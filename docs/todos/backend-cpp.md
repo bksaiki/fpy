@@ -22,11 +22,14 @@ bottom. Narrower questions have their own documents:
 
 - `unboxing-gaps.md` — what stays boxed, and why.
 - `cpp-narrower-variable-at-a-join.md` — two element types meeting at one place.
-- `format-infer-aliasing.md` — an unsound bound the backend inherits.
-- **`reals-in-integer-storage.md`** — the largest open correctness problem: a
-  real narrowed into an integer holds neither `-0.0` nor NaN.
-- `cpp-literal-tokens-and-sum.md` — three smaller disagreements between the
-  emitted C++ and the interpreter.
+- `format-infer-aliasing.md` — a store widens every name in its alias region.
+  Closed: the bound is sound, and the shape it used to refuse now compiles. A
+  callee's list parameter still refuses, on ABI grounds.
+- `reals-in-integer-storage.md` — a real narrowed into an integer holds neither
+  `-0.0` nor NaN. Mostly closed: the narrowing is now gated on the bound
+  genuinely excluding those. One case remains, plus a latent bypass.
+- **`cpp-literal-tokens-and-sum.md`** — the largest remaining set of known
+  divergences between the emitted C++ and the interpreter.
 
 The correctness criterion those last three are measured against: *if the
 compiler succeeds, the emitted C++ must compile and must behave as the FPy

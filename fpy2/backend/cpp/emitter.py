@@ -2971,7 +2971,9 @@ class CppEmitter(Visitor):
         fmt = self.format_info.by_expr.get(e)
         if isinstance(fmt, SetFormat) and len(fmt.values) == 1:
             (v,) = fmt.values
-            if v.denominator == 1:
+            # A `SetFormat` value may be `NEG_ZERO`, which is not an integer --
+            # no `range` bound may be one, and it has no `denominator`.
+            if isinstance(v, Fraction) and v.denominator == 1:
                 return v.numerator
         return None
 

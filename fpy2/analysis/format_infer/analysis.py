@@ -31,7 +31,10 @@ The analysis tracks a **format** that mirrors the basic-type structure::
   any other expression for which a number format is not meaningful.
 - :class:`SetFormat` describes an expression with a known, finite set of real
   values (e.g. a numeric literal or a join of numeric literals).  It is more
-  precise than any :class:`Format` containing all of its values.
+  precise than any :class:`Format` containing all of its values.  Its values are
+  :data:`SetValue` — an exact :class:`Fraction`, or :data:`NEG_ZERO` for the
+  negative zero a ``Fraction`` cannot represent — so a set says *which* zero it
+  holds rather than leaving it to an invariant.
 - A scalar :class:`Format` (e.g. ``IEEEFormat(es=8, nbits=32)``) describes a
   real-valued expression.  ``REAL_FORMAT`` is the **scalar top** — unrestricted
   real values (the format is unknown or unconstrained).
@@ -132,7 +135,8 @@ from typing import Any, TypeAlias
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
-from ...number import FP32, INTEGER, REAL, Context, Float, RealFloat
+from ...number import INTEGER, REAL, Context, Float, RealFloat
+from ...number.context.mp_fixed import MPFixedFormat
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
     BoolType,
@@ -145,6 +149,7 @@ from ...types import (
     VarType,
 )
 from ...utils import is_dyadic
+from ..alias import Alias, AliasAnalysis, Region
 from ..array_size import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -175,6 +180,40 @@ __all__ = [
 #####################################################################
 # Format lattice
 
+class NegZero:
+    """The value ``-0.0``, as a member of a :class:`SetFormat`.
+
+    A ``SetFormat`` holds a set of exact values, and ``-0.0`` is one — but a
+    :class:`Fraction` cannot represent it: ``Fraction(0)`` is *the* zero,
+    unsigned.  So the element domain is :data:`SetValue`, and this is its second
+    member.
+
+    Deliberately not a :class:`Float`: ``Float(-0.0) == Fraction(0)`` and the two
+    hash equally, so a ``frozenset`` would collapse them into one element.  A
+    distinct type keeps them distinct, which is the entire requirement.
+    """
+    __slots__ = ()
+
+    def __repr__(self):
+        return 'NEG_ZERO'
+
+    def __str__(self):
+        return '-0.0'
+
+    def __eq__(self, other):
+        return isinstance(other, NegZero)
+
+    def __hash__(self):
+        return hash(NegZero)
+
+
+NEG_ZERO = NegZero()
+"""The single :class:`NegZero` instance; compare with ``==`` or ``isinstance``."""
+
+SetValue: TypeAlias = Fraction | NegZero
+"""A member of a :class:`SetFormat`: an exact rational, or the negative zero."""
+
+
 @dataclass(frozen=True)
 class SetFormat:
     """
@@ -183,11 +222,16 @@ class SetFormat:
     Strictly more precise than any :class:`Format` that contains every value;
     when joined with such a format the format is returned (otherwise the join
     widens to ``REAL_FORMAT``).
+
+    Values are :data:`SetValue`, so the set says *which* zero it holds:
+    ``Fraction(0)`` is ``+0.0`` and :data:`NEG_ZERO` is ``-0.0``.  That is a
+    property of the representation rather than an invariant maintained by the
+    producers, which is what it replaced.
     """
-    values: frozenset[Fraction]
+    values: frozenset[SetValue]
 
     @staticmethod
-    def from_value(x: Fraction):
+    def from_value(x: SetValue):
         return SetFormat(frozenset((x,)))
 
 
@@ -209,7 +253,12 @@ def _free_var_format(val: object) -> 'FormatBound':
         case Fraction():
             return SetFormat.from_value(val)
         case Float():
-            return SetFormat.from_value(val.as_rational()) if val.is_finite() else None
+            if not val.is_finite():
+                return None
+            # A captured `-0.0` is statable now: `NEG_ZERO` is a `SetValue`.
+            if val.is_zero() and val.s:
+                return SetFormat.from_value(NEG_ZERO)
+            return SetFormat.from_value(val.as_rational())
         case RealFloat():
             return SetFormat.from_value(Fraction(val))
         case int() | float():
@@ -303,14 +352,22 @@ Inferred format for an expression or variable definition.
 """
 
 
-_INTEGER_FORMAT: Format = INTEGER.format()
+_INTEGER_FORMAT: Format = MPFixedFormat(
+    INTEGER.format().nmin, enable_neg_zero=False,
+)
 """
-Cached format for the :data:`INTEGER` context — used as the result
-format of integer-producing operations (``Len``, ``Dim``, ``Size``,
-``Range1``/``Range2``/``Range3``, the integer projection of
-``Enumerate``).  These ops always produce integer values regardless of
-the active rounding context, so reporting the active context's format
-would be unnecessarily loose.
+The format of an integer-*valued* expression: the result of ``Len``, ``Dim``,
+``Size``, ``Range1``/``Range2``/``Range3``, and the integer projection of
+``Enumerate``.  These ops produce integers whatever the active rounding context
+is, so reporting the active context's format would be unnecessarily loose.
+
+Deliberately **not** ``INTEGER.format()``, though it describes the same value
+grid.  ``INTEGER`` is a rounding context, and FPy's has a signed zero; a *count*
+does not — a list length is an integer, and an integer has one zero.  Conflating
+the two is what made believing that signed zero unaffordable: every counter and
+length inherited it, and no C++ integer type holds one, so they all had to widen
+to ``float``.  Keeping the two apart lets a real rounded under ``INTEGER`` carry
+its ``-0.0`` (and reach a float storage) while a length stays an integer.
 """
 
 
@@ -323,12 +380,14 @@ def _concrete_int(fmt: FormatBound) -> int | None:
     """
     if isinstance(fmt, SetFormat) and len(fmt.values) == 1:
         (v,) = fmt.values
-        if v.denominator == 1:
+        # `NEG_ZERO` is not an integer: it is a distinct value that no `range`
+        # bound may be, and it has no `denominator`.
+        if isinstance(v, Fraction) and v.denominator == 1:
             return v.numerator
     return None
 
 
-def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
+def _all_representable_in(values: frozenset[SetValue], fmt: Format) -> bool:
     """
     Returns true iff every value in *values* is representable under *fmt*.
 
@@ -340,6 +399,12 @@ def _all_representable_in(values: frozenset[Fraction], fmt: Format) -> bool:
     if fmt == REAL_FORMAT:
         return True
     for v in values:
+        if isinstance(v, NegZero):
+            # Exact, thanks to `representable_in` knowing about signed zeros: a
+            # two's-complement format answers False and a float format True.
+            if not fmt.representable_in(RealFloat(s=True, exp=0, c=0)):
+                return False
+            continue
         if not is_dyadic(v):
             return False
         if not fmt.representable_in(RealFloat.from_rational(v)):
@@ -436,9 +501,16 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     """
     if not s.values:
         return None
-    if not all(is_dyadic(v) for v in s.values):
+    if not all(isinstance(v, NegZero) or is_dyadic(v) for v in s.values):
         return None
-    rfs = [RealFloat.from_rational(v) for v in s.values]
+    # `NEG_ZERO` becomes a `RealFloat` that carries the sign, which the bounds
+    # below then read like any other value.  Its presence also sets
+    # `has_neg_zero` on the result -- see the end of this function.
+    rfs = [
+        RealFloat(s=True, exp=0, c=0) if isinstance(v, NegZero)
+        else RealFloat.from_rational(v)
+        for v in s.values
+    ]
     # Bounds: max non-negative value and min non-positive value, with
     # zero used when no value falls on the corresponding side.  This
     # matches AbstractFormat's convention of pos_bound >= 0 and
@@ -453,7 +525,10 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     prec = max((rf.p for rf in rfs), default=1)
     prec = max(prec, 1)
     exp = min((rf.exp for rf in rfs), default=0)
-    return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+    return AbstractFormat(
+        prec, exp, pos_bound, neg_bound=neg_bound,
+        has_neg_zero=any(isinstance(v, NegZero) for v in s.values),
+    )
 
 
 def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | None:
@@ -470,9 +545,96 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
 
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
+def _set_as_fraction(v: SetValue) -> Fraction:
+    """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``."""
+    return Fraction(0) if isinstance(v, NegZero) else v
+
+
+def _set_is_negative(v: SetValue) -> bool:
+    """Does *v* carry a minus sign?  True for :data:`NEG_ZERO`."""
+    return True if isinstance(v, NegZero) else v < 0
+
+
+def _set_neg(v: SetValue) -> SetValue:
+    """``-v``.  Negation exchanges the two zeros."""
+    if isinstance(v, NegZero):
+        return Fraction(0)
+    return NEG_ZERO if v == 0 else -v
+
+
+def _set_abs(v: SetValue) -> SetValue:
+    """``abs(v)``.  Never a negative zero."""
+    return Fraction(0) if isinstance(v, NegZero) else abs(v)
+
+
+def _set_add(a: SetValue, b: SetValue) -> SetValue:
+    """``a + b``.
+
+    IEEE-754 §6.3: a sum is ``-0.0`` only when both addends are.  Every other
+    zero sum — including ``1 + (-1)`` and ``(-0.0) + (+0.0)`` — is ``+0.0``.
+    """
+    if isinstance(a, NegZero) and isinstance(b, NegZero):
+        return NEG_ZERO
+    return _set_as_fraction(a) + _set_as_fraction(b)
+
+
+def _set_sub(a: SetValue, b: SetValue) -> SetValue:
+    """``a - b``, as ``a + (-b)``.
+
+    Not special-cased: routing through :func:`_set_add` reproduces every
+    measured case, including ``(-0.0) - (+0.0) = -0.0`` and
+    ``(-0.0) - (-0.0) = +0.0``.
+    """
+    return _set_add(a, _set_neg(b))
+
+
+def _set_mul(a: SetValue, b: SetValue) -> SetValue:
+    """``a * b``.
+
+    IEEE-754 §6.3: a product's sign is the XOR of the operand signs, in every
+    rounding mode — so a zero product is ``-0.0`` exactly when the signs differ.
+    That is why a negative operand and a ``+0.0`` give ``-0.0`` even though
+    neither is a negative zero.
+    """
+    product = _set_as_fraction(a) * _set_as_fraction(b)
+    if product != 0:
+        return product
+    return NEG_ZERO if _set_is_negative(a) != _set_is_negative(b) else Fraction(0)
+
+
+_SET_BINOPS: dict[Any, Callable[[SetValue, SetValue], SetValue]] = {
+    operator.add: _set_add,
+    operator.sub: _set_sub,
+    operator.mul: _set_mul,
+}
+"""Exact binary arithmetic over :data:`SetValue`, keyed by the operator the
+caller passes.
+
+Why functions rather than operators on :class:`NegZero`: two of these rules must
+*produce* a negative zero from operands that are both plain
+:class:`Fraction`\\ s — ``-Fraction(0)`` and ``Fraction(-1) * Fraction(0)`` — and
+those go through ``Fraction``'s own dunders, which no method on the sentinel can
+intercept.  A reflected operator only fires when the sentinel is an *operand*,
+never when it must be the *result*.
+
+An operator absent here has no set-level rule, so :func:`exact_binop` falls back
+to the abstract path rather than guessing."""
+
+_SET_UNOPS: dict[Any, Callable[[SetValue], SetValue]] = {
+    operator.neg: _set_neg,
+    abs: _set_abs,
+}
+"""Exact unary arithmetic over :data:`SetValue`; see :data:`_SET_BINOPS`."""
+
 
 def _is_zero_set(f: 'FormatBound') -> bool:
-    """``f`` is the precise singleton ``{0}``."""
+    """``f`` is the precise singleton ``{0}`` — and therefore exactly ``+0.0``.
+
+    Callers use this to apply algebraic identities that hold for ``+0.0`` and
+    not for ``-0.0``, so reading the sign off the set is load-bearing — and it is
+    now structural: a negative zero is :data:`NEG_ZERO`, a different element, so
+    ``{Fraction(0)}`` cannot be holding one.  No invariant to maintain.
+    """
     return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
 
 
@@ -518,7 +680,14 @@ def exact_binop(
     ):
         return None
     if isinstance(lhs, SetFormat) and isinstance(rhs, SetFormat):
-        result = frozenset(op(va, vb) for va in lhs.values for vb in rhs.values)
+        # Exact arithmetic over `SetValue`, which carries the sign of a zero --
+        # so the result set says which zero it holds and nothing has to widen.
+        set_op = _SET_BINOPS.get(op)
+        if set_op is None:
+            return None
+        result = frozenset(
+            set_op(va, vb) for va in lhs.values for vb in rhs.values
+        )
         if cap is not None and len(result) > cap:
             # collapse an over-large set to its covering AbstractFormat
             return _setformat_to_abstract(SetFormat(result))
@@ -526,17 +695,15 @@ def exact_binop(
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
-        # UNSOUND, and knowingly so: in IEEE-754 `0 * x` is NaN when *x* is an
-        # infinity or a NaN, and `-0.0` when *x* is negative.  Kept because a
-        # recomputed abstract product is degenerate and drives a later add/sub's
-        # `prec` to 0 (`test_exact_binop_mul_by_zero_set_stays_set`).
+        # `0 * x` is not `{0}`: IEEE-754 gives NaN for an infinite or NaN *x*
+        # and `-0.0` for a negative *x*.  The other operand is a `Format` here
+        # — the set/set case returned above — and a float format admits all
+        # three, so none of them can be ruled out.
         #
-        # A consumer must not read `{0}` as "an integer can hold this".  The C++
-        # backend currently does, so `0.0 * inf` compiles to
-        # `static_cast<uint8_t>(NaN)` and returns 0 -- see
-        # `docs/todos/reals-in-integer-storage.md` for why the fix has to be
-        # uniform rather than a guard here.
-        return _ZERO_SET
+        # Widen rather than falling through to the abstract path: `{0}` lifts to
+        # an AbstractFormat bounded by zero on both sides, whose product drives
+        # a later add/sub's `prec` to 0.
+        return None
     if op is operator.add:
         if lhs_zero:
             return rhs if isinstance(rhs, SetFormat) else _to_abstract(rhs)
@@ -563,7 +730,12 @@ def exact_unop(
     if not isinstance(arg, AbstractableFormatBound):
         return None
     if isinstance(arg, SetFormat):
-        return SetFormat(frozenset(op(v) for v in arg.values))
+        # See :func:`exact_binop`: `SetValue` carries the sign of a zero, so
+        # `neg({+0.0})` is exactly `{-0.0}` rather than something widened.
+        set_op = _SET_UNOPS.get(op)
+        if set_op is None:
+            return None
+        return SetFormat(frozenset(set_op(v) for v in arg.values))
     af = _to_abstract(arg)
     if af is None:
         return None
@@ -668,36 +840,41 @@ def _join_bounds(
 def _literal_bound(e) -> FormatBound:
     """A numeric literal's bound: the singleton set of its exact value.
 
-    Except a **signed zero**.  ``SetFormat`` holds :class:`Fraction`s, and a
-    ``Fraction`` has no signed zero — so ``SetFormat({0})`` would assert that
-    ``-0.0`` and ``+0.0`` are the same value.  They are not: ``-0.0`` is a
-    distinct real that compares equal to ``+0.0`` but is distinguishable by
-    ``copysign``, and by division, where ``x / -0.0`` and ``x / +0.0`` have
-    opposite signs.
-
-    So the set cannot state this literal's value, and a bound that cannot state
-    a value must not pretend to.  Report a *format* that does contain it
-    instead — less precise, but true.  Every binary floating-point format has a
-    signed zero, so ``FP32`` is a true bound for one; it is picked as a small
-    widely-supported format, and nothing here depends on which.
+    Including a **signed zero**.  ``-0.0`` is a distinct real -- it compares
+    equal to ``+0.0`` but is told apart by ``copysign``, and by division, where
+    ``x / -0.0`` and ``x / +0.0`` have opposite signs -- and a :class:`Fraction`
+    cannot represent it.  :data:`NEG_ZERO` can, so the set states this literal's
+    value exactly like any other.
 
     The discriminator is the literal's **value**, not the type ``as_real``
     happens to return.  ``as_real`` returns a :class:`Float` only for a signed
     zero today, but that invariant lives in :mod:`fpy2.ast.fpyast` and this
-    function cannot enforce it: a ``Float`` holding, say, ``1e-400`` is not in
-    ``FP32``, and answering ``FP32`` for it would be a false bound no consumer
-    could detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
-    ``SetFormat`` path; anything else — an infinity or a NaN, which no literal
-    parses to — has no rational value at all, so the honest answer is the
-    scalar top.
+    function cannot enforce it: a ``Float`` holding ``1e-400`` is not a zero, and
+    answering ``NEG_ZERO`` for it would be a false bound no consumer could
+    detect.  A non-zero ``Float`` *is* an exact rational, so it takes the
+    ``as_rational`` path; an infinity or a NaN -- which no literal parses to --
+    has no rational value at all, so the honest answer is the scalar top.
     """
     v = e.as_real()
     if isinstance(v, Float):
         if v.is_zero():
-            return FP32.format()
+            return SetFormat.from_value(NEG_ZERO if v.s else Fraction(0))
         if v.isinf or v.isnan:
             return REAL_FORMAT
     return SetFormat.from_value(e.as_rational())
+
+
+def _has_list_depth(fmt: FormatBound, depth: int) -> bool:
+    """Can *fmt* be peeled *depth* times as a :class:`ListFormat`?
+
+    The precondition :func:`_list_set_widen` asserts.  Tested rather than
+    caught, so that a genuine shape bug still surfaces as the assertion it is.
+    """
+    for _ in range(depth):
+        if not isinstance(fmt, ListFormat):
+            return False
+        fmt = fmt.elt
+    return True
 
 
 def _list_set_widen(
@@ -752,13 +929,14 @@ def _format_of_scope(scope: ContextScope) -> Format:
 
 @dataclass(frozen=True)
 class PreAnalyses:
-    """Bundle of the four structural pre-analyses a
-    :class:`FormatAnalysis` depends on.  Identical for every
-    instantiation of the same :class:`FuncDef`."""
+    """Bundle of the structural pre-analyses a :class:`FormatAnalysis`
+    depends on.  Identical for every instantiation of the same
+    :class:`FuncDef`."""
     def_use: DefineUseAnalysis
     type_info: TypeAnalysis
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
+    alias: AliasAnalysis
 
 
 class PreAnalysisCache:
@@ -781,6 +959,7 @@ class PreAnalysisCache:
         type_info: TypeAnalysis | None = None,
         ctx_use: ContextUseAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
+        alias: AliasAnalysis | None = None,
     ) -> PreAnalyses:
         """Return the pre-analyses for *func*, computing them on the
         first request.  Pre-supplied analyses (via the keyword args)
@@ -800,7 +979,12 @@ class PreAnalysisCache:
             ctx_use = ContextUse.analyze(func, def_use=def_use)
         if array_size is None:
             array_size = ArraySizeInfer.analyze(func, type_info=type_info)
-        pre = PreAnalyses(def_use, type_info, ctx_use, array_size)
+        if alias is None:
+            # No escape summaries: `Alias` is then maximally conservative about
+            # what a call may retain, which over-approximates the aliasing --
+            # exactly the safe direction for the widening below.
+            alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
+        pre = PreAnalyses(def_use, type_info, ctx_use, array_size, alias)
         self._table[key] = pre
         return pre
 
@@ -927,7 +1111,11 @@ class _FormatInferInstance(Visitor):
         self.type_info = pre.type_info
         self.ctx_use = pre.ctx_use
         self.array_size = pre.array_size
+        self.alias = pre.alias
         self.by_def = {}
+        self._region_inserts: dict[
+            Region, list[tuple[int, FormatBound, frozenset[Definition]]]
+        ] = {}
         self.by_expr = {}
         self.by_call = {}
         self._pre_cache = pre_cache
@@ -973,7 +1161,37 @@ class _FormatInferInstance(Visitor):
         return self.type_info.def_use
 
     def _set_def_bound(self, d: Definition, fmt: FormatBound):
-        self.by_def[d] = fmt
+        self.by_def[d] = self._with_region_inserts(d, fmt)
+
+    def _with_region_inserts(self, d: Definition, fmt: FormatBound) -> FormatBound:
+        """*fmt*, widened by every store recorded against *d*'s alias region.
+
+        Replaying the record on each write, rather than editing bounds in place,
+        makes this order-independent: a def computed after the store picks the
+        widening up when it is first set, and one computed before is re-widened by
+        :meth:`_record_region_insert`.  Widening only raises a bound, so a loop
+        fixpoint still converges.
+        """
+        if not self._region_inserts:
+            return fmt
+        region = self.alias.region_of(d)
+        if region is None:
+            return fmt
+        for depth, insert_fmt, already in self._region_inserts.get(region, ()):
+            if d in already:
+                # `reaching_defs` accounts for these two itself: the def the
+                # store reads is the list's state *before* it, and the def it
+                # creates already carries the widening.  Skipping them is what
+                # keeps this flow-sensitive -- a read before the store still
+                # sees the narrow bound.
+                continue
+            if not _has_list_depth(fmt, depth):
+                # A region can hold defs of differing nesting -- a row and the
+                # matrix that holds it -- and a store at one depth says nothing
+                # about a def shallower than that.
+                continue
+            fmt = _list_set_widen(fmt, depth, insert_fmt, widen=self._widen)
+        return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
         return self.by_def[d]
@@ -1641,6 +1859,38 @@ class _FormatInferInstance(Visitor):
         )
         d_def = self.def_use.find_def_from_site(stmt.var, stmt)
         self._set_def_bound(d_def, new_fmt)
+        self._record_region_insert(
+            d_use, len(stmt.indices), insert_fmt, already={d_use, d_def},
+        )
+
+    def _record_region_insert(
+        self, base: Definition, depth: int, insert_fmt: FormatBound,
+        *, already: set[Definition],
+    ) -> None:
+        """Note that a store put *insert_fmt* into *base*'s list at *depth*.
+
+        ``reaching_defs`` refreshes only the name written through, but the list is
+        one object: ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding ``y``.  Without
+        this, ``xs`` keeps its old element format and the analysis reports a bound
+        the program exceeds -- see ``docs/todos/format-infer-aliasing.md``.
+        """
+        region = self.alias.region_of(base)
+        if region is None:
+            return
+        record = self._region_inserts.setdefault(region, [])
+        entry = (depth, insert_fmt, frozenset(already))
+        if entry in record:
+            # A loop body is visited once per fixpoint iteration, so the same
+            # store arrives repeatedly.  Replaying a duplicate is harmless --
+            # widening is idempotent -- but the record would grow with the
+            # iteration count.
+            return
+        record.append(entry)
+        # Defs already computed do not get another write on their own, so
+        # re-widen them here.  Monotone, so this cannot cycle.
+        for d in list(self.by_def):
+            if d not in already and self.alias.region_of(d) == region:
+                self.by_def[d] = self._with_region_inserts(d, self.by_def[d])
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)

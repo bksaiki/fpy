@@ -15,7 +15,11 @@ from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
 from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
-from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
+from fpy2.analysis.format_infer.analysis import (
+    _INTEGER_FORMAT,
+    _join_bounds,
+    _list_set_widen,
+)
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import FuncDef, IndexedAssign
 from fpy2.number.context.format import Format
@@ -1012,7 +1016,7 @@ class TestFormatInfer:
         len_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Len'
         ]
-        integer_fmt = fp.INTEGER.format()
+        integer_fmt = _INTEGER_FORMAT
         assert len_bounds and len_bounds[0] == integer_fmt, (
             f'expected Len to report INTEGER format, got {len_bounds}'
         )
@@ -1033,7 +1037,7 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
         ]
-        integer_fmt = fp.INTEGER.format()
+        integer_fmt = _INTEGER_FORMAT
         assert range_bounds, 'expected a Range1 expression'
         assert range_bounds[0] == ListFormat(integer_fmt), (
             f'expected ListFormat(INTEGER) for Range1, got {range_bounds}'
@@ -1153,7 +1157,7 @@ class TestFormatInfer:
 
         info = self._run(f)
         lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
-        assert lens and lens[0] == fp.INTEGER.format()
+        assert lens and lens[0] == _INTEGER_FORMAT
 
     def test_dim_pins_nesting_depth(self):
         """``dim(xs)`` always pins the (static) nesting depth."""
@@ -1212,7 +1216,7 @@ class TestFormatInfer:
         assert enum_bounds, 'expected an Enumerate expression'
         bound = enum_bounds[0]
         # Outer: ListFormat. Element: TupleFormat((INTEGER, FP32)).
-        integer_fmt = fp.INTEGER.format()
+        integer_fmt = _INTEGER_FORMAT
         fp32_fmt = fp.FP32.format()
         assert isinstance(bound, ListFormat)
         assert isinstance(bound.elt, TupleFormat)
@@ -1392,24 +1396,42 @@ class TestFormatInfer:
             f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
 
-    def test_literal_bound_reports_a_format_only_for_a_signed_zero(self):
-        """``_literal_bound`` may only answer ``FP32`` for a value ``FP32``
-        contains.
+    def test_integer_valued_ops_do_not_inherit_integers_signed_zero(self):
+        """`_INTEGER_FORMAT` is not `INTEGER.format()`, though the grids match.
 
-        A signed zero is the one literal value ``SetFormat`` cannot state, so it
-        gets a format bound instead.  ``as_real`` returns a ``Float`` for
-        exactly that case today -- but that invariant lives in
-        ``fpy2.ast.fpyast``, and answering ``FP32`` on the strength of the
-        *type* would be a false bound the moment some other ``Float`` came
-        back: ``1e-400`` is a ``Float`` and is not in ``FP32``, and no consumer
-        of the bound could detect the lie.  So the discriminator has to be the
-        value.
+        `INTEGER` is a rounding *context* and FPy's has a signed zero; a *count*
+        does not -- a list length is an integer, and an integer has one zero.
+        Conflating them made believing that signed zero unaffordable: every
+        counter and length inherited it, no C++ integer type holds one, so they
+        all widened to `float`.
         """
-        from fpy2.analysis.format_infer.analysis import _literal_bound
+        from fpy2.analysis.format_infer.format import AbstractFormat
+        assert _INTEGER_FORMAT != fp.INTEGER.format()
+        assert not AbstractFormat.from_format(_INTEGER_FORMAT).has_neg_zero
+        # ...but they describe the same value grid.
+        assert _INTEGER_FORMAT.nmin == fp.INTEGER.format().nmin
+
+    def test_an_integer_count_keeps_an_integer_storage(self):
+        """The consequence at the backend: `len(xs)` stays an integer."""
+        from fpy2.backend.cpp.storage import choose_storage_scalar
+        from fpy2.backend.cpp.types import CppScalar
+        assert choose_storage_scalar(_INTEGER_FORMAT) != CppScalar.F32
+
+    def test_literal_bound_states_a_signed_zero_exactly(self):
+        """A ``-0.0`` literal gets ``SetFormat({NEG_ZERO})`` -- an exact bound.
+
+        The discriminator is the literal's **value**, not the type ``as_real``
+        returns.  ``as_real`` returns a ``Float`` only for a signed zero today,
+        but that invariant lives in ``fpy2.ast.fpyast`` and ``_literal_bound``
+        cannot enforce it: ``1e-400`` is a ``Float`` and is not a zero, so
+        answering ``NEG_ZERO`` for it would be a false bound no consumer could
+        detect.
+        """
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, _literal_bound
         from fpy2.number import Float
 
         class _FakeLiteral:
-            """A literal whose ``as_real`` hands back the ``Float`` given."""
+            """A literal whose ``as_real`` hands back the value given."""
             def __init__(self, real, rational):
                 self._real, self._rational = real, rational
 
@@ -1420,27 +1442,26 @@ class TestFormatInfer:
                 return self._rational
 
         neg_zero = _FakeLiteral(Float(s=True, exp=0, c=0), Fraction(0))
-        assert _literal_bound(neg_zero) == fp.FP32.format()
-
-        # Not a zero, so `FP32` is not known to contain it -- and it does not:
-        # `2**-400` is far below `FP32`'s smallest subnormal.  A `Float` is an
-        # exact rational whenever it is finite, so the set states it exactly.
+        assert _literal_bound(neg_zero) == SetFormat.from_value(NEG_ZERO)
+        # `+0.0` is exactly the integer 0 and keeps its `Fraction`.
+        pos_zero = _FakeLiteral(Float(s=False, exp=0, c=0), Fraction(0))
+        assert _literal_bound(pos_zero) == SetFormat.from_value(Fraction(0))
+        # A finite non-zero `Float` is an exact rational, so it takes that path.
         tiny = Float(s=False, exp=-400, c=1)
-        assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) != fp.FP32.format()
         assert _literal_bound(_FakeLiteral(tiny, tiny.as_rational())) == \
             SetFormat.from_value(tiny.as_rational())
-
         # No rational value at all: the honest bound is the scalar top.
         assert _literal_bound(_FakeLiteral(Float(isinf=True), None)) == REAL_FORMAT
         assert _literal_bound(_FakeLiteral(Float(isnan=True), None)) == REAL_FORMAT
 
-    def test_a_negative_zero_literal_gets_a_float_bound(self):
-        """The end-to-end direction, through the real AST rather than a fake.
+    def test_a_negative_zero_literal_keeps_its_sign_end_to_end(self):
+        """Through the real AST: the two zeros get *different* bounds.
 
-        ``SetFormat`` holds ``Fraction``s and a ``Fraction`` has no signed zero,
-        so ``SetFormat({0})`` would claim ``-0.0`` and ``+0.0`` are one value.
-        They are distinguishable by ``copysign`` and by division.
+        This is what a `Fraction`-only set could not do, and why `-0.0` used to
+        report a whole format instead.
         """
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO
+
         @fp.fpy
         def neg() -> fp.Real:
             with fp.FP64:
@@ -1451,26 +1472,127 @@ class TestFormatInfer:
             with fp.FP64:
                 return 0.0
 
-        neg_info = FormatInfer.analyze(neg.ast)
-        pos_info = FormatInfer.analyze(pos.ast)
-        # `-0.0` reports a format; `+0.0` is exactly the integer 0, so it keeps
-        # the precise singleton set and nothing about it regresses.
-        assert neg_info.fn_fmt.ret_fmt == fp.FP32.format(), neg_info.fn_fmt.ret_fmt
-        assert pos_info.fn_fmt.ret_fmt == SetFormat.from_value(Fraction(0)), \
-            pos_info.fn_fmt.ret_fmt
+        assert FormatInfer.analyze(neg.ast).fn_fmt.ret_fmt == \
+            SetFormat.from_value(NEG_ZERO)
+        assert FormatInfer.analyze(pos.ast).fn_fmt.ret_fmt == \
+            SetFormat.from_value(Fraction(0))
 
-    def test_exact_binop_mul_by_zero_set_stays_set(self):
-        """``Mul(loose_format, SetFormat({0}))`` short-circuits to
-        ``SetFormat({0})`` rather than producing a degenerate
-        zero-bounded ``AbstractFormat`` whose subsequent ``add``/``sub``
-        drives ``prec`` to 0.
+    def test_neg_of_a_zero_set_is_exactly_the_other_zero(self):
+        """``-(+0.0)`` is ``-0.0``, stated exactly.
+
+        This was the original wrong answer: `z = 0.0; return -z` inferred
+        ``{0}``, stored as ``uint8_t``, and the emitted C++ returned ``+0.0``
+        where the interpreter returns ``-0.0``.
+        """
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, exact_unop
+        import operator
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_unop(zero, operator.neg) == SetFormat.from_value(NEG_ZERO)
+        # ...and back again.
+        assert exact_unop(SetFormat.from_value(NEG_ZERO), operator.neg) == zero
+        # A set with no zero in it negates exactly, as before.
+        assert exact_unop(SetFormat(frozenset((Fraction(2),))), operator.neg) \
+            == SetFormat(frozenset((Fraction(-2),)))
+
+    def test_abs_of_a_zero_set_stays_a_set(self):
+        """``abs`` can never produce a negative zero, so it keeps its
+        precision -- the widening is targeted, not blanket."""
+        from fpy2.analysis.format_infer.analysis import exact_unop
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_unop(zero, abs) == zero
+
+    def test_mul_to_zero_follows_the_ieee_sign_rule(self):
+        """IEEE 754 §6.3: a product's zero sign is the XOR of the operand signs,
+        in every rounding mode -- so a negative operand and a ``+0.0`` give
+        ``-0.0`` even though neither operand is a signed zero."""
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, exact_binop
+        import operator
+        zero = SetFormat(frozenset((Fraction(0),)))
+        nzero = SetFormat.from_value(NEG_ZERO)
+        pos = SetFormat(frozenset((Fraction(2),)))
+        neg = SetFormat(frozenset((Fraction(-2),)))
+        assert exact_binop(zero, pos, operator.mul) == zero
+        assert exact_binop(zero, neg, operator.mul) == nzero
+        assert exact_binop(neg, zero, operator.mul) == nzero
+        assert exact_binop(nzero, pos, operator.mul) == nzero
+        assert exact_binop(nzero, neg, operator.mul) == zero      # signs agree
+
+    def test_add_and_sub_to_zero_follow_the_ieee_sign_rule(self):
+        """A sum is ``-0.0`` only when both addends are; ``a - b`` is
+        ``a + (-b)``, which derives every subtraction case without a special
+        rule."""
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, exact_binop
+        import operator
+        zero = SetFormat(frozenset((Fraction(0),)))
+        nzero = SetFormat.from_value(NEG_ZERO)
+        one = SetFormat(frozenset((Fraction(1),)))
+        neg_one = SetFormat(frozenset((Fraction(-1),)))
+        assert exact_binop(zero, zero, operator.add) == zero
+        assert exact_binop(nzero, nzero, operator.add) == nzero
+        assert exact_binop(nzero, zero, operator.add) == zero
+        assert exact_binop(one, neg_one, operator.add) == zero
+        assert exact_binop(nzero, zero, operator.sub) == nzero
+        assert exact_binop(zero, zero, operator.sub) == zero
+        assert exact_binop(nzero, nzero, operator.sub) == zero
+        assert exact_binop(one, one, operator.sub) == zero
+        assert exact_binop(one, one, operator.add) \
+            == SetFormat(frozenset((Fraction(2),)))
+
+    def test_an_accumulator_starting_at_zero_keeps_its_set(self):
+        """Regression against over-widening.
+
+        ``acc = 0`` then ``acc += i`` puts a zero in every intermediate set, so
+        a rule keyed on "the result contains zero" widens the whole
+        accumulation.  The rule is keyed on the *operands* that produced each
+        zero instead: here the only zero comes from ``0 + 0``, which IEEE makes
+        ``+0.0`` in every mode.
+        """
+        @fp.fpy
+        def f():
+            with fp.REAL:
+                acc = 0
+                for i in range(10):
+                    acc += i
+                return acc
+
+        info = FormatInfer.analyze(f.ast, set_format_threshold=256)
+        acc = self._last_acc(info)
+        assert isinstance(acc, SetFormat), acc
+        assert Fraction(0) in acc.values, acc
+
+    def test_a_negative_zero_free_variable_keeps_its_sign(self):
+        """A captured ``-0.0`` is statable, so it gets a set like any capture.
+
+        The old code handed it ``SetFormat({0})`` via ``as_rational``, which said
+        it was ``+0.0``."""
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, _free_var_format
+        from fpy2.number import Float
+        assert _free_var_format(Float(s=True, exp=0, c=0)) \
+            == SetFormat.from_value(NEG_ZERO)
+        # A `+0.0` capture is exactly the integer 0 and keeps its `Fraction`.
+        assert _free_var_format(Float(s=False, exp=0, c=0)) \
+            == SetFormat(frozenset((Fraction(0),)))
+
+    def test_exact_binop_mul_by_zero_format_widens(self):
+        """``Mul(loose_format, SetFormat({0}))`` must not answer ``{0}``.
+
+        IEEE 754 makes ``0 * x`` a NaN for an infinite or NaN *x* and ``-0.0``
+        for a negative *x*.  An ``FP32`` bound admits all three, so none can be
+        ruled out -- and a ``Fraction`` set can state none of them.  ``{0}`` was
+        the old answer, and it is what made ``0.0 * inf`` compile to
+        ``static_cast<uint8_t>(NaN)``.
+
+        ``None`` specifically, rather than falling through to the abstract path:
+        ``{0}`` lifts to an ``AbstractFormat`` bounded by zero on both sides,
+        whose product drives a later ``add``/``sub``'s ``prec`` to 0.  ``None``
+        makes the caller use the scope format, which is well-formed.
         """
         from fpy2.analysis.format_infer.analysis import exact_binop
         import operator
         fp32_fmt = fp.FP32.format()
         zero = SetFormat(frozenset((Fraction(0),)))
-        assert exact_binop(fp32_fmt, zero, operator.mul) == zero
-        assert exact_binop(zero, fp32_fmt, operator.mul) == zero
+        assert exact_binop(fp32_fmt, zero, operator.mul) is None
+        assert exact_binop(zero, fp32_fmt, operator.mul) is None
 
     def test_exact_binop_add_zero_set_is_identity(self):
         """``Add(F, SetFormat({0}))`` and ``Sub(F, SetFormat({0}))``
@@ -1516,7 +1638,7 @@ class TestFormatInfer:
 
         info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
         x_bounds = {b for d, b in info.by_def.items() if d.name.base == 'x'}
-        int_fmt = fp.INTEGER.format()
+        int_fmt = _INTEGER_FORMAT
         assert int_fmt in x_bounds, (
             f'expected INTEGER MPFixedFormat among x bounds, got {x_bounds}'
         )
@@ -1540,6 +1662,90 @@ class TestFormatInfer:
 
     # ------------------------------------------------------------------
     # Functional-update (``IndexedAssign``) semantics
+
+    # A store mutates the list *every* name in its alias region refers to, so
+    # each of their bounds has to admit the inserted value.  `reaching_defs`
+    # only refreshes the name written through, which is why `format_infer`
+    # consults `Alias`; see `docs/todos/format-infer-aliasing.md`.
+
+    _NARROW = SetFormat(frozenset((Fraction(1), Fraction(2))))
+
+    def test_a_store_through_an_alias_widens_the_original(self):
+        """`ys = xs; ys[0] = y` leaves `xs[0]` holding `y`.
+
+        The bug this fixes: only `ys` was widened, so `xs` kept the literal
+        element set and the analysis reported a bound the program exceeds.
+        Every consumer inherited that, not just the C++ backend.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            ys[0] = y
+            return xs[0]
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == REAL_FORMAT, info.fn_fmt.ret_fmt
+
+    def test_a_read_only_alias_does_not_widen(self):
+        """The precision side: aliasing alone changes nothing.
+
+        Only a *store* widens, so a name that merely shares a list keeps the
+        exact element set.  A blanket "aliased names share one bound" rule would
+        lose this for every consumer even where nothing is ever written.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            return ys[0]
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == self._NARROW, info.fn_fmt.ret_fmt
+
+    def test_a_read_before_the_store_keeps_its_narrow_bound(self):
+        """Flow-sensitivity: `a` is read before the store, so it really is
+        narrow -- it holds the element the list had at that point.
+
+        This is what excluding the two defs `reaching_defs` already refreshes
+        buys.  Widening them instead marks the list's *pre-store* state with the
+        inserted format, which over-widens even a direct `xs[0] = x`.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            a = xs[0]
+            ys[0] = y
+            return a
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == self._NARROW, info.fn_fmt.ret_fmt
+        # ...while `xs` itself is widened, since after the store it does hold `y`.
+        xs_bounds = [b for d, b in info.by_def.items()
+                     if getattr(d.name, 'base', None) == 'xs']
+        assert xs_bounds == [ListFormat(REAL_FORMAT)], xs_bounds
+
+    def test_a_read_after_a_store_across_a_back_edge_is_widened(self):
+        """The case that would be a *wrong answer* rather than a refusal.
+
+        Iteration 2's read sees what iteration 1 stored, so `a` must admit the
+        inserted format.  It only does if the widening survives the loop
+        fixpoint -- which is why the region record is replayed on every bound
+        write instead of editing bounds in place.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            a = 0.0
+            for _ in range(2):
+                a = xs[0]
+                ys[0] = y
+            return a
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == REAL_FORMAT, info.fn_fmt.ret_fmt
 
     def test_indexed_assign_widens_format_at_fresh_def(self):
         """

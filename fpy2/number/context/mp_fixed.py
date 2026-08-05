@@ -32,7 +32,8 @@ class MPFixedFormat(OrdinalFormat):
     enable_inf: bool
     """is infinity representable?"""
 
-    def __init__(self, nmin: int, enable_nan: bool = False, enable_inf: bool = False):
+    def __init__(self, nmin: int, enable_nan: bool = False, enable_inf: bool = False,
+                 enable_neg_zero: bool = True):
         if not isinstance(nmin, int):
             raise TypeError(f'Expected \'int\' for nmin={nmin}, got {type(nmin)}')
         if not isinstance(enable_nan, bool):
@@ -42,6 +43,7 @@ class MPFixedFormat(OrdinalFormat):
         self.nmin = nmin
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
+        self.enable_neg_zero = enable_neg_zero
 
     def __eq__(self, other):
         return (
@@ -49,10 +51,12 @@ class MPFixedFormat(OrdinalFormat):
             and self.nmin == other.nmin
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
+            and self.enable_neg_zero == other.enable_neg_zero
         )
 
     def __hash__(self):
-        return hash((self.__class__, self.nmin, self.enable_nan, self.enable_inf))
+        return hash((self.__class__, self.nmin, self.enable_nan, self.enable_inf,
+                     self.enable_neg_zero))
 
     @property
     def expmin(self) -> int:
@@ -60,6 +64,8 @@ class MPFixedFormat(OrdinalFormat):
         return self.nmin + 1
 
     def representable_in(self, x: RealFloat | Float) -> bool:
+        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s and not self.enable_neg_zero:
+            return False
         match x:
             case Float():
                 if x.isnan:

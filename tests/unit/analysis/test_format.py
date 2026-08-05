@@ -92,6 +92,197 @@ class TestAbstractFormat():
         print(list(generate(A1.prec, Fraction(2) ** A1.exp, A1.bound)))
         print(list(generate(A2.prec, Fraction(2) ** A2.exp, A2.bound)))
 
+    # `has_neg_zero`: the one special-value flag whose value sits *inside* the
+    # finite grid.  `pos_bound >= 0 >= neg_bound` holds by convention and the
+    # bounds are compared by magnitude, so conditions 1-3 of containment cannot
+    # tell `+0.0` from `-0.0`; only this flag can.
+
+    _PZ = fp.RealFloat(s=False, exp=0, c=0)
+    _NZ = fp.RealFloat(s=True, exp=0, c=0)
+
+    def test_neg_zero_is_probed_from_the_format(self):
+        """A float format has a signed zero; a fixed one does not.
+
+        Regression target: reading it off the *bounds* instead would report
+        `True` for every format, since a bound of `-0.0` is magnitude-equal to
+        `+0.0`.
+        """
+        for ctx in (fp.FP32, fp.FP64):
+            assert AbstractFormat.from_format(ctx.format()).has_neg_zero, ctx
+        for ctx in (fp.UINT8, fp.SINT8, fp.SINT64):
+            assert not AbstractFormat.from_format(ctx.format()).has_neg_zero, ctx
+
+    def test_neg_zero_distinguishes_two_otherwise_equal_formats(self):
+        """The whole point: these differ only in the sign of their zero, and
+        every other field — including the magnitude of `neg_bound` — is equal."""
+        pos = AbstractFormat(1, 0, self._PZ, neg_bound=self._PZ)
+        neg = AbstractFormat(1, 0, self._PZ, neg_bound=self._NZ, has_neg_zero=True)
+        assert pos != neg
+        assert hash(pos) != hash(neg)
+        assert '-0' in str(neg) and '-0' not in str(pos)
+
+    def test_a_neg_zero_bound_is_not_contained_in_an_integer_format(self):
+        """Containment gains a fourth membership implication.
+
+        `uint8_t` holds the integer 0 but not a negative zero, so a bound
+        carrying one must not fit in it — this is what stops the C++ backend
+        selecting an integer storage and dropping the sign.
+        """
+        neg = AbstractFormat(1, 0, self._PZ, neg_bound=self._NZ, has_neg_zero=True)
+        for ctx in (fp.UINT8, fp.SINT8, fp.SINT64):
+            assert not (neg <= AbstractFormat.from_format(ctx.format())), ctx
+        # ...but it does fit a float, which has both zeros.
+        for ctx in (fp.FP32, fp.FP64):
+            assert neg <= AbstractFormat.from_format(ctx.format()), ctx
+
+    def test_a_positive_zero_bound_still_fits_an_integer(self):
+        """The other direction, so the implication cannot be "reject all zeros":
+        `+0.0` really is the integer 0 and keeps the narrow storage."""
+        pos = AbstractFormat(1, 0, self._PZ, neg_bound=self._PZ)
+        assert pos <= AbstractFormat.from_format(fp.UINT8.format())
+
+    def test_neg_zero_round_trips_through_format(self):
+        """`has_neg_zero` survives materialize-and-re-abstract, both ways.
+
+        This is what each format's `enable_neg_zero` is for.  Without it the flag
+        decays to `True`, because the shapes `format()` produces admit a negative
+        zero by default — and then every integer-valued bound materialized on the
+        way to storage selection loses its integer storage.
+        """
+        for hnz in (False, True):
+            af = AbstractFormat(1, 0, self._PZ, neg_bound=self._NZ, has_neg_zero=hnz)
+            assert af.format().representable_in(self._NZ) is hnz
+            assert AbstractFormat.from_format(af.format()).has_neg_zero is hnz
+
+    def test_unbounded_fixed_point_is_not_believed_about_neg_zero(self):
+        """`MPFixedFormat` is taken as having no negative zero, whatever it says.
+
+        FPy's `INTEGER` really does hold one, deliberately.  But C++ has no
+        integer type that does, and believing the format costs integer storage
+        everywhere -- it retypes `range` counters as `float` and diverges the
+        loop fixpoint in `test_while{5,6,7}_rounded` to `REAL_FORMAT`.
+
+        This test should **fail** once that is fixed properly (either
+        `MPFixedContext` flattens signed zeros, or the backend stops storing
+        `INTEGER`-bounded reals in `int64_t`).  That is the point: the carve-out
+        and the divergence it defers -- negating an integer whose zero is not
+        statically known -- go away together.
+        """
+        nz = fp.RealFloat(s=True, exp=0, c=0)
+        assert fp.INTEGER.format().representable_in(nz)          # the format says yes
+        assert not AbstractFormat.from_format(fp.INTEGER.format()).has_neg_zero
+
+    def test_bounded_fixed_point_is_still_believed(self):
+        """The carve-out stops at the *unbounded* case.
+
+        `MPBFixedFormat.enable_neg_zero` is what lets a bound say "this really
+        can be a negative zero" and so reach a float storage — the whole reason
+        the flag exists.  Extending the carve-out to it would silently undo that.
+        """
+        pz = fp.RealFloat(s=False, exp=0, c=0)
+        nz = fp.RealFloat(s=True, exp=0, c=0)
+        af = AbstractFormat(1, 0, pz, neg_bound=nz, has_neg_zero=True)
+        assert AbstractFormat.from_format(af.format()).has_neg_zero
+
+    def test_add_derives_neg_zero_as_a_conjunction(self):
+        """A sum is `-0.0` only when *both* addends are.
+
+        IEEE-754 gives a like-signed sum that sign, and every other zero sum is
+        `+0.0` — checked against the interpreter: `(-0)+(-0)` is `-0.0` while
+        `(-0)+(+0)`, `(+0)+(+0)` and `1+(-1)` are all `+0.0`.
+
+        This is not cosmetic.  `_bound_if_fits` asks `scope_af <= exact`, so an
+        `exact` that under-reports the flag *fails* a containment that really
+        holds, and `x + y` under FP32 degrades from `FP32.format()` to a
+        materialized approximation.
+        """
+        f32 = AbstractFormat.from_format(fp.FP32.format())   # has a signed zero
+        i8 = AbstractFormat.from_format(fp.SINT8.format())   # does not
+        assert f32.has_neg_zero and not i8.has_neg_zero
+        assert (f32 + f32).has_neg_zero
+        assert not (i8 + i8).has_neg_zero
+        assert not (f32 + i8).has_neg_zero
+        assert not (i8 + f32).has_neg_zero
+
+    def test_sub_derives_neg_zero_from_the_left_operand(self):
+        """`a - b` is `a + (-b)`, so by the sum rule both addends must be able to
+        be `-0.0`: `a` directly, and `-b` whenever `b` can be `+0.0` — which
+        every grid can.  So only `a` matters.  Confirmed against the
+        interpreter: `(-0)-(+0)` is `-0.0`, while `(+0)-(+0)`, `(-0)-(-0)` and
+        `1-1` are `+0.0`."""
+        f32 = AbstractFormat.from_format(fp.FP32.format())
+        i8 = AbstractFormat.from_format(fp.SINT8.format())
+        assert (f32 - i8).has_neg_zero
+        assert (f32 - f32).has_neg_zero
+        assert not (i8 - f32).has_neg_zero
+        assert not (i8 - i8).has_neg_zero
+
+    def test_neg_carries_neg_zero_over(self):
+        """Negation maps `+0.0` to `-0.0`, and every grid contains a `+0.0` — so
+        the image holds one exactly when the number system does.
+
+        Checked against the interpreter: `-(+0)` is `-0.0` under FP64, while
+        `-(0)` under `SINT8` is `+0.0`, two's-complement having a single zero.
+        """
+        f64 = AbstractFormat.from_format(fp.FP64.format())
+        i8 = AbstractFormat.from_format(fp.SINT8.format())
+        assert (-f64).has_neg_zero
+        assert not (-i8).has_neg_zero
+
+    def test_mul_derives_neg_zero_as_a_disjunction(self):
+        """A zero product takes the XOR of the operand signs, so a `-0.0` needs a
+        sign disagreement — and one is always available once *either* system has
+        a signed zero, since every grid contains a `+0.0` and negative times
+        that zero is `-0.0`.
+
+        Checked against the interpreter: `(-1)*(+0)`, `(+0)*(-1)` and `(-0)*(+2)`
+        are all `-0.0` under FP64, while `(-2)*0` under `SINT8` is `+0.0`.
+
+        Note this is a *disjunction* where addition takes a conjunction — the
+        asymmetry is real, and assuming one rule for both is what makes
+        `no -0 * no -0 = no -0` look plausible while `(-1) * 0 = -0.0`.
+        """
+        f64 = AbstractFormat.from_format(fp.FP64.format())
+        i8 = AbstractFormat.from_format(fp.SINT8.format())
+        assert (f64 * f64).has_neg_zero
+        assert (f64 * i8).has_neg_zero
+        assert (i8 * f64).has_neg_zero
+        assert not (i8 * i8).has_neg_zero
+
+    def test_integer_ops_keep_an_integer_storage(self):
+        """The payoff: deriving the flag must not cost integer code its storage.
+
+        Both rules answer "does this number system have a signed zero", and an
+        integer one does not — so negation and multiplication of integer-bounded
+        values stay integers rather than widening to `float`.
+        """
+        from fpy2.backend.cpp.storage import choose_storage_scalar
+        from fpy2.backend.cpp.types import CppScalar
+        i8 = AbstractFormat.from_format(fp.SINT8.format())
+        assert choose_storage_scalar((-i8).format()) != CppScalar.F32
+        assert choose_storage_scalar((i8 * i8).format()) != CppScalar.F32
+
+    def test_abs_never_has_a_negative_zero(self):
+        """`abs` cannot produce one, so `False` here is the derived answer."""
+        f32 = AbstractFormat.from_format(fp.FP32.format())
+        assert f32.has_neg_zero
+        assert not abs(f32).has_neg_zero
+
+    def test_integer_arithmetic_keeps_no_negative_zero(self):
+        """The case that forced `enable_neg_zero` to exist.
+
+        `SINT8` has `prec=inf`, but the *sum* has a finite precision, so
+        `format()` materializes it as a float-shaped `MPBFloatFormat` — whose
+        value set includes a `-0.0` unless the flag says otherwise.  Left to
+        decay, `int8 + int8` stopped fitting `int16_t` and became `float`.
+        """
+        a = AbstractFormat.from_format(fp.SINT8.format())
+        assert not a.has_neg_zero
+        s = a + a
+        assert not s.has_neg_zero
+        assert not s.format().representable_in(self._NZ)
+        assert not AbstractFormat.from_format(s.format()).has_neg_zero
+
     def test_contains_examples(self):
         """Testing containment check."""
         # FP32 \subseteq FP64

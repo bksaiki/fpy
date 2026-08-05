@@ -55,6 +55,7 @@ class AbstractFormat:
     - `has_pos_inf`: whether `+inf` is a representable value
     - `has_neg_inf`: whether `-inf` is a representable value
     - `has_nan`: whether `NaN` is a representable value
+    - `has_neg_zero`: whether `-0.0` is a representable value
 
     A special-value flag is independent of the corresponding bound: e.g.
     `pos_bound = inf` means the finite grid is unbounded, not that `+inf` is a
@@ -68,6 +69,7 @@ class AbstractFormat:
     has_pos_inf: bool
     has_neg_inf: bool
     has_nan: bool
+    has_neg_zero: bool
 
     def __init__(
         self,
@@ -79,6 +81,7 @@ class AbstractFormat:
         has_pos_inf: bool = False,
         has_neg_inf: bool = False,
         has_nan: bool = False,
+        has_neg_zero: bool = False,
     ):
         if prec <= 0:
             raise ValueError("`prec` must be positive.")
@@ -90,11 +93,12 @@ class AbstractFormat:
         self.has_pos_inf = has_pos_inf
         self.has_neg_inf = has_neg_inf
         self.has_nan = has_nan
+        self.has_neg_zero = has_neg_zero
 
     def __hash__(self):
         return hash((
             self.prec, self.exp, self.pos_bound, self.neg_bound,
-            self.has_pos_inf, self.has_neg_inf, self.has_nan,
+            self.has_pos_inf, self.has_neg_inf, self.has_nan, self.has_neg_zero,
         ))
 
     def __eq__(self, other):
@@ -107,6 +111,7 @@ class AbstractFormat:
             and self.has_pos_inf == other.has_pos_inf
             and self.has_neg_inf == other.has_neg_inf
             and self.has_nan == other.has_nan
+            and self.has_neg_zero == other.has_neg_zero
         )
 
     def __str__(self) -> str:
@@ -115,6 +120,7 @@ class AbstractFormat:
                 (self.has_pos_inf, '+inf'),
                 (self.has_neg_inf, '-inf'),
                 (self.has_nan, 'nan'),
+                (self.has_neg_zero, '-0'),
             ) if flag
         )
         base = f'A({self.prec}, {self.exp}, +{self.pos_bound}, {self.neg_bound}'
@@ -125,19 +131,31 @@ class AbstractFormat:
         return AbstractFormat(
             self.prec, self.exp, self.pos_bound, neg_bound=self.neg_bound,
             has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_neg_zero=self.has_neg_zero,
         )
 
     def __neg__(self) -> 'AbstractFormat':
-        """Negation of the format (swaps positive and negative bounds)."""
+        """Negation of the format (swaps positive and negative bounds).
+
+        ``has_neg_zero`` carries over unchanged.  Negation maps ``+0.0`` to
+        ``-0.0``, and every grid contains a ``+0.0`` -- ``pos_bound >= 0 >=
+        neg_bound`` holds by convention and nothing excludes zero -- so the image
+        holds a ``-0.0`` exactly when this number system has one at all.  A
+        system without: ``-(0)`` under ``SINT8`` is ``+0.0``, since
+        two's-complement has a single zero.
+        """
         # negation maps +inf <-> -inf; NaN is unsigned so it is preserved
         return AbstractFormat(
             self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound,
             has_pos_inf=self.has_neg_inf, has_neg_inf=self.has_pos_inf, has_nan=self.has_nan,
+            has_neg_zero=self.has_neg_zero,
         )
 
     def __abs__(self) -> 'AbstractFormat':
         """Absolute value of the format (clamps the negative bound to zero)."""
-        # abs maps -inf to +inf, so +inf is present if either infinity was
+        # abs maps -inf to +inf, so +inf is present if either infinity was.
+        # `has_neg_zero` is left at its default: `abs` never yields a negative
+        # zero, so false is the derived answer here, not an omission.
         return AbstractFormat(
             self.prec, self.exp, self.pos_bound, neg_bound=RealFloat.from_int(0),
             has_pos_inf=self.has_pos_inf or self.has_neg_inf, has_neg_inf=False, has_nan=self.has_nan,
@@ -188,10 +206,14 @@ class AbstractFormat:
             or (self.has_pos_inf and other.has_neg_inf)
             or (self.has_neg_inf and other.has_pos_inf)
         )
+        # A sum is `-0.0` only when *both* addends are: IEEE-754 gives a
+        # like-signed sum that sign, and every other zero sum is `+0.0`.
+        has_neg_zero = self.has_neg_zero and other.has_neg_zero
 
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=has_pos_inf, has_neg_inf=has_neg_inf, has_nan=has_nan,
+            has_neg_zero=has_neg_zero,
         )
 
     def __sub__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -241,10 +263,16 @@ class AbstractFormat:
             or (self.has_pos_inf and other.has_pos_inf)
             or (self.has_neg_inf and other.has_neg_inf)
         )
+        # `a - b` is `a + (-b)`, so by the sum rule both addends must be able to
+        # be `-0.0`: `a` directly, and `-b` when *b* can be `+0.0`.  Every grid
+        # contains a `+0.0` -- `pos_bound >= 0 >= neg_bound` holds by convention
+        # and nothing excludes zero -- so only `a` is in question.
+        has_neg_zero = self.has_neg_zero
 
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=has_pos_inf, has_neg_inf=has_neg_inf, has_nan=has_nan,
+            has_neg_zero=has_neg_zero,
         )
 
 
@@ -275,9 +303,18 @@ class AbstractFormat:
         other_inf = other.has_pos_inf or other.has_neg_inf
         inf_out = self_inf or other_inf
         has_nan = self.has_nan or other.has_nan or inf_out
+        # A zero product takes the XOR of the operand signs (IEEE-754 §6.3, in
+        # every rounding mode), so a `-0.0` needs a sign disagreement -- and one
+        # is always available once *either* number system has a signed zero:
+        # every grid contains a `+0.0`, and a negative times that zero is
+        # `-0.0`.  When neither system has one, no product can be one:
+        # two's-complement has a single zero, and `(-2) * 0` under `SINT8` is
+        # `+0.0`.
+        has_neg_zero = self.has_neg_zero or other.has_neg_zero
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=inf_out, has_neg_inf=inf_out, has_nan=has_nan,
+            has_neg_zero=has_neg_zero,
         )
 
     def __and__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -338,10 +375,19 @@ class AbstractFormat:
         Callers should gate with ``isinstance(fmt, AbstractableFormat)``.
 
         Special-value membership is derived by probing *fmt*'s
-        :meth:`representable_in` with each signed infinity and NaN.  Probing
-        ``+inf``/``-inf`` separately captures per-sign asymmetry a single
-        ``enable_inf`` flag cannot (e.g. a positive-only format has no -inf).
-        This round-trips with :meth:`format`, which sets the ``enable_*`` flags.
+        :meth:`representable_in` with each signed infinity, NaN, and a negative
+        zero.  Probing ``+inf``/``-inf`` separately captures per-sign asymmetry a
+        single ``enable_inf`` flag cannot (e.g. a positive-only format has no
+        -inf).  This round-trips with :meth:`format`, which sets the
+        ``enable_*`` flags.
+
+        ``has_neg_zero`` round-trips like the others, via each format's
+        ``enable_neg_zero``.  That flag exists for this: without it
+        :meth:`format` could not express "no negative zero", so every
+        integer-valued bound materialized on the way to storage selection would
+        acquire one and lose its integer storage — ``int8 + int8`` lands on a
+        *float*-shaped ``MPBFloatFormat``, whose value set legitimately includes
+        a ``-0.0`` unless told otherwise.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:
@@ -387,9 +433,29 @@ class AbstractFormat:
                 raise ValueError(f'format is not abstractable: {fmt!r}')
 
         # special values: probe the format's representable set directly.
+        # TODO: drop the carve-out once MPFixedFormat / MPBFixedFormat gain an option to disable -0.0.
         af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
         af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
         af.has_nan = fmt.representable_in(Float.nan())
+        # `MPFixedFormat` is taken as having no negative zero, whatever it says.
+        #
+        # TODO: a lie, and the last one here.  `MPFixedFormat` backs FPy's
+        # `INTEGER`, which does hold a negative zero -- but no C++ integer type
+        # does, and believing it diverges the loop fixpoint in
+        # `test_while{5,6,7}_rounded` to `REAL_FORMAT`, which nothing can store.
+        # It costs one divergence: `-x` for an `INTEGER` parameter `x == 0` gives
+        # `-0.0` from the interpreter and `0` from compiled code.  A *literal*
+        # zero is fine -- its bound is a `SetFormat`, which states the sign.
+        # `docs/todos/reals-in-integer-storage.md` has the diagnosis and the two
+        # candidate fixes.
+        #
+        # Not extended to `MPBFixedFormat`: its `enable_neg_zero` is what lets a
+        # bound say "this really can be a negative zero" and so reach a float
+        # storage, which is the whole point of the flag.
+        af.has_neg_zero = (
+            not isinstance(fmt, MPFixedFormat)
+            and fmt.representable_in(Float(s=True, exp=0, c=0))
+        )
         return af
 
     def format(self) -> Format:
@@ -429,6 +495,17 @@ class AbstractFormat:
             if bounds_bounded:
                 assert isinstance(self.pos_bound, RealFloat)
                 assert isinstance(self.neg_bound, RealFloat)
+                if not self._prec_constrains():
+                    # An integer grid: describe it as fixed-point.  Materializing
+                    # as a float would be correct but perverse — every value would
+                    # be subnormal — and, more to the point, a float format has a
+                    # signed zero.  `int8 + int8` lands here, and describing it as a
+                    # float is what cost it its `int16_t` storage.
+                    return MPBFixedFormat(
+                        self.exp - 1, self.pos_bound, self.neg_bound,
+                        enable_nan=enable_nan, enable_inf=enable_inf,
+                        enable_neg_zero=self.has_neg_zero,
+                    )
                 neg_maxval = self.neg_bound
                 if not neg_maxval.s:
                     # MPBFloatFormat requires a strictly-negative neg_maxval;
@@ -456,11 +533,43 @@ class AbstractFormat:
                 return MPBFixedFormat(
                     nmin, self.pos_bound, self.neg_bound,
                     enable_nan=enable_nan, enable_inf=enable_inf,
+                    enable_neg_zero=self.has_neg_zero,
                 )
             if bounds_unbounded:
-                return MPFixedFormat(nmin, enable_nan=enable_nan, enable_inf=enable_inf)
+                return MPFixedFormat(nmin, enable_nan=enable_nan, enable_inf=enable_inf,
+                    enable_neg_zero=self.has_neg_zero)
 
         return REAL_FORMAT
+
+    def _prec_constrains(self) -> bool:
+        """Does ``prec`` actually thin the grid inside the bounds?
+
+        The grid has spacing ``2**exp``; spanning the bounds at that spacing
+        needs some number of significand bits.  If ``prec`` supplies at least
+        that many it removes nothing, and the value set is the *whole* grid —
+        which is exactly what a fixed-point format describes.  If ``prec`` is
+        smaller, values thin out as the magnitude grows, and only a floating-point
+        format can say that.
+
+        So this is the float/fixed discriminator, and it is about the precision
+        constraint alone — not about whether the values happen to be integers.
+        ``A(24, -149, ±3.4e38)`` (FP32's own shape) needs 278 bits to span its
+        range at quantum ``2**-149`` and has 24, so it is genuinely floating.
+        ``A(9, 0, +254, -256)`` — the sum of two ``int8`` formats — needs 9 and
+        has 9, so it is genuinely fixed.
+
+        Only meaningful with a finite ``prec``/``exp`` and finite bounds; callers
+        check that first.
+        """
+        if not isinstance(self.prec, int) or not isinstance(self.exp, int):
+            return True
+        if isinstance(self.pos_bound, float) or isinstance(self.neg_bound, float):
+            return True
+        needed = max(
+            _maxval_precision(self.pos_bound, self.exp),
+            _maxval_precision(RealFloat(s=False, x=self.neg_bound), self.exp),
+        )
+        return self.prec < needed
 
     def effective_prec(self):
         """Effective maximum precision."""
@@ -480,6 +589,23 @@ class AbstractFormat:
         # everything else
         return self.prec
 
+    def specials_contained_in(self, other: 'AbstractFormat') -> bool:
+        """Is every special value of ``self`` also one of ``other``?
+
+        Condition 4 of :meth:`_is_contained_in`, factored out because storage
+        selection needs it *without* the magnitude conditions: its fallback for an
+        unbounded integer deliberately ignores the bounds, but must not ignore
+        these.  Keeping one implementation is the point -- ``has_neg_zero`` was
+        added to the containment check and missed in that fallback, which let a
+        bound carrying a ``-0.0`` reach an integer storage.
+        """
+        return not (
+            (self.has_pos_inf and not other.has_pos_inf)
+            or (self.has_neg_inf and not other.has_neg_inf)
+            or (self.has_nan and not other.has_nan)
+            or (self.has_neg_zero and not other.has_neg_zero)
+        )
+
     def _is_contained_in(self, other: 'AbstractFormat') -> bool:
         """Return True iff every value representable by `self` is also representable by `other`.
 
@@ -490,15 +616,20 @@ class AbstractFormat:
              other's subnormal region (pos_bound <= 2^(other.exp + other.prec)), in which case
              the floating-point precision of other is irrelevant — all values fit exactly.
           4. Special values: every special value in self must also be in other
-             (a member of self that other lacks breaks containment).
+             (a member of self that other lacks breaks containment).  This
+             includes ``-0.0``, which conditions 1-3 cannot see: they compare
+             ``RealFloat`` bounds by magnitude, so the two zeros are
+             indistinguishable there.
+
+        Under-reporting a flag is not merely imprecise.  It accepts containments
+        that should fail, and storage selection reads that as permission -- a
+        bound that can hold a ``-0.0`` reaching an integer type is a wrong
+        answer, not a loose one.  Every operator derives ``has_neg_zero`` for
+        this reason.
         """
 
-        # 4. special values — each is a cheap membership implication
-        if self.has_pos_inf and not other.has_pos_inf:
-            return False
-        if self.has_neg_inf and not other.has_neg_inf:
-            return False
-        if self.has_nan and not other.has_nan:
+        # 4. special values
+        if not self.specials_contained_in(other):
             return False
 
         # 1. quantum
