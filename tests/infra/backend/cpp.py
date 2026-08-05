@@ -1830,10 +1830,31 @@ def _regression_blocked_dot_e4m3(xs):
 # losslessly.  These are compiled (and ``cc``-checked) with the given arg
 # types; they are not run-mode executed (custom-typed inputs aren't
 # synthesized by the differential harness).
+@fp.fpy(ctx=fp.FP32)
+def _regression_fp32_literal_call_arg(y: fp.Real, z: fp.Real) -> fp.Real:
+    """Literal arguments to type-deduced C++ calls, under FP32.
+
+    A literal's storage comes from its value, so `1.5` matches the `float`
+    signature while the token is a C++ `double`.  `fpy::max` is a template, so
+    that combination does not deduce and the emitted C++ *does not compile* --
+    which is what this regression catches, since the harness compiles every
+    corpus program.  `std::fma` is the silent half: it would pick the `double`
+    overload and round twice.  Only FP32 shows either; an FP64 literal already
+    has the right type.
+    """
+    a = fp.fmax(y, 1.5)
+    b = fp.fma(y, z, 0.25)
+    return a + b
+
+
 _typed_regression_funcs: list[tuple[fp.Function, list]] = [
     (
         _regression_blocked_dot_e4m3,
         [fp.types.ListType(fp.types.RealType(fp.MX_E4M3))],
+    ),
+    (
+        _regression_fp32_literal_call_arg,
+        [fp.types.RealType(fp.FP32), fp.types.RealType(fp.FP32)],
     ),
 ]
 

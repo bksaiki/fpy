@@ -1545,6 +1545,55 @@ class CppEmitter(Visitor):
             )
         return self._explicit_cast(arg, target_ty)
 
+    @staticmethod
+    def _literal_cpp_type(e: RationalVal) -> CppScalar | None:
+        """The C++ type of the token *e* prints as, or ``None`` if unclear.
+
+        Not the same question as its *storage*, which
+        :class:`StorageAnalysis` picks from the literal's value.  A token has
+        whatever type C++ gives it: anything with a fraction goes out through
+        ``repr(float)`` and so is a ``double``, and a decimal integer literal
+        is ``int`` unless it does not fit.  ``None`` means "wider than we
+        model", which callers treat as "does not match", so an unmodelled
+        literal gets a cast rather than the benefit of the doubt.
+        """
+        v = e.as_rational()
+        if v.denominator != 1:
+            return CppScalar.F64
+        n = v.numerator
+        if -2 ** 31 <= n < 2 ** 31:
+            return CppScalar.S32
+        if -2 ** 63 <= n < 2 ** 63:
+            return CppScalar.S64
+        return None
+
+    def _call_arg(self, code: str, e: Expr, want: CppScalar) -> str:
+        """*code* as a call argument of type *want*, spelling a literal's type.
+
+        The op table matches a literal on its *storage*, which is chosen from
+        its value -- so ``1.5`` in an FP32 context matches the ``float``
+        signature while the token itself is a C++ ``double``, and nothing
+        inserts a cast because the two "agree".  Anywhere a declaration
+        supplies the type that is harmless, and the promotion is exact for
+        ``+ - * /`` because double rounding equals single rounding when
+        ``2p + 2 <= 53``, which holds for every format this backend can store.
+
+        It is *not* harmless where the callee takes its type from the argument.
+        ``fpy::min`` / ``fpy::max`` are our own templates, so a ``float`` and a
+        ``double`` argument fail to deduce at all; the ``<cmath>`` overload sets
+        silently select the wider overload, which for ``fma`` -- whose exact
+        result is a product *plus* an addend, and so is not covered by
+        ``2p + 2`` -- rounds twice where FPy rounds once.
+
+        Only literals need this: a variable's declared type already is its
+        storage.  See ``docs/todos/cpp-literal-tokens-and-sum.md``.
+        """
+        if not isinstance(e, RationalVal):
+            return code
+        if self._literal_cpp_type(e) == want:
+            return code
+        return self._explicit_cast(code, want)
+
     def _explicit_cast(self, arg: str, target_ty: CppScalar) -> str:
         """Emit ``static_cast<target>(arg)`` unconditionally.
 
@@ -1625,9 +1674,12 @@ class CppEmitter(Visitor):
         active = self._active_ctx_for(e)
         arg_storage = self._scalar_storage_for_expr(e.arg)
 
-        # (1) Direct match.
+        # (1) Direct match.  A literal still needs its type spelled where the
+        # signature is a call: it matched on storage, not on the token's type.
         for sig in sigs:
             if sig.matches(arg_storage, active):
+                if sig.is_func:
+                    return sig.format(self._call_arg(arg, e.arg, sig.arg_ty))
                 return sig.format(arg)
 
         # (2) Cast-to-active fallback: pick the all-active signature
@@ -1641,9 +1693,10 @@ class CppEmitter(Visitor):
         if target is not None:
             for sig in sigs:
                 if sig.arg_ty == target and sig.out_ctx == active:
-                    return sig.format(
-                        self._maybe_cast(arg, arg_storage, target, at=e)
-                    )
+                    cast = self._maybe_cast(arg, arg_storage, target, at=e)
+                    if sig.is_func:
+                        cast = self._call_arg(cast, e.arg, target)
+                    return sig.format(cast)
 
         # (3) Lossless-widening fallback — only sound when the active
         # context is ``REAL``.  The wider C++ op then produces the exact
@@ -1748,9 +1801,15 @@ class CppEmitter(Visitor):
         lhs_storage = self._scalar_storage_for_expr(e.first)
         rhs_storage = self._scalar_storage_for_expr(e.second)
 
-        # (1) Direct match.
+        # (1) Direct match.  See the unary path: a literal operand of a
+        # call-form signature needs its type spelled.
         for sig in sigs:
             if sig.matches(lhs_storage, rhs_storage, active):
+                if not sig.is_infix:
+                    return sig.format(
+                        self._call_arg(lhs, e.first, sig.in1_ty),
+                        self._call_arg(rhs, e.second, sig.in2_ty),
+                    )
                 return sig.format(lhs, rhs)
 
         # (2) Cast-to-active fallback.
@@ -1763,10 +1822,12 @@ class CppEmitter(Visitor):
                 if (sig.in1_ty == target
                         and sig.in2_ty == target
                         and sig.out_ctx == active):
-                    return sig.format(
-                        self._maybe_cast(lhs, lhs_storage, target, at=e),
-                        self._maybe_cast(rhs, rhs_storage, target, at=e),
-                    )
+                    l = self._maybe_cast(lhs, lhs_storage, target, at=e)
+                    r = self._maybe_cast(rhs, rhs_storage, target, at=e)
+                    if not sig.is_infix:
+                        l = self._call_arg(l, e.first, target)
+                        r = self._call_arg(r, e.second, target)
+                    return sig.format(l, r)
 
         # (3) Lossless-widening fallback — only sound when the active
         # context is ``REAL``.  See :meth:`_try_widen_binary` and the
@@ -2254,10 +2315,15 @@ class CppEmitter(Visitor):
         in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         args = [a1, a2, a3]
 
-        # (1) Direct match.
+        # (1) Direct match.  Every ternary signature is a call -- `std::fma`
+        # among them, where picking the wider overload rounds twice.
         for sig in sigs:
             if sig.matches(in_storages[0], in_storages[1], in_storages[2], active):
-                return sig.format(a1, a2, a3)
+                return sig.format(
+                    self._call_arg(a1, e.args[0], sig.in1_ty),
+                    self._call_arg(a2, e.args[1], sig.in2_ty),
+                    self._call_arg(a3, e.args[2], sig.in3_ty),
+                )
 
         # (2) Cast-to-active fallback.
         try:
@@ -2270,11 +2336,12 @@ class CppEmitter(Visitor):
                         and sig.in2_ty == target
                         and sig.in3_ty == target
                         and sig.out_ctx == active):
-                    return sig.format(
-                        self._maybe_cast(a1, in_storages[0], target, at=e),
-                        self._maybe_cast(a2, in_storages[1], target, at=e),
-                        self._maybe_cast(a3, in_storages[2], target, at=e),
-                    )
+                    return sig.format(*[
+                        self._call_arg(
+                            self._maybe_cast(a, s, target, at=e), src, target,
+                        )
+                        for a, s, src in zip(args, in_storages, e.args)
+                    ])
 
         # (3) Lossless-widening fallback — only sound when the active
         # context is ``REAL``.  See :meth:`_try_widen_ternary` and the
@@ -2384,8 +2451,8 @@ class CppEmitter(Visitor):
         args = [self._visit_expr(a, ctx) for a in e.args]
         arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         casted = [
-            self._maybe_cast(a, s, target, at=e)
-            for a, s in zip(args, arg_storages)
+            self._call_arg(self._maybe_cast(a, s, target, at=e), src, target)
+            for a, s, src in zip(args, arg_storages, e.args)
         ]
         if target.is_float():
             # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``
