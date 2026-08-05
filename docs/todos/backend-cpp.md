@@ -17,25 +17,18 @@ Module layout:
 - `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
 - `target.py`, `utils.py` — target description, header / helper preamble.
 
-Read the design before changing anything; [Open TODOs](#open-todos) is at the
-bottom. Narrower questions have their own documents:
+Read the design before changing anything; [Open issues](#open-issues) is at
+the bottom.
 
-- `unboxing-gaps.md` — what stays boxed, and why.
-- `cpp-narrower-variable-at-a-join.md` — two element types meeting at one place.
-- `format-infer-aliasing.md` — a store widens every name in its alias region.
-  Closed: the bound is sound, and the shape it used to refuse now compiles. A
-  callee's list parameter still refuses, on ABI grounds.
-- `reals-in-integer-storage.md` — a real narrowed into an integer holds neither
-  `-0.0` nor NaN. Closed: the narrowing is gated on the bound genuinely
-  excluding those, and `enable_neg_zero` lets a format say which zeros it holds.
-  Only the open question of whether to keep the narrowing at all remains.
-- **`cpp-literal-tokens-and-sum.md`** — the largest remaining set of known
-  divergences between the emitted C++ and the interpreter.
+Everything C++-specific lives here. Analyses this backend depends on but does not
+own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
+`array-size-integer-exactness.md`.
 
-The correctness criterion those last three are measured against: *if the
-compiler succeeds, the emitted C++ must compile and must behave as the FPy
-interpreter does.* A refusal is always acceptable — the compiler may be limited —
-so a shape it cannot handle should raise, never miscompile.
+The correctness criterion: *if the compiler succeeds, the emitted C++ must
+compile and must behave as the FPy interpreter does.* A refusal is always
+acceptable — the compiler may be limited — so a shape it cannot handle should
+raise, never miscompile. The one place that still violates this is unchecked
+subscripts, below.
 
 ## Design
 
@@ -151,7 +144,7 @@ Module
 
 `Specialize` means a callee's formats follow its call site — so a callee called with a wider
 list is automatically instantiated wider, which is the workaround
-`cpp-narrower-variable-at-a-join.md` relies on.
+*A narrower value meeting a wider place* relies on.
 
 ### Translation-unit preamble
 
@@ -161,41 +154,186 @@ pull `headers()`, `helpers()`, or `prelude()`. `helpers()` carries the runtime:
 `fpy::list<T>` (a `shared_ptr<vector<T>>`), `fpy::make_list`, and the nary
 `fpy::min` / `fpy::max`. Headers track exactly what the emitted code uses.
 
-## Open TODOs
+## Open issues
 
 ### Bounds-checked list operations
 
-`_visit_list_ref`, `_visit_list_slice`, and `_visit_indexed_assign` emit raw
-`xs[i]` with no range check — `xs[10]` on a shorter list is undefined behaviour,
-while the interpreter raises. Likely shape: a checked subscript helper in
-`CPP_HELPERS`, called from each subscript site.
+**A silent wrong answer, and the only one left.** `_visit_list_ref`,
+`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]` with no range
+check. The interpreter raises on `xs[10]` over a shorter list; C++ does not
+report anything. A read returns whatever occupies that memory, so the program
+carries on and produces a wrong number. A write — `xs[10] = v` — stores outside
+the vector's buffer, which can corrupt unrelated data or the heap, with the
+damage surfacing far from its cause.
 
-### RAII fenv guard
+So this is not a difference in how an error is reported, and it is the last
+violation of the criterion above. It is narrow only in needing the program to
+index out of range in the first place.
 
-A `return` inside an active `fesetround` scope leaves the restore unreachable, so
-the caller's rounding mode leaks:
+Likely shape: a checked subscript helper in `CPP_HELPERS`, called from each
+subscript site. Deliberately not done yet, for two reasons that argue for doing
+it together with the array-size work rather than alone:
 
-```cpp
-double leak(double x) {
-    const auto _tmp1 = std::fegetround();
-    std::fesetround(FE_TOWARDZERO);
-    return (x + static_cast<double>(1));
-    std::fesetround(_tmp1);          // dead
-}
-```
+- an unconditional check costs something at every subscript, and
+- the checks worth keeping are the ones that cannot be discharged statically.
+  `array-size-symbolic.md` already tracks the size equalities that would
+  discharge them (`is_size_eq` proving `len(ys) == len(xs)` where `i < len(xs)`)
+  and says the two belong together. Nothing consumes those equalities yet.
 
-Fix with a guard in the helper preamble whose destructor runs on every exit path:
+### One question answered in four places
 
-```cpp
-struct __cpp_FenvGuard {
-    int prev;
-    explicit __cpp_FenvGuard(int rm) : prev(std::fegetround()) { std::fesetround(rm); }
-    ~__cpp_FenvGuard() { std::fesetround(prev); }
-};
-```
+"Can this value inhabit that place?" is decided four times, with different rules:
 
-`_visit_function` / `_visit_context` declare a guard instead of the manual
-save / set / restore.
+| path | sites | scalar | list element type | boxing |
+|---|---|---|---|---|
+`_emit_at` / `_convert_storage` | 10 | cast, never refuses | rebuild if unboxed, refuse if boxed | unboxed→boxed free; reverse refused |
+`_maybe_cast` | 23 | **refuses if lossy** | — | — |
+`_adapt_result` | callee results | — | refuse on mismatch | refuse if boxed; unboxed→boxed via `make_shared` |
+`_adapt_arg` | call arguments | — | refuse on mismatch | **boxed→unboxed via deref**; reverse refused |
+
+The scalar rules only *look* contradictory: `_emit_at` returns early when `want`
+is a scalar, so `_convert_storage` sees scalars only as tuple fields, where the
+target is the join and never narrower than a contributor. Measured — zero lossy
+narrowings through it across the corpus. But that reasoning is written nowhere
+and has to be rederived from two early-returns in different functions. Every site
+is defensible alone, none states its precondition, so the set can only be audited
+by reconstructing it.
+
+The fix: one predicate per *place kind* — return, argument, slot store, container
+field, operand rebind, callee result — in one module, called from each site
+instead of reimplemented. Deferred: instrumenting every `raise` and running the
+corpus plus 400 generated programs fired only 8 of ~75 sites, so this buys
+maintainability rather than correctness, at ~33 call sites in the most delicate
+part of the emitter. Worth doing when something next changes representation
+handling.
+
+Those 8 also say where the compilable set is actually bounded: *unconstrained
+real in a finite C++ type* accounts for 233 of 543 refusals, and the next two are
+downstream of the same storage question. That is the only lever that would move
+the *number* of compilable programs, and it is out of scope above.
+
+### A narrower value meeting a wider place
+
+Where several values reach one place — a `return`, a ternary arm, a list's
+elements, a tuple's field — that place admits one C++ type, while `format_infer`
+bounds each expression by *its own* values. Reconciling the two is a **storage**
+question, so it lives in `emitter._emit_at`: it builds a *constructor* at the
+place's type and converts anything else (`_convert_storage`).
+
+> Do not push this into `format_infer`. An earlier version did, by overwriting
+> each contributor's `by_expr` entry with the join. Sound, strictly less precise,
+> and it makes a backend-independent analysis answer a C++ question: `[1.5, 2.5]`
+> and `[3.0]` both came out bounded by `{3/2, 5/2, 3}`, so `round_elim`,
+> `const_fold`, error analysis and the FPCore backend all paid for a decision
+> only this backend cares about.
+
+**What cannot be converted.** A *shared* list cannot be rebuilt: converting
+allocates, a new allocation is a different object, and sharing exists precisely
+so FPy's aliasing survives. `_convert_storage` refuses and `_refuse_unsharing`
+writes the message. Unboxed → boxed is fine and is done — a value has no aliases
+to lose. A callee's result is the same refusal from the other side: its
+representation is fixed by the callee's own body.
+
+The refusal has to be ours rather than the C++ compiler's, because reference-bound
+names are spelled `const auto&` — *nothing in the emitted text states the element
+type*, so only C++ would object, and only sometimes.
+`test_a_shared_narrower_list_is_refused` pins seven shapes.
+
+Four `[32_64]` matrix instantiations refuse today:
+`_gen_return_param_or_literal`, `_gen_ternary_param`, `_gen_list_into_tuple`,
+`_gen_comprehension_of_rows`. The discriminator is not fresh-vs-shared — a fresh
+narrower local compiles, because storage assignment unifies it with the return
+type. It is whether the narrower value's storage is fixed by something outside
+the function: a parameter's ABI, a callee's return, or a reference binding.
+
+**The workaround is real and pinned.** Widening at the *call site* is enough:
+`Specialize` then instantiates the callee at the wider argument format
+(`test_widening_the_call_site_is_a_real_workaround`).
+
+Three things considered and not done:
+
+- **Raise the definition instead of converting at the place** (`place_floors`,
+  landed in `f05ea99`, removed; `cpp-old` is the last state with it). Measured
+  cost of removing it: the corpus failure set was unchanged and the matrix went
+  29 → 27 instantiations, both losses being "return an FP32 list parameter or an
+  FP64 literal list". A pure capability, fixing no defect — against which it has
+  to skip exactly the values with no storage of their own to raise, and getting
+  that set wrong is a *silent* miscompile for the `const auto&` reason above. It
+  got that wrong four times. Raising a *parameter* also changes the ABI, which is
+  fine for an entry point and wrong for a function compiled code calls.
+- **Closing the callee-result case properly** is harder than propagating a floor
+  across the call edge: a callee's return format is a *function* of its parameter
+  formats, so a caller can only ask for parameter formats that *produce* a wider
+  return. That is inverting the callee's body, and for many callees no answer
+  exists — one returning `[1.5]` cannot be widened by any argument.
+- **A language answer.** A returned list's element format is arguably part of
+  what the function *is*; a signature claiming `-> list[fp.Real]` at FP64 while
+  returning an FP32 parameter could be rejected by `TypeInfer` rather than by
+  storage selection.
+
+### What stays boxed
+
+A list is a plain `std::vector<T>` wherever `fpy2.analysis.alias` proves nothing
+can observe the difference, and keeps the `fpy::list<T>` handle otherwise. **All
+166 of the corpus's signature list levels come out unboxed**, so both shapes below
+are ones the corpus does not contain — which is why they are written down.
+`test_unbox_profile.py` pins the count *and* the corpus size: an empty result
+only means something while the corpus is as large as when it was measured.
+
+**A list a local name and a container both hold.** *Open.* `xs = [n, n]; return
+(xs, 1.0)` keeps its handle — the name and the tuple's field are two places, even
+though the name is dead after the return. Inline as `return ([n, n], 1.0)` it
+unboxes. Closing it needs liveness, not just a sharing verdict, *and* the emitter
+must learn to **move** into the container: `std::make_tuple(xs, 1)` copies a value
+where it merely bumps a refcount for a handle. The two have to land together or
+the change makes things slower.
+
+**A projection whose slot is replaced.** *Deliberate.* `row = xss[i]` binds a
+reference, which is what lets `for a, b in zip(...)` over nested lists unbox at
+all. A C++ reference follows the *slot* while FPy keeps referring to the list that
+was in it, so any `xss[i] = <list>` anywhere in the function rules it out.
+Function-wide by choice: nothing else in the analysis is flow-sensitive.
+
+**Not planned:** interprocedural precision beyond retention — a caller-driven
+representation choice with the callee specialized per argument representation. It
+needs one body per representation vector and nothing has measured a gain that
+justifies it. If ever wanted, the representation must join the specialization key
+rather than be patched on after, since storage is decided per spec.
+
+### Aliasing: what still refuses
+
+`format_infer` consumes `Alias` and replays a region's inserts against every bound
+written through it, so a store through one name widens all of them. Two shapes
+still refuse:
+
+- **A callee's list parameter.** Widening it moves the signature out from under
+  the call site. The call-site workaround above does not apply, because here the
+  argument is the *narrower* one.
+- **A list aliased through a tuple**, in the backend. `_gen_list_into_tuple` gets
+  a sound bound, but the emitter computes a stale element type for the tuple
+  field and wants a `float` somewhere.
+
+Two imprecisions, neither unsound: flow-sensitivity comes from an *exclusion*
+(the two defs `reaching_defs` already refreshes are skipped) rather than by
+construction — the alternative is for `IndexedAssign` to refresh a def for every
+may-alias, which would benefit every analysis. And `Alias` runs without escape
+summaries, so a callee that provably does not retain its argument still forces a
+widening at the caller.
+
+### Whether integer narrowing earns its keep
+
+The backend narrows a `RealType` value to an integer type when its bound says
+every value is a small integer — `acc = 0.0` becomes `uint8_t`. This was the root
+cause of several wrong answers, since an integer holds neither a signed zero nor
+a NaN; it no longer is, because the narrowing is gated on the bound genuinely
+excluding those, in the analysis rather than here.
+
+What remains is a question of size, not correctness. Measured: 21 of the corpus's
+112 list element types are value-narrowed reals, plus scalars like `uint8_t acc`
+inside FP64 functions. Dropping it would trade smaller objects for emitted code
+that says `double` wherever FPy says real. *Integer*-typed FPy values keep integer
+storage regardless; `range(...)` needs an integer list and must stay one — that is
+what an early measured attempt broke.
 
 ### Narrowing inside `std::accumulate`, so `Sum` can fuse
 
@@ -226,10 +364,3 @@ A short package README pointing at this file and listing the public surface
   programs are rejected with an error naming the symbolic expression.
 - `with FP64 as ctx:` — binding the active context to a name.
 
-## Done since this document was written
-
-Kept as a record so they are not re-proposed: classification ops
-(`isfinite`/`isinf`/`isnan`/`isnormal`/`signbit`) and nary `Min`/`Max`; the
-execute-and-bit-compare harness (`tests/infra/backend/cpp.py --mode run`, plus a
-generated format matrix); and whole-call-graph optimization — `Specialize` runs
-before the pipeline, so `ZipElim` and friends reach callees, not just the entry.
