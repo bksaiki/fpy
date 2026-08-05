@@ -68,6 +68,40 @@ class TestStorageScalar:
         unbounded_int = MPFixedFormat(nmin=-1)
         assert choose_storage_scalar(unbounded_int) == CppScalar.S64
 
+    def test_unbounded_integer_fallback_still_checks_special_values(self):
+        """The ``S64`` fallback ignores the *magnitude* bound, not the rest.
+
+        Regression: it ran after the ladder search and re-checked nothing, so a
+        bound the ladder had just rejected could still land in ``int64_t``.
+        ``int64_t`` holds no NaN, no infinity and no signed zero, and an
+        ``MPFixedFormat`` can carry any of the three.
+        """
+        from fpy2.number.context.mp_fixed import MPFixedFormat
+        for kwargs in ({'enable_nan': True}, {'enable_inf': True}):
+            fmt = MPFixedFormat(nmin=-1, **kwargs)
+            with pytest.raises(StorageSelectionError):
+                choose_storage_scalar(fmt)
+        # ...while a plain unbounded integer still takes the fallback.
+        assert choose_storage_scalar(MPFixedFormat(nmin=-1)) == CppScalar.S64
+
+    def test_an_unbounded_integers_signed_zero_is_not_seen_here(self):
+        """``enable_neg_zero`` is the one flag this guard cannot act on.
+
+        Not because the guard is wrong, but because
+        ``AbstractFormat.from_format`` declines to believe an ``MPFixedFormat``
+        about its signed zero -- so the flag is already gone by the time storage
+        selection runs.  See the ``TODO`` there and
+        ``docs/todos/reals-in-integer-storage.md``: this is what lets ``-x`` on an
+        ``INTEGER`` parameter return ``0`` where the interpreter returns ``-0.0``.
+
+        Pinned so that lifting the carve-out shows up here as a change in
+        behaviour rather than passing unnoticed.
+        """
+        from fpy2.number.context.mp_fixed import MPFixedFormat
+        fmt = MPFixedFormat(nmin=-1, enable_neg_zero=True)
+        assert fmt.representable_in(fp.RealFloat(s=True, exp=0, c=0))
+        assert choose_storage_scalar(fmt) == CppScalar.S64
+
     def test_a_signed_zero_bound_does_not_narrow_to_an_integer(self):
         """A bound carrying a ``-0.0`` selects a float, not an integer.
 

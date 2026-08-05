@@ -136,6 +136,7 @@ from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
 from ...number import INTEGER, REAL, Context, Float, RealFloat
+from ...number.context.mp_fixed import MPFixedFormat
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
     BoolType,
@@ -350,14 +351,22 @@ Inferred format for an expression or variable definition.
 """
 
 
-_INTEGER_FORMAT: Format = INTEGER.format()
+_INTEGER_FORMAT: Format = MPFixedFormat(
+    INTEGER.format().nmin, enable_neg_zero=False,
+)
 """
-Cached format for the :data:`INTEGER` context — used as the result
-format of integer-producing operations (``Len``, ``Dim``, ``Size``,
-``Range1``/``Range2``/``Range3``, the integer projection of
-``Enumerate``).  These ops always produce integer values regardless of
-the active rounding context, so reporting the active context's format
-would be unnecessarily loose.
+The format of an integer-*valued* expression: the result of ``Len``, ``Dim``,
+``Size``, ``Range1``/``Range2``/``Range3``, and the integer projection of
+``Enumerate``.  These ops produce integers whatever the active rounding context
+is, so reporting the active context's format would be unnecessarily loose.
+
+Deliberately **not** ``INTEGER.format()``, though it describes the same value
+grid.  ``INTEGER`` is a rounding context, and FPy's has a signed zero; a *count*
+does not — a list length is an integer, and an integer has one zero.  Conflating
+the two is what made believing that signed zero unaffordable: every counter and
+length inherited it, and no C++ integer type holds one, so they all had to widen
+to ``float``.  Keeping the two apart lets a real rounded under ``INTEGER`` carry
+its ``-0.0`` (and reach a float storage) while a length stays an integer.
 """
 
 
@@ -598,8 +607,17 @@ _SET_BINOPS: dict[Any, Callable[[SetValue, SetValue], SetValue]] = {
     operator.mul: _set_mul,
 }
 """Exact binary arithmetic over :data:`SetValue`, keyed by the operator the
-caller passes.  An operator absent here has no set-level rule, so
-:func:`exact_binop` falls back to the abstract path rather than guessing."""
+caller passes.
+
+Why functions rather than operators on :class:`NegZero`: two of these rules must
+*produce* a negative zero from operands that are both plain
+:class:`Fraction`\\ s — ``-Fraction(0)`` and ``Fraction(-1) * Fraction(0)`` — and
+those go through ``Fraction``'s own dunders, which no method on the sentinel can
+intercept.  A reflected operator only fires when the sentinel is an *operand*,
+never when it must be the *result*.
+
+An operator absent here has no set-level rule, so :func:`exact_binop` falls back
+to the abstract path rather than guessing."""
 
 _SET_UNOPS: dict[Any, Callable[[SetValue], SetValue]] = {
     operator.neg: _set_neg,

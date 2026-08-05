@@ -131,7 +131,13 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
     for cpp_ty, ladder_af in _LADDER:
         if af <= ladder_af:
             return cpp_ty
-    if isinstance(bound, MPFixedFormat) and bound.expmin >= 0:
+    if (isinstance(bound, MPFixedFormat) and bound.expmin >= 0
+            and af.specials_contained_in(_LADDER_LOOKUP[CppScalar.S64])):
+        # Deliberately ignores the *magnitude* bound -- an unbounded integer has
+        # none, and overflow is the user's problem (see the docstring above).  It
+        # must not ignore the membership flags too: `int64_t` holds no NaN, no
+        # infinity and no signed zero, so a bound carrying one of those has no
+        # business here even though the ladder search already rejected it.
         return CppScalar.S64
     raise StorageSelectionError(
         f'no storage type on the ladder contains {bound!r}'

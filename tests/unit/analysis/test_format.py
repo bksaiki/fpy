@@ -165,7 +165,8 @@ class TestAbstractFormat():
         This test should **fail** once that is fixed properly (either
         `MPFixedContext` flattens signed zeros, or the backend stops storing
         `INTEGER`-bounded reals in `int64_t`).  That is the point: the carve-out
-        and the `-z`-on-an-integer divergence it defers go away together.
+        and the divergence it defers -- negating an integer whose zero is not
+        statically known -- go away together.
         """
         nz = fp.RealFloat(s=True, exp=0, c=0)
         assert fp.INTEGER.format().representable_in(nz)          # the format says yes

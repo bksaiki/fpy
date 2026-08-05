@@ -15,7 +15,11 @@ from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
 from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
-from fpy2.analysis.format_infer.analysis import _join_bounds, _list_set_widen
+from fpy2.analysis.format_infer.analysis import (
+    _INTEGER_FORMAT,
+    _join_bounds,
+    _list_set_widen,
+)
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import FuncDef, IndexedAssign
 from fpy2.number.context.format import Format
@@ -1012,7 +1016,7 @@ class TestFormatInfer:
         len_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Len'
         ]
-        integer_fmt = fp.INTEGER.format()
+        integer_fmt = _INTEGER_FORMAT
         assert len_bounds and len_bounds[0] == integer_fmt, (
             f'expected Len to report INTEGER format, got {len_bounds}'
         )
@@ -1033,7 +1037,7 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
         ]
-        integer_fmt = fp.INTEGER.format()
+        integer_fmt = _INTEGER_FORMAT
         assert range_bounds, 'expected a Range1 expression'
         assert range_bounds[0] == ListFormat(integer_fmt), (
             f'expected ListFormat(INTEGER) for Range1, got {range_bounds}'
@@ -1153,7 +1157,7 @@ class TestFormatInfer:
 
         info = self._run(f)
         lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
-        assert lens and lens[0] == fp.INTEGER.format()
+        assert lens and lens[0] == _INTEGER_FORMAT
 
     def test_dim_pins_nesting_depth(self):
         """``dim(xs)`` always pins the (static) nesting depth."""
@@ -1212,7 +1216,7 @@ class TestFormatInfer:
         assert enum_bounds, 'expected an Enumerate expression'
         bound = enum_bounds[0]
         # Outer: ListFormat. Element: TupleFormat((INTEGER, FP32)).
-        integer_fmt = fp.INTEGER.format()
+        integer_fmt = _INTEGER_FORMAT
         fp32_fmt = fp.FP32.format()
         assert isinstance(bound, ListFormat)
         assert isinstance(bound.elt, TupleFormat)
@@ -1391,6 +1395,27 @@ class TestFormatInfer:
         assert REAL_FORMAT in s_bounds, (
             f'expected REAL_FORMAT among s bounds with widening, got {s_bounds}'
         )
+
+    def test_integer_valued_ops_do_not_inherit_integers_signed_zero(self):
+        """`_INTEGER_FORMAT` is not `INTEGER.format()`, though the grids match.
+
+        `INTEGER` is a rounding *context* and FPy's has a signed zero; a *count*
+        does not -- a list length is an integer, and an integer has one zero.
+        Conflating them made believing that signed zero unaffordable: every
+        counter and length inherited it, no C++ integer type holds one, so they
+        all widened to `float`.
+        """
+        from fpy2.analysis.format_infer.format import AbstractFormat
+        assert _INTEGER_FORMAT != fp.INTEGER.format()
+        assert not AbstractFormat.from_format(_INTEGER_FORMAT).has_neg_zero
+        # ...but they describe the same value grid.
+        assert _INTEGER_FORMAT.nmin == fp.INTEGER.format().nmin
+
+    def test_an_integer_count_keeps_an_integer_storage(self):
+        """The consequence at the backend: `len(xs)` stays an integer."""
+        from fpy2.backend.cpp.storage import choose_storage_scalar
+        from fpy2.backend.cpp.types import CppScalar
+        assert choose_storage_scalar(_INTEGER_FORMAT) != CppScalar.F32
 
     def test_literal_bound_states_a_signed_zero_exactly(self):
         """A ``-0.0`` literal gets ``SetFormat({NEG_ZERO})`` -- an exact bound.
@@ -1613,7 +1638,7 @@ class TestFormatInfer:
 
         info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
         x_bounds = {b for d, b in info.by_def.items() if d.name.base == 'x'}
-        int_fmt = fp.INTEGER.format()
+        int_fmt = _INTEGER_FORMAT
         assert int_fmt in x_bounds, (
             f'expected INTEGER MPFixedFormat among x bounds, got {x_bounds}'
         )

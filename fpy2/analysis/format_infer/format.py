@@ -439,23 +439,34 @@ class AbstractFormat:
         af.has_nan = fmt.representable_in(Float.nan())
         # `MPFixedFormat` is taken as having no negative zero, whatever it says.
         #
-        # TODO: this is a lie and it needs fixing.  `MPFixedFormat` -- which backs
-        # FPy's `INTEGER` -- really does hold a negative zero, deliberately so.
-        # But C++ has no integer type that does, and believing the format costs
-        # integer storage everywhere: measured, it retypes every `range` counter
-        # as `float`, and it diverges the loop fixpoint in
-        # `test_while{5,6,7}_rounded` all the way to `REAL_FORMAT`, which no C++
-        # type can hold.  The honest fix is either for `MPFixedContext` to flatten
-        # signed zeros the way `FixedContext` already does, or for the backend to
-        # stop storing `INTEGER`-bounded reals in `int64_t`.  Until then this
-        # leaves one known divergence unfixed: `-z` on an integer `z` returns
-        # `-0.0` from the interpreter and `0` from compiled code (see
-        # `docs/todos/reals-in-integer-storage.md`).
+        # TODO: this is a lie and it needs fixing.  `MPFixedFormat` backs FPy's
+        # `INTEGER`, which really does hold a negative zero, deliberately -- but
+        # no C++ integer type does.
         #
-        # Deliberately *not* extended to `MPBFixedFormat`: its `enable_neg_zero`
-        # is the one thing that lets a bound say "this really can be a negative
-        # zero" and so reach a float storage, which is the whole point of the
-        # flag.  Only the unbounded fixed-point case is distrusted here.
+        # The scope is now as narrow as it can be made from this side.  Integer
+        # *counts* no longer need the lie: `format_infer._INTEGER_FORMAT` is its
+        # own `MPFixedFormat` with `enable_neg_zero=False`, because a list length
+        # is an integer and an integer has one zero.  What remains is a real
+        # rounded under an ``INTEGER`` *scope*, whose bound is `INTEGER.format()`
+        # itself.
+        #
+        # Believing *that* is what is still unaffordable, and the obstacle is no
+        # longer storage selection -- it is the loop fixpoint.  For `x += 1`
+        # inside `with fp.INTEGER:`, the scope admits a `-0.0` while the sum
+        # provably cannot be one (a sum is `-0.0` only when both addends are), so
+        # `scope_af <= exact` correctly fails, `_bound_if_fits` takes its
+        # mixed-overlap branch, and `test_while{5,6,7}_rounded` widen to
+        # `REAL_FORMAT` -- which no C++ type can hold.  Intersecting the
+        # membership flags in that branch was tried and does not converge either.
+        #
+        # So the fix is either to stop `MPFixedContext` preserving signed zeros
+        # (contradicting `TestMPFixedKeepsNegativeZero`), or to make that
+        # fixpoint stable when a bound and its scope disagree about a membership
+        # flag.  Until then this leaves one divergence: negating an integer whose
+        # zero is not statically known -- `-x` for an `INTEGER` parameter `x == 0`
+        # gives `-0.0` from the interpreter and `0` from compiled code.  A
+        # *literal* zero is fine; its bound is a `SetFormat`, which states the
+        # sign via `NEG_ZERO`.  See `docs/todos/reals-in-integer-storage.md`.
         af.has_neg_zero = (
             not isinstance(fmt, MPFixedFormat)
             and fmt.representable_in(Float(s=True, exp=0, c=0))
@@ -594,6 +605,23 @@ class AbstractFormat:
         # everything else
         return self.prec
 
+    def specials_contained_in(self, other: 'AbstractFormat') -> bool:
+        """Is every special value of ``self`` also one of ``other``?
+
+        Condition 4 of :meth:`_is_contained_in`, factored out because storage
+        selection needs it *without* the magnitude conditions: its fallback for an
+        unbounded integer deliberately ignores the bounds, but must not ignore
+        these.  Keeping one implementation is the point -- ``has_neg_zero`` was
+        added to the containment check and missed in that fallback, which let a
+        bound carrying a ``-0.0`` reach an integer storage.
+        """
+        return not (
+            (self.has_pos_inf and not other.has_pos_inf)
+            or (self.has_neg_inf and not other.has_neg_inf)
+            or (self.has_nan and not other.has_nan)
+            or (self.has_neg_zero and not other.has_neg_zero)
+        )
+
     def _is_contained_in(self, other: 'AbstractFormat') -> bool:
         """Return True iff every value representable by `self` is also representable by `other`.
 
@@ -616,14 +644,8 @@ class AbstractFormat:
         :meth:`__neg__`.
         """
 
-        # 4. special values — each is a cheap membership implication
-        if self.has_pos_inf and not other.has_pos_inf:
-            return False
-        if self.has_neg_inf and not other.has_neg_inf:
-            return False
-        if self.has_nan and not other.has_nan:
-            return False
-        if self.has_neg_zero and not other.has_neg_zero:
+        # 4. special values
+        if not self.specials_contained_in(other):
             return False
 
         # 1. quantum
