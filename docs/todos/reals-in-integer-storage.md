@@ -46,9 +46,9 @@ flag survives `AbstractFormat.format()` and back. Without it every
 integer-valued bound materialized on the way to storage selection acquired a
 signed zero and lost its integer storage — `int8 + int8` became `float`.
 
-## What is still broken
+## Retired: the carve-out on `MPFixedFormat`
 
-**Negating an integer whose zero is not statically known.**
+One divergence outlived the change above:
 
 ```python
 def f(x: fp.Real) -> fp.Real:      # x : INTEGER
@@ -56,32 +56,42 @@ def f(x: fp.Real) -> fp.Real:      # x : INTEGER
         return -x
 ```
 
-For `x == 0` the interpreter returns `-0.0` and compiled code returns `0`. FPy's
-`INTEGER` (an `MPFixedFormat`) deliberately *has* a signed zero, but no C++
-integer type does.
+For `x == 0` the interpreter returned `-0.0` and compiled code returned `0`.
+`AbstractFormat.from_format` took every `MPFixedFormat` as having no signed zero
+whatever it said, because believing FPy's `INTEGER` cost integer storage
+everywhere: measured, it retyped every `range` counter as `float` and diverged
+the loop fixpoint in `test_while{5,6,7}_rounded` to `REAL_FORMAT`, which no C++
+type can hold.
 
-The analysis declines to believe it — see the `TODO` on
-`AbstractFormat.from_format` — because taking the format at its word costs
-integer storage everywhere: measured, it retypes every `range` counter as `float`
-and diverges the loop fixpoint in `test_while{5,6,7}_rounded` all the way to
-`REAL_FORMAT`, which no C++ type can hold. Two honest fixes, either of which
-retires the carve-out:
+Fixed by the first of the two candidates this document listed — the flag now
+reaches the *contexts*, and `INTEGER` declines the signed zero at the source:
 
-- `MPFixedContext` flattens signed zeros, as `FixedContext` already does (its
-  comment: *"two's complement has a single encoding of zero"*).
-- The backend stops storing `INTEGER`-bounded reals in `int64_t`.
+```python
+INTEGER = MPFixedContext(-1, RM.RTZ, enable_neg_zero=False)
+```
 
-`test_unbounded_fixed_point_is_not_believed_about_neg_zero` is written to **fail**
-when this is fixed, so the carve-out cannot outlive its justification.
+An `int` has a single zero, so this is what `INTEGER` always meant. The
+`MPFixedContext` underneath still *has* a signed zero, and a caller wanting one
+can ask; `INTEGER` declines. That collapsed `_INTEGER_FORMAT` — which existed
+only to say "a count has one zero" — back to `INTEGER.format()`, and let
+`from_format` believe every probe. A format that does claim a signed zero is now
+refused every integer rung of the ladder, correctly.
 
-A *literal* zero is fine: its bound is a `SetFormat`, which states the sign and so
-reaches a float storage.
+Two things fell out. `FixedContext` no longer needs its `_round_at` override, since
+`enable_neg_zero=False` says the same thing declaratively (*"two's complement has
+a single encoding of zero"*). And `MPFixedFormat.to_fractional_ordinal` had a
+latent bug: its fast path was gated on `representable_in`, but the interpolation
+below it needs the stricter condition that the value lie *strictly between* two
+grid points. A `-0.0` under `enable_neg_zero=False` is on the grid yet
+unrepresentable, so it fell through to a zero-width interval and divided by zero.
 
-**A latent bypass.** `choose_storage_scalar` falls back to `S64` for an unbounded
-`MPFixedFormat` after the ladder search fails, and that fallback does not re-check
-the membership flags. An `MPFixedFormat` carrying a NaN would land in `int64_t`.
-Not reachable today — `_INTEGER_FORMAT` has `enable_nan=False` — but the path is
-unguarded.
+A *literal* zero was always fine: its bound is a `SetFormat`, which states the
+sign and so reaches a float storage.
+
+**The `S64` fallback** in `choose_storage_scalar` — taken for an unbounded
+`MPFixedFormat` after the ladder search fails — used to skip the membership
+checks, so a format carrying a NaN could land in `int64_t`. It now re-checks all
+four flags.
 
 ## Retired: "the fix has to be uniform"
 

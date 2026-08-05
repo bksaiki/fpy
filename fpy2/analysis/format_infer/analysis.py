@@ -136,7 +136,6 @@ from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
 from ...number import INTEGER, REAL, Context, Float, RealFloat
-from ...number.context.mp_fixed import MPFixedFormat
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
     BoolType,
@@ -352,22 +351,19 @@ Inferred format for an expression or variable definition.
 """
 
 
-_INTEGER_FORMAT: Format = MPFixedFormat(
-    INTEGER.format().nmin, enable_neg_zero=False,
-)
+_INTEGER_FORMAT: Format = INTEGER.format()
 """
 The format of an integer-*valued* expression: the result of ``Len``, ``Dim``,
 ``Size``, ``Range1``/``Range2``/``Range3``, and the integer projection of
 ``Enumerate``.  These ops produce integers whatever the active rounding context
 is, so reporting the active context's format would be unnecessarily loose.
 
-Deliberately **not** ``INTEGER.format()``, though it describes the same value
-grid.  ``INTEGER`` is a rounding context, and FPy's has a signed zero; a *count*
-does not — a list length is an integer, and an integer has one zero.  Conflating
-the two is what made believing that signed zero unaffordable: every counter and
-length inherited it, and no C++ integer type holds one, so they all had to widen
-to ``float``.  Keeping the two apart lets a real rounded under ``INTEGER`` carry
-its ``-0.0`` (and reach a float storage) while a length stays an integer.
+A *count* has one zero — a list length is an integer, and an integer has no
+signed zero.  This was once a separate ``MPFixedFormat`` for exactly that reason,
+because ``INTEGER`` claimed a signed zero that every length and counter then
+inherited and could not lose, forcing them all to widen to ``float`` in C++.
+``INTEGER`` now declines it, so the two agree and this is just a name for the
+intent.
 """
 
 

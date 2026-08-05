@@ -388,6 +388,15 @@ class AbstractFormat:
         acquire one and lose its integer storage — ``int8 + int8`` lands on a
         *float*-shaped ``MPBFloatFormat``, whose value set legitimately includes
         a ``-0.0`` unless told otherwise.
+
+        Every probe here is believed.  A format that says it holds a negative
+        zero gets ``has_neg_zero``, and containment then keeps it away from the
+        integer rungs of the C++ storage ladder — which is correct, since no C++
+        integer type has one.  This used to carve out ``MPFixedFormat`` and take
+        it as having no negative zero whatever it said, because ``INTEGER`` was
+        built without ``enable_neg_zero`` and every list length and loop counter
+        inherited a signed zero it could not lose.  ``INTEGER`` now declines it
+        at the source, so the lie is no longer needed.
         """
         # finite grid: quantum, precision, and bounds
         match fmt:
@@ -433,29 +442,10 @@ class AbstractFormat:
                 raise ValueError(f'format is not abstractable: {fmt!r}')
 
         # special values: probe the format's representable set directly.
-        # TODO: drop the carve-out once MPFixedFormat / MPBFixedFormat gain an option to disable -0.0.
         af.has_pos_inf = fmt.representable_in(Float.inf(s=False))
         af.has_neg_inf = fmt.representable_in(Float.inf(s=True))
         af.has_nan = fmt.representable_in(Float.nan())
-        # `MPFixedFormat` is taken as having no negative zero, whatever it says.
-        #
-        # TODO: a lie, and the last one here.  `MPFixedFormat` backs FPy's
-        # `INTEGER`, which does hold a negative zero -- but no C++ integer type
-        # does, and believing it diverges the loop fixpoint in
-        # `test_while{5,6,7}_rounded` to `REAL_FORMAT`, which nothing can store.
-        # It costs one divergence: `-x` for an `INTEGER` parameter `x == 0` gives
-        # `-0.0` from the interpreter and `0` from compiled code.  A *literal*
-        # zero is fine -- its bound is a `SetFormat`, which states the sign.
-        # `docs/todos/reals-in-integer-storage.md` has the diagnosis and the two
-        # candidate fixes.
-        #
-        # Not extended to `MPBFixedFormat`: its `enable_neg_zero` is what lets a
-        # bound say "this really can be a negative zero" and so reach a float
-        # storage, which is the whole point of the flag.
-        af.has_neg_zero = (
-            not isinstance(fmt, MPFixedFormat)
-            and fmt.representable_in(Float(s=True, exp=0, c=0))
-        )
+        af.has_neg_zero = fmt.representable_in(Float(s=True, exp=0, c=0))
         return af
 
     def format(self) -> Format:

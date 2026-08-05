@@ -244,9 +244,15 @@ class TestRejection:
         scope, so the round is identity), sidestepping the
         rejection.  The rejection mechanism is what this test
         exercises, so we keep it visible by opting out of
-        optimization."""
+        optimization.
 
-        bad_int = fp.MPFixedContext(-1, fp.RM.RNE)
+        ``enable_neg_zero=False`` for a similar reason: it
+        defaults to ``True``, and a context that holds a signed
+        zero has no integer storage on the ladder, so storage
+        selection would reject this program before the
+        rounding-mode check ever ran."""
+
+        bad_int = fp.MPFixedContext(-1, fp.RM.RNE, enable_neg_zero=False)
 
         @fp.fpy(ctx=bad_int)
         def f(x: fp.Real, y: fp.Real) -> fp.Real:

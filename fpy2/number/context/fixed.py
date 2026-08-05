@@ -63,7 +63,10 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
         pos_maxval, neg_maxval = _fixed_to_mpb_fixed(signed, scale, nbits)
         nmin = scale - 1
 
-        MPBFixedFormat.__init__(self, nmin, pos_maxval, neg_maxval)
+        # unlike sign-magnitude, two's complement has a single encoding
+        # of zero, so a negative zero is not representable
+        MPBFixedFormat.__init__(self, nmin, pos_maxval, neg_maxval,
+                                enable_neg_zero=False)
         self.signed = signed
         self.scale = scale
         self.nbits = nbits
@@ -84,13 +87,6 @@ class FixedFormat(MPBFixedFormat, EncodableFormat):
 
     def total_bits(self) -> int:
         return self.nbits
-
-    def representable_in(self, x: RealFloat | Float) -> bool:
-        # unlike sign-magnitude, two's complement has a single encoding
-        # of zero, so a negative zero is not representable
-        if isinstance(x, Float | RealFloat) and x.is_zero() and x.s:
-            return False
-        return super().representable_in(x)
 
     def encode(self, x: Float) -> int:
         if not isinstance(x, Float):
