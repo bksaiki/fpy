@@ -163,6 +163,33 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTN: 'FE_DOWNWARD',
 }
 
+def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
+    """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
+
+    The single answer to "what type does the emitted token have", which is a
+    different question from what storage the value was *assigned*: a literal's
+    storage comes from its value, so ``1.5`` can be stored as a ``float`` while
+    the token ``1.5`` is a ``double``.  Both users of that distinction come
+    here -- :meth:`CppEmitter._emit_numeric_literal` to decide whether digits
+    can be printed at all, and :meth:`CppEmitter._call_arg` to decide whether a
+    cast has to be spelled.
+
+    Bounds are on the *magnitude*, since C++ has no negative literal: ``-2**31``
+    is unary minus applied to ``2**31``, which does not fit an ``int``, so the
+    whole expression is a ``long``.  A decimal literal takes the first of
+    ``int`` / ``long`` / ``long long`` that fits and is ill-formed when none
+    does, so beyond ``long long`` there is no integer spelling and the caller
+    must fall back to a floating one or refuse.
+    """
+    if v.denominator != 1:
+        return CppScalar.F64 if _as_exact_double(v) is not None else None
+    n = abs(v.numerator)
+    if n < 2 ** 31:
+        return CppScalar.S32
+    if n < 2 ** 63:
+        return CppScalar.S64
+    return None
+
 
 
 def _as_exact_double(v: Fraction) -> float | None:
@@ -1458,8 +1485,9 @@ class CppEmitter(Visitor):
         return self._emit_real_literal(e.as_real(), at=e)
 
     def _visit_integer(self, e: Integer, ctx) -> str:
-        # Integer literals print directly.
-        return str(e.val)
+        # Through the shared path, which range-checks: `str(e.val)` here was a
+        # second way to emit an integer too large for a C++ integer literal.
+        return self._emit_numeric_literal(e.as_rational(), at=e)
 
     def _visit_rational(self, e: Rational, ctx) -> str:
         return self._emit_numeric_literal(e.as_rational(), at=e)
@@ -1486,19 +1514,29 @@ class CppEmitter(Visitor):
         where FPy has a constant: it rounds under whatever mode happens to be
         set, and ``-O2`` folds it to nearest regardless.
 
-        ``fp.round`` is how a program says which format a constant is in; see
-        :meth:`_fold_rounded_literal`.
+        ``fp.round`` is how a program pins a constant to a format -- it rounds
+        the value there, at compile time; see :meth:`_fold_rounded_literal`.
+
+        An integral value only prints as digits while a C++ integer literal can
+        hold it, which is :func:`_value_cpp_type`'s answer -- the same function
+        :meth:`_call_arg` asks, since "what type is this token" and "can this
+        token be written at all" are one question.  Past ``long long`` gcc
+        accepts the digits with a warning and the value becomes ``0``.  Storage
+        selection refuses such a value for a scalar, but a list element or a
+        slot never asks, so ``[1e300, y]`` used to compile and return ``0``
+        where the interpreter returns ``1e300``.  Beyond that range the value
+        falls through to the floating spelling below.
         """
-        if v.denominator == 1:
+        ty = _value_cpp_type(v)
+        if ty is not None and ty.is_integer():
             return str(v.numerator)
         exact = _as_exact_double(v)
         if exact is not None:
             return repr(exact)
         raise CppEmitError(
             f'unsupported literal: `{v.numerator}/{v.denominator}` is not '
-            f'exactly representable as a double, and C++ has no exact-real '
-            f'literal to round at the point of use.  Wrap it in `fp.round` to '
-            f'say which format the constant is in.',
+            f'representable in C++.  Wrap it in `fp.round(...)` to round it to '
+            f'a format that is.',
             at=at,
         )
 
@@ -1547,25 +1585,14 @@ class CppEmitter(Visitor):
 
     @staticmethod
     def _literal_cpp_type(e: RationalVal) -> CppScalar | None:
-        """The C++ type of the token *e* prints as, or ``None`` if unclear.
+        """The C++ type of the token *e* prints as, or ``None`` for no literal.
 
         Not the same question as its *storage*, which
         :class:`StorageAnalysis` picks from the literal's value.  A token has
-        whatever type C++ gives it: anything with a fraction goes out through
-        ``repr(float)`` and so is a ``double``, and a decimal integer literal
-        is ``int`` unless it does not fit.  ``None`` means "wider than we
-        model", which callers treat as "does not match", so an unmodelled
-        literal gets a cast rather than the benefit of the doubt.
+        whatever type C++ gives it, which is what
+        :func:`_value_cpp_type` answers.
         """
-        v = e.as_rational()
-        if v.denominator != 1:
-            return CppScalar.F64
-        n = v.numerator
-        if -2 ** 31 <= n < 2 ** 31:
-            return CppScalar.S32
-        if -2 ** 63 <= n < 2 ** 63:
-            return CppScalar.S64
-        return None
+        return _value_cpp_type(e.as_rational())
 
     def _call_arg(self, code: str, e: Expr, want: CppScalar) -> str:
         """*code* as a call argument of type *want*, spelling a literal's type.

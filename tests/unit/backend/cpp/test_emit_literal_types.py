@@ -121,8 +121,26 @@ class TestLiteralArgumentsStateTheirType:
         # a decimal integer literal is `int` while it fits
         assert lit(Integer(1, None)) == CppScalar.S32
         assert lit(Integer(2 ** 40, None)) == CppScalar.S64
-        # ...and wider than we model means "cast it", not "assume it matches"
+        # ...and past `long long` no integer literal holds it at all
         assert lit(Integer(2 ** 100, None)) is None
+
+    def test_the_bound_is_on_magnitude_not_the_signed_range(self):
+        """C++ has no negative literal, so the bound is two-sided.
+
+        ``-2147483648`` is unary minus applied to ``2147483648``, which does not
+        fit an ``int`` -- so the expression is a ``long``, not the ``int`` its
+        value would suggest.  Getting this wrong would skip a cast in a deduced
+        position for exactly that value.
+        """
+        from fpy2.ast.fpyast import Integer
+        from fpy2.backend.cpp.emitter import CppEmitter
+        from fpy2.backend.cpp.types import CppScalar
+
+        lit = CppEmitter._literal_cpp_type
+        assert lit(Integer(2 ** 31 - 1, None)) == CppScalar.S32
+        assert lit(Integer(-(2 ** 31 - 1), None)) == CppScalar.S32
+        assert lit(Integer(-(2 ** 31), None)) == CppScalar.S64
+        assert lit(Integer(2 ** 31, None)) == CppScalar.S64
 
     def test_infix_operators_are_left_alone(self):
         """An infix operator deduces nothing, so the promotion is C++'s own.

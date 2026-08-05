@@ -1830,6 +1830,20 @@ def _regression_blocked_dot_e4m3(xs):
 # losslessly.  These are compiled (and ``cc``-checked) with the given arg
 # types; they are not run-mode executed (custom-typed inputs aren't
 # synthesized by the differential harness).
+@fp.fpy
+def _regression_big_literal_in_a_list(y: fp.Real) -> fp.Real:
+    """An integral literal past `long long`, reached through a list element.
+
+    Storage selection refuses such a value for a scalar, but an element never
+    asks -- so this compiled to a 301-digit token that gcc folded to `0`, where
+    the interpreter gives 1e300.  Executed, so the harness bit-compares it.
+    """
+    with fp.FP64:
+        zs = [1e300, y]
+        zs[1] = 1e300
+        return zs[0] + zs[1]
+
+
 @fp.fpy(ctx=fp.FP32)
 def _regression_fp32_literal_call_arg(y: fp.Real, z: fp.Real) -> fp.Real:
     """Literal arguments to type-deduced C++ calls, under FP32.
