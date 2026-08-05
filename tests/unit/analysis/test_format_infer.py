@@ -1663,6 +1663,90 @@ class TestFormatInfer:
     # ------------------------------------------------------------------
     # Functional-update (``IndexedAssign``) semantics
 
+    # A store mutates the list *every* name in its alias region refers to, so
+    # each of their bounds has to admit the inserted value.  `reaching_defs`
+    # only refreshes the name written through, which is why `format_infer`
+    # consults `Alias`; see `docs/todos/format-infer-aliasing.md`.
+
+    _NARROW = SetFormat(frozenset((Fraction(1), Fraction(2))))
+
+    def test_a_store_through_an_alias_widens_the_original(self):
+        """`ys = xs; ys[0] = y` leaves `xs[0]` holding `y`.
+
+        The bug this fixes: only `ys` was widened, so `xs` kept the literal
+        element set and the analysis reported a bound the program exceeds.
+        Every consumer inherited that, not just the C++ backend.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            ys[0] = y
+            return xs[0]
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == REAL_FORMAT, info.fn_fmt.ret_fmt
+
+    def test_a_read_only_alias_does_not_widen(self):
+        """The precision side: aliasing alone changes nothing.
+
+        Only a *store* widens, so a name that merely shares a list keeps the
+        exact element set.  A blanket "aliased names share one bound" rule would
+        lose this for every consumer even where nothing is ever written.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            return ys[0]
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == self._NARROW, info.fn_fmt.ret_fmt
+
+    def test_a_read_before_the_store_keeps_its_narrow_bound(self):
+        """Flow-sensitivity: `a` is read before the store, so it really is
+        narrow -- it holds the element the list had at that point.
+
+        This is what excluding the two defs `reaching_defs` already refreshes
+        buys.  Widening them instead marks the list's *pre-store* state with the
+        inserted format, which over-widens even a direct `xs[0] = x`.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            a = xs[0]
+            ys[0] = y
+            return a
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == self._NARROW, info.fn_fmt.ret_fmt
+        # ...while `xs` itself is widened, since after the store it does hold `y`.
+        xs_bounds = [b for d, b in info.by_def.items()
+                     if getattr(d.name, 'base', None) == 'xs']
+        assert xs_bounds == [ListFormat(REAL_FORMAT)], xs_bounds
+
+    def test_a_read_after_a_store_across_a_back_edge_is_widened(self):
+        """The case that would be a *wrong answer* rather than a refusal.
+
+        Iteration 2's read sees what iteration 1 stored, so `a` must admit the
+        inserted format.  It only does if the widening survives the loop
+        fixpoint -- which is why the region record is replayed on every bound
+        write instead of editing bounds in place.
+        """
+        @fp.fpy
+        def f(y: fp.Real) -> fp.Real:
+            xs = [1.0, 2.0]
+            ys = xs
+            a = 0.0
+            for _ in range(2):
+                a = xs[0]
+                ys[0] = y
+            return a
+
+        info = FormatInfer.analyze(f.ast)
+        assert info.fn_fmt.ret_fmt == REAL_FORMAT, info.fn_fmt.ret_fmt
+
     def test_indexed_assign_widens_format_at_fresh_def(self):
         """
         ``xs[i] = x`` creates a *fresh* SSA def of ``xs`` (per
