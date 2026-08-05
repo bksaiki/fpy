@@ -298,9 +298,7 @@ class CppInternalError(CppEmitError):
     ``__cause__``, which is what lets a test tell the two apart.
 
     ``tests/unit/backend/cpp/test_internal_invariants.py`` asserts none of these
-    fires across the corpus.  ``docs/todos/cpp-refusal-audit.md`` has the audit
-    that separated them, and the list of sites deliberately left as
-    :class:`CppEmitError`.
+    fires across the corpus.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
@@ -1090,7 +1088,7 @@ class CppEmitter(Visitor):
         accepts a narrowing store into a slot, and FPy says the list then holds
         the wider value.  Widening the container instead is not available --
         another name may already alias it, which ``format_infer`` does not track
-        (see ``docs/todos/format-infer-aliasing.md``).
+        (see ``docs/todos/backend-cpp.md``).
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
@@ -1613,7 +1611,7 @@ class CppEmitter(Visitor):
         ``2p + 2`` -- rounds twice where FPy rounds once.
 
         Only literals need this: a variable's declared type already is its
-        storage.  See ``docs/todos/cpp-literal-tokens-and-sum.md``.
+        storage.
         """
         if not isinstance(e, RationalVal):
             return code

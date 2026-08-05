@@ -82,7 +82,7 @@ def test_no_signature_keeps_a_handle_unexpectedly(profile):
         f'{len(boxed)} signature list levels keep a handle:\n  '
         + '\n  '.join(boxed)
         + '\n\nEach is either real sharing — in which case record it in '
-          'docs/todos/unboxing-gaps.md and update EXPECTED_BOXED — or a '
+          'docs/todos/backend-cpp.md and update EXPECTED_BOXED — or a '
           'precision regression.  Do not update the constant without deciding '
           'which.'
     )

@@ -326,7 +326,7 @@ def test_a_narrower_variable_is_converted_at_the_boundary(func):
 # nothing else holds that buffer.  Once something does, the rebuilt copy is a
 # different list from the one the other references see, and there is no sound
 # lowering -- so the compiler refuses.  These are all legal FPy programs; the
-# limitation is the C++ backend's.  `docs/todos/cpp-narrower-variable-at-a-join.md`
+# limitation is the C++ backend's.  `docs/todos/backend-cpp.md`
 # records what it would take to compile them.
 
 @fp.fpy

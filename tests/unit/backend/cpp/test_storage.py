@@ -101,7 +101,7 @@ class TestStorageScalar:
         No C++ integer type has a signed zero, so a format claiming one is
         refused ``int64_t`` rather than taking the fallback.  This flag used to be
         discarded by ``AbstractFormat.from_format`` before storage selection ever
-        ran; see ``docs/todos/reals-in-integer-storage.md``.
+        ran; see ``docs/todos/backend-cpp.md``.
         """
         from fpy2.number.context.mp_fixed import MPFixedFormat
         fmt = MPFixedFormat(nmin=-1, enable_neg_zero=True)
@@ -117,7 +117,7 @@ class TestStorageScalar:
         them.  Without that, the narrowest type containing "a zero" is
         ``uint8_t``, which holds the integer 0 and neither sign — the mechanism
         behind every signed-zero wrong answer in
-        ``docs/todos/reals-in-integer-storage.md``.
+        ``docs/todos/backend-cpp.md``.
         """
         from fpy2.analysis.format_infer.format import AbstractFormat
         pz = fp.RealFloat(s=False, exp=0, c=0)

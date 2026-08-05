@@ -11,9 +11,9 @@ distinction honest: it fails when any program in the corpus reaches one, in
 either direction — a real analysis bug, or a refusal that was misclassified as
 internal and is actually reachable.
 
-``docs/todos/cpp-refusal-audit.md`` has the audit, the per-site classification,
-and the sites deliberately left as :class:`CppEmitError` because reachability
-could not be settled.
+One site is deliberately left as :class:`CppEmitError` -- *cannot dispatch X
+under symbolic context*, where reachability could not be settled cheaply, and
+calling a real refusal a compiler bug is the worse error.
 """
 
 import importlib
