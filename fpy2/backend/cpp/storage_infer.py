@@ -46,30 +46,17 @@ from .types import CppList, CppTuple, CppType
 
 @dataclass
 class StorageAnalysis:
-    """
-    Result of :class:`StorageInfer`.
+    """Result of :class:`StorageInfer`.
 
-    Each SSA def belongs to a *class* -- the defs that denote one runtime
-    object, per ``same_object_defs`` -- and each class gets one C++ identifier
-    and storage type.  The class id is its canonical member.  Two emission
-    shapes:
+    Each SSA def belongs to a *class* -- the defs denoting one runtime object,
+    per ``same_object_defs`` -- and each class gets one identifier and storage.
 
-    - ``declare_at_assign``: the lowest-index writer in the class is
-      its declaration site.  The emitter folds the declaration into
-      that assign, e.g. ``double t = (a + b);``,
-      ``for (int64_t i = 0; …)``, or ``double y = x;`` immediately
-      followed by reassignments inside an ``if1`` body or loop.
-    - ``hoists_before``: a class has writers in disjoint branches of
-      an ``if/else`` and the variable did not exist before the
-      ``if`` (the merge phi has ``is_intro=True``).  In that case
-      no single AssignDef dominates the others, so the emitter
-      hoists ``T name{};`` *just before* the responsible ``IfStmt``.
-      Each ``AssignDef`` in the class then reassigns into that
-      variable.
-
-    External classes (containing a function arg or free variable)
-    don't appear in either set: the C++ signature / surrounding scope
-    already declares them.
+    A class declares at its lowest-index writer (``declare_at_assign``), except
+    where writers sit in disjoint ``if``/``else`` branches and the name did not
+    exist before: no writer dominates, so the declaration hoists just before that
+    ``IfStmt`` (``hoists_before``) and every writer reassigns.  External classes
+    -- an argument or free variable -- appear in neither; the signature or
+    enclosing scope already declares them.
 
     Attributes:
         def_class:          each def's class id (the canonical member).

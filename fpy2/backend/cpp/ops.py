@@ -36,16 +36,13 @@ class CppOpStyle(enum.Enum):
 
 @dataclasses.dataclass(frozen=True)
 class CppOp:
-    """One supported C++ signature for an FPy op: the input slots it takes,
-    the active rounding context its output is correct under, and how it is
-    spelled.
+    """One supported C++ signature: input slots, the rounding context its output is
+    correct under, and how it is spelled.
 
-    ``cast_out`` wraps the emitted form in a ``static_cast`` to the output
-    context's storage -- for primitives returning something narrower or
-    otherwise different from what the output demands, such as ``std::ilogb``
-    returning C ``int`` where the context maps to ``int64_t``.  Sound by
-    precondition: such primitives are paired with op variants guaranteeing the
-    value fits.
+    ``cast_out`` wraps the result in a ``static_cast`` to the output storage, for
+    primitives returning something else -- ``std::ilogb`` gives C ``int`` where
+    the context may map to ``int64_t``.  Sound by precondition: such primitives
+    are paired with op variants guaranteeing the value fits.
     """
     name: str
     in_tys: tuple[CppScalar, ...]

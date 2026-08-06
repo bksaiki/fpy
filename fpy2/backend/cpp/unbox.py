@@ -113,16 +113,13 @@ class UnboxAnalysis:
         return region is not None and region not in self.slot_replaced
 
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
-        """Whether a ``const`` reference to this would reject a write FPy allows.
+        """Whether a ``const`` reference here would reject a write FPy allows.
 
-        ``const fpy::list<T>&`` does not — ``const`` qualifies the handle, and
-        ``xs[i] = e`` through one is FPy's parameter semantics.  An unboxed list
-        has no such indirection, so ``const std::vector<T>&`` makes its elements
-        const too.
-
-        Walks every *unboxed* level: ``const`` reaches through a value
+        ``const fpy::list<T>&`` does not: ``const`` qualifies the handle, and
+        ``xs[i] = e`` through one is FPy parameter semantics.  An unboxed list has no
+        such indirection, so ``const`` reaches its elements -- and through a value
         container, so a write to a row needs the whole thing non-const.  A boxed
-        level stops it.
+        level stops that.
         """
         depth = 0
         while isinstance(ty, CppList) and not ty.boxed:
@@ -286,15 +283,13 @@ def _regions(
 ) -> list[Region | None]:
     """The alias region each level of *cls*'s storage holds, by depth.
 
-    At most one per level, and the assertion is the point: ``storage_infer``
-    coalesces on phi and in-place-mutation edges, and
-    ``alias._merge_redefinitions`` unions on exactly those two, so a class
-    cannot span regions that could answer differently.  Taking a conjunction
-    over several would silently repair a violation of that; this reports it.
+    At most one per level, and the assertion is the point: ``storage_infer`` and
+    ``alias`` coalesce on the same edges, so a class cannot span regions that
+    would answer differently.  A conjunction over several would silently repair
+    that violation; this reports it.
 
-    A tuple contributes its own region and stops: :func:`_stamp` descends into
-    its fields with :func:`_fields`, which needs the tuple's region rather than
-    a per-depth entry of its own.
+    A tuple contributes its region and stops -- :func:`_stamp` descends its
+    fields with :func:`_fields`, which needs that region, not a per-depth entry.
     """
     ty = storage.class_storage[cls]
     per_depth: list[Region | None] = []
@@ -429,16 +424,13 @@ def _shares_storage(
     def_use: DefineUseAnalysis,
     slot_replaced: set[Region],
 ) -> bool:
-    """Whether more than one place in this function holds *region* separately.
+    """Whether more than one place holds *region* separately.
 
-    Not ``AliasAnalysis.is_shared``, which counts every name.  What decides a
-    representation is whether a second name gets its own *storage*: a name the
-    emitter binds by reference copies nothing.  ``for row in xss`` and the
-    ``_src = xs`` aliases ``ZipElim`` introduces are both of that kind, and both
-    are common enough that counting them would box most idiomatic programs.
-
-    Mirrors the emitter's binding rules exactly rather than approximating them:
-    discounting a name the emitter then *copies* would be a miscompilation.
+    Not ``is_shared``, which counts every name: what decides a representation is
+    whether a second name gets its own *storage*.  ``for row in xss`` and
+    ``ZipElim``'s ``_src = xs`` do not, and are common enough that counting them
+    would box most idiomatic programs.  Mirrors the binding rules exactly --
+    discounting a name the emitter then copies would be a miscompilation.
     """
     for d in alias.defs_in(region):
         if (
@@ -476,14 +468,12 @@ def _binds_by_reference(
     alias: AliasAnalysis,
     slot_replaced: set[Region],
 ) -> bool:
-    """Whether *d* is a reference to storage that exists already, *and* that
-    storage is inside this function.
+    """Whether *d* references storage that already exists *inside this function*.
 
-    The one deliberate difference from the emitter: a parameter binds by
-    reference too, but to the **caller's** storage, which is a place of its own.
-    Discounting it would make ``zss = [xs]`` look unshared.  Spelled as one
-    extra term so the divergence stays visible rather than becoming a second
-    copy of the rule to keep in sync.
+    The one deliberate difference from the emitter: a parameter also binds by
+    reference, but to the caller's storage, a place of its own -- discounting it
+    would make ``zss = [xs]`` look unshared.  One extra term, so the divergence
+    stays visible instead of becoming a second copy of the rule.
     """
     region = alias.region_of(d)
     return (
@@ -500,13 +490,9 @@ def return_storage(
 ) -> CppType:
     """The storage a function's return value takes.
 
-    ``fn_fmt.ret_fmt`` is the running join of every ``ReturnStmt``'s bound, so a
-    multiple-return program gets a class wide enough for every path.  A ``None``
-    bound is not a missing return -- it is format inference's convention for a
-    non-numeric result, and ``choose_storage`` maps it to ``BOOL``.
-
-    Raises :class:`StorageSelectionError`; callers that have a source location
-    wrap it.
+    ``ret_fmt`` joins every ``ReturnStmt``, so a multiple-return program gets a
+    class wide enough for every path.  A ``None`` bound is not a missing return
+    but format inference's convention for a non-numeric result.
     """
     ty = choose_storage(ret_fmt)
     return ty if unbox is None else unbox.annotate_return(ty)

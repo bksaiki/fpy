@@ -84,12 +84,12 @@ _LADDER_LOOKUP = {ty: af for ty, af in _LADDER}
 
 
 def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
-    """Does scalar *a* fit (as a subset) in scalar *b*?
+    """Does scalar *a* fit inside scalar *b*?
 
-    ``BOOL`` only fits in itself.  Other scalars dispatch to ladder
-    abstract-format containment, capturing the standard inclusions
-    ``U8 ⊆ U16 ⊆ U32 ⊆ U64``, ``S8 ⊆ S16 ⊆ …``, ``F32 ⊆ F64``, and
-    integer→float when the mantissa is wide enough."""
+    ``BOOL`` only fits itself; the rest dispatch to ladder containment, which
+    gives the standard inclusions plus integer-to-float where the mantissa is
+    wide enough.
+    """
     if a is CppScalar.BOOL or b is CppScalar.BOOL:
         return a is b
     return _LADDER_LOOKUP[a] <= _LADDER_LOOKUP[b]
@@ -100,14 +100,10 @@ class StorageSelectionError(Exception):
 
 
 def choose_storage_scalar(bound: FormatBound) -> CppScalar:
-    """
-    Picks the smallest scalar storage that contains *bound*.
+    """The smallest scalar storage containing *bound*.
 
-    - ``None`` (non-numeric, e.g., the format of a comparison) → ``BOOL``.
-    - :class:`SetFormat` / scalar :class:`Format` → smallest ladder
-      entry whose AbstractFormat ``>= from_format(bound)``.
-    - ``REAL_FORMAT`` → :exc:`StorageSelectionError` (no finite ladder
-      entry covers all reals).
+    ``None`` -- a non-numeric bound, e.g. a comparison -- is ``BOOL``;
+    ``REAL_FORMAT`` raises, since no finite ladder entry covers all reals.
     """
     if bound is None:
         return CppScalar.BOOL
@@ -145,13 +141,9 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
 
 
 def choose_storage(bound: FormatBound) -> CppType:
-    """
-    Recursively picks the storage type for a (possibly structured)
-    :class:`FormatBound`.
-
-    - Scalars dispatch to :func:`choose_storage_scalar`.
-    - :class:`TupleFormat` becomes ``std::tuple<...>``.
-    - :class:`ListFormat` becomes ``std::vector<...>``.
+    """The storage for a possibly structured :class:`FormatBound`: scalars via
+    :func:`choose_storage_scalar`, tuples to ``std::tuple``, lists to
+    ``std::vector``.
     """
     if isinstance(bound, TupleFormat):
         return CppTuple(tuple(choose_storage(b) for b in bound.elts))
@@ -161,16 +153,11 @@ def choose_storage(bound: FormatBound) -> CppType:
 
 
 def aggregate_storage(bounds: list[FormatBound]) -> CppType:
-    """
-    Picks a single storage type that contains every bound in *bounds*.
+    """A single storage type containing every bound in *bounds*.
 
-    Used when a name has multiple SSA defs (e.g., loop phi widening) —
-    the variable's C++ declaration must accommodate every value
-    assigned into it.
-
-    The simplest implementation: pick storage for each bound, then take
-    the supremum on the ladder.  For scalars: largest covering ladder
-    type across all defs.  For structured types: structural recursion.
+    For a name with several SSA defs, whose declaration must hold every value
+    assigned into it.  Storage per bound, then the ladder supremum; structured
+    types recurse.
     """
     assert bounds, 'aggregate_storage requires at least one bound'
     storages = [choose_storage(b) for b in bounds]

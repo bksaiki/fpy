@@ -136,33 +136,23 @@ def _return_storage(a: SpecAnalyses) -> CppType:
 
 
 class CppCompiler(Backend):
-    """
-    Format-inference-driven C++ compiler.
+    """Format-inference-driven C++ compiler.
 
-    The pipeline runs all pre-analyses and assigns each SSA def to a
-    C++ variable; the emitter then walks the AST and produces source.
+    Runs the pre-analyses, assigns each SSA def a C++ variable, then emits.
 
     Args:
         unsafe_cast_int:
-            When ``True`` (default), allow rounded arithmetic under
-            an unbounded-integer context (``MPFixedContext(nmin=-1)``
-            / ``fpy2.INTEGER``); the compiler compiles these by
-            emitting casts to the widest built-in integer type
-            (currently ``int64_t``) and assuming no overflow occurs.
-            Set ``False`` to reject such programs at compile time.
+            Allow rounded arithmetic under an unbounded-integer context by
+            casting to ``int64_t`` and assuming no overflow.  ``False`` rejects
+            such programs instead.  Default ``True``.
         optimize:
-            When ``True`` (default), run the optimizing transforms
-            listed in :meth:`_run_pipeline` — they skip intermediate
-            vectors and let the widening dispatch pick tighter
-            storage.  Sound either way; ``False`` compiles the
-            surface AST verbatim.
+            Run the transforms listed in :meth:`_run_pipeline`.  Sound either
+            way; ``False`` compiles the surface AST verbatim.  Default ``True``.
         unbox:
-            When ``True`` (default), represent a list as a plain
-            ``std::vector`` wherever :mod:`fpy2.analysis.alias` proves
-            nothing can observe the difference (see :mod:`.unbox`).
-            The choice is per list and per nesting level.  ``False``
-            keeps every handle -- always correct, but slower at a
-            native boundary.
+            Drop the handle where :mod:`.unbox` proves nothing observes the
+            difference, per list and per nesting level.  ``False`` keeps every
+            handle -- correct, but slower at a native boundary.  Default
+            ``True``.
     """
 
     _unsafe_cast_int: bool
@@ -204,15 +194,10 @@ class CppCompiler(Backend):
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
     ) -> str:
-        """Compile *func* to a C++ source-code string.
+        """Compile *func* to a C++ source string.
 
-        Thin wrapper around :meth:`compile_module` over a one-entry module,
-        so the single-function and module paths share one pipeline.
-
-        Args:
-            func: The :class:`Function` to compile.
-            ctx: Optional rounding context to monomorphize against.
-            arg_types: Optional per-argument types to monomorphize against.
+        A thin wrapper around :meth:`compile_module` over a one-entry module, so the
+        single-function and module paths share one pipeline.
         """
         m = Module()
         m.add(func, ctx=ctx, arg_types=arg_types)
@@ -221,15 +206,10 @@ class CppCompiler(Backend):
     def compile_module(self, module: Module) -> str:
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
-        Pipeline:
-          1. **Pre-spec optimizations** (``EnumerateElim``, ``ZipElim``,
-             ``ReduceFusion``) on every function in the module via ``map``.
-          2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)``
-             becomes one entry; cross-function calls rewire to the
-             appropriate spec.
-          3. **Post-spec optimizations** (``RoundElim``) on each spec —
-             monomorphic format inference is now available.
-          4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
+        Pre-spec optimizations, then ``Specialize`` -- one entry per
+        ``(FuncDef, ctx, arg_fmts)``, with calls rewired -- then post-spec
+        optimizations now that format inference is monomorphic, then codegen
+        leaves-first.
         """
         specs = self.specialize(module)
         params: dict[FuncDef, CalleeAbi] = {}
@@ -374,10 +354,10 @@ class CppCompiler(Backend):
     ) -> tuple[list[CppType], CppType]:
         """The C++ storage types of *func*'s parameters and result.
 
-        Not derivable from FPy types alone: how a list is represented depends on
-        :mod:`.unbox`, so the same FPy signature can compile to ``fpy::list<T>``
-        or ``std::vector<T>``.  Pass the *module* being compiled whenever there
-        is one — a function another compiled function calls keeps its handles.
+        Not derivable from FPy types alone: representation depends on :mod:`.unbox`,
+        so one FPy signature can compile to either ``fpy::list<T>`` or
+        ``std::vector<T>``.  Pass the *module* when there is one -- a function that
+        compiled code calls keeps its handles.
         """
         if module is None:
             module = Module()

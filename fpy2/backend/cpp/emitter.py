@@ -143,14 +143,11 @@ _FE_RM_MACRO: dict[RM, str] = {
 def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
 
-    Not the same question as its *storage*, which comes from the value: ``1.5``
-    is stored as a ``float`` while the token ``1.5`` is a ``double``.
-
-    Bounds are on the *magnitude*, since C++ has no negative literal — ``-2**31``
-    is unary minus applied to ``2**31``, so the expression is a ``long``.  A
-    decimal literal takes the first of ``int`` / ``long`` / ``long long`` that
-    fits and is ill-formed when none does, so ``None`` means the caller must
-    spell it as a float or refuse.
+    Not its *storage*, which comes from the value: ``1.5`` is stored as a
+    ``float`` while the token is a ``double``.  Bounds are on magnitude, since
+    C++ has no negative literal -- ``-2**31`` is unary minus on ``2**31``, so the
+    expression is a ``long``.  ``None`` means no integer literal fits and the
+    caller must spell a float or refuse.
     """
     if v.denominator != 1:
         return CppScalar.F64 if _as_exact_double(v) is not None else None
@@ -190,16 +187,11 @@ def _list_depth(ty: CppType) -> int:
 
 @dataclasses.dataclass(frozen=True)
 class _TupleAccess:
-    """Resolved form of a folded ``fst``/``snd`` chain over a tuple.
+    """A folded ``fst``/``snd`` chain over a tuple.
 
-    - ``off is None`` — a finished value: ``s`` is its C++ expression and
-      ``ty`` its type (one ``std::get`` for an element, or a non-accessor
-      base).
-    - ``off`` an ``int`` — the not-yet-materialized suffix ``base[off:]`` of
-      a tuple: ``s`` is the base expression and ``ty`` the base
-      :class:`CppTuple`.  Materialized into a ``std::make_tuple`` only if the
-      suffix is actually used (it never is when a ``fst`` reads one element
-      out of it).
+    ``off is None`` means a finished value in ``s``; an ``int`` means the
+    unmaterialized suffix ``base[off:]``, built into a ``std::make_tuple`` only
+    if used -- which it is not when a ``fst`` reads one element out of it.
     """
     s: str
     ty: CppType
@@ -230,16 +222,10 @@ class _IndentedWriter:
 
 
 class CppEmitError(Exception):
-    """Raised for unsupported AST shapes during emission.
+    """Raised for a program this backend cannot emit.
 
-    Optionally carries an ``at`` :class:`Ast` node — the
-    source-location of that node is prepended to the error message
-    when present, so error output points at the offending FPy
-    construct instead of leaving the user to guess.
-
-    The wrapping :class:`CppCompileError` in :mod:`compiler` builds
-    its message from ``str(e)`` of the underlying :class:`CppEmitError`,
-    so the location prefix flows through untouched.
+    An optional ``at`` node prefixes the message with a source location, which
+    the wrapping :class:`CppCompileError` passes through untouched.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
@@ -255,15 +241,10 @@ class CppEmitError(Exception):
 class CppInternalError(CppEmitError):
     """An invariant an earlier phase was supposed to guarantee.
 
-    Where :class:`CppEmitError` reports a *program* this backend cannot compile,
-    this reports a *backend bug*: an upstream analysis handed the emitter
-    something structurally impossible.  Kept distinct so such a bug does not
-    reach the user as "your program is unsupported", sending them off to rewrite
-    working code.
-
-    A subclass, so existing handlers and the :class:`CppCompileError` wrapping
-    are unchanged; the wrapping preserves the type on ``__cause__``, which is how
-    ``test_internal_invariants.py`` tells the two apart.
+    A *backend bug*, not a program this backend cannot compile -- kept distinct
+    so it does not reach the user as "your program is unsupported".  A subclass,
+    so handlers are unchanged and the type survives on ``__cause__``, which is
+    how ``test_internal_invariants.py`` tells the two apart.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
@@ -309,13 +290,8 @@ class CppEmitter(Visitor):
         # style monomorphization).  When ``None``, the AST's declared
         # name is used.
         self._func_name_override = func_name_override
-        # Mapping from each :class:`Call` AST node inside this
-        # function to the mangled C++ name of its target.  The
-        # compiler builds this map by walking ``format_info.by_call``
-        # and dispensing a stable mangled name per
-        # ``(callee FuncDef, outer_ctx)`` pair.  Falls back to the
-        # callee's declared name when a Call isn't in the map (e.g.
-        # foreign function values).
+        # Call -> mangled target name, one per (callee, outer_ctx).  A Call not
+        # in the map falls back to the callee's declared name.
         self._call_names: dict = call_names or {}
         # When True, allow rounded arithmetic to dispatch under an
         # unbounded-integer context (truncating silently to
@@ -526,14 +502,11 @@ class CppEmitter(Visitor):
     def _binding_decl(self, d: Definition, storage: CppType, name) -> str:
         """``T name``, ``const T& name`` or ``T& name`` for the def *d*.
 
-        A name that is never rebound binds by reference: that shares the object
-        and leaves the refcount untouched, which measurement showed is the only
-        case where the atomic control block costs anything.  ``const`` unless
-        something in the region writes through it -- note ``const`` applies to
-        the handle, not the elements, so a callee can still write ``xs[i] = e``
-        and the caller sees it, which is FPy's parameter semantics.
-
-        Rebinding must stay local, so such a name takes its own copy.
+        A name never rebound binds by reference, sharing the object and skipping the
+        atomic refcount; ``const`` unless something in its region writes through it.
+        That ``const`` is on the handle, not the elements, so a callee can still
+        write ``xs[i] = e`` and the caller sees it.  A rebind must stay local, so it
+        takes its own copy.
         """
         if not binds_by_reference(self.storage, self.def_use, d):
             return f'{storage.format()} {name}'
@@ -600,12 +573,9 @@ class CppEmitter(Visitor):
     def _reference_source(self, d) -> 'Expr | None':
         """The initializer *d*'s C++ name deduces its type from, if any.
 
-        Asked of the whole storage class, not of *d*.  A use resolves to the
-        latest def, and ``xs[i] = e`` makes a fresh one that is unioned with its
-        ``prev`` — so a name declared as ``const auto& L3 = N2[1]`` and then
-        written through is *read* through an ``IndexedAssign``-sited def whose own
-        site says nothing about the binding.  One member of the class carries the
-        declaration, and that is the one whose initializer fixed the type.
+        Asked of the storage class, not of *d*: a use resolves to the latest def, and
+        ``xs[i] = e`` makes a fresh one unioned with its ``prev``, whose own site says
+        nothing about the binding.  One member carries the declaration.
         """
         cls = self.storage.def_class[d]
         for m in self.storage.class_members[cls]:
@@ -630,12 +600,8 @@ class CppEmitter(Visitor):
         )
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
-        """Emit a single ``T name = rhs;`` (declare-on-assign) or
-        ``name = rhs;`` (reassign) line for a NamedId target whose
-        SSA def is registered at *site*.
-
-        Whether to declare or reassign is decided by the
-        :class:`StorageAnalysis`."""
+        """``T name = rhs;`` or ``name = rhs;``, per :class:`StorageAnalysis`.
+        """
         target_def = self.def_use.find_def_from_site(name, site)
         target_name = self.storage.def_to_name[target_def]
         if target_def in self.storage.declare_at_assign:
@@ -652,12 +618,10 @@ class CppEmitter(Visitor):
         src_ty: CppType | None = None,
         at: Expr | None = None,
     ) -> None:
-        """Emit destructuring assigns extracting each element of
-        *binding* from the tuple-valued local *src*.  The SSA defs
-        for every NamedId in *binding* are registered at *site* (the
-        enclosing :class:`Assign` / :class:`ForStmt` / :class:`ListComp`
-        node).  Underscore positions are skipped; nested tuple bindings
-        recurse via a fresh temp."""
+        """Emit assigns extracting each element of *binding* from the tuple *src*.
+
+        Underscore positions are skipped; nested bindings recurse via a fresh temp.
+        """
         for i, elt in enumerate(binding.elts):
             match elt:
                 case UnderscoreId():
@@ -888,14 +852,12 @@ class CppEmitter(Visitor):
         return self._convert_storage(emitted, src, want, at=e)
 
     def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
-        """:meth:`_emit_at` where C++ takes the type *from the argument*.
+        """:meth:`_emit_at` where C++ takes the type *from* the argument.
 
-        A braced initializer and ``std::make_tuple`` both do: the first rejects
-        a narrowing conversion outright, and the second silently deduces a
-        different type — ``std::make_tuple(a, b)`` with a ``float`` ``a`` builds
-        a ``std::tuple<float, double>`` that the surrounding declaration then
-        will not accept.  Either way the scalar's cast has to be spelled, even
-        though the same conversion is implicit anywhere else.
+        A braced initializer rejects a narrowing conversion outright, and
+        ``std::make_tuple`` silently deduces a different type -- a ``float`` first
+        argument gives ``std::tuple<float, double>``, which the declaration then
+        rejects.  Either way the scalar's cast must be spelled.
         """
         code = self._emit_at(e, want, ctx)
         if isinstance(want, CppScalar):
@@ -963,11 +925,9 @@ class CppEmitter(Visitor):
     ) -> CppEmitError:
         """One place wants two types and nothing in C++ bridges them.
 
-        Reached where a *representation* decision could not be reconciled --
-        distinct ``std::vector`` instantiations are unrelated types, and so are a
-        vector and a handle.  A limitation in the compiler is acceptable;
-        emitting C++ that does not compile is not, so this refuses rather than
-        letting the mismatch reach the C++ compiler.
+        Distinct ``std::vector`` instantiations are unrelated types, as are a vector
+        and a handle.  A limitation is acceptable; emitting C++ that does not compile
+        is not.
         """
         return CppEmitError(
             f'unsupported: this value is `{src.format()}` where '
@@ -981,12 +941,10 @@ class CppEmitter(Visitor):
     ) -> None:
         """Refuse a store C++ would narrow silently.
 
-        The sibling of :meth:`_require_bridgeable`, for the one case where a
-        format disagreement is a *wrong answer* instead of a compile error: C++
-        accepts a narrowing store into a slot, and FPy says the list then holds
-        the wider value.  Widening the container instead is not available --
-        another name may already alias it, which ``format_infer`` does not track
-        (see ``docs/todos/backend-cpp.md``).
+        The one case where a format disagreement is a *wrong answer* rather than a
+        compile error: C++ accepts a narrowing store into a slot, and FPy says the
+        list then holds the wider value.  Widening the container is not available --
+        another name may alias it.  See ``docs/todos/backend-cpp.md``.
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
@@ -1182,15 +1140,11 @@ class CppEmitter(Visitor):
         return resolved
 
     def _entry_rm(self, site: ContextScopeSite) -> RM | None:
-        """The rounding mode the C++ caller is contractually
-        delivering when control enters *site*'s scope.
+        """The rounding mode the caller contractually delivers at *site*.
 
-        Returns the scope's RM for a concrete, fesetround-supported
-        FP context (the FPy annotation pins the caller's
-        responsibility).  Returns ``None`` for symbolic, integer,
-        or unsupported contexts — in those cases the caller's mode
-        is treated as unknown and any nested concrete context must
-        emit an explicit ``fesetround`` to recover certainty.
+        The scope's RM for a concrete, ``fesetround``-supported FP context, since the
+        FPy annotation pins that responsibility on the caller; ``None`` for symbolic,
+        integer or unsupported ones, where a nested context must set the mode itself.
         """
         scope = self._scope_by_site.get(site)
         if scope is None:
@@ -1240,13 +1194,9 @@ class CppEmitter(Visitor):
                     f'{rctx.rm}',
                     at=at,
                 )
-            # Reject unbounded integer contexts unless the caller has
-            # opted into the unsafe cast.  C++ has no
-            # arbitrary-precision integer type, so any rounded
-            # arithmetic landing in storage ``int64_t`` via the
-            # unbounded-integer fallback may silently overflow.
-            # ``MPFixedContext`` reports unboundedness via
-            # ``nmin == -1`` (the lower-exponent bound).
+            # C++ has no arbitrary-precision integer, so the int64_t fallback
+            # may silently overflow; `nmin == -1` is how MPFixedContext reports
+            # unboundedness.
             if (
                 isinstance(rctx, MPFixedContext)
                 and rctx.nmin == -1
@@ -1268,16 +1218,11 @@ class CppEmitter(Visitor):
 
     @contextmanager
     def _fenv_scope(self, target_rm: RM):
-        """Wrap the contained emission in a ``fesetround`` save / set
-        / restore unless the active mode is already *target_rm*.
+        """Wrap the contained emission in a ``fesetround`` save/set/restore, unless the
+        active mode is already *target_rm*.
 
-        ``self._current_rm`` is ``None`` when the live mode is
-        unknown (function entry, after restoring a previously-saved
-        scope, etc.) — in that case we *always* emit ``fesetround``,
-        never relying on a guess about what the C++ runtime is doing.
-        When the active mode is known and equals *target_rm* we skip
-        the save / set / restore so plain ``with FP64:`` blocks
-        under an FP64-RNE function add no fenv noise.
+        ``_current_rm`` is ``None`` when the live mode is unknown, and then the set is
+        unconditional rather than a guess about what the runtime holds.
         """
         if self._current_rm is not None and target_rm == self._current_rm:
             yield
@@ -1296,14 +1241,8 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'std::fesetround({fenv});')
 
     def _visit_context(self, stmt: ContextStmt, ctx):
-        # ``with <ctx>:`` blocks.  The active rounding context is
-        # taken from the :class:`ContextUseAnalysis` scope registered
-        # at this statement's site (which has already resolved
-        # attribute references / partial-eval'd the context
-        # expression).  Validation only fires when something inside
-        # the block actually uses the context — see
-        # :meth:`_resolve_used_ctx`.  For used FP scopes we may emit
-        # ``fesetround`` save / set / restore around the body.
+        # The context comes from the ContextUse scope at this site, already
+        # resolved.  Validation fires only if something inside uses it.
         if not isinstance(stmt.target, UnderscoreId):
             raise CppEmitError(
                 'binding the active context to a name is not yet supported',
@@ -1365,16 +1304,11 @@ class CppEmitter(Visitor):
     def _emit_numeric_literal(self, v: Fraction, *, at: Expr) -> str:
         """Emit a numeric literal as a C++ expression.
 
-        An FPy literal is an exact rational rounded where it is *used*; C++ has no
-        such thing, so one binary64 holds exactly prints as itself and one it cannot
-        is refused.  ``num / denom`` would be an *operation* where FPy has a
-        constant, rounding under whatever mode happens to be set.  ``fp.round`` is
-        how a program pins a constant to a format -- see
-        :meth:`_fold_rounded_literal`.
-
-        Digits only while a C++ integer literal holds the value
-        (:func:`_value_cpp_type`); past ``long long`` gcc folds them to ``0``, so it
-        falls through to the floating spelling below.
+        An FPy literal is an exact rational rounded where it is *used*, which C++
+        has no spelling for -- so a value binary64 holds exactly prints as itself,
+        and one it cannot is refused rather than emitted as ``num / denom``, which
+        would be an operation where FPy has a constant.  Digits only while an
+        integer literal holds the value (:func:`_value_cpp_type`).
         """
         ty = _value_cpp_type(v)
         if ty is not None and ty.is_integer():
@@ -1441,13 +1375,11 @@ class CppEmitter(Visitor):
         """*code* as a call argument of type *want*, spelling a literal's type.
 
         A literal matches the op table on its *storage*, so ``1.5`` under FP32
-        matches the ``float`` signature while the token is a ``double``, and
-        nothing inserts a cast.  Harmless where a declaration supplies the type
-        (and exact for ``+ - * /``, since double rounding equals single rounding
-        when ``2p + 2 <= 53``).  Not harmless where the callee takes its type
-        *from* the argument: ``fpy::min``/``max`` are templates, so mixed types
-        fail to deduce, and the ``<cmath>`` overload sets pick the wider
-        overload -- which for ``fma``, outside ``2p + 2``, rounds twice.
+        matches the ``float`` signature while the token is a ``double``.  Harmless
+        where a declaration supplies the type, and exact for ``+ - * /`` since
+        ``2p + 2 <= 53``.  Not where the callee deduces from the argument:
+        ``fpy::min``/``max`` fail to deduce, and the ``<cmath>`` overload sets pick
+        the wider one -- which for ``fma``, outside that bound, rounds twice.
         """
         if not isinstance(e, RationalVal):
             return code
@@ -1511,18 +1443,14 @@ class CppEmitter(Visitor):
     ) -> str:
         """Emit *e* via the op table, choosing a signature in three phases.
 
-        1. **Direct match** -- every operand's storage and the active context
-           already equal a signature's slots, so no conversion is needed.
-        2. **Cast-to-active** -- no direct match, but the active context has an
-           all-same-type signature whose width holds every operand losslessly.
-           Skipped when the active context has no C++ storage, e.g. ``REAL``.
-        3. **Lossless widening** -- sound only under ``REAL``, where the wider
-           C++ op produces the exact mathematical result and rounds to itself.
-           Under any other context the wider op rounds differently than that
-           context demands.  See :meth:`_try_widen`.
+        A **direct match** needs no conversion.  Failing that, **cast-to-active**
+        takes an all-same-type signature of the active context whose width holds
+        every operand losslessly -- skipped when that context has no C++ storage.
+        Failing that, **widening**, sound only under ``REAL``, where the wider op
+        gives the exact result and rounds to itself; see :meth:`_try_widen`.
 
-        A literal operand of a call-form signature needs its type spelled even
-        on a direct match: it matched on storage, not on the token's own type.
+        A literal operand of a call-form signature needs its type spelled even on a
+        direct match: it matched on storage, not on the token's type.
         """
         sigs = table.get(type(e))
         if sigs is None:
@@ -1725,12 +1653,9 @@ class CppEmitter(Visitor):
     def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> str:
         """Emit a (possibly nested) ``fst``/``snd`` chain.
 
-        The chain is folded to a single ``std::get`` whenever it reads one
-        element of a tuple — e.g. ``fst(snd(e))`` over a 3+-tuple is
-        ``std::get<1>(e)`` rather than ``std::get<0>`` of a freshly built
-        tail tuple.  Only a chain that genuinely yields a shorter tuple (a
-        ``snd`` whose result is still multi-element and is *not* consumed by
-        an outer ``fst``) materializes a ``std::make_tuple``.
+        Folded to a single ``std::get`` whenever it reads one element, so
+        ``fst(snd(e))`` over a 3-tuple is ``std::get<1>(e)``.  Only a chain genuinely
+        yielding a shorter tuple materializes a ``std::make_tuple``.
         """
         acc = self._tuple_access(e, ctx)
         if acc.off is None:
@@ -1941,14 +1866,12 @@ class CppEmitter(Visitor):
                 )
 
     def _emit_size(self, e: Size, ctx) -> str:
-        """``size(xs, d)`` returns the size of *xs* at dimension *d*.
-        The compile-time shape of *xs* is known from format inference
-        — we follow ``d`` ``[0]`` indices into the first element to
-        reach the right ``vector``, then take ``.size()``.
+        """``size(xs, d)`` -- follow *d* ``[0]`` indices into the shape format
+        inference knows, then ``.size()``.
 
-        Requires a constant integer ``d``; symbolic / runtime ``d``
-        would need a more sophisticated dispatch and isn't worth the
-        complexity for the current corpus."""
+        Requires a constant *d*; a runtime one would need a dispatch the corpus does
+        not justify.
+        """
         if not isinstance(e.second, Integer):
             raise CppEmitError(
                 'size(xs, d) requires a constant integer dimension; '
@@ -2062,12 +1985,12 @@ class CppEmitter(Visitor):
                 )
 
     def _emit_bool_chain(self, e: 'And | Or', ctx) -> str:
-        """Reduce an ``And`` / ``Or`` to a fully-parenthesised chain
-        of ``&&`` / ``||``.  C++'s short-circuit semantics match FPy's
-        for pure expressions, and the operands are already bool —
-        :class:`StorageInfer` chose ``BOOL`` storage for each one.
-        Zero-arg ``and()`` / ``or()`` shouldn't reach here (the
-        front-end rejects them), but we degenerate cleanly anyway."""
+        """Reduce ``And``/``Or`` to a parenthesised ``&&``/``||`` chain.
+
+        C++'s short-circuit matches FPy's for pure expressions, and the operands are
+        already ``BOOL``.  A zero-arg form is rejected by the front end, but
+        degenerates cleanly here.
+        """
         if not e.args:
             return 'true' if isinstance(e, And) else 'false'
         args = [self._visit_expr(a, ctx) for a in e.args]
@@ -2185,15 +2108,9 @@ class CppEmitter(Visitor):
     def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
         """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
 
-        Combiner mirrors :meth:`_emit_min_max`: ``std::fmin``/``fmax``
-        for FP results, ``std::min``/``max`` (templated) for integer
-        ones.  Both demand uniform operand types — we cast each element
-        to ``result_ty`` via :meth:`_maybe_cast`, which raises on a
-        lossy cast.
-
-        Empty-list behavior is undefined (matches the interpreter's
-        ``min([]) → ValueError`` contract); the emit indexes ``xs[0]``
-        without a guard.
+        Combiner as in :meth:`_emit_min_max`.  Both demand uniform operands, so each
+        element is cast to ``result_ty``.  The empty list is undefined, matching the
+        interpreter's ``ValueError``: the emit indexes ``xs[0]`` unguarded.
         """
         result_ty = self._storage_for_expr(e)
         if not isinstance(result_ty, CppScalar):
@@ -2237,15 +2154,12 @@ class CppEmitter(Visitor):
         return acc
 
     def _emit_empty(self, e: Empty, ctx) -> str:
-        """``empty(d1, ..., dN)`` builds an ``N``-dimensional zero-
-        initialised vector.  The result's storage shape comes from
-        format inference; we read the dimension sizes off the call
-        site and emit nested ``fpy::make_list<T>(d, ...)`` calls
-        right-to-left so the innermost element type bubbles out.
+        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector.
 
-        ``empty()`` with zero args returns ``T()`` — a scalar, which
-        format inference resolves to whatever storage the call site
-        expects."""
+        Sizes are read off the call site and emitted as nested ``make_list`` calls
+        right-to-left, so the innermost element type bubbles out.  ``empty()`` is a
+        scalar ``T()``, which format inference resolves at the call site.
+        """
         result_ty = self._storage_for_expr(e)
         dims = [self._visit_expr(a, ctx) for a in e.args]
         dim_storages = [
@@ -2324,13 +2238,12 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return result
     def _scalar_cast_types(self, e):
-        """Source/target scalar storage for a round-like node ``e``.
+        """Source/target scalar storage for a round-like node *e*.
 
-        The argument's storage is only used to short-circuit same-type casts.
-        A non-dyadic literal has a ``SetFormat`` with no representable storage
-        — fine, we always cast.  ``Round`` folds those before getting here
-        (:meth:`_fold_rounded_literal`); ``Cast`` does not, and refuses them at
-        emission instead, which is right for a cast that asserts exactness."""
+        The argument's storage only short-circuits same-type casts, so a non-dyadic
+        literal with no representable storage is fine.  ``Round`` folds those earlier;
+        ``Cast`` refuses them, which is right for a cast asserting exactness.
+        """
         try:
             arg_ty = self._scalar_storage_for_expr(e.arg)
         except CppEmitError:
@@ -2405,13 +2318,9 @@ class CppEmitter(Visitor):
         return self._explicit_cast(lit, target_ty)
 
     def _visit_round(self, e, ctx) -> str:
-        # ``Round(arg)`` rounds ``arg`` to the active rounding
-        # context — emitted as a plain ``static_cast`` (the cast's
-        # rounding mode is the active ``fesetround`` mode set by
-        # Phase 5b at the surrounding ``with`` boundary).  The user
-        # explicitly asked to round into the active context, so the
-        # cast is emitted even when lossy.  Same-type short-circuits
-        # to a no-op.  A literal argument is rounded here instead.
+        # A `static_cast`, whose rounding mode is the one the surrounding
+        # `with` set.  The user asked for it, so it is emitted even when lossy;
+        # a literal argument is folded instead.
         folded = self._fold_rounded_literal(e)
         if folded is not None:
             return folded
@@ -2450,12 +2359,10 @@ class CppEmitter(Visitor):
         """*emitted* as the caller needs the result.
 
         A callee's return representation is fixed by its own body, so a caller
-        that keeps a handle for a local reason has to make one.  The result is a
-        prvalue whose ownership the callee handed over — that is why it unboxed
-        — so this moves the elements rather than copying them.
-
-        Only this direction: :func:`~fpy2.backend.cpp.unbox._boxed_by_callees`
-        gives the caller a handle whenever the callee returns one.
+        keeping a handle for a local reason has to make one.  The result is a prvalue
+        the callee handed over -- which is why it unboxed -- so this moves rather
+        than copies.  Only this direction arises; ``unbox`` gives the caller a handle
+        whenever the callee returns one.
         """
         if got is None or self.unbox is None:
             return emitted
@@ -2546,15 +2453,11 @@ class CppEmitter(Visitor):
         comp_site: ListComp,
         ctx,
     ) -> None:
-        """Emit one ``for`` line for a single comprehension stage,
-        leaving the writer indented inside the loop body.
+        """Emit one ``for`` line for a comprehension stage, leaving the writer indented
+        inside the body.
 
-        The target's storage class is determined by ``StorageInfer``
-        exactly as for any other AssignDef.  We always declare-on-
-        assign in the for header — the comprehension's target lives
-        only inside the loop's lexical scope.  The comp target's
-        SSA site is the ``ListComp`` node, not the target id itself
-        (see ``define_use._visit_list_comp``).
+        Always declare-on-assign: the target lives only in the loop scope.  Its SSA
+        site is the ``ListComp`` node, not the target id.
         """
         # ``loop_def`` drives the value-iterable element binding (const&
         # for read-only aggregates); ``None`` => discarded/anonymous.
@@ -2779,15 +2682,13 @@ class CppEmitter(Visitor):
         return None
 
     def _range_counter_scalar(self, iterable: Expr) -> 'CppScalar | None':
-        """Counter type for a ``range`` for-loop, or ``None`` when the bounds
-        aren't statically concrete.
+        """Counter type for a ``range`` loop, or ``None`` when the bounds are not
+        statically concrete.
 
-        The C-style counter transiently reaches the first value past ``stop``
-        (the exit-test overshoot), which the loop variable's *element* format
-        (the values actually taken) excludes — so a counter typed from the
-        element storage can overflow at a type boundary (e.g. ``range(128)``
-        would overflow ``int8_t``).  We size it to cover ``start`` and that
-        overshoot instead.
+        A C-style counter transiently reaches the first value past ``stop``, which
+        the loop variable's *element* format excludes -- so typing it from the
+        element storage overflows at a boundary (``range(128)`` in an ``int8_t``).
+        Sized to cover ``start`` and that overshoot instead.
         """
         start: int | None
         stop: int | None
@@ -2829,14 +2730,11 @@ class CppEmitter(Visitor):
 
     def _emit_for_loop(self, stmt: ForStmt, ctx, target: str, decl: str,
                        target_def) -> None:
-        """``for (<header>) { body }`` given the loop variable and its
-        declaration.
+        """``for (<header>) { body }`` given the loop variable and its declaration.
 
-        A ``Range*`` iterable is a counter loop and uses *decl* as given;
-        anything else is a range-for over a container, where the element
-        binding is :meth:`_foreach_decl`'s decision instead -- ``const&`` for a
-        read-only aggregate, so no per-element copy.  A ``None`` *target_def*
-        marks a discarded element, which that method binds ``const auto&``.
+        A ``Range*`` iterable is a counter loop using *decl*; anything else is a
+        range-for whose element binding is :meth:`_foreach_decl`'s decision.  A
+        ``None`` *target_def* marks a discarded element.
         """
         match stmt.iterable:
             case Range1():
