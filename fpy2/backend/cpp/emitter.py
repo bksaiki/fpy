@@ -29,7 +29,9 @@ Currently supported:
   ``static_cast`` (with a NaN-aware assertion for ``Cast``).
 
 Anything else raises :class:`CppEmitError`, which the public
-``CppCompiler`` re-wraps as :class:`CppCompileError`.
+``CppCompiler`` re-wraps as :class:`CppCompileError`.  A violated
+invariant from an earlier phase raises :class:`CppInternalError`
+instead -- a backend bug rather than an uncompilable program.
 """
 
 import dataclasses
@@ -105,6 +107,7 @@ from ...ast.fpyast import (
     Range2,
     Range3,
     Rational,
+    RationalVal,
     ReturnStmt,
     Round,
     Signbit,
@@ -159,6 +162,28 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTP: 'FE_UPWARD',
     RM.RTN: 'FE_DOWNWARD',
 }
+
+def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
+    """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
+
+    Not the same question as its *storage*, which comes from the value: ``1.5``
+    is stored as a ``float`` while the token ``1.5`` is a ``double``.
+
+    Bounds are on the *magnitude*, since C++ has no negative literal — ``-2**31``
+    is unary minus applied to ``2**31``, so the expression is a ``long``.  A
+    decimal literal takes the first of ``int`` / ``long`` / ``long long`` that
+    fits and is ill-formed when none does, so ``None`` means the caller must
+    spell it as a float or refuse.
+    """
+    if v.denominator != 1:
+        return CppScalar.F64 if _as_exact_double(v) is not None else None
+    n = abs(v.numerator)
+    if n < 2 ** 31:
+        return CppScalar.S32
+    if n < 2 ** 63:
+        return CppScalar.S64
+    return None
+
 
 
 def _as_exact_double(v: Fraction) -> float | None:
@@ -250,6 +275,24 @@ class CppEmitError(Exception):
             super().__init__(msg)
 
 
+class CppInternalError(CppEmitError):
+    """An invariant an earlier phase was supposed to guarantee.
+
+    Where :class:`CppEmitError` reports a *program* this backend cannot compile,
+    this reports a *backend bug*: an upstream analysis handed the emitter
+    something structurally impossible.  Kept distinct so such a bug does not
+    reach the user as "your program is unsupported", sending them off to rewrite
+    working code.
+
+    A subclass, so existing handlers and the :class:`CppCompileError` wrapping
+    are unchanged; the wrapping preserves the type on ``__cause__``, which is how
+    ``test_internal_invariants.py`` tells the two apart.
+    """
+
+    def __init__(self, msg: str, *, at: 'Ast | None' = None):
+        super().__init__(f'internal error (please report): {msg}', at=at)
+
+
 class CppEmitter(Visitor):
     """Single-use visitor that produces a C++ source string."""
 
@@ -323,6 +366,14 @@ class CppEmitter(Visitor):
         # the ``fesetround`` to keep simple ``with FP64:`` blocks
         # under an FP64-RNE function free of fenv noise.
         self._current_rm: RM | None = None
+        self._fenv_saved: list[str] = []
+        """Saved mode of each enclosing ``fesetround`` scope, outermost first.
+
+        :meth:`_visit_return` restores from this, since a ``return`` jumps over
+        the restore at the end of every scope it sits inside.  That covers every
+        path: FPy has no ``break`` or ``continue``, so ``return`` is the only
+        early exit.
+        """
 
     # ------------------------------------------------------------------
     # List representation
@@ -1024,7 +1075,7 @@ class CppEmitter(Visitor):
         accepts a narrowing store into a slot, and FPy says the list then holds
         the wider value.  Widening the container instead is not available --
         another name may already alias it, which ``format_infer`` does not track
-        (see ``docs/todos/format-infer-aliasing.md``).
+        (see ``docs/todos/backend-cpp.md``).
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
@@ -1165,7 +1216,42 @@ class CppEmitter(Visitor):
         # at that storage where the value is constructed here, converted where
         # it comes from somewhere with storage of its own.
         rhs = self._emit_at(stmt.expr, self._return_storage, ctx)
+        if self._fenv_saved:
+            # This `return` jumps over the restore each enclosing scope emits
+            # after its body, so the mode would escape into the caller and
+            # silently change arithmetic unrelated to this function.  Restore
+            # from the outermost scope: it saved the mode from before any were
+            # entered, which is the caller's.
+            #
+            # The value must be computed under this scope's mode, and C++ gives
+            # no point between evaluating a return expression and returning — so
+            # bind it first, unless the mode cannot affect it anyway, where the
+            # copy would cost a whole vector on a list return.  Not `const`, so
+            # the return can still move out of the temp.
+            if not self._mode_independent(stmt.expr):
+                ty = self._return_storage
+                tmp = self._fresh_temp()
+                decl = 'auto' if ty is None else ty.format()
+                self.writer.add_line(f'{decl} {tmp} = {rhs};')
+                rhs = tmp
+            self.writer.add_line(f'std::fesetround({self._fenv_saved[0]});')
         self.writer.add_line(f'return {rhs};')
+
+    def _mode_independent(self, e: Expr) -> bool:
+        """Is the emitted value of *e* independent of the live rounding mode?
+
+        A :class:`Var` already holds its value, and a literal is a constant
+        expression — including one :meth:`_fold_rounded_literal` produces, which
+        is rounded at compile time under the mode the program asked for.
+
+        Asked of the AST, not of the emitted text: how a literal is *spelled* is
+        not stable (a narrow target comes back wrapped in a ``static_cast``).
+        ``False`` costs a temp, never correctness, so anything unrecognized falls
+        through.
+        """
+        if isinstance(e, Var | RationalVal):
+            return True
+        return isinstance(e, Round) and self._fold_rounded_literal(e) is not None
 
     def _resolve_scope_ctx(self, scope: ContextScope) -> Context | None:
         """Concrete :class:`Context` for *scope*, substituting the
@@ -1322,9 +1408,11 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'const auto {fenv} = std::fegetround();')
         self.writer.add_line(f'std::fesetround({_FE_RM_MACRO[target_rm]});')
         self._current_rm = target_rm
+        self._fenv_saved.append(fenv)
         try:
             yield
         finally:
+            self._fenv_saved.pop()
             self._current_rm = prev_rm
         self.writer.add_line(f'std::fesetround({fenv});')
 
@@ -1377,8 +1465,9 @@ class CppEmitter(Visitor):
         return self._emit_real_literal(e.as_real(), at=e)
 
     def _visit_integer(self, e: Integer, ctx) -> str:
-        # Integer literals print directly.
-        return str(e.val)
+        # Through the shared path, which range-checks: `str(e.val)` here was a
+        # second way to emit an integer too large for a C++ integer literal.
+        return self._emit_numeric_literal(e.as_rational(), at=e)
 
     def _visit_rational(self, e: Rational, ctx) -> str:
         return self._emit_numeric_literal(e.as_rational(), at=e)
@@ -1405,19 +1494,26 @@ class CppEmitter(Visitor):
         where FPy has a constant: it rounds under whatever mode happens to be
         set, and ``-O2`` folds it to nearest regardless.
 
-        ``fp.round`` is how a program says which format a constant is in; see
-        :meth:`_fold_rounded_literal`.
+        ``fp.round`` is how a program pins a constant to a format -- it rounds
+        the value there, at compile time; see :meth:`_fold_rounded_literal`.
+
+        An integral value prints as digits only while a C++ integer literal can
+        hold it — :func:`_value_cpp_type`'s answer, the same one :meth:`_call_arg`
+        asks.  Past ``long long`` gcc accepts the digits with a warning and folds
+        them to ``0``; storage selection refuses such a value for a scalar, but a
+        list element or slot never asks.  Beyond that range it falls through to
+        the floating spelling below.
         """
-        if v.denominator == 1:
+        ty = _value_cpp_type(v)
+        if ty is not None and ty.is_integer():
             return str(v.numerator)
         exact = _as_exact_double(v)
         if exact is not None:
             return repr(exact)
         raise CppEmitError(
             f'unsupported literal: `{v.numerator}/{v.denominator}` is not '
-            f'exactly representable as a double, and C++ has no exact-real '
-            f'literal to round at the point of use.  Wrap it in `fp.round` to '
-            f'say which format the constant is in.',
+            f'representable in C++.  Wrap it in `fp.round(...)` to round it to '
+            f'a format that is.',
             at=at,
         )
 
@@ -1427,7 +1523,7 @@ class CppEmitter(Visitor):
         only take/return scalars."""
         ty = self._storage_for_expr(e)
         if not isinstance(ty, CppScalar):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected scalar storage for {type(e).__name__}, got {ty!r}',
                 at=e,
             )
@@ -1464,6 +1560,42 @@ class CppEmitter(Visitor):
             )
         return self._explicit_cast(arg, target_ty)
 
+    @staticmethod
+    def _literal_cpp_type(e: RationalVal) -> CppScalar | None:
+        """The C++ type of the token *e* prints as, or ``None`` for no literal.
+
+        Not the same question as its *storage*, which
+        :class:`StorageAnalysis` picks from the literal's value.  A token has
+        whatever type C++ gives it, which is what
+        :func:`_value_cpp_type` answers.
+        """
+        return _value_cpp_type(e.as_rational())
+
+    def _call_arg(self, code: str, e: Expr, want: CppScalar) -> str:
+        """*code* as a call argument of type *want*, spelling a literal's type.
+
+        The op table matches a literal on its *storage*, so ``1.5`` under FP32
+        matches the ``float`` signature while the token is a ``double`` — and
+        nothing inserts a cast, because the two "agree".  Harmless wherever a
+        declaration supplies the type, and exact for ``+ - * /`` since double
+        rounding equals single rounding when ``2p + 2 <= 53``, which holds for
+        every format this backend can store.
+
+        Not harmless where the callee takes its type *from* the argument:
+        ``fpy::min`` / ``fpy::max`` are templates, so mixed types fail to deduce,
+        and the ``<cmath>`` overload sets silently pick the wider overload —
+        which for ``fma``, a product *plus* an addend and so outside ``2p + 2``,
+        rounds twice where FPy rounds once.
+
+        Only literals need this; a variable's declared type already is its
+        storage.
+        """
+        if not isinstance(e, RationalVal):
+            return code
+        if self._literal_cpp_type(e) == want:
+            return code
+        return self._explicit_cast(code, want)
+
     def _explicit_cast(self, arg: str, target_ty: CppScalar) -> str:
         """Emit ``static_cast<target>(arg)`` unconditionally.
 
@@ -1483,7 +1615,7 @@ class CppEmitter(Visitor):
         try:
             scope = self.ctx_use.find_scope_from_use(e)
         except KeyError as err:
-            raise CppEmitError(
+            raise CppInternalError(
                 f'no context scope registered for {type(e).__name__}',
                 at=e,
             ) from err
@@ -1544,9 +1676,12 @@ class CppEmitter(Visitor):
         active = self._active_ctx_for(e)
         arg_storage = self._scalar_storage_for_expr(e.arg)
 
-        # (1) Direct match.
+        # (1) Direct match.  A literal still needs its type spelled where the
+        # signature is a call: it matched on storage, not on the token's type.
         for sig in sigs:
             if sig.matches(arg_storage, active):
+                if sig.is_func:
+                    return sig.format(self._call_arg(arg, e.arg, sig.arg_ty))
                 return sig.format(arg)
 
         # (2) Cast-to-active fallback: pick the all-active signature
@@ -1560,9 +1695,10 @@ class CppEmitter(Visitor):
         if target is not None:
             for sig in sigs:
                 if sig.arg_ty == target and sig.out_ctx == active:
-                    return sig.format(
-                        self._maybe_cast(arg, arg_storage, target, at=e)
-                    )
+                    cast = self._maybe_cast(arg, arg_storage, target, at=e)
+                    if sig.is_func:
+                        cast = self._call_arg(cast, e.arg, target)
+                    return sig.format(cast)
 
         # (3) Lossless-widening fallback — only sound when the active
         # context is ``REAL``.  The wider C++ op then produces the exact
@@ -1667,9 +1803,15 @@ class CppEmitter(Visitor):
         lhs_storage = self._scalar_storage_for_expr(e.first)
         rhs_storage = self._scalar_storage_for_expr(e.second)
 
-        # (1) Direct match.
+        # (1) Direct match.  See the unary path: a literal operand of a
+        # call-form signature needs its type spelled.
         for sig in sigs:
             if sig.matches(lhs_storage, rhs_storage, active):
+                if not sig.is_infix:
+                    return sig.format(
+                        self._call_arg(lhs, e.first, sig.in1_ty),
+                        self._call_arg(rhs, e.second, sig.in2_ty),
+                    )
                 return sig.format(lhs, rhs)
 
         # (2) Cast-to-active fallback.
@@ -1682,10 +1824,12 @@ class CppEmitter(Visitor):
                 if (sig.in1_ty == target
                         and sig.in2_ty == target
                         and sig.out_ctx == active):
-                    return sig.format(
-                        self._maybe_cast(lhs, lhs_storage, target, at=e),
-                        self._maybe_cast(rhs, rhs_storage, target, at=e),
-                    )
+                    l = self._maybe_cast(lhs, lhs_storage, target, at=e)
+                    r = self._maybe_cast(rhs, rhs_storage, target, at=e)
+                    if not sig.is_infix:
+                        l = self._call_arg(l, e.first, target)
+                        r = self._call_arg(r, e.second, target)
+                    return sig.format(l, r)
 
         # (3) Lossless-widening fallback — only sound when the active
         # context is ``REAL``.  See :meth:`_try_widen_binary` and the
@@ -1794,22 +1938,7 @@ class CppEmitter(Visitor):
                     f'({self._list_len(arg_ty, arg)})'
                 )
             case Sum():
-                # ``sum(xs)`` → ``std::accumulate(begin, end, T(0))``
-                # with ``T`` taken from format inference.  Bind the operand
-                # to a reference first: when ``arg`` is a prvalue (e.g. a
-                # list literal), ``arg.begin()`` and ``arg.end()`` would
-                # otherwise name iterators into *different* temporaries — an
-                # invalid range (undefined behavior at runtime).  ``auto&&``
-                # lifetime-extends a temporary and binds an lvalue without
-                # copying.
-                result_ty = self._storage_for_expr(e)
-                arg_ty = self._storage_for_expr(e.arg)
-                src = self._bind_operand(arg)
-                return (
-                    f'std::accumulate({self._list_begin(arg_ty, src)}, '
-                    f'{self._list_end(arg_ty, src)}, '
-                    f'static_cast<{result_ty.format()}>(0))'
-                )
+                return self._emit_sum(e, arg)
             case AMin() | AMax():
                 return self._emit_amin_amax(e, arg)
             case AnyOf() | AllOf():
@@ -1871,7 +2000,7 @@ class CppEmitter(Visitor):
     def _as_tuple(self, acc: _TupleAccess, e: Expr) -> tuple[str, CppTuple]:
         """The (base string, tuple type) of *acc*, which must be a tuple."""
         if not isinstance(acc.ty, CppTuple):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'tuple accessor expects a tuple, got {acc.ty.format()}', at=e,
             )
         return acc.s, acc.ty
@@ -1886,7 +2015,7 @@ class CppEmitter(Visitor):
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppTuple)
                 and len(result_ty.elt.elts) == 2):
-            raise CppEmitError(
+            raise CppInternalError(
                 'expected list[(int, T)] for enumerate result, '
                 f'got {result_ty!r}', at=e,
             )
@@ -1962,7 +2091,7 @@ class CppEmitter(Visitor):
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppScalar)
                 and result_ty.elt.is_integer()):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'range(...) expected integer-list result, '
                 f'got `{result_ty!r}`',
                 at=e,
@@ -2173,10 +2302,15 @@ class CppEmitter(Visitor):
         in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         args = [a1, a2, a3]
 
-        # (1) Direct match.
+        # (1) Direct match.  Every ternary signature is a call -- `std::fma`
+        # among them, where picking the wider overload rounds twice.
         for sig in sigs:
             if sig.matches(in_storages[0], in_storages[1], in_storages[2], active):
-                return sig.format(a1, a2, a3)
+                return sig.format(
+                    self._call_arg(a1, e.args[0], sig.in1_ty),
+                    self._call_arg(a2, e.args[1], sig.in2_ty),
+                    self._call_arg(a3, e.args[2], sig.in3_ty),
+                )
 
         # (2) Cast-to-active fallback.
         try:
@@ -2189,11 +2323,12 @@ class CppEmitter(Visitor):
                         and sig.in2_ty == target
                         and sig.in3_ty == target
                         and sig.out_ctx == active):
-                    return sig.format(
-                        self._maybe_cast(a1, in_storages[0], target, at=e),
-                        self._maybe_cast(a2, in_storages[1], target, at=e),
-                        self._maybe_cast(a3, in_storages[2], target, at=e),
-                    )
+                    return sig.format(*[
+                        self._call_arg(
+                            self._maybe_cast(a, s, target, at=e), src, target,
+                        )
+                        for a, s, src in zip(args, in_storages, e.args)
+                    ])
 
         # (3) Lossless-widening fallback — only sound when the active
         # context is ``REAL``.  See :meth:`_try_widen_ternary` and the
@@ -2294,7 +2429,7 @@ class CppEmitter(Visitor):
         cast (losslessly) into the active context's storage so the
         pairwise calls have a single deduced template type."""
         if not e.args:
-            raise CppEmitError(
+            raise CppInternalError(
                 f'{type(e).__name__} requires at least one argument',
                 at=e,
             )
@@ -2303,8 +2438,8 @@ class CppEmitter(Visitor):
         args = [self._visit_expr(a, ctx) for a in e.args]
         arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         casted = [
-            self._maybe_cast(a, s, target, at=e)
-            for a, s in zip(args, arg_storages)
+            self._call_arg(self._maybe_cast(a, s, target, at=e), src, target)
+            for a, s, src in zip(args, arg_storages, e.args)
         ]
         if target.is_float():
             # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``
@@ -2318,6 +2453,59 @@ class CppEmitter(Visitor):
             result = f'{fn}({result}, {nxt})'
         return result
 
+    def _emit_sum(self, e: Sum, arg: str) -> str:
+        """``sum(xs)`` as the fold the interpreter performs.
+
+        ``_eval_sum`` seeds with ``xs[0]`` **unrounded** and performs *n-1*
+        additions; an empty list is an exact ``+0``.  ``accumulate`` takes its
+        seed and range separately, so that shape is a range starting one past
+        ``begin``.  Seeding a typed zero over the whole range instead did *n*
+        additions, so ``sum([-0.0])`` came out ``+0.0`` and a narrower seed
+        rounded the first element away.
+
+        The empty guard is not optional: ``begin() + 1`` and ``xs[0]`` are both
+        undefined there, and the differential harness runs length zero.
+
+        The accumulator may be *wider* than the element, since the seed cast is
+        then exact and ``accumulate``'s ``init + *first`` converts to the common
+        type — which is the accumulator only when the element fits it, making the
+        fold uni-precision there, as the interpreter is.  Otherwise refuse: the
+        seed would round (``sum([5e-324])`` under FP32), and widening instead
+        would run every addition at the wrong format.
+        """
+        result_ty = self._storage_for_expr(e)
+        arg_ty = self._storage_for_expr(e.arg)
+        elt_ty = arg_ty.elt if isinstance(arg_ty, CppList) else None
+        if not isinstance(elt_ty, CppScalar) or not isinstance(result_ty, CppScalar):
+            raise CppInternalError(
+                f'expected scalar element and result for `sum`, got '
+                f'{elt_ty!r} and {result_ty!r}',
+                at=e,
+            )
+        if not scalar_fits_in(elt_ty, result_ty):
+            raise CppEmitError(
+                f'unsupported: `sum` over `{elt_ty.format()}` elements '
+                f'accumulating in `{result_ty.format()}`, which cannot hold one '
+                f'exactly.  Use a context whose format contains the element '
+                f'format.',
+                at=e,
+            )
+        # A prvalue operand (a list literal) would otherwise give begin() and
+        # end() into *different* temporaries; binding also keeps the three uses
+        # below to one evaluation.
+        src = self._bind_operand(arg)
+        seed = self._list_at(arg_ty, src, '0')
+        if elt_ty != result_ty:
+            # `accumulate` deduces `T` from its seed, so an uncast one would run
+            # the whole fold in the element type.  Exact, by the check above.
+            seed = self._explicit_cast(seed, result_ty)
+        return (
+            f'({self._list_len(arg_ty, src)} == 0'
+            f' ? static_cast<{result_ty.format()}>(0)'
+            f' : std::accumulate({self._list_begin(arg_ty, src)} + 1, '
+            f'{self._list_end(arg_ty, src)}, {seed}))'
+        )
+
     def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
         """``any(bs)`` / ``all(bs)`` -> ``std::any_of`` / ``std::all_of`` with an
         identity predicate.  The empty range agrees with FPy (``all_of`` is
@@ -2330,7 +2518,7 @@ class CppEmitter(Visitor):
             isinstance(arg_storage, CppList)
             and arg_storage.elt == CppScalar.BOOL
         ):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected list[bool] arg for {type(e).__name__}, '
                 f'got {arg_storage!r}',
                 at=e,
@@ -2361,14 +2549,14 @@ class CppEmitter(Visitor):
         """
         result_ty = self._storage_for_expr(e)
         if not isinstance(result_ty, CppScalar):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected scalar result for {type(e).__name__}, got {result_ty!r}',
                 at=e,
             )
         arg_storage = self._storage_for_expr(e.arg)
         if not (isinstance(arg_storage, CppList)
                 and isinstance(arg_storage.elt, CppScalar)):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected list[scalar] arg for {type(e).__name__}, '
                 f'got {arg_storage!r}',
                 at=e,
@@ -2453,7 +2641,7 @@ class CppEmitter(Visitor):
         result_ty = self._storage_for_expr(e)
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppTuple)):
-            raise CppEmitError(
+            raise CppInternalError(
                 f'expected list[tuple[...]] for zip result, got {result_ty!r}',
                 at=e,
             )
@@ -2540,7 +2728,7 @@ class CppEmitter(Visitor):
         Rounding at compile time also uses the mode the program asked for
         rather than whatever ``fesetround`` last left behind.
         """
-        if not isinstance(e.arg, Decnum | Hexnum | Rational | Digits | Integer):
+        if not isinstance(e.arg, RationalVal):
             return None
         active = self._active_ctx_for(e)
         if not isinstance(active, EFloatContext):
@@ -2923,7 +3111,7 @@ class CppEmitter(Visitor):
         level = self._emitted_storage_of(target_def)
         for idx in idxs:
             if not isinstance(level, CppList):
-                raise CppEmitError(
+                raise CppInternalError(
                     f'`{stmt.var}` is indexed {len(idxs)} deep but its storage '
                     f'is `{level!r}`',
                     at=stmt,

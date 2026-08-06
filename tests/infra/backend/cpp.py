@@ -110,13 +110,7 @@ _NON_CR_OPS = frozenset([
 # diverge from the interpreter for a known reason (populate as discovered,
 # e.g. exact-rational decimal literals rounded once in the interpreter vs.
 # per-literal in C++).
-_run_ignore: list[str] = [
-    # Quantized dot product that collapses to zero: the interpreter yields
-    # -0.0 and C++ `std::accumulate` (seeded with +0.0) yields +0.0 —
-    # numerically equal, a signed-zero-from-reduction edge.  This function
-    # exists to pin widening codegen (which compiles), not exact execution.
-    '_regression_quant_dot_real_widen',
-]
+_run_ignore: list[str] = []
 
 
 class _OpScan(DefaultVisitor):
@@ -920,6 +914,91 @@ def _test_library(
     return failures
 
 
+CPP_INTEROP: str = '''\
+namespace fpy {
+
+// Interop: a program holding `std::vector` converts here.  A flat vector can be
+// shared or copied; a nested one can only be copied.
+
+// Must not outlive `v`.
+template <typename T>
+inline list<T> borrow(std::vector<T>& v) {
+    return list<T>(&v, [](std::vector<T>*) {});
+}
+
+template <typename T>
+inline list<T> copy_in(const std::vector<T>& v) {
+    return std::make_shared<std::vector<T> >(v);
+}
+
+template <typename T>
+inline list<list<T> > copy_in(const std::vector<std::vector<T> >& vs) {
+    list<list<T> > out = make_list<list<T> >(vs.size());
+    for (std::size_t i = 0; i < vs.size(); ++i)
+        (*out)[i] = copy_in(vs[i]);
+    return out;
+}
+
+template <typename T>
+inline std::vector<T> copy_out(const list<T>& xs) {
+    return *xs;
+}
+
+template <typename T>
+inline std::vector<std::vector<T> > copy_out(const list<list<T> >& xss) {
+    std::vector<std::vector<T> > out(xss->size());
+    for (std::size_t i = 0; i < xss->size(); ++i)
+        out[i] = *(*xss)[i];
+    return out;
+}
+
+}  // namespace fpy
+'''
+"""Conversions a *caller* needs to hand a ``std::vector`` to a generated kernel.
+
+Not part of the runtime, because nothing emitted names them: the emitter never
+produces a ``borrow`` / ``copy_in`` / ``copy_out`` call, so carrying them in
+every translation unit would be surface no generated program uses.  They live
+here, with the tests that exercise the boundary, and are appended after
+``CppCompiler.helpers()`` — which defines the ``fpy::list`` and ``make_list``
+they build on.
+
+Two properties the ABI tests pin:
+
+- A ``vector<vector<T>>`` can only be copied.  The caller stores rows by value
+  where a list stores handles, so no arrangement makes a write through either
+  side visible to the other.
+- A borrowed handle must not outlive its vector.  That holds because a callee
+  cannot retain one: FPy has no globals, and captures are materialized before
+  compilation.
+"""
+
+
+def _build_and_run_driver(
+    cpp_path: Path, group: str, name: str,
+) -> list[tuple[str, str, str]]:
+    """Build a driver translation unit and run it; a nonzero exit is a failure.
+
+    The driver `main`s assert what the differential harness cannot: they inspect
+    state a kernel leaves behind rather than the value it returns.
+    """
+    exe = cpp_path.with_suffix('.exe')
+    try:
+        subprocess.run(
+            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, name, f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, name, f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
 def _test_runtime(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     """Compile and run a self-test of the emitted runtime prelude (``fpy::``).
 
@@ -1087,6 +1166,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
         print('\n'.join(compiler.headers()), file=f)
         print('#include <cstdio>', file=f)
         print(compiler.helpers(), file=f)
+        print(CPP_INTEROP, file=f)
         print(compiler.compile_module(module), file=f)
         print(_ABI_MAIN, file=f)
 
@@ -1096,21 +1176,126 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
         print('  SKIPPED (no C++ compiler driver)')
         return []
 
-    exe = cpp_path.with_suffix('.exe')
-    try:
-        subprocess.run(
-            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
-            check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f'  FAILED to build: {e.stderr[-400:]}')
-        return [(group, 'abi_boundary', f'build failed: {e.stderr[-200:]}')]
+    return _build_and_run_driver(cpp_path, group, 'abi_boundary')
 
-    r = subprocess.run([str(exe)], capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
-        return [(group, 'abi_boundary', f'assertion failed: {r.stdout.strip()}')]
-    return []
+
+_RTZ_64 = fp.IEEEContext(11, 64, fp.RM.RTZ)
+_RTP_64 = fp.IEEEContext(11, 64, fp.RM.RTP)
+
+
+@fp.fpy
+def _fenv_early_return(x: fp.Real) -> fp.Real:
+    """Returns from *inside* a rounding scope.
+
+    The restore a scope emits after its body is unreachable from here, so
+    without a restore before the return the mode escapes into the caller.
+    """
+    with _RTZ_64:
+        y = x + 1.0
+        return y
+
+
+@fp.fpy
+def _fenv_return_after_scope(x: fp.Real) -> fp.Real:
+    """The counterweight: execution leaves the scope normally.
+
+    The restore has to still happen at the end of the block, or `z` is computed
+    under the scope's mode instead of the function's.
+    """
+    with _RTZ_64:
+        y = x + 1.0
+    z = y + 1.0
+    return z
+
+
+@fp.fpy
+def _fenv_nested_early_return(x: fp.Real) -> fp.Real:
+    """Two scopes deep, so the restore has to reach past both."""
+    with _RTZ_64:
+        with _RTP_64:
+            y = x + 1.0
+            return y
+
+
+def _test_fenv(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
+    """A kernel must not change the caller's rounding mode.
+
+    The differential driver cannot see this: it compares a kernel's *own*
+    result, and a leaked mode is correct there and wrong everywhere after.  So
+    the check is a driver that inspects `fegetround` across a call, and computes
+    a sum whose value differs between the modes involved.
+    """
+    group = 'fenv'
+    compiler = fp.CppCompiler()
+    cpp_path = output_dir / 'fenv_boundary.cpp'
+    print(f'Compiling fenv boundary test to `{cpp_path}`')
+    real = fp.types.RealType(fp.FP64)
+    module = fp.Module()
+    module.add(_fenv_early_return, ctx=fp.FP64, arg_types=[real])
+    module.add(_fenv_return_after_scope, ctx=fp.FP64, arg_types=[real])
+    module.add(_fenv_nested_early_return, ctx=fp.FP64, arg_types=[real])
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print('#include <cstdio>', file=f)
+        print(compiler.helpers(), file=f)
+        print(compiler.compile_module(module), file=f)
+        print(_FENV_MAIN, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    return _build_and_run_driver(cpp_path, group, 'fenv_boundary')
+
+
+_FENV_MAIN: str = """\
+// 1.0 + 1.5e-16 is just past half an ulp of 1.0, so RNE rounds it up and RTZ
+// truncates -- the cheapest expression that tells the two modes apart.
+static bool nearest_is_live() {
+    volatile double a = 1.0, b = 1.5e-16;
+    return (a + b) != 1.0;
+}
+
+int main() {
+    std::fesetround(FE_TONEAREST);
+    if (!nearest_is_live()) {
+        printf("precondition: FE_TONEAREST not in effect\\n");
+        return 1;
+    }
+
+    volatile double r = _fenv_early_return(1.0);
+    (void)r;
+    if (std::fegetround() != FE_TONEAREST || !nearest_is_live()) {
+        printf("_fenv_early_return leaked its rounding mode\\n");
+        return 1;
+    }
+
+    r = _fenv_nested_early_return(1.0);
+    (void)r;
+    if (std::fegetround() != FE_TONEAREST || !nearest_is_live()) {
+        printf("_fenv_nested_early_return leaked its rounding mode\\n");
+        return 1;
+    }
+
+    r = _fenv_return_after_scope(1.0);
+    (void)r;
+    if (std::fegetround() != FE_TONEAREST || !nearest_is_live()) {
+        printf("_fenv_return_after_scope leaked its rounding mode\\n");
+        return 1;
+    }
+
+    // ...and the scope still applied while it was open: 1.0 + 1.0 is exact, so
+    // both statements give 3 under any mode -- this pins the value, not the mode
+    if (_fenv_return_after_scope(1.0) != 3.0) {
+        printf("_fenv_return_after_scope computed %g, wanted 3\\n",
+               _fenv_return_after_scope(1.0));
+        return 1;
+    }
+    return 0;
+}
+"""
 
 
 _ABI_MAIN: str = """\
@@ -1197,6 +1382,7 @@ def _test_abi_native(
         print('\n'.join(compiler.headers()), file=f)
         print('#include <cstdio>', file=f)
         print(compiler.helpers(), file=f)
+        print(CPP_INTEROP, file=f)
         print(compiler.compile_module(module), file=f)
         print(_ABI_NATIVE_MAIN, file=f)
 
@@ -1276,9 +1462,15 @@ def _regression_quant_dot_real_widen(
       lossless-widening dispatch in
       :meth:`fpy2.backend.cpp.emitter.CppEmitter._try_widen_binary`:
       the ``Mul`` widens both operands to ``int16_t``.
-    - ``sum(prods)`` under FP32 lowers to ``std::accumulate`` with
-      a ``float`` accumulator, taking advantage of the lossless
-      ``int16 → float`` implicit conversion.
+    - ``sum(prods)`` under FP32 lowers to ``std::accumulate`` seeded with the
+      first element cast to ``float``, taking advantage of the lossless
+      ``int16 → float`` conversion.  That the conversion is exact is what makes
+      the fold uni-precision at ``float`` -- ``init + *first`` converts to the
+      common type, which is the accumulator only because the element fits it --
+      and so equal to the interpreter's per-addition rounding.
+
+    Was in ``_run_ignore`` while ``sum`` seeded from a typed zero: this product
+    collapses to zero, and the interpreter's ``-0.0`` came out ``+0.0``.
     """
     with fp.SINT8:
         xqs = [fp.round(x) for x in xs]
@@ -1697,10 +1889,45 @@ def _regression_blocked_dot_e4m3(xs):
 # losslessly.  These are compiled (and ``cc``-checked) with the given arg
 # types; they are not run-mode executed (custom-typed inputs aren't
 # synthesized by the differential harness).
+@fp.fpy
+def _regression_big_literal_in_a_list(y: fp.Real) -> fp.Real:
+    """An integral literal past `long long`, reached through a list element.
+
+    Storage selection refuses such a value for a scalar, but an element never
+    asks -- so this compiled to a 301-digit token that gcc folded to `0`, where
+    the interpreter gives 1e300.  Executed, so the harness bit-compares it.
+    """
+    with fp.FP64:
+        zs = [1e300, y]
+        zs[1] = 1e300
+        return zs[0] + zs[1]
+
+
+@fp.fpy(ctx=fp.FP32)
+def _regression_fp32_literal_call_arg(y: fp.Real, z: fp.Real) -> fp.Real:
+    """Literal arguments to type-deduced C++ calls, under FP32.
+
+    A literal's storage comes from its value, so `1.5` matches the `float`
+    signature while the token is a C++ `double`.  `fpy::max` is a template, so
+    that combination does not deduce and the emitted C++ *does not compile* --
+    which is what this regression catches, since the harness compiles every
+    corpus program.  `std::fma` is the silent half: it would pick the `double`
+    overload and round twice.  Only FP32 shows either; an FP64 literal already
+    has the right type.
+    """
+    a = fp.fmax(y, 1.5)
+    b = fp.fma(y, z, 0.25)
+    return a + b
+
+
 _typed_regression_funcs: list[tuple[fp.Function, list]] = [
     (
         _regression_blocked_dot_e4m3,
         [fp.types.ListType(fp.types.RealType(fp.MX_E4M3))],
+    ),
+    (
+        _regression_fp32_literal_call_arg,
+        [fp.types.RealType(fp.FP32), fp.types.RealType(fp.FP32)],
     ),
 ]
 
@@ -2031,6 +2258,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     failures += _test_runtime(output_dir, mode=mode)
     failures += _test_abi(output_dir, mode=mode)
     failures += _test_abi_native(output_dir, mode=mode)
+    failures += _test_fenv(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)
     failures += _test_regressions(output_dir, mode=mode, cov=cov)

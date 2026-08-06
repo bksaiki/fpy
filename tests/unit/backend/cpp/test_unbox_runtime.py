@@ -24,6 +24,7 @@ import pytest
 
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.types import CppList
+from tests.infra.backend.cpp import CPP_INTEROP
 from fpy2.module import Module
 from fpy2.types import BoolType, ListType, RealType
 
@@ -73,7 +74,7 @@ def _run(func, arg_types, args, *, unbox: bool) -> tuple[str, list[list[float]]]
             actuals.append(f'a{i}')
 
     src = '\n'.join([
-        *cc.headers(), '#include <cstdio>', cc.helpers(),
+        *cc.headers(), '#include <cstdio>', cc.helpers(), CPP_INTEROP,
         cc.compile_module(m),
         'int main() {',
         *decls,

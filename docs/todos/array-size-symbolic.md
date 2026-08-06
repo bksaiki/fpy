@@ -5,46 +5,33 @@ precise for compile-time constants and throws away everything about runtime size
 that are *statically constrained to be equal* — `ys = xs` makes `len(ys) ==
 len(xs)`, and the old lattice recorded `None`. It now tracks those equalities.
 
-What remains is **consumer integration**: nothing reads them yet. This document
-is the as-built record plus that remaining work; the original design proposal has
-been dropped, since the implementation diverged from it in ways worth stating
-directly rather than reconstructing from a diff.
+What remains is **consumer integration**: nothing reads them yet.
 
-## As built
+## The API a consumer needs
 
-- **A size variable is a `NamedId`** minted by a `Gensym`, with a shared
-  `Unionfind[NamedId | int]` — following the type-inference precedent rather than
-  a bespoke `SymbolicSize` class. So `ArraySize: TypeAlias = int | NamedId | None`.
-- **A concrete `int` is the class representative.** Pinning is `union(int, var)`
-  with the `int` as leader; no separate pin/resolve map.
-- **The result is fully resolved and the union-find is not exposed.** `_resolve`
-  (cf. type inference's `_resolve_type`) replaces every size by its
-  representative before returning, so a size is known iff it is an `int`, and
-  `concrete_size` / `is_size_eq` take no union-find argument.
-- **Propagation is mostly free.** `ys = xs`, `[f(x) for x in xs]`,
-  `enumerate(xs)`, `xs[:]`, and `IndexedAssign` already thread `.size`, so the
-  variable rides along. Arguments and free variables mint one fresh variable for
-  their outer dimension (`_arg_bound`).
-- **`zip` is strict, not `min`.** Any concrete input pins the symbolic ones to it;
-  all-symbolic inputs merge and the result keeps the representative.
-- **Unconditional `assert` seeds equalities.** `assert len(xs) == len(ys)` merges
-  the two variables and `assert len(xs) == N` pins one — only when not nested in
-  an `if` or loop, so the equality holds on every execution.
-- **Calls adopt only concrete callee sizes.** `_refine_sizes` ignores a callee's
-  size *variables*: they belong to that run and must not leak across the call.
+- `ArraySize: TypeAlias = int | NamedId | None`. A size variable is a `NamedId`
+  minted by a `Gensym`, sharing a `Unionfind[NamedId | int]`; a concrete `int` is
+  the class representative.
+- Results are fully resolved and the union-find is not exposed, so a size is
+  known iff it is an `int`, and `concrete_size` / `is_size_eq` take no
+  union-find argument.
+- Equalities come from three places: arguments and free variables (one fresh
+  variable per outer dimension), strict `zip` (any concrete input pins the
+  others), and unconditional `assert len(xs) == len(ys)` — only when not nested
+  in an `if` or loop, so the equality holds on every execution.
+- Calls adopt only *concrete* callee sizes; a callee's variables belong to that
+  run and must not leak across the call.
 
-Two deliberate departures from the original plan:
+Two departures not to re-propose:
 
-- **No optimistic loop-phi merge.** Merging the pre-loop and post-body size
-  variables assumes the body preserves length, which `ys = ys[1:]` violates. The
-  loop fixpoint uses the ordinary join instead: a size-preserving body
-  re-propagates the *same* variable so the join keeps it, and a size-changing body
-  yields a different size so the join goes to `None`. Sound with no optimism.
+- **No optimistic loop-phi merge.** Merging the pre-loop and post-body variables
+  assumes the body preserves length, which `ys = ys[1:]` violates. The ordinary
+  join is sound with no optimism: a size-preserving body re-propagates the *same*
+  variable, a size-changing one yields a different size and the join goes `None`.
 - **Convergence needs the union-find in the check.** A merge does not change the
   `NamedId` stored in `by_def`, so bound-stability alone can end the fixpoint one
-  iteration early — a `zip`-merge inside a loop body would be missed. The visitor
-  keeps a monotone `_uf_changes` counter and the fixpoint requires both stored
-  bounds *and* that counter to be stable.
+  iteration early. The visitor keeps a monotone `_uf_changes` counter and
+  requires both to be stable.
 
 ## Remaining work: nothing consumes the equalities
 

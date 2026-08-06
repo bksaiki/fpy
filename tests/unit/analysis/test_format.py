@@ -162,7 +162,7 @@ class TestAbstractFormat():
         `MPFixedFormat` was once carved out and taken as having none whatever it
         said, which is what made `-x` on an `INTEGER` parameter return `0` where
         the interpreter returned `-0.0`.  See
-        `docs/todos/reals-in-integer-storage.md`.
+        `docs/todos/backend-cpp.md`.
         """
         nz = fp.RealFloat(s=True, exp=0, c=0)
         # `INTEGER` declines it, and the abstraction agrees.

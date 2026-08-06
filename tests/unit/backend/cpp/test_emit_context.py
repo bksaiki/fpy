@@ -76,7 +76,11 @@ class TestStaticResolution:
 
         # No error: compilation succeeds.
         out = CppCompiler(optimize=False).compile(f, arg_types=[RealType(fp.FP64)])
-        assert 'return (x + x);' in out
+        # Not `return (x + x);`: the outer RM is unknown, so the inner ``with``
+        # does set the mode, and returning from inside it restores first -- which
+        # binds the value to a temp.  See
+        # `test_return_inside_a_scope_restores_first`.
+        assert '(x + x)' in out
 
     def test_with_block_scope_unused_compiles(self):
         """A ``with`` block whose body has no ops compiles fine
@@ -153,6 +157,94 @@ class TestNonDefaultRmEmitsFesetround:
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         assert 'fesetround' not in out
+
+    def test_return_inside_a_scope_restores_first(self):
+        """A ``return`` inside a rounding scope restores *before* returning.
+
+        The restore a scope emits after its body cannot run when the body
+        returns, so without this the mode escapes into the caller and silently
+        changes arithmetic that has nothing to do with this function.  Pinned
+        on the order, which is the whole content of the fix: the value must be
+        computed under the scope's mode and handed back under the caller's.
+
+        Executed end-to-end by ``_test_fenv`` in
+        ``tests/infra/backend/cpp.py``, which a unit test cannot do -- the
+        differential driver compares a kernel's own result, and a leaked mode
+        is correct there and wrong everywhere after.
+        """
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with _RTZ_64:
+                y = x + 1.0
+                return y
+
+        out = CppCompiler(optimize=False).compile(
+            f, arg_types=[RealType(fp.FP64)],
+        )
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        restore = next(
+            i for i, ln in enumerate(lines)
+            if ln.startswith('std::fesetround(') and 'FE_' not in ln
+        )
+        ret = next(i for i, ln in enumerate(lines) if ln.startswith('return '))
+        assert restore < ret, f'restore must precede the return:\n{out}'
+
+    def test_nested_scopes_restore_to_the_callers_mode(self):
+        """Two scopes deep, the restore reaches past both.
+
+        One restore suffices and it comes from the *outermost* scope, which
+        saved the mode from before any of them were entered.
+
+        Both scopes need an op of their own: a scope no op dispatches under is
+        not emitted at all, so nesting alone would give only one save.
+        """
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with _RTZ_64:
+                a = x + 1.0
+                with _RTP_64:
+                    y = a + 1.0
+                    return y
+
+        out = CppCompiler(optimize=False).compile(
+            f, arg_types=[RealType(fp.FP64)],
+        )
+        saves = [
+            ln.split('=')[0].strip().split()[-1]
+            for ln in out.splitlines() if 'std::fegetround()' in ln
+        ]
+        assert len(saves) == 2, out
+        ret = out.index('return ')
+        # the restore before the return names the outermost save
+        assert f'std::fesetround({saves[0]});' in out[:ret], out
+
+    def test_falling_out_of_a_scope_still_restores_at_the_end(self):
+        """The counterweight: the end-of-block restore is load-bearing.
+
+        When execution leaves the scope normally, the statement after it must
+        run under the function's mode again -- so the fix for the early-return
+        path must not replace the ordinary restore.
+        """
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with _RTZ_64:
+                y = x + 1.0
+            z = y + 1.0
+            return z
+
+        out = CppCompiler(optimize=False).compile(
+            f, arg_types=[RealType(fp.FP64)],
+        )
+        lines = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        restore = next(
+            i for i, ln in enumerate(lines)
+            if ln.startswith('std::fesetround(') and 'FE_' not in ln
+        )
+        z_decl = next(i for i, ln in enumerate(lines) if ln.startswith('double z'))
+        assert restore < z_decl, f'`z` must be computed after the restore:\n{out}'
 
     def test_with_block_changes_rm(self):
         """An inner ``with`` that switches to a different RM emits

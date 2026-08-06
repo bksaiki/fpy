@@ -1865,7 +1865,7 @@ class _FormatInferInstance(Visitor):
         ``reaching_defs`` refreshes only the name written through, but the list is
         one object: ``ys = xs; ys[0] = y`` leaves ``xs[0]`` holding ``y``.  Without
         this, ``xs`` keeps its old element format and the analysis reports a bound
-        the program exceeds -- see ``docs/todos/format-infer-aliasing.md``.
+        the program exceeds -- see ``docs/todos/backend-cpp.md``.
         """
         region = self.alias.region_of(base)
         if region is None:

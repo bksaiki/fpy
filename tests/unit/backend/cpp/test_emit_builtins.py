@@ -37,10 +37,11 @@ class TestSum:
         # that begin()/end() name the same object (see
         # ``test_prvalue_operand_is_bound_before_iterating`` in test_emit_bool).
         assert 'auto&&' not in out
-        assert (
-            'std::accumulate(xs.begin(), xs.end(), '
-            'static_cast<double>(0))'
-        ) in out
+        # Seeded from the first element over ``begin() + 1``, which is the fold
+        # `_eval_sum` performs -- *n-1* additions from an unrounded seed, and an
+        # exact ``+0`` for the empty list.  See ``test_emit_sum.py``.
+        assert 'std::accumulate(xs.begin() + 1, xs.end(), ' in out
+        assert 'xs.size() == 0 ? static_cast<double>(0)' in out
 
 
 class TestEnumerate:

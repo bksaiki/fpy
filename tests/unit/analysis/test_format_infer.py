@@ -1659,7 +1659,7 @@ class TestFormatInfer:
     # A store mutates the list *every* name in its alias region refers to, so
     # each of their bounds has to admit the inserted value.  `reaching_defs`
     # only refreshes the name written through, which is why `format_infer`
-    # consults `Alias`; see `docs/todos/format-infer-aliasing.md`.
+    # consults `Alias`; see `docs/todos/backend-cpp.md`.
 
     _NARROW = SetFormat(frozenset((Fraction(1), Fraction(2))))
 
