@@ -7,12 +7,10 @@ becomes a miscompilation rather than a missed optimization.  See
 
 import re
 
-import pytest
-
 import fpy2 as fp
 
 from fpy2.analysis import Alias
-from fpy2.backend.cpp.compiler import CppCompileError, CppCompiler
+from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.types import CppList
 from fpy2.backend.cpp.unbox import Unbox
 from fpy2.module import Module
@@ -545,20 +543,14 @@ class TestProjectionByReference:
         out = CppCompiler().compile_module(m)
         assert 'fpy::list' not in out, out
 
-    @pytest.mark.xfail(
-        reason='blocked on whether a list-valued store rebinds the slot or '
-               'overwrites it in place; see docs/todos/list-value-semantics.md',
-        raises=CppCompileError, strict=True,
-    )
-    def test_a_replaced_slot_still_copies(self):
-        """The guard.  A C++ reference follows the slot; FPy keeps referring to
-        the list that was in it, so a store of a *different* list anywhere in
-        the function rules the reference out.
+    def test_a_replaced_slot_binds_a_reference_too(self):
+        """A store into the projected slot used to rule the reference out, on the
+        grounds that a C++ reference follows the slot while FPy kept referring to
+        the list that had been in it.
 
-        Now refuses instead: the rows are no longer shared, so they unbox, and
-        the guard's demand for a handle has nothing to build one from.  Which
-        way this resolves depends on the store question above -- an overwriting
-        store makes the reference correct and retires the guard entirely.
+        A store overwrites its slot rather than replacing it, so following the
+        slot *is* FPy's behaviour and the guard that used to force a handle here
+        is gone.  ``_regression_replaced_slot`` executes the difference.
         """
         import tests.infra.backend.cpp as corpus
 
@@ -566,29 +558,22 @@ class TestProjectionByReference:
             corpus._regression_replaced_slot, ctx=fp.FP64,
             arg_types=[ListType(ListType(R)), ListType(R)],
         )
-        assert 'fpy::list<double> row = ' in out, out
-        assert 'auto& row' not in out, out
+        assert 'auto& row' in out, out
+        assert 'fpy::list' not in out, out
 
-    @pytest.mark.xfail(
-        reason='same store question as the test above',
-        raises=CppCompileError, strict=True,
-    )
-    def test_the_guard_is_function_wide(self):
-        """Conservative on purpose: the store is *after* the last read here, so
-        a flow-sensitive guard would allow the reference.  Deliberately not —
-        nothing else in the analysis is flow-sensitive."""
+    def test_the_store_itself_does_not_box_the_row(self):
+        """The narrower claim left over from the retired guard: a list-valued
+        store is an elementwise overwrite of storage the container already owns,
+        so it needs no indirection at either end."""
         @fp.fpy
         def f(xss: list[list[fp.Real]], ys: list[fp.Real]) -> fp.Real:
             with fp.FP64:
-                row = xss[0]
-                n = row[0]
                 xss[0] = ys
-                return n
+                return xss[0][0]
 
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
-        )
-        assert 'auto& row' not in out, out
+        storage, _ = _decide(f, [ListType(ListType(R)), ListType(R)])
+        assert _levels(storage['xss']) == [False, False]
+        assert _levels(storage['ys']) == [False]
 
 
     def test_a_literal_nested_three_deep_unboxes_at_every_level(self):

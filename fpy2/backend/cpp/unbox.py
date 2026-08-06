@@ -91,13 +91,6 @@ class UnboxAnalysis:
     storage: dict[Definition, CppType] = field(default_factory=dict)
     ret_regions: list[set[Region]] = field(default_factory=list)
     written: set[Region] = field(default_factory=set)
-    slot_replaced: set[Region] = field(default_factory=set)
-    """Element regions some ``xss[i] = <list>`` puts a *different* list into.
-
-    A C++ reference binds to the slot, so a name projected out of one of these
-    would follow the replacement; FPy keeps referring to the list that was
-    there.  ``_regression_replaced_slot`` is exactly that.
-    """
     at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
@@ -106,11 +99,12 @@ class UnboxAnalysis:
     def may_reference_projection(self, d: Definition) -> bool:
         """Whether ``row = xss[i]`` may bind a reference rather than copy.
 
-        Only when nothing replaces that slot: a reference follows the slot, and
-        FPy keeps referring to the list that was in it.
+        Whenever the projection has a region at all.  A C++ reference follows the
+        slot, and so does FPy: a store *overwrites* the slot rather than putting a
+        different list in it, so there is no way to detach one from its contents.
+        The guard this used to need went away with that rule.
         """
-        region = self.alias.region_of(d)
-        return region is not None and region not in self.slot_replaced
+        return self.alias.region_of(d) is not None
 
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
         """Whether a ``const`` reference here would reject a write FPy allows.
@@ -216,7 +210,6 @@ class Unbox:
         out = UnboxAnalysis(alias)
         scan = _Scan(alias, def_use, callees or {})
         scan._visit_function(ast, None)
-        out.slot_replaced = scan.slot_replaced
         out.ret_regions = scan.returned
         out.written = scan.written
         out.at_boundary = scan.at_boundary
@@ -228,7 +221,7 @@ class Unbox:
                 continue
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
             shared = escapes or _shares_storage(
-                region, alias, storage, def_use, scan.slot_replaced,
+                region, alias, storage, def_use,
             )
             out.boxed[region] = out.boxed.get(region, False) or shared
 
@@ -345,14 +338,12 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
 
 
 class _Scan(DefaultVisitor):
-    """One walk collecting the four facts ``decide`` reads off the syntax.
+    """One walk collecting the three facts ``decide`` reads off the syntax.
 
-    ``slot_replaced`` element regions some ``xss[i] = <list>`` replaces -- a C++
-    reference follows the slot, FPy the list that was in it.  ``written``
-    regions stored into here or in a callee, which a ``const`` reference would
-    reject.  ``at_boundary`` regions crossing a call that declared a handle; an
-    unknown callee counts as declaring one everywhere.  ``returned`` what each
-    ``return`` hands back, by depth.
+    ``written`` regions stored into here or in a callee, which a ``const``
+    reference would reject.  ``at_boundary`` regions crossing a call that
+    declared a handle; an unknown callee counts as declaring one everywhere.
+    ``returned`` what each ``return`` hands back, by depth.
     """
 
     def __init__(
@@ -364,7 +355,6 @@ class _Scan(DefaultVisitor):
         self.alias = alias
         self.def_use = def_use
         self.callees = callees
-        self.slot_replaced: set[Region] = set()
         self.written: set[Region] = set()
         self.at_boundary: set[Region] = set()
         self.returned: list[set[Region]] = []
@@ -379,16 +369,6 @@ class _Scan(DefaultVisitor):
             out.add(r)
             depth += 1
         return out
-
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-        if (
-            isinstance(stmt.var, NamedId)
-            and self.alias.region_of_expr(stmt.expr) is not None
-        ):
-            d = self.def_use.find_def_from_site(stmt.var, stmt)
-            if (r := self.alias.region_of(d, len(stmt.indices))) is not None:
-                self.slot_replaced.add(r)
-        super()._visit_indexed_assign(stmt, ctx)
 
     def _visit_call(self, e: Call, ctx):
         abi = self.callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
@@ -422,7 +402,6 @@ def _shares_storage(
     alias: AliasAnalysis,
     storage: StorageAnalysis,
     def_use: DefineUseAnalysis,
-    slot_replaced: set[Region],
 ) -> bool:
     """Whether more than one place holds *region* separately.
 
@@ -454,8 +433,7 @@ def _shares_storage(
     owned_separately = 0
     for ds in by_name.values():
         if not all(
-            _binds_by_reference(d, storage, def_use, alias, slot_replaced)
-            for d in ds
+            _binds_by_reference(d, storage, def_use, alias) for d in ds
         ):
             owned_separately += 1
     return slots + owned_separately > 1
@@ -466,7 +444,6 @@ def _binds_by_reference(
     storage: StorageAnalysis,
     def_use: DefineUseAnalysis,
     alias: AliasAnalysis,
-    slot_replaced: set[Region],
 ) -> bool:
     """Whether *d* references storage that already exists *inside this function*.
 
@@ -475,11 +452,10 @@ def _binds_by_reference(
     would make ``zss = [xs]`` look unshared.  One extra term, so the divergence
     stays visible instead of becoming a second copy of the rule.
     """
-    region = alias.region_of(d)
     return (
         binds_by_reference(
             storage, def_use, d,
-            allow_projection=region is not None and region not in slot_replaced,
+            allow_projection=alias.region_of(d) is not None,
         )
         and not isinstance(d.site, Argument)
     )

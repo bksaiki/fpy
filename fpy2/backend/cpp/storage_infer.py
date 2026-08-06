@@ -114,8 +114,10 @@ def binds_by_reference(
     *place*.  They must agree: discounting a name the emitter then copies is a
     miscompilation.
 
-    *allow_projection* enables ``row = xss[i]``, valid only where nothing
-    replaces that slot -- the caller supplies that fact from the alias analysis.
+    *allow_projection* enables ``row = xss[i]``, which needs the projection to
+    have a region at all -- the caller supplies that from the alias analysis.  A
+    store overwrites its slot rather than replacing it, so a reference following
+    the slot is what FPy does too and no further condition is needed.
     """
     if not isinstance(storage.storage_of(d), (CppList, CppTuple)):
         return False

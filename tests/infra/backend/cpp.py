@@ -1783,9 +1783,11 @@ def _regression_conditional_alias(
 def _regression_replaced_slot(
     xss: list[list[fp.Real]], ys: list[fp.Real],
 ) -> fp.Real:
-    """Pin: a projection names an *object*, not a slot.  After `xss[0] = ys`,
-    `row` is still the detached old list — a C++ reference would follow the
-    slot instead."""
+    """Route: a projection outliving a store into the same slot.  A store
+    *overwrites*, so `row` still refers to that slot afterwards and sees `ys`'s
+    values — which is what a C++ reference does too.  `ys` is unchanged, since
+    overwriting says where the values land and not that they are shared, so the
+    two terms below distinguish this from a store that rebound the slot."""
     with fp.FP64:
         if len(xss) == 0 or len(ys) == 0:
             return 0
