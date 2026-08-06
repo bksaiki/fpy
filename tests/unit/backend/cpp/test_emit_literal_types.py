@@ -1,31 +1,22 @@
 """A literal argument to a C++ call must state its own type.
 
-The emitter picks a literal's storage from its *value*, so ``1.5`` in an FP32
-context matches the ``float`` signature in the op table while the token it
-prints is a C++ ``double``.  Nothing inserts a cast, because storage and
-signature agree -- the disagreement is between the storage and the *token*.
+A literal's storage comes from its *value*, so ``1.5`` under FP32 matches the
+``float`` signature while the token it prints is a ``double`` — and nothing
+inserts a cast, because storage and signature agree.  Harmless wherever a
+declaration supplies the type, and exact for ``+ - * /`` since double rounding
+equals single rounding when ``2p + 2 <= 53``.  Not harmless where the callee
+takes its type *from* the argument: ``fpy::min`` / ``fpy::max`` are templates, so
+mixed types fail to deduce and the C++ does not compile, and the ``<cmath>``
+overload sets silently pick the wider overload — which for ``fma``, outside
+``2p + 2``, rounds twice where FPy rounds once.
 
-Where a declaration supplies the type that is harmless, and the promotion is
-exact for ``+ - * /`` because double rounding equals single rounding when
-``2p + 2 <= 53``, which holds for every format this backend can store.  Where
-the callee takes its type *from* the argument it is not harmless:
+**Paths, not ops.**  The op table's 40 call-form signatures share four dispatch
+paths, so testing each op would exercise the same four routes forty times.  The
+risk worth guarding is a *new* path added without routing literals through
+``_call_arg``, so the last test asserts the call-form arity set is closed.
 
-- ``fpy::min`` / ``fpy::max`` are our own templates, so a ``float`` and a
-  ``double`` argument fail to deduce and the emitted C++ does not compile;
-- the ``<cmath>`` overload sets silently select the wider overload, which for
-  ``fma`` -- whose exact result is a product *plus* an addend, and so is not
-  covered by ``2p + 2`` -- rounds twice where FPy rounds once.
-
-**Why this file enumerates paths rather than ops.**  The op table has 40
-call-form signatures, but they share four dispatch paths: the unary, binary and
-ternary op-table paths, and ``_emit_min_max``.  Testing each op would exercise
-the same four routes forty times.  The risk this guards is the other one -- a
-*new* path added without routing literals through ``_call_arg`` -- so the last
-test asserts the set of call-form arities is closed, and fails if one appears
-that has no case here.
-
-``optimize=False`` throughout: ``RoundElim`` and const-folding would otherwise
-rewrite these expressions before the emitter sees them.
+``optimize=False`` throughout, or ``RoundElim`` and const-folding rewrite these
+before the emitter sees them.
 """
 
 import fpy2 as fp

@@ -1,26 +1,18 @@
 """``sum(xs)`` must be the fold the interpreter performs.
 
-``_eval_sum`` seeds the accumulator with ``xs[0]`` **unrounded** and performs
-*n-1* additions, each rounded to the active context; an empty list is an exact
-``+0``.  Emitting ``accumulate(begin, end, T(0))`` instead did *n* additions from
-a typed zero, which differs twice over:
+``_eval_sum`` seeds with ``xs[0]`` **unrounded** and performs *n-1* additions,
+each rounded to the active context; an empty list is an exact ``+0``.  Seeding a
+typed zero over the whole range did *n* additions instead, so ``sum([-0.0])``
+came out ``+0.0`` and a narrower seed rounded the first element away
+(``sum([5e-324])`` under FP32 gave ``0``).
 
-- ``sum([-0.0])`` came out ``+0.0``, since ``0.0 + -0.0`` is ``+0.0``;
-- a seed in a narrower format rounded the first element away, so ``sum(xs)``
-  under FP32 with ``xs = [5e-324]`` gave ``0`` where the interpreter gives the
-  element untouched.
-
-``accumulate`` takes its seed and its range separately, so the interpreter's
-shape is just a range starting one past ``begin``.
-
-**Why the accumulator may be wider but not narrower.**  ``accumulate``'s step is
+**Wider accumulator yes, narrower no.**  ``accumulate``'s step is
 ``init = init + *first``, so the addition is ``T + E`` under the usual arithmetic
-conversions, not ``T + T``.  When ``E`` converts to ``T`` exactly the common type
-*is* ``T``, so the step promotes exactly, adds once and rounds once to ``T`` --
-uni-precision at the accumulator, which is what the interpreter does.  When ``E``
-is wider the step computes in ``E`` and narrows on assignment, rounding twice;
-and widening ``T`` to hold the unrounded seed instead would round every addition
-at the wrong format.  No accumulator type gives both, so that case is refused.
+conversions.  When ``E`` converts exactly the common type *is* ``T``, so the step
+promotes exactly, adds once and rounds once — uni-precision at the accumulator,
+as the interpreter is.  When ``E`` is wider the step computes in ``E`` and
+narrows on assignment, rounding twice; widening ``T`` to hold the unrounded seed
+would instead round every addition at the wrong format.
 """
 
 import fpy2 as fp

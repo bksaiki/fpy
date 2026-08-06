@@ -914,6 +914,31 @@ def _test_library(
     return failures
 
 
+def _build_and_run(
+    cpp_path: Path, group: str, name: str,
+) -> list[tuple[str, str, str]]:
+    """Build a driver translation unit and run it; a nonzero exit is a failure.
+
+    The driver `main`s assert what the differential harness cannot: they inspect
+    state a kernel leaves behind rather than the value it returns.
+    """
+    exe = cpp_path.with_suffix('.exe')
+    try:
+        subprocess.run(
+            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
+            check=True, capture_output=True, text=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f'  FAILED to build: {e.stderr[-400:]}')
+        return [(group, name, f'build failed: {e.stderr[-200:]}')]
+
+    r = subprocess.run([str(exe)], capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
+        return [(group, name, f'assertion failed: {r.stdout.strip()}')]
+    return []
+
+
 def _test_runtime(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
     """Compile and run a self-test of the emitted runtime prelude (``fpy::``).
 
@@ -1090,21 +1115,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
         print('  SKIPPED (no C++ compiler driver)')
         return []
 
-    exe = cpp_path.with_suffix('.exe')
-    try:
-        subprocess.run(
-            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
-            check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f'  FAILED to build: {e.stderr[-400:]}')
-        return [(group, 'abi_boundary', f'build failed: {e.stderr[-200:]}')]
-
-    r = subprocess.run([str(exe)], capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
-        return [(group, 'abi_boundary', f'assertion failed: {r.stdout.strip()}')]
-    return []
+    return _build_and_run(cpp_path, group, 'abi_boundary')
 
 
 _RTZ_64 = fp.IEEEContext(11, 64, fp.RM.RTZ)
@@ -1175,21 +1186,7 @@ def _test_fenv(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, 
         print('  SKIPPED (no C++ compiler driver)')
         return []
 
-    exe = cpp_path.with_suffix('.exe')
-    try:
-        subprocess.run(
-            [_CXX, *_CPP_OPTIONS, '-o', str(exe), str(cpp_path)],
-            check=True, capture_output=True, text=True,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f'  FAILED to build: {e.stderr[-400:]}')
-        return [(group, 'fenv_boundary', f'build failed: {e.stderr[-200:]}')]
-
-    r = subprocess.run([str(exe)], capture_output=True, text=True)
-    if r.returncode != 0:
-        print(f'  FAILED: {r.stdout.strip()} {r.stderr.strip()}')
-        return [(group, 'fenv_boundary', f'assertion failed: {r.stdout.strip()}')]
-    return []
+    return _build_and_run(cpp_path, group, 'fenv_boundary')
 
 
 _FENV_MAIN: str = """\

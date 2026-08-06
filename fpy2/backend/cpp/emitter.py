@@ -166,20 +166,14 @@ _FE_RM_MACRO: dict[RM, str] = {
 def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
 
-    The single answer to "what type does the emitted token have", which is a
-    different question from what storage the value was *assigned*: a literal's
-    storage comes from its value, so ``1.5`` can be stored as a ``float`` while
-    the token ``1.5`` is a ``double``.  Both users of that distinction come
-    here -- :meth:`CppEmitter._emit_numeric_literal` to decide whether digits
-    can be printed at all, and :meth:`CppEmitter._call_arg` to decide whether a
-    cast has to be spelled.
+    Not the same question as its *storage*, which comes from the value: ``1.5``
+    is stored as a ``float`` while the token ``1.5`` is a ``double``.
 
-    Bounds are on the *magnitude*, since C++ has no negative literal: ``-2**31``
-    is unary minus applied to ``2**31``, which does not fit an ``int``, so the
-    whole expression is a ``long``.  A decimal literal takes the first of
-    ``int`` / ``long`` / ``long long`` that fits and is ill-formed when none
-    does, so beyond ``long long`` there is no integer spelling and the caller
-    must fall back to a floating one or refuse.
+    Bounds are on the *magnitude*, since C++ has no negative literal — ``-2**31``
+    is unary minus applied to ``2**31``, so the expression is a ``long``.  A
+    decimal literal takes the first of ``int`` / ``long`` / ``long long`` that
+    fits and is ill-formed when none does, so ``None`` means the caller must
+    spell it as a float or refuse.
     """
     if v.denominator != 1:
         return CppScalar.F64 if _as_exact_double(v) is not None else None
@@ -284,21 +278,15 @@ class CppEmitError(Exception):
 class CppInternalError(CppEmitError):
     """An invariant an earlier phase was supposed to guarantee.
 
-    :class:`CppEmitError` reports a *program* the backend cannot compile — a
-    legal FPy program with no faithful C++ representation, or a shape the
-    emitter does not implement yet.  This reports a *backend bug*:
-    ``format_infer``, ``storage_infer``, or ``context_use`` handed the emitter
-    something structurally impossible, and the fix belongs in that phase rather
-    than in the user's program.  Told apart, because otherwise an analysis bug
-    reaches the user as "your program is unsupported" and sends them off to
-    rewrite working code.
+    Where :class:`CppEmitError` reports a *program* this backend cannot compile,
+    this reports a *backend bug*: an upstream analysis handed the emitter
+    something structurally impossible.  Kept distinct so such a bug does not
+    reach the user as "your program is unsupported", sending them off to rewrite
+    working code.
 
     A subclass, so existing handlers and the :class:`CppCompileError` wrapping
-    are unchanged; only the message differs.  The wrapping preserves the type on
-    ``__cause__``, which is what lets a test tell the two apart.
-
-    ``tests/unit/backend/cpp/test_internal_invariants.py`` asserts none of these
-    fires across the corpus.
+    are unchanged; the wrapping preserves the type on ``__cause__``, which is how
+    ``test_internal_invariants.py`` tells the two apart.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
@@ -379,13 +367,12 @@ class CppEmitter(Visitor):
         # under an FP64-RNE function free of fenv noise.
         self._current_rm: RM | None = None
         self._fenv_saved: list[str] = []
-        """Names holding the saved mode of each enclosing ``fesetround`` scope,
-        outermost first.
+        """Saved mode of each enclosing ``fesetround`` scope, outermost first.
 
-        A ``return`` jumps over the restore at the end of every scope it sits
-        inside, so :meth:`_visit_return` restores from this before returning.
-        ``return`` is the only way out of a scope early -- FPy has no ``break``
-        or ``continue`` -- so this covers every path.
+        :meth:`_visit_return` restores from this, since a ``return`` jumps over
+        the restore at the end of every scope it sits inside.  That covers every
+        path: FPy has no ``break`` or ``continue``, so ``return`` is the only
+        early exit.
         """
 
     # ------------------------------------------------------------------
@@ -1230,20 +1217,17 @@ class CppEmitter(Visitor):
         # it comes from somewhere with storage of its own.
         rhs = self._emit_at(stmt.expr, self._return_storage, ctx)
         if self._fenv_saved:
-            # This `return` is inside at least one `fesetround` scope, and it
-            # jumps over the restore each of those scopes emits after its body.
-            # Left alone, the mode escapes into the caller and silently changes
-            # arithmetic that has nothing to do with this function.
+            # This `return` jumps over the restore each enclosing scope emits
+            # after its body, so the mode would escape into the caller and
+            # silently change arithmetic unrelated to this function.  Restore
+            # from the outermost scope: it saved the mode from before any were
+            # entered, which is the caller's.
             #
-            # The value has to be materialized first: it must be computed under
-            # this scope's mode, and C++ gives no point between evaluating a
-            # return expression and returning.  Unless the mode cannot affect it
-            # anyway, where a copy would cost a whole vector on a list return.
-            # Not `const`, so the return can still move out of the temp when one
-            # is needed.
-            #
-            # One restore, from the outermost scope: it saved the mode from
-            # before any of them were entered, which is the caller's.
+            # The value must be computed under this scope's mode, and C++ gives
+            # no point between evaluating a return expression and returning — so
+            # bind it first, unless the mode cannot affect it anyway, where the
+            # copy would cost a whole vector on a list return.  Not `const`, so
+            # the return can still move out of the temp.
             if not self._mode_independent(stmt.expr):
                 ty = self._return_storage
                 tmp = self._fresh_temp()
@@ -1256,16 +1240,14 @@ class CppEmitter(Visitor):
     def _mode_independent(self, e: Expr) -> bool:
         """Is the emitted value of *e* independent of the live rounding mode?
 
-        A :class:`Var` already holds its value, and a literal — including one
-        ``_fold_rounded_literal`` produces, which is rounded at compile time
-        under the mode the program asked for — is a constant expression.
+        A :class:`Var` already holds its value, and a literal is a constant
+        expression — including one :meth:`_fold_rounded_literal` produces, which
+        is rounded at compile time under the mode the program asked for.
 
-        Asked of the AST rather than of the emitted text.  A text test would
-        have to track how a literal is *spelled*, and that spelling is not
-        stable: a narrow target already comes back from
-        :meth:`_fold_rounded_literal` wrapped in a ``static_cast``.  Answering
-        ``False`` costs a temp, never correctness, so anything unrecognized
-        falls through.
+        Asked of the AST, not of the emitted text: how a literal is *spelled* is
+        not stable (a narrow target comes back wrapped in a ``static_cast``).
+        ``False`` costs a temp, never correctness, so anything unrecognized falls
+        through.
         """
         if isinstance(e, Var | RationalVal):
             return True
@@ -1515,15 +1497,12 @@ class CppEmitter(Visitor):
         ``fp.round`` is how a program pins a constant to a format -- it rounds
         the value there, at compile time; see :meth:`_fold_rounded_literal`.
 
-        An integral value only prints as digits while a C++ integer literal can
-        hold it, which is :func:`_value_cpp_type`'s answer -- the same function
-        :meth:`_call_arg` asks, since "what type is this token" and "can this
-        token be written at all" are one question.  Past ``long long`` gcc
-        accepts the digits with a warning and the value becomes ``0``.  Storage
-        selection refuses such a value for a scalar, but a list element or a
-        slot never asks, so ``[1e300, y]`` used to compile and return ``0``
-        where the interpreter returns ``1e300``.  Beyond that range the value
-        falls through to the floating spelling below.
+        An integral value prints as digits only while a C++ integer literal can
+        hold it — :func:`_value_cpp_type`'s answer, the same one :meth:`_call_arg`
+        asks.  Past ``long long`` gcc accepts the digits with a warning and folds
+        them to ``0``; storage selection refuses such a value for a scalar, but a
+        list element or slot never asks.  Beyond that range it falls through to
+        the floating spelling below.
         """
         ty = _value_cpp_type(v)
         if ty is not None and ty.is_integer():
@@ -1595,22 +1574,20 @@ class CppEmitter(Visitor):
     def _call_arg(self, code: str, e: Expr, want: CppScalar) -> str:
         """*code* as a call argument of type *want*, spelling a literal's type.
 
-        The op table matches a literal on its *storage*, which is chosen from
-        its value -- so ``1.5`` in an FP32 context matches the ``float``
-        signature while the token itself is a C++ ``double``, and nothing
-        inserts a cast because the two "agree".  Anywhere a declaration
-        supplies the type that is harmless, and the promotion is exact for
-        ``+ - * /`` because double rounding equals single rounding when
-        ``2p + 2 <= 53``, which holds for every format this backend can store.
+        The op table matches a literal on its *storage*, so ``1.5`` under FP32
+        matches the ``float`` signature while the token is a ``double`` — and
+        nothing inserts a cast, because the two "agree".  Harmless wherever a
+        declaration supplies the type, and exact for ``+ - * /`` since double
+        rounding equals single rounding when ``2p + 2 <= 53``, which holds for
+        every format this backend can store.
 
-        It is *not* harmless where the callee takes its type from the argument.
-        ``fpy::min`` / ``fpy::max`` are our own templates, so a ``float`` and a
-        ``double`` argument fail to deduce at all; the ``<cmath>`` overload sets
-        silently select the wider overload, which for ``fma`` -- whose exact
-        result is a product *plus* an addend, and so is not covered by
-        ``2p + 2`` -- rounds twice where FPy rounds once.
+        Not harmless where the callee takes its type *from* the argument:
+        ``fpy::min`` / ``fpy::max`` are templates, so mixed types fail to deduce,
+        and the ``<cmath>`` overload sets silently pick the wider overload —
+        which for ``fma``, a product *plus* an addend and so outside ``2p + 2``,
+        rounds twice where FPy rounds once.
 
-        Only literals need this: a variable's declared type already is its
+        Only literals need this; a variable's declared type already is its
         storage.
         """
         if not isinstance(e, RationalVal):
@@ -2479,30 +2456,22 @@ class CppEmitter(Visitor):
     def _emit_sum(self, e: Sum, arg: str) -> str:
         """``sum(xs)`` as the fold the interpreter performs.
 
-        ``_eval_sum`` seeds the accumulator with ``xs[0]`` **unrounded** and
-        performs *n-1* additions; an empty list is an exact ``+0``.  Emitting
-        ``accumulate(begin, end, T(0))`` instead does *n* additions from a typed
-        zero, which differs twice over: ``sum([-0.0])`` came out ``+0.0``,
-        because ``0.0 + -0.0`` is ``+0.0``, and a seed in a narrower format
-        rounded the first element away.  ``accumulate`` takes its seed and its
-        range separately, so the interpreter's shape is a range starting one
-        past ``begin``.
+        ``_eval_sum`` seeds with ``xs[0]`` **unrounded** and performs *n-1*
+        additions; an empty list is an exact ``+0``.  ``accumulate`` takes its
+        seed and range separately, so that shape is a range starting one past
+        ``begin``.  Seeding a typed zero over the whole range instead did *n*
+        additions, so ``sum([-0.0])`` came out ``+0.0`` and a narrower seed
+        rounded the first element away.
 
         The empty guard is not optional: ``begin() + 1`` and ``xs[0]`` are both
-        undefined on an empty vector, and the differential harness runs length
-        zero.
+        undefined there, and the differential harness runs length zero.
 
-        The accumulator may be *wider* than the element: the seed cast is then
-        exact, so an unrounded seed survives it, and each addition promotes its
-        element exactly and rounds once -- which is what the interpreter does.
-        ``int16_t`` elements into a ``float`` accumulator is the corpus case.
-
-        Refuses only when the accumulator cannot hold an element exactly.  There
-        the seed rounds -- ``sum([5e-324])`` under FP32 is the element untouched
-        for the interpreter and ``0`` once seeded at ``float`` -- and no single
-        C++ accumulator type fixes it, since widening instead would perform the
-        additions in the wrong format.  ``scalar_fits_in`` is the same test
-        :meth:`_maybe_cast` uses to reject a lossy implicit operand widening.
+        The accumulator may be *wider* than the element, since the seed cast is
+        then exact and ``accumulate``'s ``init + *first`` converts to the common
+        type — which is the accumulator only when the element fits it, making the
+        fold uni-precision there, as the interpreter is.  Otherwise refuse: the
+        seed would round (``sum([5e-324])`` under FP32), and widening instead
+        would run every addition at the wrong format.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2516,25 +2485,19 @@ class CppEmitter(Visitor):
         if not scalar_fits_in(elt_ty, result_ty):
             raise CppEmitError(
                 f'unsupported: `sum` over `{elt_ty.format()}` elements '
-                f'accumulating in `{result_ty.format()}`, which cannot hold '
-                f'one exactly.  The interpreter seeds the fold with the first '
-                f'element unrounded, and no C++ accumulator type reproduces '
-                f'that while still rounding each addition to the active '
-                f'context.  Use a context whose format contains the element '
+                f'accumulating in `{result_ty.format()}`, which cannot hold one '
+                f'exactly.  Use a context whose format contains the element '
                 f'format.',
                 at=e,
             )
-        # Bind the operand to a reference first: when ``arg`` is a prvalue (e.g.
-        # a list literal), ``arg.begin()`` and ``arg.end()`` would otherwise name
-        # iterators into *different* temporaries -- an invalid range.  ``auto&&``
-        # lifetime-extends a temporary and binds an lvalue without copying, and
-        # also keeps the three uses below to a single evaluation.
+        # A prvalue operand (a list literal) would otherwise give begin() and
+        # end() into *different* temporaries; binding also keeps the three uses
+        # below to one evaluation.
         src = self._bind_operand(arg)
         seed = self._list_at(arg_ty, src, '0')
         if elt_ty != result_ty:
-            # `accumulate` deduces `T` from its seed, so an uncast seed would
-            # run the whole fold in the element type -- integer arithmetic, for
-            # the int16-into-float case.  Exact, by the check above.
+            # `accumulate` deduces `T` from its seed, so an uncast one would run
+            # the whole fold in the element type.  Exact, by the check above.
             seed = self._explicit_cast(seed, result_ty)
         return (
             f'({self._list_len(arg_ty, src)} == 0'
