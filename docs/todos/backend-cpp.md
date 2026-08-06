@@ -20,8 +20,8 @@ Module layout:
 Read the design before changing anything; [Open issues](#open-issues) is at
 the bottom.
 
-Everything C++-specific lives here. Analyses this backend depends on but does not
-own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
+Everything C++-specific lives here. Analyses this backend depends on but does
+not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
@@ -54,16 +54,10 @@ several expressions reach one place they must agree on one C++ type
 ### SSA rebinds → fresh C++ variables
 
 The emitter is free to give every SSA def its own C++ variable. The one
-constraint is that defs joined by a coalescing edge share storage:
-
-- **Phi edges** — a phi merge means both incoming defs write one variable.
-- **In-place mutation edges** — `xs[i] = e` mutates in place per the interpreter
-  (`interpret/byte.py:_visit_indexed_assign`), so the SSA-fresh def at the
-  `IndexedAssign` is unioned with its `prev`. Same name, no rename.
-
-`storage_infer.py` computes the partition with `Unionfind[Definition]`. Argument
-and free-variable defs anchor a class to the bare source name; other classes for
-the same name take `_1`, `_2`, … suffixes.
+constraint is that defs denoting the same runtime object share storage —
+`reaching_defs.same_object_defs` is that rule, and `storage_infer.py` unions
+over it. Argument and free-variable defs anchor a class to the bare source name;
+other classes for the same name take `_1`, `_2`, … suffixes.
 
 Per-class declaration shape:
 

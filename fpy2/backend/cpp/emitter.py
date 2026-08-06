@@ -1,44 +1,23 @@
 """
 cpp backend: emitter.
 
-Walks the (post-pipeline) :class:`FuncDef` and produces a C++ source
-string.  Storage types and per-def C++ identifiers come from
-:class:`CppPipelineResult.storage` (a :class:`StorageAnalysis`
-produced by :class:`StorageInfer`); per-expression bounds come from
-:class:`FormatAnalysis`.
+Walks the post-pipeline :class:`FuncDef` and produces a C++ source string.
+Storage types and per-def identifiers come from :class:`StorageAnalysis`;
+per-expression bounds from :class:`FormatAnalysis`.  Primitive ops dispatch
+through the :class:`ScalarOpTable` in :mod:`.ops`, which is where operand
+formats meet the active rounding context.
 
-Currently supported:
-
-- Function signatures, ``Assign`` (with ``TupleBinding``
-  destructuring), ``Return``, numeric literals, comparisons and
-  booleans.
-- Control flow: ``if`` / ``if1`` / ``while`` / ``for``-over-range
-  and ``for``-over-list (with optional tuple-binding target).
-- Lists: literals, indexing, slicing, comprehensions (with optional
-  tuple-binding target), and ``IndexedAssign`` as direct in-place
-  subscript-stores.
-- Tuples: ``TupleExpr`` and tuple-binding destructuring everywhere.
-- Built-ins: ``len``, ``sum``, ``enumerate``, ``zip``, ``range``.
-- Primitive arithmetic / transcendental ops dispatched through
-  the :class:`ScalarOpTable` from :mod:`.ops`, which validates
-  the operand formats against the active rounding context and
-  inserts explicit ``static_cast`` conversions.
-- Rounding-context boundaries: ``with`` blocks emit save / set /
-  restore around ``fesetround`` when the active mode changes;
-  ``Round`` / ``Cast`` lower as
-  ``static_cast`` (with a NaN-aware assertion for ``Cast``).
-
-Anything else raises :class:`CppEmitError`, which the public
-``CppCompiler`` re-wraps as :class:`CppCompileError`.  A violated
-invariant from an earlier phase raises :class:`CppInternalError`
-instead -- a backend bug rather than an uncompilable program.
+An unsupported program raises :class:`CppEmitError`, which ``CppCompiler``
+re-wraps as :class:`CppCompileError`.  A violated invariant from an earlier
+phase raises :class:`CppInternalError` instead -- a backend bug rather than an
+uncompilable program.
 """
 
 import dataclasses
 import math
+from collections.abc import Sequence
 from contextlib import contextmanager
 from fractions import Fraction
-from typing import TYPE_CHECKING
 
 from ...analysis import (
     AssignDef,
@@ -136,7 +115,7 @@ from ...number import (
     RealFloat,
 )
 from ...number.context.context import Context
-from .ops import BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp
+from .ops import CppOp, ScalarOpTable
 from .storage import (
     StorageSelectionError,
     choose_storage,
@@ -150,9 +129,7 @@ from .storage_infer import (
 )
 from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
-
-if TYPE_CHECKING:
-    from .unbox import UnboxAnalysis
+from .unbox import UnboxAnalysis, return_storage
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -166,14 +143,11 @@ _FE_RM_MACRO: dict[RM, str] = {
 def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
 
-    Not the same question as its *storage*, which comes from the value: ``1.5``
-    is stored as a ``float`` while the token ``1.5`` is a ``double``.
-
-    Bounds are on the *magnitude*, since C++ has no negative literal — ``-2**31``
-    is unary minus applied to ``2**31``, so the expression is a ``long``.  A
-    decimal literal takes the first of ``int`` / ``long`` / ``long long`` that
-    fits and is ill-formed when none does, so ``None`` means the caller must
-    spell it as a float or refuse.
+    Not its *storage*, which comes from the value: ``1.5`` is stored as a
+    ``float`` while the token is a ``double``.  Bounds are on magnitude, since
+    C++ has no negative literal -- ``-2**31`` is unary minus on ``2**31``, so the
+    expression is a ``long``.  ``None`` means no integer literal fits and the
+    caller must spell a float or refuse.
     """
     if v.denominator != 1:
         return CppScalar.F64 if _as_exact_double(v) is not None else None
@@ -213,16 +187,11 @@ def _list_depth(ty: CppType) -> int:
 
 @dataclasses.dataclass(frozen=True)
 class _TupleAccess:
-    """Resolved form of a folded ``fst``/``snd`` chain over a tuple.
+    """A folded ``fst``/``snd`` chain over a tuple.
 
-    - ``off is None`` — a finished value: ``s`` is its C++ expression and
-      ``ty`` its type (one ``std::get`` for an element, or a non-accessor
-      base).
-    - ``off`` an ``int`` — the not-yet-materialized suffix ``base[off:]`` of
-      a tuple: ``s`` is the base expression and ``ty`` the base
-      :class:`CppTuple`.  Materialized into a ``std::make_tuple`` only if the
-      suffix is actually used (it never is when a ``fst`` reads one element
-      out of it).
+    ``off is None`` means a finished value in ``s``; an ``int`` means the
+    unmaterialized suffix ``base[off:]``, built into a ``std::make_tuple`` only
+    if used -- which it is not when a ``fst`` reads one element out of it.
     """
     s: str
     ty: CppType
@@ -253,16 +222,10 @@ class _IndentedWriter:
 
 
 class CppEmitError(Exception):
-    """Raised for unsupported AST shapes during emission.
+    """Raised for a program this backend cannot emit.
 
-    Optionally carries an ``at`` :class:`Ast` node — the
-    source-location of that node is prepended to the error message
-    when present, so error output points at the offending FPy
-    construct instead of leaving the user to guess.
-
-    The wrapping :class:`CppCompileError` in :mod:`compiler` builds
-    its message from ``str(e)`` of the underlying :class:`CppEmitError`,
-    so the location prefix flows through untouched.
+    An optional ``at`` node prefixes the message with a source location, which
+    the wrapping :class:`CppCompileError` passes through untouched.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
@@ -278,15 +241,10 @@ class CppEmitError(Exception):
 class CppInternalError(CppEmitError):
     """An invariant an earlier phase was supposed to guarantee.
 
-    Where :class:`CppEmitError` reports a *program* this backend cannot compile,
-    this reports a *backend bug*: an upstream analysis handed the emitter
-    something structurally impossible.  Kept distinct so such a bug does not
-    reach the user as "your program is unsupported", sending them off to rewrite
-    working code.
-
-    A subclass, so existing handlers and the :class:`CppCompileError` wrapping
-    are unchanged; the wrapping preserves the type on ``__cause__``, which is how
-    ``test_internal_invariants.py`` tells the two apart.
+    A *backend bug*, not a program this backend cannot compile -- kept distinct
+    so it does not reach the user as "your program is unsupported".  A subclass,
+    so handlers are unchanged and the type survives on ``__cause__``, which is
+    how ``test_internal_invariants.py`` tells the two apart.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
@@ -314,7 +272,7 @@ class CppEmitter(Visitor):
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
-        unbox: 'UnboxAnalysis | None' = None,
+        unbox: UnboxAnalysis | None = None,
         callee_params: dict | None = None,
     ):
         self.ast = ast
@@ -332,13 +290,8 @@ class CppEmitter(Visitor):
         # style monomorphization).  When ``None``, the AST's declared
         # name is used.
         self._func_name_override = func_name_override
-        # Mapping from each :class:`Call` AST node inside this
-        # function to the mangled C++ name of its target.  The
-        # compiler builds this map by walking ``format_info.by_call``
-        # and dispensing a stable mangled name per
-        # ``(callee FuncDef, outer_ctx)`` pair.  Falls back to the
-        # callee's declared name when a Call isn't in the map (e.g.
-        # foreign function values).
+        # Call -> mangled target name, one per (callee, outer_ctx).  A Call not
+        # in the map falls back to the callee's declared name.
         self._call_names: dict = call_names or {}
         # When True, allow rounded arithmetic to dispatch under an
         # unbounded-integer context (truncating silently to
@@ -355,16 +308,8 @@ class CppEmitter(Visitor):
         self._scope_by_site: dict[ContextScopeSite, ContextScope] = {
             scope.site: scope for scope in ctx_use.scopes
         }
-        # Track the rounding mode in effect at the current emission
-        # point.  ``None`` means *unknown* — that's the safe initial
-        # state (the C++ caller's ``fenv`` could be anything) and the
-        # state we restore to after a saved scope exits.  When we
-        # transition from an unknown mode to any concrete mode, the
-        # ``_fenv_scope`` helper always emits ``fesetround`` so we
-        # never operate under a rounding mode we don't know.  When
-        # the active mode is known and matches the target, we skip
-        # the ``fesetround`` to keep simple ``with FP64:`` blocks
-        # under an FP64-RNE function free of fenv noise.
+        # The mode in effect at the current emission point; `None` is unknown,
+        # which forces `_fenv_scope` to set it rather than assume.
         self._current_rm: RM | None = None
         self._fenv_saved: list[str] = []
         """Saved mode of each enclosing ``fesetround`` scope, outermost first.
@@ -443,12 +388,9 @@ class CppEmitter(Visitor):
         """The operand of a range-``for`` over a list.
 
         A temporary must be bound to a name: range-``for`` extends the lifetime
-        of the range-init's own result, and the dereference of a handle is a
-        reference to the pointee, so the handle would be freed before the first
-        iteration.
-
-        No parenthesis, unlike :meth:`_list_seq`: the range-init is a complete
-        expression and the bound operand is always an identifier.
+        of the range-init's own result, and dereferencing a handle yields a
+        reference to the pointee -- so the handle would be freed before the
+        first iteration.
         """
         bound = self._bind_operand(base)
         return f'*{bound}' if self._is_boxed(ty) else bound
@@ -467,11 +409,19 @@ class CppEmitter(Visitor):
         return f'{cls._member(ty, base)}push_back({elt})'
 
     @classmethod
-    def _list_new_sized(cls, ty: CppType, n: str) -> str:
-        """A new list of *n* default-initialised elements."""
+    def _list_new(cls, ty: CppType, args: str) -> str:
+        """A new list from a parenthesised constructor argument list.
+
+        The one place the boxed and unboxed spellings of construction are
+        stated; the named wrappers below only supply the arguments.
+        """
         if cls._is_boxed(ty):
-            return f'fpy::make_list<{cls._elt_of(ty)}>({n})'
-        return f'{ty.format()}({n})'
+            return f'fpy::make_list<{cls._elt_of(ty)}>({args})'
+        return f'{ty.format()}({args})'
+
+    @classmethod
+    def _list_new_sized(cls, ty: CppType, n: str) -> str:
+        return cls._list_new(ty, n)
 
     @classmethod
     def _list_empty(cls, ty: CppType) -> str:
@@ -482,14 +432,12 @@ class CppEmitter(Visitor):
 
     @classmethod
     def _list_new_filled(cls, ty: CppType, n: str, fill: str) -> str:
-        """A new list of *n* copies of *fill*."""
-        if cls._is_boxed(ty):
-            return f'fpy::make_list<{cls._elt_of(ty)}>({n}, {fill})'
-        return f'{ty.format()}({n}, {fill})'
+        return cls._list_new(ty, f'{n}, {fill}')
 
     @classmethod
     def _list_new_init(cls, ty: CppType, parts: list[str]) -> str:
-        """A new list of the given elements."""
+        """The given elements.  Not :meth:`_list_new`: a braced list is the
+        argument when boxed, and the whole initialiser when not."""
         joined = ', '.join(parts)
         if cls._is_boxed(ty):
             return f'fpy::make_list<{cls._elt_of(ty)}>({{{joined}}})'
@@ -497,23 +445,15 @@ class CppEmitter(Visitor):
 
     @classmethod
     def _list_new_range(cls, ty: CppType, first: str, last: str) -> str:
-        """A new list copying the half-open iterator range."""
-        if cls._is_boxed(ty):
-            return f'fpy::make_list<{cls._elt_of(ty)}>({first}, {last})'
-        return f'{ty.format()}({first}, {last})'
+        """The half-open iterator range ``[first, last)``, copied."""
+        return cls._list_new(ty, f'{first}, {last}')
 
     def _fresh_temp(self) -> str:
-        """Allocate a fresh emitter-only temporary identifier.
+        """A fresh emitter-only identifier.
 
-        Used by visitors that need to emit setup statements alongside
-        an expression result — comprehensions, slices, tuple-binding
-        destructure sources, ``enumerate``, ``zip``, etc.  The
-        The ``_tmp`` prefix keeps these distinct from any identifier the
-        source program could introduce (FPy doesn't allow leading underscores
-        in user-visible names).  A single leading underscore is deliberate: an
-        identifier containing ``__`` is reserved to the implementation at every
-        scope, and ``__cpp_`` in particular is the standard's feature-test-macro
-        prefix.
+        One leading underscore, deliberately: FPy forbids leading underscores in
+        user names, so ``_tmp`` cannot collide, while any identifier containing
+        ``__`` is reserved to the implementation at every scope.
         """
         self._tmp_counter += 1
         return f'_tmp{self._tmp_counter}'
@@ -554,26 +494,25 @@ class CppEmitter(Visitor):
         return is_rebound(self.storage, d)
 
     def _arg_decl(self, arg: Argument, storage: CppType) -> str:
-        """Parameter declaration.
-
-        A list parameter is ``const fpy::list<T>&`` unless the body *rebinds*
-        the name.  ``const`` applies to the handle, not the elements — a callee
-        can still write ``xs[i] = e`` and the caller sees it, which is exactly
-        FPy's parameter semantics.  A reference also leaves the refcount
-        untouched, which measurement showed is the only case where the atomic
-        control block costs anything.
-
-        Rebinding is different: it must stay local to the callee, so such a
-        parameter takes its own copy of the handle.  A tuple follows the same
-        rule (copying one is O(size)); a scalar is always by value.
-        """
+        """Parameter declaration; see :meth:`_binding_decl` for the rule."""
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
-        if binds_by_reference(self.storage, self.def_use, d):
-            if self._writes_through(d, storage):
-                return f'{storage.format()}& {arg.name}'
-            return f'const {storage.format()}& {arg.name}'
-        return f'{storage.format()} {arg.name}'
+        return self._binding_decl(d, storage, arg.name)
+
+    def _binding_decl(self, d: Definition, storage: CppType, name) -> str:
+        """``T name``, ``const T& name`` or ``T& name`` for the def *d*.
+
+        A name never rebound binds by reference, sharing the object and skipping the
+        atomic refcount; ``const`` unless something in its region writes through it.
+        That ``const`` is on the handle, not the elements, so a callee can still
+        write ``xs[i] = e`` and the caller sees it.  A rebind must stay local, so it
+        takes its own copy.
+        """
+        if not binds_by_reference(self.storage, self.def_use, d):
+            return f'{storage.format()} {name}'
+        if self._writes_through(d, storage):
+            return f'{storage.format()}& {name}'
+        return f'const {storage.format()}& {name}'
 
     def _writes_through(self, d: Definition, storage: CppType) -> bool:
         """Whether a ``const`` reference to *d* would reject a write FPy allows.
@@ -592,42 +531,27 @@ class CppEmitter(Visitor):
         self, target_def, name: str,
         *, elt: CppType | None = None, at: Expr | None = None,
     ) -> str:
-        """Loop-variable declaration for a range-for over a container.
+        """Loop-variable declaration for a range-for.
 
-        Same rule as :meth:`_arg_decl`: an element that is never rebound binds
-        by ``const&``, which shares the element and skips a refcount bump per
-        iteration.  Writing ``row[i] = e`` through it still reaches the
-        container.  ``target_def is None`` marks a discarded element — always
-        read-only, and ``const auto&`` lets the type deduce.
-
-        *elt* is the container's element type when the caller knows it.  The
-        target reads that element, so the two have to agree — there is nowhere
-        in a range-for to put a conversion.
+        :meth:`_binding_decl`, plus: *elt* is the container element type when the
+        caller knows it, and the two must agree -- a range-for has nowhere to put a
+        conversion.
         """
         if target_def is None:
             return f'const auto& {name}'
         storage = self.storage.storage_of(target_def)
         if elt is not None and at is not None:
             self._require_bridgeable(elt, storage, at)
-        if binds_by_reference(self.storage, self.def_use, target_def):
-            # same rule as `_arg_decl`
-            if self._writes_through(target_def, storage):
-                return f'{storage.format()}& {name}'
-            return f'const {storage.format()}& {name}'
-        return f'{storage.format()} {name}'
+        return self._binding_decl(target_def, storage, name)
 
     def _is_readonly_alias(
         self, stmt: Assign, target_def, target_storage: CppType,
     ) -> bool:
         """Whether ``x = y`` can bind a ``const`` reference instead of copying.
 
-        A list is a handle now, so copying one is O(1) and *shares* the elements
-        — the correctness argument this used to need is gone, and what is left is
-        a small saving: a reference skips a refcount bump.  The condition is the
-        same as :meth:`_arg_decl`'s, for the same reason — a ``const`` reference
-        cannot be rebound.
-
-        Still worth it for a tuple, where a copy is O(size).
+        Copying a handle is O(1) and shares the elements, so this is only a
+        saved refcount bump -- but a tuple copy is O(size).  Same condition as
+        :meth:`_binding_decl`: a ``const`` reference cannot be rebound.
         """
         return self._binds_reference(target_def)
 
@@ -649,12 +573,9 @@ class CppEmitter(Visitor):
     def _reference_source(self, d) -> 'Expr | None':
         """The initializer *d*'s C++ name deduces its type from, if any.
 
-        Asked of the whole storage class, not of *d*.  A use resolves to the
-        latest def, and ``xs[i] = e`` makes a fresh one that is unioned with its
-        ``prev`` — so a name declared as ``const auto& L3 = N2[1]`` and then
-        written through is *read* through an ``IndexedAssign``-sited def whose own
-        site says nothing about the binding.  One member of the class carries the
-        declaration, and that is the one whose initializer fixed the type.
+        Asked of the storage class, not of *d*: a use resolves to the latest def, and
+        ``xs[i] = e`` makes a fresh one unioned with its ``prev``, whose own site says
+        nothing about the binding.  One member carries the declaration.
         """
         cls = self.storage.def_class[d]
         for m in self.storage.class_members[cls]:
@@ -679,12 +600,8 @@ class CppEmitter(Visitor):
         )
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
-        """Emit a single ``T name = rhs;`` (declare-on-assign) or
-        ``name = rhs;`` (reassign) line for a NamedId target whose
-        SSA def is registered at *site*.
-
-        Whether to declare or reassign is decided by the
-        :class:`StorageAnalysis`."""
+        """``T name = rhs;`` or ``name = rhs;``, per :class:`StorageAnalysis`.
+        """
         target_def = self.def_use.find_def_from_site(name, site)
         target_name = self.storage.def_to_name[target_def]
         if target_def in self.storage.declare_at_assign:
@@ -701,12 +618,10 @@ class CppEmitter(Visitor):
         src_ty: CppType | None = None,
         at: Expr | None = None,
     ) -> None:
-        """Emit destructuring assigns extracting each element of
-        *binding* from the tuple-valued local *src*.  The SSA defs
-        for every NamedId in *binding* are registered at *site* (the
-        enclosing :class:`Assign` / :class:`ForStmt` / :class:`ListComp`
-        node).  Underscore positions are skipped; nested tuple bindings
-        recurse via a fresh temp."""
+        """Emit assigns extracting each element of *binding* from the tuple *src*.
+
+        Underscore positions are skipped; nested bindings recurse via a fresh temp.
+        """
         for i, elt in enumerate(binding.elts):
             match elt:
                 case UnderscoreId():
@@ -786,34 +701,16 @@ class CppEmitter(Visitor):
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        # The function-level scope determines the rounding mode in
-        # effect at function entry — but only when something actually
-        # *uses* the context (a primitive op dispatching under it).
-        # A function that does only context-free work (bool returns,
-        # tuple shuffling, ops fully nested in inner ``with`` blocks)
-        # doesn't need its outer scope to be supported.  See
-        # :meth:`_resolve_used_ctx`.
-        #
-        # ``self._current_rm`` tracks the rounding mode the live
-        # ``fenv`` is guaranteed to hold.  For a concrete FP
-        # function-level scope the FPy contract says the caller
-        # delivers that RM, so :meth:`_entry_rm` returns it and the
-        # shared :meth:`_fenv_scope` skips an entry ``fesetround``
-        # when the body's used context already matches.  Symbolic /
-        # integer / unsupported function-level scopes leave
-        # ``_current_rm`` at ``None`` (unknown), which forces
-        # nested concrete contexts to emit ``fesetround``
-        # unconditionally.
+        # `_current_rm` is the mode the live fenv is guaranteed to hold.  For a
+        # concrete FP function-level scope the FPy contract says the caller
+        # delivers it, so no entry `fesetround` is needed; symbolic, integer and
+        # unsupported scopes leave it None, forcing nested contexts to set the
+        # mode unconditionally.
         self._current_rm = self._entry_rm(func)
         func_ctx = self._resolve_used_ctx(func)
-        # ``REAL`` is unrepresentable in C++; it never sets an fenv
-        # mode.  Ops inside a REAL scope succeed only via the
-        # emitter's lossless-widening dispatch (see
-        # :meth:`_try_widen_binary` and friends) — if widening is
-        # unavailable the op-level error fires with a precise
-        # location.  Validation here would fail prematurely, so we
-        # treat REAL like an integer scope: descend without fenv
-        # bookkeeping.
+        # REAL sets no fenv mode; its ops succeed only via `_try_widen`, whose
+        # failure reports a precise location.  Validating here would fire first
+        # and worse, so descend like an integer scope.
         if (
             func_ctx is None
             or func_ctx is REAL
@@ -848,27 +745,16 @@ class CppEmitter(Visitor):
             self.writer.add_line(f'{storage.format()} {name}{{}};')
 
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
-        """Pull the storage type for the function's return value from
-        the format analysis.
+        """The function's return storage, with a source location on failure.
 
-        ``format_info.fn_fmt.ret_fmt`` is the running join of every
-        ``ReturnStmt`` expression's bound (see
-        :meth:`FormatAnalysis._visit_return`); using it directly
-        means multiple-return programs select a storage class wide
-        enough to hold every path's value.
-
-        A ``None`` bound is *not* a missing-return marker — it's the
-        format inference convention for non-numeric return values
-        (bool, e.g. a ``Compare`` result).  ``choose_storage(None)``
-        correctly maps that to ``CppScalar.BOOL``.  FPy's
-        reachability check rejects truly missing-return programs at
-        decoration time, so we don't distinguish that case here."""
-        fmt = self.format_info.fn_fmt.ret_fmt
+        See :func:`return_storage`.  A ``None`` bound is not a missing return --
+        FPy's reachability check rejects those at decoration time -- but format
+        inference's convention for a non-numeric result, which maps to ``BOOL``.
+        """
         try:
-            ty = choose_storage(fmt)
+            return return_storage(self.format_info.fn_fmt.ret_fmt, self.unbox)
         except StorageSelectionError as e:
             raise CppEmitError(f'return type: {e}', at=func) from e
-        return ty if self.unbox is None else self.unbox.annotate_return(ty)
 
     # ------------------------------------------------------------------
     # Statement visitors
@@ -928,15 +814,11 @@ class CppEmitter(Visitor):
     def _emit_at(self, e: Expr, want: CppType | None, ctx) -> str:
         """Emit *e* as a value of storage *want*.
 
-        One place admits one C++ type, but ``format_infer`` bounds each
-        expression by *its own* values — correctly: that is the question it
-        answers.  ``[3.0]`` really is bounded by ``{3}``, even where it has to
-        be a ``std::vector<double>`` because the other ``return`` is one.
-        Reconciling the two is a storage question, so it lives here.
-
-        An expression that *constructs* its value is simply built at *want*.
-        Anything else already has storage of its own and is converted
-        (:meth:`_convert_storage`), which is where a shared list gets refused.
+        One place admits one C++ type, while ``format_infer`` bounds each expression
+        by its own values -- correctly, since that is the question it answers.
+        Reconciling them is a storage question, so it lives here: an expression that
+        *constructs* its value is built at *want*, and anything with storage of its
+        own goes to :meth:`_convert_storage`, where a shared list is refused.
         """
         if want is None:
             return self._visit_expr(e, ctx)
@@ -970,14 +852,12 @@ class CppEmitter(Visitor):
         return self._convert_storage(emitted, src, want, at=e)
 
     def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
-        """:meth:`_emit_at` where C++ takes the type *from the argument*.
+        """:meth:`_emit_at` where C++ takes the type *from* the argument.
 
-        A braced initializer and ``std::make_tuple`` both do: the first rejects
-        a narrowing conversion outright, and the second silently deduces a
-        different type — ``std::make_tuple(a, b)`` with a ``float`` ``a`` builds
-        a ``std::tuple<float, double>`` that the surrounding declaration then
-        will not accept.  Either way the scalar's cast has to be spelled, even
-        though the same conversion is implicit anywhere else.
+        A braced initializer rejects a narrowing conversion outright, and
+        ``std::make_tuple`` silently deduces a different type -- a ``float`` first
+        argument gives ``std::tuple<float, double>``, which the declaration then
+        rejects.  Either way the scalar's cast must be spelled.
         """
         code = self._emit_at(e, want, ctx)
         if isinstance(want, CppScalar):
@@ -989,14 +869,11 @@ class CppEmitter(Visitor):
     def _emit_assign_rhs(
         self, expr: Expr, target_ty: CppType, ctx,
     ) -> str:
-        """Emit an assignment's RHS at the target's storage.
+        """Emit an assignment's RHS at the *target's* storage, not its own.
 
-        ``_storage_for_expr`` bounds the RHS by its own values, but
-        :class:`StorageInfer` may have widened the variable beyond that — a
-        later ``x[i] = y`` joins the def with a wider value.  Emitting
-        ``vector<wide> x = vector<narrow>{...}`` is a hard type error, and
-        narrowing per element trips ``-Wnarrowing`` when the elements were
-        emitted at the wider type (``Round`` lowers to a ``static_cast``).
+        ``StorageInfer`` may have widened the variable past the RHS's own bound
+        -- a later ``x[i] = y`` joins the def with a wider value -- and
+        ``vector<wide> x = vector<narrow>{...}`` is a hard type error.
         """
         return self._emit_at(expr, target_ty, ctx)
 
@@ -1005,16 +882,12 @@ class CppEmitter(Visitor):
     ) -> str:
         """*code*, of storage *src*, as storage *want*.
 
-        Format inference gives one place one bound, and :meth:`_emit_at` builds
-        every *constructor* that reaches a place at that bound.  A variable
-        cannot be built that way -- its storage was fixed by its own definition
-        -- so a narrower one flowing into a wider place arrives here and is
-        converted.
-
-        A scalar is cast: ``std::make_tuple`` below deduces its type from the
-        argument, so leaving the conversion implicit rebuilds the tuple at the
-        type it already had.  ``std::vector`` has no converting constructor
-        either, so a list is rebuilt element-wise.
+        Where :meth:`_emit_at` builds a constructor at the wanted bound, a variable
+        cannot be built that way -- its storage was fixed by its definition -- so a
+        narrower one flowing into a wider place is converted here.  Every conversion
+        is spelled: ``std::make_tuple`` deduces from its arguments, and
+        ``std::vector`` has no converting constructor, so a list is rebuilt
+        element-wise.
         """
         if src == want:
             return code
@@ -1052,11 +925,9 @@ class CppEmitter(Visitor):
     ) -> CppEmitError:
         """One place wants two types and nothing in C++ bridges them.
 
-        Reached where a *representation* decision could not be reconciled --
-        distinct ``std::vector`` instantiations are unrelated types, and so are a
-        vector and a handle.  A limitation in the compiler is acceptable;
-        emitting C++ that does not compile is not, so this refuses rather than
-        letting the mismatch reach the C++ compiler.
+        Distinct ``std::vector`` instantiations are unrelated types, as are a vector
+        and a handle.  A limitation is acceptable; emitting C++ that does not compile
+        is not.
         """
         return CppEmitError(
             f'unsupported: this value is `{src.format()}` where '
@@ -1070,12 +941,10 @@ class CppEmitter(Visitor):
     ) -> None:
         """Refuse a store C++ would narrow silently.
 
-        The sibling of :meth:`_require_bridgeable`, for the one case where a
-        format disagreement is a *wrong answer* instead of a compile error: C++
-        accepts a narrowing store into a slot, and FPy says the list then holds
-        the wider value.  Widening the container instead is not available --
-        another name may already alias it, which ``format_infer`` does not track
-        (see ``docs/todos/backend-cpp.md``).
+        The one case where a format disagreement is a *wrong answer* rather than a
+        compile error: C++ accepts a narrowing store into a slot, and FPy says the
+        list then holds the wider value.  Widening the container is not available --
+        another name may alias it.  See ``docs/todos/backend-cpp.md``.
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
@@ -1178,14 +1047,11 @@ class CppEmitter(Visitor):
     def _storage_or_none(self, e: Expr) -> CppType | None:
         """The storage *e* actually emits as, or ``None`` where unknown.
 
-        A format with no storage on the ladder — a symbolic ``REAL_FORMAT``, say
-        — is not a disagreement to repair.  Callers that only want to *adjust* a
-        representation skip it rather than failing the compile.
+        A format with no ladder entry is not a disagreement to repair, so callers
+        that only *adjust* a representation skip it rather than failing.
 
-        A variable reads as its **declaration**, which is not always what its
-        own format bound would choose: ``storage_infer`` aggregates a whole
-        storage class, so every member reads as the type the class settled on.
-        Asking ``by_expr`` here would compare against a type the emitted name
+        A variable reads as its **declaration**: ``storage_infer`` aggregates a whole
+        class, so asking ``by_expr`` would compare against a type the emitted name
         does not have.
         """
         if isinstance(e, Var):
@@ -1217,17 +1083,11 @@ class CppEmitter(Visitor):
         # it comes from somewhere with storage of its own.
         rhs = self._emit_at(stmt.expr, self._return_storage, ctx)
         if self._fenv_saved:
-            # This `return` jumps over the restore each enclosing scope emits
-            # after its body, so the mode would escape into the caller and
-            # silently change arithmetic unrelated to this function.  Restore
-            # from the outermost scope: it saved the mode from before any were
-            # entered, which is the caller's.
-            #
-            # The value must be computed under this scope's mode, and C++ gives
-            # no point between evaluating a return expression and returning — so
-            # bind it first, unless the mode cannot affect it anyway, where the
-            # copy would cost a whole vector on a list return.  Not `const`, so
-            # the return can still move out of the temp.
+            # A `return` jumps over each enclosing scope's restore, so the
+            # mode would escape into the caller.  The outermost scope holds the
+            # caller's.  C++ offers no point between evaluating a return
+            # expression and returning, so bind the value first; non-const, so
+            # the return can still move out of it.
             if not self._mode_independent(stmt.expr):
                 ty = self._return_storage
                 tmp = self._fresh_temp()
@@ -1240,49 +1100,32 @@ class CppEmitter(Visitor):
     def _mode_independent(self, e: Expr) -> bool:
         """Is the emitted value of *e* independent of the live rounding mode?
 
-        A :class:`Var` already holds its value, and a literal is a constant
-        expression — including one :meth:`_fold_rounded_literal` produces, which
-        is rounded at compile time under the mode the program asked for.
-
-        Asked of the AST, not of the emitted text: how a literal is *spelled* is
-        not stable (a narrow target comes back wrapped in a ``static_cast``).
-        ``False`` costs a temp, never correctness, so anything unrecognized falls
-        through.
+        Asked of the AST, not the emitted text: how a literal is *spelled* is
+        not stable.  ``False`` costs a temp, never correctness.
         """
         if isinstance(e, Var | RationalVal):
             return True
         return isinstance(e, Round) and self._fold_rounded_literal(e) is not None
 
     def _resolve_scope_ctx(self, scope: ContextScope) -> Context | None:
-        """Concrete :class:`Context` for *scope*, substituting the
-        per-instantiation incoming context for symbolic scopes.
+        """Concrete :class:`Context` for *scope*.
 
-        Specializations of a callee are emitted without first
-        monomorphizing the AST, so :class:`ContextUse` leaves the
-        function-level scope's ctx as a symbolic ``NamedId``.  The
-        ``ctx`` field of :attr:`FormatAnalysis.fn_fmt` is
-        the concrete context the caller pinned at the call site —
-        we substitute it in wherever the emitter would otherwise
-        see a symbolic scope.
+        A callee's specializations are emitted without monomorphizing the AST,
+        so ``ContextUse`` leaves the function-level scope symbolic; ``fn_fmt.ctx``
+        is what the caller pinned, and substitutes in.
         """
         if isinstance(scope.ctx, Context):
             return scope.ctx
         return self.format_info.fn_fmt.ctx
 
     def _resolve_used_ctx(self, site: ContextScopeSite) -> Context | None:
-        """Pull the scope's resolved context, *but only if some
-        primitive op actually dispatches under it*.
+        """The scope's resolved context, or ``None`` when no primitive op dispatches
+        under it -- the caller then skips validation and ``fesetround`` entirely, so
+        a program with no rounding-context use needs no supported context.
 
-        Returns ``None`` when the scope has no uses — in that case
-        the caller skips validation, skips ``fesetround``, and just
-        descends into the body.  Programs without rounding-context
-        uses don't need a supported context.
-
-        When uses exist, the scope's context must be statically
-        resolvable (a concrete :class:`Context` or a symbolic one
-        the caller has pinned via ``outer_ctx``); a remaining
-        symbolic ctx is rejected here, with the error pointing at
-        the ``with`` site rather than at the op that consumed it.
+        Where uses exist the context must be statically resolvable; a symbolic one
+        is rejected here, pointing at the ``with`` site rather than at the op that
+        consumed it.
         """
         scope = self._scope_by_site.get(site)
         if scope is None or not self.ctx_use.uses.get(scope):
@@ -1297,15 +1140,11 @@ class CppEmitter(Visitor):
         return resolved
 
     def _entry_rm(self, site: ContextScopeSite) -> RM | None:
-        """The rounding mode the C++ caller is contractually
-        delivering when control enters *site*'s scope.
+        """The rounding mode the caller contractually delivers at *site*.
 
-        Returns the scope's RM for a concrete, fesetround-supported
-        FP context (the FPy annotation pins the caller's
-        responsibility).  Returns ``None`` for symbolic, integer,
-        or unsupported contexts — in those cases the caller's mode
-        is treated as unknown and any nested concrete context must
-        emit an explicit ``fesetround`` to recover certainty.
+        The scope's RM for a concrete, ``fesetround``-supported FP context, since the
+        FPy annotation pins that responsibility on the caller; ``None`` for symbolic,
+        integer or unsupported ones, where a nested context must set the mode itself.
         """
         scope = self._scope_by_site.get(site)
         if scope is None:
@@ -1322,16 +1161,10 @@ class CppEmitter(Visitor):
     ) -> CppScalar:
         """Validate *rctx* and return its scalar storage type.
 
-        - Float storage (F32 / F64): rounding mode must be one of
-          the four supported by ``fesetround`` (RNE / RTZ / RTP / RTN).
-        - Integer storage: rounding mode must be RTZ — C++ integer
-          arithmetic rounds toward zero, and other modes would need
-          per-operation emulation.
-        - Anything else (bool, list, tuple) is out of scope.
-
-        *at* is an optional AST node to anchor error locations
-        to — typically the function or ``with`` statement that
-        introduced the context.
+        Float storage needs an ``fesetround`` mode (RNE/RTZ/RTP/RTN); integer
+        storage needs RTZ, which is what C++ integer arithmetic does -- anything
+        else would need per-operation emulation.  Bool, list and tuple are out of
+        scope.  *at* anchors the error location.
         """
         try:
             storage = choose_storage(rctx.format())
@@ -1361,13 +1194,9 @@ class CppEmitter(Visitor):
                     f'{rctx.rm}',
                     at=at,
                 )
-            # Reject unbounded integer contexts unless the caller has
-            # opted into the unsafe cast.  C++ has no
-            # arbitrary-precision integer type, so any rounded
-            # arithmetic landing in storage ``int64_t`` via the
-            # unbounded-integer fallback may silently overflow.
-            # ``MPFixedContext`` reports unboundedness via
-            # ``nmin == -1`` (the lower-exponent bound).
+            # C++ has no arbitrary-precision integer, so the int64_t fallback
+            # may silently overflow; `nmin == -1` is how MPFixedContext reports
+            # unboundedness.
             if (
                 isinstance(rctx, MPFixedContext)
                 and rctx.nmin == -1
@@ -1389,16 +1218,11 @@ class CppEmitter(Visitor):
 
     @contextmanager
     def _fenv_scope(self, target_rm: RM):
-        """Wrap the contained emission in a ``fesetround`` save / set
-        / restore unless the active mode is already *target_rm*.
+        """Wrap the contained emission in a ``fesetround`` save/set/restore, unless the
+        active mode is already *target_rm*.
 
-        ``self._current_rm`` is ``None`` when the live mode is
-        unknown (function entry, after restoring a previously-saved
-        scope, etc.) — in that case we *always* emit ``fesetround``,
-        never relying on a guess about what the C++ runtime is doing.
-        When the active mode is known and equals *target_rm* we skip
-        the save / set / restore so plain ``with FP64:`` blocks
-        under an FP64-RNE function add no fenv noise.
+        ``_current_rm`` is ``None`` when the live mode is unknown, and then the set is
+        unconditional rather than a guess about what the runtime holds.
         """
         if self._current_rm is not None and target_rm == self._current_rm:
             yield
@@ -1417,14 +1241,8 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'std::fesetround({fenv});')
 
     def _visit_context(self, stmt: ContextStmt, ctx):
-        # ``with <ctx>:`` blocks.  The active rounding context is
-        # taken from the :class:`ContextUseAnalysis` scope registered
-        # at this statement's site (which has already resolved
-        # attribute references / partial-eval'd the context
-        # expression).  Validation only fires when something inside
-        # the block actually uses the context — see
-        # :meth:`_resolve_used_ctx`.  For used FP scopes we may emit
-        # ``fesetround`` save / set / restore around the body.
+        # The context comes from the ContextUse scope at this site, already
+        # resolved.  Validation fires only if something inside uses it.
         if not isinstance(stmt.target, UnderscoreId):
             raise CppEmitError(
                 'binding the active context to a name is not yet supported',
@@ -1484,25 +1302,13 @@ class CppEmitter(Visitor):
         return self._emit_numeric_literal(v, at=at)
 
     def _emit_numeric_literal(self, v: Fraction, *, at: Expr) -> str:
-        """
-        Emit a numeric literal as a C++ expression.
+        """Emit a numeric literal as a C++ expression.
 
-        An FPy literal is an exact rational, rounded where it is *used*.  C++
-        has no such thing — every literal it can spell is a value of some
-        format — so one binary64 holds exactly prints as itself and one it
-        cannot is refused.  The alternative, ``num / denom``, is an *operation*
-        where FPy has a constant: it rounds under whatever mode happens to be
-        set, and ``-O2`` folds it to nearest regardless.
-
-        ``fp.round`` is how a program pins a constant to a format -- it rounds
-        the value there, at compile time; see :meth:`_fold_rounded_literal`.
-
-        An integral value prints as digits only while a C++ integer literal can
-        hold it — :func:`_value_cpp_type`'s answer, the same one :meth:`_call_arg`
-        asks.  Past ``long long`` gcc accepts the digits with a warning and folds
-        them to ``0``; storage selection refuses such a value for a scalar, but a
-        list element or slot never asks.  Beyond that range it falls through to
-        the floating spelling below.
+        An FPy literal is an exact rational rounded where it is *used*, which C++
+        has no spelling for -- so a value binary64 holds exactly prints as itself,
+        and one it cannot is refused rather than emitted as ``num / denom``, which
+        would be an operation where FPy has a constant.  Digits only while an
+        integer literal holds the value (:func:`_value_cpp_type`).
         """
         ty = _value_cpp_type(v)
         if ty is not None and ty.is_integer():
@@ -1535,18 +1341,12 @@ class CppEmitter(Visitor):
     ) -> str:
         """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
-        Used by op-dispatch / comparison cast-to-active paths where
-        the conversion is implicit from the user's perspective —
-        format inference + storage selection together decided to
-        rebind the operand into *target_ty*.  If the conversion
-        isn't lossless (``scalar_fits_in``), we refuse to compile
-        rather than silently emit a lossy ``static_cast``: the user
-        should either narrow the active context or wrap the operand
-        in ``fp.round(...)`` to acknowledge the precision change.
-
-        For user-explicit casts (``Round`` / ``Cast``, vector
-        subscript), use :meth:`_explicit_cast` instead — that path
-        never refuses."""
+        For conversions implicit from the user's perspective, where format inference
+        and storage selection decided to rebind the operand.  A lossy one is refused
+        rather than silently emitted: the user should narrow the active context or
+        write ``fp.round(...)``.  Casts the user *did* write go through
+        :meth:`_explicit_cast`, which never refuses.
+        """
         if arg_ty == target_ty:
             return arg
         if not scalar_fits_in(arg_ty, target_ty):
@@ -1574,21 +1374,12 @@ class CppEmitter(Visitor):
     def _call_arg(self, code: str, e: Expr, want: CppScalar) -> str:
         """*code* as a call argument of type *want*, spelling a literal's type.
 
-        The op table matches a literal on its *storage*, so ``1.5`` under FP32
-        matches the ``float`` signature while the token is a ``double`` — and
-        nothing inserts a cast, because the two "agree".  Harmless wherever a
-        declaration supplies the type, and exact for ``+ - * /`` since double
-        rounding equals single rounding when ``2p + 2 <= 53``, which holds for
-        every format this backend can store.
-
-        Not harmless where the callee takes its type *from* the argument:
-        ``fpy::min`` / ``fpy::max`` are templates, so mixed types fail to deduce,
-        and the ``<cmath>`` overload sets silently pick the wider overload —
-        which for ``fma``, a product *plus* an addend and so outside ``2p + 2``,
-        rounds twice where FPy rounds once.
-
-        Only literals need this; a variable's declared type already is its
-        storage.
+        A literal matches the op table on its *storage*, so ``1.5`` under FP32
+        matches the ``float`` signature while the token is a ``double``.  Harmless
+        where a declaration supplies the type, and exact for ``+ - * /`` since
+        ``2p + 2 <= 53``.  Not where the callee deduces from the argument:
+        ``fpy::min``/``max`` fail to deduce, and the ``<cmath>`` overload sets pick
+        the wider one -- which for ``fma``, outside that bound, rounds twice.
         """
         if not isinstance(e, RationalVal):
             return code
@@ -1597,12 +1388,11 @@ class CppEmitter(Visitor):
         return self._explicit_cast(code, want)
 
     def _explicit_cast(self, arg: str, target_ty: CppScalar) -> str:
-        """Emit ``static_cast<target>(arg)`` unconditionally.
+        """``static_cast<target>(arg)``, unconditionally.
 
-        Used at sites where the cast is part of the FPy semantics
-        the user wrote — ``Round`` / ``Cast`` lower to a cast,
-        ``xs[i]`` needs ``static_cast<size_t>(i)``.  These callers
-        accept that the conversion may be lossy."""
+        For casts the user wrote (``Round``/``Cast``) or the language requires
+        (``size_t`` subscripts); these callers accept a lossy conversion, unlike
+        :meth:`_maybe_cast`."""
         return f'static_cast<{target_ty.format()}>({arg})'
 
     def _active_ctx_for(self, e: ContextUseSite) -> Context:
@@ -1645,77 +1435,89 @@ class CppEmitter(Visitor):
             )
         return storage
 
-    def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
-        """Dispatch a unary op via the op table.
+    def _dispatch(
+        self,
+        e: UnaryOp | BinaryOp | TernaryOp,
+        table,
+        operands: Sequence[tuple[str, Expr]],
+    ) -> str:
+        """Emit *e* via the op table, choosing a signature in three phases.
 
-        Three signature-selection paths, tried in order:
+        A **direct match** needs no conversion.  Failing that, **cast-to-active**
+        takes an all-same-type signature of the active context whose width holds
+        every operand losslessly -- skipped when that context has no C++ storage.
+        Failing that, **widening**, sound only under ``REAL``, where the wider op
+        gives the exact result and rounds to itself; see :meth:`_try_widen`.
 
-        1. **Direct match.**  Operand's C++ storage type and the
-           active rounding context both equal a signature's input
-           slots — no casts needed.
-        2. **Cast-to-active.**  No direct match, but the active ctx
-           has a same-type signature whose input width contains the
-           operand losslessly; cast the operand to that width and
-           emit.  Skipped when the active ctx has no C++ storage
-           (e.g. ``REAL``).
-        3. **Lossless widening.**  Used when (1) and (2) don't fire
-           — typically because the active ctx is ``REAL`` or the
-           operand can't safely cast into the active ctx.  Selects a
-           signature whose output width matches the result-storage
-           format inference chose for *e*, on the soundness premise
-           that the wider C++ op produces the exact mathematical
-           result and rounds to itself.  Soundness is gated by
-           :meth:`_maybe_cast` rejecting any lossy operand widening.
+        A literal operand of a call-form signature needs its type spelled even on a
+        direct match: it matched on storage, not on the token's type.
         """
-        sigs = self.op_table.unary.get(type(e))
+        sigs = table.get(type(e))
         if sigs is None:
             raise CppEmitError(
-                f'no signatures for unary op: {type(e).__name__}',
-                at=e,
+                f'no signatures for op: {type(e).__name__}', at=e,
             )
+        codes = [code for code, _ in operands]
+        srcs = [src for _, src in operands]
+        storages = [self._scalar_storage_for_expr(src) for src in srcs]
         active = self._active_ctx_for(e)
-        arg_storage = self._scalar_storage_for_expr(e.arg)
 
-        # (1) Direct match.  A literal still needs its type spelled where the
-        # signature is a call: it matched on storage, not on the token's type.
+        def spell(args: list[str], slots) -> list[str]:
+            return [
+                self._call_arg(a, src, slot)
+                for a, src, slot in zip(args, srcs, slots)
+            ]
+
+        # (1) direct match
         for sig in sigs:
-            if sig.matches(arg_storage, active):
-                if sig.is_func:
-                    return sig.format(self._call_arg(arg, e.arg, sig.arg_ty))
-                return sig.format(arg)
+            if sig.matches(tuple(storages), active):
+                out = spell(codes, sig.in_tys) if sig.is_call else codes
+                return sig.format(*out)
 
-        # (2) Cast-to-active fallback: pick the all-active signature
-        # and cast the operand into the active context's storage.
-        # Skipped silently when the active context has no concrete
-        # storage (e.g. ``REAL``) — falls through to widening.
+        # (2) cast every operand into the active context's storage
         try:
             target = self._scalar_for_ctx(active, at=e)
         except CppEmitError:
             target = None
         if target is not None:
+            want = (target,) * len(operands)
             for sig in sigs:
-                if sig.arg_ty == target and sig.out_ctx == active:
-                    cast = self._maybe_cast(arg, arg_storage, target, at=e)
-                    if sig.is_func:
-                        cast = self._call_arg(cast, e.arg, target)
-                    return sig.format(cast)
+                if sig.in_tys == want and sig.out_ctx == active:
+                    casts = [
+                        self._maybe_cast(code, have, target, at=e)
+                        for code, have in zip(codes, storages)
+                    ]
+                    if sig.is_call:
+                        casts = spell(casts, want)
+                    return sig.format(*casts)
 
-        # (3) Lossless-widening fallback — only sound when the active
-        # context is ``REAL``.  The wider C++ op then produces the exact
-        # mathematical result of the operand-typed op and rounds to
-        # itself; under any other active context the wider op rounds
-        # differently than the active ctx demands.  See
-        # :meth:`_try_widen_unary`.
+        # (3) widen, only under REAL
         if active is REAL:
-            widened = self._try_widen_unary(e, sigs, arg, arg_storage)
+            widened = self._try_widen(e, sigs, list(zip(codes, storages)))
             if widened is not None:
                 return widened
 
         raise CppEmitError(
-            f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: arg type `{arg_storage.format()}`',
+            f'no matching signature for {type(e).__name__} under context '
+            f'`{active}`: {[s.format() for s in storages]}',
             at=e,
         )
+
+    def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
+        return self._dispatch(e, self.op_table.unary, [(arg, e.arg)])
+
+    def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
+        return self._dispatch(
+            e, self.op_table.binary, [(lhs, e.first), (rhs, e.second)],
+        )
+
+    def _dispatch_ternary(
+        self, e: TernaryOp, a1: str, a2: str, a3: str,
+    ) -> str:
+        return self._dispatch(
+            e, self.op_table.ternary, list(zip([a1, a2, a3], e.args)),
+        )
+
 
     def _result_fits_ctx(self, e: Expr, ctx: Context) -> bool:
         """Is rounding the inferred result format of *e* under *ctx* an
@@ -1730,24 +1532,21 @@ class CppEmitter(Visitor):
             return round_is_identity(AbstractFormat.from_format(fmt), ctx)
         return False
 
-    def _try_widen_unary(
+    def _try_widen(
         self,
-        e: UnaryOp,
-        sigs: list[UnaryCppOp],
-        arg: str,
-        arg_storage: CppScalar,
+        e: Expr,
+        sigs: Sequence[CppOp],
+        operands: Sequence[tuple[str, CppScalar]],
     ) -> str | None:
-        """Pick a unary signature whose output context contains the
-        exact unrounded result of *e* (so the op-under-sig is identity)
-        and whose input slot losslessly receives ``arg_storage``.  The
-        sig's output is then losslessly cast down to ``result_ty``;
-        that cast is sound because the runtime value lies in
-        ``format_info.by_expr[e]`` which by storage selection fits in
-        ``result_ty``.  ``None`` if no such signature exists.
+        """Pick a signature whose output context contains the exact unrounded
+        result of *e* -- so the op under that signature is the identity -- and
+        whose input slots losslessly receive *operands*.  Its output is cast down
+        to the expression's own storage, sound because the runtime value lies in
+        ``format_info.by_expr[e]``, which fits ``result_ty`` by storage
+        selection.  ``None`` when no signature qualifies.
 
-        Two-pass to prefer narrower signatures: first sigs whose output
-        already equals ``result_ty`` (no downcast), then sigs whose
-        output is wider (downcast inserted).
+        Two passes, to prefer a narrower signature: first those whose output
+        already *is* ``result_ty``, then those needing the downcast.
         """
         try:
             result_ty = self._storage_for_expr(e)
@@ -1756,22 +1555,29 @@ class CppEmitter(Visitor):
         if not isinstance(result_ty, CppScalar):
             return None
 
-        def _try(sig: UnaryCppOp, *, exact_out: bool) -> str | None:
+        def _try(sig, *, exact_out: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
                 return None
             if exact_out and sig_out_ty is not result_ty:
                 return None
-            if not scalar_fits_in(arg_storage, sig.arg_ty):
+            slots = sig.in_tys
+            if not all(
+                scalar_fits_in(have, want)
+                for (_, have), want in zip(operands, slots)
+            ):
                 return None
             if not self._result_fits_ctx(e, sig.out_ctx):
                 return None
             try:
-                cast = self._maybe_cast(arg, arg_storage, sig.arg_ty, at=e)
+                casts = [
+                    self._maybe_cast(code, have, want, at=e)
+                    for (code, have), want in zip(operands, slots)
+                ]
             except CppEmitError:
                 return None
-            out = sig.format(cast)
+            out = sig.format(*casts)
             if sig_out_ty is not result_ty:
                 out = f'static_cast<{result_ty.format()}>({out})'
             return out
@@ -1783,117 +1589,8 @@ class CppEmitter(Visitor):
                     return emitted
         return None
 
-    def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
-        """Dispatch a binary op via the op table.
 
-        Same three-phase selection as :meth:`_dispatch_unary`:
-        direct match, cast-to-active, lossless-widening.  The
-        widening fallback is the path that supports ``with fp.REAL:``
-        ops on bounded-format operands: format inference picks a
-        concrete wider result storage that contains the exact
-        mathematical result, and we dispatch under that.
-        """
-        sigs = self.op_table.binary.get(type(e))
-        if sigs is None:
-            raise CppEmitError(
-                f'no signatures for binary op: {type(e).__name__}',
-                at=e,
-            )
-        active = self._active_ctx_for(e)
-        lhs_storage = self._scalar_storage_for_expr(e.first)
-        rhs_storage = self._scalar_storage_for_expr(e.second)
 
-        # (1) Direct match.  See the unary path: a literal operand of a
-        # call-form signature needs its type spelled.
-        for sig in sigs:
-            if sig.matches(lhs_storage, rhs_storage, active):
-                if not sig.is_infix:
-                    return sig.format(
-                        self._call_arg(lhs, e.first, sig.in1_ty),
-                        self._call_arg(rhs, e.second, sig.in2_ty),
-                    )
-                return sig.format(lhs, rhs)
-
-        # (2) Cast-to-active fallback.
-        try:
-            target = self._scalar_for_ctx(active, at=e)
-        except CppEmitError:
-            target = None
-        if target is not None:
-            for sig in sigs:
-                if (sig.in1_ty == target
-                        and sig.in2_ty == target
-                        and sig.out_ctx == active):
-                    l = self._maybe_cast(lhs, lhs_storage, target, at=e)
-                    r = self._maybe_cast(rhs, rhs_storage, target, at=e)
-                    if not sig.is_infix:
-                        l = self._call_arg(l, e.first, target)
-                        r = self._call_arg(r, e.second, target)
-                    return sig.format(l, r)
-
-        # (3) Lossless-widening fallback — only sound when the active
-        # context is ``REAL``.  See :meth:`_try_widen_binary` and the
-        # corresponding note in :meth:`_dispatch_unary`.
-        if active is REAL:
-            widened = self._try_widen_binary(
-                e, sigs, lhs, lhs_storage, rhs, rhs_storage,
-            )
-            if widened is not None:
-                return widened
-
-        raise CppEmitError(
-            f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: lhs `{lhs_storage.format()}`, '
-            f'rhs `{rhs_storage.format()}`',
-            at=e,
-        )
-
-    def _try_widen_binary(
-        self,
-        e: BinaryOp,
-        sigs: list[BinaryCppOp],
-        lhs: str,
-        lhs_storage: CppScalar,
-        rhs: str,
-        rhs_storage: CppScalar,
-    ) -> str | None:
-        """Binary analogue of :meth:`_try_widen_unary`."""
-        try:
-            result_ty = self._storage_for_expr(e)
-        except CppEmitError:
-            return None
-        if not isinstance(result_ty, CppScalar):
-            return None
-
-        def _try(sig: BinaryCppOp, *, exact_out: bool) -> str | None:
-            try:
-                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
-            except CppEmitError:
-                return None
-            if exact_out and sig_out_ty is not result_ty:
-                return None
-            if not scalar_fits_in(lhs_storage, sig.in1_ty):
-                return None
-            if not scalar_fits_in(rhs_storage, sig.in2_ty):
-                return None
-            if not self._result_fits_ctx(e, sig.out_ctx):
-                return None
-            try:
-                cast_lhs = self._maybe_cast(lhs, lhs_storage, sig.in1_ty, at=e)
-                cast_rhs = self._maybe_cast(rhs, rhs_storage, sig.in2_ty, at=e)
-            except CppEmitError:
-                return None
-            out = sig.format(cast_lhs, cast_rhs)
-            if sig_out_ty is not result_ty:
-                out = f'static_cast<{result_ty.format()}>({out})'
-            return out
-
-        for exact_out in (True, False):
-            for sig in sigs:
-                emitted = _try(sig, exact_out=exact_out)
-                if emitted is not None:
-                    return emitted
-        return None
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         if isinstance(e, (Fst, Snd)):
@@ -1956,12 +1653,9 @@ class CppEmitter(Visitor):
     def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> str:
         """Emit a (possibly nested) ``fst``/``snd`` chain.
 
-        The chain is folded to a single ``std::get`` whenever it reads one
-        element of a tuple — e.g. ``fst(snd(e))`` over a 3+-tuple is
-        ``std::get<1>(e)`` rather than ``std::get<0>`` of a freshly built
-        tail tuple.  Only a chain that genuinely yields a shorter tuple (a
-        ``snd`` whose result is still multi-element and is *not* consumed by
-        an outer ``fst``) materializes a ``std::make_tuple``.
+        Folded to a single ``std::get`` whenever it reads one element, so
+        ``fst(snd(e))`` over a 3-tuple is ``std::get<1>(e)``.  Only a chain genuinely
+        yielding a shorter tuple materializes a ``std::make_tuple``.
         """
         acc = self._tuple_access(e, ctx)
         if acc.off is None:
@@ -2081,6 +1775,12 @@ class CppEmitter(Visitor):
                     f'unsupported FP predicate: {type(e).__name__}', at=e,
                 )
 
+    def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx) -> str:
+        """A ``range`` bound, cast into the element type."""
+        return self._maybe_cast(
+            self._visit_expr(e, ctx), self._scalar_storage_for_expr(e), elt_ty,
+        )
+
     def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
         """``range(...)`` as an expression — materialise a vector via
         ``std::iota`` for unit-step ranges, or a manual fill loop for
@@ -2100,9 +1800,7 @@ class CppEmitter(Visitor):
         tmp = self._fresh_temp()
         match e:
             case Range1():
-                stop = self._visit_expr(e.arg, ctx)
-                stop_ty = self._scalar_storage_for_expr(e.arg)
-                stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+                stop_cast = self._range_bound(e.arg, result_ty.elt, ctx)
                 # ``range(stop)`` with ``stop <= 0`` is empty; clamp before
                 # the unsigned cast so a negative stop doesn't wrap to a
                 # huge allocation.
@@ -2120,12 +1818,8 @@ class CppEmitter(Visitor):
                 )
                 return tmp
             case Range2():
-                start = self._visit_expr(e.first, ctx)
-                stop = self._visit_expr(e.second, ctx)
-                start_ty = self._scalar_storage_for_expr(e.first)
-                stop_ty = self._scalar_storage_for_expr(e.second)
-                start_cast = self._maybe_cast(start, start_ty, result_ty.elt)
-                stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+                start_cast = self._range_bound(e.first, result_ty.elt, ctx)
+                stop_cast = self._range_bound(e.second, result_ty.elt, ctx)
                 size_expr = (
                     f'static_cast<size_t>({stop_cast} > {start_cast} '
                     f'? ({stop_cast} - {start_cast}) : 0)'
@@ -2141,15 +1835,9 @@ class CppEmitter(Visitor):
                 return tmp
             case Range3():
                 # Explicit step — emit a fill loop.
-                start = self._visit_expr(e.args[0], ctx)
-                stop = self._visit_expr(e.args[1], ctx)
-                step = self._visit_expr(e.args[2], ctx)
-                start_ty = self._scalar_storage_for_expr(e.args[0])
-                stop_ty = self._scalar_storage_for_expr(e.args[1])
-                step_ty = self._scalar_storage_for_expr(e.args[2])
-                start_cast = self._maybe_cast(start, start_ty, result_ty.elt)
-                stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
-                step_cast = self._maybe_cast(step, step_ty, result_ty.elt)
+                start_cast = self._range_bound(e.args[0], result_ty.elt, ctx)
+                stop_cast = self._range_bound(e.args[1], result_ty.elt, ctx)
+                step_cast = self._range_bound(e.args[2], result_ty.elt, ctx)
                 ctr = self._fresh_temp()
                 self.writer.add_line(
                     f'{result_ty.format()} {tmp} = '
@@ -2172,14 +1860,12 @@ class CppEmitter(Visitor):
                 )
 
     def _emit_size(self, e: Size, ctx) -> str:
-        """``size(xs, d)`` returns the size of *xs* at dimension *d*.
-        The compile-time shape of *xs* is known from format inference
-        — we follow ``d`` ``[0]`` indices into the first element to
-        reach the right ``vector``, then take ``.size()``.
+        """``size(xs, d)`` -- follow *d* ``[0]`` indices into the shape format
+        inference knows, then ``.size()``.
 
-        Requires a constant integer ``d``; symbolic / runtime ``d``
-        would need a more sophisticated dispatch and isn't worth the
-        complexity for the current corpus."""
+        Requires a constant *d*; a runtime one would need a dispatch the corpus does
+        not justify.
+        """
         if not isinstance(e.second, Integer):
             raise CppEmitError(
                 'size(xs, d) requires a constant integer dimension; '
@@ -2236,15 +1922,9 @@ class CppEmitter(Visitor):
         return 'true' if e.val else 'false'
 
     def _visit_compare(self, e: Compare, ctx) -> str:
-        # Chained comparisons (``a < b < c``) expand to a conjunction
-        # of pairwise comparisons.  FPy's evaluation order is
-        # left-to-right with no short-circuit semantics that differ
-        # from C++'s — the operands are pure expressions, so ``&&``
-        # is fine.
-        #
-        # Each pair of operands is converted to its scalar supremum
-        # via explicit ``static_cast`` (no implicit promotion) so the
-        # comparison happens in a well-defined common type.
+        # `a < b < c` expands to pairwise `&&`, sound because the operands are
+        # pure.  Each pair is cast to its scalar supremum so the comparison
+        # happens in a defined common type.
         args = [self._visit_expr(a, ctx) for a in e.args]
         arg_tys = [self._scalar_storage_for_expr(a) for a in e.args]
         clauses = []
@@ -2281,115 +1961,7 @@ class CppEmitter(Visitor):
                     f'unsupported ternary op: {type(e).__name__}', at=e,
                 )
 
-    def _dispatch_ternary(
-        self,
-        e: TernaryOp,
-        a1: str,
-        a2: str,
-        a3: str,
-    ) -> str:
-        """Dispatch a ternary op via the op table.
 
-        Same three-phase selection as :meth:`_dispatch_binary`:
-        direct match, cast-to-active, lossless-widening.
-        """
-        sigs = self.op_table.ternary.get(type(e))
-        if sigs is None:
-            raise CppEmitError(
-                f'no signatures for ternary op: {type(e).__name__}', at=e,
-            )
-        active = self._active_ctx_for(e)
-        in_storages = [self._scalar_storage_for_expr(a) for a in e.args]
-        args = [a1, a2, a3]
-
-        # (1) Direct match.  Every ternary signature is a call -- `std::fma`
-        # among them, where picking the wider overload rounds twice.
-        for sig in sigs:
-            if sig.matches(in_storages[0], in_storages[1], in_storages[2], active):
-                return sig.format(
-                    self._call_arg(a1, e.args[0], sig.in1_ty),
-                    self._call_arg(a2, e.args[1], sig.in2_ty),
-                    self._call_arg(a3, e.args[2], sig.in3_ty),
-                )
-
-        # (2) Cast-to-active fallback.
-        try:
-            target = self._scalar_for_ctx(active, at=e)
-        except CppEmitError:
-            target = None
-        if target is not None:
-            for sig in sigs:
-                if (sig.in1_ty == target
-                        and sig.in2_ty == target
-                        and sig.in3_ty == target
-                        and sig.out_ctx == active):
-                    return sig.format(*[
-                        self._call_arg(
-                            self._maybe_cast(a, s, target, at=e), src, target,
-                        )
-                        for a, s, src in zip(args, in_storages, e.args)
-                    ])
-
-        # (3) Lossless-widening fallback — only sound when the active
-        # context is ``REAL``.  See :meth:`_try_widen_ternary` and the
-        # corresponding note in :meth:`_dispatch_unary`.
-        if active is REAL:
-            widened = self._try_widen_ternary(e, sigs, args, in_storages)
-            if widened is not None:
-                return widened
-
-        raise CppEmitError(
-            f'no matching signature for {type(e).__name__} under '
-            f'context `{active}`: '
-            f'{[s.format() for s in in_storages]}',
-            at=e,
-        )
-
-    def _try_widen_ternary(
-        self,
-        e: TernaryOp,
-        sigs: list[TernaryCppOp],
-        args: list[str],
-        in_storages: list[CppScalar],
-    ) -> str | None:
-        """Ternary analogue of :meth:`_try_widen_unary`."""
-        try:
-            result_ty = self._storage_for_expr(e)
-        except CppEmitError:
-            return None
-        if not isinstance(result_ty, CppScalar):
-            return None
-
-        def _try(sig: TernaryCppOp, *, exact_out: bool) -> str | None:
-            try:
-                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
-            except CppEmitError:
-                return None
-            if exact_out and sig_out_ty is not result_ty:
-                return None
-            sig_in_tys = (sig.in1_ty, sig.in2_ty, sig.in3_ty)
-            if not all(scalar_fits_in(s, t) for s, t in zip(in_storages, sig_in_tys)):
-                return None
-            if not self._result_fits_ctx(e, sig.out_ctx):
-                return None
-            try:
-                casts = [
-                    self._maybe_cast(a, s, t, at=e)
-                    for a, s, t in zip(args, in_storages, sig_in_tys)
-                ]
-            except CppEmitError:
-                return None
-            out = sig.format(*casts)
-            if sig_out_ty is not result_ty:
-                out = f'static_cast<{result_ty.format()}>({out})'
-            return out
-
-        for exact_out in (True, False):
-            for sig in sigs:
-                emitted = _try(sig, exact_out=exact_out)
-                if emitted is not None:
-                    return emitted
-        return None
 
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         match e:
@@ -2407,12 +1979,12 @@ class CppEmitter(Visitor):
                 )
 
     def _emit_bool_chain(self, e: 'And | Or', ctx) -> str:
-        """Reduce an ``And`` / ``Or`` to a fully-parenthesised chain
-        of ``&&`` / ``||``.  C++'s short-circuit semantics match FPy's
-        for pure expressions, and the operands are already bool —
-        :class:`StorageInfer` chose ``BOOL`` storage for each one.
-        Zero-arg ``and()`` / ``or()`` shouldn't reach here (the
-        front-end rejects them), but we degenerate cleanly anyway."""
+        """Reduce ``And``/``Or`` to a parenthesised ``&&``/``||`` chain.
+
+        C++'s short-circuit matches FPy's for pure expressions, and the operands are
+        already ``BOOL``.  A zero-arg form is rejected by the front end, but
+        degenerates cleanly here.
+        """
         if not e.args:
             return 'true' if isinstance(e, And) else 'false'
         args = [self._visit_expr(a, ctx) for a in e.args]
@@ -2456,22 +2028,15 @@ class CppEmitter(Visitor):
     def _emit_sum(self, e: Sum, arg: str) -> str:
         """``sum(xs)`` as the fold the interpreter performs.
 
-        ``_eval_sum`` seeds with ``xs[0]`` **unrounded** and performs *n-1*
-        additions; an empty list is an exact ``+0``.  ``accumulate`` takes its
-        seed and range separately, so that shape is a range starting one past
-        ``begin``.  Seeding a typed zero over the whole range instead did *n*
-        additions, so ``sum([-0.0])`` came out ``+0.0`` and a narrower seed
-        rounded the first element away.
+        ``_eval_sum`` seeds with ``xs[0]`` **unrounded** and does *n-1* additions;
+        an empty list is an exact ``+0``.  ``accumulate`` takes seed and range
+        separately, so that is a range starting one past ``begin``.  The empty guard
+        is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there.
 
-        The empty guard is not optional: ``begin() + 1`` and ``xs[0]`` are both
-        undefined there, and the differential harness runs length zero.
-
-        The accumulator may be *wider* than the element, since the seed cast is
-        then exact and ``accumulate``'s ``init + *first`` converts to the common
-        type — which is the accumulator only when the element fits it, making the
-        fold uni-precision there, as the interpreter is.  Otherwise refuse: the
-        seed would round (``sum([5e-324])`` under FP32), and widening instead
-        would run every addition at the wrong format.
+        The accumulator may be *wider* than the element but not narrower:
+        ``init + *first`` converts to the common type, which is the accumulator only
+        when the element fits it exactly, making the fold uni-precision there as the
+        interpreter is.  Otherwise the seed would round.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2537,15 +2102,9 @@ class CppEmitter(Visitor):
     def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
         """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
 
-        Combiner mirrors :meth:`_emit_min_max`: ``std::fmin``/``fmax``
-        for FP results, ``std::min``/``max`` (templated) for integer
-        ones.  Both demand uniform operand types — we cast each element
-        to ``result_ty`` via :meth:`_maybe_cast`, which raises on a
-        lossy cast.
-
-        Empty-list behavior is undefined (matches the interpreter's
-        ``min([]) → ValueError`` contract); the emit indexes ``xs[0]``
-        without a guard.
+        Combiner as in :meth:`_emit_min_max`.  Both demand uniform operands, so each
+        element is cast to ``result_ty``.  The empty list is undefined, matching the
+        interpreter's ``ValueError``: the emit indexes ``xs[0]`` unguarded.
         """
         result_ty = self._storage_for_expr(e)
         if not isinstance(result_ty, CppScalar):
@@ -2589,15 +2148,12 @@ class CppEmitter(Visitor):
         return acc
 
     def _emit_empty(self, e: Empty, ctx) -> str:
-        """``empty(d1, ..., dN)`` builds an ``N``-dimensional zero-
-        initialised vector.  The result's storage shape comes from
-        format inference; we read the dimension sizes off the call
-        site and emit nested ``fpy::make_list<T>(d, ...)`` calls
-        right-to-left so the innermost element type bubbles out.
+        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector.
 
-        ``empty()`` with zero args returns ``T()`` — a scalar, which
-        format inference resolves to whatever storage the call site
-        expects."""
+        Sizes are read off the call site and emitted as nested ``make_list`` calls
+        right-to-left, so the innermost element type bubbles out.  ``empty()`` is a
+        scalar ``T()``, which format inference resolves at the call site.
+        """
         result_ty = self._storage_for_expr(e)
         dims = [self._visit_expr(a, ctx) for a in e.args]
         dim_storages = [
@@ -2676,13 +2232,12 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return result
     def _scalar_cast_types(self, e):
-        """Source/target scalar storage for a round-like node ``e``.
+        """Source/target scalar storage for a round-like node *e*.
 
-        The argument's storage is only used to short-circuit same-type casts.
-        A non-dyadic literal has a ``SetFormat`` with no representable storage
-        — fine, we always cast.  ``Round`` folds those before getting here
-        (:meth:`_fold_rounded_literal`); ``Cast`` does not, and refuses them at
-        emission instead, which is right for a cast that asserts exactness."""
+        The argument's storage only short-circuits same-type casts, so a non-dyadic
+        literal with no representable storage is fine.  ``Round`` folds those earlier;
+        ``Cast`` refuses them, which is right for a cast asserting exactness.
+        """
         try:
             arg_ty = self._scalar_storage_for_expr(e.arg)
         except CppEmitError:
@@ -2757,13 +2312,9 @@ class CppEmitter(Visitor):
         return self._explicit_cast(lit, target_ty)
 
     def _visit_round(self, e, ctx) -> str:
-        # ``Round(arg)`` rounds ``arg`` to the active rounding
-        # context — emitted as a plain ``static_cast`` (the cast's
-        # rounding mode is the active ``fesetround`` mode set by
-        # Phase 5b at the surrounding ``with`` boundary).  The user
-        # explicitly asked to round into the active context, so the
-        # cast is emitted even when lossy.  Same-type short-circuits
-        # to a no-op.  A literal argument is rounded here instead.
+        # A `static_cast`, whose rounding mode is the one the surrounding
+        # `with` set.  The user asked for it, so it is emitted even when lossy;
+        # a literal argument is folded instead.
         folded = self._fold_rounded_literal(e)
         if folded is not None:
             return folded
@@ -2777,16 +2328,9 @@ class CppEmitter(Visitor):
         self._unsupported('RoundAt', at=e)
 
     def _visit_call(self, e, ctx) -> str:
-        # FPy ``Call(args, fn=Function(...), ...)`` lowers to a plain
-        # C++ ``func(arg1, ..., argN)``.  The target's emitted name
-        # is determined by the compiler's per-instantiation mangling:
-        # at ``compile`` time we walk the FormatAnalysis call graph
-        # and dispense a stable mangled name per
-        # ``(callee FuncDef, outer_ctx)``, recorded in
-        # :attr:`_call_names`.  Two call sites that instantiate the
-        # same callee at the same context share an emitted name; two
-        # that instantiate at distinct contexts get distinct
-        # specializations.
+        # The emitted name comes from the compiler's per-instantiation
+        # mangling in :attr:`_call_names`: one name per (callee, outer_ctx), so
+        # call sites at the same context share a specialization.
         if e.kwargs:
             raise CppEmitError(
                 f'unsupported call: kwargs are not supported '
@@ -2809,12 +2353,10 @@ class CppEmitter(Visitor):
         """*emitted* as the caller needs the result.
 
         A callee's return representation is fixed by its own body, so a caller
-        that keeps a handle for a local reason has to make one.  The result is a
-        prvalue whose ownership the callee handed over — that is why it unboxed
-        — so this moves the elements rather than copying them.
-
-        Only this direction: :func:`~fpy2.backend.cpp.unbox._boxed_by_callees`
-        gives the caller a handle whenever the callee returns one.
+        keeping a handle for a local reason has to make one.  The result is a prvalue
+        the callee handed over -- which is why it unboxed -- so this moves rather
+        than copies.  Only this direction arises; ``unbox`` gives the caller a handle
+        whenever the callee returns one.
         """
         if got is None or self.unbox is None:
             return emitted
@@ -2834,16 +2376,12 @@ class CppEmitter(Visitor):
     def _adapt_arg(self, emitted: str, e: Expr, want: CppType | None) -> str:
         """*emitted* as the callee spelled its parameter.
 
-        A callee's signature is fixed by its own body, so a caller that keeps a
-        handle for a local reason the callee does not share must hand over the
-        pointee.  That names the same elements — no copy, and a write through it
-        still reaches the caller.
-
-        Only this direction arises: ``unbox`` gives an argument a handle whenever
-        the callee declared one, so a caller never holds a bare vector where a
-        handle is wanted.  Which is just as well — the reverse needs
-        ``fpy::borrow``, and that cannot take the ``const`` reference a read-only
-        parameter is.
+        A callee's signature is fixed by its own body, so a caller holding a handle
+        the callee does not want hands over the pointee -- same elements, no copy,
+        and a write still reaches the caller.  Only this direction arises: ``unbox``
+        gives an argument a handle whenever the callee declared one.  Just as well,
+        since the reverse needs ``fpy::borrow``, which cannot bind a ``const``
+        reference.
         """
         if want is None or self.unbox is None:
             return emitted
@@ -2865,36 +2403,24 @@ class CppEmitter(Visitor):
         return f'*{self._bind_operand(emitted)}'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:
-        # ``(a, b, c)`` → ``std::make_tuple(a, b, c)``.  Type deduction
-        # from the argument types matches what the format-inference
-        # pipeline assigns to the tuple slot — no explicit type prefix,
-        # but a field whose own storage is narrower has to be converted
-        # or deduction produces a tuple type nothing accepts.
+        # Through `_emit_at`: `std::make_tuple` deduces from its arguments, so
+        # a narrower field must be converted or deduction yields a tuple type
+        # nothing accepts.
         return self._emit_at(e, self._storage_for_expr(e), ctx)
 
     def _visit_list_expr(self, e: ListExpr, ctx) -> str:
-        # ``[a, b, c]`` → ``fpy::make_list<T>({a, b, c})`` where ``T`` comes
-        # from format inference on the list expression.  One vector, one
-        # element type, so each element is emitted at ``T`` rather than at
-        # whatever it is on its own.
+        # Through `_emit_at`: one vector means one element type, so each
+        # element is emitted at the list's `T`, not at its own bound.
         return self._emit_at(e, self._storage_for_expr(e), ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx) -> str:
         return self._emit_list_comp_at(e, self._storage_for_expr(e), ctx)
 
     def _emit_list_comp_at(self, e: ListComp, result_ty: CppType, ctx) -> str:
-        # ``[elt for x1 in iter1 [for x2 in iter2 ...]]``
-        #
-        # Emitted as a temporary ``fpy::list<T> tmp;`` followed by
-        # nested for-loops that ``push_back`` the element expression
-        # into ``tmp``.  Returns the temp's name as the comprehension's
-        # value.  The temp shape mirrors the cpp/ backend; future
-        # polish may inline directly into an ``Assign`` target to skip
-        # the temp + copy.
-        #
+        # A temp plus nested loops that `push_back` the element expression.
         # *result_ty* is supplied because a comprehension builds its vector
-        # element by element, so it is a contributor to whatever place it
-        # reaches — see :meth:`_emit_at`.
+        # element by element, making it a contributor to whatever place it
+        # reaches -- see :meth:`_emit_at`.
         tmp = self._fresh_temp()
         self.writer.add_line(
                     f'{result_ty.format()} {tmp} = '
@@ -2921,56 +2447,29 @@ class CppEmitter(Visitor):
         comp_site: ListComp,
         ctx,
     ) -> None:
-        """Emit one ``for`` line for a single comprehension stage,
-        leaving the writer indented inside the loop body.
+        """Emit one ``for`` line for a comprehension stage, leaving the writer
+        indented inside the body.
 
-        The target's storage class is determined by ``StorageInfer``
-        exactly as for any other AssignDef.  We always declare-on-
-        assign in the for header — the comprehension's target lives
-        only inside the loop's lexical scope.  The comp target's
-        SSA site is the ``ListComp`` node, not the target id itself
-        (see ``define_use._visit_list_comp``).
+        Always declare-on-assign: the target lives only in the loop scope.  Its
+        SSA site is the ``ListComp`` node, not the target id.
         """
-        # ``loop_def`` drives the value-iterable element binding (const&
-        # for read-only aggregates); ``None`` => discarded/anonymous.
+        # `loop_def` drives the element binding; None means discarded.
         loop_def = None
         match target:
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
                 target_name = self.storage.def_to_name[target_def]
-                # For a range counter, size to the exit-test overshoot (see
-                # :meth:`_range_counter_scalar`); the element storage would be
-                # too narrow.  Non-range iterables fall back to element storage.
-                counter_scalar = self._range_counter_scalar(iterable)
-                storage = counter_scalar or self.storage.storage_of(target_def)
+                # A range counter is sized to the exit-test overshoot; the
+                # element storage would be too narrow.
+                counter = self._range_counter_scalar(iterable)
+                storage = counter or self.storage.storage_of(target_def)
                 decl = f'{storage.format()} {target_name}'
                 loop_def = target_def
             case UnderscoreId():
-                # ``_`` discards the loop variable — no SSA def, no
-                # storage class.  Synthesize a fresh name and pick the
-                # iterator type from the range counter's trajectory (or the
-                # stop bound's storage when the range isn't concrete); value
-                # iterables use ``auto`` and let the for-range loop deduce.
                 target_name = self._fresh_temp()
-                counter_scalar = self._range_counter_scalar(iterable)
-                match iterable:
-                    case Range1() if counter_scalar is not None:
-                        decl = f'{counter_scalar.format()} {target_name}'
-                    case Range1():
-                        stop_ty = self._scalar_storage_for_expr(iterable.arg)
-                        decl = f'{stop_ty.format()} {target_name}'
-                    case (Range2() | Range3()) if counter_scalar is not None:
-                        decl = f'{counter_scalar.format()} {target_name}'
-                    case Range2() | Range3():
-                        stop_ty = self._scalar_storage_for_expr(iterable.args[1])
-                        decl = f'{stop_ty.format()} {target_name}'
-                    case _:
-                        decl = f'auto {target_name}'
+                decl = f'{self._underscore_counter_ty(iterable)} {target_name}'
             case TupleBinding():
-                # ``for (a, b) in xs`` — bind the tuple element to
-                # an anonymous temp via ``auto`` and destructure
-                # inside the loop body.  Range iterables can't pair
-                # with a tuple binding; reject early.
+                # A tuple binding cannot pair with a range.
                 if isinstance(iterable, (Range1, Range2, Range3)):
                     raise CppEmitError(
                         'tuple-binding comprehension target requires a '
@@ -2980,7 +2479,7 @@ class CppEmitter(Visitor):
                 tmp = self._fresh_temp()
                 iter_str = self._visit_expr(iterable, ctx)
                 iter_ty = self._storage_for_expr(iterable)
-                # element read-only (only destructured) -> bind by const&
+                # read-only (only destructured) -> bind by const&
                 self.writer.add_line(
                     f'for (const auto& {tmp} : '
                     f'{self._list_range(iter_ty, iter_str)}) {{'
@@ -2998,39 +2497,8 @@ class CppEmitter(Visitor):
                     at=comp_site,
                 )
 
-        match iterable:
-            case Range1():
-                stop = self._visit_expr(iterable.arg, ctx)
-                self.writer.add_line(
-                    f'for ({decl} = 0; '
-                    f'{target_name} < {stop}; ++{target_name}) {{'
-                )
-            case Range2():
-                start = self._visit_expr(iterable.first, ctx)
-                stop = self._visit_expr(iterable.second, ctx)
-                self.writer.add_line(
-                    f'for ({decl} = {start}; '
-                    f'{target_name} < {stop}; ++{target_name}) {{'
-                )
-            case Range3():
-                start = self._visit_expr(iterable.args[0], ctx)
-                stop = self._visit_expr(iterable.args[1], ctx)
-                step = self._visit_expr(iterable.args[2], ctx)
-                self.writer.add_line(
-                    f'for ({decl} = {start}; '
-                    f'{target_name} < {stop}; {target_name} += {step}) {{'
-                )
-            case _:
-                iter_str = self._visit_expr(iterable, ctx)
-                iter_ty = self._storage_for_expr(iterable)
-                decl = self._foreach_decl(
-                    loop_def, target_name,
-                    elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
-                    at=iterable,
-                )
-                self.writer.add_line(
-                    f'for ({decl} : {self._list_range(iter_ty, iter_str)}) {{'
-                )
+        header = self._for_header(iterable, target_name, decl, loop_def, ctx)
+        self.writer.add_line(f'{header} {{')
         self.writer.indent()
 
     def _visit_list_ref(self, e: ListRef, ctx) -> str:
@@ -3044,19 +2512,9 @@ class CppEmitter(Visitor):
         return self._list_at(self._storage_for_expr(e.value), value, index)
 
     def _visit_list_slice(self, e: ListSlice, ctx) -> str:
-        # ``xs[start:stop]`` →
-        #   auto&& _tmpN = <xs>;
-        #   <result_ty>(_tmpN.begin() + start,
-        #               _tmpN.begin() + stop)
-        #
-        # Binding the value to a reference avoids re-evaluating ``<xs>``
-        # when it isn't a simple lvalue (and matches the interpreter,
-        # which evaluates the value exactly once).  ``auto&&`` binds an
-        # lvalue without copying and lifetime-extends a prvalue — the temp
-        # is only read (``begin``/``size``) before the slice is copied out.
-        # Indices are cast to ``size_t`` to match the iterator-arithmetic
-        # API.  Strict bounds-checking against the interpreter's behaviour
-        # is a TODO (slice-out-of-range, negative-index handling, etc.).
+        # `auto&& _tmpN = <xs>` binds an lvalue without copying and
+        # lifetime-extends a prvalue, so `<xs>` is evaluated exactly once, as
+        # the interpreter does.  Bounds-checking is a TODO; see backend-cpp.md.
         arr_ty = self._storage_for_expr(e.value)
         arr_tmp = self._bind_operand(self._visit_expr(e.value, ctx))
 
@@ -3101,8 +2559,8 @@ class CppEmitter(Visitor):
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
         # post-mutation SSA def of ``xs`` shares a storage class with
-        # its ``prev`` (see ``_is_in_place_assign`` in
-        # ``storage_infer``), so the C++ name is the same on both
+        # its ``prev`` (see ``same_object_defs`` in
+        # ``reaching_defs``), so the C++ name is the same on both
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
         target_name = self.storage.def_to_name[target_def]
@@ -3126,13 +2584,16 @@ class CppEmitter(Visitor):
         rhs = self._emit_at(stmt.expr, level, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
 
-    def _visit_if1(self, stmt: If1Stmt, ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        self.writer.add_line(f'if ({cond}) {{')
+    def _emit_guarded_block(self, keyword: str, cond, body, ctx) -> None:
+        """``<keyword> (<cond>) { <body> }``."""
+        self.writer.add_line(f'{keyword} ({self._visit_expr(cond, ctx)}) {{')
         self.writer.indent()
-        self._visit_block(stmt.body, ctx)
+        self._visit_block(body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
+
+    def _visit_if1(self, stmt: If1Stmt, ctx):
+        self._emit_guarded_block('if', stmt.cond, stmt.body, ctx)
 
     def _visit_if(self, stmt: IfStmt, ctx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -3147,12 +2608,7 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
 
     def _visit_while(self, stmt: WhileStmt, ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        self.writer.add_line(f'while ({cond}) {{')
-        self.writer.indent()
-        self._visit_block(stmt.body, ctx)
-        self.writer.dedent()
-        self.writer.add_line('}')
+        self._emit_guarded_block('while', stmt.cond, stmt.body, ctx)
 
     def _concrete_int_of(self, e: Expr) -> int | None:
         """Concrete integer value of *e* per format inference, or ``None``."""
@@ -3166,15 +2622,13 @@ class CppEmitter(Visitor):
         return None
 
     def _range_counter_scalar(self, iterable: Expr) -> 'CppScalar | None':
-        """Counter type for a ``range`` for-loop, or ``None`` when the bounds
-        aren't statically concrete.
+        """Counter type for a ``range`` loop, or ``None`` when the bounds are not
+        statically concrete.
 
-        The C-style counter transiently reaches the first value past ``stop``
-        (the exit-test overshoot), which the loop variable's *element* format
-        (the values actually taken) excludes — so a counter typed from the
-        element storage can overflow at a type boundary (e.g. ``range(128)``
-        would overflow ``int8_t``).  We size it to cover ``start`` and that
-        overshoot instead.
+        A C-style counter transiently reaches the first value past ``stop``, which
+        the loop variable's *element* format excludes -- so typing it from the
+        element storage overflows at a boundary (``range(128)`` in an ``int8_t``).
+        Sized to cover ``start`` and that overshoot instead.
         """
         start: int | None
         stop: int | None
@@ -3214,54 +2668,84 @@ class CppEmitter(Visitor):
                     at=stmt,
                 )
 
-    def _emit_for_underscore_target(self, stmt: ForStmt, ctx):
-        """``for _ in iter:`` — the loop body never reads the counter,
-        so we just emit a synthetic name and pick its type the same
-        way :meth:`_open_comp_loop` does for an ``UnderscoreId``
-        comprehension target."""
-        target = self._fresh_temp()
-        counter_scalar = self._range_counter_scalar(stmt.iterable)
-        if counter_scalar is not None:
-            ty = counter_scalar.format()
-        elif isinstance(stmt.iterable, Range1):
-            ty = self._scalar_storage_for_expr(stmt.iterable.arg).format()
-        elif isinstance(stmt.iterable, (Range2, Range3)):
-            ty = self._scalar_storage_for_expr(stmt.iterable.args[1]).format()
-        else:
-            ty = 'auto'
-        decl = f'{ty} {target}'
-        match stmt.iterable:
+    def _for_header(self, iterable: Expr, target: str, decl: str,
+                    target_def, ctx) -> str:
+        """The ``for (...)`` header for *iterable*, without the brace.
+
+        A ``Range*`` is a counter loop using *decl* as given; anything else is a
+        range-for, where :meth:`_foreach_decl` decides the element binding and a
+        ``None`` *target_def* marks a discarded element.
+
+        Shared with :meth:`_open_comp_loop`, which needs the header alone -- it
+        leaves the writer open for its caller to fill the body.
+        """
+        match iterable:
             case Range1():
-                stop = self._visit_expr(stmt.iterable.arg, ctx)
-                header = f'for ({decl} = 0; {target} < {stop}; ++{target})'
+                stop = self._visit_expr(iterable.arg, ctx)
+                return f'for ({decl} = 0; {target} < {stop}; ++{target})'
             case Range2():
-                start = self._visit_expr(stmt.iterable.first, ctx)
-                stop = self._visit_expr(stmt.iterable.second, ctx)
-                header = (
+                start = self._visit_expr(iterable.first, ctx)
+                stop = self._visit_expr(iterable.second, ctx)
+                return (
                     f'for ({decl} = {start}; '
                     f'{target} < {stop}; ++{target})'
                 )
             case Range3():
-                start = self._visit_expr(stmt.iterable.args[0], ctx)
-                stop = self._visit_expr(stmt.iterable.args[1], ctx)
-                step = self._visit_expr(stmt.iterable.args[2], ctx)
-                header = (
+                start = self._visit_expr(iterable.args[0], ctx)
+                stop = self._visit_expr(iterable.args[1], ctx)
+                step = self._visit_expr(iterable.args[2], ctx)
+                return (
                     f'for ({decl} = {start}; '
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
-                # discarded element -> bind by const& (no per-element copy)
-                iter_str = self._visit_expr(stmt.iterable, ctx)
-                iter_ty = self._storage_for_expr(stmt.iterable)
-                header = (
-                    f'for ({self._foreach_decl(None, target)} : '
+                iter_str = self._visit_expr(iterable, ctx)
+                iter_ty = self._storage_for_expr(iterable)
+                elt_decl = self._foreach_decl(
+                    target_def, target,
+                    elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
+                    at=iterable,
+                )
+                return (
+                    f'for ({elt_decl} : '
                     f'{self._list_range(iter_ty, iter_str)})'
                 )
+
+    def _underscore_counter_ty(self, iterable: Expr) -> str:
+        """The C++ type for a discarded loop variable.
+
+        A range counter is sized from its trajectory (:meth:`_range_counter_scalar`),
+        falling back to the stop bound's storage; a value iterable uses ``auto``
+        and lets the range-for deduce.
+        """
+        counter = self._range_counter_scalar(iterable)
+        if counter is not None:
+            return counter.format()
+        match iterable:
+            case Range1():
+                return self._scalar_storage_for_expr(iterable.arg).format()
+            case Range2() | Range3():
+                return self._scalar_storage_for_expr(iterable.args[1]).format()
+            case _:
+                return 'auto'
+
+    def _emit_for_loop(self, stmt: ForStmt, ctx, target: str, decl: str,
+                       target_def) -> None:
+        """``for (<header>) { body }``."""
+        header = self._for_header(stmt.iterable, target, decl, target_def, ctx)
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
+
+
+    def _emit_for_underscore_target(self, stmt: ForStmt, ctx):
+        """``for _ in iter:`` -- the body never reads the counter, so emit a
+        synthetic name."""
+        target = self._fresh_temp()
+        ty = self._underscore_counter_ty(stmt.iterable)
+        self._emit_for_loop(stmt, ctx, target, f'{ty} {target}', None)
 
     def _emit_for_named_target(self, stmt: ForStmt, ctx):
         assert isinstance(stmt.target, NamedId)
@@ -3279,44 +2763,7 @@ class CppEmitter(Visitor):
             decl = f'{storage.format()} {target}'
         else:
             decl = target
-        match stmt.iterable:
-            case Range1():
-                stop = self._visit_expr(stmt.iterable.arg, ctx)
-                header = f'for ({decl} = 0; {target} < {stop}; ++{target})'
-            case Range2():
-                start = self._visit_expr(stmt.iterable.first, ctx)
-                stop = self._visit_expr(stmt.iterable.second, ctx)
-                header = (
-                    f'for ({decl} = {start}; '
-                    f'{target} < {stop}; ++{target})'
-                )
-            case Range3():
-                start = self._visit_expr(stmt.iterable.args[0], ctx)
-                stop = self._visit_expr(stmt.iterable.args[1], ctx)
-                step = self._visit_expr(stmt.iterable.args[2], ctx)
-                header = (
-                    f'for ({decl} = {start}; '
-                    f'{target} < {stop}; {target} += {step})'
-                )
-            case _:
-                # range-for over a container: bind the element (const& for
-                # read-only aggregates — no per-element copy).
-                iter_str = self._visit_expr(stmt.iterable, ctx)
-                iter_ty = self._storage_for_expr(stmt.iterable)
-                decl = self._foreach_decl(
-                    target_def, target,
-                    elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
-                    at=stmt.iterable,
-                )
-                header = (
-                    f'for ({decl} : '
-                    f'{self._list_range(iter_ty, iter_str)})'
-                )
-        self.writer.add_line(f'{header} {{')
-        self.writer.indent()
-        self._visit_block(stmt.body, ctx)
-        self.writer.dedent()
-        self.writer.add_line('}')
+        self._emit_for_loop(stmt, ctx, target, decl, target_def)
 
     def _emit_for_tuple_target(self, stmt: ForStmt, ctx):
         # ``for (a, b) in xs:`` — a tuple-binding target only makes

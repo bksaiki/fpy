@@ -19,6 +19,7 @@ __all__ = [
     'PhiSite',
     'ReachingDefs',
     'ReachingDefsAnalysis',
+    'same_object_defs',
 ]
 
 
@@ -108,6 +109,31 @@ class PhiDef:
 
 
 Definition: TypeAlias = AssignDef | PhiDef
+
+
+def same_object_defs(d: 'Definition') -> tuple[int, ...]:
+    """Indices of the definitions *d* denotes the *same runtime object* as.
+
+    Two of SSA's fresh definitions allocate nothing: ``xs[i] = e`` mutates the
+    list that was already there, and a phi names whichever of its operands
+    arrived.  A plain rebinding is not one of them -- ``ys = zs`` has a ``prev``
+    too, and it is a different list.
+
+    This is the rule the ``IndexedAssign`` note above tells physical-property
+    analyses to apply.  Stating it once keeps allocation tracking, alias
+    analysis and the C++ backend's storage coalescing from drifting apart --
+    they had each written it out separately.
+
+    Callers restrict the domain themselves: alias analysis only unifies defs
+    that carry a list, while storage coalescing applies to every def.
+    """
+    match d:
+        case AssignDef(site=IndexedAssign()) if d.prev is not None:
+            return (d.prev,)
+        case PhiDef():
+            return (d.lhs, d.rhs)
+        case _:
+            return ()
 """definition: either an assignment or a phi node"""
 
 DefCtx: TypeAlias = dict[NamedId, Definition]

@@ -67,20 +67,13 @@ class CppScalar(enum.Enum):
 
 @default_repr
 class CppList:
-    """An FPy list, in one of two representations.
+    """An FPy list: a shared ``fpy::list<T>`` handle, or -- where
+    :mod:`fpy2.analysis.alias` proves nothing can observe the difference -- a
+    plain ``std::vector<T>``.  See :mod:`.utils` for why the handle exists and
+    :mod:`.unbox` for when it is dropped.
 
-    ``fpy::list<T>`` — a handle to a shared, mutable sequence — is the general
-    one: FPy lists alias on assignment, which a bare ``std::vector`` (a value
-    type) cannot express; see the ``fpy::list`` comment in :mod:`.utils`.
-
-    ``std::vector<T>`` (``boxed=False``) is for a list that
-    :mod:`fpy2.analysis.alias` proves nothing else can observe — no sharing to
-    represent, so the indirection is pure cost, and the type is one a native
-    caller already has.
-
-    The flag is part of the type's identity, so two lists differing only in
-    representation compare unequal and ``storage_infer`` cannot merge them into
-    one class.
+    ``boxed`` is part of the type's identity, so two lists differing only in
+    representation compare unequal and ``storage_infer`` cannot merge them.
     """
     elt: 'CppType'
     boxed: bool

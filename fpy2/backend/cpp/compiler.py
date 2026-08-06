@@ -41,10 +41,10 @@ from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
-from .storage import StorageSelectionError, choose_storage
+from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
-from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis
+from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis, return_storage
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
@@ -75,21 +75,24 @@ class SpecAnalyses:
 # Compiler
 
 
-def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
-    """Build a ``Call → emit-name`` map for every Function-targeted Call in
-    *ast*'s body.  After :class:`Specialize`, each such ``Call.fn`` points at
-    the target spec's :class:`Function`, so the emit name is just
-    ``call.fn.ast.name``."""
-    out: dict[Call, str] = {}
+def _function_calls(ast: FuncDef) -> dict[Call, Function]:
+    """Every ``Call`` in *ast*'s body that targets a :class:`Function`."""
+    out: dict[Call, Function] = {}
 
     class _Collector(DefaultVisitor):
         def _visit_call(self, e: Call, ctx):
             if isinstance(e.fn, Function):
-                out[e] = e.fn.ast.name
+                out[e] = e.fn
             super()._visit_call(e, ctx)
 
     _Collector()._visit_function(ast, None)
     return out
+
+
+def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
+    """``Call → emit-name``.  After :class:`Specialize` each ``Call.fn`` points
+    at the target spec's :class:`Function`, so the name is ``fn.ast.name``."""
+    return {c: fn.ast.name for c, fn in _function_calls(ast).items()}
 
 
 def _find_spec(specs: list[Function], func: Function) -> Function:
@@ -129,73 +132,27 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
 
 
 def _return_storage(a: SpecAnalyses) -> CppType:
-    """Same rule as ``CppEmitter._infer_return_storage``."""
-    ret = choose_storage(a.format_info.fn_fmt.ret_fmt)
-    return ret if a.unbox is None else a.unbox.annotate_return(ret)
-
-
-def _callees(ast: FuncDef) -> list[Function]:
-    """Every :class:`Function` *ast* calls."""
-    out: list[Function] = []
-
-    class _Collector(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            if isinstance(e.fn, Function):
-                out.append(e.fn)
-            super()._visit_call(e, ctx)
-
-    _Collector()._visit_function(ast, None)
-    return out
+    return return_storage(a.format_info.fn_fmt.ret_fmt, a.unbox)
 
 
 class CppCompiler(Backend):
-    """
-    Format-inference-driven C++ compiler.
+    """Format-inference-driven C++ compiler.
 
-    The pipeline runs all pre-analyses and assigns each SSA def to a
-    C++ variable; the emitter then walks the AST and produces source.
+    Runs the pre-analyses, assigns each SSA def a C++ variable, then emits.
 
     Args:
         unsafe_cast_int:
-            When ``True`` (default), allow rounded arithmetic under
-            an unbounded-integer context (``MPFixedContext(nmin=-1)``
-            / ``fpy2.INTEGER``); the compiler compiles these by
-            emitting casts to the widest built-in integer type
-            (currently ``int64_t``) and assuming no overflow occurs.
-            Set ``False`` to reject such programs at compile time.
+            Allow rounded arithmetic under an unbounded-integer context by
+            casting to ``int64_t`` and assuming no overflow.  ``False`` rejects
+            such programs instead.  Default ``True``.
         optimize:
-            When ``True`` (default), apply optimizing program
-            transformations to each :class:`FuncDef` before the rest
-            of the pipeline runs:
-
-            - :class:`fpy2.transform.EnumerateElim` (pre-monomorphize):
-              skips materializing intermediate
-              ``std::vector<std::tuple<...>>``s for ``enumerate``
-              iterables.  Must run before ``ZipElim``: it also handles
-              ``enumerate(zip(...))``, collapsing both intermediate
-              vectors at once, which ``ZipElim`` could no longer do
-              once the ``zip`` sits in an assignment.
-            - :class:`fpy2.transform.ZipElim` (pre-monomorphize):
-              skips materializing intermediate
-              ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
-            - :class:`fpy2.transform.ReduceFusion` (pre-monomorphize):
-              folds ``any``/``all`` over a comprehension into one loop,
-              skipping the intermediate ``std::vector<bool>``.
-            - :class:`fpy2.transform.RoundElim` (post-monomorphize):
-              hoists eliminable rounded operations into
-              ``with fp.REAL:`` blocks so the cpp emitter's
-              lossless-widening dispatch can pick tighter storage
-              for them.
-
-            The pipeline is sound either way.  Set ``False`` to
-            compile the surface AST verbatim.
+            Run the transforms listed in :meth:`_run_pipeline`.  Sound either
+            way; ``False`` compiles the surface AST verbatim.  Default ``True``.
         unbox:
-            When ``True`` (default), represent a list as a plain
-            ``std::vector`` wherever :mod:`fpy2.analysis.alias` proves
-            nothing can observe the difference (see :mod:`.unbox`).
-            The choice is per list and per nesting level.  ``False``
-            keeps every handle -- always correct, but slower at a
-            native boundary.
+            Drop the handle where :mod:`.unbox` proves nothing observes the
+            difference, per list and per nesting level.  ``False`` keeps every
+            handle -- correct, but slower at a native boundary.  Default
+            ``True``.
     """
 
     _unsafe_cast_int: bool
@@ -211,29 +168,20 @@ class CppCompiler(Backend):
         self._unbox = unbox
 
     # ------------------------------------------------------------------
-    # Translation-unit preamble
-    #
-    # ``compile`` returns a function definition only, so single-function
-    # tests can use exact-string equality.  Callers that want a full
-    # translation unit pull these explicitly:
-    #
-    #     headers = '\\n'.join(cc.headers())
-    #     unit = headers + '\\n' + cc.helpers() + cc.compile(f) + '\\n'
+    # Translation-unit preamble.  ``compile`` returns a function definition
+    # only, so single-function tests can use exact-string equality.
 
     def headers(self) -> list[str]:
         """C++ headers required by every emitted unit."""
         return list(CPP_HEADERS)
 
     def helpers(self) -> str:
-        """Runtime helper definitions emitted alongside compiled
-        functions.  Currently empty — cpp doesn't yet need custom
-        runtime support beyond ``<cmath>`` / ``std::vector``."""
+        """The ``fpy::`` runtime every emitted unit needs: the list handle,
+        ``make_list``, and NaN-correct ``min``/``max``."""
         return CPP_HELPERS
 
     def prelude(self) -> str:
-        """Convenience: the headers and helpers concatenated as a
-        single source-ready string.  Equivalent to
-        ``'\\n'.join(self.headers()) + '\\n' + self.helpers()``."""
+        """The headers and helpers concatenated, ready to prepend."""
         return '\n'.join(self.headers()) + '\n\n' + self.helpers()
 
     # ------------------------------------------------------------------
@@ -246,15 +194,10 @@ class CppCompiler(Backend):
         ctx: Context | None = None,
         arg_types: Collection[Type | None] | None = None,
     ) -> str:
-        """Compile *func* to a C++ source-code string.
+        """Compile *func* to a C++ source string.
 
-        Thin wrapper around :meth:`compile_module` over a one-entry module,
-        so the single-function and module paths share one pipeline.
-
-        Args:
-            func: The :class:`Function` to compile.
-            ctx: Optional rounding context to monomorphize against.
-            arg_types: Optional per-argument types to monomorphize against.
+        A thin wrapper around :meth:`compile_module` over a one-entry module, so the
+        single-function and module paths share one pipeline.
         """
         m = Module()
         m.add(func, ctx=ctx, arg_types=arg_types)
@@ -263,15 +206,10 @@ class CppCompiler(Backend):
     def compile_module(self, module: Module) -> str:
         """Compile a :class:`~fpy2.Module` to a single C++ translation unit.
 
-        Pipeline:
-          1. **Pre-spec optimizations** (``EnumerateElim``, ``ZipElim``,
-             ``ReduceFusion``) on every function in the module via ``map``.
-          2. **Specialize** the module: each ``(FuncDef, ctx, arg_fmts)``
-             becomes one entry; cross-function calls rewire to the
-             appropriate spec.
-          3. **Post-spec optimizations** (``RoundElim``) on each spec —
-             monomorphic format inference is now available.
-          4. **Per-spec codegen**, leaves-first, one C++ definition per entry.
+        Pre-spec optimizations, then ``Specialize`` -- one entry per
+        ``(FuncDef, ctx, arg_fmts)``, with calls rewired -- then post-spec
+        optimizations now that format inference is monomorphic, then codegen
+        leaves-first.
         """
         specs = self.specialize(module)
         params: dict[FuncDef, CalleeAbi] = {}
@@ -291,7 +229,7 @@ class CppCompiler(Backend):
         different conclusions about the same function — they did once, and it
         was an ABI bug rather than a missed optimization.
         """
-        called = {id(c.ast) for f in specs for c in _callees(f.ast)}
+        called = {id(c.ast) for f in specs for c in _function_calls(f.ast).values()}
         summaries: dict[FuncDef, EscapeSummary] = {}
         for f in specs:
             a = self.analyze(
@@ -416,10 +354,10 @@ class CppCompiler(Backend):
     ) -> tuple[list[CppType], CppType]:
         """The C++ storage types of *func*'s parameters and result.
 
-        Not derivable from FPy types alone: how a list is represented depends on
-        :mod:`.unbox`, so the same FPy signature can compile to ``fpy::list<T>``
-        or ``std::vector<T>``.  Pass the *module* being compiled whenever there
-        is one — a function another compiled function calls keeps its handles.
+        Not derivable from FPy types alone: representation depends on :mod:`.unbox`,
+        so one FPy signature can compile to either ``fpy::list<T>`` or
+        ``std::vector<T>``.  Pass the *module* when there is one -- a function that
+        compiled code calls keeps its handles.
         """
         if module is None:
             module = Module()
@@ -472,7 +410,3 @@ class CppCompiler(Backend):
             raise CppCompileError(
                 f'compilation failed for `{func.name}`: {e}'
             ) from e
-
-    # ------------------------------------------------------------------
-    # Call-graph walk
-

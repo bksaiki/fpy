@@ -1,42 +1,30 @@
 """
 cpp backend: which lists may drop the handle.
 
-A list compiles to ``fpy::list<T>`` — a shared handle — because FPy lists alias.
-Where :mod:`fpy2.analysis.alias` proves nothing else can observe a list, the
-indirection buys nothing and it can be a plain ``std::vector<T>`` instead: no
+A list compiles to ``fpy::list<T>`` -- a shared handle -- because FPy lists
+alias.  Where :mod:`fpy2.analysis.alias` proves nothing else can observe one, the
+indirection buys nothing and it becomes a plain ``std::vector<T>``: no
 allocation, no refcount, and a type a native caller already holds.
 
-The decision is per **alias region** — the analysis's own equivalence class —
-because that is the only unit at which one answer satisfies everything that
-reads it.
+Decided per **alias region**, the only unit at which one answer satisfies every
+reader.  That works because :mod:`.storage_infer` coalesces on exactly the edges
+:func:`~fpy2.analysis.alias.Alias` unions on, so a storage class maps to one
+region per level -- :func:`_regions` asserts this rather than taking a
+conjunction that would silently paper over a violation.
 
-One answer per storage class
-----------------------------
+A signature's representation is part of its contract, so a function that
+compiled code calls keeps its handles on *both* sides.  Measured: 5 of the 50
+corpus functions with a list parameter.  The kernels worth unboxing are entry
+points a *native* caller invokes, and a native caller is not bound by this.
 
-:mod:`.storage_infer` gives one C++ variable per class, coalescing on phi and
-in-place-mutation edges; :func:`~fpy2.analysis.alias.Alias` unions on exactly
-those two.  So a class maps to a single region per level, and :func:`_regions`
-asserts it rather than taking a conjunction that would silently repair a
-violation.
-
-Callers must agree
-------------------
-
-A signature's representation is part of the contract, so a function that compiled
-code calls keeps its handles on *both* sides of it.  Measured over the corpus this
-costs 5 of the 50 functions with a list parameter — the kernels worth unboxing are
-entry points a *native* caller invokes, and a native caller is not bound by this.
-
-Refusal means keeping the handle, never failing a compile; reasons are recorded in
+Refusing means keeping the handle, never failing a compile; reasons land in
 :attr:`UnboxAnalysis.boxed_because`.
 
-A list inside a tuple is decided like any other, and :func:`_stamp` is the *only*
-place any of it is decided — for an expression, for the return type, and for a
-storage class's declaration.  There used to be a second traversal for the
-declaration that did not descend into tuples, so ``t = [y, y], 1.0; return t``
-declared ``std::tuple<fpy::list<T>, …>`` and returned
-``std::tuple<std::vector<T>, …>``, which does not compile.  Keep it one
-traversal.
+:func:`_stamp` is the *only* place any of this is decided -- for an expression,
+a return type, and a storage class's declaration alike.  A second traversal for
+the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
+``std::tuple<fpy::list<T>, ...>`` and returned ``std::tuple<std::vector<T>,
+...>``, which does not compile.  Keep it one traversal.
 """
 
 from dataclasses import dataclass, field
@@ -45,6 +33,7 @@ from ...analysis import Definition
 from ...analysis.alias import AliasAnalysis, Region
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
+from ...analysis.format_infer import FormatBound
 from ...analysis.reaching_defs import AssignDef
 from ...ast.fpyast import (
     Argument,
@@ -61,6 +50,7 @@ from ...ast.fpyast import (
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
+from .storage import choose_storage
 from .storage_infer import (
     StorageAnalysis,
     binds_by_reference,
@@ -123,16 +113,13 @@ class UnboxAnalysis:
         return region is not None and region not in self.slot_replaced
 
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
-        """Whether a ``const`` reference to this would reject a write FPy allows.
+        """Whether a ``const`` reference here would reject a write FPy allows.
 
-        ``const fpy::list<T>&`` does not — ``const`` qualifies the handle, and
-        ``xs[i] = e`` through one is FPy's parameter semantics.  An unboxed list
-        has no such indirection, so ``const std::vector<T>&`` makes its elements
-        const too.
-
-        Walks every *unboxed* level: ``const`` reaches through a value
+        ``const fpy::list<T>&`` does not: ``const`` qualifies the handle, and
+        ``xs[i] = e`` through one is FPy parameter semantics.  An unboxed list has no
+        such indirection, so ``const`` reaches its elements -- and through a value
         container, so a write to a row needs the whole thing non-const.  A boxed
-        level stops it.
+        level stops that.
         """
         depth = 0
         while isinstance(ty, CppList) and not ty.boxed:
@@ -170,22 +157,13 @@ class UnboxAnalysis:
         self, ty: CppType, regions_at, depth: int,
         cls: Definition | None = None,
     ) -> CppType:
-        """*ty* with a representation for each list level, following tuple
-        fields too — a list inside a tuple is decided like any other.
+        """*ty* with a representation per list level, descending into tuple
+        fields too.  The single place a representation is chosen -- see the
+        module docstring for why that has to stay true.
 
-        The single place a representation is chosen.  It is used for an
-        expression (:meth:`annotate`), for the return type
-        (:meth:`annotate_return`), and for a storage class's declaration —
-        which must agree, or a variable is declared as one thing and handed
-        over as another.  They did not always: a second traversal used to
-        produce the declaration and it did not descend into tuples, so
-        ``t = [y, y], 1.0; return t`` declared a boxed field and returned an
-        unboxed one.
-
-        *cls* records why a level kept its handle, for a storage class.  Only
-        down the list spine: ``boxed_because`` is keyed by depth, so two list
-        fields of one tuple would collide, and nothing consumes a reason for a
-        tuple field.
+        *cls* records why a level kept its handle, and only down the list
+        spine: ``boxed_because`` is keyed by depth, so two list fields of one
+        tuple would collide, and nothing consumes a reason for a tuple field.
         """
         if isinstance(ty, CppTuple):
             return CppTuple(
@@ -229,18 +207,11 @@ class Unbox:
     ) -> UnboxAnalysis:
         """Which lists may drop the handle.
 
-        Args:
-            ast: the function, for its ``return`` statements.
-            storage: the storage classes to decide.
-            alias: what may refer to what.
-            def_use: to tell a binding that copies from one that references.
-            is_called: whether compiled code calls this function.
-            summary: this function's own escape summary.  A parameter it does
-                not retain can drop its handle even when it is called, because
-                the caller reads that same summary and stops treating the
-                argument as shared.  Absent means retains everything.
-            callees: the emitted signatures of the callees, so an argument
-                and a result can be given the representation each declares.
+        A parameter the function does not retain (per *summary*) can drop its handle
+        even when called, because the caller reads that same summary and stops
+        treating the argument as shared; absent means it retains everything.
+        *callees* carries the emitted signatures, so an argument and a result get
+        the representation each declares.
         """
         out = UnboxAnalysis(alias)
         scan = _Scan(alias, def_use, callees or {})
@@ -312,15 +283,13 @@ def _regions(
 ) -> list[Region | None]:
     """The alias region each level of *cls*'s storage holds, by depth.
 
-    At most one per level, and the assertion is the point: ``storage_infer``
-    coalesces on phi and in-place-mutation edges, and
-    ``alias._merge_redefinitions`` unions on exactly those two, so a class
-    cannot span regions that could answer differently.  Taking a conjunction
-    over several would silently repair a violation of that; this reports it.
+    At most one per level, and the assertion is the point: ``storage_infer`` and
+    ``alias`` coalesce on the same edges, so a class cannot span regions that
+    would answer differently.  A conjunction over several would silently repair
+    that violation; this reports it.
 
-    A tuple contributes its own region and stops: :func:`_stamp` descends into
-    its fields with :func:`_fields`, which needs the tuple's region rather than
-    a per-depth entry of its own.
+    A tuple contributes its region and stops -- :func:`_stamp` descends its
+    fields with :func:`_fields`, which needs that region, not a per-depth entry.
     """
     ty = storage.class_storage[cls]
     per_depth: list[Region | None] = []
@@ -376,28 +345,14 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
 
 
 class _Scan(DefaultVisitor):
-    """One walk collecting everything ``decide`` reads off the syntax.
+    """One walk collecting the four facts ``decide`` reads off the syntax.
 
-    Four facts, all about where a list can be reached from, and all needing the
-    same traversal:
-
-    ``slot_replaced``
-        Element regions some ``xss[i] = <list>`` puts a *different* list into.
-        A C++ reference binds to the slot, so a name projected out of one would
-        follow the replacement while FPy keeps referring to the list that was
-        there.
-
-    ``written``
-        Regions whose elements are stored into, here or in a callee.  A
-        ``const`` reference to an unboxed one would reject the store.
-
-    ``at_boundary``
-        Regions passed to, or received from, a callee that declared a handle.
-        An unknown callee counts as declaring one everywhere: its signature is
-        not ours to match.
-
-    ``returned``
-        What each ``return`` hands back, by list depth.
+    ``slot_replaced`` element regions some ``xss[i] = <list>`` replaces -- a C++
+    reference follows the slot, FPy the list that was in it.  ``written``
+    regions stored into here or in a callee, which a ``const`` reference would
+    reject.  ``at_boundary`` regions crossing a call that declared a handle; an
+    unknown callee counts as declaring one everywhere.  ``returned`` what each
+    ``return`` hands back, by depth.
     """
 
     def __init__(
@@ -469,16 +424,13 @@ def _shares_storage(
     def_use: DefineUseAnalysis,
     slot_replaced: set[Region],
 ) -> bool:
-    """Whether more than one place in this function holds *region* separately.
+    """Whether more than one place holds *region* separately.
 
-    Not ``AliasAnalysis.is_shared``, which counts every name.  What decides a
-    representation is whether a second name gets its own *storage*: a name the
-    emitter binds by reference copies nothing.  ``for row in xss`` and the
-    ``_src = xs`` aliases ``ZipElim`` introduces are both of that kind, and both
-    are common enough that counting them would box most idiomatic programs.
-
-    Mirrors the emitter's binding rules exactly rather than approximating them:
-    discounting a name the emitter then *copies* would be a miscompilation.
+    Not ``is_shared``, which counts every name: what decides a representation is
+    whether a second name gets its own *storage*.  ``for row in xss`` and
+    ``ZipElim``'s ``_src = xs`` do not, and are common enough that counting them
+    would box most idiomatic programs.  Mirrors the binding rules exactly --
+    discounting a name the emitter then copies would be a miscompilation.
     """
     for d in alias.defs_in(region):
         if (
@@ -516,14 +468,12 @@ def _binds_by_reference(
     alias: AliasAnalysis,
     slot_replaced: set[Region],
 ) -> bool:
-    """Whether *d* is a reference to storage that exists already, *and* that
-    storage is inside this function.
+    """Whether *d* references storage that already exists *inside this function*.
 
-    The one deliberate difference from the emitter: a parameter binds by
-    reference too, but to the **caller's** storage, which is a place of its own.
-    Discounting it would make ``zss = [xs]`` look unshared.  Spelled as one
-    extra term so the divergence stays visible rather than becoming a second
-    copy of the rule to keep in sync.
+    The one deliberate difference from the emitter: a parameter also binds by
+    reference, but to the caller's storage, a place of its own -- discounting it
+    would make ``zss = [xs]`` look unshared.  One extra term, so the divergence
+    stays visible instead of becoming a second copy of the rule.
     """
     region = alias.region_of(d)
     return (
@@ -533,3 +483,16 @@ def _binds_by_reference(
         )
         and not isinstance(d.site, Argument)
     )
+
+
+def return_storage(
+    ret_fmt: FormatBound, unbox: UnboxAnalysis | None,
+) -> CppType:
+    """The storage a function's return value takes.
+
+    ``ret_fmt`` joins every ``ReturnStmt``, so a multiple-return program gets a
+    class wide enough for every path.  A ``None`` bound is not a missing return
+    but format inference's convention for a non-numeric result.
+    """
+    ty = choose_storage(ret_fmt)
+    return ty if unbox is None else unbox.annotate_return(ty)

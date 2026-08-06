@@ -32,8 +32,7 @@ class TestOpTableShape:
             # FP64 self-application (RNE) must be present — the
             # common-case signature for ``with FP64:`` blocks.
             assert any(
-                sig.in1_ty == CppScalar.F64
-                and sig.in2_ty == CppScalar.F64
+                sig.in_tys == (CppScalar.F64, CppScalar.F64)
                 and sig.out_ctx == fp.FP64
                 for sig in t.binary[op]
             )
@@ -44,7 +43,7 @@ class TestOpTableShape:
         for op in (Neg, Abs):
             assert op in t.unary
             assert any(
-                sig.arg_ty == CppScalar.F64 and sig.out_ctx == fp.FP64
+                sig.in_tys == (CppScalar.F64,) and sig.out_ctx == fp.FP64
                 for sig in t.unary[op]
             )
 
@@ -73,7 +72,7 @@ class TestOpTableShape:
         for rm in rms:
             ctx = fp.IEEEContext(11, 64, rm)
             assert any(
-                sig.in1_ty == CppScalar.F64 and sig.out_ctx == ctx
+                sig.in_tys[0] == CppScalar.F64 and sig.out_ctx == ctx
                 for sig in t.binary[Add]
             )
 

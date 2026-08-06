@@ -8,43 +8,24 @@ Callers that want a complete translation unit pull
 explicitly and concatenate them — same shape as the legacy
 ``cpp/`` backend.
 
-Header coverage tracks what the emitter actually uses:
+Headers track exactly what the emitter uses; the list below is the whole
+dependency set.
 
-- ``<algorithm>``: ``std::any_of`` / ``std::all_of`` for ``AnyOf`` / ``AllOf``,
-  and ``std::min`` / ``std::max`` for the integer ``min``/``max`` paths.
-- ``<cassert>``: ``assert(...)`` from ``Cast``.
-- ``<cfenv>``: ``std::fegetround`` / ``std::fesetround`` and the
-  ``FE_*`` rounding-mode macros.
-- ``<cmath>``: every ``std::fabs`` / ``std::sqrt`` / ``std::sin`` /
-  ``std::isnan`` / etc. dispatched through the op table.
-- ``<cstddef>``: ``size_t`` for vector indexing.
-- ``<cstdint>``: fixed-width ``int8_t`` … ``uint64_t``.
-- ``<initializer_list>``: ``fpy::make_list`` from a braced list.
-- ``<limits>``: ``quiet_NaN`` in ``fpy::min`` / ``fpy::max``.
-- ``<memory>``: ``std::shared_ptr`` behind ``fpy::list``.
-- ``<numeric>``: ``std::accumulate`` for ``Sum``.
-- ``<vector>``: the element storage inside ``fpy::list``.
-- ``<tuple>``: ``std::tuple`` / ``std::make_tuple`` / ``std::get`` for
-  tuples and tuple-binding destructuring.
+``fpy::list`` is why a runtime exists at all: FPy lists alias on assignment, so
+a ``std::vector`` — a value — cannot represent one.  Three choices worth not
+relitigating:
 
-``fpy::list`` is why the runtime exists.  FPy lists alias on assignment, so a
-``std::vector`` — a value — cannot represent one; the handle supplies the
-indirection.  Notes on the choices, kept here rather than in the emitted code:
-
-- A plain alias for ``std::shared_ptr``, not a wrapper class: the standard type
-  already has the required semantics, and a program embedding a generated kernel
-  can then handle a list without depending on anything of ours.
+- A plain alias for ``std::shared_ptr``, not a wrapper class, so a program
+  embedding a kernel can handle a list without depending on anything of ours.
 - The control block is atomic, so copying a handle is an atomic increment.  The
-  emitter passes ``const list<T>&`` wherever a name is not rebound (see
-  ``_arg_decl``); a reference does no refcounting, which is what keeps the atomic
-  off the hot path.
-- Reference counting suffices with no collector: FPy has no recursive list type,
-  so no location can be stored within itself and no cycle is constructible.
+  emitter passes ``const list<T>&`` wherever a name is not rebound, and a
+  reference does no refcounting — that is what keeps the atomic off the hot path.
+- Refcounting needs no collector: FPy has no recursive list type, so no cycle is
+  constructible.
 
-This runtime carries only what emitted code names.  Conversions a *caller*
-would need to hand a ``std::vector`` to a generated kernel are not here: nothing
-emitted uses them, so they live with the tests that exercise the boundary
-(``CPP_INTEROP`` in ``tests/infra/backend/cpp.py``).
+Only what emitted code names lives here.  The conversions a *caller* needs to
+hand a ``std::vector`` to a kernel are in ``CPP_INTEROP``, with the tests that
+exercise that boundary.
 """
 
 
@@ -63,16 +44,11 @@ CPP_HEADERS: tuple[str, ...] = (
     '#include <tuple>',
 )
 
-# IEEE 754-2019 ``minimum`` / ``maximum`` for floating-point ``T``:
-# NaN-propagating and signed-zero-correct.  ``std::fmin`` / ``std::fmax``
-# follow C99 / IEEE 754-2008 ``minNum`` (NaN-ignoring), and on libstdc++
-# the non-constant-folded path is just ``(a < b) ? a : b``, which loses
-# the ±0 distinction (``std::fmin(-0.0, +0.0)`` with variable operands
-# returns ``+0`` instead of ``-0``).  The explicit ``a == b`` tie-break
-# fixes both issues.
-#
-# Only emitted for floating-point ``T``; integer ``min`` / ``max``
-# continue to use ``std::min`` / ``std::max`` (no NaN, no signed-zero).
+# `fpy::min`/`max` are IEEE 754-2019 minimum/maximum: NaN-propagating and
+# signed-zero-correct.  `std::fmin`/`fmax` are neither -- they ignore NaN, and
+# libstdc++ compiles the variable-operand path to `(a < b) ? a : b`, which
+# returns +0 for `fmin(-0.0, +0.0)`.  The `a == b` tie-break fixes both.
+# Integer min/max use `std::min`/`max`: no NaN, no signed zero.
 CPP_HELPERS: str = '''\
 namespace fpy {
 

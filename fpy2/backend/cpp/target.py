@@ -80,12 +80,11 @@ from ...number import (
 from ...number.context.context import Context
 from ...number.context.ieee754 import IEEEContext
 from .ops import (
-    BinaryCppOp,
     BinaryOpTable,
+    CppOp,
+    CppOpStyle,
     ScalarOpTable,
-    TernaryCppOp,
     TernaryOpTable,
-    UnaryCppOp,
     UnaryOpTable,
 )
 from .storage import choose_storage_scalar
@@ -138,32 +137,29 @@ def _ty_of(ctx: Context) -> CppScalar:
 # Per-arity factory helpers — generate signature sets parameterized
 # by the contexts above.
 
-def _fp_unary(name: str) -> list[UnaryCppOp]:
+def _fp_unary(name: str) -> list[CppOp]:
     """Same-context FP-only unary signatures for one ``<cmath>``
     function.  One sig per FP context (FP32 / FP64 × the four
     supported rounding modes)."""
     return [
-        UnaryCppOp(name, is_func=True, arg_ty=_ty_of(c), out_ctx=c)
+        CppOp(name, (_ty_of(c),), c)
         for c in _fp_ctxs()
     ]
 
 
-def _fp_binary(name: str) -> list[BinaryCppOp]:
+def _fp_binary(name: str) -> list[CppOp]:
     """Same-context FP-only binary signatures for one ``<cmath>``
     function (function-call form, not infix)."""
     return [
-        BinaryCppOp(name, is_infix=False,
-                    in1_ty=_ty_of(c), in2_ty=_ty_of(c), out_ctx=c)
+        CppOp(name, (_ty_of(c), _ty_of(c)), c)
         for c in _fp_ctxs()
     ]
 
 
-def _fp_ternary(name: str) -> list[TernaryCppOp]:
+def _fp_ternary(name: str) -> list[CppOp]:
     """Same-context FP-only ternary signatures."""
     return [
-        TernaryCppOp(name,
-                     in1_ty=_ty_of(c), in2_ty=_ty_of(c),
-                     in3_ty=_ty_of(c), out_ctx=c)
+        CppOp(name, (_ty_of(c),) * 3, c)
         for c in _fp_ctxs()
     ]
 
@@ -226,15 +222,11 @@ def _make_unary_table() -> UnaryOpTable:
     ints = _int_ctxs()
     same = _all_arith_ctxs()
     table: UnaryOpTable = {
-        Neg: [UnaryCppOp('-', is_func=False, arg_ty=_ty_of(c), out_ctx=c)
+        Neg: [CppOp('-', (_ty_of(c),), c, style=CppOpStyle.PREFIX)
               for c in same],
         Abs: (
-            [UnaryCppOp('std::fabs', is_func=True,
-                        arg_ty=_ty_of(c), out_ctx=c)
-             for c in fp]
-            + [UnaryCppOp('std::abs', is_func=True,
-                          arg_ty=_ty_of(c), out_ctx=c)
-               for c in ints]
+            [CppOp('std::fabs', (_ty_of(c),), c) for c in fp]
+            + [CppOp('std::abs', (_ty_of(c),), c) for c in ints]
         ),
     }
     for op_cls, name in _UNARY_CMATH:
@@ -247,11 +239,7 @@ def _make_unary_table() -> UnaryOpTable:
     # inputs the cpp backend supports, so casting to the output's
     # storage type is value-preserving in practice.
     table[Logb] = table[Logb] + [
-        UnaryCppOp(
-            'std::ilogb', is_func=True,
-            arg_ty=_ty_of(fp_ctx), out_ctx=int_ctx,
-            cast_out=True,
-        )
+        CppOp('std::ilogb', (_ty_of(fp_ctx),), int_ctx, cast_out=True)
         for fp_ctx in fp
         for int_ctx in ints
     ]
@@ -262,7 +250,8 @@ def _make_binary_table() -> BinaryOpTable:
     same = _all_arith_ctxs()
     table: BinaryOpTable = {
         op_cls: [
-            BinaryCppOp(name, True, _ty_of(c), _ty_of(c), c)
+            CppOp(name, (_ty_of(c), _ty_of(c)), c,
+                  style=CppOpStyle.INFIX)
             for c in same
         ]
         for op_cls, name in (
