@@ -99,10 +99,9 @@ class UnboxAnalysis:
     def may_reference_projection(self, d: Definition) -> bool:
         """Whether ``row = xss[i]`` may bind a reference rather than copy.
 
-        Whenever the projection has a region at all.  A C++ reference follows the
-        slot, and so does FPy: a store *overwrites* the slot rather than putting a
-        different list in it, so there is no way to detach one from its contents.
-        The guard this used to need went away with that rule.
+        Whenever the projection has a region at all: a C++ reference follows the
+        slot, and so does FPy, since a store overwrites a slot rather than putting
+        a different list in it.  Nothing can detach a slot from its contents.
         """
         return self.alias.region_of(d) is not None
 

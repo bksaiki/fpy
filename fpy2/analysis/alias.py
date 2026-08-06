@@ -33,12 +33,9 @@ union-find (``elts(c)`` is the elements part, ``fld(c, i)`` field *i*):
 ``enumerate``/``zip``      ``elts(result) ≡ elts(arg)``
 =========================  ==========================================
 
-Construction *copies*, so the three routes written ``copy(·)`` usually generate
-no constraint at all.  ``copy`` follows the interpreter's ``__fpy_copy``: it
-descends through lists and stops at tuples, so a copied list is fresh at every
-level while a copied tuple's fields hold what the original's held.  A
-construction therefore aliases its operands only where a tuple sits above a
-list — ``[xs]`` shares nothing, ``[(xs, 1.0)]`` shares ``xs``.
+``copy`` descends through lists and stops at tuples, so the three routes written
+``copy(·)`` constrain nothing unless a tuple sits above a list: ``[xs]`` shares
+nothing, ``[(xs, 1.0)]`` shares ``xs``.  See ``docs/source/dev/list-semantics``.
 
 Equality rather than inclusion (unification rather than a subset-based solver) is
 deliberate: it over-approximates aliasing, which is the safe direction for every
@@ -604,9 +601,7 @@ class _Builder(DefaultVisitor):
         a merge — a tuple literal, ``zip``, ``enumerate`` — where seeding on top
         would give one place two parts, which merge into two referrers and read
         as shared.  List construction copies, so it owns every level down to the
-        first tuple and does want a site apiece; without them the levels below a
-        nested literal would have no site, which reads as *unknown* rather than
-        as the uniquely-owned storage they are.
+        first tuple and does want a site apiece.
         """
         # transient: an allocation is not itself a place a reference is held
         cell = self.cells.new(kind)
@@ -761,14 +756,14 @@ class _Builder(DefaultVisitor):
     def _merge_copy(self, dst: _Cell, src: _Cell, ty: Type | None) -> None:
         """Constraints for *dst* holding a **copy** of *src*, a value of type *ty*.
 
-        Mirrors the interpreter's ``__fpy_copy``: the copy descends through
-        lists, so every list level is a fresh allocation aliasing nothing, and
-        stops at tuples, so a copied tuple's fields still refer to whatever the
-        original's did.  Generates no constraint at all unless a tuple sits above
-        a list somewhere in *ty*.
+        Mirrors the interpreter's ``__fpy_copy``: descends through lists, which
+        are fresh at every level and so constrain nothing, and stops at tuples,
+        whose fields still refer to what the original's did.
         """
+        if not _shares_through_copy(ty):
+            return
         match ty:
-            case ListType() if _shares_through_copy(ty.elt):
+            case ListType():
                 self._merge_copy(self._part(dst), self._part(src), ty.elt)
             case TupleType():
                 for i, elt in enumerate(ty.elts):

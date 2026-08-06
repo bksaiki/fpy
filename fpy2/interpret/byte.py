@@ -265,14 +265,10 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
 
 
 def _fpy_copy(v: Value) -> Value:
-    """*v* materialised for insertion into a list.
+    """*v* materialised for insertion into a list — **L-Copy-List/Other**.
 
-    Copying descends through lists and stops at tuples: a list is an owned
-    container, a tuple is a transparent grouping.  Scalars and tuples are
-    immutable in the host, so only list spines need a fresh allocation -- a
-    tuple's *fields* are deliberately not copied, which is what keeps
-    ``zip``/``enumerate`` cheap and stops ``fst(t)`` and ``fst([t][0])``
-    disagreeing.  See ``docs/todos/list-value-semantics.md``.
+    Descends through lists and stops at tuples.  Scalars and tuples are immutable
+    in the host, so only list spines need a fresh allocation.
     """
     if isinstance(v, list):
         return [_fpy_copy(x) for x in v]
@@ -280,23 +276,12 @@ def _fpy_copy(v: Value) -> Value:
 
 
 def _fpy_store(lst: list[Value], idx: int, v: Value) -> None:
-    """``lst[idx] = v``, *overwriting* the slot rather than rebinding it.
+    """``lst[idx] = v`` — **L-Store-List/Scalar**.
 
-    A list is an owned container, so a slot is storage the container owns and a
-    store writes into it: a reference taken earlier as ``row = lst[idx]`` sees
-    the new values.  This is ``arr[0] = row`` in numpy and ``operator=`` in
-    ``std::vector``, and is what lets the C++ backend hold a nested list by
-    value -- rebinding a slot while an outstanding reference keeps the old
-    buffer alive is what forces a handle.
-
-    Deliberately *not* Python's subscript store, which rebinds.  Only lists need
-    the distinction: a scalar or a tuple is immutable in the host, so rebinding a
-    slot holding one cannot be told apart from overwriting it.
-
-    One level deep.  The elements *of* the slot are replaced with fresh copies
-    rather than themselves overwritten, so a reference to something deeper than
-    the slot does not survive.  Nothing in the corpus stores that deep; see
-    ``docs/todos/list-value-semantics.md``.
+    Deliberately *not* Python's subscript store, which rebinds the slot: this
+    overwrites it, so a reference taken earlier as ``row = lst[idx]`` sees the
+    new values.  Only lists can tell the difference, no other value having
+    identity.
     """
     slot = lst[idx]
     if isinstance(slot, list) and isinstance(v, list):
@@ -884,8 +869,7 @@ class BytecodeCompiler(Visitor):
     def _copied(self, value: pyast.expr, attrs) -> pyast.expr:
         """*value* wrapped in ``__fpy_copy``.
 
-        Applied wherever a value is placed *into* a list -- construction and
-        stores -- because a list owns its elements.  Not applied to projection,
+        Applied at construction, which owns its elements; not at projection,
         assignment or return, which hand out references.
         """
         return pyast.Call(
@@ -988,12 +972,10 @@ class BytecodeCompiler(Visitor):
         return pyast.Assign(targets=[targets], value=expr, type_comment=None, **attrs)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
-        """``xs[i] = e`` — ``__fpy_store`` rather than a subscript assignment.
+        """``xs[i] = e`` — ``__fpy_store``, since a subscript store would rebind.
 
-        A store overwrites the slot, and Python's subscript store rebinds it, so
-        the write has to go through the helper.  It copies, so no ``_copied``
-        here.  The container is every index but the last, which the helper needs
-        in order to reach the slot itself.
+        The helper copies, so no ``_copied`` here, and it takes the container
+        rather than the slot: every index but the last.
         """
         attrs = self._location_to_attributes(stmt.loc)
         arr: pyast.expr = pyast.Name(id=str(stmt.var), ctx=pyast.Load(), **attrs)

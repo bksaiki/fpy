@@ -179,8 +179,13 @@ class TestConstructionCopies:
                 return m[0][0]
 
         a, _, _ = _sites(f)
-        outer = [s for s in a.sites if s.kind == 'literal' and s.node is not None]
-        assert sorted({s.depth for s in outer}) == [0, 1]
+        # per *node*, not pooled: the two inner literals have one level each and
+        # the outer has two, and pooling the depths would pass either way
+        by_node: dict[int, list[int]] = {}
+        for s in a.sites:
+            if s.kind == 'literal':
+                by_node.setdefault(id(s.node), []).append(s.depth)
+        assert sorted(sorted(v) for v in by_node.values()) == [[0], [0], [0, 1]]
 
 
 class TestEscape:
