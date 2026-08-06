@@ -68,8 +68,17 @@ class UnaryCppOp:
         """The signature's input slots, left to right."""
         return (self.arg_ty,)
 
-    def matches(self, arg_ty: CppScalar, active_ctx: Context) -> bool:
-        return self.out_ctx == active_ctx and self.arg_ty == arg_ty
+    @property
+    def is_call(self) -> bool:
+        """Does this signature emit ``f(args)``?  Infix and prefix
+        operators take their type from the operands instead."""
+        return self.is_func
+
+    def matches(
+        self, in_tys: tuple[CppScalar, ...], active_ctx: Context,
+    ) -> bool:
+        """Exactly this signature, no conversions."""
+        return self.out_ctx == active_ctx and self.in_tys == in_tys
 
     def format(self, arg: str) -> str:
         call = f'{self.name}({arg})' if self.is_func else f'({self.name}{arg})'
@@ -95,17 +104,17 @@ class BinaryCppOp:
         """The signature's input slots, left to right."""
         return (self.in1_ty, self.in2_ty)
 
+    @property
+    def is_call(self) -> bool:
+        """Does this signature emit ``f(args)``?  Infix and prefix
+        operators take their type from the operands instead."""
+        return not self.is_infix
+
     def matches(
-        self,
-        in1_ty: CppScalar,
-        in2_ty: CppScalar,
-        active_ctx: Context,
+        self, in_tys: tuple[CppScalar, ...], active_ctx: Context,
     ) -> bool:
-        return (
-            self.out_ctx == active_ctx
-            and self.in1_ty == in1_ty
-            and self.in2_ty == in2_ty
-        )
+        """Exactly this signature, no conversions."""
+        return self.out_ctx == active_ctx and self.in_tys == in_tys
 
     def format(self, lhs: str, rhs: str) -> str:
         if self.is_infix:
@@ -128,19 +137,17 @@ class TernaryCppOp:
         """The signature's input slots, left to right."""
         return (self.in1_ty, self.in2_ty, self.in3_ty)
 
+    @property
+    def is_call(self) -> bool:
+        """Does this signature emit ``f(args)``?  Infix and prefix
+        operators take their type from the operands instead."""
+        return True
+
     def matches(
-        self,
-        in1_ty: CppScalar,
-        in2_ty: CppScalar,
-        in3_ty: CppScalar,
-        active_ctx: Context,
+        self, in_tys: tuple[CppScalar, ...], active_ctx: Context,
     ) -> bool:
-        return (
-            self.out_ctx == active_ctx
-            and self.in1_ty == in1_ty
-            and self.in2_ty == in2_ty
-            and self.in3_ty == in3_ty
-        )
+        """Exactly this signature, no conversions."""
+        return self.out_ctx == active_ctx and self.in_tys == in_tys
 
     def format(self, a: str, b: str, c: str) -> str:
         return f'{self.name}({a}, {b}, {c})'

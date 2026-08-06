@@ -459,7 +459,3 @@ class CppCompiler(Backend):
             raise CppCompileError(
                 f'compilation failed for `{func.name}`: {e}'
             ) from e
-
-    # ------------------------------------------------------------------
-    # Call-graph walk
-
