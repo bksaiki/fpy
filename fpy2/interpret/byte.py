@@ -261,7 +261,23 @@ def _eval_list_slice(lst: list[Value], start: Value | None, stop: Value | None):
             f'slice bounds invalid: start {start_idx} > stop {stop_idx}'
         )
 
-    return lst[start_idx:stop_idx]
+    # a slice is construction, so it owns its elements
+    return [_fpy_copy(x) for x in lst[start_idx:stop_idx]]
+
+
+def _fpy_copy(v: Value) -> Value:
+    """*v* materialised for insertion into a list.
+
+    Copying descends through lists and stops at tuples: a list is an owned
+    container, a tuple is a transparent grouping.  Scalars and tuples are
+    immutable in the host, so only list spines need a fresh allocation -- a
+    tuple's *fields* are deliberately not copied, which is what keeps
+    ``zip``/``enumerate`` cheap and stops ``fst(t)`` and ``fst([t][0])``
+    disagreeing.  See ``docs/todos/list-value-semantics.md``.
+    """
+    if isinstance(v, list):
+        return [_fpy_copy(x) for x in v]
+    return v
 
 
 def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
@@ -549,6 +565,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_call': _eval_call,
         '__fpy_fraction': Fraction,
         '__fpy_negzero': _neg_zero,
+        '__fpy_copy': _fpy_copy,
         '__fpy_int': _cvt_int,
         '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
@@ -860,9 +877,23 @@ class BytecodeCompiler(Visitor):
         attrs = self._location_to_attributes(e.loc)
         return pyast.Tuple(elts=args, ctx=pyast.Load(), **attrs)
 
+    def _copied(self, value: pyast.expr, attrs) -> pyast.expr:
+        """*value* wrapped in ``__fpy_copy``.
+
+        Applied wherever a value is placed *into* a list -- construction and
+        stores -- because a list owns its elements.  Not applied to projection,
+        assignment or return, which hand out references.
+        """
+        return pyast.Call(
+            func=pyast.Name(id='__fpy_copy', ctx=pyast.Load(), **attrs),
+            args=[value], keywords=[], **attrs,
+        )
+
     def _visit_list_expr(self, e: ListExpr, ctx: None):
-        args = [self._visit_expr(elt, ctx) for elt in e.elts]
         attrs = self._location_to_attributes(e.loc)
+        args: list[pyast.expr] = [
+            self._copied(self._visit_expr(elt, ctx), attrs) for elt in e.elts
+        ]
         return pyast.List(elts=args, ctx=pyast.Load(), **attrs)
 
     def _visit_target(self, target: Id | TupleBinding) -> pyast.expr:
@@ -893,8 +924,8 @@ class BytecodeCompiler(Visitor):
             for target, iterable in zip(targets, iterables)
         ]
 
-        elt = self._visit_expr(e.elt, ctx)
         attrs = self._location_to_attributes(e.loc)
+        elt = self._copied(self._visit_expr(e.elt, ctx), attrs)
         return pyast.ListComp(elt=elt, generators=generators, **attrs)
 
     def _visit_list_ref(self, e: ListRef, ctx: None):
@@ -956,7 +987,7 @@ class BytecodeCompiler(Visitor):
         attrs = self._location_to_attributes(stmt.loc)
         arr: pyast.Name | pyast.Subscript = pyast.Name(id=str(stmt.var), ctx=pyast.Load(), **attrs)
         idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
-        expr = self._visit_expr(stmt.expr, ctx)
+        expr = self._copied(self._visit_expr(stmt.expr, ctx), attrs)
 
         for i, idx in enumerate(idxs):
             func = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
