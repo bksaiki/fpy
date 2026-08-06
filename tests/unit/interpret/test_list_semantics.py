@@ -122,6 +122,76 @@ class TestStoreCopies:
         assert _r(f, 1.0) == 1.0
 
 
+class TestStoreOverwritesTheSlot:
+    """The other half of the store rule, and the one that is not Python's: the
+    values go *into* the list already in the slot, rather than the slot coming to
+    hold a different list.  ``arr[0] = row`` in numpy, ``operator=`` in
+    ``std::vector`` -- and the reason the C++ backend can hold a nested list by
+    value."""
+
+    def test_a_projection_taken_earlier_sees_the_store(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real) -> fp.Real:
+            xss = [[n, n], [n, n]]
+            ys = [99.0, 99.0]
+            row = xss[0]
+            xss[0] = ys
+            return row[0]
+
+        assert _r(f, 1.0) == 99.0
+
+    def test_and_writing_through_that_projection_reaches_the_container(self):
+        """The store does not detach the slot, so the projection is still a
+        reference to it afterwards."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real) -> fp.Real:
+            xss = [[n, n], [n, n]]
+            ys = [2.0, 2.0]
+            row = xss[0]
+            xss[0] = ys
+            row[0] = 99.0
+            return xss[0][0]
+
+        assert _r(f, 1.0) == 99.0
+
+    def test_overwriting_is_still_a_copy_of_the_source(self):
+        """Overwrite says where the values land, not whether they are shared."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real) -> fp.Real:
+            xss = [[n, n], [n, n]]
+            ys = [2.0, 2.0]
+            xss[0] = ys
+            ys[0] = 99.0
+            return xss[0][0]
+
+        assert _r(f, 1.0) == 2.0
+
+    def test_a_scalar_store_is_unaffected(self):
+        """Rebinding a slot that holds a scalar cannot be told from overwriting
+        it, so nothing about the flat case changes."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real) -> fp.Real:
+            xs = [n, n]
+            xs[1] = 42.0
+            return xs[1]
+
+        assert _r(f, 1.0) == 42.0
+
+    def test_a_store_through_two_indices(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real) -> fp.Real:
+            xsss = [[[n, n]]]
+            ys = [7.0, 7.0]
+            row = xsss[0][0]
+            xsss[0][0] = ys
+            return row[0]
+
+        assert _r(f, 1.0) == 7.0
+
+
 class TestReferencesAreKept:
     """The counterweight: not everything copies, or in-place mutation would be
     inexpressible."""

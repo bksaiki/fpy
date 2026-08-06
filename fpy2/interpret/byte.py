@@ -280,6 +280,33 @@ def _fpy_copy(v: Value) -> Value:
     return v
 
 
+def _fpy_store(lst: list[Value], idx: int, v: Value) -> None:
+    """``lst[idx] = v``, *overwriting* the slot rather than rebinding it.
+
+    A list is an owned container, so a slot is storage the container owns and a
+    store writes into it: a reference taken earlier as ``row = lst[idx]`` sees
+    the new values.  This is ``arr[0] = row`` in numpy and ``operator=`` in
+    ``std::vector``, and is what lets the C++ backend hold a nested list by
+    value -- rebinding a slot while an outstanding reference keeps the old
+    buffer alive is what forces a handle.
+
+    Deliberately *not* Python's subscript store, which rebinds.  Only lists need
+    the distinction: a scalar or a tuple is immutable in the host, so rebinding a
+    slot holding one cannot be told apart from overwriting it.
+
+    One level deep.  The elements *of* the slot are replaced with fresh copies
+    rather than themselves overwritten, so a reference to something deeper than
+    the slot does not survive.  Nothing in the corpus stores that deep; see
+    ``docs/todos/list-value-semantics.md``.
+    """
+    slot = lst[idx]
+    if isinstance(slot, list) and isinstance(v, list):
+        # in place, so `slot` stays the object anything else is referring to
+        slot[:] = [_fpy_copy(x) for x in v]
+    else:
+        lst[idx] = _fpy_copy(v)
+
+
 def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
     if not isinstance(lst, list):
         raise TypeError(f'expected a list, got {lst}')
@@ -567,6 +594,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_negzero': _neg_zero,
         '__fpy_copy': _fpy_copy,
         '__fpy_int': _cvt_int,
+        '__fpy_store': _fpy_store,
         '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
@@ -984,18 +1012,34 @@ class BytecodeCompiler(Visitor):
         return pyast.Assign(targets=[targets], value=expr, type_comment=None, **attrs)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+        """``xs[i] = e`` — ``__fpy_store`` rather than a subscript assignment.
+
+        A store overwrites the slot, and Python's subscript store rebinds it, so
+        the write has to go through the helper.  It copies, so no ``_copied``
+        here.  The container is every index but the last, which the helper needs
+        in order to reach the slot itself.
+        """
         attrs = self._location_to_attributes(stmt.loc)
-        arr: pyast.Name | pyast.Subscript = pyast.Name(id=str(stmt.var), ctx=pyast.Load(), **attrs)
-        idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
-        expr = self._copied(self._visit_expr(stmt.expr, ctx), attrs)
+        arr: pyast.expr = pyast.Name(id=str(stmt.var), ctx=pyast.Load(), **attrs)
+        expr = self._visit_expr(stmt.expr, ctx)
 
-        for i, idx in enumerate(idxs):
-            func = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
-            idx = pyast.Call(func=func, args=[idx], keywords=[], **attrs)
-            e_ctx = pyast.Load() if i < len(idxs) - 1 else pyast.Store()
-            arr = pyast.Subscript(value=arr, slice=idx, ctx=e_ctx, **attrs)
+        idxs = [
+            pyast.Call(
+                func=pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs),
+                args=[self._visit_expr(idx, ctx)], keywords=[], **attrs,
+            )
+            for idx in stmt.indices
+        ]
+        for idx in idxs[:-1]:
+            arr = pyast.Subscript(
+                value=arr, slice=idx, ctx=pyast.Load(), **attrs,
+            )
 
-        return pyast.Assign(targets=[arr], value=expr, type_comment=None, **attrs)
+        store = pyast.Call(
+            func=pyast.Name(id='__fpy_store', ctx=pyast.Load(), **attrs),
+            args=[arr, idxs[-1], expr], keywords=[], **attrs,
+        )
+        return pyast.Expr(value=store, **attrs)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
