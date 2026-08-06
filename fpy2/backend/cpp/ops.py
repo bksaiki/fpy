@@ -63,6 +63,11 @@ class UnaryCppOp:
     out_ctx: Context
     cast_out: bool = False
 
+    @property
+    def in_tys(self) -> tuple[CppScalar, ...]:
+        """The signature's input slots, left to right."""
+        return (self.arg_ty,)
+
     def matches(self, arg_ty: CppScalar, active_ctx: Context) -> bool:
         return self.out_ctx == active_ctx and self.arg_ty == arg_ty
 
@@ -84,6 +89,11 @@ class BinaryCppOp:
     in1_ty: CppScalar
     in2_ty: CppScalar
     out_ctx: Context
+
+    @property
+    def in_tys(self) -> tuple[CppScalar, ...]:
+        """The signature's input slots, left to right."""
+        return (self.in1_ty, self.in2_ty)
 
     def matches(
         self,
@@ -112,6 +122,11 @@ class TernaryCppOp:
     in2_ty: CppScalar
     in3_ty: CppScalar
     out_ctx: Context
+
+    @property
+    def in_tys(self) -> tuple[CppScalar, ...]:
+        """The signature's input slots, left to right."""
+        return (self.in1_ty, self.in2_ty, self.in3_ty)
 
     def matches(
         self,

@@ -36,6 +36,7 @@ instead -- a backend bug rather than an uncompilable program.
 
 import dataclasses
 import math
+from collections.abc import Sequence
 from contextlib import contextmanager
 from fractions import Fraction
 
@@ -815,7 +816,7 @@ class CppEmitter(Visitor):
         # ``REAL`` is unrepresentable in C++; it never sets an fenv
         # mode.  Ops inside a REAL scope succeed only via the
         # emitter's lossless-widening dispatch (see
-        # :meth:`_try_widen_binary` and friends) — if widening is
+        # :meth:`_try_widen`) — if widening is
         # unavailable the op-level error fires with a precise
         # location.  Validation here would fail prematurely, so we
         # treat REAL like an integer scope: descend without fenv
@@ -1709,9 +1710,9 @@ class CppEmitter(Visitor):
         # mathematical result of the operand-typed op and rounds to
         # itself; under any other active context the wider op rounds
         # differently than the active ctx demands.  See
-        # :meth:`_try_widen_unary`.
+        # :meth:`_try_widen`.
         if active is REAL:
-            widened = self._try_widen_unary(e, sigs, arg, arg_storage)
+            widened = self._try_widen(e, sigs, [(arg, arg_storage)])
             if widened is not None:
                 return widened
 
@@ -1734,24 +1735,21 @@ class CppEmitter(Visitor):
             return round_is_identity(AbstractFormat.from_format(fmt), ctx)
         return False
 
-    def _try_widen_unary(
+    def _try_widen(
         self,
-        e: UnaryOp,
-        sigs: list[UnaryCppOp],
-        arg: str,
-        arg_storage: CppScalar,
+        e: Expr,
+        sigs: Sequence[UnaryCppOp | BinaryCppOp | TernaryCppOp],
+        operands: Sequence[tuple[str, CppScalar]],
     ) -> str | None:
-        """Pick a unary signature whose output context contains the
-        exact unrounded result of *e* (so the op-under-sig is identity)
-        and whose input slot losslessly receives ``arg_storage``.  The
-        sig's output is then losslessly cast down to ``result_ty``;
-        that cast is sound because the runtime value lies in
-        ``format_info.by_expr[e]`` which by storage selection fits in
-        ``result_ty``.  ``None`` if no such signature exists.
+        """Pick a signature whose output context contains the exact unrounded
+        result of *e* -- so the op under that signature is the identity -- and
+        whose input slots losslessly receive *operands*.  Its output is cast down
+        to the expression's own storage, sound because the runtime value lies in
+        ``format_info.by_expr[e]``, which fits ``result_ty`` by storage
+        selection.  ``None`` when no signature qualifies.
 
-        Two-pass to prefer narrower signatures: first sigs whose output
-        already equals ``result_ty`` (no downcast), then sigs whose
-        output is wider (downcast inserted).
+        Two passes, to prefer a narrower signature: first those whose output
+        already *is* ``result_ty``, then those needing the downcast.
         """
         try:
             result_ty = self._storage_for_expr(e)
@@ -1760,22 +1758,29 @@ class CppEmitter(Visitor):
         if not isinstance(result_ty, CppScalar):
             return None
 
-        def _try(sig: UnaryCppOp, *, exact_out: bool) -> str | None:
+        def _try(sig, *, exact_out: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
                 return None
             if exact_out and sig_out_ty is not result_ty:
                 return None
-            if not scalar_fits_in(arg_storage, sig.arg_ty):
+            slots = sig.in_tys
+            if not all(
+                scalar_fits_in(have, want)
+                for (_, have), want in zip(operands, slots)
+            ):
                 return None
             if not self._result_fits_ctx(e, sig.out_ctx):
                 return None
             try:
-                cast = self._maybe_cast(arg, arg_storage, sig.arg_ty, at=e)
+                casts = [
+                    self._maybe_cast(code, have, want, at=e)
+                    for (code, have), want in zip(operands, slots)
+                ]
             except CppEmitError:
                 return None
-            out = sig.format(cast)
+            out = sig.format(*casts)
             if sig_out_ty is not result_ty:
                 out = f'static_cast<{result_ty.format()}>({out})'
             return out
@@ -1786,6 +1791,7 @@ class CppEmitter(Visitor):
                 if emitted is not None:
                     return emitted
         return None
+
 
     def _dispatch_binary(self, e: BinaryOp, lhs: str, rhs: str) -> str:
         """Dispatch a binary op via the op table.
@@ -1836,11 +1842,11 @@ class CppEmitter(Visitor):
                     return sig.format(l, r)
 
         # (3) Lossless-widening fallback — only sound when the active
-        # context is ``REAL``.  See :meth:`_try_widen_binary` and the
+        # context is ``REAL``.  See :meth:`_try_widen` and the
         # corresponding note in :meth:`_dispatch_unary`.
         if active is REAL:
-            widened = self._try_widen_binary(
-                e, sigs, lhs, lhs_storage, rhs, rhs_storage,
+            widened = self._try_widen(
+                e, sigs, [(lhs, lhs_storage), (rhs, rhs_storage)],
             )
             if widened is not None:
                 return widened
@@ -1852,52 +1858,6 @@ class CppEmitter(Visitor):
             at=e,
         )
 
-    def _try_widen_binary(
-        self,
-        e: BinaryOp,
-        sigs: list[BinaryCppOp],
-        lhs: str,
-        lhs_storage: CppScalar,
-        rhs: str,
-        rhs_storage: CppScalar,
-    ) -> str | None:
-        """Binary analogue of :meth:`_try_widen_unary`."""
-        try:
-            result_ty = self._storage_for_expr(e)
-        except CppEmitError:
-            return None
-        if not isinstance(result_ty, CppScalar):
-            return None
-
-        def _try(sig: BinaryCppOp, *, exact_out: bool) -> str | None:
-            try:
-                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
-            except CppEmitError:
-                return None
-            if exact_out and sig_out_ty is not result_ty:
-                return None
-            if not scalar_fits_in(lhs_storage, sig.in1_ty):
-                return None
-            if not scalar_fits_in(rhs_storage, sig.in2_ty):
-                return None
-            if not self._result_fits_ctx(e, sig.out_ctx):
-                return None
-            try:
-                cast_lhs = self._maybe_cast(lhs, lhs_storage, sig.in1_ty, at=e)
-                cast_rhs = self._maybe_cast(rhs, rhs_storage, sig.in2_ty, at=e)
-            except CppEmitError:
-                return None
-            out = sig.format(cast_lhs, cast_rhs)
-            if sig_out_ty is not result_ty:
-                out = f'static_cast<{result_ty.format()}>({out})'
-            return out
-
-        for exact_out in (True, False):
-            for sig in sigs:
-                emitted = _try(sig, exact_out=exact_out)
-                if emitted is not None:
-                    return emitted
-        return None
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         if isinstance(e, (Fst, Snd)):
@@ -2335,10 +2295,10 @@ class CppEmitter(Visitor):
                     ])
 
         # (3) Lossless-widening fallback — only sound when the active
-        # context is ``REAL``.  See :meth:`_try_widen_ternary` and the
+        # context is ``REAL``.  See :meth:`_try_widen` and the
         # corresponding note in :meth:`_dispatch_unary`.
         if active is REAL:
-            widened = self._try_widen_ternary(e, sigs, args, in_storages)
+            widened = self._try_widen(e, sigs, list(zip(args, in_storages)))
             if widened is not None:
                 return widened
 
@@ -2349,51 +2309,6 @@ class CppEmitter(Visitor):
             at=e,
         )
 
-    def _try_widen_ternary(
-        self,
-        e: TernaryOp,
-        sigs: list[TernaryCppOp],
-        args: list[str],
-        in_storages: list[CppScalar],
-    ) -> str | None:
-        """Ternary analogue of :meth:`_try_widen_unary`."""
-        try:
-            result_ty = self._storage_for_expr(e)
-        except CppEmitError:
-            return None
-        if not isinstance(result_ty, CppScalar):
-            return None
-
-        def _try(sig: TernaryCppOp, *, exact_out: bool) -> str | None:
-            try:
-                sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
-            except CppEmitError:
-                return None
-            if exact_out and sig_out_ty is not result_ty:
-                return None
-            sig_in_tys = (sig.in1_ty, sig.in2_ty, sig.in3_ty)
-            if not all(scalar_fits_in(s, t) for s, t in zip(in_storages, sig_in_tys)):
-                return None
-            if not self._result_fits_ctx(e, sig.out_ctx):
-                return None
-            try:
-                casts = [
-                    self._maybe_cast(a, s, t, at=e)
-                    for a, s, t in zip(args, in_storages, sig_in_tys)
-                ]
-            except CppEmitError:
-                return None
-            out = sig.format(*casts)
-            if sig_out_ty is not result_ty:
-                out = f'static_cast<{result_ty.format()}>({out})'
-            return out
-
-        for exact_out in (True, False):
-            for sig in sigs:
-                emitted = _try(sig, exact_out=exact_out)
-                if emitted is not None:
-                    return emitted
-        return None
 
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         match e:
