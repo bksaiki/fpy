@@ -38,7 +38,6 @@ import dataclasses
 import math
 from contextlib import contextmanager
 from fractions import Fraction
-from typing import TYPE_CHECKING
 
 from ...analysis import (
     AssignDef,
@@ -140,7 +139,6 @@ from .ops import BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp
 from .storage import (
     StorageSelectionError,
     choose_storage,
-    return_storage,
     scalar_fits_in,
     scalar_sup,
 )
@@ -151,9 +149,7 @@ from .storage_infer import (
 )
 from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
-
-if TYPE_CHECKING:
-    from .unbox import UnboxAnalysis
+from .unbox import UnboxAnalysis, return_storage
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -315,7 +311,7 @@ class CppEmitter(Visitor):
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
-        unbox: 'UnboxAnalysis | None' = None,
+        unbox: UnboxAnalysis | None = None,
         callee_params: dict | None = None,
     ):
         self.ast = ast

@@ -45,6 +45,7 @@ from ...analysis import Definition
 from ...analysis.alias import AliasAnalysis, Region
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
+from ...analysis.format_infer import FormatBound
 from ...analysis.reaching_defs import AssignDef
 from ...ast.fpyast import (
     Argument,
@@ -61,6 +62,7 @@ from ...ast.fpyast import (
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
+from .storage import choose_storage
 from .storage_infer import (
     StorageAnalysis,
     binds_by_reference,
@@ -533,3 +535,20 @@ def _binds_by_reference(
         )
         and not isinstance(d.site, Argument)
     )
+
+
+def return_storage(
+    ret_fmt: FormatBound, unbox: UnboxAnalysis | None,
+) -> CppType:
+    """The storage a function's return value takes.
+
+    ``fn_fmt.ret_fmt`` is the running join of every ``ReturnStmt``'s bound, so a
+    multiple-return program gets a class wide enough for every path.  A ``None``
+    bound is not a missing return -- it is format inference's convention for a
+    non-numeric result, and ``choose_storage`` maps it to ``BOOL``.
+
+    Raises :class:`StorageSelectionError`; callers that have a source location
+    wrap it.
+    """
+    ty = choose_storage(ret_fmt)
+    return ty if unbox is None else unbox.annotate_return(ty)

@@ -41,10 +41,10 @@ from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
-from .storage import StorageSelectionError, choose_storage, return_storage
+from .storage import StorageSelectionError, choose_storage
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
-from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis
+from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis, return_storage
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
@@ -75,21 +75,24 @@ class SpecAnalyses:
 # Compiler
 
 
-def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
-    """Build a ``Call → emit-name`` map for every Function-targeted Call in
-    *ast*'s body.  After :class:`Specialize`, each such ``Call.fn`` points at
-    the target spec's :class:`Function`, so the emit name is just
-    ``call.fn.ast.name``."""
-    out: dict[Call, str] = {}
+def _function_calls(ast: FuncDef) -> dict[Call, Function]:
+    """Every ``Call`` in *ast*'s body that targets a :class:`Function`."""
+    out: dict[Call, Function] = {}
 
     class _Collector(DefaultVisitor):
         def _visit_call(self, e: Call, ctx):
             if isinstance(e.fn, Function):
-                out[e] = e.fn.ast.name
+                out[e] = e.fn
             super()._visit_call(e, ctx)
 
     _Collector()._visit_function(ast, None)
     return out
+
+
+def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
+    """``Call → emit-name``.  After :class:`Specialize` each ``Call.fn`` points
+    at the target spec's :class:`Function`, so the name is ``fn.ast.name``."""
+    return {c: fn.ast.name for c, fn in _function_calls(ast).items()}
 
 
 def _find_spec(specs: list[Function], func: Function) -> Function:
@@ -130,20 +133,6 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
 
 def _return_storage(a: SpecAnalyses) -> CppType:
     return return_storage(a.format_info.fn_fmt.ret_fmt, a.unbox)
-
-
-def _callees(ast: FuncDef) -> list[Function]:
-    """Every :class:`Function` *ast* calls."""
-    out: list[Function] = []
-
-    class _Collector(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            if isinstance(e.fn, Function):
-                out.append(e.fn)
-            super()._visit_call(e, ctx)
-
-    _Collector()._visit_function(ast, None)
-    return out
 
 
 class CppCompiler(Backend):
@@ -289,7 +278,7 @@ class CppCompiler(Backend):
         different conclusions about the same function — they did once, and it
         was an ABI bug rather than a missed optimization.
         """
-        called = {id(c.ast) for f in specs for c in _callees(f.ast)}
+        called = {id(c.ast) for f in specs for c in _function_calls(f.ast).values()}
         summaries: dict[FuncDef, EscapeSummary] = {}
         for f in specs:
             a = self.analyze(
