@@ -5,20 +5,10 @@ Assigns each SSA def to a C++ variable: the variable's identifier and
 its storage type.  The emitter consumes the result directly — every
 ``Var``/``Assign`` is just a lookup.
 
-The partition is computed via union-find over two kinds of coalescing
-edges:
-
-- **Phi edges.**  A phi merge means both incoming defs must write to
-  the same C++ variable, so they share storage.
-- **In-place mutation edges.**  An ``IndexedAssign`` (``xs[i] = e``)
-  produces an SSA-fresh def of ``xs`` so value-tracking analyses can
-  reason about it, but physically the same vector is mutated — the
-  new def is unioned with its ``prev`` so they share a single C++
-  name and the emitter produces a direct subscript-store.
-
-Anything *not* connected by either edge is free to rename, so a
-sequential rebind of a name without a phi merge gets its *own*
-variable with its *own* (possibly narrower) storage type.
+The partition is a union-find over ``reaching_defs.same_object_defs`` -- the
+defs that denote one runtime object must be one C++ variable.  Anything not
+connected that way is free to rename, so a sequential rebind without a phi
+merge gets its own variable with its own, possibly narrower, storage.
 
 Storage per class is chosen by aggregating every member's
 :class:`FormatBound` through :func:`aggregate_storage`.  Only members
@@ -43,7 +33,6 @@ from ...ast.fpyast import (
     Assign,
     Expr,
     ForStmt,
-    IndexedAssign,
     ListComp,
     ListRef,
     NamedId,
@@ -60,12 +49,10 @@ class StorageAnalysis:
     """
     Result of :class:`StorageInfer`.
 
-    Each SSA def is assigned to a *class* (the union-find equivalence
-    class over phi and in-place mutation edges), and each class is
-    assigned a single C++ identifier and storage type.  The class id
-    is the union-find representative — the canonical
-    :class:`Definition` standing in for the whole class.  Storage
-    classes split into two emission shapes:
+    Each SSA def belongs to a *class* -- the defs that denote one runtime
+    object, per ``same_object_defs`` -- and each class gets one C++ identifier
+    and storage type.  The class id is its canonical member.  Two emission
+    shapes:
 
     - ``declare_at_assign``: the lowest-index writer in the class is
       its declaration site.  The emitter folds the declaration into
@@ -85,19 +72,12 @@ class StorageAnalysis:
     already declares them.
 
     Attributes:
-        def_class:          maps each def to its class id (the canonical
-                            representative def of the class).
-        class_members:      maps each class id to its member defs.
-        class_storage:      the C++ storage chosen for each class.
-        def_to_name:        the C++ identifier each def reads/writes
-                            through.
-        hoists_before:      maps each anchor statement (an ``IfStmt``)
-                            to the storage classes whose declarations
-                            the emitter must emit *just before* that
-                            statement.
-        declare_at_assign:  AssignDefs whose statement should declare
-                            *and* assign in one go (the canonical
-                            declaration site of their class).
+        def_class:          each def's class id (the canonical member).
+        class_members:      each class id's member defs.
+        class_storage:      the C++ storage chosen per class.
+        def_to_name:        the identifier each def reads/writes through.
+        hoists_before:      anchor ``IfStmt`` -> classes to declare before it.
+        declare_at_assign:  AssignDefs that declare and assign in one go.
     """
     def_class: dict[Definition, Definition]
     class_members: dict[Definition, list[Definition]]
@@ -139,22 +119,16 @@ def binds_by_reference(
     *,
     allow_projection: bool = False,
 ) -> bool:
-    """Whether the emitter binds *d*'s name as a reference to storage that
-    already exists, rather than giving it a place of its own.
+    """Whether the emitter binds *d*'s name as a reference to storage that already
+    exists, rather than giving it a place of its own.
 
-    One definition for a question two modules ask: the emitter, to choose
-    between a reference and a copy, and :mod:`.unbox`, to decide whether a name
-    is a second *place*.  They must agree — discounting a name the emitter then
-    copies is a miscompilation — so they share this rather than mirror it.
+    One definition for a question two modules ask -- the emitter, choosing
+    reference or copy, and :mod:`.unbox`, deciding whether a name is a second
+    *place*.  They must agree: discounting a name the emitter then copies is a
+    miscompilation.
 
-    All three emitter sites require the name never be rebound, since a ``const``
-    reference cannot be.
-
-    *allow_projection* enables ``row = xss[i]``, which a reference can bind only
-    where nothing replaces that slot — a caller establishes that from
-    :meth:`UnboxAnalysis.may_reference_projection` and passes the answer, so the
-    rule stays in one place while the fact it needs comes from the alias
-    analysis.
+    *allow_projection* enables ``row = xss[i]``, valid only where nothing
+    replaces that slot -- the caller supplies that fact from the alias analysis.
     """
     if not isinstance(storage.storage_of(d), (CppList, CppTuple)):
         return False
@@ -232,38 +206,14 @@ class StorageInfer:
         def_use: DefineUseAnalysis,
         def_to_bound: dict[Definition, FormatBound],
     ) -> StorageAnalysis:
-        """
-        Build a :class:`StorageAnalysis` from def-use info and per-def
-        format bounds.
+        """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 
-        Args:
-            def_use:      def-use analysis result for the function.
-            def_to_bound: format bound for each SSA def (typically
-                          ``format_info.by_def``).
-
-        Returns:
-            A :class:`StorageAnalysis` carrying the per-def C++ name and
-            per-class storage.
-
-        Raises:
-            StorageSelectionError: if no ladder entry covers the
-            aggregated bound of some phi class.
+        Raises :class:`StorageSelectionError` when no ladder entry covers some
+        class's aggregated bound.
         """
         defs = def_use.defs
 
         # ---- 1. union-find over coalescing edges ----
-        # Two kinds of edges force defs into the same storage class:
-        #   * Phi edges: a phi merge is exactly "both incoming defs
-        #     write to the same C++ variable."
-        #   * In-place mutation edges: SSA gives ``xs[i] = e`` a
-        #     fresh def of ``xs`` so value-tracking analyses can
-        #     reason about it, but the FPy interpreter mutates the
-        #     existing list in place and C++ does the same — so the
-        #     new def is unioned with its ``prev``.  Underlying
-        #     vector is the same, so storage cannot widen and the
-        #     C++ name must be reused.  This mirrors the comment in
-        #     ``reaching_defs`` that physical-property analyses treat
-        #     IndexedAssign-sited defs as sharing storage with prev.
         uf: Unionfind[Definition] = Unionfind(defs)
         for d in defs:
             for i in same_object_defs(d):
@@ -333,24 +283,15 @@ class StorageInfer:
 
         def_to_name = {d: class_to_name[c] for d, c in def_class.items()}
 
-        # Decide each non-external class's emission shape.
+        # Hoisting is required only for a phi that introduces a name fresh in
+        # both branches (`is_intro`); otherwise FPy well-formedness guarantees
+        # the lowest-index AssignDef dominates the class, so it declares on
+        # assign and the rest reassign.
         #
-        # The only case where we *must* hoist is a phi merge that
-        # introduces a name fresh in both branches — i.e., a PhiDef
-        # with ``is_intro=True``.  In every other case, FPy
-        # well-formedness guarantees the lowest-index AssignDef
-        # dominates the rest of the class (it's either a single writer,
-        # or a pre-loop / pre-if writer that the body then rebinds via
-        # phi).  So that AssignDef can declare-on-assign and any other
-        # AssignDefs become plain reassignments.
-        #
-        # When we *do* hoist, we don't go all the way to the function
-        # top — we anchor at the outermost responsible ``IfStmt`` and
-        # emit the declaration just before it, narrowing the variable's
-        # scope to exactly what its writers need.  For nested if/else
-        # introductions the outermost is_intro phi is the one with the
-        # highest def index, since phis are appended after their
-        # branches finish in pre-order traversal.
+        # A hoist anchors at the outermost responsible IfStmt rather than the
+        # function top, keeping the variable's scope to what its writers need.
+        # That phi is the one with the highest def index, since phis are
+        # appended after their branches finish in pre-order.
         hoists_before: dict[Stmt, list[Definition]] = defaultdict(list)
         declare_at_assign: set[AssignDef] = set()
         for c, members in class_members.items():

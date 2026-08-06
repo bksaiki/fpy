@@ -1,35 +1,17 @@
 """
 cpp backend: per-op signature abstractions.
 
-This module defines the *shape* of the cpp backend's operator
-descriptions — the per-arity ``CppOp`` dataclasses and the
-``ScalarOpTable`` that groups them — without prescribing *which*
-operators are supported.  See :mod:`fpy2.backend.cpp.target` for the
-default target description (the set of operators and signatures the
-emitter dispatches against).
+The *shape* of the backend's operator descriptions -- :class:`CppOp` and the
+:class:`ScalarOpTable` grouping them -- without prescribing which operators are
+supported.  See :mod:`fpy2.backend.cpp.target` for the default target
+description.
 
-Each primitive operation is parameterized by *argument C++ types*
-(:class:`CppScalar`) and an *active rounding context*
-(:class:`Context`).  The split mirrors what emission actually needs:
-
-- A signature's input slots are the concrete C++ scalar types the
-  generated code feeds the operator.  ``int8_t + int8_t`` is one
-  signature, ``float + float`` is another.
-- The output slot is the active rounding context.  Its C++ type
-  (``choose_storage(out_ctx.format())``) determines the result's
-  storage; its rounding mode is enforced separately by the
-  ``fesetround`` boundary emitted around ``with`` blocks.
-
-At an op site the emitter consults:
-
-- The **active rounding context** from
-  :class:`ContextUseAnalysis.find_scope_from_use` — must equal the
-  signature's ``out_ctx``.
-- Each operand's **C++ storage type** from
-  :class:`StorageAnalysis` — must equal the signature's input
-  slot.  On mismatch the emitter falls back to the
-  all-active-context signature and inserts an explicit
-  ``static_cast`` per operand.
+A signature pairs concrete input slots (:class:`CppScalar`) with an active
+rounding context for its output: ``int8_t + int8_t`` is one signature,
+``float + float`` another.  The context decides the result's storage, while its
+rounding *mode* is enforced separately, by the ``fesetround`` boundary emitted
+around ``with`` blocks.  ``CppEmitter._dispatch`` documents how a signature is
+chosen when nothing matches exactly.
 """
 
 from __future__ import annotations

@@ -41,7 +41,7 @@ from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
-from .storage import StorageSelectionError, choose_storage
+from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
 from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis, return_storage
@@ -151,31 +151,11 @@ class CppCompiler(Backend):
             (currently ``int64_t``) and assuming no overflow occurs.
             Set ``False`` to reject such programs at compile time.
         optimize:
-            When ``True`` (default), apply optimizing program
-            transformations to each :class:`FuncDef` before the rest
-            of the pipeline runs:
-
-            - :class:`fpy2.transform.EnumerateElim` (pre-monomorphize):
-              skips materializing intermediate
-              ``std::vector<std::tuple<...>>``s for ``enumerate``
-              iterables.  Must run before ``ZipElim``: it also handles
-              ``enumerate(zip(...))``, collapsing both intermediate
-              vectors at once, which ``ZipElim`` could no longer do
-              once the ``zip`` sits in an assignment.
-            - :class:`fpy2.transform.ZipElim` (pre-monomorphize):
-              skips materializing intermediate
-              ``std::vector<std::tuple<...>>``s for ``zip`` iterables.
-            - :class:`fpy2.transform.ReduceFusion` (pre-monomorphize):
-              folds ``any``/``all`` over a comprehension into one loop,
-              skipping the intermediate ``std::vector<bool>``.
-            - :class:`fpy2.transform.RoundElim` (post-monomorphize):
-              hoists eliminable rounded operations into
-              ``with fp.REAL:`` blocks so the cpp emitter's
-              lossless-widening dispatch can pick tighter storage
-              for them.
-
-            The pipeline is sound either way.  Set ``False`` to
-            compile the surface AST verbatim.
+            When ``True`` (default), run the optimizing transforms
+            listed in :meth:`_run_pipeline` — they skip intermediate
+            vectors and let the widening dispatch pick tighter
+            storage.  Sound either way; ``False`` compiles the
+            surface AST verbatim.
         unbox:
             When ``True`` (default), represent a list as a plain
             ``std::vector`` wherever :mod:`fpy2.analysis.alias` proves
@@ -198,29 +178,20 @@ class CppCompiler(Backend):
         self._unbox = unbox
 
     # ------------------------------------------------------------------
-    # Translation-unit preamble
-    #
-    # ``compile`` returns a function definition only, so single-function
-    # tests can use exact-string equality.  Callers that want a full
-    # translation unit pull these explicitly:
-    #
-    #     headers = '\\n'.join(cc.headers())
-    #     unit = headers + '\\n' + cc.helpers() + cc.compile(f) + '\\n'
+    # Translation-unit preamble.  ``compile`` returns a function definition
+    # only, so single-function tests can use exact-string equality.
 
     def headers(self) -> list[str]:
         """C++ headers required by every emitted unit."""
         return list(CPP_HEADERS)
 
     def helpers(self) -> str:
-        """Runtime helper definitions emitted alongside compiled
-        functions.  Currently empty — cpp doesn't yet need custom
-        runtime support beyond ``<cmath>`` / ``std::vector``."""
+        """The ``fpy::`` runtime every emitted unit needs: the list handle,
+        ``make_list``, and NaN-correct ``min``/``max``."""
         return CPP_HELPERS
 
     def prelude(self) -> str:
-        """Convenience: the headers and helpers concatenated as a
-        single source-ready string.  Equivalent to
-        ``'\\n'.join(self.headers()) + '\\n' + self.helpers()``."""
+        """The headers and helpers concatenated, ready to prepend."""
         return '\n'.join(self.headers()) + '\n\n' + self.helpers()
 
     # ------------------------------------------------------------------
