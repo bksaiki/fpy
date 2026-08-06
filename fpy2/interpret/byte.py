@@ -3,7 +3,6 @@ Interpreter backed by Python bytecode.
 """
 
 import ast as pyast
-import copy
 import functools
 import inspect
 import sys
@@ -307,28 +306,6 @@ def _fpy_store(lst: list[Value], idx: int, v: Value) -> None:
         lst[idx] = _fpy_copy(v)
 
 
-def _eval_list_set(lst: list[Value], idxs: list[RealValue], val: Value):
-    if not isinstance(lst, list):
-        raise TypeError(f'expected a list, got {lst}')
-    array: list = copy.deepcopy(lst) # make a copy
-
-    slices: list[int] = []
-    for idx in idxs:
-        if not isinstance(idx, RealValue):
-            raise TypeError(f'expected a real number slice, got {idx}')
-        if not _is_integer(idx):
-            raise TypeError(f'expected an integer slice, got {idx}')
-        slices.append(int(idx))
-
-    for s in slices[:-1]:
-        array = array[s]
-        if not isinstance(array, list):
-            raise TypeError(f'expected a list, got {array}')
-
-    array[slices[-1]] = val
-    return array
-
-
 def _eval_range(start: Value | None, stop: Value, step: Value | None):
     # start index
     if start is None:
@@ -595,7 +572,6 @@ def make_namespace() -> dict[str, object]:
         '__fpy_copy': _fpy_copy,
         '__fpy_int': _cvt_int,
         '__fpy_store': _fpy_store,
-        '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
         '__fpy_min': _eval_min,

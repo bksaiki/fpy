@@ -84,4 +84,5 @@ Internal
    ast
    semantics
    derived-semantics
+   list-semantics
    typing

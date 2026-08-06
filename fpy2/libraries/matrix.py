@@ -361,6 +361,9 @@ def get_row(A: list[list[fp.Real]], i: int):
     :param i: Row index.
     :return: Row vector.
     """
+    # `A[i]` alone is a reference into `A`, and returning one would let the
+    # caller write through it.  The only copy in this module that is still
+    # load-bearing: construction and stores copy on their own, a return does not.
     return A[i][:]
 
 @fp.fpy
@@ -384,8 +387,8 @@ def set_row(A: list[list[fp.Real]], i: int, row: list[fp.Real]) -> list[list[fp.
     :param row: New row values.
     :return: Matrix with updated row.
     """
-    result = [row_data[:] for row_data in A]  # Deep copy
-    result[i] = row[:]
+    result = A[:]  # a slice is construction, so this copies A's rows
+    result[i] = row
     return result
 
 @fp.fpy
@@ -402,7 +405,7 @@ def set_column(A: list[list[fp.Real]], j: int, col: list[fp.Real]) -> list[list[
     # assert message: "Column length must match matrix rows"
     assert len(col) == rows
 
-    result = [row_data[:] for row_data in A]  # Deep copy
+    result = A[:]  # a slice is construction, so this copies A's rows
     for i in range(rows):
         result[i][j] = col[i]
     return result
