@@ -96,7 +96,7 @@ from ..function import Function
 from ..types import ListType, TupleType, Type
 from ..utils import Unionfind
 from .define_use import DefineUse, DefineUseAnalysis
-from .reaching_defs import AssignDef, Definition, PhiDef
+from .reaching_defs import AssignDef, Definition, PhiDef, same_object_defs
 from .type_infer import TypeAnalysis, TypeInfer
 
 if TYPE_CHECKING:
@@ -608,14 +608,7 @@ class _Builder(DefaultVisitor):
         for d in self.def_use.defs:
             if not _carries_list(self.types.by_def.get(d)):
                 continue
-            match d:
-                case AssignDef(site=IndexedAssign()) if d.prev is not None:
-                    prevs = [d.prev]
-                case PhiDef():
-                    prevs = [d.lhs, d.rhs]
-                case _:
-                    continue
-            for i in prevs:
+            for i in same_object_defs(d):
                 self.cells.merge(self._cell(d), self._cell(self.def_use.defs[i]))
 
     def _seed_params(self) -> None:

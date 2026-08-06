@@ -3020,8 +3020,8 @@ class CppEmitter(Visitor):
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # ``xs[i1]…[iN] = e`` is in-place mutation in C++.  The
         # post-mutation SSA def of ``xs`` shares a storage class with
-        # its ``prev`` (see ``_is_in_place_assign`` in
-        # ``storage_infer``), so the C++ name is the same on both
+        # its ``prev`` (see ``same_object_defs`` in
+        # ``reaching_defs``), so the C++ name is the same on both
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
         target_name = self.storage.def_to_name[target_def]

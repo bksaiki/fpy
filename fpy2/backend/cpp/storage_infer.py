@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from ...analysis import Definition
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.format_infer import FormatBound
-from ...analysis.reaching_defs import AssignDef, PhiDef
+from ...analysis.reaching_defs import AssignDef, PhiDef, same_object_defs
 from ...ast.fpyast import (
     Argument,
     Assign,
@@ -218,19 +218,6 @@ def _is_external(members: list[Definition]) -> bool:
     return False
 
 
-def _is_in_place_assign(d: AssignDef) -> bool:
-    """Does *d* come from an in-place ``IndexedAssign`` (``xs[i] = e``)?
-
-    The FPy interpreter mutates the underlying list in place
-    (``interpret/byte.py:_visit_indexed_assign``).  SSA gives the
-    post-mutation name its own AssignDef anyway so value-tracking
-    analyses can reason about it, but for the cpp backend the new
-    def must share storage with its ``prev`` — no copy, no widening,
-    no rename.
-    """
-    return isinstance(d.site, IndexedAssign)
-
-
 class StorageInfer:
     """
     Storage-type inference for the cpp emitter.
@@ -279,15 +266,8 @@ class StorageInfer:
         #     IndexedAssign-sited defs as sharing storage with prev.
         uf: Unionfind[Definition] = Unionfind(defs)
         for d in defs:
-            if isinstance(d, PhiDef):
-                uf.union(d, defs[d.lhs])
-                uf.union(d, defs[d.rhs])
-            elif (
-                isinstance(d, AssignDef)
-                and d.prev is not None
-                and _is_in_place_assign(d)
-            ):
-                uf.union(d, defs[d.prev])
+            for i in same_object_defs(d):
+                uf.union(d, defs[i])
 
         def_class: dict[Definition, Definition] = {d: uf.find(d) for d in defs}
         class_members: dict[Definition, list[Definition]] = defaultdict(list)
