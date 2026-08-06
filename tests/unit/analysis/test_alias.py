@@ -91,8 +91,14 @@ class TestAliasingRoutes:
         _, _, shared = _sites(f)
         assert [s.depth for s in shared] == [1]
 
-    def test_construction_shares_what_it_holds(self):
-        """``[xs]`` is a new list holding the *same* xs."""
+
+class TestConstructionCopies:
+    """Construction owns its elements, so it creates no referrer to them.  These
+    are the routes that *were* aliasing routes before list construction copied;
+    each asserts the absence the copy buys."""
+
+    def test_construction_does_not_share_what_it_holds(self):
+        """``[xs]`` holds a copy, so nothing else refers to xs."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -101,10 +107,10 @@ class TestAliasingRoutes:
                 return xs[0]
 
         _, _, shared = _sites(f)
-        assert any(s.kind == 'param' for s in shared)
+        assert not shared
 
-    def test_one_list_at_two_indices(self):
-        """Only expressible because a slot holds a reference."""
+    def test_one_list_at_two_indices_is_two_copies(self):
+        """``[a, a]`` copies twice, so the two slots are independent."""
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -113,12 +119,11 @@ class TestAliasingRoutes:
                 m[0][0] = 99
                 return m[1][0]
 
-        a_, _, shared = _sites(f)
-        assert any(s.kind == 'literal' for s in shared)
+        _, _, shared = _sites(f)
+        assert not shared
 
-    def test_slice_is_shallow(self):
-        """A slice makes a fresh outer list over the same elements, so a nested
-        slice shares them while a flat one does not."""
+    def test_slice_copies(self):
+        """A slice is construction, so neither a nested nor a flat one shares."""
         @fp.fpy
         def nested(xss: list[list[fp.Real]]) -> fp.Real:
             with fp.FP64:
@@ -133,24 +138,49 @@ class TestAliasingRoutes:
                 ys[0] = 99
                 return xs[0]
 
-        _, _, nested_shared = _sites(nested)
-        assert nested_shared, 'a nested slice shares its elements'
+        for func in (nested, flat):
+            _, owned, shared = _sites(func)
+            assert owned and not shared
 
-        _, flat_owned, _ = _sites(flat)
-        assert len(flat_owned) >= 1, 'a flat slice copies; nothing is shared'
-
-    def test_slot_store_shares(self):
+    def test_slot_store_copies(self):
         @fp.fpy
         def f(xss: list[list[fp.Real]], ys: list[fp.Real]) -> fp.Real:
             with fp.FP64:
                 xss[0] = ys
                 return xss[0][0]
 
+        _, _, shared = _sites(f)
+        assert not shared
+
+    def test_the_copy_stops_at_a_tuple(self):
+        """The one case construction still shares, and the reason this is not a
+        plain deletion of the element merge: the copy does not descend into a
+        tuple, so a list reached through a tuple field stays shared."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)
+                ts = [t]
+                ys = fp.fst(ts[0])
+                ys[0] = 99
+                return xs[0]
+
         a, _, shared = _sites(f)
-        assert any(
-            s.kind == 'param' and getattr(s.node.name, 'base', str(s.node.name))
-            for s in shared
-        )
+        param = [s for s in a.sites if s.kind == 'param']
+        assert param and all(s in shared for s in param)
+
+    def test_a_nested_literal_has_a_site_per_level(self):
+        """Construction owns every level, so each has a site.  Without one, a
+        consumer cannot tell owned storage from storage nothing is known about."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                m = [[x, x], [x, x]]
+                return m[0][0]
+
+        a, _, _ = _sites(f)
+        outer = [s for s in a.sites if s.kind == 'literal' and s.node is not None]
+        assert sorted({s.depth for s in outer}) == [0, 1]
 
 
 class TestEscape:
@@ -201,9 +231,10 @@ class TestEscape:
         assert a.is_returned(row) and not a.transfers_ownership(row)
         assert [s.depth for s in owned] == [0]
 
-    def test_returning_a_local_stored_into_a_parameter_is_sharing(self):
-        """The other indirect route: fresh, but the caller can reach it through
-        ``xss`` after the store."""
+    def test_returning_a_local_stored_into_a_parameter_still_transfers(self):
+        """A store copies, so ``xss`` holds no reference to ``ys`` and returning
+        it is an ordinary transfer.  Contrast the two tests above, where the
+        route out is a projection and the sharing is real."""
         @fp.fpy
         def f(xss: list[list[fp.Real]], x: fp.Real) -> list[fp.Real]:
             with fp.FP64:
@@ -212,7 +243,8 @@ class TestEscape:
                 return ys
 
         a, _, _ = _sites(f)
-        assert not any(a.transfers_ownership(s) for s in a.sites)
+        ys, = (s for s in a.sites if s.kind == 'literal')
+        assert a.transfers_ownership(ys)
 
     def test_returned_and_also_passed_to_a_call_is_not_owned(self):
         """Shared outward beats a transfer: the callee may still hold it."""
@@ -321,8 +353,10 @@ class TestCapturedByNonLists:
     """A list can be captured by an expression that is not itself a list."""
 
     def test_comprehension_variable_shares_the_element(self):
-        """``[row for row in xss]`` is a new outer list over the *same* rows, so
-        the comprehension's loop variable has to be bound to xss's elements."""
+        """``[row for row in xss]`` binds its loop variable to xss's elements,
+        which is *projection* and so still aliases — what the comprehension
+        collects is copied, but what it iterates is not.  Flow-insensitively the
+        binding alone marks the rows shared, even though this body only reads."""
         @fp.fpy
         def f(xss: list[list[fp.Real]]) -> fp.Real:
             with fp.FP64:
@@ -331,7 +365,20 @@ class TestCapturedByNonLists:
                 return xss[0][0]
 
         _, _, shared = _sites(f)
-        assert shared, 'the comprehension shares xss rows'
+        assert shared, 'the loop variable projects a row out of xss'
+
+    def test_a_comprehension_copies_what_it_collects(self):
+        """The other half, with nothing projected: the element is a *reference*
+        to xs on every iteration, and each is copied into the result."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                yss = [xs for i in range(2)]
+                yss[0][0] = 99
+                return xs[0]
+
+        _, _, shared = _sites(f)
+        assert not shared
 
     def test_list_in_a_tuple_is_shared(self):
         """A tuple is not list-typed, so the list inside it is only reachable if

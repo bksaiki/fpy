@@ -61,15 +61,16 @@ class TestLocal:
 
         assert _retained(f) == {0}
 
-    def test_stored_into_another_parameter_is_retained(self):
-        """The caller can reach it afterwards through ``yss``."""
+    def test_stored_into_another_parameter_is_not_retained(self):
+        """A store *copies*, so the caller reaches xs's values through ``yss``
+        afterwards but not xs itself — and retention is about identity."""
         @fp.fpy
         def f(yss: list[list[fp.Real]], xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
                 yss[0] = xs
                 return xs[0]
 
-        assert 1 in _retained(f)
+        assert 1 not in _retained(f)
 
     def test_a_fresh_local_does_not_retain_the_parameter(self):
         @fp.fpy

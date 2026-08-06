@@ -330,22 +330,13 @@ def test_a_narrower_variable_is_converted_at_the_boundary(func):
 # records what it would take to compile them.
 
 @fp.fpy
-def s_local_in_a_list(c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """`xs` is a name *and* a slot of `zss`, so it keeps its handle -- and a
-    handle cannot be rebuilt without `zss` still naming the old buffer."""
-    with fp.FP64:
-        xs = [1.0, 2.0]
-        zss = [xs]
-        zss[0][0] = 1.0
-        if c > 0:
-            return xs
-        else:
-            return [y]
-
-
-@fp.fpy
 def s_local_in_a_tuple(c: fp.Real, y: fp.Real):
-    """The same, one level in: the tuple's field fixes the list's type."""
+    """A tuple's field fixes the list's type, and the field holds the list
+    itself: the copy stops at tuples, so this is still a second name for it.
+
+    Putting it in a *list* no longer does this — see
+    :func:`test_a_list_container_no_longer_shares` below.
+    """
     with fp.FP64:
         xs = [1.0, 2.0]
         if c > 0:
@@ -355,17 +346,16 @@ def s_local_in_a_tuple(c: fp.Real, y: fp.Real):
 
 
 @fp.fpy
-def s_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+def s_mixed_precision_local(c: fp.Real, y: fp.Real):
     """The format the program asked for, not a narrowing accident: `lo`'s
-    elements are FP32-rounded *values*, and `zss` holds the same buffer."""
+    elements are FP32-rounded *values*, and the tuple's field holds `lo`."""
     with fp.FP32:
         lo = [fp.round(y), fp.round(y)]
     with fp.FP64:
-        zss = [lo]
         if c > 0:
-            return lo
+            return (lo, 1.0)
         else:
-            return [y]
+            return ([y], y)
 
 
 @fp.fpy
@@ -416,7 +406,6 @@ L32 = ListType(RealType(fp.FP32))
 N32 = ListType(L32)
 
 SHARED_CASES = [
-    (s_local_in_a_list, [R, R]),
     (s_local_in_a_tuple, [R, R]),
     (s_mixed_precision_local, [R, R]),
     (s_parameter, [L32, R, R]),
@@ -442,6 +431,30 @@ def test_a_shared_narrower_list_is_refused(func, arg_types):
     m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
     with pytest.raises(CppCompileError, match='is shared'):
         CppCompiler().compile_module(m)
+
+
+def test_a_list_container_no_longer_shares():
+    """The boundary of the refusal above, and where it moved to.
+
+    ``zss = [xs]`` was the cheapest way to reach it: two names for one buffer,
+    so the narrowing conversion had nowhere sound to go.  Construction copies
+    now, so ``zss`` holds storage of its own and ``xs`` is free to be rebuilt --
+    which leaves the tuple field as the only container route left.
+    """
+    @fp.fpy
+    def f(c: fp.Real, y: fp.Real) -> list[fp.Real]:
+        with fp.FP64:
+            xs = [1.0, 2.0]
+            zss = [xs]
+            zss[0][0] = 1.0
+            if c > 0:
+                return xs
+            else:
+                return [y]
+
+    m = Module()
+    m.add(f, ctx=fp.FP64, arg_types=[R, R])
+    CppCompiler().compile_module(m)
 
 
 def test_a_callee_result_is_refused_rather_than_unshared():

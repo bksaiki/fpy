@@ -22,16 +22,23 @@ union-find (``elts(c)`` is the elements part, ``fld(c, i)`` field *i*):
 =========================  ==========================================
 ``ys = xs``                ``cell(ys) ≡ cell(xs)``
 ``row = xss[i]``           ``cell(row) ≡ elts(xss)``
-``xss[i] = e``             ``elts(xss) ≡ cell(e)``
-``[a, b]``                 ``elts(result) ≡ cell(a) ≡ cell(b)``
+``xss[i] = e``             ``elts(xss) ≡ copy(cell(e))``
+``[a, b]``                 ``elts(result) ≡ copy(cell(a)) ≡ copy(cell(b))``
 ``(a, b)``                 ``fld(result, 0) ≡ cell(a)``, likewise 1
 ``a, b = t``               ``cell(a) ≡ fld(t, 0)``, likewise 1
 ``fst(t)`` / ``t[0]``      ``cell(result) ≡ fld(t, 0)``
-``xs[i:j]``                ``elts(result) ≡ elts(xs)`` — a slice is *shallow*
+``xs[i:j]``                ``elts(result) ≡ copy(elts(xs))``
 ``for row in xss``         ``cell(row) ≡ elts(xss)``
 ``xs if c else ys``        ``cell(result) ≡ cell(xs) ≡ cell(ys)``
 ``enumerate``/``zip``      ``elts(result) ≡ elts(arg)``
 =========================  ==========================================
+
+Construction *copies*, so the three routes written ``copy(·)`` usually generate
+no constraint at all.  ``copy`` follows the interpreter's ``__fpy_copy``: it
+descends through lists and stops at tuples, so a copied list is fresh at every
+level while a copied tuple's fields hold what the original's held.  A
+construction therefore aliases its operands only where a tuple sits above a
+list — ``[xs]`` shares nothing, ``[(xs, 1.0)]`` shares ``xs``.
 
 Equality rather than inclusion (unification rather than a subset-based solver) is
 deliberate: it over-approximates aliasing, which is the safe direction for every
@@ -126,6 +133,22 @@ def _carries_list(ty: Type | None) -> bool:
     match ty:
         case ListType():
             return True
+        case TupleType():
+            return any(_carries_list(elt) for elt in ty.elts)
+        case _:
+            return False
+
+
+def _shares_through_copy(ty: Type | None) -> bool:
+    """Whether copying a value of type *ty* leaves a list shared with the source.
+
+    True exactly when a tuple sits somewhere above a list, since that is where
+    the copy stops.  Used to avoid walking — and so lazily *creating* — parts of
+    a type that copying separates completely.
+    """
+    match ty:
+        case ListType():
+            return _shares_through_copy(ty.elt)
         case TupleType():
             return any(_carries_list(elt) for elt in ty.elts)
         case _:
@@ -577,10 +600,13 @@ class _Builder(DefaultVisitor):
         call result.  Without one, that level has no site at all and a consumer
         cannot tell "nothing owns this" from "nothing is known about it".
 
-        Off by default, because a literal or a comprehension *does* describe its
-        elements: those are expressions of their own, and each allocates its own
-        cell.  Seeding on top of them would give one place two parts, which
-        merge into two referrers and read as shared.
+        Off by default for the constructs that still describe their elements with
+        a merge — a tuple literal, ``zip``, ``enumerate`` — where seeding on top
+        would give one place two parts, which merge into two referrers and read
+        as shared.  List construction copies, so it owns every level down to the
+        first tuple and does want a site apiece; without them the levels below a
+        nested literal would have no site, which reads as *unknown* rather than
+        as the uniquely-owned storage they are.
         """
         # transient: an allocation is not itself a place a reference is held
         cell = self.cells.new(kind)
@@ -666,20 +692,21 @@ class _Builder(DefaultVisitor):
                         cell = self.cells.merge(cell, bc)
                 return cell
             case ListSlice():
-                # a fresh outer list over the *same* elements
-                cell = self._alloc('slice', e)
+                # a slice is construction, so it copies its elements
+                cell = self._alloc('slice', e, deep=True)
                 base = self._cell_for(e.value)
                 if base is not None:
-                    self.cells.merge(
-                        self._part(cell), self._part(base),
+                    self._merge_copy(
+                        self._part(cell), self._part(base), self._elt_type(e),
                     )
                 return cell
             case ListExpr():
-                cell = self._alloc('literal', e)
+                cell = self._alloc('literal', e, deep=True)
+                elt_ty = self._elt_type(e)
                 for x in e.elts:
                     xc = self._cell_for(x)
                     if xc is not None:
-                        self.cells.merge(self._part(cell), xc)
+                        self._merge_copy(self._part(cell), xc, elt_ty)
                 return cell
             case TupleExpr():
                 cell = self._alloc('literal', e)
@@ -689,11 +716,11 @@ class _Builder(DefaultVisitor):
                         self.cells.merge(self._part(cell, i), xc)
                 return cell
             case ListComp():
-                cell = self._alloc('comprehension', e)
+                cell = self._alloc('comprehension', e, deep=True)
                 self._bind_comp_targets(e)
                 xc = self._cell_for(e.elt)
                 if xc is not None:
-                    self.cells.merge(self._part(cell), xc)
+                    self._merge_copy(self._part(cell), xc, self._elt_type(e))
                 return cell
             case Enumerate() | Zip():
                 # Each element is a *tuple* over the sources' elements, so the
@@ -730,6 +757,28 @@ class _Builder(DefaultVisitor):
                 cell = self._alloc('builtin', e, deep=True)
                 _EscapeVars(self)._visit_expr(e, None)
                 return cell
+
+    def _merge_copy(self, dst: _Cell, src: _Cell, ty: Type | None) -> None:
+        """Constraints for *dst* holding a **copy** of *src*, a value of type *ty*.
+
+        Mirrors the interpreter's ``__fpy_copy``: the copy descends through
+        lists, so every list level is a fresh allocation aliasing nothing, and
+        stops at tuples, so a copied tuple's fields still refer to whatever the
+        original's did.  Generates no constraint at all unless a tuple sits above
+        a list somewhere in *ty*.
+        """
+        match ty:
+            case ListType() if _shares_through_copy(ty.elt):
+                self._merge_copy(self._part(dst), self._part(src), ty.elt)
+            case TupleType():
+                for i, elt in enumerate(ty.elts):
+                    if _carries_list(elt):
+                        self.cells.merge(self._part(dst, i), self._part(src, i))
+
+    def _elt_type(self, e: Expr) -> Type | None:
+        """The element type of a list-typed expression."""
+        ty = self.types.by_expr.get(e)
+        return ty.elt if isinstance(ty, ListType) else None
 
     def _project(self, e: ListRef) -> _Cell | None:
         """``xs[i]`` — the elements part of a list, or a field of a tuple."""
@@ -814,7 +863,10 @@ class _Builder(DefaultVisitor):
             if rhs is not None:
                 for _ in stmt.indices[:-1]:
                     cur = self._part(cur)
-                self.cells.merge(self._part(cur), rhs)
+                # a store copies into a slot the container already owns
+                self._merge_copy(
+                    self._part(cur), rhs, self.types.by_expr.get(stmt.expr),
+                )
         super()._visit_indexed_assign(stmt, ctx)
 
     def _visit_for(self, stmt: ForStmt, ctx):
