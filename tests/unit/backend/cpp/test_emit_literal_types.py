@@ -169,12 +169,7 @@ class TestThePathSetIsClosed:
         ):
             for sigs in sigs_by_op.values():
                 for s in sigs:
-                    is_call = (
-                        getattr(s, 'is_func', None) is True
-                        or getattr(s, 'is_infix', None) is False
-                        or name == 'ternary'
-                    )
-                    if is_call:
+                    if s.is_call:
                         arities_with_calls.add(name)
                         break
         assert arities_with_calls == {'unary', 'binary', 'ternary'}, (
@@ -198,12 +193,7 @@ class TestThePathSetIsClosed:
             ('ternary', table.ternary),
         ):
             for sigs in sigs_by_op.values():
-                if any(
-                    getattr(s, 'is_func', None) is True
-                    or getattr(s, 'is_infix', None) is False
-                    or name == 'ternary'
-                    for s in sigs
-                ):
+                if any(s.is_call for s in sigs):
                     n += 1
         assert n == 40, (
             f'{n} ops have a call-form signature, expected 40 -- update this '

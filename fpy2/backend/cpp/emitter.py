@@ -1775,6 +1775,12 @@ class CppEmitter(Visitor):
                     f'unsupported FP predicate: {type(e).__name__}', at=e,
                 )
 
+    def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx) -> str:
+        """A ``range`` bound, cast into the element type."""
+        return self._maybe_cast(
+            self._visit_expr(e, ctx), self._scalar_storage_for_expr(e), elt_ty,
+        )
+
     def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
         """``range(...)`` as an expression — materialise a vector via
         ``std::iota`` for unit-step ranges, or a manual fill loop for
@@ -1794,9 +1800,7 @@ class CppEmitter(Visitor):
         tmp = self._fresh_temp()
         match e:
             case Range1():
-                stop = self._visit_expr(e.arg, ctx)
-                stop_ty = self._scalar_storage_for_expr(e.arg)
-                stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+                stop_cast = self._range_bound(e.arg, result_ty.elt, ctx)
                 # ``range(stop)`` with ``stop <= 0`` is empty; clamp before
                 # the unsigned cast so a negative stop doesn't wrap to a
                 # huge allocation.
@@ -1814,12 +1818,8 @@ class CppEmitter(Visitor):
                 )
                 return tmp
             case Range2():
-                start = self._visit_expr(e.first, ctx)
-                stop = self._visit_expr(e.second, ctx)
-                start_ty = self._scalar_storage_for_expr(e.first)
-                stop_ty = self._scalar_storage_for_expr(e.second)
-                start_cast = self._maybe_cast(start, start_ty, result_ty.elt)
-                stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
+                start_cast = self._range_bound(e.first, result_ty.elt, ctx)
+                stop_cast = self._range_bound(e.second, result_ty.elt, ctx)
                 size_expr = (
                     f'static_cast<size_t>({stop_cast} > {start_cast} '
                     f'? ({stop_cast} - {start_cast}) : 0)'
@@ -1835,15 +1835,9 @@ class CppEmitter(Visitor):
                 return tmp
             case Range3():
                 # Explicit step — emit a fill loop.
-                start = self._visit_expr(e.args[0], ctx)
-                stop = self._visit_expr(e.args[1], ctx)
-                step = self._visit_expr(e.args[2], ctx)
-                start_ty = self._scalar_storage_for_expr(e.args[0])
-                stop_ty = self._scalar_storage_for_expr(e.args[1])
-                step_ty = self._scalar_storage_for_expr(e.args[2])
-                start_cast = self._maybe_cast(start, start_ty, result_ty.elt)
-                stop_cast = self._maybe_cast(stop, stop_ty, result_ty.elt)
-                step_cast = self._maybe_cast(step, step_ty, result_ty.elt)
+                start_cast = self._range_bound(e.args[0], result_ty.elt, ctx)
+                stop_cast = self._range_bound(e.args[1], result_ty.elt, ctx)
+                step_cast = self._range_bound(e.args[2], result_ty.elt, ctx)
                 ctr = self._fresh_temp()
                 self.writer.add_line(
                     f'{result_ty.format()} {tmp} = '
@@ -2453,52 +2447,29 @@ class CppEmitter(Visitor):
         comp_site: ListComp,
         ctx,
     ) -> None:
-        """Emit one ``for`` line for a comprehension stage, leaving the writer indented
-        inside the body.
+        """Emit one ``for`` line for a comprehension stage, leaving the writer
+        indented inside the body.
 
-        Always declare-on-assign: the target lives only in the loop scope.  Its SSA
-        site is the ``ListComp`` node, not the target id.
+        Always declare-on-assign: the target lives only in the loop scope.  Its
+        SSA site is the ``ListComp`` node, not the target id.
         """
-        # ``loop_def`` drives the value-iterable element binding (const&
-        # for read-only aggregates); ``None`` => discarded/anonymous.
+        # `loop_def` drives the element binding; None means discarded.
         loop_def = None
         match target:
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
                 target_name = self.storage.def_to_name[target_def]
-                # For a range counter, size to the exit-test overshoot (see
-                # :meth:`_range_counter_scalar`); the element storage would be
-                # too narrow.  Non-range iterables fall back to element storage.
-                counter_scalar = self._range_counter_scalar(iterable)
-                storage = counter_scalar or self.storage.storage_of(target_def)
+                # A range counter is sized to the exit-test overshoot; the
+                # element storage would be too narrow.
+                counter = self._range_counter_scalar(iterable)
+                storage = counter or self.storage.storage_of(target_def)
                 decl = f'{storage.format()} {target_name}'
                 loop_def = target_def
             case UnderscoreId():
-                # ``_`` discards the loop variable — no SSA def, no
-                # storage class.  Synthesize a fresh name and pick the
-                # iterator type from the range counter's trajectory (or the
-                # stop bound's storage when the range isn't concrete); value
-                # iterables use ``auto`` and let the for-range loop deduce.
                 target_name = self._fresh_temp()
-                counter_scalar = self._range_counter_scalar(iterable)
-                match iterable:
-                    case Range1() if counter_scalar is not None:
-                        decl = f'{counter_scalar.format()} {target_name}'
-                    case Range1():
-                        stop_ty = self._scalar_storage_for_expr(iterable.arg)
-                        decl = f'{stop_ty.format()} {target_name}'
-                    case (Range2() | Range3()) if counter_scalar is not None:
-                        decl = f'{counter_scalar.format()} {target_name}'
-                    case Range2() | Range3():
-                        stop_ty = self._scalar_storage_for_expr(iterable.args[1])
-                        decl = f'{stop_ty.format()} {target_name}'
-                    case _:
-                        decl = f'auto {target_name}'
+                decl = f'{self._underscore_counter_ty(iterable)} {target_name}'
             case TupleBinding():
-                # ``for (a, b) in xs`` — bind the tuple element to
-                # an anonymous temp via ``auto`` and destructure
-                # inside the loop body.  Range iterables can't pair
-                # with a tuple binding; reject early.
+                # A tuple binding cannot pair with a range.
                 if isinstance(iterable, (Range1, Range2, Range3)):
                     raise CppEmitError(
                         'tuple-binding comprehension target requires a '
@@ -2508,7 +2479,7 @@ class CppEmitter(Visitor):
                 tmp = self._fresh_temp()
                 iter_str = self._visit_expr(iterable, ctx)
                 iter_ty = self._storage_for_expr(iterable)
-                # element read-only (only destructured) -> bind by const&
+                # read-only (only destructured) -> bind by const&
                 self.writer.add_line(
                     f'for (const auto& {tmp} : '
                     f'{self._list_range(iter_ty, iter_str)}) {{'
@@ -2526,39 +2497,8 @@ class CppEmitter(Visitor):
                     at=comp_site,
                 )
 
-        match iterable:
-            case Range1():
-                stop = self._visit_expr(iterable.arg, ctx)
-                self.writer.add_line(
-                    f'for ({decl} = 0; '
-                    f'{target_name} < {stop}; ++{target_name}) {{'
-                )
-            case Range2():
-                start = self._visit_expr(iterable.first, ctx)
-                stop = self._visit_expr(iterable.second, ctx)
-                self.writer.add_line(
-                    f'for ({decl} = {start}; '
-                    f'{target_name} < {stop}; ++{target_name}) {{'
-                )
-            case Range3():
-                start = self._visit_expr(iterable.args[0], ctx)
-                stop = self._visit_expr(iterable.args[1], ctx)
-                step = self._visit_expr(iterable.args[2], ctx)
-                self.writer.add_line(
-                    f'for ({decl} = {start}; '
-                    f'{target_name} < {stop}; {target_name} += {step}) {{'
-                )
-            case _:
-                iter_str = self._visit_expr(iterable, ctx)
-                iter_ty = self._storage_for_expr(iterable)
-                decl = self._foreach_decl(
-                    loop_def, target_name,
-                    elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
-                    at=iterable,
-                )
-                self.writer.add_line(
-                    f'for ({decl} : {self._list_range(iter_ty, iter_str)}) {{'
-                )
+        header = self._for_header(iterable, target_name, decl, loop_def, ctx)
+        self.writer.add_line(f'{header} {{')
         self.writer.indent()
 
     def _visit_list_ref(self, e: ListRef, ctx) -> str:
@@ -2728,65 +2668,83 @@ class CppEmitter(Visitor):
                     at=stmt,
                 )
 
-    def _emit_for_loop(self, stmt: ForStmt, ctx, target: str, decl: str,
-                       target_def) -> None:
-        """``for (<header>) { body }`` given the loop variable and its declaration.
+    def _for_header(self, iterable: Expr, target: str, decl: str,
+                    target_def, ctx) -> str:
+        """The ``for (...)`` header for *iterable*, without the brace.
 
-        A ``Range*`` iterable is a counter loop using *decl*; anything else is a
-        range-for whose element binding is :meth:`_foreach_decl`'s decision.  A
+        A ``Range*`` is a counter loop using *decl* as given; anything else is a
+        range-for, where :meth:`_foreach_decl` decides the element binding and a
         ``None`` *target_def* marks a discarded element.
+
+        Shared with :meth:`_open_comp_loop`, which needs the header alone -- it
+        leaves the writer open for its caller to fill the body.
         """
-        match stmt.iterable:
+        match iterable:
             case Range1():
-                stop = self._visit_expr(stmt.iterable.arg, ctx)
-                header = f'for ({decl} = 0; {target} < {stop}; ++{target})'
+                stop = self._visit_expr(iterable.arg, ctx)
+                return f'for ({decl} = 0; {target} < {stop}; ++{target})'
             case Range2():
-                start = self._visit_expr(stmt.iterable.first, ctx)
-                stop = self._visit_expr(stmt.iterable.second, ctx)
-                header = (
+                start = self._visit_expr(iterable.first, ctx)
+                stop = self._visit_expr(iterable.second, ctx)
+                return (
                     f'for ({decl} = {start}; '
                     f'{target} < {stop}; ++{target})'
                 )
             case Range3():
-                start = self._visit_expr(stmt.iterable.args[0], ctx)
-                stop = self._visit_expr(stmt.iterable.args[1], ctx)
-                step = self._visit_expr(stmt.iterable.args[2], ctx)
-                header = (
+                start = self._visit_expr(iterable.args[0], ctx)
+                stop = self._visit_expr(iterable.args[1], ctx)
+                step = self._visit_expr(iterable.args[2], ctx)
+                return (
                     f'for ({decl} = {start}; '
                     f'{target} < {stop}; {target} += {step})'
                 )
             case _:
-                iter_str = self._visit_expr(stmt.iterable, ctx)
-                iter_ty = self._storage_for_expr(stmt.iterable)
+                iter_str = self._visit_expr(iterable, ctx)
+                iter_ty = self._storage_for_expr(iterable)
                 elt_decl = self._foreach_decl(
                     target_def, target,
                     elt=iter_ty.elt if isinstance(iter_ty, CppList) else None,
-                    at=stmt.iterable,
+                    at=iterable,
                 )
-                header = (
+                return (
                     f'for ({elt_decl} : '
                     f'{self._list_range(iter_ty, iter_str)})'
                 )
+
+    def _underscore_counter_ty(self, iterable: Expr) -> str:
+        """The C++ type for a discarded loop variable.
+
+        A range counter is sized from its trajectory (:meth:`_range_counter_scalar`),
+        falling back to the stop bound's storage; a value iterable uses ``auto``
+        and lets the range-for deduce.
+        """
+        counter = self._range_counter_scalar(iterable)
+        if counter is not None:
+            return counter.format()
+        match iterable:
+            case Range1():
+                return self._scalar_storage_for_expr(iterable.arg).format()
+            case Range2() | Range3():
+                return self._scalar_storage_for_expr(iterable.args[1]).format()
+            case _:
+                return 'auto'
+
+    def _emit_for_loop(self, stmt: ForStmt, ctx, target: str, decl: str,
+                       target_def) -> None:
+        """``for (<header>) { body }``."""
+        header = self._for_header(stmt.iterable, target, decl, target_def, ctx)
         self.writer.add_line(f'{header} {{')
         self.writer.indent()
         self._visit_block(stmt.body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
 
+
     def _emit_for_underscore_target(self, stmt: ForStmt, ctx):
         """``for _ in iter:`` -- the body never reads the counter, so emit a
-        synthetic name and type it the way :meth:`_open_comp_loop` types an
-        ``UnderscoreId`` comprehension target."""
+        synthetic name."""
         target = self._fresh_temp()
-        counter_scalar = self._range_counter_scalar(stmt.iterable)
-        if counter_scalar is not None:
-            ty = counter_scalar.format()
-        elif isinstance(stmt.iterable, Range1):
-            ty = self._scalar_storage_for_expr(stmt.iterable.arg).format()
-        elif isinstance(stmt.iterable, (Range2, Range3)):
-            ty = self._scalar_storage_for_expr(stmt.iterable.args[1]).format()
-        else:
-            ty = 'auto'
+        ty = self._underscore_counter_ty(stmt.iterable)
         self._emit_for_loop(stmt, ctx, target, f'{ty} {target}', None)
 
     def _emit_for_named_target(self, stmt: ForStmt, ctx):
