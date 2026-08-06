@@ -1780,6 +1780,76 @@ def _regression_conditional_alias(
 
 
 @fp.fpy
+def _regression_boxed_slot_overwrite(
+    xss: list[list[fp.Real]], ws: list[fp.Real],
+) -> fp.Real:
+    """Route: a store into a slot whose level is *boxed*.
+
+    A store overwrites, so both holders of that row -- the tuple's field, which
+    took a copy of the handle, and `row`, which references the slot -- must see
+    `ws`.  Assigning the handle would rebind the slot and leave the tuple on the
+    old buffer, which compiled silently and gave the wrong answer until the
+    store learned to write through to the pointee.
+
+    The tuples are what force the boxing; without them the rows are values and
+    `std::vector`'s own assignment already overwrites.
+    """
+    with fp.FP64:
+        if len(xss) < 2 or len(ws) == 0:
+            return 0
+        _u = (xss[0], 1.0)
+        yss = [xss[0], xss[1]]
+        t = (yss[0], 1.0)
+        row = yss[0]
+        yss[0] = ws
+        return row[0] + fp.fst(t)[0]
+
+
+@fp.fpy
+def _regression_store_into_boxed_slot(
+    xss: list[list[fp.Real]], ws: list[fp.Real],
+) -> fp.Real:
+    """Pin: the *conversion* half of the same store.
+
+    `row` is rebound each iteration, so it is a second place and boxes the row
+    level of `yss`, while `xss`'s rows stay values -- so the store has to convert
+    as well as overwrite.  A store copies, so converting is sound here for the
+    same reason it is at a construction.
+    """
+    with fp.FP64:
+        if len(xss) < 2 or len(ws) == 0:
+            return 0
+        acc = 0.0
+        yss = [xss[0], xss[1]]
+        yss[0] = ws
+        for _ in range(2):
+            row = yss[0]
+            acc = acc + row[0]
+        return acc
+
+
+@fp.fpy
+def _regression_tuple_row_into_list(
+    xss: list[list[fp.Real]], ys: list[fp.Real],
+) -> fp.Real:
+    """Route: a boxed row copied into an unboxed container.
+
+    A tuple keeps sharing, so `xss`'s rows stay `fpy::list<double>`; a
+    construction copies, so `zss` is a plain `vector<vector<double>>`.  The two
+    meet at the literal, where the emitter reads the sequence out of the handle.
+    Writing through `zss[0]` must therefore leave `xss` alone -- if the handle
+    were shared into the container instead, both terms below would move.
+    """
+    with fp.FP64:
+        if len(xss) == 0 or len(ys) == 0:
+            return 0
+        t = (xss[0], 1.0)
+        zss = [fp.fst(t), ys]
+        zss[0][0] = 99
+        return zss[0][0] + xss[0][0]
+
+
+@fp.fpy
 def _regression_replaced_slot(
     xss: list[list[fp.Real]], ys: list[fp.Real],
 ) -> fp.Real:
@@ -1859,6 +1929,9 @@ _regression_funcs: list[fp.Function] = [
     _regression_enumerate_row_write,
     _regression_conditional_alias,
     _regression_replaced_slot,
+    _regression_tuple_row_into_list,
+    _regression_boxed_slot_overwrite,
+    _regression_store_into_boxed_slot,
 ]
 
 

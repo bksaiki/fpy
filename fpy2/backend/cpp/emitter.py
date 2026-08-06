@@ -811,14 +811,17 @@ class CppEmitter(Visitor):
                     at=stmt,
                 )
 
-    def _emit_at(self, e: Expr, want: CppType | None, ctx) -> str:
+    def _emit_at(
+        self, e: Expr, want: CppType | None, ctx, *, copying: bool = False,
+    ) -> str:
         """Emit *e* as a value of storage *want*.
 
         One place admits one C++ type, while ``format_infer`` bounds each expression
         by its own values -- correctly, since that is the question it answers.
         Reconciling them is a storage question, so it lives here: an expression that
         *constructs* its value is built at *want*, and anything with storage of its
-        own goes to :meth:`_convert_storage`, where a shared list is refused.
+        own goes to :meth:`_convert_storage`, where a shared list is refused unless
+        *copying* says the site materialises a fresh one anyway.
         """
         if want is None:
             return self._visit_expr(e, ctx)
@@ -828,11 +831,17 @@ class CppEmitter(Visitor):
             return self._visit_expr(e, ctx)
         match e:
             case ListExpr() if isinstance(want, CppList):
-                parts = [self._emit_deduced(elt, want.elt, ctx) for elt in e.elts]
+                # a list owns its elements, so each is a copy site
+                parts = [
+                    self._emit_deduced(elt, want.elt, ctx, copying=True)
+                    for elt in e.elts
+                ]
                 return self._list_new_init(want, parts)
             case TupleExpr() if (
                 isinstance(want, CppTuple) and len(want.elts) == len(e.elts)
             ):
+                # *not* a copy site: a tuple's fields keep referring to what the
+                # operands referred to
                 parts = [
                     self._emit_deduced(elt, w, ctx)
                     for elt, w in zip(e.elts, want.elts)
@@ -842,16 +851,18 @@ class CppEmitter(Visitor):
                 return self._emit_list_comp_at(e, want, ctx)
             case IfExpr():
                 cond = self._visit_expr(e.cond, ctx)
-                ift = self._emit_at(e.ift, want, ctx)
-                iff = self._emit_at(e.iff, want, ctx)
+                ift = self._emit_at(e.ift, want, ctx, copying=copying)
+                iff = self._emit_at(e.iff, want, ctx, copying=copying)
                 return f'({cond} ? {ift} : {iff})'
         emitted = self._visit_expr(e, ctx)
         src = self._storage_or_none(e)
         if src is None:
             return emitted
-        return self._convert_storage(emitted, src, want, at=e)
+        return self._convert_storage(emitted, src, want, at=e, copying=copying)
 
-    def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
+    def _emit_deduced(
+        self, e: Expr, want: CppType, ctx, *, copying: bool = False,
+    ) -> str:
         """:meth:`_emit_at` where C++ takes the type *from* the argument.
 
         A braced initializer rejects a narrowing conversion outright, and
@@ -859,7 +870,7 @@ class CppEmitter(Visitor):
         argument gives ``std::tuple<float, double>``, which the declaration then
         rejects.  Either way the scalar's cast must be spelled.
         """
-        code = self._emit_at(e, want, ctx)
+        code = self._emit_at(e, want, ctx, copying=copying)
         if isinstance(want, CppScalar):
             src = self._storage_or_none(e)
             if isinstance(src, CppScalar) and src != want:
@@ -879,6 +890,7 @@ class CppEmitter(Visitor):
 
     def _convert_storage(
         self, code: str, src: CppType, want: CppType, *, at: Expr,
+        copying: bool = False,
     ) -> str:
         """*code*, of storage *src*, as storage *want*.
 
@@ -888,6 +900,11 @@ class CppEmitter(Visitor):
         is spelled: ``std::make_tuple`` deduces from its arguments, and
         ``std::vector`` has no converting constructor, so a list is rebuilt
         element-wise.
+
+        *copying* marks a site where FPy's semantics already materialises a fresh
+        list -- a construction, or an element of one being rebuilt.  There a
+        handle may be read out of, because producing a different object is the
+        specified behaviour rather than a silent unsharing.
         """
         if src == want:
             return code
@@ -908,13 +925,18 @@ class CppEmitter(Visitor):
             # user to meet one.  Refuse here instead.
             raise self._refuse_mismatch(src, want, at)
         if src.boxed:
-            # A rebuilt list is a different object, and a handle exists exactly
-            # so that FPy's aliasing survives.  Unsharing it here would be
-            # silent, so refuse instead.
-            raise self._refuse_unsharing(src, want, at)
+            if not copying:
+                # A rebuilt list is a different object, and a handle exists
+                # exactly so that FPy's aliasing survives.  Unsharing it here
+                # would be silent, so refuse instead.
+                raise self._refuse_unsharing(src, want, at)
+            # Construction copies, so a fresh buffer *is* the semantics here:
+            # read the sequence out of the handle and carry on unboxed.
+            code = f'*({code})'
+            src = CppList(src.elt, boxed=False)
         unboxed = CppList(want.elt, boxed=False)
         if src.elt != want.elt:
-            code = self._rebuild_list(code, src, unboxed, at=at)
+            code = self._rebuild_list(code, src, unboxed, at=at, copying=copying)
         if not want.boxed:
             return code
         # A value has no aliases to lose, so giving it a handle is free.
@@ -1009,14 +1031,14 @@ class CppEmitter(Visitor):
             )
         return CppEmitError(
             f'unsupported: {what}{where} {detail}.  Changing a list\'s element '
-            f'type needs a new buffer, and this one is shared — so the copy '
-            f'would not be the list its other references name.  Either {fix}, '
+            f'type needs a new buffer, and this one is shared. Either {fix}, '
             f'or do not mix formats at this point.',
             at=at,
         )
 
     def _rebuild_list(
         self, code: str, src: CppList, want: CppList, *, at: Expr,
+        copying: bool = False,
     ) -> str:
         """A new list of *want*, element-wise from *code*.
 
@@ -1038,6 +1060,7 @@ class CppEmitter(Visitor):
         self.writer.indent()
         elt = self._convert_storage(
             self._list_at_raw(src, base, i), src.elt, want.elt, at=at,
+            copying=copying,
         )
         self.writer.add_line(f'{self._list_push(want, out, elt)};')
         self.writer.dedent()
@@ -2431,7 +2454,8 @@ class CppEmitter(Visitor):
             self._open_comp_loop(target, iterable, e, ctx)
 
         elt_want = result_ty.elt if isinstance(result_ty, CppList) else None
-        elt = self._emit_at(e.elt, elt_want, ctx)
+        # a comprehension is construction, so the element is a copy site
+        elt = self._emit_at(e.elt, elt_want, ctx, copying=True)
         self.writer.add_line(f'{self._list_push(result_ty, tmp, elt)};')
 
         for _ in e.targets:
@@ -2576,12 +2600,22 @@ class CppEmitter(Visitor):
                 )
             chain = self._list_at(level, chain, idx)
             level = level.elt
-        # The slot's type comes from the container, so there is nowhere to put
-        # a conversion: the value has to already fit.
-        src = self._storage_or_none(stmt.expr)
-        self._require_bridgeable(src, level, stmt.expr)
-        self._require_no_narrowing(src, level, stmt.expr)
-        rhs = self._emit_at(stmt.expr, level, ctx)
+        self._require_no_narrowing(
+            self._storage_or_none(stmt.expr), level, stmt.expr,
+        )
+        if isinstance(level, CppList) and level.boxed:
+            # A store *overwrites* the slot, and assigning the handle would
+            # rebind it -- leaving every other holder of that handle, and any
+            # reference bound to the slot, on the old buffer.  Assign the
+            # pointee instead, which is what `std::vector` does for an unboxed
+            # slot and what `__fpy_store` does in the interpreter.
+            unboxed = CppList(level.elt, boxed=False)
+            rhs = self._emit_at(stmt.expr, unboxed, ctx, copying=True)
+            self.writer.add_line(f'*({chain}) = {rhs};')
+            return
+        # An unboxed slot assigns element-wise, so the store is a copy site too
+        # and the value may be converted to the slot's storage.
+        rhs = self._emit_at(stmt.expr, level, ctx, copying=True)
         self.writer.add_line(f'{chain} = {rhs};')
 
     def _emit_guarded_block(self, keyword: str, cond, body, ctx) -> None:
