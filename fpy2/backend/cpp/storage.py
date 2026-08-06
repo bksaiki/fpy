@@ -21,6 +21,7 @@ The module also exposes:
 """
 
 from fractions import Fraction
+from typing import TYPE_CHECKING
 
 from ...analysis.format_infer import (
     AbstractableFormat,
@@ -49,6 +50,9 @@ from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
 from ...utils import is_dyadic
 from .types import CppList, CppScalar, CppTuple, CppType
+
+if TYPE_CHECKING:
+    from .unbox import UnboxAnalysis
 
 # ----------------------------------------------------------------------
 # The storage ladder.
@@ -246,3 +250,20 @@ def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
     raise StorageSelectionError(
         f'no storage type on the ladder subsumes {scalars!r}'
     )
+
+
+def return_storage(
+    ret_fmt: FormatBound, unbox: 'UnboxAnalysis | None',
+) -> CppType:
+    """The storage a function's return value takes.
+
+    ``fn_fmt.ret_fmt`` is the running join of every ``ReturnStmt``'s bound, so a
+    multiple-return program gets a class wide enough for every path.  A ``None``
+    bound is not a missing return -- it is format inference's convention for a
+    non-numeric result, and ``choose_storage`` maps it to ``BOOL``.
+
+    Raises :class:`StorageSelectionError`; callers that have a source location
+    wrap it.
+    """
+    ty = choose_storage(ret_fmt)
+    return ty if unbox is None else unbox.annotate_return(ty)

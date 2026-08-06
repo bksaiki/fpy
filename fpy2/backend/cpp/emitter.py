@@ -140,6 +140,7 @@ from .ops import BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp
 from .storage import (
     StorageSelectionError,
     choose_storage,
+    return_storage,
     scalar_fits_in,
     scalar_sup,
 )
@@ -569,11 +570,25 @@ class CppEmitter(Visitor):
         """
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
-        if binds_by_reference(self.storage, self.def_use, d):
-            if self._writes_through(d, storage):
-                return f'{storage.format()}& {arg.name}'
-            return f'const {storage.format()}& {arg.name}'
-        return f'{storage.format()} {arg.name}'
+        return self._binding_decl(d, storage, arg.name)
+
+    def _binding_decl(self, d: Definition, storage: CppType, name) -> str:
+        """``T name``, ``const T& name`` or ``T& name`` for the def *d*.
+
+        A name that is never rebound binds by reference: that shares the object
+        and leaves the refcount untouched, which measurement showed is the only
+        case where the atomic control block costs anything.  ``const`` unless
+        something in the region writes through it -- note ``const`` applies to
+        the handle, not the elements, so a callee can still write ``xs[i] = e``
+        and the caller sees it, which is FPy's parameter semantics.
+
+        Rebinding must stay local, so such a name takes its own copy.
+        """
+        if not binds_by_reference(self.storage, self.def_use, d):
+            return f'{storage.format()} {name}'
+        if self._writes_through(d, storage):
+            return f'{storage.format()}& {name}'
+        return f'const {storage.format()}& {name}'
 
     def _writes_through(self, d: Definition, storage: CppType) -> bool:
         """Whether a ``const`` reference to *d* would reject a write FPy allows.
@@ -609,12 +624,7 @@ class CppEmitter(Visitor):
         storage = self.storage.storage_of(target_def)
         if elt is not None and at is not None:
             self._require_bridgeable(elt, storage, at)
-        if binds_by_reference(self.storage, self.def_use, target_def):
-            # same rule as `_arg_decl`
-            if self._writes_through(target_def, storage):
-                return f'{storage.format()}& {name}'
-            return f'const {storage.format()}& {name}'
-        return f'{storage.format()} {name}'
+        return self._binding_decl(target_def, storage, name)
 
     def _is_readonly_alias(
         self, stmt: Assign, target_def, target_storage: CppType,
@@ -863,12 +873,10 @@ class CppEmitter(Visitor):
         correctly maps that to ``CppScalar.BOOL``.  FPy's
         reachability check rejects truly missing-return programs at
         decoration time, so we don't distinguish that case here."""
-        fmt = self.format_info.fn_fmt.ret_fmt
         try:
-            ty = choose_storage(fmt)
+            return return_storage(self.format_info.fn_fmt.ret_fmt, self.unbox)
         except StorageSelectionError as e:
             raise CppEmitError(f'return type: {e}', at=func) from e
-        return ty if self.unbox is None else self.unbox.annotate_return(ty)
 
     # ------------------------------------------------------------------
     # Statement visitors

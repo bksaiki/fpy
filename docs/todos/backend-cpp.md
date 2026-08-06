@@ -20,8 +20,10 @@ Module layout:
 Read the design before changing anything; [Open issues](#open-issues) is at
 the bottom.
 
-Everything C++-specific lives here. Analyses this backend depends on but does not
-own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
+Everything C++-specific lives here, except the refactoring backlog in
+`cpp-simplification.md` — that one is about the shape of the code, not what it
+compiles. Analyses this backend depends on but does not own have their own
+documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must

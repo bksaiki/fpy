@@ -41,7 +41,7 @@ from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
-from .storage import StorageSelectionError, choose_storage
+from .storage import StorageSelectionError, choose_storage, return_storage
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
 from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis
@@ -129,9 +129,7 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
 
 
 def _return_storage(a: SpecAnalyses) -> CppType:
-    """Same rule as ``CppEmitter._infer_return_storage``."""
-    ret = choose_storage(a.format_info.fn_fmt.ret_fmt)
-    return ret if a.unbox is None else a.unbox.annotate_return(ret)
+    return return_storage(a.format_info.fn_fmt.ret_fmt, a.unbox)
 
 
 def _callees(ast: FuncDef) -> list[Function]:
