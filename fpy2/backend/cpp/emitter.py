@@ -904,9 +904,11 @@ class CppEmitter(Visitor):
         *copying* marks a site where FPy's semantics already materialises a fresh
         list -- a construction, or an element of one being rebuilt.  There a
         handle may be read out of, because producing a different object is the
-        specified behaviour rather than a silent unsharing.
+        specified behaviour rather than a silent unsharing; and a handle must be
+        *rebuilt* even when the two storages agree, since passing one on would
+        share where the semantics copies.
         """
-        if src == want:
+        if src == want and not (copying and self._copy_allocates(want)):
             return code
         if isinstance(src, CppScalar) and isinstance(want, CppScalar):
             return self._explicit_cast(code, want)
@@ -935,7 +937,9 @@ class CppEmitter(Visitor):
             code = f'*({code})'
             src = CppList(src.elt, boxed=False)
         unboxed = CppList(want.elt, boxed=False)
-        if src.elt != want.elt:
+        if src.elt != want.elt or (copying and self._copy_allocates(want.elt)):
+            # The second case: the sequence copies on its own, but its elements
+            # are handles, and copying those would share what they point at.
             code = self._rebuild_list(code, src, unboxed, at=at, copying=copying)
         if not want.boxed:
             return code
@@ -985,15 +989,29 @@ class CppEmitter(Visitor):
     ) -> None:
         """Refuse unless *src* can reach *want*, for a site that cannot convert.
 
-        A slot store, a loop target and a destructured field all take their type
-        from something else, so the emitter has nowhere to put a conversion --
-        the only options are agreement or a refusal.
+        A loop target, a destructured field and a reference binding all name
+        storage that already exists, so the emitter has nowhere to put a
+        conversion -- the only options are agreement or a refusal.  A slot store
+        is *not* one of these: it copies, so it converts like a construction.
         """
         if src is None or want is None or src == want:
             return
         if isinstance(src, CppScalar) and isinstance(want, CppScalar):
             return                # C++ converts these
         raise self._refuse_mismatch(src, want, at)
+
+    @staticmethod
+    def _copy_allocates(ty: CppType | None) -> bool:
+        """Whether copying a value of *ty* has to allocate.
+
+        True where a handle sits somewhere the copy reaches: a handle is a
+        reference, so passing it on would share rather than copy.  A plain
+        ``std::vector`` needs nothing -- the surrounding initializer, ``push_back``
+        or ``operator=`` copies it.  Stops at tuples, like ``__fpy_copy``.
+        """
+        return isinstance(ty, CppList) and (
+            ty.boxed or CppEmitter._copy_allocates(ty.elt)
+        )
 
     def _refuse_unsharing(
         self, src: CppList, want: CppList, at: Expr,
@@ -1052,11 +1070,29 @@ class CppEmitter(Visitor):
             return self._list_new_range(
                 want, self._list_begin(src, base), self._list_end(src, base),
             )
+        return self._build_elementwise(
+            src, base, '0', self._list_len(src, base), want,
+            at=at, copying=copying,
+        )
+
+    def _build_elementwise(
+        self, src: CppList, base: str, start: str, stop: str, want: CppList,
+        *, at: Expr, copying: bool,
+    ) -> str:
+        """An unboxed list of *want*'s elements, from ``[start, stop)`` of *base*.
+
+        The one loop that converts a list a element at a time.  A range
+        constructor cannot serve where the elements need converting, and cannot
+        serve at a copy site where they are handles -- it would copy the handles
+        and share what they point at.
+        """
+        assert not want.boxed, 'the caller boxes; see _convert_storage'
         out, i = self._fresh_temp(), self._fresh_temp()
-        n = self._list_len(src, base)
         self.writer.add_line(f'{want.format()} {out};')
-        self.writer.add_line(f'{self._member(want, out)}reserve({n});')
-        self.writer.add_line(f'for (size_t {i} = 0; {i} < {n}; ++{i}) {{')
+        self.writer.add_line(
+            f'{self._member(want, out)}reserve({stop} - {start});'
+        )
+        self.writer.add_line(f'for (size_t {i} = {start}; {i} < {stop}; ++{i}) {{')
         self.writer.indent()
         elt = self._convert_storage(
             self._list_at_raw(src, base, i), src.elt, want.elt, at=at,
@@ -2552,6 +2588,22 @@ class CppEmitter(Visitor):
             stop = f'static_cast<size_t>({self._visit_expr(e.stop, ctx)})'
 
         result_ty = self._storage_for_expr(e)
+        if (
+            isinstance(result_ty, CppList) and isinstance(arr_ty, CppList)
+            # A slice is construction, so its elements are a region of their own:
+            # they may be represented differently from the source's, and where
+            # they are handles the range constructor would copy those and share
+            # what they point at.  It neither converts nor copies through.
+            and (self._copy_allocates(result_ty.elt)
+                 or arr_ty.elt != result_ty.elt)
+        ):
+            unboxed = CppList(result_ty.elt, boxed=False)
+            out = self._build_elementwise(
+                arr_ty, arr_tmp, start, stop, unboxed, at=e, copying=True,
+            )
+            if not result_ty.boxed:
+                return out
+            return f'std::make_shared<{unboxed.format()}>({out})'
         begin = self._list_begin(arr_ty, arr_tmp)
         return (
             self._list_new_range(
@@ -2560,6 +2612,7 @@ class CppEmitter(Visitor):
                 f'{begin} + {stop}',
             )
         )
+
     def _visit_if_expr(self, e, ctx) -> str:
         # ``cond ? ift : iff`` — both branches must share a C++ type,
         # so when their storages differ we cast each to the IfExpr's

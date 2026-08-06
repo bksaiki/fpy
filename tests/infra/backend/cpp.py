@@ -1780,6 +1780,64 @@ def _regression_conditional_alias(
 
 
 @fp.fpy
+def _regression_boxed_construction_copies(
+    xss: list[list[fp.Real]], ws: list[fp.Real],
+) -> fp.Real:
+    """Route: construction where *both* levels are boxed.
+
+    The element and the slot then have the same C++ type, so a conversion looks
+    unnecessary and the handle would be passed straight through -- sharing where
+    the semantics copies.  Writing through `yss` must leave `xss` alone.
+
+    The tuples force the boxing; the second is what boxes `yss`'s rows, and
+    without it this is an ordinary `vector<vector<T>>`.
+    """
+    with fp.FP64:
+        if len(xss) < 2 or len(ws) == 0:
+            return 0
+        _u = (xss[0], 1.0)
+        yss = [xss[0], xss[1]]
+        _t = (yss[0], 1.0)
+        yss[0][0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_boxed_slice_copies(
+    xss: list[list[fp.Real]], ws: list[fp.Real],
+) -> fp.Real:
+    """The same for a slice, whose range constructor copies its elements -- and
+    a handle copied is a reference shared."""
+    with fp.FP64:
+        if len(xss) < 2 or len(ws) == 0:
+            return 0
+        _u = (xss[0], 1.0)
+        yss = xss[0:2]
+        _t = (yss[0], 1.0)
+        yss[0][0] = 99
+        return xss[0][0]
+
+
+@fp.fpy
+def _regression_slice_across_representations(
+    xss: list[list[fp.Real]], ws: list[fp.Real],
+) -> fp.Real:
+    """Pin: a slice whose elements are represented differently from its source.
+
+    A slice's elements are a region of their own now, so the source's rows may
+    be handles while the result's are values.  The range constructor converts
+    nothing, so it cannot express that -- it emitted C++ that did not compile.
+    """
+    with fp.FP64:
+        if len(xss) < 2 or len(ws) == 0:
+            return 0
+        _u = (xss[0], 1.0)
+        yss = xss[0:2]
+        zss = yss[0:1]
+        return zss[0][0] + yss[0][0]
+
+
+@fp.fpy
 def _regression_boxed_slot_overwrite(
     xss: list[list[fp.Real]], ws: list[fp.Real],
 ) -> fp.Real:
@@ -1932,6 +1990,9 @@ _regression_funcs: list[fp.Function] = [
     _regression_tuple_row_into_list,
     _regression_boxed_slot_overwrite,
     _regression_store_into_boxed_slot,
+    _regression_boxed_construction_copies,
+    _regression_boxed_slice_copies,
+    _regression_slice_across_representations,
 ]
 
 
