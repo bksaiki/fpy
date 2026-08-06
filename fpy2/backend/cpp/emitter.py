@@ -136,7 +136,7 @@ from ...number import (
     RealFloat,
 )
 from ...number.context.context import Context
-from .ops import BinaryCppOp, ScalarOpTable, TernaryCppOp, UnaryCppOp
+from .ops import CppOp, ScalarOpTable
 from .storage import (
     StorageSelectionError,
     choose_storage,
@@ -1754,7 +1754,7 @@ class CppEmitter(Visitor):
     def _try_widen(
         self,
         e: Expr,
-        sigs: Sequence[UnaryCppOp | BinaryCppOp | TernaryCppOp],
+        sigs: Sequence[CppOp],
         operands: Sequence[tuple[str, CppScalar]],
     ) -> str | None:
         """Pick a signature whose output context contains the exact unrounded

@@ -35,6 +35,7 @@ At an op site the emitter consults:
 from __future__ import annotations
 
 import dataclasses
+import enum
 from typing import TypeAlias
 
 from ...ast.fpyast import Expr
@@ -43,36 +44,39 @@ from .storage import choose_storage_scalar
 from .types import CppScalar
 
 
-@dataclasses.dataclass(frozen=True)
-class UnaryCppOp:
-    """A single supported C++ signature for a unary FPy op,
-    parameterized by an argument C++ type and an active rounding
-    context for the output.
+@enum.unique
+class CppOpStyle(enum.Enum):
+    """How a signature spells itself in C++."""
+    CALL = 'call'      # f(a, b)
+    INFIX = 'infix'    # (a op b)
+    PREFIX = 'prefix'  # (op a)
 
-    When ``cast_out`` is ``True`` the emitted call is wrapped in a
-    ``static_cast`` to the output context's storage type — used by
-    ops whose underlying C++ primitive returns a *narrower* /
-    differently-typed value than the output storage demands (e.g.
-    ``std::ilogb`` returns ``int`` but the output context might map
-    to ``int64_t``).  The cast is sound by precondition: such
-    primitives are paired with op variants that guarantee the
-    returned value fits in the destination width."""
+
+@dataclasses.dataclass(frozen=True)
+class CppOp:
+    """One supported C++ signature for an FPy op: the input slots it takes,
+    the active rounding context its output is correct under, and how it is
+    spelled.
+
+    ``cast_out`` wraps the emitted form in a ``static_cast`` to the output
+    context's storage -- for primitives returning something narrower or
+    otherwise different from what the output demands, such as ``std::ilogb``
+    returning C ``int`` where the context maps to ``int64_t``.  Sound by
+    precondition: such primitives are paired with op variants guaranteeing the
+    value fits.
+    """
     name: str
-    is_func: bool
-    arg_ty: CppScalar
+    in_tys: tuple[CppScalar, ...]
     out_ctx: Context
+    style: CppOpStyle = CppOpStyle.CALL
     cast_out: bool = False
 
     @property
-    def in_tys(self) -> tuple[CppScalar, ...]:
-        """The signature's input slots, left to right."""
-        return (self.arg_ty,)
-
-    @property
     def is_call(self) -> bool:
-        """Does this signature emit ``f(args)``?  Infix and prefix
-        operators take their type from the operands instead."""
-        return self.is_func
+        """Does this emit ``f(args)``?  An infix or prefix operator takes its
+        type from the operands instead, which is what decides whether a literal
+        argument needs its own type spelled."""
+        return self.style is CppOpStyle.CALL
 
     def matches(
         self, in_tys: tuple[CppScalar, ...], active_ctx: Context,
@@ -80,82 +84,25 @@ class UnaryCppOp:
         """Exactly this signature, no conversions."""
         return self.out_ctx == active_ctx and self.in_tys == in_tys
 
-    def format(self, arg: str) -> str:
-        call = f'{self.name}({arg})' if self.is_func else f'({self.name}{arg})'
+    def format(self, *args: str) -> str:
+        match self.style:
+            case CppOpStyle.INFIX:
+                lhs, rhs = args
+                out = f'({lhs} {self.name} {rhs})'
+            case CppOpStyle.PREFIX:
+                (arg,) = args
+                out = f'({self.name}{arg})'
+            case CppOpStyle.CALL:
+                out = f'{self.name}({", ".join(args)})'
         if self.cast_out:
             out_ty = choose_storage_scalar(self.out_ctx.format())
-            return f'static_cast<{out_ty.format()}>({call})'
-        return call
+            return f'static_cast<{out_ty.format()}>({out})'
+        return out
 
 
-@dataclasses.dataclass(frozen=True)
-class BinaryCppOp:
-    """A single supported C++ signature for a binary FPy op,
-    parameterized by per-operand C++ types and an active rounding
-    context for the output."""
-    name: str
-    is_infix: bool
-    in1_ty: CppScalar
-    in2_ty: CppScalar
-    out_ctx: Context
-
-    @property
-    def in_tys(self) -> tuple[CppScalar, ...]:
-        """The signature's input slots, left to right."""
-        return (self.in1_ty, self.in2_ty)
-
-    @property
-    def is_call(self) -> bool:
-        """Does this signature emit ``f(args)``?  Infix and prefix
-        operators take their type from the operands instead."""
-        return not self.is_infix
-
-    def matches(
-        self, in_tys: tuple[CppScalar, ...], active_ctx: Context,
-    ) -> bool:
-        """Exactly this signature, no conversions."""
-        return self.out_ctx == active_ctx and self.in_tys == in_tys
-
-    def format(self, lhs: str, rhs: str) -> str:
-        if self.is_infix:
-            return f'({lhs} {self.name} {rhs})'
-        return f'{self.name}({lhs}, {rhs})'
-
-
-@dataclasses.dataclass(frozen=True)
-class TernaryCppOp:
-    """A single supported C++ signature for a ternary FPy op
-    (e.g., ``Fma``).  Same parameterization as the binary case."""
-    name: str
-    in1_ty: CppScalar
-    in2_ty: CppScalar
-    in3_ty: CppScalar
-    out_ctx: Context
-
-    @property
-    def in_tys(self) -> tuple[CppScalar, ...]:
-        """The signature's input slots, left to right."""
-        return (self.in1_ty, self.in2_ty, self.in3_ty)
-
-    @property
-    def is_call(self) -> bool:
-        """Does this signature emit ``f(args)``?  Infix and prefix
-        operators take their type from the operands instead."""
-        return True
-
-    def matches(
-        self, in_tys: tuple[CppScalar, ...], active_ctx: Context,
-    ) -> bool:
-        """Exactly this signature, no conversions."""
-        return self.out_ctx == active_ctx and self.in_tys == in_tys
-
-    def format(self, a: str, b: str, c: str) -> str:
-        return f'{self.name}({a}, {b}, {c})'
-
-
-UnaryOpTable: TypeAlias = dict[type[Expr], list[UnaryCppOp]]
-BinaryOpTable: TypeAlias = dict[type[Expr], list[BinaryCppOp]]
-TernaryOpTable: TypeAlias = dict[type[Expr], list[TernaryCppOp]]
+UnaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
+BinaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
+TernaryOpTable: TypeAlias = dict[type[Expr], list[CppOp]]
 
 
 @dataclasses.dataclass
