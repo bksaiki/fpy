@@ -914,7 +914,67 @@ def _test_library(
     return failures
 
 
-def _build_and_run(
+CPP_INTEROP: str = '''\
+namespace fpy {
+
+// Interop: a program holding `std::vector` converts here.  A flat vector can be
+// shared or copied; a nested one can only be copied.
+
+// Must not outlive `v`.
+template <typename T>
+inline list<T> borrow(std::vector<T>& v) {
+    return list<T>(&v, [](std::vector<T>*) {});
+}
+
+template <typename T>
+inline list<T> copy_in(const std::vector<T>& v) {
+    return std::make_shared<std::vector<T> >(v);
+}
+
+template <typename T>
+inline list<list<T> > copy_in(const std::vector<std::vector<T> >& vs) {
+    list<list<T> > out = make_list<list<T> >(vs.size());
+    for (std::size_t i = 0; i < vs.size(); ++i)
+        (*out)[i] = copy_in(vs[i]);
+    return out;
+}
+
+template <typename T>
+inline std::vector<T> copy_out(const list<T>& xs) {
+    return *xs;
+}
+
+template <typename T>
+inline std::vector<std::vector<T> > copy_out(const list<list<T> >& xss) {
+    std::vector<std::vector<T> > out(xss->size());
+    for (std::size_t i = 0; i < xss->size(); ++i)
+        out[i] = *(*xss)[i];
+    return out;
+}
+
+}  // namespace fpy
+'''
+"""Conversions a *caller* needs to hand a ``std::vector`` to a generated kernel.
+
+Not part of the runtime, because nothing emitted names them: the emitter never
+produces a ``borrow`` / ``copy_in`` / ``copy_out`` call, so carrying them in
+every translation unit would be surface no generated program uses.  They live
+here, with the tests that exercise the boundary, and are appended after
+``CppCompiler.helpers()`` — which defines the ``fpy::list`` and ``make_list``
+they build on.
+
+Two properties the ABI tests pin:
+
+- A ``vector<vector<T>>`` can only be copied.  The caller stores rows by value
+  where a list stores handles, so no arrangement makes a write through either
+  side visible to the other.
+- A borrowed handle must not outlive its vector.  That holds because a callee
+  cannot retain one: FPy has no globals, and captures are materialized before
+  compilation.
+"""
+
+
+def _build_and_run_driver(
     cpp_path: Path, group: str, name: str,
 ) -> list[tuple[str, str, str]]:
     """Build a driver translation unit and run it; a nonzero exit is a failure.
@@ -1106,6 +1166,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
         print('\n'.join(compiler.headers()), file=f)
         print('#include <cstdio>', file=f)
         print(compiler.helpers(), file=f)
+        print(CPP_INTEROP, file=f)
         print(compiler.compile_module(module), file=f)
         print(_ABI_MAIN, file=f)
 
@@ -1115,7 +1176,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
         print('  SKIPPED (no C++ compiler driver)')
         return []
 
-    return _build_and_run(cpp_path, group, 'abi_boundary')
+    return _build_and_run_driver(cpp_path, group, 'abi_boundary')
 
 
 _RTZ_64 = fp.IEEEContext(11, 64, fp.RM.RTZ)
@@ -1186,7 +1247,7 @@ def _test_fenv(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, 
         print('  SKIPPED (no C++ compiler driver)')
         return []
 
-    return _build_and_run(cpp_path, group, 'fenv_boundary')
+    return _build_and_run_driver(cpp_path, group, 'fenv_boundary')
 
 
 _FENV_MAIN: str = """\
@@ -1321,6 +1382,7 @@ def _test_abi_native(
         print('\n'.join(compiler.headers()), file=f)
         print('#include <cstdio>', file=f)
         print(compiler.helpers(), file=f)
+        print(CPP_INTEROP, file=f)
         print(compiler.compile_module(module), file=f)
         print(_ABI_NATIVE_MAIN, file=f)
 
