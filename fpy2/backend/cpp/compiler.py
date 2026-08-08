@@ -118,6 +118,7 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
     the callee declared and must be non-const if the callee writes it, and a
     result must have the representation the callee returns.
     """
+    _check_signature_monomorphic(a)
     params: list[ParamAbi] = []
     for arg in a.ast.args:
         if not isinstance(arg.name, NamedId):
@@ -129,6 +130,27 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
         )
         params.append(ParamAbi(ty, written))
     return CalleeAbi(params, _return_storage(a))
+
+
+def _check_signature_monomorphic(a: SpecAnalyses) -> None:
+    """Refuse a spec whose signature still holds a type variable -- emitting it
+    needs a template, which this backend does not do.
+
+    Storage selection will not catch this: a :class:`VarType` and a ``bool``
+    share the ``None`` format bound, so the ladder answers ``bool`` for both
+    and ``return []`` became ``std::vector<bool> f()``.
+
+    Scoped to the signature, which is where the template would be needed.  A
+    type variable that stays internal belongs to a value no element is stored
+    into or read from, so its storage is unobservable.
+    """
+    fn_type = a.format_info.type_info.fn_type
+    if not fn_type.is_monomorphic():
+        raise CppCompileError(
+            f'`{a.ast.name}` has an unresolved type in its signature '
+            f'({fn_type.format()}); emitting it would need a C++ template. '
+            'Annotate the type, or give the value an element to infer from.'
+        )
 
 
 def _return_storage(a: SpecAnalyses) -> CppType:

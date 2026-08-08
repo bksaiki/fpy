@@ -51,6 +51,36 @@ class TestCppCompilerStub:
         with pytest.raises(CppCompileError, match='cannot pick storage'):
             compiler.compile(f)
 
+    def test_compile_unresolved_signature_type_rejects(self):
+        """A type variable in the signature needs a template.  The ladder does
+        not catch it: a ``VarType`` and a ``bool`` share the ``None`` format
+        bound, so ``return []`` compiled to ``std::vector<bool> f()``."""
+
+        @fp.fpy
+        def empty_list():
+            return []
+
+        @fp.fpy
+        def alloc_only():
+            xs = fp.empty(4)
+            return xs
+
+        compiler = CppCompiler()
+        for f in (empty_list, alloc_only):
+            with pytest.raises(CppCompileError, match='unresolved type'):
+                compiler.compile(f, ctx=fp.FP64)
+
+    def test_compile_unresolved_internal_type_still_emits(self):
+        """Only the signature is refused: nothing reads an element of ``x``, so
+        its storage is unobservable and any choice compiles."""
+
+        @fp.fpy
+        def f():
+            x = []
+            return len(x)
+
+        assert 'return' in CppCompiler().compile(f, ctx=fp.FP64)
+
     def test_compile_rejects_non_function(self):
         """Passing a non-Function raises ``TypeError`` before the stub fires."""
         compiler = CppCompiler()
