@@ -117,6 +117,15 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
         raise StorageSelectionError(
             f'cannot reason about format: {bound!r}'
         )
+    if is_bottom(bound):
+        # The empty set: a slot that holds no value, i.e. an element of a
+        # fresh `empty(...)` allocation.  Every ladder entry contains it
+        # vacuously, so the smallest one is the answer -- and it is only ever
+        # the answer for a slot nothing is stored into, since a store joins a
+        # real bound over the bottom.  `_to_abstract` cannot serve this case:
+        # every `AbstractFormat` grid holds a `+0.0`, so none of them *is* the
+        # empty set.
+        return _LADDER[0][0]
 
     af = _to_abstract(bound)
     if af is None:
@@ -140,6 +149,23 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
     )
 
 
+def is_bottom(bound: FormatBound) -> bool:
+    """Does *bound* describe no value at all — the format-lattice bottom?
+
+    True for the empty :class:`SetFormat` and for an aggregate all of whose
+    leaves are empty, which is what format inference gives a fresh
+    ``empty(...)``.  ``None`` is *not* bottom: it is the bound of a boolean,
+    which has storage of its own.
+    """
+    if isinstance(bound, SetFormat):
+        return not bound.values
+    if isinstance(bound, TupleFormat):
+        return bool(bound.elts) and all(is_bottom(b) for b in bound.elts)
+    if isinstance(bound, ListFormat):
+        return is_bottom(bound.elt)
+    return False
+
+
 def choose_storage(bound: FormatBound) -> CppType:
     """The storage for a possibly structured :class:`FormatBound`: scalars via
     :func:`choose_storage_scalar`, tuples to ``std::tuple``, lists to
@@ -158,9 +184,17 @@ def aggregate_storage(bounds: list[FormatBound]) -> CppType:
     For a name with several SSA defs, whose declaration must hold every value
     assigned into it.  Storage per bound, then the ladder supremum; structured
     types recurse.
+
+    A bottom bound (:func:`is_bottom` — a fresh ``empty(...)``) holds no value,
+    so it constrains nothing and is dropped when any other def does.  Keeping it
+    would widen for nothing: its storage is the ladder's *first* rung, and
+    ``u8 ⊔ s8`` is ``s16``.  Bounds that are only partly bottom still contribute
+    their bottom slots, which can widen the same way; that would need a
+    supremum over bounds rather than over storages.
     """
     assert bounds, 'aggregate_storage requires at least one bound'
-    storages = [choose_storage(b) for b in bounds]
+    constraining = [b for b in bounds if not is_bottom(b)]
+    storages = [choose_storage(b) for b in (constraining or bounds)]
     return _supremum(storages)
 
 

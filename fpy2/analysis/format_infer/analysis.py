@@ -34,7 +34,11 @@ The analysis tracks a **format** that mirrors the basic-type structure::
   precise than any :class:`Format` containing all of its values.  Its values are
   :data:`SetValue` — an exact :class:`Fraction`, or :data:`NEG_ZERO` for the
   negative zero a ``Fraction`` cannot represent — so a set says *which* zero it
-  holds rather than leaving it to an invariant.
+  holds rather than leaving it to an invariant.  The **empty** set is the
+  scalar **bottom** (:meth:`SetFormat.bottom`): a slot that holds no number at
+  all, which is what a fresh ``empty(...)`` allocation gives every element.  It
+  is the identity of the join, so the stores into such a list are what
+  determine its format.
 - A scalar :class:`Format` (e.g. ``IEEEFormat(es=8, nbits=32)``) describes a
   real-valued expression.  ``REAL_FORMAT`` is the **scalar top** — unrestricted
   real values (the format is unknown or unconstrained).
@@ -114,6 +118,14 @@ Format inference rules
 - **Tuple expressions**: ``TupleFormat`` of the per-element formats.
 - **List expressions**: ``ListFormat`` of the join of element formats; the top
   format of the list's element type when the list is empty.
+- **Allocation** (``Empty``): the **bottom** of the lattice at the result's
+  type — every real leaf is the empty :class:`SetFormat`, recursively, so
+  ``empty(10)`` is ``list[∅]``, ``empty(2, 3)`` is ``list[list[∅]]``, and a
+  ``list[tuple[real, real]]`` allocation is ``list[tuple[∅, ∅]]``.  The
+  elements are ``UNINIT``: they hold no number, and the stores that follow
+  join over the bottom to give the list its format.  (The type-derived bound
+  would say ``REAL_FORMAT`` here — the top, which is absorbing, so a
+  fully-initialized list would stay unconstrained.)
 - **List comprehensions**: ``ListFormat`` of the body expression's format; the
   loop target is bound to the iterable's element format.
 - **Indexing/slicing**: list indexing returns the list's element format; list
@@ -233,6 +245,19 @@ class SetFormat:
     def from_value(x: SetValue):
         return SetFormat(frozenset((x,)))
 
+    @staticmethod
+    def bottom() -> 'SetFormat':
+        """The empty set — the bottom of the scalar lattice.
+
+        No real value is a member, which is the honest bound for a slot that
+        holds no number yet: an element of a fresh :class:`Empty` allocation.
+        It is the identity of :func:`_join_bounds` on the scalar sub-lattice
+        (``∅ ⊔ f = f``, since ``_all_representable_in`` is vacuously true), so
+        an uninitialized list picks up exactly the formats that are stored
+        into it rather than the ``REAL_FORMAT`` top.
+        """
+        return SetFormat(frozenset())
+
 
 def _free_var_format(val: object) -> 'FormatBound':
     """Recursive :data:`FormatBound` for a captured free-variable value.
@@ -342,7 +367,7 @@ Inferred format for an expression or variable definition.
 
 - ``None`` — no numeric format (booleans, contexts, foreign values, …).
 - :class:`SetFormat` — known finite set of real values; more precise than any
-  format containing them.
+  format containing them.  Empty is the scalar bottom — no value at all.
 - :class:`Format` — scalar format; ``REAL_FORMAT`` is the top of the scalar
   lattice.
 - :class:`TupleFormat` — heterogeneous tuple, per-element formats preserved.
@@ -474,6 +499,35 @@ def _bound_of_type(ty: Type) -> FormatBound:
             return TupleFormat(tuple(_bound_of_type(t) for t in ty.elts))
         case ListType():
             return ListFormat(_bound_of_type(ty.elt))
+        case BoolType() | ContextType() | FunctionType() | VarType():
+            return None
+        case _:
+            raise RuntimeError(f'unreachable: unknown type {ty!r}')
+
+
+def _bottom_of_type(ty: Type) -> FormatBound:
+    """The **bottom** :data:`FormatBound` at *ty*'s shape: every real leaf is
+    the empty set :meth:`SetFormat.bottom`, aggregates recurse, and non-numeric
+    leaves are ``None`` (their own bottom — and their only inhabitant).
+
+    The structural mirror of :func:`_bound_of_type`, which gives the *top* at a
+    shape.  Used for :class:`Empty`, whose elements hold no number at all:
+    ``fp.empty(10)`` is ``list[∅]``, and ``fp.empty(2, 3)`` is ``list[list[∅]]``.
+    A ``list[tuple[real, real]]`` allocation is ``list[tuple[∅, ∅]]`` — the
+    recursion is what makes each tuple slot start empty rather than at the top.
+
+    A :class:`VarType` leaf stays ``None``, matching :func:`_bound_of_type`: an
+    element type that type inference never resolved is not known to be numeric,
+    and claiming the scalar bottom for it would make the first join with a
+    real-valued store a structural mismatch rather than a widening.
+    """
+    match ty:
+        case RealType():
+            return SetFormat.bottom()
+        case TupleType():
+            return TupleFormat(tuple(_bottom_of_type(t) for t in ty.elts))
+        case ListType():
+            return ListFormat(_bottom_of_type(ty.elt))
         case BoolType() | ContextType() | FunctionType() | VarType():
             return None
         case _:
@@ -1707,6 +1761,15 @@ class _FormatInferInstance(Visitor):
                     for fmt in arg_fmts
                 ]
                 return ListFormat(TupleFormat(tuple(elts)))
+            case Empty():
+                # An allocation, not a computation: every element is
+                # ``UNINIT``, so the set of numbers it can hold is *empty*.
+                # The bottom of the lattice at the result's shape says that;
+                # ``_op_bound``'s type-derived bound would say ``REAL_FORMAT``
+                # — the top — and that top then poisons every join the list
+                # takes part in, so a fully-initialized ``xs`` stays
+                # unconstrained no matter what is stored into it.
+                return _bottom_of_type(self.type_info.by_expr[e])
             case _:
                 return self._op_bound(e)
 

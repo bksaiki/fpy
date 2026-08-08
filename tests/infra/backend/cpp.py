@@ -715,8 +715,8 @@ _test_ignore = [
     'test_assert3',
     # not monomorphic
     'test_meta_inner',
-    # unsupported operations
-    'test_empty1',
+    # `i * n` is an int64 product under FP64, which the lossy-implicit-cast
+    # guard refuses -- nothing to do with `empty` (`test_empty1` compiles).
     'test_empty2',
     'test_empty3',
 ]

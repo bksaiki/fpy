@@ -213,3 +213,38 @@ class TestStorageAggregate:
     def test_aggregate_real_format_rejected(self):
         with pytest.raises(StorageSelectionError):
             aggregate_storage([REAL_FORMAT])
+
+
+class TestStorageBottom:
+    """The empty :class:`SetFormat` — a slot holding no value, i.e. an element
+    of a fresh ``empty(...)`` allocation."""
+
+    def test_bottom_takes_the_smallest_rung(self):
+        """Every ladder entry contains it vacuously, so the cheapest wins.
+        ``_to_abstract`` cannot answer this: every ``AbstractFormat`` grid holds
+        a ``+0.0``, so none of them *is* the empty set."""
+        assert choose_storage_scalar(SetFormat(frozenset())) == CppScalar.U8
+
+    def test_bottom_recurses_through_a_list(self):
+        assert choose_storage(ListFormat(SetFormat(frozenset()))) \
+            == CppList(CppScalar.U8)
+
+    def test_bottom_does_not_widen_an_aggregate(self):
+        """A def that holds no value constrains nothing.  Keeping it would
+        widen for nothing: its own storage is ``u8`` and ``u8 ⊔ s8`` is
+        ``s16``."""
+        s8 = SetFormat(frozenset((Fraction(-1),)))
+        assert aggregate_storage([SetFormat(frozenset()), s8]) == CppScalar.S8
+
+    def test_an_all_bottom_aggregate_still_picks_a_type(self):
+        """Nothing is ever read from it, so any type is correct — but there
+        must be one."""
+        assert aggregate_storage([
+            ListFormat(SetFormat(frozenset())),
+            ListFormat(SetFormat(frozenset())),
+        ]) == CppList(CppScalar.U8)
+
+    def test_none_is_not_bottom(self):
+        """``None`` is a boolean's bound, and a boolean has storage of its
+        own — dropping it from an aggregate would lose that."""
+        assert aggregate_storage([None, None]) == CppScalar.BOOL

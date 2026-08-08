@@ -21,7 +21,7 @@ from fpy2.analysis.format_infer.analysis import (
     _list_set_widen,
 )
 from fpy2.analysis.reaching_defs import AssignDef
-from fpy2.ast.fpyast import FuncDef, IndexedAssign
+from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType
@@ -1966,3 +1966,100 @@ class TestTupleAccessorFormats:
         mono = Monomorphize.apply(f.ast, None, [RealType(fp.FP32), RealType(fp.FP64)])
         info = FormatInfer.analyze(mono)
         assert fp.FP64.format() in self._bounds(info, 'u')
+
+
+class TestEmptyIsBottom:
+    """``empty(...)`` allocates; it does not compute.
+
+    Every element is ``UNINIT``, so the set of numbers it holds is the *empty*
+    set — the bottom of the scalar lattice.  Reporting the top instead
+    (``REAL_FORMAT``, the type-derived bound) is not merely imprecise: the top
+    is absorbing under join, so an ``xs`` written entirely by the loop below
+    would stay unconstrained no matter what was stored into it.
+    """
+
+    @staticmethod
+    def _empty_bound(info):
+        """The bound inferred for the (single) ``Empty`` node."""
+        bounds = [b for e, b in info.by_expr.items() if isinstance(e, Empty)]
+        assert len(bounds) == 1, f'expected one Empty node, got {len(bounds)}'
+        return bounds[0]
+
+    @staticmethod
+    def _bounds(info, name):
+        return [b for d, b in info.by_def.items() if d.name.base == name]
+
+    def test_empty_list_elements_hold_no_value(self):
+        @fp.fpy
+        def f():
+            xs = fp.empty(10)
+            for i in range(10):
+                xs[i] = 0
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert self._empty_bound(info) == ListFormat(SetFormat(frozenset()))
+
+    def test_stores_join_over_the_bottom(self):
+        """``∅ ⊔ {0} = {0}``: the initialized list is pinned to what was
+        stored, where the ``REAL_FORMAT`` top would have swallowed it."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(10)
+            for i in range(10):
+                xs[i] = 0
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert ListFormat(SetFormat(frozenset((Fraction(0),)))) in \
+            self._bounds(info, 'xs')
+
+    def test_nested_allocation_is_bottom_at_every_level(self):
+        """A multi-dimensional ``empty`` is bottom at the leaf, not at the
+        outer list — the recursion is over the result *type*."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(2, 3)
+            for i in range(2):
+                for j in range(3):
+                    xs[i][j] = 1
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert self._empty_bound(info) == ListFormat(ListFormat(SetFormat(frozenset())))
+
+    def test_tuple_elements_are_bottom_per_slot(self):
+        """``list[tuple[real, real]]`` allocates to ``list[tuple[∅, ∅]]``: each
+        slot starts empty and is joined independently by the stores."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(4)
+            for i in range(4):
+                xs[i] = (1, 2)
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        empty_bound = self._empty_bound(info)
+        assert empty_bound == ListFormat(
+            TupleFormat((SetFormat(frozenset()), SetFormat(frozenset())))
+        )
+        assert ListFormat(TupleFormat((
+            SetFormat(frozenset((Fraction(1),))),
+            SetFormat(frozenset((Fraction(2),))),
+        ))) in self._bounds(info, 'xs')
+
+    def test_unresolved_element_type_stays_none(self):
+        """Nothing constrains the element type of an allocation that is never
+        written, so the leaf is the ``None`` that :func:`_bound_of_type` also
+        gives a :class:`VarType` — not the scalar bottom."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(4)
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert self._empty_bound(info) == ListFormat(None)
