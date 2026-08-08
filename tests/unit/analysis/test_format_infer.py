@@ -1971,11 +1971,10 @@ class TestTupleAccessorFormats:
 class TestEmptyIsBottom:
     """``empty(...)`` allocates; it does not compute.
 
-    Every element is ``UNINIT``, so the set of numbers it holds is the *empty*
-    set — the bottom of the scalar lattice.  Reporting the top instead
-    (``REAL_FORMAT``, the type-derived bound) is not merely imprecise: the top
-    is absorbing under join, so an ``xs`` written entirely by the loop below
-    would stay unconstrained no matter what was stored into it.
+    Every element is ``UNINIT``, so it holds no number and the bound is the
+    empty set.  Reporting the type-derived ``REAL_FORMAT`` instead is not
+    merely imprecise: the top is absorbing under join, so a list written
+    entirely by the loops below would stay unconstrained.
     """
 
     @staticmethod
@@ -1989,7 +1988,7 @@ class TestEmptyIsBottom:
     def _bounds(info, name):
         return [b for d, b in info.by_def.items() if d.name.base == name]
 
-    def test_empty_list_elements_hold_no_value(self):
+    def test_allocation_is_bottom_and_stores_join_over_it(self):
         @fp.fpy
         def f():
             xs = fp.empty(10)
@@ -1998,26 +1997,14 @@ class TestEmptyIsBottom:
             return xs
 
         info = FormatInfer.analyze(f.ast)
-        assert self._empty_bound(info) == ListFormat(SetFormat(frozenset()))
-
-    def test_stores_join_over_the_bottom(self):
-        """``∅ ⊔ {0} = {0}``: the initialized list is pinned to what was
-        stored, where the ``REAL_FORMAT`` top would have swallowed it."""
-
-        @fp.fpy
-        def f():
-            xs = fp.empty(10)
-            for i in range(10):
-                xs[i] = 0
-            return xs
-
-        info = FormatInfer.analyze(f.ast)
-        assert ListFormat(SetFormat(frozenset((Fraction(0),)))) in \
+        assert self._empty_bound(info) == ListFormat(SetFormat.bottom())
+        # ``∅ ⊔ {0} = {0}``, where the top would have swallowed the store.
+        assert ListFormat(SetFormat.from_value(Fraction(0))) in \
             self._bounds(info, 'xs')
 
-    def test_nested_allocation_is_bottom_at_every_level(self):
-        """A multi-dimensional ``empty`` is bottom at the leaf, not at the
-        outer list — the recursion is over the result *type*."""
+    def test_nested_allocation_is_bottom_at_the_leaf(self):
+        """The recursion is over the result *type*, so a multi-dimensional
+        ``empty`` is bottom at the leaf rather than at the outer list."""
 
         @fp.fpy
         def f():
@@ -2028,7 +2015,7 @@ class TestEmptyIsBottom:
             return xs
 
         info = FormatInfer.analyze(f.ast)
-        assert self._empty_bound(info) == ListFormat(ListFormat(SetFormat(frozenset())))
+        assert self._empty_bound(info) == ListFormat(ListFormat(SetFormat.bottom()))
 
     def test_tuple_elements_are_bottom_per_slot(self):
         """``list[tuple[real, real]]`` allocates to ``list[tuple[∅, ∅]]``: each
@@ -2042,19 +2029,17 @@ class TestEmptyIsBottom:
             return xs
 
         info = FormatInfer.analyze(f.ast)
-        empty_bound = self._empty_bound(info)
-        assert empty_bound == ListFormat(
-            TupleFormat((SetFormat(frozenset()), SetFormat(frozenset())))
-        )
+        bottom = SetFormat.bottom()
+        assert self._empty_bound(info) == ListFormat(TupleFormat((bottom, bottom)))
         assert ListFormat(TupleFormat((
-            SetFormat(frozenset((Fraction(1),))),
-            SetFormat(frozenset((Fraction(2),))),
+            SetFormat.from_value(Fraction(1)),
+            SetFormat.from_value(Fraction(2)),
         ))) in self._bounds(info, 'xs')
 
     def test_unresolved_element_type_stays_none(self):
         """Nothing constrains the element type of an allocation that is never
-        written, so the leaf is the ``None`` that :func:`_bound_of_type` also
-        gives a :class:`VarType` — not the scalar bottom."""
+        written, so the leaf is the ``None`` :func:`_bound_of_type` also gives
+        a :class:`VarType` — not the scalar bottom."""
 
         @fp.fpy
         def f():

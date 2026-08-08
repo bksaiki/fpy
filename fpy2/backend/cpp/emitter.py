@@ -841,12 +841,10 @@ class CppEmitter(Visitor):
             case ListComp() if isinstance(want, CppList):
                 return self._emit_list_comp_at(e, want, ctx)
             case Empty() if isinstance(want, CppList):
-                # `empty(...)` holds no value, so its own bound is the lattice
-                # bottom and its own storage the ladder's first rung.  Build it
-                # at the target instead: the alternative is a `vector<uint8_t>`
-                # rebuilt element-wise into the real storage, one loop to fill
-                # what the constructor already filled.
-                return self._emit_empty_at(e, want, ctx)
+                # Its own bound is the lattice bottom, so its own storage is
+                # the ladder's first rung; building at the target saves
+                # rebuilding a `vector<uint8_t>` element-wise into it.
+                return self._emit_empty(e, want, ctx)
             case IfExpr():
                 cond = self._visit_expr(e.cond, ctx)
                 ift = self._emit_at(e.ift, want, ctx)
@@ -1979,7 +1977,7 @@ class CppEmitter(Visitor):
             case Min() | Max():
                 return self._emit_min_max(e, ctx)
             case Empty():
-                return self._emit_empty(e, ctx)
+                return self._emit_empty(e, self._storage_for_expr(e), ctx)
             case _:
                 raise CppEmitError(
                     f'unsupported nary op: {type(e).__name__}', at=e,
@@ -2154,18 +2152,9 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return acc
 
-    def _emit_empty(self, e: Empty, ctx) -> str:
-        """``empty(d1, ..., dN)`` at its own storage.
-
-        Its own bound is the lattice bottom, so that storage is the ladder's
-        first rung -- correct for a value nothing reads, and converted by the
-        caller otherwise.  :meth:`_emit_at` takes the target-storage path.
-        """
-        return self._emit_empty_at(e, self._storage_for_expr(e), ctx)
-
-    def _emit_empty_at(self, e: Empty, result_ty: CppType, ctx) -> str:
-        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector
-        of storage *result_ty*.
+    def _emit_empty(self, e: Empty, result_ty: CppType, ctx) -> str:
+        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector of
+        storage *result_ty*.
 
         Sizes are read off the call site and emitted as nested ``make_list`` calls
         right-to-left, so the innermost element type bubbles out.  ``empty()`` is a

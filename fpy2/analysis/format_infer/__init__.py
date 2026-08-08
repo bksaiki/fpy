@@ -12,6 +12,7 @@ from .analysis import (
     TupleFormat,
     exact_binop,
     exact_unop,
+    is_bottom,
     round_is_identity,
 )
 from .format import AbstractableFormat, AbstractFormat
@@ -30,5 +31,6 @@ __all__ = [
     'TupleFormat',
     'exact_binop',
     'exact_unop',
+    'is_bottom',
     'round_is_identity',
 ]
