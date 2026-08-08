@@ -2,21 +2,21 @@ Language Semantics
 ======================
 
 This page documents the semantics of FPy.  To stay tractable, it covers only
-the *core* of the language—a minimal imperative fragment of constants,
-arithmetic, function calls, and the basic statements—not the full surface
-syntax; the remaining operators and statements evaluate the same way.
+the *core* of the language. The semantics for the full language can
+be found in the :doc:`derived semantics <derivedsemantics>` page.
 
 It describes how FPy programs *evaluate*, and in particular how the *active
-rounding context* governs every arithmetic operation.  Typing is out of scope.
+rounding context* governs every arithmetic operation.
 
 Syntax
 ------
 
 FPy's expressions are boolean and numerical constants, arithmetic, comparisons,
-function calls, and compound data—lists and tuples.  Its statements are the
+function calls, lists, tuples, and references. Its statements include the
 usual imperative ones—assignment, sequencing, conditionals, return, assertion,
-and skip—plus one unique to FPy: the *context statement*, which sets
-the active rounding context for the expressions it evaluates.
+and skip. FPy has an update statement to modify the value contained
+by a reference. It also has a unique statement: the *context statement*,
+which sets the active rounding context for the expressions it evaluates.
 
 In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
 over a countable set of identifiers, and :math:`\R` is the *real rounding
@@ -39,14 +39,20 @@ context*, whose rounding operation is the identity, so no rounding occurs.
        & \text{list indexing} \\
      & \mid & (\, e_1, \ldots, e_n \,)
        & \text{tuple} \\
+     & \mid & \texttt{ref} e
+       & \text{reference} \\
+     & \mid & \texttt{!} e
+       & \text{dereference} \\
      & \mid & e_1 + e_2
        & \text{arithmetic} \\
      & \mid & e_1 < e_2
        & \text{comparison} \\
      & \mid & f\ e
        & \text{function application} \\[1ex]
-   s & ::= & p := e
+   s & ::= & p = e
        & \text{assignment} \\
+     & \mid & x := e
+       & \text{update} \\
      & \mid & s_1\, \texttt{;}\, s_2
        & \text{sequencing} \\
      & \mid & \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2
@@ -66,9 +72,9 @@ context*, whose rounding operation is the identity, so no rounding occurs.
    \end{array}
 
 An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
-tuple of (possibly nested) patterns.  A tuple pattern deconstructs a tuple
+tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position; this is the only way to take a tuple apart, since tuples
-cannot be indexed.
+cannot be indexed. An update's left-hand side must be a variable.
 
 ``+`` and ``<`` stand in for arithmetic and comparison in general; every other
 FPy operator evaluates the same way, though comparison and classification
@@ -87,7 +93,7 @@ contexts.
 
    v ::= \texttt{true} \mid \texttt{false} \mid n \mid C
        \mid [\, v_1, \ldots, v_n \,] \mid (\, v_1, \ldots, v_n \,)
-       \mid \langle \lambda x.\, s,\, \rho \rangle
+       \mid \texttt{ref} v \mid \langle \lambda x.\, s,\, \rho \rangle
 
 A function value is a *closure* :math:`\langle \lambda x.\, s,\, \rho \rangle`—a parameter
 :math:`x`, a body :math:`s`, and the environment :math:`\rho` captured at definition.
@@ -173,8 +179,8 @@ Lists evaluate their elements left to right; indexing selects an element.
         {\langle \sigma, C, e_1[e_2] \rangle \Downarrow v_n}
    \tag{E-Ref}
 
-Tuples are built like lists—elements left to right—but cannot be indexed;
-a tuple is taken apart only by a tuple pattern (see **E-Assign**).
+Tuples are similar to lists, but they cannot be indexed and are
+decomposed only by a tuple pattern (see **E-Assign**).
 
 .. math::
 
@@ -184,6 +190,21 @@ a tuple is taken apart only by a tuple pattern (see **E-Assign**).
         {\langle \sigma, C, (\, e_1, \ldots, e_n \,) \rangle \Downarrow
          (\, v_1, \ldots, v_n \,)}
    \tag{E-Tuple}
+
+References are a mutable container around a value.
+They are constructed by **E-Box** and unpacked via **E-Unbox**.
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow v}
+        {\langle \sigma, C, \texttt{ref} e \rangle \Downarrow \texttt{ref} v}
+   \tag{E-Box}
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{ref} v}
+        {\langle \sigma, C, \texttt{!} e \rangle \Downarrow v}
+   \tag{E-Unbox}
 
 Arithmetic is where rounding happens.  The operands evaluate to real numbers,
 and the active context :math:`C` rounds their exact sum :math:`\exact{n_1 + n_2}`
@@ -267,6 +288,16 @@ is :math:`\sigma` updated with every binding in :math:`\theta`).
          p \triangleright v \Rightarrow \theta}
         {\langle \sigma, C, p := e \rangle \Downarrow_S \mathsf{normal}\ \sigma[\theta]}
    \tag{E-Assign}
+
+An update statement replaces the value contained by a box.
+
+.. math::
+
+   \frac{\langle \sigma, C, e \rangle \Downarrow v
+         \quad
+         p \triangleright v \Rightarrow \theta}
+        {\langle \sigma, C, x := e \rangle \Downarrow_S \mathsf{normal} \sigma[\theta]}
+   \tag{E-Update}
 
 The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
 returns it.
