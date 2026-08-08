@@ -840,6 +840,11 @@ class CppEmitter(Visitor):
                 return f'std::make_tuple({", ".join(parts)})'
             case ListComp() if isinstance(want, CppList):
                 return self._emit_list_comp_at(e, want, ctx)
+            case Empty() if isinstance(want, CppList):
+                # Its own bound is the lattice bottom, so its own storage is
+                # the ladder's first rung; building at the target saves
+                # rebuilding a `vector<uint8_t>` element-wise into it.
+                return self._emit_empty(e, want, ctx)
             case IfExpr():
                 cond = self._visit_expr(e.cond, ctx)
                 ift = self._emit_at(e.ift, want, ctx)
@@ -1972,7 +1977,7 @@ class CppEmitter(Visitor):
             case Min() | Max():
                 return self._emit_min_max(e, ctx)
             case Empty():
-                return self._emit_empty(e, ctx)
+                return self._emit_empty(e, self._storage_for_expr(e), ctx)
             case _:
                 raise CppEmitError(
                     f'unsupported nary op: {type(e).__name__}', at=e,
@@ -2147,14 +2152,14 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return acc
 
-    def _emit_empty(self, e: Empty, ctx) -> str:
-        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector.
+    def _emit_empty(self, e: Empty, result_ty: CppType, ctx) -> str:
+        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector of
+        storage *result_ty*.
 
         Sizes are read off the call site and emitted as nested ``make_list`` calls
         right-to-left, so the innermost element type bubbles out.  ``empty()`` is a
         scalar ``T()``, which format inference resolves at the call site.
         """
-        result_ty = self._storage_for_expr(e)
         dims = [self._visit_expr(a, ctx) for a in e.args]
         dim_storages = [
             self._scalar_storage_for_expr(a) for a in e.args

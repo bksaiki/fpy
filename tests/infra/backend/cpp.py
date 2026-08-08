@@ -694,12 +694,10 @@ _test_ignore = [
     'test_for3',
     'test_for4',
     'test_for5',
-    # empty list is not monomorphic
+    # an empty list leaves a type variable in the signature, which would
+    # need a C++ template (the cases where it stays internal now compile)
     'test_list1',
-    'test_list_len1',
-    'test_list_dim1',
-    'test_list_size1',
-    'test_enumerate1', 
+    'test_enumerate1',
     # context expressions
     'test_context_expr1',
     'test_context_expr2',
@@ -715,8 +713,8 @@ _test_ignore = [
     'test_assert3',
     # not monomorphic
     'test_meta_inner',
-    # unsupported operations
-    'test_empty1',
+    # `i * n` is an int64 product under FP64, which the lossy-implicit-cast
+    # guard refuses -- nothing to do with `empty` (`test_empty1` compiles).
     'test_empty2',
     'test_empty3',
 ]

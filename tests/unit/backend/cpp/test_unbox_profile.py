@@ -26,7 +26,7 @@ from tests.infra.examples import all_example_tests, all_unit_tests
 
 # Every list level of every emitted signature in the corpus, and how many keep
 # a handle.  Update deliberately, with the reason in the commit message.
-EXPECTED_LEVELS = 166
+EXPECTED_LEVELS = 170
 EXPECTED_BOXED = 0
 
 

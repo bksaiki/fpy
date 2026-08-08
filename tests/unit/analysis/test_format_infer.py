@@ -21,7 +21,7 @@ from fpy2.analysis.format_infer.analysis import (
     _list_set_widen,
 )
 from fpy2.analysis.reaching_defs import AssignDef
-from fpy2.ast.fpyast import FuncDef, IndexedAssign
+from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType
@@ -1966,3 +1966,85 @@ class TestTupleAccessorFormats:
         mono = Monomorphize.apply(f.ast, None, [RealType(fp.FP32), RealType(fp.FP64)])
         info = FormatInfer.analyze(mono)
         assert fp.FP64.format() in self._bounds(info, 'u')
+
+
+class TestEmptyIsBottom:
+    """``empty(...)`` allocates; it does not compute.
+
+    Every element is ``UNINIT``, so it holds no number and the bound is the
+    empty set.  Reporting the type-derived ``REAL_FORMAT`` instead is not
+    merely imprecise: the top is absorbing under join, so a list written
+    entirely by the loops below would stay unconstrained.
+    """
+
+    @staticmethod
+    def _empty_bound(info):
+        """The bound inferred for the (single) ``Empty`` node."""
+        bounds = [b for e, b in info.by_expr.items() if isinstance(e, Empty)]
+        assert len(bounds) == 1, f'expected one Empty node, got {len(bounds)}'
+        return bounds[0]
+
+    @staticmethod
+    def _bounds(info, name):
+        return [b for d, b in info.by_def.items() if d.name.base == name]
+
+    def test_allocation_is_bottom_and_stores_join_over_it(self):
+        @fp.fpy
+        def f():
+            xs = fp.empty(10)
+            for i in range(10):
+                xs[i] = 0
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert self._empty_bound(info) == ListFormat(SetFormat.bottom())
+        # ``∅ ⊔ {0} = {0}``, where the top would have swallowed the store.
+        assert ListFormat(SetFormat.from_value(Fraction(0))) in \
+            self._bounds(info, 'xs')
+
+    def test_nested_allocation_is_bottom_at_the_leaf(self):
+        """The recursion is over the result *type*, so a multi-dimensional
+        ``empty`` is bottom at the leaf rather than at the outer list."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(2, 3)
+            for i in range(2):
+                for j in range(3):
+                    xs[i][j] = 1
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert self._empty_bound(info) == ListFormat(ListFormat(SetFormat.bottom()))
+
+    def test_tuple_elements_are_bottom_per_slot(self):
+        """``list[tuple[real, real]]`` allocates to ``list[tuple[∅, ∅]]``: each
+        slot starts empty and is joined independently by the stores."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(4)
+            for i in range(4):
+                xs[i] = (1, 2)
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        bottom = SetFormat.bottom()
+        assert self._empty_bound(info) == ListFormat(TupleFormat((bottom, bottom)))
+        assert ListFormat(TupleFormat((
+            SetFormat.from_value(Fraction(1)),
+            SetFormat.from_value(Fraction(2)),
+        ))) in self._bounds(info, 'xs')
+
+    def test_unresolved_element_type_stays_none(self):
+        """Nothing constrains the element type of an allocation that is never
+        written, so the leaf is the ``None`` :func:`_bound_of_type` also gives
+        a :class:`VarType` — not the scalar bottom."""
+
+        @fp.fpy
+        def f():
+            xs = fp.empty(4)
+            return xs
+
+        info = FormatInfer.analyze(f.ast)
+        assert self._empty_bound(info) == ListFormat(None)

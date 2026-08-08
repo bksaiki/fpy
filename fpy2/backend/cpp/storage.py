@@ -8,10 +8,6 @@ type per phi-web equivalence class.
 
 The module also exposes:
 
-- :func:`format_fits_in` — is every value of a :class:`FormatBound`
-  representable in a target :class:`Format`?  Used by
-  :mod:`.ops` to validate operand formats against op-table
-  signatures.
 - :func:`scalar_fits_in` — ladder-level containment between two
   :class:`CppScalar`s.  Used by the cast helper to reject lossy
   implicit conversions.
@@ -20,8 +16,6 @@ The module also exposes:
   for a chained comparison.
 """
 
-from fractions import Fraction
-
 from ...analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
@@ -29,6 +23,7 @@ from ...analysis.format_infer import (
     ListFormat,
     SetFormat,
     TupleFormat,
+    is_bottom,
 )
 from ...analysis.format_infer.analysis import _to_abstract
 from ...number import (
@@ -42,12 +37,9 @@ from ...number import (
     UINT16,
     UINT32,
     UINT64,
-    RealFloat,
 )
-from ...number.context.format import Format
 from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
-from ...utils import is_dyadic
 from .types import CppList, CppScalar, CppTuple, CppType
 
 # ----------------------------------------------------------------------
@@ -117,6 +109,12 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
         raise StorageSelectionError(
             f'cannot reason about format: {bound!r}'
         )
+    if is_bottom(bound):
+        # A slot holding no value -- an element of a fresh `empty(...)`.  Every
+        # rung contains it vacuously, so the smallest wins.  `_to_abstract`
+        # cannot serve this: every grid holds a `+0.0`, so none *is* the empty
+        # set.
+        return _LADDER[0][0]
 
     af = _to_abstract(bound)
     if af is None:
@@ -158,9 +156,16 @@ def aggregate_storage(bounds: list[FormatBound]) -> CppType:
     For a name with several SSA defs, whose declaration must hold every value
     assigned into it.  Storage per bound, then the ladder supremum; structured
     types recurse.
+
+    A bottom bound (a fresh ``empty(...)``) holds no value, so it constrains
+    nothing and is dropped when any other def does -- keeping it would widen
+    for nothing, since its storage is the first rung and ``u8 ⊔ s8`` is
+    ``s16``.  A *partly* bottom bound still contributes its empty slots; fixing
+    that needs a supremum over bounds rather than over storages.
     """
     assert bounds, 'aggregate_storage requires at least one bound'
-    storages = [choose_storage(b) for b in bounds]
+    constraining = [b for b in bounds if not is_bottom(b)]
+    storages = [choose_storage(b) for b in (constraining or bounds)]
     return _supremum(storages)
 
 
