@@ -3,7 +3,7 @@ Language Semantics
 
 This page documents the semantics of FPy.  To stay tractable, it covers only
 the *core* of the language. The semantics for the full language can
-be found in the :doc:`derived semantics <derivedsemantics>` page.
+be found in the :doc:`derived semantics <derived-semantics>` page.
 
 It describes how FPy programs *evaluate*, and in particular how the *active
 rounding context* governs every arithmetic operation.
@@ -14,13 +14,17 @@ Syntax
 FPy's expressions are boolean and numerical constants, arithmetic, comparisons,
 function calls, lists, tuples, and references. Its statements include the
 usual imperative ones—assignment, sequencing, conditionals, return, assertion,
-and skip. FPy has an update statement to modify the value contained
+and skip. It has an update statement to modify the value contained
 by a reference. It also has a unique statement: the *context statement*,
 which sets the active rounding context for the expressions it evaluates.
 
 In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
-over a countable set of identifiers, and :math:`\R` is the *real rounding
-context*, whose rounding operation is the identity, so no rounding occurs.
+over a countable set of identifiers :math:`\mathit{Var}`, and :math:`\R` is
+the *real rounding context*, whose rounding operation is the identity,
+so no rounding occurs. :math:`f` ranges over :math:`\mathit{Var}` as well; it
+is a separate letter only to mark the operator position, since the fragment has
+no general application—the operator of a call is always an identifier, looked up
+in the environment like any other (see **E-App**).
 
 .. math::
 
@@ -33,15 +37,15 @@ context*, whose rounding operation is the identity, so no rounding occurs.
        & \text{context constants} \\
      & \mid & x
        & \text{variable} \\
-     & \mid & [\, e_1, \ldots, e_n \,]
+     & \mid & [\, e_1, \ldots, e_m \,]
        & \text{list constructor} \\
      & \mid & e_1[e_2]
        & \text{list indexing} \\
-     & \mid & (\, e_1, \ldots, e_n \,)
+     & \mid & (\, e_1, \ldots, e_m \,)
        & \text{tuple} \\
-     & \mid & \texttt{ref} e
+     & \mid & \texttt{ref}\ e
        & \text{reference} \\
-     & \mid & \texttt{!} e
+     & \mid & \texttt{!}\, e
        & \text{dereference} \\
      & \mid & e_1 + e_2
        & \text{arithmetic} \\
@@ -67,7 +71,7 @@ context*, whose rounding operation is the identity, so no rounding occurs.
        & \text{no-op} \\[1ex]
    p & ::= & x
        & \text{variable pattern} \\
-     & \mid & p_1, \ldots, p_n
+     & \mid & (\, p_1, \ldots, p_m \,)
        & \text{tuple pattern}
    \end{array}
 
@@ -83,36 +87,50 @@ operators yield booleans rather than rounded reals.
 Values
 ------
 
-Evaluating an FPy expression produces one of six kinds of value: a boolean, a
+Evaluating an FPy expression produces one of seven kinds of value: a boolean, a
 real number :math:`n`, a *rounding context* :math:`C`, a list of values, a
-tuple of values, or a *function value*.  The only context constructible in this
-fragment is :math:`\R`; full FPy provides constructors for the common rounding
-contexts.
+tuple of values, a *location* :math:`\ell`, or a *function value*.  The only
+context constructible in this fragment is :math:`\R`; full FPy provides
+constructors for the common rounding contexts.
 
 .. math::
 
    v ::= \texttt{true} \mid \texttt{false} \mid n \mid C
-       \mid [\, v_1, \ldots, v_n \,] \mid (\, v_1, \ldots, v_n \,)
-       \mid \texttt{ref} v \mid \langle \lambda x.\, s,\, \rho \rangle
+       \mid [\, v_1, \ldots, v_m \,] \mid (\, v_1, \ldots, v_m \,)
+       \mid \ell \mid \langle \lambda x.\, s,\, \rho \rangle
 
 A function value is a *closure* :math:`\langle \lambda x.\, s,\, \rho \rangle`—a parameter
 :math:`x`, a body :math:`s`, and the environment :math:`\rho` captured at definition.
 The fragment has no definition syntax, so closures are pre-bound in the initial environment,
 one per top-level FPy function.
 
+A *location* :math:`\ell` is the value of a reference: :math:`\texttt{ref}\ e`
+evaluates to a location whose store entry holds :math:`e`'s value.
+Locations are drawn from a countable set :math:`\mathit{Loc}`, cannot be
+named by an expression, and cannot be compared—they are used only by
+:math:`\texttt{!}` and :math:`:=`. Evaluation is therefore deterministic
+only *up to renaming of locations*: **E-Ref** may pick any location
+not already in use.
+
 Evaluation
 ----------
 
-Evaluation requires an environment :math:`\sigma`, mapping identifiers to
-values, and an *active rounding context* :math:`C`.  The program state is the
-triple :math:`\langle \sigma, C, p \rangle`, where :math:`p` is the expression
-or statement under evaluation.  Two big-step judgements relate states to
-results:
+Evaluation requires an environment :math:`\sigma`, a finite map from identifiers
+to values, a *store* :math:`\mu`, a finite map from locations to the values they
+currently contain, and an *active rounding context* :math:`C`.
 
-* :math:`\langle \sigma, C, e \rangle \Downarrow v` - expression :math:`e`
-  evaluates to value :math:`v`;
-* :math:`\langle \sigma, C, s \rangle \Downarrow_S o` - statement :math:`s`
-  evaluates to an *outcome* :math:`o`.
+The program state is the quadruple :math:`\langle \sigma, \mu, C, p \rangle`,
+where :math:`p` is the expression or statement under evaluation.  Two big-step
+judgements relate states to results:
+
+* :math:`\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu'`—expression
+  :math:`e` evaluates to value :math:`v`, leaving the store :math:`\mu'`;
+* :math:`\langle \sigma, \mu, C, s \rangle \Downarrow_S o \,;\, \mu'`—statement
+  :math:`s` evaluates to an *outcome* :math:`o`, leaving the store :math:`\mu'`.
+
+A rule that writes a lookup—:math:`\sigma(x)`, :math:`\mu(\ell)`, or an equation
+such as :math:`\sigma(f) = \langle \lambda x.\, s,\, \rho \rangle`—requires it to
+be defined. Where it is not, no rule applies and evaluation is stuck.
 
 A statement either completes normally with an updated environment or returns a
 value, so an outcome is one of:
@@ -123,88 +141,103 @@ value, so an outcome is one of:
 
 A :math:`\mathsf{normal}` outcome carries the environment threaded to the next
 statement; a :math:`\mathsf{return}` outcome carries a function's result and
-short-circuits the rest of the body.
+short-circuits the rest of the body.  The store is carried alongside the
+outcome rather than inside it, since both outcomes leave one.
 
 The active rounding context :math:`C` is the crux of FPy's semantics: it is
 threaded through every expression and rounds the exact result of each
 arithmetic operation (see **E-Add**).
 
+The store is threaded through the premises of each rule. It is the only thing
+that mutates, and it only grows: :math:`\sigma` changes only by binding, while
+:math:`\mu` is global, shared by caller and callee, and never deallocates.
+
 Expressions
 ^^^^^^^^^^^
 
 Constants and variables evaluate to themselves and to their bound value,
-respectively.  The real context :math:`\R` is itself a value.
+respectively, and leave the store untouched.  The real context :math:`\R` is
+itself a value.
 
 .. math::
 
-   \frac{}{\langle \sigma, C, \texttt{true} \rangle \Downarrow \texttt{true}}
+   \frac{}{\langle \sigma, \mu, C, \texttt{true} \rangle \Downarrow \texttt{true} \,;\, \mu}
    \tag{E-True}
 
 .. math::
 
-   \frac{}{\langle \sigma, C, \texttt{false} \rangle \Downarrow \texttt{false}}
+   \frac{}{\langle \sigma, \mu, C, \texttt{false} \rangle \Downarrow \texttt{false} \,;\, \mu}
    \tag{E-False}
 
 .. math::
 
-   \frac{}{\langle \sigma, C, n \rangle \Downarrow n}
+   \frac{}{\langle \sigma, \mu, C, n \rangle \Downarrow n \,;\, \mu}
    \tag{E-Num}
 
 .. math::
 
-   \frac{}{\langle \sigma, C, \R \rangle \Downarrow \R}
+   \frac{}{\langle \sigma, \mu, C, \R \rangle \Downarrow \R \,;\, \mu}
    \tag{E-Real}
 
 .. math::
 
-   \frac{}{\langle \sigma, C, x \rangle \Downarrow \sigma(x)}
+   \frac{}{\langle \sigma, \mu, C, x \rangle \Downarrow \sigma(x) \,;\, \mu}
    \tag{E-Var}
 
 Lists evaluate their elements left to right; indexing selects an element.
 
 .. math::
 
-   \frac{\langle \sigma, C, e_1 \rangle \Downarrow v_1
-         \quad \cdots \quad
-         \langle \sigma, C, e_n \rangle \Downarrow v_n}
-        {\langle \sigma, C, [\, e_1, \ldots, e_n \,] \rangle \Downarrow
-         [\, v_1, \ldots, v_n \,]}
+   \frac{\mu_0 = \mu
+         \quad
+         \langle \sigma, \mu_{i-1}, C, e_i \rangle \Downarrow v_i \,;\, \mu_i
+         \quad (1 \le i \le m)}
+        {\langle \sigma, \mu, C, [\, e_1, \ldots, e_m \,] \rangle \Downarrow
+         [\, v_1, \ldots, v_m \,] \,;\, \mu_m}
    \tag{E-List}
 
 .. math::
 
-   \frac{\langle \sigma, C, e_1 \rangle \Downarrow [\, v_1, \ldots, v_k \,]
+   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow [\, v_1, \ldots, v_m \,] \,;\, \mu_1
          \quad
-         \langle \sigma, C, e_2 \rangle \Downarrow n}
-        {\langle \sigma, C, e_1[e_2] \rangle \Downarrow v_n}
-   \tag{E-Ref}
+         \langle \sigma, \mu_1, C, e_2 \rangle \Downarrow n \,;\, \mu_2
+         \quad
+         n \in \{ 0, \ldots, m-1 \}}
+        {\langle \sigma, \mu, C, e_1[e_2] \rangle \Downarrow v_{n+1} \,;\, \mu_2}
+   \tag{E-Index}
 
 Tuples are similar to lists, but they cannot be indexed and are
 decomposed only by a tuple pattern (see **E-Assign**).
 
 .. math::
 
-   \frac{\langle \sigma, C, e_1 \rangle \Downarrow v_1
-         \quad \cdots \quad
-         \langle \sigma, C, e_n \rangle \Downarrow v_n}
-        {\langle \sigma, C, (\, e_1, \ldots, e_n \,) \rangle \Downarrow
-         (\, v_1, \ldots, v_n \,)}
+   \frac{\mu_0 = \mu
+         \quad
+         \langle \sigma, \mu_{i-1}, C, e_i \rangle \Downarrow v_i \,;\, \mu_i
+         \quad (1 \le i \le m)}
+        {\langle \sigma, \mu, C, (\, e_1, \ldots, e_m \,) \rangle \Downarrow
+         (\, v_1, \ldots, v_m \,) \,;\, \mu_m}
    \tag{E-Tuple}
 
-References are a mutable container around a value.
-They are constructed by **E-Box** and unpacked via **E-Unbox**.
+A reference is a mutable cell.
+:math:`\texttt{ref}\ e` allocates a fresh location holding :math:`e`'s value and
+returns that location (**E-Ref**); :math:`\texttt{!}\, e` reads the
+location back out of the store (**E-Deref**).
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow v}
-        {\langle \sigma, C, \texttt{ref} e \rangle \Downarrow \texttt{ref} v}
-   \tag{E-Box}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
+         \quad
+         \ell \notin \mathrm{dom}(\mu_1)}
+        {\langle \sigma, \mu, C, \texttt{ref}\ e \rangle \Downarrow
+         \ell \,;\, \mu_1[\ell \mapsto v]}
+   \tag{E-Ref}
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{ref} v}
-        {\langle \sigma, C, \texttt{!} e \rangle \Downarrow v}
-   \tag{E-Unbox}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \ell \,;\, \mu_1}
+        {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu_1(\ell) \,;\, \mu_1}
+   \tag{E-Deref}
 
 Arithmetic is where rounding happens.  The operands evaluate to real numbers,
 and the active context :math:`C` rounds their exact sum :math:`\exact{n_1 + n_2}`
@@ -213,10 +246,11 @@ exact result is returned unchanged.
 
 .. math::
 
-   \frac{\langle \sigma, C, e_1 \rangle \Downarrow n_1
+   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1 \,;\, \mu_1
          \quad
-         \langle \sigma, C, e_2 \rangle \Downarrow n_2}
-        {\langle \sigma, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2})}
+         \langle \sigma, \mu_1, C, e_2 \rangle \Downarrow n_2 \,;\, \mu_2}
+        {\langle \sigma, \mu, C, e_1 + e_2 \rangle \Downarrow
+         C(\exact{n_1 + n_2}) \,;\, \mu_2}
    \tag{E-Add}
 
 A comparison evaluates its operands and tests them as real numbers, producing a
@@ -225,34 +259,37 @@ boolean; unlike arithmetic, the result is exact and no rounding is applied.
 
 .. math::
 
-   \frac{\langle \sigma, C, e_1 \rangle \Downarrow n_1
+   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1 \,;\, \mu_1
          \quad
-         \langle \sigma, C, e_2 \rangle \Downarrow n_2}
-        {\langle \sigma, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)}
+         \langle \sigma, \mu_1, C, e_2 \rangle \Downarrow n_2 \,;\, \mu_2}
+        {\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2) \,;\, \mu_2}
    \tag{E-Lt}
 
 A function application looks up the closure bound to :math:`f`, evaluates the
 argument, binds the parameter in the captured environment :math:`\rho`, and runs
 the body to the value it returns. The body runs under the caller's context
 :math:`C`; a well-formed body always returns, so its outcome is
-:math:`\mathsf{return}\ v'`.
+:math:`\mathsf{return}\ v'`.  The store is *not* captured: the body runs in the
+store the argument left behind and its writes outlive the call, which is how a
+callee mutates a reference its caller holds.
 
 .. math::
 
    \frac{\sigma(f) = \langle \lambda x.\, s,\, \rho \rangle
          \quad
-         \langle \sigma, C, e \rangle \Downarrow v
+         \langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
          \quad
-         \langle \rho[x \mapsto v], C, s \rangle \Downarrow_S \mathsf{return}\ v'}
-        {\langle \sigma, C, f\ e \rangle \Downarrow v'}
+         \langle \rho[x \mapsto v], \mu_1, C, s \rangle \Downarrow_S
+         \mathsf{return}\ v' \,;\, \mu_2}
+        {\langle \sigma, \mu, C, f\ e \rangle \Downarrow v' \,;\, \mu_2}
    \tag{E-App}
 
 Statements
 ^^^^^^^^^^
 
-Every statement evaluates to an outcome.  Assignment, skip, and a passing
-assertion complete normally (:math:`\mathsf{normal}`) and :math:`\texttt{ret}`
-returns
+Every statement evaluates to an outcome.  Assignment, update, skip, and a
+passing assertion complete normally (:math:`\mathsf{normal}`) and
+:math:`\texttt{ret}` returns
 (:math:`\mathsf{return}`); sequencing, conditionals, and the context statement
 pass along the outcome of whatever sub-statement they run, so a
 :math:`\mathsf{return}` propagates out to the enclosing function.
@@ -261,7 +298,8 @@ Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \thet
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
 A variable matches anything and binds it; a tuple pattern matches a tuple
 position by position, combining the per-component bindings by disjoint union
-:math:`\uplus` (the sub-patterns bind distinct variables).
+:math:`\uplus` (the sub-patterns bind distinct variables).  Matching inspects a
+value without allocating, so it needs no store.
 
 .. math::
 
@@ -272,31 +310,39 @@ position by position, combining the per-component bindings by disjoint union
 
    \frac{p_1 \triangleright v_1 \Rightarrow \theta_1
          \quad \cdots \quad
-         p_n \triangleright v_n \Rightarrow \theta_n}
-        {p_1, \ldots, p_n \triangleright (\, v_1, \ldots, v_n \,)
-         \Rightarrow \theta_1 \uplus \cdots \uplus \theta_n}
+         p_m \triangleright v_m \Rightarrow \theta_m}
+        {(\, p_1, \ldots, p_m \,) \triangleright (\, v_1, \ldots, v_m \,)
+         \Rightarrow \theta_1 \uplus \cdots \uplus \theta_m}
    \tag{M-Tuple}
 
 Assignment evaluates its right-hand side, matches the value against the
 pattern, and extends the environment with the bindings (:math:`\sigma[\theta]`
-is :math:`\sigma` updated with every binding in :math:`\theta`).
+is :math:`\sigma` updated with every binding in :math:`\theta`).  It copies
+nothing: if :math:`v` is a location, the pattern's variable becomes a second
+name for the same cell.
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow v
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
          \quad
          p \triangleright v \Rightarrow \theta}
-        {\langle \sigma, C, p := e \rangle \Downarrow_S \mathsf{normal}\ \sigma[\theta]}
+        {\langle \sigma, \mu, C, p = e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma[\theta] \,;\, \mu_1}
    \tag{E-Assign}
 
-An update statement replaces the value contained by a box.
+An update statement replaces the value contained by a reference.
+The environment is unchanged—an update mutates the store and only the store,
+which is why every other name for that location observes the write.
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow v
+   \frac{\sigma(x) = \ell
          \quad
-         p \triangleright v \Rightarrow \theta}
-        {\langle \sigma, C, x := e \rangle \Downarrow_S \mathsf{normal} \sigma[\theta]}
+         \langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
+         \quad
+         \ell \in \mathrm{dom}(\mu_1)}
+        {\langle \sigma, \mu, C, x := e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma \,;\, \mu_1[\ell \mapsto v]}
    \tag{E-Update}
 
 The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
@@ -304,62 +350,71 @@ returns it.
 
 .. math::
 
-   \frac{}{\langle \sigma, C, \texttt{skip} \rangle \Downarrow_S \mathsf{normal}\ \sigma}
+   \frac{}{\langle \sigma, \mu, C, \texttt{skip} \rangle \Downarrow_S
+           \mathsf{normal}\ \sigma \,;\, \mu}
    \tag{E-Skip}
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow v}
-        {\langle \sigma, C, \texttt{ret}\ e \rangle \Downarrow_S \mathsf{return}\ v}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1}
+        {\langle \sigma, \mu, C, \texttt{ret}\ e \rangle \Downarrow_S
+         \mathsf{return}\ v \,;\, \mu_1}
    \tag{E-Ret}
 
 An assertion evaluates its test; if it holds, evaluation continues with the
 environment unchanged. FPy has no error handling, so a failing assertion has no
-rule—evaluation is simply stuck, as for any other undefined operation.
+rule—evaluation is simply stuck, as it is wherever no rule applies.
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{true}}
-        {\langle \sigma, C, \texttt{assert}\ e \rangle \Downarrow_S \mathsf{normal}\ \sigma}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true} \,;\, \mu_1}
+        {\langle \sigma, \mu, C, \texttt{assert}\ e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma \,;\, \mu_1}
    \tag{E-Assert}
 
 Sequencing runs :math:`s_1` first.
-If :math:`s_1` returns, the sequence returns at once.
-Otherwise, :math:`s_2` runs under the updated environment to produce the
-sequence's outcome.
+If :math:`s_1` returns, the sequence returns at once, and :math:`s_2`'s writes
+never happen.
+Otherwise, :math:`s_2` runs under the updated environment and store to produce
+the sequence's outcome.
 
 .. math::
 
-   \frac{\langle \sigma, C, s_1 \rangle \Downarrow_S \mathsf{normal}\ \sigma'
+   \frac{\langle \sigma, \mu, C, s_1 \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma' \,;\, \mu_1
          \quad
-         \langle \sigma', C, s_2 \rangle \Downarrow_S o}
-        {\langle \sigma, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S o}
+         \langle \sigma', \mu_1, C, s_2 \rangle \Downarrow_S o \,;\, \mu_2}
+        {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S o \,;\, \mu_2}
    \tag{E-Seq-Normal}
 
 .. math::
 
-   \frac{\langle \sigma, C, s_1 \rangle \Downarrow_S \mathsf{return}\ v}
-        {\langle \sigma, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S \mathsf{return}\ v}
+   \frac{\langle \sigma, \mu, C, s_1 \rangle \Downarrow_S \mathsf{return}\ v \,;\, \mu_1}
+        {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S
+         \mathsf{return}\ v \,;\, \mu_1}
    \tag{E-Seq-Return}
 
 A conditional evaluates its condition to a boolean and runs the matching
 branch; the branch's outcome becomes the conditional's, so a :math:`\texttt{ret}`
-in either branch returns from the enclosing function.
+in either branch returns from the enclosing function.  Only the taken branch
+touches the store.
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{true}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true} \,;\, \mu_1
          \quad
-         \langle \sigma, C, s_1 \rangle \Downarrow_S o}
-        {\langle \sigma, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle \Downarrow_S o}
+         \langle \sigma, \mu_1, C, s_1 \rangle \Downarrow_S o \,;\, \mu_2}
+        {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
+         \Downarrow_S o \,;\, \mu_2}
    \tag{E-If-True}
 
 .. math::
 
-   \frac{\langle \sigma, C, e \rangle \Downarrow \texttt{false}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{false} \,;\, \mu_1
          \quad
-         \langle \sigma, C, s_2 \rangle \Downarrow_S o}
-        {\langle \sigma, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle \Downarrow_S o}
+         \langle \sigma, \mu_1, C, s_2 \rangle \Downarrow_S o \,;\, \mu_2}
+        {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
+         \Downarrow_S o \,;\, \mu_2}
    \tag{E-If-False}
 
 The context statement is the heart of FPy.  The context expression :math:`e` is
@@ -369,11 +424,13 @@ governing context as a value.  :math:`C'` governs only the body—the
 surrounding context :math:`C` is unchanged and still applies after the
 ``with``.  The body's outcome becomes the statement's outcome, so a
 :math:`\texttt{ret}` inside a ``with`` returns from the enclosing function.
+The context is scoped; the store is not.
 
 .. math::
 
-   \frac{\langle \sigma, \R, e \rangle \Downarrow C'
+   \frac{\langle \sigma, \mu, \R, e \rangle \Downarrow C' \,;\, \mu_1
          \quad
-         \langle \sigma[x \mapsto C'], C', s \rangle \Downarrow_S o}
-        {\langle \sigma, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle \Downarrow_S o}
+         \langle \sigma[x \mapsto C'], \mu_1, C', s \rangle \Downarrow_S o \,;\, \mu_2}
+        {\langle \sigma, \mu, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle
+         \Downarrow_S o \,;\, \mu_2}
    \tag{E-Context}

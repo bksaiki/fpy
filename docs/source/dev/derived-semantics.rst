@@ -237,7 +237,7 @@ These move values without inspecting them, so they are *polymorphic*: ``Any``
 below is any element type, not just ``fp.Real``.
 
 * ``TupleExpr`` — **E-Tuple**; ``ListExpr`` — **E-List**; ``ListRef`` (``xs[i]``)
-  — **E-Ref**; ``TupleBinding`` — the tuple pattern of **M-Tuple**.
+  — **E-Index**; ``TupleBinding`` — the tuple pattern of **M-Tuple**.
 * ``Fst`` / ``Snd`` — tuple accessors (``snd`` of a longer tuple is the rest)::
 
     @fp.fpy
