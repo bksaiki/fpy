@@ -47,9 +47,11 @@ from .types import CppType
 from .unbox import (
     CalleeAbi,
     ParamAbi,
+    StrictUnboxError,
     Unbox,
     UnboxAnalysis,
     UnboxMode,
+    check_strict,
     return_storage,
 )
 from .utils import CPP_HEADERS, CPP_HELPERS
@@ -373,6 +375,15 @@ class CppCompiler(Backend):
             # declaration's representation straight off the type.
             storage.class_storage.update(unbox.storage)
 
+            if self._unbox is UnboxMode.STRICT:
+                ret_ty = return_storage(format_info.fn_fmt.ret_fmt, unbox)
+                try:
+                    check_strict(unbox, storage, ret_ty)
+                except StrictUnboxError as e:
+                    raise CppCompileError(
+                        f'strict unboxing failed for `{func.name}`: {e}'
+                    ) from e
+
         return SpecAnalyses(
             ast=ast,
             def_use=def_use,
@@ -445,8 +456,18 @@ class CppCompiler(Backend):
             callee_params=callee_params,
         )
         try:
-            return emitter.emit()
+            code = emitter.emit()
         except CppEmitError as e:
             raise CppCompileError(
                 f'compilation failed for `{func.name}`: {e}'
             ) from e
+        if self._unbox is UnboxMode.STRICT and 'fpy::list<' in code:
+            # Backstop for what `check_strict` cannot see: an expression the
+            # emitter typed through `annotate`, which keeps the handle for any
+            # level the alias analysis did not track.  (`fpy::make_list<` does
+            # not contain this substring, so the scan matches types only.)
+            raise CppCompileError(
+                f'compilation failed for `{func.name}`: internal error: '
+                'strict unboxing let an `fpy::list` reach the emitted code'
+            )
+        return code

@@ -520,3 +520,61 @@ def return_storage(
     """
     ty = choose_storage(ret_fmt)
     return ty if unbox is None else unbox.annotate_return(ty)
+
+
+class StrictUnboxError(Exception):
+    """Raised by :func:`check_strict` when a list must keep its handle."""
+
+
+def check_strict(
+    unbox: UnboxAnalysis,
+    storage: 'StorageAnalysis',
+    ret_ty: CppType,
+) -> None:
+    """Refuse every list that kept its handle.
+
+    ``UnboxMode.STRICT``'s contract is that the emitted unit holds no
+    ``std::shared_ptr``.  This walks the artifacts the emitter reads its
+    types from -- each storage class's stamped type and the stamped return
+    type -- and reports every boxed level with the reason
+    :meth:`Unbox.decide` recorded, so the error names the list to fix rather
+    than the fact of failure.  Reported together: fixing one shared list only
+    to be told about the next is a bad loop to put a user in.
+    """
+    offenders: list[str] = []
+    for cls, ty in unbox.storage.items():
+        name = storage.def_to_name[cls]
+        for depth, on_spine in _boxed_levels(ty):
+            reason = (
+                unbox.boxed_because.get((cls, depth), 'shared')
+                if on_spine else 'shared (tuple field)'
+            )
+            offenders.append(f'`{name}` (depth {depth}): {reason}')
+    for depth, on_spine in _boxed_levels(ret_ty):
+        regions = (
+            unbox.ret_regions[depth]
+            if depth < len(unbox.ret_regions) else set()
+        )
+        reason = unbox._reason(regions) if on_spine else 'shared (tuple field)'
+        offenders.append(f'<return> (depth {depth}): {reason}')
+    if offenders:
+        raise StrictUnboxError(
+            'these lists must keep their `fpy::list` handle:\n  '
+            + '\n  '.join(offenders)
+            + '\nuse unbox=UnboxMode.ALLOW to permit handles'
+        )
+
+
+def _boxed_levels(ty: CppType, depth: int = 0, on_spine: bool = True):
+    """``(depth, on_spine)`` for every boxed list level in *ty*.
+
+    ``on_spine`` mirrors :meth:`UnboxAnalysis._stamp`: a reason is recorded
+    only down the list spine, so a tuple field's level has none to look up.
+    """
+    if isinstance(ty, CppList):
+        if ty.boxed:
+            yield depth, on_spine
+        yield from _boxed_levels(ty.elt, depth + 1, on_spine)
+    elif isinstance(ty, CppTuple):
+        for e in ty.elts:
+            yield from _boxed_levels(e, depth, False)
