@@ -185,7 +185,9 @@ class CppCompiler(Backend):
             :mod:`.unbox` proves nothing observes the difference, per list and
             per nesting level; ``NEVER`` keeps every handle -- correct, but
             slower at a native boundary; ``STRICT`` is ``ALLOW`` where a list
-            that must keep its handle fails the compile.  Default ``ALLOW``.
+            that must keep its handle fails the compile.  Default ``STRICT``:
+            a ``std::shared_ptr`` in numerical C++ is surprising enough that
+            it has to be asked for.
     """
 
     UnboxMode = UnboxMode
@@ -198,7 +200,7 @@ class CppCompiler(Backend):
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: UnboxMode = UnboxMode.ALLOW,
+        unbox: UnboxMode = UnboxMode.STRICT,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
@@ -376,7 +378,15 @@ class CppCompiler(Backend):
             storage.class_storage.update(unbox.storage)
 
             if self._unbox is UnboxMode.STRICT:
-                ret_ty = return_storage(format_info.fn_fmt.ret_fmt, unbox)
+                try:
+                    # Can refuse for its own reason (e.g. a REAL-format
+                    # return): a storage-selection failure, not a strict one,
+                    # and it must present as the same error emission gives it.
+                    ret_ty = return_storage(format_info.fn_fmt.ret_fmt, unbox)
+                except StorageSelectionError as e:
+                    raise CppCompileError(
+                        f'storage selection failed for `{func.name}`: {e}'
+                    ) from e
                 try:
                     check_strict(unbox, storage, ret_ty)
                 except StrictUnboxError as e:

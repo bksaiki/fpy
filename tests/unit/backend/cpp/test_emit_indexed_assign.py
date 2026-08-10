@@ -11,6 +11,7 @@ the emitter produces a direct subscript-store.
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
+from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.types import ListType, RealType
 
 
@@ -28,12 +29,13 @@ class TestIndexedAssign:
                     xs[i] = xs[i] * 2
                 return xs
 
-        out = CppCompiler().compile(
+        # `xs` is a parameter *and* the result, so the caller ends up with
+        # two handles to one list: shared, and it keeps its handle -- which
+        # strict mode refuses, so this test asks for ALLOW.
+        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        # `xs` is a parameter *and* the result, so the caller ends up with
-        # two handles to one list: shared, and it keeps its handle.
         assert (
             '(*xs)[static_cast<size_t>(i)] = '
             '((*xs)[static_cast<size_t>(i)] * static_cast<double>(2));'
@@ -62,7 +64,7 @@ class TestIndexedAssign:
                 ys[0] = 99
                 return ys
 
-        out = CppCompiler().compile(
+        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )

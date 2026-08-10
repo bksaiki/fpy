@@ -113,6 +113,21 @@ class TestStrictRefuses:
             )
 
 
+class TestStrictIsTheDefault:
+    """A bare ``CppCompiler()`` refuses a handle rather than emitting one."""
+
+    def test_default_refuses_a_shared_list(self):
+        with pytest.raises(CppCompileError, match='strict unboxing failed'):
+            CppCompiler().compile(
+                _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
+            )
+
+    def test_default_compiles_an_unboxable_kernel(self):
+        assert 'fpy::list' not in CppCompiler().compile(
+            _scale, ctx=fp.FP64, arg_types=[L, R],
+        )
+
+
 class TestOtherModesUnchanged:
     """STRICT is a third mode, not a change to the other two."""
 
