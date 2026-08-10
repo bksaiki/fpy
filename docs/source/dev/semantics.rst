@@ -1,7 +1,7 @@
 Language Semantics
 ======================
 
-This page documents the semantics of FPy.  To stay tractable, it covers only
+This page documents the semantics of FPy. To stay tractable, it covers only
 the *core* of the language. The semantics for the full language can
 be found in the :doc:`derived semantics <derived-semantics>` page.
 
@@ -89,7 +89,7 @@ Values
 
 Evaluating an FPy expression produces one of seven kinds of value: a boolean, a
 real number :math:`n`, a *rounding context* :math:`C`, a list of values, a
-tuple of values, a *location* :math:`\ell`, or a *function value*.  The only
+tuple of values, a *location* :math:`\ell`, or a *function value*. The only
 context constructible in this fragment is :math:`\R`; full FPy provides
 constructors for the common rounding contexts.
 
@@ -120,7 +120,7 @@ to values, a *store* :math:`\mu`, a finite map from locations to the values they
 currently contain, and an *active rounding context* :math:`C`.
 
 The program state is the quadruple :math:`\langle \sigma, \mu, C, p \rangle`,
-where :math:`p` is the expression or statement under evaluation.  Two big-step
+where :math:`p` is the expression or statement under evaluation. Two big-step
 judgements relate states to results:
 
 * :math:`\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu'`—expression
@@ -141,7 +141,7 @@ value, so an outcome is one of:
 
 A :math:`\mathsf{normal}` outcome carries the environment threaded to the next
 statement; a :math:`\mathsf{return}` outcome carries a function's result and
-short-circuits the rest of the body.  The store is carried alongside the
+short-circuits the rest of the body. The store is carried alongside the
 outcome rather than inside it, since both outcomes leave one.
 
 The active rounding context :math:`C` is the crux of FPy's semantics: it is
@@ -156,7 +156,7 @@ Expressions
 ^^^^^^^^^^^
 
 Constants and variables evaluate to themselves and to their bound value,
-respectively, and leave the store untouched.  The real context :math:`\R` is
+respectively, and leave the store untouched. The real context :math:`\R` is
 itself a value.
 
 .. math::
@@ -239,9 +239,9 @@ location back out of the store (**E-Deref**).
         {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu_1(\ell) \,;\, \mu_1}
    \tag{E-Deref}
 
-Arithmetic is where rounding happens.  The operands evaluate to real numbers,
+Arithmetic is where rounding happens. The operands evaluate to real numbers,
 and the active context :math:`C` rounds their exact sum :math:`\exact{n_1 + n_2}`
-to a representable value.  Under :math:`\R`, rounding is the identity, so the
+to a representable value. Under :math:`\R`, rounding is the identity, so the
 exact result is returned unchanged.
 
 .. math::
@@ -269,7 +269,7 @@ A function application looks up the closure bound to :math:`f`, evaluates the
 argument, binds the parameter in the captured environment :math:`\rho`, and runs
 the body to the value it returns. The body runs under the caller's context
 :math:`C`; a well-formed body always returns, so its outcome is
-:math:`\mathsf{return}\ v'`.  The store is *not* captured: the body runs in the
+:math:`\mathsf{return}\ v'`. The store is *not* captured: the body runs in the
 store the argument left behind and its writes outlive the call, which is how a
 callee mutates a reference its caller holds.
 
@@ -287,7 +287,7 @@ callee mutates a reference its caller holds.
 Statements
 ^^^^^^^^^^
 
-Every statement evaluates to an outcome.  Assignment, update, skip, and a
+Every statement evaluates to an outcome. Assignment, update, skip, and a
 passing assertion complete normally (:math:`\mathsf{normal}`) and
 :math:`\texttt{ret}` returns
 (:math:`\mathsf{return}`); sequencing, conditionals, and the context statement
@@ -298,7 +298,7 @@ Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \thet
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
 A variable matches anything and binds it; a tuple pattern matches a tuple
 position by position, combining the per-component bindings by disjoint union
-:math:`\uplus` (the sub-patterns bind distinct variables).  Matching inspects a
+:math:`\uplus` (the sub-patterns bind distinct variables). Matching inspects a
 value without allocating, so it needs no store.
 
 .. math::
@@ -317,7 +317,7 @@ value without allocating, so it needs no store.
 
 Assignment evaluates its right-hand side, matches the value against the
 pattern, and extends the environment with the bindings (:math:`\sigma[\theta]`
-is :math:`\sigma` updated with every binding in :math:`\theta`).  It copies
+is :math:`\sigma` updated with every binding in :math:`\theta`). It copies
 nothing: if :math:`v` is a location, the pattern's variable becomes a second
 name for the same cell.
 
@@ -396,7 +396,7 @@ the sequence's outcome.
 
 A conditional evaluates its condition to a boolean and runs the matching
 branch; the branch's outcome becomes the conditional's, so a :math:`\texttt{ret}`
-in either branch returns from the enclosing function.  Only the taken branch
+in either branch returns from the enclosing function. Only the taken branch
 touches the store.
 
 .. math::
@@ -417,12 +417,12 @@ touches the store.
          \Downarrow_S o \,;\, \mu_2}
    \tag{E-If-False}
 
-The context statement is the heart of FPy.  The context expression :math:`e` is
+The context statement is the heart of FPy. The context expression :math:`e` is
 evaluated under :math:`\R` to a new context :math:`C'`, and the body :math:`s`
 runs under :math:`C'` with :math:`x` bound to :math:`C'`, so it can refer to its
-governing context as a value.  :math:`C'` governs only the body—the
+governing context as a value. :math:`C'` governs only the body—the
 surrounding context :math:`C` is unchanged and still applies after the
-``with``.  The body's outcome becomes the statement's outcome, so a
+``with``. The body's outcome becomes the statement's outcome, so a
 :math:`\texttt{ret}` inside a ``with`` returns from the enclosing function.
 The context is scoped; the store is not.
 
