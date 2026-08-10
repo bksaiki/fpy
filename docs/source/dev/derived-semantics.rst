@@ -350,12 +350,14 @@ Miscellaneous
 Statements
 ----------
 
-* ``StmtBlock`` — a statement sequence, **E-Seq**; empty is **E-Skip**.
+* ``StmtBlock`` — a statement sequence, **E-Seq-Normal** / **E-Seq-Return**;
+  empty is **E-Skip**.
 * ``Assign`` — **E-Assign** (pattern via **M-Var** / **M-Tuple**).
 * ``IndexedAssign`` — **E-Index** to the cell, then **E-Update** through it.
   Because the core's update takes a variable on the left, a temporary carries the
   projection: ``x[i] = e`` :math:`\equiv` ``y = x[i] ; y := e``.
-* ``If1Stmt`` — ``if c: body`` is **E-If** with an **E-Skip** else-branch.
+* ``If1Stmt`` — ``if c: body`` is **E-If-True** / **E-If-False** with an
+  **E-Skip** else-branch.
 * ``IfStmt`` — **E-If-True** / **E-If-False**.
 * ``WhileStmt`` — ``while c: s`` :math:`\equiv`
   ``if c then (s ; while c: s) else skip``.
