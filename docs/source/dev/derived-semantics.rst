@@ -195,8 +195,8 @@ Logical operators
 -----------------
 
 * ``Not`` — boolean negation, like **E-Lt**.
-* ``And`` / ``Or`` — short-circuiting; each is a conditional (**E-If** as a
-  value)::
+* ``And`` / ``Or`` — short-circuiting; each is a conditional
+  (**E-If-True** / **E-If-False** as a value)::
 
     @fp.fpy
     def and_(a: bool, b: bool) -> bool:
