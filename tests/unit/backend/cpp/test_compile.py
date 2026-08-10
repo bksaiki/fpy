@@ -11,6 +11,7 @@ import fpy2 as fp
 import pytest
 
 from fpy2.backend.cpp import CppCompiler, CppCompileError
+from fpy2.backend.cpp.unbox import UnboxMode
 
 
 class TestCppCompilerStub:
@@ -20,6 +21,17 @@ class TestCppCompilerStub:
         """The public API is reachable from the package import."""
         assert callable(CppCompiler)
         assert issubclass(CppCompileError, Exception)
+        assert fp.CppCompiler.UnboxMode is UnboxMode
+
+    def test_unbox_rejects_non_mode(self):
+        """``unbox`` takes an :class:`UnboxMode`, not the bool it once was --
+        a bool would silently mean the wrong mode, so it is a ``TypeError``."""
+        with pytest.raises(TypeError, match='UnboxMode'):
+            CppCompiler(unbox=True)
+        with pytest.raises(TypeError, match='UnboxMode'):
+            CppCompiler(unbox=False)
+        with pytest.raises(TypeError, match='UnboxMode'):
+            CppCompiler(unbox='allow')
 
     def test_compile_returns_source_string(self):
         """A simple monomorphized program compiles to a non-empty C++

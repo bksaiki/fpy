@@ -29,6 +29,8 @@ the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
 ...>``, which does not compile.  Keep it one traversal.
 """
 
+import enum
+
 from dataclasses import dataclass, field
 
 from ...analysis import Definition
@@ -52,6 +54,7 @@ from ...ast.fpyast import (
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
+from ...utils import enum_repr
 from .storage import choose_storage
 from .storage_infer import (
     StorageAnalysis,
@@ -59,6 +62,23 @@ from .storage_infer import (
     is_rebound,
 )
 from .types import CppList, CppTuple, CppType
+
+
+@enum_repr
+class UnboxMode(enum.Enum):
+    """How aggressively the compiler drops the ``fpy::list`` handle.
+
+    - ``NEVER``: every list keeps its handle -- correct, but slower at a
+      native boundary.
+    - ``ALLOW``: drop the handle where the alias analysis proves nothing
+      observes the difference; keep it everywhere else.
+    - ``STRICT``: like ``ALLOW``, but a list that must keep its handle is a
+      compile error rather than a ``std::shared_ptr`` in the output.
+    """
+
+    NEVER = 0
+    ALLOW = 1
+    STRICT = 2
 
 
 @dataclass(frozen=True)

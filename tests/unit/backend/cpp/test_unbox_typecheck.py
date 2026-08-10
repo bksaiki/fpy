@@ -23,6 +23,7 @@ import pytest
 
 from fpy2.backend.cpp.compiler import CppCompileError, CppCompiler
 from fpy2.backend.cpp.types import CppList
+from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.module import Module
 from fpy2.types import ListType, RealType
 
@@ -35,7 +36,7 @@ _OPTS = ['-std=c++11', '-O0', '-Wall', '-Wextra', '-Werror=return-type']
 pytestmark = pytest.mark.skipif(_CXX is None, reason='no C++ compiler')
 
 
-def _typecheck(module: Module, *, unbox=True, optimize=True) -> str:
+def _typecheck(module: Module, *, unbox=UnboxMode.ALLOW, optimize=True) -> str:
     """Compile *module* to a translation unit and put it through the C++
     compiler.  Returns the source on success; fails the test on a diagnostic."""
     cc = CppCompiler(unbox=unbox, optimize=optimize)
@@ -157,7 +158,7 @@ def test_representation_stressing_programs_typecheck(name, func, arg_types, opti
     """
     m = Module()
     m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
-    _typecheck(m, unbox=True, optimize=optimize)
+    _typecheck(m, unbox=UnboxMode.ALLOW, optimize=optimize)
 
 
 def test_mixed_nesting_is_actually_produced():
@@ -196,7 +197,7 @@ def test_a_fresh_nested_result_is_fully_unboxed():
 
 # --------------------------------------------------------------------------
 # Found while writing the tests above, and none of it is an unbox bug -- all of
-# it reproduces with `unbox=False`.  It is the first thing that fell out of
+# it reproduces with `UnboxMode.NEVER`.  It is the first thing that fell out of
 # running a C++ compiler over emitted code, which nothing else does.
 #
 # `format_infer` picks a bound per expression and joins where several values
@@ -262,7 +263,7 @@ JOIN_CASES = [
 ]
 
 
-@pytest.mark.parametrize('unbox', [True, False])
+@pytest.mark.parametrize('unbox', [UnboxMode.ALLOW, UnboxMode.NEVER])
 @pytest.mark.parametrize(
     'func,arg_types', JOIN_CASES, ids=[f.name for f, _ in JOIN_CASES],
 )
@@ -271,7 +272,7 @@ def test_a_joined_place_has_one_element_type(func, arg_types, unbox):
     m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
     _typecheck(m, unbox=unbox)
     # One element type throughout -- which one it is, is storage selection's
-    # business, and `unbox=False` spells the same list `fpy::list`.  Read off
+    # business, and `UnboxMode.NEVER` spells the same list `fpy::list`.  Read off
     # the function alone; the runtime helpers are templates and would
     # contribute a `T`.
     body = CppCompiler(unbox=unbox).compile_module(m)

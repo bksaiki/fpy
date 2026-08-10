@@ -1150,7 +1150,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
     # Boxed on purpose, whatever the default: these helpers exist to convert
     # *to* a handle, so a signature that has no handle has nothing to pin.  The
     # native path is `_test_abi_native`.
-    compiler = fp.CppCompiler(unbox=False)
+    compiler = fp.CppCompiler(unbox=fp.CppCompiler.UnboxMode.NEVER)
     cpp_path = output_dir / 'abi_boundary.cpp'
     print(f'Compiling ABI boundary test to `{cpp_path}`')
     lst = fp.types.ListType(fp.types.RealType(fp.FP64))
@@ -1358,7 +1358,7 @@ def _test_abi_native(
     here the write lands.
     """
     group = 'abi'
-    compiler = fp.CppCompiler(unbox=True)
+    compiler = fp.CppCompiler(unbox=fp.CppCompiler.UnboxMode.ALLOW)
     cpp_path = output_dir / 'abi_native.cpp'
     print(f'Compiling native ABI test to `{cpp_path}`')
     nested = fp.types.ListType(fp.types.ListType(fp.types.RealType(fp.FP64)))

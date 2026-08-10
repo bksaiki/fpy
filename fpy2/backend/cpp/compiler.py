@@ -44,7 +44,14 @@ from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
-from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis, return_storage
+from .unbox import (
+    CalleeAbi,
+    ParamAbi,
+    Unbox,
+    UnboxAnalysis,
+    UnboxMode,
+    return_storage,
+)
 from .utils import CPP_HEADERS, CPP_HELPERS
 
 
@@ -171,20 +178,31 @@ class CppCompiler(Backend):
             Run the transforms listed in :meth:`_run_pipeline`.  Sound either
             way; ``False`` compiles the surface AST verbatim.  Default ``True``.
         unbox:
-            Drop the handle where :mod:`.unbox` proves nothing observes the
-            difference, per list and per nesting level.  ``False`` keeps every
-            handle -- correct, but slower at a native boundary.  Default
-            ``True``.
+            An :class:`UnboxMode` (also reachable as
+            ``CppCompiler.UnboxMode``).  ``ALLOW`` drops the handle where
+            :mod:`.unbox` proves nothing observes the difference, per list and
+            per nesting level; ``NEVER`` keeps every handle -- correct, but
+            slower at a native boundary; ``STRICT`` is ``ALLOW`` where a list
+            that must keep its handle fails the compile.  Default ``ALLOW``.
     """
+
+    UnboxMode = UnboxMode
+    """The mode enum for ``unbox``, re-exported so callers holding the
+    compiler need not import :mod:`fpy2.backend.cpp.unbox`."""
 
     _unsafe_cast_int: bool
     _optimize: bool
-    _unbox: bool
+    _unbox: UnboxMode
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: bool = True,
+        unbox: UnboxMode = UnboxMode.ALLOW,
     ):
+        if not isinstance(unbox, UnboxMode):
+            raise TypeError(
+                f'`unbox` must be an UnboxMode, got {unbox!r}; '
+                'use UnboxMode.ALLOW / UnboxMode.NEVER instead of a bool'
+            )
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
@@ -344,7 +362,7 @@ class CppCompiler(Backend):
             ast, summaries, def_use=def_use, alias=alias,
         )
         unbox = None
-        if self._unbox:
+        if self._unbox is not UnboxMode.NEVER:
             unbox = Unbox.decide(
                 ast, storage, alias, def_use,
                 is_called=is_called,
