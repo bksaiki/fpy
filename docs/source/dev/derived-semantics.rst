@@ -13,8 +13,10 @@ The two rules leaned on most are **E-Add**
 the exact result under the active context :math:`C`) and **E-Lt**
 (:math:`\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2) \,;\, \mu_2`—an exact
 boolean, no rounding).  The store :math:`\mu` is elided in the entries below:
-every node threads it, list construction allocates a cell per element, and
-``IndexedAssign`` is the only node that overwrites one.  Type annotations,
+every node threads it, list construction allocates a reference per element, and
+``IndexedAssign`` is the only node that writes through one.  Several operations move
+values without inspecting them, so they are *polymorphic*: ``Any`` in the
+programs below is any element type, not just ``fp.Real``.  Type annotations,
 abstract base classes, and re-exports carry no runtime behaviour and are omitted.
 
 Literals and values
@@ -233,62 +235,16 @@ Rounding operators
 * ``Cast`` — ``fp.cast(e)`` rounds ``e`` but is stuck unless the result is
   exact (a guarded **E-Assert**).
 
-Lists
------
+Tuples
+------
 
-Every FPy list is a core list of *references*.  The list expression
-``[e_1, ..., e_m]`` elaborates to
-
-.. math::
-
-   [\, \texttt{ref}\ e_1, \ldots, \texttt{ref}\ e_m \,]
-
-whose value is a list of locations :math:`[\, \ell_1, \ldots, \ell_m \,]`—one
-cell per element.  Everything below follows from that choice and the core rules
-that act on it.
-
-**Elements are mutable; the length is not.**  **E-Update** replaces the contents
-of a cell, and **E-List** is the only rule that builds a list value, fixing
-:math:`m` where the list is constructed.  No core rule lengthens or shortens an
-existing one, so FPy has no ``append`` and a list's length is fixed for the life
-of the value.
-
-**A projection is a cell, and its two positions differ.**  As a value, ``xs[i]``
-is **E-Index** followed by **E-Deref**—:math:`\texttt{!}\, (xs[i])`—reading the
-element out of its cell.  As the target of an assignment it is the cell itself,
-with no dereference (see ``IndexedAssign``).  Nesting works the same way at each
-level: a ``list[list[Any]]`` is cells holding list structures, so ``xss[i]``
-dereferences to a row whose cells are the original's.
-
-**Binding shares cells.**  **E-Assign** copies nothing, so ``ys = xs`` gives
-``xs``'s cells a second name and a write to an element is visible through both.
-Rebinding ``xs`` afterwards is not, since that changes only the environment.
-Argument passing and ``return`` are the same: **E-App** does not capture the
-store, so a callee's writes to an element are visible to its caller.
-
-**Construction allocates, one level deep.**  Every element of a new list gets a
-fresh cell, so ``[a, b]`` shares no cell with whatever ``a`` and ``b`` are bound
-to—no copying rule is needed for that.  The fresh cell holds the element's
-*value*, though, so where that value is itself a list the new cell holds the
-same structure: ``[xs]`` does not copy ``xs``'s cells.  A list owns its own
-cells and nothing deeper.
-
-**Tuples hold values, not cells.**  A tuple groups without owning.  The fields
-of ``(a, b)`` hold whatever ``a`` and ``b`` evaluate to, which for a list is its
-structure of cells, so a list reached through a tuple is shared rather than
-copied.
-
-Compound data
--------------
-
-These move values without inspecting them, so they are *polymorphic*: ``Any``
-below is any element type, not just ``fp.Real``.
+A tuple holds its fields' values directly and is immutable—no node writes to one.
+It copies nothing: a field holds exactly what its expression evaluated to, so a
+tuple groups without owning.  Tuples cannot be indexed, and are decomposed only
+by a tuple pattern.
 
 * ``TupleExpr`` — **E-Tuple**; ``TupleBinding`` — the tuple pattern of
   **M-Tuple**.
-* ``ListExpr`` — **E-List** over an **E-Ref** per element; ``ListRef``
-  (``xs[i]``) — **E-Index** in target position, **E-Index** then **E-Deref** as a
-  value.  Both are the elaboration described under *Lists*.
 * ``Fst`` / ``Snd`` — tuple accessors (``snd`` of a longer tuple is the rest)::
 
     @fp.fpy
@@ -301,17 +257,33 @@ below is any element type, not just ``fp.Real``.
         a, b = t
         return b
 
-* ``IfExpr`` — ``a if c else b``, the expression form of the conditional (only
-  the selected branch runs)::
+Lists
+-----
 
-    @fp.fpy
-    def if_expr(c: bool, a: Any, b: Any) -> Any:
-        if c:
-            r = a
-        else:
-            r = b
-        return r
+Every FPy list is a core list of *references*.  The list expression
+``[e_1, ..., e_m]`` elaborates to
 
+.. math::
+
+   [\, \texttt{ref}\ e_1, \ldots, \texttt{ref}\ e_m \,]
+
+whose value is a list of locations :math:`[\, \ell_1, \ldots, \ell_m \,]`—one
+cell per element.  Three consequences:
+
+* **Elements are mutable, the length is not.**  **E-Update** replaces a cell's
+  contents; only **E-List** builds a list value, and it fixes :math:`m`.  So FPy
+  has no ``append``.
+* **Binding shares cells.**  **E-Assign** copies nothing, so ``ys = xs``—and a
+  tuple field holding ``xs``—sees writes to its elements.
+* **Ownership stops at the cell.**  Construction gives every element a fresh
+  cell, but that cell holds the element's *value*: ``[xs]`` does not copy
+  ``xs``'s cells, and ``xss[i]`` dereferences to a row shared with the original.
+
+The nodes that build and read them:
+
+* ``ListExpr`` — **E-List** over an **E-Ref** per element; ``ListRef``
+  (``xs[i]``) — **E-Index** then **E-Deref**, since it only ever appears in value
+  position.  An assignment target is ``IndexedAssign``, not a ``ListRef``.
 * ``ListSlice`` — ``xs[start:stop]`` extracts exactly ``stop - start``
   elements::
 
@@ -360,6 +332,21 @@ below is any element type, not just ``fp.Real``.
   exact integer counts, no rounding.
 * ``Range1`` / ``Range2`` / ``Range3`` — ``range(…)`` materialized to a list of
   integers, as in Python.
+
+Miscellaneous
+-------------
+
+* ``IfExpr`` — ``a if c else b``, the expression form of the conditional (only
+  the selected branch runs)::
+
+    @fp.fpy
+    def if_expr(c: bool, a: Any, b: Any) -> Any:
+        if c:
+            r = a
+        else:
+            r = b
+        return r
+
 * ``Attribute`` — ``e.name`` reads an attribute of a foreign value (no
   rounding).
 * ``Call`` — **E-App**, generalized to many arguments and foreign callables; the
@@ -376,7 +363,9 @@ Statements
   core's update takes a variable on the left, so it elaborates to a projection
   bound to a temporary and an **E-Update** on that: :math:`y = x[i]`,
   :math:`y := e`, where the projection is in target position and so carries no
-  **E-Deref**.  Every other name for that cell observes the write.  It cannot
+  **E-Deref**.  ``indices`` may name several levels, and the intermediate ones
+  *are* dereferenced: ``x[i][j] = e`` is :math:`y = \texttt{!}\, (x[i])[j]`,
+  :math:`y := e`.  Every other name for that cell observes the write.  It cannot
   change the list's length, and it cannot make the slot hold a *different*
   cell—only the contents of the cell already there.
 * ``If1Stmt`` — ``if c: body`` is **E-If** with an **E-Skip** else-branch.
