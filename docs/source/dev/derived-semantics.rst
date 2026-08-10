@@ -238,7 +238,8 @@ by a tuple pattern.
 
 * ``TupleExpr`` — **E-Tuple**; ``TupleBinding`` — the tuple pattern of
   **M-Tuple**.
-* ``Fst`` / ``Snd`` — tuple accessors (``snd`` of a longer tuple is the rest)::
+* ``Fst`` / ``Snd`` — pair accessors. Both require a tuple of exactly two
+  elements; a longer one is an error, not a shorter tuple::
 
     @fp.fpy
     def fst(t: tuple[Any, Any]) -> Any:

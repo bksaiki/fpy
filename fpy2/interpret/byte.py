@@ -114,11 +114,30 @@ def _cvt_float(x: Value):
             raise TypeError(f'expected a real number, got `{x}`')
 
 def _cvt_int(val: Value):
+    """
+    Converts an integer-valued real to a Python `int`.
+
+    Negative values are fine here -- this is the plain conversion, and a
+    negative integer is meaningful in positions such as `round_at`'s digit.
+    Callers converting a *list index* want `_cvt_index` instead.
+    """
     if not isinstance(val, RealValue):
-        raise TypeError(f'expected a real number slice, got {val}')
+        raise TypeError(f'expected a real number, got {val}')
     if not _is_integer(val):
-        raise TypeError(f'expected an integer slice, got {val}')
+        raise TypeError(f'expected an integer, got {val}')
     return int(val)
+
+def _cvt_index(val: Value):
+    """
+    Converts a list index to a Python `int`.
+
+    FPy does not support negative indices, so this raises an `IndexError` if
+    the value is negative. Otherwise, this is the same as `_cvt_int`.
+    """
+    idx = _cvt_int(val)
+    if idx < 0:
+        raise IndexError(f'list index out of range: {idx}')
+    return idx
 
 def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
     if ty is int:
@@ -549,7 +568,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_call': _eval_call,
         '__fpy_fraction': Fraction,
         '__fpy_negzero': _neg_zero,
-        '__fpy_int': _cvt_int,
+        '__fpy_index': _cvt_index,
         '__fpy_list_set': _eval_list_set,
         '__fpy_list_slice': _eval_list_slice,
         '__fpy_range': _eval_range,
@@ -902,8 +921,8 @@ class BytecodeCompiler(Visitor):
         index = self._visit_expr(e.index, ctx)
         attrs = self._location_to_attributes(e.loc)
 
-        # convert the index to an integer using `__fpy_int` to ensure it's a valid list index
-        cvt_name = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+        # convert the index using `__fpy_index` to ensure it's a valid list index
+        cvt_name = pyast.Name(id='__fpy_index', ctx=pyast.Load(), **attrs)
         idx = pyast.Call(func=cvt_name, args=[index], keywords=[], **attrs)
 
         # do a normal list reference
@@ -959,7 +978,7 @@ class BytecodeCompiler(Visitor):
         expr = self._visit_expr(stmt.expr, ctx)
 
         for i, idx in enumerate(idxs):
-            func = pyast.Name(id='__fpy_int', ctx=pyast.Load(), **attrs)
+            func = pyast.Name(id='__fpy_index', ctx=pyast.Load(), **attrs)
             idx = pyast.Call(func=func, args=[idx], keywords=[], **attrs)
             e_ctx = pyast.Load() if i < len(idxs) - 1 else pyast.Store()
             arr = pyast.Subscript(value=arr, slice=idx, ctx=e_ctx, **attrs)
