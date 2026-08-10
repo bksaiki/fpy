@@ -88,9 +88,10 @@ class StorageAnalysis:
 def is_rebound(storage: 'StorageAnalysis', d: Definition) -> bool:
     """Is the name *d* introduces ever bound to a different value?
 
-    ``xs[i] = e`` is not a rebind — it mutates the list the name already refers
-    to, and that def stays in the same class.  Only an ``Assign`` to the same
-    name is, and *d*'s own defining assignment does not count.
+    ``xs[i] = e`` is not a rebind — **E-Update** writes *through* an element
+    cell, so the name still denotes the same list and that def stays in the same
+    class.  Only an ``Assign`` to the same name is, and *d*'s own defining
+    assignment does not count.
     """
     cls = storage.def_class[d]
     return any(

@@ -1,9 +1,11 @@
 """
 cpp backend: which lists may drop the handle.
 
-A list compiles to ``fpy::list<T>`` -- a shared handle -- because FPy lists
-alias.  Where :mod:`fpy2.analysis.alias` proves nothing else can observe one, the
-indirection buys nothing and it becomes a plain ``std::vector<T>``: no
+An FPy list is a core list of *references* -- one cell per element -- so two
+names can hold the same cells and a write through either is visible to both.
+``fpy::list<T>``, a shared handle, is how that identity survives compilation.
+Where :mod:`fpy2.analysis.alias` proves nothing else can observe the cells, the
+indirection buys nothing and the list becomes a plain ``std::vector<T>``: no
 allocation, no refcount, and a type a native caller already holds.
 
 Decided per **alias region**, the only unit at which one answer satisfies every
@@ -94,9 +96,10 @@ class UnboxAnalysis:
     slot_replaced: set[Region] = field(default_factory=set)
     """Element regions some ``xss[i] = <list>`` puts a *different* list into.
 
-    A C++ reference binds to the slot, so a name projected out of one of these
-    would follow the replacement; FPy keeps referring to the list that was
-    there.  ``_regression_replaced_slot`` is exactly that.
+    ``row = xss[i]`` is **E-Index** then **E-Deref**: it reads through the cell
+    *once* and binds what was in it.  A C++ reference re-reads the slot on every
+    use, so the two diverge exactly where an **E-Update** replaces the cell's
+    contents.  ``_regression_replaced_slot`` is that program.
     """
     at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
@@ -106,8 +109,8 @@ class UnboxAnalysis:
     def may_reference_projection(self, d: Definition) -> bool:
         """Whether ``row = xss[i]`` may bind a reference rather than copy.
 
-        Only when nothing replaces that slot: a reference follows the slot, and
-        FPy keeps referring to the list that was in it.
+        Only when nothing replaces that slot: a reference re-reads it, where
+        **E-Deref** read it once at the binding.
         """
         region = self.alias.region_of(d)
         return region is not None and region not in self.slot_replaced
@@ -115,8 +118,9 @@ class UnboxAnalysis:
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
         """Whether a ``const`` reference here would reject a write FPy allows.
 
-        ``const fpy::list<T>&`` does not: ``const`` qualifies the handle, and
-        ``xs[i] = e`` through one is FPy parameter semantics.  An unboxed list has no
+        **E-App** keeps no store of its own, so a callee's ``xs[i] = e`` writes
+        the caller's cells -- and ``const fpy::list<T>&`` permits exactly that,
+        since ``const`` qualifies the handle and not the cells.  An unboxed list has no
         such indirection, so ``const`` reaches its elements -- and through a value
         container, so a write to a row needs the whole thing non-const.  A boxed
         level stops that.
@@ -348,7 +352,7 @@ class _Scan(DefaultVisitor):
     """One walk collecting the four facts ``decide`` reads off the syntax.
 
     ``slot_replaced`` element regions some ``xss[i] = <list>`` replaces -- a C++
-    reference follows the slot, FPy the list that was in it.  ``written``
+    reference re-reads the slot where **E-Deref** read it once.  ``written``
     regions stored into here or in a callee, which a ``const`` reference would
     reject.  ``at_boundary`` regions crossing a call that declared a handle; an
     unknown callee counts as declaring one everywhere.  ``returned`` what each

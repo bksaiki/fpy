@@ -1,7 +1,7 @@
 Type System
 ===========
 
-FPy is *not* statically typed.  A program runs (see :doc:`semantics`) without
+FPy is *not* statically typed. A program runs (see :doc:`semantics`) without
 any type-checking, and every value carries its rounding context at run time.
 Static types enter only when compiling a program to a strongly-typed target,
 such as C++: the compiler infers a static type for each expression, and a
@@ -9,39 +9,43 @@ program must type-check to be compiled — even though an ill-typed program may
 still run under the dynamic semantics.
 
 This page gives the typing rules for the same core fragment as
-:doc:`semantics`.  The types here are *context-free*: a real number has type
-:math:`\texttt{real}`, with no rounding context attached.  To emit code for a
+:doc:`semantics`. The types here are *context-free*: a real number has type
+:math:`\texttt{real}`, with no rounding context attached. To emit code for a
 typed target, a separate pass refines each :math:`\texttt{real}` with the
 rounding context it is produced under (so the backend can pick a concrete
-machine type — ``float``, ``double``, a fixed-point format, and so on).  That
+machine type — ``float``, ``double``, a fixed-point format, and so on). That
 refinement is out of scope here.
 
 Types
 -----
 
 The scalar types mirror the three scalar value kinds — booleans, real numbers,
-and rounding contexts — and are joined by list, tuple, and function types.
+and rounding contexts — and are joined by list, tuple, reference, and function
+types.
 
 .. math::
 
    T ::= \texttt{bool} \mid \texttt{real} \mid \texttt{context}
        \mid \texttt{list}\ T
        \mid T_1 \times \cdots \times T_n
+       \mid \texttt{ref}\ T
        \mid T_1 \rightarrow T_2
 
 The real rounding context :math:`\R` has type :math:`\texttt{context}`.
 Function symbols are assigned a function type :math:`T_1 \rightarrow T_2`.
+A reference to a :math:`T` has type :math:`\texttt{ref}\ T`; since a reference
+is both read and written at that one type, :math:`\texttt{ref}` is invariant.
 
 Typing
 ------
 
 Typing is the judgement :math:`\Gamma \vdash e : T`, read "under typing context
-:math:`\Gamma`, expression :math:`e` has type :math:`T`".  :math:`\Gamma`
+:math:`\Gamma`, expression :math:`e` has type :math:`T`". :math:`\Gamma`
 assigns each variable a single type and is the solution of whole-function type
 inference — computed by unification, so library functions may be polymorphic.
 The rules below present the monomorphic case and state when a program agrees
 with that solution; statement well-formedness is written
-:math:`\Gamma \vdash s\ \texttt{ok}`.  Because :math:`\Gamma` is fixed, typing
+:math:`\Gamma \vdash s\ \texttt{ok}`. Because :math:`\Gamma` is fixed, typing
 *checks* a program against it rather than building it up statement by
 statement.
 
@@ -76,7 +80,7 @@ assigns it.
    \frac{x : T \in \Gamma}{\Gamma \vdash x : T}
    \tag{T-Var}
 
-A list is homogeneous; indexing recovers the element type.  A tuple's type
+A list is homogeneous; indexing recovers the element type. A tuple's type
 records each component.
 
 .. math::
@@ -89,13 +93,27 @@ records each component.
 
    \frac{\Gamma \vdash e_1 : \texttt{list}\ T \quad \Gamma \vdash e_2 : \texttt{real}}
         {\Gamma \vdash e_1[e_2] : T}
-   \tag{T-Ref}
+   \tag{T-Index}
 
 .. math::
 
    \frac{\Gamma \vdash e_1 : T_1 \quad \cdots \quad \Gamma \vdash e_n : T_n}
         {\Gamma \vdash (\, e_1, \ldots, e_n \,) : T_1 \times \cdots \times T_n}
    \tag{T-Tuple}
+
+Allocating a reference wraps its operand's type; dereferencing unwraps it.
+
+.. math::
+
+   \frac{\Gamma \vdash e : T}
+        {\Gamma \vdash \texttt{ref}\ e : \texttt{ref}\ T}
+   \tag{T-Ref}
+
+.. math::
+
+   \frac{\Gamma \vdash e : \texttt{ref}\ T}
+        {\Gamma \vdash \texttt{!}\, e : T}
+   \tag{T-Deref}
 
 As in :doc:`semantics`, ``+`` and ``<`` are representatives: arithmetic maps
 reals to a real, and comparison maps reals to a boolean.
@@ -122,17 +140,26 @@ Statements
 ^^^^^^^^^^
 
 An assignment checks that its right-hand side's type agrees with the pattern on
-the left.  Because :math:`\Gamma` is fixed — every variable already has its
+the left. Because :math:`\Gamma` is fixed — every variable already has its
 inferred type — a pattern needs no rules of its own: it is typed by the
 *expression* rules, a variable by **T-Var** and a tuple pattern
-:math:`x_1, \ldots, x_n` like the tuple :math:`(\, x_1, \ldots, x_n \,)` by
+:math:`(\, x_1, \ldots, x_n \,)` like the tuple of the same shape by
 **T-Tuple**.
 
 .. math::
 
    \frac{\Gamma \vdash e : T \quad \Gamma \vdash p : T}
-        {\Gamma \vdash p := e\ \texttt{ok}}
+        {\Gamma \vdash p = e\ \texttt{ok}}
    \tag{T-Assign}
+
+An update writes at the type its target refers to, so the two sides agree only
+up to the :math:`\texttt{ref}`.
+
+.. math::
+
+   \frac{\Gamma \vdash x : \texttt{ref}\ T \quad \Gamma \vdash e : T}
+        {\Gamma \vdash x := e\ \texttt{ok}}
+   \tag{T-Update}
 
 .. math::
 
@@ -140,7 +167,7 @@ inferred type — a pattern needs no rules of its own: it is typed by the
    \tag{T-Skip}
 
 The :math:`\texttt{ret}` operand may have any type; all returns in a function
-share one type, which becomes the function's result type.  An assertion tests a
+share one type, which becomes the function's result type. An assertion tests a
 boolean.
 
 .. math::

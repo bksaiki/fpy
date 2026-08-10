@@ -11,17 +11,18 @@ explicitly and concatenate them — same shape as the legacy
 Headers track exactly what the emitter uses; the list below is the whole
 dependency set.
 
-``fpy::list`` is why a runtime exists at all: FPy lists alias on assignment, so
-a ``std::vector`` — a value — cannot represent one.  Three choices worth not
-relitigating:
+``fpy::list`` is why a runtime exists at all: an FPy list is a list of
+*references*, and binding shares those cells, so a ``std::vector`` — a value —
+cannot represent one.  Three choices worth not relitigating:
 
 - A plain alias for ``std::shared_ptr``, not a wrapper class, so a program
   embedding a kernel can handle a list without depending on anything of ours.
 - The control block is atomic, so copying a handle is an atomic increment.  The
   emitter passes ``const list<T>&`` wherever a name is not rebound, and a
   reference does no refcounting — that is what keeps the atomic off the hot path.
-- Refcounting needs no collector: FPy has no recursive list type, so no cycle is
-  constructible.
+- Refcounting needs no collector: a cycle needs a list to hold itself, and list
+  types are finite, so ``xs[0] = xs`` fails to unify.  It is the *type* system
+  that rules this out, not the store rules, which would permit it.
 
 Only what emitted code names lives here.  The conversions a *caller* needs to
 hand a ``std::vector`` to a kernel are in ``CPP_INTEROP``, with the tests that

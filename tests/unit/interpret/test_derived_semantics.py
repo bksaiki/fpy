@@ -2,7 +2,8 @@
 Interpreter checks backing ``docs/source/dev/derived-semantics.rst``.
 
 Every AST node outside the core fragment is documented there as either
-(i) evaluating like a core rule or (ii) desugaring to a core FPy program.
+(i) evaluating like a core rule, (ii) desugaring to a core FPy program, or
+(iii) elaborating to core syntax with no FPy spelling of its own.
 These tests make each claim executable:
 
 * **desugarings** are checked by running the node form against the *exact
@@ -13,10 +14,15 @@ These tests make each claim executable:
 * **rounding primitives** are checked for the documented rounding behaviour
   (exact under ``REAL``, correctly rounded under a finite context).
 
-Grouped by the headings of the doc.  ``min`` / ``max`` (``test_min_max``),
-list slicing (``test_list_slice``), and ``fst`` / ``snd``
-(``test_tuple_accessors``) have dedicated files; they are re-touched lightly
-here only so every group is self-contained.
+Grouped by the headings of the doc.  Three areas have dedicated files, and are
+re-touched lightly here only so every group is self-contained: IEEE special
+values for ``min`` / ``max`` (``test_min_max``), slice bounds
+(``test_list_slice``), and the value semantics of the list encoding — sharing,
+ownership, and what a slice copies (``test_list_semantics``).
+
+Mechanism (iii) is the list encoding, so it is checked there rather than here;
+what this file checks about lists is that each node computes the values the
+doc's desugaring computes.
 """
 
 import math
@@ -690,19 +696,33 @@ class TestRoundingOperators:
 
 
 # ---------------------------------------------------------------------------
-# Compound data  (TupleExpr, ListExpr, ListRef, Fst, Snd, IfExpr, ListSlice,
-# ListComp, Zip, Enumerate, Empty, Len, Size, Dim, Range1/2/3, Attribute)
+# Tuples  (TupleExpr, TupleBinding, Fst, Snd)
 # ---------------------------------------------------------------------------
 
-class TestCompoundData:
+class TestTuples:
 
-    def test_tuple_list_ref(self):
+    def test_tuple_expr_and_list_expr(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             xs = [a, b]
             t = (a, b)
             return xs[0] + fp.snd(t)
         assert float(f(3.0, 4.0, ctx=FP64)) == 7.0
+
+    def test_fst_snd_require_a_pair(self):
+        """Both accessors are *pair* accessors: a longer tuple is an error, not
+        a shorter tuple.  Covered because the doc used to claim ``snd`` of a
+        longer tuple returned the rest, which ``fpy2.ops`` never did."""
+        @fp.fpy
+        def fst_(t: tuple[fp.Real, fp.Real, fp.Real]) -> fp.Real:
+            return fp.fst(t)
+        @fp.fpy
+        def snd_(t: tuple[fp.Real, fp.Real, fp.Real]) -> fp.Real:
+            return fp.snd(t)
+        with pytest.raises(ValueError, match='fst requires a pair'):
+            fst_((1.0, 2.0, 3.0), ctx=FP64)
+        with pytest.raises(ValueError, match='snd requires a pair'):
+            snd_((1.0, 2.0, 3.0), ctx=FP64)
 
     def test_fst_snd_match_tuple_pattern(self):
         @fp.fpy
@@ -722,19 +742,73 @@ class TestCompoundData:
         _agree(fst_node, fst_desugar, ((5.0, 2.0),))
         _agree(snd_node, snd_desugar, ((5.0, 2.0),))
 
-    def test_if_expr_matches_if_stmt(self):
+
+# ---------------------------------------------------------------------------
+# Lists  (ListExpr, ListRef, ListSlice, ListComp, Zip, Enumerate, Empty, Len,
+# Size, Dim, Range1/2/3).  The value semantics of the encoding -- sharing,
+# ownership, what a slice copies -- are in test_list_semantics.
+# ---------------------------------------------------------------------------
+
+class TestLists:
+
+    def test_index_out_of_range_is_stuck(self):
+        """**E-Index** requires ``n`` in ``{0, ..., m-1}``, so an out-of-range
+        index has no rule.  As with slice bounds, the ``IndexError`` is the
+        reference interpreter's diagnostic for that stuck state rather than a
+        contract; what these pin is that it does not quietly return a value."""
         @fp.fpy
-        def expr_(x: fp.Real) -> fp.Real:
-            return x if x > 0 else -x
+        def read(xs: list[fp.Real], i: fp.Real) -> fp.Real:
+            return xs[i]
         @fp.fpy
-        def stmt_(x: fp.Real) -> fp.Real:
-            if x > 0:
-                y = x
-            else:
-                y = -x
-            return y
-        for args in [(3.0,), (-3.0,)]:
-            _agree(expr_, stmt_, args)
+        def write(xs: list[fp.Real], i: fp.Real) -> fp.Real:
+            xs[i] = 9
+            return xs[0]
+        @fp.fpy
+        def read_nested(xss: list[list[fp.Real]], i: fp.Real) -> fp.Real:
+            return xss[i][0]
+
+        with pytest.raises(IndexError):
+            read([1.0, 2.0], 2, ctx=FP64)        # just past the end
+        with pytest.raises(IndexError):
+            read([1.0, 2.0], 5, ctx=FP64)        # well past the end
+        with pytest.raises(IndexError):
+            read([], 0, ctx=FP64)                # empty list
+        with pytest.raises(IndexError):
+            read_nested([[1.0]], 2, ctx=FP64)    # the outer level
+        with pytest.raises(IndexError):
+            write([1.0, 2.0], 2, ctx=FP64)       # IndexedAssign, not just reads
+
+    def test_a_negative_index_does_not_wrap(self):
+        """``-1`` is outside ``{0, ..., m-1}`` just as ``m`` is, so it is stuck
+        rather than Python's index-from-the-end.  Inheriting the wrap-around
+        would hand a stuck program a plausible value that a backend subscripting
+        a vector would not agree on, so the interpreter rejects it — matching
+        slice bounds, which already reject a negative start."""
+        @fp.fpy
+        def read(xs: list[fp.Real], i: fp.Real) -> fp.Real:
+            return xs[i]
+        @fp.fpy
+        def write(xs: list[fp.Real], i: fp.Real) -> fp.Real:
+            xs[i] = 9
+            return xs[0]
+
+        with pytest.raises(IndexError, match='out of range'):
+            read([1.0, 2.0], -1, ctx=FP64)
+        with pytest.raises(IndexError, match='out of range'):
+            read([1.0, 2.0], -3, ctx=FP64)
+        with pytest.raises(IndexError, match='out of range'):
+            write([1.0, 2.0], -1, ctx=FP64)
+
+    def test_index_must_be_an_integer(self):
+        """The same premise requires an integral ``n``.  FPy has no integer
+        type — **T-Index** types the index as ``real`` — so integrality is a
+        run-time premise, not a static one."""
+        @fp.fpy
+        def read(xs: list[fp.Real], i: fp.Real) -> fp.Real:
+            return xs[i]
+
+        with pytest.raises(TypeError):
+            read([1.0, 2.0], 1.5, ctx=FP64)
 
     def test_list_slice_matches_comprehension(self):
         @fp.fpy
@@ -814,6 +888,27 @@ class TestCompoundData:
         assert [float(v) for v in r1(ctx=FP64)] == [0.0, 1.0, 2.0]
         assert [float(v) for v in r2(ctx=FP64)] == [2.0, 3.0, 4.0]
         assert [float(v) for v in r3(ctx=FP64)] == [0.0, 2.0, 4.0]
+
+
+# ---------------------------------------------------------------------------
+# Miscellaneous  (IfExpr, Attribute; Call is exercised under Statements)
+# ---------------------------------------------------------------------------
+
+class TestMiscellaneous:
+
+    def test_if_expr_matches_if_stmt(self):
+        @fp.fpy
+        def expr_(x: fp.Real) -> fp.Real:
+            return x if x > 0 else -x
+        @fp.fpy
+        def stmt_(x: fp.Real) -> fp.Real:
+            if x > 0:
+                y = x
+            else:
+                y = -x
+            return y
+        for args in [(3.0,), (-3.0,)]:
+            _agree(expr_, stmt_, args)
 
     def test_attribute_reads_foreign(self):
         # `e.name` reads a native attribute of a foreign value

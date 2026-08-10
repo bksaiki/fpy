@@ -5,6 +5,12 @@ Unlike Python's clamping behaviour, FPy requires ``xs[start:stop]`` to
 extract a block of *exactly* ``stop - start`` elements — out-of-range
 bounds raise ``IndexError`` at runtime instead of silently producing a
 truncated or empty list.
+
+Extracting exactly ``stop - start`` elements is the semantics; the
+``IndexError`` is not.  Out-of-range bounds are a *stuck* state, so the
+exception is the reference interpreter's diagnostic rather than a contract a
+backend has to reproduce — these tests pin it because a silent truncation is
+the failure they exist to catch.
 """
 
 import fpy2 as fp
@@ -12,7 +18,7 @@ import pytest
 
 
 class TestStrictListSlice:
-    """Runtime tests for the ``__fpy_list_slice`` helper."""
+    """``ListSlice`` extracts exactly ``stop - start`` elements."""
 
     def test_valid_inner_slice(self):
         """A fully-in-bounds slice extracts exactly ``stop - start`` items."""
