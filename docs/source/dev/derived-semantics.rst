@@ -4,15 +4,18 @@ Derived Semantics
 The :doc:`core semantics <semantics>` covers only a minimal fragment of
 FPy—constants, arithmetic, function calls, and the basic statements.  This page
 explains every other *evaluable* node in :mod:`fpy2.ast.fpyast`, each either
-**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Add**) or
-**(ii)** desugaring to a small FPy program.
+**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Add**),
+**(ii)** desugaring to a small FPy program, or **(iii)** elaborating to core
+syntax that has no FPy spelling of its own, as lists do (see *Lists*).
 
 The two rules leaned on most are **E-Add**
-(:math:`\langle \sigma, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2})`—round
+(:math:`\langle \sigma, \mu, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2}) \,;\, \mu_2`—round
 the exact result under the active context :math:`C`) and **E-Lt**
-(:math:`\langle \sigma, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)`—an exact
-boolean, no rounding).  Type annotations, abstract base classes, and re-exports
-carry no runtime behaviour and are omitted.
+(:math:`\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2) \,;\, \mu_2`—an exact
+boolean, no rounding).  The store :math:`\mu` is elided in the entries below:
+every node threads it, list construction allocates a cell per element, and
+``IndexedAssign`` is the only node that overwrites one.  Type annotations,
+abstract base classes, and re-exports carry no runtime behaviour and are omitted.
 
 Literals and values
 -------------------
@@ -230,14 +233,62 @@ Rounding operators
 * ``Cast`` — ``fp.cast(e)`` rounds ``e`` but is stuck unless the result is
   exact (a guarded **E-Assert**).
 
+Lists
+-----
+
+Every FPy list is a core list of *references*.  The list expression
+``[e_1, ..., e_m]`` elaborates to
+
+.. math::
+
+   [\, \texttt{ref}\ e_1, \ldots, \texttt{ref}\ e_m \,]
+
+whose value is a list of locations :math:`[\, \ell_1, \ldots, \ell_m \,]`—one
+cell per element.  Everything below follows from that choice and the core rules
+that act on it.
+
+**Elements are mutable; the length is not.**  **E-Update** replaces the contents
+of a cell, and **E-List** is the only rule that builds a list value, fixing
+:math:`m` where the list is constructed.  No core rule lengthens or shortens an
+existing one, so FPy has no ``append`` and a list's length is fixed for the life
+of the value.
+
+**A projection is a cell, and its two positions differ.**  As a value, ``xs[i]``
+is **E-Index** followed by **E-Deref**—:math:`\texttt{!}\, (xs[i])`—reading the
+element out of its cell.  As the target of an assignment it is the cell itself,
+with no dereference (see ``IndexedAssign``).  Nesting works the same way at each
+level: a ``list[list[Any]]`` is cells holding list structures, so ``xss[i]``
+dereferences to a row whose cells are the original's.
+
+**Binding shares cells.**  **E-Assign** copies nothing, so ``ys = xs`` gives
+``xs``'s cells a second name and a write to an element is visible through both.
+Rebinding ``xs`` afterwards is not, since that changes only the environment.
+Argument passing and ``return`` are the same: **E-App** does not capture the
+store, so a callee's writes to an element are visible to its caller.
+
+**Construction allocates, one level deep.**  Every element of a new list gets a
+fresh cell, so ``[a, b]`` shares no cell with whatever ``a`` and ``b`` are bound
+to—no copying rule is needed for that.  The fresh cell holds the element's
+*value*, though, so where that value is itself a list the new cell holds the
+same structure: ``[xs]`` does not copy ``xs``'s cells.  A list owns its own
+cells and nothing deeper.
+
+**Tuples hold values, not cells.**  A tuple groups without owning.  The fields
+of ``(a, b)`` hold whatever ``a`` and ``b`` evaluate to, which for a list is its
+structure of cells, so a list reached through a tuple is shared rather than
+copied.
+
 Compound data
 -------------
 
 These move values without inspecting them, so they are *polymorphic*: ``Any``
 below is any element type, not just ``fp.Real``.
 
-* ``TupleExpr`` — **E-Tuple**; ``ListExpr`` — **E-List**; ``ListRef`` (``xs[i]``)
-  — **E-Index**; ``TupleBinding`` — the tuple pattern of **M-Tuple**.
+* ``TupleExpr`` — **E-Tuple**; ``TupleBinding`` — the tuple pattern of
+  **M-Tuple**.
+* ``ListExpr`` — **E-List** over an **E-Ref** per element; ``ListRef``
+  (``xs[i]``) — **E-Index** in target position, **E-Index** then **E-Deref** as a
+  value.  Both are the elaboration described under *Lists*.
 * ``Fst`` / ``Snd`` — tuple accessors (``snd`` of a longer tuple is the rest)::
 
     @fp.fpy
@@ -268,6 +319,11 @@ below is any element type, not just ``fp.Real``.
     def slice(xs: list[Any], start: int, stop: int) -> list[Any]:
         return [xs[i] for i in range(start, stop)]
 
+  Reading each element and rebuilding allocates a fresh cell per element, so a
+  slice copies the spine rather than viewing it: for ``ys = xs[i:j]``, a write to
+  ``ys[k]`` does not reach ``xs``.  Those cells hold the same rows, though, so
+  ``ys[k][l] = e`` does.
+
 * ``ListComp`` — a list-building loop; a target may be a tuple binding
   (**M-Tuple**), and several generators nest as in Python.  For an element
   expression ``g``, ``[g(x, y) for x, y in zip(xs, ys)]``::
@@ -289,6 +345,10 @@ below is any element type, not just ``fp.Real``.
         assert len(xs) == len(ys)
         return [(xs[i], ys[i]) for i in range(len(xs))]
 
+  Its elements are tuples, so each cell holds a tuple whose fields hold what
+  ``xs[i]`` and ``ys[i]`` dereference to—a copy for a scalar, the shared row for
+  a list.  ``Enumerate`` has the same shape.
+
 * ``Enumerate`` — ``(i, xs[i])`` pairs with integer ``i``::
 
     @fp.fpy
@@ -304,16 +364,21 @@ below is any element type, not just ``fp.Real``.
   rounding).
 * ``Call`` — **E-App**, generalized to many arguments and foreign callables; the
   body runs under the callee's declared context if any, else the caller's
-  :math:`C`.
+  :math:`C`.  An argument passes its structure of cells, and **E-App** does not
+  capture the store, so a callee's write to an element is visible to its caller.
 
 Statements
 ----------
 
 * ``StmtBlock`` — a statement sequence, **E-Seq**; empty is **E-Skip**.
 * ``Assign`` — **E-Assign** (pattern via **M-Var** / **M-Tuple**).
-* ``IndexedAssign`` — ``x[i] = e`` updates element ``i`` of the list bound to
-  ``x`` *in place*; lists are references, so other bindings to the same list
-  observe the update.
+* ``IndexedAssign`` — ``x[i] = e`` writes through the cell at index ``i``.  The
+  core's update takes a variable on the left, so it elaborates to a projection
+  bound to a temporary and an **E-Update** on that: :math:`y = x[i]`,
+  :math:`y := e`, where the projection is in target position and so carries no
+  **E-Deref**.  Every other name for that cell observes the write.  It cannot
+  change the list's length, and it cannot make the slot hold a *different*
+  cell—only the contents of the cell already there.
 * ``If1Stmt`` — ``if c: body`` is **E-If** with an **E-Skip** else-branch.
 * ``IfStmt`` — **E-If-True** / **E-If-False**.
 * ``WhileStmt`` — ``while c: s`` :math:`\equiv`
@@ -332,5 +397,5 @@ Statements
 
 * ``ContextStmt`` — **E-Context**.
 * ``AssertStmt`` — **E-Assert** (the optional message is used only on failure).
-* ``EffectStmt`` — evaluate an expression and discard the result (``_ := e``).
+* ``EffectStmt`` — evaluate an expression and discard the result (``_ = e``).
 * ``ReturnStmt`` — **E-Ret**; ``PassStmt`` — **E-Skip**.
