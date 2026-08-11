@@ -10,6 +10,7 @@ surface as :class:`CppCompileError`.
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from ...analysis import (
     Alias,
@@ -55,6 +56,10 @@ from .unbox import (
     return_storage,
 )
 from .utils import CPP_HEADERS, CPP_HELPERS
+
+_UnboxMode: TypeAlias = UnboxMode
+"""Annotation-only alias: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
+enum inside the class body, so annotations there need a name it does not."""
 
 
 class CppCompileError(CompileError):
@@ -196,11 +201,11 @@ class CppCompiler(Backend):
 
     _unsafe_cast_int: bool
     _optimize: bool
-    _unbox: UnboxMode
+    _unbox: _UnboxMode
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: UnboxMode = UnboxMode.STRICT,
+        unbox: _UnboxMode = UnboxMode.STRICT,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(

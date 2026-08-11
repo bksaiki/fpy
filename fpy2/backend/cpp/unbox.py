@@ -30,7 +30,6 @@ the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
 """
 
 import enum
-
 from dataclasses import dataclass, field
 
 from ...analysis import Definition
