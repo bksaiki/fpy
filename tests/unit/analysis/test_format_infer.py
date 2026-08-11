@@ -2048,3 +2048,37 @@ class TestEmptyIsBottom:
 
         info = FormatInfer.analyze(f.ast)
         assert self._empty_bound(info) == ListFormat(None)
+
+
+class TestRoundIntoAFixedScope:
+    """A partial-overlap round must not materialize past its scope.
+
+    ``round_SINT64(x: FP32)`` intersects to integers of 24 bits with no ``-0``,
+    which has no *fixed* spelling -- so it materialized as a float format,
+    admitting a ``-0`` SINT64 does not, and the cpp ladder then had to store the
+    value as ``float``.
+    """
+
+    @staticmethod
+    def _bound(info, cls):
+        return next(b for e, b in info.by_expr.items() if isinstance(e, cls))
+
+    def test_the_bound_admits_no_negative_zero(self):
+        from fpy2.ast.fpyast import Round
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.SINT64)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round(x)
+
+        mono = Monomorphize.apply(f.ast, fp.SINT64, [RealType(fp.FP32)])
+        bound = self._bound(FormatInfer.analyze(mono), Round)
+        af = AbstractFormat.from_format(bound)
+        assert not af.has_neg_zero, bound
+        assert af.contained_in(AbstractFormat.from_format(fp.SINT64.format())), bound
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: the ``-0`` really is unreachable, so the bound
+        above is a fact about the program and not about the analysis."""
+        assert not fp.SINT64.round(fp.Float(-0.5)).s
+        assert not fp.SINT64.round(fp.Float(-0.0)).s

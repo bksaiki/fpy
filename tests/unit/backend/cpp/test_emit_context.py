@@ -567,3 +567,29 @@ class TestRealScopeLosslessWidening:
                 f, ctx=fp.FP64,
                 arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
             )
+
+
+class TestRoundIntoAFixedScope:
+    """``fp.round(x)`` under an integer context is an integer operation.
+
+    The bound for ``round_SINT64(x: FP32)`` used to materialize as a float
+    format, whose ``-0`` pushed the ladder off ``int64_t`` onto ``float`` -- and
+    the accumulation then refused the operand as a lossy cast.
+    """
+
+    def test_accumulation_stays_integral(self):
+        from fpy2.types import ListType
+
+        @fp.fpy(ctx=fp.SINT64)
+        def g(xs: list[fp.Real]) -> fp.Real:
+            acc = 0
+            for x in xs:
+                acc += fp.round(x)
+            return acc
+
+        out = CppCompiler().compile(
+            g, arg_types=[ListType(RealType(fp.FP32), 32)],
+        )
+        assert out.startswith('int64_t g(const std::array<float, 32>& xs)'), out
+        assert 'int64_t acc = 0;' in out, out
+        assert 'acc = (acc + static_cast<int64_t>(x));' in out, out

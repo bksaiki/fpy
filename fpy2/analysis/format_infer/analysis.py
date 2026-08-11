@@ -1389,19 +1389,7 @@ class _FormatInferInstance(Visitor):
         if round_is_identity(exact, resolved):
             if isinstance(exact, SetFormat):
                 return exact
-            # ``exact.format()`` can over-approximate *past* the scope — e.g.
-            # a non-negative bound has no unsigned float format, so it
-            # symmetrizes into a signed one that a cast to an unsigned scope
-            # would reject.  Keep the tight materialization only when it still
-            # fits the scope; otherwise fall back to the scope format (a sound
-            # superset of ``exact`` that is emittable under the context).
-            cand = exact.format()
-            if (isinstance(cand, AbstractableFormat)
-                    and isinstance(scope_fmt, AbstractableFormat)
-                    and not AbstractFormat.from_format(cand).contained_in(
-                        AbstractFormat.from_format(scope_fmt))):
-                return scope_fmt
-            return cand
+            return self._materialize_in_scope(exact, scope_fmt)
         if isinstance(exact, SetFormat):
             # TODO: we can round each value in the set individually
             # to produce a precise image even when some values exceed the scope
@@ -1438,7 +1426,29 @@ class _FormatInferInstance(Visitor):
         else:
             pos_bound = min(exact.pos_bound, scope_af.pos_bound)
             neg_bound = max(exact.neg_bound, scope_af.neg_bound)
-        return AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound).format()
+        overlap = AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+        return self._materialize_in_scope(overlap, scope_fmt)
+
+    @staticmethod
+    def _materialize_in_scope(
+        cand: AbstractFormat, scope_fmt: Format,
+    ) -> FormatBound:
+        """*cand* as a concrete format, falling back to *scope_fmt* when the
+        materialization over-approximates past the scope.
+
+        No concrete format expresses every abstract one, and both ways it fails
+        land outside the context: a non-negative bound symmetrizes into a signed
+        float an unsigned scope rejects, and an integral one becomes a float
+        format, which admits a ``-0.0`` an integer scope does not.  The scope
+        format is a sound superset and emittable under the context.
+        """
+        mat = cand.format()
+        if (isinstance(mat, AbstractableFormat)
+                and isinstance(scope_fmt, AbstractableFormat)
+                and not AbstractFormat.from_format(mat).contained_in(
+                    AbstractFormat.from_format(scope_fmt))):
+            return scope_fmt
+        return mat
 
     def _visit_binding(
         self,
