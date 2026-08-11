@@ -1,5 +1,37 @@
 # Version History
 
+## [0.2.1] - 2026-08-11
+### Features:
+ - Analyses:
+   - alias analysis:
+     - new analysis to determine when two variables may refer to the same object
+   - escape analysis:
+     - new analysis to determine when a variable may escape its scope
+ - Backend:
+   - C++:
+     - unboxing optimization for lists
+     - emit `std::array` when the size is known at compile time
+     - add strict mode to not compile with `std::shared_ptr` for `list` types
+ - Frontend:
+   - parse `x ** y` as `pow(x, y)` instead of `x * x * ... * x` (y times)
+ - Number:
+   - `MPFixedContext`/`MPBFixedContext`:
+     -add `enable_neg_zero` flag to control whether -0 is representable
+ - Transforms:
+   - enumerate elimination:
+     - new transformation to eliminate `enumerate` calls
+
+### Fixes:
+ - Backend:
+   - C++:
+     - emit `std::shared_ptr` to emulate Python's reference semantics for `list` types
+     - fix multiple return staements
+     - fix literals
+     - fix restoring of rounding modes
+     - fix `sum(...)` to properly fold
+ - Interpreter:
+   - do not copy structured data on function call
+
 ## [0.2.0] - 2026-07-27
 ### Features:
  - Analyses:
