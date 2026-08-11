@@ -23,6 +23,7 @@ a *caller* needs to hand a ``std::vector`` to a boxed kernel are in
 
 CPP_HEADERS: tuple[str, ...] = (
     '#include <algorithm>',
+    '#include <array>',
     '#include <cassert>',
     '#include <cfenv>',
     '#include <cmath>',

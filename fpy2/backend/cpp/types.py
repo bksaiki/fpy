@@ -81,30 +81,51 @@ class CppList:
     list types are finite, so ``xs[0] = xs`` fails to unify -- the *type*
     system rules it out, not the store rules, which would permit it.
 
-    ``boxed`` is part of the type's identity, so two lists differing only in
-    representation compare unequal and ``storage_infer`` cannot merge them.
+    A *value* list whose length the backend proved is a ``size`` here and a
+    ``std::array<T, K>`` in the output.  ``size`` is part of the type's
+    identity, like ``boxed``: two lists differing in representation or length
+    compare unequal, so neither ``storage_infer`` nor a stamped type can
+    silently conflate them.  (``fpy2.types.ListType.length`` is *metadata*,
+    excluded from equality -- do not repeat that here: an equality that
+    ignores ``size`` would let ``std::array<double, 3>`` pass for
+    ``std::array<double, 4>`` and the C++ compiler would be the first to
+    notice.)
+
+    A boxed list never carries a size: the handle exists for sharing, whose
+    cost is dynamic anyway, and one representation per axis keeps the
+    conversion lattice small.  Enforced here, not merely avoided.
     """
     elt: 'CppType'
     boxed: bool
+    size: int | None
 
-    def __init__(self, elt: 'CppType', boxed: bool = True):
+    def __init__(
+        self, elt: 'CppType', boxed: bool = True, size: int | None = None,
+    ):
+        assert not (boxed and size is not None), (
+            f'a boxed list cannot carry a static size: {size}'
+        )
         self.elt = elt
         self.boxed = boxed
+        self.size = size
 
     def __eq__(self, other):
         return (
             isinstance(other, CppList)
             and self.elt == other.elt
             and self.boxed == other.boxed
+            and self.size == other.size
         )
 
     def __hash__(self):
-        return hash((CppList, self.elt, self.boxed))
+        return hash((CppList, self.elt, self.boxed, self.size))
 
     def format(self) -> str:
         elt = self.elt.format()
         if self.boxed:
             return f'std::shared_ptr<std::vector<{elt}>>'
+        if self.size is not None:
+            return f'std::array<{elt}, {self.size}>'
         return f'std::vector<{elt}>'
 
 

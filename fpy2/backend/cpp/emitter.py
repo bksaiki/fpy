@@ -390,7 +390,8 @@ class CppEmitter(Visitor):
         """A name for *expr*, so it can be read more than once.
 
         Already a name — evaluated once, no side effects — so nothing to bind.
-        Otherwise bind it to a temp; a list is a handle, so this costs nothing.
+        Otherwise bind it to a temp; ``auto&&`` binds a reference, so this
+        copies nothing whatever the representation.
         """
         if expr.isidentifier():
             return expr
@@ -415,8 +416,33 @@ class CppEmitter(Visitor):
     def _list_end(self, ty: CppType, base: str) -> str:
         return f'{self._member(ty, base)}end()'
 
+    @staticmethod
+    def _is_sized(ty: CppType) -> bool:
+        """Whether *ty* is a fixed-length value list -- a ``std::array``."""
+        return (
+            isinstance(ty, CppList) and not ty.boxed and ty.size is not None
+        )
+
+    @classmethod
+    def _all_sized(cls, ty: CppType) -> bool:
+        """Whether every list level of *ty* is fixed-length."""
+        while isinstance(ty, CppList):
+            if not cls._is_sized(ty):
+                return False
+            ty = ty.elt
+        return True
+
     def _list_push(self, ty: CppType, base: str, elt: str) -> str:
-        """Append to a list under construction."""
+        """Append to a list under construction.
+
+        ``std::array`` has no growth operation; every element-at-a-time
+        construction goes through :meth:`_open_list_build`, which spells an
+        index store instead.
+        """
+        if self._is_sized(ty):
+            raise CppInternalError(
+                f'push_back on a fixed-size list `{ty.format()}`'
+            )
         return f'{self._member(ty, base)}push_back({elt})'
 
     def _list_new(self, ty: CppType, args: str) -> str:
@@ -426,12 +452,23 @@ class CppEmitter(Visitor):
         stated; the named wrappers below only supply the arguments.
         ``make_shared`` forwards ordinary arguments -- ``(n)``, ``(n, fill)``,
         ``(first, last)`` -- to the ``std::vector`` constructor unchanged.
+        ``std::array`` has none of these constructors; each wrapper handles
+        the fixed-size case before coming here.
         """
+        if self._is_sized(ty):
+            raise CppInternalError(
+                f'no constructor-argument form for `{ty.format()}`'
+            )
         if self._is_boxed(ty):
             return f'std::make_shared<std::vector<{self._elt_of(ty)}>>({args})'
         return f'{ty.format()}({args})'
 
     def _list_new_sized(self, ty: CppType, n: str) -> str:
+        """*n* value-initialised elements.  For a fixed-size list the length
+        is in the type -- *n* is by construction the same ``K`` the analysis
+        proved, so it has nothing to say."""
+        if self._is_sized(ty):
+            return f'{ty.format()}{{}}'
         return self._list_new(ty, n)
 
     def _list_empty(self, ty: CppType) -> str:
@@ -441,13 +478,32 @@ class CppEmitter(Visitor):
         return self._list_new_sized(ty, '0')
 
     def _list_new_filled(self, ty: CppType, n: str, fill: str) -> str:
+        """*n* copies of *fill*.  A fixed-size list has no ``(n, fill)``
+        constructor, but its ``K`` is a compile-time count, so the fill is
+        simply repeated -- callers pass constructor expressions, so the
+        repetition cannot duplicate a side effect."""
+        if self._is_sized(ty):
+            assert isinstance(ty, CppList) and ty.size is not None
+            return self._list_new_init(ty, [fill] * ty.size)
         return self._list_new(ty, f'{n}, {fill}')
 
     def _list_new_init(self, ty: CppType, parts: list[str]) -> str:
         """The given elements.  Not :meth:`_list_new`: a braced init-list is a
         non-deduced context, so ``make_shared`` cannot take ``{...}`` directly
-        -- the boxed form spells the inner vector and moves it in."""
+        -- the boxed form spells the inner vector and moves it in.  A
+        fixed-size list takes double braces (the aggregate holds a C array;
+        single braces rely on brace elision, which ``-Wmissing-braces``
+        flags)."""
         joined = ', '.join(parts)
+        if self._is_sized(ty):
+            assert isinstance(ty, CppList)
+            if len(parts) != ty.size:
+                raise CppInternalError(
+                    f'{len(parts)} elements for `{ty.format()}`'
+                )
+            if not parts:
+                return f'{ty.format()}{{}}'
+            return f'{ty.format()}{{{{{joined}}}}}'
         if self._is_boxed(ty):
             elt = self._elt_of(ty)
             return (
@@ -457,8 +513,39 @@ class CppEmitter(Visitor):
         return f'{ty.format()}{{{joined}}}'
 
     def _list_new_range(self, ty: CppType, first: str, last: str) -> str:
-        """The half-open iterator range ``[first, last)``, copied."""
+        """The half-open iterator range ``[first, last)``, copied.
+
+        A fixed-size list has no iterator-pair constructor, so it is
+        value-initialised into a temp and filled with ``std::copy`` -- the
+        range's length is the type's own ``K`` by construction.
+        """
+        if self._is_sized(ty):
+            out = self._fresh_temp()
+            self.writer.add_line(f'{ty.format()} {out}{{}};')
+            self.writer.add_line(f'std::copy({first}, {last}, {out}.begin());')
+            return out
         return self._list_new(ty, f'{first}, {last}')
+
+    def _open_list_build(self, ty: CppType):
+        """A named list under element-at-a-time construction:
+        ``(name, append)``, where ``append(elt)`` is the statement text that
+        adds one element.
+
+        A vector starts empty and grows with ``push_back``; a fixed-size list
+        is value-initialised and filled through a running index, its element
+        count being the type's own ``K``, which the analysis guaranteed
+        matches the number of appends.
+        """
+        out = self._fresh_temp()
+        if self._is_sized(ty):
+            self.writer.add_line(f'{ty.format()} {out}{{}};')
+            idx = self._fresh_temp()
+            self.writer.add_line(f'size_t {idx} = 0;')
+            return out, lambda elt: f'{out}[{idx}++] = {elt}'
+        self.writer.add_line(
+            f'{ty.format()} {out} = {self._list_empty(ty)};'
+        )
+        return out, lambda elt: self._list_push(ty, out, elt)
 
     def _fresh_temp(self) -> str:
         """A fresh emitter-only identifier.
@@ -933,8 +1020,17 @@ class CppEmitter(Visitor):
             # so that FPy's aliasing survives.  Unsharing it here would be
             # silent, so refuse instead.
             raise self._refuse_unsharing(src, want, at)
-        unboxed = CppList(want.elt, boxed=False)
-        if src.elt != want.elt:
+        if want.size is not None and src.size != want.size:
+            # A sizeless source has no compile-time length to check against
+            # `K`, and two different `K`s bridge nowhere.  Unreachable if the
+            # size meet is right -- one region has one size -- so a tripwire.
+            raise self._refuse_mismatch(src, want, at)
+        # `want` boxed implies `want.size is None`, so this is also the size
+        # drop -- an array flowing into a vector place is a value copy, and it
+        # must happen *before* boxing: `make_shared<vector>(array)` does not
+        # compile.
+        unboxed = CppList(want.elt, boxed=False, size=want.size)
+        if src != unboxed:
             code = self._rebuild_list(code, src, unboxed, at=at)
         if not self._is_boxed(want):
             return code
@@ -1046,21 +1142,31 @@ class CppEmitter(Visitor):
         """
         assert not want.boxed, 'the caller boxes; see _convert_storage'
         base = self._bind_operand(code)
-        if not isinstance(src.elt, CppList):
-            # Flat: the range constructor converts each element on the way in.
+        if not isinstance(src.elt, CppList) and want.size is None:
+            # Flat vector: the range constructor converts each element on the
+            # way in.  (A fixed-size target has no such constructor; the loop
+            # below stores by index instead.)
             return self._list_new_range(
                 want, self._list_begin(src, base), self._list_end(src, base),
             )
-        out, i = self._fresh_temp(), self._fresh_temp()
+        i = self._fresh_temp()
         n = self._list_len(src, base)
-        self.writer.add_line(f'{want.format()} {out};')
-        self.writer.add_line(f'{self._member(want, out)}reserve({n});')
+        if self._is_sized(want):
+            out = self._fresh_temp()
+            self.writer.add_line(f'{want.format()} {out}{{}};')
+        else:
+            out = self._fresh_temp()
+            self.writer.add_line(f'{want.format()} {out};')
+            self.writer.add_line(f'{self._member(want, out)}reserve({n});')
         self.writer.add_line(f'for (size_t {i} = 0; {i} < {n}; ++{i}) {{')
         self.writer.indent()
         elt = self._convert_storage(
             self._list_at_raw(src, base, i), src.elt, want.elt, at=at,
         )
-        self.writer.add_line(f'{self._list_push(want, out, elt)};')
+        if self._is_sized(want):
+            self.writer.add_line(f'{self._list_at_raw(want, out, i)} = {elt};')
+        else:
+            self.writer.add_line(f'{self._list_push(want, out, elt)};')
         self.writer.dedent()
         self.writer.add_line('}')
         return out
@@ -1860,21 +1966,16 @@ class CppEmitter(Visitor):
                 stop_cast = self._range_bound(e.args[1], result_ty.elt, ctx)
                 step_cast = self._range_bound(e.args[2], result_ty.elt, ctx)
                 ctr = self._fresh_temp()
-                self.writer.add_line(
-                    f'{result_ty.format()} {tmp} = '
-                    f'{self._list_empty(result_ty)};'
-                )
+                out, append = self._open_list_build(result_ty)
                 self.writer.add_line(
                     f'for ({int_ty} {ctr} = {start_cast}; '
                     f'{ctr} < {stop_cast}; {ctr} += {step_cast}) {{'
                 )
                 self.writer.indent()
-                self.writer.add_line(
-                    f'{self._list_push(result_ty, tmp, ctr)};'
-                )
+                self.writer.add_line(f'{append(ctr)};')
                 self.writer.dedent()
                 self.writer.add_line('}')
-                return tmp
+                return out
             case _:
                 raise CppEmitError(
                     f'unsupported range op: {type(e).__name__}', at=e,
@@ -2194,6 +2295,11 @@ class CppEmitter(Visitor):
                 f'dimensions were given',
                 at=e,
             )
+        if self._all_sized(result_ty):
+            # Every dimension is in the type, and value-initialising a
+            # nested `std::array` zeroes it recursively -- one expression,
+            # no per-layer fill values.
+            return f'{result_ty.format()}{{}}'
         # Build from the inside out: innermost is ``T()``-default,
         # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
         ty: CppType = result_ty
@@ -2384,7 +2490,7 @@ class CppEmitter(Visitor):
         want = self._storage_for_expr(e)
         if not (isinstance(got, CppList) and isinstance(want, CppList)):
             return emitted
-        if got.boxed == want.boxed and got.elt == want.elt:
+        if got == want:
             return emitted
         if got.boxed or got.elt != want.elt:
             raise CppEmitError(
@@ -2392,8 +2498,10 @@ class CppEmitter(Visitor):
                 f'is wanted',
                 at=e,
             )
-        self._is_boxed(want)  # strict tripwire: a handle is made here
-        return f'std::make_shared<{got.format()}>({emitted})'
+        # What remains is a value adjustment: a sized result into a sizeless
+        # place (a legal copy), or an unboxed result the caller boxes.
+        # `_convert_storage` spells both and refuses the rest.
+        return self._convert_storage(emitted, got, want, at=e)
 
     def _adapt_arg(self, emitted: str, e: Expr, want: CppType | None) -> str:
         """*emitted* as the callee spelled its parameter.
@@ -2414,6 +2522,14 @@ class CppEmitter(Visitor):
         if have.elt != want.elt:
             # The callee declared a different element type; nothing at the call
             # site can bridge two `std::vector` instantiations.
+            raise self._refuse_mismatch(have, want, e)
+        if have.size != want.size:
+            # A reference parameter binds no differently-sized value: a
+            # `const std::vector<T>&` cannot take a `std::array`, nor `K1`
+            # take `K2`.  With sizes in the specialization key the two ends
+            # agree by construction, so this is a tripwire -- except for a
+            # callee whose *source* annotation pins a length the caller
+            # cannot prove, where it is the user-facing refusal.
             raise self._refuse_mismatch(have, want, e)
         if have.boxed == want.boxed:
             return emitted
@@ -2440,22 +2556,18 @@ class CppEmitter(Visitor):
         return self._emit_list_comp_at(e, self._storage_for_expr(e), ctx)
 
     def _emit_list_comp_at(self, e: ListComp, result_ty: CppType, ctx) -> str:
-        # A temp plus nested loops that `push_back` the element expression.
-        # *result_ty* is supplied because a comprehension builds its vector
+        # A temp plus nested loops that append the element expression.
+        # *result_ty* is supplied because a comprehension builds its list
         # element by element, making it a contributor to whatever place it
         # reaches -- see :meth:`_emit_at`.
-        tmp = self._fresh_temp()
-        self.writer.add_line(
-                    f'{result_ty.format()} {tmp} = '
-                    f'{self._list_empty(result_ty)};'
-                )
+        tmp, append = self._open_list_build(result_ty)
 
         for target, iterable in zip(e.targets, e.iterables):
             self._open_comp_loop(target, iterable, e, ctx)
 
         elt_want = result_ty.elt if isinstance(result_ty, CppList) else None
         elt = self._emit_at(e.elt, elt_want, ctx)
-        self.writer.add_line(f'{self._list_push(result_ty, tmp, elt)};')
+        self.writer.add_line(f'{append(elt)};')
 
         for _ in e.targets:
             self.writer.dedent()
