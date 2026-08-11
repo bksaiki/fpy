@@ -351,7 +351,10 @@ class CppCompiler(Backend):
         # mismatches) into ``CppCompileError`` so callers iterating over
         # candidate functions can catch a uniform error type.
         try:
-            specialized = Specialize.apply(module)
+            # `size_key`: a spec per distinct argument-length vector, so a
+            # proven length crosses the call edge as the callee's annotation
+            # and both ends agree on `std::array` (see `.unbox`).
+            specialized = Specialize.apply(module, size_key=self._arrays)
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 

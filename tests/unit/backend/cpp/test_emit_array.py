@@ -175,6 +175,87 @@ class TestConversionLattice:
         assert 'push_back' not in body and 'reserve' not in body
 
 
+@fp.fpy
+def _dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    with fp.FP64:
+        acc = 0.0
+        for i in range(len(xs)):
+            acc = acc + xs[i] * ys[i]
+        return acc
+
+
+@fp.fpy
+def _calls_dot_at_two_lengths(x: fp.Real) -> fp.Real:
+    with fp.FP64:
+        a = _dot([x, x], [x, x])
+        b = _dot([x, x, x], [x, x, x])
+        return a + b
+
+
+class TestSizeSpecialization:
+    """Sizes join the specialization key: a callee compiles once per
+    distinct argument-length vector, its parameters carrying the length."""
+
+    def test_a_callee_parameter_becomes_an_array(self):
+        @fp.fpy
+        def caller(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return _dot([x, x, x], [x, x, x])
+
+        m = Module()
+        m.add(caller, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        out = CppCompiler().compile_module(m)
+        assert 'const std::array<double, 3>& xs' in out
+        assert 'std::vector' not in out
+
+    def test_two_lengths_make_two_specs(self):
+        m = Module()
+        m.add(
+            _calls_dot_at_two_lengths, ctx=fp.FP64,
+            arg_types=[RealType(fp.FP64)],
+        )
+        out = CppCompiler().compile_module(m)
+        assert 'const std::array<double, 2>& xs' in out
+        assert 'const std::array<double, 3>& xs' in out
+        assert out.count('double _dot__') == 2
+
+    def test_size_free_specs_are_byte_identical(self):
+        """`size_key` must not move a size-free program: same mangled
+        names, same code."""
+        from fpy2.types import ListType
+
+        @fp.fpy
+        def caller(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return _dot(xs, xs)
+
+        L = ListType(RealType(fp.FP64))
+        m = Module()
+        m.add(caller, ctx=fp.FP64, arg_types=[L])
+        on = CppCompiler(arrays=True).compile_module(m)
+        off = CppCompiler(arrays=False).compile_module(m)
+        assert on == off
+        assert 'std::array' not in on
+
+    def test_entries_differing_only_in_length_get_distinct_specs(self):
+        """The public key carries lengths too: two `Module.add` entries at
+        different lengths must not collapse to the first one's signature."""
+        from fpy2.types import ListType
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return xs[0]
+
+        R = RealType(fp.FP64)
+        m = Module()
+        m.add(f, name='f2', ctx=fp.FP64, arg_types=[ListType(R, 2)])
+        m.add(f, name='f5', ctx=fp.FP64, arg_types=[ListType(R, 5)])
+        out = CppCompiler().compile_module(m)
+        assert 'double f2(const std::array<double, 2>& xs)' in out
+        assert 'double f5(const std::array<double, 5>& xs)' in out
+
+
 class TestEndToEnd:
     """The size decision, through the whole pipeline."""
 

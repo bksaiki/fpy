@@ -1096,6 +1096,15 @@ class FormatAnalysis:
     For non-numeric expressions it is ``None``.
     """
 
+    array_size: ArraySizeAnalysis
+    """The structural array-size pre-analysis this instantiation used.
+
+    Exposed so consumers that already hold a :class:`FormatAnalysis`
+    (notably :class:`~fpy2.transform.specialize.Specialize`, which keys
+    specs on argument sizes) read it instead of recomputing --
+    ``PreAnalysisCache`` shares one per :class:`FuncDef` already.
+    """
+
     by_call: dict[Call, 'FormatAnalysis']
     """
     Per-call-site sub-analyses — the :class:`FormatAnalysis` graph
@@ -2213,6 +2222,7 @@ class _FormatInferInstance(Visitor):
             ctx_use=self.ctx_use,
             by_def=self.by_def,
             by_expr=self.by_expr,
+            array_size=self.array_size,
             by_call=self.by_call,
         )
 
