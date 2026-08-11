@@ -10,6 +10,7 @@ surface as :class:`CppCompileError`.
 
 from collections.abc import Collection
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from ...analysis import (
     Alias,
@@ -44,8 +45,23 @@ from .emitter import CppEmitError, CppEmitter
 from .storage import StorageSelectionError
 from .storage_infer import StorageAnalysis, StorageInfer
 from .types import CppType
-from .unbox import CalleeAbi, ParamAbi, Unbox, UnboxAnalysis, return_storage
+from .unbox import (
+    CalleeAbi,
+    ParamAbi,
+    StrictUnboxError,
+    Unbox,
+    UnboxAnalysis,
+    UnboxMode,
+    check_strict,
+    return_storage,
+)
 from .utils import CPP_HEADERS, CPP_HELPERS
+
+_UnboxMode: TypeAlias = UnboxMode
+"""Annotation-only alias: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
+enum inside the class body.  Runtime resolves the shadow to the same object;
+type checkers reject an attribute used as a type, so annotations there need
+this name instead."""
 
 
 class CppCompileError(CompileError):
@@ -93,6 +109,22 @@ def _collect_call_names(ast: FuncDef) -> dict[Call, str]:
     """``Call → emit-name``.  After :class:`Specialize` each ``Call.fn`` points
     at the target spec's :class:`Function`, so the name is ``fn.ast.name``."""
     return {c: fn.ast.name for c, fn in _function_calls(ast).items()}
+
+
+def _reachable_asts(entry: Function) -> set[int]:
+    """ids of the ``FuncDef``s on *entry*'s call path, *entry* included.
+
+    ``Specialize`` rewired every ``Call.fn`` to the target spec's
+    :class:`Function`, so the walk is over specs directly.
+    """
+    seen: set[int] = set()
+    stack = [entry]
+    while stack:
+        f = stack.pop()
+        if id(f.ast) not in seen:
+            seen.add(id(f.ast))
+            stack.extend(_function_calls(f.ast).values())
+    return seen
 
 
 def _find_spec(specs: list[Function], func: Function) -> Function:
@@ -171,20 +203,33 @@ class CppCompiler(Backend):
             Run the transforms listed in :meth:`_run_pipeline`.  Sound either
             way; ``False`` compiles the surface AST verbatim.  Default ``True``.
         unbox:
-            Drop the handle where :mod:`.unbox` proves nothing observes the
-            difference, per list and per nesting level.  ``False`` keeps every
-            handle -- correct, but slower at a native boundary.  Default
-            ``True``.
+            An :class:`~fpy2.backend.cpp.unbox.UnboxMode` (also reachable as
+            ``CppCompiler.UnboxMode``).  ``ALLOW`` drops the handle where
+            :mod:`.unbox` proves nothing observes the difference, per list and
+            per nesting level; ``NEVER`` keeps every handle -- correct, but
+            slower at a native boundary; ``STRICT`` is like ``ALLOW``, but a
+            list that must keep its handle fails the compile.  Default
+            ``STRICT``: a ``std::shared_ptr`` in numerical C++ is surprising
+            enough that it has to be asked for.
     """
+
+    UnboxMode = UnboxMode
+    """The mode enum for ``unbox``, re-exported so callers holding the
+    compiler need not import :mod:`fpy2.backend.cpp.unbox`."""
 
     _unsafe_cast_int: bool
     _optimize: bool
-    _unbox: bool
+    _unbox: _UnboxMode
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: bool = True,
+        unbox: _UnboxMode = UnboxMode.STRICT,
     ):
+        if not isinstance(unbox, UnboxMode):
+            raise TypeError(
+                f'`unbox` must be an UnboxMode, got {unbox!r}; '
+                'use UnboxMode.ALLOW / UnboxMode.NEVER instead of a bool'
+            )
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
@@ -244,16 +289,24 @@ class CppCompiler(Backend):
         self,
         specs: list[Function],
         params: dict[FuncDef, CalleeAbi],
+        only: set[int] | None = None,
     ):
         """Analyze every spec leaves-first, filling *params* as it goes.
 
         One path, so :meth:`compile_module` and :meth:`signature` cannot reach
         different conclusions about the same function — they did once, and it
         was an ABI bug rather than a missed optimization.
+
+        *only* limits which specs are analyzed (by ``id(f.ast)``) without
+        narrowing what counts as *called*, so :meth:`signature` can skip a
+        spec the entry never reaches — whose failures are not the entry's —
+        while an entry that other functions call keeps its boundary ABI.
         """
         called = {id(c.ast) for f in specs for c in _function_calls(f.ast).values()}
         summaries: dict[FuncDef, EscapeSummary] = {}
         for f in specs:
+            if only is not None and id(f.ast) not in only:
+                continue
             a = self.analyze(
                 f, is_called=id(f.ast) in called, summaries=summaries,
                 callee_abis=params,
@@ -344,16 +397,36 @@ class CppCompiler(Backend):
             ast, summaries, def_use=def_use, alias=alias,
         )
         unbox = None
-        if self._unbox:
+        if self._unbox is not UnboxMode.NEVER:
             unbox = Unbox.decide(
                 ast, storage, alias, def_use,
                 is_called=is_called,
                 summary=summary,
                 callees=callee_abis,
             )
+            unbox.strict = self._unbox is UnboxMode.STRICT
             # Rewrite each class's storage in place: the emitter reads a
             # declaration's representation straight off the type.
             storage.class_storage.update(unbox.storage)
+
+        # The return type is one more place storage is chosen, and the only
+        # one `StorageInfer` does not cover (e.g. a REAL-format return).
+        # Checked here for every mode so each entry point reports the same
+        # error -- `signature` has no emission step to catch it later.
+        try:
+            ret_ty = return_storage(format_info.fn_fmt.ret_fmt, unbox)
+        except StorageSelectionError as e:
+            raise CppCompileError(
+                f'storage selection failed for `{func.name}`: {e}'
+            ) from e
+
+        if unbox is not None and unbox.strict:
+            try:
+                check_strict(unbox, storage, ret_ty)
+            except StrictUnboxError as e:
+                raise CppCompileError(
+                    f'strict unboxing failed for `{func.name}`: {e}'
+                ) from e
 
         return SpecAnalyses(
             ast=ast,
@@ -387,8 +460,13 @@ class CppCompiler(Backend):
         specs = self.specialize(module)
         entry = _find_spec(specs, func)
         emitted: dict[FuncDef, CalleeAbi] = {}
+        # Only the entry's call path: an unrelated spec's failure (routine
+        # under STRICT) must not decide -- by `Module.add` order, no less --
+        # whether the entry has a signature.
         a = next(
-            an for f, an in self._analyze_all(specs, emitted) if f is entry
+            an for f, an in self._analyze_all(
+                specs, emitted, only=_reachable_asts(entry),
+            ) if f is entry
         )
 
         abi = _callee_abi(a)
@@ -427,7 +505,17 @@ class CppCompiler(Backend):
             callee_params=callee_params,
         )
         try:
+            # Under STRICT the emitter carries its own tripwire: every handle
+            # spelling branches on `_is_boxed`, which refuses -- so a leak
+            # past `check_strict` and `annotate` is a `CppEmitError` naming a
+            # backend bug, not a `std::shared_ptr` in the output.
             return emitter.emit()
+        except StrictUnboxError as e:
+            # `annotate` refused an expression temporary -- a user program,
+            # not a bug, so it presents like `check_strict`'s refusals.
+            raise CppCompileError(
+                f'strict unboxing failed for `{func.name}`: {e}'
+            ) from e
         except CppEmitError as e:
             raise CppCompileError(
                 f'compilation failed for `{func.name}`: {e}'

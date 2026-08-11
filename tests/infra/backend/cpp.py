@@ -97,6 +97,13 @@ def _compile_obj(cpp_path: Path):
 # `cc -c` path used elsewhere does not link, so it cannot build an exe).
 _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
 
+# The compiler every corpus-shaped driver uses.  The corpus deliberately
+# contains shared lists, which the strict default refuses, so these drivers
+# compile in ALLOW mode; strict refusals are pinned by the unit tests.
+_CORPUS_COMPILER = fp.CppCompiler(
+    unsafe_cast_int=True, unbox=fp.CppCompiler.UnboxMode.ALLOW,
+)
+
 # Operators NOT correctly-rounded in C++ `<cmath>`; using any of these
 # disqualifies a function from bit-exact execution comparison.
 _NON_CR_OPS = frozenset([
@@ -755,7 +762,7 @@ def _test_unit_tests(
     does *not* mask them — the caller aggregates the returned list and
     exits non-zero when it's non-empty.
     """
-    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    compiler = _CORPUS_COMPILER
     failures: list[tuple[str, str, str]] = []
     for func in funcs:
         if func.name in ignore or not _selected(func.name):
@@ -858,7 +865,7 @@ def _test_library(
     every function that failed to register with the unit.  Empty
     list = clean run.
     """
-    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    compiler = _CORPUS_COMPILER
     cpp_path = output_dir / f'library_{prefix}.cpp'
     print(f"Compiling library `{mod.__name__}` to `{cpp_path}`")
     group = f'library_{prefix}'
@@ -1150,7 +1157,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
     # Boxed on purpose, whatever the default: these helpers exist to convert
     # *to* a handle, so a signature that has no handle has nothing to pin.  The
     # native path is `_test_abi_native`.
-    compiler = fp.CppCompiler(unbox=False)
+    compiler = fp.CppCompiler(unbox=fp.CppCompiler.UnboxMode.NEVER)
     cpp_path = output_dir / 'abi_boundary.cpp'
     print(f'Compiling ABI boundary test to `{cpp_path}`')
     lst = fp.types.ListType(fp.types.RealType(fp.FP64))
@@ -1358,7 +1365,7 @@ def _test_abi_native(
     here the write lands.
     """
     group = 'abi'
-    compiler = fp.CppCompiler(unbox=True)
+    compiler = fp.CppCompiler(unbox=fp.CppCompiler.UnboxMode.ALLOW)
     cpp_path = output_dir / 'abi_native.cpp'
     print(f'Compiling native ABI test to `{cpp_path}`')
     nested = fp.types.ListType(fp.types.ListType(fp.types.RealType(fp.FP64)))
@@ -1936,7 +1943,7 @@ def _test_typed_regressions(
     """Compile each explicitly-typed regression with its given arg types
     (bypassing the FP64 instantiation), then object-compile unless in
     ``emit`` mode.  No execution — these carry non-synthesizable arg types."""
-    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    compiler = _CORPUS_COMPILER
     failures: list[tuple[str, str, str]] = []
     for func, arg_types in _typed_regression_funcs:
         if not _selected(func.name):
@@ -2107,7 +2114,7 @@ def _test_generated(
     """
     if mode != 'run' or _CXX is None:
         return []
-    compiler = fp.CppCompiler(unsafe_cast_int=True)
+    compiler = _CORPUS_COMPILER
     failures: list[tuple[str, str, str]] = []
     xfailed: list[str] = []
     refused: list[str] = []

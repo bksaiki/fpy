@@ -7,7 +7,7 @@ silently swallowed a write.
 
 The oracle here is the **boxed compilation of the same function**.  Boxing is
 the reference semantics -- an `fpy::list<T>` shares, always -- so for any
-program, `unbox=True` and `unbox=False` must produce the same return value
+program, `UnboxMode.ALLOW` and `UnboxMode.NEVER` must produce the same return value
 *and* leave the caller's vectors in the same state.  Restricted to flat
 `list[Real]` parameters because those are the ones a native caller can share
 under both representations (`fpy::borrow(v)` vs `v` itself); a nested boxed
@@ -24,6 +24,7 @@ import pytest
 
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.types import CppList
+from fpy2.backend.cpp.unbox import UnboxMode
 from tests.infra.backend.cpp import CPP_INTEROP
 from fpy2.module import Module
 from fpy2.types import BoolType, ListType, RealType
@@ -42,7 +43,7 @@ def _adapt(param, name: str) -> str:
     return name
 
 
-def _run(func, arg_types, args, *, unbox: bool) -> tuple[str, list[list[float]]]:
+def _run(func, arg_types, args, *, unbox: UnboxMode) -> tuple[str, list[list[float]]]:
     """``(printed result, post-call contents of each list argument)``.
 
     Builds native storage the *caller* owns, hands it over however the
@@ -211,8 +212,8 @@ def test_unboxing_preserves_caller_visible_effects(name, func, arg_types, args):
     `_is_rebound` check, a discount that stops mirroring the emitter.  Loud:
     the boxed run is the oracle and it disagrees numerically.
     """
-    boxed = _run(func, arg_types, args, unbox=False)
-    unboxed = _run(func, arg_types, args, unbox=True)
+    boxed = _run(func, arg_types, args, unbox=UnboxMode.NEVER)
+    unboxed = _run(func, arg_types, args, unbox=UnboxMode.ALLOW)
     assert boxed == unboxed, (
         f'{name}: boxed gave {boxed}, unboxed gave {unboxed}'
     )

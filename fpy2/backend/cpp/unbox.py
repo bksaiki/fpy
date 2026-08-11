@@ -19,8 +19,12 @@ compiled code calls keeps its handles on *both* sides.  Measured: 5 of the 50
 corpus functions with a list parameter.  The kernels worth unboxing are entry
 points a *native* caller invokes, and a native caller is not bound by this.
 
-Refusing means keeping the handle, never failing a compile; reasons land in
-:attr:`UnboxAnalysis.boxed_because`.
+The analysis itself never fails: refusing means keeping the handle, with
+reasons in :attr:`UnboxAnalysis.boxed_because`.  Under :class:`UnboxMode.STRICT`
+the compiler then turns each retained handle into an error --
+:func:`check_strict` for anything a storage class or the return type names,
+:meth:`UnboxAnalysis.annotate` for expression temporaries -- rather than let a
+``std::shared_ptr`` into the output.
 
 :func:`_stamp` is the *only* place any of this is decided -- for an expression,
 a return type, and a storage class's declaration alike.  A second traversal for
@@ -29,6 +33,7 @@ the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
 ...>``, which does not compile.  Keep it one traversal.
 """
 
+import enum
 from dataclasses import dataclass, field
 
 from ...analysis import Definition
@@ -52,6 +57,7 @@ from ...ast.fpyast import (
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
+from ...utils import enum_repr
 from .storage import choose_storage
 from .storage_infer import (
     StorageAnalysis,
@@ -59,6 +65,23 @@ from .storage_infer import (
     is_rebound,
 )
 from .types import CppList, CppTuple, CppType
+
+
+@enum_repr
+class UnboxMode(enum.Enum):
+    """How aggressively the compiler drops the ``fpy::list`` handle.
+
+    - ``NEVER``: every list keeps its handle -- correct, but slower at a
+      native boundary.
+    - ``ALLOW``: drop the handle where the alias analysis proves nothing
+      observes the difference; keep it everywhere else.
+    - ``STRICT``: like ``ALLOW``, but a list that must keep its handle is a
+      compile error rather than a ``std::shared_ptr`` in the output.
+    """
+
+    NEVER = 0
+    ALLOW = 1
+    STRICT = 2
 
 
 @dataclass(frozen=True)
@@ -105,6 +128,10 @@ class UnboxAnalysis:
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
     )
+    strict: bool = False
+    """Set by the compiler under :class:`UnboxMode.STRICT`: :meth:`annotate`
+    then refuses a boxed level instead of returning it, catching the
+    expression temporaries :func:`check_strict` has no storage class for."""
 
     def may_reference_projection(self, d: Definition) -> bool:
         """Whether ``row = xss[i]`` may bind a reference rather than copy.
@@ -139,13 +166,22 @@ class UnboxAnalysis:
         """*ty* with each list level's representation as decided for *e*.
 
         A level with no region — nothing the analysis tracked — keeps its
-        handle.
+        handle.  Under ``strict`` a boxed level raises instead: the handle
+        would surface as a ``std::shared_ptr`` the mode promised away.
         """
         def at(depth: int) -> set[Region]:
             r = self.alias.region_of_expr(e, depth)
             return set() if r is None else {r}
 
-        return self._stamp(ty, at, 0)
+        ty = self._stamp(ty, at, 0)
+        if self.strict and contains_boxed(ty):
+            raise StrictUnboxError(
+                'an expression must keep an `fpy::list` handle (a shared '
+                'temporary, or a list level the alias analysis did not '
+                'track); use unbox=CppCompiler.UnboxMode.ALLOW to permit '
+                'handles'
+            )
+        return ty
 
     def annotate_return(self, ty: CppType) -> CppType:
         """*ty* with the representation every ``return`` in the function agrees
@@ -500,3 +536,78 @@ def return_storage(
     """
     ty = choose_storage(ret_fmt)
     return ty if unbox is None else unbox.annotate_return(ty)
+
+
+class StrictUnboxError(Exception):
+    """Raised by :func:`check_strict` when a list must keep its handle."""
+
+
+def check_strict(
+    unbox: UnboxAnalysis,
+    storage: StorageAnalysis,
+    ret_ty: CppType,
+) -> None:
+    """Refuse every list that kept its handle.
+
+    ``UnboxMode.STRICT``'s contract is that the emitted unit holds no
+    ``std::shared_ptr``.  This walks the artifacts the emitter reads its
+    types from -- each storage class's stamped type and the stamped return
+    type -- and reports every boxed level with the reason
+    :meth:`Unbox.decide` recorded, so the error names the list to fix rather
+    than the fact of failure.  Reported together: fixing one shared list only
+    to be told about the next is a bad loop to put a user in.  One entry per
+    list, too: a returned parameter is one list, so a ``<return>`` level
+    whose regions a named class already reported is skipped.
+
+    Expression temporaries have no storage class, so they are out of reach
+    here; :meth:`UnboxAnalysis.annotate` refuses those at emission.
+    """
+    offenders: list[str] = []
+    covered: set[Region] = set()
+    for cls, ty in unbox.storage.items():
+        name = storage.def_to_name[cls]
+        per_depth = _regions(cls, storage, unbox.alias)
+        for depth, on_spine in _boxed_levels(ty):
+            reason = (
+                unbox.boxed_because.get((cls, depth), 'shared')
+                if on_spine else 'shared (tuple field)'
+            )
+            offenders.append(f'`{name}` (depth {depth}): {reason}')
+            if on_spine and depth < len(per_depth):
+                if (r := per_depth[depth]) is not None:
+                    covered.add(r)
+    for depth, on_spine in _boxed_levels(ret_ty):
+        regions = (
+            unbox.ret_regions[depth]
+            if depth < len(unbox.ret_regions) else set()
+        )
+        if on_spine and regions and regions <= covered:
+            continue
+        reason = unbox._reason(regions) if on_spine else 'shared (tuple field)'
+        offenders.append(f'<return> (depth {depth}): {reason}')
+    if offenders:
+        raise StrictUnboxError(
+            'these lists must keep their `fpy::list` handle:\n  '
+            + '\n  '.join(offenders)
+            + '\nuse unbox=CppCompiler.UnboxMode.ALLOW to permit handles'
+        )
+
+
+def contains_boxed(ty: CppType) -> bool:
+    """Whether any list level of *ty*, at any depth, keeps its handle."""
+    return any(True for _ in _boxed_levels(ty))
+
+
+def _boxed_levels(ty: CppType, depth: int = 0, on_spine: bool = True):
+    """``(depth, on_spine)`` for every boxed list level in *ty*.
+
+    ``on_spine`` mirrors :meth:`UnboxAnalysis._stamp`: a reason is recorded
+    only down the list spine, so a tuple field's level has none to look up.
+    """
+    if isinstance(ty, CppList):
+        if ty.boxed:
+            yield depth, on_spine
+        yield from _boxed_levels(ty.elt, depth + 1, on_spine)
+    elif isinstance(ty, CppTuple):
+        for e in ty.elts:
+            yield from _boxed_levels(e, depth, False)

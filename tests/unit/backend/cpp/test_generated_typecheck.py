@@ -34,6 +34,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.backend.cpp.compiler import CppCompileError, CppCompiler
+from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.module import Module
 from fpy2.types import ListType, RealType
 
@@ -303,7 +304,9 @@ def emitted():
         m = Module()
         try:
             m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
-            body = CppCompiler().compile_module(m)
+            # ALLOW: the matrix deliberately includes sharing shapes, and
+            # strict refusals would hollow out `test_enough_of_the_matrix_compiles`.
+            body = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
         except CppCompileError as e:
             refused.append(f'{label}: {" ".join(str(e).split())[:100]}')
             continue
