@@ -30,8 +30,8 @@ class TestIndexedAssign:
                 return xs
 
         # `xs` is a parameter *and* the result, so the caller ends up with
-        # two handles to one list: shared, and it keeps its handle -- which
-        # strict mode refuses, so this test asks for ALLOW.
+        # two handles to one list: shared, and it keeps its handle -- so
+        # ALLOW, not the strict default.
         out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],

@@ -129,7 +129,7 @@ from .storage_infer import (
 )
 from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
-from .unbox import UnboxAnalysis, return_storage
+from .unbox import UnboxAnalysis, contains_boxed, return_storage
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -334,43 +334,57 @@ class CppEmitter(Visitor):
         assert isinstance(ty, CppList), f'not a list storage type: {ty!r}'
         return ty.elt.format()
 
-    @staticmethod
-    def _is_boxed(ty: CppType) -> bool:
-        """Whether *ty* is a handle rather than the sequence itself."""
+    def _strict_tripwire(self) -> CppEmitError:
+        """The error for a handle reaching emission under STRICT.
+
+        `check_strict` and `annotate` guarantee no boxed type survives to the
+        emitter, so raising here means a backend bug, not a user program.
+        """
+        return CppEmitError(
+            'internal error: strict unboxing let a shared handle reach '
+            'emission'
+        )
+
+    def _is_boxed(self, ty: CppType) -> bool:
+        """Whether *ty* is a handle rather than the sequence itself.
+
+        Under STRICT this is the tripwire: every handle spelling branches on
+        this predicate, so answering "yes" is refused at the source."""
         assert isinstance(ty, CppList), f'not a list storage type: {ty!r}'
+        if ty.boxed and self._strict:
+            raise self._strict_tripwire()
         return ty.boxed
 
-    @classmethod
-    def _list_seq(cls, ty: CppType, base: str) -> str:
+    @property
+    def _strict(self) -> bool:
+        return self.unbox is not None and self.unbox.strict
+
+    def _list_seq(self, ty: CppType, base: str) -> str:
         """*base* as the sequence itself — dereferenced if it is a handle.
 
         No parenthesis is needed unboxed: a list-valued C++ expression here is a
         name, an emitter temp, or a subscript chain, never an operator
         expression that could bind more loosely than ``[]``.
         """
-        return f'(*{base})' if cls._is_boxed(ty) else base
+        return f'(*{base})' if self._is_boxed(ty) else base
 
-    @classmethod
-    def _member(cls, ty: CppType, base: str) -> str:
+    def _member(self, ty: CppType, base: str) -> str:
         """``base->`` or ``base.``, whichever reaches a member of the sequence."""
-        return f'{base}->' if cls._is_boxed(ty) else f'{base}.'
+        return f'{base}->' if self._is_boxed(ty) else f'{base}.'
 
-    @classmethod
-    def _list_len(cls, ty: CppType, base: str) -> str:
+    def _list_len(self, ty: CppType, base: str) -> str:
         """``len(xs)``."""
-        return f'{cls._member(ty, base)}size()'
+        return f'{self._member(ty, base)}size()'
 
-    @classmethod
-    def _list_at(cls, ty: CppType, base: str, idx: str) -> str:
+    def _list_at(self, ty: CppType, base: str, idx: str) -> str:
         """``xs[i]``.  The cast belongs here because C++ ``operator[]`` takes an
         unsigned index while FPy indices are signed."""
-        return f'{cls._list_seq(ty, base)}[static_cast<size_t>({idx})]'
+        return f'{self._list_seq(ty, base)}[static_cast<size_t>({idx})]'
 
-    @classmethod
-    def _list_at_raw(cls, ty: CppType, base: str, idx: str) -> str:
+    def _list_at_raw(self, ty: CppType, base: str, idx: str) -> str:
         """``xs[i]`` where *idx* is already a ``size_t`` — an emitter-internal
         loop counter rather than an FPy index, so no cast is needed."""
-        return f'{cls._list_seq(ty, base)}[{idx}]'
+        return f'{self._list_seq(ty, base)}[{idx}]'
 
     def _bind_operand(self, expr: str) -> str:
         """A name for *expr*, so it can be read more than once.
@@ -395,58 +409,49 @@ class CppEmitter(Visitor):
         bound = self._bind_operand(base)
         return f'*{bound}' if self._is_boxed(ty) else bound
 
-    @classmethod
-    def _list_begin(cls, ty: CppType, base: str) -> str:
-        return f'{cls._member(ty, base)}begin()'
+    def _list_begin(self, ty: CppType, base: str) -> str:
+        return f'{self._member(ty, base)}begin()'
 
-    @classmethod
-    def _list_end(cls, ty: CppType, base: str) -> str:
-        return f'{cls._member(ty, base)}end()'
+    def _list_end(self, ty: CppType, base: str) -> str:
+        return f'{self._member(ty, base)}end()'
 
-    @classmethod
-    def _list_push(cls, ty: CppType, base: str, elt: str) -> str:
+    def _list_push(self, ty: CppType, base: str, elt: str) -> str:
         """Append to a list under construction."""
-        return f'{cls._member(ty, base)}push_back({elt})'
+        return f'{self._member(ty, base)}push_back({elt})'
 
-    @classmethod
-    def _list_new(cls, ty: CppType, args: str) -> str:
+    def _list_new(self, ty: CppType, args: str) -> str:
         """A new list from a parenthesised constructor argument list.
 
         The one place the boxed and unboxed spellings of construction are
         stated; the named wrappers below only supply the arguments.
         """
-        if cls._is_boxed(ty):
-            return f'fpy::make_list<{cls._elt_of(ty)}>({args})'
+        if self._is_boxed(ty):
+            return f'fpy::make_list<{self._elt_of(ty)}>({args})'
         return f'{ty.format()}({args})'
 
-    @classmethod
-    def _list_new_sized(cls, ty: CppType, n: str) -> str:
-        return cls._list_new(ty, n)
+    def _list_new_sized(self, ty: CppType, n: str) -> str:
+        return self._list_new(ty, n)
 
-    @classmethod
-    def _list_empty(cls, ty: CppType) -> str:
+    def _list_empty(self, ty: CppType) -> str:
         """A new empty list.  Never emit a bare declaration for a *boxed* list:
         an uninitialised ``fpy::list`` is a null handle, unlike an empty
         ``std::vector``."""
-        return cls._list_new_sized(ty, '0')
+        return self._list_new_sized(ty, '0')
 
-    @classmethod
-    def _list_new_filled(cls, ty: CppType, n: str, fill: str) -> str:
-        return cls._list_new(ty, f'{n}, {fill}')
+    def _list_new_filled(self, ty: CppType, n: str, fill: str) -> str:
+        return self._list_new(ty, f'{n}, {fill}')
 
-    @classmethod
-    def _list_new_init(cls, ty: CppType, parts: list[str]) -> str:
+    def _list_new_init(self, ty: CppType, parts: list[str]) -> str:
         """The given elements.  Not :meth:`_list_new`: a braced list is the
         argument when boxed, and the whole initialiser when not."""
         joined = ', '.join(parts)
-        if cls._is_boxed(ty):
-            return f'fpy::make_list<{cls._elt_of(ty)}>({{{joined}}})'
+        if self._is_boxed(ty):
+            return f'fpy::make_list<{self._elt_of(ty)}>({{{joined}}})'
         return f'{ty.format()}{{{joined}}}'
 
-    @classmethod
-    def _list_new_range(cls, ty: CppType, first: str, last: str) -> str:
+    def _list_new_range(self, ty: CppType, first: str, last: str) -> str:
         """The half-open iterator range ``[first, last)``, copied."""
-        return cls._list_new(ty, f'{first}, {last}')
+        return self._list_new(ty, f'{first}, {last}')
 
     def _fresh_temp(self) -> str:
         """A fresh emitter-only identifier.
@@ -680,6 +685,8 @@ class CppEmitter(Visitor):
         # bound (the slice assumes a single return, possibly nested in a
         # ``with`` block).
         ret_ty = self._infer_return_storage(func)
+        if self._strict and ret_ty is not None and contains_boxed(ret_ty):
+            raise self._strict_tripwire()
         ret_str = ret_ty.format() if ret_ty is not None else 'void'
         # Read back by each `return` to convert a narrower value into it.
         self._return_storage = ret_ty
@@ -695,6 +702,8 @@ class CppEmitter(Visitor):
                     f'unsupported arg pattern: {arg.name!r}', at=arg,
                 )
             storage = self._storage_for_arg(arg)
+            if self._strict and contains_boxed(storage):
+                raise self._strict_tripwire()
             arg_strs.append(self._arg_decl(arg, storage))
         emitted_name = self._func_name_override or func.name
         sig = f'{ret_str} {emitted_name}({", ".join(arg_strs)})'
@@ -920,7 +929,7 @@ class CppEmitter(Visitor):
         unboxed = CppList(want.elt, boxed=False)
         if src.elt != want.elt:
             code = self._rebuild_list(code, src, unboxed, at=at)
-        if not want.boxed:
+        if not self._is_boxed(want):
             return code
         # A value has no aliases to lose, so giving it a handle is free.
         return f'std::make_shared<{unboxed.format()}>({code})'
@@ -2376,6 +2385,7 @@ class CppEmitter(Visitor):
                 f'is wanted',
                 at=e,
             )
+        self._is_boxed(want)  # strict tripwire: a handle is made here
         return f'std::make_shared<{got.format()}>({emitted})'
 
     def _adapt_arg(self, emitted: str, e: Expr, want: CppType | None) -> str:
@@ -2405,6 +2415,7 @@ class CppEmitter(Visitor):
                 f'passing an unboxed list where `{want.format()}` is declared',
                 at=e,
             )
+        self._is_boxed(have)  # strict tripwire: a handle is handed over
         return f'*{self._bind_operand(emitted)}'
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx) -> str:

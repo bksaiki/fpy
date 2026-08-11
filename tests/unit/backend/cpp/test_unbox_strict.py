@@ -60,16 +60,26 @@ class TestStrictAccepts:
         assert params[0].format() == 'std::vector<double>'
         assert ret.format() == 'std::vector<double>'
 
+    def test_signature_is_not_poisoned_by_an_unrelated_function(self):
+        """An unrelated function's strict refusal is not the entry's problem,
+        and must not become one by way of `Module.add` order."""
+        for order in ([_shared, _scale], [_scale, _shared]):
+            m = Module()
+            for f in order:
+                if f is _shared:
+                    m.add(f, ctx=fp.FP64, arg_types=[L, BoolType(), R])
+                else:
+                    m.add(f, ctx=fp.FP64, arg_types=[L, R])
+            params, ret = STRICT.signature(
+                _scale, ctx=fp.FP64, arg_types=[L, R], module=m,
+            )
+            assert params[0].format() == 'std::vector<double>'
+            assert ret.format() == 'std::vector<double>'
+
 
 class TestStrictRefuses:
     """Where a list must keep its handle, compilation fails -- naming the
     list, the reason, and the way out."""
-
-    def test_shared_list_is_a_compile_error(self):
-        with pytest.raises(CppCompileError, match='strict unboxing failed'):
-            STRICT.compile(
-                _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
-            )
 
     def test_the_error_names_the_list_reason_and_escape_hatch(self):
         with pytest.raises(
@@ -80,14 +90,46 @@ class TestStrictRefuses:
                 _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
             )
 
-    def test_returned_parameter_is_a_compile_error(self):
-        with pytest.raises(CppCompileError, match='strict unboxing failed'):
+    def test_returned_parameter_is_one_offender_not_two(self):
+        """A returned parameter is *one* list: it is named as `xs`, and the
+        `<return>` entry for the same region is deduplicated away."""
+        with pytest.raises(CppCompileError, match=r'`xs`') as exc:
             STRICT.compile(_identity, ctx=fp.FP64, arg_types=[L])
+        assert '<return>' not in str(exc.value), str(exc.value)
+
+    def test_an_unnamed_returned_list_reports_as_return(self):
+        """A `return` joining a parameter with a fresh literal boxes both;
+        the literal is bound to no name, so only `<return>` can report it."""
+        @fp.fpy
+        def f(xs: list[fp.Real], c: bool, y: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                if c:
+                    return xs
+                return [y, y]
+
+        with pytest.raises(CppCompileError, match=r'<return> \(depth 0\)'):
+            STRICT.compile(f, ctx=fp.FP64, arg_types=[L, BoolType(), R])
+
+    def test_a_list_shared_through_a_tuple_field_is_refused(self):
+        """The tuple-field branch of the walk: `_stamp` records no reason
+        down a tuple field, so the report falls back to naming the shape."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = (xs, 1.0)
+                w = fp.fst(t)
+                w[0] = 55
+                return xs[0]
+
+        with pytest.raises(
+            CppCompileError, match=r'`t` \(depth 0\): shared \(tuple field\)',
+        ):
+            STRICT.compile(f, ctx=fp.FP64, arg_types=[L])
 
     def test_a_retaining_callee_fails_strict(self):
         """A callee that keeps its argument forces handles on both ends of
         the call -- leaves-first, the callee is refused before the caller
-        is ever emitted."""
+        is ever emitted, so the error names `keep` and the boundary."""
         @fp.fpy
         def keep(zs: list[fp.Real]) -> list[fp.Real]:
             with fp.FP64:
@@ -101,7 +143,11 @@ class TestStrictRefuses:
 
         m = Module()
         m.add(hand_over, ctx=fp.FP64, arg_types=[L])
-        with pytest.raises(CppCompileError, match='strict unboxing failed'):
+        with pytest.raises(
+            CppCompileError,
+            match=r'(?s)strict unboxing failed for `keep'
+                  r'.*reached across a boundary',
+        ):
             STRICT.compile_module(m)
 
     def test_signature_is_strict_too(self):
@@ -109,6 +155,47 @@ class TestStrictRefuses:
         program cannot be told types that `compile_module` would refuse."""
         with pytest.raises(CppCompileError, match='strict unboxing failed'):
             STRICT.signature(
+                _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
+            )
+
+    def test_an_unstorable_return_is_not_blamed_on_strictness(self):
+        """A REAL-format return fails storage selection in every mode; under
+        STRICT it must present as that failure, not as a strict refusal."""
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.REAL:
+                return x * y
+
+        with pytest.raises(
+            CppCompileError, match='storage selection failed',
+        ) as exc:
+            STRICT.compile(f, ctx=fp.FP64, arg_types=[R, R])
+        assert 'strict unboxing' not in str(exc.value)
+
+
+class TestEmitterTripwire:
+    """The emitter's `_is_boxed` tripwire is the last line of defense: every
+    handle spelling branches on it, so a boxed type that survives both
+    analysis layers is refused at the point the handle would become real.
+    No real program can get past those layers (that is their contract), so
+    the regression is simulated by disabling them."""
+
+    def test_tripwire_fires_if_both_analysis_layers_regress(self, monkeypatch):
+        import fpy2.backend.cpp.compiler as compiler_mod
+        from fpy2.backend.cpp.unbox import UnboxAnalysis
+
+        def lenient_annotate(self, e, ty):
+            def at(depth):
+                r = self.alias.region_of_expr(e, depth)
+                return set() if r is None else {r}
+            return self._stamp(ty, at, 0)
+
+        monkeypatch.setattr(compiler_mod, 'check_strict', lambda *a: None)
+        monkeypatch.setattr(UnboxAnalysis, 'annotate', lenient_annotate)
+        with pytest.raises(
+            CppCompileError, match='internal error.*shared handle',
+        ):
+            STRICT.compile(
                 _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
             )
 

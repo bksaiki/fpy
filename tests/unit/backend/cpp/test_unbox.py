@@ -18,6 +18,10 @@ from fpy2.types import BoolType, ListType, RealType
 
 R = RealType(fp.FP64)
 
+# This file is about the opportunistic analysis, so every compile is ALLOW;
+# the strict default's refusals live in `test_unbox_strict.py`.
+ALLOW = CppCompiler(unbox=UnboxMode.ALLOW)
+
 
 def _decide(f: fp.Function, arg_types):
     """``(names -> chosen storage, reasons)`` for *f*.
@@ -25,7 +29,7 @@ def _decide(f: fp.Function, arg_types):
     Goes through the compiler's own analyses: the decision has to be made on the
     *specialized* AST, whose types are concrete.
     """
-    cc = CppCompiler(unbox=UnboxMode.ALLOW)
+    cc = ALLOW
     m = Module()
     m.add(f, ctx=fp.FP64, arg_types=list(arg_types))
     a = cc.analyze(cc.specialize(m)[-1])
@@ -232,7 +236,7 @@ class TestDiscountHasLimits:
                 ys[0] = 99
                 return xs[0]
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
         assert 'std::vector<double>& xs' in out
         assert 'const std::vector<double>& xs' not in out
         assert 'auto& ys = xs;' in out
@@ -249,7 +253,7 @@ class TestDiscountHasLimits:
                     row[0] = 99
                 return xss[0][0]
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
+        out = ALLOW.compile(
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R))],
         )
         assert 'std::vector<std::vector<double>>& xss' in out
@@ -291,7 +295,7 @@ class TestInvisibleToTheHarness:
             with fp.FP64:
                 return callee(ws)
 
-        cc = CppCompiler(unbox=UnboxMode.ALLOW)
+        cc = ALLOW
         m = Module()
         m.add(caller, ctx=fp.FP64, arg_types=[ListType(R)])
         m.add(callee, ctx=fp.FP64, arg_types=[ListType(R)])
@@ -329,7 +333,7 @@ class TestAcrossACall:
 
         m = Module()
         m.add(outer, ctx=fp.FP64, arg_types=[ListType(ListType(R))])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'const std::vector<double>& xs' in out
         assert 'const std::vector<std::vector<double>>& xss' in out
         assert 'fpy::list' not in out
@@ -348,7 +352,7 @@ class TestAcrossACall:
 
         m = Module()
         m.add(hand_over, ctx=fp.FP64, arg_types=[ListType(R)])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'std::vector<double>& xs' not in out
         assert 'fpy::list<double>' in out
 
@@ -368,7 +372,7 @@ class TestAcrossACall:
 
         m = Module()
         m.add(call_it, ctx=fp.FP64, arg_types=[ListType(R)])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'std::vector<double>& zs' in out
         assert 'std::vector<double>& xs' in out
         assert 'const std::vector<double>&' not in out
@@ -390,7 +394,7 @@ class TestAcrossACall:
 
         m = Module()
         m.add(shares, ctx=fp.FP64, arg_types=[ListType(R)])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'const std::vector<double>& zs' in out
         assert 'const fpy::list<double>& xs' in out
         assert re.search(r'reads__\w+\(\*xs\)', out), out
@@ -409,7 +413,7 @@ class TestFreshNestedAllocations:
         import fpy2.libraries.matrix as M
 
         N = ListType(ListType(R))
-        _params, ret = CppCompiler(unbox=UnboxMode.ALLOW).signature(
+        _params, ret = ALLOW.signature(
             M.add, ctx=fp.FP64, arg_types=[N, N],
         )
         assert _levels(ret) == [False, False], ret.format()
@@ -461,7 +465,7 @@ class TestCalleeReturn:
 
         m = Module()
         m.add(use, ctx=fp.FP64, arg_types=[R])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'fpy::list' not in out, out
 
     def test_a_caller_that_needs_a_handle_makes_one(self):
@@ -484,7 +488,7 @@ class TestCalleeReturn:
 
         m = Module()
         m.add(boxes_it, ctx=fp.FP64, arg_types=[R])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'std::make_shared<std::vector<double>>(make' in out, out
         assert boxes_it(3.0, ctx=fp.FP64) == 9
 
@@ -504,7 +508,7 @@ class TestProjectionByReference:
                 row = xss[0]
                 return row[0]
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
+        out = ALLOW.compile(
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R))],
         )
         assert 'const auto& row =' in out, out
@@ -534,7 +538,7 @@ class TestProjectionByReference:
         N = ListType(ListType(R))
         m = Module()
         m.add(outer, ctx=fp.FP64, arg_types=[N, N])
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile_module(m)
+        out = ALLOW.compile_module(m)
         assert 'fpy::list' not in out, out
 
     def test_a_replaced_slot_still_copies(self):
@@ -544,7 +548,7 @@ class TestProjectionByReference:
         """
         import tests.infra.backend.cpp as corpus
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
+        out = ALLOW.compile(
             corpus._regression_replaced_slot, ctx=fp.FP64,
             arg_types=[ListType(ListType(R)), ListType(R)],
         )
@@ -563,7 +567,7 @@ class TestProjectionByReference:
                 xss[0] = ys
                 return n
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
+        out = ALLOW.compile(
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
         )
         assert 'auto& row' not in out, out
@@ -585,7 +589,7 @@ class TestProjectionByReference:
                 x[0][0][0] = 0
                 return x
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(f, ctx=fp.FP64, arg_types=[])
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[])
         assert 'fpy::list' not in out, out
 
     def test_a_call_result_still_seeds_its_levels(self):
@@ -593,7 +597,7 @@ class TestProjectionByReference:
         a value a callee hands back, so those levels do need seeding."""
         import fpy2.libraries.matrix as M
 
-        _p, ret = CppCompiler(unbox=UnboxMode.ALLOW).signature(
+        _p, ret = ALLOW.signature(
             M.identity, ctx=fp.FP64, arg_types=[R],
         )
         assert _levels(ret) == [False, False], ret.format()
@@ -624,7 +628,7 @@ class TestListsInsideTuples:
                 a[0] = 99
                 return xs[0]
 
-        cc = CppCompiler(unbox=UnboxMode.ALLOW)
+        cc = ALLOW
         m = Module()
         m.add(f, ctx=fp.FP64, arg_types=[ListType(R)])
         a = cc.analyze(cc.specialize(m)[-1])
@@ -641,7 +645,7 @@ class TestListsInsideTuples:
             with fp.FP64:
                 return ([n, n], 1.0)
 
-        cc = CppCompiler(unbox=UnboxMode.ALLOW)
+        cc = ALLOW
         m = Module()
         m.add(f, ctx=fp.FP64, arg_types=[R])
         _p, ret = cc.signature(f, ctx=fp.FP64, arg_types=[R], module=m)
@@ -658,7 +662,7 @@ class TestListsInsideTuples:
                 w[0] = 55
                 return xs[0]
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
         assert 'std::tuple<fpy::list<double>, uint8_t>' in out, out
         assert f([1.0, 2.0], ctx=fp.FP64) == 55
 
@@ -678,7 +682,7 @@ class TestListsInsideTuples:
             with fp.FP64:
                 return fp.fst(t)[0]
 
-        out = CppCompiler(unbox=UnboxMode.ALLOW).compile(
+        out = ALLOW.compile(
             f, ctx=fp.FP64, arg_types=[TupleType(ListType(R), R)],
         )
         assert 'const std::tuple<std::vector<double>, double>&' in out, out
