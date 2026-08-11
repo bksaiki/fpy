@@ -1,7 +1,8 @@
 """Mixed per-level representations, and the return type.
 
 `unbox` decides each list *level* independently, so
-`std::vector<fpy::list<double>>` is legal and does occur.  Every unit test in
+`std::vector<std::shared_ptr<std::vector<double>>>` is legal and does
+occur.  Every unit test in
 `test_unbox.py` stops at the emitted *string* -- nothing hands the result to a
 C++ compiler, and the differential harness only ever sees whole-corpus
 programs whose levels happen to agree.  A mixed nesting that does not typecheck
@@ -68,7 +69,7 @@ def _levels(ty) -> list[bool]:
 @fp.fpy
 def m_hand_out_a_row(xss: list[list[fp.Real]]) -> list[fp.Real]:
     """Outer unboxed (nothing else names it), inner boxed (a row is handed to
-    the caller).  The mixed type `std::vector<fpy::list<double>>`."""
+    the caller).  The mixed type: a vector of boxed rows."""
     with fp.FP64:
         xss[0][0] = 99
         return xss[1]
@@ -272,11 +273,11 @@ def test_a_joined_place_has_one_element_type(func, arg_types, unbox):
     m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
     _typecheck(m, unbox=unbox)
     # One element type throughout -- which one it is, is storage selection's
-    # business, and `UnboxMode.NEVER` spells the same list `fpy::list`.  Read off
+    # business, and `UnboxMode.NEVER` wraps the same list in a `shared_ptr`.  Read off
     # the function alone; the runtime helpers are templates and would
     # contribute a `T`.
     body = CppCompiler(unbox=unbox).compile_module(m)
-    elts = re.findall(r'(?:std::vector|fpy::(?:list|make_list))<(\w+)>', body)
+    elts = re.findall(r'std::vector<(\w+)>', body)
     assert len(set(elts)) == 1, body
 
 
@@ -436,7 +437,7 @@ def test_a_shared_narrower_list_is_refused(func, arg_types):
     The last three matter most, because there the mismatch would be invisible.
     A reference binding is spelled `const auto&`, so nothing in the emitted text
     states its element type -- `const auto& ys = xs;` followed by `return ys;`
-    would hand back an `fpy::list<float>` as an `fpy::list<double>` and only the
+    would hand back a boxed `float` list as a boxed `double` list and only the
     C++ compiler would object.
     """
     m = Module()
@@ -518,7 +519,7 @@ def test_a_declaration_agrees_with_what_is_handed_through_it():
     that did not, the return type from the one that did, so this emitted
 
         std::tuple<std::vector<double>, uint8_t> f() {
-            std::tuple<fpy::list<double>, uint8_t> t = ...;   // disagrees
+            std::tuple<std::shared_ptr<std::vector<double>>, uint8_t> t = ...;
             return t;
         }
 
@@ -532,13 +533,13 @@ def test_a_declaration_agrees_with_what_is_handed_through_it():
     # The point is agreement, not which answer: the two spellings of the tuple
     # type in the emitted function must be the same one.  Read the function
     # alone -- the runtime helpers legitimately use `make_shared` for
-    # `fpy::make_list`.
+    # allocation of its own.
     body = CppCompiler().compile_module(m)
     tuples = set(re.findall(r'std::tuple<[^>]*>', body))
     assert len(tuples) == 1, f'declaration and return type disagree: {tuples}'
     # ...and here the answer should be unboxed: nothing else holds the list, so
     # a handle would be a pointless allocation.
-    assert 'fpy::list' not in body, body
+    assert 'std::shared_ptr' not in body, body
     assert 'make_shared' not in body, body
 
 

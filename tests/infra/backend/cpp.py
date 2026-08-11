@@ -413,7 +413,7 @@ def _cpp_type(ty) -> str:
         case fp.types.ListType():
             # must match `CppList.format()`: a list is a shared handle, not a
             # bare vector
-            return f'fpy::list<{_cpp_type(ty.elt)}>'
+            return f'std::shared_ptr<std::vector<{_cpp_type(ty.elt)}>>'
         case fp.types.TupleType():
             return f'std::tuple<{", ".join(_cpp_type(elt) for elt in ty.elts)}>'
         case _:
@@ -432,7 +432,11 @@ def _cpp_value(value, cty) -> str:
         case CppList():
             elts = ', '.join(_cpp_value(v, cty.elt) for v in value)
             if cty.boxed:
-                return f'fpy::make_list<{cty.elt.format()}>({{{elts}}})'
+                elt = cty.elt.format()
+                return (
+                    f'std::make_shared<std::vector<{elt}>>'
+                    f'(std::vector<{elt}>{{{elts}}})'
+                )
             return f'{cty.format()}{{{elts}}}'
         case CppTuple():
             elts = ', '.join(
@@ -490,7 +494,11 @@ def _cpp_literal(value, ty) -> str:
             return 'true' if value else 'false'
         case fp.types.ListType():
             elts = ', '.join(_cpp_literal(v, ty.elt) for v in value)
-            return f'fpy::make_list<{_cpp_type(ty.elt)}>({{{elts}}})'
+            t = _cpp_type(ty.elt)
+            return (
+                f'std::make_shared<std::vector<{t}>>'
+                f'(std::vector<{t}>{{{elts}}})'
+            )
         case fp.types.TupleType():
             elts = ', '.join(_cpp_literal(v, e) for v, e in zip(value, ty.elts))
             return f'std::make_tuple({elts})'
@@ -923,35 +931,40 @@ CPP_INTEROP: str = '''\
 namespace fpy {
 
 // Interop: a program holding `std::vector` converts here.  A flat vector can be
-// shared or copied; a nested one can only be copied.
+// shared or copied; a nested one can only be copied.  Spelled in the same
+// standard-library types the compiler emits -- there is no runtime alias.
 
 // Must not outlive `v`.
 template <typename T>
-inline list<T> borrow(std::vector<T>& v) {
-    return list<T>(&v, [](std::vector<T>*) {});
+inline std::shared_ptr<std::vector<T>> borrow(std::vector<T>& v) {
+    return std::shared_ptr<std::vector<T>>(&v, [](std::vector<T>*) {});
 }
 
 template <typename T>
-inline list<T> copy_in(const std::vector<T>& v) {
-    return std::make_shared<std::vector<T> >(v);
+inline std::shared_ptr<std::vector<T>> copy_in(const std::vector<T>& v) {
+    return std::make_shared<std::vector<T>>(v);
 }
 
 template <typename T>
-inline list<list<T> > copy_in(const std::vector<std::vector<T> >& vs) {
-    list<list<T> > out = make_list<list<T> >(vs.size());
+inline std::shared_ptr<std::vector<std::shared_ptr<std::vector<T>>>>
+copy_in(const std::vector<std::vector<T>>& vs) {
+    auto out = std::make_shared<
+        std::vector<std::shared_ptr<std::vector<T>>>>(vs.size());
     for (std::size_t i = 0; i < vs.size(); ++i)
         (*out)[i] = copy_in(vs[i]);
     return out;
 }
 
 template <typename T>
-inline std::vector<T> copy_out(const list<T>& xs) {
+inline std::vector<T> copy_out(const std::shared_ptr<std::vector<T>>& xs) {
     return *xs;
 }
 
 template <typename T>
-inline std::vector<std::vector<T> > copy_out(const list<list<T> >& xss) {
-    std::vector<std::vector<T> > out(xss->size());
+inline std::vector<std::vector<T>> copy_out(
+    const std::shared_ptr<std::vector<std::shared_ptr<std::vector<T>>>>& xss
+) {
+    std::vector<std::vector<T>> out(xss->size());
     for (std::size_t i = 0; i < xss->size(); ++i)
         out[i] = *(*xss)[i];
     return out;
@@ -964,9 +977,7 @@ inline std::vector<std::vector<T> > copy_out(const list<list<T> >& xss) {
 Not part of the runtime, because nothing emitted names them: the emitter never
 produces a ``borrow`` / ``copy_in`` / ``copy_out`` call, so carrying them in
 every translation unit would be surface no generated program uses.  They live
-here, with the tests that exercise the boundary, and are appended after
-``CppCompiler.helpers()`` — which defines the ``fpy::list`` and ``make_list``
-they build on.
+here, with the tests that exercise the boundary.
 
 Two properties the ABI tests pin:
 
@@ -1005,13 +1016,13 @@ def _build_and_run_driver(
 
 
 def _test_runtime(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, str]]:
-    """Compile and run a self-test of the emitted runtime prelude (``fpy::``).
+    """Compile and run a self-test of the boxed-list idioms the emitter spells.
 
-    The prelude is handwritten C++ that every emitted unit depends on, so it is
-    worth checking directly rather than only through generated code.  Asserts
-    the sharing contract ``fpy::list`` exists to provide: copying a list shares
-    its elements, an element of a nested list is the same object, and copying
-    the range is the opt-out.
+    There is no list runtime -- boxed lists are emitted as
+    ``std::shared_ptr<std::vector<T>>`` at the use site -- so this pins the
+    sharing contract those spellings provide: copying a handle shares its
+    elements, an element of a nested list is the same object, and copying the
+    range is the opt-out.
     """
     group = 'runtime'
     compiler = fp.CppCompiler()
@@ -1046,35 +1057,39 @@ def _test_runtime(output_dir: Path, mode: str = 'compile') -> list[tuple[str, st
 _RUNTIME_SELFTEST: str = """\
 #include <cstdio>
 
+typedef std::shared_ptr<std::vector<double>> list_d;
+typedef std::shared_ptr<std::vector<list_d>> list_dd;
+
 int main() {
     // copying a handle shares the elements
-    fpy::list<double> xs = fpy::make_list<double>({1.0, 2.0, 3.0});
-    fpy::list<double> ys = xs;
+    list_d xs = std::make_shared<std::vector<double>>(
+        std::vector<double>{1.0, 2.0, 3.0});
+    list_d ys = xs;
     (*ys)[0] = 99.0;
     assert((*xs)[0] == 99.0);
 
     // ...and an explicit copy is the opt-out -- the idiom the emitter emits
     // for `xs[:]`
-    fpy::list<double> zs = fpy::make_list<double>(xs->begin(), xs->end());
+    list_d zs = std::make_shared<std::vector<double>>(xs->begin(), xs->end());
     (*zs)[0] = 7.0;
     assert((*xs)[0] == 99.0);
 
     // an element of a nested list is the same object, at every slot
-    fpy::list<fpy::list<double> > m =
-        fpy::make_list<fpy::list<double> >({xs, xs});
+    list_dd m = std::make_shared<std::vector<list_d>>(
+        std::vector<list_d>{xs, xs});
     (*(*m)[0])[1] = 42.0;
     assert((*xs)[1] == 42.0);
     assert((*(*m)[1])[1] == 42.0);
 
     // a projection shares, and survives its container's slot being replaced
-    fpy::list<double> row = (*m)[0];
+    list_d row = (*m)[0];
     (*m)[0] = zs;
     (*row)[2] = 5.0;
     assert((*xs)[2] == 5.0);
     assert((*(*m)[0])[2] != 5.0);
 
     // range-for over the pointee, and size
-    fpy::list<double> acc = fpy::make_list<double>(3);
+    list_d acc = std::make_shared<std::vector<double>>(3);
     std::size_t i = 0;
     for (double v : *xs) { (*acc)[i] = v; ++i; }
     assert(i == 3 && acc->size() == 3);
@@ -1086,7 +1101,7 @@ int main() {
 
     // refcounting: the last owner keeps the elements alive
     {
-        fpy::list<double> tmp = xs;
+        list_d tmp = xs;
         (*tmp)[0] = 3.5;
     }
     assert((*xs)[0] == 3.5);
@@ -1147,7 +1162,7 @@ def _test_abi(output_dir: Path, mode: str = 'compile') -> list[tuple[str, str, s
     """Compile kernels and call them the way an embedding program would.
 
     Nothing in the corpus covers handing a kernel storage the *caller* owns —
-    the differential driver builds fresh ``fpy::list`` arguments — so the
+    the differential driver builds fresh boxed-list arguments — so the
     ``fpy::`` conversions are pinned here: ``borrow`` shares a flat vector,
     ``copy_in`` does not, ``copy_out`` reads a result back, and a
     ``vector<vector<T>>`` can only be copied, so a kernel's write must *not*
@@ -1342,7 +1357,7 @@ int main() {
     // ...and copied out row by row.
     {
         std::vector<std::vector<double> > m(1, std::vector<double>(2, 1.0));
-        fpy::list<fpy::list<double> > h = fpy::copy_in(m);
+        auto h = fpy::copy_in(m);
         double got = _abi_row_element_write(h);
         assert(got == 99.0);
         std::vector<std::vector<double> > out = fpy::copy_out(h);
@@ -1572,7 +1587,7 @@ def _regression_any_over_comprehension(xs: list[fp.Real]) -> bool:
 # One function per *route* by which a list can reach a copy.  All of them are
 # executed and bit-compared against the interpreter on every `--mode run`; the
 # eleven that once diverged were the acceptance criterion for representing a
-# list as `fpy::list`.  Each guards the empty case because `_LIST_LENS`
+# list as a shared handle.  Each guards the empty case because `_LIST_LENS`
 # includes 0.
 
 
@@ -1753,7 +1768,7 @@ def _regression_enumerate_row_write(xss: list[list[fp.Real]]) -> fp.Real:
     this pins the pair rather than one code path: `optimize=False` materializes
     a `vector<tuple<I, T>>` and reaches the row through a copy synthesized by
     codegen that appears nowhere in the AST, while `optimize=True` (the
-    default) rewrites to an ordinary `row = _src0[i]`.  A `fpy::list` is a
+    default) rewrites to an ordinary `row = _src0[i]`.  A boxed list is a
     handle, so both copies share elements.
     """
     with fp.FP64:

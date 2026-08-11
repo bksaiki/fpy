@@ -68,12 +68,12 @@ class TestIndexedAssign:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
-        assert 'const fpy::list<double>& xs' in out
+        assert 'const std::shared_ptr<std::vector<double>>& xs' in out
         assert 'const auto& ys = xs;' in out
         assert '(*ys)[static_cast<size_t>(0)] = 99;' in out
         # Nothing is copied: no temp, and no fresh list.
         assert '_tmp' not in out
-        assert 'make_list' not in out
+        assert 'make_shared' not in out
 
     def test_sequential_mutations_in_place(self):
         """Sequential mutations of a freshly-built list reuse the

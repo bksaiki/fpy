@@ -67,10 +67,19 @@ class CppScalar(enum.Enum):
 
 @default_repr
 class CppList:
-    """An FPy list: a shared ``fpy::list<T>`` handle, or -- where
-    :mod:`fpy2.analysis.alias` proves nothing can observe the difference -- a
-    plain ``std::vector<T>``.  See :mod:`.utils` for why the handle exists and
-    :mod:`.unbox` for when it is dropped.
+    """An FPy list: a shared ``std::shared_ptr<std::vector<T>>`` handle, or --
+    where :mod:`fpy2.analysis.alias` proves nothing can observe the difference
+    -- a plain ``std::vector<T>``.  See :mod:`.unbox` for when the handle is
+    dropped.
+
+    The handle exists because an FPy list is a list of *references*: binding
+    shares its cells, so two names can hold the same elements and a write
+    through either is visible to both.  A ``std::vector`` -- a value -- cannot
+    represent that identity; a ``shared_ptr`` to one can, and a program
+    embedding a kernel can hold either without depending on anything of ours.
+    Refcounting needs no collector: a cycle needs a list to hold itself, and
+    list types are finite, so ``xs[0] = xs`` fails to unify -- the *type*
+    system rules it out, not the store rules, which would permit it.
 
     ``boxed`` is part of the type's identity, so two lists differing only in
     representation compare unequal and ``storage_infer`` cannot merge them.
@@ -94,7 +103,9 @@ class CppList:
 
     def format(self) -> str:
         elt = self.elt.format()
-        return f'fpy::list<{elt}>' if self.boxed else f'std::vector<{elt}>'
+        if self.boxed:
+            return f'std::shared_ptr<std::vector<{elt}>>'
+        return f'std::vector<{elt}>'
 
 
 @default_repr

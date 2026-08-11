@@ -326,7 +326,7 @@ class CppEmitter(Visitor):
     # Purely syntactic: these take and return emitted C++ strings.  The point is
     # that how a list is stored and accessed is spelled out here and nowhere
     # else, so changing the representation is a change to this block plus
-    # ``fpy::list`` in ``.utils``.
+    # the boxed spelling in ``.types``.
 
     @staticmethod
     def _elt_of(ty: CppType) -> str:
@@ -424,9 +424,11 @@ class CppEmitter(Visitor):
 
         The one place the boxed and unboxed spellings of construction are
         stated; the named wrappers below only supply the arguments.
+        ``make_shared`` forwards ordinary arguments -- ``(n)``, ``(n, fill)``,
+        ``(first, last)`` -- to the ``std::vector`` constructor unchanged.
         """
         if self._is_boxed(ty):
-            return f'fpy::make_list<{self._elt_of(ty)}>({args})'
+            return f'std::make_shared<std::vector<{self._elt_of(ty)}>>({args})'
         return f'{ty.format()}({args})'
 
     def _list_new_sized(self, ty: CppType, n: str) -> str:
@@ -434,7 +436,7 @@ class CppEmitter(Visitor):
 
     def _list_empty(self, ty: CppType) -> str:
         """A new empty list.  Never emit a bare declaration for a *boxed* list:
-        an uninitialised ``fpy::list`` is a null handle, unlike an empty
+        an uninitialised handle is a null ``shared_ptr``, unlike an empty
         ``std::vector``."""
         return self._list_new_sized(ty, '0')
 
@@ -442,11 +444,16 @@ class CppEmitter(Visitor):
         return self._list_new(ty, f'{n}, {fill}')
 
     def _list_new_init(self, ty: CppType, parts: list[str]) -> str:
-        """The given elements.  Not :meth:`_list_new`: a braced list is the
-        argument when boxed, and the whole initialiser when not."""
+        """The given elements.  Not :meth:`_list_new`: a braced init-list is a
+        non-deduced context, so ``make_shared`` cannot take ``{...}`` directly
+        -- the boxed form spells the inner vector and moves it in."""
         joined = ', '.join(parts)
         if self._is_boxed(ty):
-            return f'fpy::make_list<{self._elt_of(ty)}>({{{joined}}})'
+            elt = self._elt_of(ty)
+            return (
+                f'std::make_shared<std::vector<{elt}>>'
+                f'(std::vector<{elt}>{{{joined}}})'
+            )
         return f'{ty.format()}{{{joined}}}'
 
     def _list_new_range(self, ty: CppType, first: str, last: str) -> str:
@@ -745,7 +752,7 @@ class CppEmitter(Visitor):
         # are well-defined (FPy analyses ensure this can't happen,
         # but the initialiser also serves as a paper-trail).
         if isinstance(storage, CppList):
-            # a bare ``fpy::list`` is a *null* handle, not an empty list, so a
+            # a bare handle is a *null* ``shared_ptr``, not an empty list, so a
             # hoisted list must be given one
             self.writer.add_line(
                 f'{storage.format()} {name} = {self._list_empty(storage)};'
@@ -1073,7 +1080,7 @@ class CppEmitter(Visitor):
             # A name the emitter binds as `const auto&` has the type C++
             # *deduced* from its initializer, not the one `storage_of` chose --
             # so follow the alias.  Missing this is how `[L3, L3]` came to hold
-            # a `fpy::list<uint8_t>` in a `std::vector<fpy::list<float>>`.
+            # a boxed `uint8_t` list in a vector of boxed `float` lists.
             src = self._reference_source(d)
             if src is not None:
                 return self._storage_or_none(src)
@@ -1714,7 +1721,7 @@ class CppEmitter(Visitor):
         return acc.s, acc.ty
 
     def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
-        """``enumerate(xs)`` builds a ``fpy::list<std::tuple<I, T>>``
+        """``enumerate(xs)`` builds a list of ``std::tuple<I, T>``
         where ``I`` is the index integer type and ``T`` is the source
         element type — both come from format inference on the
         Enumerate node itself.
@@ -2165,7 +2172,7 @@ class CppEmitter(Visitor):
         """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector of
         storage *result_ty*.
 
-        Sizes are read off the call site and emitted as nested ``make_list`` calls
+        Sizes are read off the call site and emitted as nested constructor calls
         right-to-left, so the innermost element type bubbles out.  ``empty()`` is a
         scalar ``T()``, which format inference resolves at the call site.
         """
@@ -2204,7 +2211,7 @@ class CppEmitter(Visitor):
 
     def _emit_zip(self, e: Zip, ctx) -> str:
         """``zip(xs1, …, xsN)`` builds a
-        ``fpy::list<std::tuple<T1, …, TN>>`` whose length matches the
+        list of ``std::tuple<T1, …, TN>`` whose length matches the
         first iterable.  Each iterable is bound to a temp once to
         evaluate side-effects in source order; the tuple type comes
         from format inference on the Zip node."""

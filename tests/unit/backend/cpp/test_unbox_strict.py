@@ -1,7 +1,7 @@
 """``UnboxMode.STRICT``: unbox everywhere or refuse to compile.
 
 ``ALLOW``'s contract is per-level best effort; ``STRICT``'s is a guarantee --
-the emitted unit contains no ``fpy::list`` (``std::shared_ptr``).  A program
+the emitted unit contains no ``std::shared_ptr``.  A program
 whose semantics need a shared handle is a compile error naming the list and
 the reason it kept its handle, not a handle in the output.
 """
@@ -53,7 +53,7 @@ class TestStrictAccepts:
     def test_fully_unboxable_program_compiles_clean(self):
         out = STRICT.compile(_scale, ctx=fp.FP64, arg_types=[L, R])
         assert 'std::vector<double>' in out
-        assert 'fpy::list' not in out
+        assert 'std::shared_ptr' not in out
 
     def test_signature_reports_native_types(self):
         params, ret = STRICT.signature(_scale, ctx=fp.FP64, arg_types=[L, R])
@@ -210,7 +210,7 @@ class TestStrictIsTheDefault:
             )
 
     def test_default_compiles_an_unboxable_kernel(self):
-        assert 'fpy::list' not in CppCompiler().compile(
+        assert 'std::shared_ptr' not in CppCompiler().compile(
             _scale, ctx=fp.FP64, arg_types=[L, R],
         )
 
@@ -225,4 +225,4 @@ class TestOtherModesUnchanged:
         out = CppCompiler(unbox=mode).compile(
             _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
         )
-        assert 'fpy::list<double>' in out
+        assert 'std::shared_ptr<std::vector<double>>' in out

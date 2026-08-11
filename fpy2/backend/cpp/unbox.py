@@ -3,7 +3,8 @@ cpp backend: which lists may drop the handle.
 
 An FPy list is a core list of *references* -- one cell per element -- so two
 names can hold the same cells and a write through either is visible to both.
-``fpy::list<T>``, a shared handle, is how that identity survives compilation.
+A shared handle -- ``std::shared_ptr<std::vector<T>>`` -- is how that
+identity survives compilation.
 Where :mod:`fpy2.analysis.alias` proves nothing else can observe the cells, the
 indirection buys nothing and the list becomes a plain ``std::vector<T>``: no
 allocation, no refcount, and a type a native caller already holds.
@@ -29,7 +30,7 @@ the compiler then turns each retained handle into an error --
 :func:`_stamp` is the *only* place any of this is decided -- for an expression,
 a return type, and a storage class's declaration alike.  A second traversal for
 the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
-``std::tuple<fpy::list<T>, ...>`` and returned ``std::tuple<std::vector<T>,
+a boxed tuple field where the return said ``std::tuple<std::vector<T>,
 ...>``, which does not compile.  Keep it one traversal.
 """
 
@@ -69,7 +70,7 @@ from .types import CppList, CppTuple, CppType
 
 @enum_repr
 class UnboxMode(enum.Enum):
-    """How aggressively the compiler drops the ``fpy::list`` handle.
+    """How aggressively the compiler drops the shared-``shared_ptr`` handle.
 
     - ``NEVER``: every list keeps its handle -- correct, but slower at a
       native boundary.
@@ -146,7 +147,8 @@ class UnboxAnalysis:
         """Whether a ``const`` reference here would reject a write FPy allows.
 
         **E-App** keeps no store of its own, so a callee's ``xs[i] = e`` writes
-        the caller's cells -- and ``const fpy::list<T>&`` permits exactly that,
+        the caller's cells -- and a ``const`` reference to the handle permits
+        exactly that,
         since ``const`` qualifies the handle and not the cells.  An unboxed list has no
         such indirection, so ``const`` reaches its elements -- and through a value
         container, so a write to a row needs the whole thing non-const.  A boxed
@@ -176,7 +178,7 @@ class UnboxAnalysis:
         ty = self._stamp(ty, at, 0)
         if self.strict and contains_boxed(ty):
             raise StrictUnboxError(
-                'an expression must keep an `fpy::list` handle (a shared '
+                'an expression must keep a shared handle (a shared '
                 'temporary, or a list level the alias analysis did not '
                 'track); use unbox=CppCompiler.UnboxMode.ALLOW to permit '
                 'handles'
@@ -296,7 +298,7 @@ class Unbox:
         #    regions.  So this group really can hold more than one, and the
         #    conjunction has to be written back or `annotate_return` and
         #    `annotate` disagree: `if c: return xs else: return [y, y]` would
-        #    declare `fpy::list` and hand back a `std::vector`.
+        #    declare a handle and hand back a `std::vector`.
         changed = True
         while changed:
             changed = False
@@ -587,7 +589,8 @@ def check_strict(
         offenders.append(f'<return> (depth {depth}): {reason}')
     if offenders:
         raise StrictUnboxError(
-            'these lists must keep their `fpy::list` handle:\n  '
+            'these lists must keep their shared handle '
+            '(`std::shared_ptr`):\n  '
             + '\n  '.join(offenders)
             + '\nuse unbox=CppCompiler.UnboxMode.ALLOW to permit handles'
         )

@@ -243,8 +243,9 @@ class CppCompiler(Backend):
         return list(CPP_HEADERS)
 
     def helpers(self) -> str:
-        """The ``fpy::`` runtime every emitted unit needs: the list handle,
-        ``make_list``, and NaN-correct ``min``/``max``."""
+        """The ``fpy::`` runtime every emitted unit needs: NaN-correct
+        ``min``/``max``, and nothing else -- list code is generated in
+        standard-library spellings at the use site."""
         return CPP_HELPERS
 
     def prelude(self) -> str:
@@ -450,7 +451,7 @@ class CppCompiler(Backend):
         """The C++ storage types of *func*'s parameters and result.
 
         Not derivable from FPy types alone: representation depends on :mod:`.unbox`,
-        so one FPy signature can compile to either ``fpy::list<T>`` or
+        so one FPy signature can compile to either a shared handle or
         ``std::vector<T>``.  Pass the *module* when there is one -- a function that
         compiled code calls keeps its handles.
         """
