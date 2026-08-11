@@ -39,6 +39,13 @@ from dataclasses import dataclass, field
 
 from ...analysis import Definition
 from ...analysis.alias import AliasAnalysis, Region
+from ...analysis.array_size import (
+    ArraySizeAnalysis,
+    ArraySizeBound,
+    ListSize,
+    TupleSize,
+    concrete_size,
+)
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatBound
@@ -47,14 +54,22 @@ from ...ast.fpyast import (
     Argument,
     Assign,
     Call,
+    Empty,
+    Enumerate,
     Expr,
     ForStmt,
     FuncDef,
     IndexedAssign,
     ListComp,
+    ListExpr,
+    ListSlice,
     NamedId,
+    Range1,
+    Range2,
+    Range3,
     ReturnStmt,
     Var,
+    Zip,
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -133,6 +148,15 @@ class UnboxAnalysis:
     """Set by the compiler under :class:`UnboxMode.STRICT`: :meth:`annotate`
     then refuses a boxed level instead of returning it, catching the
     expression temporaries :func:`check_strict` has no storage class for."""
+    sizes: dict[Region, int | None] = field(default_factory=dict)
+    """One proven length per region, from :func:`_region_sizes`.
+
+    ``int`` means every value the region ever holds has that length, so its
+    unboxed storage may be ``std::array``; ``None`` or absent means unknown.
+    Region-keyed like ``boxed``: a region is one runtime object per list
+    level, and FPy lists never change length after construction, so one size
+    per region is as coherent as one boxedness.
+    """
 
     def may_reference_projection(self, d: Definition) -> bool:
         """Whether ``row = xss[i]`` may bind a reference rather than copy.
@@ -222,7 +246,22 @@ class UnboxAnalysis:
         boxed = not regions or any(self.boxed.get(r, True) for r in regions)
         if boxed and cls is not None:
             self.boxed_because[(cls, depth)] = self._reason(regions)
-        return CppList(elt, boxed=boxed)
+        size = None if boxed else self._size_of(regions)
+        return CppList(elt, boxed=boxed, size=size)
+
+    def _size_of(self, regions: set[Region]) -> int | None:
+        """The one length every region in *regions* agrees on, if any.
+
+        The polarity is the reverse of boxedness: no region means no
+        evidence, so no size; several regions (only the return group
+        produces this) must be unanimous.
+        """
+        if not regions:
+            return None
+        sizes = {self.sizes.get(r) for r in regions}
+        if len(sizes) == 1:
+            return sizes.pop()
+        return None
 
     def _reason(self, regions: set[Region]) -> str:
         """Why a level kept its handle."""
@@ -246,6 +285,7 @@ class Unbox:
         is_called: bool = False,
         summary: 'EscapeSummary | None' = None,
         callees: 'dict[FuncDef, CalleeAbi] | None' = None,
+        array_size: 'ArraySizeAnalysis | None' = None,
     ) -> UnboxAnalysis:
         """Which lists may drop the handle.
 
@@ -254,8 +294,15 @@ class Unbox:
         treating the argument as shared; absent means it retains everything.
         *callees* carries the emitted signatures, so an argument and a result get
         the representation each declares.
+
+        *array_size* enables fixed-length storage: an unboxed level whose
+        region has one proven length becomes ``std::array``.  ``None`` --
+        the compiler's ``arrays=False``, or :class:`UnboxMode.NEVER`, which
+        never gets here -- stamps no sizes, so no sized type can exist.
         """
         out = UnboxAnalysis(alias)
+        if array_size is not None:
+            out.sizes = _region_sizes(alias, array_size)
         scan = _Scan(alias, def_use, callees or {})
         scan._visit_function(ast, None)
         out.slot_replaced = scan.slot_replaced
@@ -351,6 +398,63 @@ def _regions(
             break
         ty, depth = ty.elt, depth + 1
     return per_depth
+
+
+_ALLOC_EXPRS = (
+    ListExpr, ListComp, Empty, ListSlice, Range1, Range2, Range3, Zip,
+    Enumerate, Call,
+)
+"""Expression forms that produce a list of their own.
+
+These seed :func:`_region_sizes` in addition to the defs: a returned literal
+has a region but no def, and only its ``by_expr`` bound can size it.  Plain
+reads (``Var``, ``ListRef``) mirror what a def already contributed, and a
+lossy read-side bound must not poison a region a definition proved.
+"""
+
+
+def _region_sizes(
+    alias: AliasAnalysis, array_size: ArraySizeAnalysis,
+) -> dict[Region, int | None]:
+    """One proven length per region, by meeting every contribution.
+
+    A region's storage must hold every value it is ever bound to, so the
+    meet poisons on any doubt: a def with no bound, a level the size
+    analysis answered ``None`` for, a symbolic size (a per-run variable,
+    never a length ``std::array`` can spell), or two differing lengths all
+    force ``None``.  Contributions walk each bound structurally against the
+    region graph, mirroring :meth:`UnboxAnalysis._stamp`'s traversal --
+    ``ListSize`` descends ``region_at``, ``TupleSize`` descends
+    ``region_field`` -- so the table is keyed exactly where ``_stamp``
+    reads it.
+    """
+    sizes: dict[Region, int | None] = {}
+
+    def contribute(region: Region, k: int | None) -> None:
+        if region in sizes and sizes[region] != k:
+            sizes[region] = None
+        else:
+            sizes[region] = k
+
+    def seed(bound: ArraySizeBound, region: Region | None) -> None:
+        if region is None:
+            return
+        match bound:
+            case ListSize():
+                contribute(region, concrete_size(bound.size))
+                seed(bound.elt, alias.region_at(region))
+            case TupleSize():
+                for i, b in enumerate(bound.elts):
+                    seed(b, alias.region_field(region, i))
+            case None:
+                contribute(region, None)
+
+    for d in alias.all_defs():
+        seed(array_size.by_def.get(d), alias.region_of(d))
+    for e, bound in array_size.by_expr.items():
+        if isinstance(e, _ALLOC_EXPRS):
+            seed(bound, alias.region_of_expr(e))
+    return sizes
 
 
 def _fields(alias: AliasAnalysis, regions: set[Region], i: int) -> set[Region]:

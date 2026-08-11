@@ -175,16 +175,164 @@ class TestConversionLattice:
         assert 'push_back' not in body and 'reserve' not in body
 
 
-class TestInert:
-    """Until the analysis stamps sizes, no program produces an array."""
+class TestEndToEnd:
+    """The size decision, through the whole pipeline."""
 
-    def test_a_list_program_is_array_free(self):
+    def test_literal_and_comprehension(self):
         @fp.fpy
         def f() -> fp.Real:
             with fp.FP64:
-                xs = [1.0, 2.0, 3.0]
+                xs = [1.5, 2.5, 3.5]
                 ys = [x * 2 for x in xs]
                 return ys[0]
 
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        # the element scalar is the ladder's business (it is value-precise
+        # enough to fit {3, 5, 7} in uint8_t); what this pins is the shape
+        assert out.count('std::array<') >= 2
+        assert 'std::vector' not in out
+        assert 'push_back' not in out
+
+    def test_empty_of_constant_dims_is_one_value_init(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                m = fp.empty(2, 3)
+                m[0][0] = x
+                return m[0][0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        assert 'std::array<std::array<double, 3>, 2>' in out
+        assert '{};' in out
+
+    def test_slice_of_whole_keeps_the_size(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                xs = [1.5, 2.5, 3.5]
+                ys = xs[:]
+                ys[0] = 9.0
+                return xs[0]
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        assert out.count('std::array<') >= 2
+        assert 'std::vector' not in out
+        assert 'std::copy(' in out
+
+    def test_sized_entry_parameter_from_arg_types(self):
+        from fpy2.types import ListType
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return xs[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64), 4)],
+        )
+        assert 'const std::array<double, 4>& xs' in out
+
+    def test_unsized_parameter_stays_a_vector(self):
+        from fpy2.types import ListType
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return xs[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
+        )
+        assert 'const std::vector<double>& xs' in out
+
+    def test_a_join_of_two_sizes_demotes_to_vector(self):
+        from fpy2.types import BoolType
+
+        @fp.fpy
+        def f(c: bool, x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                if c:
+                    xs = [x, x]
+                else:
+                    xs = [x, x, x]
+                return xs[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[BoolType(), RealType(fp.FP64)],
+        )
+        assert 'std::vector<double> xs' in out
+        assert 'std::array' not in out
+
+    def test_disagreeing_returns_demote_the_return_type(self):
+        from fpy2.types import BoolType
+
+        @fp.fpy
+        def f(c: bool, x: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                if c:
+                    return [x, x]
+                return [x, x, x]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[BoolType(), RealType(fp.FP64)],
+        )
+        assert out.startswith('std::vector<double> f(')
+
+    def test_agreeing_returns_keep_the_size(self):
+        from fpy2.types import BoolType
+
+        @fp.fpy
+        def f(c: bool, x: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                if c:
+                    return [x, x]
+                return [x, x + 1.0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[BoolType(), RealType(fp.FP64)],
+        )
+        assert out.startswith('std::array<double, 2> f(')
+
+    def test_runtime_length_stays_a_vector(self):
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.INTEGER:
+                k = fp.round(n)
+            xs = fp.empty(k)
+            with fp.FP64:
+                xs[0] = 1.5
+                return xs[0]
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        assert 'std::vector<' in out
+        assert 'std::array' not in out
+
+    def test_flag_off_is_a_clean_bypass(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                xs = [1.5, 2.5, 3.5]
+                return xs[0]
+
+        on = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        off = CppCompiler(arrays=False).compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'std::array<float, 3>' in on
+        assert 'std::array' not in off
+        assert 'std::vector<float>' in off
+
+    def test_never_mode_has_no_arrays(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                xs = [1.0, 2.0, 3.0]
+                return xs[0]
+
+        out = CppCompiler(unbox=UnboxMode.NEVER).compile(
+            f, ctx=fp.FP64, arg_types=[],
+        )
         assert 'std::array' not in out

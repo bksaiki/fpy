@@ -489,7 +489,9 @@ class TestCalleeReturn:
         m = Module()
         m.add(boxes_it, ctx=fp.FP64, arg_types=[R])
         out = ALLOW.compile_module(m)
-        assert 'std::make_shared<std::vector<double>>(make' in out, out
+        # the callee hands back a fixed-size value; boxing it spells the
+        # vector copy first -- `make_shared<vector>(array)` does not exist
+        assert 'std::make_shared<std::vector<double>>(std::vector<double>(' in out, out
         assert boxes_it(3.0, ctx=fp.FP64) == 9
 
 
@@ -649,7 +651,7 @@ class TestListsInsideTuples:
         m = Module()
         m.add(f, ctx=fp.FP64, arg_types=[R])
         _p, ret = cc.signature(f, ctx=fp.FP64, arg_types=[R], module=m)
-        assert ret.format() == 'std::tuple<std::vector<double>, uint8_t>', (
+        assert ret.format() == 'std::tuple<std::array<double, 2>, uint8_t>', (
             ret.format()
         )
 

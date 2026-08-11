@@ -21,6 +21,7 @@ from ...analysis import (
     FormatInfer,
 )
 from ...analysis.alias import AliasAnalysis
+from ...analysis.array_size import ArraySizeAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
@@ -84,6 +85,7 @@ class SpecAnalyses:
     alias: AliasAnalysis
     summary: EscapeSummary
     unbox: UnboxAnalysis | None
+    array_size: ArraySizeAnalysis
 
 
 
@@ -211,6 +213,15 @@ class CppCompiler(Backend):
             list that must keep its handle fails the compile.  Default
             ``STRICT``: a ``std::shared_ptr`` in numerical C++ is surprising
             enough that it has to be asked for.
+        arrays:
+            Compile an unboxed list whose length is statically proven to
+            ``std::array<T, K>`` instead of ``std::vector<T>``.  Purely a
+            representation choice -- same values, same layout -- but it does
+            shape signatures: an entry whose ``arg_types`` carry a
+            ``ListType`` *length* gets an array parameter, and a trusted
+            ``assert len(xs) == K`` becomes a type-level commitment.  Boxed
+            lists never carry a size, so under ``unbox=NEVER`` this has no
+            effect.  Default ``True``.
     """
 
     UnboxMode = UnboxMode
@@ -220,10 +231,11 @@ class CppCompiler(Backend):
     _unsafe_cast_int: bool
     _optimize: bool
     _unbox: _UnboxMode
+    _arrays: bool
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: _UnboxMode = UnboxMode.STRICT,
+        unbox: _UnboxMode = UnboxMode.STRICT, arrays: bool = True,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
@@ -233,6 +245,7 @@ class CppCompiler(Backend):
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
+        self._arrays = arrays
 
     # ------------------------------------------------------------------
     # Translation-unit preamble.  ``compile`` returns a function definition
@@ -404,6 +417,7 @@ class CppCompiler(Backend):
                 is_called=is_called,
                 summary=summary,
                 callees=callee_abis,
+                array_size=array_size if self._arrays else None,
             )
             unbox.strict = self._unbox is UnboxMode.STRICT
             # Rewrite each class's storage in place: the emitter reads a
@@ -438,6 +452,7 @@ class CppCompiler(Backend):
             alias=alias,
             summary=summary,
             unbox=unbox,
+            array_size=array_size,
         )
 
     def signature(
