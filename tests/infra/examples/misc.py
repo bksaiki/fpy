@@ -40,10 +40,10 @@ def instCurrent(
     pi = fp.round(3.14159265359)
     impedance_re = resistance
     impedance_im = fp.round(2) * pi * frequency * inductance
-    denom = impedance_re ** 2+ impedance_im ** 2
+    denom = impedance_re * impedance_re + impedance_im * impedance_im
     current_re = (maxVoltage - impedance_re) / denom
     current_im = (maxVoltage - impedance_im) / denom
-    maxCurrent = fp.sqrt(current_re ** 2 + current_im ** 2)
+    maxCurrent = fp.sqrt(current_re * current_re + current_im * current_im)
     theta = fp.atan(current_im / current_re)
     return maxCurrent * fp.cos(fp.round(2) * pi * frequency * t + theta)
 

@@ -253,3 +253,39 @@ class TestFloatArithmetic(FloatTestCast):
         expect = _cvt_to_fraction(a) * _cvt_to_fraction(b)
         actual = fp.Float.from_float(a) * b
         self.assertEqualOrNan(actual, expect)
+
+    @given(
+        st.floats(allow_nan=False, allow_infinity=False, min_value=-1e6, max_value=1e6),
+        st.integers(min_value=0, max_value=8)
+    )
+    def test_pow(self, a: float, n: int):
+        expect = _cvt_to_fraction(a) ** n
+        actual = fp.Float.from_float(a) ** n
+        self.assertEqualOrNan(actual, expect)
+
+    @pytest.mark.parametrize('a', [
+        math.nan, math.inf, -math.inf, 0.0, -0.0, 2.0, -2.0
+    ])
+    def test_pow_zero_exponent(self, a: float):
+        # x ** 0 is 1 for every base, including Inf and NaN
+        assert fp.Float.from_float(a) ** 0 == 1
+
+    @pytest.mark.parametrize('a, n, isinf, isnan, s', [
+        (math.inf, 2, True, False, False),
+        (math.inf, 3, True, False, False),
+        (-math.inf, 2, True, False, False),
+        (-math.inf, 3, True, False, True),
+        (math.nan, 2, False, True, False),
+    ])
+    def test_pow_nar(self, a: float, n: int, isinf: bool, isnan: bool, s: bool):
+        r = fp.Float.from_float(a) ** n
+        assert r.isinf == isinf and r.isnan == isnan
+        if not isnan:
+            assert r.s == s
+
+    def test_pow_rejects_inexact_exponent(self):
+        x = fp.Float.from_float(2.0)
+        with pytest.raises(ValueError):
+            x ** -1
+        with pytest.raises(TypeError):
+            x ** 0.5

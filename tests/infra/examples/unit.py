@@ -158,6 +158,12 @@ def test_augassign5():
     return x
 
 @fp.fpy
+def test_augassign6():
+    x = 2.0
+    x **= 3.0
+    return x
+
+@fp.fpy
 def test_ife1():
     return False if True else False
 

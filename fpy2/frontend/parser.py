@@ -120,15 +120,21 @@ _fixed_arity_tables: list[tuple[Mapping[Callable, type], int, type]] = [
 ]
 
 # Python binary operators, shared by `_parse_binop` and `_parse_augassign`.
-# `**` is not here: it is handled specially in `_parse_binop` and unsupported
-# as an augmented assignment.
 _binop_table: dict[type[ast.operator], type[BinaryOp]] = {
     ast.Add: Add,
     ast.Sub: Sub,
     ast.Mult: Mul,
     ast.Div: Div,
     ast.Mod: Mod,
+    ast.Pow: Pow,
 }
+
+def _make_binop(cls: type[BinaryOp], lhs: Expr, rhs: Expr, loc: Location) -> Expr:
+    """Construct a `_binop_table` node; operator syntax carries no `func`."""
+    if issubclass(cls, NamedBinaryOp):
+        return cls(None, lhs, rhs, loc)
+    else:
+        return cls(lhs, rhs, loc)
 
 # Python comparison operators.
 _cmpop_table: dict[type[ast.cmpop], CompareOp] = {
@@ -205,18 +211,6 @@ class Parser:
             msg_lines.append(f' in: {ast.unparse(ctx)}')
 
         return FPyParserError('\n'.join(msg_lines))
-
-    def _ipow(self, expr: Expr, n: int, loc: Location):
-        assert n >= 0, "must be a non-negative integer"
-        if n == 0:
-            return Integer(1, loc)
-        elif n == 1:
-            return expr
-        else:
-            e = Mul(expr, expr, loc)
-            for _ in range(2, n):
-                e = Mul(e, expr, loc)
-            return e
 
     def _convert_type(self, ty, loc: Location):
         if ty == Real:
@@ -404,21 +398,12 @@ class Parser:
 
     def _parse_binop(self, e: ast.BinOp):
         loc = self._parse_location(e)
-        # `**` folds into repeated multiplication and only accepts a small
-        # non-negative integer exponent, so it is handled apart from the table.
-        if isinstance(e.op, ast.Pow):
-            base = self._parse_expr(e.left)
-            exp = self._parse_expr(e.right)
-            if not isinstance(exp, Integer) or exp.val < 0:
-                raise self._parse_error('FPy only supports `**` for small integer exponent, use `pow()` instead', e.op, e)
-            return self._ipow(base, exp.val, loc)
-
         cls = _binop_table.get(type(e.op))
         if cls is None:
             raise self._parse_error('Not a valid FPy operator', e.op, e)
         lhs = self._parse_expr(e.left)
         rhs = self._parse_expr(e.right)
-        return cls(lhs, rhs, loc)
+        return _make_binop(cls, lhs, rhs, loc)
 
     def _parse_cmpop(self, op: ast.cmpop, e: ast.Compare):
         result = _cmpop_table.get(type(op))
@@ -697,7 +682,7 @@ class Parser:
             raise self._parse_error('Unsupported operator-assignment in FPy', stmt)
 
         value = self._parse_expr(stmt.value)
-        e: Expr = cls(Var(ident, loc), value, loc)
+        e = _make_binop(cls, Var(ident, loc), value, loc)
         return Assign(ident, None, e, loc)
 
     def _parse_statement(self, stmt: ast.stmt) -> Stmt:

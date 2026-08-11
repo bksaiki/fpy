@@ -27,6 +27,24 @@ def _is_zero(x: EngineArg) -> bool:
 def _signbit(x: EngineArg) -> bool:
     return x.s if isinstance(x, Float) else (x < 0)
 
+def _nonneg_int(x: EngineArg) -> int | None:
+    """The value of `x` as a non-negative `int`, or `None` if it is not one."""
+    match x:
+        case Float():
+            # `is_integer()` is false for Inf and NaN, so `int()` is safe here
+            if not x.is_integer():
+                return None
+        case Fraction():
+            if x.denominator != 1:
+                return None
+        case _:
+            raise RuntimeError("unreachable case")
+    n = int(x)
+    return n if n >= 0 else None
+
+
+_MAX_POW_EXPONENT = 1 << 16
+"""largest exponent `pow` folds: `x ** n` has `n` times the significand of `x`"""
 
 _real_engine_inst = None
 """single instance of Real engine"""
@@ -281,7 +299,31 @@ class RealEngine(Engine):
                     raise RuntimeError("unreachable case")
 
     def pow(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
+        # only exact for a small non-negative integer exponent
+        n = _nonneg_int(y)
+        if n is None or n > _MAX_POW_EXPONENT:
+            return None
+
+        if _is_nan(x) or _is_inf(x):
+            if n == 0:
+                # Inf ** 0 = NaN ** 0 = 1
+                return Float(c=1, ctx=REAL)
+            elif _is_nan(x):
+                # NaN ** n = NaN
+                return Float(isnan=True, ctx=REAL)
+            else:
+                # Inf ** n = Inf
+                s = _signbit(x) and n % 2 == 1
+                return Float(s=s, isinf=True, ctx=REAL)
+        else:
+            # x is finite
+            match x:
+                case Float():
+                    return Float(x=x.as_real() ** n, ctx=REAL)
+                case Fraction():
+                    return x ** n
+                case _:
+                    raise RuntimeError("unreachable case")
 
     def remainder(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         return None
