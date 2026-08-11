@@ -1,9 +1,11 @@
-"""The ``std::array`` surface, ahead of anything that produces it.
+"""The ``std::array`` surface.
 
-Phase 2 of the sized-list feature: `CppList` carries a ``size`` and the
-emitter can construct, rebuild, and convert fixed-size lists -- but no
-analysis stamps a size yet, so every case here drives the machinery with
-hand-built types.  End-to-end coverage arrives with the size decision.
+`TestSizedType` / `TestConstruction` / `TestConversionLattice` drive the
+emitter's fixed-size arms with hand-built types; `TestSizeSpecialization`
+pins size-keyed specs; `TestEndToEnd` runs the size decision through the
+whole pipeline, including the demotions (joins, runtime lengths,
+conditionally-proven sizes) and the two off switches (``arrays=False``,
+``UnboxMode.NEVER``).
 """
 
 import pytest
@@ -19,7 +21,7 @@ from fpy2.backend.cpp.emitter import (
 from fpy2.backend.cpp.types import CppList, CppScalar
 from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.module import Module
-from fpy2.types import RealType
+from fpy2.types import BoolType, ListType, RealType
 
 F64 = CppScalar.F64
 ARR3 = CppList(F64, boxed=False, size=3)
@@ -34,13 +36,13 @@ def _trivial(x: fp.Real) -> fp.Real:
         return x + 1.0
 
 
-def _emitter(mode=UnboxMode.ALLOW):
+def _emitter():
     """``(emitter, at)`` over a trivial function, to drive helpers by hand.
 
     *at* is an arbitrary expression of the analyzed AST -- the helpers only
     read it for an error location.
     """
-    cc = CppCompiler(unbox=mode)
+    cc = CppCompiler(unbox=UnboxMode.ALLOW)
     m = Module()
     m.add(_trivial, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
     a = cc.analyze(cc.specialize(m)[-1])
@@ -222,8 +224,6 @@ class TestSizeSpecialization:
     def test_size_free_specs_are_byte_identical(self):
         """`size_key` must not move a size-free program: same mangled
         names, same code."""
-        from fpy2.types import ListType
-
         @fp.fpy
         def caller(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -240,8 +240,6 @@ class TestSizeSpecialization:
     def test_entries_differing_only_in_length_get_distinct_specs(self):
         """The public key carries lengths too: two `Module.add` entries at
         different lengths must not collapse to the first one's signature."""
-        from fpy2.types import ListType
-
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -287,6 +285,7 @@ class TestEndToEnd:
         )
         assert 'std::array<std::array<double, 3>, 2>' in out
         assert '{};' in out
+        assert 'std::vector' not in out
 
     def test_slice_of_whole_keeps_the_size(self):
         @fp.fpy
@@ -303,8 +302,6 @@ class TestEndToEnd:
         assert 'std::copy(' in out
 
     def test_sized_entry_parameter_from_arg_types(self):
-        from fpy2.types import ListType
-
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -317,8 +314,6 @@ class TestEndToEnd:
         assert 'const std::array<double, 4>& xs' in out
 
     def test_unsized_parameter_stays_a_vector(self):
-        from fpy2.types import ListType
-
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
             with fp.FP64:
@@ -330,8 +325,6 @@ class TestEndToEnd:
         assert 'const std::vector<double>& xs' in out
 
     def test_a_join_of_two_sizes_demotes_to_vector(self):
-        from fpy2.types import BoolType
-
         @fp.fpy
         def f(c: bool, x: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -348,8 +341,6 @@ class TestEndToEnd:
         assert 'std::array' not in out
 
     def test_disagreeing_returns_demote_the_return_type(self):
-        from fpy2.types import BoolType
-
         @fp.fpy
         def f(c: bool, x: fp.Real) -> list[fp.Real]:
             with fp.FP64:
@@ -363,8 +354,6 @@ class TestEndToEnd:
         assert out.startswith('std::vector<double> f(')
 
     def test_agreeing_returns_keep_the_size(self):
-        from fpy2.types import BoolType
-
         @fp.fpy
         def f(c: bool, x: fp.Real) -> list[fp.Real]:
             with fp.FP64:
@@ -392,6 +381,109 @@ class TestEndToEnd:
         )
         assert 'std::vector<' in out
         assert 'std::array' not in out
+
+    def test_a_conditional_zip_does_not_pin_a_parameter(self):
+        """Regression: `zip(xs, [«3 elements»])` under a branch used to pin
+        `len(xs) == 3` globally, compiling the parameter to
+        `std::array<double, 3>` -- a stack overflow (ASan-confirmed) for a
+        caller whose list is longer and whose execution never takes the
+        branch.  The pin holds only where the zip runs.
+        """
+        @fp.fpy
+        def f(xs: list[fp.Real], c: fp.Real) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                if c > 0:
+                    for a, b in zip(xs, [1.0, 2.0, 3.0]):
+                        acc = acc + a * b
+                return acc + xs[0]
+
+        cc = CppCompiler(unbox=UnboxMode.ALLOW)
+        params, _ = cc.signature(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(RealType(fp.FP64)), RealType(fp.FP64)],
+        )
+        assert params[0].format() == 'std::vector<double>'
+
+    def test_an_unconditional_zip_still_pins(self):
+        """The counterweight: reached on every execution, the strict-zip
+        equality is a global fact (a mismatched call is undefined anyway),
+        so the parameter does become an array.  Expression position, since
+        ``ZipElim`` rewrites a for-header zip away before the analysis."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                t = zip(xs, [1.0, 2.0, 3.0])
+                acc = 0.0
+                for i in range(len(t)):
+                    a, b = t[i]
+                    acc = acc + a * b
+                return acc
+
+        cc = CppCompiler(unbox=UnboxMode.ALLOW)
+        params, _ = cc.signature(
+            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
+        )
+        assert params[0].format() == 'std::array<double, 3>'
+
+    def test_mixed_sized_and_runtime_dims(self):
+        """`empty(2, k)`: the outer layer is an array of two *runtime-sized*
+        vectors -- the repeated-fill path, with the dimension bound to a
+        name so it is evaluated once."""
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.INTEGER:
+                k = fp.round(n)
+            m = fp.empty(2, k)
+            with fp.FP64:
+                m[0][0] = 1.5
+                return m[0][0]
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        assert 'std::array<std::vector<' in out
+
+    def test_strict_mode_emits_arrays(self):
+        """STRICT gates handles, not sizes: a fully-unboxable program keeps
+        its arrays under the default mode."""
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                xs = [1.5, 2.5, 3.5]
+                return xs[0]
+
+        out = CppCompiler(unbox=UnboxMode.STRICT).compile(
+            f, ctx=fp.FP64, arg_types=[],
+        )
+        assert 'std::array<float, 3>' in out
+
+    def test_assert_len_pins_a_parameter(self):
+        """The route the `arrays` docstring advertises: a trusted top-level
+        `assert len(xs) == K` becomes a type-level commitment."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                assert len(xs) == 4
+                return xs[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
+        )
+        assert 'const std::array<double, 4>& xs' in out
+
+    def test_flag_off_drops_a_sized_annotation_silently(self):
+        """`arrays=False` compiles a length-annotated parameter as a plain
+        vector -- the length is advisory metadata again, not an error."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return xs[0]
+
+        out = CppCompiler(arrays=False).compile(
+            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64), 4)],
+        )
+        assert 'const std::vector<double>& xs' in out
 
     def test_flag_off_is_a_clean_bypass(self):
         @fp.fpy

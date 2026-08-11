@@ -67,10 +67,11 @@ class CppScalar(enum.Enum):
 
 @default_repr
 class CppList:
-    """An FPy list: a shared ``std::shared_ptr<std::vector<T>>`` handle, or --
-    where :mod:`fpy2.analysis.alias` proves nothing can observe the difference
-    -- a plain ``std::vector<T>``.  See :mod:`.unbox` for when the handle is
-    dropped.
+    """An FPy list: a shared ``std::shared_ptr<std::vector<T>>`` handle;
+    where :mod:`fpy2.analysis.alias` proves nothing can observe the
+    difference, a plain ``std::vector<T>``; and where the length is also
+    proven, a ``std::array<T, K>``.  See :mod:`.unbox` for how both are
+    decided.
 
     The handle exists because an FPy list is a list of *references*: binding
     shares its cells, so two names can hold the same elements and a write
@@ -91,9 +92,10 @@ class CppList:
     ``std::array<double, 4>`` and the C++ compiler would be the first to
     notice.)
 
-    A boxed list never carries a size: the handle exists for sharing, whose
-    cost is dynamic anyway, and one representation per axis keeps the
-    conversion lattice small.  Enforced here, not merely avoided.
+    A boxed list never carries a size: sharing already costs a heap
+    allocation, so a static length buys nothing, and one representation per
+    axis keeps the conversion lattice small.  Enforced here, not merely
+    avoided.
     """
     elt: 'CppType'
     boxed: bool

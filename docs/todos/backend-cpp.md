@@ -13,7 +13,7 @@ Module layout:
 - `ops.py` — per-op tables of supported C++ signatures.
 - `storage.py` — storage-type ladder, format-containment helpers.
 - `storage_infer.py` — per-SSA-def storage assignment via union-find.
-- `unbox.py` — which lists may drop the `fpy::list` handle.
+- `unbox.py` — which lists may drop the `std::shared_ptr` handle.
 - `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
 - `target.py`, `utils.py` — target description, header / helper preamble.
 
@@ -145,8 +145,9 @@ list is automatically instantiated wider, which is the workaround
 `CppCompiler.compile` returns a function definition only, so single-function
 tests can use exact-string equality. Callers wanting a full translation unit
 pull `headers()`, `helpers()`, or `prelude()`. `helpers()` carries the runtime:
-`fpy::list<T>` (a `shared_ptr<vector<T>>`), `fpy::make_list`, and the nary
-`fpy::min` / `fpy::max`. Headers track exactly what the emitted code uses.
+the nary `fpy::min` / `fpy::max`, and nothing else — list code is emitted in
+standard-library spellings (`std::shared_ptr<std::vector<T>>`, `std::array`)
+at the use site. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
@@ -268,7 +269,7 @@ Three things considered and not done:
 ### What stays boxed
 
 A list is a plain `std::vector<T>` wherever `fpy2.analysis.alias` proves nothing
-can observe the difference, and keeps the `fpy::list<T>` handle otherwise. **All
+can observe the difference, and keeps the `std::shared_ptr<std::vector<T>>` handle otherwise. **All
 166 of the corpus's signature list levels come out unboxed**, so both shapes below
 are ones the corpus does not contain — which is why they are written down.
 `test_unbox_profile.py` pins the count *and* the corpus size: an empty result

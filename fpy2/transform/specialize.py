@@ -248,45 +248,48 @@ def _arg_fmts_fingerprint(
 
 
 def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
-    """*b* with every non-concrete size dropped.
+    """*b* with every non-concrete size dropped, and ``None`` when nothing
+    concrete survives at any level.
 
     Size *variables* (``NamedId``) are per-analysis gensyms: letting one
     into a fingerprint would make spec keys and mangled names differ from
-    run to run.  Only ``int`` lengths survive; the shape is kept so nested
-    and tuple-carried lengths line up positionally.
+    run to run.  Only ``int`` lengths survive; the shape is kept (so nested
+    and tuple-carried lengths line up positionally) exactly where a length
+    remains to position.
     """
     match b:
         case ListSize():
-            return ListSize(_sanitize_size(b.elt), concrete_size(b.size))
+            elt, k = _sanitize_size(b.elt), concrete_size(b.size)
+            if elt is None and k is None:
+                return None
+            return ListSize(elt, k)
         case TupleSize():
-            return TupleSize(tuple(_sanitize_size(e) for e in b.elts))
+            elts = tuple(_sanitize_size(e) for e in b.elts)
+            if all(e is None for e in elts):
+                return None
+            return TupleSize(elts)
         case None:
             return None
 
 
 def _type_to_size(t: Type | None) -> ArraySizeBound:
-    """The concrete lengths a user-supplied ``arg_type`` carries, as an
-    :class:`ArraySizeBound` -- the size analog of :func:`_type_to_fmt`, for
-    public keying.  Two entries differing only in length must not collapse
-    to one spec: the length reaches the annotations and, with the cpp
-    backend's arrays, the ABI."""
+    """The concrete lengths a user-supplied ``arg_type`` carries, as a
+    *sanitized* :class:`ArraySizeBound` -- the size analog of
+    :func:`_type_to_fmt`, for public keying.  Two entries differing only in
+    length must not collapse to one spec: the length reaches the annotations
+    and, with the cpp backend's arrays, the ABI."""
     if isinstance(t, TupleType):
-        return TupleSize(tuple(_type_to_size(e) for e in t.elts))
+        elts = tuple(_type_to_size(e) for e in t.elts)
+        if all(e is None for e in elts):
+            return None
+        return TupleSize(elts)
     if isinstance(t, ListType):
+        elt = _type_to_size(t.elt)
         length = t.length if isinstance(t.length, int) else None
-        return ListSize(_type_to_size(t.elt), length)
+        if elt is None and length is None:
+            return None
+        return ListSize(elt, length)
     return None
-
-
-def _has_concrete_size(b: ArraySizeBound) -> bool:
-    """Whether *b* carries an ``int`` length at any level."""
-    match b:
-        case ListSize():
-            return isinstance(b.size, int) or _has_concrete_size(b.elt)
-        case TupleSize():
-            return any(_has_concrete_size(e) for e in b.elts)
-        case None:
-            return False
 
 
 def _arg_sizes_fingerprint(
@@ -295,7 +298,7 @@ def _arg_sizes_fingerprint(
     """A short fingerprint of *sanitized* per-argument sizes.  Returns
     ``''`` when nothing carries a concrete length -- so a size-free program
     produces byte-identical keys and mangled names to a size-blind run."""
-    if arg_sizes is None or not any(_has_concrete_size(s) for s in arg_sizes):
+    if arg_sizes is None or all(s is None for s in arg_sizes):
         return ''
     parts = [repr(s) if s is not None else 'X' for s in arg_sizes]
     return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:8]
@@ -315,7 +318,9 @@ def _mangle_private(
     if arg_fmts_fp:
         parts.append(arg_fmts_fp)
     if arg_sizes_fp:
-        parts.append(arg_sizes_fp)
+        # `s`-tagged so a format fingerprint and a size fingerprint can
+        # never collide into one emitted name across the two domains.
+        parts.append(f's{arg_sizes_fp}')
     return '__'.join(parts)
 
 

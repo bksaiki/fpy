@@ -9,13 +9,16 @@ through a nested-literal miscompile, a return-join type disagreement, a
 reference did not have.  Each was found by hand-writing a shape, which is the
 thing to automate.
 
-Two axes:
+Three axes:
 
 - **Shape** -- hand-enumerated below, because a failure has to be readable.
   Adding one is a single function plus an entry in ``SHAPES``.
 - **Format** -- generated.  This is where the corpus has nothing, and it is also
   the cheap axis: a program's formats come entirely from ``arg_types``, so
   one source function yields four programs.
+- **Length** -- generated; see ``LENGTHS``.  A concrete length turns a
+  parameter into ``std::array`` and collides with in-body literals' own
+  sizes at joins.
 
 The assertion is deliberately weak on purpose: a program may legitimately be
 *refused* (``CppEmitError``) -- a shared list cannot change element type, and
@@ -262,7 +265,7 @@ SHAPES = [
 
 FORMATS = [fp.FP32, fp.FP64]
 
-# The size axis: a `None` length is today's vector world; a concrete length
+# The size axis: a `None` length is the unsized world; a concrete length
 # makes the parameter a `std::array` and collides with the in-body literals'
 # own sizes at joins — `1` agrees with the `[y]` arm (sized results appear),
 # `2` disagrees (the join must demote).  Only list-taking signatures vary;

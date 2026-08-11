@@ -21,7 +21,7 @@ ever holds has one length, the value becomes ``std::array<T, K>``
 (:func:`_region_sizes` builds the per-region table; the meet poisons on any
 doubt).  Sizes are region-keyed and stamped in the same traversal as
 boxedness, so the two axes cannot disagree, and a boxed level never carries a
-size -- the handle exists for sharing, whose cost is dynamic anyway.  Sizes
+size (see :class:`.types.CppList`, which enforces it).  Sizes
 cross call edges by *specialization*
 (:class:`~fpy2.transform.specialize.Specialize` keys specs on argument
 lengths), not by conversion, so both ends of a call agree by construction.
@@ -166,9 +166,10 @@ class UnboxAnalysis:
 
     ``int`` means every value the region ever holds has that length, so its
     unboxed storage may be ``std::array``; ``None`` or absent means unknown.
-    Region-keyed like ``boxed``: a region is one runtime object per list
-    level, and FPy lists never change length after construction, so one size
-    per region is as coherent as one boxedness.
+    Region-keyed like ``boxed``: the region is where storage is decided, and
+    FPy lists never change length after construction, so a region whose
+    every contributor agrees on one length genuinely has one --
+    :func:`_region_sizes`' meet poisons the rest.
     """
 
     def may_reference_projection(self, d: Definition) -> bool:
@@ -310,8 +311,9 @@ class Unbox:
 
         *array_size* enables fixed-length storage: an unboxed level whose
         region has one proven length becomes ``std::array``.  ``None`` --
-        the compiler's ``arrays=False``, or :class:`UnboxMode.NEVER`, which
-        never gets here -- stamps no sizes, so no sized type can exist.
+        the compiler's ``arrays=False`` -- stamps no sizes, so no sized type
+        can exist.  (Under :class:`UnboxMode.NEVER` this function is not
+        called at all.)
         """
         out = UnboxAnalysis(alias)
         if array_size is not None:
@@ -436,10 +438,8 @@ def _region_sizes(
     analysis answered ``None`` for, a symbolic size (a per-run variable,
     never a length ``std::array`` can spell), or two differing lengths all
     force ``None``.  Contributions walk each bound structurally against the
-    region graph, mirroring :meth:`UnboxAnalysis._stamp`'s traversal --
-    ``ListSize`` descends ``region_at``, ``TupleSize`` descends
-    ``region_field`` -- so the table is keyed exactly where ``_stamp``
-    reads it.
+    region graph, mirroring :meth:`UnboxAnalysis._stamp`'s traversal, so the
+    table is keyed exactly where ``_stamp`` reads it.
     """
     sizes: dict[Region, int | None] = {}
 

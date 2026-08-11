@@ -420,6 +420,16 @@ def _cpp_type(ty) -> str:
             raise ValueError(f'no C++ type for: {ty.format()}')
 
 
+def _boxed_list_literal(elt: str, elts: str) -> str:
+    """The boxed-list literal idiom, matching the emitter's spelling:
+    `make_shared` cannot deduce a braced init-list, so the inner vector is
+    spelled and moved in."""
+    return (
+        f'std::make_shared<std::vector<{elt}>>'
+        f'(std::vector<{elt}>{{{elts}}})'
+    )
+
+
 def _cpp_value(value, cty) -> str:
     """C++ initializer for *value* at emitted storage type *cty*.
 
@@ -432,18 +442,16 @@ def _cpp_value(value, cty) -> str:
         case CppList():
             elts = ', '.join(_cpp_value(v, cty.elt) for v in value)
             if cty.boxed:
-                elt = cty.elt.format()
-                return (
-                    f'std::make_shared<std::vector<{elt}>>'
-                    f'(std::vector<{elt}>{{{elts}}})'
-                )
+                return _boxed_list_literal(cty.elt.format(), elts)
             if cty.size is not None:
                 # a fixed-size list: the driver's value must match the
                 # length the signature promised
                 assert len(value) == cty.size, (
                     f'driver value of length {len(value)} for {cty.format()}'
                 )
-                return f'{cty.format()}{{{{{elts}}}}}' if elts else f'{cty.format()}{{}}'
+                if not elts:
+                    return f'{cty.format()}{{}}'
+                return f'{cty.format()}{{{{{elts}}}}}'
             return f'{cty.format()}{{{elts}}}'
         case CppTuple():
             elts = ', '.join(
@@ -501,11 +509,7 @@ def _cpp_literal(value, ty) -> str:
             return 'true' if value else 'false'
         case fp.types.ListType():
             elts = ', '.join(_cpp_literal(v, ty.elt) for v in value)
-            t = _cpp_type(ty.elt)
-            return (
-                f'std::make_shared<std::vector<{t}>>'
-                f'(std::vector<{t}>{{{elts}}})'
-            )
+            return _boxed_list_literal(_cpp_type(ty.elt), elts)
         case fp.types.TupleType():
             elts = ', '.join(_cpp_literal(v, e) for v, e in zip(value, ty.elts))
             return f'std::make_tuple({elts})'

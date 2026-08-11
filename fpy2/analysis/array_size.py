@@ -432,20 +432,32 @@ class _ArraySizeInferInstance(DefaultVisitor):
                              if isinstance((r := _repr_size(s, self.uf)), int)}
                 symbols = [s for s in sizes if isinstance(s, NamedId)]
 
+                # Only an *unconditional* zip may constrain its inputs'
+                # sizes globally (cf. ``_visit_assert``): on an execution
+                # that never reaches it, the inputs' lengths owe it
+                # nothing, and a false global pin becomes a wrong
+                # ``std::array`` length in the cpp backend.  The zip's own
+                # result keeps the joined size either way -- the result
+                # only exists on executions where the zip ran.
                 if any(s is None for s in sizes):
                     size: ArraySize = None
                 elif concretes:
                     # all inputs must equal the concrete length(s)
                     size = next(iter(concretes)) if len(concretes) == 1 else None
-                    if size is not None:
+                    if size is not None and self._cond_depth == 0:
                         for s in symbols:
                             self._pin_size(s, size)
-                else:
+                elif self._cond_depth == 0:
                     # all symbolic: strict zip proves them equal
                     rep = symbols[0]
                     for s in symbols[1:]:
                         self._merge_sizes(rep, s)
                     size = self.uf.find(rep)
+                else:
+                    # conditionally executed: equal where the zip runs, so
+                    # the result matches its first input there, but no
+                    # global merge.
+                    size = self.uf.find(symbols[0])
 
                 return ListSize(TupleSize(tuple(elt_tys)), size)
 
@@ -493,7 +505,10 @@ class _ArraySizeInferInstance(DefaultVisitor):
             assert isinstance(ty, ListSize)
             self._visit_binding(e, target, ty.elt)
             iter_tys.append(ty)
-        elt_ty = self._visit_expr(e.elt, ctx)
+        # The element expression runs zero times over an empty iterable, so
+        # it is conditional for the same reason a branch body is.
+        with self._branch():
+            elt_ty = self._visit_expr(e.elt, ctx)
 
         # One iterable: same length (propagates a symbolic size, so
         # ``[f(x) for x in xs]`` stays length-linked to ``xs``).
@@ -651,8 +666,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
     def _visit_if_expr(self, e: IfExpr, ctx: None):
         self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, ctx)
-        iff = self._visit_expr(e.iff, ctx)
+        # Each arm executes conditionally -- a strict ``zip`` inside one
+        # must not pin sizes globally.
+        with self._branch():
+            ift = self._visit_expr(e.ift, ctx)
+            iff = self._visit_expr(e.iff, ctx)
         return self._unify(ift, iff)
 
     def _visit_call(self, e: Call, ctx: None):

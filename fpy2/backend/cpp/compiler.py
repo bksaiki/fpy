@@ -21,7 +21,6 @@ from ...analysis import (
     FormatInfer,
 )
 from ...analysis.alias import AliasAnalysis
-from ...analysis.array_size import ArraySizeAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
@@ -85,7 +84,6 @@ class SpecAnalyses:
     alias: AliasAnalysis
     summary: EscapeSummary
     unbox: UnboxAnalysis | None
-    array_size: ArraySizeAnalysis
 
 
 
@@ -216,8 +214,8 @@ class CppCompiler(Backend):
         arrays:
             Compile an unboxed list whose length is statically proven to
             ``std::array<T, K>`` instead of ``std::vector<T>``.  Purely a
-            representation choice -- same values, same layout -- but it does
-            shape signatures: an entry whose ``arg_types`` carry a
+            representation choice -- same values, same element order -- but
+            it does shape signatures: an entry whose ``arg_types`` carry a
             ``ListType`` *length* gets an array parameter, and a trusted
             ``assert len(xs) == K`` becomes a type-level commitment.  Boxed
             lists never carry a size, so under ``unbox=NEVER`` this has no
@@ -455,7 +453,6 @@ class CppCompiler(Backend):
             alias=alias,
             summary=summary,
             unbox=unbox,
-            array_size=array_size,
         )
 
     def signature(
