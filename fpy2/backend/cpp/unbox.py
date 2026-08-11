@@ -15,6 +15,17 @@ reader.  That works because :mod:`.storage_infer` coalesces on exactly the edges
 region per level -- :func:`_regions` asserts this rather than taking a
 conjunction that would silently paper over a violation.
 
+A dropped handle can go one step further: where
+:class:`~fpy2.analysis.array_size.ArraySizeInfer` proves every value a region
+ever holds has one length, the value becomes ``std::array<T, K>``
+(:func:`_region_sizes` builds the per-region table; the meet poisons on any
+doubt).  Sizes are region-keyed and stamped in the same traversal as
+boxedness, so the two axes cannot disagree, and a boxed level never carries a
+size -- the handle exists for sharing, whose cost is dynamic anyway.  Sizes
+cross call edges by *specialization*
+(:class:`~fpy2.transform.specialize.Specialize` keys specs on argument
+lengths), not by conversion, so both ends of a call agree by construction.
+
 A signature's representation is part of its contract, so a function that
 compiled code calls keeps its handles on *both* sides.  Measured: 5 of the 50
 corpus functions with a list parameter.  The kernels worth unboxing are entry
@@ -88,7 +99,9 @@ class UnboxMode(enum.Enum):
     """How aggressively the compiler drops the shared-``shared_ptr`` handle.
 
     - ``NEVER``: every list keeps its handle -- correct, but slower at a
-      native boundary.
+      native boundary.  A fixed-size list is a refinement of the *value*
+      representation, so ``NEVER`` also means no ``std::array`` anywhere,
+      whatever the compiler's ``arrays`` flag says.
     - ``ALLOW``: drop the handle where the alias analysis proves nothing
       observes the difference; keep it everywhere else.
     - ``STRICT``: like ``ALLOW``, but a list that must keep its handle is a

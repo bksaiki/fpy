@@ -277,7 +277,9 @@ def test_a_joined_place_has_one_element_type(func, arg_types, unbox):
     # the function alone; the runtime helpers are templates and would
     # contribute a `T`.
     body = CppCompiler(unbox=unbox).compile_module(m)
-    elts = re.findall(r'std::vector<(\w+)>', body)
+    # both spellings of an unboxed list: `std::vector<T>` and
+    # `std::array<T, K>`; the boxed handle contains the vector form
+    elts = re.findall(r'std::(?:vector|array)<(\w+)[,>]', body)
     assert len(set(elts)) == 1, body
 
 

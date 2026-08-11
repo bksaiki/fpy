@@ -5,7 +5,10 @@ precise for compile-time constants and throws away everything about runtime size
 that are *statically constrained to be equal* — `ys = xs` makes `len(ys) ==
 len(xs)`, and the old lattice recorded `None`. It now tracks those equalities.
 
-What remains is **consumer integration**: nothing reads them yet.
+Consumer integration has begun: the C++ backend reads *concrete* sizes — a
+proven-length unboxed list compiles to `std::array<T, K>` (`backend/cpp/unbox.py`
+`_region_sizes`), and `Specialize` keys specs on argument lengths so sizes cross
+call edges. The *equalities* (symbolic `NamedId` sizes) still have no consumer.
 
 ## The API a consumer needs
 
@@ -35,7 +38,10 @@ Two departures not to re-propose:
 
 ## Remaining work: nothing consumes the equalities
 
-`format_infer` ignores non-`int` sizes, which is a safe no-op.
+`format_infer` ignores non-`int` sizes, which is a safe no-op, and the C++
+backend's array selection deliberately drops them too (a symbolic size is a
+per-run gensym — it can neither name a `std::array<T, N>` without templates
+nor enter a specialization fingerprint deterministically).
 
 - **Bounds-check elimination** — the flagship payoff. Discharge `ys[i]` when
   `is_size_eq` proves `len(ys) == len(xs)` and `i < len(xs)`. Three equality

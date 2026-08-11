@@ -437,6 +437,13 @@ def _cpp_value(value, cty) -> str:
                     f'std::make_shared<std::vector<{elt}>>'
                     f'(std::vector<{elt}>{{{elts}}})'
                 )
+            if cty.size is not None:
+                # a fixed-size list: the driver's value must match the
+                # length the signature promised
+                assert len(value) == cty.size, (
+                    f'driver value of length {len(value)} for {cty.format()}'
+                )
+                return f'{cty.format()}{{{{{elts}}}}}' if elts else f'{cty.format()}{{}}'
             return f'{cty.format()}{{{elts}}}'
         case CppTuple():
             elts = ', '.join(
@@ -955,6 +962,22 @@ copy_in(const std::vector<std::vector<T>>& vs) {
     return out;
 }
 
+// Fixed-size interop: a kernel with a proven length takes `std::array`.
+// `K` is spelled at the call site (`fpy::copy_in_sized<3>(v)`); the length
+// check is the caller's obligation made explicit.
+template <std::size_t K, typename T>
+inline std::array<T, K> copy_in_sized(const std::vector<T>& v) {
+    assert(v.size() == K);
+    std::array<T, K> out{};
+    std::copy(v.begin(), v.end(), out.begin());
+    return out;
+}
+
+template <typename T, std::size_t K>
+inline std::vector<T> copy_out(const std::array<T, K>& xs) {
+    return std::vector<T>(xs.begin(), xs.end());
+}
+
 template <typename T>
 inline std::vector<T> copy_out(const std::shared_ptr<std::vector<T>>& xs) {
     return *xs;
@@ -1444,6 +1467,88 @@ int main() {
     assert(m[0][0] == 99.0);
 
     std::printf("abi native OK\\n");
+    return 0;
+}
+"""
+
+
+@fp.fpy
+def _abi_sized_dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    with fp.FP64:
+        acc = 0.0
+        for i in range(len(xs)):
+            acc = acc + xs[i] * ys[i]
+        return acc
+
+
+@fp.fpy
+def _abi_sized_scaled(xs: list[fp.Real], k: fp.Real) -> list[fp.Real]:
+    with fp.FP64:
+        return [k * x for x in xs]
+
+
+def _test_abi_sized(
+    output_dir: Path, mode: str = 'compile',
+) -> list[tuple[str, str, str]]:
+    """The fixed-size boundary: ``arg_types`` carrying a length compile to
+    ``std::array`` parameters, and a caller holding vectors converts with
+    ``copy_in_sized`` / reads a fresh array result back with ``copy_out``.
+    """
+    group = 'abi'
+    compiler = fp.CppCompiler()
+    cpp_path = output_dir / 'abi_sized.cpp'
+    print(f'Compiling sized ABI test to `{cpp_path}`')
+    sized = fp.types.ListType(fp.types.RealType(fp.FP64), 3)
+    real = fp.types.RealType(fp.FP64)
+    module = fp.Module()
+    module.add(_abi_sized_dot, ctx=fp.FP64, arg_types=[sized, sized])
+    module.add(_abi_sized_scaled, ctx=fp.FP64, arg_types=[sized, real])
+
+    # the claim under test, checked rather than assumed
+    params, _ = compiler.signature(
+        _abi_sized_dot, ctx=fp.FP64, arg_types=[sized, sized], module=module,
+    )
+    got = params[0].format()
+    if got != 'std::array<double, 3>':
+        return [(
+            group, 'abi_sized',
+            f'_abi_sized_dot did not take an array: `{got}`',
+        )]
+
+    with open(cpp_path, 'w') as f:
+        print('\n'.join(compiler.headers()), file=f)
+        print('#include <cstdio>', file=f)
+        print(compiler.helpers(), file=f)
+        print(CPP_INTEROP, file=f)
+        print(compiler.compile_module(module), file=f)
+        print(_ABI_SIZED_MAIN, file=f)
+
+    if mode == 'emit':
+        return []
+    if _CXX is None:
+        print('  SKIPPED (no C++ compiler driver)')
+        return []
+
+    return _build_and_run_driver(cpp_path, group, 'abi_sized')
+
+
+_ABI_SIZED_MAIN: str = """\
+int main() {
+    // A caller holding vectors converts at the boundary, length checked.
+    std::vector<double> v{1.0, 2.0, 3.0};
+    std::array<double, 3> a = fpy::copy_in_sized<3>(v);
+    std::array<double, 3> b{{2.0, 2.0, 2.0}};
+
+    assert(_abi_sized_dot(a, b) == 12.0);
+
+    // ...or passes its own array directly -- no conversion at all.
+    assert(_abi_sized_dot(b, b) == 12.0);
+
+    // a fresh fixed-size result reads back into a vector
+    std::vector<double> out = fpy::copy_out(_abi_sized_scaled(a, 10.0));
+    assert(out.size() == 3 && out[0] == 10.0 && out[2] == 30.0);
+
+    std::printf("abi sized OK\\n");
     return 0;
 }
 """
@@ -2278,6 +2383,7 @@ def test_compile_cpp(delete: bool = True, mode: str = 'compile'):
     failures += _test_runtime(output_dir, mode=mode)
     failures += _test_abi(output_dir, mode=mode)
     failures += _test_abi_native(output_dir, mode=mode)
+    failures += _test_abi_sized(output_dir, mode=mode)
     failures += _test_fenv(output_dir, mode=mode)
     failures += _test_unit(output_dir, mode=mode, cov=cov)
     failures += _test_libraries(output_dir, mode=mode)

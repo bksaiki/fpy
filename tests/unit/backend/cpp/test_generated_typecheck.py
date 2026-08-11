@@ -262,31 +262,49 @@ SHAPES = [
 
 FORMATS = [fp.FP32, fp.FP64]
 
+# The size axis: a `None` length is today's vector world; a concrete length
+# makes the parameter a `std::array` and collides with the in-body literals'
+# own sizes at joins — `1` agrees with the `[y]` arm (sized results appear),
+# `2` disagrees (the join must demote).  Only list-taking signatures vary;
+# a scalar shape would repeat byte-identically.
+LENGTHS = [None, 1, 2]
 
-def _arg_types(sig: str, elt_fmt, y_fmt):
-    """*sig*'s parameters, at the given formats."""
+
+def _arg_types(sig: str, elt_fmt, y_fmt, length=None):
+    """*sig*'s parameters, at the given formats and list length."""
     scalars = [RealType(fp.FP64), RealType(y_fmt)]      # c, y
     match sig:
         case 'scalars':
             return scalars
         case 'flat':
-            return [ListType(RealType(elt_fmt)), *scalars]
+            return [ListType(RealType(elt_fmt), length), *scalars]
         case 'nested':
-            return [ListType(ListType(RealType(elt_fmt))), *scalars]
+            return [
+                ListType(ListType(RealType(elt_fmt), length), length),
+                *scalars,
+            ]
     raise AssertionError(sig)
 
 
 def _matrix():
-    """Every (shape, element format, scalar format) combination.
+    """Every (shape, element format, scalar format, length) combination.
 
     No outer-context axis: every shape pins its context with ``with fp.FP64:``,
     so varying it produced byte-identical programs and only doubled the count.
     """
     for func, sig in SHAPES:
+        lengths = LENGTHS if sig != SCALARS else [None]
         for elt_fmt in FORMATS:
             for y_fmt in FORMATS:
-                label = f'{func.name}__{elt_fmt.nbits}_{y_fmt.nbits}'
-                yield label, func, _arg_types(sig, elt_fmt, y_fmt)
+                for length in lengths:
+                    label = (
+                        f'{func.name}__{elt_fmt.nbits}_{y_fmt.nbits}'
+                        f'_L{length}'
+                    )
+                    yield (
+                        label, func,
+                        _arg_types(sig, elt_fmt, y_fmt, length),
+                    )
 
 
 @pytest.fixture(scope='module')
