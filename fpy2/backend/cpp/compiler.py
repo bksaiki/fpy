@@ -194,6 +194,11 @@ class CppCompiler(Backend):
 
     Runs the pre-analyses, assigns each SSA def a C++ variable, then emits.
 
+    Emitted code has one precondition on its callers: enter a kernel with the
+    ``fesetround`` mode its top-level context names, or ``FE_TONEAREST`` when it
+    names none (``REAL``, an integer context, or no annotation).  A kernel sets
+    no mode at entry and restores what it found before returning.
+
     Args:
         unsafe_cast_int:
             Allow rounded arithmetic under an unbounded-integer context by

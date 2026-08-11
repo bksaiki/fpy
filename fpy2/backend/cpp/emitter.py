@@ -826,11 +826,9 @@ class CppEmitter(Visitor):
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        # `_current_rm` is the mode the live fenv is guaranteed to hold.  For a
-        # concrete FP function-level scope the FPy contract says the caller
-        # delivers it, so no entry `fesetround` is needed; symbolic, integer and
-        # unsupported scopes leave it None, forcing nested contexts to set the
-        # mode unconditionally.
+        # `_current_rm` is the mode the live fenv is guaranteed to hold on entry,
+        # which the caller delivers -- see `_entry_rm` for what it is and when it
+        # is unknown.  Either way no entry `fesetround` is emitted.
         self._current_rm = self._entry_rm(func)
         func_ctx = self._resolve_used_ctx(func)
         # REAL sets no fenv mode; its ops succeed only via `_try_widen`, whose
@@ -1290,16 +1288,25 @@ class CppEmitter(Visitor):
     def _entry_rm(self, site: ContextScopeSite) -> RM | None:
         """The rounding mode the caller contractually delivers at *site*.
 
-        The scope's RM for a concrete, ``fesetround``-supported FP context, since the
-        FPy annotation pins that responsibility on the caller; ``None`` for symbolic,
-        integer or unsupported ones, where a nested context must set the mode itself.
+        The scope's own RM for a concrete, ``fesetround``-supported FP context --
+        the FPy annotation pins that on the caller.  A scope naming no FP mode
+        (absent, ``REAL``, integer) falls back to ``RNE``: it is the same caller
+        either way, so a ``REAL``-topped kernel has no reason to assume less than
+        an ``FP64``-topped one, and a nested RNE ``with`` stays a no-op instead of
+        a save/set/restore per execution.
+
+        ``None`` is for the cases with no answer -- a context nothing resolved, an
+        RM ``fesetround`` cannot express -- where a nested ``with`` must set the
+        mode unconditionally.
         """
         scope = self._scope_by_site.get(site)
         if scope is None:
-            return None
+            return RM.RNE
         resolved = self._resolve_scope_ctx(scope)
-        if not isinstance(resolved, EFloatContext):
+        if resolved is None:
             return None
+        if not isinstance(resolved, EFloatContext):
+            return RM.RNE
         if resolved.rm not in _FE_RM_MACRO:
             return None
         return resolved.rm

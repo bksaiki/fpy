@@ -103,10 +103,14 @@ When a scope is used:
 - The context must be concrete; a symbolic context variable is rejected at its
   introduction site.
 - **Float contexts** need an `fesetround`-supported mode (RNE / RTZ / RTP / RTN).
-  `_current_rm` tracks the mode the live `fenv` is guaranteed to hold, seeded at
-  entry from the function-level scope (`None` = unknown, so a nested concrete
-  `with` must emit `fesetround` unconditionally). A matching mode makes the
-  `with` a C++-level no-op.
+  `_current_rm` tracks the mode the live `fenv` is guaranteed to hold, and a
+  matching mode makes a `with` a C++-level no-op. It is seeded from the
+  function-level scope, which is a **precondition on the caller**: an emitted
+  kernel is entered with the RM its top-level annotation names, or with
+  `FE_TONEAREST` when that annotation names no FP mode (absent, `REAL`, or
+  integer). Either way no entry `fesetround` is emitted. `None` = unknown — a
+  context nothing resolved, or an RM `fesetround` cannot express — is the one
+  case where a nested concrete `with` must set the mode unconditionally.
 - **Integer contexts** must use RTZ — that is what C++ integer truncation does.
 
 `Round` / `Cast`:

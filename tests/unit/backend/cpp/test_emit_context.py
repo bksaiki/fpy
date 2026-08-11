@@ -118,6 +118,57 @@ class TestDefaultRmIsImplicit:
         )
         assert 'fesetround' not in out
 
+    def test_a_real_function_scope_still_delivers_rne(self):
+        """A ``REAL``-topped kernel assumes RNE on entry like any other.
+
+        Assuming less bought a save/set/restore pair per nested ``with``, per
+        execution, for a mode that was already live.
+        """
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = x + 1.0
+            with fp.FP64:
+                b = a + 1.0
+            return b
+
+        out = CppCompiler(optimize=False).compile(
+            f, arg_types=[RealType(fp.FP32)],
+        )
+        assert 'fesetround' not in out, out
+
+    def test_an_integer_function_scope_still_delivers_rne(self):
+        """Same for an integer top-level scope: integer arithmetic never
+        consults ``fenv``, so it says nothing about the live mode either."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x + 1.0
+            return y
+
+        out = CppCompiler(unsafe_cast_int=True, optimize=False).compile(
+            f, arg_types=[RealType(fp.FP64)],
+        )
+        assert 'fesetround' not in out, out
+
+    def test_a_real_function_scope_still_sets_a_different_mode(self):
+        """The counterweight: assuming RNE on entry must not swallow a nested
+        scope that genuinely changes the mode."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with _RTZ_64:
+                y = x + 1.0
+            return y
+
+        out = CppCompiler(optimize=False).compile(
+            f, arg_types=[RealType(fp.FP64)],
+        )
+        assert out.count('std::fegetround()') == 1, out
+        assert 'std::fesetround(FE_TOWARDZERO)' in out, out
+
     def test_integer_context_no_fesetround(self):
         """``with INTEGER:`` doesn't emit fesetround — integer
         arithmetic doesn't consult ``fenv``.  Requires
