@@ -3,11 +3,11 @@ cpp backend: which lists may drop the handle.
 
 An FPy list is a core list of *references* -- one cell per element -- so two
 names can hold the same cells and a write through either is visible to both.
-A shared handle -- ``std::shared_ptr<std::vector<T>>`` -- is how that
-identity survives compilation.
-Where :mod:`fpy2.analysis.alias` proves nothing else can observe the cells, the
-indirection buys nothing and the list becomes a plain ``std::vector<T>``: no
-allocation, no refcount, and a type a native caller already holds.
+A shared handle -- ``std::shared_ptr<std::vector<T>>`` -- is how that identity
+survives compilation.  Where :mod:`fpy2.analysis.alias` proves nothing else can
+observe the cells, the indirection buys nothing and the list becomes a plain
+``std::vector<T>``: no allocation, no refcount, and a type a native caller
+already holds.
 
 Decided per **alias region**, the only unit at which one answer satisfies every
 reader.  That works because :mod:`.storage_infer` coalesces on exactly the edges
@@ -18,11 +18,9 @@ conjunction that would silently paper over a violation.
 A dropped handle can go one step further: where
 :class:`~fpy2.analysis.array_size.ArraySizeInfer` proves every value a region
 ever holds has one length, the value becomes ``std::array<T, K>``
-(:func:`_region_sizes` builds the per-region table; the meet poisons on any
-doubt).  Sizes are region-keyed and stamped in the same traversal as
-boxedness, so the two axes cannot disagree, and a boxed level never carries a
-size (see :class:`.types.CppList`, which enforces it).  Sizes
-cross call edges by *specialization*
+(:func:`_region_sizes` builds the table, poisoning on any doubt).  Sizes are
+region-keyed and stamped in the same traversal as boxedness, so the two axes
+cannot disagree.  They cross call edges by *specialization*
 (:class:`~fpy2.transform.specialize.Specialize` keys specs on argument
 lengths), not by conversion, so both ends of a call agree by construction.
 
@@ -96,12 +94,12 @@ from .types import CppList, CppTuple, CppType
 
 @enum_repr
 class UnboxMode(enum.Enum):
-    """How aggressively the compiler drops the shared-``shared_ptr`` handle.
+    """How aggressively the compiler drops the ``std::shared_ptr`` handle.
 
     - ``NEVER``: every list keeps its handle -- correct, but slower at a
-      native boundary.  A fixed-size list is a refinement of the *value*
-      representation, so ``NEVER`` also means no ``std::array`` anywhere,
-      whatever the compiler's ``arrays`` flag says.
+      native boundary.  A fixed length refines the *value* representation, so
+      ``NEVER`` also means no ``std::array`` anywhere, whatever the compiler's
+      ``arrays`` flag says.
     - ``ALLOW``: drop the handle where the alias analysis proves nothing
       observes the difference; keep it everywhere else.
     - ``STRICT``: like ``ALLOW``, but a list that must keep its handle is a
@@ -166,10 +164,9 @@ class UnboxAnalysis:
 
     ``int`` means every value the region ever holds has that length, so its
     unboxed storage may be ``std::array``; ``None`` or absent means unknown.
-    Region-keyed like ``boxed``: the region is where storage is decided, and
-    FPy lists never change length after construction, so a region whose
-    every contributor agrees on one length genuinely has one --
-    :func:`_region_sizes`' meet poisons the rest.
+    Region-keyed like ``boxed``, and sound for the same reason: FPy lists never
+    change length after construction, so a region whose every contributor
+    agrees on one length genuinely has one.
     """
 
     def may_reference_projection(self, d: Definition) -> bool:
@@ -186,11 +183,10 @@ class UnboxAnalysis:
 
         **E-App** keeps no store of its own, so a callee's ``xs[i] = e`` writes
         the caller's cells -- and a ``const`` reference to the handle permits
-        exactly that,
-        since ``const`` qualifies the handle and not the cells.  An unboxed list has no
-        such indirection, so ``const`` reaches its elements -- and through a value
-        container, so a write to a row needs the whole thing non-const.  A boxed
-        level stops that.
+        exactly that, since ``const`` qualifies the handle and not the cells.  An
+        unboxed list has no such indirection, so ``const`` reaches its elements
+        -- and through a value container, so a write to a row needs the whole
+        thing non-const.  A boxed level stops that.
         """
         depth = 0
         while isinstance(ty, CppList) and not ty.boxed:
@@ -216,10 +212,9 @@ class UnboxAnalysis:
         ty = self._stamp(ty, at, 0)
         if self.strict and contains_boxed(ty):
             raise StrictUnboxError(
-                'an expression must keep a shared handle (a shared '
-                'temporary, or a list level the alias analysis did not '
-                'track); use unbox=CppCompiler.UnboxMode.ALLOW to permit '
-                'handles'
+                'an expression must keep its handle (a shared temporary, or a '
+                'list level the alias analysis did not track); use '
+                'unbox=CppCompiler.UnboxMode.ALLOW to permit handles'
             )
         return ty
 
@@ -266,16 +261,12 @@ class UnboxAnalysis:
     def _size_of(self, regions: set[Region]) -> int | None:
         """The one length every region in *regions* agrees on, if any.
 
-        The polarity is the reverse of boxedness: no region means no
-        evidence, so no size; several regions (only the return group
-        produces this) must be unanimous.
+        Reverse polarity from boxedness: no region is no evidence, hence no
+        size, and several regions (only the return group has them) must be
+        unanimous.
         """
-        if not regions:
-            return None
         sizes = {self.sizes.get(r) for r in regions}
-        if len(sizes) == 1:
-            return sizes.pop()
-        return None
+        return sizes.pop() if len(sizes) == 1 else None
 
     def _reason(self, regions: set[Region]) -> str:
         """Why a level kept its handle."""
@@ -309,11 +300,9 @@ class Unbox:
         *callees* carries the emitted signatures, so an argument and a result get
         the representation each declares.
 
-        *array_size* enables fixed-length storage: an unboxed level whose
-        region has one proven length becomes ``std::array``.  ``None`` --
-        the compiler's ``arrays=False`` -- stamps no sizes, so no sized type
-        can exist.  (Under :class:`UnboxMode.NEVER` this function is not
-        called at all.)
+        *array_size* enables fixed-length storage: an unboxed level whose region
+        has one proven length becomes ``std::array``.  ``None`` -- the
+        compiler's ``arrays=False`` -- stamps no sizes at all.
         """
         out = UnboxAnalysis(alias)
         if array_size is not None:
@@ -421,10 +410,10 @@ _ALLOC_EXPRS = (
 )
 """Expression forms that produce a list of their own.
 
-These seed :func:`_region_sizes` in addition to the defs: a returned literal
-has a region but no def, and only its ``by_expr`` bound can size it.  Plain
-reads (``Var``, ``ListRef``) mirror what a def already contributed, and a
-lossy read-side bound must not poison a region a definition proved.
+These seed :func:`_region_sizes` in addition to the defs: a returned literal has
+a region but no def, and only its ``by_expr`` bound can size it.  Plain reads
+(``Var``, ``ListRef``) are left out -- they only mirror what a def contributed,
+and a lossy read-side bound must not poison a region a definition proved.
 """
 
 
@@ -433,13 +422,13 @@ def _region_sizes(
 ) -> dict[Region, int | None]:
     """One proven length per region, by meeting every contribution.
 
-    A region's storage must hold every value it is ever bound to, so the
-    meet poisons on any doubt: a def with no bound, a level the size
-    analysis answered ``None`` for, a symbolic size (a per-run variable,
-    never a length ``std::array`` can spell), or two differing lengths all
-    force ``None``.  Contributions walk each bound structurally against the
-    region graph, mirroring :meth:`UnboxAnalysis._stamp`'s traversal, so the
-    table is keyed exactly where ``_stamp`` reads it.
+    A region's storage must hold every value it is ever bound to, so the meet
+    poisons on any doubt: a def with no bound, a level the size analysis
+    answered ``None`` for, a symbolic size (a per-run variable, never a length
+    ``std::array`` can spell), or two differing lengths all force ``None``.
+    Contributions walk each bound structurally against the region graph,
+    mirroring :meth:`UnboxAnalysis._stamp`, so the table is keyed exactly where
+    ``_stamp`` reads it.
     """
     sizes: dict[Region, int | None] = {}
 

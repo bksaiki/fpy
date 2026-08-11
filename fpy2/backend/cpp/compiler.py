@@ -214,12 +214,11 @@ class CppCompiler(Backend):
         arrays:
             Compile an unboxed list whose length is statically proven to
             ``std::array<T, K>`` instead of ``std::vector<T>``.  Purely a
-            representation choice -- same values, same element order -- but
-            it does shape signatures: an entry whose ``arg_types`` carry a
+            representation choice -- same values, same element order -- but it
+            does shape signatures: an entry whose ``arg_types`` carry a
             ``ListType`` *length* gets an array parameter, and a trusted
-            ``assert len(xs) == K`` becomes a type-level commitment.  Boxed
-            lists never carry a size, so under ``unbox=NEVER`` this has no
-            effect.  Default ``True``.
+            ``assert len(xs) == K`` becomes a type-level commitment.  No effect
+            under ``unbox=NEVER``, where nothing is a value.  Default ``True``.
     """
 
     UnboxMode = UnboxMode
@@ -349,9 +348,9 @@ class CppCompiler(Backend):
         # mismatches) into ``CppCompileError`` so callers iterating over
         # candidate functions can catch a uniform error type.
         try:
-            # `size_key`: a spec per distinct argument-length vector, so a
-            # proven length crosses the call edge as the callee's annotation
-            # and both ends agree on `std::array` (see `.unbox`).
+            # `size_key`: a spec per distinct argument-length vector, so a proven
+            # length crosses the call edge as the callee's annotation and both
+            # ends agree on `std::array` (see `.unbox`).
             specialized = Specialize.apply(module, size_key=self._arrays)
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e

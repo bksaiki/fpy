@@ -132,11 +132,11 @@ def _bound_to_type(
     success (fallback ``RealType(None)`` otherwise).  ``SetFormat`` and
     ``None`` collapse to ``RealType(None)`` / ``None``.
 
-    *size* rides along structurally: a ``ListSize`` whose length is a
-    concrete ``int`` puts that length on the ``ListType``, which is how a
-    caller's proven argument length reaches the callee's annotations (and
-    from there its own array-size analysis).  A shape mismatch or ``None``
-    contributes nothing.
+    *size* rides along structurally: a ``ListSize`` with a concrete ``int``
+    length puts that length on the ``ListType``, which is how a caller's proven
+    argument length reaches the callee's annotations, and from there the
+    callee's own array-size analysis.  A shape mismatch or ``None`` contributes
+    nothing.
     """
     if bound is None:
         return None
@@ -179,10 +179,10 @@ def _arg_fmts_to_arg_types(
 
 
 class _SpecKey(NamedTuple):
-    """A specialization is identified by the original ``FuncDef``, the
-    calling (outer) context, a stable fingerprint of the per-argument
-    :class:`FormatBound`\\s, and -- when the caller asked for size keying --
-    one of the per-argument concrete lengths."""
+    """A specialization is identified by the original ``FuncDef``, the calling
+    (outer) context, and stable fingerprints of the per-argument
+    :class:`FormatBound`\\s and -- when the caller asked for size keying --
+    concrete lengths."""
     fdef: FuncDef
     ctx: Context | None
     arg_fmts_fp: str   # '' when no arg formats are pinned
@@ -251,11 +251,11 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
     """*b* with every non-concrete size dropped, and ``None`` when nothing
     concrete survives at any level.
 
-    Size *variables* (``NamedId``) are per-analysis gensyms: letting one
-    into a fingerprint would make spec keys and mangled names differ from
-    run to run.  Only ``int`` lengths survive; the shape is kept (so nested
-    and tuple-carried lengths line up positionally) exactly where a length
-    remains to position.
+    Size *variables* (``NamedId``) are per-analysis gensyms: letting one into a
+    fingerprint would make spec keys and mangled names differ from run to run.
+    So only ``int`` lengths survive, and the structure around them is kept only
+    where one does, so that nested and tuple-carried lengths line up
+    positionally.
     """
     match b:
         case ListSize():
@@ -307,19 +307,17 @@ def _arg_sizes_fingerprint(
 def _mangle_private(
     name: str, ctx: Context | None, arg_fmts_fp: str, arg_sizes_fp: str = '',
 ) -> str:
-    """Build a stable name for a private spec.  Includes the ctx
-    fingerprint (when present) and the arg-format and arg-size
-    fingerprints (when non-empty), so two specs of the same function with
-    different ``(ctx, arg_fmts, arg_sizes)`` produce distinguishable
-    names."""
+    """Build a stable name for a private spec.  Includes the ctx fingerprint
+    (when present) and the arg-format and arg-size fingerprints (when
+    non-empty), so two specs of the same function with different ``(ctx,
+    arg_fmts, arg_sizes)`` produce distinguishable names."""
     parts = [name]
     if ctx is not None:
         parts.append(_ctx_fingerprint(ctx))
     if arg_fmts_fp:
         parts.append(arg_fmts_fp)
     if arg_sizes_fp:
-        # `s`-tagged so a format fingerprint and a size fingerprint can
-        # never collide into one emitted name across the two domains.
+        # `s`-tagged so a format and a size fingerprint cannot collide.
         parts.append(f's{arg_sizes_fp}')
     return '__'.join(parts)
 
@@ -376,14 +374,13 @@ class Specialize:
         """Specialize *module*.
 
         *size_key* additionally keys each spec on its arguments' concrete
-        lengths, so one function called with 3- and 5-element lists compiles
-        twice, each spec's annotations carrying its length -- what lets the
-        cpp backend's arrays cross call edges.  One spec per distinct
-        length vector is the same template-instantiation economics as the
-        ctx and format axes; lengths originate in program text (literals,
-        ``empty(K)``, ``range(K)``, annotations), so the worklist stays
-        finite.  ``False`` keeps keys and mangled names byte-identical to a
-        size-blind run.
+        lengths, so a function called with 3- and 5-element lists compiles
+        twice, each spec's annotations carrying its length -- which is what lets
+        the cpp backend's arrays cross call edges.  Lengths originate in program
+        text (literals, ``empty(K)``, ``range(K)``, annotations), so the
+        worklist stays finite; the cost is the same template-instantiation
+        economics as the ctx and format axes.  ``False`` keeps keys and mangled
+        names byte-identical to a size-blind run.
         """
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')

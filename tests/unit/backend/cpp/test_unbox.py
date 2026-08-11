@@ -470,8 +470,8 @@ class TestCalleeReturn:
 
     def test_a_caller_that_needs_a_handle_makes_one(self):
         """The callee's signature is fixed by its own body, so a caller with a
-        local reason to hold a handle wraps the result.  The value is a prvalue
-        whose ownership was handed over, so this moves rather than copies."""
+        local reason to hold a handle wraps the result.  Here the callee returns
+        a *sized* value, so the wrap goes through a vector rebuild."""
         @fp.fpy
         def make(n: fp.Real) -> list[fp.Real]:
             with fp.FP64:

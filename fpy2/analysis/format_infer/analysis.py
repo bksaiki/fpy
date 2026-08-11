@@ -1099,10 +1099,9 @@ class FormatAnalysis:
     array_size: ArraySizeAnalysis
     """The structural array-size pre-analysis this instantiation used.
 
-    Exposed so consumers that already hold a :class:`FormatAnalysis`
-    (notably :class:`~fpy2.transform.specialize.Specialize`, which keys
-    specs on argument sizes) read it instead of recomputing --
-    ``PreAnalysisCache`` shares one per :class:`FuncDef` already.
+    Exposed so a consumer already holding a :class:`FormatAnalysis` -- notably
+    :class:`~fpy2.transform.specialize.Specialize`, which keys specs on argument
+    sizes -- reads it instead of recomputing.
     """
 
     by_call: dict[Call, 'FormatAnalysis']

@@ -36,17 +36,13 @@ def _trivial(x: fp.Real) -> fp.Real:
         return x + 1.0
 
 
-def _emitter():
-    """``(emitter, at)`` over a trivial function, to drive helpers by hand.
-
-    *at* is an arbitrary expression of the analyzed AST -- the helpers only
-    read it for an error location.
-    """
+def _emitter() -> CppEmitter:
+    """An emitter over a trivial function, to drive helpers by hand."""
     cc = CppCompiler(unbox=UnboxMode.ALLOW)
     m = Module()
     m.add(_trivial, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
     a = cc.analyze(cc.specialize(m)[-1])
-    em = CppEmitter(
+    return CppEmitter(
         ast=a.ast,
         storage=a.storage,
         def_use=a.def_use,
@@ -57,7 +53,12 @@ def _emitter():
         unbox=a.unbox,
         callee_params={},
     )
-    return em, next(iter(a.format_info.by_expr))
+
+
+def _any_expr(em: CppEmitter):
+    """An arbitrary expression of *em*'s AST -- the helpers taking an ``at``
+    only read it for an error location."""
+    return next(iter(em.format_info.by_expr))
 
 
 class TestSizedType:
@@ -87,43 +88,43 @@ class TestConstruction:
     """The constructor forms `std::array` lacks, respelled."""
 
     def test_init_takes_double_braces(self):
-        em, _ = _emitter()
+        em = _emitter()
         s = em._list_new_init(ARR3, ['a', 'b', 'c'])
         assert s == 'std::array<double, 3>{{a, b, c}}'
 
     def test_init_element_count_is_checked(self):
-        em, _ = _emitter()
+        em = _emitter()
         with pytest.raises(CppInternalError):
             em._list_new_init(ARR3, ['a', 'b'])
 
     def test_empty_init_is_value_init(self):
-        em, _ = _emitter()
+        em = _emitter()
         assert em._list_new_init(ARR0, []) == 'std::array<double, 0>{}'
         assert em._list_empty(ARR3) == 'std::array<double, 3>{}'
 
     def test_sized_ignores_the_runtime_count(self):
-        em, _ = _emitter()
+        em = _emitter()
         assert em._list_new_sized(ARR3, 'n') == 'std::array<double, 3>{}'
 
     def test_filled_repeats_the_fill(self):
-        em, _ = _emitter()
+        em = _emitter()
         s = em._list_new_filled(ARR3, 'n', 'double{}')
         assert s == 'std::array<double, 3>{{double{}, double{}, double{}}}'
 
     def test_range_copies_into_a_declared_temp(self):
-        em, _ = _emitter()
+        em = _emitter()
         out = em._list_new_range(ARR3, 'first', 'last')
         body = em.writer.render()
         assert f'std::array<double, 3> {out}{{}};' in body
         assert f'std::copy(first, last, {out}.begin());' in body
 
     def test_push_back_on_an_array_is_a_backend_bug(self):
-        em, _ = _emitter()
+        em = _emitter()
         with pytest.raises(CppInternalError):
             em._list_push(ARR3, 'xs', 'x')
 
     def test_builder_stores_by_index(self):
-        em, _ = _emitter()
+        em = _emitter()
         out, append = em._open_list_build(ARR3)
         stmt = append('x')
         body = em.writer.render()
@@ -132,7 +133,7 @@ class TestConstruction:
         assert stmt.endswith('] = x') and '++' in stmt
 
     def test_builder_still_pushes_for_vectors(self):
-        em, _ = _emitter()
+        em = _emitter()
         out, append = em._open_list_build(VEC)
         assert append('x') == f'{out}.push_back(x)'
 
@@ -141,17 +142,20 @@ class TestConversionLattice:
     """array→vector converts; vector→array and K1→K2 refuse."""
 
     def test_array_to_vector_is_a_copy(self):
-        em, at = _emitter()
+        em = _emitter()
+        at = _any_expr(em)
         s = em._convert_storage('xs', ARR3, VEC, at=at)
         assert s == 'std::vector<double>(xs.begin(), xs.end())'
 
     def test_vector_to_array_refuses(self):
-        em, at = _emitter()
+        em = _emitter()
+        at = _any_expr(em)
         with pytest.raises(CppEmitError):
             em._convert_storage('xs', VEC, ARR3, at=at)
 
     def test_size_mismatch_refuses(self):
-        em, at = _emitter()
+        em = _emitter()
+        at = _any_expr(em)
         with pytest.raises(CppEmitError):
             em._convert_storage(
                 'xs', ARR3, CppList(F64, boxed=False, size=4), at=at,
@@ -160,7 +164,8 @@ class TestConversionLattice:
     def test_array_to_boxed_drops_the_size_before_the_handle(self):
         """`make_shared<vector>(array)` does not compile: the value must be
         rebuilt as a vector first, then boxed."""
-        em, at = _emitter()
+        em = _emitter()
+        at = _any_expr(em)
         s = em._convert_storage('xs', ARR3, BOXED, at=at)
         assert s == (
             'std::make_shared<std::vector<double>>'
@@ -169,7 +174,8 @@ class TestConversionLattice:
 
     def test_same_size_element_widening_rebuilds_by_index(self):
         src = CppList(CppScalar.U8, boxed=False, size=3)
-        em, at = _emitter()
+        em = _emitter()
+        at = _any_expr(em)
         out = em._convert_storage('xs', src, ARR3, at=at)
         body = em.writer.render()
         assert f'std::array<double, 3> {out}{{}};' in body

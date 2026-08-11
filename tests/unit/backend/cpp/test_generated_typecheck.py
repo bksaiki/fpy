@@ -265,11 +265,9 @@ SHAPES = [
 
 FORMATS = [fp.FP32, fp.FP64]
 
-# The size axis: a `None` length is the unsized world; a concrete length
-# makes the parameter a `std::array` and collides with the in-body literals'
-# own sizes at joins — `1` agrees with the `[y]` arm (sized results appear),
-# `2` disagrees (the join must demote).  Only list-taking signatures vary;
-# a scalar shape would repeat byte-identically.
+# `1` agrees with the `[y]` arm every shape has (so sized results appear), `2`
+# disagrees (so the join must demote).  Only list-taking signatures vary over
+# this; a scalar shape would repeat byte-identically.
 LENGTHS = [None, 1, 2]
 
 

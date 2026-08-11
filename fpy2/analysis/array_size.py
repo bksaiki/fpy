@@ -432,13 +432,12 @@ class _ArraySizeInferInstance(DefaultVisitor):
                              if isinstance((r := _repr_size(s, self.uf)), int)}
                 symbols = [s for s in sizes if isinstance(s, NamedId)]
 
-                # Only an *unconditional* zip may constrain its inputs'
-                # sizes globally (cf. ``_visit_assert``): on an execution
-                # that never reaches it, the inputs' lengths owe it
-                # nothing, and a false global pin becomes a wrong
-                # ``std::array`` length in the cpp backend.  The zip's own
-                # result keeps the joined size either way -- the result
-                # only exists on executions where the zip ran.
+                # Only an *unconditional* zip may constrain its inputs' sizes
+                # globally (cf. ``_visit_assert``): on an execution that never
+                # reaches it the inputs' lengths owe it nothing, and a false
+                # global pin becomes a wrong ``std::array`` length in the cpp
+                # backend.  The result keeps the joined size either way -- it
+                # only exists where the zip ran.
                 if any(s is None for s in sizes):
                     size: ArraySize = None
                 elif concretes:

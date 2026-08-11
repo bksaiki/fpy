@@ -67,11 +67,11 @@ class CppScalar(enum.Enum):
 
 @default_repr
 class CppList:
-    """An FPy list: a shared ``std::shared_ptr<std::vector<T>>`` handle;
-    where :mod:`fpy2.analysis.alias` proves nothing can observe the
-    difference, a plain ``std::vector<T>``; and where the length is also
-    proven, a ``std::array<T, K>``.  See :mod:`.unbox` for how both are
-    decided.
+    """An FPy list, in one of three representations: a shared
+    ``std::shared_ptr<std::vector<T>>`` handle; a plain ``std::vector<T>``
+    where :mod:`fpy2.analysis.alias` proves nothing can observe the difference;
+    and a ``std::array<T, K>`` where the length is proven too.  :mod:`.unbox`
+    decides both.
 
     The handle exists because an FPy list is a list of *references*: binding
     shares its cells, so two names can hold the same elements and a write
@@ -79,23 +79,19 @@ class CppList:
     represent that identity; a ``shared_ptr`` to one can, and a program
     embedding a kernel can hold either without depending on anything of ours.
     Refcounting needs no collector: a cycle needs a list to hold itself, and
-    list types are finite, so ``xs[0] = xs`` fails to unify -- the *type*
-    system rules it out, not the store rules, which would permit it.
+    list types are finite, so ``xs[0] = xs`` fails to unify -- the *type* system
+    rules it out, not the store rules, which would permit it.
 
-    A *value* list whose length the backend proved is a ``size`` here and a
-    ``std::array<T, K>`` in the output.  ``size`` is part of the type's
-    identity, like ``boxed``: two lists differing in representation or length
-    compare unequal, so neither ``storage_infer`` nor a stamped type can
-    silently conflate them.  (``fpy2.types.ListType.length`` is *metadata*,
-    excluded from equality -- do not repeat that here: an equality that
-    ignores ``size`` would let ``std::array<double, 3>`` pass for
-    ``std::array<double, 4>`` and the C++ compiler would be the first to
-    notice.)
+    ``boxed`` and ``size`` are both part of the type's identity, so two lists
+    differing in representation or length compare unequal and neither
+    ``storage_infer`` nor a stamped type can conflate them.
+    (``fpy2.types.ListType.length`` is *metadata*, excluded from equality --
+    not to be repeated here: an equality ignoring ``size`` would let
+    ``std::array<double, 3>`` pass for ``std::array<double, 4>``.)
 
-    A boxed list never carries a size: sharing already costs a heap
-    allocation, so a static length buys nothing, and one representation per
-    axis keeps the conversion lattice small.  Enforced here, not merely
-    avoided.
+    A boxed list never carries a size -- sharing already costs a heap
+    allocation, so a static length buys nothing -- and that is asserted here
+    rather than merely avoided.
     """
     elt: 'CppType'
     boxed: bool
