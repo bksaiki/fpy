@@ -6,7 +6,7 @@ passed `xs`.  Nothing checks that, which is why a rebound unboxed parameter
 silently swallowed a write.
 
 The oracle here is the **boxed compilation of the same function**.  Boxing is
-the reference semantics -- an `fpy::list<T>` shares, always -- so for any
+the reference semantics -- a boxed list shares, always -- so for any
 program, `UnboxMode.ALLOW` and `UnboxMode.NEVER` must produce the same return value
 *and* leave the caller's vectors in the same state.  Restricted to flat
 `list[Real]` parameters because those are the ones a native caller can share

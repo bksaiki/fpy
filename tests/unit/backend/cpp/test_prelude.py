@@ -30,8 +30,10 @@ class TestHeaders:
             '<cassert>',
             '<cfenv>',
             '<cmath>',
+            '<array>',
             '<cstddef>',
             '<cstdint>',
+            '<memory>',
             '<numeric>',
             '<vector>',
             '<tuple>',
@@ -52,7 +54,7 @@ class TestHeaders:
 
 
 class TestHelpers:
-    """Runtime helpers — currently empty but the slot exists."""
+    """Runtime helpers: NaN/signed-zero-correct `fpy::min`/`max`, nothing else."""
 
     def test_helpers_returns_string(self):
         cc = CppCompiler()

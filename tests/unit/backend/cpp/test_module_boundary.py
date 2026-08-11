@@ -131,7 +131,7 @@ def test_signature_matches_the_module_for_every_function(func):
 
     Regression class: `_find_spec` picks the wrong spec (name mangling, a
     duplicate name, a changed emission order) and a native caller builds a
-    `std::vector` for a parameter that is really an `fpy::list`.
+    `std::vector` for a parameter that is really a shared handle.
     """
     m = _module()
     cc = CppCompiler()

@@ -25,6 +25,12 @@ representations.
 import hashlib
 from typing import NamedTuple
 
+from ..analysis.array_size import (
+    ArraySizeBound,
+    ListSize,
+    TupleSize,
+    concrete_size,
+)
 from ..analysis.format_infer import (
     FormatBound,
     FormatInfer,
@@ -115,7 +121,9 @@ def _format_to_ctx(fmt: Format) -> Context | None:
         return None
 
 
-def _bound_to_type(bound: FormatBound) -> Type | None:
+def _bound_to_type(
+    bound: FormatBound, size: ArraySizeBound = None,
+) -> Type | None:
     """Convert a :class:`FormatBound` to a :class:`Type` for use as a
     ``Monomorphize`` argument override.
 
@@ -123,22 +131,35 @@ def _bound_to_type(bound: FormatBound) -> Type | None:
     :func:`_format_to_ctx` and become ``RealType(<recovered ctx>)`` on
     success (fallback ``RealType(None)`` otherwise).  ``SetFormat`` and
     ``None`` collapse to ``RealType(None)`` / ``None``.
+
+    *size* rides along structurally: a ``ListSize`` with a concrete ``int``
+    length puts that length on the ``ListType``, which is how a caller's proven
+    argument length reaches the callee's annotations, and from there the
+    callee's own array-size analysis.  A shape mismatch or ``None`` contributes
+    nothing.
     """
     if bound is None:
         return None
     if isinstance(bound, TupleFormat):
+        sizes: tuple[ArraySizeBound, ...] = (
+            size.elts
+            if isinstance(size, TupleSize) and len(size.elts) == len(bound.elts)
+            else (None,) * len(bound.elts)
+        )
         elt_types: list[Type] = []
-        for e in bound.elts:
-            t = _bound_to_type(e)
+        for e, se in zip(bound.elts, sizes):
+            t = _bound_to_type(e, se)
             if t is None:
                 return None
             elt_types.append(t)
         return TupleType(*elt_types)
     if isinstance(bound, ListFormat):
-        elt_type = _bound_to_type(bound.elt)
+        elt_size = size.elt if isinstance(size, ListSize) else None
+        elt_type = _bound_to_type(bound.elt, elt_size)
         if elt_type is None:
             return None
-        return ListType(elt_type)
+        length = concrete_size(size.size) if isinstance(size, ListSize) else None
+        return ListType(elt_type, length)
     if isinstance(bound, SetFormat):
         return RealType(None)
     assert isinstance(bound, Format), f'unexpected FormatBound: {type(bound)}'
@@ -147,20 +168,25 @@ def _bound_to_type(bound: FormatBound) -> Type | None:
 
 def _arg_fmts_to_arg_types(
     arg_fmts: tuple[FormatBound, ...] | None,
+    arg_sizes: 'tuple[ArraySizeBound, ...] | None' = None,
 ) -> tuple[Type | None, ...] | None:
     """Per-argument ``FormatBound → Type`` for ``Monomorphize``."""
     if arg_fmts is None:
         return None
-    return tuple(_bound_to_type(b) for b in arg_fmts)
+    if arg_sizes is None or len(arg_sizes) != len(arg_fmts):
+        arg_sizes = (None,) * len(arg_fmts)
+    return tuple(_bound_to_type(b, s) for b, s in zip(arg_fmts, arg_sizes))
 
 
 class _SpecKey(NamedTuple):
-    """A specialization is identified by the original ``FuncDef``, the
-    calling (outer) context, and a stable fingerprint of the per-argument
-    :class:`FormatBound`\\s."""
+    """A specialization is identified by the original ``FuncDef``, the calling
+    (outer) context, and stable fingerprints of the per-argument
+    :class:`FormatBound`\\s and -- when the caller asked for size keying --
+    concrete lengths."""
     fdef: FuncDef
     ctx: Context | None
     arg_fmts_fp: str   # '' when no arg formats are pinned
+    arg_sizes_fp: str  # '' when no argument carries a concrete length
 
 
 # ----------------------------------------------------------------------
@@ -221,18 +247,78 @@ def _arg_fmts_fingerprint(
     return hashlib.sha1(raw.encode()).hexdigest()[:8]
 
 
-def _mangle_private(
-    name: str, ctx: Context | None, arg_fmts_fp: str,
+def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
+    """*b* with every non-concrete size dropped, and ``None`` when nothing
+    concrete survives at any level.
+
+    Size *variables* (``NamedId``) are per-analysis gensyms: letting one into a
+    fingerprint would make spec keys and mangled names differ from run to run.
+    So only ``int`` lengths survive, and the structure around them is kept only
+    where one does, so that nested and tuple-carried lengths line up
+    positionally.
+    """
+    match b:
+        case ListSize():
+            elt, k = _sanitize_size(b.elt), concrete_size(b.size)
+            if elt is None and k is None:
+                return None
+            return ListSize(elt, k)
+        case TupleSize():
+            elts = tuple(_sanitize_size(e) for e in b.elts)
+            if all(e is None for e in elts):
+                return None
+            return TupleSize(elts)
+        case None:
+            return None
+
+
+def _type_to_size(t: Type | None) -> ArraySizeBound:
+    """The concrete lengths a user-supplied ``arg_type`` carries, as a
+    *sanitized* :class:`ArraySizeBound` -- the size analog of
+    :func:`_type_to_fmt`, for public keying.  Two entries differing only in
+    length must not collapse to one spec: the length reaches the annotations
+    and, with the cpp backend's arrays, the ABI."""
+    if isinstance(t, TupleType):
+        elts = tuple(_type_to_size(e) for e in t.elts)
+        if all(e is None for e in elts):
+            return None
+        return TupleSize(elts)
+    if isinstance(t, ListType):
+        elt = _type_to_size(t.elt)
+        length = t.length if isinstance(t.length, int) else None
+        if elt is None and length is None:
+            return None
+        return ListSize(elt, length)
+    return None
+
+
+def _arg_sizes_fingerprint(
+    arg_sizes: 'tuple[ArraySizeBound, ...] | None',
 ) -> str:
-    """Build a stable name for a private spec.  Includes the ctx
-    fingerprint (when present) and the arg-format fingerprint (when
-    non-empty), so two specs of the same function with different
-    ``(ctx, arg_fmts)`` produce distinguishable names."""
+    """A short fingerprint of *sanitized* per-argument sizes.  Returns
+    ``''`` when nothing carries a concrete length -- so a size-free program
+    produces byte-identical keys and mangled names to a size-blind run."""
+    if arg_sizes is None or all(s is None for s in arg_sizes):
+        return ''
+    parts = [repr(s) if s is not None else 'X' for s in arg_sizes]
+    return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:8]
+
+
+def _mangle_private(
+    name: str, ctx: Context | None, arg_fmts_fp: str, arg_sizes_fp: str = '',
+) -> str:
+    """Build a stable name for a private spec.  Includes the ctx fingerprint
+    (when present) and the arg-format and arg-size fingerprints (when
+    non-empty), so two specs of the same function with different ``(ctx,
+    arg_fmts, arg_sizes)`` produce distinguishable names."""
     parts = [name]
     if ctx is not None:
         parts.append(_ctx_fingerprint(ctx))
     if arg_fmts_fp:
         parts.append(arg_fmts_fp)
+    if arg_sizes_fp:
+        # `s`-tagged so a format and a size fingerprint cannot collide.
+        parts.append(f's{arg_sizes_fp}')
     return '__'.join(parts)
 
 
@@ -284,7 +370,18 @@ class Specialize:
     """
 
     @staticmethod
-    def apply(module: Module) -> Module:
+    def apply(module: Module, *, size_key: bool = False) -> Module:
+        """Specialize *module*.
+
+        *size_key* additionally keys each spec on its arguments' concrete
+        lengths, so a function called with 3- and 5-element lists compiles
+        twice, each spec's annotations carrying its length -- which is what lets
+        the cpp backend's arrays cross call edges.  Lengths originate in program
+        text (literals, ``empty(K)``, ``range(K)``, annotations), so the
+        worklist stays finite; the cost is the same template-instantiation
+        economics as the ctx and format axes.  ``False`` keeps keys and mangled
+        names byte-identical to a size-blind run.
+        """
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
 
@@ -313,10 +410,17 @@ class Specialize:
                 tuple(_type_to_fmt(t) for t in atypes)
                 if atypes is not None else None
             )
+            # ...and the lengths those arg_types carry, so two entries
+            # differing only in length get distinct specs.
+            pub_arg_sizes = (
+                tuple(_type_to_size(t) for t in atypes)
+                if size_key and atypes is not None else None
+            )
             key = _SpecKey(
                 fdef=entry.func.ast,
                 ctx=entry.ctx,
                 arg_fmts_fp=_arg_fmts_fingerprint(pub_arg_fmts),
+                arg_sizes_fp=_arg_sizes_fingerprint(pub_arg_sizes),
             )
             public_keys.append((entry.name, key))
             if key not in orig_func:
@@ -346,10 +450,21 @@ class Specialize:
                 # Only concrete ``Context``s count; symbolic / None collapse.
                 callee_ctx = callee_ctx_raw if isinstance(callee_ctx_raw, Context) else None
                 callee_arg_fmts = sub_fa.fn_fmt.arg_fmts
+                # The caller-side proven length of each argument expression,
+                # sanitized to concrete ints (a symbolic size is a per-run
+                # gensym and must never reach a fingerprint).
+                callee_arg_sizes = (
+                    tuple(
+                        _sanitize_size(fa.array_size.by_expr.get(a))
+                        for a in call.args
+                    )
+                    if size_key else None
+                )
                 callee_key = _SpecKey(
                     fdef=callee_fn.ast,
                     ctx=callee_ctx,
                     arg_fmts_fp=_arg_fmts_fingerprint(callee_arg_fmts),
+                    arg_sizes_fp=_arg_sizes_fingerprint(callee_arg_sizes),
                 )
 
                 site_map[call] = callee_key
@@ -364,7 +479,7 @@ class Specialize:
                     # FormatBound space) so the body's arg annotations
                     # get per-arg ctx pinning that backends need.
                     arg_types_for[callee_key] = _arg_fmts_to_arg_types(
-                        callee_arg_fmts,
+                        callee_arg_fmts, callee_arg_sizes,
                     )
                     worklist.append(callee_key)
 
@@ -399,7 +514,7 @@ class Specialize:
                 names[k] = spec_to_public_name[k]
             else:
                 names[k] = _mangle_private(
-                    orig_func[k].name, k.ctx, k.arg_fmts_fp,
+                    orig_func[k].name, k.ctx, k.arg_fmts_fp, k.arg_sizes_fp,
                 )
 
         # --- 4. Build new ``Function``s in leaves-first order, rewiring

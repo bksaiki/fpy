@@ -26,8 +26,9 @@ class TestListLiteral:
                 return xs[0]
 
         out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        assert 'std::vector<uint8_t>' in out
-        assert '{1, 2, 3}' in out
+        # three literal elements: the length is proven, so a std::array
+        assert 'std::array<uint8_t, 3>' in out
+        assert '{{1, 2, 3}}' in out
 
     def test_list_passed_through_args(self):
         """A list-typed argument keeps its ``std::vector<T>`` storage
@@ -128,7 +129,10 @@ class TestListComp:
             f, ctx=fp.FP64, arg_types=[],
         )
         assert 'for (int8_t i = 0; i < 5; ++i) {' in out
-        assert '.push_back((static_cast<int64_t>(i) * static_cast<int64_t>(i)));' in out
+        # `range(5)` has a proven length, so the comprehension fills a
+        # std::array through a running index rather than push_back
+        assert '] = (static_cast<int64_t>(i) * static_cast<int64_t>(i));' in out
+        assert 'std::array<uint8_t, 5>' in out  # {0,1,4,9,16} fits u8
 
     def test_range2_iterable(self):
         @fp.fpy

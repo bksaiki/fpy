@@ -11,33 +11,24 @@ explicitly and concatenate them — same shape as the legacy
 Headers track exactly what the emitter uses; the list below is the whole
 dependency set.
 
-``fpy::list`` is why a runtime exists at all: an FPy list is a list of
-*references*, and binding shares those cells, so a ``std::vector`` — a value —
-cannot represent one.  Three choices worth not relitigating:
-
-- A plain alias for ``std::shared_ptr``, not a wrapper class, so a program
-  embedding a kernel can handle a list without depending on anything of ours.
-- The control block is atomic, so copying a handle is an atomic increment.  The
-  emitter passes ``const list<T>&`` wherever a name is not rebound, and a
-  reference does no refcounting — that is what keeps the atomic off the hot path.
-- Refcounting needs no collector: a cycle needs a list to hold itself, and list
-  types are finite, so ``xs[0] = xs`` fails to unify.  It is the *type* system
-  that rules this out, not the store rules, which would permit it.
-
-Only what emitted code names lives here.  The conversions a *caller* needs to
-hand a ``std::vector`` to a kernel are in ``CPP_INTEROP``, with the tests that
-exercise that boundary.
+The runtime is ``fpy::min``/``max`` and nothing else: everything a list needs
+is generated at the use site in standard-library spellings
+(``std::shared_ptr<std::vector<T>>``, ``std::make_shared``), so a program
+embedding a kernel depends on nothing of ours.  See :class:`.types.CppList`
+for why the boxed representation is a ``shared_ptr`` at all.  The conversions
+a *caller* needs to hand a ``std::vector`` to a boxed kernel are in
+``CPP_INTEROP``, with the tests that exercise that boundary.
 """
 
 
 CPP_HEADERS: tuple[str, ...] = (
     '#include <algorithm>',
+    '#include <array>',
     '#include <cassert>',
     '#include <cfenv>',
     '#include <cmath>',
     '#include <cstddef>',
     '#include <cstdint>',
-    '#include <initializer_list>',
     '#include <limits>',
     '#include <memory>',
     '#include <numeric>',
@@ -69,31 +60,6 @@ inline T max(T a, T b) {
     if (a == b)
         return std::signbit(a) ? b : a;
     return (a < b) ? b : a;
-}
-
-// An FPy list: a handle to a shared, mutable sequence.  Copying a `list` shares
-// its elements; only `make_list` allocates.
-template <typename T>
-using list = std::shared_ptr<std::vector<T> >;
-
-template <typename T>
-inline list<T> make_list(std::size_t n) {
-    return std::make_shared<std::vector<T> >(n);
-}
-
-template <typename T>
-inline list<T> make_list(std::size_t n, const T& x) {
-    return std::make_shared<std::vector<T> >(n, x);
-}
-
-template <typename T>
-inline list<T> make_list(std::initializer_list<T> il) {
-    return std::make_shared<std::vector<T> >(il);
-}
-
-template <typename T, typename It>
-inline list<T> make_list(It first, It last) {
-    return std::make_shared<std::vector<T> >(first, last);
 }
 
 }  // namespace fpy

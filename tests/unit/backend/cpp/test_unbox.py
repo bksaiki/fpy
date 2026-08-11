@@ -336,7 +336,7 @@ class TestAcrossACall:
         out = ALLOW.compile_module(m)
         assert 'const std::vector<double>& xs' in out
         assert 'const std::vector<std::vector<double>>& xss' in out
-        assert 'fpy::list' not in out
+        assert 'std::shared_ptr' not in out
 
     def test_a_retaining_callee_keeps_both_ends_boxed(self):
         @fp.fpy
@@ -354,7 +354,7 @@ class TestAcrossACall:
         m.add(hand_over, ctx=fp.FP64, arg_types=[ListType(R)])
         out = ALLOW.compile_module(m)
         assert 'std::vector<double>& xs' not in out
-        assert 'fpy::list<double>' in out
+        assert 'std::shared_ptr<std::vector<double>>' in out
 
     def test_a_writing_callee_makes_both_ends_non_const(self):
         """Writing is not retaining, so both unbox — but ``const`` has to cross
@@ -396,7 +396,7 @@ class TestAcrossACall:
         m.add(shares, ctx=fp.FP64, arg_types=[ListType(R)])
         out = ALLOW.compile_module(m)
         assert 'const std::vector<double>& zs' in out
-        assert 'const fpy::list<double>& xs' in out
+        assert 'const std::shared_ptr<std::vector<double>>& xs' in out
         assert re.search(r'reads__\w+\(\*xs\)', out), out
 
 
@@ -466,12 +466,12 @@ class TestCalleeReturn:
         m = Module()
         m.add(use, ctx=fp.FP64, arg_types=[R])
         out = ALLOW.compile_module(m)
-        assert 'fpy::list' not in out, out
+        assert 'std::shared_ptr' not in out, out
 
     def test_a_caller_that_needs_a_handle_makes_one(self):
         """The callee's signature is fixed by its own body, so a caller with a
-        local reason to hold a handle wraps the result.  The value is a prvalue
-        whose ownership was handed over, so this moves rather than copies."""
+        local reason to hold a handle wraps the result.  Here the callee returns
+        a *sized* value, so the wrap goes through a vector rebuild."""
         @fp.fpy
         def make(n: fp.Real) -> list[fp.Real]:
             with fp.FP64:
@@ -489,7 +489,9 @@ class TestCalleeReturn:
         m = Module()
         m.add(boxes_it, ctx=fp.FP64, arg_types=[R])
         out = ALLOW.compile_module(m)
-        assert 'std::make_shared<std::vector<double>>(make' in out, out
+        # the callee hands back a fixed-size value; boxing it spells the
+        # vector copy first -- `make_shared<vector>(array)` does not exist
+        assert 'std::make_shared<std::vector<double>>(std::vector<double>(' in out, out
         assert boxes_it(3.0, ctx=fp.FP64) == 9
 
 
@@ -512,7 +514,7 @@ class TestProjectionByReference:
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R))],
         )
         assert 'const auto& row =' in out, out
-        assert 'fpy::list' not in out, out
+        assert 'std::shared_ptr' not in out, out
 
     def test_zip_over_nested_lists_unboxes(self):
         """The shape from the report: `ZipElim` lowers the loop variable to a
@@ -539,7 +541,7 @@ class TestProjectionByReference:
         m = Module()
         m.add(outer, ctx=fp.FP64, arg_types=[N, N])
         out = ALLOW.compile_module(m)
-        assert 'fpy::list' not in out, out
+        assert 'std::shared_ptr' not in out, out
 
     def test_a_replaced_slot_still_copies(self):
         """The guard.  A C++ reference follows the slot; FPy keeps referring to
@@ -552,7 +554,7 @@ class TestProjectionByReference:
             corpus._regression_replaced_slot, ctx=fp.FP64,
             arg_types=[ListType(ListType(R)), ListType(R)],
         )
-        assert 'fpy::list<double> row = ' in out, out
+        assert 'std::shared_ptr<std::vector<double>> row = ' in out, out
         assert 'auto& row' not in out, out
 
     def test_the_guard_is_function_wide(self):
@@ -590,7 +592,7 @@ class TestProjectionByReference:
                 return x
 
         out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[])
-        assert 'fpy::list' not in out, out
+        assert 'std::shared_ptr' not in out, out
 
     def test_a_call_result_still_seeds_its_levels(self):
         """The other half of the rule: nothing local describes the elements of
@@ -649,7 +651,7 @@ class TestListsInsideTuples:
         m = Module()
         m.add(f, ctx=fp.FP64, arg_types=[R])
         _p, ret = cc.signature(f, ctx=fp.FP64, arg_types=[R], module=m)
-        assert ret.format() == 'std::tuple<std::vector<double>, uint8_t>', (
+        assert ret.format() == 'std::tuple<std::array<double, 2>, uint8_t>', (
             ret.format()
         )
 
@@ -663,7 +665,7 @@ class TestListsInsideTuples:
                 return xs[0]
 
         out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
-        assert 'std::tuple<fpy::list<double>, uint8_t>' in out, out
+        assert 'std::tuple<std::shared_ptr<std::vector<double>>, uint8_t>' in out, out
         assert f([1.0, 2.0], ctx=fp.FP64) == 55
 
     def test_a_read_only_tuple_parameter_unboxes(self):
@@ -686,4 +688,4 @@ class TestListsInsideTuples:
             f, ctx=fp.FP64, arg_types=[TupleType(ListType(R), R)],
         )
         assert 'const std::tuple<std::vector<double>, double>&' in out, out
-        assert 'fpy::list' not in out, out
+        assert 'std::shared_ptr' not in out, out

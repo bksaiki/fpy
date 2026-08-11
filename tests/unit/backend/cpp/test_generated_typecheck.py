@@ -9,13 +9,16 @@ through a nested-literal miscompile, a return-join type disagreement, a
 reference did not have.  Each was found by hand-writing a shape, which is the
 thing to automate.
 
-Two axes:
+Three axes:
 
 - **Shape** -- hand-enumerated below, because a failure has to be readable.
   Adding one is a single function plus an entry in ``SHAPES``.
 - **Format** -- generated.  This is where the corpus has nothing, and it is also
   the cheap axis: a program's formats come entirely from ``arg_types``, so
   one source function yields four programs.
+- **Length** -- generated; see ``LENGTHS``.  A concrete length turns a
+  parameter into ``std::array`` and collides with in-body literals' own
+  sizes at joins.
 
 The assertion is deliberately weak on purpose: a program may legitimately be
 *refused* (``CppEmitError``) -- a shared list cannot change element type, and
@@ -262,31 +265,47 @@ SHAPES = [
 
 FORMATS = [fp.FP32, fp.FP64]
 
+# `1` agrees with the `[y]` arm every shape has (so sized results appear), `2`
+# disagrees (so the join must demote).  Only list-taking signatures vary over
+# this; a scalar shape would repeat byte-identically.
+LENGTHS = [None, 1, 2]
 
-def _arg_types(sig: str, elt_fmt, y_fmt):
-    """*sig*'s parameters, at the given formats."""
+
+def _arg_types(sig: str, elt_fmt, y_fmt, length=None):
+    """*sig*'s parameters, at the given formats and list length."""
     scalars = [RealType(fp.FP64), RealType(y_fmt)]      # c, y
     match sig:
         case 'scalars':
             return scalars
         case 'flat':
-            return [ListType(RealType(elt_fmt)), *scalars]
+            return [ListType(RealType(elt_fmt), length), *scalars]
         case 'nested':
-            return [ListType(ListType(RealType(elt_fmt))), *scalars]
+            return [
+                ListType(ListType(RealType(elt_fmt), length), length),
+                *scalars,
+            ]
     raise AssertionError(sig)
 
 
 def _matrix():
-    """Every (shape, element format, scalar format) combination.
+    """Every (shape, element format, scalar format, length) combination.
 
     No outer-context axis: every shape pins its context with ``with fp.FP64:``,
     so varying it produced byte-identical programs and only doubled the count.
     """
     for func, sig in SHAPES:
+        lengths = LENGTHS if sig != SCALARS else [None]
         for elt_fmt in FORMATS:
             for y_fmt in FORMATS:
-                label = f'{func.name}__{elt_fmt.nbits}_{y_fmt.nbits}'
-                yield label, func, _arg_types(sig, elt_fmt, y_fmt)
+                for length in lengths:
+                    label = (
+                        f'{func.name}__{elt_fmt.nbits}_{y_fmt.nbits}'
+                        f'_L{length}'
+                    )
+                    yield (
+                        label, func,
+                        _arg_types(sig, elt_fmt, y_fmt, length),
+                    )
 
 
 @pytest.fixture(scope='module')

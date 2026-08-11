@@ -194,6 +194,11 @@ class CppCompiler(Backend):
 
     Runs the pre-analyses, assigns each SSA def a C++ variable, then emits.
 
+    Emitted code has one precondition on its callers: enter a kernel with the
+    ``fesetround`` mode its top-level context names, or ``FE_TONEAREST`` when it
+    names none (``REAL``, an integer context, or no annotation).  A kernel sets
+    no mode at entry and restores what it found before returning.
+
     Args:
         unsafe_cast_int:
             Allow rounded arithmetic under an unbounded-integer context by
@@ -211,6 +216,14 @@ class CppCompiler(Backend):
             list that must keep its handle fails the compile.  Default
             ``STRICT``: a ``std::shared_ptr`` in numerical C++ is surprising
             enough that it has to be asked for.
+        arrays:
+            Compile an unboxed list whose length is statically proven to
+            ``std::array<T, K>`` instead of ``std::vector<T>``.  Purely a
+            representation choice -- same values, same element order -- but it
+            does shape signatures: an entry whose ``arg_types`` carry a
+            ``ListType`` *length* gets an array parameter, and a trusted
+            ``assert len(xs) == K`` becomes a type-level commitment.  No effect
+            under ``unbox=NEVER``, where nothing is a value.  Default ``True``.
     """
 
     UnboxMode = UnboxMode
@@ -220,10 +233,11 @@ class CppCompiler(Backend):
     _unsafe_cast_int: bool
     _optimize: bool
     _unbox: _UnboxMode
+    _arrays: bool
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: _UnboxMode = UnboxMode.STRICT,
+        unbox: _UnboxMode = UnboxMode.STRICT, arrays: bool = True,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
@@ -233,6 +247,7 @@ class CppCompiler(Backend):
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
+        self._arrays = arrays
 
     # ------------------------------------------------------------------
     # Translation-unit preamble.  ``compile`` returns a function definition
@@ -243,8 +258,9 @@ class CppCompiler(Backend):
         return list(CPP_HEADERS)
 
     def helpers(self) -> str:
-        """The ``fpy::`` runtime every emitted unit needs: the list handle,
-        ``make_list``, and NaN-correct ``min``/``max``."""
+        """The ``fpy::`` runtime every emitted unit needs: NaN-correct
+        ``min``/``max``, and nothing else -- list code is generated in
+        standard-library spellings at the use site."""
         return CPP_HELPERS
 
     def prelude(self) -> str:
@@ -337,7 +353,10 @@ class CppCompiler(Backend):
         # mismatches) into ``CppCompileError`` so callers iterating over
         # candidate functions can catch a uniform error type.
         try:
-            specialized = Specialize.apply(module)
+            # `size_key`: a spec per distinct argument-length vector, so a proven
+            # length crosses the call edge as the callee's annotation and both
+            # ends agree on `std::array` (see `.unbox`).
+            specialized = Specialize.apply(module, size_key=self._arrays)
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 
@@ -403,6 +422,7 @@ class CppCompiler(Backend):
                 is_called=is_called,
                 summary=summary,
                 callees=callee_abis,
+                array_size=array_size if self._arrays else None,
             )
             unbox.strict = self._unbox is UnboxMode.STRICT
             # Rewrite each class's storage in place: the emitter reads a
@@ -450,7 +470,7 @@ class CppCompiler(Backend):
         """The C++ storage types of *func*'s parameters and result.
 
         Not derivable from FPy types alone: representation depends on :mod:`.unbox`,
-        so one FPy signature can compile to either ``fpy::list<T>`` or
+        so one FPy signature can compile to either a shared handle or
         ``std::vector<T>``.  Pass the *module* when there is one -- a function that
         compiled code calls keeps its handles.
         """

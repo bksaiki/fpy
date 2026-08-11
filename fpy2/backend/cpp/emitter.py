@@ -15,7 +15,7 @@ uncompilable program.
 
 import dataclasses
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from fractions import Fraction
 
@@ -129,7 +129,7 @@ from .storage_infer import (
 )
 from .target import make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
-from .unbox import UnboxAnalysis, contains_boxed, return_storage
+from .unbox import ParamAbi, UnboxAnalysis, contains_boxed, return_storage
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -326,7 +326,7 @@ class CppEmitter(Visitor):
     # Purely syntactic: these take and return emitted C++ strings.  The point is
     # that how a list is stored and accessed is spelled out here and nowhere
     # else, so changing the representation is a change to this block plus
-    # ``fpy::list`` in ``.utils``.
+    # the boxed spelling in ``.types``.
 
     @staticmethod
     def _elt_of(ty: CppType) -> str:
@@ -390,7 +390,8 @@ class CppEmitter(Visitor):
         """A name for *expr*, so it can be read more than once.
 
         Already a name — evaluated once, no side effects — so nothing to bind.
-        Otherwise bind it to a temp; a list is a handle, so this costs nothing.
+        Otherwise bind it to a temp; ``auto&&`` binds a reference, so this
+        copies nothing whatever the representation.
         """
         if expr.isidentifier():
             return expr
@@ -415,43 +416,158 @@ class CppEmitter(Visitor):
     def _list_end(self, ty: CppType, base: str) -> str:
         return f'{self._member(ty, base)}end()'
 
+    @staticmethod
+    def _is_sized(ty: CppType) -> bool:
+        """Whether *ty* is a fixed-length value list -- a ``std::array``."""
+        return (
+            isinstance(ty, CppList) and not ty.boxed and ty.size is not None
+        )
+
+    @classmethod
+    def _all_sized(cls, ty: CppType) -> bool:
+        """Whether every list level of *ty* is fixed-length."""
+        while isinstance(ty, CppList):
+            if not cls._is_sized(ty):
+                return False
+            ty = ty.elt
+        return True
+
     def _list_push(self, ty: CppType, base: str, elt: str) -> str:
-        """Append to a list under construction."""
+        """Append to a list under construction.  ``std::array`` has no growth
+        operation; :meth:`_open_list_build` spells an index store instead."""
+        if self._is_sized(ty):
+            raise CppInternalError(
+                f'push_back on a fixed-size list `{ty.format()}`'
+            )
         return f'{self._member(ty, base)}push_back({elt})'
 
     def _list_new(self, ty: CppType, args: str) -> str:
         """A new list from a parenthesised constructor argument list.
 
         The one place the boxed and unboxed spellings of construction are
-        stated; the named wrappers below only supply the arguments.
+        stated; the named wrappers below only supply the arguments, which
+        ``make_shared`` forwards to ``std::vector``'s constructor unchanged.
+        ``std::array`` has none of these constructors, so each wrapper handles
+        the fixed-size case before coming here.
         """
+        if self._is_sized(ty):
+            raise CppInternalError(
+                f'no constructor-argument form for `{ty.format()}`'
+            )
         if self._is_boxed(ty):
-            return f'fpy::make_list<{self._elt_of(ty)}>({args})'
+            return f'std::make_shared<std::vector<{self._elt_of(ty)}>>({args})'
         return f'{ty.format()}({args})'
 
     def _list_new_sized(self, ty: CppType, n: str) -> str:
+        """*n* value-initialised elements.  A fixed-size list has its length in
+        the type, so *n* -- the same ``K`` by construction -- says nothing."""
+        if self._is_sized(ty):
+            return f'{ty.format()}{{}}'
         return self._list_new(ty, n)
 
     def _list_empty(self, ty: CppType) -> str:
         """A new empty list.  Never emit a bare declaration for a *boxed* list:
-        an uninitialised ``fpy::list`` is a null handle, unlike an empty
+        an uninitialised handle is a null ``shared_ptr``, unlike an empty
         ``std::vector``."""
         return self._list_new_sized(ty, '0')
 
     def _list_new_filled(self, ty: CppType, n: str, fill: str) -> str:
+        """*n* copies of *fill*.  A fixed-size list has no ``(n, fill)``
+        constructor, but ``K`` is a compile-time count, so the fill is simply
+        repeated -- safe because FPy expressions are pure and ``_emit_empty``
+        binds a dimension to a name before it can appear in one."""
+        if self._is_sized(ty):
+            assert isinstance(ty, CppList) and ty.size is not None
+            return self._list_new_init(ty, [fill] * ty.size)
         return self._list_new(ty, f'{n}, {fill}')
 
     def _list_new_init(self, ty: CppType, parts: list[str]) -> str:
-        """The given elements.  Not :meth:`_list_new`: a braced list is the
-        argument when boxed, and the whole initialiser when not."""
+        """The given elements.  Not :meth:`_list_new`: a braced init-list is a
+        non-deduced context, so ``make_shared`` cannot take one -- the boxed
+        form spells the inner vector and moves it in.  A fixed-size list needs
+        double braces; single braces rely on brace elision, which
+        ``-Wmissing-braces`` flags."""
         joined = ', '.join(parts)
+        if self._is_sized(ty):
+            assert isinstance(ty, CppList)
+            if len(parts) != ty.size:
+                raise CppInternalError(
+                    f'{len(parts)} elements for `{ty.format()}`'
+                )
+            if not parts:
+                return f'{ty.format()}{{}}'
+            return f'{ty.format()}{{{{{joined}}}}}'
         if self._is_boxed(ty):
-            return f'fpy::make_list<{self._elt_of(ty)}>({{{joined}}})'
+            elt = self._elt_of(ty)
+            return (
+                f'std::make_shared<std::vector<{elt}>>'
+                f'(std::vector<{elt}>{{{joined}}})'
+            )
         return f'{ty.format()}{{{joined}}}'
 
+    def _declare_empty_list(self, ty: CppType) -> str:
+        """Declare a fresh empty list of *ty* and return its name.
+
+        The one spelling of an empty declaration: a fixed-size list is
+        value-initialised in place, everything else needs an initialiser.
+        """
+        out = self._fresh_temp()
+        if self._is_sized(ty):
+            self.writer.add_line(f'{ty.format()} {out}{{}};')
+        else:
+            self.writer.add_line(f'{ty.format()} {out} = {self._list_empty(ty)};')
+        return out
+
     def _list_new_range(self, ty: CppType, first: str, last: str) -> str:
-        """The half-open iterator range ``[first, last)``, copied."""
+        """The half-open iterator range ``[first, last)``, copied.  A
+        fixed-size list has no iterator-pair constructor, so it is
+        value-initialised and filled with ``std::copy`` instead."""
+        if self._is_sized(ty):
+            out = self._declare_empty_list(ty)
+            self.writer.add_line(f'std::copy({first}, {last}, {out}.begin());')
+            return out
         return self._list_new(ty, f'{first}, {last}')
+
+    def _open_fill_loop(self, ty: CppType, src_len: str) -> tuple[str, str]:
+        """A fresh list of *ty* with a ``for`` opened over its indices:
+        ``(name, index)``.  The caller writes the element stores and closes the
+        loop.
+
+        The count is *src_len* -- except for a fixed-size result, which counts
+        by its own ``K``: the analysis proved the two agree on defined
+        executions, and on one FPy leaves undefined (a mismatched ``zip`` that
+        runs) ``K`` truncates where the runtime length would write out of
+        bounds.
+        """
+        if self._is_sized(ty):
+            assert isinstance(ty, CppList)
+            n = str(ty.size)
+        else:
+            n = src_len
+        out = self._fresh_temp()
+        self.writer.add_line(
+            f'{ty.format()} {out} = {self._list_new_sized(ty, n)};'
+        )
+        i = self._fresh_temp()
+        self.writer.add_line(f'for (size_t {i} = 0; {i} < {n}; ++{i}) {{')
+        self.writer.indent()
+        return out, i
+
+    def _open_list_build(self, ty: CppType) -> tuple[str, Callable[[str], str]]:
+        """A named list under element-at-a-time construction: ``(name,
+        append)``, where ``append(elt)`` is the statement text adding one
+        element.
+
+        A vector grows with ``push_back``; a fixed-size list is filled through
+        a running index, its length being the ``K`` the analysis proved matches
+        the number of appends.
+        """
+        out = self._declare_empty_list(ty)
+        if self._is_sized(ty):
+            idx = self._fresh_temp()
+            self.writer.add_line(f'size_t {idx} = 0;')
+            return out, lambda elt: f'{out}[{idx}++] = {elt}'
+        return out, lambda elt: self._list_push(ty, out, elt)
 
     def _fresh_temp(self) -> str:
         """A fresh emitter-only identifier.
@@ -710,11 +826,9 @@ class CppEmitter(Visitor):
 
         self.writer.add_line(sig + ' {')
         self.writer.indent()
-        # `_current_rm` is the mode the live fenv is guaranteed to hold.  For a
-        # concrete FP function-level scope the FPy contract says the caller
-        # delivers it, so no entry `fesetround` is needed; symbolic, integer and
-        # unsupported scopes leave it None, forcing nested contexts to set the
-        # mode unconditionally.
+        # `_current_rm` is the mode the live fenv is guaranteed to hold on entry,
+        # which the caller delivers -- see `_entry_rm` for what it is and when it
+        # is unknown.  Either way no entry `fesetround` is emitted.
         self._current_rm = self._entry_rm(func)
         func_ctx = self._resolve_used_ctx(func)
         # REAL sets no fenv mode; its ops succeed only via `_try_widen`, whose
@@ -745,7 +859,7 @@ class CppEmitter(Visitor):
         # are well-defined (FPy analyses ensure this can't happen,
         # but the initialiser also serves as a paper-trail).
         if isinstance(storage, CppList):
-            # a bare ``fpy::list`` is a *null* handle, not an empty list, so a
+            # a bare handle is a *null* ``shared_ptr``, not an empty list, so a
             # hoisted list must be given one
             self.writer.add_line(
                 f'{storage.format()} {name} = {self._list_empty(storage)};'
@@ -926,8 +1040,15 @@ class CppEmitter(Visitor):
             # so that FPy's aliasing survives.  Unsharing it here would be
             # silent, so refuse instead.
             raise self._refuse_unsharing(src, want, at)
-        unboxed = CppList(want.elt, boxed=False)
-        if src.elt != want.elt:
+        if self._is_sized(want) and src.size != want.size:
+            # Nothing bridges a sizeless source or a different `K`; a tripwire,
+            # since one region has one size.
+            raise self._refuse_mismatch(src, want, at)
+        # A boxed `want` carries no size, so this is the size drop too -- and it
+        # has to precede the boxing: `make_shared<vector>(array)` does not
+        # compile.
+        unboxed = CppList(want.elt, boxed=False, size=want.size)
+        if src != unboxed:
             code = self._rebuild_list(code, src, unboxed, at=at)
         if not self._is_boxed(want):
             return code
@@ -939,14 +1060,15 @@ class CppEmitter(Visitor):
     ) -> CppEmitError:
         """One place wants two types and nothing in C++ bridges them.
 
-        Distinct ``std::vector`` instantiations are unrelated types, as are a vector
-        and a handle.  A limitation is acceptable; emitting C++ that does not compile
-        is not.
+        Distinct ``std::vector`` instantiations are unrelated types, as are a
+        vector and a handle, and differently-sized ``std::array``\\s.  A
+        limitation is acceptable; emitting C++ that does not compile is not.
         """
         return CppEmitError(
             f'unsupported: this value is `{src.format()}` where '
             f'`{want.format()}` is needed, and C++ has no conversion between '
-            f'them.  Keeping the two formats the same at this point avoids it.',
+            f'them.  Keeping the two representations the same at this point '
+            f'avoids it.',
             at=at,
         )
 
@@ -1039,21 +1161,31 @@ class CppEmitter(Visitor):
         """
         assert not want.boxed, 'the caller boxes; see _convert_storage'
         base = self._bind_operand(code)
-        if not isinstance(src.elt, CppList):
-            # Flat: the range constructor converts each element on the way in.
+        sized = self._is_sized(want)
+        if not isinstance(src.elt, CppList) and not sized:
+            # Flat vector: the range constructor converts each element on the
+            # way in.  A fixed-size target has no such constructor, so the loop
+            # below stores by index instead.
             return self._list_new_range(
                 want, self._list_begin(src, base), self._list_end(src, base),
             )
-        out, i = self._fresh_temp(), self._fresh_temp()
+        i = self._fresh_temp()
         n = self._list_len(src, base)
-        self.writer.add_line(f'{want.format()} {out};')
-        self.writer.add_line(f'{self._member(want, out)}reserve({n});')
+        if sized:
+            out = self._declare_empty_list(want)
+        else:
+            out = self._fresh_temp()
+            self.writer.add_line(f'{want.format()} {out};')
+            self.writer.add_line(f'{self._member(want, out)}reserve({n});')
         self.writer.add_line(f'for (size_t {i} = 0; {i} < {n}; ++{i}) {{')
         self.writer.indent()
         elt = self._convert_storage(
             self._list_at_raw(src, base, i), src.elt, want.elt, at=at,
         )
-        self.writer.add_line(f'{self._list_push(want, out, elt)};')
+        self.writer.add_line(
+            f'{self._list_at_raw(want, out, i)} = {elt};' if sized
+            else f'{self._list_push(want, out, elt)};'
+        )
         self.writer.dedent()
         self.writer.add_line('}')
         return out
@@ -1073,7 +1205,7 @@ class CppEmitter(Visitor):
             # A name the emitter binds as `const auto&` has the type C++
             # *deduced* from its initializer, not the one `storage_of` chose --
             # so follow the alias.  Missing this is how `[L3, L3]` came to hold
-            # a `fpy::list<uint8_t>` in a `std::vector<fpy::list<float>>`.
+            # a boxed `uint8_t` list in a vector of boxed `float` lists.
             src = self._reference_source(d)
             if src is not None:
                 return self._storage_or_none(src)
@@ -1156,16 +1288,25 @@ class CppEmitter(Visitor):
     def _entry_rm(self, site: ContextScopeSite) -> RM | None:
         """The rounding mode the caller contractually delivers at *site*.
 
-        The scope's RM for a concrete, ``fesetround``-supported FP context, since the
-        FPy annotation pins that responsibility on the caller; ``None`` for symbolic,
-        integer or unsupported ones, where a nested context must set the mode itself.
+        The scope's own RM for a concrete, ``fesetround``-supported FP context --
+        the FPy annotation pins that on the caller.  A scope naming no FP mode
+        (absent, ``REAL``, integer) falls back to ``RNE``: it is the same caller
+        either way, so a ``REAL``-topped kernel has no reason to assume less than
+        an ``FP64``-topped one, and a nested RNE ``with`` stays a no-op instead of
+        a save/set/restore per execution.
+
+        ``None`` is for the cases with no answer -- a context nothing resolved, an
+        RM ``fesetround`` cannot express -- where a nested ``with`` must set the
+        mode unconditionally.
         """
         scope = self._scope_by_site.get(site)
         if scope is None:
-            return None
+            return RM.RNE
         resolved = self._resolve_scope_ctx(scope)
-        if not isinstance(resolved, EFloatContext):
+        if resolved is None:
             return None
+        if not isinstance(resolved, EFloatContext):
+            return RM.RNE
         if resolved.rm not in _FE_RM_MACRO:
             return None
         return resolved.rm
@@ -1714,7 +1855,7 @@ class CppEmitter(Visitor):
         return acc.s, acc.ty
 
     def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
-        """``enumerate(xs)`` builds a ``fpy::list<std::tuple<I, T>>``
+        """``enumerate(xs)`` builds a list of ``std::tuple<I, T>``
         where ``I`` is the index integer type and ``T`` is the source
         element type — both come from format inference on the
         Enumerate node itself.
@@ -1731,17 +1872,9 @@ class CppEmitter(Visitor):
 
         src_ty = self._storage_for_expr(e.args[0])
         src = self._bind_operand(src_str)
-        result = self._fresh_temp()
-        self.writer.add_line(
-            f'{result_ty.format()} {result} = '
-            f'{self._list_new_sized(result_ty, self._list_len(src_ty, src))};'
+        result, i = self._open_fill_loop(
+            result_ty, self._list_len(src_ty, src),
         )
-        i = self._fresh_temp()
-        self.writer.add_line(
-            f'for (size_t {i} = 0; {i} < '
-            f'{self._list_len(src_ty, src)}; ++{i}) {{'
-        )
-        self.writer.indent()
         self.writer.add_line(
             f'{self._list_at_raw(result_ty, result, i)} = std::make_tuple('
             f'static_cast<{idx_ty.format()}>({i}), '
@@ -1811,9 +1944,9 @@ class CppEmitter(Visitor):
                 at=e,
             )
         int_ty = result_ty.elt.format()
-        tmp = self._fresh_temp()
         match e:
             case Range1():
+                tmp = self._fresh_temp()
                 stop_cast = self._range_bound(e.arg, result_ty.elt, ctx)
                 # ``range(stop)`` with ``stop <= 0`` is empty; clamp before
                 # the unsigned cast so a negative stop doesn't wrap to a
@@ -1832,6 +1965,7 @@ class CppEmitter(Visitor):
                 )
                 return tmp
             case Range2():
+                tmp = self._fresh_temp()
                 start_cast = self._range_bound(e.first, result_ty.elt, ctx)
                 stop_cast = self._range_bound(e.second, result_ty.elt, ctx)
                 size_expr = (
@@ -1853,21 +1987,16 @@ class CppEmitter(Visitor):
                 stop_cast = self._range_bound(e.args[1], result_ty.elt, ctx)
                 step_cast = self._range_bound(e.args[2], result_ty.elt, ctx)
                 ctr = self._fresh_temp()
-                self.writer.add_line(
-                    f'{result_ty.format()} {tmp} = '
-                    f'{self._list_empty(result_ty)};'
-                )
+                out, append = self._open_list_build(result_ty)
                 self.writer.add_line(
                     f'for ({int_ty} {ctr} = {start_cast}; '
                     f'{ctr} < {stop_cast}; {ctr} += {step_cast}) {{'
                 )
                 self.writer.indent()
-                self.writer.add_line(
-                    f'{self._list_push(result_ty, tmp, ctr)};'
-                )
+                self.writer.add_line(f'{append(ctr)};')
                 self.writer.dedent()
                 self.writer.add_line('}')
-                return tmp
+                return out
             case _:
                 raise CppEmitError(
                     f'unsupported range op: {type(e).__name__}', at=e,
@@ -2162,14 +2291,21 @@ class CppEmitter(Visitor):
         return acc
 
     def _emit_empty(self, e: Empty, result_ty: CppType, ctx) -> str:
-        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised vector of
+        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised list of
         storage *result_ty*.
 
-        Sizes are read off the call site and emitted as nested ``make_list`` calls
+        Sizes are read off the call site and emitted as nested constructor calls
         right-to-left, so the innermost element type bubbles out.  ``empty()`` is a
         scalar ``T()``, which format inference resolves at the call site.
+
+        Each non-constant dimension is bound to a name first, so that a
+        fixed-size layer repeating its fill ``K`` times does not evaluate a
+        dimension more than once.
         """
-        dims = [self._visit_expr(a, ctx) for a in e.args]
+        dims = []
+        for a in e.args:
+            d = self._visit_expr(a, ctx)
+            dims.append(d if d.isdigit() else self._bind_operand(d))
         dim_storages = [
             self._scalar_storage_for_expr(a) for a in e.args
         ]
@@ -2187,6 +2323,10 @@ class CppEmitter(Visitor):
                 f'dimensions were given',
                 at=e,
             )
+        if self._all_sized(result_ty):
+            # Every dimension is in the type, and value-initialising a nested
+            # `std::array` zeroes it recursively -- no per-layer fill needed.
+            return self._list_empty(result_ty)
         # Build from the inside out: innermost is ``T()``-default,
         # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
         ty: CppType = result_ty
@@ -2204,7 +2344,7 @@ class CppEmitter(Visitor):
 
     def _emit_zip(self, e: Zip, ctx) -> str:
         """``zip(xs1, …, xsN)`` builds a
-        ``fpy::list<std::tuple<T1, …, TN>>`` whose length matches the
+        list of ``std::tuple<T1, …, TN>`` whose length matches the
         first iterable.  Each iterable is bound to a temp once to
         evaluate side-effects in source order; the tuple type comes
         from format inference on the Zip node."""
@@ -2224,17 +2364,9 @@ class CppEmitter(Visitor):
             )
 
         head_ty, head = srcs[0]
-        result = self._fresh_temp()
-        self.writer.add_line(
-            f'{result_ty.format()} {result} = '
-            f'{self._list_new_sized(result_ty, self._list_len(head_ty, head))};'
+        result, i = self._open_fill_loop(
+            result_ty, self._list_len(head_ty, head),
         )
-        i = self._fresh_temp()
-        self.writer.add_line(
-            f'for (size_t {i} = 0; {i} < '
-            f'{self._list_len(head_ty, head)}; ++{i}) {{'
-        )
-        self.writer.indent()
         elts = ', '.join(
             self._list_at_raw(ty, src, i) for ty, src in srcs
         )
@@ -2245,6 +2377,7 @@ class CppEmitter(Visitor):
         self.writer.dedent()
         self.writer.add_line('}')
         return result
+
     def _scalar_cast_types(self, e):
         """Source/target scalar storage for a round-like node *e*.
 
@@ -2357,8 +2490,8 @@ class CppEmitter(Visitor):
         params = abi.params if abi is not None else None
         parts = []
         for i, a in enumerate(e.args):
-            want = params[i].ty if params and i < len(params) else None
-            parts.append(self._adapt_arg(self._visit_expr(a, ctx), a, want))
+            param = params[i] if params and i < len(params) else None
+            parts.append(self._adapt_arg(self._visit_expr(a, ctx), a, param))
         target = self._call_names.get(e, str(e.func))
         call = f'{target}({", ".join(parts)})'
         return self._adapt_result(call, e, abi.ret if abi is not None else None)
@@ -2367,17 +2500,19 @@ class CppEmitter(Visitor):
         """*emitted* as the caller needs the result.
 
         A callee's return representation is fixed by its own body, so a caller
-        keeping a handle for a local reason has to make one.  The result is a prvalue
-        the callee handed over -- which is why it unboxed -- so this moves rather
-        than copies.  Only this direction arises; ``unbox`` gives the caller a handle
-        whenever the callee returns one.
+        keeping a handle for a local reason has to make one.  The result is a
+        prvalue the callee handed over -- which is why it unboxed -- so
+        re-boxing a vector moves rather than copies; a *sized* result headed for
+        a vector or a handle is rebuilt, which copies.  Only this direction
+        arises; ``unbox`` gives the caller a handle whenever the callee returns
+        one.
         """
         if got is None or self.unbox is None:
             return emitted
         want = self._storage_for_expr(e)
         if not (isinstance(got, CppList) and isinstance(want, CppList)):
             return emitted
-        if got.boxed == want.boxed and got.elt == want.elt:
+        if got == want:
             return emitted
         if got.boxed or got.elt != want.elt:
             raise CppEmitError(
@@ -2385,21 +2520,23 @@ class CppEmitter(Visitor):
                 f'is wanted',
                 at=e,
             )
-        self._is_boxed(want)  # strict tripwire: a handle is made here
-        return f'std::make_shared<{got.format()}>({emitted})'
+        # What remains is a value adjustment -- a size drop, a boxing, or both.
+        return self._convert_storage(emitted, got, want, at=e)
 
-    def _adapt_arg(self, emitted: str, e: Expr, want: CppType | None) -> str:
+    def _adapt_arg(self, emitted: str, e: Expr, param: ParamAbi | None) -> str:
         """*emitted* as the callee spelled its parameter.
 
         A callee's signature is fixed by its own body, so a caller holding a handle
         the callee does not want hands over the pointee -- same elements, no copy,
         and a write still reaches the caller.  Only this direction arises: ``unbox``
         gives an argument a handle whenever the callee declared one.  Just as well,
-        since the reverse needs ``fpy::borrow``, which cannot bind a ``const``
+        since the reverse needs an aliasing ``shared_ptr`` (the test-side
+        ``fpy::borrow`` interop helper), which cannot bind a ``const``
         reference.
         """
-        if want is None or self.unbox is None:
+        if param is None or self.unbox is None:
             return emitted
+        want = param.ty
         have = self._storage_or_none(e)
         if not (isinstance(have, CppList) and isinstance(want, CppList)):
             self._require_bridgeable(have, want, e)
@@ -2407,6 +2544,21 @@ class CppEmitter(Visitor):
         if have.elt != want.elt:
             # The callee declared a different element type; nothing at the call
             # site can bridge two `std::vector` instantiations.
+            raise self._refuse_mismatch(have, want, e)
+        if have.size != want.size:
+            if have.boxed and self._is_sized(want) and not param.written:
+                # The spec was keyed at the argument *value*'s proven length,
+                # which the caller's representation joined away (its region is
+                # shared, so the value lives behind a handle).  For a read-only
+                # parameter a copy is observationally equal, and its length is
+                # `K` by the key's construction.
+                base = self._bind_operand(emitted)
+                return self._list_new_range(
+                    want, self._list_begin(have, base),
+                    self._list_end(have, base),
+                )
+            # Otherwise nothing bridges: a *written* sized parameter cannot take
+            # a copy, since the write has to reach the caller.
             raise self._refuse_mismatch(have, want, e)
         if have.boxed == want.boxed:
             return emitted
@@ -2433,22 +2585,18 @@ class CppEmitter(Visitor):
         return self._emit_list_comp_at(e, self._storage_for_expr(e), ctx)
 
     def _emit_list_comp_at(self, e: ListComp, result_ty: CppType, ctx) -> str:
-        # A temp plus nested loops that `push_back` the element expression.
-        # *result_ty* is supplied because a comprehension builds its vector
+        # A temp plus nested loops that append the element expression.
+        # *result_ty* is supplied because a comprehension builds its list
         # element by element, making it a contributor to whatever place it
         # reaches -- see :meth:`_emit_at`.
-        tmp = self._fresh_temp()
-        self.writer.add_line(
-                    f'{result_ty.format()} {tmp} = '
-                    f'{self._list_empty(result_ty)};'
-                )
+        tmp, append = self._open_list_build(result_ty)
 
         for target, iterable in zip(e.targets, e.iterables):
             self._open_comp_loop(target, iterable, e, ctx)
 
         elt_want = result_ty.elt if isinstance(result_ty, CppList) else None
         elt = self._emit_at(e.elt, elt_want, ctx)
-        self.writer.add_line(f'{self._list_push(result_ty, tmp, elt)};')
+        self.writer.add_line(f'{append(elt)};')
 
         for _ in e.targets:
             self.writer.dedent()
