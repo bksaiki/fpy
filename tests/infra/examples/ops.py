@@ -11,7 +11,7 @@ def test_logb(x: fp.Real) -> fp.Real:
 
 @fp.fpy
 def test_pow(x: fp.Real, y: fp.Real) -> fp.Real:
-    """Example function for `pow`, via `**` surface syntax."""
+    """Example function for `pow`."""
     return x ** y
 
 @fp.fpy

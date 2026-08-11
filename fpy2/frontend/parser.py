@@ -130,15 +130,11 @@ _binop_table: dict[type[ast.operator], type[BinaryOp]] = {
 }
 
 def _make_binop(cls: type[BinaryOp], lhs: Expr, rhs: Expr, loc: Location) -> Expr:
-    """Construct a `_binop_table` node.
-
-    A named operator (`**` -> `Pow`) also carries a `func` symbol, which is
-    `None` here since the source wrote operator syntax rather than a call.
-    """
-    ctor: Any = cls
+    """Construct a `_binop_table` node; operator syntax carries no `func`."""
     if issubclass(cls, NamedBinaryOp):
-        return ctor(None, lhs, rhs, loc)
-    return ctor(lhs, rhs, loc)
+        return cls(None, lhs, rhs, loc)
+    else:
+        return cls(lhs, rhs, loc)
 
 # Python comparison operators.
 _cmpop_table: dict[type[ast.cmpop], CompareOp] = {

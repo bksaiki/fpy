@@ -34,15 +34,17 @@ def _nonneg_int(x: EngineArg) -> int | None:
             # `is_integer()` is false for Inf and NaN, so `int()` is safe here
             if not x.is_integer():
                 return None
-            n = int(x)
         case Fraction():
             if x.denominator != 1:
                 return None
-            n = int(x)
         case _:
             raise RuntimeError("unreachable case")
+    n = int(x)
     return n if n >= 0 else None
 
+
+_MAX_POW_EXPONENT = 1 << 16
+"""largest exponent `pow` folds: `x ** n` has `n` times the significand of `x`"""
 
 _real_engine_inst = None
 """single instance of Real engine"""
@@ -297,12 +299,9 @@ class RealEngine(Engine):
                     raise RuntimeError("unreachable case")
 
     def pow(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        # Exact only for a non-negative integer exponent, where the result is
-        # repeated multiplication. A negative exponent needs division and a
-        # non-integral one is irrational in general, so both decline like
-        # `div` does.
+        # only exact for a small non-negative integer exponent
         n = _nonneg_int(y)
-        if n is None:
+        if n is None or n > _MAX_POW_EXPONENT:
             return None
 
         if _is_nan(x) or _is_inf(x):
@@ -313,11 +312,11 @@ class RealEngine(Engine):
                 # NaN ** n = NaN
                 return Float(isnan=True, ctx=REAL)
             else:
-                # Inf ** n = Inf; the sign survives only an odd exponent
+                # Inf ** n = Inf
                 s = _signbit(x) and n % 2 == 1
                 return Float(s=s, isinf=True, ctx=REAL)
         else:
-            # x is finite; `** 0` is 1 in either representation
+            # x is finite
             match x:
                 case Float():
                     return Float(x=x.as_real() ** n, ctx=REAL)

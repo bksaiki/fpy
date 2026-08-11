@@ -9,6 +9,8 @@ import pytest
 
 from hypothesis import given, strategies as st
 
+from fpy2.number.engine.real import _MAX_POW_EXPONENT
+
 from .generators import floats, common_contexts
 
 
@@ -97,11 +99,11 @@ class TestTupleAccessors:
 
 class TestPowReal:
     """``pow`` under ``REAL``, which is exact only for a non-negative
-    integer exponent (the case ``**`` used to desugar to)."""
+    integer exponent."""
 
     @given(
         floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False),
-        st.integers(min_value=0, max_value=8),
+        st.integers(min_value=0, max_value=8)
     )
     def test_matches_repeated_mul(self, x: fp.Float, n: int) -> None:
         acc = fp.round(1, fp.REAL)
@@ -114,7 +116,7 @@ class TestPowReal:
         (-2, 3, -8),
         (-2, 2, 4),
         (Fraction(2, 3), 3, Fraction(8, 27)),
-        # `** 0` is 1 for every base, so no operand is inspected
+        # `** 0` is 1 for every base
         (2, 0, 1),
         (float('inf'), 0, 1),
         (float('nan'), 0, 1),
@@ -123,7 +125,6 @@ class TestPowReal:
         assert fp.pow(x, n, fp.REAL) == expect
 
     def test_signed_zero(self) -> None:
-        # the sign survives only an odd exponent
         assert fp.pow(-0.0, 3, fp.REAL).s
         assert not fp.pow(-0.0, 2, fp.REAL).s
 
@@ -141,7 +142,11 @@ class TestPowReal:
 
     @pytest.mark.parametrize('n', [-1, -2, 0.5, 2.5, float('inf'), float('nan')])
     def test_inexact_exponent_declines(self, n) -> None:
-        # a negative exponent needs division and a non-integral one is
-        # irrational in general; neither is exact, so `REAL` refuses
         with pytest.raises(NotImplementedError):
             fp.pow(2.0, n, fp.REAL)
+
+    def test_oversized_exponent_declines(self) -> None:
+        # folding `x ** n` exactly costs `n` times the significand of `x`
+        assert fp.pow(3.0, _MAX_POW_EXPONENT, fp.REAL) is not None
+        with pytest.raises(NotImplementedError):
+            fp.pow(3.0, _MAX_POW_EXPONENT + 1, fp.REAL)

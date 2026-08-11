@@ -338,11 +338,14 @@ class Float:
         This operation is only valid for `exponent` of type `int` with `exponent >= 0`.
         """
         if not isinstance(exponent, int):
-            raise TypeError(f'unsupported operand type(s) for **: \'RealFloat\' and \'{type(exponent)}\'')
+            raise TypeError(f'unsupported operand type(s) for **: \'Float\' and \'{type(exponent)}\'')
         if exponent < 0:
             raise ValueError('negative exponent unsupported; cannot be implemented exactly')
 
-        if self.is_nar():
+        if exponent == 0:
+            # x ** 0 = 1 for every x, including Inf and NaN
+            return Float(c=1, ctx=None)
+        elif self.is_nar():
             s = self._real._s and (exponent % 2 != 0)
             return Float(x=self, s=s, ctx=None)
         else:
