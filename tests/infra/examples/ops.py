@@ -10,6 +10,11 @@ def test_logb(x: fp.Real) -> fp.Real:
     return fp.logb(x)
 
 @fp.fpy
+def test_pow(x: fp.Real, y: fp.Real) -> fp.Real:
+    """Example function for `pow`, via `**` surface syntax."""
+    return x ** y
+
+@fp.fpy
 def test_empty1(n: fp.Real):
     """Example function for `empty`."""
     arr = fp.empty(n)
