@@ -18,8 +18,8 @@ def lod_anisotropic(
     dy_v: fp.Real,
     max_aniso: fp.Real,
 ):
-    dx2 = dx_u ** 2 + dx_v ** 2
-    dy2 = dy_u ** 2 + dy_v ** 2
+    dx2 = dx_u * dx_u + dx_v * dx_v
+    dy2 = dy_u * dy_u + dy_v * dy_v
     det = abs(dx_u * dy_v - dx_v * dy_u)
     x_major = dx2 > dy2
     major2 = dx2 if x_major else dy2
