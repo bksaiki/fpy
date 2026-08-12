@@ -9,7 +9,7 @@ import pytest
 
 import fpy2 as fp
 
-from fpy2.ast.fpyast import AllOf, AnyOf, ListComp
+from fpy2.ast import AllOf, AnyOf, ListComp
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.strategies import fuse

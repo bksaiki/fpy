@@ -4,24 +4,23 @@ import pytest
 
 import fpy2 as fp
 
-from fpy2.ast.fpyast import Assign, ContextStmt, ForStmt, Var
+from fpy2.ast import Assign, ContextStmt, ForStmt, Var
+from fpy2.ast.visitor import DefaultVisitor
 from fpy2.strategies import lift_context
 
 
 def _find_stmt(ast, node_type):
-    """Return the first statement of *node_type* in *ast*, descending
-    into compound-statement bodies."""
-    def walk(stmts):
-        for s in stmts:
-            if isinstance(s, node_type):
-                return s
-            body = getattr(s, 'body', None)
-            if body is not None and hasattr(body, 'stmts'):
-                hit = walk(body.stmts)
-                if hit is not None:
-                    return hit
-        return None
-    return walk(ast.body.stmts)
+    """Return the first statement of *node_type* in *ast*."""
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_statement(self, stmt, ctx):
+            if isinstance(stmt, node_type):
+                found.append(stmt)
+            return super()._visit_statement(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return found[0] if found else None
 
 
 @fp.fpy

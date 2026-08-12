@@ -65,6 +65,18 @@ def _leaf_twice(x: fp.Real) -> fp.Real:
     return _leaf(x) * _leaf(x + 1)
 
 
+@fp.fpy
+def _below(x: fp.Real) -> bool:
+    return x < 10.0
+
+
+@fp.fpy
+def _while_call(x: fp.Real) -> fp.Real:
+    while _below(x):
+        x = x + 3.0
+    return x
+
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -81,6 +93,8 @@ class TestInline:
     def test_recursive_default_flattens(self):
         out = inline(_top)
         assert _count_fpy_calls(out.ast) == 0
+        # the inlined callees' names are no longer free variables
+        assert not {str(v) for v in out.ast.free_vars} & {'_mid', '_leaf'}
         for x in (0.0, 1.5, -3.25, 10.0):
             assert _top(x) == out(x)
 
@@ -106,6 +120,14 @@ class TestInline:
     def test_no_calls_noop(self):
         out = inline(_leaf)
         assert out.ast.is_equiv(_leaf.ast)
+
+    def test_while_cond_rejected(self):
+        # splicing a body before the loop would evaluate the condition
+        # only once — refuse rather than emit a non-terminating loop
+        with pytest.raises(RuntimeError):
+            inline(_while_call)
+        with pytest.raises(RuntimeError):
+            inline(_while_call, 0)
 
     def test_type_errors(self):
         with pytest.raises(TypeError):
@@ -133,6 +155,8 @@ class TestInlineWhere:
     def test_where_same_callee_two_sites(self):
         out = inline(_leaf_twice, 1)
         assert _fpy_callees(out.ast) == [_leaf]
+        # `_leaf` is still called at the other site — its name stays free
+        assert '_leaf' in {str(v) for v in out.ast.free_vars}
         for x in (0.0, 1.5, -3.25, 10.0):
             assert _leaf_twice(x) == out(x)
 

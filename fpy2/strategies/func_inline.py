@@ -50,8 +50,10 @@ def inline(
         If `where` does not correspond to a candidate call site.
     RuntimeError
         If a callee cannot be inlined: its body must end in exactly
-        one trailing `return` statement, and its free variables must
-        not conflict with the caller's.
+        one trailing `return` statement, its free variables must not
+        conflict with the caller's, and the call must not be in a
+        `while` condition (the spliced body would be evaluated only
+        once, before the loop).
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

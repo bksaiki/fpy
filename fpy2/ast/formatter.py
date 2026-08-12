@@ -6,10 +6,29 @@ from typing import Any
 
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
+from ..number import Context
 from .fpyast import *
 from .visitor import Visitor
 
 _Ctx = int
+
+_named_contexts: list[tuple[str, Context]] | None = None
+
+def _context_name(val: object) -> str | None:
+    """`fpy2` export name for a named context value (e.g. ``REAL``,
+    ``FP64``), or ``None``. Names are tried in sorted order so a value
+    exported under several names formats deterministically."""
+    global _named_contexts
+    if _named_contexts is None:
+        import fpy2
+        _named_contexts = [
+            (name, ctx) for name in sorted(dir(fpy2))
+            if isinstance((ctx := getattr(fpy2, name)), Context)
+        ]
+    for name, ctx in _named_contexts:
+        if ctx == val:
+            return name
+    return None
 
 class _FormatterInstance(Visitor):
     """Single-instance visitor for pretty printing FPy ASTs"""
@@ -102,6 +121,11 @@ class _FormatterInstance(Visitor):
                     if k == 'precision' or k == 'round':
                         props[k] = v
                 return FPCoreContext(**props)
+            case Context():
+                name = _context_name(e.val)
+                if name is not None:
+                    return self._fpy_qualified(name)
+                return repr(e.val)
             case _:
                 return repr(e.val)
 
@@ -363,6 +387,8 @@ class _FormatterInstance(Visitor):
         if isinstance(data, Expr):
             e = self._visit_expr(data, 0)
             return f'lambda {arg_str}: {e}'
+        elif isinstance(data, Context) and (name := _context_name(data)) is not None:
+            return self._fpy_qualified(name)
         else:
             return pformat(data)
 

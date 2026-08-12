@@ -17,11 +17,10 @@ def elim_round(func: Function) -> Function:
     their argument. Expressions are left unchanged when identity cannot
     be proven.
 
-    This is the payoff step of a precision schedule: after
-    :func:`fpy2.strategies.monomorphize` pins a context and concrete
-    argument formats, this pass deletes the roundings the pinned formats
-    made redundant. Run :func:`fpy2.strategies.simplify` afterwards to
-    clean up the temporaries the rewrite introduces.
+    Typically run after :func:`fpy2.strategies.monomorphize` pins a
+    context and concrete argument formats, which is what makes rounding
+    provably redundant; run :func:`fpy2.strategies.simplify` afterwards
+    to clean up the temporaries the rewrite introduces.
 
     Parameters
     ----------

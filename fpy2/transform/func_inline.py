@@ -10,6 +10,7 @@ from ..analysis import (
     CallGraph,
     DefineUse,
     DefineUseAnalysis,
+    PhiDef,
     Reachability,
     ReachingDefs,
     SyntaxCheck,
@@ -39,6 +40,7 @@ def _replace_ret(block: StmtBlock, new_var: NamedId):
 class _Ctx:
     stmts: list[Stmt]
     is_ctx_expr: bool
+    in_while_cond: bool = False
 
     @staticmethod
     def default():
@@ -75,9 +77,7 @@ class _FuncInline(DefaultTransformVisitor):
         self.where = where
         # Counts *candidate* call sites (calls to a `Function` that pass
         # the `funcs` filter) in visit order, outermost-first.  `where`
-        # selects one by this index.  Statements spliced from an inlined
-        # callee body are never re-visited, so the final count is the
-        # candidate-site count of the original function.
+        # selects one by this index.
         self.site_idx = 0
         # Cache of fully-inlined callee bodies, keyed by callee
         # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
@@ -105,6 +105,11 @@ class _FuncInline(DefaultTransformVisitor):
         if self.where is not None and idx != self.where:
             # a candidate site, but not the selected one
             return super()._visit_call(e, ctx)
+        if ctx.in_while_cond:
+            raise RuntimeError(
+                f'cannot inline call to `{e.fn.name}` in a `while` condition: '
+                f'the spliced body would be evaluated only once, before the loop'
+            )
 
         # Inline the callee body.  Acyclicity is guaranteed by the
         # `CallGraph` guard in `FuncInline.apply`, so this terminates.
@@ -185,6 +190,11 @@ class _FuncInline(DefaultTransformVisitor):
         return Var(t, e.loc)
 
 
+    def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
+        cond = self._visit_expr(stmt.cond, _Ctx(ctx.stmts, False, in_while_cond=True))
+        body, _ = self._visit_block(stmt.body, ctx)
+        return WhileStmt(cond, body, stmt.loc), None
+
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         ctx_e = self._visit_expr(stmt.ctx, _Ctx(ctx.stmts, True))
         body, _ = self._visit_block(stmt.body, None)
@@ -250,13 +260,16 @@ class FuncInline:
             # Bottom-up: inline each reachable function exactly once in
             # leaves-first order, reusing cached results, instead of
             # re-inlining the whole callee subtree at every call site.
+            # Entries are finished as they are built: later functions'
+            # free-variable merges consume the pruned free-var sets.
             inlined: dict[FuncDef, FuncDef] = {}
             for fdef in cg.order:
                 fdef_du = DefineUse.analyze(fdef)
-                inlined[fdef] = _FuncInline(
+                out = _FuncInline(
                     fdef, fdef_du, None, recursive=True, inlined=inlined,
                 ).apply()
-            result = inlined[func]
+                inlined[fdef] = FuncInline._finish(out)
+            return inlined[func]
         else:
             # One-level inlining, or selective inlining via `funcs` /
             # `where`: keep the per-call-site strategy.
@@ -273,6 +286,44 @@ class FuncInline:
                     f'where={where} does not correspond to a call site; '
                     f'the function has {vtor.site_idx} candidate call site(s)'
                 )
+            return FuncInline._finish(result)
 
+    @staticmethod
+    def _finish(result: FuncDef) -> FuncDef:
+        """Validate an inlined function and prune stale callee names.
+
+        Inlining removes references to callee names, but the visitor only
+        ever *adds* free variables — prune function-valued free variables
+        with no remaining uses.  Data free variables are DCE's business,
+        not ours.  The syntax check runs first so a malformed result
+        fails with a syntax error rather than inside `DefineUse`.
+        """
         SyntaxCheck.check(result, ignore_unknown=True)
-        return result
+
+        fn_names = {
+            fv for fv in result.free_vars
+            if isinstance(result.env.get(str(fv)), Function)
+        }
+        if not fn_names:
+            return result
+
+        du = DefineUse.analyze(result)
+        unused: set[NamedId] = set()
+        for name in fn_names:
+            for d in du.name_to_defs.get(name, ()):
+                if (
+                    isinstance(d, AssignDef)
+                    and d.is_free
+                    and not du.uses[d]
+                    # a phi successor means the name still flows into a merge
+                    and not any(isinstance(s, PhiDef) for s in du.successors[d])
+                ):
+                    unused.add(name)
+        if not unused:
+            return result
+
+        meta = FuncMeta(
+            result.free_vars - unused, result.meta.ctx,
+            result.meta.spec, result.meta.props, result.env,
+        )
+        return FuncDef(result.name, result.args, result.body, meta, loc=result.loc)

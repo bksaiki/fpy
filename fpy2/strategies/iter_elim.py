@@ -20,8 +20,7 @@ def elim_iter(
     :func:`fpy2.strategies.split` and :func:`fpy2.strategies.unroll_for`:
     they materialize the loop's iterable into a temporary, which for a
     derived iterable builds exactly the tuple list this pass avoids —
-    and their target rewrites defeat this pass's patterns, so the
-    opportunity does not survive them.
+    and their target rewrites defeat this pass's patterns.
 
     Patterns that do not match are left unchanged; see
     :class:`fpy2.transform.EnumerateElim` and
@@ -33,7 +32,9 @@ def elim_iter(
     func : Function
         The function to transform.
     enable_enumerate : bool
-        Rewrite ``enumerate(...)`` iterables (default `True`).
+        Rewrite ``enumerate(...)`` iterables (default `True`). This
+        handles ``enumerate(zip(...))`` as a unit, so the ``zip`` inside
+        is eliminated regardless of `enable_zip`.
     enable_zip : bool
         Rewrite ``zip(...)`` iterables (default `True`).
 

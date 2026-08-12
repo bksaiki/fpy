@@ -4,9 +4,8 @@ import pytest
 
 import fpy2 as fp
 
-from fpy2.ast.fpyast import Assign
-from fpy2.strategies import close, inline, simplify
-from fpy2.transform.free_var_elim import unclosed_data_free_vars
+from fpy2.ast import Assign
+from fpy2.strategies import close, inline
 
 
 SCALE = 2.0
@@ -56,7 +55,6 @@ class TestClose:
         out = close(_scaled)
         assert isinstance(out.ast.body.stmts[0], Assign)
         assert not out.ast.free_vars
-        assert unclosed_data_free_vars(out.ast) == []
         for x in (0.0, 1.5, -3.25):
             assert _scaled(x) == out(x)
         # the input is not mutated
@@ -77,15 +75,9 @@ class TestClose:
         assert out.ast.is_equiv(_no_free.ast)
 
     def test_after_inline(self):
-        # the guiding loop schedule: inlining `_mul_add` makes SCALE
-        # free in `_dot`; `close` then bakes it
+        # inlining `_mul_add` makes SCALE free in `_dot`; `close` bakes it
         sched = close(inline(_dot))
-        assert unclosed_data_free_vars(sched.ast) == []
-        # `inline` leaves the inlined callee's name as a stale free-var
-        # entry (the body no longer references it); a `Function` has no
-        # literal form, so `close` leaves it and DCE prunes it
-        assert {str(v) for v in sched.ast.free_vars} == {'_mul_add'}
-        assert not simplify(sched).ast.free_vars
+        assert not sched.ast.free_vars
         xs, ys = [1.0, 2.0, 3.0], [0.5, -1.5, 2.5]
         assert _dot(xs, ys) == sched(xs, ys)
 

@@ -11,7 +11,7 @@ import pytest
 
 import fpy2 as fp
 
-from fpy2.ast.fpyast import Enumerate, Zip
+from fpy2.ast import Enumerate, Zip
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.strategies import elim_iter, inline, unroll_for
 
@@ -95,9 +95,17 @@ class TestElimIter:
         out = elim_iter(_weighted_sum, enable_enumerate=False)
         assert _has_node(out.ast, Enumerate)
 
+    def test_enumerate_flag_owns_enum_zip(self):
+        # `enumerate(zip(...))` is handled as a unit by EnumerateElim,
+        # so the inner zip goes even with `enable_zip=False`
+        out = elim_iter(_enum_zip, enable_zip=False)
+        assert not _has_node(out.ast, Enumerate)
+        assert not _has_node(out.ast, Zip)
+        assert _enum_zip(_XS, _YS) == out(_XS, _YS)
+
     def test_loop_schedule_composition(self):
-        # the guiding loop schedule: inline, then eliminate the derived
-        # iterable, then unroll the resulting indexed loop
+        # inline, then eliminate the derived iterable, then unroll the
+        # resulting indexed loop
         sched = inline(_dot)
         sched = elim_iter(sched)
         sched = unroll_for(sched, times=1)
