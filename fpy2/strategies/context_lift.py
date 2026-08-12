@@ -30,6 +30,29 @@ def lift_context(func: Function) -> Function:
     -------
     Function
         The transformed function.
+
+    Examples
+    --------
+    ::
+
+        @fp.fpy
+        def accum(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                with fp.IEEEContext(8, 32):
+                    acc = acc + x
+            return acc
+
+    ``lift_context(accum)`` builds the context once, before the loop::
+
+        @fp.fpy
+        def accum(xs):
+            ctx = fp.IEEEContext(8, 32)
+            acc = 0
+            for x in xs:
+                with ctx:
+                    acc = (acc + x)
+            return acc
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

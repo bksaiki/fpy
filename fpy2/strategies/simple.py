@@ -27,6 +27,26 @@ def simplify(
     (ignored when ``enable_const_fold=False``).  A common use is
     ``enable_const_fold_context=False`` to simplify boolean / numeric
     expressions while leaving ``with``-block contexts untouched.
+
+    Examples
+    --------
+    ::
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                a = 1.0 + 2.0
+                y = x
+                if False:
+                    return -1.0
+                return a * y
+
+    ``simplify(f)`` yields::
+
+        @fp.fpy
+        def f(x):
+            with fp.FP64:
+                return (3 * x)
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

@@ -49,6 +49,30 @@ def elim_iter(
         for such programs the rewritten function may observably differ
         from the original (silently truncating, or failing with a
         different error).
+
+    Examples
+    --------
+    ::
+
+        @fp.fpy
+        def dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x, y in zip(xs, ys):
+                acc = acc + x * y
+            return acc
+
+    ``elim_iter(dot)`` yields::
+
+        @fp.fpy
+        def dot(xs, ys):
+            acc = 0
+            _src = xs
+            _src5 = ys
+            for _i in range(len(_src)):
+                x = _src[_i]
+                y = _src5[_i]
+                acc = (acc + (x * y))
+            return acc
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

@@ -54,6 +54,31 @@ def inline(
         conflict with the caller's, and the call must not be in a
         `while` condition (the spliced body would be evaluated only
         once, before the loop).
+
+    Examples
+    --------
+    ::
+
+        @fp.fpy
+        def sq(x: fp.Real) -> fp.Real:
+            return x * x
+
+        @fp.fpy
+        def hypot2(x: fp.Real, y: fp.Real) -> fp.Real:
+            return sq(x) + sq(y)
+
+    ``inline(hypot2)`` yields::
+
+        @fp.fpy
+        def hypot2(x, y):
+            x3 = x
+            t = (x3 * x3)
+            x4 = y
+            t5 = (x4 * x4)
+            return (t + t5)
+
+    while ``inline(hypot2, 0)`` inlines only the ``sq(x)`` site and
+    keeps the ``sq(y)`` call.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

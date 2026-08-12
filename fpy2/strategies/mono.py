@@ -49,6 +49,25 @@ def monomorphize(
     ValueError
         If `args` has the wrong arity, or an entry (or `ctx`) conflicts
         with the function's inferred types.
+
+    Examples
+    --------
+    ::
+
+        from fpy2.types import RealType
+
+        @fp.fpy
+        def prod3(x: fp.Real, y: fp.Real, z: fp.Real) -> fp.Real:
+            return (x * y) * z
+
+    ``monomorphize(prod3, fp.FP64, [RealType(fp.FP32)] * 3)`` pins the
+    caller context and every argument format::
+
+        @fp.fpy(
+            ctx=fp.FP64,
+        )
+        def prod3(x, y, z):
+            return ((x * y) * z)
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

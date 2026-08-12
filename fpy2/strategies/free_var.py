@@ -30,6 +30,23 @@ def close(func: Function) -> Function:
     -------
     Function
         The transformed function.
+
+    Examples
+    --------
+    ::
+
+        SCALE = 2.0
+
+        @fp.fpy
+        def scaled(x: fp.Real) -> fp.Real:
+            return SCALE * x
+
+    ``close(scaled)`` yields::
+
+        @fp.fpy
+        def scaled(x):
+            SCALE = 2
+            return (SCALE * x)
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
