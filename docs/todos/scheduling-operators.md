@@ -200,8 +200,9 @@ constants.
 def close(func: Function) -> Function
 ```
 
-Raises (via the transform) on free variables with no literal form;
-say so in the docstring.
+Captures with no literal form (a called function, a module, a rounding
+context) are deliberately left free rather than raising — they resolve
+via their own machinery; say so in the docstring.
 
 ## Validation
 

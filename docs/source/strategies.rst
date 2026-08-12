@@ -7,6 +7,8 @@ to create more complex transformations.
 
 The available strategies are found in the :mod:`fpy2.strategies` module:
 
+.. autofunction:: fpy2.strategies.close
+
 .. autofunction:: fpy2.strategies.elim_iter
 
 .. autofunction:: fpy2.strategies.elim_round
