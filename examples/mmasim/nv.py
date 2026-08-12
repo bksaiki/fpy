@@ -10,17 +10,26 @@ Every output element of an MMA `D = A x B + C` is computed independently
 as a dot-product-accumulate `d = c + sum_k a_k * b_k` (paper, Sec. 3.1.1),
 so the models here are written at that level.
 
+Each model is built by calling a `make_XXX` factory with the
+per-instruction parameters; input and accumulator formats are given as
+contexts (`EFloatContext`, or `ExpContext` for E8M0 scales; only their
+`emin` is read). For example, Hopper's FP16 x FP16 + FP32 wgmma
+instruction with K = 32 is:
+
+    dpa = make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32)
+    d = dpa(a_row, b_col, c)
+
 Instruction-to-model mapping on NVIDIA Tensor Cores (Table 3):
 
-    FP64            -> `fma_dpa`   (chain of standard FMAs)
-    TF32/BF16/FP16  -> `t_fdpa`    (truncated FDPA)
-    FP8, FP6/FP4    -> `t_fdpa`
-    MXFP8/6/4       -> `st_fdpa`   (scaled truncated FDPA)
-    MXFP4/NVFP4     -> `gst_fdpa`  (group-scaled truncated FDPA)
+    FP64            -> `make_fma_dpa`    (chain of standard FMAs)
+    TF32/BF16/FP16  -> `make_t_fdpa`     (truncated FDPA)
+    FP8, FP6/FP4    -> `make_t_fdpa`
+    MXFP8/6/4       -> `make_st_fdpa`    (scaled truncated FDPA)
+    MXFP4/NVFP4     -> `make_gst_fdpa`   (group-scaled truncated FDPA)
 
-When K exceeds the FDPA arity `Lmax`, FDPAs are chained (`t_fdpa_chain`).
-TF32 instructions truncate their FP32 operands to TF32 (`RZ_TF32`)
-before the dot product.
+When K exceeds the FDPA arity `Lmax`, FDPAs are chained
+(`make_t_fdpa_chain`). TF32 instructions truncate their FP32 operands
+to TF32 (`RZ_TF32`) before the dot product.
 
 T-FDPA / ST-FDPA parameters by architecture (paper Table 4; `e_zero`
 from the MMA-Sim reference implementation, keyed by the accumulator
@@ -53,9 +62,20 @@ GST-FDPA parameters (Table 5):
 
     Blackwell/RTX, MXFP4/NVFP4: L = 64, G = 16, F = 35,
     rho = RZ_FP32, e_zero = -139
+
+`e_zero` is the exponent an exact-zero term reads out of the internal
+alignment datapath. When omitted, the factories derive it as `3 - F`
+for FP16-accumulate `mma`-class instructions and `-108 - F` otherwise
+(`is_mma=False` covers wgmma/tcgen05, whose FP16-accumulate datapath
+is FP32-wide). The derivation tracks each generation's base F, so the
+FP8 instructions (F = 13) must pass the architecture's `e_zero`
+explicitly, per the table above; GST-FDPA defaults to -139.
 """
 
 import fpy2 as fp
+
+###########################################################
+# Rounding contexts
 
 # conversion functions `rho` (Table 2); on overflow the hardware
 # produces infinity even in RZ mode, see `fdpa_round`
@@ -67,19 +87,8 @@ RNE_FP16 = fp.FP16
 # input conversion applied by TF32 instructions to their FP32 operands
 RZ_TF32 = fp.IEEEContext(8, 19, fp.RM.RTZ)
 
-# emin of the input formats, for `exponent`
-EMIN_FP32 = fp.FP32.emin
-EMIN_TF32 = fp.TF32.emin
-EMIN_BF16 = fp.BF16.emin
-EMIN_FP16 = fp.FP16.emin
-EMIN_E4M3 = fp.MX_E4M3.emin
-EMIN_E5M2 = fp.MX_E5M2.emin
-EMIN_E3M2 = fp.MX_E3M2.emin
-EMIN_E2M3 = fp.MX_E2M3.emin
-EMIN_E2M1 = fp.MX_E2M1.emin
-EMIN_UE4M3 = fp.MX_E4M3.emin  # NVFP4 scale format (E4M3 minus the sign)
-EMIN_E8M0 = fp.MX_E8M0.emin   # MXFP scale format (never subnormal)
-
+###########################################################
+# Helpers
 
 @fp.fpy(ctx=fp.REAL)
 def join(xs, ys):
@@ -98,19 +107,6 @@ def join(xs, ys):
     return zs
 
 @fp.fpy(ctx=fp.REAL)
-def vec_sum(xs):
-    """
-    Exact sum of a non-empty list.
-
-    Folds from the first element rather than from 0 so that IEEE
-    signed-zero rules apply: a sum of all `-0.0` terms is `-0.0`.
-    """
-    acc = xs[0]
-    for x in xs[1:]:
-        acc += x
-    return acc
-
-@fp.fpy(ctx=fp.REAL)
 def fused_sum(xs, n, rm):
     """
     Fused summation of a non-empty list.
@@ -118,16 +114,13 @@ def fused_sum(xs, n, rm):
     Each summand is rounded with mode `rm` onto the fixed-point grid
     whose first unrepresentable digit is `n` (so the least significant
     representable digit has exponent `exp = n + 1`), then the rounded
-    summands are added exactly.
+    summands are added exactly. `sum` folds from the first element
+    with no `+0` identity, so IEEE signed-zero rules apply: a sum of
+    all `-0.0` terms is `-0.0`.
     """
-    ctx = fp.MPFixedContext(n, rm)
-    with ctx:
-        acc = fp.round(xs[0])
-    for x in xs[1:]:
-        with ctx:
-            t = fp.round(x)
-        acc += t
-    return acc
+    with fp.MPFixedContext(n, rm):
+        ts = [fp.round(x) for x in xs]
+    return sum(ts)
 
 @fp.fpy(ctx=fp.REAL)
 def exponent(x, emin):
@@ -152,21 +145,22 @@ def fdpa_round(s, rho):
         return fp.round(s)
 
 @fp.fpy(ctx=fp.REAL)
-def dot_prod_special_values(A, B):
+def dpa_special_values(A, B, c):
     """
-    Result of a dot product whose inputs contain a NaN or an infinity:
-    NaN if any input is NaN, any product is `inf * 0`, or two infinite
-    products disagree in sign; otherwise the common infinity.
+    Result of a dot-product-accumulate whose inputs contain a NaN or an
+    infinity (Sec. 4.2): `NaN + x = NaN`, `+/-inf + y = +/-inf`,
+    `inf - inf = NaN`, and `inf * 0 = NaN`.
+
+    The accumulator is just another summand: it seeds the scan over
+    the infinite terms.
     """
-    # any NaN => produce NaN
-    if any([fp.isnan(a) for a in A]):
-        return fp.nan()
-    if any([fp.isnan(b) for b in B]):
+    # any NaN summand => produce NaN
+    if any([fp.isnan(a) for a in A]) or any([fp.isnan(b) for b in B]) or fp.isnan(c):
         return fp.nan()
 
     # any infinity => produce either infinity or NaN
-    has_inf = False
-    inf_sgn = False
+    has_inf = fp.isinf(c)
+    inf_sgn = fp.signbit(c)
     for a, b in zip(A, B):
         if fp.isinf(a) or fp.isinf(b):
             # actually compute the product
@@ -187,159 +181,256 @@ def dot_prod_special_values(A, B):
     assert has_inf, "expected either NaN or infinity in the input"
     return -fp.inf() if inf_sgn else fp.inf()
 
-@fp.fpy(ctx=fp.REAL)
-def dpa_special_values(A, B, c):
+###########################################################
+# Model factories
+
+def _default_e_zero(c_ctx: fp.EFloatContext, F: int, is_mma: bool) -> int:
+    """The `e_zero` of the standard (non-FP8, non-GST) instructions."""
+    if is_mma and c_ctx.emin == fp.FP16.emin:
+        return 3 - F    # mma-class FP16-accumulate datapath
+    return -108 - F     # FP32-wide datapath
+
+def make_fma_dpa(ctx: fp.Context):
     """
-    Result of a dot-product-accumulate whose inputs contain a NaN or an
-    infinity (Sec. 4.2): `NaN + x = NaN`, `+/-inf + y = +/-inf`,
-    `inf - inf = NaN`, and `inf * 0 = NaN`.
+    Builds a Phi_FMA dot-product-accumulate (Algorithm 4): a chain of
+    standard FMAs under `ctx` (FP64 or FP32, round-to-nearest-even);
+    all FP64 MMA instructions.
     """
-    if fp.isnan(c):
-        return fp.nan()
+    @fp.fpy(ctx=fp.REAL)
+    def fma_dpa(A, B, c):
+        """Chain of standard FMAs (Algorithm 4)."""
+        d = c
+        for a, b in zip(A, B):
+            with ctx:
+                d = fp.fma(a, b, d)
+        return d
+    return fma_dpa
 
-    if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]):
-        s = dot_prod_special_values(A, B)
-        if fp.isnan(s):
-            return s
-        # s is +/-inf; a conflicting infinite accumulator produces NaN
-        if fp.isinf(c) and fp.signbit(c) != fp.signbit(s):
-            return fp.nan()
-        return s
-
-    # products are all finite, c is +/-inf
-    return c
-
-@fp.fpy(ctx=fp.REAL)
-def fma_dpa(A, B, c, ctx):
+def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
+                F: int, rho: fp.Context,
+                *, e_zero: int | None = None, is_mma: bool = True):
     """
-    Phi_FMA (Algorithm 4): a chain of standard FMAs under `ctx`
-    (FP64 or FP32, round-to-nearest-even); all FP64 MMA instructions.
+    Builds a T-FDPA (Algorithm 7): truncated fused dot-product-add.
+
+    `a_ctx`, `b_ctx`, `c_ctx` describe the input and accumulator
+    formats (only their `emin` is read); `F` and `rho` are
+    per-instruction parameters (see the module docstring).
+
+    If `e_zero` is omitted, it is derived from the accumulator format
+    and F (`is_mma=False` selects the wgmma/tcgen05 datapath); the
+    FP8 instructions (F = 13) must pass it explicitly.
     """
-    d = c
-    for a, b in zip(A, B):
-        with ctx:
-            d = fp.fma(a, b, d)
-    return d
+    emin_a = a_ctx.emin
+    emin_b = b_ctx.emin
+    emin_c = c_ctx.emin
+    if e_zero is None:
+        e_zero = _default_e_zero(c_ctx, F, is_mma)
 
-@fp.fpy(ctx=fp.REAL)
-def t_fdpa(A, B, c, emin_a, emin_b, emin_c, e_zero, F, rho):
+    @fp.fpy(ctx=fp.REAL)
+    def t_fdpa(A, B, c):
+        """
+        Truncated fused dot-product-add (Algorithm 7).
+
+        Computes the L products exactly and aligns them and `c` at the
+        maximum exponent-field sum `e_max`. Each term is truncated
+        toward zero at 2^(e_max - F), i.e. to F fractional bits, summed
+        exactly, and converted to the output format with `rho`.
+
+        A zero product (either factor zero) or a zero accumulator
+        reads as exponent `e_zero` rather than its format exponent.
+        """
+        if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]) \
+                or not fp.isfinite(c):
+            return dpa_special_values(A, B, c)
+
+        # Step 1: exact products and their exponent-field sums
+        prods = [a * b for a, b in zip(A, B)]
+        es = [e_zero if a * b == 0 else exponent(a, emin_a) + exponent(b, emin_b)
+              for a, b in zip(A, B)]
+        e_c = e_zero if c == 0 else exponent(c, emin_c)
+
+        # Step 2: truncated fused sum of L + 1 terms
+        e_max = max(max(es), e_c)
+        s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
+
+        # Step 3: convert to the output format
+        return fdpa_round(s, rho)
+    return t_fdpa
+
+def make_t_fdpa_chain(l_max: int,
+                      a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
+                      F: int, rho: fp.Context,
+                      *, e_zero: int | None = None, is_mma: bool = True):
     """
-    T-FDPA (Algorithm 7): truncated fused dot-product-add.
+    Builds a Phi_FDPA dot-product-accumulate (Algorithm 5): chains
+    T-FDPAs over vectors of length K, L = min(K, Lmax) elements at
+    a time.
 
-    Computes the L products exactly and aligns them and `c` at the
-    maximum exponent-field sum `e_max`. Each term is truncated toward
-    zero at 2^(e_max - F), i.e. to F fractional bits, summed exactly,
-    and converted to the output format with `rho`.
-
-    A zero product (either factor zero) or a zero accumulator reads
-    as exponent `e_zero` rather than its format exponent; `e_zero` is
-    instruction-specific (see the module docstring).
+    Assumes `rho` outputs the accumulator format, so `c_ctx` also
+    describes the running accumulator.
     """
-    if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]) \
-            or not fp.isfinite(c):
-        return dpa_special_values(A, B, c)
+    fdpa_op = make_t_fdpa(a_ctx, b_ctx, c_ctx, F, rho, e_zero=e_zero, is_mma=is_mma)
 
-    # Step 1: exact products and their exponent-field sums
-    prods = [a * b for a, b in zip(A, B)]
-    es = [e_zero if a * b == 0 else exponent(a, emin_a) + exponent(b, emin_b)
-          for a, b in zip(A, B)]
-    e_c = e_zero if c == 0 else exponent(c, emin_c)
+    @fp.fpy(ctx=fp.REAL)
+    def t_fdpa_chain(A, B, c):
+        """Chain of T-FDPAs (Algorithm 5)."""
+        k = len(A)
+        l = min(k, l_max)
 
-    # Step 2: truncated fused sum of L + 1 terms
-    e_max = max(max(es), e_c)
-    s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
+        d = c
+        for i in range(0, k, l):
+            hi = min(i + l, k)
+            d = fdpa_op(A[i:hi], B[i:hi], d)
+        return d
 
-    # Step 3: convert to the output format
-    return fdpa_round(s, rho)
+    return t_fdpa_chain
 
-@fp.fpy(ctx=fp.REAL)
-def t_fdpa_chain(A, B, c, l_max, emin_a, emin_b, emin_c, e_zero, F, rho):
+def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
+                 scale_ctx: fp.EFloatContext | fp.ExpContext,
+                 F: int, rho: fp.Context, *, e_zero: int | None = None):
     """
-    Phi_FDPA (Algorithm 5): chains T-FDPAs over vectors of length K,
-    L = min(K, Lmax) elements at a time.
-
-    Assumes `rho` outputs the accumulator format, so `emin_c` also
-    applies to the running accumulator.
-    """
-    k = len(A)
-    l = min(k, l_max)
-
-    d = c
-    for i in range(0, k, l):
-        hi = min(i + l, k)
-        d = t_fdpa(A[i:hi], B[i:hi], d, emin_a, emin_b, emin_c, e_zero, F, rho)
-    return d
-
-@fp.fpy(ctx=fp.REAL)
-def st_fdpa(A, B, c, alpha, beta, emin_a, emin_b, emin_s, e_zero, F, rho):
-    """
-    ST-FDPA (Algorithm 8): T-FDPA with block scale factors `alpha` and
-    `beta` (E8M0) applied to the products; MXFP8/6/4 MMA instructions.
-    The accumulator `c` is FP32.
+    Builds an ST-FDPA (Algorithm 8): T-FDPA with block scale factors
+    `alpha` and `beta` (E8M0) applied to the products; MXFP8/6/4 MMA
+    instructions. The accumulator is FP32.
 
     Scaling is exact: the scale exponents shift each product's
     alignment exponent, and E8M0 significands are always 1.
     """
-    if fp.isnan(alpha) or fp.isnan(beta):
-        return fp.nan()
-    if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]) \
-            or not fp.isfinite(c):
-        return dpa_special_values(A, B, c)
+    emin_a = a_ctx.emin
+    emin_b = b_ctx.emin
+    emin_s = scale_ctx.emin
+    emin_c = fp.FP32.emin
+    if e_zero is None:
+        e_zero = _default_e_zero(fp.FP32, F, False)
 
-    # Step 1: exact scaled products and their exponent-field sums
-    prods = [a * b * alpha * beta for a, b in zip(A, B)]
-    es = [e_zero if a * b * alpha * beta == 0 else
-          exponent(a, emin_a) + exponent(b, emin_b)
-          + exponent(alpha, emin_s) + exponent(beta, emin_s)
-          for a, b in zip(A, B)]
-    e_c = e_zero if c == 0 else exponent(c, EMIN_FP32)
+    @fp.fpy(ctx=fp.REAL)
+    def st_fdpa(A, B, c, alpha, beta):
+        """Scaled truncated fused dot-product-add (Algorithm 8)."""
+        if fp.isnan(alpha) or fp.isnan(beta):
+            return fp.nan()
+        if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]) \
+                or not fp.isfinite(c):
+            return dpa_special_values(A, B, c)
 
-    # Step 2: truncated fused sum of L + 1 terms
-    e_max = max(max(es), e_c)
-    s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
+        # Step 1: exact scaled products and their exponent-field sums
+        prods = [a * b * alpha * beta for a, b in zip(A, B)]
+        es = [e_zero if a * b * alpha * beta == 0 else
+              exponent(a, emin_a) + exponent(b, emin_b)
+              + exponent(alpha, emin_s) + exponent(beta, emin_s)
+              for a, b in zip(A, B)]
+        e_c = e_zero if c == 0 else exponent(c, emin_c)
 
-    # Step 3: convert to the output format
-    return fdpa_round(s, rho)
+        # Step 2: truncated fused sum of L + 1 terms
+        e_max = max(max(es), e_c)
+        s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
 
-@fp.fpy(ctx=fp.REAL)
-def gst_fdpa(A, B, c, alphas, betas, G, emin_s, e_zero, F, rho):
+        # Step 3: convert to the output format
+        return fdpa_round(s, rho)
+
+    return st_fdpa
+
+def make_gst_fdpa(G: int, scale_ctx: fp.EFloatContext | fp.ExpContext,
+                  F: int, rho: fp.Context, *, e_zero: int = -139):
     """
-    GST-FDPA (Algorithm 9): group-scaled truncated FDPA;
-    MXFP4/NVFP4 MMA instructions. The accumulator `c` is FP32.
+    Builds a GST-FDPA (Algorithm 9): group-scaled truncated FDPA;
+    MXFP4/NVFP4 MMA instructions. The accumulator is FP32.
 
-    The vectors are split into groups of size G. Each group's dot
-    product is computed exactly, scaled by its scale factors
-    (`alphas[g]`, `betas[g]`, one per group: replicate them if the
-    scale block size exceeds G), and aligned using only the scale
-    exponents. A group reads as exponent `e_zero` only if all of its
-    products are zero or its scale product is zero -- a group that
-    merely sums to zero by cancellation keeps its scale exponent.
-    `emin_s` is the emin of the scale format (UE4M3 for NVFP4, E8M0
-    for MXFP4).
+    The element formats are irrelevant: group dot products are
+    computed exactly, so only the scale format (`scale_ctx`: UE4M3
+    for NVFP4, E8M0 for MXFP4) enters the alignment. `e_zero` is not
+    derivable from any format; -139 is the only known configuration.
     """
-    if any([fp.isnan(s1) for s1 in alphas]) or any([fp.isnan(s2) for s2 in betas]):
-        return fp.nan()
-    if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]) \
-            or not fp.isfinite(c):
-        return dpa_special_values(A, B, c)
+    emin_s = scale_ctx.emin
+    emin_c = fp.FP32.emin
 
-    # Step 1: exact dot product per group, scaled
-    n_groups = len(alphas)
-    ts = fp.empty(n_groups)
-    es = fp.empty(n_groups)
-    for g in range(n_groups):
-        prods = [a * b for a, b in zip(A[g * G:(g + 1) * G], B[g * G:(g + 1) * G])]
-        scale = alphas[g] * betas[g]
-        ts[g] = vec_sum(prods) * scale
-        if all([p == 0 for p in prods]) or scale == 0:
-            es[g] = e_zero
-        else:
-            es[g] = exponent(alphas[g], emin_s) + exponent(betas[g], emin_s)
-    e_c = e_zero if c == 0 else exponent(c, EMIN_FP32)
+    @fp.fpy(ctx=fp.REAL)
+    def gst_fdpa(A, B, c, alphas, betas):
+        """
+        Group-scaled truncated fused dot-product-add (Algorithm 9).
 
-    # Step 2: truncated fused sum of L/G + 1 terms
-    e_max = max(max(es), e_c)
-    s = fused_sum(join(ts, [c]), e_max - F - 1, fp.RM.RTZ)
+        The vectors are split into groups of size G. Each group's dot
+        product is computed exactly, scaled by its scale factors
+        (`alphas[g]`, `betas[g]`, one per group: replicate them if the
+        scale block size exceeds G), and aligned using only the scale
+        exponents. A group reads as exponent `e_zero` only if all of
+        its products are zero or its scale product is zero -- a group
+        that merely sums to zero by cancellation keeps its scale
+        exponent.
+        """
+        if any([fp.isnan(s1) for s1 in alphas]) or any([fp.isnan(s2) for s2 in betas]):
+            return fp.nan()
+        if any([not fp.isfinite(a) for a in A]) or any([not fp.isfinite(b) for b in B]) \
+                or not fp.isfinite(c):
+            return dpa_special_values(A, B, c)
 
-    # Step 3: convert to the output format
-    return fdpa_round(s, rho)
+        # Step 1: exact dot product per group, scaled
+        n_groups = len(alphas)
+        ts = fp.empty(n_groups)
+        es = fp.empty(n_groups)
+        for g in range(n_groups):
+            prods = [a * b for a, b in zip(A[g * G:(g + 1) * G], B[g * G:(g + 1) * G])]
+            scale = alphas[g] * betas[g]
+            ts[g] = sum(prods) * scale
+            if all([p == 0 for p in prods]) or scale == 0:
+                es[g] = e_zero
+            else:
+                es[g] = exponent(alphas[g], emin_s) + exponent(betas[g], emin_s)
+        e_c = e_zero if c == 0 else exponent(c, emin_c)
+
+        # Step 2: truncated fused sum of L/G + 1 terms
+        e_max = max(max(es), e_c)
+        s = fused_sum(join(ts, [c]), e_max - F - 1, fp.RM.RTZ)
+
+        # Step 3: convert to the output format
+        return fdpa_round(s, rho)
+
+    return gst_fdpa
+
+
+if __name__ == "__main__":
+    # Run the paper's Eq. 10 example through every model, reproducing
+    # the divergent per-architecture results of Table 8:
+    #     d = 2^23 + (-2^23) + (-0.5) + (-0.25) + (-0.125)
+    # The exact answer is -0.875; each architecture truncates the small
+    # products differently.
+    def pad(xs, k):
+        return xs + [0.0] * (k - len(xs))
+
+    a = [-2.0**13, -0.5, -0.25, -0.125]
+    b = [2.0**10, 1.0, 1.0, 1.0]
+    c = 2.0**23
+
+    # instruction models per Tables 3 and 4 (FP32-accumulate variants;
+    # FP8 uses E5M2 so the inputs above are representable)
+    models = [
+        # name                          model                                                                              K     expected
+        ('fp64 (fma)',                  make_fma_dpa(fp.FP64),                                                             4),   # -0.875
+        ('volta.f16.f32',               make_t_fdpa_chain(4, fp.FP16, fp.FP16, fp.FP32, 23, RZ_FP32),                      8),   # 0.0
+        ('turing/ampere/ada.f16.f32',   make_t_fdpa_chain(8, fp.FP16, fp.FP16, fp.FP32, 24, RZ_FP32),                      16),  # -0.5
+        ('ampere.tf32.f32',             make_t_fdpa_chain(4, fp.TF32, fp.TF32, fp.FP32, 24, RZ_FP32),                      8),   # -0.5
+        ('ampere.bf16.f32',             make_t_fdpa_chain(8, fp.BF16, fp.BF16, fp.FP32, 24, RZ_FP32),                      16),  # -0.5
+        ('ada.e5m2.f32',                make_t_fdpa_chain(16, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 13, RZ_E8M13, e_zero=-132), 16),  # 0.0
+        ('hopper.f16.f32 (wgmma)',      make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, is_mma=False),       32),  # -0.75
+        ('hopper.e5m2.f32 (wgmma)',     make_t_fdpa_chain(32, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 13, RZ_E8M13, e_zero=-133), 32),  # 0.0
+        ('blackwell.f16.f32 (tcgen05)', make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32, is_mma=False),       32),  # -0.75
+        ('blackwell.e5m2.f32 (tcgen05)', make_t_fdpa_chain(32, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 25, RZ_FP32, is_mma=False), 32), # -0.75
+    ]
+    for name, model, k in models:
+        print(f'{name:32s} {float(model(pad(a, k), pad(b, k), c)):+.3f}')
+
+    # MXFP8 (ST-FDPA, Blackwell): unit E8M0 scales
+    st = make_st_fdpa(fp.MX_E5M2, fp.MX_E5M2, fp.MX_E8M0, 25, RZ_FP32)
+    d = st(pad(a, 32), pad(b, 32), c, 1.0, 1.0)
+    print(f'{"blackwell.mxfp8 (st-fdpa)":32s} {float(d):+.3f}')          # -0.75
+
+    # NVFP4 (GST-FDPA, Blackwell): FP4 elements, per-group UE4M3 scales.
+    # Group 0 encodes 2^23 * -1 via scales; group 1 encodes -0.875
+    # exactly, since group dot products are exact and F = 35 keeps
+    # everything here.
+    a4 = pad([-4.0], 16) + pad([-1.0, -1.0, -0.5], 16) + [0.0] * 32
+    b4 = pad([4.0], 16) + pad([1.0, 0.5, 0.5], 16) + [0.0] * 32
+    alphas = [2.0**11, 1.0, 1.0, 1.0]
+    betas = [2.0**8, 2.0**-1, 1.0, 1.0]
+    gst = make_gst_fdpa(16, fp.MX_E8M0, 35, RZ_FP32)
+    d = gst(a4, b4, c, alphas, betas)
+    print(f'{"blackwell.nvfp4 (gst-fdpa)":32s} {float(d):+.3f}')         # -0.875
