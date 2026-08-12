@@ -42,37 +42,10 @@ def check(name, ok, detail=''):
 ###########################################################
 # Tier 1: directed checks (fpy2 only)
 
-def pad(xs, k):
-    return xs + [0.0] * (k - len(xs))
-
 def check_table8():
-    # Eq. 10: d = 2^23 + (-2^23) + (-0.5) + (-0.25) + (-0.125) = -0.875 exactly
-    a = [-2.0**13, -0.5, -0.25, -0.125]
-    b = [2.0**10, 1.0, 1.0, 1.0]
-    c = 2.0**23
-
-    cases = [
-        ('fp64 (fma)',                nv.make_fma_dpa(fp.FP64),                                                                4,  -0.875),
-        ('volta.f16.f32',             nv.make_t_fdpa_chain(4, fp.FP16, fp.FP16, fp.FP32, 23, nv.RZ_FP32),                      8,  0.0),
-        ('turing/ampere/ada.f16.f32', nv.make_t_fdpa_chain(8, fp.FP16, fp.FP16, fp.FP32, 24, nv.RZ_FP32),                      16, -0.5),
-        ('ada.e5m2.f32',              nv.make_t_fdpa_chain(16, fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 13, nv.RZ_E8M13, e_zero=-132), 16, 0.0),
-        ('hopper.f16.f32 (wgmma)',    nv.make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, nv.RZ_FP32, is_mma=False),       32, -0.75),
-    ]
-    for name, model, k, expected in cases:
-        got = float(model(pad(a, k), pad(b, k), c))
+    for name, thunk, expected in nv.table8_cases():
+        got = thunk()
         check(f'table8 {name}', got == expected, f'got {got}, expected {expected}')
-
-    st = nv.make_st_fdpa(fp.MX_E5M2, fp.MX_E5M2, fp.MX_E8M0, 25, nv.RZ_FP32)
-    got = float(st(pad(a, 32), pad(b, 32), c, 1.0, 1.0))
-    check('table8 blackwell.mxfp8 (st-fdpa)', got == -0.75, f'got {got}')
-
-    # FP4 elements with per-group scales: group 0 encodes -2^23 via
-    # scales, group 1 encodes -0.875 exactly
-    a4 = pad([-4.0], 16) + pad([-1.0, -1.0, -0.5], 16) + [0.0] * 32
-    b4 = pad([4.0], 16) + pad([1.0, 0.5, 0.5], 16) + [0.0] * 32
-    gst = nv.make_gst_fdpa(16, fp.MX_E8M0, 35, nv.RZ_FP32)
-    got = float(gst(a4, b4, c, [2.0**11, 1.0, 1.0, 1.0], [2.0**8, 2.0**-1, 1.0, 1.0]))
-    check('table8 blackwell.nvfp4 (gst-fdpa)', got == -0.875, f'got {got}')
 
 def check_directed():
     m24 = nv.make_t_fdpa(fp.FP16, fp.FP16, fp.FP32, 24, nv.RZ_FP32)
@@ -128,13 +101,11 @@ def check_fma(trials):
 ###########################################################
 # Tier 2: randomized differential sweep vs MMA-Sim (needs torch)
 
-FP4_VALS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
-            -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
-
 def run_sweep(trials):
     import torch  # type: ignore[import-not-found]
     from mmasim.arithmetic import fdpa  # type: ignore[import-not-found]
     from mmasim.arithmetic.helper import truncate_e4m3_to_ue4m3  # type: ignore[import-not-found]
+    import validate_common as vc
 
     torch.manual_seed(0)
 
@@ -145,79 +116,21 @@ def run_sweep(trials):
            torch.float8_e4m3fn: fp.MX_E4M3, torch.float8_e5m2: fp.MX_E5M2}
     C_CTX = {torch.float16: fp.FP16, torch.float32: fp.FP32}
 
-    def rand_bits(n, dtype):
-        """n random bit-patterns of the given dtype."""
-        nbits = torch.finfo(dtype).bits
-        if nbits == 16:
-            raw = torch.randint(0, 2**16, (n,), dtype=torch.int32).to(torch.uint16)
-        elif nbits == 32:
-            return torch.randint(-2**31, 2**31, (n,), dtype=torch.int32).view(dtype)
-        else:
-            raw = torch.randint(0, 256, (n,), dtype=torch.uint8)
-        return raw.view(dtype)
-
-    def rand_edge(n, dtype):
-        fi = torch.finfo(dtype)
-        vals = [0.0, -0.0, fi.smallest_normal * fi.eps, -fi.smallest_normal * fi.eps,
-                fi.smallest_normal, -fi.smallest_normal, fi.tiny, 1.0, -1.0,
-                fi.max, -fi.max, fi.smallest_normal * 4.0]
-        if dtype != torch.float8_e4m3fn:
-            vals += [float('inf'), float('-inf')]
-        vals += [float('nan')]
-        return torch.tensor([random.choice(vals) for _ in range(n)]).to(dtype)
-
-    def rand_mixed(n, dtype):
-        """random bits, but ~1/3 of entries forced to +/-0 (stresses e_zero)."""
-        t = rand_bits(n, dtype)
-        for i in range(n):
-            r = random.random()
-            if r < 0.25:
-                t[i] = 0.0
-            elif r < 0.35:
-                t[i] = -0.0
-        return t
-
-    def rand_normal(n, dtype):
-        """standard normal, rounded into the input format."""
-        return torch.randn(n).to(dtype)
-
-    def rand_subnormal(n, dtype):
-        """normal scaled so that 1 becomes 2^emin (subnormal-centered)."""
-        emin = int(torch.log2(torch.tensor(torch.finfo(dtype).smallest_normal,
-                                           dtype=torch.float64)))
-        return (torch.randn(n, dtype=torch.float64) * 2.0 ** emin).float().to(dtype)
-
-    GENS = [rand_bits, rand_edge, rand_mixed, rand_normal, rand_subnormal]
-
-    def out_bits(t):
-        if t.dtype == torch.float16:
-            return t.view(torch.int16).item() & 0xFFFF
-        return t.view(torch.int32).item() & 0xFFFFFFFF
-
-    def same(ref_t, fpy_x, out_dtype):
-        if torch.isnan(ref_t) and fp.isnan(fpy_x):
-            return True
-        mine = torch.tensor(float(fpy_x), dtype=out_dtype)
-        return out_bits(ref_t) == out_bits(mine)
-
     def run_t_fdpa(name, a_dtype, c_dtype, L, K, F, rho, e_zero):
         op = fdpa.MMA_T_FDPA(F, rho, L, e_zero)
         model = nv.make_t_fdpa_chain(L, CTX[a_dtype], CTX[a_dtype], C_CTX[c_dtype],
                                      F, RHO[rho], e_zero=e_zero)
         fails = 0
         for i in range(trials):
-            gen = GENS[i % len(GENS)]
+            gen = vc.GENS[i % len(vc.GENS)]
             a, b, c = gen(K, a_dtype), gen(K, a_dtype), gen(1, c_dtype)[0]
             ref = op.dpa(a.clone(), b.clone(), c.clone())
             if a_dtype == torch.float32:  # tf32: truncate inputs on the FPy side
-                af = [x if math.isnan(x) else float(nv.RZ_TF32.round(x))
-                      for x in a.float().tolist()]
-                bf = [x if math.isnan(x) else float(nv.RZ_TF32.round(x))
-                      for x in b.float().tolist()]
+                af, bf = vc.tf32_list(a), vc.tf32_list(b)
             else:
                 af, bf = a.float().tolist(), b.float().tolist()
             mine = model(af, bf, float(c.float()))
-            if not same(ref, mine, c_dtype if rho.endswith('FP16') else torch.float32):
+            if not vc.same(ref, mine, c_dtype if rho.endswith('FP16') else torch.float32):
                 fails += 1
         check(f'sweep {name}: {trials - fails}/{trials}', fails == 0)
 
@@ -226,18 +139,21 @@ def run_sweep(trials):
                                 F, RHO[rho], e_zero=e_zero)
         fails = 0
         for i in range(trials):
-            gen = GENS[i % len(GENS)]
+            gen = vc.GENS[i % len(vc.GENS)]
             a, b = gen(L, a_dtype), gen(L, a_dtype)
-            c = rand_bits(1, torch.float32)[0]
-            alpha = rand_bits(1, torch.float8_e8m0fnu)
-            beta = rand_bits(1, torch.float8_e8m0fnu)
+            c = vc.rand_bits(1, torch.float32)[0]
+            alpha = vc.rand_bits(1, torch.float8_e8m0fnu)
+            beta = vc.rand_bits(1, torch.float8_e8m0fnu)
             ref = fdpa.st_fdpa(a.clone(), b.clone(), c.clone(),
                                alpha.clone(), beta.clone(), F, rho, e_zero)
             mine = model(a.float().tolist(), b.float().tolist(), float(c.float()),
                          float(alpha.float()[0]), float(beta.float()[0]))
-            if not same(ref, mine, torch.float32):
+            if not vc.same(ref, mine):
                 fails += 1
         check(f'sweep {name}: {trials - fails}/{trials}', fails == 0)
+
+    FP4_VALS = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+                -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
 
     def run_gst_fdpa(name, scale_dtype, K, K_block, G, F, rho, e_zero):
         n_scales = K // K_block
@@ -250,8 +166,9 @@ def run_sweep(trials):
             vals = [0.0, -0.0, 0.0, 0.5, -0.5] if zero_heavy else FP4_VALS
             a = [random.choice(vals) for _ in range(K)]
             b = [random.choice(vals) for _ in range(K)]
-            alpha, beta = rand_bits(n_scales, scale_dtype), rand_bits(n_scales, scale_dtype)
-            c = rand_bits(1, torch.float32)[0]
+            alpha = vc.rand_bits(n_scales, scale_dtype)
+            beta = vc.rand_bits(n_scales, scale_dtype)
+            c = vc.rand_bits(1, torch.float32)[0]
             ref = op.dpa(torch.tensor(a, dtype=torch.float16),
                          torch.tensor(b, dtype=torch.float16),
                          c.clone(), alpha.clone(), beta.clone())
@@ -265,7 +182,7 @@ def run_sweep(trials):
             alphas = [x for x in alpha_f for _ in range(rep)]
             betas = [x for x in beta_f for _ in range(rep)]
             mine = model(a, b, float(c.float()), alphas, betas)
-            if not same(ref, mine, torch.float32):
+            if not vc.same(ref, mine):
                 fails += 1
         check(f'sweep {name}: {trials - fails}/{trials}', fails == 0)
 

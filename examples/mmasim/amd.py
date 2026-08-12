@@ -12,12 +12,12 @@ models). Instruction-to-model mapping (Table 6):
 
     arch    inputs              model              parameters
     -----------------------------------------------------------------
-    CDNA1   FP32                nv.make_fma_dpa    fp.FP32
+    CDNA1   FP32                make_fma_dpa       fp.FP32
     CDNA1   BF16 / FP16         make_e_fdpa        L = 2 / 4
-    CDNA2   FP64, FP32          nv.make_fma_dpa    fp.FP64 / fp.FP32
+    CDNA2   FP64, FP32          make_fma_dpa       fp.FP64 / fp.FP32
     CDNA2   BF16 (w/o _1k)      make_ftz_addmul    P = 2
     CDNA2   BF16 (_1k), FP16    make_ftz_addmul    P = 4
-    CDNA3   FP64, FP32          nv.make_fma_dpa    fp.FP64 / fp.FP32
+    CDNA3   FP64, FP32          make_fma_dpa       fp.FP64 / fp.FP32
     CDNA3   TF32 (xf32)         make_tr_fdpa       L = 4  (Table 7)
     CDNA3   BF16 / FP16         make_tr_fdpa       L = 8
     CDNA3   FP8                 make_gtr_fdpa      L = 16
@@ -25,7 +25,7 @@ models). Instruction-to-model mapping (Table 6):
 TR-FDPA / GTR-FDPA parameters (Table 7): F = 24, F2 = 31,
 rho = RNE_FP32 for every input type. CDNA3 FP8 means the "fnuz"
 formats: `fp.S1E4M3` (fp8) and `fp.S1E5M2` (bf8). TF32 instructions
-truncate their FP32 operands to TF32 (`nv.RZ_TF32`) first.
+truncate their FP32 operands to TF32 (`utils.RZ_TF32`) first.
 
 Notes:
 
@@ -105,6 +105,11 @@ def make_e_fdpa(l_max: int):
             return sum_special_values(prods, c)
 
         s = sum(join(prods, [c]))
+        if s == 0:
+            # an exactly-zero sum is always +0.0, even for all-negative-zero
+            # summands (unlike IEEE exact addition); -0.0 arises only when a
+            # nonzero negative sum underflows in the output rounding
+            s = 0
         with RNE_FP32:
             return fp.round(s)
 
@@ -112,11 +117,11 @@ def make_e_fdpa(l_max: int):
     def e_fdpa(A, B, c):
         """Chain of E-FDPAs (Algorithm 5)."""
         k = len(A)
-        l = min(k, l_max)
+        L = min(k, l_max)
 
         d = c
-        for i in range(0, k, l):
-            hi = min(i + l, k)
+        for i in range(0, k, L):
+            hi = min(i + L, k)
             d = e_fdpa_block(A[i:hi], B[i:hi], d)
         return d
     return e_fdpa
@@ -132,6 +137,7 @@ def make_ftz_addmul(a_ctx: fp.EFloatContext, P: int):
     accumulator) flush to +0.0; subnormal FP32 results flush to
     +/-0.0.
     """
+    assert P in (2, 4), 'the pairwise summation step is defined for P = 2 or 4'
     tiny_in = 2.0 ** a_ctx.emin    # smallest normal of the input format
     tiny_out = 2.0 ** EMIN_FP32    # smallest normal FP32
 
@@ -179,16 +185,13 @@ def make_tr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     chained L = min(K, Lmax) elements at a time; CDNA3 TF32 (L = 4)
     and BF16/FP16 (L = 8) MFMA instructions.
 
-    Each block computes the products exactly (overflowing to infinity
-    at 2^128), truncates them toward zero at F fractional bits below
-    their maximum exponent, and sums exactly. The product sum and the
-    accumulator are then combined with round-down (RD) rounding: the
-    sum at F2 + 1 fractional bits, the accumulator at F, and their
-    total -- renormalized -- at F2, before the RNE-FP32 output
-    conversion.
+    Each block truncates the exact products at F fractional bits, then
+    combines their sum and the accumulator with round-down rounding
+    per the reference implementation (see the module notes).
     """
     emin_a = a_ctx.emin
     emin_b = b_ctx.emin
+    assert emin_a + emin_b > E_ZERO_TR, 'zero products must read below any real product'
 
     @fp.fpy(ctx=fp.REAL)
     def tr_fdpa_block(A, B, c):
@@ -198,9 +201,10 @@ def make_tr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
         if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
             return sum_special_values(prods, c)
 
-        # Step 2: truncated fused sum of the L products (without c)
-        es = [E_ZERO_TR if a * b == 0 else exponent(a, emin_a) + exponent(b, emin_b)
-              for a, b in zip(A, B)]
+        # Step 2: truncated fused sum of the L products (without c);
+        # all products are finite past the guard, so `exponent` suffices
+        es = [E_ZERO_TR if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
+              for p, a, b in zip(prods, A, B)]
         e_dot = max(es)
         t = fused_sum(prods, e_dot - F - 1, fp.RM.RTZ)
 
@@ -222,11 +226,11 @@ def make_tr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     def tr_fdpa(A, B, c):
         """Chain of TR-FDPAs (Algorithm 5)."""
         k = len(A)
-        l = min(k, l_max)
+        L = min(k, l_max)
 
         d = c
-        for i in range(0, k, l):
-            hi = min(i + l, k)
+        for i in range(0, k, L):
+            hi = min(i + L, k)
             d = tr_fdpa_block(A[i:hi], B[i:hi], d)
         return d
     return tr_fdpa
@@ -246,18 +250,19 @@ def make_gtr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     """
     emin_a = a_ctx.emin
     emin_b = b_ctx.emin
+    assert emin_a + emin_b > E_ZERO_TR, 'zero products must read below any real product'
 
     @fp.fpy(ctx=fp.REAL)
     def gtr_fdpa_block(A, B, c):
         """Group-truncated rounded fused dot-product-add (Algorithm 11)."""
         # Step 1: exact products and their exponent-field sums
-        # (a NaN or infinite factor reads exponent 0)
+        # (a NaN or infinite factor reads exponent -1, via `exponent0`)
         prods = [a * b for a, b in zip(A, B)]
-        es = [E_ZERO_TR if a * b == 0 else exponent0(a, emin_a) + exponent0(b, emin_b)
-              for a, b in zip(A, B)]
-        l = len(A)
-        e_even = max([es[i] for i in range(0, l, 2)])
-        e_odd = max([es[i] for i in range(1, l, 2)])
+        es = [E_ZERO_TR if p == 0 else exponent0(a, emin_a) + exponent0(b, emin_b)
+              for p, a, b in zip(prods, A, B)]
+        L = len(A)
+        e_even = max([es[i] for i in range(0, L, 2)])
+        e_odd = max([es[i] for i in range(1, L, 2)])
 
         # a NaN or infinite accumulator also reads exponent -1, so the
         # special truncation of Step 4 drops it whenever the product
@@ -269,8 +274,8 @@ def make_gtr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
             return sum_special_values(prods, c)
 
         # Step 2: truncated fused sums of the even- and odd-index products
-        t_even = fused_sum([prods[i] for i in range(0, l, 2)], e_even - F - 1, fp.RM.RTZ)
-        t_odd = fused_sum([prods[i] for i in range(1, l, 2)], e_odd - F - 1, fp.RM.RTZ)
+        t_even = fused_sum([prods[i] for i in range(0, L, 2)], e_even - F - 1, fp.RM.RTZ)
+        t_odd = fused_sum([prods[i] for i in range(1, L, 2)], e_odd - F - 1, fp.RM.RTZ)
 
         # Step 3: rounded (round-down) sum of the two group sums
         e_dot = max(e_even, e_odd)
@@ -295,19 +300,26 @@ def make_gtr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     def gtr_fdpa(A, B, c):
         """Chain of GTR-FDPAs (Algorithm 5)."""
         k = len(A)
-        l = min(k, l_max)
+        L = min(k, l_max)
 
         d = c
-        for i in range(0, k, l):
-            hi = min(i + l, k)
+        for i in range(0, k, L):
+            hi = min(i + L, k)
             d = gtr_fdpa_block(A[i:hi], B[i:hi], d)
         return d
     return gtr_fdpa
 
 
-if __name__ == "__main__":
-    # Run the paper's Eq. 10 example through every model, reproducing
-    # the AMD rows of Table 8. The exact answer is -0.875.
+def table8_cases():
+    """
+    The paper's Eq. 10 example on every AMD model, reproducing the
+    AMD rows of Table 8:
+
+        d = 2^23 + (-2^23) + (-0.5) + (-0.25) + (-0.125)
+
+    The exact answer is -0.875. Returns (name, result thunk, expected)
+    triples.
+    """
     def pad(xs, k):
         return xs + [0.0] * (k - len(xs))
 
@@ -315,17 +327,22 @@ if __name__ == "__main__":
     b = [2.0**10, 1.0, 1.0, 1.0]
     c = 2.0**23
 
-    models = [
-        # name                     model                                  K     expected
-        ('fp64 (fma)',             make_fma_dpa(fp.FP64),                 4),   # -0.875
-        ('cdna1.bf16 (e-fdpa)',    make_e_fdpa(2),                        4),   # -0.875
-        ('cdna1.f16 (e-fdpa)',     make_e_fdpa(4),                        4),   # -0.875
-        ('cdna2.bf16 (ftz, P=2)',  make_ftz_addmul(fp.BF16, 2),           4),   # -0.375
-        ('cdna2.bf16_1k (ftz, P=4)', make_ftz_addmul(fp.BF16, 4),         4),   # 0.0
-        ('cdna2.f16 (ftz, P=4)',   make_ftz_addmul(fp.FP16, 4),           4),   # 0.0
-        ('cdna3.f16 (tr-fdpa)',    make_tr_fdpa(8, fp.FP16, fp.FP16),     8),   # -0.5
-        ('cdna3.bf16 (tr-fdpa)',   make_tr_fdpa(8, fp.BF16, fp.BF16),     8),   # -0.5
-        ('cdna3.bf8 (gtr-fdpa)',   make_gtr_fdpa(16, fp.S1E5M2, fp.S1E5M2), 16), # -1.0
+    def dpa(model, k):
+        return lambda: float(model(pad(a, k), pad(b, k), c))
+
+    return [
+        ('fp64 (fma)',               dpa(make_fma_dpa(fp.FP64), 4),                   -0.875),
+        ('cdna1.bf16 (e-fdpa)',      dpa(make_e_fdpa(2), 4),                          -0.875),
+        ('cdna1.f16 (e-fdpa)',       dpa(make_e_fdpa(4), 4),                          -0.875),
+        ('cdna2.bf16 (ftz, P=2)',    dpa(make_ftz_addmul(fp.BF16, 2), 4),             -0.375),
+        ('cdna2.bf16_1k (ftz, P=4)', dpa(make_ftz_addmul(fp.BF16, 4), 4),             0.0),
+        ('cdna2.f16 (ftz, P=4)',     dpa(make_ftz_addmul(fp.FP16, 4), 4),             0.0),
+        ('cdna3.f16 (tr-fdpa)',      dpa(make_tr_fdpa(8, fp.FP16, fp.FP16), 8),       -0.5),
+        ('cdna3.bf16 (tr-fdpa)',     dpa(make_tr_fdpa(8, fp.BF16, fp.BF16), 8),       -0.5),
+        ('cdna3.bf8 (gtr-fdpa)',     dpa(make_gtr_fdpa(16, fp.S1E5M2, fp.S1E5M2), 16), -1.0),
     ]
-    for name, model, k in models:
-        print(f'{name:28s} {float(model(pad(a, k), pad(b, k), c)):+.3f}')
+
+
+if __name__ == "__main__":
+    for name, thunk, expected in table8_cases():
+        print(f'{name:28s} {thunk():+.3f}')

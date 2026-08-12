@@ -4,6 +4,10 @@ Shared helpers for the MMA-Sim models (`nv.py`, `amd.py`).
 
 import fpy2 as fp
 
+# input conversion applied by TF32 (NVIDIA) and XF32 (AMD CDNA3)
+# instructions to their FP32 operands
+RZ_TF32 = fp.IEEEContext(8, 19, fp.RM.RTZ)
+
 @fp.fpy(ctx=fp.REAL)
 def join(xs, ys):
     """
@@ -103,7 +107,6 @@ def dpa_special_values(A, B, c):
     inf_sgn = fp.signbit(c)
     for a, b in zip(A, B):
         if fp.isinf(a) or fp.isinf(b):
-            # actually compute the product
             t = a * b
             if fp.isnan(t):
                 return t
@@ -114,7 +117,6 @@ def dpa_special_values(A, B, c):
                 if inf_sgn != t_sgn:
                     return fp.nan()
             else:
-                # if this is the first infinity, record its sign
                 has_inf = True
                 inf_sgn = t_sgn
 
