@@ -462,6 +462,59 @@ def _eval_any(x):
 def _eval_all(x):
     return all(_check_bool_list(x, 'all()'))
 
+def _eval_ordered(x, op: str):
+    """Check that *x* may be ordered, then hand it back.
+
+    ``<`` and friends are real-only.  Python would order a tuple or a list
+    lexicographically and a ``bool`` as an integer, and FPy defines none of
+    that -- so without this the interpreter answers a question the language
+    does not ask.  Type inference rejects the same programs, but it is an
+    optional analysis, so it cannot be the only place this is caught.
+    """
+    if not isinstance(x, RealValue):
+        raise TypeError(f'`{op}` expects real operands, got {x}')
+    return x
+
+def _eq_kind(x) -> type:
+    """*x*'s FPy type-kind, as a tag for checking that two operands agree.
+
+    A tuple and a list are different FPy types even when their elements match,
+    so they get different tags.
+    """
+    match x:
+        case bool():
+            return bool
+        case Float() | Fraction():
+            return RealFloat  # stands for the real kind; `Float`/`Fraction` agree
+        case Context():
+            return Context
+        case tuple():
+            return tuple
+        case list():
+            return list
+        case _:
+            return type(x)
+
+def _eval_eq(a, b) -> bool:
+    """``a == b``, structurally and without shortcutting on identity.
+
+    Python's sequence equality compares elements with ``is`` before ``==``, so
+    delegating to it would make a NaN inside a container compare equal to
+    itself: ``t == t`` would be ``True`` where ``t == u`` on identical data is
+    ``False``.  Object identity is not observable in FPy, so a container is
+    always walked elementwise and only scalars reach ``==`` -- where
+    :meth:`Float.__eq__` gives NaN its IEEE answer.
+    """
+    a_kind = _eq_kind(a)
+    if a_kind is not _eq_kind(b):
+        # `==` is `a -> a -> bool`: type inference rejects mismatched operands,
+        # so the interpreter must too.  It is an optional analysis, and a
+        # runtime that accepts what the types reject makes the types a lie.
+        raise TypeError(f'`==` expects operands of the same type, got {a} and {b}')
+    if a_kind is not tuple and a_kind is not list:
+        return a == b
+    return len(a) == len(b) and all(_eval_eq(x, y) for x, y in zip(a, b))
+
 ###########################################################
 # Operator tables
 
@@ -577,6 +630,8 @@ def make_namespace() -> dict[str, object]:
         '__fpy_len': _eval_len,
         '__fpy_any': _eval_any,
         '__fpy_all': _eval_all,
+        '__fpy_eq': _eval_eq,
+        '__fpy_ordered': _eval_ordered,
         REAL_NAME: REAL,
     }
 
@@ -868,11 +923,66 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported comparison operator: {type(op).__name__}')
 
+    def _ordered_guard(self, arg: pyast.expr, op: CompareOp, attrs) -> pyast.expr:
+        """Wrap an ordering operand in its real-only check (`_eval_ordered`)."""
+        return pyast.Call(
+            func=pyast.Name(id='__fpy_ordered', ctx=pyast.Load(), **attrs),
+            args=[arg, pyast.Constant(value=op.symbol(), **attrs)],
+            keywords=[], **attrs,
+        )
+
     def _visit_compare(self, e: Compare, ctx: None):
-        ops = [self._visit_compare_op(op) for op in e.ops]
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
         attrs = self._location_to_attributes(e.loc)
-        return pyast.Compare(args[0], ops, args[1:], **attrs)
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        if not any(op is CompareOp.EQ or op is CompareOp.NE for op in e.ops):
+            # Ordering is real-only, and every operand appears once here, so
+            # guarding in place keeps Python's chain semantics intact.
+            ops = [self._visit_compare_op(op) for op in e.ops]
+            guarded = [
+                self._ordered_guard(a, e.ops[max(i - 1, 0)], attrs)
+                for i, a in enumerate(args)
+            ]
+            return pyast.Compare(guarded[0], ops, guarded[1:], **attrs)
+
+        # Equality is structural (see `_eval_eq`), which no `==` node expresses,
+        # so the chain becomes a conjunction of pairwise tests.  Python's own
+        # chain evaluates each middle operand once, and a walrus keeps that --
+        # an FPy call may mutate a list it was handed, so a second evaluation
+        # is not free.
+        reuse: list[pyast.expr] = []
+        for i in range(1, len(args) - 1):
+            tmp = str(self.gensym.fresh('__fpy_cmp'))
+            args[i] = pyast.NamedExpr(
+                target=pyast.Name(id=tmp, ctx=pyast.Store(), **attrs),
+                value=args[i], **attrs,
+            )
+            reuse.append(pyast.Name(id=tmp, ctx=pyast.Load(), **attrs))
+
+        clauses: list[pyast.expr] = []
+        for i, op in enumerate(e.ops):
+            # every operand but the first is written by the pair before it
+            lhs = args[0] if i == 0 else reuse[i - 1]
+            rhs = args[i + 1]
+            clause: pyast.expr
+            if op is CompareOp.EQ or op is CompareOp.NE:
+                call = pyast.Call(
+                    func=pyast.Name(id='__fpy_eq', ctx=pyast.Load(), **attrs),
+                    args=[lhs, rhs], keywords=[], **attrs,
+                )
+                clause = call if op is CompareOp.EQ else pyast.UnaryOp(
+                    op=pyast.Not(), operand=call, **attrs,
+                )
+            else:
+                clause = pyast.Compare(
+                    self._ordered_guard(lhs, op, attrs),
+                    [self._visit_compare_op(op)],
+                    [self._ordered_guard(rhs, op, attrs)], **attrs,
+                )
+            clauses.append(clause)
+
+        if len(clauses) == 1:
+            return clauses[0]
+        return pyast.BoolOp(op=pyast.And(), values=clauses, **attrs)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         args = [self._visit_expr(elt, ctx) for elt in e.elts]

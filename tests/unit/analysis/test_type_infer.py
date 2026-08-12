@@ -491,6 +491,23 @@ class TestPolymorphicEquality:
         with pytest.raises(TypeInferError):
             TypeInfer.check(f.ast)
 
+    def test_ordering_rejects_aggregates(self):
+        """Python orders tuples and lists lexicographically; FPy does not, and
+        the real-only ordering rule is what keeps it out."""
+        @fp.fpy
+        def tup(x: fp.Real, y: fp.Real) -> bool:
+            a = (x, y)
+            b = (y, x)
+            return a >= b
+
+        @fp.fpy
+        def lst() -> bool:
+            return [1.0] < [2.0]
+
+        for fn in (tup, lst):
+            with pytest.raises(TypeInferError):
+                TypeInfer.check(fn.ast)
+
     def test_aggregates_typecheck(self):
         """``a -> a -> bool`` admits them; the backends refuse what they
         cannot emit."""
