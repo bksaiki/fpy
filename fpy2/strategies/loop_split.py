@@ -12,7 +12,7 @@ def split(
     factor: int | str,
     where: int | None = None,
     *,
-    strategy: SplitLoopStrategy = SplitLoopStrategy.STRICT,
+    strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
     temp_id: str = 't',
     outer_id: str = 'i',
     inner_id: str = 'j'
@@ -32,8 +32,10 @@ def split(
         The index of the `for` loop to split. If `None`, split all
         `for` loops.
     strategy : SplitLoopStrategy
-        How to handle a length that is not a multiple of `factor`;
-        ``STRICT`` (the only strategy) asserts divisibility at runtime.
+        How to handle a length that is not a multiple of `factor`.
+        Defaults to ``PEEL``, which runs the remainder in a residual
+        loop and is correct for any length; ``STRICT`` instead asserts
+        divisibility at runtime.
 
     Returns
     -------
@@ -57,7 +59,8 @@ def split(
                 acc = acc + x
             return acc
 
-    ``split(total, 2)`` yields::
+    ``split(total, 2)`` yields (the default ``PEEL`` strategy runs any
+    remainder in a residual loop)::
 
         @fp.fpy
         def total(xs):
@@ -66,13 +69,16 @@ def split(
             with fp.INTEGER:
                 t3 = 2
                 t4 = len(t)
-                assert fp.fmod(t4, t3) == 0
-            for i in range(0, t4, t3):
+                t5 = (t4 - fp.fmod(t4, t3))
+            for i in range(0, t5, t3):
                 with fp.INTEGER:
-                    t5 = (i + t3)
-                for j in range(i, t5, 1):
-                    x = t[j]
+                    t7 = (i + t3)
+                for j6 in range(i, t7, 1):
+                    x = t[j6]
                     acc = (acc + x)
+            for j in range(t5, t4, 1):
+                x = t[j]
+                acc = (acc + x)
             return acc
     """
     if not isinstance(func, Function):

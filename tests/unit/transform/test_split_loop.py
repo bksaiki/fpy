@@ -25,7 +25,9 @@ from fpy2.ast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import INTEGER
-from fpy2.transform import SplitLoop
+from fpy2.transform import SplitLoop, SplitLoopStrategy
+
+_BOTH = (SplitLoopStrategy.STRICT, SplitLoopStrategy.PEEL)
 
 
 # ----------------------------------------------------------------------
@@ -142,22 +144,27 @@ _XS4 = [1.0, 2.0, 3.0, 4.0]
 
 class TestShape:
 
-    def test_no_slice(self):
-        out = _split(_total)
+    @pytest.mark.parametrize('strategy', _BOTH)
+    def test_no_slice(self, strategy):
+        out = _split(_total, strategy=strategy)
         assert not _has_node(out, ListSlice)
 
-    def test_integer_blocks(self):
-        # one prelude (factor/len/assert), one chunk bound
-        out = _split(_total)
+    @pytest.mark.parametrize('strategy', _BOTH)
+    def test_integer_blocks(self, strategy):
+        # one prelude (factor/len/check), one chunk bound; the PEEL
+        # residual loop indexes with plain variables and needs none
+        out = _split(_total, strategy=strategy)
         assert _count_integer_blocks(out) == 2
 
     def test_nested_loops(self):
-        out = _split(_total)
-        assert _count_fors(out) == 2
+        # STRICT: chunk loop + inner; PEEL adds the residual loop
+        assert _count_fors(_split(_total, strategy=SplitLoopStrategy.STRICT)) == 2
+        assert _count_fors(_split(_total, strategy=SplitLoopStrategy.PEEL)) == 3
 
-    def test_materialized_once(self):
+    @pytest.mark.parametrize('strategy', _BOTH)
+    def test_materialized_once(self, strategy):
         # exactly one bare Assign precedes the INTEGER prelude
-        out = _split(_total)
+        out = _split(_total, strategy=strategy)
         kinds = [type(s) for s in out.body.stmts]
         assert kinds[:4] == [Assign, Assign, ContextStmt, ForStmt]
 
@@ -170,34 +177,60 @@ class TestShape:
 # Semantic equivalence
 
 
+@pytest.mark.parametrize('strategy', _BOTH)
 class TestEquivalence:
 
-    def test_divisible_lengths(self):
-        out = _split(_total)
+    def test_divisible_lengths(self, strategy):
+        out = _split(_total, strategy=strategy)
         for xs in ([], [1.0, 2.0], _XS4, [0.5] * 8):
             assert _total(xs) == _run(out, _total, xs)
 
-    def test_factor_one_and_whole(self):
+    def test_factor_one_and_whole(self, strategy):
         for factor in (1, 4):
-            out = _split(_total, factor)
+            out = _split(_total, factor, strategy=strategy)
             assert _total(_XS4) == _run(out, _total, _XS4)
 
+    def test_name_collisions(self, strategy):
+        out = _split(_collides, strategy=strategy)
+        assert _collides(_XS4) == _run(out, _collides, _XS4)
+
+    def test_body_mutates_iterable(self, strategy):
+        out = _split(_mutates, strategy=strategy)
+        assert _mutates(_XS4) == _run(out, _mutates, _XS4)
+
+    def test_tuple_target(self, strategy):
+        out = _split(_pairs, strategy=strategy)
+        ps = [(1.0, 2.0), (3.0, 4.0)]
+        assert _pairs(ps) == _run(out, _pairs, ps)
+
+
+class TestRemainder:
+
     def test_strict_non_divisible_asserts(self):
-        out = _split(_total)
+        out = _split(_total, strategy=SplitLoopStrategy.STRICT)
         with pytest.raises(AssertionError):
             _run(out, _total, [1.0, 2.0, 3.0])
 
-    def test_name_collisions(self):
-        out = _split(_collides)
-        assert _collides(_XS4) == _run(out, _collides, _XS4)
+    def test_peel_any_length(self):
+        out = _split(_total, strategy=SplitLoopStrategy.PEEL)
+        for xs in ([], [1.0], [1.0, 2.0, 3.0], [0.5] * 7):
+            assert _total(xs) == _run(out, _total, xs)
 
-    def test_body_mutates_iterable(self):
-        out = _split(_mutates)
-        assert _mutates(_XS4) == _run(out, _mutates, _XS4)
+    def test_peel_factor_exceeds_length(self):
+        out = _split(_total, 8, strategy=SplitLoopStrategy.PEEL)
+        assert _total(_XS4) == _run(out, _total, _XS4)
 
-    def test_tuple_target(self):
-        out = _split(_pairs)
-        ps = [(1.0, 2.0), (3.0, 4.0)]
+    def test_peel_mutation_reaches_residual(self):
+        # `xs[1]` is written in the chunked prefix and (for odd
+        # lengths) read again in the residual loop
+        out = _split(_mutates, strategy=SplitLoopStrategy.PEEL)
+        for xs in ([1.0, 2.0, 3.0], _XS4):
+            assert _mutates(list(xs)) == _run(out, _mutates, list(xs))
+
+    def test_peel_tuple_target(self):
+        # the residual loop rebuilds its own copy of the tuple binding
+        out = _split(_pairs, strategy=SplitLoopStrategy.PEEL)
+        ps = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]
         assert _pairs(ps) == _run(out, _pairs, ps)
 
 
@@ -208,11 +241,18 @@ class TestEquivalence:
 class TestWhere:
 
     def test_where_selects_loop(self):
+        # STRICT replaces the selected loop with 2 loops.  PEEL replaces
+        # it with 3 and duplicates its body into the residual loop, so
+        # splitting the *outer* loop of the nest re-emits the inner one
+        # (3 + 2 copies of the body's loop = 5).
         xss = [[1.0, 2.0], [3.0, 4.0]]
-        for w in (0, 1):
-            out = _split(_nested, 2, where=w)
-            # exactly one loop split: original 2 loops become 3
+        for w, expect_peel in ((0, 5), (1, 4)):
+            out = _split(_nested, 2, where=w, strategy=SplitLoopStrategy.STRICT)
             assert _count_fors(out) == 3
+            assert _nested(xss) == _run(out, _nested, xss)
+
+            out = _split(_nested, 2, where=w, strategy=SplitLoopStrategy.PEEL)
+            assert _count_fors(out) == expect_peel
             assert _nested(xss) == _run(out, _nested, xss)
 
     def test_where_out_of_range(self):

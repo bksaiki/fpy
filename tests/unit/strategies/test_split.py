@@ -10,6 +10,7 @@ import fpy2 as fp
 
 from fpy2.function import Function
 from fpy2.strategies import simplify, split
+from fpy2.transform import SplitLoopStrategy
 
 
 K = 2  # captured by the str-factor fixture
@@ -41,6 +42,16 @@ class TestSplit:
         assert isinstance(out, Function)
         for xs in ([], [1.0, 2.0], _XS4):
             assert _total(xs) == out(xs)
+
+    def test_default_peel_any_length(self):
+        out = split(_total, 2)
+        for xs in ([1.0], [1.0, 2.0, 3.0]):
+            assert _total(xs) == out(xs)
+
+    def test_strict_asserts(self):
+        out = split(_total, 2, strategy=SplitLoopStrategy.STRICT)
+        with pytest.raises(AssertionError):
+            out([1.0, 2.0, 3.0])
 
     def test_str_factor(self):
         # the factor is a variable resolved at runtime (here, the
