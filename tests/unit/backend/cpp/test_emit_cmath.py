@@ -9,6 +9,7 @@ function-name string and the dispatch path.  Detailed
 """
 
 import fpy2 as fp
+import pytest
 
 from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
@@ -218,3 +219,35 @@ class TestNullaryConstants:
 
         out = CppCompiler().compile(f, ctx=fp.INTEGER, arg_types=[])
         assert 'return 3;' in out
+
+
+class TestNullaryConstantsUnderReal:
+    """A ``REAL`` scope has no storable format of its own, so a special value
+    has to carry its own."""
+
+    def test_infinity_compiles_under_real(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            return fp.inf()
+
+        out = CppCompiler().compile(f, ctx=fp.REAL, arg_types=[])
+        assert '::infinity()' in out
+
+    def test_nan_compiles_under_real(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            return fp.nan()
+
+        out = CppCompiler().compile(f, ctx=fp.REAL, arg_types=[])
+        assert '::quiet_NaN()' in out
+
+    def test_an_irrational_constant_under_real_is_refused(self):
+        """No finite C++ type holds pi exactly, and REAL does not round."""
+        from fpy2.backend.cpp.compiler import CppCompileError
+
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            return fp.const_pi()
+
+        with pytest.raises(CppCompileError, match='unconstrained real'):
+            CppCompiler().compile(f, ctx=fp.REAL, arg_types=[])

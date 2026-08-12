@@ -2303,3 +2303,67 @@ class TestSpecialArithmetic:
         # the signed-zero rules still hold
         assert _set_add(NEG_ZERO, NEG_ZERO) is NEG_ZERO
         assert _set_mul(Fraction(-1), Fraction(0)) is NEG_ZERO
+
+
+class TestSpecialConstants:
+    """``inf()`` / ``nan()`` report a precise bound under ``REAL``, where the
+    scope format is ``REAL_FORMAT`` and no finite type can store it."""
+
+    def _nullary_bound(self, func):
+        from fpy2.ast.fpyast import NullaryOp
+
+        info = self._run(func)
+        [bound] = [
+            b for e, b in info.by_expr.items() if isinstance(e, NullaryOp)
+        ]
+        return bound
+
+    _run = staticmethod(lambda func: FormatInfer.analyze(func.ast))
+
+    def test_infinity_under_real(self):
+        from fpy2.analysis.format_infer.analysis import Special
+
+        @fp.fpy(ctx=fp.REAL)
+        def f():
+            return fp.inf()
+
+        assert self._nullary_bound(f) == SetFormat.from_value(Special.POS_INF)
+
+    def test_nan_under_real(self):
+        from fpy2.analysis.format_infer.analysis import Special
+
+        @fp.fpy(ctx=fp.REAL)
+        def f():
+            return fp.nan()
+
+        assert self._nullary_bound(f) == SetFormat.from_value(Special.NAN)
+
+    def test_a_concrete_scope_still_reports_its_own_format(self):
+        """Narrowing to ``{+inf}`` here would retype an ``FP64`` function's
+        result as the smallest float holding an infinity."""
+        @fp.fpy(ctx=fp.FP64)
+        def f():
+            return fp.inf()
+
+        assert self._nullary_bound(f) == fp.FP64.format()
+
+    def test_an_irrational_constant_under_real_is_still_unbounded(self):
+        """``const_pi()`` is not a special value -- no finite format holds it,
+        and it must keep saying so."""
+        @fp.fpy(ctx=fp.REAL)
+        def f():
+            return fp.const_pi()
+
+        assert self._nullary_bound(f) == REAL_FORMAT
+
+    def test_negating_an_infinity_under_real(self):
+        """``-fp.inf()`` goes through ``_set_neg``, so the sign follows."""
+        from fpy2.analysis.format_infer.analysis import Special
+
+        @fp.fpy(ctx=fp.REAL)
+        def f():
+            return -fp.inf()
+
+        info = self._run(f)
+        [neg] = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Neg']
+        assert neg == SetFormat.from_value(Special.NEG_INF)

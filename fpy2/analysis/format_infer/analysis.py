@@ -1622,6 +1622,16 @@ class _FormatInferInstance(Visitor):
     # format; non-real results (bool predicates, range, …) take
     # the top format of their inferred type.
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> FormatBound:
+        if isinstance(e, ConstInf | ConstNan) and self._is_real_scope(e):
+            # Under any other scope `_op_bound` reports that scope's format,
+            # which both holds the value and is what the source asked for --
+            # reporting `{+inf}` there would narrow an `FP64` function's result
+            # to the smallest float that holds an infinity.  Under `REAL` it
+            # reports `REAL_FORMAT`, which no finite type can store, and these
+            # are single special values rather than unconstrained reals.
+            return SetFormat.from_value(
+                Special.POS_INF if isinstance(e, ConstInf) else Special.NAN
+            )
         return self._op_bound(e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:
