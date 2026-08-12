@@ -74,6 +74,8 @@ explicitly, per the table above; GST-FDPA defaults to -139.
 
 import fpy2 as fp
 
+from utils import dpa_special_values, exponent, fused_sum, join, make_fma_dpa
+
 ###########################################################
 # Rounding contexts
 
@@ -91,47 +93,6 @@ RZ_TF32 = fp.IEEEContext(8, 19, fp.RM.RTZ)
 # Helpers
 
 @fp.fpy(ctx=fp.REAL)
-def join(xs, ys):
-    """
-    Concatenates two lists.
-
-    FPy has no list concatenation, so preallocate and copy.
-    """
-    n = len(xs)
-    m = len(ys)
-    zs = fp.empty(n + m)
-    for i in range(n):
-        zs[i] = xs[i]
-    for i in range(m):
-        zs[n + i] = ys[i]
-    return zs
-
-@fp.fpy(ctx=fp.REAL)
-def fused_sum(xs, n, rm):
-    """
-    Fused summation of a non-empty list.
-
-    Each summand is rounded with mode `rm` onto the fixed-point grid
-    whose first unrepresentable digit is `n` (so the least significant
-    representable digit has exponent `exp = n + 1`), then the rounded
-    summands are added exactly. `sum` folds from the first element
-    with no `+0` identity, so IEEE signed-zero rules apply: a sum of
-    all `-0.0` terms is `-0.0`.
-    """
-    with fp.MPFixedContext(n, rm):
-        ts = [fp.round(x) for x in xs]
-    return sum(ts)
-
-@fp.fpy(ctx=fp.REAL)
-def exponent(x, emin):
-    """
-    The paper's `Exp(x)`: the exponent field of `x` in a floating-point
-    format with minimum normalized exponent `emin`. Subnormal values
-    (including zero) read as `emin`.
-    """
-    return max(fp.logb(x), emin)
-
-@fp.fpy(ctx=fp.REAL)
 def fdpa_round(s, rho):
     """
     Converts an exact FDPA sum `s` to the output format with `rho`.
@@ -144,43 +105,6 @@ def fdpa_round(s, rho):
     with rho:
         return fp.round(s)
 
-@fp.fpy(ctx=fp.REAL)
-def dpa_special_values(A, B, c):
-    """
-    Result of a dot-product-accumulate whose inputs contain a NaN or an
-    infinity (Sec. 4.2): `NaN + x = NaN`, `+/-inf + y = +/-inf`,
-    `inf - inf = NaN`, and `inf * 0 = NaN`.
-
-    The accumulator is just another summand: it seeds the scan over
-    the infinite terms.
-    """
-    # any NaN summand => produce NaN
-    if any([fp.isnan(a) for a in A]) or any([fp.isnan(b) for b in B]) or fp.isnan(c):
-        return fp.nan()
-
-    # any infinity => produce either infinity or NaN
-    has_inf = fp.isinf(c)
-    inf_sgn = fp.signbit(c)
-    for a, b in zip(A, B):
-        if fp.isinf(a) or fp.isinf(b):
-            # actually compute the product
-            t = a * b
-            if fp.isnan(t):
-                return t
-
-            t_sgn = fp.signbit(t)
-            if has_inf:
-                # if we have already seen an infinity, check that the sign is consistent
-                if inf_sgn != t_sgn:
-                    return fp.nan()
-            else:
-                # if this is the first infinity, record its sign
-                has_inf = True
-                inf_sgn = t_sgn
-
-    assert has_inf, "expected either NaN or infinity in the input"
-    return -fp.inf() if inf_sgn else fp.inf()
-
 ###########################################################
 # Model factories
 
@@ -189,22 +113,6 @@ def _default_e_zero(c_ctx: fp.EFloatContext, F: int, is_mma: bool) -> int:
     if is_mma and c_ctx.emin == fp.FP16.emin:
         return 3 - F    # mma-class FP16-accumulate datapath
     return -108 - F     # FP32-wide datapath
-
-def make_fma_dpa(ctx: fp.Context):
-    """
-    Builds a Phi_FMA dot-product-accumulate (Algorithm 4): a chain of
-    standard FMAs under `ctx` (FP64 or FP32, round-to-nearest-even);
-    all FP64 MMA instructions.
-    """
-    @fp.fpy(ctx=fp.REAL)
-    def fma_dpa(A, B, c):
-        """Chain of standard FMAs (Algorithm 4)."""
-        d = c
-        for a, b in zip(A, B):
-            with ctx:
-                d = fp.fma(a, b, d)
-        return d
-    return fma_dpa
 
 def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
                 F: int, rho: fp.Context,
@@ -282,7 +190,6 @@ def make_t_fdpa_chain(l_max: int,
             hi = min(i + l, k)
             d = fdpa_op(A[i:hi], B[i:hi], d)
         return d
-
     return t_fdpa_chain
 
 def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
