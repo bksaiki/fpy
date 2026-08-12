@@ -1,0 +1,9 @@
+# Dependencies for the validators' differential sweeps against the
+# MMA-Sim reference implementation (the models need only fpy2).
+#
+#   pip install -r requirements.txt
+#   python validate_nv.py (or validate_amd.py)
+#
+# mmasim pulls in torch; CPU torch is sufficient:
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+mmasim @ git+https://github.com/microsoft/MMA-Sim@2e57de2bb8e120409b00bfc2fd7bc59227631712#subdirectory=src/mmasim
