@@ -242,6 +242,25 @@ class TestRealFloatArithmetic():
         actual = fp.RealFloat.from_float(a) + fp.RealFloat.from_float(b)
         assert actual == expect
 
+    @pytest.mark.parametrize('a, b, expect_neg', [
+        (-0.0, -0.0, True),
+        (0.0, -0.0, False),
+        (-0.0, 0.0, False),
+        (0.0, 0.0, False),
+    ])
+    def test_add_of_two_zeros_keeps_the_ieee_sign(self, a, b, expect_neg):
+        """IEEE 754 §6.3: a sum of two zeros is ``-0`` only when both are.
+
+        The ``0 + b = b`` identity must not fire when ``b`` is itself a zero,
+        or the sum takes the sign of whichever operand came second -- which
+        would also make addition non-commutative.
+        """
+        actual = fp.RealFloat.from_float(a) + fp.RealFloat.from_float(b)
+        assert actual.is_zero()
+        assert actual.s is expect_neg
+        # and it agrees with the platform float
+        assert actual.s is (math.copysign(1.0, a + b) < 0)
+
     @given(
         st.floats(allow_infinity=False, allow_nan=False),
         st.integers()

@@ -227,3 +227,32 @@ class TestNegativeZero:
             return 0.0
 
         assert 'uint8_t' in cc.compile(f, ctx=fp.FP64, arg_types=[])
+
+
+class TestMixedSignTernary:
+    """A ternary whose arms are literals of opposite sign.  Each arm takes the
+    smallest type holding it, so ``1`` is unsigned and ``-1`` is signed; the
+    result is signed, and converting the unsigned arm must be allowed on the
+    strength of its value."""
+
+    def test_opposite_sign_literal_arms(self, cc):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return -1 if x > 0 else 1
+
+        out = _compile(cc, f)
+        assert 'int8_t f(double x)' in out
+
+    def test_the_sign_variable_pattern(self, cc):
+        """The shape this came from: a sign accumulator seeded at ``0``."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                sgn = 0
+                s = -1 if x > 0 else 1
+                sgn = s
+                return sgn
+
+        out = _compile(cc, f)
+        assert 'int8_t f(double x)' in out

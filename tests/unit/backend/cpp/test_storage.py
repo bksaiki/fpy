@@ -267,3 +267,40 @@ class TestStorageBottom:
         """``None`` is a boolean's bound, and a boolean has storage of its own
         — dropping it from an aggregate would lose that."""
         assert aggregate_storage([None, None]) == CppScalar.BOOL
+
+
+class TestBoundFitsInScalar:
+    """``bound_fits_in_scalar`` asks about values where ``scalar_fits_in``
+    asks about types."""
+
+    def test_a_positive_literal_fits_a_signed_type(self):
+        """``{1}`` stores as ``uint8_t``, which does not nest into ``int8_t``
+        -- but the value does, and that is the question here."""
+        from fpy2.backend.cpp.storage import bound_fits_in_scalar, scalar_fits_in
+
+        one = SetFormat(frozenset((Fraction(1),)))
+        assert choose_storage_scalar(one) == CppScalar.U8
+        assert not scalar_fits_in(CppScalar.U8, CppScalar.S8)
+        assert bound_fits_in_scalar(one, CppScalar.S8)
+
+    def test_an_out_of_range_value_does_not_fit(self):
+        from fpy2.backend.cpp.storage import bound_fits_in_scalar
+
+        big = SetFormat(frozenset((Fraction(200),)))
+        assert not bound_fits_in_scalar(big, CppScalar.S8)
+        assert bound_fits_in_scalar(big, CppScalar.S16)
+
+    def test_a_fractional_value_does_not_fit_an_integer(self):
+        from fpy2.backend.cpp.storage import bound_fits_in_scalar
+
+        half = SetFormat(frozenset((Fraction(1, 2),)))
+        assert not bound_fits_in_scalar(half, CppScalar.S8)
+        assert bound_fits_in_scalar(half, CppScalar.F32)
+
+    def test_bool_and_unreasonable_bounds_are_refused(self):
+        from fpy2.backend.cpp.storage import bound_fits_in_scalar
+
+        one = SetFormat(frozenset((Fraction(1),)))
+        assert not bound_fits_in_scalar(one, CppScalar.BOOL)
+        assert not bound_fits_in_scalar(REAL_FORMAT, CppScalar.F64)
+        assert not bound_fits_in_scalar(None, CppScalar.S8)

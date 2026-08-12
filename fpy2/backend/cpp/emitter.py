@@ -135,6 +135,7 @@ from ... import ops as fpy_ops
 from .ops import CppOp, ScalarOpTable
 from .storage import (
     StorageSelectionError,
+    bound_fits_in_scalar,
     choose_storage,
     scalar_fits_in,
     scalar_sup,
@@ -1529,7 +1530,7 @@ class CppEmitter(Visitor):
 
     def _maybe_cast(
         self, arg: str, arg_ty: CppScalar, target_ty: CppScalar,
-        *, at: Ast | None = None,
+        *, at: Ast | None = None, src: Expr | None = None,
     ) -> str:
         """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
@@ -1538,10 +1539,20 @@ class CppEmitter(Visitor):
         rather than silently emitted: the user should narrow the active context or
         write ``fp.round(...)``.  Casts the user *did* write go through
         :meth:`_explicit_cast`, which never refuses.
+
+        Pass *src* to fall back on the operand's own values when the type-level
+        test refuses.  Every bound takes the smallest type holding it, so the
+        two disagree in one direction: ``1`` stores as ``uint8_t``, which does
+        not nest into ``int8_t``, while the value does.
         """
         if arg_ty == target_ty:
             return arg
-        if not scalar_fits_in(arg_ty, target_ty):
+        if not scalar_fits_in(arg_ty, target_ty) and not (
+            src is not None
+            and bound_fits_in_scalar(
+                self.format_info.by_expr.get(src), target_ty,
+            )
+        ):
             raise CppEmitError(
                 f'cannot implicitly cast `{arg_ty.format()}` to '
                 f'`{target_ty.format()}`: conversion is lossy.  '
@@ -2778,8 +2789,8 @@ class CppEmitter(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         ift_ty = self._scalar_storage_for_expr(e.ift)
         iff_ty = self._scalar_storage_for_expr(e.iff)
-        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e)
-        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e)
+        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e, src=e.ift)
+        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e, src=e.iff)
         return f'({cond} ? {ift} : {iff})'
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):

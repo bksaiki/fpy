@@ -87,6 +87,24 @@ def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
     return _LADDER_LOOKUP[a] <= _LADDER_LOOKUP[b]
 
 
+def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:
+    """Is every value *bound* admits representable in *ty*?
+
+    A question about values, where :func:`scalar_fits_in` asks about types --
+    and the two disagree, because a bound picks the *smallest* type holding it.
+    The literal ``1`` stores as ``uint8_t``, which does not nest into
+    ``int8_t``, yet the value itself fits ``int8_t`` perfectly well.  Use this
+    to admit a conversion the type-level test refuses; it is exactly the
+    containment :func:`choose_storage_scalar` searches the ladder with.
+    """
+    if ty is CppScalar.BOOL:
+        return False
+    if not isinstance(bound, AbstractableFormat | SetFormat):
+        return False
+    af = _to_abstract(bound)
+    return af is not None and af <= _LADDER_LOOKUP[ty]
+
+
 class StorageSelectionError(Exception):
     """Raised when no storage type contains the inferred format."""
 
