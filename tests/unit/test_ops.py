@@ -195,3 +195,90 @@ class TestPowReal:
         assert fp.pow(3.0, -_MAX_POW_EXPONENT, fp.REAL) is not None
         with pytest.raises(NotImplementedError):
             fp.pow(3.0, n, fp.REAL)
+
+
+class TestDivReal:
+    """``div`` under ``REAL``, which is exact: the quotient of two finite
+    numbers is a rational."""
+
+    @given(
+        floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False),
+        floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False)
+    )
+    def test_matches_exact_quotient(self, x: fp.Float, y: fp.Float) -> None:
+        if y.is_zero():
+            return
+        expect = x.as_rational() / y.as_rational()
+        assert fp.div(x, y, fp.REAL) == expect, f'{x} / {y}'
+
+    @pytest.mark.parametrize('x, y, expect', [
+        (1, 4, Fraction(1, 4)),
+        (1, 3, Fraction(1, 3)),
+        (3, -2, Fraction(-3, 2)),
+        (7, 7, 1),
+        (Fraction(1, 3), 2, Fraction(1, 6)),
+        (Fraction(2, 3), Fraction(4, 9), Fraction(3, 2)),
+    ])
+    def test_exact(self, x, y, expect) -> None:
+        assert fp.div(x, y, fp.REAL) == expect
+
+    @pytest.mark.parametrize('x, y, is_float', [
+        # the quotient of two `Float`s stays a `Float` only when it is dyadic
+        (1.0, 4.0, True),
+        (3.0, -2.0, True),
+        (1.0, 3.0, False),
+        (1.0, 10.0, False),
+    ])
+    def test_result_type(self, x, y, is_float) -> None:
+        r = fp.div(x, y, fp.REAL)
+        assert isinstance(r, fp.Float if is_float else Fraction), f'{x} / {y}: {r!r}'
+
+    @pytest.mark.parametrize('x, y, s', [
+        (0.0, 3.0, False),
+        (-0.0, 3.0, True),
+        (0.0, -3.0, True),
+        (-0.0, -3.0, False),
+    ])
+    def test_zero_dividend(self, x, y, s) -> None:
+        r = fp.div(x, y, fp.REAL)
+        assert r.is_zero() and r.s == s
+
+    @pytest.mark.parametrize('x, y, s', [
+        (3.0, 0.0, False),
+        (-3.0, 0.0, True),
+        (3.0, -0.0, True),
+        (-3.0, -0.0, False),
+    ])
+    def test_zero_divisor(self, x, y, s) -> None:
+        # `x / 0` is infinite and reports divide-by-zero
+        r = fp.div(x, y, fp.REAL)
+        assert r.isinf and r.s == s
+        assert r.divzero, f'expected divzero for {x} / {y}'
+
+    @pytest.mark.parametrize('x, y', [
+        (0.0, 0.0), (-0.0, -0.0),
+        (float('inf'), float('inf')), (float('-inf'), float('inf')),
+    ])
+    def test_invalid(self, x, y) -> None:
+        # `0 / 0` and `Inf / Inf` are NaN
+        r = fp.div(x, y, fp.REAL)
+        assert r.isnan, f'expected NaN for {x} / {y}'
+
+    @pytest.mark.parametrize('x, y, isinf, s', [
+        (float('inf'), 2.0, True, False),
+        (float('-inf'), 2.0, True, True),
+        (float('inf'), -2.0, True, True),
+        # a finite dividend over Inf is a signed zero
+        (2.0, float('inf'), False, False),
+        (2.0, float('-inf'), False, True),
+        (-2.0, float('inf'), False, True),
+    ])
+    def test_infinite_operand(self, x, y, isinf, s) -> None:
+        r = fp.div(x, y, fp.REAL)
+        assert r.isinf == isinf and r.s == s
+        if not isinf:
+            assert r.is_zero()
+
+    @pytest.mark.parametrize('x, y', [(float('nan'), 1.0), (1.0, float('nan'))])
+    def test_nan_operand(self, x, y) -> None:
+        assert fp.div(x, y, fp.REAL).isnan

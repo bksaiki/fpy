@@ -28,6 +28,10 @@ def _is_zero(x: EngineArg) -> bool:
 def _signbit(x: EngineArg) -> bool:
     return x.s if isinstance(x, Float) else (x < 0)
 
+def _as_rational(x: EngineArg) -> Fraction:
+    """The exact value of a finite `x` as a `Fraction`."""
+    return x.as_rational() if isinstance(x, Float) else x
+
 def _int_value(x: EngineArg) -> int | None:
     """The value of `x` as an `int`, or `None` if it is not an integer."""
     match x:
@@ -241,7 +245,37 @@ class RealEngine(Engine):
         return None
 
     def div(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
+        if _is_nan(x) or _is_nan(y):
+            # either is NaN
+            return Float(isnan=True, ctx=REAL)
+
+        s = _signbit(x) != _signbit(y)
+        if _is_inf(x):
+            if _is_inf(y):
+                # Inf / Inf = NaN
+                return Float(isnan=True, ctx=REAL)
+            else:
+                # Inf / y = Inf
+                return Float(s=s, isinf=True, ctx=REAL)
+        elif _is_inf(y):
+            # x / Inf = 0
+            return Float(s=s, c=0, ctx=REAL)
+        elif _is_zero(y):
+            if _is_zero(x):
+                # 0 / 0 = NaN
+                return Float(isnan=True, ctx=REAL)
+            else:
+                # x / 0 = Inf; `ops` reports this as divide-by-zero
+                return Float(s=s, isinf=True, ctx=REAL)
+        elif _is_zero(x):
+            # 0 / y = 0; the separate case keeps the sign of a zero `x`
+            return Float(s=s, c=0, ctx=REAL)
+        else:
+            # both are finite and non-zero, so the quotient is an exact rational
+            r = _as_rational(x) / _as_rational(y)
+            if isinstance(x, Float) and isinstance(y, Float) and is_dyadic(r):
+                return Float(x=RealFloat.from_rational(r), ctx=REAL)
+            return r
 
     def fdim(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         return None
