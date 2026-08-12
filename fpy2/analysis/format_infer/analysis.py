@@ -251,6 +251,14 @@ SetValue: TypeAlias = Fraction | NegZero | Special
 """A member of a :class:`SetFormat`: an exact rational, the negative zero, or
 an infinity / NaN."""
 
+_SPECIAL_FLOAT: dict[Special, Float] = {
+    Special.POS_INF: Float(isinf=True),
+    Special.NEG_INF: Float(s=True, isinf=True),
+    Special.NAN: Float(isnan=True),
+}
+"""Each :class:`Special` as a :class:`Float`, for asking a format whether it
+holds one."""
+
 
 @dataclass(frozen=True)
 class SetFormat:
@@ -446,8 +454,11 @@ def _all_representable_in(values: frozenset[SetValue], fmt: Format) -> bool:
                 return False
             continue
         if isinstance(v, Special):
-            # Conservative: no format is credited with holding a special here.
-            return False
+            # `representable_in` takes a `Float`, which -- unlike `RealFloat` --
+            # can be an infinity or a NaN, so the format answers directly.
+            if not fmt.representable_in(_SPECIAL_FLOAT[v]):
+                return False
+            continue
         if not is_dyadic(v):
             return False
         if not fmt.representable_in(RealFloat.from_rational(v)):
@@ -586,12 +597,15 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     # `NEG_ZERO` becomes a `RealFloat` that carries the sign, which the bounds
     # below then read like any other value.  Its presence also sets
     # `has_neg_zero` on the result -- see the end of this function.
+    # A `Special` has no place on the finite grid, so it sets the corresponding
+    # membership flag and is left out of the bounds below.  A set of nothing but
+    # specials therefore takes every `default=` path.
     rfs: list[RealFloat] = []
+    specials: set[Special] = set()
     for v in s.values:
         if isinstance(v, Special):
-            # Conservative: a special is not liftable onto the finite grid here.
-            return None
-        if isinstance(v, NegZero):
+            specials.add(v)
+        elif isinstance(v, NegZero):
             rfs.append(RealFloat(s=True, exp=0, c=0))
         elif is_dyadic(v):
             rfs.append(RealFloat.from_rational(v))
@@ -613,6 +627,9 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     exp = min((rf.exp for rf in rfs), default=0)
     return AbstractFormat(
         prec, exp, pos_bound, neg_bound=neg_bound,
+        has_pos_inf=Special.POS_INF in specials,
+        has_neg_inf=Special.NEG_INF in specials,
+        has_nan=Special.NAN in specials,
         has_neg_zero=any(isinstance(v, NegZero) for v in s.values),
     )
 
@@ -679,7 +696,20 @@ def _set_add(a: SetValue, b: SetValue) -> SetValue:
 
     IEEE-754 §6.3: a sum is ``-0.0`` only when both addends are.  Every other
     zero sum — including ``1 + (-1)`` and ``(-0.0) + (+0.0)`` — is ``+0.0``.
+
+    A NaN propagates, and ``(+inf) + (-inf)`` is the one undefined sum; any
+    other sum involving an infinity is that infinity.
     """
+    if a is Special.NAN or b is Special.NAN:
+        return Special.NAN
+    a_inf = isinstance(a, Special)
+    b_inf = isinstance(b, Special)
+    if a_inf and b_inf:
+        return a if a is b else Special.NAN
+    if a_inf:
+        return a
+    if b_inf:
+        return b
     if isinstance(a, NegZero) and isinstance(b, NegZero):
         return NEG_ZERO
     return _set_as_fraction(a) + _set_as_fraction(b)
@@ -702,7 +732,26 @@ def _set_mul(a: SetValue, b: SetValue) -> SetValue:
     rounding mode — so a zero product is ``-0.0`` exactly when the signs differ.
     That is why a negative operand and a ``+0.0`` give ``-0.0`` even though
     neither is a negative zero.
+
+    A NaN propagates, and ``inf * 0`` is the one undefined product; any other
+    product involving an infinity is an infinity, signed by the same XOR.  This
+    is exact where :meth:`AbstractFormat.__mul__` must be conservative — that
+    one only knows an operand *may* be zero, this one knows whether it is.
     """
+    if a is Special.NAN or b is Special.NAN:
+        return Special.NAN
+    a_inf = isinstance(a, Special)
+    b_inf = isinstance(b, Special)
+    if a_inf or b_inf:
+        if (not a_inf and _set_as_fraction(a) == 0) or (
+            not b_inf and _set_as_fraction(b) == 0
+        ):
+            return Special.NAN
+        return (
+            Special.NEG_INF
+            if _set_is_negative(a) != _set_is_negative(b)
+            else Special.POS_INF
+        )
     product = _set_as_fraction(a) * _set_as_fraction(b)
     if product != 0:
         return product

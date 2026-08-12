@@ -2154,3 +2154,152 @@ class TestSpecialSentinels:
         assert not _set_is_negative(Special.POS_INF)
         # a NaN is unsigned here; every sign rule short-circuits on it first
         assert not _set_is_negative(Special.NAN)
+
+
+class TestSpecialConversions:
+    """Lifting a special-bearing ``SetFormat`` and asking a format whether it
+    holds one."""
+
+    def test_lift_sets_the_membership_flags(self):
+        from fpy2.analysis.format_infer.analysis import (
+            Special, _setformat_to_abstract,
+        )
+        for member, attr in (
+            (Special.POS_INF, 'has_pos_inf'),
+            (Special.NEG_INF, 'has_neg_inf'),
+            (Special.NAN, 'has_nan'),
+        ):
+            af = _setformat_to_abstract(SetFormat.from_value(member))
+            assert af is not None
+            assert getattr(af, attr), f'{member!r} did not set {attr}'
+
+    def test_a_special_stays_off_the_finite_grid(self):
+        """An infinity must not widen the bounds -- the finite part of
+        ``{1, +inf}`` is still just ``1``."""
+        from fpy2.analysis.format_infer.analysis import (
+            Special, _setformat_to_abstract,
+        )
+        finite = _setformat_to_abstract(SetFormat.from_value(Fraction(1)))
+        with_inf = _setformat_to_abstract(
+            SetFormat(frozenset((Fraction(1), Special.POS_INF)))
+        )
+        assert finite is not None and with_inf is not None
+        assert with_inf.pos_bound == finite.pos_bound
+        assert with_inf.prec == finite.prec
+        assert with_inf.has_pos_inf and not finite.has_pos_inf
+
+    def test_an_all_special_set_lifts_to_the_empty_grid(self):
+        from fpy2.analysis.format_infer.analysis import (
+            Special, _setformat_to_abstract,
+        )
+        af = _setformat_to_abstract(SetFormat.from_value(Special.NAN))
+        assert af is not None
+        assert af.pos_bound.is_zero() and af.neg_bound.is_zero()
+        assert af.prec == 1 and af.has_nan
+
+    @pytest.mark.parametrize('ctx, expect', [
+        (fp.FP32, True),
+        (fp.FP64, True),
+        (fp.INTEGER, False),
+        (fp.SINT8, False),
+    ])
+    def test_representable_in(self, ctx, expect):
+        from fpy2.analysis.format_infer.analysis import (
+            Special, _all_representable_in,
+        )
+        for member in Special:
+            got = _all_representable_in(frozenset((member,)), ctx.format())
+            assert got is expect, f'{member!r} under {ctx}'
+
+    def test_round_is_identity_follows(self):
+        """``round_is_identity`` routes through ``_all_representable_in``, so a
+        float context is the identity on a special and an integer one is not."""
+        from fpy2.analysis.format_infer.analysis import (
+            Special, round_is_identity,
+        )
+        s = SetFormat.from_value(Special.POS_INF)
+        assert round_is_identity(s, fp.FP64)
+        assert not round_is_identity(s, fp.INTEGER)
+
+
+class TestSpecialArithmetic:
+    """IEEE rules for the ``Special`` members of ``SetValue``."""
+
+    @pytest.mark.parametrize('a, b, expect', [
+        ('POS_INF', 'POS_INF', 'POS_INF'),
+        ('NEG_INF', 'NEG_INF', 'NEG_INF'),
+        # the one undefined sum
+        ('POS_INF', 'NEG_INF', 'NAN'),
+        ('NEG_INF', 'POS_INF', 'NAN'),
+        ('NAN', 'POS_INF', 'NAN'),
+        ('NAN', 'NAN', 'NAN'),
+    ])
+    def test_add_of_two_specials(self, a, b, expect):
+        from fpy2.analysis.format_infer.analysis import Special, _set_add
+
+        assert _set_add(Special[a], Special[b]) is Special[expect]
+
+    @pytest.mark.parametrize('special', ['POS_INF', 'NEG_INF'])
+    def test_add_of_an_infinity_and_a_finite_value(self, special):
+        from fpy2.analysis.format_infer.analysis import Special, _set_add
+
+        for finite in (Fraction(0), Fraction(3), Fraction(-3)):
+            assert _set_add(Special[special], finite) is Special[special]
+            assert _set_add(finite, Special[special]) is Special[special]
+
+    def test_sub_of_equal_infinities_is_nan(self):
+        """``_set_sub`` routes through ``neg`` + ``add``, so this falls out."""
+        from fpy2.analysis.format_infer.analysis import Special, _set_sub
+
+        assert _set_sub(Special.POS_INF, Special.POS_INF) is Special.NAN
+        assert _set_sub(Special.NEG_INF, Special.NEG_INF) is Special.NAN
+        assert _set_sub(Special.POS_INF, Special.NEG_INF) is Special.POS_INF
+
+    @pytest.mark.parametrize('a, b, expect', [
+        ('POS_INF', 'POS_INF', 'POS_INF'),
+        ('POS_INF', 'NEG_INF', 'NEG_INF'),
+        ('NEG_INF', 'NEG_INF', 'POS_INF'),
+        ('NAN', 'POS_INF', 'NAN'),
+    ])
+    def test_mul_of_two_specials(self, a, b, expect):
+        from fpy2.analysis.format_infer.analysis import Special, _set_mul
+
+        assert _set_mul(Special[a], Special[b]) is Special[expect]
+
+    def test_mul_of_an_infinity_by_zero_is_nan(self):
+        """The one undefined product -- and the case where the set path is
+        exact where ``AbstractFormat.__mul__`` must be conservative, since that
+        one only knows an operand *may* be zero."""
+        from fpy2.analysis.format_infer.analysis import (
+            NEG_ZERO, Special, _set_mul,
+        )
+        for zero in (Fraction(0), NEG_ZERO):
+            assert _set_mul(Special.POS_INF, zero) is Special.NAN
+            assert _set_mul(zero, Special.NEG_INF) is Special.NAN
+
+    def test_mul_of_an_infinity_by_a_nonzero_keeps_the_xor_sign(self):
+        from fpy2.analysis.format_infer.analysis import Special, _set_mul
+
+        assert _set_mul(Special.POS_INF, Fraction(2)) is Special.POS_INF
+        assert _set_mul(Special.POS_INF, Fraction(-2)) is Special.NEG_INF
+        assert _set_mul(Special.NEG_INF, Fraction(-2)) is Special.POS_INF
+
+    def test_neg_and_abs(self):
+        from fpy2.analysis.format_infer.analysis import (
+            Special, _set_abs, _set_neg,
+        )
+        assert _set_neg(Special.POS_INF) is Special.NEG_INF
+        assert _set_neg(Special.NEG_INF) is Special.POS_INF
+        assert _set_neg(Special.NAN) is Special.NAN
+        assert _set_abs(Special.NEG_INF) is Special.POS_INF
+        assert _set_abs(Special.NAN) is Special.NAN
+
+    def test_the_finite_domain_is_untouched(self):
+        from fpy2.analysis.format_infer.analysis import (
+            NEG_ZERO, _set_add, _set_mul,
+        )
+        assert _set_add(Fraction(1), Fraction(2)) == Fraction(3)
+        assert _set_mul(Fraction(3), Fraction(-2)) == Fraction(-6)
+        # the signed-zero rules still hold
+        assert _set_add(NEG_ZERO, NEG_ZERO) is NEG_ZERO
+        assert _set_mul(Fraction(-1), Fraction(0)) is NEG_ZERO

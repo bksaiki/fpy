@@ -54,6 +54,27 @@ class TestStorageScalar:
         with pytest.raises(StorageSelectionError, match='unconstrained real'):
             choose_storage_scalar(REAL_FORMAT)
 
+    @pytest.mark.parametrize('special', ['POS_INF', 'NEG_INF', 'NAN'])
+    def test_setformat_with_a_special_never_picks_an_integer(self, special):
+        """No integer type holds an infinity or a NaN, so a set carrying one
+        must skip every integer rung -- otherwise an infinity would be stored
+        in an ``int8_t``."""
+        from fpy2.analysis.format_infer.analysis import Special
+
+        s = SetFormat(frozenset((Special[special],)))
+        assert choose_storage_scalar(s).is_float()
+
+    def test_a_special_beside_a_small_integer_still_picks_a_float(self):
+        """The finite part alone would fit ``uint8_t``; the infinity must
+        override that."""
+        from fpy2.analysis.format_infer.analysis import Special
+
+        finite = SetFormat(frozenset((Fraction(1),)))
+        assert choose_storage_scalar(finite) == CppScalar.U8
+
+        with_inf = SetFormat(frozenset((Fraction(1), Special.POS_INF)))
+        assert choose_storage_scalar(with_inf).is_float()
+
     def test_unbounded_integer_falls_back_to_s64(self):
         """``MPFixedFormat`` representing unbounded integers — e.g.,
         the result of ``range(...)`` — falls back to ``S64``.
