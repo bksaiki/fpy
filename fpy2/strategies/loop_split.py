@@ -15,8 +15,8 @@ def split(
     strategy: SplitLoopStrategy = SplitLoopStrategy.STRICT,
     temp_id: str = 't',
     outer_id: str = 'i',
-    inner_id: str = 'i'
-):
+    inner_id: str = 'j'
+) -> Function:
     """
     Split ``for`` loops in `func` into nested loops over chunks of
     `factor` elements (Halide's ``split``).
@@ -26,8 +26,8 @@ def split(
     func : Function
         The function to transform.
     factor : int | str
-        The chunk size — a constant, or the name of a variable in
-        scope holding it.
+        The chunk size — a positive constant, or the name of a
+        variable in scope holding it.
     where : int | None
         The index of the `for` loop to split. If `None`, split all
         `for` loops.
@@ -39,6 +39,12 @@ def split(
     -------
     Function
         The transformed function.
+
+    Raises
+    ------
+    ValueError
+        If `factor` is a non-positive constant, or `where` does not
+        correspond to a `for` loop.
 
     Examples
     --------
@@ -57,26 +63,29 @@ def split(
         def total(xs):
             acc = 0
             t = xs
-            t0 = 2
             with fp.INTEGER:
-                t1 = len(t)
-                assert fp.fmod(t1, t0) == 0
-            for i in range(0, t1, t0):
+                t3 = 2
+                t4 = len(t)
+                assert fp.fmod(t4, t3) == 0
+            for i in range(0, t4, t3):
                 with fp.INTEGER:
-                    i2 = t[i:(i + t0)]
-                for x in i2:
+                    t5 = (i + t3)
+                for j in range(i, t5, 1):
+                    x = t[j]
                     acc = (acc + x)
             return acc
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
-    if not isinstance(factor, (int, str)):
-        raise TypeError(f"Expected an \'int\' or \'str\' for factor, got {factor}")
-    
+
     if isinstance(factor, int):
+        if factor < 1:
+            raise ValueError(f"Expected a positive integer for factor, got {factor}")
         factor_e: Expr = Integer(factor, None)
-    else:
+    elif isinstance(factor, str):
         factor_e = Var(NamedId(factor), None)
+    else:
+        raise TypeError(f"Expected an \'int\' or \'str\' for factor, got {factor}")
 
     ast = SplitLoop.apply(
         func.ast, factor_e, where, strategy,
