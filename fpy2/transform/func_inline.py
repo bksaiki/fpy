@@ -50,9 +50,11 @@ class _FuncInline(DefaultTransformVisitor):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    funcs: set[FuncDef] | None
+    funcs: set[Function] | None
     inlined: dict[FuncDef, FuncDef]
     recursive: bool
+    where: int | None
+    site_idx: int
 
     gensym: Gensym
     free_vars: set[NamedId]
@@ -62,13 +64,21 @@ class _FuncInline(DefaultTransformVisitor):
         self,
         func: FuncDef,
         def_use: DefineUseAnalysis,
-        funcs: set[FuncDef] | None,
+        funcs: set[Function] | None,
         inlined: dict[FuncDef, FuncDef] | None = None,
-        recursive: bool = True
+        recursive: bool = True,
+        where: int | None = None
     ):
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
+        self.where = where
+        # Counts *candidate* call sites (calls to a `Function` that pass
+        # the `funcs` filter) in visit order, outermost-first.  `where`
+        # selects one by this index.  Statements spliced from an inlined
+        # callee body are never re-visited, so the final count is the
+        # candidate-site count of the original function.
+        self.site_idx = 0
         # Cache of fully-inlined callee bodies, keyed by callee
         # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
         # sites instead of re-inlining the whole callee subtree each
@@ -88,6 +98,12 @@ class _FuncInline(DefaultTransformVisitor):
             return super()._visit_call(e, ctx)
         if self.funcs is not None and e.fn not in self.funcs:
             # not a candidate for inlining
+            return super()._visit_call(e, ctx)
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if self.where is not None and idx != self.where:
+            # a candidate site, but not the selected one
             return super()._visit_call(e, ctx)
 
         # Inline the callee body.  Acyclicity is guaranteed by the
@@ -201,11 +217,18 @@ class FuncInline:
     def apply(
         func: FuncDef, *,
         def_use: DefineUseAnalysis | None = None,
-        funcs: Iterable[FuncDef] | None = None,
-        recursive: bool = True
+        funcs: Iterable[Function] | None = None,
+        recursive: bool = True,
+        where: int | None = None
     ) -> FuncDef:
         """
         Applies function inlining to `func` returning the transformed function.
+
+        `where` selects a single candidate call site by index, in visit
+        order (outermost-first); candidates are calls to a `Function`
+        that pass the `funcs` filter.  If `None`, every candidate site
+        is inlined.  With `recursive=True` the selected site's callee is
+        still fully flattened.
 
         Raises `CallGraphError` if the call graph reachable from `func`
         contains a cycle (FPy forbids recursion; inlining a recursive
@@ -213,6 +236,8 @@ class FuncInline:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
+        if where is not None and not isinstance(where, int):
+            raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
 
         # Recursion guard — see the method docstring.  Also gives us
         # the leaves-first order for the bottom-up path below.
@@ -221,7 +246,7 @@ class FuncInline:
         if funcs is not None:
             funcs = set(funcs)
 
-        if recursive and funcs is None:
+        if recursive and funcs is None and where is None:
             # Bottom-up: inline each reachable function exactly once in
             # leaves-first order, reusing cached results, instead of
             # re-inlining the whole callee subtree at every call site.
@@ -233,11 +258,21 @@ class FuncInline:
                 ).apply()
             result = inlined[func]
         else:
-            # One-level inlining, or selective inlining via `funcs`:
-            # keep the per-call-site strategy.
+            # One-level inlining, or selective inlining via `funcs` /
+            # `where`: keep the per-call-site strategy.
             if def_use is None:
                 def_use = DefineUse.analyze(func)
-            result = _FuncInline(func, def_use, funcs, recursive=recursive).apply()
+            vtor = _FuncInline(func, def_use, funcs, recursive=recursive, where=where)
+            result = vtor.apply()
+            # A `where` that named no candidate site leaves the function
+            # unchanged; fail rather than silently no-op.  `site_idx` is
+            # the true candidate count (spliced callee bodies are never
+            # re-visited).
+            if where is not None and not (0 <= where < vtor.site_idx):
+                raise ValueError(
+                    f'where={where} does not correspond to a call site; '
+                    f'the function has {vtor.site_idx} candidate call site(s)'
+                )
 
         SyntaxCheck.check(result, ignore_unknown=True)
         return result
