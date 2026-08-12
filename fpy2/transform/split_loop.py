@@ -22,7 +22,15 @@ body run under the *ambient* context so their rounding is unchanged.
 import dataclasses
 import enum
 
-from ..analysis import ReachingDefs, ReachingDefsAnalysis, SyntaxCheck
+from ..analysis import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
+    ListSize,
+    ReachingDefs,
+    ReachingDefsAnalysis,
+    SyntaxCheck,
+    concrete_size,
+)
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER
@@ -87,6 +95,9 @@ class _SplitLoop(DefaultTransformVisitor):
 
     gensym: Gensym
     index: int
+    # Static list sizes of iterables; with a literal factor, enables
+    # discharging the remainder handling at compile time.
+    array_size: ArraySizeAnalysis | None
 
     def __init__(
         self,
@@ -97,7 +108,8 @@ class _SplitLoop(DefaultTransformVisitor):
         reaching_defs: ReachingDefsAnalysis,
         tmp_id: NamedId,
         outer_id: NamedId,
-        inner_id: NamedId
+        inner_id: NamedId,
+        array_size: ArraySizeAnalysis | None
     ):
         super().__init__()
         self.func = func
@@ -107,6 +119,7 @@ class _SplitLoop(DefaultTransformVisitor):
         self.tmp_id = tmp_id
         self.outer_id = outer_id
         self.inner_id = inner_id
+        self.array_size = array_size
 
         self.gensym = Gensym(reaching_defs.names())
         self.index = 0
@@ -114,11 +127,36 @@ class _SplitLoop(DefaultTransformVisitor):
     def _integer_ctx(self, stmts: list[Stmt], loc: Location | None) -> ContextStmt:
         return ContextStmt(UnderscoreId(), ForeignVal(INTEGER, None), StmtBlock(stmts), loc)
 
+    def _static_size(self, iterable: Expr) -> int | None:
+        """The statically-known length of *iterable* (the original AST
+        node), or ``None`` if the array-size analysis could not pin it."""
+        if self.array_size is None:
+            return None
+        bound = self.array_size.by_expr.get(iterable)
+        if isinstance(bound, ListSize):
+            return concrete_size(bound.size)
+        return None
+
+    def _static_factor(self) -> int | None:
+        """The factor as a positive compile-time constant, or ``None``."""
+        if isinstance(self.factor, Integer) and self.factor.val >= 1:
+            return self.factor.val
+        return None
+
+    @staticmethod
+    def _ref(x: NamedId | int) -> Expr:
+        """A fresh reference node per use site — a ``Var`` for a bound
+        name, an ``Integer`` for a compile-time constant — so no node is
+        shared between positions."""
+        if isinstance(x, NamedId):
+            return Var(x, None)
+        return Integer(x, None)
+
     def _chunk_loop(
         self,
         t: NamedId,
-        f: NamedId,
-        bound: NamedId,
+        f: NamedId | int,
+        bound: NamedId | int,
         target: Id | TupleBinding,
         body: StmtBlock,
         loc: Location | None
@@ -133,7 +171,7 @@ class _SplitLoop(DefaultTransformVisitor):
         # the chunk bound `i + f` must be exact, so it is precomputed
         # under `INTEGER` rather than inlined into the `range`
         hi_bind = self._integer_ctx([
-            Assign(hi, None, Add(Var(outer, None), Var(f, None), None), None)
+            Assign(hi, None, Add(Var(outer, None), self._ref(f), None), None)
         ], None)
 
         inner_body = StmtBlock([
@@ -149,7 +187,7 @@ class _SplitLoop(DefaultTransformVisitor):
 
         return ForStmt(
             outer,
-            Range3(None, Integer(0, None), Var(bound, None), Var(f, None), None),
+            Range3(None, Integer(0, None), self._ref(bound), self._ref(f), None),
             StmtBlock([hi_bind, inner_loop]),
             loc
         )
@@ -158,12 +196,25 @@ class _SplitLoop(DefaultTransformVisitor):
         # STRICT: the length must be an exact multiple of `f`, so the
         # chunked loop covers the whole (asserted-divisible) length.
         t = self.gensym.refresh(self.tmp_id)
-        f = self.gensym.refresh(self.tmp_id)
-        n = self.gensym.refresh(self.tmp_id)
+        emitted: list[Stmt] = [Assign(t, None, iterable, None)]   # ambient materialize
 
-        return [
-            Assign(t, None, iterable, None),   # ambient materialize
-            self._integer_ctx([
+        size = self._static_size(stmt.iterable)
+        fval = self._static_factor()
+        if size is not None and fval is not None:
+            # Statically-known length and factor: verify divisibility at
+            # compile time and drop the runtime `len`/`assert` entirely.
+            if size % fval != 0:
+                raise ValueError(
+                    f'STRICT split by {fval} requires the iterable length to '
+                    f'be a multiple of {fval}, but its statically-known '
+                    f'length is {size}'
+                )
+            if size > 0:
+                emitted.append(self._chunk_loop(t, fval, size, stmt.target, body, stmt.loc))
+        else:
+            f = self.gensym.refresh(self.tmp_id)
+            n = self.gensym.refresh(self.tmp_id)
+            emitted.append(self._integer_ctx([
                 Assign(f, None, factor, None),
                 Assign(n, None, Len(None, Var(t, None), None), None),
                 AssertStmt(
@@ -178,19 +229,21 @@ class _SplitLoop(DefaultTransformVisitor):
                     None,
                     None
                 ),
-            ], stmt.loc),
-            self._chunk_loop(t, f, n, stmt.target, body, stmt.loc),
-        ]
+            ], stmt.loc))
+            emitted.append(self._chunk_loop(t, f, n, stmt.target, body, stmt.loc))
 
-    def _build_peel(self, stmt: ForStmt, iterable: Expr, factor: Expr, body: StmtBlock) -> list[Stmt]:
-        # PEEL: chunk the `[0, m)` prefix (largest multiple of `f`) and
-        # run the `[m, n)` remainder in a residual loop.  Correct for
-        # any length.
-        t = self.gensym.refresh(self.tmp_id)
-        f = self.gensym.refresh(self.tmp_id)
-        n = self.gensym.refresh(self.tmp_id)
-        m = self.gensym.refresh(self.tmp_id)
+        return emitted
 
+    def _residual_loop(
+        self,
+        stmt: ForStmt,
+        t: NamedId,
+        lo: NamedId | int,
+        hi: NamedId | int,
+        body: StmtBlock
+    ) -> ForStmt:
+        """The ``[lo, hi)`` remainder loop, over a fresh copy of the
+        target and body (they also appear in the chunked loop)."""
         rem = self.gensym.refresh(self.inner_id)
         rem_body = StmtBlock([
             Assign(
@@ -199,26 +252,48 @@ class _SplitLoop(DefaultTransformVisitor):
             ),
             *_clone_block(body).stmts
         ])
+        return ForStmt(
+            rem,
+            Range3(None, self._ref(lo), self._ref(hi), Integer(1, None), None),
+            rem_body,
+            stmt.loc
+        )
 
-        return [
-            Assign(t, None, iterable, None),   # ambient materialize
-            self._integer_ctx([
+    def _build_peel(self, stmt: ForStmt, iterable: Expr, factor: Expr, body: StmtBlock) -> list[Stmt]:
+        # PEEL: chunk the `[0, m)` prefix (largest multiple of `f`) and
+        # run the `[m, n)` remainder in a residual loop.  Correct for
+        # any length.
+        t = self.gensym.refresh(self.tmp_id)
+        emitted: list[Stmt] = [Assign(t, None, iterable, None)]   # ambient materialize
+
+        size = self._static_size(stmt.iterable)
+        fval = self._static_factor()
+        if size is not None and fval is not None:
+            # Statically-known length and factor: the bounds are
+            # compile-time constants, so no `len`, no `fmod`, and empty
+            # regions are dropped entirely.
+            m = (size // fval) * fval
+            if m > 0:
+                emitted.append(self._chunk_loop(t, fval, m, stmt.target, body, stmt.loc))
+            if m < size:
+                emitted.append(self._residual_loop(stmt, t, m, size, body))
+        else:
+            f = self.gensym.refresh(self.tmp_id)
+            n = self.gensym.refresh(self.tmp_id)
+            m_id = self.gensym.refresh(self.tmp_id)
+            emitted.append(self._integer_ctx([
                 Assign(f, None, factor, None),
                 Assign(n, None, Len(None, Var(t, None), None), None),
-                Assign(m, None, Sub(
+                Assign(m_id, None, Sub(
                     Var(n, None),
                     Fmod(None, Var(n, None), Var(f, None), None),
                     None
                 ), None),
-            ], stmt.loc),
-            self._chunk_loop(t, f, m, stmt.target, body, stmt.loc),
-            ForStmt(
-                rem,
-                Range3(None, Var(m, None), Var(n, None), Integer(1, None), None),
-                rem_body,
-                stmt.loc
-            ),
-        ]
+            ], stmt.loc))
+            emitted.append(self._chunk_loop(t, f, m_id, stmt.target, body, stmt.loc))
+            emitted.append(self._residual_loop(stmt, t, m_id, n, body))
+
+        return emitted
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx) -> tuple[Stmt, None]:
         selected = self.where is None or self.index == self.where
@@ -292,6 +367,7 @@ class SplitLoop:
         where: int | None = None,
         strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
+        array_size: ArraySizeAnalysis | None = None,
         tmp_id: NamedId | None = None,
         outer_id: NamedId | None = None,
         inner_id: NamedId | None = None
@@ -305,6 +381,13 @@ class SplitLoop:
 
         if reaching_defs is None:
             reaching_defs = ReachingDefs.analyze(func)
+        if array_size is None:
+            # Auxiliary: a failed size analysis only disables the static
+            # optimization, so never let it break the transformation.
+            try:
+                array_size = ArraySizeInfer.analyze(func)
+            except Exception:  # noqa: BLE001 -- auxiliary analysis; failure only disables an optimization
+                array_size = None
         if tmp_id is None:
             tmp_id = NamedId('t')
         if outer_id is None:
@@ -312,7 +395,10 @@ class SplitLoop:
         if inner_id is None:
             inner_id = NamedId('j')
 
-        vtor = _SplitLoop(func, factor, where, strategy, reaching_defs, tmp_id, outer_id, inner_id)
+        vtor = _SplitLoop(
+            func, factor, where, strategy, reaching_defs,
+            tmp_id, outer_id, inner_id, array_size
+        )
         func = vtor.apply()
         # A `where` that named no loop leaves the function unchanged;
         # fail rather than silently no-op.  `index` is the true loop

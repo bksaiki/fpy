@@ -235,6 +235,83 @@ class TestRemainder:
 
 
 # ----------------------------------------------------------------------
+# Static-size discharge
+
+
+@fp.fpy
+def _range8() -> fp.Real:
+    x = 0.0
+    for i in range(8):
+        x = x + i
+    return x
+
+
+@fp.fpy
+def _range7() -> fp.Real:
+    x = 0.0
+    for i in range(7):
+        x = x + i
+    return x
+
+
+@fp.fpy
+def _range0() -> fp.Real:
+    x = 0.0
+    for i in range(0):
+        x = x + i
+    return x
+
+
+class TestStaticSize:
+    """A statically-known length plus a literal factor discharges the
+    remainder handling at compile time: no ``len``, no ``fmod``, and
+    empty regions are dropped."""
+
+    def test_peel_divisible_no_residual(self):
+        out = _split(_range8, 2, strategy=SplitLoopStrategy.PEEL)
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 2   # chunk + inner; no residual
+        assert _range8() == _run(out, _range8)
+
+    def test_peel_non_divisible_constant_residual(self):
+        out = _split(_range7, 2, strategy=SplitLoopStrategy.PEEL)
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 3   # chunk + inner + residual
+        assert _range7() == _run(out, _range7)
+
+    def test_peel_factor_exceeds_length(self):
+        # m = 0: no chunked region at all, only the residual loop
+        out = _split(_range7, 8, strategy=SplitLoopStrategy.PEEL)
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt
+        assert txt.count('for ') == 1
+        assert _range7() == _run(out, _range7)
+
+    def test_peel_empty(self):
+        out = _split(_range0, 2, strategy=SplitLoopStrategy.PEEL)
+        assert _count_fors(out) == 0
+        assert _range0() == _run(out, _range0)
+
+    def test_strict_divisible_no_runtime_check(self):
+        out = _split(_range8, 2, strategy=SplitLoopStrategy.STRICT)
+        txt = out.format()
+        assert 'len(' not in txt and 'fmod(' not in txt and 'assert' not in txt
+        assert _range8() == _run(out, _range8)
+
+    def test_strict_indivisible_raises(self):
+        with pytest.raises(ValueError):
+            _split(_range7, 2, strategy=SplitLoopStrategy.STRICT)
+
+    def test_unknown_length_keeps_runtime_check(self):
+        # a list parameter has no statically-known length
+        out = _split(_total, 2, strategy=SplitLoopStrategy.PEEL)
+        txt = out.format()
+        assert 'len(' in txt and 'fmod(' in txt
+
+
+# ----------------------------------------------------------------------
 # `where` targeting and validation
 
 
