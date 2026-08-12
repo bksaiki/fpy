@@ -11,9 +11,9 @@ the tests assert:
    ``with fp.INTEGER:``, no ``ListSlice`` is emitted, and the loops
    nest as expected.
 2. **Semantic equivalence** via the FPy interpreter on concrete
-   inputs — including the two soundness fixtures from the audit:
-   user variables that collide with the minted names, and a body
-   that mutates the iterated list in place.
+   inputs — including two soundness fixtures: user variables that
+   collide with the minted names, and a body that mutates the
+   iterated list in place.
 """
 
 import pytest
@@ -119,6 +119,17 @@ def _mutates(xs: list[fp.Real]) -> fp.Real:
 
 
 @fp.fpy
+def _mutates_late(xs: list[fp.Real]) -> fp.Real:
+    # writes the *last* cell — for factor 2 and odd length, written in
+    # the chunked prefix and read by the residual loop
+    acc = 0.0
+    for x in xs:
+        acc = acc + x
+        xs[2] = 99.0
+    return acc
+
+
+@fp.fpy
 def _pairs(ps: list[tuple[fp.Real, fp.Real]]) -> fp.Real:
     acc = 0.0
     for a, b in ps:
@@ -163,7 +174,8 @@ class TestShape:
 
     @pytest.mark.parametrize('strategy', _BOTH)
     def test_materialized_once(self, strategy):
-        # exactly one bare Assign precedes the INTEGER prelude
+        # user's `acc`, then the single materialize Assign, then the
+        # INTEGER prelude
         out = _split(_total, strategy=strategy)
         kinds = [type(s) for s in out.body.stmts]
         assert kinds[:4] == [Assign, Assign, ContextStmt, ForStmt]
@@ -221,11 +233,11 @@ class TestRemainder:
         assert _total(_XS4) == _run(out, _total, _XS4)
 
     def test_peel_mutation_reaches_residual(self):
-        # `xs[1]` is written in the chunked prefix and (for odd
-        # lengths) read again in the residual loop
-        out = _split(_mutates, strategy=SplitLoopStrategy.PEEL)
+        # `xs[2]` is written in the chunked prefix; for length 3 and
+        # factor 2 the residual loop reads exactly that cell
+        out = _split(_mutates_late, strategy=SplitLoopStrategy.PEEL)
         for xs in ([1.0, 2.0, 3.0], _XS4):
-            assert _mutates(list(xs)) == _run(out, _mutates, list(xs))
+            assert _mutates_late(list(xs)) == _run(out, _mutates_late, list(xs))
 
     def test_peel_tuple_target(self):
         # the residual loop rebuilds its own copy of the tuple binding
@@ -345,3 +357,37 @@ class TestWhere:
             SplitLoop.apply(_total.ast, 2)  # type: ignore[arg-type]  # int, not Expr
         with pytest.raises(TypeError):
             _split(_total, 2, where='x')  # type: ignore[arg-type]
+
+
+# ----------------------------------------------------------------------
+# Factor validation
+
+
+@fp.fpy
+def _total_k(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    # `k` is referenced only by the factor `Var` the transform injects
+    acc = 0.0
+    for x in xs:
+        acc = acc + x
+    return acc
+
+
+class TestFactorValidation:
+
+    def test_non_positive_literal_raises(self):
+        for bad in (0, -2):
+            with pytest.raises(ValueError):
+                _split(_total, bad)
+
+    @pytest.mark.parametrize('strategy', _BOTH)
+    def test_non_positive_runtime_factor_asserts(self, strategy):
+        # a runtime factor < 1 would silently skip iterations
+        # (`range(0, n, f)` is empty) — the emitted assert rejects it
+        from fpy2.ast import NamedId, Var
+        out = SplitLoop.apply(
+            _total_k.ast, Var(NamedId('k'), None), strategy=strategy
+        )
+        assert _total_k(_XS4, 2.0) == _run(out, _total_k, _XS4, 2.0)
+        for bad in (0.0, -2.0):
+            with pytest.raises(AssertionError):
+                _run(out, _total_k, _XS4, bad)

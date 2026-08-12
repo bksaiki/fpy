@@ -10,27 +10,24 @@ context (**E-Add**): under a low-precision float context an offset or bound
 could round to the wrong value and read out of bounds.  Every such inserted
 computation is therefore wrapped in ``with fp.INTEGER:`` (see
 :func:`fpy2.transform.utils.integer_ctx`); the element reads then index with
-the resulting exact values, so the reads themselves need no special context.  The iterable and
-the loop body, by contrast, run under the *ambient* context so their rounding
-is unchanged.
+the resulting exact values, so the reads themselves need no special context.
+The iterable and the loop body, by contrast, run under the *ambient* context
+so their rounding is unchanged.
 """
 
 import enum
 
 from ..analysis import (
     ArraySizeAnalysis,
-    ArraySizeInfer,
-    ListSize,
     ReachingDefs,
     ReachingDefsAnalysis,
     SyntaxCheck,
-    concrete_size,
 )
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
 from .rename_target import RenameTarget
-from .utils import clone_block, copy_target, integer_ctx
+from .utils import clone_block, copy_target, infer_array_size, integer_ctx, static_size
 
 
 class ForUnrollStrategy(enum.Enum):
@@ -152,16 +149,6 @@ class _ForUnroll(DefaultTransformVisitor):
         self.idx_id = idx_id
         self.array_size = array_size
 
-    def _static_size(self, iterable: Expr) -> int | None:
-        """The statically-known length of *iterable* (the original AST node),
-        or ``None`` if the array-size analysis could not pin it down."""
-        if self.array_size is None:
-            return None
-        bound = self.array_size.by_expr.get(iterable)
-        if isinstance(bound, ListSize):
-            return concrete_size(bound.size)
-        return None
-
     def _body_copy(
         self,
         target: Id | TupleBinding,
@@ -259,7 +246,7 @@ class _ForUnroll(DefaultTransformVisitor):
         t = self.gensym.refresh(self.temp_id)
         emitted: list[Stmt] = [_assign(t, iterable)]   # ambient materialize
 
-        size = self._static_size(stmt.iterable)
+        size = static_size(self.array_size, stmt.iterable)
         if size is not None:
             # Statically known length: verify divisibility at compile time and
             # drop the runtime `len`/`assert` entirely.
@@ -287,7 +274,7 @@ class _ForUnroll(DefaultTransformVisitor):
         t = self.gensym.refresh(self.temp_id)
         emitted: list[Stmt] = [_assign(t, iterable)]   # ambient materialize
 
-        size = self._static_size(stmt.iterable)
+        size = static_size(self.array_size, stmt.iterable)
         if size is not None:
             # Statically-known length: the bound and remainder indices are
             # compile-time constants, so no `len`, no `fmod`, and the leftover
@@ -390,12 +377,7 @@ class ForUnroll:
         if reaching_defs is None:
             reaching_defs = ReachingDefs.analyze(func)
         if array_size is None:
-            # Auxiliary: a failed size analysis only disables the static
-            # optimization, so never let it break the transformation.
-            try:
-                array_size = ArraySizeInfer.analyze(func)
-            except Exception:  # noqa: BLE001 -- auxiliary analysis; failure only disables an optimization
-                array_size = None
+            array_size = infer_array_size(func)
         if temp_id is None:
             temp_id = NamedId('t')
         if len_id is None:
