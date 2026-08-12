@@ -33,8 +33,8 @@ from ..analysis import (
 )
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
-from ..number import INTEGER
 from ..utils import Gensym
+from .utils import clone_block, copy_target, integer_ctx
 
 
 class SplitLoopStrategy(enum.Enum):
@@ -57,27 +57,6 @@ class _Ctx:
     @staticmethod
     def default():
         return _Ctx(stmts=[])
-
-
-def _copy_target(target: Id | TupleBinding) -> Id | TupleBinding:
-    """A fresh copy of a loop target with the *same* names.  ``Id``s are
-    value-like and shared verbatim; a ``TupleBinding`` is rebuilt so no
-    node is shared between the copies it appears in."""
-    match target:
-        case Id():
-            return target
-        case TupleBinding():
-            return TupleBinding([_copy_target(e) for e in target.elts], target.loc)
-        case _:
-            raise RuntimeError(f'Unexpected target {target}')
-
-
-def _clone_block(block: StmtBlock) -> StmtBlock:
-    """A structurally-fresh copy of *block*, so the main and residual
-    loops occupy distinct AST nodes (a plain transform visit rebuilds
-    every node)."""
-    block, _ = DefaultTransformVisitor()._visit_block(block, None)
-    return block
 
 
 class _SplitLoop(DefaultTransformVisitor):
@@ -124,9 +103,6 @@ class _SplitLoop(DefaultTransformVisitor):
         self.gensym = Gensym(reaching_defs.names())
         self.index = 0
 
-    def _integer_ctx(self, stmts: list[Stmt], loc: Location | None) -> ContextStmt:
-        return ContextStmt(UnderscoreId(), ForeignVal(INTEGER, None), StmtBlock(stmts), loc)
-
     def _static_size(self, iterable: Expr) -> int | None:
         """The statically-known length of *iterable* (the original AST
         node), or ``None`` if the array-size analysis could not pin it."""
@@ -170,7 +146,7 @@ class _SplitLoop(DefaultTransformVisitor):
 
         # the chunk bound `i + f` must be exact, so it is precomputed
         # under `INTEGER` rather than inlined into the `range`
-        hi_bind = self._integer_ctx([
+        hi_bind = integer_ctx([
             Assign(hi, None, Add(Var(outer, None), self._ref(f), None), None)
         ], None)
 
@@ -214,7 +190,7 @@ class _SplitLoop(DefaultTransformVisitor):
         else:
             f = self.gensym.refresh(self.tmp_id)
             n = self.gensym.refresh(self.tmp_id)
-            emitted.append(self._integer_ctx([
+            emitted.append(integer_ctx([
                 Assign(f, None, factor, None),
                 Assign(n, None, Len(None, Var(t, None), None), None),
                 AssertStmt(
@@ -247,10 +223,10 @@ class _SplitLoop(DefaultTransformVisitor):
         rem = self.gensym.refresh(self.inner_id)
         rem_body = StmtBlock([
             Assign(
-                _copy_target(stmt.target), None,
+                copy_target(stmt.target), None,
                 ListRef(Var(t, None), Var(rem, None), None), None
             ),
-            *_clone_block(body).stmts
+            *clone_block(body).stmts
         ])
         return ForStmt(
             rem,
@@ -281,7 +257,7 @@ class _SplitLoop(DefaultTransformVisitor):
             f = self.gensym.refresh(self.tmp_id)
             n = self.gensym.refresh(self.tmp_id)
             m_id = self.gensym.refresh(self.tmp_id)
-            emitted.append(self._integer_ctx([
+            emitted.append(integer_ctx([
                 Assign(f, None, factor, None),
                 Assign(n, None, Len(None, Var(t, None), None), None),
                 Assign(m_id, None, Sub(
