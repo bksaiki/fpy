@@ -16,6 +16,7 @@ uncompilable program.
 import dataclasses
 import math
 from collections.abc import Callable, Sequence
+from typing import NoReturn
 from contextlib import contextmanager
 from fractions import Fraction
 
@@ -50,6 +51,20 @@ from ...ast.fpyast import (
     Call,
     Cast,
     Compare,
+    Const1_Pi,
+    Const2_Pi,
+    Const2_SqrtPi,
+    ConstE,
+    ConstInf,
+    ConstLn2,
+    ConstLog10E,
+    ConstLog2E,
+    ConstNan,
+    ConstPi,
+    ConstPi_2,
+    ConstPi_4,
+    ConstSqrt1_2,
+    ConstSqrt2,
     ContextStmt,
     Decnum,
     Digits,
@@ -81,6 +96,7 @@ from ...ast.fpyast import (
     NamedId,
     NaryOp,
     Not,
+    NullaryOp,
     Or,
     Range1,
     Range2,
@@ -115,6 +131,7 @@ from ...number import (
     RealFloat,
 )
 from ...number.context.context import Context
+from ... import ops as fpy_ops
 from .ops import CppOp, ScalarOpTable
 from .storage import (
     StorageSelectionError,
@@ -138,6 +155,26 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTZ: 'FE_TOWARDZERO',
     RM.RTP: 'FE_UPWARD',
     RM.RTN: 'FE_DOWNWARD',
+}
+
+# Value of each finite nullary constant.  C++ has no spelling for `const_pi()`
+# (`<numbers>` is C++20 and the emitted code targets C++11), but the constant is
+# `C(k)` -- fixed once the active context is known -- so it is evaluated here and
+# emitted as the literal it rounds to.  `ConstNan`/`ConstInf` are absent: they
+# have no literal form, and `_visit_nullaryop` spells them via `<limits>`.
+_NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
+    ConstPi: fpy_ops.const_pi,
+    ConstE: fpy_ops.const_e,
+    ConstLog2E: fpy_ops.const_log2e,
+    ConstLog10E: fpy_ops.const_log10e,
+    ConstLn2: fpy_ops.const_ln2,
+    ConstPi_2: fpy_ops.const_pi_2,
+    ConstPi_4: fpy_ops.const_pi_4,
+    Const1_Pi: fpy_ops.const_1_pi,
+    Const2_Pi: fpy_ops.const_2_pi,
+    Const2_SqrtPi: fpy_ops.const_2_sqrt_pi,
+    ConstSqrt2: fpy_ops.const_sqrt2,
+    ConstSqrt1_2: fpy_ops.const_sqrt1_2,
 }
 
 def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
@@ -2056,7 +2093,7 @@ class CppEmitter(Visitor):
     # (``Assert`` / ``Effect`` / ``Pass``) raise a clean error
     # pointing at the node kind.
 
-    def _unsupported(self, kind: str, at: Ast | None = None):
+    def _unsupported(self, kind: str, at: Ast | None = None) -> NoReturn:
         raise CppEmitError(
             f'cpp emitter does not handle {kind}', at=at,
         )
@@ -2086,8 +2123,33 @@ class CppEmitter(Visitor):
     def _visit_attribute(self, e, ctx):
         self._unsupported('Attribute', at=e)
 
-    def _visit_nullaryop(self, e, ctx):
-        self._unsupported('NullaryOp', at=e)
+    def _visit_nullaryop(self, e: NullaryOp, ctx) -> str:
+        ty = self._scalar_storage_for_expr(e)
+        if isinstance(e, ConstInf | ConstNan):
+            # No literal spells these, and no integer type holds them.
+            if ty.is_integer():
+                raise CppEmitError(
+                    f'{type(e).__name__} is not representable in integer '
+                    f'storage `{ty.format()}`',
+                    at=e,
+                )
+            member = 'infinity' if isinstance(e, ConstInf) else 'quiet_NaN'
+            return f'std::numeric_limits<{ty.format()}>::{member}()'
+
+        fn = _NULLARY_CONSTS.get(type(e))
+        if fn is None:
+            self._unsupported(type(e).__name__, at=e)
+
+        active = self._active_ctx_for(e)
+        try:
+            val = fn(ctx=active)
+        except NotImplementedError as err:
+            # e.g. an irrational constant under `REAL`, which rounds to nothing
+            raise CppEmitError(
+                f'cannot evaluate {type(e).__name__} under context `{active}`',
+                at=e,
+            ) from err
+        return self._emit_numeric_literal(val.as_rational(), at=e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
         match e:

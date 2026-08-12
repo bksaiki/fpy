@@ -95,10 +95,12 @@ class TestScalarSlice:
 
         @fp.fpy
         def f() -> fp.Real:
-            with fp.FP64:
-                return fp.const_pi()
+            with fp.INTEGER:
+                return fp.inf()
 
-        with pytest.raises(CppCompileError, match='does not handle NullaryOp'):
+        with pytest.raises(
+            CppCompileError, match='ConstInf is not representable in integer storage'
+        ):
             _compile(cc, f)
 
 
