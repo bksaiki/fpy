@@ -109,11 +109,11 @@ class TestInline:
 
     def test_type_errors(self):
         with pytest.raises(TypeError):
-            inline(_top.ast)  # FuncDef, not Function
+            inline(_top.ast)  # type: ignore[arg-type]  # FuncDef, not Function
         with pytest.raises(TypeError):
-            inline(_two_callees, funcs=[_leaf.ast])
+            inline(_two_callees, funcs=[_leaf.ast])  # type: ignore[list-item]
         with pytest.raises(TypeError):
-            inline(_top, 'x')
+            inline(_top, 'x')  # type: ignore[arg-type]
 
 
 class TestInlineWhere:
