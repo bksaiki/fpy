@@ -520,10 +520,8 @@ class _TypeInferInstance(Visitor):
         # ---------------------------------- (< / <= / > / >=)
         #        Γ |- e1 < e2 : bool
         #
-        # Equality is `a -> a -> bool`: the operands must agree, but need not be
-        # real.  Ordering stays real-only.  A chain may mix the two, so the rule
-        # applies per operator rather than per node -- in `a < b == c` the `<`
-        # pins `a` and `b` to real, and `c` then unifies with `b`.
+        # Equality unifies the operands; ordering pins both to real.  Applied
+        # per operator, so a chain may mix the two.
         tys = [self._visit_expr(arg, None) for arg in e.args]
         for i, op in enumerate(e.ops):
             if op is CompareOp.EQ or op is CompareOp.NE:

@@ -416,25 +416,22 @@ class TestNonFiniteValues:
                 return 1e308 * 1e308
 
         e = _return_expr(ConstFold.apply(f.ast))
-        assert isinstance(e, BinaryOp)
+        assert isinstance(e, BinaryOp), f'expected BinaryOp; got {type(e).__name__}'
 
-    def test_infinity_constant_does_not_fold(self):
+    def test_a_non_finite_constant_does_not_fold(self):
         @fp.fpy
-        def f():
+        def inf():
             with fp.FP64:
                 return fp.inf()
 
-        e = _return_expr(ConstFold.apply(f.ast))
-        assert isinstance(e, NullaryOp), f'expected NullaryOp; got {type(e).__name__}'
-
-    def test_nan_constant_does_not_fold(self):
         @fp.fpy
-        def f():
+        def nan():
             with fp.FP64:
                 return fp.nan()
 
-        e = _return_expr(ConstFold.apply(f.ast))
-        assert isinstance(e, NullaryOp)
+        for fn in (inf, nan):
+            e = _return_expr(ConstFold.apply(fn.ast))
+            assert isinstance(e, NullaryOp), f'expected NullaryOp; got {type(e).__name__}'
 
     def test_foreign_non_finite_does_not_fold(self):
         """A captured Python ``float`` reaches the fold as a raw ``float``,

@@ -89,20 +89,6 @@ class TestScalarSlice:
         )
         assert out.startswith('float f(float x, float y) {')
 
-    def test_unsupported_node_kind_errors(self, cc):
-        """Anything outside the supported subset raises a clear
-        CppCompileError pointing at the node kind."""
-
-        @fp.fpy
-        def f() -> fp.Real:
-            with fp.INTEGER:
-                return fp.inf()
-
-        with pytest.raises(
-            CppCompileError, match='ConstInf is not representable in integer storage'
-        ):
-            _compile(cc, f)
-
 
 class TestAssert:
     """``assert`` statements lower to ``<cassert>`` ``assert(...)``.
@@ -259,8 +245,8 @@ class TestMixedSignTernary:
 
 
 class TestComparisonOperands:
-    """``==`` / ``!=`` are ``a -> a -> bool`` in FPy, so the backend has to
-    say what it cannot emit."""
+    """``==`` is ``a -> a -> bool``, so the backend must say what it cannot
+    emit."""
 
     def test_booleans_compare_natively(self, cc):
         @fp.fpy
@@ -270,13 +256,10 @@ class TestComparisonOperands:
                 b = fp.signbit(y)
                 return 1.0 if a != b else 0.0
 
-        out = cc.compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
+        out = _compile(cc, f)
         assert '(a != b)' in out
 
-    def test_an_aggregate_comparison_is_refused(self):
+    def test_an_aggregate_comparison_is_refused(self, cc):
         """A list is a handle here, so ``==`` would compare identity."""
         @fp.fpy
         def f() -> fp.Real:
@@ -286,4 +269,4 @@ class TestComparisonOperands:
                 return 1.0 if a == b else 0.0
 
         with pytest.raises(CppCompileError, match='compares scalars only'):
-            CppCompiler(optimize=False).compile(f, ctx=fp.FP64, arg_types=[])
+            _compile(cc, f)

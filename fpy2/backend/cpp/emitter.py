@@ -158,11 +158,9 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTN: 'FE_DOWNWARD',
 }
 
-# Value of each finite nullary constant.  C++ has no spelling for `const_pi()`
-# (`<numbers>` is C++20 and the emitted code targets C++11), but the constant is
-# `C(k)` -- fixed once the active context is known -- so it is evaluated here and
-# emitted as the literal it rounds to.  `ConstNan`/`ConstInf` are absent: they
-# have no literal form, and `_visit_nullaryop` spells them via `<limits>`.
+# Finite nullary constants.  C++11 has no spelling for these, but each is fixed
+# once the active context is known, so it is evaluated and emitted as a literal.
+# `ConstNan`/`ConstInf` have no literal form; `_visit_nullaryop` spells those.
 _NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstPi: fpy_ops.const_pi,
     ConstE: fpy_ops.const_e,
@@ -1540,10 +1538,8 @@ class CppEmitter(Visitor):
         write ``fp.round(...)``.  Casts the user *did* write go through
         :meth:`_explicit_cast`, which never refuses.
 
-        Pass *src* to fall back on the operand's own values when the type-level
-        test refuses.  Every bound takes the smallest type holding it, so the
-        two disagree in one direction: ``1`` stores as ``uint8_t``, which does
-        not nest into ``int8_t``, while the value does.
+        Pass *src* to fall back on :func:`bound_fits_in_scalar` when the
+        type-level test refuses.
         """
         if arg_ty == target_ty:
             return arg
@@ -2121,9 +2117,7 @@ class CppEmitter(Visitor):
         for a in e.args:
             ty = self._storage_for_expr(a)
             if not isinstance(ty, CppScalar):
-                # FPy's `==` / `!=` are `a -> a -> bool`, so an aggregate
-                # arrives well-typed.  Comparing one needs an elementwise walk,
-                # and a list is a handle here -- `==` would compare identity.
+                # `==` is `a -> a -> bool`, so an aggregate arrives well-typed
                 raise CppEmitError(
                     f'cannot compare `{ty.format()}`: the cpp backend compares '
                     f'scalars only',

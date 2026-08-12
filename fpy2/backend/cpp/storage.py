@@ -14,6 +14,8 @@ The module also exposes:
 - :func:`scalar_sup` — smallest ladder scalar subsuming every
   input.  Used by :meth:`_visit_compare` to pick the common type
   for a chained comparison.
+- :func:`bound_fits_in_scalar` — value-level containment, for a
+  conversion the type-level test refuses.
 """
 
 from ...analysis.format_infer import (
@@ -91,11 +93,8 @@ def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:
     """Is every value *bound* admits representable in *ty*?
 
     A question about values, where :func:`scalar_fits_in` asks about types --
-    and the two disagree, because a bound picks the *smallest* type holding it.
-    The literal ``1`` stores as ``uint8_t``, which does not nest into
-    ``int8_t``, yet the value itself fits ``int8_t`` perfectly well.  Use this
-    to admit a conversion the type-level test refuses; it is exactly the
-    containment :func:`choose_storage_scalar` searches the ladder with.
+    and the two disagree, because a bound picks the *smallest* type holding it:
+    ``1`` stores as ``uint8_t``, which does not nest into ``int8_t``.
     """
     if ty is CppScalar.BOOL:
         return False

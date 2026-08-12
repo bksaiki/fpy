@@ -46,9 +46,8 @@ class TestTupleAccessors:
 
 
 class TestComparisonOperands:
-    """FPCore compares numbers.  FPy's ``==`` / ``!=`` are ``a -> a -> bool``,
-    so an aggregate arrives well-typed and has to be refused here -- otherwise
-    it emits ``(== <array> <array>)``, which FPCore does not define."""
+    """FPCore compares numbers, so an aggregate -- well-typed under FPy's
+    ``a -> a -> bool`` -- has to be refused here."""
 
     def test_a_tuple_comparison_is_refused(self):
         @fp.fpy
@@ -76,3 +75,42 @@ class TestComparisonOperands:
             return x == y
 
         assert '==' in str(FPCoreCompiler().compile(f))
+
+
+class TestComparisonChains:
+    """FPCore's comparisons are n-ary, so a run of one operator is a single
+    call and a change of operator starts a new one at the shared operand."""
+
+    def test_a_run_of_one_operator_is_one_call(self):
+        @fp.fpy
+        def lt(x: fp.Real, y: fp.Real, z: fp.Real) -> bool:
+            return x < y < z
+
+        @fp.fpy
+        def le(x: fp.Real, y: fp.Real, z: fp.Real) -> bool:
+            return x <= y <= z
+
+        assert '(< x y z)' in str(FPCoreCompiler().compile(lt))
+        assert '(<= x y z)' in str(FPCoreCompiler().compile(le))
+
+    def test_a_change_of_operator_starts_a_new_call(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real, z: fp.Real) -> bool:
+            return x < y == z
+
+        assert '(and (< x y) (== y z))' in str(FPCoreCompiler().compile(f))
+
+    def test_three_runs(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real, z: fp.Real, w: fp.Real) -> bool:
+            return x < y == z > w
+
+        out = str(FPCoreCompiler().compile(f))
+        assert '(and (< x y) (== y z) (> z w))' in out, out
+
+    def test_a_two_operand_comparison_is_unchanged(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> bool:
+            return x < y
+
+        assert '(< x y)' in str(FPCoreCompiler().compile(f))

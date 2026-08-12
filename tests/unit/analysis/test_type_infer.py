@@ -419,21 +419,19 @@ class TestPolymorphicEquality:
 
     def test_booleans_compare_for_equality(self):
         @fp.fpy
-        def f(x: fp.Real) -> bool:
+        def eq(x: fp.Real) -> bool:
             a = fp.signbit(x)
             b = fp.isnan(x)
             return a == b
 
-        assert isinstance(TypeInfer.check(f.ast).return_type, BoolType)
-
-    def test_booleans_compare_for_inequality(self):
         @fp.fpy
-        def f(x: fp.Real) -> bool:
+        def ne(x: fp.Real) -> bool:
             a = fp.signbit(x)
             b = fp.isnan(x)
             return a != b
 
-        assert isinstance(TypeInfer.check(f.ast).return_type, BoolType)
+        for fn in (eq, ne):
+            assert isinstance(TypeInfer.check(fn.ast).return_type, BoolType)
 
     def test_ordering_still_rejects_booleans(self):
         @fp.fpy

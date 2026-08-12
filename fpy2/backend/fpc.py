@@ -6,6 +6,7 @@ from collections.abc import Callable
 import titanfp.fpbench.fpcast as fpc
 
 from ..analysis import DefineUse, DefineUseAnalysis, TypeAnalysis, TypeInfer
+from ..analysis.type_infer import TypeInferError
 from ..ast import *
 from ..fpc_context import FPCoreContext
 from ..function import Function
@@ -20,7 +21,7 @@ from ..transform import (
     WhileBundling,
 )
 from ..transform.free_var_elim import unclosed_data_free_vars
-from ..types import RealType, TupleType, Type
+from ..types import BoolType, ContextType, ListType, TupleType, Type
 from ..utils import Gensym
 from .backend import Backend, CompileError
 
@@ -770,12 +771,22 @@ class _FPCoreCompileInstance(Visitor):
                     raise NotImplementedError('no FPCore operator for', e)
 
     def _check_comparable(self, e: Compare):
-        """FPCore compares numbers.  FPy's ``==`` / ``!=`` are ``a -> a ->
-        bool``, so an aggregate reaches here well-typed and would otherwise
-        emit ``(== <array> <array>)``, which FPCore does not define."""
+        """Reject a comparison of operands FPCore cannot compare.
+
+        FPy's ``==`` is ``a -> a -> bool``, so an aggregate arrives well-typed.
+        Only a type *known* to be non-numeric is rejected: an unresolved one is
+        left alone, since type inference is optional here (see
+        :meth:`_expr_type`) and an unannotated argument compared only for
+        equality never gets pinned to a real.
+        """
+        if self._type_info is None:
+            try:
+                self._type_info = TypeInfer.check(self.func)
+            except TypeInferError:
+                return
         for arg in e.args:
-            ty = self._expr_type(arg)
-            if not isinstance(ty, RealType):
+            ty = self._type_info.by_expr.get(arg)
+            if isinstance(ty, BoolType | TupleType | ListType | ContextType):
                 raise FPCoreCompileError(
                     f'cannot compile a comparison of `{ty.format()}`: '
                     f'FPCore compares numbers only',
@@ -798,18 +809,18 @@ class _FPCoreCompileInstance(Visitor):
                 #       may need to let-bind in case any argument is
                 #       used multiple times
                 args = [self._visit_expr(arg, ctx) for arg in e.args]
-                curr_group = (op, [args[0], args[1]])
-                groups: list[tuple[CompareOp, list[fpc.Expr]]] = [curr_group]
-                for op, lhs, rhs in zip(ops, args[1:], args[2:]):
-                    if op == curr_group[0] or isinstance(lhs, fpc.ValueExpr):
-                        # same op => append
-                        # different op (terminal) => append
-                        curr_group[1].append(lhs)
+                groups: list[tuple[CompareOp, list[fpc.Expr]]] = [
+                    (op, [args[0], args[1]])
+                ]
+                for op, rhs in zip(ops, args[2:]):
+                    prev_op, prev_args = groups[-1]
+                    if op == prev_op:
+                        # FPCore's comparisons are n-ary, so a run of one
+                        # operator is a single call
+                        prev_args.append(rhs)
                     else:
-                        # different op (non-terminal) => new group
-                        new_group = (op, [lhs, rhs])
-                        groups.append(new_group)
-                        curr_group = new_group
+                        # a new run starts at the operand the two share
+                        groups.append((op, [prev_args[-1], rhs]))
 
                 if len(groups) == 1:
                     op, args = groups[0]

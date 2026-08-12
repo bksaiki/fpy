@@ -249,12 +249,7 @@ class TestRealFloatArithmetic():
         (0.0, 0.0, False),
     ])
     def test_add_of_two_zeros_keeps_the_ieee_sign(self, a, b, expect_neg):
-        """IEEE 754 §6.3: a sum of two zeros is ``-0`` only when both are.
-
-        The ``0 + b = b`` identity must not fire when ``b`` is itself a zero,
-        or the sum takes the sign of whichever operand came second -- which
-        would also make addition non-commutative.
-        """
+        """IEEE 754 §6.3: a sum of two zeros is ``-0`` only when both are."""
         actual = fp.RealFloat.from_float(a) + fp.RealFloat.from_float(b)
         assert actual.is_zero()
         assert actual.s is expect_neg

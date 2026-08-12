@@ -13,6 +13,7 @@ from typing import Any, TypeAlias
 
 from .. import ops
 from ..ast.fpyast import *
+from ..analysis.define_use import DefineUse
 from ..ast.visitor import Visitor
 from ..env import ForeignEnv
 from ..function import Function
@@ -463,57 +464,29 @@ def _eval_all(x):
     return all(_check_bool_list(x, 'all()'))
 
 def _eval_ordered(x, op: str):
-    """Check that *x* may be ordered, then hand it back.
-
-    ``<`` and friends are real-only.  Python would order a tuple or a list
-    lexicographically and a ``bool`` as an integer, and FPy defines none of
-    that -- so without this the interpreter answers a question the language
-    does not ask.  Type inference rejects the same programs, but it is an
-    optional analysis, so it cannot be the only place this is caught.
-    """
+    # ordering is real-only (matches `TypeInfer`, which is optional); Python
+    # would order a tuple lexicographically and a `bool` as an integer
     if not isinstance(x, RealValue):
         raise TypeError(f'`{op}` expects real operands, got {x}')
     return x
 
-def _eq_kind(x) -> type:
-    """*x*'s FPy type-kind, as a tag for checking that two operands agree.
-
-    A tuple and a list are different FPy types even when their elements match,
-    so they get different tags.
-    """
-    match x:
-        case bool():
-            return bool
-        case Float() | Fraction():
-            return RealFloat  # stands for the real kind; `Float`/`Fraction` agree
-        case Context():
-            return Context
-        case tuple():
-            return tuple
-        case list():
-            return list
-        case _:
-            return type(x)
-
 def _eval_eq(a, b) -> bool:
     """``a == b``, structurally and without shortcutting on identity.
 
-    Python's sequence equality compares elements with ``is`` before ``==``, so
-    delegating to it would make a NaN inside a container compare equal to
-    itself: ``t == t`` would be ``True`` where ``t == u`` on identical data is
-    ``False``.  Object identity is not observable in FPy, so a container is
-    always walked elementwise and only scalars reach ``==`` -- where
-    :meth:`Float.__eq__` gives NaN its IEEE answer.
+    Python's sequence equality compares elements with ``is`` before ``==``,
+    which would make a NaN inside a container equal to itself.  Mismatched
+    operands are rejected, as `TypeInfer` rejects them: a tuple and a list are
+    different FPy types even when their elements agree.
     """
-    a_kind = _eq_kind(a)
-    if a_kind is not _eq_kind(b):
-        # `==` is `a -> a -> bool`: type inference rejects mismatched operands,
-        # so the interpreter must too.  It is an optional analysis, and a
-        # runtime that accepts what the types reject makes the types a lie.
-        raise TypeError(f'`==` expects operands of the same type, got {a} and {b}')
-    if a_kind is not tuple and a_kind is not list:
-        return a == b
-    return len(a) == len(b) and all(_eval_eq(x, y) for x, y in zip(a, b))
+    match a, b:
+        case (tuple(), tuple()) | (list(), list()):
+            return len(a) == len(b) and all(_eval_eq(x, y) for x, y in zip(a, b))
+        case (bool(), bool()) | (Context(), Context()):
+            return a == b
+        case (Float() | Fraction(), Float() | Fraction()):
+            return a == b
+        case _:
+            raise TypeError(f'`==` expects operands of the same type, got {a} and {b}')
 
 ###########################################################
 # Operator tables
@@ -665,7 +638,9 @@ class BytecodeCompiler(Visitor):
     def __init__(self, func: FuncDef, env: ForeignEnv):
         self.func = func
         self.env = env
-        self.gensym = Gensym()
+        # reserve the program's own names: a bare `fresh('__fpy_cmp')` would
+        # otherwise return that very name and shadow a source variable
+        self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.foreign_vals = {}
 
     def compile(self):
@@ -934,21 +909,9 @@ class BytecodeCompiler(Visitor):
     def _visit_compare(self, e: Compare, ctx: None):
         attrs = self._location_to_attributes(e.loc)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
-        if not any(op is CompareOp.EQ or op is CompareOp.NE for op in e.ops):
-            # Ordering is real-only, and every operand appears once here, so
-            # guarding in place keeps Python's chain semantics intact.
-            ops = [self._visit_compare_op(op) for op in e.ops]
-            guarded = [
-                self._ordered_guard(a, e.ops[max(i - 1, 0)], attrs)
-                for i, a in enumerate(args)
-            ]
-            return pyast.Compare(guarded[0], ops, guarded[1:], **attrs)
-
         # Equality is structural (see `_eval_eq`), which no `==` node expresses,
-        # so the chain becomes a conjunction of pairwise tests.  Python's own
-        # chain evaluates each middle operand once, and a walrus keeps that --
-        # an FPy call may mutate a list it was handed, so a second evaluation
-        # is not free.
+        # so the chain becomes a conjunction of pairwise tests.  A walrus binds
+        # each middle operand so it is evaluated once, as Python's chain does.
         reuse: list[pyast.expr] = []
         for i in range(1, len(args) - 1):
             tmp = str(self.gensym.fresh('__fpy_cmp'))

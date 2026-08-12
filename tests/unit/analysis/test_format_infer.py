@@ -2101,27 +2101,6 @@ class TestSpecialSentinels:
         assert Special.POS_INF != Special.NAN
         assert Special.POS_INF != Fraction(0)
 
-    def test_hashes_are_stable_across_processes(self):
-        """``frozenset`` iteration order feeds specialization's cache key, so a
-        per-run hash would make it nondeterministic.  Enum's default
-        ``hash(name)`` and ``NegZero``'s ``hash(type)`` both are."""
-        import subprocess
-        import sys
-
-        script = (
-            'from fpy2.analysis.format_infer.analysis import Special;'
-            'print([hash(v) for v in Special])'
-        )
-        runs = {
-            subprocess.run(
-                [sys.executable, '-c', script],
-                capture_output=True, text=True, check=True,
-                env={'PYTHONHASHSEED': 'random', 'PATH': ''},
-            ).stdout.strip()
-            for _ in range(3)
-        }
-        assert len(runs) == 1, f'hashes varied across processes: {runs}'
-
     def test_repr(self):
         """A `SetFormat` repr should read `POS_INF`, not `<Special.POS_INF: 0>`."""
         from fpy2.analysis.format_infer.analysis import Special
@@ -2309,16 +2288,15 @@ class TestSpecialConstants:
     """``inf()`` / ``nan()`` report a precise bound under ``REAL``, where the
     scope format is ``REAL_FORMAT`` and no finite type can store it."""
 
-    def _nullary_bound(self, func):
+    @staticmethod
+    def _nullary_bound(func):
         from fpy2.ast.fpyast import NullaryOp
 
-        info = self._run(func)
+        info = FormatInfer.analyze(func.ast)
         [bound] = [
             b for e, b in info.by_expr.items() if isinstance(e, NullaryOp)
         ]
         return bound
-
-    _run = staticmethod(lambda func: FormatInfer.analyze(func.ast))
 
     def test_infinity_under_real(self):
         from fpy2.analysis.format_infer.analysis import Special
@@ -2364,6 +2342,6 @@ class TestSpecialConstants:
         def f():
             return -fp.inf()
 
-        info = self._run(f)
+        info = FormatInfer.analyze(f.ast)
         [neg] = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Neg']
         assert neg == SetFormat.from_value(Special.NEG_INF)

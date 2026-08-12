@@ -259,7 +259,7 @@ class RealFloat(numbers.Rational):
                 # IEEE 754 §6.3: a sum of two zeros is `-0` only when both are.
                 # Returning `other` (or `self`) here would give `(+0) + (-0)` the
                 # sign of whichever came second, making addition non-commutative.
-                return RealFloat(s=self._s and other._s, exp=other._exp, c=0)
+                return RealFloat(s=self._s and other._s, exp=min(self._exp, other._exp), c=0)
             else:
                 # 0 + b = b
                 return RealFloat(x=other)

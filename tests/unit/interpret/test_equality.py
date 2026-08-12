@@ -236,3 +236,28 @@ class TestTheRuntimeRejectsWhatTypesReject:
 
         assert f(1.0, 2.0, 3.0) is True
         assert f(1.0, 3.0, 2.0) is False
+
+
+class TestGeneratedNamesDoNotShadow:
+    """The bytecode compiler mints temporaries for comparison chains and
+    ``with`` scopes.  ``Gensym`` only avoids names it was told about, so the
+    program's own names have to be reserved."""
+
+    def test_a_chain_temp_does_not_shadow(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(a: fp.Real, b: fp.Real, c: fp.Real):
+            __fpy_cmp = 5.0
+            r = a == b == c
+            return __fpy_cmp
+
+        assert f(1.0, 2.0, 3.0) == 5.0
+
+    def test_a_context_temp_does_not_shadow(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real):
+            __fpy_ctx_tmp = 5.0
+            with fp.FP32:
+                y = fp.round(x)
+            return __fpy_ctx_tmp
+
+        assert f(1.0) == 5.0

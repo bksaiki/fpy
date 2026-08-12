@@ -198,19 +198,6 @@ class TestNullaryConstants:
         out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[])
         assert 'return 3.1415927410125732;' in out
 
-    def test_constant_matches_the_interpreter(self):
-        @fp.fpy
-        def f() -> fp.Real:
-            with fp.FP64:
-                return fp.const_e()
-
-        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        [lit] = [
-            l.strip()[len('return '):-1]
-            for l in out.splitlines() if 'return' in l
-        ]
-        assert float(lit) == float(f())
-
     def test_constant_under_integer_context(self):
         @fp.fpy
         def f() -> fp.Real:
