@@ -9,6 +9,7 @@ function-name string and the dispatch path.  Detailed
 """
 
 import fpy2 as fp
+import pytest
 
 from fpy2.backend.cpp import CppCompiler
 from fpy2.types import RealType
@@ -144,3 +145,96 @@ class TestCmathTableShape:
         t = make_op_table()
         assert Fma in t.ternary
         assert any(s.out_ctx == fp.FP64 for s in t.ternary[Fma])
+
+
+class TestNullaryConstants:
+    """Nullary constants.  ``inf``/``nan`` get a ``<limits>`` spelling; the
+    rest are evaluated under the active context and emitted as literals,
+    since C++11 has no constant to name."""
+
+    def test_infinity_and_nan(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                return fp.inf()
+
+        @fp.fpy
+        def g() -> fp.Real:
+            with fp.FP64:
+                return fp.nan()
+
+        out_f = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out_g = CppCompiler().compile(g, ctx=fp.FP64, arg_types=[])
+        assert 'std::numeric_limits<double>::infinity()' in out_f
+        assert 'std::numeric_limits<double>::quiet_NaN()' in out_g
+
+    def test_infinity_follows_storage_width(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP32:
+                return fp.inf()
+
+        out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[])
+        assert 'std::numeric_limits<float>::infinity()' in out
+
+    def test_math_constants_fold_to_literals(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                return fp.const_pi()
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        assert 'return 3.141592653589793;' in out
+        assert 'const_pi' not in out
+
+    def test_constant_rounds_under_its_own_context(self):
+        """The literal is the constant rounded under the *active* context,
+        not the widest one."""
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP32:
+                return fp.const_pi()
+
+        out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[])
+        assert 'return 3.1415927410125732;' in out
+
+    def test_constant_under_integer_context(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.INTEGER:
+                return fp.const_pi()
+
+        out = CppCompiler().compile(f, ctx=fp.INTEGER, arg_types=[])
+        assert 'return 3;' in out
+
+
+class TestNullaryConstantsUnderReal:
+    """A ``REAL`` scope has no storable format of its own, so a special value
+    has to carry its own."""
+
+    def test_infinity_compiles_under_real(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            return fp.inf()
+
+        out = CppCompiler().compile(f, ctx=fp.REAL, arg_types=[])
+        assert '::infinity()' in out
+
+    def test_nan_compiles_under_real(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            return fp.nan()
+
+        out = CppCompiler().compile(f, ctx=fp.REAL, arg_types=[])
+        assert '::quiet_NaN()' in out
+
+    def test_an_irrational_constant_under_real_is_refused(self):
+        """No finite C++ type holds pi exactly, and REAL does not round."""
+        from fpy2.backend.cpp.compiler import CppCompileError
+
+        @fp.fpy(ctx=fp.REAL)
+        def f() -> fp.Real:
+            return fp.const_pi()
+
+        with pytest.raises(CppCompileError, match='unconstrained real'):
+            CppCompiler().compile(f, ctx=fp.REAL, arg_types=[])

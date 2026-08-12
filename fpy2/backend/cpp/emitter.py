@@ -18,7 +18,9 @@ import math
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from fractions import Fraction
+from typing import NoReturn
 
+from ... import ops as fpy_ops
 from ...analysis import (
     AssignDef,
     ContextScope,
@@ -50,6 +52,20 @@ from ...ast.fpyast import (
     Call,
     Cast,
     Compare,
+    Const1_Pi,
+    Const2_Pi,
+    Const2_SqrtPi,
+    ConstE,
+    ConstInf,
+    ConstLn2,
+    ConstLog2E,
+    ConstLog10E,
+    ConstNan,
+    ConstPi,
+    ConstPi_2,
+    ConstPi_4,
+    ConstSqrt1_2,
+    ConstSqrt2,
     ContextStmt,
     Decnum,
     Digits,
@@ -81,6 +97,7 @@ from ...ast.fpyast import (
     NamedId,
     NaryOp,
     Not,
+    NullaryOp,
     Or,
     Range1,
     Range2,
@@ -118,6 +135,7 @@ from ...number.context.context import Context
 from .ops import CppOp, ScalarOpTable
 from .storage import (
     StorageSelectionError,
+    bound_fits_in_scalar,
     choose_storage,
     scalar_fits_in,
     scalar_sup,
@@ -138,6 +156,24 @@ _FE_RM_MACRO: dict[RM, str] = {
     RM.RTZ: 'FE_TOWARDZERO',
     RM.RTP: 'FE_UPWARD',
     RM.RTN: 'FE_DOWNWARD',
+}
+
+# Finite nullary constants.  C++11 has no spelling for these, but each is fixed
+# once the active context is known, so it is evaluated and emitted as a literal.
+# `ConstNan`/`ConstInf` have no literal form; `_visit_nullaryop` spells those.
+_NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
+    ConstPi: fpy_ops.const_pi,
+    ConstE: fpy_ops.const_e,
+    ConstLog2E: fpy_ops.const_log2e,
+    ConstLog10E: fpy_ops.const_log10e,
+    ConstLn2: fpy_ops.const_ln2,
+    ConstPi_2: fpy_ops.const_pi_2,
+    ConstPi_4: fpy_ops.const_pi_4,
+    Const1_Pi: fpy_ops.const_1_pi,
+    Const2_Pi: fpy_ops.const_2_pi,
+    Const2_SqrtPi: fpy_ops.const_2_sqrt_pi,
+    ConstSqrt2: fpy_ops.const_sqrt2,
+    ConstSqrt1_2: fpy_ops.const_sqrt1_2,
 }
 
 def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
@@ -1492,7 +1528,7 @@ class CppEmitter(Visitor):
 
     def _maybe_cast(
         self, arg: str, arg_ty: CppScalar, target_ty: CppScalar,
-        *, at: Ast | None = None,
+        *, at: Ast | None = None, src: Expr | None = None,
     ) -> str:
         """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
@@ -1501,10 +1537,18 @@ class CppEmitter(Visitor):
         rather than silently emitted: the user should narrow the active context or
         write ``fp.round(...)``.  Casts the user *did* write go through
         :meth:`_explicit_cast`, which never refuses.
+
+        Pass *src* to fall back on :func:`bound_fits_in_scalar` when the
+        type-level test refuses.
         """
         if arg_ty == target_ty:
             return arg
-        if not scalar_fits_in(arg_ty, target_ty):
+        if not scalar_fits_in(arg_ty, target_ty) and not (
+            src is not None
+            and bound_fits_in_scalar(
+                self.format_info.by_expr.get(src), target_ty,
+            )
+        ):
             raise CppEmitError(
                 f'cannot implicitly cast `{arg_ty.format()}` to '
                 f'`{target_ty.format()}`: conversion is lossy.  '
@@ -2056,7 +2100,7 @@ class CppEmitter(Visitor):
     # (``Assert`` / ``Effect`` / ``Pass``) raise a clean error
     # pointing at the node kind.
 
-    def _unsupported(self, kind: str, at: Ast | None = None):
+    def _unsupported(self, kind: str, at: Ast | None = None) -> NoReturn:
         raise CppEmitError(
             f'cpp emitter does not handle {kind}', at=at,
         )
@@ -2069,7 +2113,17 @@ class CppEmitter(Visitor):
         # pure.  Each pair is cast to its scalar supremum so the comparison
         # happens in a defined common type.
         args = [self._visit_expr(a, ctx) for a in e.args]
-        arg_tys = [self._scalar_storage_for_expr(a) for a in e.args]
+        arg_tys = []
+        for a in e.args:
+            ty = self._storage_for_expr(a)
+            if not isinstance(ty, CppScalar):
+                # `==` is `a -> a -> bool`, so an aggregate arrives well-typed
+                raise CppEmitError(
+                    f'cannot compare `{ty.format()}`: the cpp backend compares '
+                    f'scalars only',
+                    at=e,
+                )
+            arg_tys.append(ty)
         clauses = []
         for i, op in enumerate(e.ops):
             common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
@@ -2086,8 +2140,33 @@ class CppEmitter(Visitor):
     def _visit_attribute(self, e, ctx):
         self._unsupported('Attribute', at=e)
 
-    def _visit_nullaryop(self, e, ctx):
-        self._unsupported('NullaryOp', at=e)
+    def _visit_nullaryop(self, e: NullaryOp, ctx) -> str:
+        ty = self._scalar_storage_for_expr(e)
+        if isinstance(e, ConstInf | ConstNan):
+            # No literal spells these, and no integer type holds them.
+            if ty.is_integer():
+                raise CppEmitError(
+                    f'{type(e).__name__} is not representable in integer '
+                    f'storage `{ty.format()}`',
+                    at=e,
+                )
+            member = 'infinity' if isinstance(e, ConstInf) else 'quiet_NaN'
+            return f'std::numeric_limits<{ty.format()}>::{member}()'
+
+        fn = _NULLARY_CONSTS.get(type(e))
+        if fn is None:
+            self._unsupported(type(e).__name__, at=e)
+
+        active = self._active_ctx_for(e)
+        try:
+            val = fn(ctx=active)
+        except NotImplementedError as err:
+            # e.g. an irrational constant under `REAL`, which rounds to nothing
+            raise CppEmitError(
+                f'cannot evaluate {type(e).__name__} under context `{active}`',
+                at=e,
+            ) from err
+        return self._emit_numeric_literal(val.as_rational(), at=e)
 
     def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
         match e:
@@ -2716,8 +2795,8 @@ class CppEmitter(Visitor):
         iff = self._visit_expr(e.iff, ctx)
         ift_ty = self._scalar_storage_for_expr(e.ift)
         iff_ty = self._scalar_storage_for_expr(e.iff)
-        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e)
-        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e)
+        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e, src=e.ift)
+        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e, src=e.iff)
         return f'({cond} ? {ift} : {iff})'
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):

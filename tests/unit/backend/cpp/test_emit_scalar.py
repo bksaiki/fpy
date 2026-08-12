@@ -89,18 +89,6 @@ class TestScalarSlice:
         )
         assert out.startswith('float f(float x, float y) {')
 
-    def test_unsupported_node_kind_errors(self, cc):
-        """Anything outside the supported subset raises a clear
-        CppCompileError pointing at the node kind."""
-
-        @fp.fpy
-        def f() -> fp.Real:
-            with fp.FP64:
-                return fp.const_pi()
-
-        with pytest.raises(CppCompileError, match='does not handle NullaryOp'):
-            _compile(cc, f)
-
 
 class TestAssert:
     """``assert`` statements lower to ``<cassert>`` ``assert(...)``.
@@ -225,3 +213,60 @@ class TestNegativeZero:
             return 0.0
 
         assert 'uint8_t' in cc.compile(f, ctx=fp.FP64, arg_types=[])
+
+
+class TestMixedSignTernary:
+    """A ternary whose arms are literals of opposite sign.  Each arm takes the
+    smallest type holding it, so ``1`` is unsigned and ``-1`` is signed; the
+    result is signed, and converting the unsigned arm must be allowed on the
+    strength of its value."""
+
+    def test_opposite_sign_literal_arms(self, cc):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return -1 if x > 0 else 1
+
+        out = _compile(cc, f)
+        assert 'int8_t f(double x)' in out
+
+    def test_the_sign_variable_pattern(self, cc):
+        """The shape this came from: a sign accumulator seeded at ``0``."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                sgn = 0
+                s = -1 if x > 0 else 1
+                sgn = s
+                return sgn
+
+        out = _compile(cc, f)
+        assert 'int8_t f(double x)' in out
+
+
+class TestComparisonOperands:
+    """``==`` is ``a -> a -> bool``, so the backend must say what it cannot
+    emit."""
+
+    def test_booleans_compare_natively(self, cc):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP64:
+                a = fp.signbit(x)
+                b = fp.signbit(y)
+                return 1.0 if a != b else 0.0
+
+        out = _compile(cc, f)
+        assert '(a != b)' in out
+
+    def test_an_aggregate_comparison_is_refused(self, cc):
+        """A list is a handle here, so ``==`` would compare identity."""
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                a = [1.0, 2.0]
+                b = [1.0, 2.0]
+                return 1.0 if a == b else 0.0
+
+        with pytest.raises(CppCompileError, match='compares scalars only'):
+            _compile(cc, f)

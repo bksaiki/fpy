@@ -412,3 +412,107 @@ class TestBooleanReductions:
         for fn in (scalar, tup):
             with pytest.raises(TypeInferError):
                 TypeInfer.check(fn.ast)
+
+
+class TestPolymorphicEquality:
+    """``==`` / ``!=`` are ``a -> a -> bool``; ordering stays real-only."""
+
+    def test_booleans_compare_for_equality(self):
+        @fp.fpy
+        def eq(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            b = fp.isnan(x)
+            return a == b
+
+        @fp.fpy
+        def ne(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            b = fp.isnan(x)
+            return a != b
+
+        for fn in (eq, ne):
+            assert isinstance(TypeInfer.check(fn.ast).return_type, BoolType)
+
+    def test_ordering_still_rejects_booleans(self):
+        @fp.fpy
+        def lt(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            b = fp.isnan(x)
+            return a < b
+
+        @fp.fpy
+        def le(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            b = fp.isnan(x)
+            return a <= b
+
+        @fp.fpy
+        def gt(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            b = fp.isnan(x)
+            return a > b
+
+        @fp.fpy
+        def ge(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            b = fp.isnan(x)
+            return a >= b
+
+        for fn in (lt, le, gt, ge):
+            with pytest.raises(TypeInferError):
+                TypeInfer.check(fn.ast)
+
+    def test_operands_must_still_agree(self):
+        @fp.fpy
+        def f(x: fp.Real) -> bool:
+            a = fp.signbit(x)
+            return a == x
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_a_chain_may_mix_ordering_and_equality(self):
+        """The rule is per operator, not per node: ``<`` pins ``x`` and ``y``
+        to real, and ``z`` then unifies with ``y``."""
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real, z: fp.Real) -> bool:
+            return x < y == z
+
+        assert isinstance(TypeInfer.check(f.ast).return_type, BoolType)
+
+    def test_a_chain_cannot_order_a_boolean(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> bool:
+            a = fp.signbit(x)
+            return a == a < y
+
+        with pytest.raises(TypeInferError):
+            TypeInfer.check(f.ast)
+
+    def test_ordering_rejects_aggregates(self):
+        """Python orders tuples and lists lexicographically; FPy does not, and
+        the real-only ordering rule is what keeps it out."""
+        @fp.fpy
+        def tup(x: fp.Real, y: fp.Real) -> bool:
+            a = (x, y)
+            b = (y, x)
+            return a >= b
+
+        @fp.fpy
+        def lst() -> bool:
+            return [1.0] < [2.0]
+
+        for fn in (tup, lst):
+            with pytest.raises(TypeInferError):
+                TypeInfer.check(fn.ast)
+
+    def test_aggregates_typecheck(self):
+        """``a -> a -> bool`` admits them; the backends refuse what they
+        cannot emit."""
+        @fp.fpy
+        def f() -> bool:
+            a = [1.0, 2.0]
+            b = [1.0, 2.0]
+            return a == b
+
+        assert isinstance(TypeInfer.check(f.ast).return_type, BoolType)

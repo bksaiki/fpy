@@ -10,8 +10,10 @@ from fpy2.analysis.format_infer import ListFormat, SetFormat, TupleFormat
 from fpy2.backend.cpp.storage import (
     StorageSelectionError,
     aggregate_storage,
+    bound_fits_in_scalar,
     choose_storage,
     choose_storage_scalar,
+    scalar_fits_in,
 )
 from fpy2.backend.cpp.types import CppList, CppScalar, CppTuple
 from fpy2.number.context.real import REAL_FORMAT
@@ -53,6 +55,27 @@ class TestStorageScalar:
         """REAL_FORMAT can't be stored in any finite C++ type."""
         with pytest.raises(StorageSelectionError, match='unconstrained real'):
             choose_storage_scalar(REAL_FORMAT)
+
+    @pytest.mark.parametrize('special', ['POS_INF', 'NEG_INF', 'NAN'])
+    def test_setformat_with_a_special_never_picks_an_integer(self, special):
+        """No integer type holds an infinity or a NaN, so a set carrying one
+        must skip every integer rung -- otherwise an infinity would be stored
+        in an ``int8_t``."""
+        from fpy2.analysis.format_infer.analysis import Special
+
+        s = SetFormat(frozenset((Special[special],)))
+        assert choose_storage_scalar(s).is_float()
+
+    def test_a_special_beside_a_small_integer_still_picks_a_float(self):
+        """The finite part alone would fit ``uint8_t``; the infinity must
+        override that."""
+        from fpy2.analysis.format_infer.analysis import Special
+
+        finite = SetFormat(frozenset((Fraction(1),)))
+        assert choose_storage_scalar(finite) == CppScalar.U8
+
+        with_inf = SetFormat(frozenset((Fraction(1), Special.POS_INF)))
+        assert choose_storage_scalar(with_inf).is_float()
 
     def test_unbounded_integer_falls_back_to_s64(self):
         """``MPFixedFormat`` representing unbounded integers — e.g.,
@@ -246,3 +269,31 @@ class TestStorageBottom:
         """``None`` is a boolean's bound, and a boolean has storage of its own
         — dropping it from an aggregate would lose that."""
         assert aggregate_storage([None, None]) == CppScalar.BOOL
+
+
+class TestBoundFitsInScalar:
+    """``bound_fits_in_scalar`` asks about values where ``scalar_fits_in``
+    asks about types."""
+
+    def test_a_positive_literal_fits_a_signed_type(self):
+        """``{1}`` stores as ``uint8_t``, but the value fits ``int8_t``."""
+        one = SetFormat(frozenset((Fraction(1),)))
+        assert choose_storage_scalar(one) == CppScalar.U8
+        assert not scalar_fits_in(CppScalar.U8, CppScalar.S8)
+        assert bound_fits_in_scalar(one, CppScalar.S8)
+
+    def test_an_out_of_range_value_does_not_fit(self):
+        big = SetFormat(frozenset((Fraction(200),)))
+        assert not bound_fits_in_scalar(big, CppScalar.S8)
+        assert bound_fits_in_scalar(big, CppScalar.S16)
+
+    def test_a_fractional_value_does_not_fit_an_integer(self):
+        half = SetFormat(frozenset((Fraction(1, 2),)))
+        assert not bound_fits_in_scalar(half, CppScalar.S8)
+        assert bound_fits_in_scalar(half, CppScalar.F32)
+
+    def test_bool_and_unreasonable_bounds_are_refused(self):
+        one = SetFormat(frozenset((Fraction(1),)))
+        assert not bound_fits_in_scalar(one, CppScalar.BOOL)
+        assert not bound_fits_in_scalar(REAL_FORMAT, CppScalar.F64)
+        assert not bound_fits_in_scalar(None, CppScalar.S8)

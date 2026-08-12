@@ -6,8 +6,10 @@ from fpy2.ast import (
     BinaryOp,
     BoolVal,
     ContextStmt,
+    Decnum,
     ForeignVal,
     Integer,
+    NullaryOp,
     Rational,
     ReturnStmt,
     Var,
@@ -390,3 +392,67 @@ class TestPhiMergeFolding:
         folded = ConstFold.apply(f.ast)
         e = _return_expr(folded)
         assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'
+
+
+class TestNonFiniteValues:
+    """Inf and NaN have no literal form, so a fold that reaches one leaves
+    the expression alone instead of failing."""
+
+    def test_division_by_zero_does_not_fold(self):
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                x = 1.0
+                y = 0.0
+                return x / y
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, BinaryOp), f'expected BinaryOp; got {type(e).__name__}'
+
+    def test_overflow_does_not_fold(self):
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return 1e308 * 1e308
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, BinaryOp), f'expected BinaryOp; got {type(e).__name__}'
+
+    def test_a_non_finite_constant_does_not_fold(self):
+        @fp.fpy
+        def inf():
+            with fp.FP64:
+                return fp.inf()
+
+        @fp.fpy
+        def nan():
+            with fp.FP64:
+                return fp.nan()
+
+        for fn in (inf, nan):
+            e = _return_expr(ConstFold.apply(fn.ast))
+            assert isinstance(e, NullaryOp), f'expected NullaryOp; got {type(e).__name__}'
+
+    def test_foreign_non_finite_does_not_fold(self):
+        """A captured Python ``float`` reaches the fold as a raw ``float``,
+        not a ``Float``, so it needs its own guard."""
+        INF = float('inf')
+
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return INF
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'
+
+    def test_negative_zero_still_folds(self):
+        """A signed zero is finite and keeps its own literal form."""
+        @fp.fpy
+        def f():
+            with fp.FP64:
+                return -0.0
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Decnum), f'expected Decnum; got {type(e).__name__}'
+        assert e.val == '-0.0'

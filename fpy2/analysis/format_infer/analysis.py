@@ -134,6 +134,7 @@ Format inference rules
   forms) — no widening to the active scope.
 """
 
+import enum
 import operator
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -213,14 +214,40 @@ class NegZero:
         return isinstance(other, NegZero)
 
     def __hash__(self):
-        return hash(NegZero)
+        return hash(())
 
 
 NEG_ZERO = NegZero()
 """The single :class:`NegZero` instance; compare with ``==`` or ``isinstance``."""
 
-SetValue: TypeAlias = Fraction | NegZero
-"""A member of a :class:`SetFormat`: an exact rational, or the negative zero."""
+
+class Special(enum.Enum):
+    """An infinity or a NaN, as a member of a :class:`SetFormat`.
+
+    Same problem as :class:`NegZero` — no :class:`Fraction` denotes these — but
+    an enum serves all three at once: members are singletons compared by
+    identity, so they stay distinct under ``frozenset``.
+    """
+    POS_INF = 0
+    NEG_INF = 1
+    NAN = 2
+
+    def __repr__(self):
+        # `NEG_ZERO`, not `<Special.NEG_ZERO: 0>`, to match `NegZero` in a set
+        return self.name
+
+
+SetValue: TypeAlias = Fraction | NegZero | Special
+"""A member of a :class:`SetFormat`: an exact rational, the negative zero, or
+an infinity / NaN."""
+
+_SPECIAL_FLOAT: dict[Special, Float] = {
+    Special.POS_INF: Float(isinf=True),
+    Special.NEG_INF: Float(s=True, isinf=True),
+    Special.NAN: Float(isnan=True),
+}
+"""Each :class:`Special` as a :class:`Float`, for asking a format whether it
+holds one."""
 
 
 @dataclass(frozen=True)
@@ -416,6 +443,12 @@ def _all_representable_in(values: frozenset[SetValue], fmt: Format) -> bool:
             if not fmt.representable_in(RealFloat(s=True, exp=0, c=0)):
                 return False
             continue
+        if isinstance(v, Special):
+            # `representable_in` takes a `Float`, which -- unlike `RealFloat` --
+            # can be an infinity or a NaN, so the format answers directly.
+            if not fmt.representable_in(_SPECIAL_FLOAT[v]):
+                return False
+            continue
         if not is_dyadic(v):
             return False
         if not fmt.representable_in(RealFloat.from_rational(v)):
@@ -551,16 +584,24 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     """
     if not s.values:
         return None
-    if not all(isinstance(v, NegZero) or is_dyadic(v) for v in s.values):
-        return None
     # `NEG_ZERO` becomes a `RealFloat` that carries the sign, which the bounds
     # below then read like any other value.  Its presence also sets
     # `has_neg_zero` on the result -- see the end of this function.
-    rfs = [
-        RealFloat(s=True, exp=0, c=0) if isinstance(v, NegZero)
-        else RealFloat.from_rational(v)
-        for v in s.values
-    ]
+    # A `Special` sets a membership flag instead of joining the bounds, so a
+    # set of nothing but specials takes every `default=` path below.
+    rfs: list[RealFloat] = []
+    specials: set[Special] = set()
+    has_neg_zero = False
+    for v in s.values:
+        if isinstance(v, Special):
+            specials.add(v)
+        elif isinstance(v, NegZero):
+            has_neg_zero = True
+            rfs.append(RealFloat(s=True, exp=0, c=0))
+        elif is_dyadic(v):
+            rfs.append(RealFloat.from_rational(v))
+        else:
+            return None
     # Bounds: max non-negative value and min non-positive value, with
     # zero used when no value falls on the corresponding side.  This
     # matches AbstractFormat's convention of pos_bound >= 0 and
@@ -577,7 +618,10 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     exp = min((rf.exp for rf in rfs), default=0)
     return AbstractFormat(
         prec, exp, pos_bound, neg_bound=neg_bound,
-        has_neg_zero=any(isinstance(v, NegZero) for v in s.values),
+        has_pos_inf=Special.POS_INF in specials,
+        has_neg_inf=Special.NEG_INF in specials,
+        has_nan=Special.NAN in specials,
+        has_neg_zero=has_neg_zero,
     )
 
 
@@ -596,17 +640,34 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
 def _set_as_fraction(v: SetValue) -> Fraction:
-    """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``."""
+    """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``.
+
+    A :class:`Special` has none, so callers must dispatch on it first.
+    """
+    if isinstance(v, Special):
+        raise TypeError(f'{v!r} has no rational form')
     return Fraction(0) if isinstance(v, NegZero) else v
 
 
 def _set_is_negative(v: SetValue) -> bool:
-    """Does *v* carry a minus sign?  True for :data:`NEG_ZERO`."""
+    """Does *v* carry a minus sign?  True for :data:`NEG_ZERO` and ``NEG_INF``;
+    a NaN is unsigned (callers short-circuit on it first)."""
+    if isinstance(v, Special):
+        return v is Special.NEG_INF
     return True if isinstance(v, NegZero) else v < 0
 
 
+_NEG_SPECIAL = {
+    Special.POS_INF: Special.NEG_INF,
+    Special.NEG_INF: Special.POS_INF,
+    Special.NAN: Special.NAN,
+}
+
+
 def _set_neg(v: SetValue) -> SetValue:
-    """``-v``.  Negation exchanges the two zeros."""
+    """``-v``.  Negation exchanges the two zeros and the two infinities."""
+    if isinstance(v, Special):
+        return _NEG_SPECIAL[v]
     if isinstance(v, NegZero):
         return Fraction(0)
     return NEG_ZERO if v == 0 else -v
@@ -614,6 +675,8 @@ def _set_neg(v: SetValue) -> SetValue:
 
 def _set_abs(v: SetValue) -> SetValue:
     """``abs(v)``.  Never a negative zero."""
+    if isinstance(v, Special):
+        return Special.NAN if v is Special.NAN else Special.POS_INF
     return Fraction(0) if isinstance(v, NegZero) else abs(v)
 
 
@@ -622,7 +685,19 @@ def _set_add(a: SetValue, b: SetValue) -> SetValue:
 
     IEEE-754 §6.3: a sum is ``-0.0`` only when both addends are.  Every other
     zero sum — including ``1 + (-1)`` and ``(-0.0) + (+0.0)`` — is ``+0.0``.
+
+    A NaN propagates; ``(+inf) + (-inf)`` is the one undefined sum.
     """
+    if a is Special.NAN or b is Special.NAN:
+        return Special.NAN
+    a_inf = isinstance(a, Special)
+    b_inf = isinstance(b, Special)
+    if a_inf and b_inf:
+        return a if a is b else Special.NAN
+    if a_inf:
+        return a
+    if b_inf:
+        return b
     if isinstance(a, NegZero) and isinstance(b, NegZero):
         return NEG_ZERO
     return _set_as_fraction(a) + _set_as_fraction(b)
@@ -645,11 +720,27 @@ def _set_mul(a: SetValue, b: SetValue) -> SetValue:
     rounding mode — so a zero product is ``-0.0`` exactly when the signs differ.
     That is why a negative operand and a ``+0.0`` give ``-0.0`` even though
     neither is a negative zero.
+
+    A NaN propagates; ``inf * 0`` is the one undefined product.  Other infinite
+    products keep the XOR sign.  This is exact where
+    :meth:`AbstractFormat.__mul__` must be conservative: that one only knows an
+    operand *may* be zero.
     """
+    if a is Special.NAN or b is Special.NAN:
+        return Special.NAN
+    a_inf = isinstance(a, Special)
+    b_inf = isinstance(b, Special)
+    neg = _set_is_negative(a) != _set_is_negative(b)
+    if a_inf or b_inf:
+        is_zero = (not a_inf and _set_as_fraction(a) == 0) \
+            or (not b_inf and _set_as_fraction(b) == 0)
+        if is_zero:
+            return Special.NAN
+        return Special.NEG_INF if neg else Special.POS_INF
     product = _set_as_fraction(a) * _set_as_fraction(b)
     if product != 0:
         return product
-    return NEG_ZERO if _set_is_negative(a) != _set_is_negative(b) else Fraction(0)
+    return NEG_ZERO if neg else Fraction(0)
 
 
 _SET_BINOPS: dict[Any, Callable[[SetValue, SetValue], SetValue]] = {
@@ -1516,6 +1607,17 @@ class _FormatInferInstance(Visitor):
     # format; non-real results (bool predicates, range, …) take
     # the top format of their inferred type.
     def _visit_nullaryop(self, e: NullaryOp, ctx: None) -> FormatBound:
+        if isinstance(e, ConstInf | ConstNan):
+            member = Special.POS_INF if isinstance(e, ConstInf) else Special.NAN
+            # Report the value itself unless the scope's format holds it and
+            # can be stored: `REAL_FORMAT` holds it but no finite type does, and
+            # an integer format does not hold it at all.  A float scope that
+            # holds it keeps its own format -- `{+inf}` there would retype an
+            # `FP64` result.
+            scope_fmt = self._scope_format(e)
+            if (scope_fmt == REAL_FORMAT
+                    or not scope_fmt.representable_in(_SPECIAL_FLOAT[member])):
+                return SetFormat.from_value(member)
         return self._op_bound(e)
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> FormatBound:

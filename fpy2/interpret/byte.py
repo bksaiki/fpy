@@ -12,6 +12,7 @@ from fractions import Fraction
 from typing import Any, TypeAlias
 
 from .. import ops
+from ..analysis.define_use import DefineUse
 from ..ast.fpyast import *
 from ..ast.visitor import Visitor
 from ..env import ForeignEnv
@@ -462,6 +463,31 @@ def _eval_any(x):
 def _eval_all(x):
     return all(_check_bool_list(x, 'all()'))
 
+def _eval_ordered(x, op: str):
+    # ordering is real-only (matches `TypeInfer`, which is optional); Python
+    # would order a tuple lexicographically and a `bool` as an integer
+    if not isinstance(x, RealValue):
+        raise TypeError(f'`{op}` expects real operands, got {x}')
+    return x
+
+def _eval_eq(a, b) -> bool:
+    """``a == b``, structurally and without shortcutting on identity.
+
+    Python's sequence equality compares elements with ``is`` before ``==``,
+    which would make a NaN inside a container equal to itself.  Mismatched
+    operands are rejected, as `TypeInfer` rejects them: a tuple and a list are
+    different FPy types even when their elements agree.
+    """
+    match a, b:
+        case (tuple(), tuple()) | (list(), list()):
+            return len(a) == len(b) and all(_eval_eq(x, y) for x, y in zip(a, b))
+        case (bool(), bool()) | (Context(), Context()):
+            return a == b
+        case (Float() | Fraction(), Float() | Fraction()):
+            return a == b
+        case _:
+            raise TypeError(f'`==` expects operands of the same type, got {a} and {b}')
+
 ###########################################################
 # Operator tables
 
@@ -577,6 +603,8 @@ def make_namespace() -> dict[str, object]:
         '__fpy_len': _eval_len,
         '__fpy_any': _eval_any,
         '__fpy_all': _eval_all,
+        '__fpy_eq': _eval_eq,
+        '__fpy_ordered': _eval_ordered,
         REAL_NAME: REAL,
     }
 
@@ -610,7 +638,9 @@ class BytecodeCompiler(Visitor):
     def __init__(self, func: FuncDef, env: ForeignEnv):
         self.func = func
         self.env = env
-        self.gensym = Gensym()
+        # reserve the program's own names: a bare `fresh('__fpy_cmp')` would
+        # otherwise return that very name and shadow a source variable
+        self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.foreign_vals = {}
 
     def compile(self):
@@ -868,11 +898,54 @@ class BytecodeCompiler(Visitor):
             case _:
                 raise NotImplementedError(f'unsupported comparison operator: {type(op).__name__}')
 
+    def _ordered_guard(self, arg: pyast.expr, op: CompareOp, attrs) -> pyast.expr:
+        """Wrap an ordering operand in its real-only check (`_eval_ordered`)."""
+        return pyast.Call(
+            func=pyast.Name(id='__fpy_ordered', ctx=pyast.Load(), **attrs),
+            args=[arg, pyast.Constant(value=op.symbol(), **attrs)],
+            keywords=[], **attrs,
+        )
+
     def _visit_compare(self, e: Compare, ctx: None):
-        ops = [self._visit_compare_op(op) for op in e.ops]
-        args = [self._visit_expr(arg, ctx) for arg in e.args]
         attrs = self._location_to_attributes(e.loc)
-        return pyast.Compare(args[0], ops, args[1:], **attrs)
+        args = [self._visit_expr(arg, ctx) for arg in e.args]
+        # Equality is structural (see `_eval_eq`), which no `==` node expresses,
+        # so the chain becomes a conjunction of pairwise tests.  A walrus binds
+        # each middle operand so it is evaluated once, as Python's chain does.
+        reuse: list[pyast.expr] = []
+        for i in range(1, len(args) - 1):
+            tmp = str(self.gensym.fresh('__fpy_cmp'))
+            args[i] = pyast.NamedExpr(
+                target=pyast.Name(id=tmp, ctx=pyast.Store(), **attrs),
+                value=args[i], **attrs,
+            )
+            reuse.append(pyast.Name(id=tmp, ctx=pyast.Load(), **attrs))
+
+        clauses: list[pyast.expr] = []
+        for i, op in enumerate(e.ops):
+            # every operand but the first is written by the pair before it
+            lhs = args[0] if i == 0 else reuse[i - 1]
+            rhs = args[i + 1]
+            clause: pyast.expr
+            if op is CompareOp.EQ or op is CompareOp.NE:
+                call = pyast.Call(
+                    func=pyast.Name(id='__fpy_eq', ctx=pyast.Load(), **attrs),
+                    args=[lhs, rhs], keywords=[], **attrs,
+                )
+                clause = call if op is CompareOp.EQ else pyast.UnaryOp(
+                    op=pyast.Not(), operand=call, **attrs,
+                )
+            else:
+                clause = pyast.Compare(
+                    self._ordered_guard(lhs, op, attrs),
+                    [self._visit_compare_op(op)],
+                    [self._ordered_guard(rhs, op, attrs)], **attrs,
+                )
+            clauses.append(clause)
+
+        if len(clauses) == 1:
+            return clauses[0]
+        return pyast.BoolOp(op=pyast.And(), values=clauses, **attrs)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         args = [self._visit_expr(elt, ctx) for elt in e.elts]

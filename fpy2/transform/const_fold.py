@@ -5,6 +5,7 @@ Queries ``pe.by_expr`` at each AST node and substitutes a literal
 when a value is available.  No value-tracking dataflow lives here.
 """
 
+import math
 from fractions import Fraction
 
 from ..analysis import DefineUse, DefineUseAnalysis, PartialEval, PartialEvalInfo
@@ -29,10 +30,15 @@ def value_to_literal(val: object, loc):
         case bool():                       # before int — bool is a subclass
             return BoolVal(val, loc)
         case Float():
+            if val.is_nar():
+                # Inf and NaN have no rational form, so no literal form either
+                return None
             if val.is_zero() and val.s:
                 # negative zero has no `Fraction` form; emit a signed literal
                 return Decnum('-0.0', loc)
             return _rational_literal(val.as_rational(), loc)
+        case float() if not math.isfinite(val):
+            return None
         case int() | float():
             return _rational_literal(Fraction(val), loc)
         case Fraction():
