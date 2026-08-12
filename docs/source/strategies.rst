@@ -11,6 +11,8 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.elim_round
 
+.. autofunction:: fpy2.strategies.fuse
+
 .. autofunction:: fpy2.strategies.inline
 
 .. autofunction:: fpy2.strategies.monomorphize

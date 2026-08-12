@@ -42,7 +42,7 @@ def _mul_add(acc: fp.Real, x: fp.Real, y: fp.Real) -> fp.Real:
 def _dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     acc = 0.0
     for x, y in zip(xs, ys):
-        acc = _mul_add(acc, x, y)
+        acc = _mul_add(acc, x, y)  # type: ignore[assignment]
     return acc
 
 
