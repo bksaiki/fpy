@@ -32,6 +32,16 @@ def _as_rational(x: EngineArg) -> Fraction:
     """The exact value of a finite `x` as a `Fraction`."""
     return x.as_rational() if isinstance(x, Float) else x
 
+def _log2_exact(x: EngineArg) -> int | None:
+    """`k` such that `|x| == 2 ** k`, or `None` if `x` is not a power of two."""
+    if not isinstance(x, Float) or x.is_nar() or x.is_zero():
+        return None
+    c = x.c
+    if c & (c - 1) != 0:
+        # `c` is not a power of two
+        return None
+    return x.exp + (c.bit_length() - 1)
+
 def _int_value(x: EngineArg) -> int | None:
     """The value of `x` as an `int`, or `None` if it is not an integer."""
     match x:
@@ -333,9 +343,15 @@ class RealEngine(Engine):
                     raise RuntimeError("unreachable case")
 
     def pow(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        # only exact for a small integer exponent
+        # only exact for an integer exponent
         n = _int_value(y)
-        if n is None or abs(n) > _MAX_POW_EXPONENT:
+        if n is None:
+            return None
+
+        # folding costs `|n|` times the significand of `x`, so the exponent is
+        # bounded; a power of two is the exception, since only its exponent scales
+        k = _log2_exact(x)
+        if k is None and abs(n) > _MAX_POW_EXPONENT:
             return None
 
         # `n % 2 == 1` tests oddness for negative `n` as well
@@ -358,13 +374,17 @@ class RealEngine(Engine):
             # 0 ** -n = Inf; `ops` reports this as divide-by-zero
             s = _signbit(x) and n % 2 == 1
             return Float(s=s, isinf=True, ctx=REAL)
+        elif k is not None:
+            # |x| is a power of two: `x ** n = +/-2 ** (k * n)`
+            s = _signbit(x) and n % 2 == 1
+            return Float(x=RealFloat(s=s, exp=k * n, c=1), ctx=REAL)
         else:
             # x is finite, and non-zero when `n < 0`
             match x:
                 case Float():
                     if n >= 0:
                         return Float(x=x.as_real() ** n, ctx=REAL)
-                    # a negative exponent stays a `Float` only when `x` is a power of two
+                    # a negative exponent stays a `Float` only when the result is dyadic
                     r = x.as_rational() ** n
                     if is_dyadic(r):
                         return Float(x=RealFloat.from_rational(r), ctx=REAL)

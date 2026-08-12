@@ -196,6 +196,17 @@ class TestPowReal:
         with pytest.raises(NotImplementedError):
             fp.pow(3.0, n, fp.REAL)
 
+    @pytest.mark.parametrize('x', [2.0, -2.0, 0.5, -0.25, 1.0, 8.0])
+    @pytest.mark.parametrize('n', [0, 1, -1, 3, -3, 16, -16])
+    def test_power_of_two_base(self, x, n) -> None:
+        assert fp.pow(x, n, fp.REAL) == Fraction(x) ** n, f'{x} ** {n}'
+
+    @pytest.mark.parametrize('n', [1 << 20, -(1 << 20)])
+    def test_power_of_two_base_ignores_the_bound(self, n) -> None:
+        # only the exponent of a power of two scales, so any `n` is cheap
+        r = fp.pow(2.0, n, fp.REAL)
+        assert r.c == 1 and r.exp == n, f'expected 2**{n}, got {r!r}'
+
 
 class TestDivReal:
     """``div`` under ``REAL``, which is exact: the quotient of two finite

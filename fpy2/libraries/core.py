@@ -164,7 +164,7 @@ def logb(x: fp.Real) -> fp.Real:
     return fp.logb(x)
 
 @fp.fpy
-def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
+def ldexp(x: fp.Real, n: fp.Real) -> fp.Real:
     """
     Computes `x * 2**n` with correct rounding.
 
@@ -172,40 +172,17 @@ def _ldexp_spec(x: fp.Real, n: fp.Real) -> fp.Real:
     - If `x` is NaN, the result is NaN.
     - If `x` is infinite, the result is infinite.
 
-    If `n` is not an integer, a `ValueError` is raised.
-    Under the `RealContext`, this function is the specification of ldexp.
+    If `n` is not an integer, an `AssertionError` is raised.
     """
-    assert isinteger(n)
+    # check `n` and compute the scale exactly: the caller's
+    # rounding context need not represent either
+    with fp.REAL:
+        assert isinteger(n)
+        scale = 2 ** n
 
-    if fp.isnan(x):
-        ret: fp.Real = fp.nan()
-    elif fp.isinf(x):
-        ret = fp.copysign(fp.inf(), x)
-    else:
-        ret = x * fp.pow(2, n)
-
-    return ret
-
-@fp.fpy_primitive(ctx='R', ret_ctx='R', spec=_ldexp_spec)
-def ldexp(x: fp.Float, n: fp.Float, ctx: fp.Context) -> fp.Float:
-    """
-    Computes `x * 2**n` with correct rounding.
-
-    Special cases:
-    - If `x` is NaN, the result is NaN.
-    - If `x` is infinite, the result is infinite.
-
-    If `n` is not an integer, a `ValueError` is raised.
-    """
-    if not n.is_integer():
-        raise ValueError("n must be an integer")
-
-    if x.isnan or x.isinf:
-        return ctx.round(x)
-    else:
-        xr = x.as_real()
-        scale = fp.RealFloat.power_of_2(int(n))
-        return ctx.round(xr * scale)
+    # the scale is an exact power of two, so the product rounds only once;
+    # it also carries NaN, infinity, and the sign of a zero `x`
+    return x * scale
 
 @fp.fpy(ctx=fp.INTEGER)
 def max_e(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
