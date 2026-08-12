@@ -2,6 +2,7 @@
 Scheduling language constructs for FPy programs.
 """
 
+from .context_lift import lift_context
 from .func_inline import inline
 from .iter_elim import elim_iter
 from .loop_split import split
@@ -16,6 +17,7 @@ __all__ = [
     'elim_round',
     'fuse',
     'inline',
+    'lift_context',
     'monomorphize',
     'simplify',
     'split',
