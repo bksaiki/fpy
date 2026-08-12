@@ -8,9 +8,10 @@ context requests exact computation (prec=None, n=None).
 
 from fractions import Fraction
 
+from ...utils import is_dyadic
 from ..context import REAL, Context
 from ..gmputils import mpfr_value
-from ..number import Float
+from ..number import Float, RealFloat
 from ..round import RoundingMode
 from .engine import Engine, EngineArg, EngineRes
 
@@ -27,8 +28,8 @@ def _is_zero(x: EngineArg) -> bool:
 def _signbit(x: EngineArg) -> bool:
     return x.s if isinstance(x, Float) else (x < 0)
 
-def _nonneg_int(x: EngineArg) -> int | None:
-    """The value of `x` as a non-negative `int`, or `None` if it is not one."""
+def _int_value(x: EngineArg) -> int | None:
+    """The value of `x` as an `int`, or `None` if it is not an integer."""
     match x:
         case Float():
             # `is_integer()` is false for Inf and NaN, so `int()` is safe here
@@ -39,12 +40,11 @@ def _nonneg_int(x: EngineArg) -> int | None:
                 return None
         case _:
             raise RuntimeError("unreachable case")
-    n = int(x)
-    return n if n >= 0 else None
+    return int(x)
 
 
 _MAX_POW_EXPONENT = 1 << 16
-"""largest exponent `pow` folds: `x ** n` has `n` times the significand of `x`"""
+"""largest exponent `pow` folds: `x ** n` has `|n|` times the significand of `x`"""
 
 _real_engine_inst = None
 """single instance of Real engine"""
@@ -299,11 +299,12 @@ class RealEngine(Engine):
                     raise RuntimeError("unreachable case")
 
     def pow(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        # only exact for a small non-negative integer exponent
-        n = _nonneg_int(y)
-        if n is None or n > _MAX_POW_EXPONENT:
+        # only exact for a small integer exponent
+        n = _int_value(y)
+        if n is None or abs(n) > _MAX_POW_EXPONENT:
             return None
 
+        # `n % 2 == 1` tests oddness for negative `n` as well
         if _is_nan(x) or _is_inf(x):
             if n == 0:
                 # Inf ** 0 = NaN ** 0 = 1
@@ -311,15 +312,29 @@ class RealEngine(Engine):
             elif _is_nan(x):
                 # NaN ** n = NaN
                 return Float(isnan=True, ctx=REAL)
-            else:
+            elif n > 0:
                 # Inf ** n = Inf
                 s = _signbit(x) and n % 2 == 1
                 return Float(s=s, isinf=True, ctx=REAL)
+            else:
+                # Inf ** -n = 0
+                s = _signbit(x) and n % 2 == 1
+                return Float(s=s, c=0, ctx=REAL)
+        elif n < 0 and _is_zero(x):
+            # 0 ** -n = Inf; `ops` reports this as divide-by-zero
+            s = _signbit(x) and n % 2 == 1
+            return Float(s=s, isinf=True, ctx=REAL)
         else:
-            # x is finite
+            # x is finite, and non-zero when `n < 0`
             match x:
                 case Float():
-                    return Float(x=x.as_real() ** n, ctx=REAL)
+                    if n >= 0:
+                        return Float(x=x.as_real() ** n, ctx=REAL)
+                    # a negative exponent stays a `Float` only when `x` is a power of two
+                    r = x.as_rational() ** n
+                    if is_dyadic(r):
+                        return Float(x=RealFloat.from_rational(r), ctx=REAL)
+                    return r
                 case Fraction():
                     return x ** n
                 case _:
