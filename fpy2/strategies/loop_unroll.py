@@ -25,6 +25,26 @@ def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Fu
     -------
     Function
         The transformed function.
+
+    Examples
+    --------
+    ::
+
+        @fp.fpy
+        def countdown(x: fp.Real) -> fp.Real:
+            while x > 0.0:
+                x = x - 1.0
+            return x
+
+    ``unroll_while(countdown, times=1)`` yields::
+
+        @fp.fpy
+        def countdown(x):
+            if x > 0:
+                x = (x - 1)
+                while x > 0:
+                    x = (x - 1)
+            return x
     """
     if not isinstance(func, Function):
             raise TypeError(f"Expected a \'Function\', got {func}")
@@ -55,7 +75,41 @@ def unroll_for(
         The index of the `for` loop to unroll. If `None`, unroll all
         `for` loops.
     times : int
-        The number of times to unroll the loop.
+        The number of times to unroll the loop; the rewritten loop
+        consumes ``times + 1`` consecutive elements per iteration.
+
+    Examples
+    --------
+    ::
+
+        @fp.fpy
+        def total(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + x
+            return acc
+
+    ``unroll_for(total, times=1)`` yields (the default ``PEEL`` strategy
+    runs any odd remainder in a residual loop)::
+
+        @fp.fpy
+        def total(xs):
+            acc = 0
+            t = xs
+            with fp.INTEGER:
+                n = len(t)
+                m = (n - fp.fmod(n, 2))
+            for i in range(0, m, 2):
+                with fp.INTEGER:
+                    i3 = (i + 1)
+                x = t[i]
+                acc = (acc + x)
+                x = t[i3]
+                acc = (acc + x)
+            for i4 in range(m, n, 1):
+                x = t[i4]
+                acc = (acc + x)
+            return acc
     """
     if not isinstance(func, Function):
             raise TypeError(f"Expected a \'Function\', got {func}")
