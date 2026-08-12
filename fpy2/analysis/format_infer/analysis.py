@@ -134,6 +134,7 @@ Format inference rules
   forms) — no widening to the active scope.
 """
 
+import enum
 import operator
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -219,8 +220,36 @@ class NegZero:
 NEG_ZERO = NegZero()
 """The single :class:`NegZero` instance; compare with ``==`` or ``isinstance``."""
 
-SetValue: TypeAlias = Fraction | NegZero
-"""A member of a :class:`SetFormat`: an exact rational, or the negative zero."""
+
+class Special(enum.Enum):
+    """An infinity or a NaN, as a member of a :class:`SetFormat`.
+
+    Same problem as :class:`NegZero` — no :class:`Fraction` denotes these — but
+    an enum serves all three at once: members are singletons compared by
+    identity, so they stay distinct under ``frozenset``.
+    """
+    POS_INF = 0
+    NEG_INF = 1
+    NAN = 2
+
+    def __repr__(self):
+        return self.name
+
+    def __hash__(self):
+        """The member value, which is stable across processes.
+
+        Enum's default is ``hash(self._name_)``, and neither that nor
+        :class:`NegZero`'s ``hash(type)`` is: string hashing is randomized by
+        ``PYTHONHASHSEED`` and a type's is its id.  A ``SetFormat`` repr reaches
+        specialization's cache key by way of ``frozenset`` iteration order, so a
+        new sentinel should not make that any less deterministic.
+        """
+        return self.value
+
+
+SetValue: TypeAlias = Fraction | NegZero | Special
+"""A member of a :class:`SetFormat`: an exact rational, the negative zero, or
+an infinity / NaN."""
 
 
 @dataclass(frozen=True)
@@ -416,6 +445,9 @@ def _all_representable_in(values: frozenset[SetValue], fmt: Format) -> bool:
             if not fmt.representable_in(RealFloat(s=True, exp=0, c=0)):
                 return False
             continue
+        if isinstance(v, Special):
+            # Conservative: no format is credited with holding a special here.
+            return False
         if not is_dyadic(v):
             return False
         if not fmt.representable_in(RealFloat.from_rational(v)):
@@ -551,16 +583,20 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     """
     if not s.values:
         return None
-    if not all(isinstance(v, NegZero) or is_dyadic(v) for v in s.values):
-        return None
     # `NEG_ZERO` becomes a `RealFloat` that carries the sign, which the bounds
     # below then read like any other value.  Its presence also sets
     # `has_neg_zero` on the result -- see the end of this function.
-    rfs = [
-        RealFloat(s=True, exp=0, c=0) if isinstance(v, NegZero)
-        else RealFloat.from_rational(v)
-        for v in s.values
-    ]
+    rfs: list[RealFloat] = []
+    for v in s.values:
+        if isinstance(v, Special):
+            # Conservative: a special is not liftable onto the finite grid here.
+            return None
+        if isinstance(v, NegZero):
+            rfs.append(RealFloat(s=True, exp=0, c=0))
+        elif is_dyadic(v):
+            rfs.append(RealFloat.from_rational(v))
+        else:
+            return None
     # Bounds: max non-negative value and min non-positive value, with
     # zero used when no value falls on the corresponding side.  This
     # matches AbstractFormat's convention of pos_bound >= 0 and
@@ -596,17 +632,36 @@ def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | Non
 _ZERO_SET: 'SetFormat' = SetFormat.from_value(Fraction(0))
 
 def _set_as_fraction(v: SetValue) -> Fraction:
-    """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``."""
+    """*v*'s magnitude-and-sign as a rational: :data:`NEG_ZERO` becomes ``0``.
+
+    A :class:`Special` has no rational form at all, and quietly reading one as
+    ``0`` would be unsound — callers must dispatch on it first.
+    """
+    if isinstance(v, Special):
+        raise ValueError(f'{v!r} has no rational form')
     return Fraction(0) if isinstance(v, NegZero) else v
 
 
 def _set_is_negative(v: SetValue) -> bool:
-    """Does *v* carry a minus sign?  True for :data:`NEG_ZERO`."""
+    """Does *v* carry a minus sign?  True for :data:`NEG_ZERO` and
+    ``Special.NEG_INF``; a NaN is unsigned here, since every rule that consults
+    the sign short-circuits on a NaN before reaching it."""
+    if isinstance(v, Special):
+        return v is Special.NEG_INF
     return True if isinstance(v, NegZero) else v < 0
 
 
+_NEG_SPECIAL = {
+    Special.POS_INF: Special.NEG_INF,
+    Special.NEG_INF: Special.POS_INF,
+    Special.NAN: Special.NAN,
+}
+
+
 def _set_neg(v: SetValue) -> SetValue:
-    """``-v``.  Negation exchanges the two zeros."""
+    """``-v``.  Negation exchanges the two zeros and the two infinities."""
+    if isinstance(v, Special):
+        return _NEG_SPECIAL[v]
     if isinstance(v, NegZero):
         return Fraction(0)
     return NEG_ZERO if v == 0 else -v
@@ -614,6 +669,8 @@ def _set_neg(v: SetValue) -> SetValue:
 
 def _set_abs(v: SetValue) -> SetValue:
     """``abs(v)``.  Never a negative zero."""
+    if isinstance(v, Special):
+        return Special.NAN if v is Special.NAN else Special.POS_INF
     return Fraction(0) if isinstance(v, NegZero) else abs(v)
 
 

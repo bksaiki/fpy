@@ -2082,3 +2082,75 @@ class TestRoundIntoAFixedScope:
         above is a fact about the program and not about the analysis."""
         assert not fp.SINT64.round(fp.Float(-0.5)).s
         assert not fp.SINT64.round(fp.Float(-0.0)).s
+
+
+class TestSpecialSentinels:
+    """The ``Special`` members of ``SetValue``.  Nothing produces them yet --
+    these pin the value domain itself."""
+
+    def test_the_sentinels_are_distinct(self):
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, Special
+
+        members = frozenset([*Special, NEG_ZERO, Fraction(0)])
+        assert len(members) == 5
+
+    def test_equality_is_identity(self):
+        from fpy2.analysis.format_infer.analysis import Special
+
+        assert Special.POS_INF == Special.POS_INF
+        assert Special.POS_INF != Special.NAN
+        assert Special.POS_INF != Fraction(0)
+
+    def test_hashes_are_stable_across_processes(self):
+        """``frozenset`` iteration order feeds specialization's cache key, so a
+        per-run hash would make it nondeterministic.  Enum's default
+        ``hash(name)`` and ``NegZero``'s ``hash(type)`` both are."""
+        import subprocess
+        import sys
+
+        script = (
+            'from fpy2.analysis.format_infer.analysis import Special;'
+            'print([hash(v) for v in Special])'
+        )
+        runs = {
+            subprocess.run(
+                [sys.executable, '-c', script],
+                capture_output=True, text=True, check=True,
+                env={'PYTHONHASHSEED': 'random', 'PATH': ''},
+            ).stdout.strip()
+            for _ in range(3)
+        }
+        assert len(runs) == 1, f'hashes varied across processes: {runs}'
+
+    def test_repr(self):
+        """A `SetFormat` repr should read `POS_INF`, not `<Special.POS_INF: 0>`."""
+        from fpy2.analysis.format_infer.analysis import Special
+
+        assert [repr(v) for v in Special] == ['POS_INF', 'NEG_INF', 'NAN']
+        assert repr(SetFormat.from_value(Special.NAN)) == \
+            'SetFormat(values=frozenset({NAN}))'
+
+    def test_as_fraction_refuses_a_special(self):
+        """Reading an infinity as ``0`` would be silently unsound, so callers
+        are forced to dispatch on it first."""
+        from fpy2.analysis.format_infer.analysis import Special, _set_as_fraction
+
+        for v in Special:
+            with pytest.raises(ValueError, match='no rational form'):
+                _set_as_fraction(v)
+
+    def test_as_fraction_still_handles_the_finite_domain(self):
+        from fpy2.analysis.format_infer.analysis import NEG_ZERO, _set_as_fraction
+
+        assert _set_as_fraction(Fraction(3, 2)) == Fraction(3, 2)
+        assert _set_as_fraction(NEG_ZERO) == Fraction(0)
+
+    def test_is_negative(self):
+        from fpy2.analysis.format_infer.analysis import (
+            NEG_ZERO, Special, _set_is_negative,
+        )
+        assert _set_is_negative(Special.NEG_INF)
+        assert _set_is_negative(NEG_ZERO)
+        assert not _set_is_negative(Special.POS_INF)
+        # a NaN is unsigned here; every sign rule short-circuits on it first
+        assert not _set_is_negative(Special.NAN)
