@@ -16,10 +16,11 @@ uncompilable program.
 import dataclasses
 import math
 from collections.abc import Callable, Sequence
-from typing import NoReturn
 from contextlib import contextmanager
 from fractions import Fraction
+from typing import NoReturn
 
+from ... import ops as fpy_ops
 from ...analysis import (
     AssignDef,
     ContextScope,
@@ -57,8 +58,8 @@ from ...ast.fpyast import (
     ConstE,
     ConstInf,
     ConstLn2,
-    ConstLog10E,
     ConstLog2E,
+    ConstLog10E,
     ConstNan,
     ConstPi,
     ConstPi_2,
@@ -131,7 +132,6 @@ from ...number import (
     RealFloat,
 )
 from ...number.context.context import Context
-from ... import ops as fpy_ops
 from .ops import CppOp, ScalarOpTable
 from .storage import (
     StorageSelectionError,

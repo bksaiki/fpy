@@ -2115,7 +2115,7 @@ class TestSpecialSentinels:
         from fpy2.analysis.format_infer.analysis import Special, _set_as_fraction
 
         for v in Special:
-            with pytest.raises(ValueError, match='no rational form'):
+            with pytest.raises(TypeError, match='no rational form'):
                 _set_as_fraction(v)
 
     def test_as_fraction_still_handles_the_finite_domain(self):

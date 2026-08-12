@@ -6,7 +6,6 @@ when a value is available.  No value-tracking dataflow lives here.
 """
 
 import math
-
 from fractions import Fraction
 
 from ..analysis import DefineUse, DefineUseAnalysis, PartialEval, PartialEvalInfo

@@ -645,7 +645,7 @@ def _set_as_fraction(v: SetValue) -> Fraction:
     A :class:`Special` has none, so callers must dispatch on it first.
     """
     if isinstance(v, Special):
-        raise ValueError(f'{v!r} has no rational form')
+        raise TypeError(f'{v!r} has no rational form')
     return Fraction(0) if isinstance(v, NegZero) else v
 
 

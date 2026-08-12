@@ -12,8 +12,8 @@ from fractions import Fraction
 from typing import Any, TypeAlias
 
 from .. import ops
-from ..ast.fpyast import *
 from ..analysis.define_use import DefineUse
+from ..ast.fpyast import *
 from ..ast.visitor import Visitor
 from ..env import ForeignEnv
 from ..function import Function
