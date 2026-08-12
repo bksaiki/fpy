@@ -8,8 +8,10 @@ the tuples here are built from scalar arguments inside the body.
 """
 
 import fpy2 as fp
+import pytest
 
 from fpy2 import FPCoreCompiler
+from fpy2.backend.fpc import FPCoreCompileError
 
 
 def _compile(f) -> str:
@@ -41,3 +43,36 @@ class TestTupleAccessors:
             return fp.fst(fp.snd(t))
 
         assert '(ref (ref t 1) 0)' in _compile(f)
+
+
+class TestComparisonOperands:
+    """FPCore compares numbers.  FPy's ``==`` / ``!=`` are ``a -> a -> bool``,
+    so an aggregate arrives well-typed and has to be refused here -- otherwise
+    it emits ``(== <array> <array>)``, which FPCore does not define."""
+
+    def test_a_tuple_comparison_is_refused(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            a = (x, y)
+            b = (y, x)
+            return 1.0 if a == b else 0.0
+
+        with pytest.raises(FPCoreCompileError, match='compares numbers only'):
+            FPCoreCompiler().compile(f)
+
+    def test_a_list_comparison_is_refused(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            a = [1.0, 2.0]
+            b = [1.0, 2.0]
+            return 1.0 if a == b else 0.0
+
+        with pytest.raises(FPCoreCompileError, match='compares numbers only'):
+            FPCoreCompiler().compile(f)
+
+    def test_a_real_comparison_still_compiles(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> bool:
+            return x == y
+
+        assert '==' in str(FPCoreCompiler().compile(f))

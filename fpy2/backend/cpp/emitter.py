@@ -2117,7 +2117,19 @@ class CppEmitter(Visitor):
         # pure.  Each pair is cast to its scalar supremum so the comparison
         # happens in a defined common type.
         args = [self._visit_expr(a, ctx) for a in e.args]
-        arg_tys = [self._scalar_storage_for_expr(a) for a in e.args]
+        arg_tys = []
+        for a in e.args:
+            ty = self._storage_for_expr(a)
+            if not isinstance(ty, CppScalar):
+                # FPy's `==` / `!=` are `a -> a -> bool`, so an aggregate
+                # arrives well-typed.  Comparing one needs an elementwise walk,
+                # and a list is a handle here -- `==` would compare identity.
+                raise CppEmitError(
+                    f'cannot compare `{ty.format()}`: the cpp backend compares '
+                    f'scalars only',
+                    at=e,
+                )
+            arg_tys.append(ty)
         clauses = []
         for i, op in enumerate(e.ops):
             common = scalar_sup([arg_tys[i], arg_tys[i + 1]])

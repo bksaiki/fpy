@@ -256,3 +256,34 @@ class TestMixedSignTernary:
 
         out = _compile(cc, f)
         assert 'int8_t f(double x)' in out
+
+
+class TestComparisonOperands:
+    """``==`` / ``!=`` are ``a -> a -> bool`` in FPy, so the backend has to
+    say what it cannot emit."""
+
+    def test_booleans_compare_natively(self, cc):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP64:
+                a = fp.signbit(x)
+                b = fp.signbit(y)
+                return 1.0 if a != b else 0.0
+
+        out = cc.compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
+        )
+        assert '(a != b)' in out
+
+    def test_an_aggregate_comparison_is_refused(self):
+        """A list is a handle here, so ``==`` would compare identity."""
+        @fp.fpy
+        def f() -> fp.Real:
+            with fp.FP64:
+                a = [1.0, 2.0]
+                b = [1.0, 2.0]
+                return 1.0 if a == b else 0.0
+
+        with pytest.raises(CppCompileError, match='compares scalars only'):
+            CppCompiler(optimize=False).compile(f, ctx=fp.FP64, arg_types=[])

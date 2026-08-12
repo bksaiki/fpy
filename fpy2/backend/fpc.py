@@ -20,7 +20,7 @@ from ..transform import (
     WhileBundling,
 )
 from ..transform.free_var_elim import unclosed_data_free_vars
-from ..types import TupleType, Type
+from ..types import RealType, TupleType, Type
 from ..utils import Gensym
 from .backend import Backend, CompileError
 
@@ -769,8 +769,22 @@ class _FPCoreCompileInstance(Visitor):
                     # unknown operator
                     raise NotImplementedError('no FPCore operator for', e)
 
+    def _check_comparable(self, e: Compare):
+        """FPCore compares numbers.  FPy's ``==`` / ``!=`` are ``a -> a ->
+        bool``, so an aggregate reaches here well-typed and would otherwise
+        emit ``(== <array> <array>)``, which FPCore does not define."""
+        for arg in e.args:
+            ty = self._expr_type(arg)
+            if not isinstance(ty, RealType):
+                raise FPCoreCompileError(
+                    f'cannot compile a comparison of `{ty.format()}`: '
+                    f'FPCore compares numbers only',
+                    e,
+                )
+
     def _visit_compare(self, e: Compare, ctx: None) -> fpc.Expr:
         assert e.ops != [], 'should not be empty'
+        self._check_comparable(e)
         match e.ops:
             case [op]:
                 # 2-argument case: just compile

@@ -512,9 +512,25 @@ class _TypeInferInstance(Visitor):
                 raise ValueError(f'unknown n-ary operator: {type(e)}')
 
     def _visit_compare(self, e: Compare, ctx: None) -> BoolType:
-        for arg in e.args:
-            ty = self._visit_expr(arg, None)
-            self._unify(ty, RealType(None))
+        #   Γ |- e1 : a   Γ |- e2 : a
+        # ----------------------------- (== / !=)
+        #     Γ |- e1 == e2 : bool
+        #
+        #   Γ |- e1 : real   Γ |- e2 : real
+        # ---------------------------------- (< / <= / > / >=)
+        #        Γ |- e1 < e2 : bool
+        #
+        # Equality is `a -> a -> bool`: the operands must agree, but need not be
+        # real.  Ordering stays real-only.  A chain may mix the two, so the rule
+        # applies per operator rather than per node -- in `a < b == c` the `<`
+        # pins `a` and `b` to real, and `c` then unifies with `b`.
+        tys = [self._visit_expr(arg, None) for arg in e.args]
+        for i, op in enumerate(e.ops):
+            if op is CompareOp.EQ or op is CompareOp.NE:
+                self._unify(tys[i], tys[i + 1])
+            else:
+                self._unify(tys[i], RealType(None))
+                self._unify(tys[i + 1], RealType(None))
         return BoolType()
 
     def _visit_call(self, e: Call, ctx: None) -> Type:
