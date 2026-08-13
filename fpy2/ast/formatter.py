@@ -213,6 +213,7 @@ class _FormatterInstance(Visitor):
     def _visit_call(self, e: Call, ctx: _Ctx):
         name = self._visit_function_name(e.func, ctx)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
+        args += [f'{k}={self._visit_expr(v, ctx)}' for k, v in e.kwargs]
         arg_str = ', '.join(args)
         return f'{name}({arg_str})'
 

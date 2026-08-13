@@ -1,4 +1,4 @@
-"""Unit tests for context resugaring in the AST formatter."""
+"""Unit tests for the AST formatter."""
 
 import fpy2 as fp
 
@@ -37,3 +37,24 @@ class TestContextResugar:
         # concrete context, which resugars to the attribute syntax
         folded = ConstFold.apply(_with_attr.ast, enable_op=False)
         assert 'with fp.FP32:' in folded.format()
+
+
+class TestCallArguments:
+    """A call formats every argument it carries, keyword ones included."""
+
+    def test_keyword_arguments(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FixedContext(signed=True, scale=-16, nbits=32):
+                return fp.round(x)
+
+        assert 'fp.FixedContext(signed=True, scale=-16, nbits=32)' in f.ast.format()
+
+    def test_positional_and_keyword_arguments(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FixedContext(True, -16, 32, overflow=fp.OverflowMode.SATURATE):
+                return fp.round(x)
+
+        out = f.ast.format()
+        assert 'fp.FixedContext(True, -16, 32, overflow=' in out
