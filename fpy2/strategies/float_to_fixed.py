@@ -6,7 +6,7 @@ from ..function import Function
 from ..transform import FloatToFixed
 
 
-def float_to_fixed(func: Function) -> Function:
+def float_to_fixed(func: Function, where: int | None = None) -> Function:
     """
     Express floating-point rounding in `func` as fixed-point rounding.
 
@@ -36,6 +36,10 @@ def float_to_fixed(func: Function) -> Function:
     ----------
     func : Function
         The function to transform.
+    where : int | None
+        The index of the block to lower, counting candidate blocks (those
+        this rewrite could lower) in visit order, outermost-first. If
+        `None`, lower every candidate.
 
     Returns
     -------
@@ -78,5 +82,5 @@ def float_to_fixed(func: Function) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = FloatToFixed.apply(func.ast)
+    ast = FloatToFixed.apply(func.ast, where=where)
     return func.with_ast(ast)

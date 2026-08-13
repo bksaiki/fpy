@@ -290,11 +290,19 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
+    where: int | None
+    site_idx: int
 
-    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
+    def __init__(
+        self, func: FuncDef, eval_info: PartialEvalInfo, where: int | None = None
+    ):
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
+        self.where = where
+        # Counts *candidate* blocks (those the rewrite could rescale) in
+        # visit order, outermost-first.  `where` selects one by this index.
+        self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -460,8 +468,11 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
             if isinstance(s, ContextStmt):
                 shift = self._shift_for(s)
                 if shift is not None:
-                    stmts.extend(self._rescale_block(s, shift))
-                    continue
+                    idx = self.site_idx
+                    self.site_idx += 1
+                    if self.where is None or idx == self.where:
+                        stmts.extend(self._rescale_block(s, shift))
+                        continue
             new_s, ctx = self._visit_statement(s, ctx)
             stmts.append(new_s)
         return StmtBlock(stmts), ctx
@@ -473,11 +484,24 @@ class RescaleFixed:
     """
 
     @staticmethod
-    def apply(func: FuncDef, *, eval_info: PartialEvalInfo | None = None) -> FuncDef:
+    def apply(
+        func: FuncDef, *,
+        where: int | None = None,
+        eval_info: PartialEvalInfo | None = None,
+    ) -> FuncDef:
+        """
+        Rescales fixed-point rounding in `func` to digit position zero.
+
+        `where` selects a single candidate block by index, in visit order
+        (outermost-first); candidates are the blocks this pass could
+        rescale.  If `None`, every candidate is rescaled.
+        """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
+        if where is not None and not isinstance(where, int):
+            raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _RescaleFixedInstance(func, eval_info).apply()
+        return _RescaleFixedInstance(func, eval_info, where).apply()

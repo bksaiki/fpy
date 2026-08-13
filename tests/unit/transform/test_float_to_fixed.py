@@ -230,6 +230,49 @@ class TestLowering:
 
 
 # ----------------------------------------------------------------------
+# Selecting a single site
+
+
+class TestWhere:
+    """``where`` picks one candidate block by index, in visit order."""
+
+    @staticmethod
+    def _two() -> fp.Function:
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP16:
+                aq = fp.round(a)
+            with fp.FP32:
+                bq = fp.round(b)
+            with fp.FP64:
+                s = aq + bq
+            return s
+        return f
+
+    @pytest.mark.parametrize('where, left', [
+        (0, [fp.FP32]),
+        (1, [fp.FP16]),
+        (None, []),
+    ])
+    def test_selects_one_block(self, where, left):
+        f = self._two()
+        out = FloatToFixed.apply(f.ast, where=where)
+        # the FP64 block is arithmetic, so it is never a candidate
+        remaining = [c for c in _block_ctxs(out) if c in (fp.FP16, fp.FP32)]
+        assert remaining == left
+        assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
+
+    def test_index_past_the_last_site(self):
+        f = self._two()
+        assert FloatToFixed.apply(f.ast, where=9).is_equiv(f.ast)
+
+    def test_rejects_a_non_integer(self):
+        f = self._two()
+        with pytest.raises(TypeError):
+            FloatToFixed.apply(f.ast, where='first')  # type: ignore[arg-type]
+
+
+# ----------------------------------------------------------------------
 # Blocks the rewrite must leave alone
 
 

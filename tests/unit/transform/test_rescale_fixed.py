@@ -272,6 +272,64 @@ class TestContextVariants:
 
 
 # ----------------------------------------------------------------------
+# Selecting a single site
+
+
+class TestWhere:
+    """``where`` picks one candidate block by index, in visit order."""
+
+    @staticmethod
+    def _three() -> fp.Function:
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b, c):
+            with fp.FixedContext(True, -16, 32):
+                aq = fp.round(a)
+            with fp.FixedContext(True, -8, 32):
+                bq = fp.round(b)
+            with fp.FixedContext(True, -4, 32):
+                cq = fp.round(c)
+            with fp.FP64:
+                s = aq + bq + cq
+            return s
+        return f
+
+    @pytest.mark.parametrize('where, expect', [
+        (0, [0, -8, -4]),
+        (1, [-16, 0, -4]),
+        (2, [-16, -8, 0]),
+        (None, [0, 0, 0]),
+    ])
+    def test_selects_one_block(self, where, expect):
+        f = self._three()
+        out = RescaleFixed.apply(f.ast, where=where)
+        assert _fixed_scales(out) == expect
+        assert _same(_eval(out, f, 0.1, 0.2, 0.3), f(0.1, 0.2, 0.3))
+
+    def test_index_past_the_last_site(self):
+        f = self._three()
+        assert RescaleFixed.apply(f.ast, where=9).is_equiv(f.ast)
+
+    def test_rejects_a_non_integer(self):
+        f = self._three()
+        with pytest.raises(TypeError):
+            RescaleFixed.apply(f.ast, where='first')  # type: ignore[arg-type]
+
+    def test_counts_only_candidates(self):
+        """A block the rewrite would skip does not consume an index."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP64:                       # not fixed-point: not a candidate
+                p = a * b
+            with fp.FixedContext(True, -16, 32):
+                aq = fp.round(a)
+            return aq
+
+        out = RescaleFixed.apply(f.ast, where=0)
+        assert _fixed_scales(out) == [0]
+
+
+# ----------------------------------------------------------------------
 # Contexts whose position is only known at run time
 
 

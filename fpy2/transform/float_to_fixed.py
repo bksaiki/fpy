@@ -295,11 +295,19 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
     eval_info: PartialEvalInfo
     gensym: Gensym
     alias: str | None
+    where: int | None
+    site_idx: int
 
-    def __init__(self, func: FuncDef, eval_info: PartialEvalInfo):
+    def __init__(
+        self, func: FuncDef, eval_info: PartialEvalInfo, where: int | None = None
+    ):
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
+        self.where = where
+        # Counts *candidate* blocks (those the rewrite could lower) in visit
+        # order, outermost-first.  `where` selects one by this index.
+        self.site_idx = 0
         # the name the program calls `fpy2` by: the rewrite constructs a
         # context per value, so it has to name the constructor
         self.alias = fpy_alias(func.env)
@@ -464,8 +472,11 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
             if isinstance(s, ContextStmt):
                 src = self._source_ctx(s)
                 if src is not None:
-                    stmts.extend(self._lower_block(s, src))
-                    continue
+                    idx = self.site_idx
+                    self.site_idx += 1
+                    if self.where is None or idx == self.where:
+                        stmts.extend(self._lower_block(s, src))
+                        continue
             new_s, ctx = self._visit_statement(s, ctx)
             stmts.append(new_s)
         return StmtBlock(stmts), ctx
@@ -477,11 +488,24 @@ class FloatToFixed:
     """
 
     @staticmethod
-    def apply(func: FuncDef, *, eval_info: PartialEvalInfo | None = None) -> FuncDef:
+    def apply(
+        func: FuncDef, *,
+        where: int | None = None,
+        eval_info: PartialEvalInfo | None = None,
+    ) -> FuncDef:
+        """
+        Expresses float rounding in `func` as fixed-point rounding.
+
+        `where` selects a single candidate block by index, in visit order
+        (outermost-first); candidates are the blocks this pass could lower.
+        If `None`, every candidate is lowered.
+        """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
+        if where is not None and not isinstance(where, int):
+            raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _FloatToFixedInstance(func, eval_info).apply()
+        return _FloatToFixedInstance(func, eval_info, where).apply()

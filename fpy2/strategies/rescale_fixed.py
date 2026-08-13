@@ -6,7 +6,7 @@ from ..function import Function
 from ..transform import RescaleFixed
 
 
-def rescale_fixed(func: Function) -> Function:
+def rescale_fixed(func: Function, where: int | None = None) -> Function:
     """
     Rescale fixed-point rounding in `func` to digit position zero.
 
@@ -34,6 +34,10 @@ def rescale_fixed(func: Function) -> Function:
     ----------
     func : Function
         The function to transform.
+    where : int | None
+        The index of the block to rescale, counting candidate blocks (those
+        this rewrite could rescale) in visit order, outermost-first. If
+        `None`, rescale every candidate.
 
     Returns
     -------
@@ -68,5 +72,5 @@ def rescale_fixed(func: Function) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = RescaleFixed.apply(func.ast)
+    ast = RescaleFixed.apply(func.ast, where=where)
     return func.with_ast(ast)
