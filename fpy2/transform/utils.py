@@ -1,6 +1,8 @@
 """
-Shared machinery for the loop transforms
-(:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`).
+Shared machinery for the transforms: the loop rewrites
+(:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`) and the
+rounding rewrites (:class:`fpy2.transform.FloatToFixed`,
+:class:`fpy2.transform.RescaleFixed`).
 """
 
 from ..analysis import (
@@ -10,19 +12,27 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
+    ConstInf,
+    ConstNan,
     ContextStmt,
+    Decnum,
     Expr,
     ForeignVal,
     FuncDef,
     Id,
+    IfExpr,
+    Integer,
     Location,
+    Neg,
+    Rational,
+    Signbit,
     Stmt,
     StmtBlock,
     TupleBinding,
     UnderscoreId,
 )
 from ..ast.visitor import DefaultTransformVisitor
-from ..number import INTEGER
+from ..number import INTEGER, Float, RealFloat
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -74,3 +84,44 @@ def copy_target(target: Id | TupleBinding) -> Id | TupleBinding:
             return TupleBinding([copy_target(e) for e in target.elts], target.loc)
         case _:
             raise RuntimeError(f'Unexpected target {target}')
+
+
+def number_literal(x: RealFloat, loc: Location | None) -> Expr:
+    """`x` as an exact literal: every `RealFloat` is a dyadic rational."""
+    if x.is_integer():
+        return Integer(int(x), loc)
+    r = x.as_rational()
+    return Rational(None, r.numerator, r.denominator, loc)
+
+
+def value_literal(v: Float, loc: Location | None) -> Expr:
+    """`v` as a literal, whatever kind of value it is."""
+    if v.is_zero() and v.s:
+        # a negative zero has no rational form
+        return Decnum('-0.0', loc)
+    if not v.is_nar():
+        return number_literal(v.as_real(), loc)
+    e: Expr = ConstNan(None, loc) if v.isnan else ConstInf(None, loc)
+    return Neg(e, loc) if v.s else e
+
+
+def same_value(a: Float, b: Float) -> bool:
+    """Whether two values are the same, sign and all."""
+    if a.is_nar():
+        return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
+    return not b.is_nar() and a.as_real() == b.as_real() and a.s == b.s
+
+
+def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> Expr:
+    """
+    The result for a positive or negative `operand`, chosen by its sign.
+
+    When a format makes the same value of both, the choice collapses to that
+    value and the operand is not tested at all.
+    """
+    if same_value(pos, neg):
+        return value_literal(pos, loc)
+    return IfExpr(
+        Signbit(None, operand, loc),
+        value_literal(neg, loc), value_literal(pos, loc), loc,
+    )

@@ -69,7 +69,10 @@ from ..ast.fpyast import (
     Expr,
     ForeignVal,
     FuncDef,
+    IfStmt,
     Integer,
+    IsInf,
+    IsNan,
     Location,
     Mul,
     NamedId,
@@ -88,6 +91,7 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     REAL,
     Context,
+    Float,
     FixedContext,
     MPBFixedContext,
     MPFixedContext,
@@ -102,6 +106,7 @@ from ..number.format import (
     SMFixedFormat,
 )
 from ..utils import Gensym
+from .utils import number_literal, sign_choice, value_literal
 
 _FixedCtx = FixedContext | SMFixedContext | MPBFixedContext | MPFixedContext
 """the fixed-point contexts, whose formats shift under a power of two"""
@@ -154,6 +159,37 @@ class _Shift:
     """`2 ** scale`, applied to each result"""
     preamble: list[Stmt] = field(default_factory=list)
     """statements the block's context expression depends on"""
+    specials: dict[str, Float] = field(default_factory=dict)
+    """
+    what the format makes of NaN and the infinities, where that is defined.
+
+    Keyed by ``'nan'``, ``'+inf'``, and ``'-inf'``; an absent key means the
+    format leaves that value undefined, so it is left to the rounding, which
+    rejects it exactly as it did before.
+    """
+
+
+def _defined_specials(ctx: _FixedCtx) -> dict[str, Float]:
+    """
+    What NaN and the infinities round to under `ctx`, where that is defined.
+
+    A fixed-point format often leaves them undefined — rounding one raises
+    rather than producing a value — so each is tried on its own.  Zeros are
+    always defined, and the rescaled rounding already carries them through
+    exactly, so they are not folded.
+    """
+    out: dict[str, Float] = {}
+    for name, v in (
+        ('nan', Float(isnan=True)),
+        ('+inf', Float(isinf=True)),
+        ('-inf', Float(isinf=True, s=True)),
+    ):
+        try:
+            out[name] = ctx.round(v)
+        except ValueError:
+            # undefined under this format: leave it to the rounding
+            pass
+    return out
 
 
 def _pow2(k: int, loc: Location | None) -> Expr:
@@ -203,30 +239,59 @@ def _shift_format(fmt: Format, k: int) -> Format:
             raise RuntimeError(f'unexpected fixed-point format {fmt}')
 
 
-def _rescale(ctx: _FixedCtx, scale: int) -> _FixedCtx:
+def _without_nan(fmt: Format) -> Format:
+    """`fmt` with NaN turned off; a format that never had it is unchanged."""
+    match fmt:
+        # both derive from `MPBFixedFormat`, and neither has a NaN to turn off
+        case FixedFormat() | SMFixedFormat():
+            return fmt
+        case MPBFixedFormat():
+            return MPBFixedFormat(
+                fmt.nmin, fmt.pos_maxval, fmt.neg_maxval,
+                False, fmt.enable_inf, fmt.enable_neg_zero,
+            )
+        case MPFixedFormat():
+            return MPFixedFormat(
+                fmt.nmin, False, fmt.enable_inf, fmt.enable_neg_zero,
+            )
+        case _:
+            return fmt
+
+
+def _rescale(ctx: _FixedCtx, scale: int, *, drop_specials: bool = False) -> _FixedCtx:
     """`ctx` with its format shifted to `scale`, all else equal."""
     k = scale - _scale_of(ctx)  # type: ignore[operator]
     fmt = _shift_format(ctx.format(), k)
-    kwargs: dict = dict(
-        rm=ctx.rm, num_randbits=ctx.num_randbits, rng=ctx.rng,
+    if drop_specials:
+        # a NaN reaches a rounding only as its operand, and the caller has
+        # taken that case; an overflow can still *produce* an infinity, so
+        # that stays enabled
+        fmt = _without_nan(fmt)
+    kwargs: dict = dict(rm=ctx.rm, num_randbits=ctx.num_randbits, rng=ctx.rng)
+    if not drop_specials:
         # only a non-finite substitute gets this far, and it is scale-invariant
-        nan_value=ctx.nan_value, inf_value=ctx.inf_value,
-    )
+        kwargs.update(nan_value=ctx.nan_value, inf_value=ctx.inf_value)
     if isinstance(ctx, MPBFixedContext):
         # only a bounded format can overflow
         kwargs['overflow'] = ctx.overflow
     return type(ctx).from_format(fmt, **kwargs)
 
 
-def _rescale_expr(e: Expr, ctx: _FixedCtx, scale: int) -> Expr:
+def _rescale_expr(
+    e: Expr, ctx: _FixedCtx, scale: int, *, drop_specials: bool = False
+) -> Expr:
     """
     `e`, which evaluates to `ctx`, rewritten to evaluate at `scale`.
 
     A constructor call keeps its written form with only the digit-position
     argument replaced, so the rewritten program reads like the original.
     Any other expression is replaced by the rescaled context itself.
+
+    With `drop_specials`, the substitutes for NaN and infinity are left out:
+    the caller has taken those values into branches of its own, so nothing
+    reaches the rounding for them to stand in for.
     """
-    dst = _rescale(ctx, scale)
+    dst = _rescale(ctx, scale, drop_specials=drop_specials)
     info = _CTOR_ARGS.get(type(ctx))
     if info is not None and isinstance(e, Call) and e.fn is type(ctx):
         pos = Integer(getattr(dst, info.position), e.loc)
@@ -240,21 +305,22 @@ def _rescale_expr(e: Expr, ctx: _FixedCtx, scale: int) -> Expr:
                 if _arg_of(rewritten, name, index) is None:
                     continue
                 attr = 'pos_maxval' if name == 'maxval' else name
-                scaled = _number(getattr(dst, attr), e.loc)
+                scaled = number_literal(getattr(dst, attr), e.loc)
                 bound = _replace_arg(rewritten, name, index, lambda _: scaled)
                 assert bound is not None
                 rewritten = bound
+            if drop_specials:
+                rewritten = Call(
+                    rewritten.func, rewritten.fn, rewritten.args,
+                    tuple(
+                        (n, v) for n, v in rewritten.kwargs
+                        if n not in ('nan_value', 'inf_value', 'enable_nan')
+                    ),
+                    rewritten.loc,
+                )
             return rewritten
 
     return ForeignVal(dst, e.loc)
-
-
-def _number(x: RealFloat, loc: Location | None) -> Expr:
-    """`x` as an exact literal: every `RealFloat` is a dyadic rational."""
-    if x.is_integer():
-        return Integer(int(x), loc)
-    r = x.as_rational()
-    return Rational(None, r.numerator, r.denominator, loc)
 
 
 def _replace_arg(
@@ -291,15 +357,18 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
     eval_info: PartialEvalInfo
     gensym: Gensym
     where: int | None
+    fold_specials: bool
     site_idx: int
 
     def __init__(
-        self, func: FuncDef, eval_info: PartialEvalInfo, where: int | None = None
+        self, func: FuncDef, eval_info: PartialEvalInfo,
+        where: int | None = None, fold_specials: bool = False,
     ):
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
+        self.fold_specials = fold_specials
         # Counts *candidate* blocks (those the rewrite could rescale) in
         # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
@@ -327,10 +396,12 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
             # a known format shifts by a constant, so the factors fold away
             if _scale_of(ctx) == 0:
                 return None
+            specials = _defined_specials(ctx) if self.fold_specials else {}
             # a *finite* substitute for NaN or infinity is a value in the
             # format, so it would have to shift along with it; a non-finite
-            # one is the same at every scale
-            if any(
+            # one is the same at every scale.  Folding takes the specials out
+            # of the block, which leaves nothing for a substitute to do.
+            if not specials and any(
                 v is not None and not v.is_nar()
                 for v in (ctx.nan_value, ctx.inf_value)
             ):
@@ -338,9 +409,10 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
             scale = _scale_of(ctx)
             assert scale is not None
             return _Shift(
-                ctx=_rescale_expr(stmt.ctx, ctx, 0),
+                ctx=_rescale_expr(stmt.ctx, ctx, 0, drop_specials=bool(specials)),
                 up=lambda: _pow2(-scale, stmt.loc),
                 down=lambda: _pow2(scale, stmt.loc),
+                specials=specials,
             )
 
         if isinstance(stmt.ctx, Call):
@@ -442,22 +514,76 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
             ContextStmt(UnderscoreId(), real, StmtBlock([down]), loc),
         ]
 
+    def _fold_specials(
+        self, e: Round | Cast, target: NamedId, loc: Location | None,
+        shift: _Shift, rescaled: list[Stmt],
+    ) -> Stmt:
+        """
+        `rescaled`, behind branches assigning the folded special values.
+
+        Only the values the format defines get a branch; anything else falls
+        through to the rounding, which treats it exactly as it did before.
+        """
+        assert isinstance(e.arg, Var)
+        name = e.arg.name
+
+        def arg() -> Var:
+            return Var(name, loc)
+
+        def assign(v: Float) -> StmtBlock:
+            return StmtBlock([Assign(target, None, value_literal(v, loc), loc)])
+
+        rest: StmtBlock = StmtBlock(rescaled)
+        pos_inf, neg_inf = shift.specials.get('+inf'), shift.specials.get('-inf')
+        if pos_inf is not None and neg_inf is not None:
+            # an infinity keeps its sign, so which one it was still matters
+            body = StmtBlock([Assign(
+                target, None, sign_choice(pos_inf, neg_inf, arg(), loc), loc,
+            )])
+            rest = StmtBlock([IfStmt(IsInf(None, arg(), loc), body, rest, loc)])
+
+        nan_v = shift.specials.get('nan')
+        if nan_v is not None:
+            rest = StmtBlock([IfStmt(IsNan(None, arg(), loc), assign(nan_v), rest, loc)])
+
+        # the folded values are exact, and stay so whatever context encloses
+        # this statement; the rounding inside sets its own
+        return ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), rest, loc)
+
     def _rescale_block(self, stmt: ContextStmt, shift: _Shift) -> list[Stmt]:
         """The block, rescaled, after whatever its context expression needs."""
+        if shift.specials:
+            # each rounding gets branches of its own, since each has its own
+            # operand to test, so the block splits into one per rounding
+            folded: list[Stmt] = []
+            for s in stmt.body.stmts:
+                assert isinstance(s, (Assign, ReturnStmt))
+                assert isinstance(s.expr, (Round, Cast))
+                out = s.target if isinstance(s, Assign) else self.gensym.fresh('_t')
+                assert isinstance(out, NamedId)
+                one = ContextStmt(
+                    stmt.target, shift.ctx,
+                    StmtBlock(self._rescale_round(s.expr, out, s.loc, shift)),
+                    stmt.loc,
+                )
+                folded.append(self._fold_specials(s.expr, out, s.loc, shift, [one]))
+                if isinstance(s, ReturnStmt):
+                    folded.append(ReturnStmt(Var(out, s.loc), s.loc))
+            return [*shift.preamble, *folded]
+
         stmts: list[Stmt] = []
         for s in stmt.body.stmts:
-            assert isinstance(s.expr, (Round, Cast))
             if isinstance(s, Assign):
-                assert isinstance(s.target, NamedId)
+                assert isinstance(s.expr, (Round, Cast)) and isinstance(s.target, NamedId)
                 stmts.extend(self._rescale_round(s.expr, s.target, s.loc, shift))
             else:
                 # a returned round scales out into a temporary, then returns it
-                assert isinstance(s, ReturnStmt)
+                assert isinstance(s, ReturnStmt) and isinstance(s.expr, (Round, Cast))
                 out = self.gensym.fresh('_t')
                 stmts.extend(self._rescale_round(s.expr, out, s.loc, shift))
                 stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
 
-        block = ContextStmt(stmt.target, shift.ctx, StmtBlock(stmts), stmt.loc)
+        block: Stmt = ContextStmt(stmt.target, shift.ctx, StmtBlock(stmts), stmt.loc)
         return [*shift.preamble, block]
 
     def _visit_block(self, block: StmtBlock, ctx: None):
@@ -487,6 +613,7 @@ class RescaleFixed:
     def apply(
         func: FuncDef, *,
         where: int | None = None,
+        fold_specials: bool = False,
         eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
@@ -495,6 +622,12 @@ class RescaleFixed:
         `where` selects a single candidate block by index, in visit order
         (outermost-first); candidates are the blocks this pass could
         rescale.  If `None`, every candidate is rescaled.
+
+        With `fold_specials`, a rounding is preceded by branches assigning
+        what the format makes of NaN and the infinities, for whichever of
+        them it defines.  That takes them out of the rounding, which is what
+        lets a format that substitutes a finite value for them be rescaled
+        at all.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
@@ -504,4 +637,4 @@ class RescaleFixed:
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _RescaleFixedInstance(func, eval_info, where).apply()
+        return _RescaleFixedInstance(func, eval_info, where, fold_specials).apply()

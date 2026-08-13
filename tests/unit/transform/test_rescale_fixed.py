@@ -272,6 +272,86 @@ class TestContextVariants:
 
 
 # ----------------------------------------------------------------------
+# Folding the special values
+
+
+class TestFoldSpecials:
+    """``fold_specials`` takes NaN and the infinities out of the rounding,
+    where the format defines what they become."""
+
+    _SUBST = fp.FixedContext(
+        True, -16, 32, RoundingMode.RNE, OverflowMode.WRAP,
+        nan_value=fp.FixedContext(True, -16, 32).maxval(s=True),
+        inf_value=fp.FixedContext(True, -16, 32).maxval(s=True),
+    )
+
+    def test_substituting_format_is_rescalable(self):
+        """A finite substitute would have to shift with the format, so the
+        pass refuses it — unless the specials are folded out first."""
+        f = _quantizer(self._SUBST)
+        assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
+
+        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        assert not out.is_equiv(f.ast)
+        assert _fixed_scales(out) == [0]
+
+    @pytest.mark.parametrize('x', [
+        0.1, -3.25, 1000.0, 0.0, -0.0, float('nan'), float('inf'), float('-inf'),
+    ])
+    def test_preserves_results(self, x):
+        f = _quantizer(self._SUBST)
+        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        assert _same(_eval(out, f, x), f(x)), x
+
+    def test_undefined_specials_are_left_to_the_rounding(self):
+        """A plain fixed format defines none of them, so nothing is folded
+        and they keep raising exactly as before."""
+        f = _quantizer(fp.FixedContext(True, -16, 32))
+        plain = RescaleFixed.apply(f.ast)
+        folded = RescaleFixed.apply(f.ast, fold_specials=True)
+        assert folded.is_equiv(plain)
+
+        for x in (float('nan'), float('inf')):
+            with pytest.raises(ValueError):
+                f(x)
+            with pytest.raises(ValueError):
+                _eval(folded, f, x)
+
+    def test_off_by_default(self):
+        f = _quantizer(self._SUBST)
+        assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_folding_drops_nan_from_the_format(self):
+        """A NaN reaches a rounding only as its operand, and that case is
+        folded away, so the rescaled format has no need of NaN."""
+        src = fp.MPBFixedContext(
+            -17, fp.FixedContext(True, -16, 32).maxval().as_real(),
+            RoundingMode.RNE, OverflowMode.SATURATE,
+            enable_nan=True, enable_inf=True,
+        )
+        f = _quantizer(src)
+        out = RescaleFixed.apply(f.ast, fold_specials=True)
+
+        dst = next(
+            s.ctx.val for s in _blocks(out)
+            if isinstance(s.ctx, ForeignVal)
+            and isinstance(s.ctx.val, fp.MPBFixedContext)
+        )
+        assert not dst.enable_nan
+        # an overflow can still produce one, so infinity stays
+        assert dst.enable_inf
+        for x in (float('nan'), float('inf'), float('-inf'), 0.5, -1e9):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_zeros_are_not_folded(self):
+        """A zero survives the shift on its own, so it needs no branch."""
+        f = _quantizer(self._SUBST)
+        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        for x in (0.0, -0.0):
+            assert _same(_eval(out, f, x), f(x)), x
+
+
+# ----------------------------------------------------------------------
 # Selecting a single site
 
 

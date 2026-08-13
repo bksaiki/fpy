@@ -6,7 +6,9 @@ from ..function import Function
 from ..transform import RescaleFixed
 
 
-def rescale_fixed(func: Function, where: int | None = None) -> Function:
+def rescale_fixed(
+    func: Function, where: int | None = None, *, fold_specials: bool = False
+) -> Function:
     """
     Rescale fixed-point rounding in `func` to digit position zero.
 
@@ -38,6 +40,14 @@ def rescale_fixed(func: Function, where: int | None = None) -> Function:
         The index of the block to rescale, counting candidate blocks (those
         this rewrite could rescale) in visit order, outermost-first. If
         `None`, rescale every candidate.
+    fold_specials : bool
+        If `True`, precede each rounding with branches assigning what the
+        format makes of NaN and the infinities, for whichever of them it
+        defines. Fixed-point formats commonly leave them undefined, in which
+        case nothing is folded and the rounding rejects them as before. This
+        is what lets a format that substitutes a finite value for them be
+        rescaled at all, since such a substitute would otherwise have to
+        shift along with the format. Defaults to `False`.
 
     Returns
     -------
@@ -72,5 +82,5 @@ def rescale_fixed(func: Function, where: int | None = None) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = RescaleFixed.apply(func.ast, where=where)
+    ast = RescaleFixed.apply(func.ast, where=where, fold_specials=fold_specials)
     return func.with_ast(ast)

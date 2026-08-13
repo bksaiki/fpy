@@ -89,7 +89,6 @@ from ..ast.fpyast import (
     Expr,
     ForeignVal,
     FuncDef,
-    IfExpr,
     IfStmt,
     Integer,
     IsInf,
@@ -102,7 +101,6 @@ from ..ast.fpyast import (
     Rational,
     ReturnStmt,
     Round,
-    Signbit,
     Stmt,
     StmtBlock,
     Sub,
@@ -124,11 +122,14 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
+from .utils import number_literal, sign_choice, value_literal
 
 
 class _Policy(Enum):
     """What a float format does with a value too large to represent."""
 
+    UNBOUNDED = auto()
+    """the format has no bound, so nothing can overflow it"""
     INFINITE = auto()
     """overflow becomes an infinity, as IEEE 754 does"""
     SATURATING = auto()
@@ -143,14 +144,23 @@ class _Source:
 
     pmax: int
     """precision"""
-    emin: int
-    """smallest normal exponent: below it the format is fixed-point"""
-    expmin: int
-    """position of the format's finest grid"""
-    expmax: int
-    """position of the bound's last digit, above which the bound leaves the grid"""
-    maxval: RealFloat
-    """the bound"""
+    emin: int | None
+    """
+    smallest normal exponent: below it the format is fixed-point.
+
+    `None` for a format without subnormals, which then needs no branch for
+    them: every value rounds at a position taken from its own exponent.
+    """
+    expmin: int | None
+    """position of the format's finest grid, if it has one"""
+    expmax: int | None
+    """
+    position of the bound's last digit, above which the bound leaves the grid.
+
+    `None` for an unbounded format, whose position needs no upper clamp.
+    """
+    maxval: RealFloat | None
+    """the bound, if the format has one"""
     rm: RoundingMode
     """rounding mode"""
     policy: _Policy
@@ -159,39 +169,68 @@ class _Source:
     """what NaN, `+Inf`, `-Inf`, `+0`, and `-0` round to"""
 
 
+def _overflow_policy(ctx: Context, maxval: RealFloat) -> _Policy | None:
+    """
+    What `ctx` makes of a value past its bound, asked rather than deduced.
+
+    A format states its edge rule in its own terms — an overflow mode, a NaN
+    encoding, a substituted value — so the reliable question is what it
+    actually returns.  `None` means it lands somewhere a fixed-point round
+    cannot follow, such as wrapping.
+    """
+    past = RealFloat(exp=maxval.exp + 1, c=maxval.c)  # twice the bound
+    try:
+        pos, neg = ctx.round(past), ctx.round(RealFloat(s=True, x=past))
+    except ValueError:
+        return None
+
+    if pos.isinf and neg.isinf and not pos.s and neg.s:
+        return _Policy.INFINITE
+    if pos.isnan and neg.isnan:
+        return _Policy.NAN_ON_OVERFLOW
+    if not pos.is_nar() and not neg.is_nar():
+        # saturation keeps the bound and the sign
+        if pos.as_real() == maxval and neg.as_real() == RealFloat(s=True, x=maxval):
+            return _Policy.SATURATING
+    return None
+
+
 def _describe(ctx: Context) -> _Source | None:
     """
     `ctx` as a lowerable float format, or `None`.
 
     A format qualifies when the fixed-point round can reproduce it exactly:
-    its rounding must be deterministic, and its overflow must land somewhere
-    a fixed-point context can also land.
+    it must state a precision, its rounding must be deterministic, and its
+    overflow must land somewhere a fixed-point context can also land.
     """
     match ctx:
         # `IEEEContext` derives from `EFloatContext`, so it matches first
         case IEEEContext():
-            if not ctx.enable_inf:
-                return None
-            policy = _Policy.INFINITE
+            pass
         case EFloatContext():
             # a shifted exponent encoding is not accounted for below
-            if ctx.eoffset != 0 or ctx.enable_inf:
+            if ctx.eoffset != 0:
                 return None
-            match ctx.nan_kind:
-                case EFloatNanKind.NONE:
-                    policy = _Policy.SATURATING
-                case EFloatNanKind.MAX_VAL:
-                    policy = _Policy.NAN_ON_OVERFLOW
-                case _:
-                    return None
+        case MPBFloatContext() | MPSFloatContext() | MPFloatContext():
+            pass
         case _:
             return None
 
-    if ctx.overflow is not OverflowMode.OVERFLOW:
-        return None
     # stochastic rounding would have to draw its bits at the same position
     if ctx.num_randbits != 0:
         return None
+
+    # an unbounded format cannot overflow; a bounded one has to say where to
+    maxval: RealFloat | None = None
+    expmax: int | None = None
+    policy = _Policy.UNBOUNDED
+    if hasattr(ctx, 'maxval'):
+        maxval = ctx.maxval().as_real()
+        expmax = ctx.emax - ctx.pmax + 1
+        found = _overflow_policy(ctx, maxval)
+        if found is None:
+            return None
+        policy = found
 
     # `logb` is undefined on these, so each takes a branch of its own; since
     # they are constants, what the format makes of them is known right here
@@ -207,36 +246,12 @@ def _describe(ctx: Context) -> _Source | None:
         # a format that cannot represent one of them at all
         return None
 
+    # a format without subnormals states no `emin`: every value then rounds
+    # at a position read off its own exponent
     return _Source(
-        ctx.pmax, ctx.emin, ctx.expmin, ctx.emax - ctx.pmax + 1,
-        ctx.maxval().as_real(), ctx.rm, policy, specials,
+        ctx.pmax, getattr(ctx, 'emin', None), getattr(ctx, 'expmin', None),
+        expmax, maxval, ctx.rm, policy, specials,
     )
-
-
-def _number(x: RealFloat, loc: Location | None) -> Expr:
-    """`x` as an exact literal: every `RealFloat` is a dyadic rational."""
-    if x.is_integer():
-        return Integer(int(x), loc)
-    r = x.as_rational()
-    return Rational(None, r.numerator, r.denominator, loc)
-
-
-def _literal(v: Float, loc: Location | None) -> Expr:
-    """`v` as a literal, whatever kind of value it is."""
-    if v.is_zero() and v.s:
-        # a negative zero has no rational form
-        return Decnum('-0.0', loc)
-    if not v.is_nar():
-        return _number(v.as_real(), loc)
-    e: Expr = ConstNan(None, loc) if v.isnan else ConstInf(None, loc)
-    return Neg(e, loc) if v.s else e
-
-
-def _identical(a: Float, b: Float) -> bool:
-    """Whether two values are the same, sign and all."""
-    if a.is_nar():
-        return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
-    return not b.is_nar() and a.as_real() == b.as_real() and a.s == b.s
 
 
 def _attribute(alias: str, *names: str, loc: Location | None = None) -> Attribute:
@@ -282,7 +297,7 @@ def _ctx_call(
     return Call(
         _attribute(alias, 'MPBFixedContext', loc=loc),
         MPBFixedContext,
-        (nmin, _number(src.maxval, loc)),
+        (nmin, number_literal(src.maxval, loc)),
         tuple(kwargs),
         loc,
     )
@@ -414,19 +429,14 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
         nan_v, pos_inf, neg_inf, pos_zero, neg_zero = src.specials
 
         def by_sign(pos: Float, neg: Float) -> Expr:
-            """The result for `+x` or `-x`, chosen by the sign of the input."""
-            if _identical(pos, neg):
-                return _literal(pos, loc)
-            return IfExpr(
-                Signbit(None, arg(), loc), _literal(neg, loc), _literal(pos, loc), loc,
-            )
+            return sign_choice(pos, neg, arg(), loc)
 
         def assign(value: Expr) -> StmtBlock:
             return StmtBlock([Assign(target, None, value, loc)])
 
         chain = IfStmt(
             IsNan(None, arg(), loc),
-            assign(_literal(nan_v, loc)),
+            assign(value_literal(nan_v, loc)),
             StmtBlock([IfStmt(
                 IsInf(None, arg(), loc),
                 assign(by_sign(pos_inf, neg_inf)),
