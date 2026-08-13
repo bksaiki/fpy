@@ -18,11 +18,11 @@ def float_to_fixed(func: Function) -> Function:
     ``round_F(x) = round_A(inf, n, B)(x)``, where
     ``n = clamp(logb(x) - P + 1, EXP, EMAX - P + 1)``.
 
-    The rewrite computes that position under ``fp.INTEGER`` and turns the round
-    into an ``fp.round_at`` under a fixed-point context on the format's finest
-    grid.  The value is never scaled and the bound is the format's own.  NaN,
-    infinities, and zeros take their own branches, since ``logb`` is undefined
-    for them.
+    The rewrite computes that position under ``fp.REAL`` and rounds under a
+    fixed-point context built at it.  The value is never scaled and the bound
+    is the format's own.  Values below ``emin`` get their own branch, where the
+    format is fixed-point already and the context is a constant; NaN,
+    infinities, and zeros get another, since ``logb`` is undefined for them.
 
     Applies to an :class:`fpy2.IEEEContext` that overflows to infinity and
     rounds deterministically; other contexts are left unchanged.  Only blocks
@@ -59,15 +59,20 @@ def float_to_fixed(func: Function) -> Function:
             ctx=fp.REAL,
         )
         def quantize(x):
-            if fp.isnan(x):
-                y = fp.nan()
-            elif (fp.isinf(x) or x == 0):
-                y = x
+            if fp.isnan(x) or fp.isinf(x) or x == 0:
+                with fp.MPBFixedContext(-25, 65504, overflow=..., enable_nan=True, enable_inf=True):
+                    y = fp.round(x)
             else:
-                with fp.INTEGER:
-                    _n = (min(max((fp.logb(x) - 10), -24), 5) - 1)
-                with MPBFixedContext(nmin=-25, ...):
-                    y = fp.round_at(x, _n)
+                with fp.REAL:
+                    e = fp.logb(x)
+                if e < -14:
+                    with fp.MPBFixedContext(-25, 65504, overflow=..., enable_nan=True, enable_inf=True):
+                        y = fp.round(x)
+                else:
+                    with fp.REAL:
+                        exp = min((e - 10), 5)
+                    with fp.MPBFixedContext((exp - 1), 65504, overflow=..., enable_nan=True, enable_inf=True):
+                        y = fp.round(x)
             return y
     """
     if not isinstance(func, Function):

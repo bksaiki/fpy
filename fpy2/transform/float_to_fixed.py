@@ -29,9 +29,19 @@ that position.
            y = fp.round(x)
    else:
        with fp.REAL:
-           _e = min(max((fp.logb(x) - 10), -24), 5)
-       with fp.MPBFixedContext((_e - 1), 65504, overflow=..., enable_nan=True, enable_inf=True):
-           y = fp.round(x)
+           e = fp.logb(x)
+       if e < -14:
+           with fp.MPBFixedContext(-25, 65504, overflow=..., enable_nan=True, enable_inf=True):
+               y = fp.round(x)
+       else:
+           with fp.REAL:
+               exp = min((e - 10), 5)
+           with fp.MPBFixedContext((exp - 1), 65504, overflow=..., enable_nan=True, enable_inf=True):
+               y = fp.round(x)
+
+Below ``emin`` the format is fixed-point already: every value there rounds at
+``EXP``, so that branch's context is a constant and nothing in it depends on
+the exponent.  The normal branch needs no lower clamp because of it.
 
 The upper clamp is what keeps the context constructible *and* keeps the format
 shiftable afterwards: ``B`` lies on the grid at every position up to
@@ -220,20 +230,34 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
                 StmtBlock([Assign(target, None, Round(None, arg(), loc), loc)]), loc,
             )
 
-        # the format's grid at this magnitude, clamped below by the subnormal
-        # position and above by the position of the bound's last digit
-        pos = Min(None, [
-            Max(None, [
-                Sub(Logb(None, arg(), loc), Integer(src.pmax - 1, loc), loc),
-                Integer(src.expmin, loc),
-            ], loc),
-            Integer(src.emax - src.pmax + 1, loc),
-        ], loc)
+        # below `emin` the format is itself fixed-point: every value in that
+        # range rounds at the same position, so the context is a constant
+        finest = Integer(src.expmin - 1, loc)
 
-        n = self.gensym.fresh('e')
+        e_name = self.gensym.fresh('e')
         exponent = ContextStmt(
             UnderscoreId(), ForeignVal(REAL, loc),
-            StmtBlock([Assign(n, None, pos, loc)]), loc,
+            StmtBlock([Assign(e_name, None, Logb(None, arg(), loc), loc)]), loc,
+        )
+
+        # in the normal range the grid follows the magnitude, bounded above by
+        # the position of the bound's last digit; the subnormal branch already
+        # covers everything below, so no lower clamp is needed here
+        # named for the scale it holds, not for the context's `n` (which is
+        # one position below it)
+        pos_name = self.gensym.fresh('exp')
+        position = ContextStmt(
+            UnderscoreId(), ForeignVal(REAL, loc),
+            StmtBlock([Assign(pos_name, None, Min(None, [
+                Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc),
+                Integer(src.emax - src.pmax + 1, loc),
+            ], loc), loc)]), loc,
+        )
+        normal = IfStmt(
+            Compare([CompareOp.LT], [Var(e_name, loc), Integer(src.emin, loc)], loc),
+            StmtBlock([rounding(finest)]),
+            StmtBlock([position, rounding(Sub(Var(pos_name, loc), Integer(1, loc), loc))]),
+            loc,
         )
 
         # `logb` is undefined on the specials, so they round at the format's
@@ -244,8 +268,8 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
                 IsInf(None, arg(), loc),
                 Compare([CompareOp.EQ], [arg(), Integer(0, loc)], loc),
             ], loc),
-            StmtBlock([rounding(Integer(src.expmin - 1, loc))]),
-            StmtBlock([exponent, rounding(Sub(Var(n, loc), Integer(1, loc), loc))]),
+            StmtBlock([rounding(finest)]),
+            StmtBlock([exponent, normal]),
             loc,
         )
 

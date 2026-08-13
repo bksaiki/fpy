@@ -126,9 +126,21 @@ class TestLowering:
         ctxs = _block_ctxs(out)
         assert REAL in ctxs
         assert not any(isinstance(c, fp.IEEEContext) for c in ctxs)
-        # one context per branch: the specials' static one, and the computed one
-        assert len(_ctx_calls(out, MPBFixedContext)) == 2
+        # one context per branch: specials, subnormal, and normal
+        assert len(_ctx_calls(out, MPBFixedContext)) == 3
         assert _has_node(out, Round)
+
+    def test_subnormal_branch_is_static(self):
+        """Below `emin` the format is fixed-point already, so that branch's
+        context is a constant — nothing there depends on the exponent."""
+        f = _quantizer(fp.FP16)
+        out = FloatToFixed.apply(f.ast)
+
+        calls = _ctx_calls(out, MPBFixedContext)
+        static = [c for c in calls if isinstance(c.args[0], Integer)]
+        # the specials and the subnormals both round at the finest grid
+        assert len(static) == 2
+        assert all(c.args[0].val == fp.FP16.expmin - 1 for c in static)
 
     def test_specials_round_at_the_finest_grid(self):
         """The specials' context is static, so its format is what inference
