@@ -20,8 +20,8 @@ Types
 -----
 
 The scalar types mirror the three scalar value kinds — booleans, real numbers,
-and rounding contexts — and are joined by list, tuple, reference, and function
-types.
+and rounding contexts — and are joined by list, tuple, and reference types, one
+per value kind.
 
 .. math::
 
@@ -29,12 +29,17 @@ types.
        \mid \texttt{list}\ T
        \mid T_1 \times \cdots \times T_n
        \mid \texttt{ref}\ T
-       \mid T_1 \rightarrow T_2
 
-The real rounding context :math:`\R` has type :math:`\texttt{context}`.
-Function symbols are assigned a function type :math:`T_1 \rightarrow T_2`.
-A reference to a :math:`T` has type :math:`\texttt{ref}\ T`; since a reference
-is both read and written at that one type, :math:`\texttt{ref}` is invariant.
+Both context constants have type :math:`\texttt{context}`. A reference to a
+:math:`T` has type :math:`\texttt{ref}\ T`; since a reference is both read and
+written at that one type, :math:`\texttt{ref}` is invariant.
+
+There is no function type. Functions are not values (see :doc:`semantics`), so
+they are typed by a *signature* :math:`T_1 \rightarrow T_2` assigned by a
+top-level environment :math:`\Phi`, mirroring the :math:`\Phi` that assigns each
+function name its definition. A signature is not a :math:`T`—no type contains an
+arrow, so a function can be neither stored nor passed. Like :math:`\Gamma`,
+:math:`\Phi` is fixed, and only **T-App** consults it.
 
 Typing
 ------
@@ -77,6 +82,11 @@ assigns it.
 
 .. math::
 
+   \frac{}{\Gamma \vdash \texttt{ctx}\ \{ \ldots \} : \texttt{context}}
+   \tag{T-Ctx}
+
+.. math::
+
    \frac{x : T \in \Gamma}{\Gamma \vdash x : T}
    \tag{T-Var}
 
@@ -101,13 +111,8 @@ records each component.
         {\Gamma \vdash (\, e_1, \ldots, e_n \,) : T_1 \times \cdots \times T_n}
    \tag{T-Tuple}
 
-Allocating a reference wraps its operand's type; dereferencing unwraps it.
-
-.. math::
-
-   \frac{\Gamma \vdash e : T}
-        {\Gamma \vdash \texttt{ref}\ e : \texttt{ref}\ T}
-   \tag{T-Ref}
+Dereferencing unwraps a reference type; allocating the reference is a statement
+(see **T-Ref**).
 
 .. math::
 
@@ -130,12 +135,6 @@ reals to a real, and comparison maps reals to a boolean.
         {\Gamma \vdash e_1 < e_2 : \texttt{bool}}
    \tag{T-Lt}
 
-.. math::
-
-   \frac{\Gamma \vdash f : T_1 \rightarrow T_2 \quad \Gamma \vdash e : T_1}
-        {\Gamma \vdash f\ e : T_2}
-   \tag{T-App}
-
 Statements
 ^^^^^^^^^^
 
@@ -152,6 +151,15 @@ inferred type — a pattern needs no rules of its own: it is typed by the
         {\Gamma \vdash p = e\ \texttt{ok}}
    \tag{T-Assign}
 
+An allocation wraps its operand's type: the variable it binds refers to what the
+right-hand side produced.
+
+.. math::
+
+   \frac{\Gamma \vdash e : T \quad \Gamma \vdash x : \texttt{ref}\ T}
+        {\Gamma \vdash x = \texttt{ref}\ e\ \texttt{ok}}
+   \tag{T-Ref}
+
 An update writes at the type its target refers to, so the two sides agree only
 up to the :math:`\texttt{ref}`.
 
@@ -160,6 +168,17 @@ up to the :math:`\texttt{ref}`.
    \frac{\Gamma \vdash x : \texttt{ref}\ T \quad \Gamma \vdash e : T}
         {\Gamma \vdash x := e\ \texttt{ok}}
    \tag{T-Update}
+
+An application checks the argument against the callee's signature and binds its
+result at the signature's result type.
+
+.. math::
+
+   \frac{\Phi(f) = T_1 \rightarrow T_2 \quad
+         \Gamma \vdash e : T_1 \quad
+         \Gamma \vdash x : T_2}
+        {\Gamma \vdash x = f\ e\ \texttt{ok}}
+   \tag{T-App}
 
 .. math::
 
