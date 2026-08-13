@@ -1,0 +1,301 @@
+"""
+Unit tests for the :class:`fpy2.transform.FloatToFixed` transform.
+
+Float rounding is fixed-point rounding once the digit position is known, so
+the tests assert:
+
+1. **Structural shape**: the float context is gone, replaced by fixed-point
+   blocks whose context is built at the computed position.
+2. **Negative checks**: contexts and bodies the rewrite must not touch compare
+   via ``is_equiv`` against the original AST.
+3. **Semantic equivalence** via the interpreter, bit-exactly, across formats,
+   rounding modes, and every value class — specials, subnormals, the boundary
+   where rounding overflows, and beyond it.
+"""
+
+import fpy2 as fp
+import pytest
+
+from fpy2.analysis import PartialEval
+from fpy2.ast.fpyast import Call, ContextStmt, FuncDef, Integer, Round
+from fpy2.ast.visitor import DefaultVisitor
+from fpy2.number import REAL, MPBFixedContext
+from fpy2.transform import FloatToFixed
+
+
+# ----------------------------------------------------------------------
+# Helpers
+
+
+def _blocks(ast: FuncDef) -> list[ContextStmt]:
+    """Every ``ContextStmt`` in *ast*, outermost first."""
+    found: list[ContextStmt] = []
+
+    class _C(DefaultVisitor):
+        def _visit_context(self, stmt: ContextStmt, ctx):
+            found.append(stmt)
+            super()._visit_context(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
+
+
+def _block_ctxs(ast: FuncDef) -> list:
+    """The value of every statically-known block context in *ast*.
+
+    A context built per value (the normal branch's) has no static value, so
+    it does not appear here; :func:`_ctx_calls` covers those."""
+    eval_info = PartialEval.apply(ast)
+    return [
+        v for s in _blocks(ast)
+        if (v := eval_info.by_expr.get(s.ctx)) is not None
+    ]
+
+
+def _ctx_calls(ast: FuncDef, ctx_type: type) -> list[Call]:
+    """Every block context in *ast* written as a call to *ctx_type*."""
+    return [
+        s.ctx for s in _blocks(ast)
+        if isinstance(s.ctx, Call) and s.ctx.fn is ctx_type
+    ]
+
+
+def _has_node(ast: FuncDef, node_type) -> bool:
+    found = [False]
+
+    class _C(DefaultVisitor):
+        def _visit_expr(self, e, ctx):
+            if isinstance(e, node_type):
+                found[0] = True
+            super()._visit_expr(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return found[0]
+
+
+def _eval(ast: FuncDef, fn: fp.Function, *args):
+    return fn.with_ast(ast)(*args)
+
+
+def _same(a, b) -> bool:
+    """Bit-exact comparison that also matches NaN to NaN."""
+    if a.isnan or b.isnan:
+        return a.isnan and b.isnan
+    if a.isinf or b.isinf:
+        return a.isinf and b.isinf and a.s == b.s
+    return a.as_rational() == b.as_rational() and a.s == b.s
+
+
+def _quantizer(ctx) -> fp.Function:
+    @fp.fpy(ctx=fp.REAL)
+    def q(x):
+        with ctx:
+            y = fp.round(x)
+        return y
+    return q
+
+
+def _samples(ctx: fp.IEEEContext) -> list[float]:
+    """Values covering every class the lowering has to get right."""
+    B = float(ctx.maxval())
+    return [
+        0.0, -0.0, float('inf'), float('-inf'), float('nan'),
+        1.0, -1.0, B, -B, B * 1.001, B * 2, -B * 2,          # bound and past it
+        2.0 ** ctx.emin, -2.0 ** ctx.emin,                    # smallest normal
+        2.0 ** ctx.expmin, 3 * 2.0 ** (ctx.expmin - 1),       # subnormal grid
+        2.0 ** (ctx.expmin - 1), -2.0 ** (ctx.expmin - 1),    # below it: rounds to zero
+    ]
+
+
+# ----------------------------------------------------------------------
+# The rewrite
+
+
+class TestLowering:
+
+    def test_shape(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        out = FloatToFixed.apply(f.ast)
+        # the float context is gone; the position is computed exactly and the
+        # rounding happens under fixed-point contexts
+        ctxs = _block_ctxs(out)
+        assert REAL in ctxs
+        assert not any(isinstance(c, fp.IEEEContext) for c in ctxs)
+        # one context per branch: the specials' static one, and the computed one
+        assert len(_ctx_calls(out, MPBFixedContext)) == 2
+        assert _has_node(out, Round)
+
+    def test_specials_round_at_the_finest_grid(self):
+        """The specials' context is static, so its format is what inference
+        sees for that branch."""
+        src = fp.IEEEContext(5, 16, fp.RoundingMode.RTZ)
+
+        f = _quantizer(src)
+        out = FloatToFixed.apply(f.ast)
+        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+
+        assert target.nmin == src.expmin - 1          # the format's finest grid
+        assert target.pos_maxval == src.maxval().as_real()
+        assert target.rm is src.rm
+        assert target.enable_inf                      # overflow has to land somewhere
+        assert target.enable_nan                      # a NaN rounds into it too
+
+    def test_computed_context_carries_the_bound(self):
+        """The normal branch builds its context per value; only the position
+        varies, and the bound stays the format's own."""
+        f = _quantizer(fp.FP16)
+        out = FloatToFixed.apply(f.ast)
+
+        calls = _ctx_calls(out, MPBFixedContext)
+        computed = [c for c in calls if not isinstance(c.args[0], Integer)]
+        assert len(computed) == 1
+        assert computed[0].args[1].val == 65504       # maxval, written exactly
+
+    def test_returned_round(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                return fp.round(x)
+
+        out = FloatToFixed.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _block_ctxs(out))
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_several_rounds_in_one_block(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP16:
+                aq = fp.round(a)
+                bq = fp.round(b)
+            with fp.FP64:
+                s = aq + bq
+            return s
+
+        out = FloatToFixed.apply(f.ast)
+        assert not any(c is fp.FP16 for c in _block_ctxs(out))
+        assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
+
+    def test_inside_a_loop(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(A):
+            acc = 0
+            for a in A:
+                with fp.FP16:
+                    aq = fp.round(a)
+                with fp.FP64:
+                    acc += aq
+            return acc
+
+        out = FloatToFixed.apply(f.ast)
+        A = [0.1, 0.25, -3.5, 1e-6, 7.0, 70000.0]
+        assert _same(_eval(out, f, A), f(A))
+
+
+# ----------------------------------------------------------------------
+# Blocks the rewrite must leave alone
+
+
+class TestUnchanged:
+
+    def test_non_ieee_context(self):
+        """MX formats have no infinity, so overflow lands elsewhere."""
+        f = _quantizer(fp.MX_E4M3)
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_fixed_point_context(self):
+        f = _quantizer(fp.FixedContext(True, -16, 32))
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_stochastic_context(self):
+        """Stochastic rounding would have to draw its bits at the same position."""
+        f = _quantizer(fp.IEEEContext(5, 16, fp.RoundingMode.RNE, num_randbits=2))
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_saturating_context(self):
+        """Overflow yields the bound, not an infinity."""
+        f = _quantizer(fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE))
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_cast_body(self):
+        """``cast`` asserts exactness, which the lowering would not preserve."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y = fp.cast(x)
+            return y
+
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_arithmetic_body(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP16:
+                p = a * b
+            return p
+
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_round_of_an_expression(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP16:
+                y = fp.round(a + b)
+            return y
+
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_bound_context(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16 as c:
+                y = fp.round(x)
+            return y
+
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+
+# ----------------------------------------------------------------------
+# Semantic equivalence
+
+
+class TestEquivalence:
+    """The lowering must be bit-exact: it is the same rounding, expressed
+    against a different format."""
+
+    @pytest.mark.parametrize('ctx', [
+        fp.FP16, fp.FP32, fp.FP64, fp.IEEEContext(4, 8), fp.IEEEContext(8, 32),
+    ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8', 'ieee_8_32'])
+    def test_formats(self, ctx):
+        f = _quantizer(ctx)
+        out = FloatToFixed.apply(f.ast)
+        for x in _samples(ctx):
+            assert _same(_eval(out, f, x), f(x)), (ctx, x)
+
+    @pytest.mark.parametrize('rm', [
+        fp.RoundingMode.RNE, fp.RoundingMode.RNA, fp.RoundingMode.RTZ,
+        fp.RoundingMode.RTP, fp.RoundingMode.RTN, fp.RoundingMode.RAZ,
+    ])
+    def test_rounding_modes(self, rm):
+        ctx = fp.IEEEContext(5, 16, rm)
+        f = _quantizer(ctx)
+        out = FloatToFixed.apply(f.ast)
+        # values that land between grid points, where the mode decides
+        xs = _samples(ctx) + [0.1, -0.1, 65519.0, 65519.996, -65519.996, 1.0009765625]
+        for x in xs:
+            assert _same(_eval(out, f, x), f(x)), (rm, x)
+
+    def test_overflow_boundary(self):
+        """Rounding at the top of the range decides between maxval and
+        infinity; the fixed target must make the same call."""
+        f = _quantizer(fp.FP16)
+        out = FloatToFixed.apply(f.ast)
+        for x in (65504.0, 65515.0, 65519.0, 65519.996, 65520.0, 65536.0, 1e5, 1e10):
+            for sx in (x, -x):
+                assert _same(_eval(out, f, sx), f(sx)), sx

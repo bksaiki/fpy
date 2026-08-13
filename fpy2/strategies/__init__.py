@@ -3,6 +3,7 @@ Scheduling language constructs for FPy programs.
 """
 
 from .context_lift import lift_context
+from .float_to_fixed import float_to_fixed
 from .free_var import close
 from .func_inline import inline
 from .iter_elim import elim_iter
@@ -18,6 +19,7 @@ __all__ = [
     'close',
     'elim_iter',
     'elim_round',
+    'float_to_fixed',
     'fuse',
     'inline',
     'lift_context',

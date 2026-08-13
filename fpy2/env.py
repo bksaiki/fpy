@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
-from types import CellType
+from types import CellType, ModuleType
 from typing import Any
 
 
@@ -87,3 +87,21 @@ class ForeignEnv:
             builtins.update({k: v for k, v in other.builtins.items() if k in keys})
 
         return ForeignEnv(globals, nonlocals, builtins)
+
+
+def fpy_alias(env: ForeignEnv | None) -> str | None:
+    """
+    Name that the `fpy2` package is bound to in `env`, if any.
+
+    `env` iterates in nondeterministic (set-union) order, so pick the
+    lexicographically smallest match to keep the result stable when
+    `fpy2` is bound under more than one name.
+    """
+    if env is None:
+        return None
+    aliases = [
+        name for name in env
+        if isinstance(env.get(name), ModuleType)
+        and getattr(env.get(name), '__name__', None) == 'fpy2'
+    ]
+    return min(aliases, default=None)
