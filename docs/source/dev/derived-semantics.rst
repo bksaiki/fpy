@@ -9,15 +9,40 @@ explains every other *evaluable* node in :mod:`fpy2.ast.fpyast`, each either
 syntax that has no FPy spelling of its own, as lists do (see *Lists*).
 
 The two rules leaned on most are **E-Add**
-(:math:`\langle \sigma, \mu, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2}) \,;\, \mu_2`—round
+(:math:`\langle \sigma, \mu, C, e_1 + e_2 \rangle \Downarrow C(\exact{n_1 + n_2})`—round
 the exact result under the active context :math:`C`) and **E-Lt**
-(:math:`\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2) \,;\, \mu_2`—an exact
+(:math:`\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)`—an exact
 boolean, no rounding). The store :math:`\mu` is elided in the entries below:
-every node threads it, list construction allocates a reference per element, and
-``IndexedAssign`` is the only node that writes through one. Several operations move
+expressions only read it, list construction allocates a reference per element,
+and ``IndexedAssign`` is the only node that writes through one. Several operations move
 values without inspecting them, so they are *polymorphic*: ``Any`` in the
 programs below is any element type, not just ``fp.Real``. Type annotations,
 abstract base classes, and re-exports carry no runtime behaviour and are omitted.
+
+Flattening
+----------
+
+Core expressions are pure, so the two constructs that write the store—allocation
+and calls—are statements there (**E-Ref**, **E-App**). A surface expression that
+uses either is *flattened*: each is lifted into a statement binding a fresh
+temporary, innermost first and left to right, leaving a pure expression behind.
+So ``z = f(g(x) + 1)`` elaborates to
+
+.. math::
+
+   t = g\ x \,\texttt{;}\, z = f\ (t + 1)
+
+Lifting is safe in that order because only the lifted constructs write the
+store, so their relative order is all that matters; what remains reads the store
+but cannot write it, and the core leaves its evaluation order unobservable.
+
+Lifting has two exceptions. A call under ``and``, ``or``, or
+``a if c else b`` must not be hoisted out, since it runs only when the guard
+selects it—those nodes desugar to conditionals first (see *Logical operators*
+and *Miscellaneous*), and flattening then applies inside each branch. And a
+context expression is not flattened at all: **E-Context** evaluates it under
+:math:`\R`, so a lifted call would run under the wrong context (see
+``ContextStmt``).
 
 Literals and values
 -------------------
@@ -196,7 +221,8 @@ Logical operators
 
 * ``Not`` — boolean negation, like **E-Lt**.
 * ``And`` / ``Or`` — short-circuiting; each is a conditional
-  (**E-If-True** / **E-If-False** as a value)::
+  (**E-If-True** / **E-If-False** as a value), and so a barrier to lifting (see
+  *Flattening*)::
 
     @fp.fpy
     def and_(a: bool, b: bool) -> bool:
@@ -254,12 +280,14 @@ by a tuple pattern.
 Lists
 -----
 
-Every FPy list is a list of *references* in the core semantics.
-The list expression ``[e_1, ..., e_m]`` elaborates to
+Every FPy list is a list of *references* in the core semantics. Allocation is a
+statement, so the list expression ``[e_1, ..., e_m]`` flattens to one allocation
+per element and a list of the temporaries:
 
 .. math::
 
-   [\, \texttt{ref}\ e_1, \ldots, \texttt{ref}\ e_m \,]
+   t_1 = \texttt{ref}\ e_1 \,\texttt{;}\, \ldots \,\texttt{;}\,
+   t_m = \texttt{ref}\ e_m \,\texttt{;}\, [\, t_1, \ldots, t_m \,]
 
 whose value is a list of locations :math:`[\, \ell_1, \ldots, \ell_m \,]`—one
 cell per element. Three consequences:
@@ -275,9 +303,10 @@ cell per element. Three consequences:
 
 The nodes that build and read them:
 
-* ``ListExpr`` — **E-List** over an **E-Ref** per element; ``ListRef``
-  (``xs[i]``) — **E-Index** then **E-Deref**, since it only ever appears in value
-  position. An assignment target is ``IndexedAssign``, not a ``ListRef``.
+* ``ListExpr`` — an **E-Ref** per element, then **E-List** over the temporaries;
+  ``ListRef`` (``xs[i]``) — **E-Index** then **E-Deref**, since it only ever
+  appears in value position and both are pure. An assignment target is
+  ``IndexedAssign``, not a ``ListRef``.
 * ``ListSlice`` — ``xs[start:stop]`` extracts exactly ``stop - start``
   elements::
 
@@ -321,7 +350,8 @@ The nodes that build and read them:
     def enumerate(xs: list[Any]) -> list[tuple[fp.Real, Any]]:
         return [(i, xs[i]) for i in range(len(xs))]
 
-* ``Empty`` — ``fp.empty(d1, …, dn)`` allocates an uninitialized ``n``-d list.
+* ``Empty`` — ``fp.empty(d1, …, dn)`` allocates an uninitialized ``n``-d list;
+  it writes the store, so it is lifted like any call.
 * ``Len`` / ``Size`` / ``Dim`` — ``len(xs)``, ``fp.size(xs, k)``, ``fp.dim(xs)``:
   exact integer counts, no rounding.
 * ``Range1`` / ``Range2`` / ``Range3`` — ``range(…)`` materialized to a list of
@@ -331,7 +361,7 @@ Miscellaneous
 -------------
 
 * ``IfExpr`` — ``a if c else b``, the expression form of the conditional (only
-  the selected branch runs)::
+  the selected branch runs), and so a barrier to lifting (see *Flattening*)::
 
     @fp.fpy
     def if_expr(c: bool, a: Any, b: Any) -> Any:
@@ -342,11 +372,20 @@ Miscellaneous
         return r
 
 * ``Attribute`` — ``e.name`` reads an attribute of a foreign value (no
-  rounding).
-* ``Call`` — **E-App**, generalized to many arguments and foreign callables; the
-  body runs under the callee's declared context if any, else the caller's
-  :math:`C`. An argument passes its structure of cells, and **E-App** does not
-  capture the store, so a callee's write to an element is visible to its caller.
+  rounding). A ``FuncSymbol`` in operator position is a ``Var`` or an
+  ``Attribute``, which is why the core's operator is a name rather than an
+  expression.
+* ``Call`` — **E-App**, generalized to many arguments and foreign callables, so
+  :math:`\Phi` maps a name to a parameter *list* and a body. Being a statement,
+  a call in expression position is lifted (see *Flattening*), and its result
+  binds to a variable. The body runs under the callee's declared context if any,
+  else the caller's :math:`C`. Two things the core's rule pins down: the callee's
+  environment binds only the parameters, so a name the body takes from its
+  defining Python scope is a *free variable*, resolved against the environment
+  captured when the function was decorated rather than against the caller's
+  :math:`\sigma`; and **E-App** does not capture the store, so an argument passes
+  its structure of cells and a callee's write to an element is visible to its
+  caller.
 
 Statements
 ----------
@@ -374,7 +413,13 @@ Statements
             i = i + 1
         return acc
 
-* ``ContextStmt`` — **E-Context**.
+* ``ContextStmt`` — **E-Context**. Its context expression is *not* flattened, so
+  a context constructor such as ``fp.IEEEContext(8, 32)`` elaborates to a
+  :math:`\texttt{ctx}\ \{ \ldots \}` constant rather than to a lifted call. A
+  constructor whose parameters are computed at run time has no such constant and
+  does need a lifted call, which then evaluates under the ambient :math:`C`
+  instead of :math:`\R`. Since those arguments are integers, that matters only
+  where :math:`C` cannot represent them exactly.
 * ``AssertStmt`` — **E-Assert** (the optional message is used only on failure).
 * ``EffectStmt`` — evaluate an expression and discard the result (``_ = e``).
 * ``ReturnStmt`` — **E-Ret**; ``PassStmt`` — **E-Skip**.

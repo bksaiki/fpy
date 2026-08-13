@@ -59,10 +59,10 @@ is left unspecified (see *Values*).
        & \text{assignment} \\
      & \mid & x = \texttt{ref}\ e
        & \text{allocation} \\
-     & \mid & x := e
-       & \text{update} \\
      & \mid & x = f\ e
        & \text{function application} \\
+     & \mid & x := e
+       & \text{update} \\
      & \mid & s_1\, \texttt{;}\, s_2
        & \text{sequencing} \\
      & \mid & \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2
