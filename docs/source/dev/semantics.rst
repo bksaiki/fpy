@@ -61,7 +61,7 @@ is left unspecified—the semantics uses only its rounding operation.
        & \text{allocation} \\
      & \mid & x := e
        & \text{update} \\
-     & \mid & p = f\ e
+     & \mid & x = f\ e
        & \text{function application} \\
      & \mid & s_1\, \texttt{;}\, s_2
        & \text{sequencing} \\
@@ -84,9 +84,8 @@ is left unspecified—the semantics uses only its rounding operation.
 An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position; this is the only way to take a tuple apart, since tuples
-cannot be indexed. An allocation's left-hand side must be a variable, as must an
-update's; an application binds its result like an assignment, since a function
-may return a tuple.
+cannot be indexed. Only assignment takes a pattern: allocation, update, and
+application each take a variable.
 
 ``+`` and ``<`` stand in for arithmetic and comparison in general; every other
 FPy operator evaluates the same way, though comparison and classification
@@ -282,9 +281,9 @@ boolean; unlike arithmetic, the result is exact and no rounding is applied.
 Statements
 ^^^^^^^^^^
 
-Every statement evaluates to an outcome. Assignment, update, skip, and a
-passing assertion complete normally (:math:`\mathsf{normal}`) and
-:math:`\texttt{ret}` returns
+Every statement evaluates to an outcome. Assignment, allocation, update,
+application, skip, and a passing assertion complete normally
+(:math:`\mathsf{normal}`) and :math:`\texttt{ret}` returns
 (:math:`\mathsf{return}`); sequencing, conditionals, and the context statement
 pass along the outcome of whatever sub-statement they run, so a
 :math:`\mathsf{return}` propagates out to the enclosing function.
@@ -318,12 +317,25 @@ name for the same cell.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v
          \quad
          p \triangleright v \Rightarrow \theta}
         {\langle \sigma, \mu, C, p = e \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma[\theta] \,;\, \mu_1}
+         \mathsf{normal}\ \sigma[\theta] \,;\, \mu}
    \tag{E-Assign}
+
+An allocation statement creates a mutable cell: it picks a location not already
+in use, stores :math:`e`'s value there, and binds :math:`x` to the location
+itself, not to the value.
+
+.. math::
+
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v
+         \quad
+         \ell \notin \mathrm{dom}(\mu)}
+        {\langle \sigma, \mu, C, x = \texttt{ref}\ e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma[x \mapsto \ell] \,;\, \mu[\ell \mapsto v]}
+   \tag{E-Ref}
 
 An update statement replaces the value contained by a reference.
 The environment is unchanged—an update mutates the store and only the store,
@@ -333,12 +345,33 @@ which is why every other name for that location observes the write.
 
    \frac{\sigma(x) = \ell
          \quad
-         \langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
+         \langle \sigma, \mu, C, e \rangle \Downarrow v
          \quad
-         \ell \in \mathrm{dom}(\mu_1)}
+         \ell \in \mathrm{dom}(\mu)}
         {\langle \sigma, \mu, C, x := e \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma \,;\, \mu_1[\ell \mapsto v]}
+         \mathsf{normal}\ \sigma \,;\, \mu[\ell \mapsto v]}
    \tag{E-Update}
+
+A function application looks its callee up in :math:`\Phi`, evaluates the
+argument, and runs the body to the value it returns, binding that value to
+:math:`y`. The body runs in a fresh environment that binds only the parameter,
+so it can never see its caller's variables. It does run under the caller's
+context :math:`C`, and a well-formed body always returns, so its outcome is
+:math:`\mathsf{return}\ v'`. The store is *not* fresh: the body runs in the
+caller's store and its writes outlive the call, which is how a callee mutates a
+reference its caller holds.
+
+.. math::
+
+   \frac{\Phi(f) = (x, s)
+         \quad
+         \langle \sigma, \mu, C, e \rangle \Downarrow v
+         \quad
+         \langle [\, x \mapsto v \,], \mu, C, s \rangle \Downarrow_S
+         \mathsf{return}\ v' \,;\, \mu_1}
+        {\langle \sigma, \mu, C, y = f\ e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma[y \mapsto v'] \,;\, \mu_1}
+   \tag{E-App}
 
 The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
 returns it.
@@ -351,9 +384,9 @@ returns it.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v}
         {\langle \sigma, \mu, C, \texttt{ret}\ e \rangle \Downarrow_S
-         \mathsf{return}\ v \,;\, \mu_1}
+         \mathsf{return}\ v \,;\, \mu}
    \tag{E-Ret}
 
 An assertion evaluates its test; if it holds, evaluation continues with the
@@ -362,9 +395,9 @@ rule—evaluation is simply stuck, as it is wherever no rule applies.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true} \,;\, \mu_1}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true}}
         {\langle \sigma, \mu, C, \texttt{assert}\ e \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma \,;\, \mu_1}
+         \mathsf{normal}\ \sigma \,;\, \mu}
    \tag{E-Assert}
 
 Sequencing runs :math:`s_1` first.
@@ -396,20 +429,20 @@ touches the store.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true} \,;\, \mu_1
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true}
          \quad
-         \langle \sigma, \mu_1, C, s_1 \rangle \Downarrow_S o \,;\, \mu_2}
+         \langle \sigma, \mu, C, s_1 \rangle \Downarrow_S o \,;\, \mu_1}
         {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
-         \Downarrow_S o \,;\, \mu_2}
+         \Downarrow_S o \,;\, \mu_1}
    \tag{E-If-True}
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{false} \,;\, \mu_1
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{false}
          \quad
-         \langle \sigma, \mu_1, C, s_2 \rangle \Downarrow_S o \,;\, \mu_2}
+         \langle \sigma, \mu, C, s_2 \rangle \Downarrow_S o \,;\, \mu_1}
         {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
-         \Downarrow_S o \,;\, \mu_2}
+         \Downarrow_S o \,;\, \mu_1}
    \tag{E-If-False}
 
 The context statement is the heart of FPy. The context expression :math:`e` is
@@ -423,9 +456,9 @@ The context is scoped; the store is not.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, \R, e \rangle \Downarrow C' \,;\, \mu_1
+   \frac{\langle \sigma, \mu, \R, e \rangle \Downarrow C'
          \quad
-         \langle \sigma[x \mapsto C'], \mu_1, C', s \rangle \Downarrow_S o \,;\, \mu_2}
+         \langle \sigma[x \mapsto C'], \mu, C', s \rangle \Downarrow_S o \,;\, \mu_1}
         {\langle \sigma, \mu, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle
-         \Downarrow_S o \,;\, \mu_2}
+         \Downarrow_S o \,;\, \mu_1}
    \tag{E-Context}
