@@ -27,10 +27,10 @@ over a separate set of function names :math:`\mathit{FuncName}`, since a
 function is not a value and is never bound in the environment (see :math:`\Phi`
 under *Evaluation*).
 
-There are two context literals. :math:`\R` is the *real rounding context*,
+There are two context constants. :math:`\R` is the *real rounding context*,
 whose rounding operation is the identity, so no rounding occurs;
 :math:`\texttt{ctx}\ \{ \ldots \}` is an arbitrary one. What a context contains
-is left unspecified—the semantics uses only its rounding operation.
+is left unspecified (see *Values*).
 
 .. math::
 
@@ -102,13 +102,16 @@ functions never need to be values.
 
 .. math::
 
-   v ::= \texttt{true} \mid \texttt{false} \mid n \mid C
-       \mid [\, v_1, \ldots, v_m \,] \mid (\, v_1, \ldots, v_m \,)
-       \mid \ell
+   \begin{array}{rcl}
+   v & ::= & \texttt{true} \mid \texttt{false} \mid n \mid C
+       \mid [\, v_1, \ldots, v_m \,] \mid (\, v_1, \ldots, v_m \,) \mid \ell \\
+   C & ::= & \R \mid \texttt{ctx}\ \{ \ldots \}
+   \end{array}
 
-A rounding context :math:`C` is opaque. The semantics uses only its rounding
-operation, written :math:`C(\cdot)`, and never inspects its contents: the two
-context literals evaluate to a context and nothing else is said about one.
+A rounding context :math:`C` is one of the two context constants: like a
+numerical constant, each is a value in its own right and evaluates to itself
+(**E-Real**, **E-Ctx**). A context is opaque: the semantics uses only its
+rounding operation, written :math:`C(\cdot)`, and never inspects its contents.
 Full FPy provides constructors for the common rounding contexts, all of which
 the core abstracts as :math:`\texttt{ctx}\ \{ \ldots \}`.
 
@@ -169,15 +172,18 @@ threaded through every expression and rounds the exact result of each
 arithmetic operation (see **E-Add**).
 
 The store is threaded through the premises of each statement rule—only
-statements write it, and only allocation and update do. It is the only thing
-that mutates, and it only grows: :math:`\sigma` changes only by binding, while
-:math:`\mu` is global, shared by caller and callee, and never deallocates.
+statements write it, and only allocation and update do. A prime names what a
+premise leaves behind, as in :math:`\mu'` and :math:`\sigma'`, and a rule that
+threads two stores in sequence names the second :math:`\mu''`. The store is the
+only thing that mutates, and it only grows: :math:`\sigma` changes only by
+binding, while :math:`\mu` is global, shared by caller and callee, and never
+deallocates.
 
 Expressions
 ^^^^^^^^^^^
 
 Constants and variables evaluate to themselves and to their bound value,
-respectively. Both context literals are values; a context is never rounded, so
+respectively. Both context constants are values; a context is never rounded, so
 the active context plays no part in these rules.
 
 .. math::
@@ -368,9 +374,9 @@ reference its caller holds.
          \langle \sigma, \mu, C, e \rangle \Downarrow v
          \quad
          \langle [\, x \mapsto v \,], \mu, C, s \rangle \Downarrow_S
-         \mathsf{return}\ v' \,;\, \mu_1}
+         \mathsf{return}\ v' \,;\, \mu'}
         {\langle \sigma, \mu, C, y = f\ e \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma[y \mapsto v'] \,;\, \mu_1}
+         \mathsf{normal}\ \sigma[y \mapsto v'] \,;\, \mu'}
    \tag{E-App}
 
 The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
@@ -409,17 +415,17 @@ the sequence's outcome.
 .. math::
 
    \frac{\langle \sigma, \mu, C, s_1 \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma' \,;\, \mu_1
+         \mathsf{normal}\ \sigma' \,;\, \mu'
          \quad
-         \langle \sigma', \mu_1, C, s_2 \rangle \Downarrow_S o \,;\, \mu_2}
-        {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S o \,;\, \mu_2}
+         \langle \sigma', \mu', C, s_2 \rangle \Downarrow_S o \,;\, \mu''}
+        {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S o \,;\, \mu''}
    \tag{E-Seq-Normal}
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, s_1 \rangle \Downarrow_S \mathsf{return}\ v \,;\, \mu_1}
+   \frac{\langle \sigma, \mu, C, s_1 \rangle \Downarrow_S \mathsf{return}\ v \,;\, \mu'}
         {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S
-         \mathsf{return}\ v \,;\, \mu_1}
+         \mathsf{return}\ v \,;\, \mu'}
    \tag{E-Seq-Return}
 
 A conditional evaluates its condition to a boolean and runs the matching
@@ -431,18 +437,18 @@ touches the store.
 
    \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true}
          \quad
-         \langle \sigma, \mu, C, s_1 \rangle \Downarrow_S o \,;\, \mu_1}
+         \langle \sigma, \mu, C, s_1 \rangle \Downarrow_S o \,;\, \mu'}
         {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
-         \Downarrow_S o \,;\, \mu_1}
+         \Downarrow_S o \,;\, \mu'}
    \tag{E-If-True}
 
 .. math::
 
    \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{false}
          \quad
-         \langle \sigma, \mu, C, s_2 \rangle \Downarrow_S o \,;\, \mu_1}
+         \langle \sigma, \mu, C, s_2 \rangle \Downarrow_S o \,;\, \mu'}
         {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
-         \Downarrow_S o \,;\, \mu_1}
+         \Downarrow_S o \,;\, \mu'}
    \tag{E-If-False}
 
 The context statement is the heart of FPy. The context expression :math:`e` is
@@ -458,7 +464,7 @@ The context is scoped; the store is not.
 
    \frac{\langle \sigma, \mu, \R, e \rangle \Downarrow C'
          \quad
-         \langle \sigma[x \mapsto C'], \mu, C', s \rangle \Downarrow_S o \,;\, \mu_1}
+         \langle \sigma[x \mapsto C'], \mu, C', s \rangle \Downarrow_S o \,;\, \mu'}
         {\langle \sigma, \mu, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle
-         \Downarrow_S o \,;\, \mu_1}
+         \Downarrow_S o \,;\, \mu'}
    \tag{E-Context}

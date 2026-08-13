@@ -30,7 +30,7 @@ per value kind.
        \mid T_1 \times \cdots \times T_n
        \mid \texttt{ref}\ T
 
-Both context literals have type :math:`\texttt{context}`. A reference to a
+Both context constants have type :math:`\texttt{context}`. A reference to a
 :math:`T` has type :math:`\texttt{ref}\ T`; since a reference is both read and
 written at that one type, :math:`\texttt{ref}` is invariant.
 
