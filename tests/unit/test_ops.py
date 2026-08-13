@@ -293,3 +293,59 @@ class TestDivReal:
     @pytest.mark.parametrize('x, y', [(float('nan'), 1.0), (1.0, float('nan'))])
     def test_nan_operand(self, x, y) -> None:
         assert fp.div(x, y, fp.REAL).isnan
+
+
+class TestCopysignReal:
+    """``copysign`` under ``REAL``: transferring a sign moves no digits, so it
+    is exact for every value."""
+
+    @pytest.mark.parametrize('x, y, expect', [
+        (3, -1, -3),
+        (-3, 1, 3),
+        (3, 1, 3),
+        (-3, -1, -3),
+        (Fraction(1, 3), -1, Fraction(-1, 3)),
+        (Fraction(-1, 3), 1, Fraction(1, 3)),
+    ])
+    def test_exact(self, x, y, expect) -> None:
+        assert fp.copysign(x, y, fp.REAL) == expect
+
+    @pytest.mark.parametrize('x, y, s', [
+        (0.0, -1.0, True),
+        (-0.0, 1.0, False),
+        (0.0, 1.0, False),
+        (-0.0, -1.0, True),
+    ])
+    def test_signed_zero(self, x, y, s) -> None:
+        r = fp.copysign(x, y, fp.REAL)
+        assert r.is_zero() and r.s == s
+
+    def test_zero_fraction_takes_the_sign(self) -> None:
+        """A `Fraction` cannot carry a negative zero, so the result is a
+        `Float` that can."""
+        r = fp.copysign(Fraction(0), -1, fp.REAL)
+        assert isinstance(r, fp.Float) and r.is_zero() and r.s
+
+    @pytest.mark.parametrize('x, y, s', [
+        (float('inf'), -1.0, True),
+        (float('-inf'), 1.0, False),
+    ])
+    def test_infinite_magnitude(self, x, y, s) -> None:
+        r = fp.copysign(x, y, fp.REAL)
+        assert r.isinf and r.s == s
+
+    @pytest.mark.parametrize('y, s', [(-1.0, True), (1.0, False)])
+    def test_nan_magnitude(self, y, s) -> None:
+        """A NaN carries a sign like any other value."""
+        r = fp.copysign(float('nan'), y, fp.REAL)
+        assert r.isnan and r.s == s
+
+    @pytest.mark.parametrize('y, s', [
+        (-0.0, True),               # the sign of a zero still counts
+        (0.0, False),
+        (float('-inf'), True),
+        (float('nan'), False),      # the default NaN is positive
+    ])
+    def test_sign_source(self, y, s) -> None:
+        r = fp.copysign(3.0, y, fp.REAL)
+        assert r.s == s and abs(r.as_rational()) == 3

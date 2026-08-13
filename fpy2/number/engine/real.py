@@ -252,7 +252,19 @@ class RealEngine(Engine):
         return None
 
     def copysign(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
+        # transferring a sign moves no digits, so it is exact for every value,
+        # NaN and infinity included
+        s = _signbit(y)
+        match x:
+            case Float():
+                return Float(x=x, s=s, ctx=REAL)
+            case Fraction():
+                if x == 0:
+                    # a `Fraction` cannot carry a negative zero
+                    return Float(s=s, c=0, ctx=REAL)
+                return -abs(x) if s else abs(x)
+            case _:
+                raise RuntimeError("unreachable case")
 
     def div(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         if _is_nan(x) or _is_nan(y):

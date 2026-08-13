@@ -58,3 +58,85 @@ class TestCallArguments:
 
         out = f.ast.format()
         assert 'fp.FixedContext(True, -16, 32, overflow=' in out
+
+
+class TestNamedOperators:
+    """An operator written by name keeps it — the name records how the source
+    was written, which matters for translated benchmarks — while one written
+    as an operator, or synthesized by a rewrite, formats as the operator."""
+
+    def test_power_operator(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x ** y
+
+        assert '(x ** y)' in f.ast.format()
+
+    def test_power_by_name(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return fp.pow(x, y)
+
+        assert 'fp.pow(x, y)' in f.ast.format()
+
+    def test_named_operator_without_surface_syntax(self):
+        """`min` has no operator form, so it formats by name either way."""
+
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return min(x, y)
+
+        assert 'min(x, y)' in f.ast.format()
+
+
+class TestConditionals:
+    """An `else` holding a lone conditional is an `elif`."""
+
+    def test_elif(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            if x < 0:
+                y = 1.0
+            elif x < 1:
+                y = 2.0
+            else:
+                y = 3.0
+            return y
+
+        out = f.ast.format()
+        assert 'elif x < 1:' in out
+        assert 'else:' in out
+        # the chain stays flat: only the final `else` is indented as a branch
+        assert '        if ' not in out
+
+    def test_elif_without_else(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            y = 0.0
+            if x < 0:
+                y = 1.0
+            elif x < 1:
+                y = 2.0
+            return y
+
+        out = f.ast.format()
+        assert 'elif x < 1:' in out
+        assert 'else:' not in out
+
+    def test_else_with_other_statements_stays_nested(self):
+        """Only a *lone* conditional collapses; anything else keeps its
+        `else` block."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            if x < 0:
+                y = 1.0
+            else:
+                y = 2.0
+                if x < 1:
+                    y = 3.0
+            return y
+
+        out = f.ast.format()
+        assert 'else:' in out
+        assert 'elif' not in out
