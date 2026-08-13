@@ -19,7 +19,7 @@ import pytest
 from fpy2.analysis import PartialEval
 from fpy2.ast.fpyast import Call, ContextStmt, FuncDef, Integer, Round
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.number import REAL, MPBFixedContext
+from fpy2.number import REAL, EFloatContext, EFloatNanKind, MPBFixedContext
 from fpy2.transform import FloatToFixed
 
 
@@ -95,7 +95,7 @@ def _quantizer(ctx) -> fp.Function:
     return q
 
 
-def _samples(ctx: fp.IEEEContext) -> list[float]:
+def _samples(ctx) -> list[float]:
     """Values covering every class the lowering has to get right."""
     B = float(ctx.maxval())
     return [
@@ -121,14 +121,35 @@ class TestLowering:
             return y
 
         out = FloatToFixed.apply(f.ast)
-        # the float context is gone; the position is computed exactly and the
-        # rounding happens under fixed-point contexts
+        # the float context is gone; what is left rounds under fixed-point
+        # contexts, with everything else exact
         ctxs = _block_ctxs(out)
         assert REAL in ctxs
         assert not any(isinstance(c, fp.IEEEContext) for c in ctxs)
-        # one context per branch: specials, subnormal, and normal
-        assert len(_ctx_calls(out, MPBFixedContext)) == 3
+        # one rounding per finite branch: subnormal and normal
+        assert len(_ctx_calls(out, MPBFixedContext)) == 2
         assert _has_node(out, Round)
+
+    def test_specials_are_folded(self):
+        """NaN, the infinities, and the zeros are constants, so the branches
+        assign what the format makes of them rather than rounding."""
+        f = _quantizer(fp.FP16)
+        out = FloatToFixed.apply(f.ast)
+
+        # nothing rounds outside the two finite branches
+        assert len(_ctx_calls(out, MPBFixedContext)) == 2
+        for x in (float('nan'), float('inf'), float('-inf'), 0.0, -0.0):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_nan_is_canonicalized(self):
+        """Every float format gives back a positive NaN, while a fixed-point
+        round would keep the sign it was given."""
+        f = _quantizer(fp.FP16)
+        out = FloatToFixed.apply(f.ast)
+
+        neg_nan = fp.Float(isnan=True, s=True)
+        assert not _eval(out, f, neg_nan).s
+        assert _same(_eval(out, f, neg_nan), f(neg_nan))
 
     def test_subnormal_branch_is_static(self):
         """Below `emin` the format is fixed-point already, so that branch's
@@ -138,9 +159,8 @@ class TestLowering:
 
         calls = _ctx_calls(out, MPBFixedContext)
         static = [c for c in calls if isinstance(c.args[0], Integer)]
-        # the specials and the subnormals both round at the finest grid
-        assert len(static) == 2
-        assert all(c.args[0].val == fp.FP16.expmin - 1 for c in static)
+        assert len(static) == 1
+        assert static[0].args[0].val == fp.FP16.expmin - 1
 
     def test_specials_round_at_the_finest_grid(self):
         """The specials' context is static, so its format is what inference
@@ -215,9 +235,16 @@ class TestLowering:
 
 class TestUnchanged:
 
-    def test_non_ieee_context(self):
-        """MX formats have no infinity, so overflow lands elsewhere."""
-        f = _quantizer(fp.MX_E4M3)
+    def test_unreproducible_overflow(self):
+        """A format whose NaN sits at a negative zero states an overflow the
+        fixed-point round has no way to produce."""
+        f = _quantizer(EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0))
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_shifted_exponent_encoding(self):
+        """A non-zero `eoffset` is not accounted for by the parameters read
+        off the format."""
+        f = _quantizer(EFloatContext(4, 8, False, EFloatNanKind.NONE, 2))
         assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
 
     def test_fixed_point_context(self):
@@ -288,6 +315,22 @@ class TestEquivalence:
         f = _quantizer(ctx)
         out = FloatToFixed.apply(f.ast)
         for x in _samples(ctx):
+            assert _same(_eval(out, f, x), f(x)), (ctx, x)
+
+    @pytest.mark.parametrize('ctx', [
+        fp.MX_E5M2, fp.MX_E4M3, fp.MX_E3M2, fp.MX_E2M3, fp.MX_E2M1,
+    ], ids=['e5m2', 'e4m3', 'e3m2', 'e2m3', 'e2m1'])
+    def test_mx_formats(self, ctx):
+        """The MX formats differ in what overflow becomes: an infinity for
+        `E5M2`, a NaN for `E4M3`, the bound for the rest."""
+        f = _quantizer(ctx)
+        out = FloatToFixed.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+
+        xs = _samples(ctx) + [
+            fp.Float(isnan=True, s=True), 0.1, -0.1, 12.5, -12.5,
+        ]
+        for x in xs:
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
 
     @pytest.mark.parametrize('rm', [

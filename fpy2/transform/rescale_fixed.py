@@ -63,6 +63,8 @@ from ..ast.fpyast import (
     Assign,
     Call,
     Cast,
+    ConstInf,
+    ConstNan,
     ContextStmt,
     Expr,
     ForeignVal,
@@ -205,7 +207,11 @@ def _rescale(ctx: _FixedCtx, scale: int) -> _FixedCtx:
     """`ctx` with its format shifted to `scale`, all else equal."""
     k = scale - _scale_of(ctx)  # type: ignore[operator]
     fmt = _shift_format(ctx.format(), k)
-    kwargs: dict = dict(rm=ctx.rm, num_randbits=ctx.num_randbits, rng=ctx.rng)
+    kwargs: dict = dict(
+        rm=ctx.rm, num_randbits=ctx.num_randbits, rng=ctx.rng,
+        # only a non-finite substitute gets this far, and it is scale-invariant
+        nan_value=ctx.nan_value, inf_value=ctx.inf_value,
+    )
     if isinstance(ctx, MPBFixedContext):
         # only a bounded format can overflow
         kwargs['overflow'] = ctx.overflow
@@ -313,8 +319,13 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
             # a known format shifts by a constant, so the factors fold away
             if _scale_of(ctx) == 0:
                 return None
-            # a substituted NaN/Inf value would have to shift with the format
-            if ctx.nan_value is not None or ctx.inf_value is not None:
+            # a *finite* substitute for NaN or infinity is a value in the
+            # format, so it would have to shift along with it; a non-finite
+            # one is the same at every scale
+            if any(
+                v is not None and not v.is_nar()
+                for v in (ctx.nan_value, ctx.inf_value)
+            ):
                 return None
             scale = _scale_of(ctx)
             assert scale is not None
@@ -339,6 +350,14 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
         """
         info = _CTOR_ARGS.get(e.fn if isinstance(e.fn, type) else type(None))
         if info is None:
+            return None
+
+        # as in the known case, a finite substitute for NaN or infinity would
+        # have to shift too; here only a written-out one can be ruled out
+        if any(
+            name in ('nan_value', 'inf_value') and not isinstance(v, (ConstNan, ConstInf))
+            for name, v in e.kwargs
+        ):
             return None
 
         loc = e.loc
