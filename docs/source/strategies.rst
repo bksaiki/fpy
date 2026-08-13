@@ -21,6 +21,8 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.monomorphize
 
+.. autofunction:: fpy2.strategies.rescale_fixed
+
 .. autofunction:: fpy2.strategies.simplify
 
 .. autofunction:: fpy2.strategies.split

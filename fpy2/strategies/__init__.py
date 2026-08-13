@@ -10,6 +10,7 @@ from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
 from .mono import monomorphize
 from .reduce_fusion import fuse
+from .rescale_fixed import rescale_fixed
 from .round_elim import elim_round
 from .simple import simplify
 
@@ -21,6 +22,7 @@ __all__ = [
     'inline',
     'lift_context',
     'monomorphize',
+    'rescale_fixed',
     'simplify',
     'split',
     'unroll_for',
