@@ -11,20 +11,26 @@ rounding context* governs every arithmetic operation.
 Syntax
 ------
 
-FPy's expressions are boolean and numerical constants, arithmetic, comparisons,
-function calls, lists, tuples, and references. Its statements include the
-usual imperative ones—assignment, sequencing, conditionals, return, assertion,
-and skip. It has an update statement to modify the value contained
-by a reference. It also has a unique statement: the *context statement*,
-which sets the active rounding context for the expressions it evaluates.
+FPy's expressions are boolean and numerical constants, rounding contexts,
+arithmetic, comparisons, lists, tuples, and dereference. They are *pure*: they
+read the environment and the store but write neither, so the two constructs that
+do write—allocating a reference and calling a function—are statements instead.
+The rest of the statements are the usual imperative ones—assignment, sequencing,
+conditionals, return, assertion, and skip—plus an update statement to modify the
+value contained by a reference, and one that is unique to FPy: the *context
+statement*, which sets the active rounding context for the expressions it
+evaluates.
 
 In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
-over a countable set of identifiers :math:`\mathit{Var}`, and :math:`\R` is
-the *real rounding context*, whose rounding operation is the identity,
-so no rounding occurs. :math:`f` ranges over :math:`\mathit{Var}` as well; it
-is a separate letter only to mark the operator position, since the fragment has
-no general application—the operator of a call is always an identifier, looked up
-in the environment like any other (see **E-App**).
+over a countable set of identifiers :math:`\mathit{Var}`, and :math:`f` ranges
+over a separate set of function names :math:`\mathit{FuncName}`, since a
+function is not a value and is never bound in the environment (see :math:`\Phi`
+under *Evaluation*).
+
+There are two context literals. :math:`\R` is the *real rounding context*,
+whose rounding operation is the identity, so no rounding occurs;
+:math:`\texttt{ctx}\ \{ \ldots \}` is an arbitrary one. What a context contains
+is left unspecified—the semantics uses only its rounding operation.
 
 .. math::
 
@@ -33,7 +39,7 @@ in the environment like any other (see **E-App**).
        & \text{boolean constants} \\
      & \mid & n
        & \text{numerical constants} \\
-     & \mid & \R
+     & \mid & \R \mid \texttt{ctx}\ \{ \ldots \}
        & \text{context constants} \\
      & \mid & x
        & \text{variable} \\
@@ -43,20 +49,20 @@ in the environment like any other (see **E-App**).
        & \text{list indexing} \\
      & \mid & (\, e_1, \ldots, e_m \,)
        & \text{tuple} \\
-     & \mid & \texttt{ref}\ e
-       & \text{reference} \\
      & \mid & \texttt{!}\, e
        & \text{dereference} \\
      & \mid & e_1 + e_2
        & \text{arithmetic} \\
      & \mid & e_1 < e_2
-       & \text{comparison} \\
-     & \mid & f\ e
-       & \text{function application} \\[1ex]
+       & \text{comparison} \\[1ex]
    s & ::= & p = e
        & \text{assignment} \\
+     & \mid & x = \texttt{ref}\ e
+       & \text{allocation} \\
      & \mid & x := e
        & \text{update} \\
+     & \mid & p = f\ e
+       & \text{function application} \\
      & \mid & s_1\, \texttt{;}\, s_2
        & \text{sequencing} \\
      & \mid & \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2
@@ -78,7 +84,9 @@ in the environment like any other (see **E-App**).
 An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position; this is the only way to take a tuple apart, since tuples
-cannot be indexed. An update's left-hand side must be a variable.
+cannot be indexed. An allocation's left-hand side must be a variable, as must an
+update's; an application binds its result like an assignment, since a function
+may return a tuple.
 
 ``+`` and ``<`` stand in for arithmetic and comparison in general; every other
 FPy operator evaluates the same way, though comparison and classification
@@ -87,30 +95,31 @@ operators yield booleans rather than rounded reals.
 Values
 ------
 
-Evaluating an FPy expression produces one of seven kinds of value: a boolean, a
+Evaluating an FPy expression produces one of six kinds of value: a boolean, a
 real number :math:`n`, a *rounding context* :math:`C`, a list of values, a
-tuple of values, a *location* :math:`\ell`, or a *function value*. The only
-context constructible in this fragment is :math:`\R`; full FPy provides
-constructors for the common rounding contexts.
+tuple of values, or a *location* :math:`\ell`. A function is not among them:
+the operator of an application is a function name, not an expression, so
+functions never need to be values.
 
 .. math::
 
    v ::= \texttt{true} \mid \texttt{false} \mid n \mid C
        \mid [\, v_1, \ldots, v_m \,] \mid (\, v_1, \ldots, v_m \,)
-       \mid \ell \mid \langle \lambda x.\, s,\, \rho \rangle
+       \mid \ell
 
-A function value is a *closure* :math:`\langle \lambda x.\, s,\, \rho \rangle`—a parameter
-:math:`x`, a body :math:`s`, and the environment :math:`\rho` captured at definition.
-The fragment has no definition syntax, so closures are pre-bound in the initial environment,
-one per top-level FPy function.
+A rounding context :math:`C` is opaque. The semantics uses only its rounding
+operation, written :math:`C(\cdot)`, and never inspects its contents: the two
+context literals evaluate to a context and nothing else is said about one.
+Full FPy provides constructors for the common rounding contexts, all of which
+the core abstracts as :math:`\texttt{ctx}\ \{ \ldots \}`.
 
-A *location* :math:`\ell` is the value of a reference: :math:`\texttt{ref}\ e`
-evaluates to a location whose store entry holds :math:`e`'s value.
-Locations are drawn from a countable set :math:`\mathit{Loc}`, cannot be
-named by an expression, and cannot be compared—they are used only by
-:math:`\texttt{!}` and :math:`:=`. Evaluation is therefore deterministic
-only *up to renaming of locations*: **E-Ref** may pick any location
-not already in use.
+A *location* :math:`\ell` is the value of a reference: the allocation statement
+:math:`x = \texttt{ref}\ e` binds :math:`x` to a location whose store entry
+holds :math:`e`'s value. Locations are drawn from a countable set
+:math:`\mathit{Loc}`, cannot be named by an expression, and cannot be
+compared—they are used only by :math:`\texttt{!}` and :math:`:=`. Evaluation is
+therefore deterministic only *up to renaming of locations*: **E-Ref** may pick
+any location not already in use.
 
 Evaluation
 ----------
@@ -119,18 +128,30 @@ Evaluation requires an environment :math:`\sigma`, a finite map from identifiers
 to values, a *store* :math:`\mu`, a finite map from locations to the values they
 currently contain, and an *active rounding context* :math:`C`.
 
+Functions live in a separate *top-level environment* :math:`\Phi`, a finite map
+from function names to pairs :math:`(x, s)` of a parameter and a body. A program
+is a pair :math:`(\Phi, f_{\mathit{main}})`, and :math:`\Phi` is fixed
+throughout its evaluation: every judgement is implicitly parameterized by it, so
+it is elided from the rules, and only **E-App** consults it.
+
 The program state is the quadruple :math:`\langle \sigma, \mu, C, p \rangle`,
 where :math:`p` is the expression or statement under evaluation. Two big-step
 judgements relate states to results:
 
-* :math:`\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu'`—expression
-  :math:`e` evaluates to value :math:`v`, leaving the store :math:`\mu'`;
+* :math:`\langle \sigma, \mu, C, e \rangle \Downarrow v`—expression :math:`e`
+  evaluates to value :math:`v`;
 * :math:`\langle \sigma, \mu, C, s \rangle \Downarrow_S o \,;\, \mu'`—statement
   :math:`s` evaluates to an *outcome* :math:`o`, leaving the store :math:`\mu'`.
 
+The expression judgement returns no store because expressions are pure. They
+still *read* :math:`\mu`—:math:`\texttt{!}` and list indexing both do—so it
+remains an input, but no expression writes it and none rebinds :math:`\sigma`.
+The order in which a rule evaluates its sub-expressions is therefore
+unobservable.
+
 A rule that writes a lookup—:math:`\sigma(x)`, :math:`\mu(\ell)`, or an equation
-such as :math:`\sigma(f) = \langle \lambda x.\, s,\, \rho \rangle`—requires it to
-be defined. Where it is not, no rule applies and evaluation is stuck.
+such as :math:`\Phi(f) = (x, s)`—requires it to be defined. Where it is not, no
+rule applies and evaluation is stuck.
 
 A statement either completes normally with an updated environment or returns a
 value, so an outcome is one of:
@@ -148,7 +169,8 @@ The active rounding context :math:`C` is the crux of FPy's semantics: it is
 threaded through every expression and rounds the exact result of each
 arithmetic operation (see **E-Add**).
 
-The store is threaded through the premises of each rule. It is the only thing
+The store is threaded through the premises of each statement rule—only
+statements write it, and only allocation and update do. It is the only thing
 that mutates, and it only grows: :math:`\sigma` changes only by binding, while
 :math:`\mu` is global, shared by caller and callee, and never deallocates.
 
