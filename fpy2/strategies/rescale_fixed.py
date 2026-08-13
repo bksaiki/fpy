@@ -10,7 +10,7 @@ def rescale_fixed(func: Function) -> Function:
     """
     Rescale fixed-point rounding in `func` to digit position zero.
 
-    A ``FixedContext`` with scale ``n`` represents the format
+    A fixed-point context with scale ``n`` represents the format
     ``A(inf, n, maxval)``.  Scaling by ``2**k`` shifts that format to
     ``A(inf, n + k, maxval * 2**k)``, and rounding commutes with the shift
     since a power of two is exact.  Each rounding under a fixed-point
@@ -18,8 +18,14 @@ def rescale_fixed(func: Function) -> Function:
     round under the same format at position zero, then scale the result
     back down under ``fp.REAL``.
 
+    Applies to every fixed-point context — :class:`fpy2.FixedContext` and
+    :class:`fpy2.SMFixedContext`, which name their position ``scale``, and
+    :class:`fpy2.MPFixedContext` and :class:`fpy2.MPBFixedContext`, which
+    name it ``nmin``, one position below the scale.
+
     Only blocks whose body is entirely ``x = fp.round(v)`` / ``x = fp.cast(v)``
-    are rewritten, since arithmetic does not commute with the shift.
+    (or a returned round) are rewritten, since arithmetic does not commute
+    with the shift.
 
     Run :func:`fpy2.strategies.simplify` afterwards to fold the scale
     constants into the surrounding expressions.
