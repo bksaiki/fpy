@@ -89,6 +89,7 @@ from ..ast.fpyast import (
     Expr,
     ForeignVal,
     FuncDef,
+    IfExpr,
     IfStmt,
     Integer,
     IsInf,
@@ -112,11 +113,14 @@ from ..env import fpy_alias
 from ..number import (
     REAL,
     Context,
-    Float,
     EFloatContext,
-    EFloatNanKind,
+    Float,
     IEEEContext,
     MPBFixedContext,
+    MPBFloatContext,
+    MPFixedContext,
+    MPFloatContext,
+    MPSFloatContext,
     OverflowMode,
     RealFloat,
     RoundingMode,
@@ -167,6 +171,13 @@ class _Source:
     """what overflow produces"""
     specials: tuple[Float, Float, Float, Float, Float]
     """what NaN, `+Inf`, `-Inf`, `+0`, and `-0` round to"""
+    neg_zero: bool
+    """
+    whether the format keeps a negative zero.
+
+    A format may spend that encoding on something else, in which case a
+    negative value small enough to round to zero comes back positive.
+    """
 
 
 def _overflow_policy(ctx: Context, maxval: RealFloat) -> _Policy | None:
@@ -250,7 +261,7 @@ def _describe(ctx: Context) -> _Source | None:
     # at a position read off its own exponent
     return _Source(
         ctx.pmax, getattr(ctx, 'emin', None), getattr(ctx, 'expmin', None),
-        expmax, maxval, ctx.rm, policy, specials,
+        expmax, maxval, ctx.rm, policy, specials, specials[4].s,
     )
 
 
@@ -278,12 +289,22 @@ def _ctx_call(
     kwargs: list[tuple[str, Expr]] = []
     if src.rm is not RoundingMode.RNE:
         kwargs.append(mode('rm', src.rm))
+    if not src.neg_zero:
+        # a value too small to represent comes back positive here too
+        kwargs.append(('enable_neg_zero', BoolVal(False, loc)))
 
+    # a NaN reaches a rounding only as its operand, and the branches above
+    # take that case, so the format needs NaN only where an *overflow*
+    # produces one
     match src.policy:
+        case _Policy.UNBOUNDED:
+            # nothing to overflow: the format is a digit position and no more
+            return Call(
+                _attribute(alias, 'MPFixedContext', loc=loc),
+                MPFixedContext, (nmin,), tuple(kwargs), loc,
+            )
         case _Policy.INFINITE:
-            # the specials round into this format too, so it holds them
             kwargs.append(mode('overflow', OverflowMode.OVERFLOW))
-            kwargs.append(('enable_nan', BoolVal(True, loc)))
             kwargs.append(('enable_inf', BoolVal(True, loc)))
         case _Policy.SATURATING:
             # no NaN, no infinity: overflow has nowhere to go but the bound
@@ -294,6 +315,7 @@ def _ctx_call(
             kwargs.append(('enable_nan', BoolVal(True, loc)))
             kwargs.append(('inf_value', ConstNan(None, loc)))
 
+    assert src.maxval is not None
     return Call(
         _attribute(alias, 'MPBFixedContext', loc=loc),
         MPBFixedContext,
@@ -392,35 +414,44 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
             )]
             if signed:
                 # a substituted NaN carries no sign of its own, so the input's
-                # is put back; rounding never flips a sign, so this is the
-                # identity on every other value
-                stmts.append(
-                    Assign(target, None, Copysign(None, Var(out, loc), arg(), loc), loc)
-                )
+                # is put back.  Only for a NaN: a value small enough to round
+                # to zero may have given up its sign legitimately, and this
+                # would hand it back
+                stmts.append(Assign(target, None, IfExpr(
+                    IsNan(None, Var(out, loc), loc),
+                    Copysign(None, Var(out, loc), arg(), loc),
+                    Var(out, loc), loc,
+                ), loc))
             return stmts
-
-        # below `emin` the format is itself fixed-point: every value in that
-        # range rounds at the same position, so the context is a constant
-        finest = Integer(src.expmin - 1, loc)
 
         e_name = self.gensym.fresh('e')
         exponent = Assign(e_name, None, Logb(None, arg(), loc), loc)
 
-        # in the normal range the grid follows the magnitude, bounded above by
-        # the position of the bound's last digit; the subnormal branch already
-        # covers everything below, so no lower clamp is needed here.  The name
-        # is the scale it holds, not the context's `n`, which is one below it
+        # in the normal range the grid follows the magnitude.  A bound caps it:
+        # above the position of the bound's last digit the bound leaves the
+        # grid, and everything up there overflows anyway.  The name is the
+        # scale it holds, not the context's `n`, which is one below it
         pos_name = self.gensym.fresh('exp')
-        position = Assign(pos_name, None, Min(None, [
-            Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc),
-            Integer(src.expmax, loc),
-        ], loc), loc)
-        normal = IfStmt(
-            Compare([CompareOp.LT], [Var(e_name, loc), Integer(src.emin, loc)], loc),
-            StmtBlock(rounding(finest)),
-            StmtBlock([position, *rounding(Sub(Var(pos_name, loc), Integer(1, loc), loc))]),
-            loc,
-        )
+        scale: Expr = Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc)
+        if src.expmax is not None:
+            scale = Min(None, [scale, Integer(src.expmax, loc)], loc)
+        position = Assign(pos_name, None, scale, loc)
+        at_scale = rounding(Sub(Var(pos_name, loc), Integer(1, loc), loc))
+
+        if src.emin is None:
+            # no subnormals: every value rounds at a position of its own
+            body: list[Stmt] = [exponent, position, *at_scale]
+        else:
+            # below `emin` the format is itself fixed-point: every value in
+            # that range rounds at the same position, a constant
+            assert src.expmin is not None
+            normal = IfStmt(
+                Compare([CompareOp.LT], [Var(e_name, loc), Integer(src.emin, loc)], loc),
+                StmtBlock(rounding(Integer(src.expmin - 1, loc))),
+                StmtBlock([position, *at_scale]),
+                loc,
+            )
+            body = [exponent, normal]
 
         # `logb` is undefined on NaN, an infinity, and a zero, so each takes a
         # branch of its own.  All three are constants, so what the format makes
@@ -443,7 +474,7 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
                 StmtBlock([IfStmt(
                     Compare([CompareOp.EQ], [arg(), Integer(0, loc)], loc),
                     assign(by_sign(pos_zero, neg_zero)),
-                    StmtBlock([exponent, normal]),
+                    StmtBlock(body),
                     loc,
                 )]),
                 loc,
