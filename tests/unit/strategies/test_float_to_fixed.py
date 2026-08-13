@@ -10,10 +10,23 @@ import pytest
 import fpy2 as fp
 
 from fpy2.analysis import PartialEval
-from fpy2.ast import ContextStmt
+from fpy2.ast import Call, ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
-from fpy2.strategies import float_to_fixed, simplify
+from fpy2.strategies import float_to_fixed, rescale_fixed, simplify
+
+
+def _blocks(ast) -> list:
+    """Every ``ContextStmt`` in *ast*."""
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_context(self, stmt: ContextStmt, ctx):
+            found.append(stmt)
+            super()._visit_context(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
 
 
 def _block_ctxs(ast) -> list:
@@ -86,3 +99,42 @@ class TestFloatToFixed:
     def test_composes_with_simplify(self):
         out = simplify(float_to_fixed(_quantized_sum), enable_const_fold_context=False)
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
+
+
+class TestPipeline:
+    """``float_to_fixed`` then ``rescale_fixed`` is the full lowering: float
+    rounding becomes integer rounding, at a scale that is constant where the
+    format is and computed where it is not."""
+
+    @pytest.mark.parametrize('ctx', [fp.FP16, fp.FP32, fp.IEEEContext(4, 8)],
+                             ids=['fp16', 'fp32', 'ieee_4_8'])
+    def test_preserves_results(self, ctx):
+        @fp.fpy(ctx=fp.REAL)
+        def q(x):
+            with ctx:
+                y = fp.round(x)
+            return y
+
+        out = rescale_fixed(float_to_fixed(q))
+        B = float(ctx.maxval())
+        xs = [
+            0.0, -0.0, float('inf'), float('-inf'), float('nan'),
+            1.0, -1.0, B, -B, B * 1.001, B * 2,
+            2.0 ** ctx.emin, 2.0 ** ctx.expmin, 2.0 ** (ctx.expmin - 1),
+            0.1, -0.1, 12.5,
+        ]
+        for x in xs:
+            assert _same(out(x), q(x)), x
+
+    def test_every_rounding_lands_at_position_zero(self):
+        """Nothing rounds under a float format afterwards, and every
+        fixed-point block sits on the integer grid."""
+        out = rescale_fixed(float_to_fixed(_quantized_sum))
+
+        positions = []
+        for stmt in _blocks(out.ast):
+            e = stmt.ctx
+            if isinstance(e, Call) and e.fn is fp.MPBFixedContext:
+                positions.append(e.args[0].val)
+        assert positions and all(p == -1 for p in positions)
+        assert fp.FP16 not in _block_ctxs(out.ast)

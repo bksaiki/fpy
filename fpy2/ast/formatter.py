@@ -154,6 +154,10 @@ class _FormatterInstance(Visitor):
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         match e:
+            # a named operator keeps the name the source gave it; without one
+            # it was written `**`, or synthesized by a rewrite
+            case Pow() if e.func is None:
+                return f'({lhs} ** {rhs})'
             case NamedBinaryOp():
                 name = self._op_name(e, ctx)
                 return f'{name}({lhs}, {rhs})'

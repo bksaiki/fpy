@@ -54,8 +54,12 @@ block is left unchanged, including one that binds its context (``with C as
 c:``), whose body could observe the rescaled context as a value.
 """
 
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
+    Add,
     Assign,
     Call,
     Cast,
@@ -67,11 +71,14 @@ from ..ast.fpyast import (
     Location,
     Mul,
     NamedId,
+    Neg,
+    Pow,
     Rational,
     ReturnStmt,
     Round,
     Stmt,
     StmtBlock,
+    Sub,
     UnderscoreId,
     Var,
 )
@@ -97,17 +104,54 @@ from ..utils import Gensym
 _FixedCtx = FixedContext | SMFixedContext | MPBFixedContext | MPFixedContext
 """the fixed-point contexts, whose formats shift under a power of two"""
 
-_SCALE_ARG: dict[type, str] = {
-    FixedContext: 'scale',
-    SMFixedContext: 'scale',
-    MPFixedContext: 'nmin',
+@dataclass(frozen=True)
+class _CtorArgs:
+    """Where a fixed-point constructor takes the arguments this pass rewrites."""
+
+    position: str
+    """name of the argument giving the digit position"""
+    index: int
+    """its index, when written positionally"""
+    from_nmin: bool
+    """whether the position is `nmin`, one below the scale"""
+    bound: tuple[str, ...] = ()
+    """names of the bound arguments, which shift with the format"""
+    bound_index: int | None = None
+    """index of the first bound argument, when written positionally"""
+
+
+_CTOR_ARGS: dict[type, _CtorArgs] = {
+    FixedContext: _CtorArgs('scale', 1, False),
+    SMFixedContext: _CtorArgs('scale', 0, False),
+    MPFixedContext: _CtorArgs('nmin', 0, True),
+    MPBFixedContext: _CtorArgs('nmin', 0, True, ('maxval', 'neg_maxval'), 1),
 }
 """
-The constructor argument naming each context's digit position.
+How each fixed-point constructor is written.
 
-``MPBFixedContext`` is absent: its bounds are constructor arguments too, so
-a rescaled call would have to rewrite those as well.
+`FixedContext` and `SMFixedContext` derive their bounds from `nbits`, and
+`MPFixedContext` is unbounded, so only `MPBFixedContext` states a bound that
+has to shift along with the position.
 """
+
+
+@dataclass
+class _Shift:
+    """
+    Moving a block's format to digit position zero.
+
+    `up` and `down` build the scale factors; each call returns fresh nodes,
+    since a block may hold several roundings.
+    """
+
+    ctx: Expr
+    """the rescaled context expression"""
+    up: Callable[[], Expr]
+    """`2 ** -scale`, applied to each operand"""
+    down: Callable[[], Expr]
+    """`2 ** scale`, applied to each result"""
+    preamble: list[Stmt] = field(default_factory=list)
+    """statements the block's context expression depends on"""
 
 
 def _pow2(k: int, loc: Location | None) -> Expr:
@@ -177,18 +221,61 @@ def _rescale_expr(e: Expr, ctx: _FixedCtx, scale: int) -> Expr:
     Any other expression is replaced by the rescaled context itself.
     """
     dst = _rescale(ctx, scale)
-    name = _SCALE_ARG.get(type(ctx))
-    if name is not None and isinstance(e, Call) and e.fn is type(ctx):
-        pos = Integer(getattr(dst, name), e.loc)
-        index = 1 if isinstance(ctx, FixedContext) else 0
-        if len(e.args) > index:
-            args = (*e.args[:index], pos, *e.args[index + 1:])
-            return Call(e.func, e.fn, args, e.kwargs, e.loc)
-        if any(n == name for n, _ in e.kwargs):
-            kwargs = tuple((n, pos if n == name else v) for n, v in e.kwargs)
-            return Call(e.func, e.fn, e.args, kwargs, e.loc)
+    info = _CTOR_ARGS.get(type(ctx))
+    if info is not None and isinstance(e, Call) and e.fn is type(ctx):
+        pos = Integer(getattr(dst, info.position), e.loc)
+        rewritten = _replace_arg(e, info.position, info.index, lambda _: pos)
+        if rewritten is not None:
+            # a stated bound shifts with the position; an unstated one is
+            # derived from it and follows on its own
+            for i, name in enumerate(info.bound):
+                assert info.bound_index is not None
+                index = info.bound_index + i
+                if _arg_of(rewritten, name, index) is None:
+                    continue
+                attr = 'pos_maxval' if name == 'maxval' else name
+                scaled = _number(getattr(dst, attr), e.loc)
+                bound = _replace_arg(rewritten, name, index, lambda _: scaled)
+                assert bound is not None
+                rewritten = bound
+            return rewritten
 
     return ForeignVal(dst, e.loc)
+
+
+def _number(x: RealFloat, loc: Location | None) -> Expr:
+    """`x` as an exact literal: every `RealFloat` is a dyadic rational."""
+    if x.is_integer():
+        return Integer(int(x), loc)
+    r = x.as_rational()
+    return Rational(None, r.numerator, r.denominator, loc)
+
+
+def _replace_arg(
+    e: Call, name: str, index: int, rewrite: Callable[[Expr], Expr]
+) -> Call | None:
+    """`e` with the argument named `name` rewritten, however it is written."""
+    if len(e.args) > index:
+        args = (*e.args[:index], rewrite(e.args[index]), *e.args[index + 1:])
+        return Call(e.func, e.fn, args, e.kwargs, e.loc)
+    if any(n == name for n, _ in e.kwargs):
+        kwargs = tuple((n, rewrite(v) if n == name else v) for n, v in e.kwargs)
+        return Call(e.func, e.fn, e.args, kwargs, e.loc)
+    return None
+
+
+def _arg_of(e: Call, name: str, index: int) -> Expr | None:
+    """The argument named `name`, however it is written."""
+    if len(e.args) > index:
+        return e.args[index]
+    for n, v in e.kwargs:
+        if n == name:
+            return v
+    return None
+
+
+def _is_one(e: Expr) -> bool:
+    return isinstance(e, Integer) and e.val == 1
 
 
 class _RescaleFixedInstance(DefaultTransformVisitor):
@@ -206,18 +293,10 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _source_ctx(self, stmt: ContextStmt) -> _FixedCtx | None:
-        """The block's context, if this block can be rescaled to position zero."""
+    def _shift_for(self, stmt: ContextStmt) -> _Shift | None:
+        """How to rescale this block, or `None` if it must be left alone."""
         # a bound context is visible to the body as a value, which the rewrite changes
         if not isinstance(stmt.target, UnderscoreId):
-            return None
-
-        # the context must be statically known, fixed-point, and not already integral
-        ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, _FixedCtx) or _scale_of(ctx) == 0:
-            return None
-        # a substituted NaN/Inf value would have to be shifted along with the format
-        if ctx.nan_value is not None or ctx.inf_value is not None:
             return None
 
         # rounding commutes with the shift; arithmetic does not
@@ -229,17 +308,97 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
                 case _:
                     return None
 
-        return ctx
+        ctx = self.eval_info.by_expr.get(stmt.ctx)
+        if isinstance(ctx, _FixedCtx):
+            # a known format shifts by a constant, so the factors fold away
+            if _scale_of(ctx) == 0:
+                return None
+            # a substituted NaN/Inf value would have to shift with the format
+            if ctx.nan_value is not None or ctx.inf_value is not None:
+                return None
+            scale = _scale_of(ctx)
+            assert scale is not None
+            return _Shift(
+                ctx=_rescale_expr(stmt.ctx, ctx, 0),
+                up=lambda: _pow2(-scale, stmt.loc),
+                down=lambda: _pow2(scale, stmt.loc),
+            )
+
+        if isinstance(stmt.ctx, Call):
+            return self._symbolic_shift(stmt.ctx)
+        return None
+
+    def _symbolic_shift(self, e: Call) -> _Shift | None:
+        """
+        Rescaling a context whose position is only known at run time.
+
+        The format still shifts by a power of two, so the factors become
+        `2 ** scale` expressions rather than constants.  The bound comes along:
+        a constructible source format states a bound on its own grid, so the
+        shifted bound lands exactly on the integer grid.
+        """
+        info = _CTOR_ARGS.get(e.fn if isinstance(e.fn, type) else type(None))
+        if info is None:
+            return None
+
+        loc = e.loc
+        position = _arg_of(e, info.position, info.index)
+        if position is None:
+            return None
+
+        # the scale is one above `nmin`; `nmin` is usually written as the
+        # scale minus one, in which case the two cancel
+        scale = position
+        if info.from_nmin:
+            if isinstance(position, Sub) and _is_one(position.second):
+                scale = position.first
+            else:
+                scale = Add(position, Integer(1, loc), loc)
+        # a format already at position zero has nothing to shift
+        if isinstance(scale, Integer) and scale.val == 0:
+            return None
+
+        # a scale already held in a variable needs no binding of its own
+        preamble: list[Stmt] = []
+        if isinstance(scale, Var):
+            k = scale.name
+        else:
+            k = self.gensym.fresh('_k')
+            preamble.append(ContextStmt(
+                UnderscoreId(), ForeignVal(REAL, loc),
+                StmtBlock([Assign(k, None, scale, loc)]), loc,
+            ))
+
+        up = lambda: Pow(None, Integer(2, loc), Neg(Var(k, loc), loc), loc)
+        down = lambda: Pow(None, Integer(2, loc), Var(k, loc), loc)
+
+        # the position becomes the integer grid, and every bound shifts with it
+        target = Integer(-1 if info.from_nmin else 0, loc)
+        ctx = _replace_arg(e, info.position, info.index, lambda _: target)
+        if ctx is None:
+            return None
+        for i, name in enumerate(info.bound):
+            assert info.bound_index is not None
+            index = info.bound_index + i
+            if _arg_of(ctx, name, index) is None:
+                # unstated: the constructor derives it from the bound that is
+                # stated, so it shifts along with it
+                continue
+            scaled = _replace_arg(ctx, name, index, lambda b: Mul(b, up(), loc))
+            assert scaled is not None
+            ctx = scaled
+
+        return _Shift(ctx=ctx, up=up, down=down, preamble=preamble)
 
     def _rescale_round(
-        self, e: Round | Cast, target: NamedId, loc: Location | None, scale: int
+        self, e: Round | Cast, target: NamedId, loc: Location | None, shift: _Shift
     ) -> list[Stmt]:
         """`target = round(v)` scaled in, rounded at position zero, and scaled out."""
         assert isinstance(e.arg, Var)
 
         # scale in: the operand's digits move up to position zero
         scaled = self.gensym.fresh('_t')
-        up = Assign(scaled, None, Mul(_pow2(-scale, loc), e.arg, loc), loc)
+        up = Assign(scaled, None, Mul(shift.up(), e.arg, loc), loc)
 
         # round under the rescaled context
         rounded = self.gensym.fresh('_t')
@@ -247,7 +406,7 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
 
         # scale out: the result returns to its original magnitude, under the
         # original target name, so statements after the block are unaffected
-        down = Assign(target, None, Mul(_pow2(scale, loc), Var(rounded, loc), loc), loc)
+        down = Assign(target, None, Mul(shift.down(), Var(rounded, loc), loc), loc)
 
         real = ForeignVal(REAL, loc)
         return [
@@ -256,29 +415,37 @@ class _RescaleFixedInstance(DefaultTransformVisitor):
             ContextStmt(UnderscoreId(), real, StmtBlock([down]), loc),
         ]
 
-    def _visit_context(self, stmt: ContextStmt, ctx: None):
-        src = self._source_ctx(stmt)
-        if src is None:
-            return super()._visit_context(stmt, ctx)
-
-        scale = _scale_of(src)
-        assert scale is not None
-
+    def _rescale_block(self, stmt: ContextStmt, shift: _Shift) -> list[Stmt]:
+        """The block, rescaled, after whatever its context expression needs."""
         stmts: list[Stmt] = []
         for s in stmt.body.stmts:
             assert isinstance(s.expr, (Round, Cast))
             if isinstance(s, Assign):
                 assert isinstance(s.target, NamedId)
-                stmts.extend(self._rescale_round(s.expr, s.target, s.loc, scale))
+                stmts.extend(self._rescale_round(s.expr, s.target, s.loc, shift))
             else:
                 # a returned round scales out into a temporary, then returns it
                 assert isinstance(s, ReturnStmt)
                 out = self.gensym.fresh('_t')
-                stmts.extend(self._rescale_round(s.expr, out, s.loc, scale))
+                stmts.extend(self._rescale_round(s.expr, out, s.loc, shift))
                 stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
 
-        dst = _rescale_expr(stmt.ctx, src, 0)
-        return ContextStmt(stmt.target, dst, StmtBlock(stmts), stmt.loc), ctx
+        block = ContextStmt(stmt.target, shift.ctx, StmtBlock(stmts), stmt.loc)
+        return [*shift.preamble, block]
+
+    def _visit_block(self, block: StmtBlock, ctx: None):
+        # a rescaled context may need a preamble, so the splice happens here
+        # rather than in `_visit_context`
+        stmts: list[Stmt] = []
+        for s in block.stmts:
+            if isinstance(s, ContextStmt):
+                shift = self._shift_for(s)
+                if shift is not None:
+                    stmts.extend(self._rescale_block(s, shift))
+                    continue
+            new_s, ctx = self._visit_statement(s, ctx)
+            stmts.append(new_s)
+        return StmtBlock(stmts), ctx
 
 
 class RescaleFixed:

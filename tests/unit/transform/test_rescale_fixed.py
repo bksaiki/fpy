@@ -16,7 +16,7 @@ against a hand-written golden AST is brittle.  These tests assert:
 import fpy2 as fp
 import pytest
 
-from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef
+from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef, Integer
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
 from fpy2.transform import RescaleFixed
@@ -269,6 +269,117 @@ class TestContextVariants:
         dst = block.ctx.val
         assert dst.nmin == -1
         assert dst.pos_maxval.as_rational() == maxval.as_rational() * 2 ** 4
+
+
+# ----------------------------------------------------------------------
+# Contexts whose position is only known at run time
+
+
+class TestSymbolicPosition:
+    """A context built per value shifts the same way; the factors become
+    ``2 ** scale`` expressions rather than constants, and a stated bound
+    shifts with the position."""
+
+    def test_mpb_fixed(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.MPBFixedContext(k - 1, 65504, overflow=OverflowMode.OVERFLOW,
+                                    enable_inf=True):
+                y = fp.round(x)
+            return y
+
+        out = RescaleFixed.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+        # the position is now the integer grid; the bound came along
+        call = _blocks(out)[0].ctx
+        assert isinstance(call, Call) and call.fn is fp.MPBFixedContext
+        assert call.args[0].val == -1
+        assert not isinstance(call.args[1], Integer)
+
+        for x in (0.1, -3.25, 1000.0, 0.0, -0.0, 1e-9, 70000.0):
+            for k in (-16, -4, 0, 3):
+                assert _same(_eval(out, f, x, k), f(x, k)), (x, k)
+
+    def test_fixed(self):
+        """A format whose bound comes from `nbits` needs no bound rewriting."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.FixedContext(True, k, 32):
+                y = fp.round(x)
+            return y
+
+        out = RescaleFixed.apply(f.ast)
+        assert _fixed_scales(out) == [0]
+        for x in (0.1, -3.25, 1000.0, 0.0):
+            for k in (-16, -1, 0, 3):
+                assert _same(_eval(out, f, x, k), f(x, k)), (x, k)
+
+    def test_mp_fixed(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.MPFixedContext(k - 1):
+                y = fp.round(x)
+            return y
+
+        out = RescaleFixed.apply(f.ast)
+        assert _fixed_scales(out, fp.MPFixedContext) == [0]
+        for x in (0.1, -3.25, 1e9):
+            for k in (-16, -1, 0, 3):
+                assert _same(_eval(out, f, x, k), f(x, k)), (x, k)
+
+    def test_idempotent(self):
+        """The rewritten context sits at position zero, so a second run has
+        nothing to shift."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.MPBFixedContext(k - 1, 65504, overflow=OverflowMode.OVERFLOW,
+                                    enable_inf=True):
+                y = fp.round(x)
+            return y
+
+        once = RescaleFixed.apply(f.ast)
+        assert RescaleFixed.apply(once).is_equiv(once)
+
+    def test_scale_in_a_variable_needs_no_binding(self):
+        """``nmin = k - 1`` means the scale is ``k`` itself: the two cancel,
+        leaving only the scale-in and scale-out blocks."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.MPFixedContext(k - 1):
+                y = fp.round(x)
+            return y
+
+        assert _real_blocks(RescaleFixed.apply(f.ast)) == 2
+
+    def test_computed_scale_binds_once(self):
+        """Any other position expression is bound once, so it is evaluated
+        once no matter how many times the factors appear."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.MPFixedContext(k - 2):
+                y = fp.round(x)
+            return y
+
+        out = RescaleFixed.apply(f.ast)
+        assert _real_blocks(out) == 3          # the binding, then in and out
+        for x in (0.1, -3.25, 1e9):
+            for k in (-8, 0, 5):
+                assert _same(_eval(out, f, x, k), f(x, k)), (x, k)
+
+    def test_unrecognized_call_is_left_alone(self):
+        """Only the fixed-point constructors are rewritten."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.IEEEContext(5, 16):
+                y = fp.round(x)
+            return y
+
+        assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
 
 
 # ----------------------------------------------------------------------
