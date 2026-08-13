@@ -178,54 +178,58 @@ Expressions
 ^^^^^^^^^^^
 
 Constants and variables evaluate to themselves and to their bound value,
-respectively, and leave the store untouched. The real context :math:`\R` is
-itself a value.
+respectively. Both context literals are values; a context is never rounded, so
+the active context plays no part in these rules.
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, \texttt{true} \rangle \Downarrow \texttt{true} \,;\, \mu}
+   \frac{}{\langle \sigma, \mu, C, \texttt{true} \rangle \Downarrow \texttt{true}}
    \tag{E-True}
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, \texttt{false} \rangle \Downarrow \texttt{false} \,;\, \mu}
+   \frac{}{\langle \sigma, \mu, C, \texttt{false} \rangle \Downarrow \texttt{false}}
    \tag{E-False}
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, n \rangle \Downarrow n \,;\, \mu}
+   \frac{}{\langle \sigma, \mu, C, n \rangle \Downarrow n}
    \tag{E-Num}
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, \R \rangle \Downarrow \R \,;\, \mu}
+   \frac{}{\langle \sigma, \mu, C, \R \rangle \Downarrow \R}
    \tag{E-Real}
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, x \rangle \Downarrow \sigma(x) \,;\, \mu}
-   \tag{E-Var}
-
-Lists evaluate their elements left to right; indexing selects an element.
+   \frac{}{\langle \sigma, \mu, C, \texttt{ctx}\ \{ \ldots \} \rangle \Downarrow
+           \texttt{ctx}\ \{ \ldots \}}
+   \tag{E-Ctx}
 
 .. math::
 
-   \frac{\mu_0 = \mu
-         \quad
-         \langle \sigma, \mu_{i-1}, C, e_i \rangle \Downarrow v_i \,;\, \mu_i
+   \frac{}{\langle \sigma, \mu, C, x \rangle \Downarrow \sigma(x)}
+   \tag{E-Var}
+
+A list evaluates its elements; indexing selects one.
+
+.. math::
+
+   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
          \quad (1 \le i \le m)}
         {\langle \sigma, \mu, C, [\, e_1, \ldots, e_m \,] \rangle \Downarrow
-         [\, v_1, \ldots, v_m \,] \,;\, \mu_m}
+         [\, v_1, \ldots, v_m \,]}
    \tag{E-List}
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow [\, v_1, \ldots, v_m \,] \,;\, \mu_1
+   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow [\, v_1, \ldots, v_m \,]
          \quad
-         \langle \sigma, \mu_1, C, e_2 \rangle \Downarrow n \,;\, \mu_2
+         \langle \sigma, \mu, C, e_2 \rangle \Downarrow n
          \quad
          n \in \{ 0, \ldots, m-1 \}}
-        {\langle \sigma, \mu, C, e_1[e_2] \rangle \Downarrow v_{n+1} \,;\, \mu_2}
+        {\langle \sigma, \mu, C, e_1[e_2] \rangle \Downarrow v_{n+1}}
    \tag{E-Index}
 
 Tuples are similar to lists, but they cannot be indexed and are
@@ -233,32 +237,20 @@ decomposed only by a tuple pattern (see **E-Assign**).
 
 .. math::
 
-   \frac{\mu_0 = \mu
-         \quad
-         \langle \sigma, \mu_{i-1}, C, e_i \rangle \Downarrow v_i \,;\, \mu_i
+   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
          \quad (1 \le i \le m)}
         {\langle \sigma, \mu, C, (\, e_1, \ldots, e_m \,) \rangle \Downarrow
-         (\, v_1, \ldots, v_m \,) \,;\, \mu_m}
+         (\, v_1, \ldots, v_m \,)}
    \tag{E-Tuple}
 
-A reference is a mutable cell.
-:math:`\texttt{ref}\ e` allocates a fresh location holding :math:`e`'s value and
-returns that location (**E-Ref**); :math:`\texttt{!}\, e` reads the
-location back out of the store (**E-Deref**).
+A reference is a mutable cell. Dereferencing reads the value its location
+currently contains out of the store; allocating the cell is a statement, since
+it writes one (see **E-Ref**).
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
-         \quad
-         \ell \notin \mathrm{dom}(\mu_1)}
-        {\langle \sigma, \mu, C, \texttt{ref}\ e \rangle \Downarrow
-         \ell \,;\, \mu_1[\ell \mapsto v]}
-   \tag{E-Ref}
-
-.. math::
-
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \ell \,;\, \mu_1}
-        {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu_1(\ell) \,;\, \mu_1}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \ell}
+        {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
 Arithmetic is where rounding happens. The operands evaluate to real numbers,
@@ -268,11 +260,11 @@ exact result is returned unchanged.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1 \,;\, \mu_1
+   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1
          \quad
-         \langle \sigma, \mu_1, C, e_2 \rangle \Downarrow n_2 \,;\, \mu_2}
+         \langle \sigma, \mu, C, e_2 \rangle \Downarrow n_2}
         {\langle \sigma, \mu, C, e_1 + e_2 \rangle \Downarrow
-         C(\exact{n_1 + n_2}) \,;\, \mu_2}
+         C(\exact{n_1 + n_2})}
    \tag{E-Add}
 
 A comparison evaluates its operands and tests them as real numbers, producing a
@@ -281,30 +273,11 @@ boolean; unlike arithmetic, the result is exact and no rounding is applied.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1 \,;\, \mu_1
+   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1
          \quad
-         \langle \sigma, \mu_1, C, e_2 \rangle \Downarrow n_2 \,;\, \mu_2}
-        {\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2) \,;\, \mu_2}
+         \langle \sigma, \mu, C, e_2 \rangle \Downarrow n_2}
+        {\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)}
    \tag{E-Lt}
-
-A function application looks up the closure bound to :math:`f`, evaluates the
-argument, binds the parameter in the captured environment :math:`\rho`, and runs
-the body to the value it returns. The body runs under the caller's context
-:math:`C`; a well-formed body always returns, so its outcome is
-:math:`\mathsf{return}\ v'`. The store is *not* captured: the body runs in the
-store the argument left behind and its writes outlive the call, which is how a
-callee mutates a reference its caller holds.
-
-.. math::
-
-   \frac{\sigma(f) = \langle \lambda x.\, s,\, \rho \rangle
-         \quad
-         \langle \sigma, \mu, C, e \rangle \Downarrow v \,;\, \mu_1
-         \quad
-         \langle \rho[x \mapsto v], \mu_1, C, s \rangle \Downarrow_S
-         \mathsf{return}\ v' \,;\, \mu_2}
-        {\langle \sigma, \mu, C, f\ e \rangle \Downarrow v' \,;\, \mu_2}
-   \tag{E-App}
 
 Statements
 ^^^^^^^^^^
