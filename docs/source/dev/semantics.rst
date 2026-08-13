@@ -131,10 +131,24 @@ to values, a *store* :math:`\mu`, a finite map from locations to the values they
 currently contain, and an *active rounding context* :math:`C`.
 
 Functions live in a separate *top-level environment* :math:`\Phi`, a finite map
-from function names to pairs :math:`(x, s)` of a parameter and a body. A program
+from function names to pairs :math:`(y, s)` of a parameter and a body. A program
 is a pair :math:`(\Phi, f_{\mathit{main}})`, and :math:`\Phi` is fixed
 throughout its evaluation: every judgement is implicitly parameterized by it, so
 it is elided from the rules, and only **E-App** consults it.
+
+Execution begins by applying :math:`f_{\mathit{main}}` to the program's argument
+:math:`v`. Where :math:`\Phi(f_{\mathit{main}}) = (y, s)`, the program runs its
+body from the initial state:
+
+.. math::
+
+   \langle [\, y \mapsto v \,], \emptyset, \R, s \rangle
+   \Downarrow_S \mathsf{return}\ v' \,;\, \mu'
+
+The only binding is the parameter, the store starts empty, and the active context
+is :math:`\R`, so nothing rounds until a ``with`` sets one. The program's result
+is :math:`v'`; the final store :math:`\mu'` is discarded. Entry needs no rule of
+its own—this is **E-App**'s third premise started from an empty store.
 
 The program state is the quadruple :math:`\langle \sigma, \mu, C, p \rangle`,
 where :math:`p` is the expression or statement under evaluation. Two big-step
@@ -152,7 +166,7 @@ The order in which a rule evaluates its sub-expressions is therefore
 unobservable.
 
 A rule that writes a lookup—:math:`\sigma(x)`, :math:`\mu(\ell)`, or an equation
-such as :math:`\Phi(f) = (x, s)`—requires it to be defined. Where it is not, no
+such as :math:`\Phi(f) = (y, s)`—requires it to be defined. Where it is not, no
 rule applies and evaluation is stuck.
 
 A statement either completes normally with an updated environment or returns a
@@ -360,7 +374,7 @@ which is why every other name for that location observes the write.
 
 A function application looks its callee up in :math:`\Phi`, evaluates the
 argument, and runs the body to the value it returns, binding that value to
-:math:`y`. The body runs in a fresh environment that binds only the parameter,
+:math:`x`. The body runs in a fresh environment that binds only the parameter,
 so it can never see its caller's variables. It does run under the caller's
 context :math:`C`, and a well-formed body always returns, so its outcome is
 :math:`\mathsf{return}\ v'`. The store is *not* fresh: the body runs in the
@@ -369,14 +383,14 @@ reference its caller holds.
 
 .. math::
 
-   \frac{\Phi(f) = (x, s)
+   \frac{\Phi(f) = (y, s)
          \quad
          \langle \sigma, \mu, C, e \rangle \Downarrow v
          \quad
-         \langle [\, x \mapsto v \,], \mu, C, s \rangle \Downarrow_S
+         \langle [\, y \mapsto v \,], \mu, C, s \rangle \Downarrow_S
          \mathsf{return}\ v' \,;\, \mu'}
-        {\langle \sigma, \mu, C, y = f\ e \rangle \Downarrow_S
-         \mathsf{normal}\ \sigma[y \mapsto v'] \,;\, \mu'}
+        {\langle \sigma, \mu, C, x = f\ e \rangle \Downarrow_S
+         \mathsf{normal}\ \sigma[x \mapsto v'] \,;\, \mu'}
    \tag{E-App}
 
 The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
