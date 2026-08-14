@@ -988,6 +988,49 @@ def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
     )
 
 
+def exact_select(
+    arg_fmts: 'list[FormatBound]', *, is_min: bool,
+) -> 'AbstractFormat | None':
+    """The exact format of ``min``/``max`` over *arg_fmts*.
+
+    Selection returns one operand, so the result needs every operand's
+    precision and quantum -- which is what the join gives.  But it also
+    *orders*: a ``min`` is at most every operand, so its upper bound is the
+    least of theirs, and the join throws that away.  ``min`` over bounds 5 and
+    1000 reaches 5, not 1000, which is how a clamp against a constant earns
+    its keep.
+
+    Returns ``None`` when an operand is not abstractable, leaving the caller's
+    join in place.
+
+    Special values keep the join's answer: a ``min`` yields ``+inf`` only if
+    *every* operand does, so ``or`` is an over-approximation -- sound, and the
+    finite bounds are where the precision was being lost.
+    """
+    afs = []
+    for f in arg_fmts:
+        if not isinstance(f, AbstractableFormatBound):
+            return None
+        af = _to_abstract(f)
+        if af is None:
+            return None
+        afs.append(af)
+    if not afs:
+        return None
+
+    pick = min if is_min else max
+    joined = reduce(lambda a, b: a | b, afs)
+    return AbstractFormat(
+        joined.prec, joined.exp,
+        pick(af.pos_bound for af in afs),
+        neg_bound=pick(af.neg_bound for af in afs),
+        has_pos_inf=joined.has_pos_inf,
+        has_neg_inf=joined.has_neg_inf,
+        has_nan=joined.has_nan,
+        has_neg_zero=joined.has_neg_zero,
+    )
+
+
 def round_is_identity(
     unrounded: 'SetFormat | AbstractFormat | None',
     ctx: Context | None,
@@ -1994,7 +2037,16 @@ class _FormatInferInstance(Visitor):
                 # ``a < b ? a : b`` chained.  The result is exactly one
                 # operand, so the format joins operand formats (no scope
                 # widening; mirrors :meth:`_visit_if_expr`).
-                return reduce(self._join, arg_fmts)
+                joined = reduce(self._join, arg_fmts)
+                if isinstance(joined, SetFormat):
+                    # a union of known values is already exact
+                    return joined
+                # selection also *orders*, which the join does not record: a
+                # clamp against a constant bounds its result by that constant
+                tight = exact_select(arg_fmts, is_min=isinstance(e, Min))
+                if tight is not None:
+                    return tight.format()
+                return joined
             case Zip():
                 # ``zip(xs1, ..., xsN)`` yields a list of N-tuples whose
                 # element formats are taken directly from the input lists'
