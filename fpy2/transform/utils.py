@@ -1,8 +1,8 @@
 """
 Shared machinery for the transforms: the loop rewrites
 (:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`) and the
-rounding rewrites (:class:`fpy2.transform.FloatToFixed`,
-:class:`fpy2.transform.RescaleFixed`).
+rounding rewrites (:class:`fpy2.transform.UnfoldOverflow`,
+:class:`fpy2.transform.FloatToFixed`, :class:`fpy2.transform.RescaleFixed`).
 """
 
 from ..analysis import (
@@ -12,6 +12,7 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
+    Attribute,
     ConstInf,
     ConstNan,
     ContextStmt,
@@ -23,6 +24,7 @@ from ..ast.fpyast import (
     IfExpr,
     Integer,
     Location,
+    NamedId,
     Neg,
     Rational,
     Signbit,
@@ -30,6 +32,7 @@ from ..ast.fpyast import (
     StmtBlock,
     TupleBinding,
     UnderscoreId,
+    Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER, Float, RealFloat
@@ -86,6 +89,15 @@ def copy_target(target: Id | TupleBinding) -> Id | TupleBinding:
             raise RuntimeError(f'Unexpected target {target}')
 
 
+def attribute(alias: str, *names: str, loc: Location | None = None) -> Attribute:
+    """The dotted name `alias.names[0].names[1]...`."""
+    e: Expr = Var(NamedId(alias), loc)
+    for name in names:
+        e = Attribute(e, name, loc)
+    assert isinstance(e, Attribute)
+    return e
+
+
 def number_literal(x: RealFloat, loc: Location | None) -> Expr:
     """`x` as an exact literal: every `RealFloat` is a dyadic rational."""
     if x.is_integer():
@@ -105,7 +117,12 @@ def value_literal(v: Float, loc: Location | None) -> Expr:
     return Neg(e, loc) if v.s else e
 
 
-def _same_value(a: Float, b: Float) -> bool:
+def shift(x: RealFloat, k: int) -> RealFloat:
+    """`x * 2**k`, exactly."""
+    return RealFloat(s=x.s, exp=x.exp + k, c=x.c)
+
+
+def same_value(a: Float, b: Float) -> bool:
     """Whether two values are the same, sign and all."""
     if a.is_nar():
         return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
@@ -119,7 +136,7 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     When a format makes the same value of both, the choice collapses to that
     value and the operand is not tested at all.
     """
-    if _same_value(pos, neg):
+    if same_value(pos, neg):
         return value_literal(pos, loc)
     return IfExpr(
         Signbit(None, operand, loc),
