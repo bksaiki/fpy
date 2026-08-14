@@ -466,6 +466,23 @@ class _RescaleFixedInstance(BlockRewriter):
         up = lambda: Pow(None, Integer(2, loc), Neg(Var(k, loc), loc), loc)
         down = lambda: Pow(None, Integer(2, loc), Var(k, loc), loc)
 
+        def shift_bound(b: Expr) -> Expr:
+            """`b * 2 ** -k`, folded when the two cancel.
+
+            A bound stated as ``2 ** (k + c)`` -- what a caller writes when the
+            bound follows the position by a fixed number of digits -- shifts to
+            the constant ``2 ** c``.  Multiplying instead would leave two
+            powers whose exponents cancel only at run time, which no analysis
+            of the result can see.
+            """
+            if (isinstance(b, Pow) and b.func is None
+                    and isinstance(b.first, Integer) and b.first.val == 2
+                    and isinstance(b.second, Add)
+                    and isinstance(b.second.second, Integer)
+                    and b.second.first.is_equiv(Var(k, loc))):
+                return Integer(1 << b.second.second.val, loc)
+            return Mul(b, up(), loc)
+
         def build_ctx() -> Expr:
             """The position becomes the integer grid; a stated bound shifts
             with it, while an unstated one is derived and follows on its own."""
@@ -477,7 +494,7 @@ class _RescaleFixedInstance(BlockRewriter):
             for name, index in info.bound:
                 if _arg_of(built, name, index) is None:
                     continue
-                scaled = _replace_arg(built, name, index, lambda b: Mul(b, up(), loc))
+                scaled = _replace_arg(built, name, index, shift_bound)
                 assert scaled is not None
                 built = scaled
             return built

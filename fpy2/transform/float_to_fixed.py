@@ -72,6 +72,7 @@ from enum import Enum, auto
 
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
+    Add,
     Assign,
     BoolVal,
     Call,
@@ -91,6 +92,7 @@ from ..ast.fpyast import (
     Logb,
     Min,
     NamedId,
+    Pow,
     ReturnStmt,
     Round,
     Stmt,
@@ -269,7 +271,8 @@ def _describe(ctx: Context) -> _Source | None:
 
 
 def _ctx_call(
-    nmin: Expr, src: _Source, alias: str, loc: Location | None
+    nmin: Expr, src: _Source, alias: str, loc: Location | None,
+    reach: Expr | None = None,
 ) -> Call:
     """
     The fixed-point format holding `src`'s values, with its digits at `nmin + 1`.
@@ -277,6 +280,12 @@ def _ctx_call(
     The bound and the rounding mode are `src`'s own, and the remaining flags
     put overflow where the float format puts it.  Arguments matching the
     constructor's defaults are left out.
+
+    PROTOTYPE: `reach` is how far the operand can reach in this branch, which
+    the branch itself fixes and no downstream analysis can recover.  Stating it
+    on an otherwise unbounded target turns the bound into a *claim* --
+    `OverflowMode.ASSERT`, so it is checked rather than trusted -- and gives
+    the rescaled rounding a width instead of an unbounded one.
     """
     def mode(name: str, value) -> tuple[str, Expr]:
         return (name, attribute(alias, type(value).__name__, value.name, loc=loc))
@@ -294,6 +303,14 @@ def _ctx_call(
     # produces one
     match src.policy:
         case _Policy.UNBOUNDED:
+            if reach is not None:
+                # the branch bounds the operand, so say so: a claim, not an
+                # edge rule, and the one thing that gives the rounding a width
+                kwargs.append(mode('overflow', OverflowMode.ASSERT))
+                return Call(
+                    attribute(alias, 'MPBFixedContext', loc=loc),
+                    MPBFixedContext, (nmin, reach), tuple(kwargs), loc,
+                )
             # nothing to overflow: the format is a digit position and no more
             return Call(
                 attribute(alias, 'MPFixedContext', loc=loc),
@@ -400,12 +417,12 @@ class _FloatToFixedInstance(BlockRewriter):
         # only a substituting format loses the sign of an overflow
         restore_sign = src.policy is _Policy.NAN_ON_OVERFLOW
 
-        def rounding(nmin: Expr) -> list[Stmt]:
+        def rounding(nmin: Expr, reach: Expr | None = None) -> list[Stmt]:
             """`target = round(v)` under the format at `nmin`."""
             # the block holds the rounding alone, so a later pass can shift it
             out = target if not restore_sign else self.gensym.fresh('_t')
             stmts: list[Stmt] = [ContextStmt(
-                UnderscoreId(), _ctx_call(nmin, src, alias, loc),
+                UnderscoreId(), _ctx_call(nmin, src, alias, loc, reach),
                 StmtBlock([Assign(out, None, Round(None, arg(), loc), loc)]), loc,
             )]
             if restore_sign:
@@ -429,7 +446,14 @@ class _FloatToFixedInstance(BlockRewriter):
         if src.expmax is not None:
             scale = Min(None, [scale, Integer(src.expmax, loc)], loc)
         position = Assign(pos_name, None, scale, loc)
-        at_scale = rounding(Sub(Var(pos_name, loc), Integer(1, loc), loc))
+        # `exp = logb(x) - P + 1`, so `|x| < 2 ** (logb(x) + 1) == 2 ** (exp + P)`
+        normal_reach = Pow(
+            None, Integer(2, loc),
+            Add(Var(pos_name, loc), Integer(src.pmax, loc), loc), loc,
+        )
+        at_scale = rounding(
+            Sub(Var(pos_name, loc), Integer(1, loc), loc), normal_reach,
+        )
 
         if src.emin is None:
             # no subnormals: every value rounds at a position of its own
@@ -438,9 +462,12 @@ class _FloatToFixedInstance(BlockRewriter):
             # below `emin` the format is itself fixed-point: every value in
             # that range rounds at the same position, a constant
             assert src.expmin is not None
+            # this branch is `logb(x) < emin`, so `|x| < 2 ** emin` -- a
+            # constant, since the position here is one too
+            sub_reach = number_literal(RealFloat(exp=src.emin, c=1), loc)
             normal = IfStmt(
                 Compare([CompareOp.LT], [Var(e_name, loc), Integer(src.emin, loc)], loc),
-                StmtBlock(rounding(Integer(src.expmin - 1, loc))),
+                StmtBlock(rounding(Integer(src.expmin - 1, loc), sub_reach)),
                 StmtBlock([position, *at_scale]),
                 loc,
             )
