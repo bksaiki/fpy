@@ -186,17 +186,29 @@ class TestScaleByPowerOfTwo:
     def test_the_lowering_uses_ldexp_not_pow(self):
         out = self._lowered()
         assert 'std::ldexp(' in out
-        assert 'std::pow(' not in out, (
-            'a runtime power of two must not go through std::pow'
-        )
+        # `pow` survives only as the non-finite arm of the guard, never as the
+        # way a finite scale is computed
+        for line in out.splitlines():
+            if 'std::pow(' in line:
+                assert 'std::isfinite(' in line, line
 
-    def test_exponent_is_asserted_finite(self):
-        """The exponent comes from ``logb``, whose format admits a NaN and the
-        infinities; neither has an ``int``.  The branches that rule them out
-        are not something the analysis reads, so the claim is asserted."""
+    def test_a_possibly_nonfinite_exponent_falls_back_to_a_product(self):
+        """``ldexp`` takes an ``int``, and converting a NaN or an infinity to
+        one is undefined -- on x86-64 it gives ``INT_MIN``, so ``2 ** inf``
+        would come back ``0`` where FPy says an infinity.
+
+        An assertion would not do: it compiles out under ``NDEBUG``, leaving
+        the undefined conversion in a release build.  ``std::pow`` defines all
+        three cases exactly as FPy does, so the product is the faithful
+        lowering precisely where the exponent is not finite.
+        """
         out = self._lowered()
-        assert 'assert(std::isfinite(' in out
-        assert 'scaling is undefined for this exponent' in out
+        assert 'std::isfinite(' in out
+        assert 'std::ldexp(' in out
+        assert 'std::pow(2.0,' in out, 'the non-finite arm must be a product'
+        assert 'scaling is undefined' not in out, (
+            'an assertion is not enough: NDEBUG would erase it'
+        )
 
     def test_a_constant_scale_stays_a_multiply(self):
         """A constant power of two needs no call: the literal multiply is
@@ -260,9 +272,9 @@ class TestScaleByPowerOfTwo:
         assert 'std::ldexp' not in out
         assert 'std::pow' in out
 
-    def test_an_integer_exponent_needs_no_assertion(self):
-        """An exponent the analysis knows is finite by its format costs no
-        guard -- only one derived from ``logb`` does."""
+    def test_an_integer_exponent_needs_no_guard(self):
+        """An exponent the analysis knows is finite by its format costs neither
+        a branch nor a fallback -- only one derived from ``logb`` does."""
         @fp.fpy
         def f(x: fp.Real, n: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -271,7 +283,8 @@ class TestScaleByPowerOfTwo:
         out = CppCompiler().compile(
             f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
         assert 'std::ldexp' in out
-        assert 'scaling is undefined' not in out
+        assert 'std::isfinite' not in out
+        assert 'std::pow' not in out
 
     def test_declines_when_the_context_rounds_the_product(self):
         """``ldexp`` computes the *exact* product, so it may only stand in for

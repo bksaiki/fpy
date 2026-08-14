@@ -2113,15 +2113,27 @@ class CppEmitter(Visitor):
     def _ldexp_call(
         self, value: str, exp: Expr, ctx, *, finite: bool,
     ) -> str:
-        """``std::ldexp(value, exp)``, asserting a finite exponent when the
-        analysis cannot show one."""
+        """``std::ldexp(value, exp)``, falling back to a product where the
+        exponent may not be finite.
+
+        ``ldexp`` takes its exponent as an ``int``, and converting a NaN or an
+        infinity to one is undefined -- on x86-64 it yields ``INT_MIN``, so
+        ``2 ** inf`` would come back ``0`` instead of an infinity.  FPy defines
+        all three (``inf``, ``0``, NaN), and so does ``std::pow``, so the
+        product is the faithful lowering exactly where the exponent is not
+        finite.  An assertion would not do: it compiles out under ``NDEBUG``,
+        leaving the undefined conversion in a release build.
+
+        The analysis proves finiteness whenever the exponent's format admits no
+        specials -- a bounded integer one, say -- and then this costs nothing.
+        """
         n = self._bind_operand(self._visit_expr(exp, ctx))
-        if not finite:
-            self.writer.add_line(
-                f'assert(std::isfinite({n}) '
-                f'&& "fpy: scaling is undefined for this exponent");'
-            )
-        return f'std::ldexp({value}, static_cast<int>({n}))'
+        scaled = f'std::ldexp({value}, static_cast<int>({n}))'
+        if finite:
+            return scaled
+        v = self._bind_operand(value)
+        scaled = f'std::ldexp({v}, static_cast<int>({n}))'
+        return f'(std::isfinite({n}) ? {scaled} : std::pow(2.0, {n}) * {v})'
 
     def _emit_fp_predicate(self, e: UnaryOp, arg: str) -> str:
         """Bool-returning FP predicates: ``isnan`` / ``isinf`` /
