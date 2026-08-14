@@ -60,9 +60,9 @@ fixed-point rounding to digit position zero, where its values are integers.
 
 Applies to a float format that rounds deterministically and whose overflow a
 fixed-point round can reproduce — an infinity, the bound, or a NaN.  An
-unbounded format (``MPSFloatContext``, ``MPFloatContext``) needs no bound in
-its target and no upper clamp; one without subnormals needs no branch for
-them.  Only a block whose body is entirely ``x = fp.round(v)`` (or a returned
+unbounded format (``MPSFloatContext``, ``MPFloatContext``) needs no upper
+clamp -- its target's bound states how far the operand reaches, not what the
+format does at an edge; one without subnormals needs no branch for them.  Only a block whose body is entirely ``x = fp.round(v)`` (or a returned
 round) over variables is rewritten.  The rewrite needs ``fpy2`` in scope,
 since it names the context constructor.
 """
@@ -110,7 +110,6 @@ from ..number import (
     IEEEContext,
     MPBFixedContext,
     MPBFloatContext,
-    MPFixedContext,
     MPFloatContext,
     MPSFloatContext,
     OverflowMode,
@@ -271,8 +270,7 @@ def _describe(ctx: Context) -> _Source | None:
 
 
 def _ctx_call(
-    nmin: Expr, src: _Source, alias: str, loc: Location | None,
-    reach: Expr | None = None,
+    nmin: Expr, src: _Source, alias: str, loc: Location | None, reach: Expr,
 ) -> Call:
     """
     The fixed-point format holding `src`'s values, with its digits at `nmin + 1`.
@@ -281,11 +279,9 @@ def _ctx_call(
     put overflow where the float format puts it.  Arguments matching the
     constructor's defaults are left out.
 
-    PROTOTYPE: `reach` is how far the operand can reach in this branch, which
-    the branch itself fixes and no downstream analysis can recover.  Stating it
-    on an otherwise unbounded target turns the bound into a *claim* --
-    `OverflowMode.ASSERT`, so it is checked rather than trusted -- and gives
-    the rescaled rounding a width instead of an unbounded one.
+    `reach` is how far the operand can reach in this branch, which the branch
+    itself fixes and no downstream analysis can recover.  Stating it gives the
+    rescaled rounding a width.
     """
     def mode(name: str, value) -> tuple[str, Expr]:
         return (name, attribute(alias, type(value).__name__, value.name, loc=loc))
@@ -303,18 +299,11 @@ def _ctx_call(
     # produces one
     match src.policy:
         case _Policy.UNBOUNDED:
-            if reach is not None:
-                # the branch bounds the operand, so say so: a claim, not an
-                # edge rule, and the one thing that gives the rounding a width
-                kwargs.append(mode('overflow', OverflowMode.ASSERT))
-                return Call(
-                    attribute(alias, 'MPBFixedContext', loc=loc),
-                    MPBFixedContext, (nmin, reach), tuple(kwargs), loc,
-                )
-            # nothing to overflow: the format is a digit position and no more
+            # `reach` is a claim that overflow cannot happen, not an edge rule
+            kwargs.append(mode('overflow', OverflowMode.ASSERT))
             return Call(
-                attribute(alias, 'MPFixedContext', loc=loc),
-                MPFixedContext, (nmin,), tuple(kwargs), loc,
+                attribute(alias, 'MPBFixedContext', loc=loc),
+                MPBFixedContext, (nmin, reach), tuple(kwargs), loc,
             )
         case _Policy.INFINITE:
             kwargs.append(mode('overflow', OverflowMode.OVERFLOW))
@@ -417,7 +406,7 @@ class _FloatToFixedInstance(BlockRewriter):
         # only a substituting format loses the sign of an overflow
         restore_sign = src.policy is _Policy.NAN_ON_OVERFLOW
 
-        def rounding(nmin: Expr, reach: Expr | None = None) -> list[Stmt]:
+        def rounding(nmin: Expr, reach: Expr) -> list[Stmt]:
             """`target = round(v)` under the format at `nmin`."""
             # the block holds the rounding alone, so a later pass can shift it
             out = target if not restore_sign else self.gensym.fresh('_t')
@@ -462,8 +451,7 @@ class _FloatToFixedInstance(BlockRewriter):
             # below `emin` the format is itself fixed-point: every value in
             # that range rounds at the same position, a constant
             assert src.expmin is not None
-            # this branch is `logb(x) < emin`, so `|x| < 2 ** emin` -- a
-            # constant, since the position here is one too
+            # this branch is `logb(x) < emin`, so `|x| < 2 ** emin`
             sub_reach = number_literal(RealFloat(exp=src.emin, c=1), loc)
             normal = IfStmt(
                 Compare([CompareOp.LT], [Var(e_name, loc), Integer(src.emin, loc)], loc),

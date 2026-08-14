@@ -54,8 +54,16 @@ implements.  `logb` is the one that matters:
 
 Verified against the interpreter.  The rest are the familiar rules: NaN
 propagates through arithmetic; `Zero * Inf` is `NaN`; `Finite ± Finite` is
-`{Zero, Finite}`; `min`/`max` union their operands; and a rounding maps
-`Finite` to `{Zero, Finite}`, since a small enough value underflows.
+`{Zero, Finite}`; and `min`/`max` union their operands.
+
+Rounding is the one to get right.  Under a **bounded** context it maps `Finite`
+to `{Zero, Finite, Inf}`: a small enough value underflows to zero and a large
+enough one overflows — `FP16.round(1e30)` is `+inf`, and `FP16.round(1e-30)` is
+`+0`, both verified.  Only an **unbounded** context — or one whose overflow has
+already been moved into program text by
+[`unfold_overflow`](../source/strategies.rst) — drops the `Inf`.  Reading the
+bounded case as `{Zero, Finite}` would prove exactly the guards that exist to
+catch it.
 
 ## Refinement
 

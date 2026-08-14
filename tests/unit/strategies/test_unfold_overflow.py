@@ -194,6 +194,11 @@ class TestPipeline:
 
         ctxs = _block_ctxs(out.ast)
         assert not any(isinstance(c, MPSFloatContext) for c in ctxs)
+        # the claim, stated over *every* surviving context rather than the
+        # fixed-point ones alone
+        for c in ctxs:
+            ov = getattr(c, 'overflow', None)
+            assert ov in (None, fp.OverflowMode.ASSERT), (c, ov)
         rounding = [c for c in ctxs if isinstance(c, MPFixedContext | fp.MPBFixedContext)]
         assert rounding
         for c in rounding:

@@ -300,8 +300,12 @@ class AbstractFormat:
         else:
             prec = max(p_self + p_other, 1)
         exp = self.exp + other.exp
+        # every format straddles zero (`pos_bound >= 0 >= neg_bound`), so the
+        # two like-sign corners give the maximum and the two cross corners the
+        # minimum -- `max` on the latter would claim the *tighter* of the two
+        # and miss the product it names: `[-1,1] * [-2,1]` reaches -2
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
-        neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
+        neg_bound = min(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
 
         # special values: 0 is representable everywhere, so `inf * 0 = NaN` is
         # reachable whenever either operand has an infinity -- the NaN result is

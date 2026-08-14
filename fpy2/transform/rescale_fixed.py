@@ -80,6 +80,7 @@ from ..ast.fpyast import (
     Neg,
     Pow,
     Rational,
+    RationalVal,
     ReturnStmt,
     Round,
     Stmt,
@@ -469,18 +470,19 @@ class _RescaleFixedInstance(BlockRewriter):
         def shift_bound(b: Expr) -> Expr:
             """`b * 2 ** -k`, folded when the two cancel.
 
-            A bound stated as ``2 ** (k + c)`` -- what a caller writes when the
-            bound follows the position by a fixed number of digits -- shifts to
-            the constant ``2 ** c``.  Multiplying instead would leave two
-            powers whose exponents cancel only at run time, which no analysis
-            of the result can see.
+            A bound stated as ``2 ** (k + c)`` shifts to the constant
+            ``2 ** c``.  Multiplying instead leaves two powers whose exponents
+            cancel only at run time, which no analysis of the result can see.
             """
-            if (isinstance(b, Pow) and b.func is None
-                    and isinstance(b.first, Integer) and b.first.val == 2
-                    and isinstance(b.second, Add)
-                    and isinstance(b.second.second, Integer)
-                    and b.second.first.is_equiv(Var(k, loc))):
-                return Integer(1 << b.second.second.val, loc)
+            if isinstance(b, Pow) and b.func is None \
+                    and isinstance(b.first, RationalVal) \
+                    and b.first.as_rational() == 2 \
+                    and isinstance(b.second, Add):
+                # `k + c` and `c + k` are the same sum
+                for var, const in ((b.second.first, b.second.second),
+                                   (b.second.second, b.second.first)):
+                    if isinstance(const, Integer) and var.is_equiv(Var(k, loc)):
+                        return _pow2(const.val, loc)
             return Mul(b, up(), loc)
 
         def build_ctx() -> Expr:

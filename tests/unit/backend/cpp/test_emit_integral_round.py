@@ -41,8 +41,8 @@ def _emit(ctx, src=fp.FP64, body='round'):
 
 class TestModeTable:
     """Each FPy rounding mode maps to the libm function with the same
-    semantics, verified against the interpreter in
-    ``tests/unit/analysis`` and against compiled output here."""
+    semantics.  This pins the mapping; ``test_lowered_roundtrip.py`` is where
+    the compiled result is diffed against the interpreter."""
 
     @pytest.mark.parametrize('rm, fn', [
         (RM.RTZ, 'std::trunc'),
@@ -93,8 +93,19 @@ class TestAssertions:
 
     def test_bound_assertion_for_overflow_assert(self):
         out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=11, c=1), overflow=ASSERT))
-        assert 'assert(std::fabs(' in out
+        assert 'assert((std::fabs(' in out
         assert '2048' in out
+        assert 'overflow occurred so rounding is undefined' in out
+
+    def test_asymmetric_bounds_get_two_comparisons(self):
+        """``fabs`` states one magnitude, but the two bounds are independent --
+        a two's-complement grid runs to -128 and only to 127, and the legal
+        most-negative value must not trip the assertion."""
+        out = _emit(MPBFixedContext(
+            -1, fp.RealFloat(exp=0, c=127),
+            neg_maxval=fp.RealFloat(s=True, exp=0, c=128), overflow=ASSERT))
+        assert 'fabs' not in out
+        assert '-128' in out and '127' in out
         assert 'overflow occurred so rounding is undefined' in out
 
     def test_no_bound_assertion_without_assert_mode(self):
@@ -192,6 +203,17 @@ class TestScaleByPowerOfTwo:
             if 'std::pow(' in line:
                 assert 'std::isfinite(' in line, line
 
+    def test_the_lowering_widens_before_scaling(self):
+        """``std::ldexp`` is overloaded on its first argument, so scaling the
+        `FP32` source directly would overflow in ``float`` where the `double`
+        result is representable.  The value is widened first."""
+        out = self._lowered()
+        scale = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
+        assert scale
+        for ln in scale:
+            assert 'float ' not in ln, ln
+        assert 'static_cast<double>(x)' in out
+
     def test_a_possibly_nonfinite_exponent_falls_back_to_a_product(self):
         """``ldexp`` takes an ``int``, and converting a NaN or an infinity to
         one is undefined -- on x86-64 it gives ``INT_MIN``, so ``2 ** inf``
@@ -225,7 +247,7 @@ class TestScaleByPowerOfTwo:
             with fp.FP64:
                 return 2 ** n
 
-        out = CppCompiler().compile(f, arg_types=[RealType(fp.SINT16)])
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.SINT8)])
         assert 'std::ldexp' in out
         assert 'std::pow' not in out
 
@@ -241,7 +263,7 @@ class TestScaleByPowerOfTwo:
             with fp.FP64:
                 return x * (2 ** n)
 
-        tys = [RealType(fp.FP64), RealType(fp.SINT16)]
+        tys = [RealType(fp.FP64), RealType(fp.SINT8)]
         for f in (left, right):
             out = CppCompiler().compile(f, arg_types=tys)
             assert out.count('std::ldexp') == 1, f.name
@@ -256,9 +278,29 @@ class TestScaleByPowerOfTwo:
                 return (2 ** a) * (2 ** b)
 
         out = CppCompiler().compile(
-            f, arg_types=[RealType(fp.SINT16), RealType(fp.SINT16)])
+            f, arg_types=[RealType(fp.SINT8), RealType(fp.SINT8)])
         assert out.count('std::ldexp') == 2
         assert 'std::pow' not in out
+
+    def test_declines_when_the_power_itself_is_rounded(self):
+        """One ``ldexp`` replaces *two* rounded steps, so the intermediate
+        ``2 ** n`` must be exact under the context too.
+
+        With a ``SINT16`` exponent the power spans ``2 ** 32767``, which `FP64`
+        rounds -- and `2 ** -1080` is already zero before it reaches the
+        product, a value ``ldexp`` would never form.  Inference records the
+        *clipped* format for the power, so this cannot be read off the recorded
+        bound; :func:`fpy2.analysis.format_infer.exact_exp2` is asked instead.
+        """
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** n) * x
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
+        assert 'std::ldexp' not in out
+        assert 'std::pow' in out
 
     def test_a_non_integer_exponent_is_left_alone(self):
         """``2 ** 0.5`` has no integral exponent, so the product stands."""
@@ -281,19 +323,19 @@ class TestScaleByPowerOfTwo:
                 return (2 ** n) * x
 
         out = CppCompiler().compile(
-            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
+            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])
         assert 'std::ldexp' in out
         assert 'std::isfinite' not in out
         assert 'std::pow' not in out
 
-    def test_declines_when_the_context_rounds_the_product(self):
+    def test_does_not_rescue_a_program_the_dispatch_refuses(self):
         """``ldexp`` computes the *exact* product, so it may only stand in for
-        ``round_C`` where that rounding is the identity.  Under a context
-        narrower than the operands it would skip a rounding -- and skipping it
-        gave `1 + 2**-20` back unchanged where FP16 says `1`.
+        ``round_C`` where that rounding is the identity.  The op-table refuses
+        this program because `FP16` has no storage matching its `FP64` operand;
+        were the peephole to fire it would answer first, and the emitted
+        ``ldexp`` would skip the narrowing rounding the context asked for.
 
-        The op-table dispatch refuses this program for the same reason, so the
-        peephole must decline rather than quietly answer.
+        So the error escaping is the assertion: the peephole declined.
         """
         @fp.fpy
         def f(x: fp.Real, n: fp.Real) -> fp.Real:
@@ -302,4 +344,4 @@ class TestScaleByPowerOfTwo:
 
         with pytest.raises(CppCompileError, match='no matching signature'):
             CppCompiler().compile(
-                f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
+                f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])

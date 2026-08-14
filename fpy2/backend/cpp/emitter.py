@@ -35,6 +35,7 @@ from ...analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
     SetFormat,
+    exact_exp2,
     round_is_identity,
 )
 from ...ast.fpyast import (
@@ -255,21 +256,6 @@ class _IndentedWriter:
 
     def dedent(self):
         self._depth -= 1
-
-    def mark(self) -> int:
-        """A point to :meth:`rewind` to.
-
-        Lets a caller emit speculatively -- an expression whose C++ form may or
-        may not need statements of its own -- and undo it if the shape turns out
-        not to fit.  See :meth:`_FnEmitter._visit_if`.
-        """
-        return len(self._lines)
-
-    def wrote_since(self, mark: int) -> bool:
-        return len(self._lines) > mark
-
-    def rewind(self, mark: int) -> None:
-        del self._lines[mark:]
 
     def render(self) -> str:
         return '\n'.join(self._lines)
@@ -888,15 +874,18 @@ class CppEmitter(Visitor):
         # REAL sets no fenv mode; its ops succeed only via `_try_widen`, whose
         # failure reports a precise location.  Validating here would fire first
         # and worse, so descend like an integer scope.
-        if (
-            func_ctx is None
-            or func_ctx is REAL
-            or self._validate_context_rm(func_ctx, at=func).is_integer()
-        ):
+        entry_rm = None
+        if func_ctx is not None and func_ctx is not REAL:
+            storage = self._validate_context_rm(func_ctx, at=func)
+            # only a floating-point context in float storage rounds through
+            # `fesetround`; integer storage and the libm fixed-point lowering
+            # both round by other means and want no scope
+            if storage.is_float() and isinstance(func_ctx, EFloatContext):
+                entry_rm = func_ctx.rm
+        if entry_rm is None:
             self._visit_block(func.body, None)
         else:
-            assert isinstance(func_ctx, EFloatContext)
-            with self._fenv_scope(func_ctx.rm):
+            with self._fenv_scope(entry_rm):
                 self._visit_block(func.body, None)
         self.writer.dedent()
         self.writer.add_line('}')
@@ -1381,7 +1370,9 @@ class CppEmitter(Visitor):
             raise CppEmitError(
                 f'unsupported context `{rctx}`: {e}', at=at,
             ) from e
-        if not isinstance(storage, CppScalar):
+        if not isinstance(storage, CppScalar) or not (
+            storage.is_integer() or storage.is_float()
+        ):
             raise CppEmitError(
                 f'unsupported context storage `{storage!r}` for `{rctx}`',
                 at=at,
@@ -1414,7 +1405,7 @@ class CppEmitter(Visitor):
                         '`CppCompiler` to allow truncation to int64_t.',
                         at=at,
                     )
-            elif storage.is_float():
+            else:  # float storage, by the check above
                 if rctx.nmin != -1:
                     raise CppEmitError(
                         f'fixed-point context `{rctx}` in floating-point '
@@ -1428,11 +1419,30 @@ class CppEmitter(Visitor):
                         'libm function rounding to an integral value',
                         at=at,
                     )
-            else:
-                raise CppEmitError(
-                    f'unsupported context storage `{storage!r}` for `{rctx}`',
-                    at=at,
-                )
+                # Everything the libm lowering refuses has to be refused *here*
+                # too, or `_visit_round` falls back to a cast and the rounding
+                # disappears.  These mirror `_emit_integral_round`'s guards.
+                if rctx.num_randbits != 0:
+                    raise CppEmitError(
+                        f'stochastic rounding under `{rctx}` has no C++ '
+                        'analogue: no libm function draws random bits',
+                        at=at,
+                    )
+                if not rctx.enable_neg_zero:
+                    raise CppEmitError(
+                        f'context `{rctx}` drops the negative zero that its '
+                        'floating-point storage keeps, and the libm rounding '
+                        'functions preserve',
+                        at=at,
+                    )
+                if rctx.nan_value is not None or rctx.inf_value is not None:
+                    raise CppEmitError(
+                        f'context `{rctx}` substitutes a value for NaN or an '
+                        'infinity; a libm rounding passes both through '
+                        'unchanged, and an assertion cannot stand in for a '
+                        'substitution',
+                        at=at,
+                    )
         elif storage.is_float():
             if not isinstance(rctx, EFloatContext):
                 raise CppEmitError(
@@ -1449,7 +1459,9 @@ class CppEmitter(Visitor):
                 )
         else:
             raise CppEmitError(
-                f'unsupported context storage `{storage!r}` for `{rctx}`',
+                f'context `{rctx}` resolves to integer storage but is not a '
+                'fixed-point context; only `MPFixedContext` and '
+                '`MPBFixedContext` lower to integer arithmetic',
                 at=at,
             )
         return storage
@@ -1496,9 +1508,10 @@ class CppEmitter(Visitor):
             return
         storage = self._validate_context_rm(rctx, at=stmt)
         if storage.is_integer() or isinstance(rctx, MPFixedContext | MPBFixedContext):
-            # A fixed-point scope has no ``fenv`` to manage whichever storage it
-            # lands in: its rounding is a cast or a libm call, both of which fix
-            # the mode themselves.  Just descend.
+            # A fixed-point scope sets no ``fenv`` mode whichever storage it
+            # lands in: it rounds by a cast or by a libm call naming its mode.
+            # The one exception is RNE, whose ``std::nearbyint`` reads the live
+            # mode instead -- `_emit_integral_round` checks that separately.
             self._visit_block(stmt.body, ctx)
             return
         # Float context: validation above guarantees an
@@ -2015,11 +2028,13 @@ class CppEmitter(Visitor):
     def _ldexp_exponent(self, e: Expr) -> bool | None:
         """Whether *e* can be ``std::ldexp``'s exponent, and what it costs.
 
-        ``True`` when every value is an integer that fits ``int``; ``None`` when
-        the shape is wrong and the caller should emit a product instead.
-        ``False`` means the same but with a finiteness assertion needed first:
-        the format admits a NaN or an infinity, which has no ``int``, and the
-        branches that rule them out are not something the analysis reads.
+        - ``None`` -- no: not known to be an integer within ``int``'s range, so
+          the caller must emit a product instead.
+        - ``True`` -- yes, unconditionally.
+        - ``False`` -- yes, but only under a runtime finiteness guard: the
+          format admits a NaN or an infinity, neither of which has an ``int``,
+          and the branches that rule them out are not something the analysis
+          reads.
         """
         fmt = self.format_info.by_expr.get(e)
         if isinstance(fmt, SetFormat):
@@ -2065,13 +2080,18 @@ class CppEmitter(Visitor):
             # the context rounds this product; `ldexp` would not
             return None
         for scale, value in ((e.first, e.second), (e.second, e.first)):
-            if not (isinstance(scale, Pow) and scale.func is None):
+            if not isinstance(scale, Pow):
                 continue
             base, exp = scale.first, scale.second
-            if not (isinstance(base, Integer) and base.val == 2):
+            if not (isinstance(base, RationalVal) and base.as_rational() == 2):
                 continue
             finite = self._ldexp_exponent(exp)
             if finite is None:
+                continue
+            # One call replaces *two* rounded steps, so the intermediate has to
+            # be unrounded as well: under `FP64`, `2 ** -1080` is already zero
+            # before it reaches the product, and `ldexp` would never form it.
+            if not self._pow2_is_exact(exp, active):
                 continue
             target = self._storage_for_expr(e)
             if not (isinstance(target, CppScalar) and target.is_float()):
@@ -2083,10 +2103,26 @@ class CppEmitter(Visitor):
                 and (value_ty == target or scalar_fits_in(value_ty, target))
             ):
                 continue
-            return self._ldexp_call(
-                self._visit_expr(value, ctx), exp, ctx, finite=finite,
-            )
+            v = self._visit_expr(value, ctx)
+            if value_ty != target:
+                # `std::ldexp` is overloaded on its first argument, so a narrower
+                # operand would scale -- and overflow -- in the narrower type
+                v = self._explicit_cast(v, target)
+            return self._ldexp_call(v, exp, ctx, finite=finite)
         return None
+
+    def _pow2_is_exact(self, exp: Expr, ctx: Context) -> bool:
+        """Whether `ctx` rounds `2 ** exp` at all.
+
+        Asks :func:`exact_exp2` rather than reading the recorded bound: what
+        inference records is the result *after* the scope clipped it, so a power
+        too wide for the context comes back looking like the context's own
+        format.  ``ldexp`` forms the exact value, so a clipped one is exactly
+        the case that must decline.
+        """
+        return round_is_identity(
+            exact_exp2(self.format_info.by_expr.get(exp)), ctx,
+        )
 
     def _emit_pow2(self, e: Pow, ctx) -> str | None:
         """``2 ** n`` as ``std::ldexp(1, n)``, or `None` to emit a ``pow``.
@@ -2097,10 +2133,10 @@ class CppEmitter(Visitor):
         ``ldexp(1, n) * v`` can underflow the intermediate to zero and lose a
         product that was representable.
         """
-        if not (isinstance(e.first, Integer) and e.first.val == 2):
+        if not (isinstance(e.first, RationalVal) and e.first.as_rational() == 2):
             return None
         active = self._active_ctx_for(e)
-        if active is None or not self._result_fits_ctx(e, active):
+        if active is None or not self._pow2_is_exact(e.second, active):
             return None
         finite = self._ldexp_exponent(e.second)
         if finite is None:
@@ -2128,9 +2164,9 @@ class CppEmitter(Visitor):
         specials -- a bounded integer one, say -- and then this costs nothing.
         """
         n = self._bind_operand(self._visit_expr(exp, ctx))
-        scaled = f'std::ldexp({value}, static_cast<int>({n}))'
         if finite:
-            return scaled
+            return f'std::ldexp({value}, static_cast<int>({n}))'
+        # both arms name the value, so it has to be bound before either
         v = self._bind_operand(value)
         scaled = f'std::ldexp({v}, static_cast<int>({n}))'
         return f'(std::isfinite({n}) ? {scaled} : std::pow(2.0, {n}) * {v})'
@@ -2828,9 +2864,19 @@ class CppEmitter(Visitor):
             f'{target_ty.format()} {out} = {fn}({operand});'
         )
         if isinstance(active, MPBFixedContext) and active.overflow is OverflowMode.ASSERT:
-            bound = self._emit_numeric_literal(active.maxval().as_real().as_rational(), at=e)
+            hi = active.maxval().as_real().as_rational()
+            lo = active.maxval(s=True).as_real().as_rational()
+            if lo == -hi:
+                test = f'std::fabs({out}) <= {self._emit_numeric_literal(hi, at=e)}'
+            else:
+                # the two bounds are independent -- a two's-complement grid runs
+                # to -128 but only to 127 -- and `fabs` cannot say that
+                test = (
+                    f'{self._emit_numeric_literal(lo, at=e)} <= {out} && '
+                    f'{out} <= {self._emit_numeric_literal(hi, at=e)}'
+                )
             self.writer.add_line(
-                f'assert(std::fabs({out}) <= {bound} '
+                f'assert(({test}) '
                 f'&& "fpy: overflow occurred so rounding is undefined");'
             )
         return out
@@ -3123,18 +3169,50 @@ class CppEmitter(Visitor):
     def _visit_if1(self, stmt: If1Stmt, ctx):
         self._emit_guarded_block('if', stmt.cond, stmt.body, ctx)
 
-    @staticmethod
-    def _sole_if(block: StmtBlock) -> 'IfStmt | None':
-        """The one ``if``/``else`` *block* consists of, or ``None``.
+    #: Expression kinds that emit no statement of their own, so a condition
+    #: built only from these can move onto an ``else if`` line.  Deliberately a
+    #: whitelist: anything absent keeps the nesting, which is always correct.
+    _PURE_COND_OPS = (
+        Var, Integer, Decnum, Rational, Hexnum, BoolVal,
+        Compare, Not, And, Or,
+        IsNan, IsInf, IsFinite, IsNormal, Signbit,
+    )
 
-        An ``else`` holding nothing else is what ``else if`` is for; a chain of
-        FPy ``elif``s arrives as exactly this shape, one nesting level deep per
-        arm.
+    def _is_pure_cond(self, e: Expr) -> bool:
+        """Whether *e* compiles to an expression with no statements before it.
+
+        An operand needing a temporary, and the assertions the rounding
+        lowerings emit, are both statements -- and on an ``else if`` line they
+        would sit before the ``else`` and run unconditionally.  Decided
+        structurally rather than by emitting and undoing, since a rewind cannot
+        take back the emitter state an expression visitor may also have touched.
+        """
+        if not isinstance(e, self._PURE_COND_OPS):
+            return False
+        subs: list[Expr] = [
+            v for name in ('arg', 'first', 'second')
+            if isinstance(v := getattr(e, name, None), Expr)
+        ]
+        subs += [v for v in getattr(e, 'args', ()) if isinstance(v, Expr)]
+        return all(self._is_pure_cond(s) for s in subs)
+
+    def _flattenable(self, block: StmtBlock) -> 'IfStmt | None':
+        """The ``if`` this ``else`` block can collapse onto, or ``None``.
+
+        An ``else`` holding one ``if`` and nothing else is what ``else if`` is
+        for; a chain of FPy ``elif``s arrives as exactly that, one nesting level
+        per arm.  Two things keep the nesting: a storage class anchored to the
+        inner ``if``, which declares *before* it and has nowhere to go on an
+        ``else if`` line, and a condition that needs statements of its own.
         """
         if len(block.stmts) != 1:
             return None
         only = block.stmts[0]
-        return only if isinstance(only, IfStmt) else None
+        if not isinstance(only, IfStmt):
+            return None
+        if self.storage.hoists_before.get(only):
+            return None
+        return only if self._is_pure_cond(only.cond) else None
 
     def _visit_if(self, stmt: IfStmt, ctx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -3145,16 +3223,8 @@ class CppEmitter(Visitor):
 
         # Flatten ``else { if ... }`` into ``else if``, which is what the
         # nesting means and keeps a long chain readable.
-        while (nested := self._sole_if(stmt.iff)) is not None:
-            # The condition may need statements of its own -- a bound operand,
-            # or one of the assertions the rounding lowerings emit.  Those would
-            # land before the ``else``, so run unconditionally; emit
-            # speculatively and keep the nesting when any appear.
-            mark = self.writer.mark()
+        while (nested := self._flattenable(stmt.iff)) is not None:
             nested_cond = self._visit_expr(nested.cond, ctx)
-            if self.writer.wrote_since(mark):
-                self.writer.rewind(mark)
-                break
             self.writer.add_line(f'}} else if ({nested_cond}) {{')
             self.writer.indent()
             self._visit_block(nested.ift, ctx)

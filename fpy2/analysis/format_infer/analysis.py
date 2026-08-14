@@ -157,7 +157,7 @@ from ...types import (
     Type,
     VarType,
 )
-from ...utils import is_dyadic
+from ...utils import is_dyadic, trailing_zeros
 from ..alias import Alias, AliasAnalysis, Region
 from ..array_size import (
     ArraySizeAnalysis,
@@ -581,7 +581,7 @@ def _normalized(x: RealFloat) -> RealFloat:
     """
     if x.is_zero():
         return x
-    trailing = (x.c & -x.c).bit_length() - 1
+    trailing = trailing_zeros(x.c)
     return RealFloat(s=x.s, exp=x.exp + trailing, c=x.c >> trailing)
 
 
@@ -957,6 +957,13 @@ def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
     )
 
 
+_MAX_EXP2_SPAN = 1 << 16
+"""Widest exponent range `exact_exp2` will describe.
+
+Comfortably past `binary128`'s, and far short of where materializing the
+format's precision becomes expensive."""
+
+
 def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
     """The exact format of ``2 ** n`` for ``n`` in *arg*.
 
@@ -978,8 +985,13 @@ def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
         return None
     lo, hi = bounds
 
-    # `2 ** k` as a `RealFloat` names the exponent rather than computing the
-    # value, so a wide range costs nothing
+    # The result spans `hi - lo` binades, and asking a format that wide for its
+    # precision walks a significand of that many bits -- for an `int64`
+    # exponent, `1 << 2**64`.  Nothing real reaches this, so decline rather than
+    # hand back a format no consumer can afford to inspect.
+    if hi - lo > _MAX_EXP2_SPAN:
+        return None
+
     return AbstractFormat(
         1, lo, RealFloat(exp=hi, c=1),
         neg_bound=RealFloat.from_int(0),

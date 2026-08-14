@@ -57,7 +57,11 @@ int main() {
 
 
 def _bits(v: fp.Float) -> int:
-    """`v` as FP32 bits, NaN canonicalized."""
+    """`v` as FP32 bits, NaN canonicalized -- payload *and* sign, both
+    unspecified in either language.  A restored sign is still tested: the
+    ``neg_zero`` target turns a NaN into a signed finite value, which is
+    compared as-is.
+    """
     if v.isnan:
         return 0x7fc00000
     if v.isinf:

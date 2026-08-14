@@ -45,18 +45,20 @@ double f(float x) {
                 double _t = (static_cast<double>(16777216) * static_cast<double>(x));
                 assert(std::isfinite(_t) && "fpy: rounding is undefined for this value");
                 float _tmp1 = std::nearbyint(_t);
-                assert(std::fabs(_tmp1) <= 1024 && "fpy: overflow occurred so rounding is undefined");
-                float _t6 = _tmp1;
-                t = (5.960464477539063e-08 * _t6);
+                assert((std::fabs(_tmp1) <= 1024) && "fpy: overflow occurred so rounding is undefined");
+                float _t7 = _tmp1;
+                t = (5.960464477539063e-08 * _t7);
             } else {
                 float exp = (e - static_cast<float>(10));
                 auto&& _tmp2 = (-exp);
-                double _t7 = (std::isfinite(_tmp2) ? std::ldexp(x, static_cast<int>(_tmp2)) : std::pow(2.0, _tmp2) * x);
-                assert(std::isfinite(_t7) && "fpy: rounding is undefined for this value");
-                float _tmp3 = std::nearbyint(_t7);
-                assert(std::fabs(_tmp3) <= 2048 && "fpy: overflow occurred so rounding is undefined");
-                float _t8 = _tmp3;
-                t = (std::isfinite(exp) ? std::ldexp(_t8, static_cast<int>(exp)) : std::pow(2.0, exp) * _t8);
+                auto&& _tmp3 = static_cast<double>(x);
+                double _t8 = (std::isfinite(_tmp2) ? std::ldexp(_tmp3, static_cast<int>(_tmp2)) : std::pow(2.0, _tmp2) * _tmp3);
+                assert(std::isfinite(_t8) && "fpy: rounding is undefined for this value");
+                float _tmp4 = std::nearbyint(_t8);
+                assert((std::fabs(_tmp4) <= 2048) && "fpy: overflow occurred so rounding is undefined");
+                float _t9 = _tmp4;
+                auto&& _tmp5 = static_cast<double>(_t9);
+                t = (std::isfinite(exp) ? std::ldexp(_tmp5, static_cast<int>(exp)) : std::pow(2.0, exp) * _tmp5);
             }
         }
         if ((t > static_cast<double>(65504))) {
@@ -77,13 +79,15 @@ Three ideas, each recorded where it was learned:
 
 - **Integer rounding needs no integer type.** `std::trunc` and friends are
   `double -> double`, so the rounding stays in a float type. That keeps the
-  signed zero, needs no integer wide enough for the value, and covers every
-  rounding mode rather than only `RTZ`. All six FPy modes map to a libm function
-  (`RAZ` is the one without a single spelling — see gap 2).
+  signed zero, needs no integer wide enough for the value, and covers more than
+  just `RTZ`. Five of FPy's eight modes have a libm function — `RTZ`/`RTN`/`RTP`/
+  `RNA`/`RNE` as `trunc`/`floor`/`ceil`/`round`/`nearbyint`; `RAZ`, `RTO` and
+  `RTE` have none and are declined (see gap 2).
 - **A context's unrepresentable values compile to assertions.** The bound
-  becomes `assert(std::fabs(r) <= B)`, an operand the format has no result for
-  becomes `assert(std::isfinite(v))`. Derived from the context's own flags, so a
-  format that admits NaN gets no guard.
+  becomes `assert(std::fabs(r) <= B)` — or a pair of comparisons where the two
+  bounds are asymmetric — and an operand the format has no result for becomes
+  `assert(std::isfinite(v))`. Derived from the context's own flags, so a format
+  that admits NaN gets no guard.
 - **A scale must be `ldexp`, not `pow`.** `std::pow(2, n)` is not required to be
   exact — C11 F.10 requires correct rounding of no math function and IEEE 754
   only *recommends* it for `exp2`. On this platform it happens to be exact for
@@ -135,8 +139,6 @@ one, and four emitted guards with it.
 
 ### 4. Backend cleanups
 
-- `fp.round_at(x, n)` raises `IndexError: tuple index out of range` — a crash
-  where a diagnostic belongs.
 - `(2 ** n) * x` fails for an `n` typed `SINT64` or `INTEGER`: `cannot implicitly
   cast int64_t to double: conversion is lossy`. `SINT8`/`SINT16`/`SINT32` work,
   since those convert exactly. The message does not suggest the fix.
@@ -148,9 +150,15 @@ one, and four emitted guards with it.
 
 ### 5. A recipe
 
-`monomorphize → unfold_overflow → float_to_fixed → rescale_fixed → simplify` is
-the sequence, verified across eleven formats. It deserves one entry point rather
-than a comment in a sandbox.
+`monomorphize → unfold_overflow → float_to_fixed → rescale_fixed` is the
+sequence, verified bit-for-bit against the interpreter across eleven formats in
+`tests/unit/backend/cpp/test_lowered_roundtrip.py`. `simplify` composes with it
+but is not in that check. It deserves one entry point rather than a comment in a
+sandbox.
+
+Unrelated to lowering, but found here: `fp.round_at(x, n)` raises `IndexError:
+tuple index out of range` from `fpy2/analysis/type_infer.py:440` — a crash in
+type inference where a diagnostic belongs.
 
 ## Order of work
 
