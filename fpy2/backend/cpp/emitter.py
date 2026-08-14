@@ -94,11 +94,13 @@ from ...ast.fpyast import (
     ListSlice,
     Max,
     Min,
+    Mul,
     NamedId,
     NaryOp,
     Not,
     NullaryOp,
     Or,
+    Pow,
     Range1,
     Range2,
     Range3,
@@ -1965,6 +1967,20 @@ class CppEmitter(Visitor):
                 return self._emit_size(e, ctx)
             case Range2():
                 return self._emit_range(e, ctx)
+            case Mul():
+                scaled = self._emit_scale_by_pow2(e, ctx)
+                if scaled is not None:
+                    return scaled
+                lhs = self._visit_expr(e.first, ctx)
+                rhs = self._visit_expr(e.second, ctx)
+                return self._dispatch_binary(e, lhs, rhs)
+            case Pow():
+                scaled = self._emit_pow2(e, ctx)
+                if scaled is not None:
+                    return scaled
+                lhs = self._visit_expr(e.first, ctx)
+                rhs = self._visit_expr(e.second, ctx)
+                return self._dispatch_binary(e, lhs, rhs)
             case BinaryOp():
                 # Op-table-dispatched binary (Add, Sub, Mul, Div, all
                 # <cmath> two-arg functions).
@@ -1975,6 +1991,122 @@ class CppEmitter(Visitor):
                 raise CppEmitError(
                     f'unsupported binary op: {type(e).__name__}', at=e,
                 )
+
+    _LDEXP_EXP_LIMIT = 1 << 30
+    """How large a scale exponent may be before ``std::ldexp``'s ``int``
+    parameter is in doubt.  Far above any real format's range, so this only
+    rules out a bound the analysis could not narrow."""
+
+    def _ldexp_exponent(self, e: Expr) -> bool | None:
+        """Whether *e* can be ``std::ldexp``'s exponent, and what it costs.
+
+        ``True`` when every value is an integer that fits ``int``; ``None`` when
+        the shape is wrong and the caller should emit a product instead.
+        ``False`` means the same but with a finiteness assertion needed first:
+        the format admits a NaN or an infinity, which has no ``int``, and the
+        branches that rule them out are not something the analysis reads.
+        """
+        fmt = self.format_info.by_expr.get(e)
+        if isinstance(fmt, SetFormat):
+            ok = all(
+                isinstance(v, Fraction) and v.denominator == 1
+                and abs(v) < self._LDEXP_EXP_LIMIT
+                for v in fmt.values
+            )
+            return True if ok else None
+        if not isinstance(fmt, AbstractableFormat):
+            return None
+        af = AbstractFormat.from_format(fmt)
+        # a grid whose finest digit sits at or above position zero holds
+        # integers only
+        if not isinstance(af.exp, int) or af.exp < 0:
+            return None
+        bounds = (af.pos_bound, af.neg_bound)
+        if any(not isinstance(b, RealFloat) for b in bounds):
+            return None
+        if any(abs(int(b)) >= self._LDEXP_EXP_LIMIT for b in bounds):
+            return None
+        return not (af.has_nan or af.has_pos_inf or af.has_neg_inf)
+
+    def _emit_scale_by_pow2(self, e: Mul, ctx) -> str | None:
+        """``2 ** n * v`` as ``std::ldexp(v, n)``, or `None` to emit a product.
+
+        ``ldexp`` is IEEE 754's ``scaleB``: multiplication by an integral power
+        of two, exact but for overflow and underflow.  The product it replaces
+        rounds twice and rests on ``std::pow`` returning ``2 ** n`` exactly,
+        which C11 F.10 does not require of any math function and IEEE 754 only
+        *recommends* for ``exp2`` -- so a conforming libm within one ulp would
+        put the scale on the wrong grid.  This is the shape `rescale_fixed`
+        emits for every rounding it moves.
+
+        Because ``ldexp`` computes the *exact* product, it stands in for
+        ``round_C`` only where that rounding is the identity -- otherwise it
+        would skip a rounding the context asked for, which is what the op-table
+        dispatch refuses by matching storage against the context.  The operand
+        must also reach the result's storage losslessly, for the same reason.
+        """
+        active = self._active_ctx_for(e)
+        if active is None or not self._result_fits_ctx(e, active):
+            # the context rounds this product; `ldexp` would not
+            return None
+        for scale, value in ((e.first, e.second), (e.second, e.first)):
+            if not (isinstance(scale, Pow) and scale.func is None):
+                continue
+            base, exp = scale.first, scale.second
+            if not (isinstance(base, Integer) and base.val == 2):
+                continue
+            finite = self._ldexp_exponent(exp)
+            if finite is None:
+                continue
+            target = self._storage_for_expr(e)
+            if not (isinstance(target, CppScalar) and target.is_float()):
+                continue
+            # the value has to reach `target` without being rounded on the way
+            value_ty = self._storage_for_expr(value)
+            if not (
+                isinstance(value_ty, CppScalar)
+                and (value_ty == target or scalar_fits_in(value_ty, target))
+            ):
+                continue
+            return self._ldexp_call(
+                self._visit_expr(value, ctx), exp, ctx, finite=finite,
+            )
+        return None
+
+    def _emit_pow2(self, e: Pow, ctx) -> str | None:
+        """``2 ** n`` as ``std::ldexp(1, n)``, or `None` to emit a ``pow``.
+
+        The same accuracy argument as :meth:`_emit_scale_by_pow2`, for a power
+        that is not an operand of a multiply.  Where it *is*, that method is
+        preferred: ``ldexp(v, n)`` scales in one step, while
+        ``ldexp(1, n) * v`` can underflow the intermediate to zero and lose a
+        product that was representable.
+        """
+        if not (isinstance(e.first, Integer) and e.first.val == 2):
+            return None
+        active = self._active_ctx_for(e)
+        if active is None or not self._result_fits_ctx(e, active):
+            return None
+        finite = self._ldexp_exponent(e.second)
+        if finite is None:
+            return None
+        target = self._storage_for_expr(e)
+        if not (isinstance(target, CppScalar) and target.is_float()):
+            return None
+        return self._ldexp_call('1', e.second, ctx, finite=finite)
+
+    def _ldexp_call(
+        self, value: str, exp: Expr, ctx, *, finite: bool,
+    ) -> str:
+        """``std::ldexp(value, exp)``, asserting a finite exponent when the
+        analysis cannot show one."""
+        n = self._bind_operand(self._visit_expr(exp, ctx))
+        if not finite:
+            self.writer.add_line(
+                f'assert(std::isfinite({n}) '
+                f'&& "fpy: scaling is undefined for this exponent");'
+            )
+        return f'std::ldexp({value}, static_cast<int>({n}))'
 
     def _emit_fp_predicate(self, e: UnaryOp, arg: str) -> str:
         """Bool-returning FP predicates: ``isnan`` / ``isinf`` /

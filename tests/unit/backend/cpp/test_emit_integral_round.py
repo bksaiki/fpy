@@ -156,3 +156,137 @@ class TestFloatContextUnaffected:
         # a fixed-point context at a non-zero position lands here
         with pytest.raises(CppCompileError):
             _emit(MPBFixedContext(-8, fp.RealFloat(exp=4, c=1), overflow=ASSERT))
+
+
+class TestScaleByPowerOfTwo:
+    """``2 ** n * v`` becomes ``std::ldexp(v, n)``.
+
+    Not an optimization: ``std::pow`` is not required to return ``2 ** n``
+    exactly (C11 F.10 requires correct rounding of no math function, and IEEE
+    754 only *recommends* it for ``exp2``), and the product it feeds rounds a
+    second time.  ``ldexp`` is IEEE 754's ``scaleB`` -- multiplication by an
+    integral power of two, exact but for overflow and underflow.
+    """
+
+    @staticmethod
+    def _lowered(src=fp.FP32, target=fp.FP16):
+        import fpy2.strategies as st
+
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real) -> fp.Real:
+            with target:
+                y = fp.round(x)
+            return y
+
+        ref = st.monomorphize(q, args=[RealType(src)])
+        low = st.rescale_fixed(st.float_to_fixed(
+            st.unfold_overflow(ref, early_check=True)))
+        return CppCompiler().compile(low)
+
+    def test_the_lowering_uses_ldexp_not_pow(self):
+        out = self._lowered()
+        assert 'std::ldexp(' in out
+        assert 'std::pow(' not in out, (
+            'a runtime power of two must not go through std::pow'
+        )
+
+    def test_exponent_is_asserted_finite(self):
+        """The exponent comes from ``logb``, whose format admits a NaN and the
+        infinities; neither has an ``int``.  The branches that rule them out
+        are not something the analysis reads, so the claim is asserted."""
+        out = self._lowered()
+        assert 'assert(std::isfinite(' in out
+        assert 'scaling is undefined for this exponent' in out
+
+    def test_a_constant_scale_stays_a_multiply(self):
+        """A constant power of two needs no call: the literal multiply is
+        already exact, and folding it is better than either."""
+        out = self._lowered()
+        # the subnormal branch scales by a literal 2**24
+        assert '16777216' in out
+
+    def test_a_bare_power_of_two_also_uses_ldexp(self):
+        """Not only as a multiply's operand: a power on its own would otherwise
+        go through ``std::pow`` and land on the wrong grid."""
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return 2 ** n
+
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.SINT16)])
+        assert 'std::ldexp' in out
+        assert 'std::pow' not in out
+
+    def test_both_operand_orders(self):
+        """Multiplication commutes, so the scale may sit on either side."""
+        @fp.fpy
+        def left(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** n) * x
+
+        @fp.fpy
+        def right(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x * (2 ** n)
+
+        tys = [RealType(fp.FP64), RealType(fp.SINT16)]
+        for f in (left, right):
+            out = CppCompiler().compile(f, arg_types=tys)
+            assert out.count('std::ldexp') == 1, f.name
+            assert 'std::pow' not in out, f.name
+
+    def test_a_product_of_two_powers(self):
+        """Both halves are exact: the multiply peephole takes the outer scale
+        and the bare-power rule takes the inner one."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** a) * (2 ** b)
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.SINT16), RealType(fp.SINT16)])
+        assert out.count('std::ldexp') == 2
+        assert 'std::pow' not in out
+
+    def test_a_non_integer_exponent_is_left_alone(self):
+        """``2 ** 0.5`` has no integral exponent, so the product stands."""
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** n) * x
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)])
+        assert 'std::ldexp' not in out
+        assert 'std::pow' in out
+
+    def test_an_integer_exponent_needs_no_assertion(self):
+        """An exponent the analysis knows is finite by its format costs no
+        guard -- only one derived from ``logb`` does."""
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** n) * x
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
+        assert 'std::ldexp' in out
+        assert 'scaling is undefined' not in out
+
+    def test_declines_when_the_context_rounds_the_product(self):
+        """``ldexp`` computes the *exact* product, so it may only stand in for
+        ``round_C`` where that rounding is the identity.  Under a context
+        narrower than the operands it would skip a rounding -- and skipping it
+        gave `1 + 2**-20` back unchanged where FP16 says `1`.
+
+        The op-table dispatch refuses this program for the same reason, so the
+        peephole must decline rather than quietly answer.
+        """
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP16:
+                return (2 ** n) * x
+
+        with pytest.raises(CppCompileError, match='no matching signature'):
+            CppCompiler().compile(
+                f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
