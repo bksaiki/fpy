@@ -168,7 +168,7 @@ def _func_sym(name: str) -> Var:
 
 
 # Concrete rounding contexts the generator can drop into ``with`` blocks.
-# ``fp.REAL`` is excluded — ``sqrt``/``sin``/``log``/``div`` raise under it
+# ``fp.REAL`` is excluded — ``sqrt``/``sin``/``log`` raise under it
 # (no closed-form rational result), so ``with REAL: t = sqrt(0)`` would crash.
 _DEFAULT_CONTEXTS: list = [fp.FP64, fp.FP32, fp.MX_E5M2, fp.MX_E4M3]
 

@@ -121,19 +121,17 @@ Exponent Functions
    Computes ``x * 2**n`` with correct rounding.
 
    :param x: Base value
-   :type x: Float
+   :type x: Real
    :param n: Exponent (must be an integer)
-   :type n: Float
+   :type n: Real
    :return: Result of ``x * 2**n``
-   :rtype: Float
-   :raises ValueError: if ``n`` is not an integer
+   :rtype: Real
+   :raises AssertionError: if ``n`` is not an integer
 
    **Special cases:**
-   
+
    - If ``x`` is NaN, the result is NaN
    - If ``x`` is infinite, the result is infinite
-
-   **Primitive**: This is an FPy primitive with context parameter 'R' and return context 'R'.
 
 .. py:function:: max_e(xs)
    :module: fpy2.libraries.core

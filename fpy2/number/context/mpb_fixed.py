@@ -554,9 +554,14 @@ class MPBFixedContext(SizedContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._overflow_to_infinity(xr.s):
-                        if not self.enable_inf:
+                        # an overflow that rounds to infinity is substituted
+                        # like an infinite input, since neither is representable
+                        if self.enable_inf:
+                            result = Float(x=x, isinf=True, ctx=self)
+                        elif self.inf_value is None:
                             raise ValueError('Cannot round to infinity under this context')
-                        result = Float(x=x, isinf=True, ctx=self)
+                        else:
+                            result = Float(x=self.inf_value, ctx=self)
                     else:
                         result = self.maxval(xr.s)
                 case OverflowMode.SATURATE:

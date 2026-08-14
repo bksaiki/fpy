@@ -98,8 +98,7 @@ class TestTupleAccessors:
 
 
 class TestPowReal:
-    """``pow`` under ``REAL``, which is exact only for a non-negative
-    integer exponent."""
+    """``pow`` under ``REAL``, which is exact only for an integer exponent."""
 
     @given(
         floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False),
@@ -111,11 +110,25 @@ class TestPowReal:
             acc = fp.mul(acc, x, fp.REAL)
         assert fp.pow(x, n, fp.REAL) == acc, f'{x} ** {n}'
 
+    @given(
+        floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False),
+        st.integers(min_value=-8, max_value=-1)
+    )
+    def test_negative_matches_reciprocal(self, x: fp.Float, n: int) -> None:
+        if x.is_zero():
+            return
+        assert fp.pow(x, n, fp.REAL) == 1 / x.as_rational() ** -n, f'{x} ** {n}'
+
     @pytest.mark.parametrize('x, n, expect', [
         (2, 10, 1024),
         (-2, 3, -8),
         (-2, 2, 4),
         (Fraction(2, 3), 3, Fraction(8, 27)),
+        # negative exponents
+        (2, -16, Fraction(1, 65536)),
+        (-2, -3, Fraction(-1, 8)),
+        (3, -1, Fraction(1, 3)),
+        (Fraction(2, 3), -3, Fraction(27, 8)),
         # `** 0` is 1 for every base
         (2, 0, 1),
         (float('inf'), 0, 1),
@@ -123,6 +136,17 @@ class TestPowReal:
     ])
     def test_exact(self, x, n, expect) -> None:
         assert fp.pow(x, n, fp.REAL) == expect
+
+    @pytest.mark.parametrize('x, n, is_float', [
+        # a negative exponent stays a `Float` only for a power-of-two base
+        (2.0, -16, True),
+        (0.25, -3, True),
+        (3.0, -1, False),
+        (10.0, -3, False),
+    ])
+    def test_negative_exponent_result_type(self, x, n, is_float) -> None:
+        r = fp.pow(x, n, fp.REAL)
+        assert isinstance(r, fp.Float if is_float else Fraction), f'{x} ** {n}: {r!r}'
 
     def test_signed_zero(self) -> None:
         assert fp.pow(-0.0, 3, fp.REAL).s
@@ -132,21 +156,196 @@ class TestPowReal:
         (float('inf'), 2, True, False),
         (float('-inf'), 2, True, False),
         (float('-inf'), 3, True, True),
+        # `Inf ** -n` is a signed zero
+        (float('inf'), -1, False, False),
+        (float('-inf'), -1, False, True),
+        (float('-inf'), -2, False, False),
     ])
     def test_infinite_base(self, x, n, isinf, s) -> None:
         r = fp.pow(x, n, fp.REAL)
         assert r.isinf == isinf and r.s == s
+        if not isinf:
+            assert r.is_zero()
+
+    @pytest.mark.parametrize('x, n, s', [
+        (0.0, -1, False),
+        (-0.0, -1, True),
+        (0.0, -2, False),
+        (-0.0, -2, False),
+    ])
+    def test_zero_base_negative_exponent(self, x, n, s) -> None:
+        # `0 ** -n` is infinite and reports divide-by-zero, like division does
+        r = fp.pow(x, n, fp.REAL)
+        assert r.isinf and r.s == s
+        assert r.divzero, f'expected divzero for {x} ** {n}'
 
     def test_nan_base(self) -> None:
         assert fp.pow(float('nan'), 2, fp.REAL).isnan
+        assert fp.pow(float('nan'), -1, fp.REAL).isnan
 
-    @pytest.mark.parametrize('n', [-1, -2, 0.5, 2.5, float('inf'), float('nan')])
+    @pytest.mark.parametrize('n', [0.5, 2.5, -0.5, float('inf'), float('nan')])
     def test_inexact_exponent_declines(self, n) -> None:
         with pytest.raises(NotImplementedError):
             fp.pow(2.0, n, fp.REAL)
 
-    def test_oversized_exponent_declines(self) -> None:
-        # folding `x ** n` exactly costs `n` times the significand of `x`
+    @pytest.mark.parametrize('n', [_MAX_POW_EXPONENT + 1, -_MAX_POW_EXPONENT - 1])
+    def test_oversized_exponent_declines(self, n) -> None:
+        # folding `x ** n` exactly costs `|n|` times the significand of `x`
         assert fp.pow(3.0, _MAX_POW_EXPONENT, fp.REAL) is not None
+        assert fp.pow(3.0, -_MAX_POW_EXPONENT, fp.REAL) is not None
         with pytest.raises(NotImplementedError):
-            fp.pow(3.0, _MAX_POW_EXPONENT + 1, fp.REAL)
+            fp.pow(3.0, n, fp.REAL)
+
+    @pytest.mark.parametrize('x', [2.0, -2.0, 0.5, -0.25, 1.0, 8.0])
+    @pytest.mark.parametrize('n', [0, 1, -1, 3, -3, 16, -16])
+    def test_power_of_two_base(self, x, n) -> None:
+        assert fp.pow(x, n, fp.REAL) == Fraction(x) ** n, f'{x} ** {n}'
+
+    @pytest.mark.parametrize('n', [1 << 20, -(1 << 20)])
+    def test_power_of_two_base_ignores_the_bound(self, n) -> None:
+        # only the exponent of a power of two scales, so any `n` is cheap
+        r = fp.pow(2.0, n, fp.REAL)
+        assert r.c == 1 and r.exp == n, f'expected 2**{n}, got {r!r}'
+
+
+class TestDivReal:
+    """``div`` under ``REAL``, which is exact: the quotient of two finite
+    numbers is a rational."""
+
+    @given(
+        floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False),
+        floats(prec_max=16, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False)
+    )
+    def test_matches_exact_quotient(self, x: fp.Float, y: fp.Float) -> None:
+        if y.is_zero():
+            return
+        expect = x.as_rational() / y.as_rational()
+        assert fp.div(x, y, fp.REAL) == expect, f'{x} / {y}'
+
+    @pytest.mark.parametrize('x, y, expect', [
+        (1, 4, Fraction(1, 4)),
+        (1, 3, Fraction(1, 3)),
+        (3, -2, Fraction(-3, 2)),
+        (7, 7, 1),
+        (Fraction(1, 3), 2, Fraction(1, 6)),
+        (Fraction(2, 3), Fraction(4, 9), Fraction(3, 2)),
+    ])
+    def test_exact(self, x, y, expect) -> None:
+        assert fp.div(x, y, fp.REAL) == expect
+
+    @pytest.mark.parametrize('x, y, is_float', [
+        # the quotient of two `Float`s stays a `Float` only when it is dyadic
+        (1.0, 4.0, True),
+        (3.0, -2.0, True),
+        (1.0, 3.0, False),
+        (1.0, 10.0, False),
+    ])
+    def test_result_type(self, x, y, is_float) -> None:
+        r = fp.div(x, y, fp.REAL)
+        assert isinstance(r, fp.Float if is_float else Fraction), f'{x} / {y}: {r!r}'
+
+    @pytest.mark.parametrize('x, y, s', [
+        (0.0, 3.0, False),
+        (-0.0, 3.0, True),
+        (0.0, -3.0, True),
+        (-0.0, -3.0, False),
+    ])
+    def test_zero_dividend(self, x, y, s) -> None:
+        r = fp.div(x, y, fp.REAL)
+        assert r.is_zero() and r.s == s
+
+    @pytest.mark.parametrize('x, y, s', [
+        (3.0, 0.0, False),
+        (-3.0, 0.0, True),
+        (3.0, -0.0, True),
+        (-3.0, -0.0, False),
+    ])
+    def test_zero_divisor(self, x, y, s) -> None:
+        # `x / 0` is infinite and reports divide-by-zero
+        r = fp.div(x, y, fp.REAL)
+        assert r.isinf and r.s == s
+        assert r.divzero, f'expected divzero for {x} / {y}'
+
+    @pytest.mark.parametrize('x, y', [
+        (0.0, 0.0), (-0.0, -0.0),
+        (float('inf'), float('inf')), (float('-inf'), float('inf')),
+    ])
+    def test_invalid(self, x, y) -> None:
+        # `0 / 0` and `Inf / Inf` are NaN
+        r = fp.div(x, y, fp.REAL)
+        assert r.isnan, f'expected NaN for {x} / {y}'
+
+    @pytest.mark.parametrize('x, y, isinf, s', [
+        (float('inf'), 2.0, True, False),
+        (float('-inf'), 2.0, True, True),
+        (float('inf'), -2.0, True, True),
+        # a finite dividend over Inf is a signed zero
+        (2.0, float('inf'), False, False),
+        (2.0, float('-inf'), False, True),
+        (-2.0, float('inf'), False, True),
+    ])
+    def test_infinite_operand(self, x, y, isinf, s) -> None:
+        r = fp.div(x, y, fp.REAL)
+        assert r.isinf == isinf and r.s == s
+        if not isinf:
+            assert r.is_zero()
+
+    @pytest.mark.parametrize('x, y', [(float('nan'), 1.0), (1.0, float('nan'))])
+    def test_nan_operand(self, x, y) -> None:
+        assert fp.div(x, y, fp.REAL).isnan
+
+
+class TestCopysignReal:
+    """``copysign`` under ``REAL``: transferring a sign moves no digits, so it
+    is exact for every value."""
+
+    @pytest.mark.parametrize('x, y, expect', [
+        (3, -1, -3),
+        (-3, 1, 3),
+        (3, 1, 3),
+        (-3, -1, -3),
+        (Fraction(1, 3), -1, Fraction(-1, 3)),
+        (Fraction(-1, 3), 1, Fraction(1, 3)),
+    ])
+    def test_exact(self, x, y, expect) -> None:
+        assert fp.copysign(x, y, fp.REAL) == expect
+
+    @pytest.mark.parametrize('x, y, s', [
+        (0.0, -1.0, True),
+        (-0.0, 1.0, False),
+        (0.0, 1.0, False),
+        (-0.0, -1.0, True),
+    ])
+    def test_signed_zero(self, x, y, s) -> None:
+        r = fp.copysign(x, y, fp.REAL)
+        assert r.is_zero() and r.s == s
+
+    def test_zero_fraction_takes_the_sign(self) -> None:
+        """A `Fraction` cannot carry a negative zero, so the result is a
+        `Float` that can."""
+        r = fp.copysign(Fraction(0), -1, fp.REAL)
+        assert isinstance(r, fp.Float) and r.is_zero() and r.s
+
+    @pytest.mark.parametrize('x, y, s', [
+        (float('inf'), -1.0, True),
+        (float('-inf'), 1.0, False),
+    ])
+    def test_infinite_magnitude(self, x, y, s) -> None:
+        r = fp.copysign(x, y, fp.REAL)
+        assert r.isinf and r.s == s
+
+    @pytest.mark.parametrize('y, s', [(-1.0, True), (1.0, False)])
+    def test_nan_magnitude(self, y, s) -> None:
+        """A NaN carries a sign like any other value."""
+        r = fp.copysign(float('nan'), y, fp.REAL)
+        assert r.isnan and r.s == s
+
+    @pytest.mark.parametrize('y, s', [
+        (-0.0, True),               # the sign of a zero still counts
+        (0.0, False),
+        (float('-inf'), True),
+        (float('nan'), False),      # the default NaN is positive
+    ])
+    def test_sign_source(self, y, s) -> None:
+        r = fp.copysign(3.0, y, fp.REAL)
+        assert r.s == s and abs(r.as_rational()) == 3

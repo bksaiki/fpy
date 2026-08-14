@@ -6,6 +6,7 @@ from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate
 from .dead_code import DeadCodeEliminate
 from .enumerate_elim import EnumerateElim
+from .float_to_fixed import FloatToFixed
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
 from .for_unroll import ForUnroll, ForUnrollStrategy
@@ -16,6 +17,7 @@ from .lift_context import LiftContext
 from .monomorphize import Monomorphize
 from .reduce_fusion import ReduceFusion
 from .rename_target import RenameTarget
+from .rescale_fixed import RescaleFixed
 from .round_elim import RoundElim
 from .simplify_if import SimplifyIf
 from .specialize import Specialize

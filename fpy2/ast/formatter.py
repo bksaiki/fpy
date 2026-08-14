@@ -1,10 +1,9 @@
 """Pretty printing of FPy ASTs"""
 
 from pprint import pformat
-from types import ModuleType
 from typing import Any
 
-from ..env import ForeignEnv
+from ..env import fpy_alias
 from ..fpc_context import FPCoreContext
 from ..number import Context
 from .fpyast import *
@@ -72,22 +71,6 @@ class _FormatterInstance(Visitor):
                 return self._visit_attribute(func, ctx)
             case _:
                 raise RuntimeError('unreachable', func)
-
-    @staticmethod
-    def _find_fpy_alias(env: ForeignEnv | None) -> str | None:
-        """Name that the `fpy2` package is bound to in `env`, if any.
-
-        `env` iterates in nondeterministic (set-union) order, so pick the
-        lexicographically smallest match to keep formatting stable when
-        `fpy2` is bound under more than one name."""
-        if env is None:
-            return None
-        aliases = [
-            name for name in env
-            if isinstance(env.get(name), ModuleType)
-            and getattr(env.get(name), '__name__', None) == 'fpy2'
-        ]
-        return min(aliases, default=None)
 
     def _fpy_qualified(self, name: str) -> str:
         """Render an `fpy2` symbol as `<alias>.<name>` when the enclosing
@@ -170,6 +153,10 @@ class _FormatterInstance(Visitor):
         lhs = self._visit_expr(e.first, ctx)
         rhs = self._visit_expr(e.second, ctx)
         match e:
+            # a named operator keeps the name the source gave it; without one
+            # it was written `**`, or synthesized by a rewrite
+            case Pow() if e.func is None:
+                return f'({lhs} ** {rhs})'
             case NamedBinaryOp():
                 name = self._op_name(e, ctx)
                 return f'{name}({lhs}, {rhs})'
@@ -213,6 +200,7 @@ class _FormatterInstance(Visitor):
     def _visit_call(self, e: Call, ctx: _Ctx):
         name = self._visit_function_name(e.func, ctx)
         args = [self._visit_expr(arg, ctx) for arg in e.args]
+        args += [f'{k}={self._visit_expr(v, ctx)}' for k, v in e.kwargs]
         arg_str = ', '.join(args)
         return f'{name}({arg_str})'
 
@@ -319,17 +307,25 @@ class _FormatterInstance(Visitor):
         ref_str = ''.join(f'[{slice}]' for slice in slices)
         self._add_line(f'{stmt.var!s}{ref_str} = {val}', ctx)
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx):
+    def _visit_if1(self, stmt: If1Stmt, ctx: _Ctx, keyword: str = 'if'):
         cond = self._visit_expr(stmt.cond, ctx)
-        self._add_line(f'if {cond}:', ctx)
+        self._add_line(f'{keyword} {cond}:', ctx)
         self._visit_block(stmt.body, ctx + 1)
 
-    def _visit_if(self, stmt: IfStmt, ctx: _Ctx):
+    def _visit_if(self, stmt: IfStmt, ctx: _Ctx, keyword: str = 'if'):
         cond = self._visit_expr(stmt.cond, ctx)
-        self._add_line(f'if {cond}:', ctx)
+        self._add_line(f'{keyword} {cond}:', ctx)
         self._visit_block(stmt.ift, ctx + 1)
-        self._add_line('else:', ctx)
-        self._visit_block(stmt.iff, ctx + 1)
+
+        # an `else` branch holding a lone conditional is an `elif`
+        match stmt.iff.stmts:
+            case [IfStmt() as nested]:
+                self._visit_if(nested, ctx, 'elif')
+            case [If1Stmt() as nested]:
+                self._visit_if1(nested, ctx, 'elif')
+            case _:
+                self._add_line('else:', ctx)
+                self._visit_block(stmt.iff, ctx + 1)
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -419,7 +415,7 @@ class _FormatterInstance(Visitor):
 
     def _visit_function(self, func: FuncDef, ctx: _Ctx):
         # record how `fpy2` is imported so synthesized operators can be named
-        self._fpy_alias = self._find_fpy_alias(func.env)
+        self._fpy_alias = fpy_alias(func.env)
 
         # TODO: type annotation
         arg_strs = [str(arg.name) for arg in func.args]

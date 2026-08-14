@@ -1,5 +1,7 @@
 import pytest
 
+from fractions import Fraction
+
 from fpy2 import *
 from fpy2.libraries.core import split, logb, modf, ldexp, isinteger
 
@@ -58,12 +60,32 @@ class TestCore():
         self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(1)), Float.from_int(2))
         self.assertNumEqual(ldexp(Float.from_int(1), Float.from_int(-1)), Float.from_float(0.5))
 
-        with pytest.raises(ValueError):
+        with pytest.raises(AssertionError):
             ldexp(Float.from_int(1), Float.from_float(0.5))
 
         self.assertNumEqual(ldexp(Float(isnan=True), Float.from_int(0)), Float(isnan=True))
         self.assertNumEqual(ldexp(Float(isinf=True), Float.from_int(0)), Float(isinf=True))
         self.assertNumEqual(ldexp(Float(s=True, isinf=True), Float.from_int(0)), Float(s=True, isinf=True))
+
+    def test_ldexp_signed_zero(self):
+        """`ldexp` carries the sign of a zero `x`."""
+        assert not ldexp(Float.from_float(0.0), Float.from_int(4), ctx=FP64).s
+        assert ldexp(Float.from_float(-0.0), Float.from_int(4), ctx=FP64).s
+
+    def test_ldexp_rounds_once(self):
+        """The scale is exact, so the product rounds once: `n` and `2**n`
+        need not be representable in the caller's context."""
+        # `2**-30` underflows FP16, but `ldexp(2**20, -30)` does not
+        r = ldexp(Float.from_float(2.0 ** 20), Float.from_int(-30), ctx=FP16)
+        assert r.as_rational() == Fraction(1, 1024), f'expected 2**-10, got {r!r}'
+        # neither `n` nor the scale is representable in FP16
+        assert ldexp(Float.from_int(1), Float.from_int(100000), ctx=FP16).isinf
+        assert ldexp(Float.from_int(1), Float.from_int(-100000), ctx=FP16).is_zero()
+
+    def test_ldexp_exact_under_real(self):
+        """Under `REAL` nothing rounds, for either sign of `n`."""
+        assert ldexp(Float.from_int(3), Float.from_int(40), ctx=REAL) == 3 * 2 ** 40
+        assert ldexp(Float.from_int(3), Float.from_int(-40), ctx=REAL) == Fraction(3, 2 ** 40)
 
     def test_isinteger(self):
         """Testing `isinteger` function"""

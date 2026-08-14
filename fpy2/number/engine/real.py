@@ -8,9 +8,10 @@ context requests exact computation (prec=None, n=None).
 
 from fractions import Fraction
 
+from ...utils import is_dyadic
 from ..context import REAL, Context
 from ..gmputils import mpfr_value
-from ..number import Float
+from ..number import Float, RealFloat
 from ..round import RoundingMode
 from .engine import Engine, EngineArg, EngineRes
 
@@ -27,8 +28,19 @@ def _is_zero(x: EngineArg) -> bool:
 def _signbit(x: EngineArg) -> bool:
     return x.s if isinstance(x, Float) else (x < 0)
 
-def _nonneg_int(x: EngineArg) -> int | None:
-    """The value of `x` as a non-negative `int`, or `None` if it is not one."""
+def _as_rational(x: EngineArg) -> Fraction:
+    """The exact value of a finite `x` as a `Fraction`."""
+    return x.as_rational() if isinstance(x, Float) else x
+
+def _log2_exact(x: EngineArg) -> int | None:
+    """`k` such that `|x| == 2 ** k`, or `None` if `x` is not a power of two."""
+    if not isinstance(x, Float) or x.is_nar() or x.is_zero():
+        return None
+    r = x.as_real()
+    return r.e if r.is_power_of_two() else None
+
+def _int_value(x: EngineArg) -> int | None:
+    """The value of `x` as an `int`, or `None` if it is not an integer."""
     match x:
         case Float():
             # `is_integer()` is false for Inf and NaN, so `int()` is safe here
@@ -39,12 +51,11 @@ def _nonneg_int(x: EngineArg) -> int | None:
                 return None
         case _:
             raise RuntimeError("unreachable case")
-    n = int(x)
-    return n if n >= 0 else None
+    return int(x)
 
 
 _MAX_POW_EXPONENT = 1 << 16
-"""largest exponent `pow` folds: `x ** n` has `n` times the significand of `x`"""
+"""largest exponent `pow` folds: `x ** n` has `|n|` times the significand of `x`"""
 
 _real_engine_inst = None
 """single instance of Real engine"""
@@ -238,10 +249,52 @@ class RealEngine(Engine):
         return None
 
     def copysign(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
+        # transferring a sign moves no digits, so it is exact for every value,
+        # NaN and infinity included
+        s = _signbit(y)
+        match x:
+            case Float():
+                return Float(x=x, s=s, ctx=REAL)
+            case Fraction():
+                if x == 0:
+                    # a `Fraction` cannot carry a negative zero
+                    return Float(s=s, c=0, ctx=REAL)
+                return -abs(x) if s else abs(x)
+            case _:
+                raise RuntimeError("unreachable case")
 
     def div(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        return None
+        if _is_nan(x) or _is_nan(y):
+            # either is NaN
+            return Float(isnan=True, ctx=REAL)
+
+        s = _signbit(x) != _signbit(y)
+        if _is_inf(x):
+            if _is_inf(y):
+                # Inf / Inf = NaN
+                return Float(isnan=True, ctx=REAL)
+            else:
+                # Inf / y = Inf
+                return Float(s=s, isinf=True, ctx=REAL)
+        elif _is_inf(y):
+            # x / Inf = 0
+            return Float(s=s, c=0, ctx=REAL)
+        elif _is_zero(y):
+            if _is_zero(x):
+                # 0 / 0 = NaN
+                return Float(isnan=True, ctx=REAL)
+            else:
+                # x / 0 = Inf; `ops` reports this as divide-by-zero
+                return Float(s=s, isinf=True, ctx=REAL)
+        elif _is_zero(x):
+            # 0 / y = 0; the separate case keeps the sign of a zero `x`
+            return Float(s=s, c=0, ctx=REAL)
+        else:
+            # both are finite and non-zero, so the quotient is an exact rational
+            r = _as_rational(x) / _as_rational(y)
+            if isinstance(x, Float) and isinstance(y, Float) and is_dyadic(r):
+                return Float(x=RealFloat.from_rational(r), ctx=REAL)
+            return r
 
     def fdim(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
         return None
@@ -299,11 +352,18 @@ class RealEngine(Engine):
                     raise RuntimeError("unreachable case")
 
     def pow(self, x: EngineArg, y: EngineArg, ctx: Context) -> EngineRes:
-        # only exact for a small non-negative integer exponent
-        n = _nonneg_int(y)
-        if n is None or n > _MAX_POW_EXPONENT:
+        # only exact for an integer exponent
+        n = _int_value(y)
+        if n is None:
             return None
 
+        # folding costs `|n|` times the significand of `x`, so the exponent is
+        # bounded; a power of two is the exception, since only its exponent scales
+        k = _log2_exact(x)
+        if k is None and abs(n) > _MAX_POW_EXPONENT:
+            return None
+
+        # `n % 2 == 1` tests oddness for negative `n` as well
         if _is_nan(x) or _is_inf(x):
             if n == 0:
                 # Inf ** 0 = NaN ** 0 = 1
@@ -311,15 +371,33 @@ class RealEngine(Engine):
             elif _is_nan(x):
                 # NaN ** n = NaN
                 return Float(isnan=True, ctx=REAL)
-            else:
+            elif n > 0:
                 # Inf ** n = Inf
                 s = _signbit(x) and n % 2 == 1
                 return Float(s=s, isinf=True, ctx=REAL)
+            else:
+                # Inf ** -n = 0
+                s = _signbit(x) and n % 2 == 1
+                return Float(s=s, c=0, ctx=REAL)
+        elif n < 0 and _is_zero(x):
+            # 0 ** -n = Inf; `ops` reports this as divide-by-zero
+            s = _signbit(x) and n % 2 == 1
+            return Float(s=s, isinf=True, ctx=REAL)
+        elif k is not None:
+            # |x| is a power of two: `x ** n = +/-2 ** (k * n)`
+            s = _signbit(x) and n % 2 == 1
+            return Float(x=RealFloat(s=s, exp=k * n, c=1), ctx=REAL)
         else:
-            # x is finite
+            # x is finite, and non-zero when `n < 0`
             match x:
                 case Float():
-                    return Float(x=x.as_real() ** n, ctx=REAL)
+                    if n >= 0:
+                        return Float(x=x.as_real() ** n, ctx=REAL)
+                    # a negative exponent stays a `Float` only when the result is dyadic
+                    r = x.as_rational() ** n
+                    if is_dyadic(r):
+                        return Float(x=RealFloat.from_rational(r), ctx=REAL)
+                    return r
                 case Fraction():
                     return x ** n
                 case _:

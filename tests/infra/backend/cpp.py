@@ -863,7 +863,7 @@ _library_ignore = [
     'logb', # deprecated
     '_modf_spec',
     'isinteger',
-    '_ldexp_spec',
+    'ldexp', # relies on `isinteger`
     'tree_sum',
     # eft
     'ideal_2sum',
