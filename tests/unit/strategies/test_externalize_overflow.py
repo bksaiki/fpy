@@ -13,7 +13,13 @@ from fpy2.analysis import PartialEval
 from fpy2.ast import ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
-from fpy2.number import MPSFloatContext
+from fpy2.number import (
+    EFloatContext,
+    EFloatNanKind,
+    MPFixedContext,
+    MPSFloatContext,
+    RealFloat,
+)
 from fpy2.strategies import (
     externalize_overflow,
     float_to_fixed,
@@ -117,35 +123,107 @@ class TestExternalizeOverflow:
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
 
 
+def _quantizer(ctx) -> fp.Function:
+    @fp.fpy(ctx=fp.REAL)
+    def q(x):
+        with ctx:
+            y = fp.round(x)
+        return y
+    return q
+
+
+def _samples(ctx) -> list:
+    B = ctx.maxval().as_real()
+    xs = [
+        fp.Float(isnan=True), fp.Float(isinf=True), fp.Float(isinf=True, s=True),
+        fp.Float(c=0), fp.Float(c=0, s=True),
+    ]
+    grid = [
+        B, ctx.infval().as_real(),
+        RealFloat(exp=B.exp - 1, c=2 * B.c - 1),   # just below the bound
+        RealFloat(exp=B.exp, c=B.c + 1),           # the tie above it
+        RealFloat(exp=B.exp + 40, c=B.c),          # far past
+        RealFloat(exp=ctx.expmin, c=1),            # smallest subnormal
+        RealFloat(exp=ctx.expmin - 1, c=1),        # below it: rounds to zero
+        RealFloat(exp=ctx.emin, c=1), RealFloat(exp=-2, c=1), RealFloat(exp=1, c=3),
+    ]
+    for g in grid:
+        xs.append(fp.Float(x=g, ctx=fp.REAL))
+        xs.append(fp.Float(x=RealFloat(s=True, exp=g.exp, c=g.c), ctx=fp.REAL))
+    return xs
+
+
+_PIPELINE_CTXS = [
+    fp.FP16, fp.FP32, fp.FP64, fp.IEEEContext(4, 8),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RTZ),
+    fp.MX_E5M2, fp.MX_E4M3, fp.MX_E3M2, fp.MX_E2M1,
+    EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
+    EFloatContext(4, 8, False, EFloatNanKind.NONE, 2),
+]
+_PIPELINE_IDS = [
+    'fp16', 'fp32', 'fp64', 'ieee_4_8', 'ieee_sat', 'ieee_rtz',
+    'e5m2', 'e4m3', 'e3m2', 'e2m1', 'neg_zero', 'eoffset',
+]
+
+
 class TestPipeline:
-    """With the bound out of the context, ``float_to_fixed`` lowers the
-    rounding through its unbounded path: the target carries a digit position
-    and nothing else."""
+    """``externalize_overflow`` then ``float_to_fixed`` then ``rescale_fixed``
+    is the full lowering: a float rounding becomes an integer one, with the
+    bound stated as program text rather than carried by a format."""
 
-    @pytest.mark.parametrize('ctx', [fp.FP16, fp.FP32, fp.IEEEContext(4, 8)],
-                             ids=['fp16', 'fp32', 'ieee_4_8'])
-    def test_preserves_results(self, ctx):
-        @fp.fpy(ctx=fp.REAL)
-        def q(x):
-            with ctx:
-                y = fp.round(x)
-            return y
+    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
+    def test_preserves_results(self, ctx, pre_check):
+        q = _quantizer(ctx)
+        out = rescale_fixed(float_to_fixed(externalize_overflow(q, pre_check=pre_check)))
+        for x in _samples(ctx):
+            assert _same(out(x), q(x)), (ctx, x)
 
-        out = rescale_fixed(float_to_fixed(externalize_overflow(q)))
-        B = float(ctx.maxval())
-        xs = [
-            0.0, -0.0, float('inf'), float('-inf'), float('nan'),
-            1.0, -1.0, B, -B, B * 1.001, B * 2,
-            2.0 ** ctx.emin, 2.0 ** ctx.expmin, 2.0 ** (ctx.expmin - 1),
-            0.1, -0.1, 12.5,
-        ]
-        for x in xs:
-            assert _same(out(x), q(x)), x
+    @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
+    def test_nothing_bounded_survives(self, ctx):
+        """Every rounding left states a digit position and no more: no bound
+        for `rescale_fixed` to shift, and no overflow rule for a backend to
+        reproduce."""
+        out = rescale_fixed(float_to_fixed(externalize_overflow(_quantizer(ctx))))
+
+        ctxs = _block_ctxs(out.ast)
+        assert not any(hasattr(c, 'maxval') for c in ctxs)
+        assert not any(isinstance(c, MPSFloatContext) for c in ctxs)
+        positions = [c.nmin for c in ctxs if isinstance(c, MPFixedContext)]
+        assert positions and all(n == -1 for n in positions)
 
     def test_target_carries_no_bound(self):
-        """The lowered rounding is unbounded, so nothing downstream has to
-        shift a bound or reproduce an overflow."""
+        """`float_to_fixed` takes its unbounded path, so the target is
+        `MPFixedContext` rather than the `MPBFixedContext` it emits alone."""
         out = float_to_fixed(externalize_overflow(_quantized_sum))
         ctxs = _block_ctxs(out.ast)
         assert not any(isinstance(c, fp.MPBFixedContext) for c in ctxs)
+        assert any(isinstance(c, MPFixedContext) for c in ctxs)
+        assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
+
+    def test_no_upper_clamp(self):
+        """`float_to_fixed` clamps the digit position so the *bound* stays on
+        the format's grid.  With no bound there is nothing to keep on it, so
+        the position follows the exponent alone."""
+        alone = float_to_fixed(_quantizer(fp.FP16))
+        composed = float_to_fixed(externalize_overflow(_quantizer(fp.FP16)))
+        assert 'min(' in alone.format()
+        assert 'min(' not in composed.format()
+
+    def test_pre_check_bounds_what_is_rounded(self):
+        """With the guard in front, only ``|x| < infval`` reaches the
+        rounding, which is what bounds the integer the rescaled round produces
+        — the clamp's job, done by the check instead."""
+        q = _quantizer(fp.FP16)
+        out = rescale_fixed(float_to_fixed(externalize_overflow(q, pre_check=True)))
+        assert str(int(fp.FP16.infval())) in out.format()
+        for x in _samples(fp.FP16):
+            assert _same(out(x), q(x)), x
+
+    def test_composes_with_simplify(self):
+        out = simplify(
+            rescale_fixed(float_to_fixed(externalize_overflow(_quantized_sum))),
+            enable_const_fold_context=False,
+        )
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))

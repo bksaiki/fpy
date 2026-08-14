@@ -232,6 +232,22 @@ class TestShape:
             assert _eval(out, f, 65520.0).isinf
             assert _same(_eval(out, f, 65510.0), f(65510.0))  # rounds back to the bound
 
+    @pytest.mark.parametrize('ctx', [
+        fp.FP16, fp.MX_E4M3,
+        MPBFixedContext(-4, RealFloat(exp=0, c=255),
+                        overflow=fp.OverflowMode.SATURATE, enable_nan=True),
+    ], ids=['fp16', 'e4m3', 'fixed_with_nan'])
+    def test_nan_sign(self, ctx):
+        """A float format canonicalizes NaN to positive while a fixed-point
+        one keeps the sign it was given.  Each counterpart does the same as its
+        source, so the comparison that decides whether NaN needs a branch can
+        hold the sign against it."""
+        f = _quantizer(ctx)
+        out = ExternalizeOverflow.apply(f.ast)
+
+        neg_nan = fp.Float(isnan=True, s=True)
+        assert _eval(out, f, neg_nan).s == f(neg_nan).s
+
     def test_no_special_branches_for_ieee(self):
         """An IEEE format's NaN and infinities survive the rewrite untouched,
         so nothing has to be said about them."""

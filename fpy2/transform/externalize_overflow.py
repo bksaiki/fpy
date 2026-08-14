@@ -124,6 +124,7 @@ from .utils import (
     attribute,
     check_where,
     number_literal,
+    same_value,
     sign_choice,
     value_literal,
 )
@@ -268,7 +269,7 @@ class _Prober:
             # a format that refuses to round an overflow at all
             return None
 
-        if not all(_same(a, b) for a, b in zip(near, far)):
+        if not all(same_value(a, b) for a, b in zip(near, far)):
             return None
         return near[0], near[1]
 
@@ -331,14 +332,7 @@ def _agrees(a: Float | None, b: Float | None) -> bool:
     """Whether two rounding outcomes match, a refusal counting as an outcome."""
     if a is None or b is None:
         return a is None and b is None
-    return _same(a, b)
-
-
-def _same(a: Float, b: Float) -> bool:
-    """Whether two values are the same, sign and all."""
-    if a.is_nar():
-        return a.isnan == b.isnan and a.isinf == b.isinf and (a.isnan or a.s == b.s)
-    return not b.is_nar() and a.as_real() == b.as_real() and a.s == b.s
+    return same_value(a, b)
 
 
 def _unbounded(ctx: _BoundedCtx) -> _Unbounded | None:

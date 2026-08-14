@@ -1,8 +1,8 @@
 """
 Shared machinery for the transforms: the loop rewrites
 (:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`) and the
-rounding rewrites (:class:`fpy2.transform.FloatToFixed`,
-:class:`fpy2.transform.RescaleFixed`).
+rounding rewrites (:class:`fpy2.transform.ExternalizeOverflow`,
+:class:`fpy2.transform.FloatToFixed`, :class:`fpy2.transform.RescaleFixed`).
 """
 
 from ..analysis import (
@@ -117,7 +117,7 @@ def value_literal(v: Float, loc: Location | None) -> Expr:
     return Neg(e, loc) if v.s else e
 
 
-def _same_value(a: Float, b: Float) -> bool:
+def same_value(a: Float, b: Float) -> bool:
     """Whether two values are the same, sign and all."""
     if a.is_nar():
         return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
@@ -131,7 +131,7 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     When a format makes the same value of both, the choice collapses to that
     value and the operand is not tested at all.
     """
-    if _same_value(pos, neg):
+    if same_value(pos, neg):
         return value_literal(pos, loc)
     return IfExpr(
         Signbit(None, operand, loc),
