@@ -129,6 +129,7 @@ from ...number import (
     Float,
     MPBFixedContext,
     MPFixedContext,
+    OverflowMode,
     RealFloat,
 )
 from ...number.context.context import Context
@@ -1368,36 +1369,65 @@ class CppEmitter(Visitor):
                 f'unsupported context storage `{storage!r}` for `{rctx}`',
                 at=at,
             )
-        if storage.is_float():
-            assert isinstance(rctx, EFloatContext)
+        if isinstance(rctx, MPFixedContext | MPBFixedContext):
+            # A fixed-point context rounds by a libm call (float storage) or a
+            # cast (integer storage).  Neither goes through ``fesetround``, so
+            # its rounding mode is checked against what that lowering can do
+            # rather than against the ``fenv`` modes.
+            if storage.is_integer():
+                if rctx.rm != RM.RTZ:
+                    raise CppEmitError(
+                        f'integer context `{rctx}` must use RTZ rounding mode '
+                        '(C++ integer arithmetic rounds toward zero); got '
+                        f'{rctx.rm}',
+                        at=at,
+                    )
+                # C++ has no arbitrary-precision integer, so the int64_t
+                # fallback may silently overflow; `nmin == -1` is how
+                # MPFixedContext reports unboundedness.
+                if (
+                    isinstance(rctx, MPFixedContext)
+                    and rctx.nmin == -1
+                    and not self._unsafe_cast_int
+                ):
+                    raise CppEmitError(
+                        f'rounding under unbounded integer context `{rctx}` '
+                        'has no sound C++ analogue (no arbitrary-precision '
+                        'integer type).  Pass `unsafe_cast_int=True` to '
+                        '`CppCompiler` to allow truncation to int64_t.',
+                        at=at,
+                    )
+            elif storage.is_float():
+                if rctx.nmin != -1:
+                    raise CppEmitError(
+                        f'fixed-point context `{rctx}` in floating-point '
+                        'storage must have its digits at position zero; run '
+                        '`fpy2.strategies.rescale_fixed` first',
+                        at=at,
+                    )
+                if self._integral_fn(rctx.rm) is None:
+                    raise CppEmitError(
+                        f'rounding mode {rctx.rm} for context `{rctx}` has no '
+                        'libm function rounding to an integral value',
+                        at=at,
+                    )
+            else:
+                raise CppEmitError(
+                    f'unsupported context storage `{storage!r}` for `{rctx}`',
+                    at=at,
+                )
+        elif storage.is_float():
+            if not isinstance(rctx, EFloatContext):
+                raise CppEmitError(
+                    f'context `{rctx}` resolves to floating-point storage but '
+                    'is not a floating-point context, so it states no '
+                    '``fesetround`` mode',
+                    at=at,
+                )
             if rctx.rm not in _FE_RM_MACRO:
                 raise CppEmitError(
                     f'rounding mode {rctx.rm} for context `{rctx}` is not '
                     'supported by ``fesetround`` (need RNE, RTZ, RTP, or RTN)',
-                    at=at,
-                )
-        elif storage.is_integer():
-            assert isinstance(rctx, MPFixedContext | MPBFixedContext)
-            if rctx.rm != RM.RTZ:
-                raise CppEmitError(
-                    f'integer context `{rctx}` must use RTZ rounding mode '
-                    '(C++ integer arithmetic rounds toward zero); got '
-                    f'{rctx.rm}',
-                    at=at,
-                )
-            # C++ has no arbitrary-precision integer, so the int64_t fallback
-            # may silently overflow; `nmin == -1` is how MPFixedContext reports
-            # unboundedness.
-            if (
-                isinstance(rctx, MPFixedContext)
-                and rctx.nmin == -1
-                and not self._unsafe_cast_int
-            ):
-                raise CppEmitError(
-                    f'rounding under unbounded integer context `{rctx}` '
-                    'has no sound C++ analogue (no arbitrary-precision '
-                    'integer type).  Pass `unsafe_cast_int=True` to '
-                    '`CppCompiler` to allow truncation to int64_t.',
                     at=at,
                 )
         else:
@@ -1443,14 +1473,15 @@ class CppEmitter(Visitor):
         # ``REAL`` doesn't correspond to any C++ rounding mode — see
         # the same comment in :meth:`_visit_function`.  Treat it as
         # a pass-through; per-op widening dispatch handles the body.
-        if (
-            rctx is None
-            or rctx is REAL
-            or self._validate_context_rm(rctx, at=stmt).is_integer()
-        ):
-            # No op uses this scope, the scope is REAL (no fenv
-            # mode), or the scope is integer (no ``fenv`` to manage
-            # either way).  Just descend.
+        if rctx is None or rctx is REAL:
+            # No op uses this scope, or the scope is REAL (no fenv mode).
+            self._visit_block(stmt.body, ctx)
+            return
+        storage = self._validate_context_rm(rctx, at=stmt)
+        if storage.is_integer() or isinstance(rctx, MPFixedContext | MPBFixedContext):
+            # A fixed-point scope has no ``fenv`` to manage whichever storage it
+            # lands in: its rounding is a cast or a libm call, both of which fix
+            # the mode themselves.  Just descend.
             self._visit_block(stmt.body, ctx)
             return
         # Float context: validation above guarantees an
@@ -2545,10 +2576,105 @@ class CppEmitter(Visitor):
         if folded is not None:
             return folded
         arg = self._visit_expr(e.arg, ctx)
+        integral = self._emit_integral_round(e, arg)
+        if integral is not None:
+            return integral
         arg_ty, target_ty = self._scalar_cast_types(e)
         if arg_ty == target_ty:
             return arg
         return self._explicit_cast(arg, target_ty)
+
+    def _integral_fn(self, rm: RM) -> str | None:
+        """The libm function rounding to an integral value under *rm*.
+
+        Each is exact and stays in the floating-point type, so unlike a cast to
+        an integer it keeps a signed zero and needs no integer wide enough for
+        the value.  ``RAZ`` has no single spelling and ``RTO``/``RTE`` none at
+        all.
+        """
+        return {
+            RM.RTZ: 'std::trunc',
+            RM.RTN: 'std::floor',
+            RM.RTP: 'std::ceil',
+            RM.RNA: 'std::round',
+            # follows the *current* mode, so it is RNE only under FE_TONEAREST
+            RM.RNE: 'std::nearbyint',
+        }.get(rm)
+
+    def _undefined_guard(
+        self, ctx: MPFixedContext | MPBFixedContext, operand: str,
+    ) -> str | None:
+        """A test that *operand* is a value `ctx` can round, or `None`.
+
+        A context states which values it has no result for; each such statement
+        compiles to an assertion.  A stated *substitute* (``nan_value`` /
+        ``inf_value``) is a value rather than a refusal, so it needs an emitted
+        branch instead -- callers decline those.
+        """
+        tests = []
+        if not ctx.enable_nan and ctx.nan_value is None:
+            tests.append(f'!std::isnan({operand})')
+        if not ctx.enable_inf and ctx.inf_value is None:
+            tests.append(f'!std::isinf({operand})')
+        if len(tests) == 2:
+            # both refused: one call says it
+            return f'std::isfinite({operand})'
+        return tests[0] if tests else None
+
+    def _emit_integral_round(self, e, arg: str) -> str | None:
+        """``round(v)`` under an integer context, as a libm call.
+
+        `None` when this rounding is not of that shape, leaving the caller's
+        cast in place.  Applies when the context's digits sit at position zero
+        and its storage is a floating-point type: the result is then an integral
+        *value* in a float, which is what C++ rounds to natively.
+
+        The context's edges become assertions bracketing the call -- an operand
+        it cannot round, and a result past its bound.  Both vanish under
+        ``NDEBUG``, as every FPy assertion does.
+        """
+        active = self._active_ctx_for(e)
+        if not isinstance(active, MPFixedContext | MPBFixedContext):
+            return None
+        # position zero: `nmin` is the last unrepresentable digit, so -1 is the
+        # integer grid.  Any other position needs the operand scaled first,
+        # which is `rescale_fixed`'s job rather than the backend's.
+        if active.nmin != -1 or active.num_randbits != 0:
+            return None
+        # libm keeps a signed zero; a format without one would disagree
+        if not active.enable_neg_zero:
+            return None
+        fn = self._integral_fn(active.rm)
+        if fn is None:
+            return None
+        target_ty = self._scalar_for_ctx(active, at=e)
+        if not target_ty.is_float():
+            # integer storage: the existing cast is the better lowering
+            return None
+        if active.rm is RM.RNE and self._current_rm not in (None, RM.RNE):
+            raise CppEmitError(
+                f'rounding to nearest under `{active}` needs `std::nearbyint` '
+                f'in FE_TONEAREST, but the enclosing scope set {self._current_rm}',
+                at=e,
+            )
+
+        operand = self._bind_operand(arg)
+        guard = self._undefined_guard(active, operand)
+        if guard is not None:
+            self.writer.add_line(
+                f'assert({guard} && "fpy: rounding is undefined for this value");'
+            )
+        out = self._fresh_temp()
+        self.writer.add_line(
+            f'{target_ty.format()} {out} = {fn}({operand});'
+        )
+        if isinstance(active, MPBFixedContext) and active.overflow is OverflowMode.ASSERT:
+            bound = self._emit_numeric_literal(active.maxval().as_real().as_rational(), at=e)
+            self.writer.add_line(
+                f'assert(std::fabs({out}) <= {bound} '
+                f'&& "fpy: overflow occurred so rounding is undefined");'
+            )
+        return out
 
     def _visit_round_at(self, e, ctx):
         self._unsupported('RoundAt', at=e)
