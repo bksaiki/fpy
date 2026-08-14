@@ -256,6 +256,21 @@ class _IndentedWriter:
     def dedent(self):
         self._depth -= 1
 
+    def mark(self) -> int:
+        """A point to :meth:`rewind` to.
+
+        Lets a caller emit speculatively -- an expression whose C++ form may or
+        may not need statements of its own -- and undo it if the shape turns out
+        not to fit.  See :meth:`_FnEmitter._visit_if`.
+        """
+        return len(self._lines)
+
+    def wrote_since(self, mark: int) -> bool:
+        return len(self._lines) > mark
+
+    def rewind(self, mark: int) -> None:
+        del self._lines[mark:]
+
     def render(self) -> str:
         return '\n'.join(self._lines)
 
@@ -3096,12 +3111,44 @@ class CppEmitter(Visitor):
     def _visit_if1(self, stmt: If1Stmt, ctx):
         self._emit_guarded_block('if', stmt.cond, stmt.body, ctx)
 
+    @staticmethod
+    def _sole_if(block: StmtBlock) -> 'IfStmt | None':
+        """The one ``if``/``else`` *block* consists of, or ``None``.
+
+        An ``else`` holding nothing else is what ``else if`` is for; a chain of
+        FPy ``elif``s arrives as exactly this shape, one nesting level deep per
+        arm.
+        """
+        if len(block.stmts) != 1:
+            return None
+        only = block.stmts[0]
+        return only if isinstance(only, IfStmt) else None
+
     def _visit_if(self, stmt: IfStmt, ctx):
         cond = self._visit_expr(stmt.cond, ctx)
         self.writer.add_line(f'if ({cond}) {{')
         self.writer.indent()
         self._visit_block(stmt.ift, ctx)
         self.writer.dedent()
+
+        # Flatten ``else { if ... }`` into ``else if``, which is what the
+        # nesting means and keeps a long chain readable.
+        while (nested := self._sole_if(stmt.iff)) is not None:
+            # The condition may need statements of its own -- a bound operand,
+            # or one of the assertions the rounding lowerings emit.  Those would
+            # land before the ``else``, so run unconditionally; emit
+            # speculatively and keep the nesting when any appear.
+            mark = self.writer.mark()
+            nested_cond = self._visit_expr(nested.cond, ctx)
+            if self.writer.wrote_since(mark):
+                self.writer.rewind(mark)
+                break
+            self.writer.add_line(f'}} else if ({nested_cond}) {{')
+            self.writer.indent()
+            self._visit_block(nested.ift, ctx)
+            self.writer.dedent()
+            stmt = nested
+
         self.writer.add_line('} else {')
         self.writer.indent()
         self._visit_block(stmt.iff, ctx)

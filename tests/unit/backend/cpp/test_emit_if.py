@@ -189,3 +189,58 @@ class TestIfStmt:
         # ``t`` declares-on-assign inside the if-branch.
         assert '        double t = (-x);' in out
         assert '        y = (t + static_cast<double>(1));' in out
+
+
+class TestElseIfChain:
+    """``else { if ... }`` prints as ``else if``.
+
+    An FPy ``elif`` chain arrives as one nesting level per arm, so without this
+    a five-arm chain indents five times and the closing braces pile up.
+    """
+
+    def test_chain_is_flattened(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                if x > 3.0:
+                    y = 1.0
+                elif x > 2.0:
+                    y = 2.0
+                elif x > 1.0:
+                    y = 3.0
+                else:
+                    y = 4.0
+                return y
+
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
+        assert out.count('else if') == 2
+        # one `if`, two `else if`, one `else` — and so one closing brace
+        assert out.count('} else {') == 1
+
+    def test_setup_keeps_the_nesting(self):
+        """A condition needing statements of its own must not be flattened.
+
+        Those statements would land before the ``else`` and run
+        unconditionally.  Here the second arm's ``2 ** n`` needs a finiteness
+        assertion, so the ``else { if ... }`` shape has to stay.
+        """
+        @fp.fpy
+        def f(x: fp.Real, k: fp.Real) -> fp.Real:
+            with fp.FP64:
+                n = fp.logb(k)
+                if x > 100.0:
+                    y = 1.0
+                elif ((2 ** n) * x) > 0.0:
+                    y = 2.0
+                else:
+                    y = 3.0
+                return y
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)])
+        assert 'else if' not in out
+        # the assertion sits inside the `else`, not before it
+        lines = [ln.strip() for ln in out.splitlines()]
+        i_else = lines.index('} else {')
+        i_assert = next(i for i, ln in enumerate(lines) if ln.startswith('assert('))
+        assert i_assert > i_else, 'setup escaped the else block'
