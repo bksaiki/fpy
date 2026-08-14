@@ -334,12 +334,14 @@ class AbstractFormat:
         exp = max(self.exp, other.exp)
         pos_bound = min(self.pos_bound, other.pos_bound)
         neg_bound = max(self.neg_bound, other.neg_bound)
-        # a special value is in the intersection iff it is in both operands
+        # a special value is in the intersection iff it is in both operands --
+        # the negative zero included, or `x & x` would not be `x`
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=self.has_pos_inf and other.has_pos_inf,
             has_neg_inf=self.has_neg_inf and other.has_neg_inf,
             has_nan=self.has_nan and other.has_nan,
+            has_neg_zero=self.has_neg_zero and other.has_neg_zero,
         )
 
     def __or__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -350,12 +352,14 @@ class AbstractFormat:
         exp = min(self.exp, other.exp)
         pos_bound = max(self.pos_bound, other.pos_bound)
         neg_bound = min(self.neg_bound, other.neg_bound)
-        # a special value is in the union iff it is in either operand
+        # a special value is in the union iff it is in either operand -- the
+        # negative zero included, or the join would not contain its operands
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=self.has_pos_inf or other.has_pos_inf,
             has_neg_inf=self.has_neg_inf or other.has_neg_inf,
             has_nan=self.has_nan or other.has_nan,
+            has_neg_zero=self.has_neg_zero or other.has_neg_zero,
         )
 
     def __le__(self, other) -> bool:
@@ -400,6 +404,9 @@ class AbstractFormat:
         that does claim a negative zero is kept off the integer rungs of the C++
         storage ladder by containment — correctly, as no C++ integer type has one.
         """
+        if not isinstance(fmt, Format):
+            raise TypeError(f'Expected \'Format\', got {fmt}')
+
         # finite grid: quantum, precision, and bounds
         match fmt:
             case RealFormat():
