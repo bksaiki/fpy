@@ -3,11 +3,11 @@ Scheduling language: overflow as program text
 """
 
 from ..function import Function
-from ..transform import ExternalizeOverflow
+from ..transform import UnfoldOverflow
 
 
-def externalize_overflow(
-    func: Function, where: int | None = None, *, pre_check: bool = False
+def unfold_overflow(
+    func: Function, where: int | None = None, *, early_check: bool = False
 ) -> Function:
     """
     Take the bound out of `func`'s rounding contexts and state it as program text.
@@ -26,7 +26,7 @@ def externalize_overflow(
     asked of the source context rather than assumed; a special value gets a
     branch only where the rewrite would otherwise disagree with it.
 
-    A bounded *fixed-point* format externalizes the same way, its counterpart
+    A bounded *fixed-point* format unfolds the same way, its counterpart
     being :class:`fpy2.MPFixedContext` at the same digit position.
 
     Applies to a bounded format that rounds deterministically and whose
@@ -46,12 +46,12 @@ def externalize_overflow(
         The index of the block to rewrite, counting candidate blocks (those
         this rewrite could apply to) in visit order, outermost-first. If
         `None`, rewrite every candidate.
-    pre_check : bool
-        Also guard the *operand*, so nothing certain to overflow is rounded at
-        all. The threshold is the format's ``infval``, the next value above
-        ``maxval`` — not ``maxval`` itself, which a value may exceed and still
-        round back onto the grid. The guard is sound but not complete, so the
-        comparison after the rounding stays either way.
+    early_check : bool
+        Also test the operand before rounding it, so nothing certain to
+        overflow is rounded at all. The threshold is the format's ``infval``,
+        the next value above ``maxval`` — not ``maxval`` itself, which a value
+        may exceed and still round back onto the grid. This test is sound but
+        not complete, so the one after the rounding stays either way.
 
     Returns
     -------
@@ -68,7 +68,7 @@ def externalize_overflow(
                 y = fp.round(x)
             return y
 
-    ``externalize_overflow(quantize)`` rounds under the unbounded format and
+    ``unfold_overflow(quantize)`` rounds under the unbounded format and
     compares::
 
         @fp.fpy(
@@ -86,7 +86,7 @@ def externalize_overflow(
                     y = t
             return y
 
-    With ``pre_check=True``, a guard on ``x`` precedes all of that::
+    With ``early_check=True``, a check on ``x`` precedes all of that::
 
         if x >= 65536:
             y = fp.inf()
@@ -98,5 +98,5 @@ def externalize_overflow(
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = ExternalizeOverflow.apply(func.ast, where=where, pre_check=pre_check)
+    ast = UnfoldOverflow.apply(func.ast, where=where, early_check=early_check)
     return func.with_ast(ast)

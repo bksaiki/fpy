@@ -1,5 +1,5 @@
 """
-Unit tests for the :class:`fpy2.transform.ExternalizeOverflow` transform.
+Unit tests for the :class:`fpy2.transform.UnfoldOverflow` transform.
 
 A bounded rounding is an unbounded rounding plus a comparison, so the tests
 assert:
@@ -38,7 +38,7 @@ from fpy2.number import (
     MPSFloatContext,
     RealFloat,
 )
-from fpy2.transform import ExternalizeOverflow
+from fpy2.transform import UnfoldOverflow
 
 
 # ----------------------------------------------------------------------
@@ -159,7 +159,7 @@ class TestShape:
 
     def test_context_loses_its_bound(self):
         f = _quantizer(fp.FP16)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
 
         ctxs = _block_ctxs(out)
         assert REAL in ctxs
@@ -177,7 +177,7 @@ class TestShape:
         """The point of the rewrite: what is left rounds under a format with
         no bound at all, so it states no overflow behavior for a backend to
         reproduce."""
-        out = ExternalizeOverflow.apply(_quantizer(ctx).ast)
+        out = UnfoldOverflow.apply(_quantizer(ctx).ast)
 
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPSFloatContext))
         assert not hasattr(target, 'maxval')
@@ -189,7 +189,7 @@ class TestShape:
     def test_target_is_written_as_a_constructor(self):
         """The emitted context is a call the printed program can be loaded
         back from, rather than an opaque value."""
-        out = ExternalizeOverflow.apply(_quantizer(fp.FP16).ast)
+        out = UnfoldOverflow.apply(_quantizer(fp.FP16).ast)
 
         call = next(
             s.ctx for s in _blocks(out)
@@ -201,33 +201,33 @@ class TestShape:
     def test_bound_becomes_a_comparison(self):
         """One test per side, so a format need not mirror its bound."""
         f = _quantizer(fp.FP16)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
 
         bounds = {int(c.args[1].val) for c in _nodes(out, Compare)}  # type: ignore[attr-defined]
         assert bounds == {65504, -65504}
 
-    def test_no_pre_check_by_default(self):
+    def test_no_early_check_by_default(self):
         f = _quantizer(fp.FP16)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
         # only the two post-checks, against `maxval` rather than `infval`
         assert len(_nodes(out, Compare)) == 2
 
-    def test_pre_check_guards_the_operand(self):
+    def test_early_check_tests_the_operand(self):
         f = _quantizer(fp.FP16)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=True)
+        out = UnfoldOverflow.apply(f.ast, early_check=True)
 
         bounds = {int(c.args[1].val) for c in _nodes(out, Compare)}  # type: ignore[attr-defined]
         # the guard uses `infval`, one grid point above the bound
         assert bounds == {65504, -65504, 65536, -65536}
 
-    def test_pre_check_is_not_complete(self):
+    def test_early_check_is_not_complete(self):
         """FP16's tie at 65520 lies below `infval` yet rounds up and
         overflows, so the check after the rounding has to stay."""
         f = _quantizer(fp.FP16)
         assert float(fp.FP16.infval()) == 65536.0
         for out in (
-            ExternalizeOverflow.apply(f.ast),
-            ExternalizeOverflow.apply(f.ast, pre_check=True),
+            UnfoldOverflow.apply(f.ast),
+            UnfoldOverflow.apply(f.ast, early_check=True),
         ):
             assert _eval(out, f, 65520.0).isinf
             assert _same(_eval(out, f, 65510.0), f(65510.0))  # rounds back to the bound
@@ -243,7 +243,7 @@ class TestShape:
         source, so the comparison that decides whether NaN needs a branch can
         hold the sign against it."""
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
 
         neg_nan = fp.Float(isnan=True, s=True)
         assert _eval(out, f, neg_nan).s == f(neg_nan).s
@@ -251,7 +251,7 @@ class TestShape:
     def test_no_special_branches_for_ieee(self):
         """An IEEE format's NaN and infinities survive the rewrite untouched,
         so nothing has to be said about them."""
-        out = ExternalizeOverflow.apply(_quantizer(fp.FP16).ast)
+        out = UnfoldOverflow.apply(_quantizer(fp.FP16).ast)
         assert not _nodes(out, IsNan)
         assert not _nodes(out, IsInf)
 
@@ -259,7 +259,7 @@ class TestShape:
         """`E3M2` substitutes its bound for NaN, which the comparison cannot
         produce; its infinity needs no branch, since overflow lands there
         anyway."""
-        out = ExternalizeOverflow.apply(_quantizer(fp.MX_E3M2).ast)
+        out = UnfoldOverflow.apply(_quantizer(fp.MX_E3M2).ast)
         assert len(_nodes(out, IsNan)) == 1
         assert not _nodes(out, IsInf)
 
@@ -267,7 +267,7 @@ class TestShape:
         """Overflow saturates to the bound, but an infinite *operand* stays
         infinite, so the two cannot share a branch."""
         ctx = fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE)
-        out = ExternalizeOverflow.apply(_quantizer(ctx).ast)
+        out = UnfoldOverflow.apply(_quantizer(ctx).ast)
         assert len(_nodes(out, IsInf)) == 1
         assert not _nodes(out, IsNan)
 
@@ -276,7 +276,7 @@ class TestShape:
         counterpart cannot express, so the sign is dropped explicitly."""
         ctx = EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0)
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
         assert not _eval(out, f, -1e-9).s
         assert _same(_eval(out, f, -1e-9), f(-1e-9))
 
@@ -286,7 +286,7 @@ class TestShape:
             with fp.FP16:
                 return fp.round(x)
 
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
         assert not any(isinstance(c, fp.IEEEContext) for c in _block_ctxs(out))
         for x in _samples(fp.FP16):
             assert _same(_eval(out, f, x), f(x)), x
@@ -301,7 +301,7 @@ class TestShape:
                 s = aq + bq
             return s
 
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
         assert not any(c is fp.FP16 for c in _block_ctxs(out))
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
         assert _same(_eval(out, f, 1e5, 1.0), f(1e5, 1.0))
@@ -317,7 +317,7 @@ class TestShape:
                     acc += aq
             return acc
 
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
         A = [0.1, 0.25, -3.5, 1e-6, 7.0, 70000.0]
         assert _same(_eval(out, f, A), f(A))
 
@@ -330,12 +330,12 @@ _SAT = fp.OverflowMode.SATURATE
 
 
 class TestFixedPoint:
-    """A bounded fixed-point format externalizes the same way; its counterpart
+    """A bounded fixed-point format unfolds the same way; its counterpart
     is ``MPFixedContext``, which states a digit position and nothing else."""
 
     def test_position_is_kept(self):
         src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
-        out = ExternalizeOverflow.apply(_quantizer(src).ast)
+        out = UnfoldOverflow.apply(_quantizer(src).ast)
 
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
         assert target.nmin == src.nmin
@@ -347,7 +347,7 @@ class TestFixedPoint:
         two comparisons are already separate, so nothing has to mirror."""
         src = fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT)
         f = _quantizer(src)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
 
         assert src.maxval().as_real() != -src.maxval(s=True).as_real()
         bounds = {c.args[1] for c in _nodes(out, Compare)}
@@ -362,7 +362,7 @@ class TestFixedPoint:
     def test_negative_zero_follows_the_source(self, src, neg_zero):
         """``MPFixedContext`` can state whether it keeps a negative zero, so
         unlike the float case no fixup after the rounding is needed."""
-        out = ExternalizeOverflow.apply(_quantizer(src).ast)
+        out = UnfoldOverflow.apply(_quantizer(src).ast)
 
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
         assert target.enable_neg_zero is neg_zero
@@ -375,7 +375,7 @@ class TestFixedPoint:
         them too, rather than the checks answering for it."""
         src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
         f = _quantizer(src)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
 
         for x in (fp.Float(isnan=True), fp.Float(isinf=True), fp.Float(isinf=True, s=True)):
             with pytest.raises(ValueError):
@@ -383,25 +383,25 @@ class TestFixedPoint:
             with pytest.raises(ValueError):
                 _eval(out, f, x)
 
-    def test_pre_check_guards_finiteness(self):
+    def test_early_check_excludes_infinities(self):
         """An infinity is past every bound, so the guard would claim it as an
         overflow; testing finiteness first lets it reach the rounding, which
         refuses it as the source did."""
         src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
         f = _quantizer(src)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=True)
+        out = UnfoldOverflow.apply(f.ast, early_check=True)
 
         assert len(_nodes(out, IsFinite)) == 2
         with pytest.raises(ValueError):
             _eval(out, f, fp.Float(isinf=True))
 
-    def test_float_pre_check_needs_no_guard(self):
+    def test_float_early_check_needs_no_finiteness_test(self):
         """A float counterpart represents the infinities, so its guard can
         claim one without changing what the format makes of it."""
-        out = ExternalizeOverflow.apply(_quantizer(fp.FP16).ast, pre_check=True)
+        out = UnfoldOverflow.apply(_quantizer(fp.FP16).ast, early_check=True)
         assert not _nodes(out, IsFinite)
 
-    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('src', [
         fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT),
         fp.FixedContext(True, -4, 8, fp.RoundingMode.RNE, _SAT),
@@ -413,9 +413,9 @@ class TestFixedPoint:
         MPBFixedContext(-2, RealFloat(exp=0, c=100),
                         neg_maxval=RealFloat(s=True, exp=0, c=50), overflow=_SAT),
     ], ids=['fixed_32', 'fixed_8', 'sm_16', 'sm_rtz', 'mpb_sat', 'mpb_inf', 'mpb_asym'])
-    def test_equivalence(self, src, pre_check):
+    def test_equivalence(self, src, early_check):
         f = _quantizer(src)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=pre_check)
+        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
         assert not out.is_equiv(f.ast)
         for x in _fixed_samples(src):
             assert _same(_eval(out, f, x), f(x)), (src, x)
@@ -428,12 +428,12 @@ class TestFixedPointUnchanged:
         constant states it."""
         f = _quantizer(fp.FixedContext(True, -16, 32))  # WRAP is the default
         assert fp.FixedContext(True, -16, 32).overflow is fp.OverflowMode.WRAP
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_unsigned_format(self):
         """An unsigned format states no bound below zero."""
         f = _quantizer(fp.FixedContext(False, -16, 32, fp.RoundingMode.RNE, _SAT))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_overflow_to_an_absent_infinity(self):
         """The format overflows to infinity but cannot represent one, so the
@@ -441,11 +441,11 @@ class TestFixedPointUnchanged:
         f = _quantizer(fp.FixedContext(
             True, -4, 8, fp.RoundingMode.RNE, fp.OverflowMode.OVERFLOW,
         ))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_already_unbounded(self):
         f = _quantizer(MPFixedContext(-8))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
 
 # ----------------------------------------------------------------------
@@ -475,7 +475,7 @@ class TestWhere:
     ])
     def test_selects_one_block(self, where, left):
         f = self._two()
-        out = ExternalizeOverflow.apply(f.ast, where=where)
+        out = UnfoldOverflow.apply(f.ast, where=where)
         # the FP64 block is arithmetic, so it is never a candidate
         remaining = [c for c in _block_ctxs(out) if c in (fp.FP16, fp.FP32)]
         assert remaining == left
@@ -483,12 +483,12 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert ExternalizeOverflow.apply(f.ast, where=9).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast, where=9).is_equiv(f.ast)
 
     def test_rejects_a_non_integer(self):
         f = self._two()
         with pytest.raises(TypeError):
-            ExternalizeOverflow.apply(f.ast, where='first')  # type: ignore[arg-type]
+            UnfoldOverflow.apply(f.ast, where='first')  # type: ignore[arg-type]
 
 
 # ----------------------------------------------------------------------
@@ -500,11 +500,11 @@ class TestUnchanged:
     def test_unbounded_context(self):
         """There is no bound to take out."""
         f = _quantizer(MPSFloatContext(11, -14))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_fixed_point_context(self):
         f = _quantizer(fp.FixedContext(True, -16, 32))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_overflow_that_raises(self):
         """A format that refuses to round an overflow at all states no value
@@ -512,13 +512,13 @@ class TestUnchanged:
         f = _quantizer(fp.IEEEContext(
             5, 16, fp.RoundingMode.RNE, fp.OverflowMode.ASSERT,
         ))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_stochastic_context(self):
         """Stochastic rounding would have to draw its bits under the same
         format, which the unbounded counterpart is not."""
         f = _quantizer(fp.IEEEContext(5, 16, fp.RoundingMode.RNE, num_randbits=2))
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_cast_body(self):
         """``cast`` asserts exactness, which the rewrite would not preserve."""
@@ -529,7 +529,7 @@ class TestUnchanged:
                 y = fp.cast(x)
             return y
 
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_arithmetic_body(self):
         @fp.fpy(ctx=fp.REAL)
@@ -538,7 +538,7 @@ class TestUnchanged:
                 p = a * b
             return p
 
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_round_of_an_expression(self):
         @fp.fpy(ctx=fp.REAL)
@@ -547,7 +547,7 @@ class TestUnchanged:
                 y = fp.round(a + b)
             return y
 
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
     def test_bound_context(self):
         @fp.fpy(ctx=fp.REAL)
@@ -556,7 +556,7 @@ class TestUnchanged:
                 y = fp.round(x)
             return y
 
-        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
 
 # ----------------------------------------------------------------------
@@ -567,42 +567,42 @@ class TestEquivalence:
     """The rewrite must be bit-exact: it is the same rounding, with the bound
     stated rather than built in."""
 
-    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
         fp.FP16, fp.FP32, fp.FP64, fp.IEEEContext(4, 8), fp.IEEEContext(8, 32),
     ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8', 'ieee_8_32'])
-    def test_formats(self, ctx, pre_check):
+    def test_formats(self, ctx, early_check):
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=pre_check)
+        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx):
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
 
-    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
         fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
         EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
         EFloatContext(4, 8, False, EFloatNanKind.NONE, 2),
     ], ids=['ieee_saturating', 'neg_zero_nan', 'shifted_exponent'])
-    def test_edge_rules(self, ctx, pre_check):
+    def test_edge_rules(self, ctx, early_check):
         """A format states its edge rule in its own terms; the rewrite asks
         rather than assumes.  A shifted exponent encoding is already accounted
         for by the precision and exponent range read off the format."""
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=pre_check)
+        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx) + [1e-9, -1e-9, 0.1, -0.1]:
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
 
-    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
         fp.MX_E5M2, fp.MX_E4M3, fp.MX_E3M2, fp.MX_E2M3, fp.MX_E2M1,
     ], ids=['e5m2', 'e4m3', 'e3m2', 'e2m3', 'e2m1'])
-    def test_mx_formats(self, ctx, pre_check):
+    def test_mx_formats(self, ctx, early_check):
         """The MX formats differ in what overflow becomes: an infinity for
         `E5M2`, a NaN for `E4M3`, the bound for the rest."""
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=pre_check)
+        out = UnfoldOverflow.apply(f.ast, early_check=early_check)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx) + [0.1, -0.1, 12.5, -12.5]:
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
@@ -610,7 +610,7 @@ class TestEquivalence:
     def test_multiprecision_bounded_format(self):
         ctx = MPBFloatContext(11, -14, fp.FP16.maxval().as_real())
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
         assert not out.is_equiv(f.ast)
         for x in _samples(ctx):
             assert _same(_eval(out, f, x), f(x)), x
@@ -625,7 +625,7 @@ class TestEquivalence:
         infinity."""
         ctx = fp.IEEEContext(5, 16, rm)
         f = _quantizer(ctx)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=True)
+        out = UnfoldOverflow.apply(f.ast, early_check=True)
         xs = _samples(ctx) + [0.1, -0.1, 65519.0, 65519.996, -65519.996, 1.0009765625]
         for x in xs:
             assert _same(_eval(out, f, x), f(x)), (rm, x)
@@ -634,7 +634,7 @@ class TestEquivalence:
         """Rounding at the top of the range decides between the bound and an
         infinity; the comparison must make the same call."""
         f = _quantizer(fp.FP16)
-        out = ExternalizeOverflow.apply(f.ast, pre_check=True)
+        out = UnfoldOverflow.apply(f.ast, early_check=True)
         for x in (65504.0, 65515.0, 65519.0, 65519.996, 65520.0, 65536.0, 1e5, 1e10):
             for sx in (x, -x):
                 assert _same(_eval(out, f, sx), f(sx)), sx

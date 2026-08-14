@@ -1,7 +1,7 @@
 """
 Shared machinery for the transforms: the loop rewrites
 (:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`) and the
-rounding rewrites (:class:`fpy2.transform.ExternalizeOverflow`,
+rounding rewrites (:class:`fpy2.transform.UnfoldOverflow`,
 :class:`fpy2.transform.FloatToFixed`, :class:`fpy2.transform.RescaleFixed`).
 """
 

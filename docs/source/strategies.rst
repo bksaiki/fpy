@@ -13,8 +13,6 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.elim_round
 
-.. autofunction:: fpy2.strategies.externalize_overflow
-
 .. autofunction:: fpy2.strategies.float_to_fixed
 
 .. autofunction:: fpy2.strategies.fuse
@@ -30,6 +28,8 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 .. autofunction:: fpy2.strategies.simplify
 
 .. autofunction:: fpy2.strategies.split
+
+.. autofunction:: fpy2.strategies.unfold_overflow
 
 .. autofunction:: fpy2.strategies.unroll_for
 

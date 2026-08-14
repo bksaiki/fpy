@@ -1,5 +1,5 @@
 """
-State a rounding context's overflow as program text.
+Unfold a rounding context's overflow into program text.
 
 A bounded format decides two things at once: where its grid lies, and what
 becomes of a value too large for it.  IEEE 754 defines the second in terms of
@@ -36,7 +36,7 @@ bound becomes a comparison.
        else:
            y = t
 
-With `pre_check`, a guard on the *operand* comes first, so nothing past the
+With `early_check`, a check on the operand comes first, so nothing past the
 bound reaches the rounding at all:
 
 .. code-block:: python
@@ -52,7 +52,7 @@ Its threshold is :meth:`fpy2.Context.infval`, the next value above ``maxval``
 in the unbounded format — *not* ``maxval`` itself.  Under ``RNE``, ``FP16``
 maps ``65510`` to ``65504``, so exceeding the bound does not imply overflow;
 reaching ``infval`` does, for any monotone rounding, since
-``round_U(x) >= round_U(infval) = infval > maxval``.  The guard is sound but
+``round_U(x) >= round_U(infval) = infval > maxval``.  The check is sound but
 not complete — ``FP16``'s tie at ``65520`` lies below ``infval`` yet rounds up
 to ``65536`` — so the comparison after the rounding stays either way.
 
@@ -61,13 +61,13 @@ are asked of the source context rather than assumed.  A special value gets a
 branch only where the emitted program would otherwise disagree with it, so an
 IEEE source gets none and a format that substitutes its bound for NaN gets one.
 
-A bounded *fixed-point* format externalizes the same way, its counterpart being
+A bounded *fixed-point* format unfolds the same way, its counterpart being
 :class:`fpy2.MPFixedContext` at the same digit position.  That counterpart can
 state what it does with NaN, an infinity and a negative zero, so it inherits all
 three from the source and the checks have nothing to say about them.  What it
 cannot state is a refusal, and a fixed-point format commonly refuses NaN and the
-infinities outright — hence the finiteness test in front of ``pre_check``'s
-guard, which would otherwise claim an infinity as an overflow.
+infinities outright — hence the finiteness test in front of the early
+check, which would otherwise claim an infinity as an overflow.
 
 Applies to a format whose overflow is a constant of its own: wrapping gives a
 different answer at every magnitude, and an unsigned format states no bound
@@ -157,7 +157,7 @@ class _Source:
     neg_maxval: RealFloat
     """its negative counterpart, which a format need not mirror"""
     infval: RealFloat
-    """smallest value that certainly overflows, for `pre_check`"""
+    """smallest value that certainly overflows, for `early_check`"""
     neg_infval: RealFloat
     """its negative counterpart"""
     over_pos: Float
@@ -172,11 +172,11 @@ class _Source:
     which a float counterpart cannot help doing — `MPSFloatContext` has no way
     to turn it off, while `MPFixedContext` does.
     """
-    guard_finite: bool
+    check_finite: bool
     """
-    whether `pre_check`'s guard has to exclude the infinities.
+    whether the early check has to exclude the infinities.
 
-    An infinity is past every bound, so the guard would claim it as an overflow
+    An infinity is past every bound, so the check would claim it as an overflow
     — but a fixed-point format rejects it outright, and the rewrite has no way
     to state a refusal.  Testing finiteness first lets it reach the rounding,
     which refuses it exactly as the source did.
@@ -224,12 +224,12 @@ class _Prober:
 
     ctx: _BoundedCtx
     unbounded: _Unbounded
-    pre_check: bool
+    early_check: bool
 
-    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded, pre_check: bool):
+    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded, early_check: bool):
         self.ctx = ctx
         self.unbounded = unbounded
-        self.pre_check = pre_check
+        self.early_check = early_check
 
     def describe(self) -> _Source | None:
         """`ctx` as a lowerable bounded format, or `None`."""
@@ -256,7 +256,7 @@ class _Prober:
             self.unbounded, maxval, neg_maxval, infval, neg_infval,
             over_pos, over_neg,
             drop_neg_zero=self.unbounded.round(zero).s and not ctx.round(zero).s,
-            guard_finite=_rounded(self.unbounded, _POS_INF) is None,
+            check_finite=_rounded(self.unbounded, _POS_INF) is None,
             specials=(),
         )
         # which specials need a branch depends on what the rest of `src` makes
@@ -313,7 +313,7 @@ class _Prober:
         What the generated code yields for `x`, special branches aside;
         `None` where the rounding rejects it, as the source may too.
         """
-        if self.pre_check and not (src.guard_finite and x.is_nar()):
+        if self.early_check and not (src.check_finite and x.is_nar()):
             if _holds(x, CompareOp.GE, src.infval):
                 return src.over_pos
             if _holds(x, CompareOp.LE, src.neg_infval):
@@ -414,32 +414,32 @@ def _unbounded_expr(
     )
 
 
-class _ExternalizeOverflowInstance(BlockRewriter):
+class _UnfoldOverflowInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
     where: int | None
-    pre_check: bool
+    early_check: bool
     alias: str | None
     used_alias: bool
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        where: int | None = None, pre_check: bool = False,
+        where: int | None = None, early_check: bool = False,
     ):
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        self.pre_check = pre_check
+        self.early_check = early_check
         # the name the program calls `fpy2` by, which the emitted context is
         # written with; without one it falls back to the context value itself
         self.alias = fpy_alias(func.env)
         self.used_alias = False
-        # Counts *candidate* blocks (those the rewrite could externalize) in
+        # Counts *candidate* blocks (those the rewrite could unfold) in
         # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
@@ -481,9 +481,9 @@ class _ExternalizeOverflowInstance(BlockRewriter):
         unbounded = _unbounded(ctx)
         if unbounded is None:
             return None
-        return _Prober(ctx, unbounded, self.pre_check).describe()
+        return _Prober(ctx, unbounded, self.early_check).describe()
 
-    def _externalize(
+    def _unfold(
         self, e: Round, target: NamedId, loc: Location | None, src: _Source
     ) -> Stmt:
         """`target = round(v)` as an unbounded rounding plus a bound check."""
@@ -498,11 +498,11 @@ class _ExternalizeOverflowInstance(BlockRewriter):
 
         def past(
             operand: Expr, op: CompareOp, bound: RealFloat, over: Float,
-            rest: StmtBlock, guard: bool = False,
+            rest: StmtBlock, finite: bool = False,
         ) -> StmtBlock:
             """`rest`, behind a branch taking `operand` past `bound`."""
             cond: Expr = Compare([op], [operand, number_literal(bound, loc)], loc)
-            if guard:
+            if finite:
                 cond = And([IsFinite(None, operand, loc), cond], loc)
             return StmtBlock([IfStmt(cond, assign(value_literal(over, loc)), rest, loc)])
 
@@ -530,8 +530,8 @@ class _ExternalizeOverflowInstance(BlockRewriter):
         body = StmtBlock([rounding, *rest.stmts])
 
         # an operand already past the bound needs no rounding to know it
-        if self.pre_check:
-            g = src.guard_finite
+        if self.early_check:
+            g = src.check_finite
             body = past(arg(), CompareOp.LE, src.neg_infval, src.over_neg, body, g)
             body = past(arg(), CompareOp.GE, src.infval, src.over_pos, body, g)
 
@@ -557,17 +557,17 @@ class _ExternalizeOverflowInstance(BlockRewriter):
         for s in stmt.body.stmts:
             if isinstance(s, Assign):
                 assert isinstance(s.expr, Round) and isinstance(s.target, NamedId)
-                stmts.append(self._externalize(s.expr, s.target, s.loc, src))
+                stmts.append(self._unfold(s.expr, s.target, s.loc, src))
             else:
                 # a returned round lands in a temporary, which the return names
                 assert isinstance(s, ReturnStmt) and isinstance(s.expr, Round)
                 out = self.gensym.fresh('t')
-                stmts.append(self._externalize(s.expr, out, s.loc, src))
+                stmts.append(self._unfold(s.expr, out, s.loc, src))
                 stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
         return stmts
 
 
-class ExternalizeOverflow:
+class UnfoldOverflow:
     """
     Transformation pass to state a context's overflow as program text.
     """
@@ -576,7 +576,7 @@ class ExternalizeOverflow:
     def apply(
         func: FuncDef, *,
         where: int | None = None,
-        pre_check: bool = False,
+        early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
@@ -586,7 +586,7 @@ class ExternalizeOverflow:
         (outermost-first); candidates are the blocks this pass could rewrite.
         If `None`, every candidate is rewritten.
 
-        With `pre_check`, a guard on the operand precedes the rounding, so
+        With `early_check`, a check on the operand precedes the rounding, so
         nothing certain to overflow is rounded at all.
         """
         if not isinstance(func, FuncDef):
@@ -596,4 +596,4 @@ class ExternalizeOverflow:
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _ExternalizeOverflowInstance(func, eval_info, where, pre_check).apply()
+        return _UnfoldOverflowInstance(func, eval_info, where, early_check).apply()

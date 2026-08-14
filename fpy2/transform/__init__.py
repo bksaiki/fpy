@@ -6,7 +6,6 @@ from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate
 from .dead_code import DeadCodeEliminate
 from .enumerate_elim import EnumerateElim
-from .externalize_overflow import ExternalizeOverflow
 from .float_to_fixed import FloatToFixed
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
@@ -24,6 +23,7 @@ from .simplify_if import SimplifyIf
 from .specialize import Specialize
 from .split_loop import SplitLoop, SplitLoopStrategy
 from .subst_var import SubstVar
+from .unfold_overflow import UnfoldOverflow
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
 from .zip_elim import ZipElim

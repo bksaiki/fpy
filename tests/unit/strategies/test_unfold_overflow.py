@@ -1,7 +1,7 @@
-"""Unit tests for :func:`fpy2.strategies.externalize_overflow`.
+"""Unit tests for :func:`fpy2.strategies.unfold_overflow`.
 
 The transform itself is tested exhaustively in
-``tests/unit/transform/test_externalize_overflow.py``; these tests pin the
+``tests/unit/transform/test_unfold_overflow.py``; these tests pin the
 wrapper's behavior and its composition with the other scheduling operators.
 """
 
@@ -21,7 +21,7 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.strategies import (
-    externalize_overflow,
+    unfold_overflow,
     float_to_fixed,
     rescale_fixed,
     simplify,
@@ -66,36 +66,36 @@ def _same(a, b) -> bool:
     return a.as_rational() == b.as_rational() and a.s == b.s
 
 
-class TestExternalizeOverflow:
+class TestUnfoldOverflow:
 
     def test_returns_a_function(self):
-        out = externalize_overflow(_quantized_sum)
+        out = unfold_overflow(_quantized_sum)
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
     def test_rejects_non_function(self):
         with pytest.raises(TypeError):
-            externalize_overflow(_quantized_sum.ast)  # type: ignore[arg-type]
+            unfold_overflow(_quantized_sum.ast)  # type: ignore[arg-type]
 
     def test_removes_the_bound_from_the_context(self):
         assert fp.FP16 in _block_ctxs(_quantized_sum.ast)
-        out = externalize_overflow(_quantized_sum)
+        out = unfold_overflow(_quantized_sum)
         ctxs = _block_ctxs(out.ast)
         assert fp.FP16 not in ctxs
         assert any(isinstance(c, MPSFloatContext) for c in ctxs)
         # the FP64 accumulation is untouched: its body is arithmetic, not a round
         assert fp.FP64 in ctxs
 
-    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
-    def test_preserves_results(self, pre_check):
-        out = externalize_overflow(_quantized_sum, pre_check=pre_check)
+    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
+    def test_preserves_results(self, early_check):
+        out = unfold_overflow(_quantized_sum, early_check=early_check)
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
 
     def test_idempotent(self):
         """The rewritten program rounds under an unbounded format, which has
         no bound left to take out."""
-        once = externalize_overflow(_quantized_sum)
-        twice = externalize_overflow(once)
+        once = unfold_overflow(_quantized_sum)
+        twice = unfold_overflow(once)
         assert twice.ast.is_equiv(once.ast)
 
     def test_where_selects_one_block(self):
@@ -111,14 +111,14 @@ class TestExternalizeOverflow:
                 s = aq + bq
             return s
 
-        assert fp.FP16 not in _block_ctxs(externalize_overflow(f, 0).ast)
-        assert fp.FP32 in _block_ctxs(externalize_overflow(f, 0).ast)
-        assert fp.FP16 in _block_ctxs(externalize_overflow(f, 1).ast)
-        assert _same(externalize_overflow(f, 0)(0.1, 0.2), f(0.1, 0.2))
+        assert fp.FP16 not in _block_ctxs(unfold_overflow(f, 0).ast)
+        assert fp.FP32 in _block_ctxs(unfold_overflow(f, 0).ast)
+        assert fp.FP16 in _block_ctxs(unfold_overflow(f, 1).ast)
+        assert _same(unfold_overflow(f, 0)(0.1, 0.2), f(0.1, 0.2))
 
     def test_composes_with_simplify(self):
         out = simplify(
-            externalize_overflow(_quantized_sum), enable_const_fold_context=False,
+            unfold_overflow(_quantized_sum), enable_const_fold_context=False,
         )
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
 
@@ -168,15 +168,15 @@ _PIPELINE_IDS = [
 
 
 class TestPipeline:
-    """``externalize_overflow`` then ``float_to_fixed`` then ``rescale_fixed``
+    """``unfold_overflow`` then ``float_to_fixed`` then ``rescale_fixed``
     is the full lowering: a float rounding becomes an integer one, with the
     bound stated as program text rather than carried by a format."""
 
-    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
-    def test_preserves_results(self, ctx, pre_check):
+    def test_preserves_results(self, ctx, early_check):
         q = _quantizer(ctx)
-        out = rescale_fixed(float_to_fixed(externalize_overflow(q, pre_check=pre_check)))
+        out = rescale_fixed(float_to_fixed(unfold_overflow(q, early_check=early_check)))
         for x in _samples(ctx):
             assert _same(out(x), q(x)), (ctx, x)
 
@@ -185,7 +185,7 @@ class TestPipeline:
         """Every rounding left states a digit position and no more: no bound
         for `rescale_fixed` to shift, and no overflow rule for a backend to
         reproduce."""
-        out = rescale_fixed(float_to_fixed(externalize_overflow(_quantizer(ctx))))
+        out = rescale_fixed(float_to_fixed(unfold_overflow(_quantizer(ctx))))
 
         ctxs = _block_ctxs(out.ast)
         assert not any(hasattr(c, 'maxval') for c in ctxs)
@@ -196,7 +196,7 @@ class TestPipeline:
     def test_target_carries_no_bound(self):
         """`float_to_fixed` takes its unbounded path, so the target is
         `MPFixedContext` rather than the `MPBFixedContext` it emits alone."""
-        out = float_to_fixed(externalize_overflow(_quantized_sum))
+        out = float_to_fixed(unfold_overflow(_quantized_sum))
         ctxs = _block_ctxs(out.ast)
         assert not any(isinstance(c, fp.MPBFixedContext) for c in ctxs)
         assert any(isinstance(c, MPFixedContext) for c in ctxs)
@@ -207,23 +207,23 @@ class TestPipeline:
         the format's grid.  With no bound there is nothing to keep on it, so
         the position follows the exponent alone."""
         alone = float_to_fixed(_quantizer(fp.FP16))
-        composed = float_to_fixed(externalize_overflow(_quantizer(fp.FP16)))
+        composed = float_to_fixed(unfold_overflow(_quantizer(fp.FP16)))
         assert 'min(' in alone.format()
         assert 'min(' not in composed.format()
 
-    def test_pre_check_bounds_what_is_rounded(self):
+    def test_early_check_bounds_what_is_rounded(self):
         """With the guard in front, only ``|x| < infval`` reaches the
         rounding, which is what bounds the integer the rescaled round produces
         — the clamp's job, done by the check instead."""
         q = _quantizer(fp.FP16)
-        out = rescale_fixed(float_to_fixed(externalize_overflow(q, pre_check=True)))
+        out = rescale_fixed(float_to_fixed(unfold_overflow(q, early_check=True)))
         assert str(int(fp.FP16.infval())) in out.format()
         for x in _samples(fp.FP16):
             assert _same(out(x), q(x)), x
 
     def test_composes_with_simplify(self):
         out = simplify(
-            rescale_fixed(float_to_fixed(externalize_overflow(_quantized_sum))),
+            rescale_fixed(float_to_fixed(unfold_overflow(_quantized_sum))),
             enable_const_fold_context=False,
         )
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
