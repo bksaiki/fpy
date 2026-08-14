@@ -12,6 +12,7 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
+    Attribute,
     ConstInf,
     ConstNan,
     ContextStmt,
@@ -23,6 +24,7 @@ from ..ast.fpyast import (
     IfExpr,
     Integer,
     Location,
+    NamedId,
     Neg,
     Rational,
     Signbit,
@@ -30,6 +32,7 @@ from ..ast.fpyast import (
     StmtBlock,
     TupleBinding,
     UnderscoreId,
+    Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import INTEGER, Float, RealFloat
@@ -84,6 +87,15 @@ def copy_target(target: Id | TupleBinding) -> Id | TupleBinding:
             return TupleBinding([copy_target(e) for e in target.elts], target.loc)
         case _:
             raise RuntimeError(f'Unexpected target {target}')
+
+
+def attribute(alias: str, *names: str, loc: Location | None = None) -> Attribute:
+    """The dotted name `alias.names[0].names[1]...`."""
+    e: Expr = Var(NamedId(alias), loc)
+    for name in names:
+        e = Attribute(e, name, loc)
+    assert isinstance(e, Attribute)
+    return e
 
 
 def number_literal(x: RealFloat, loc: Location | None) -> Expr:

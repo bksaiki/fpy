@@ -119,6 +119,7 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    attribute,
     check_where,
     number_literal,
     sign_choice,
@@ -268,15 +269,6 @@ def _describe(ctx: Context) -> _Source | None:
     )
 
 
-def _attribute(alias: str, *names: str, loc: Location | None = None) -> Attribute:
-    """The dotted name `alias.names[0].names[1]...`."""
-    e: Expr = Var(NamedId(alias), loc)
-    for name in names:
-        e = Attribute(e, name, loc)
-    assert isinstance(e, Attribute)
-    return e
-
-
 def _ctx_call(
     nmin: Expr, src: _Source, alias: str, loc: Location | None
 ) -> Call:
@@ -288,7 +280,7 @@ def _ctx_call(
     constructor's defaults are left out.
     """
     def mode(name: str, value) -> tuple[str, Expr]:
-        return (name, _attribute(alias, type(value).__name__, value.name, loc=loc))
+        return (name, attribute(alias, type(value).__name__, value.name, loc=loc))
 
     kwargs: list[tuple[str, Expr]] = []
     if src.rm is not RoundingMode.RNE:
@@ -305,7 +297,7 @@ def _ctx_call(
         case _Policy.UNBOUNDED:
             # nothing to overflow: the format is a digit position and no more
             return Call(
-                _attribute(alias, 'MPFixedContext', loc=loc),
+                attribute(alias, 'MPFixedContext', loc=loc),
                 MPFixedContext, (nmin,), tuple(kwargs), loc,
             )
         case _Policy.INFINITE:
@@ -322,7 +314,7 @@ def _ctx_call(
 
     assert src.maxval is not None
     return Call(
-        _attribute(alias, 'MPBFixedContext', loc=loc),
+        attribute(alias, 'MPBFixedContext', loc=loc),
         MPBFixedContext,
         (nmin, number_literal(src.maxval, loc)),
         tuple(kwargs),
