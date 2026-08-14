@@ -36,11 +36,8 @@ def _log2_exact(x: EngineArg) -> int | None:
     """`k` such that `|x| == 2 ** k`, or `None` if `x` is not a power of two."""
     if not isinstance(x, Float) or x.is_nar() or x.is_zero():
         return None
-    c = x.c
-    if c & (c - 1) != 0:
-        # `c` is not a power of two
-        return None
-    return x.exp + (c.bit_length() - 1)
+    r = x.as_real()
+    return r.e if r.is_power_of_two() else None
 
 def _int_value(x: EngineArg) -> int | None:
     """The value of `x` as an `int`, or `None` if it is not an integer."""

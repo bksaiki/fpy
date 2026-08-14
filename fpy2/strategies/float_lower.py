@@ -22,11 +22,13 @@ def float_to_fixed(func: Function, where: int | None = None) -> Function:
     fixed-point context built at it.  The value is never scaled and the bound
     is the format's own.  Values below ``emin`` get their own branch, where the
     format is fixed-point already and the context is a constant; NaN,
-    infinities, and zeros get another, since ``logb`` is undefined for them.
+    infinities, and zeros get another, since ``logb`` is undefined for them —
+    each of those is a constant, so the branch assigns what the format makes
+    of it.
 
-    Applies to an :class:`fpy2.IEEEContext` that overflows to infinity and
-    rounds deterministically; other contexts are left unchanged.  Only blocks
-    whose body is entirely ``x = fp.round(v)`` (or a returned round) are
+    Applies to a float format that rounds deterministically and whose overflow
+    a fixed-point round can reproduce; other contexts are left unchanged.  Only
+    blocks whose body is entirely ``x = fp.round(v)`` (or a returned round) are
     rewritten.
 
     Run :func:`fpy2.strategies.rescale_fixed` afterwards to shift the resulting
@@ -63,20 +65,22 @@ def float_to_fixed(func: Function, where: int | None = None) -> Function:
             ctx=fp.REAL,
         )
         def quantize(x):
-            if fp.isnan(x) or fp.isinf(x) or x == 0:
-                with fp.MPBFixedContext(-25, 65504, overflow=..., enable_nan=True, enable_inf=True):
-                    y = fp.round(x)
-            else:
-                with fp.REAL:
-                    e = fp.logb(x)
-                if e < -14:
-                    with fp.MPBFixedContext(-25, 65504, overflow=..., enable_nan=True, enable_inf=True):
-                        y = fp.round(x)
+            with fp.REAL:
+                if fp.isnan(x):
+                    y = fp.nan()
+                elif fp.isinf(x):
+                    y = (-fp.inf() if fp.signbit(x) else fp.inf())
+                elif x == 0:
+                    y = (-0.0 if fp.signbit(x) else 0)
                 else:
-                    with fp.REAL:
+                    e = fp.logb(x)
+                    if e < -14:
+                        with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
+                            y = fp.round(x)
+                    else:
                         exp = min((e - 10), 5)
-                    with fp.MPBFixedContext((exp - 1), 65504, overflow=..., enable_nan=True, enable_inf=True):
-                        y = fp.round(x)
+                        with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
+                            y = fp.round(x)
             return y
     """
     if not isinstance(func, Function):

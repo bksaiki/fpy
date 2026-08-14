@@ -19,7 +19,15 @@ import pytest
 from fpy2.analysis import PartialEval
 from fpy2.ast.fpyast import Call, ContextStmt, FuncDef, Integer, Round
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.number import REAL, EFloatContext, EFloatNanKind, MPBFixedContext
+from fpy2.number import (
+    REAL,
+    EFloatContext,
+    EFloatNanKind,
+    MPBFixedContext,
+    MPBFloatContext,
+    MPFloatContext,
+    MPSFloatContext,
+)
 from fpy2.transform import FloatToFixed
 
 
@@ -162,20 +170,18 @@ class TestLowering:
         assert len(static) == 1
         assert static[0].args[0].val == fp.FP16.expmin - 1
 
-    def test_specials_round_at_the_finest_grid(self):
-        """The specials' context is static, so its format is what inference
-        sees for that branch."""
+    def test_subnormal_branch_format(self):
+        """The subnormal branch rounds at the format's finest grid, against
+        the format's own bound and rounding mode."""
         src = fp.IEEEContext(5, 16, fp.RoundingMode.RTZ)
 
         f = _quantizer(src)
         out = FloatToFixed.apply(f.ast)
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
 
-        assert target.nmin == src.expmin - 1          # the format's finest grid
+        assert target.nmin == src.expmin - 1
         assert target.pos_maxval == src.maxval().as_real()
         assert target.rm is src.rm
-        assert target.enable_inf                      # overflow has to land somewhere
-        assert target.enable_nan                      # a NaN rounds into it too
 
     def test_computed_context_carries_the_bound(self):
         """The normal branch builds its context per value; only the position
@@ -278,10 +284,27 @@ class TestWhere:
 
 class TestUnchanged:
 
-    def test_unreproducible_overflow(self):
-        """A format whose NaN sits at a negative zero states an overflow the
-        fixed-point round has no way to produce."""
-        f = _quantizer(EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0))
+    def test_asymmetric_bound(self):
+        """An emitted context states one bound and mirrors it, so a format
+        that sets the two apart cannot be expressed."""
+        f = _quantizer(MPBFloatContext(
+            4, -3, fp.RealFloat(exp=0, c=15),
+            neg_maxval=fp.RealFloat(s=True, exp=0, c=7),
+        ))
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_bound_off_the_format_grid(self):
+        """A bound needing more digits than the format has does not lie on
+        the grid the clamp rounds at."""
+        f = _quantizer(MPBFloatContext(3, -3, fp.RealFloat(exp=0, c=13)))
+        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+
+    def test_overflow_that_raises(self):
+        """A format that refuses to round an overflow at all is declined,
+        rather than the refusal escaping the pass."""
+        f = _quantizer(fp.IEEEContext(
+            5, 16, fp.RoundingMode.RNE, fp.OverflowMode.ASSERT,
+        ))
         assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
 
     def test_shifted_exponent_encoding(self):
@@ -297,11 +320,6 @@ class TestUnchanged:
     def test_stochastic_context(self):
         """Stochastic rounding would have to draw its bits at the same position."""
         f = _quantizer(fp.IEEEContext(5, 16, fp.RoundingMode.RNE, num_randbits=2))
-        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
-
-    def test_saturating_context(self):
-        """Overflow yields the bound, not an infinity."""
-        f = _quantizer(fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE))
         assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
 
     def test_cast_body(self):
@@ -358,6 +376,39 @@ class TestEquivalence:
         f = _quantizer(ctx)
         out = FloatToFixed.apply(f.ast)
         for x in _samples(ctx):
+            assert _same(_eval(out, f, x), f(x)), (ctx, x)
+
+    @pytest.mark.parametrize('ctx', [
+        fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
+        EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
+    ], ids=['ieee_saturating', 'neg_zero_nan'])
+    def test_edge_rules(self, ctx):
+        """A format states its edge rule in its own terms; the lowering asks
+        rather than assumes.  `NEG_ZERO` also spends the negative-zero
+        encoding on NaN, so a value rounding to zero comes back positive."""
+        f = _quantizer(ctx)
+        out = FloatToFixed.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+        for x in _samples(ctx) + [1e-9, -1e-9, 0.1, -0.1]:
+            assert _same(_eval(out, f, x), f(x)), (ctx, x)
+
+    @pytest.mark.parametrize('ctx', [
+        MPBFloatContext(11, -14, fp.FP16.maxval().as_real()),
+        MPSFloatContext(11, -14),
+        MPFloatContext(11),
+    ], ids=['mpb_float', 'mps_float', 'mp_float'])
+    def test_multiprecision_formats(self, ctx):
+        """`MPSFloatContext` has no bound, so its target needs none either;
+        `MPFloatContext` has no subnormals, so it needs no branch for them."""
+        f = _quantizer(ctx)
+        out = FloatToFixed.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+
+        xs = [0.0, -0.0, float('inf'), float('-inf'), float('nan'), 1.0, -1.0,
+              0.1, -0.1, 1e9, -1e9, 2.0 ** -30, 12.5]
+        if hasattr(ctx, 'emin'):
+            xs += [2.0 ** ctx.emin, 2.0 ** (ctx.expmin - 1)]
+        for x in xs:
             assert _same(_eval(out, f, x), f(x)), (ctx, x)
 
     @pytest.mark.parametrize('ctx', [

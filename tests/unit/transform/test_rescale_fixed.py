@@ -79,6 +79,14 @@ def _same(a, b) -> bool:
     return a.as_rational() == b.as_rational() and a.s == b.s
 
 
+_SUBSTITUTING = fp.FixedContext(
+    True, -16, 32, RoundingMode.RNE, OverflowMode.WRAP,
+    nan_value=fp.FixedContext(True, -16, 32).maxval(s=True),
+    inf_value=fp.FixedContext(True, -16, 32).maxval(s=True),
+)
+"""a format that substitutes a finite value for NaN and infinity"""
+
+
 def _quantizer(ctx: fp.FixedContext) -> fp.Function:
     @fp.fpy(ctx=fp.REAL)
     def q(x):
@@ -279,11 +287,7 @@ class TestFoldSpecials:
     """``fold_specials`` takes NaN and the infinities out of the rounding,
     where the format defines what they become."""
 
-    _SUBST = fp.FixedContext(
-        True, -16, 32, RoundingMode.RNE, OverflowMode.WRAP,
-        nan_value=fp.FixedContext(True, -16, 32).maxval(s=True),
-        inf_value=fp.FixedContext(True, -16, 32).maxval(s=True),
-    )
+    _SUBST = _SUBSTITUTING
 
     def test_substituting_format_is_rescalable(self):
         """A finite substitute would have to shift with the format, so the
@@ -342,6 +346,17 @@ class TestFoldSpecials:
         assert dst.enable_inf
         for x in (float('nan'), float('inf'), float('-inf'), 0.5, -1e9):
             assert _same(_eval(out, f, x), f(x)), x
+
+    def test_overflow_keeps_its_substitute(self):
+        """Folding takes NaN out of the rounding, but an overflow still
+        *produces* an infinity, so the substitute for one has to stay."""
+        src = fp.MPBFixedContext(
+            -4, RealFloat(exp=0, c=100), RoundingMode.RNE, OverflowMode.OVERFLOW,
+            enable_nan=True, inf_value=fp.Float(isnan=True),
+        )
+        f = _quantizer(src)
+        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        assert _same(_eval(out, f, 1000.0), f(1000.0))
 
     def test_zeros_are_not_folded(self):
         """A zero survives the shift on its own, so it needs no branch."""
@@ -507,6 +522,46 @@ class TestSymbolicPosition:
         for x in (0.1, -3.25, 1e9):
             for k in (-8, 0, 5):
                 assert _same(_eval(out, f, x, k), f(x, k)), (x, k)
+
+    def test_positional_rounding_mode_survives(self):
+        """A bound written positionally must not displace the argument after
+        it, which is the rounding mode."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.MPBFixedContext(-16, 1024, RoundingMode.RTZ, OverflowMode.SATURATE):
+                y = fp.round(a)
+            return y
+
+        out = RescaleFixed.apply(f.ast)
+        for x in (0.5, -0.5, 3.7, 1e9):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_no_shared_ast_nodes(self):
+        """A node belongs in one place in the tree: expressions compare by
+        identity, and analyses key on them."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with _SUBSTITUTING:
+                p = fp.round(a)
+                r = fp.round(b)
+            with fp.FP64:
+                s = p + r
+            return s
+
+        seen: set[int] = set()
+        shared: list[str] = []
+
+        class _C(DefaultVisitor):
+            def _visit_expr(self, e, ctx):
+                if id(e) in seen:
+                    shared.append(type(e).__name__)
+                seen.add(id(e))
+                super()._visit_expr(e, ctx)
+
+        _C()._visit_function(RescaleFixed.apply(f.ast, fold_specials=True), None)
+        assert not shared
 
     def test_unrecognized_call_is_left_alone(self):
         """Only the fixed-point constructors are rewritten."""

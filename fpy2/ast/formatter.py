@@ -72,7 +72,6 @@ class _FormatterInstance(Visitor):
             case _:
                 raise RuntimeError('unreachable', func)
 
-
     def _fpy_qualified(self, name: str) -> str:
         """Render an `fpy2` symbol as `<alias>.<name>` when the enclosing
         function imports `fpy2` under a module alias, else bare `name`."""

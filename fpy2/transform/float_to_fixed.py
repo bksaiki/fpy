@@ -34,41 +34,37 @@ that position.
        else:
            e = fp.logb(x)
            if e < -14:
-               with fp.MPBFixedContext(-25, 65504, overflow=..., enable_nan=True, enable_inf=True):
+               with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
                    y = fp.round(x)
            else:
                exp = min((e - 10), 5)
-               with fp.MPBFixedContext((exp - 1), 65504, overflow=..., enable_nan=True, enable_inf=True):
+               with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
                    y = fp.round(x)
 
 Below ``emin`` the format is fixed-point already: every value there rounds at
 ``EXP``, so that branch's context is a constant and nothing in it depends on
 the exponent.  The normal branch needs no lower clamp because of it.
 
-The upper clamp is what keeps the context constructible *and* keeps the format
-shiftable afterwards: ``B`` lies on the grid at every position up to
-``EMAX - P + 1`` and falls off it immediately above.  Clamping is also correct —
-any ``x`` above that exceeds ``B`` and must overflow, which rounding at the
-clamped position against bound ``B`` produces.
+The upper clamp keeps the context constructible and the format shiftable:
+``B`` lies on the grid at every position up to ``EMAX - P + 1`` and falls off
+it immediately above.  Anything above that exceeds ``B`` and overflows, which
+rounding at the clamped position against ``B`` produces.
 
 ``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch
 of its own.  All three are constants, so the branches assign what the format
-makes of them, worked out when the format was described rather than at run
-time.  Only the rounding blocks are under a rounding context; everything else
-sits under ``REAL``, where it cannot be perturbed by whatever context encloses
-the statement.
+makes of them.  Only the roundings sit under a rounding context; the rest is
+exact under ``REAL``, whatever context encloses the statement.
 
 Run :func:`fpy2.strategies.rescale_fixed` afterwards to shift the resulting
 fixed-point rounding to digit position zero, where its values are integers.
 
-Applies to a float format whose overflow a fixed-point round can reproduce:
-an ``IEEEContext``, or an ``EFloatContext`` that saturates or substitutes a
-NaN, in each case rounding deterministically.  A format that substitutes for
-its overflow gives no sign back, so the input's is restored afterwards.  Only
-a block whose body is entirely ``x = fp.round(v)`` (or a returned round) over
-variables is rewritten; every other block is left unchanged.  The rewrite also
-needs the program to have ``fpy2`` in scope, since it names the context
-constructor.
+Applies to a float format that rounds deterministically and whose overflow a
+fixed-point round can reproduce — an infinity, the bound, or a NaN.  An
+unbounded format (``MPSFloatContext``, ``MPFloatContext``) needs no bound in
+its target and no upper clamp; one without subnormals needs no branch for
+them.  Only a block whose body is entirely ``x = fp.round(v)`` (or a returned
+round) over variables is rewritten.  The rewrite needs ``fpy2`` in scope,
+since it names the context constructor.
 """
 
 from dataclasses import dataclass, replace
@@ -81,11 +77,9 @@ from ..ast.fpyast import (
     BoolVal,
     Call,
     Compare,
-    ConstInf,
     ConstNan,
     ContextStmt,
     Copysign,
-    Decnum,
     Expr,
     ForeignVal,
     FuncDef,
@@ -98,8 +92,6 @@ from ..ast.fpyast import (
     Logb,
     Min,
     NamedId,
-    Neg,
-    Rational,
     ReturnStmt,
     Round,
     Stmt,
@@ -108,7 +100,6 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
-from ..ast.visitor import DefaultTransformVisitor
 from ..env import fpy_alias
 from ..number import (
     REAL,
@@ -126,7 +117,7 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
-from .utils import number_literal, sign_choice, value_literal
+from .utils import BlockRewriter, check_where, number_literal, sign_choice, value_literal
 
 
 class _Policy(Enum):
@@ -172,27 +163,24 @@ class _Source:
     specials: tuple[Float, Float, Float, Float, Float]
     """what NaN, `+Inf`, `-Inf`, `+0`, and `-0` round to"""
     neg_zero: bool
-    """
-    whether the format keeps a negative zero.
-
-    A format may spend that encoding on something else, in which case a
-    negative value small enough to round to zero comes back positive.
-    """
+    """whether the format keeps a negative zero"""
 
 
-def _overflow_policy(ctx: Context, maxval: RealFloat) -> _Policy | None:
+def _overflow_policy(
+    ctx: Context, maxval: RealFloat, neg_maxval: RealFloat
+) -> _Policy | None:
     """
-    What `ctx` makes of a value past its bound, asked rather than deduced.
+    What `ctx` returns for a value past its bound, or `None` if a fixed-point
+    round cannot reproduce it.
+    """
+    def past(bound: RealFloat) -> RealFloat:
+        return RealFloat(s=bound.s, exp=bound.exp + 1, c=bound.c)  # twice it
 
-    A format states its edge rule in its own terms — an overflow mode, a NaN
-    encoding, a substituted value — so the reliable question is what it
-    actually returns.  `None` means it lands somewhere a fixed-point round
-    cannot follow, such as wrapping.
-    """
-    past = RealFloat(exp=maxval.exp + 1, c=maxval.c)  # twice the bound
     try:
-        pos, neg = ctx.round(past), ctx.round(RealFloat(s=True, x=past))
-    except ValueError:
+        pos = ctx.round(past(maxval))
+        neg = ctx.round(past(neg_maxval))
+    except (ValueError, OverflowError):
+        # a format that refuses to round one at all
         return None
 
     if pos.isinf and neg.isinf and not pos.s and neg.s:
@@ -200,8 +188,8 @@ def _overflow_policy(ctx: Context, maxval: RealFloat) -> _Policy | None:
     if pos.isnan and neg.isnan:
         return _Policy.NAN_ON_OVERFLOW
     if not pos.is_nar() and not neg.is_nar():
-        # saturation keeps the bound and the sign
-        if pos.as_real() == maxval and neg.as_real() == RealFloat(s=True, x=maxval):
+        # saturation keeps each bound and its sign
+        if pos.as_real() == maxval and neg.as_real() == neg_maxval:
             return _Policy.SATURATING
     return None
 
@@ -233,18 +221,27 @@ def _describe(ctx: Context) -> _Source | None:
 
     # an unbounded format cannot overflow; a bounded one has to say where to
     maxval: RealFloat | None = None
+    neg_maxval: RealFloat | None = None
     expmax: int | None = None
     policy = _Policy.UNBOUNDED
     if hasattr(ctx, 'maxval'):
         maxval = ctx.maxval().as_real()
+        neg_maxval = ctx.maxval(s=True).as_real()
+        # an emitted context states one bound and mirrors it, and FPy's context
+        # construction has no way to pass the other, so the two must agree
+        if neg_maxval != RealFloat(s=True, x=maxval):
+            return None
+        # the format's grid in its top binade, which is where the clamp puts
+        # a value too large for one of its own; the bound has to lie on it
         expmax = ctx.emax - ctx.pmax + 1
-        found = _overflow_policy(ctx, maxval)
+        if maxval.exp < expmax:
+            return None
+        found = _overflow_policy(ctx, maxval, neg_maxval)
         if found is None:
             return None
         policy = found
 
-    # `logb` is undefined on these, so each takes a branch of its own; since
-    # they are constants, what the format makes of them is known right here
+    # constants, so what the format makes of them is known here
     try:
         specials = (
             ctx.round(Float(isnan=True)),
@@ -268,9 +265,10 @@ def _describe(ctx: Context) -> _Source | None:
 def _attribute(alias: str, *names: str, loc: Location | None = None) -> Attribute:
     """The dotted name `alias.names[0].names[1]...`."""
     e: Expr = Var(NamedId(alias), loc)
-    for name in names[:-1]:
+    for name in names:
         e = Attribute(e, name, loc)
-    return Attribute(e, names[-1], loc)
+    assert isinstance(e, Attribute)
+    return e
 
 
 def _ctx_call(
@@ -290,7 +288,8 @@ def _ctx_call(
     if src.rm is not RoundingMode.RNE:
         kwargs.append(mode('rm', src.rm))
     if not src.neg_zero:
-        # a value too small to represent comes back positive here too
+        # the format spends that encoding elsewhere, so a value rounding to
+        # zero comes back positive
         kwargs.append(('enable_neg_zero', BoolVal(False, loc)))
 
     # a NaN reaches a rounding only as its operand, and the branches above
@@ -325,7 +324,7 @@ def _ctx_call(
     )
 
 
-class _FloatToFixedInstance(DefaultTransformVisitor):
+class _FloatToFixedInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
     func: FuncDef
@@ -361,7 +360,7 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
             func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
         return func
 
-    def _source_ctx(self, stmt: ContextStmt) -> '_Source | None':
+    def _candidate(self, stmt: ContextStmt) -> _Source | None:
         """The block's context, if its rounding can be lowered to fixed-point."""
         # the position varies per value, so the rewrite has to name a context
         # constructor; without `fpy2` in scope there is nothing to name it by
@@ -402,21 +401,19 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
             return Var(name, loc)
 
         # only a substituting format loses the sign of an overflow
-        signed = src.policy is _Policy.NAN_ON_OVERFLOW
+        restore_sign = src.policy is _Policy.NAN_ON_OVERFLOW
 
         def rounding(nmin: Expr) -> list[Stmt]:
             """`target = round(v)` under the format at `nmin`."""
             # the block holds the rounding alone, so a later pass can shift it
-            out = target if not signed else self.gensym.fresh('_t')
+            out = target if not restore_sign else self.gensym.fresh('_t')
             stmts: list[Stmt] = [ContextStmt(
                 UnderscoreId(), _ctx_call(nmin, src, alias, loc),
                 StmtBlock([Assign(out, None, Round(None, arg(), loc), loc)]), loc,
             )]
-            if signed:
-                # a substituted NaN carries no sign of its own, so the input's
-                # is put back.  Only for a NaN: a value small enough to round
-                # to zero may have given up its sign legitimately, and this
-                # would hand it back
+            if restore_sign:
+                # a substituted NaN carries no sign; restore the input's.  Not
+                # for a zero, which may have dropped its sign legitimately
                 stmts.append(Assign(target, None, IfExpr(
                     IsNan(None, Var(out, loc), loc),
                     Copysign(None, Var(out, loc), arg(), loc),
@@ -427,10 +424,9 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
         e_name = self.gensym.fresh('e')
         exponent = Assign(e_name, None, Logb(None, arg(), loc), loc)
 
-        # in the normal range the grid follows the magnitude.  A bound caps it:
-        # above the position of the bound's last digit the bound leaves the
-        # grid, and everything up there overflows anyway.  The name is the
-        # scale it holds, not the context's `n`, which is one below it
+        # in the normal range the grid follows the magnitude, capped by the
+        # position of the bound's last digit: above that the bound leaves the
+        # grid, and everything up there overflows anyway
         pos_name = self.gensym.fresh('exp')
         scale: Expr = Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc)
         if src.expmax is not None:
@@ -453,10 +449,6 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
             )
             body = [exponent, normal]
 
-        # `logb` is undefined on NaN, an infinity, and a zero, so each takes a
-        # branch of its own.  All three are constants, so what the format makes
-        # of them was settled when the format was described: the branches assign
-        # the results outright rather than rounding.
         nan_v, pos_inf, neg_inf, pos_zero, neg_zero = src.specials
 
         def by_sign(pos: Float, neg: Float) -> Expr:
@@ -482,14 +474,12 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
             loc,
         )
 
-        # everything outside the rounding blocks is exact: the constants above,
-        # and the exponent arithmetic.  Under `REAL` none of it is at the mercy
-        # of whatever context encloses this statement.
+        # only the roundings need a rounding context; the rest is exact
         return ContextStmt(
             UnderscoreId(), ForeignVal(REAL, loc), StmtBlock([chain]), loc,
         )
 
-    def _lower_block(self, stmt: ContextStmt, src: '_Source') -> list[Stmt]:
+    def _rewrite(self, stmt: ContextStmt, src: _Source) -> list[Stmt]:
         """The block's rounds, lowered.  Nothing rounds under the float context
         afterwards, so the block itself goes away."""
         stmts: list[Stmt] = []
@@ -504,23 +494,6 @@ class _FloatToFixedInstance(DefaultTransformVisitor):
                 stmts.append(self._lower_round(s.expr, out, s.loc, src))
                 stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
         return stmts
-
-    def _visit_block(self, block: StmtBlock, ctx: None):
-        # a lowered block expands into several statements, so the splice
-        # happens here rather than in `_visit_context`
-        stmts: list[Stmt] = []
-        for s in block.stmts:
-            if isinstance(s, ContextStmt):
-                src = self._source_ctx(s)
-                if src is not None:
-                    idx = self.site_idx
-                    self.site_idx += 1
-                    if self.where is None or idx == self.where:
-                        stmts.extend(self._lower_block(s, src))
-                        continue
-            new_s, ctx = self._visit_statement(s, ctx)
-            stmts.append(new_s)
-        return StmtBlock(stmts), ctx
 
 
 class FloatToFixed:
@@ -543,8 +516,7 @@ class FloatToFixed:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
-        if where is not None and not isinstance(where, int):
-            raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
+        check_where(where)
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)

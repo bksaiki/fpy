@@ -105,7 +105,7 @@ def value_literal(v: Float, loc: Location | None) -> Expr:
     return Neg(e, loc) if v.s else e
 
 
-def same_value(a: Float, b: Float) -> bool:
+def _same_value(a: Float, b: Float) -> bool:
     """Whether two values are the same, sign and all."""
     if a.is_nar():
         return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
@@ -119,9 +119,53 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     When a format makes the same value of both, the choice collapses to that
     value and the operand is not tested at all.
     """
-    if same_value(pos, neg):
+    if _same_value(pos, neg):
         return value_literal(pos, loc)
     return IfExpr(
         Signbit(None, operand, loc),
         value_literal(neg, loc), value_literal(pos, loc), loc,
     )
+
+
+def check_where(where: int | None) -> None:
+    """Rejects a `where` that is not an index."""
+    if where is not None and not isinstance(where, int):
+        raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
+
+
+class BlockRewriter(DefaultTransformVisitor):
+    """
+    Rewrites selected `with` blocks, each into several statements.
+
+    A subclass says which blocks it can rewrite (`_candidate`) and what to put
+    in their place (`_rewrite`).  `where` picks one candidate by index, in
+    visit order, outermost-first; `None` takes them all.
+    """
+
+    where: int | None
+    site_idx: int
+
+    def _candidate(self, stmt: ContextStmt):
+        """What `_rewrite` needs for this block, or `None` to leave it be."""
+        raise NotImplementedError
+
+    def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
+        """The statements that replace `stmt`."""
+        raise NotImplementedError
+
+    def _visit_block(self, block: StmtBlock, ctx):
+        # a rewritten block expands into several statements, so the splice
+        # happens here rather than in `_visit_context`
+        stmts: list[Stmt] = []
+        for s in block.stmts:
+            if isinstance(s, ContextStmt):
+                info = self._candidate(s)
+                if info is not None:
+                    idx = self.site_idx
+                    self.site_idx += 1
+                    if self.where is None or idx == self.where:
+                        stmts.extend(self._rewrite(s, info))
+                        continue
+            new_s, ctx = self._visit_statement(s, ctx)
+            stmts.append(new_s)
+        return StmtBlock(stmts), ctx
