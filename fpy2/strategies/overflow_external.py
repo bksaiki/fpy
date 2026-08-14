@@ -26,9 +26,14 @@ def externalize_overflow(
     asked of the source context rather than assumed; a special value gets a
     branch only where the rewrite would otherwise disagree with it.
 
-    Applies to a bounded float format that rounds deterministically; other
-    contexts are left unchanged.  Only blocks whose body is entirely
-    ``x = fp.round(v)`` (or a returned round) are rewritten.
+    A bounded *fixed-point* format externalizes the same way, its counterpart
+    being :class:`fpy2.MPFixedContext` at the same digit position.
+
+    Applies to a bounded format that rounds deterministically and whose
+    overflow is a constant of its own: wrapping gives a different answer at
+    every magnitude, and an unsigned format states no bound below zero, so
+    neither is rewritten.  Other contexts are left unchanged.  Only blocks whose
+    body is entirely ``x = fp.round(v)`` (or a returned round) are rewritten.
 
     Run :func:`fpy2.strategies.float_to_fixed` afterwards: with no bound left in
     the context, it lowers the rounding through its unbounded path.

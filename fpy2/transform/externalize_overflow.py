@@ -61,6 +61,18 @@ are asked of the source context rather than assumed.  A special value gets a
 branch only where the emitted program would otherwise disagree with it, so an
 IEEE source gets none and a format that substitutes its bound for NaN gets one.
 
+A bounded *fixed-point* format externalizes the same way, its counterpart being
+:class:`fpy2.MPFixedContext` at the same digit position.  That counterpart can
+state what it does with NaN, an infinity and a negative zero, so it inherits all
+three from the source and the checks have nothing to say about them.  What it
+cannot state is a refusal, and a fixed-point format commonly refuses NaN and the
+infinities outright — hence the finiteness test in front of ``pre_check``'s
+guard, which would otherwise claim an infinity as an overflow.
+
+Applies to a format whose overflow is a constant of its own: wrapping gives a
+different answer at every magnitude, and an unsigned format states no bound
+below zero, so neither is rewritten.
+
 Only a block whose body is entirely ``x = fp.round(v)`` (or a returned round)
 over variables is rewritten.  ``Cast`` is excluded: it asserts exactness, which
 this rewrite does not preserve.
@@ -70,7 +82,9 @@ from dataclasses import dataclass, replace
 
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
+    And,
     Assign,
+    BoolVal,
     Call,
     Compare,
     ContextStmt,
@@ -79,6 +93,7 @@ from ..ast.fpyast import (
     FuncDef,
     IfStmt,
     Integer,
+    IsFinite,
     IsInf,
     IsNan,
     Location,
@@ -93,9 +108,12 @@ from ..ast.fpyast import (
 from ..env import fpy_alias
 from ..number import (
     REAL,
+    Context,
     EFloatContext,
     Float,
+    MPBFixedContext,
     MPBFloatContext,
+    MPFixedContext,
     MPSFloatContext,
     RealFloat,
     RoundingMode,
@@ -114,15 +132,23 @@ _NAN = Float(isnan=True)
 _POS_INF = Float(isinf=True)
 _NEG_INF = Float(isinf=True, s=True)
 
-_BoundedCtx = EFloatContext | MPBFloatContext
-"""the bounded float contexts, whose bound this rewrite states as program text"""
+_BoundedCtx = EFloatContext | MPBFloatContext | MPBFixedContext
+"""
+the bounded contexts, whose bound this rewrite states as program text.
+
+`FixedContext` and `SMFixedContext` derive from `MPBFixedContext`, so the last
+member covers every bounded fixed-point format.
+"""
+
+_Unbounded = MPSFloatContext | MPFixedContext
+"""their counterparts, which state a grid and nothing else"""
 
 
 @dataclass(frozen=True)
 class _Source:
     """A bounded format, in the terms the rewrite needs."""
 
-    unbounded: MPSFloatContext
+    unbounded: _Unbounded
     """the same format with no bound, which the block rounds under instead"""
     maxval: RealFloat
     """largest representable value; above it a rounding has overflowed"""
@@ -136,8 +162,23 @@ class _Source:
     """what an overflow above the bound produces"""
     over_neg: Float
     """what an overflow below it produces"""
-    neg_zero: bool
-    """whether the format keeps a negative zero"""
+    drop_neg_zero: bool
+    """
+    whether a value rounding to zero has to be given back a positive sign.
+
+    Only where the source drops the negative zero and the counterpart keeps it,
+    which a float counterpart cannot help doing — `MPSFloatContext` has no way
+    to turn it off, while `MPFixedContext` does.
+    """
+    guard_finite: bool
+    """
+    whether `pre_check`'s guard has to exclude the infinities.
+
+    An infinity is past every bound, so the guard would claim it as an overflow
+    — but a fixed-point format rejects it outright, and the rewrite has no way
+    to state a refusal.  Testing finiteness first lets it reach the rounding,
+    which refuses it exactly as the source did.
+    """
     specials: tuple[tuple[Float, Float] | None, ...]
     """
     what the format makes of NaN and of the infinities, as a `(positive,
@@ -168,10 +209,10 @@ class _Prober:
     """
 
     ctx: _BoundedCtx
-    unbounded: MPSFloatContext
+    unbounded: _Unbounded
     pre_check: bool
 
-    def __init__(self, ctx: _BoundedCtx, unbounded: MPSFloatContext, pre_check: bool):
+    def __init__(self, ctx: _BoundedCtx, unbounded: _Unbounded, pre_check: bool):
         self.ctx = ctx
         self.unbounded = unbounded
         self.pre_check = pre_check
@@ -179,10 +220,14 @@ class _Prober:
     def describe(self) -> _Source | None:
         """`ctx` as a lowerable bounded format, or `None`."""
         ctx = self.ctx
-        maxval = ctx.maxval().as_real()
-        neg_maxval = ctx.maxval(s=True).as_real()
-        infval = ctx.infval().as_real()
-        neg_infval = ctx.infval(s=True).as_real()
+        try:
+            maxval = ctx.maxval().as_real()
+            neg_maxval = ctx.maxval(s=True).as_real()
+            infval = ctx.infval().as_real()
+            neg_infval = ctx.infval(s=True).as_real()
+        except ValueError:
+            # an unsigned format states no bound below zero
+            return None
         if maxval.is_zero() or not neg_maxval.s:
             # a format representing no non-zero value has no overflow to state
             return None
@@ -192,21 +237,18 @@ class _Prober:
             return None
         over_pos, over_neg = over
 
-        # a value rounding to zero keeps its sign only if the format has one
-        # to keep; the unbounded counterpart always does
-        neg_zero = ctx.round(Float(c=0, s=True)).s
+        zero = Float(c=0, s=True)
+        drop_neg_zero = self.unbounded.round(zero).s and not ctx.round(zero).s
+        guard_finite = _rounded(self.unbounded, _POS_INF) is None
 
-        src = _Source(
-            self.unbounded, maxval, neg_maxval, infval, neg_infval,
-            over_pos, over_neg, neg_zero, (),
-        )
-        specials = self._specials(src)
-        if specials is None:
-            return None
-        return _Source(
-            self.unbounded, maxval, neg_maxval, infval, neg_infval,
-            over_pos, over_neg, neg_zero, specials,
-        )
+        def built(specials: tuple[tuple[Float, Float] | None, ...]) -> _Source:
+            return _Source(
+                self.unbounded, maxval, neg_maxval, infval, neg_infval,
+                over_pos, over_neg, drop_neg_zero, guard_finite, specials,
+            )
+
+        specials = self._specials(built(()))
+        return None if specials is None else built(specials)
 
     def _overflow(
         self, maxval: RealFloat, neg_maxval: RealFloat
@@ -240,32 +282,56 @@ class _Prober:
         """
         out: list[tuple[Float, Float] | None] = []
         for pos, neg in ((_NAN, Float(x=_NAN, s=True)), (_POS_INF, _NEG_INF)):
-            try:
-                want = (self.ctx.round(pos), self.ctx.round(neg))
-            except ValueError:
-                # a format that cannot represent it at all
-                return None
+            want = (_rounded(self.ctx, pos), _rounded(self.ctx, neg))
             got = (self._emitted(pos, src), self._emitted(neg, src))
-            agrees = all(_same(a, b) for a, b in zip(want, got))
-            out.append(None if agrees else want)
+            if all(_agrees(a, b) for a, b in zip(want, got)):
+                out.append(None)
+            elif want[0] is None or want[1] is None:
+                # the source rejects it where the rewrite would not, and a
+                # branch can only assign a value, not refuse one
+                return None
+            else:
+                out.append((want[0], want[1]))
         return tuple(out)
 
-    def _emitted(self, x: Float, src: _Source) -> Float:
-        """What the generated code yields for `x`, special branches aside."""
-        if self.pre_check:
+    def _emitted(self, x: Float, src: _Source) -> Float | None:
+        """
+        What the generated code yields for `x`, special branches aside;
+        `None` where the rounding rejects it, as the source may too.
+        """
+        if self.pre_check and not (src.guard_finite and x.is_nar()):
             if (c := _cmp(x, src.infval)) is not None and c >= 0:
                 return src.over_pos
             if (c := _cmp(x, src.neg_infval)) is not None and c <= 0:
                 return src.over_neg
 
-        t = self.unbounded.round(x)
+        t = _rounded(self.unbounded, x)
+        if t is None:
+            return None
         if (c := _cmp(t, src.maxval)) is not None and c > 0:
             return src.over_pos
         if (c := _cmp(t, src.neg_maxval)) is not None and c < 0:
             return src.over_neg
-        if not src.neg_zero and not t.is_nar() and t.is_zero():
+        if src.drop_neg_zero and not t.is_nar() and t.is_zero():
             return Float(c=0)
         return t
+
+
+def _rounded(ctx: Context, x: Float) -> Float | None:
+    """`x` under `ctx`, or `None` where the format has no value for it.
+
+    A fixed-point format commonly rejects NaN and the infinities outright."""
+    try:
+        return ctx.round(x)
+    except ValueError:
+        return None
+
+
+def _agrees(a: Float | None, b: Float | None) -> bool:
+    """Whether two rounding outcomes match, a refusal counting as an outcome."""
+    if a is None or b is None:
+        return a is None and b is None
+    return _same(a, b)
 
 
 def _same(a: Float, b: Float) -> bool:
@@ -275,38 +341,69 @@ def _same(a: Float, b: Float) -> bool:
     return not b.is_nar() and a.as_real() == b.as_real() and a.s == b.s
 
 
-def _unbounded(ctx: _BoundedCtx) -> MPSFloatContext:
+def _unbounded(ctx: _BoundedCtx) -> _Unbounded | None:
     """
     `ctx` with its bound removed: the same grid, with nothing to overflow.
 
-    Built through the constructor rather than ``from_format``, which rejects a
-    format without NaN or infinity (see the ``TODO`` in
-    :mod:`fpy2.number.context.mps_float`).  Handing those back is harmless:
-    they reach a rounding only as its operand, and the caller branches on
-    whichever of them the source treats differently.  A shifted exponent
-    encoding needs no attention either — ``pmax`` and ``emin`` account for it.
+    A float format keeps its precision and subnormal floor; a fixed-point one
+    keeps its digit position.  `None` if the result will not construct.
     """
-    return MPSFloatContext(ctx.pmax, ctx.emin, ctx.rm)
+    try:
+        if isinstance(ctx, MPBFixedContext):
+            # a fixed-point format states what it does with NaN, an infinity
+            # and a negative zero, and none of that depends on the bound
+            return MPFixedContext(
+                ctx.nmin, ctx.rm,
+                enable_nan=ctx.enable_nan,
+                enable_inf=ctx.enable_inf,
+                enable_neg_zero=ctx.round(Float(c=0, s=True)).s,
+                nan_value=ctx.nan_value,
+                inf_value=ctx.inf_value,
+            )
+        # `MPSFloatContext` is built through its constructor rather than
+        # `from_format`, which rejects a format without NaN or infinity (see
+        # the `TODO` in `fpy2.number.context.mps_float`).  Handing those back
+        # is harmless: they reach a rounding only as its operand, and the
+        # caller branches on whichever of them the source treats differently.
+        # A shifted exponent encoding needs no attention either — `pmax` and
+        # `emin` account for it.
+        return MPSFloatContext(ctx.pmax, ctx.emin, ctx.rm)
+    except ValueError:
+        return None
 
 
 def _unbounded_expr(
-    ctx: MPSFloatContext, alias: str | None, loc: Location | None
+    ctx: _Unbounded, alias: str | None, loc: Location | None
 ) -> Expr:
     """
     `ctx` as an expression, written as a constructor call where the program
-    has a name for `fpy2` to write it with.
+    has a name for `fpy2` to write it with.  Arguments matching the
+    constructor's defaults are left out.
     """
     if alias is None:
         return ForeignVal(ctx, loc)
+
     kwargs: list[tuple[str, Expr]] = []
     if ctx.rm is not RoundingMode.RNE:
         kwargs.append(('rm', attribute(alias, 'RoundingMode', ctx.rm.name, loc=loc)))
+
+    if isinstance(ctx, MPSFloatContext):
+        args: tuple[Expr, ...] = (Integer(ctx.pmax, loc), Integer(ctx.emin, loc))
+    else:
+        args = (Integer(ctx.nmin, loc),)
+        if ctx.enable_nan:
+            kwargs.append(('enable_nan', BoolVal(True, loc)))
+        if ctx.enable_inf:
+            kwargs.append(('enable_inf', BoolVal(True, loc)))
+        if not ctx.enable_neg_zero:
+            kwargs.append(('enable_neg_zero', BoolVal(False, loc)))
+        for name, v in (('nan_value', ctx.nan_value), ('inf_value', ctx.inf_value)):
+            if v is not None:
+                kwargs.append((name, value_literal(v, loc)))
+
     return Call(
-        attribute(alias, 'MPSFloatContext', loc=loc),
-        MPSFloatContext,
-        (Integer(ctx.pmax, loc), Integer(ctx.emin, loc)),
-        tuple(kwargs),
-        loc,
+        attribute(alias, type(ctx).__name__, loc=loc),
+        type(ctx), args, tuple(kwargs), loc,
     )
 
 
@@ -374,7 +471,10 @@ class _ExternalizeOverflowInstance(BlockRewriter):
                 case _:
                     return None
 
-        return _Prober(ctx, _unbounded(ctx), self.pre_check).describe()
+        unbounded = _unbounded(ctx)
+        if unbounded is None:
+            return None
+        return _Prober(ctx, unbounded, self.pre_check).describe()
 
     def _externalize(
         self, e: Round, target: NamedId, loc: Location | None, src: _Source
@@ -391,13 +491,13 @@ class _ExternalizeOverflowInstance(BlockRewriter):
 
         def past(
             operand: Expr, op: CompareOp, bound: RealFloat, over: Float,
-            rest: StmtBlock,
+            rest: StmtBlock, guard: bool = False,
         ) -> StmtBlock:
             """`rest`, behind a branch taking `operand` past `bound`."""
-            return StmtBlock([IfStmt(
-                Compare([op], [operand, number_literal(bound, loc)], loc),
-                assign(value_literal(over, loc)), rest, loc,
-            )])
+            cond: Expr = Compare([op], [operand, number_literal(bound, loc)], loc)
+            if guard:
+                cond = And([IsFinite(None, operand, loc), cond], loc)
+            return StmtBlock([IfStmt(cond, assign(value_literal(over, loc)), rest, loc)])
 
         # the rounding, under the format the bound came out of: with nothing
         # left to overflow, it is the grid and no more
@@ -410,7 +510,7 @@ class _ExternalizeOverflowInstance(BlockRewriter):
 
         # a result past the bound overflowed, whichever side it left by
         rest: StmtBlock = assign(Var(t, loc))
-        if not src.neg_zero:
+        if src.drop_neg_zero:
             # the format spends that encoding elsewhere, so a value rounding
             # to zero comes back positive
             rest = StmtBlock([IfStmt(
@@ -424,8 +524,9 @@ class _ExternalizeOverflowInstance(BlockRewriter):
 
         # an operand already past the bound needs no rounding to know it
         if self.pre_check:
-            body = past(arg(), CompareOp.LE, src.neg_infval, src.over_neg, body)
-            body = past(arg(), CompareOp.GE, src.infval, src.over_pos, body)
+            g = src.guard_finite
+            body = past(arg(), CompareOp.LE, src.neg_infval, src.over_neg, body, g)
+            body = past(arg(), CompareOp.GE, src.infval, src.over_pos, body, g)
 
         # a special value the rounding and the checks would not reproduce
         for test, want in zip((IsNan, IsInf), src.specials):

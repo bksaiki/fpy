@@ -22,6 +22,7 @@ from fpy2.ast.fpyast import (
     Compare,
     ContextStmt,
     FuncDef,
+    IsFinite,
     IsInf,
     IsNan,
     Round,
@@ -31,7 +32,9 @@ from fpy2.number import (
     REAL,
     EFloatContext,
     EFloatNanKind,
+    MPBFixedContext,
     MPBFloatContext,
+    MPFixedContext,
     MPSFloatContext,
     RealFloat,
 )
@@ -120,6 +123,28 @@ def _samples(ctx) -> list:
         RealFloat(exp=ctx.emin, c=1),               # smallest normal
         RealFloat(exp=-2, c=1), RealFloat(exp=0, c=1), RealFloat(exp=1, c=3),
     ]
+    for g in grid:
+        xs.append(fp.Float(x=g, ctx=REAL))
+        xs.append(fp.Float(x=RealFloat(s=True, exp=g.exp, c=g.c), ctx=REAL))
+    return xs
+
+
+def _fixed_samples(ctx) -> list:
+    """As `_samples`, for a format whose grid is uniform and which commonly
+    has no value for NaN or an infinity."""
+    B, N = ctx.maxval().as_real(), ctx.maxval(s=True).as_real()
+    grid = [
+        B, N, ctx.infval().as_real(), ctx.infval(s=True).as_real(),
+        RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
+        RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # just above it
+        RealFloat(exp=B.exp + 1, c=B.c),            # well past
+        RealFloat(exp=B.exp + 30, c=B.c),
+        RealFloat(exp=ctx.nmin, c=1),               # below the grid
+        RealFloat(exp=ctx.nmin, c=3),
+        RealFloat(exp=ctx.nmin + 1, c=1),           # the grid's finest step
+        RealFloat(exp=0, c=1),
+    ]
+    xs = [fp.Float(c=0), fp.Float(c=0, s=True)]
     for g in grid:
         xs.append(fp.Float(x=g, ctx=REAL))
         xs.append(fp.Float(x=RealFloat(s=True, exp=g.exp, c=g.c), ctx=REAL))
@@ -279,6 +304,132 @@ class TestShape:
         out = ExternalizeOverflow.apply(f.ast)
         A = [0.1, 0.25, -3.5, 1e-6, 7.0, 70000.0]
         assert _same(_eval(out, f, A), f(A))
+
+
+# ----------------------------------------------------------------------
+# Fixed-point sources
+
+
+_SAT = fp.OverflowMode.SATURATE
+
+
+class TestFixedPoint:
+    """A bounded fixed-point format externalizes the same way; its counterpart
+    is ``MPFixedContext``, which states a digit position and nothing else."""
+
+    def test_position_is_kept(self):
+        src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
+        out = ExternalizeOverflow.apply(_quantizer(src).ast)
+
+        target = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
+        assert target.nmin == src.nmin
+        assert not hasattr(target, 'maxval')
+        assert not hasattr(target, 'overflow')
+
+    def test_asymmetric_bound(self):
+        """Two's complement reaches one further below zero than above it.  The
+        two comparisons are already separate, so nothing has to mirror."""
+        src = fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT)
+        f = _quantizer(src)
+        out = ExternalizeOverflow.apply(f.ast)
+
+        assert src.maxval().as_real() != -src.maxval(s=True).as_real()
+        bounds = {c.args[1] for c in _nodes(out, Compare)}
+        assert len(bounds) == 2
+        for x in _fixed_samples(src):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    @pytest.mark.parametrize('src, neg_zero', [
+        (fp.FixedContext(True, -8, 16, fp.RoundingMode.RNE, _SAT), False),
+        (fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT), True),
+    ], ids=['twos_complement', 'sign_magnitude'])
+    def test_negative_zero_follows_the_source(self, src, neg_zero):
+        """``MPFixedContext`` can state whether it keeps a negative zero, so
+        unlike the float case no fixup after the rounding is needed."""
+        out = ExternalizeOverflow.apply(_quantizer(src).ast)
+
+        target = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
+        assert target.enable_neg_zero is neg_zero
+        assert not _nodes(out, IsNan)  # nor any zero fixup branch
+        assert len(_nodes(out, Compare)) == 2
+
+    def test_rejection_is_preserved(self):
+        """A fixed-point format has no value for NaN or an infinity, and the
+        rewrite has no way to state a refusal — so the counterpart must refuse
+        them too, rather than the checks answering for it."""
+        src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
+        f = _quantizer(src)
+        out = ExternalizeOverflow.apply(f.ast)
+
+        for x in (fp.Float(isnan=True), fp.Float(isinf=True), fp.Float(isinf=True, s=True)):
+            with pytest.raises(ValueError):
+                f(x)
+            with pytest.raises(ValueError):
+                _eval(out, f, x)
+
+    def test_pre_check_guards_finiteness(self):
+        """An infinity is past every bound, so the guard would claim it as an
+        overflow; testing finiteness first lets it reach the rounding, which
+        refuses it as the source did."""
+        src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT)
+        f = _quantizer(src)
+        out = ExternalizeOverflow.apply(f.ast, pre_check=True)
+
+        assert len(_nodes(out, IsFinite)) == 2
+        with pytest.raises(ValueError):
+            _eval(out, f, fp.Float(isinf=True))
+
+    def test_float_pre_check_needs_no_guard(self):
+        """A float counterpart represents the infinities, so its guard can
+        claim one without changing what the format makes of it."""
+        out = ExternalizeOverflow.apply(_quantizer(fp.FP16).ast, pre_check=True)
+        assert not _nodes(out, IsFinite)
+
+    @pytest.mark.parametrize('pre_check', [False, True], ids=['post', 'pre_post'])
+    @pytest.mark.parametrize('src', [
+        fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT),
+        fp.FixedContext(True, -4, 8, fp.RoundingMode.RNE, _SAT),
+        fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT),
+        fp.SMFixedContext(-8, 16, fp.RoundingMode.RTZ, _SAT),
+        MPBFixedContext(-4, RealFloat(exp=0, c=255), overflow=_SAT),
+        MPBFixedContext(-4, RealFloat(exp=0, c=255),
+                        overflow=fp.OverflowMode.OVERFLOW, enable_inf=True),
+        MPBFixedContext(-2, RealFloat(exp=0, c=100),
+                        neg_maxval=RealFloat(s=True, exp=0, c=50), overflow=_SAT),
+    ], ids=['fixed_32', 'fixed_8', 'sm_16', 'sm_rtz', 'mpb_sat', 'mpb_inf', 'mpb_asym'])
+    def test_equivalence(self, src, pre_check):
+        f = _quantizer(src)
+        out = ExternalizeOverflow.apply(f.ast, pre_check=pre_check)
+        assert not out.is_equiv(f.ast)
+        for x in _fixed_samples(src):
+            assert _same(_eval(out, f, x), f(x)), (src, x)
+
+
+class TestFixedPointUnchanged:
+
+    def test_wrapping_overflow(self):
+        """Wrapping gives a different answer at every magnitude, so no
+        constant states it."""
+        f = _quantizer(fp.FixedContext(True, -16, 32))  # WRAP is the default
+        assert fp.FixedContext(True, -16, 32).overflow is fp.OverflowMode.WRAP
+        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+
+    def test_unsigned_format(self):
+        """An unsigned format states no bound below zero."""
+        f = _quantizer(fp.FixedContext(False, -16, 32, fp.RoundingMode.RNE, _SAT))
+        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+
+    def test_overflow_to_an_absent_infinity(self):
+        """The format overflows to infinity but cannot represent one, so the
+        rounding raises and there is no value to write out."""
+        f = _quantizer(fp.FixedContext(
+            True, -4, 8, fp.RoundingMode.RNE, fp.OverflowMode.OVERFLOW,
+        ))
+        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
+
+    def test_already_unbounded(self):
+        f = _quantizer(MPFixedContext(-8))
+        assert ExternalizeOverflow.apply(f.ast).is_equiv(f.ast)
 
 
 # ----------------------------------------------------------------------
