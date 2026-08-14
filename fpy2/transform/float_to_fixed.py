@@ -73,7 +73,6 @@ from enum import Enum, auto
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
     Assign,
-    Attribute,
     BoolVal,
     Call,
     Compare,

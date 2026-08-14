@@ -117,6 +117,11 @@ def value_literal(v: Float, loc: Location | None) -> Expr:
     return Neg(e, loc) if v.s else e
 
 
+def shift(x: RealFloat, k: int) -> RealFloat:
+    """`x * 2**k`, exactly."""
+    return RealFloat(s=x.s, exp=x.exp + k, c=x.c)
+
+
 def same_value(a: Float, b: Float) -> bool:
     """Whether two values are the same, sign and all."""
     if a.is_nar():

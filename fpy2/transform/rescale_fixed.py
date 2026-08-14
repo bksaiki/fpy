@@ -110,6 +110,7 @@ from .utils import (
     BlockRewriter,
     check_where,
     number_literal,
+    shift,
     sign_choice,
     value_literal,
 )
@@ -204,11 +205,6 @@ def _scale_of(ctx: _FixedCtx) -> int:
     return ctx.nmin + 1
 
 
-def _shift(x: RealFloat, k: int) -> RealFloat:
-    """`x * 2**k`, exactly."""
-    return RealFloat(s=x.s, exp=x.exp + k, c=x.c)
-
-
 def _shift_format(fmt: Format, k: int) -> Format:
     """`fmt` scaled by `2**k`: every digit position moves, as does any bound."""
     match fmt:
@@ -218,7 +214,7 @@ def _shift_format(fmt: Format, k: int) -> Format:
             return SMFixedFormat(fmt.scale + k, fmt.nbits)
         case MPBFixedFormat():
             return MPBFixedFormat(
-                fmt.nmin + k, _shift(fmt.pos_maxval, k), _shift(fmt.neg_maxval, k),
+                fmt.nmin + k, shift(fmt.pos_maxval, k), shift(fmt.neg_maxval, k),
                 fmt.enable_nan, fmt.enable_inf, fmt.enable_neg_zero,
             )
         case MPFixedFormat():

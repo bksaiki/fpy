@@ -125,6 +125,7 @@ from .utils import (
     check_where,
     number_literal,
     same_value,
+    shift,
     sign_choice,
     value_literal,
 )
@@ -187,20 +188,32 @@ class _Source:
     """
 
 
-def _cmp(x: Float, b: RealFloat) -> int | None:
-    """The sign of ``x - b``, or `None` if `x` is a NaN, which compares to nothing."""
+def _holds(x: Float, op: CompareOp, b: RealFloat) -> bool:
+    """
+    Whether ``x op b``, as the emitted comparison decides it.
+
+    Takes the same `CompareOp` the emitter writes out, so the two cannot
+    drift.  A NaN compares false to everything, which is what leaves it to a
+    branch of its own.
+    """
     if x.isnan:
-        return None
+        return False
     if x.isinf:
-        return -1 if x.s else 1
-    xr = x.as_rational()
-    br = b.as_rational()
-    return (xr > br) - (xr < br)
-
-
-def _scaled(x: RealFloat, k: int) -> RealFloat:
-    """``x * 2**k``, exactly."""
-    return RealFloat(s=x.s, exp=x.exp + k, c=x.c)
+        c = -1 if x.s else 1
+    else:
+        xr, br = x.as_rational(), b.as_rational()
+        c = (xr > br) - (xr < br)
+    match op:
+        case CompareOp.GE:
+            return c >= 0
+        case CompareOp.LE:
+            return c <= 0
+        case CompareOp.GT:
+            return c > 0
+        case CompareOp.LT:
+            return c < 0
+        case _:
+            raise RuntimeError(f'unexpected comparison {op}')
 
 
 class _Prober:
@@ -239,17 +252,17 @@ class _Prober:
         over_pos, over_neg = over
 
         zero = Float(c=0, s=True)
-        drop_neg_zero = self.unbounded.round(zero).s and not ctx.round(zero).s
-        guard_finite = _rounded(self.unbounded, _POS_INF) is None
-
-        def built(specials: tuple[tuple[Float, Float] | None, ...]) -> _Source:
-            return _Source(
-                self.unbounded, maxval, neg_maxval, infval, neg_infval,
-                over_pos, over_neg, drop_neg_zero, guard_finite, specials,
-            )
-
-        specials = self._specials(built(()))
-        return None if specials is None else built(specials)
+        src = _Source(
+            self.unbounded, maxval, neg_maxval, infval, neg_infval,
+            over_pos, over_neg,
+            drop_neg_zero=self.unbounded.round(zero).s and not ctx.round(zero).s,
+            guard_finite=_rounded(self.unbounded, _POS_INF) is None,
+            specials=(),
+        )
+        # which specials need a branch depends on what the rest of `src` makes
+        # of them, so they are filled in against it
+        specials = self._specials(src)
+        return None if specials is None else replace(src, specials=specials)
 
     def _overflow(
         self, maxval: RealFloat, neg_maxval: RealFloat
@@ -263,8 +276,8 @@ class _Prober:
         them is declined rather than silently mis-lowered.
         """
         try:
-            near = [self.ctx.round(_scaled(b, 1)) for b in (maxval, neg_maxval)]
-            far = [self.ctx.round(_scaled(b, 64)) for b in (maxval, neg_maxval)]
+            near = [self.ctx.round(shift(b, 1)) for b in (maxval, neg_maxval)]
+            far = [self.ctx.round(shift(b, 64)) for b in (maxval, neg_maxval)]
         except (ValueError, OverflowError):
             # a format that refuses to round an overflow at all
             return None
@@ -301,17 +314,17 @@ class _Prober:
         `None` where the rounding rejects it, as the source may too.
         """
         if self.pre_check and not (src.guard_finite and x.is_nar()):
-            if (c := _cmp(x, src.infval)) is not None and c >= 0:
+            if _holds(x, CompareOp.GE, src.infval):
                 return src.over_pos
-            if (c := _cmp(x, src.neg_infval)) is not None and c <= 0:
+            if _holds(x, CompareOp.LE, src.neg_infval):
                 return src.over_neg
 
         t = _rounded(self.unbounded, x)
         if t is None:
             return None
-        if (c := _cmp(t, src.maxval)) is not None and c > 0:
+        if _holds(t, CompareOp.GT, src.maxval):
             return src.over_pos
-        if (c := _cmp(t, src.neg_maxval)) is not None and c < 0:
+        if _holds(t, CompareOp.LT, src.neg_maxval):
             return src.over_neg
         if src.drop_neg_zero and not t.is_nar() and t.is_zero():
             return Float(c=0)
