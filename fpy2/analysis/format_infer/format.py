@@ -289,7 +289,16 @@ class AbstractFormat:
         # product still has valid ``prec``)
         # exponent: e1 + e2
         # bounds: b1 * b2
-        prec = max(self.effective_prec() + other.effective_prec(), 1)
+        p_self, p_other = self.effective_prec(), other.effective_prec()
+        if p_self == 1 or p_other == 1:
+            # A single-precision-bit format holds nothing but powers of two
+            # (`±1 * 2**e`), so multiplying by one only shifts an exponent: each
+            # product keeps its operand's significand rather than widening it.
+            # Summing here would charge a scale-in or scale-out a bit it never
+            # spends -- which is what `rescale_fixed` emits on every rounding.
+            prec = max(p_self, p_other)
+        else:
+            prec = max(p_self + p_other, 1)
         exp = self.exp + other.exp
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
         neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)

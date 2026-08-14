@@ -570,6 +570,21 @@ def _bottom_of_type(ty: Type) -> FormatBound:
             raise RuntimeError(f'unreachable: unknown type {ty!r}')
 
 
+def _normalized(x: RealFloat) -> RealFloat:
+    """*x* with trailing zeros moved out of the significand into the exponent.
+
+    The same value, described with the precision it actually needs: ``2 ** 24``
+    is one significant bit at exponent 24, not 25 bits at exponent 0.
+    :class:`RealFloat` does not normalize on construction, so a dyadic literal
+    arrives in the widest form -- and a power-of-two literal is what
+    ``rescale_fixed`` emits for a constant scale factor.
+    """
+    if x.is_zero():
+        return x
+    trailing = (x.c & -x.c).bit_length() - 1
+    return RealFloat(s=x.s, exp=x.exp + trailing, c=x.c >> trailing)
+
+
 def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     """
     Returns a tight :class:`AbstractFormat` containing every value in *s*,
@@ -599,7 +614,7 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
             has_neg_zero = True
             rfs.append(RealFloat(s=True, exp=0, c=0))
         elif is_dyadic(v):
-            rfs.append(RealFloat.from_rational(v))
+            rfs.append(_normalized(RealFloat.from_rational(v)))
         else:
             return None
     # Bounds: max non-negative value and min non-positive value, with
@@ -779,6 +794,12 @@ def _is_zero_set(f: 'FormatBound') -> bool:
     return isinstance(f, SetFormat) and f.values == _ZERO_SET.values
 
 
+def _is_two_set(f: 'FormatBound') -> bool:
+    """``f`` is the precise singleton ``{2}`` — the one base whose powers a
+    format can state exactly."""
+    return isinstance(f, SetFormat) and f.values == frozenset({Fraction(2)})
+
+
 def exact_binop(
     lhs: 'FormatBound',
     rhs: 'FormatBound',
@@ -881,6 +902,90 @@ def exact_unop(
     if af is None:
         return None
     return op(af)
+
+
+def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
+    """The least and greatest values of *af*, as integers, or ``None`` when
+    either is unbounded or *af* holds a non-integer."""
+    # a grid whose finest digit sits at or above position zero holds integers
+    # only, which is what lets the bounds be read off as exact `int`s
+    if not isinstance(af.exp, int) or af.exp < 0:
+        return None
+    if not isinstance(af.pos_bound, RealFloat) or not isinstance(af.neg_bound, RealFloat):
+        return None
+    return int(af.neg_bound), int(af.pos_bound)
+
+
+def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
+    """The exact format of ``logb(x)`` for ``x`` in *arg*.
+
+    ``logb`` reads an exponent off its argument, so the result is an integer
+    fixed by the argument's *range* rather than its precision: the smallest
+    non-zero magnitude a format holds is ``2 ** exp`` and the largest is its
+    bound, so a finite non-zero ``x`` gives ``logb(x)`` in ``[exp, bound.e]``.
+
+    The edges come from the definition, not the range.  ``logb(±0)`` is
+    ``-inf`` and every grid holds a zero, so the result always admits one;
+    ``logb(±inf)`` is ``+inf`` and ``logb(NaN)`` is NaN, each admitted only
+    when the argument admits the value it comes from.
+
+    Returns ``None`` for an argument unbounded in either direction, where the
+    exponent it would report is unbounded too.
+    """
+    if not isinstance(arg, AbstractableFormatBound):
+        return None
+    af = _to_abstract(arg)
+    if af is None or not isinstance(af.exp, int):
+        return None
+
+    mags = [b for b in (af.pos_bound, af.neg_bound) if isinstance(b, RealFloat)]
+    if len(mags) != 2 or any(b.is_zero() for b in mags):
+        # unbounded, or the zero-only grid whose `logb` is `-inf` alone
+        return None
+    lo, hi = af.exp, max(b.e for b in mags)
+
+    # the result is an integer grid spanning `[lo, hi]`; `prec` has to cover
+    # the larger magnitude, and the bounds keep the class's sign convention
+    prec = max(max(abs(lo), abs(hi)).bit_length(), 1)
+    return AbstractFormat(
+        prec, 0,
+        RealFloat.from_int(max(hi, 0)),
+        neg_bound=RealFloat.from_int(min(lo, 0)),
+        has_pos_inf=af.has_pos_inf or af.has_neg_inf,
+        has_neg_inf=True,
+        has_nan=af.has_nan,
+    )
+
+
+def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
+    """The exact format of ``2 ** n`` for ``n`` in *arg*.
+
+    Every result is a power of two, so ``prec`` is 1 however wide the exponent
+    range is — that is the whole value of knowing the base.  Applies only when
+    *arg* holds integers: ``2 ** 0.5`` is irrational, so no format states it.
+
+    ``2 ** -inf`` is zero, which every grid holds already; ``2 ** +inf`` is an
+    infinity and ``2 ** NaN`` a NaN, each admitted only when the argument
+    admits the value it comes from.
+    """
+    if not isinstance(arg, AbstractableFormatBound):
+        return None
+    af = _to_abstract(arg)
+    if af is None:
+        return None
+    bounds = _int_bounds(af)
+    if bounds is None:
+        return None
+    lo, hi = bounds
+
+    # `2 ** k` as a `RealFloat` names the exponent rather than computing the
+    # value, so a wide range costs nothing
+    return AbstractFormat(
+        1, lo, RealFloat(exp=hi, c=1),
+        neg_bound=RealFloat.from_int(0),
+        has_pos_inf=af.has_pos_inf,
+        has_nan=af.has_nan,
+    )
 
 
 def round_is_identity(
@@ -1705,6 +1810,17 @@ class _FormatInferInstance(Visitor):
                 )
                 if fitted is not None:
                     return fitted
+            case Logb():
+                # an exponent read off the argument: an integer fixed by the
+                # argument's range, not by its precision.
+                fitted = self._bound_if_fits(e, exact_logb(arg_fmt))
+                if fitted is not None:
+                    return fitted
+            case Exp2():
+                # a power of two, so `prec` is 1 however wide the range.
+                fitted = self._bound_if_fits(e, exact_exp2(arg_fmt))
+                if fitted is not None:
+                    return fitted
 
         return self._op_bound(e)
 
@@ -1847,6 +1963,12 @@ class _FormatInferInstance(Visitor):
                 fitted = self._bound_if_fits(
                     e, exact_binop(lhs, rhs, operator.mul, cap=self._set_format_threshold),
                 )
+                if fitted is not None:
+                    return fitted
+            case Pow() if _is_two_set(lhs):
+                # `2 ** n` is a power of two.  Only base two: a general power
+                # is irrational, and nothing states it.
+                fitted = self._bound_if_fits(e, exact_exp2(rhs))
                 if fitted is not None:
                     return fitted
 
