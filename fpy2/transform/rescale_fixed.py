@@ -56,6 +56,7 @@ c:``), whose body could observe the rescaled context as a value.
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
@@ -90,8 +91,8 @@ from ..ast.fpyast import (
 from ..number import (
     REAL,
     Context,
-    Float,
     FixedContext,
+    Float,
     MPBFixedContext,
     MPFixedContext,
     RealFloat,
@@ -105,7 +106,13 @@ from ..number.format import (
     SMFixedFormat,
 )
 from ..utils import Gensym
-from .utils import BlockRewriter, check_where, number_literal, sign_choice, value_literal
+from .utils import (
+    BlockRewriter,
+    check_where,
+    number_literal,
+    sign_choice,
+    value_literal,
+)
 
 _FixedCtx = FixedContext | SMFixedContext | MPBFixedContext | MPFixedContext
 """the fixed-point contexts, whose formats shift under a power of two"""
@@ -233,10 +240,12 @@ def _without_nan(fmt: Format) -> Format:
                 fmt.nmin, fmt.pos_maxval, fmt.neg_maxval,
                 False, fmt.enable_inf, fmt.enable_neg_zero,
             )
-        case _:
+        case MPFixedFormat():
             return MPFixedFormat(
                 fmt.nmin, False, fmt.enable_inf, fmt.enable_neg_zero,
             )
+        case _:
+            raise RuntimeError(f'unexpected fixed-point format {fmt}')
 
 
 def _needs_nan(ctx: _FixedCtx) -> bool:
@@ -254,15 +263,18 @@ def _rescale(ctx: _FixedCtx, scale: int, *, drop_nan: bool = False) -> _FixedCtx
         # taken that case
         fmt = _without_nan(fmt)
     # only a non-finite substitute gets this far, and it is scale-invariant
-    kwargs: dict = dict(
-        rm=ctx.rm, num_randbits=ctx.num_randbits, rng=ctx.rng,
-        inf_value=ctx.inf_value,
-        nan_value=None if drop_nan else ctx.nan_value,
-    )
+    kwargs: dict = {
+        'rm': ctx.rm,
+        'num_randbits': ctx.num_randbits,
+        'rng': ctx.rng,
+        'inf_value': ctx.inf_value,
+        'nan_value': None if drop_nan else ctx.nan_value,
+    }
     if isinstance(ctx, MPBFixedContext):
         # only a bounded format can overflow
         kwargs['overflow'] = ctx.overflow
-    return type(ctx).from_format(fmt, **kwargs)
+    # the format follows the context's own type, which `type(ctx)` hides
+    return type(ctx).from_format(cast(Any, fmt), **kwargs)
 
 
 def _rescale_expr(
@@ -282,7 +294,7 @@ def _rescale_expr(
     info = _CTOR_ARGS.get(type(ctx))
     if info is not None and isinstance(e, Call) and e.fn is type(ctx):
         pos = Integer(getattr(dst, info.position), e.loc)
-        rewritten = _replace_arg(e, info.position, info.index, lambda _: pos)
+        rewritten = _replace_arg(e, info.position, info.index, _const(pos))
         if rewritten is not None:
             # a stated bound shifts with the position; an unstated one is
             # derived from it and follows on its own
@@ -291,7 +303,7 @@ def _rescale_expr(
                     continue
                 attr = 'pos_maxval' if name == 'maxval' else name
                 scaled = number_literal(getattr(dst, attr), e.loc)
-                bound = _replace_arg(rewritten, name, index, lambda _: scaled)
+                bound = _replace_arg(rewritten, name, index, _const(scaled))
                 assert bound is not None
                 rewritten = bound
             if drop_nan and not _needs_nan(ctx):
@@ -319,6 +331,11 @@ def _replace_arg(
         kwargs = tuple((n, rewrite(v) if n == name else v) for n, v in e.kwargs)
         return Call(e.func, e.fn, e.args, kwargs, e.loc)
     return None
+
+
+def _const(value: Expr) -> Callable[[Expr], Expr]:
+    """A rewrite that puts `value` in place of whatever was there."""
+    return lambda _: value
 
 
 def _arg_of(e: Call, name: str, index: int | None) -> Expr | None:
@@ -458,7 +475,7 @@ class _RescaleFixedInstance(BlockRewriter):
             with it, while an unstated one is derived and follows on its own."""
             built = _replace_arg(
                 e, info.position, info.index,
-                lambda _: Integer(-1 if info.from_nmin else 0, loc),
+                _const(Integer(-1 if info.from_nmin else 0, loc)),
             )
             assert built is not None
             for name, index in info.bound:

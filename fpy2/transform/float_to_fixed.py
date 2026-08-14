@@ -117,7 +117,13 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
-from .utils import BlockRewriter, check_where, number_literal, sign_choice, value_literal
+from .utils import (
+    BlockRewriter,
+    check_where,
+    number_literal,
+    sign_choice,
+    value_literal,
+)
 
 
 class _Policy(Enum):
@@ -224,7 +230,7 @@ def _describe(ctx: Context) -> _Source | None:
     neg_maxval: RealFloat | None = None
     expmax: int | None = None
     policy = _Policy.UNBOUNDED
-    if hasattr(ctx, 'maxval'):
+    if isinstance(ctx, (EFloatContext, MPBFloatContext)):
         maxval = ctx.maxval().as_real()
         neg_maxval = ctx.maxval(s=True).as_real()
         # an emitted context states one bound and mirrors it, and FPy's context
