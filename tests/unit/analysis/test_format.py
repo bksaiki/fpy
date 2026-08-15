@@ -662,7 +662,10 @@ class TestAbstractFormat():
         assert not inter.has_nan and not inter.has_pos_inf
 
     def test_mul(self):
-        precs: list[int | float] = [2, 4, 8, float('inf')]
+        # ``1`` is present deliberately: a format with one precision bit holds
+        # nothing but powers of two, and multiplying by one of those only
+        # shifts an exponent -- see :meth:`test_mul_by_a_power_of_two`.
+        precs: list[int | float] = [1, 2, 4, 8, float('inf')]
         exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
         bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
 
@@ -682,6 +685,94 @@ class TestAbstractFormat():
                 fmt2 = AbstractFormat(p2, e2, b2)
                 fmt = fmt1 * fmt2
 
-                assert fmt.effective_prec() == fmt1.effective_prec() + fmt2.effective_prec()
+                ep1, ep2 = fmt1.effective_prec(), fmt2.effective_prec()
+                expected = max(ep1, ep2) if 1 in (ep1, ep2) else ep1 + ep2
+                assert fmt.effective_prec() == expected
                 assert fmt.exp == e1 + e2
                 assert fmt.pos_bound == b1 * b2
+
+    def test_mul_by_a_power_of_two(self):
+        """Scaling by a power of two is exact, so it costs no precision.
+
+        ``A(1, e, b)`` holds only ``±1 * 2**k``, so each product keeps its
+        operand's significand rather than widening it.  Charging ``p1 + p2``
+        would bill every scale-in and scale-out `rescale_fixed` emits for a bit
+        it never spends.
+        """
+        pow2 = AbstractFormat(1, -4, fp.RealFloat(exp=6, c=1))
+        for prec in (1, 3, 11, 24, 53):
+            other = AbstractFormat(prec, -8, fp.RealFloat(exp=10, c=(1 << prec) - 1))
+            assert (pow2 * other).effective_prec() == max(1, other.effective_prec())
+            assert (other * pow2).effective_prec() == max(1, other.effective_prec())
+
+    def test_mul_by_a_power_of_two_is_sound(self):
+        """Every product of representable operands is representable in the
+        claimed format -- the check that the tightening above is not a lie."""
+        pow2 = AbstractFormat(1, -3, fp.RealFloat(exp=3, c=1))
+        other = AbstractFormat(4, -2, fp.RealFloat(exp=3, c=7))
+        prod = (pow2 * other).format()
+
+        def members(af):
+            out = [fp.RealFloat(exp=0, c=0)]
+            for exp in range(int(af.exp), af.pos_bound.e + 1):
+                for c in range(1, 1 << int(af.prec)):
+                    v = fp.RealFloat(exp=exp, c=c)
+                    if v > af.pos_bound:
+                        break
+                    out += [v, fp.RealFloat(s=True, exp=exp, c=c)]
+            return out
+
+        for x in members(pow2):
+            for y in members(other):
+                r = fp.RealFloat(s=x.s != y.s, exp=x.exp + y.exp, c=x.c * y.c)
+                assert prod.representable_in(r), f'{x} * {y} = {r} not in {prod}'
+
+
+class TestLatticeLaws:
+    """``|`` and ``&`` must actually be a join and a meet.
+
+    These caught ``has_neg_zero`` being dropped by both: the comments claimed a
+    special value is in the union iff it is in either operand, and in the
+    intersection iff in both, while one of the four was left at its default.
+    The visible symptom was ``FP16 | FP16 != FP16``.
+    """
+
+    @staticmethod
+    def _formats():
+        from fpy2.number import MPBFixedContext, MPFixedContext
+        ctxs = [
+            fp.FP16, fp.FP32, fp.FP64, fp.MX_E4M3, fp.MX_E2M1,
+            fp.INTEGER, fp.SINT8, fp.UINT16,
+            fp.FixedContext(True, -8, 16), fp.SMFixedContext(-8, 16),
+            MPFixedContext(-1), MPBFixedContext(-1, fp.RealFloat(exp=10, c=1)),
+        ]
+        return [AbstractFormat.from_format(c.format()) for c in ctxs]
+
+    def test_idempotent(self):
+        for a in self._formats():
+            assert (a | a) == a, f'join not idempotent for {a}'
+            assert (a & a) == a, f'meet not idempotent for {a}'
+
+    def test_join_contains_its_operands(self):
+        for a in self._formats():
+            for b in self._formats():
+                j = a | b
+                assert a.contained_in(j), f'{a} not in {a} | {b}'
+                assert b.contained_in(j), f'{b} not in {a} | {b}'
+
+    def test_meet_is_contained_in_its_operands(self):
+        for a in self._formats():
+            for b in self._formats():
+                m = a & b
+                assert m.contained_in(a), f'{a} & {b} not in {a}'
+                assert m.contained_in(b), f'{a} & {b} not in {b}'
+
+    def test_neg_zero_follows_the_other_specials(self):
+        """It is a special value like the rest, so it unions and intersects."""
+        with_nz = AbstractFormat(4, 0, fp.RealFloat.from_int(8), has_neg_zero=True)
+        without = AbstractFormat(4, 0, fp.RealFloat.from_int(8), has_neg_zero=False)
+
+        assert (with_nz | without).has_neg_zero
+        assert (with_nz | with_nz).has_neg_zero
+        assert not (with_nz & without).has_neg_zero
+        assert (with_nz & with_nz).has_neg_zero

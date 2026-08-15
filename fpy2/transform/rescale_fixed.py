@@ -80,6 +80,7 @@ from ..ast.fpyast import (
     Neg,
     Pow,
     Rational,
+    RationalVal,
     ReturnStmt,
     Round,
     Stmt,
@@ -466,6 +467,24 @@ class _RescaleFixedInstance(BlockRewriter):
         up = lambda: Pow(None, Integer(2, loc), Neg(Var(k, loc), loc), loc)
         down = lambda: Pow(None, Integer(2, loc), Var(k, loc), loc)
 
+        def shift_bound(b: Expr) -> Expr:
+            """`b * 2 ** -k`, folded when the two cancel.
+
+            A bound stated as ``2 ** (k + c)`` shifts to the constant
+            ``2 ** c``.  Multiplying instead leaves two powers whose exponents
+            cancel only at run time, which no analysis of the result can see.
+            """
+            if isinstance(b, Pow) and b.func is None \
+                    and isinstance(b.first, RationalVal) \
+                    and b.first.as_rational() == 2 \
+                    and isinstance(b.second, Add):
+                # `k + c` and `c + k` are the same sum
+                for var, const in ((b.second.first, b.second.second),
+                                   (b.second.second, b.second.first)):
+                    if isinstance(const, Integer) and var.is_equiv(Var(k, loc)):
+                        return _pow2(const.val, loc)
+            return Mul(b, up(), loc)
+
         def build_ctx() -> Expr:
             """The position becomes the integer grid; a stated bound shifts
             with it, while an unstated one is derived and follows on its own."""
@@ -477,7 +496,7 @@ class _RescaleFixedInstance(BlockRewriter):
             for name, index in info.bound:
                 if _arg_of(built, name, index) is None:
                     continue
-                scaled = _replace_arg(built, name, index, lambda b: Mul(b, up(), loc))
+                scaled = _replace_arg(built, name, index, shift_bound)
                 assert scaled is not None
                 built = scaled
             return built

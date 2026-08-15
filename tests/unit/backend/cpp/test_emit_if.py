@@ -189,3 +189,128 @@ class TestIfStmt:
         # ``t`` declares-on-assign inside the if-branch.
         assert '        double t = (-x);' in out
         assert '        y = (t + static_cast<double>(1));' in out
+
+
+def _typechecks(src: str) -> tuple[bool, str]:
+    """Does *src* compile?  The `else if` flattening moves declarations around,
+    so a text assertion is not enough -- the emitted program has to build."""
+    import shutil, subprocess, tempfile
+    from pathlib import Path
+    from fpy2.backend.cpp.utils import CPP_HEADERS
+    cxx = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
+    if cxx is None:
+        pytest.skip('no C++ compiler')
+    with tempfile.TemporaryDirectory() as td:
+        cpp = Path(td) / 'm.cpp'
+        cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src)
+        r = subprocess.run([cxx, '-std=c++17', '-fsyntax-only', str(cpp)],
+                           capture_output=True, text=True)
+    return r.returncode == 0, r.stderr
+
+
+class TestElseIfChain:
+    """``else { if ... }`` prints as ``else if``.
+
+    An FPy ``elif`` chain arrives as one nesting level per arm, so without this
+    a five-arm chain indents five times and the closing braces pile up.
+    """
+
+    def test_chain_is_flattened(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                if x > 3.0:
+                    y = 1.0
+                elif x > 2.0:
+                    y = 2.0
+                elif x > 1.0:
+                    y = 3.0
+                else:
+                    y = 4.0
+                return y
+
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
+        assert out.count('else if') == 2
+        # one `if`, two `else if`, one `else` — and so one closing brace
+        assert out.count('} else {') == 1
+
+    def test_an_arm_declaring_a_variable_still_compiles(self):
+        """A class anchored to the nested ``if`` is declared *before* it, and
+        the flattened form has no position for that declaration.
+
+        Regression: flattening emitted `} else if (...) { z = 2; ... }` with no
+        declaration of `z` anywhere, which does not compile.  A line-order
+        assertion cannot catch this -- only building the output can.
+        """
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            if x > 0:
+                y = 1.0
+            elif x > -1:
+                z = 2.0
+                y = z * 2
+            else:
+                z = 3.0
+                y = z * 3
+            return y
+
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
+        ok, err = _typechecks(out)
+        assert ok, f'emitted program does not compile:\n{err}\n--- emitted ---\n{out}'
+        # the shared declaration forces the nesting to stay
+        assert 'else if' not in out
+
+    def test_a_flattened_chain_still_compiles(self):
+        """The flattening itself must produce buildable output."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                if x > 3.0:
+                    y = 1.0
+                elif x > 2.0:
+                    y = 2.0
+                elif x > 1.0:
+                    y = 3.0
+                else:
+                    y = 4.0
+                return y
+
+        out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
+        assert out.count('else if') == 2
+        ok, err = _typechecks(out)
+        assert ok, f'flattened chain does not compile:\n{err}'
+
+    def test_setup_keeps_the_nesting(self):
+        """A condition needing statements of its own must not be flattened.
+
+        Those statements would land before the ``else`` and so run
+        unconditionally.  Here the arm's exponent ``1 - n`` is not a bare name,
+        so it is hoisted to a temporary from inside the condition, and the
+        ``else { if ... }`` shape has to stay.
+        """
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                if x > 100.0:
+                    y = 1.0
+                elif ((2 ** (1 - n)) * x) > 0.0:
+                    y = 2.0
+                else:
+                    y = 3.0
+                return y
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT16)])
+        assert 'else if' not in out
+        # the hoisted temporaries sit inside the `else`, not before it
+        lines = [ln.strip() for ln in out.splitlines()]
+        i_else = lines.index('} else {')
+        # any `TYPE _tN ...;` declaration -- which storage inference picks is
+        # not what this test is about
+        hoisted = [i for i, ln in enumerate(lines)
+                   if len(p := ln.split()) >= 2 and p[1].startswith('_t')]
+        assert hoisted, 'expected the condition to hoist a temporary'
+        last = lines[hoisted[-1]].split()[1].rstrip(';')
+        i_if = next(i for i, ln in enumerate(lines)
+                    if ln.startswith('if (') and last in ln)
+        assert all(i_else < i < i_if for i in hoisted), 'setup escaped the else block'

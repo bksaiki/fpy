@@ -289,10 +289,23 @@ class AbstractFormat:
         # product still has valid ``prec``)
         # exponent: e1 + e2
         # bounds: b1 * b2
-        prec = max(self.effective_prec() + other.effective_prec(), 1)
+        p_self, p_other = self.effective_prec(), other.effective_prec()
+        if p_self == 1 or p_other == 1:
+            # A single-precision-bit format holds nothing but powers of two
+            # (`±1 * 2**e`), so multiplying by one only shifts an exponent: each
+            # product keeps its operand's significand rather than widening it.
+            # Summing here would charge a scale-in or scale-out a bit it never
+            # spends -- which is what `rescale_fixed` emits on every rounding.
+            prec = max(p_self, p_other)
+        else:
+            prec = max(p_self + p_other, 1)
         exp = self.exp + other.exp
+        # every format straddles zero (`pos_bound >= 0 >= neg_bound`), so the
+        # two like-sign corners give the maximum and the two cross corners the
+        # minimum -- `max` on the latter would claim the *tighter* of the two
+        # and miss the product it names: `[-1,1] * [-2,1]` reaches -2
         pos_bound = max(self.pos_bound * other.pos_bound, self.neg_bound * other.neg_bound)
-        neg_bound = max(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
+        neg_bound = min(self.pos_bound * other.neg_bound, self.neg_bound * other.pos_bound)
 
         # special values: 0 is representable everywhere, so `inf * 0 = NaN` is
         # reachable whenever either operand has an infinity -- the NaN result is
@@ -325,12 +338,14 @@ class AbstractFormat:
         exp = max(self.exp, other.exp)
         pos_bound = min(self.pos_bound, other.pos_bound)
         neg_bound = max(self.neg_bound, other.neg_bound)
-        # a special value is in the intersection iff it is in both operands
+        # a special value is in the intersection iff it is in both operands --
+        # the negative zero included, or `x & x` would not be `x`
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=self.has_pos_inf and other.has_pos_inf,
             has_neg_inf=self.has_neg_inf and other.has_neg_inf,
             has_nan=self.has_nan and other.has_nan,
+            has_neg_zero=self.has_neg_zero and other.has_neg_zero,
         )
 
     def __or__(self, other: 'AbstractFormat') -> 'AbstractFormat':
@@ -341,12 +356,14 @@ class AbstractFormat:
         exp = min(self.exp, other.exp)
         pos_bound = max(self.pos_bound, other.pos_bound)
         neg_bound = min(self.neg_bound, other.neg_bound)
-        # a special value is in the union iff it is in either operand
+        # a special value is in the union iff it is in either operand -- the
+        # negative zero included, or the join would not contain its operands
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=self.has_pos_inf or other.has_pos_inf,
             has_neg_inf=self.has_neg_inf or other.has_neg_inf,
             has_nan=self.has_nan or other.has_nan,
+            has_neg_zero=self.has_neg_zero or other.has_neg_zero,
         )
 
     def __le__(self, other) -> bool:
@@ -391,6 +408,9 @@ class AbstractFormat:
         that does claim a negative zero is kept off the integer rungs of the C++
         storage ladder by containment — correctly, as no C++ integer type has one.
         """
+        if not isinstance(fmt, Format):
+            raise TypeError(f'Expected \'Format\', got {fmt}')
+
         # finite grid: quantum, precision, and bounds
         match fmt:
             case RealFormat():

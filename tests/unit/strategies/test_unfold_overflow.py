@@ -181,26 +181,50 @@ class TestPipeline:
             assert _same(out(x), q(x)), (ctx, x)
 
     @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
-    def test_nothing_bounded_survives(self, ctx):
-        """Every rounding left states a digit position and no more: no bound
-        for `rescale_fixed` to shift, and no overflow rule for a backend to
-        reproduce."""
+    def test_no_overflow_behavior_survives(self, ctx):
+        """No rounding left decides what an overflow *becomes* -- that is what
+        this operator moved into program text.
+
+        A bound may still survive, but only as ``OverflowMode.ASSERT``: a claim
+        that overflow cannot happen, which `float_to_fixed` states so the
+        rounding has a width.  ``OVERFLOW``/``SATURATE``/``WRAP`` would each be
+        an edge rule the backend has no way to reproduce.
+        """
         out = rescale_fixed(float_to_fixed(unfold_overflow(_quantizer(ctx))))
 
         ctxs = _block_ctxs(out.ast)
-        assert not any(hasattr(c, 'maxval') for c in ctxs)
         assert not any(isinstance(c, MPSFloatContext) for c in ctxs)
-        positions = [c.nmin for c in ctxs if isinstance(c, MPFixedContext)]
-        assert positions and all(n == -1 for n in positions)
+        # the claim, stated over *every* surviving context rather than the
+        # fixed-point ones alone
+        for c in ctxs:
+            ov = getattr(c, 'overflow', None)
+            assert ov in (None, fp.OverflowMode.ASSERT), (c, ov)
+        rounding = [c for c in ctxs if isinstance(c, MPFixedContext | fp.MPBFixedContext)]
+        assert rounding
+        for c in rounding:
+            # position zero, so the values are integers
+            assert c.nmin == -1
+            if isinstance(c, fp.MPBFixedContext):
+                assert c.overflow is fp.OverflowMode.ASSERT
 
-    def test_target_carries_no_bound(self):
-        """`float_to_fixed` takes its unbounded path, so the target is
-        `MPFixedContext` rather than the `MPBFixedContext` it emits alone."""
-        out = float_to_fixed(unfold_overflow(_quantized_sum))
-        ctxs = _block_ctxs(out.ast)
-        assert not any(isinstance(c, fp.MPBFixedContext) for c in ctxs)
-        assert any(isinstance(c, MPFixedContext) for c in ctxs)
-        assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
+    def test_target_states_a_claim_not_a_rule(self):
+        """`float_to_fixed` takes its unbounded path, so the bound it states is
+        the operand's reach under `ASSERT` rather than the source format's
+        overflow rule."""
+        alone = float_to_fixed(_quantized_sum)
+        composed = float_to_fixed(unfold_overflow(_quantized_sum))
+
+        def overflows(fn):
+            return {
+                c.overflow for c in _block_ctxs(fn.ast)
+                if isinstance(c, fp.MPBFixedContext)
+            }
+
+        # run alone, the target reproduces FP16's own edge rule
+        assert overflows(alone) == {fp.OverflowMode.OVERFLOW}
+        # composed, nothing but the claim
+        assert overflows(composed) == {fp.OverflowMode.ASSERT}
+        assert _same(composed(_SAMPLE), _quantized_sum(_SAMPLE))
 
     def test_no_upper_clamp(self):
         """`float_to_fixed` clamps the digit position so the *bound* stays on

@@ -2345,3 +2345,177 @@ class TestSpecialConstants:
         info = FormatInfer.analyze(f.ast)
         [neg] = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Neg']
         assert neg == SetFormat.from_value(Special.NEG_INF)
+
+
+class TestExponentOps:
+    """``logb`` and ``2 ** n`` — the two operations that let a scaled rounding
+    have a bounded format at all.  Without them every step lands on
+    ``RealFormat`` and storage selection has nothing to pick."""
+
+    @staticmethod
+    def _defs(func, name):
+        info = FormatInfer.analyze(func.ast)
+        return [b for d, b in info.by_def.items() if d.name.base == name]
+
+    # ------------------------------------------------------------------
+    # logb
+
+    @pytest.mark.parametrize('ctx, lo, hi', [
+        (fp.FP16, -24, 15),
+        (fp.FP32, -149, 127),
+        (fp.FP64, -1074, 1023),
+        (fp.IEEEContext(4, 8), -9, 7),
+    ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8'])
+    def test_logb_range_comes_from_the_argument(self, ctx, lo, hi):
+        """The result is an integer fixed by the argument's *range*, not its
+        precision: the smallest non-zero magnitude is ``2 ** exp`` and the
+        largest is the bound."""
+        from fpy2.analysis.format_infer.analysis import exact_logb
+        claim = exact_logb(ctx.format())
+        assert claim is not None
+        assert int(claim.neg_bound) == lo
+        assert int(claim.pos_bound) == hi
+        assert claim.exp == 0, 'the result is an integer'
+
+    def test_logb_admits_the_edges_it_can_produce(self):
+        """``logb(±0)`` is ``-inf`` and every grid holds a zero, so the result
+        always admits one; ``+inf`` and NaN only when the argument does."""
+        from fpy2.analysis.format_infer.analysis import exact_logb
+        claim = exact_logb(fp.FP16.format())
+        assert claim is not None
+        assert claim.has_neg_inf, 'logb(0) is -inf, and 0 is always representable'
+        assert claim.has_pos_inf and claim.has_nan
+
+        # a fixed-point format has neither infinity nor NaN to pass on
+        claim = exact_logb(fp.FixedContext(True, -8, 16).format())
+        assert claim is not None
+        assert claim.has_neg_inf and not claim.has_pos_inf and not claim.has_nan
+
+    @pytest.mark.parametrize('ctx', [
+        fp.INTEGER, fp.MPFixedContext(-4), fp.MPFloatContext(11),
+        fp.MPSFloatContext(11, -14),
+    ], ids=['integer', 'mp_fixed', 'mp_float', 'mps_float'])
+    def test_logb_declines_an_unbounded_argument(self, ctx):
+        """An unbounded argument reports an unbounded exponent."""
+        from fpy2.analysis.format_infer.analysis import exact_logb
+        assert exact_logb(ctx.format()) is None
+
+    # ------------------------------------------------------------------
+    # 2 ** n
+
+    def test_exp2_is_a_power_of_two(self):
+        """``prec`` is 1 however wide the exponent range — that is the whole
+        value of knowing the base."""
+        from fpy2.analysis.format_infer.analysis import exact_exp2
+        arg = AbstractFormat(8, 0, fp.RealFloat.from_int(127),
+                             neg_bound=fp.RealFloat.from_int(-149))
+        claim = exact_exp2(arg.format())
+        assert claim is not None
+        assert claim.prec == 1
+        assert claim.exp == -149
+        assert claim.pos_bound == fp.RealFloat(exp=127, c=1)
+        assert claim.neg_bound == fp.RealFloat.from_int(0), 'never negative'
+
+    def test_exp2_declines_a_non_integer_exponent(self):
+        """``2 ** 0.5`` is irrational, so no format states it.  A grid whose
+        finest digit is below position zero holds such an exponent."""
+        from fpy2.analysis.format_infer.analysis import exact_exp2
+        half = AbstractFormat(4, -1, fp.RealFloat.from_int(4),
+                              neg_bound=fp.RealFloat.from_int(-4))
+        assert exact_exp2(half.format()) is None
+        assert exact_exp2(fp.FP32.format()) is None
+
+    def test_exp2_declines_an_unbounded_exponent(self):
+        from fpy2.analysis.format_infer.analysis import exact_exp2
+        assert exact_exp2(fp.INTEGER.format()) is None
+
+    # ------------------------------------------------------------------
+    # in a program
+
+    def test_pow_of_two_in_a_program(self):
+        """``2 ** n`` is the spelling `rescale_fixed` emits; only base two is
+        recognised, since a general power is irrational."""
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                e = fp.logb(x)
+                s = 2 ** e
+            return s
+
+        info = FormatInfer.analyze(
+            Monomorphize.apply(f.ast, None, [RealType(fp.FP32)]))
+        s_bounds = [b for d, b in info.by_def.items() if d.name.base == 's']
+        assert s_bounds and REAL_FORMAT not in s_bounds
+        af = AbstractFormat.from_format(s_bounds[0])
+        assert af.prec == 1, 'a power of two needs one significand bit'
+
+    def test_a_general_power_is_declined(self):
+        """Base three has no exact format, so the scope's answer stands."""
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                e = fp.logb(x)
+                s = 3 ** e
+            return s
+
+        info = FormatInfer.analyze(
+            Monomorphize.apply(f.ast, None, [RealType(fp.FP32)]))
+        s_bounds = [b for d, b in info.by_def.items() if d.name.base == 's']
+        assert REAL_FORMAT in s_bounds
+
+
+class TestSelectTightens:
+    """``min``/``max`` select *and* order.  The join records the first; without
+    the second a clamp against a constant bounds nothing."""
+
+    @staticmethod
+    def _bound_of(expr_src, src=None):
+        from fpy2.transform import Monomorphize
+        from fpy2.types import RealType
+        src = src or fp.FP64
+        info = FormatInfer.analyze(
+            Monomorphize.apply(expr_src.ast, None, [RealType(src)]))
+        return {
+            d.name.base: b for d, b in info.by_def.items()
+            if isinstance(b, Format) and b is not REAL_FORMAT
+        }
+
+    def test_clamp_against_a_constant(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                e = fp.logb(x)
+                hi = min(e, 5)
+                lo = max(e, -24)
+                both = min(max(e, -24), 5)
+            return both
+
+        got = self._bound_of(f)
+        for name, lo, hi in (('hi', -1074, 5), ('lo', -24, 1023), ('both', -24, 5)):
+            af = AbstractFormat.from_format(got[name])
+            assert int(af.neg_bound) == lo, f'{name} lower bound'
+            assert int(af.pos_bound) == hi, f'{name} upper bound'
+
+    def test_selection_still_covers_both_operands(self):
+        """The result is one of the operands, so precision and quantum still
+        come from the join -- only the bounds tighten."""
+        from fpy2.analysis.format_infer.analysis import exact_select
+        a = AbstractFormat(4, -2, fp.RealFloat.from_int(8),
+                           neg_bound=fp.RealFloat.from_int(-8))
+        b = AbstractFormat(9, 0, fp.RealFloat.from_int(3),
+                           neg_bound=fp.RealFloat.from_int(0))
+        for is_min in (True, False):
+            got = exact_select([a.format(), b.format()], is_min=is_min)
+            assert got is not None
+            assert got.prec >= max(a.prec, b.prec)
+            assert got.exp <= min(a.exp, b.exp)
+        assert exact_select([a.format(), b.format()], is_min=True).pos_bound \
+            == fp.RealFloat.from_int(3)
+        assert exact_select([a.format(), b.format()], is_min=False).neg_bound \
+            == fp.RealFloat.from_int(0)
