@@ -56,16 +56,17 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
 
 ## Smaller questions in the same area
 
-- **Should `rescale_fixed`'s `fold_specials` merge with `unfold_overflow`?**
-  Both take a value class out of the context and into a branch — overflow in one
-  case, NaN and the infinities in the other. They are separate knobs today, and
-  a third has landed as `unfold_neg_zero` for the sign of zero. With all three
-  in place, one operator parameterized by *which* edge rule to externalize may
-  read better than three. One asymmetry for that design to respect: NaN and the
-  infinities are *operand*-driven (test `x` before the rounding), while the
-  sign of zero is *result*-driven (any tiny negative rounds to zero, so the
-  rounding has to happen before the sign can be restored) — related, but not
-  the same branch shape.
+- **Resolved: the edge rules are standalone operators, not knobs.**
+  `unfold_special` states NaN, the infinities, and the operand's zero as
+  branches; `unfold_neg_zero` states the sign of a zero *result*; and
+  `rescale_fixed`'s `fold_specials` is gone — a format with a finite
+  `nan_value`/`inf_value` is declined until `unfold_special` has taken the
+  rule out of the context. The asymmetry that kept them separate: NaN and
+  the infinities are *operand*-driven (test `x` before the rounding), while
+  the sign of zero is *result*-driven (any tiny negative rounds to zero, so
+  the rounding has to happen before the sign can be restored). The full
+  fixed-point lowering is now a composition of one-idea operators:
+  `unfold_special → unfold_neg_zero → unfold_overflow → rescale_fixed`.
 
 - **`where` counts candidate blocks, and these operators change how many there
   are.** Unfolding overflow turns one rounding into several statements, so a
