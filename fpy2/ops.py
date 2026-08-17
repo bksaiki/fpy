@@ -930,13 +930,13 @@ def roundint(x: Real, ctx: Context = REAL):
 
 def isnan(x: Real, ctx: Context = REAL) -> bool:
     """Checks if `x` is NaN."""
-    x = _cvt_to_float(x)
-    return x.isnan
+    x = _cvt_to_real(x)
+    return isinstance(x, Float) and x.isnan
 
 def isinf(x: Real, ctx: Context = REAL) -> bool:
     """Checks if `x` is infinite."""
-    x = _cvt_to_float(x)
-    return x.isinf
+    x = _cvt_to_real(x)
+    return isinstance(x, Float) and x.isinf
 
 def isfinite(x: Real, ctx: Context = REAL) -> bool:
     """Checks if `x` is finite."""

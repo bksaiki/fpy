@@ -198,22 +198,35 @@ class TestShape:
         for x in (fp.Float(isnan=True, s=True), fp.Float(isinf=True, s=True)):
             assert _eval(out, f, x).s == f(x).s
 
-    def test_rebuilt_as_its_base(self):
-        """`FixedContext` fixes its flags by construction, so a shed rule
-        rebuilds it as `MPBFixedContext` — a single zero included."""
+    def test_subclass_keeps_its_class(self):
+        """`FixedContext` states no NaN of its own, so a substituted value
+        comes off in-class and the format keeps its identity — a single zero
+        included."""
         src = fp.FixedContext(True, -8, 16, fp.RoundingMode.RNE, _SAT,
                               nan_value=_ZERO)
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)
 
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
-        assert type(target) is MPBFixedContext
+        assert type(target) is fp.FixedContext
         assert target.nan_value is None
         assert target.enable_neg_zero is False
         assert any(
             isinstance(s.ctx, ForeignVal) and s.ctx.val == target
             for s in _blocks(out)
         )
+
+    def test_sm_fixed_keeps_its_class(self):
+        """`SMFixedContext` is an `EncodableContext`; shedding its
+        substituted value must not demote it to the plain base class."""
+        src = fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT,
+                                nan_value=_ZERO)
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+
+        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        assert type(target) is fp.SMFixedContext
+        assert target.nan_value is None
 
     def test_refusal_is_preserved(self):
         """Only the NaN rule is stated; an infinity is still refused, by the
@@ -322,19 +335,6 @@ class TestUnchanged:
     def test_float_context(self):
         """A float format cannot shed its specials."""
         f = _quantizer(fp.FP16)
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
-
-    def test_stochastic_context(self):
-        f = _quantizer(MPFixedContext(-8, fp.RoundingMode.RNE, 2, enable_nan=True))
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
-
-    def test_cast_body(self):
-        @fp.fpy(ctx=fp.REAL)
-        def f(x):
-            with fp.MPFixedContext(-8, enable_nan=True):
-                y = fp.cast(x)
-            return y
-
         assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
 
     def test_arithmetic_body(self):
@@ -446,6 +446,64 @@ class TestEquivalence:
         assert not out.is_equiv(f.ast)
         for x in _samples(src):
             _assert_agrees(f, out, x)
+
+    def test_cast_body(self):
+        """A cast substitutes a special exactly as a round does — the
+        substitution happens before the exactness check — so it sheds the
+        same rules, and the rewrite asserts exactness as the source did."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8, nan_value=_ZERO):
+                y = fp.cast(x)
+            return y
+
+        out = UnfoldSpecial.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+        xs = [
+            fp.Float(isnan=True), fp.Float(isnan=True, s=True),
+            fp.Float(c=0), fp.Float(c=0, s=True), 0.5, -3.0,
+        ]
+        for x in xs:
+            assert _same(_eval(out, f, x), f(x)), x
+        inexact = fp.Float(x=RealFloat(exp=-12, c=1), ctx=REAL)
+        with pytest.raises(ValueError):
+            f(inexact)
+        with pytest.raises(ValueError):
+            _eval(out, f, inexact)
+
+    def test_stochastic_context(self):
+        """A special never reaches the random draw, so a stochastic rounding
+        sheds its rules too; the surviving context keeps its random bits."""
+        src = MPFixedContext(-8, fp.RoundingMode.RNE, 2, nan_value=_ZERO)
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+
+        target = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
+        assert target.num_randbits == 2
+        assert target.nan_value is None
+        # the special paths draw no bits, so they stay deterministic
+        for x in (fp.Float(isnan=True), fp.Float(isnan=True, s=True),
+                  fp.Float(c=0), fp.Float(c=0, s=True)):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_non_dyadic_operand(self):
+        """The emitted branches test the operand under ``fp.REAL``, where it
+        can be an exact non-dyadic rational; the guards must accept whatever
+        the rounding accepted."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            y = x / 3
+            with fp.MPFixedContext(-8, enable_nan=True):
+                z = fp.round(y)
+            return z
+
+        out = UnfoldSpecial.apply(f.ast)
+        assert not out.is_equiv(f.ast)
+        for x in (1.0, -1.0, 0.0, -0.0, fp.Float(isnan=True)):
+            assert _same(_eval(out, f, x), f(x)), x
 
     def test_inside_a_loop(self):
         @fp.fpy(ctx=fp.REAL)

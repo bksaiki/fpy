@@ -38,22 +38,27 @@ the source rather than assumed, over the values where the rewrite could
 disagree; a format where neither side survives the check is left unchanged.
 A refusal also stays: a branch can only assign a value, not refuse one.
 
-Only a block whose body is entirely ``x = fp.round(v)`` (or a returned round)
-over variables is rewritten.  ``Cast`` is excluded: it asserts exactness,
-which a substituted constant does not preserve.
+Only a block whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
+(or a returned round) over variables is rewritten.  A cast substitutes a
+special exactly as a round does — the substitution happens before the
+exactness check — so it sheds the same rules.  Stochastic rounding sheds them
+too: a special never reaches the random draw, so the branches are
+deterministic and the surviving context keeps its random bits; the agreement
+probes run with the randomness turned off, where the two formats coincide.
 
-`SMFixedContext` and `FixedContext` fix their flags by construction, so a
-shed side rebuilds them as the `MPBFixedContext` they derive from; the
-emitted context no longer names the source's own class.
+`SMFixedContext` and `FixedContext` state no NaN or infinity of their own, so
+what they shed is a substituted *value* — which comes off in-class, keeping
+the source's format and the written form of its constructor.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
     Assign,
     Call,
+    Cast,
     Compare,
     ContextStmt,
     Expr,
@@ -132,32 +137,21 @@ def _special_pair(ctx: _FixedCtx, positive: Float) -> _Pair | None:
 def _without_specials(
     ctx: _FixedCtx, *, drop_nan: bool, drop_inf: bool
 ) -> _FixedCtx | None:
-    """`ctx` with the selected special-value rules removed.
+    """`ctx` with the selected special-value rules removed, its class kept.
     `None` if the result will not construct."""
+    # only the parameters that change are passed, so a subclass that fixes a
+    # flag by construction (`SMFixedContext`, `FixedContext` state no NaN or
+    # infinity) still sheds a substituted *value* in-class
     kwargs: dict[str, Any] = {}
     if drop_nan:
-        kwargs |= {'enable_nan': False, 'nan_value': None}
+        kwargs |= {'nan_value': None} | ({'enable_nan': False} if ctx.enable_nan else {})
     if drop_inf:
-        kwargs |= {'enable_inf': False, 'inf_value': None}
+        kwargs |= {'inf_value': None} | ({'enable_inf': False} if ctx.enable_inf else {})
     try:
-        if type(ctx) is MPFixedContext or type(ctx) is MPBFixedContext:
-            return ctx.with_params(**kwargs)
-        if isinstance(ctx, MPBFixedContext):
-            # a subclass (`SMFixedContext`, `FixedContext`) fixes its flags by
-            # construction, so the rules come off in the base class
-            return MPBFixedContext(
-                ctx.nmin, ctx.pos_maxval, ctx.rm, ctx.overflow,
-                ctx.num_randbits,
-                neg_maxval=ctx.neg_maxval, rng=ctx.rng,
-                enable_nan=False if drop_nan else ctx.enable_nan,
-                enable_inf=False if drop_inf else ctx.enable_inf,
-                enable_neg_zero=ctx.round(Float(c=0, s=True)).s,
-                nan_value=None if drop_nan else ctx.nan_value,
-                inf_value=None if drop_inf else ctx.inf_value,
-            )
-        # an `MPFixedContext` subclass this rewrite does not know how to rebuild
-        return None
-    except ValueError:
+        return ctx.with_params(**kwargs)
+    except (TypeError, ValueError):
+        # a subclass whose `with_params` rejects the flag keywords cannot
+        # shed that rule without changing class; decline instead
         return None
 
 
@@ -175,12 +169,13 @@ def _emitted(src: _Source, x: Float | RealFloat) -> Float | None:
     return try_round(src.dropped, x)
 
 
-def _reproduced(src: _Source) -> bool:
-    """Whether the emitted program agrees with the source on every probe."""
-    return all(
-        agrees(try_round(src.ctx, x), _emitted(src, x))
-        for x in fixed_probes(src.ctx)
-    )
+def _deterministic(ctx: _FixedCtx) -> _FixedCtx:
+    """`ctx` with its randomness off, for probing.  The shed rules touch only
+    NaN, the infinities, and zero, none of which reach the random draw — so
+    agreement of the deterministic twins carries over."""
+    if ctx.num_randbits == 0:
+        return ctx
+    return ctx.with_params(num_randbits=0)
 
 
 def _describe(ctx: _FixedCtx) -> _Source | None:
@@ -195,6 +190,12 @@ def _describe(ctx: _FixedCtx) -> _Source | None:
     zero = _special_pair(ctx, Float(c=0))
     assert zero is not None  # a zero is always representable
 
+    # the probes and the source's answers are the same for every attempt;
+    # only the dropped side varies
+    det = _deterministic(ctx)
+    probes = fixed_probes(ctx)
+    want = [try_round(det, x) for x in probes]
+
     for drop_nan, drop_inf in ((True, True), (True, False), (False, True)):
         if drop_nan and nan is None or drop_inf and inf is None:
             continue
@@ -207,7 +208,8 @@ def _describe(ctx: _FixedCtx) -> _Source | None:
             inf=inf if drop_inf else None,
             zero=zero,
         )
-        if _reproduced(src):
+        probed = replace(src, dropped=_deterministic(dropped))
+        if all(agrees(w, _emitted(probed, x)) for w, x in zip(want, probes)):
             return src
     return None
 
@@ -273,16 +275,13 @@ class _UnfoldSpecialInstance(BlockRewriter):
         ctx = self.eval_info.by_expr.get(stmt.ctx)
         if not isinstance(ctx, _FixedCtx):
             return None
-        # stochastic rounding would have to draw its bits under the same format
-        if ctx.num_randbits != 0:
-            return None
 
-        # only a rounding substitutes a special; `Cast` asserts exactness,
-        # which a substituted constant does not preserve
+        # a cast substitutes a special exactly as a round does: the
+        # substitution happens before the exactness check
         for s in stmt.body.stmts:
             match s:
                 case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, Round) or not isinstance(s.expr.arg, Var):
+                    if not isinstance(s.expr, (Round, Cast)) or not isinstance(s.expr.arg, Var):
                         return None
                 case _:
                     return None
@@ -290,8 +289,8 @@ class _UnfoldSpecialInstance(BlockRewriter):
         return _describe(ctx)
 
     def _unfold(
-        self, e: Round, target: NamedId, loc: Location | None, src: _Source,
-        ctx_expr: Expr,
+        self, e: Round | Cast, target: NamedId, loc: Location | None,
+        src: _Source, ctx_expr: Expr,
     ) -> Stmt:
         """`target = round(v)` as branches on the operand's class plus a
         rounding that sees only a finite, non-zero value."""
@@ -307,7 +306,7 @@ class _UnfoldSpecialInstance(BlockRewriter):
         # the rounding, under the format the rules came out of
         body = StmtBlock([ContextStmt(
             UnderscoreId(), ctx_expr,
-            StmtBlock([Assign(target, None, Round(None, arg(), loc), loc)]), loc,
+            StmtBlock([Assign(target, None, type(e)(e.func, arg(), loc), loc)]), loc,
         )])
 
         # a zero is a constant of the format, and taking it out leaves the
@@ -339,11 +338,11 @@ class _UnfoldSpecialInstance(BlockRewriter):
             # each emitted block gets its own context expression
             ctx_expr = _ctx_expr(stmt.ctx, src)
             if isinstance(s, Assign):
-                assert isinstance(s.expr, Round) and isinstance(s.target, NamedId)
+                assert isinstance(s.expr, (Round, Cast)) and isinstance(s.target, NamedId)
                 stmts.append(self._unfold(s.expr, s.target, s.loc, src, ctx_expr))
             else:
                 # a returned round lands in a temporary, which the return names
-                assert isinstance(s, ReturnStmt) and isinstance(s.expr, Round)
+                assert isinstance(s, ReturnStmt) and isinstance(s.expr, (Round, Cast))
                 out = self.gensym.fresh('t')
                 stmts.append(self._unfold(s.expr, out, s.loc, src, ctx_expr))
                 stmts.append(ReturnStmt(Var(out, s.loc), s.loc))

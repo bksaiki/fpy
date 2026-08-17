@@ -76,7 +76,7 @@ _SAMPLE = [0.1, 0.25, -3.5, 1e-6, -1e-6, 7.0, 0.0, -2.5]
 
 def _same(a, b) -> bool:
     if a.isnan or b.isnan:
-        return a.isnan and b.isnan
+        return a.isnan and b.isnan and a.s == b.s
     if a.isinf or b.isinf:
         return a.isinf and b.isinf and a.s == b.s
     return a.as_rational() == b.as_rational() and a.s == b.s

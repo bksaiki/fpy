@@ -38,7 +38,10 @@ def unfold_special(func: Function, where: int | None = None) -> Function:
     refusal also stays — a branch can only assign a value, not refuse one —
     so a format with no stated special of its own is left unchanged, as is a
     float format, which cannot shed its specials.  Only blocks whose body is
-    entirely ``x = fp.round(v)`` (or a returned round) are rewritten.
+    entirely ``x = fp.round(v)`` or ``x = fp.cast(v)`` (or a returned round)
+    are rewritten; a cast substitutes a special exactly as a round does, and
+    a stochastic rounding sheds its rules too, since a special never reaches
+    the random draw.
 
     Run :func:`fpy2.strategies.rescale_fixed` afterwards: a substituted
     constant does not commute with scaling, so the rescale declines a format
