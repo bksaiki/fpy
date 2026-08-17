@@ -15,6 +15,8 @@ from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
 from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
+from fpy2.analysis.format_infer.analysis import _magnitude_constraint
+from fpy2.utils import CompareOp
 from fpy2.analysis.format_infer.analysis import (
     _INTEGER_FORMAT,
     _join_bounds,
@@ -2519,3 +2521,172 @@ class TestSelectTightens:
             == fp.RealFloat.from_int(3)
         assert exact_select([a.format(), b.format()], is_min=False).neg_bound \
             == fp.RealFloat.from_int(0)
+
+
+class TestBranchRefinement:
+    """A comparison against a literal bounds the variable it tests, in the arm
+    where the comparison holds.
+
+    Only the direction that shrinks a bound *toward* zero is statable:
+    ``pos_bound >= 0 >= neg_bound`` holds by convention, so ``x < 5`` narrows
+    and ``x > 5`` -- which bounds ``x`` away from zero -- has nowhere to go.
+    """
+
+    @staticmethod
+    def _defs(func, src=fp.FP64):
+        from fpy2.transform import Monomorphize
+        info = FormatInfer.analyze(
+            Monomorphize.apply(func.ast, None, [RealType(src)]))
+        return {d.name.base: b for d, b in info.by_def.items()}
+
+    @staticmethod
+    def _pos(bound) -> float:
+        return float(AbstractFormat.from_format(bound).pos_bound)
+
+    def test_the_failing_arm_of_an_upper_test_bounds_the_operand(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= 65536:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        assert self._pos(self._defs(f)['y']) == 65536.0
+
+    def test_the_holding_arm_is_not_refined_by_the_negation(self):
+        """``x >= 65536`` holding says the operand is *large*, which no bound
+        can state -- so that arm gets nothing rather than the else arm's fact."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= 65536:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        assert self._pos(self._defs(f)['y']) > 1e300      # FP64's own bound
+
+    def test_a_two_sided_guard_compounds(self):
+        """The `early_check` shape: both comparisons fail in the same arm."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= 65536:
+                y = 0
+            elif x <= -65536:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert float(af.pos_bound) == 65536.0
+        assert float(af.neg_bound) == -65536.0
+
+    def test_the_refinement_does_not_escape_the_arm(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= 65536:
+                z = 0
+            else:
+                z = 1
+            with fp.REAL:
+                y = x * 1
+            return y
+
+        assert self._pos(self._defs(f)['y']) > 1e300
+
+    def test_a_failed_test_does_not_exclude_a_nan(self):
+        """A NaN makes every ordering false, so it takes the else arm too.  The
+        constraint leaves the special flags alone, which is what keeps that
+        sound."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= 65536:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert af.has_nan and af.has_pos_inf
+
+    def test_a_lower_test_states_nothing(self):
+        """``x > 5`` bounds the operand away from zero, which this domain cannot
+        express: writing 5 into ``neg_bound`` would claim the *most negative*
+        value is +5, breaking `pos_bound >= 0 >= neg_bound`.  Both bounds have to
+        come back untouched, so the check reads both."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x > 5:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert float(af.pos_bound) > 1e300
+        assert float(af.neg_bound) < -1e300
+
+    @pytest.mark.parametrize('op, c, states', [
+        (CompareOp.LT, 5, 'pos'), (CompareOp.LE, 5, 'pos'),
+        (CompareOp.GT, -5, 'neg'), (CompareOp.GE, -5, 'neg'),
+        # the away-from-zero direction: `pos_bound >= 0 >= neg_bound` leaves it
+        # nowhere to go, so it must be declined rather than written to the
+        # opposite bound
+        (CompareOp.GT, 5, None), (CompareOp.GE, 5, None),
+        (CompareOp.LT, -5, None), (CompareOp.LE, -5, None),
+        # neither negation of these bounds a magnitude
+        (CompareOp.EQ, 5, None), (CompareOp.NE, 5, None),
+    ])
+    def test_which_comparisons_state_a_bound(self, op, c, states):
+        """The rule itself, since the analysis falls back to the unrefined bound
+        wherever a constraint fails to materialize -- which would hide a wrong
+        one behind an exception rather than a wrong answer."""
+        cons = _magnitude_constraint(op, Fraction(c))
+        if states is None:
+            assert cons is None
+            return
+        assert cons is not None
+        pinned = cons.pos_bound if states == 'pos' else cons.neg_bound
+        free = cons.neg_bound if states == 'pos' else cons.pos_bound
+        assert float(pinned) == float(c)
+        assert isinstance(free, float)      # this domain's spelling of unbounded
+
+    def test_a_non_dyadic_literal_is_declined(self):
+        """``x < 1/3`` cannot be stated exactly, and a rounded bound could be
+        *tighter* than the truth."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x >= fp.rational(1, 3):
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        assert self._pos(self._defs(f)['y']) > 1e300
+
+    def test_it_tightens_the_lowered_scale_in(self):
+        """The payoff: on an `FP64` source the scale-in was inferred at `2**2108`
+        against a true `[2**10, 2**11)`; the `early_check` guard brings it inside
+        what `F64` holds."""
+        import fpy2.strategies as strat
+
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        ref = strat.monomorphize(q, args=[RealType(fp.FP64)])
+        low = strat.rescale_fixed(strat.float_to_fixed(
+            strat.unfold_overflow(ref, early_check=True)))
+        info = FormatInfer.analyze(low.ast)
+        scale_in = next(b for d, b in info.by_def.items() if str(d.name) == '_t7')
+        assert self._pos(scale_in) < 2.0 ** 64

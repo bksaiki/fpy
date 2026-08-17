@@ -136,7 +136,8 @@ Format inference rules
 
 import enum
 import operator
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
@@ -185,6 +186,57 @@ __all__ = [
     'is_bottom',
     'round_is_identity',
 ]
+
+
+#####################################################################
+# Branch refinement
+
+_NEGATE = {
+    CompareOp.LT: CompareOp.GE, CompareOp.GE: CompareOp.LT,
+    CompareOp.LE: CompareOp.GT, CompareOp.GT: CompareOp.LE,
+}
+"""`not (a op b)`, for the orderings.  `EQ`/`NE` are absent: neither negation
+bounds a magnitude."""
+
+_INF = float('inf')
+
+
+def _unconstrained(
+    *, pos_bound: RealFloat | float = _INF, neg_bound: RealFloat | float = -_INF,
+) -> AbstractFormat:
+    """A description that constrains only the bounds given.  Every other axis is
+    that axis's top, so meeting with it leaves the rest of a format alone -- the
+    specials included, which are :class:`~fpy2.analysis.ValueClassInfer`'s to
+    narrow and not a comparison's.
+
+    A bound has to be a :class:`RealFloat`: a plain ``float`` is how this domain
+    *spells* unbounded, so passing one would widen the axis rather than pin it.
+    """
+    return AbstractFormat(
+        _INF, -_INF, pos_bound, neg_bound=neg_bound,
+        has_pos_inf=True, has_neg_inf=True, has_nan=True, has_neg_zero=True,
+    )
+
+
+def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
+    """`x op c` as a description to meet with, or `None` where it tightens
+    nothing.
+
+    Only the side that shrinks a bound *toward* zero.  `pos_bound >= 0 >=
+    neg_bound` holds by convention, so `x < 5` is statable and `x > 5` -- which
+    bounds `x` away from zero -- is not.  A NaN makes every ordering false, so a
+    failed comparison does not exclude one; the specials are left untouched
+    above, which keeps that sound.
+    """
+    if not is_dyadic(c):
+        # a rounded bound could be tighter than the truth
+        return None
+    b = RealFloat.from_rational(c)
+    if op in (CompareOp.LT, CompareOp.LE) and c >= 0:
+        return _unconstrained(pos_bound=b)
+    if op in (CompareOp.GT, CompareOp.GE) and c <= 0:
+        return _unconstrained(neg_bound=b)
+    return None
 
 
 #####################################################################
@@ -1422,6 +1474,9 @@ class _FormatInferInstance(Visitor):
         self.array_size = pre.array_size
         self.alias = pre.alias
         self.by_def = {}
+        # Per-definition description to meet with on every *read*, from the
+        # branches enclosing that read.  Saved and restored around each arm.
+        self._refine: dict[Definition, AbstractFormat] = {}
         self._region_inserts: dict[
             Region, list[tuple[int, FormatBound, frozenset[Definition]]]
         ] = {}
@@ -1503,7 +1558,79 @@ class _FormatInferInstance(Visitor):
         return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
-        return self.by_def[d]
+        fmt = self.by_def[d]
+        cons = self._refine.get(d)
+        if cons is None or not isinstance(fmt, AbstractableFormat):
+            return fmt
+        af = AbstractFormat.from_format(fmt)
+        met = af & cons
+        if met == af:
+            # Nothing was narrowed, and going back through `format()` would
+            # still cost something: it picks a canonical shape rather than
+            # inverting `from_format`, so the round trip is lossy for every
+            # format.  Only pay it where the constraint bought something.
+            return fmt
+        try:
+            return met.format()
+        except (ValueError, OverflowError):
+            # a narrower description that no `Format` materializes; the
+            # unrefined bound is still sound
+            return fmt
+
+    @contextmanager
+    def _refined(self, cond: Expr, truth: bool) -> Iterator[None]:
+        """Walk an arm with *cond* known to be *truth*.
+
+        Both arms narrow the *enclosing* mask: narrowing whatever ``self._refine``
+        happens to hold would carry the first arm's constraint into its sibling.
+        The mask is a description to meet with, not a replacement -- a definition
+        made inside the arm records the met bound, which is what storage
+        selection reads, while one made outside keeps its own.
+        """
+        saved = self._refine
+        out = dict(saved)
+        for d, cons in self._implied(cond, truth):
+            prev = out.get(d)
+            out[d] = cons if prev is None else prev & cons
+        self._refine = out
+        try:
+            yield
+        finally:
+            self._refine = saved
+
+    def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, AbstractFormat]]:
+        """What *cond* being *truth* says about the magnitude of the variables
+        it tests.  Only a comparison against a numeric literal, and only the
+        direction that tightens a *bound* -- the convention
+        ``pos_bound >= 0 >= neg_bound`` leaves no room to state that a value is
+        bounded away from zero on the far side."""
+        match cond:
+            case Not():
+                return self._implied(cond.arg, not truth)
+            case And() if truth:
+                return [i for a in cond.args for i in self._implied(a, True)]
+            case Or() if not truth:
+                return [i for a in cond.args for i in self._implied(a, False)]
+            case Compare() if len(cond.ops) == 1:
+                return self._implied_compare(cond, truth)
+            case _:
+                return []
+
+    def _implied_compare(
+        self, cond: Compare, truth: bool
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        op = cond.ops[0] if truth else _NEGATE.get(cond.ops[0])
+        if op is None:
+            return []
+        a, b = cond.args
+        out: list[tuple[Definition, AbstractFormat]] = []
+        for x, y, o in ((a, b, op), (b, a, op.invert())):
+            if not isinstance(x, Var) or not isinstance(y, RationalVal):
+                continue
+            cons = _magnitude_constraint(o, y.as_rational())
+            if cons is not None:
+                out.append((self.def_use.find_def_from_use(x), cons))
+        return out
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""
@@ -2256,7 +2383,8 @@ class _FormatInferInstance(Visitor):
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.body, ctx)
+        with self._refined(stmt.cond, True):
+            self._visit_block(stmt.body, ctx)
         for phi in self.def_use.phis[stmt]:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
@@ -2264,8 +2392,10 @@ class _FormatInferInstance(Visitor):
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.ift, ctx)
-        self._visit_block(stmt.iff, ctx)
+        with self._refined(stmt.cond, True):
+            self._visit_block(stmt.ift, ctx)
+        with self._refined(stmt.cond, False):
+            self._visit_block(stmt.iff, ctx)
         for phi in self.def_use.phis[stmt]:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
