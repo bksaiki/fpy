@@ -208,15 +208,13 @@ class TestComposition:
     states only its grid."""
 
     @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
-    def test_replaces_fold_specials(self, ctx):
-        """The composed route computes what ``fold_specials=True`` computes;
-        the knob stops carrying anything of its own."""
+    def test_rescale_after_unfold(self, ctx):
+        """The composed route is what ``rescale_fixed``'s ``fold_specials``
+        knob used to do: the specials come out first, then the scale."""
         q = _quantizer(ctx)
-        old = rescale_fixed(q, fold_specials=True)
-        new = rescale_fixed(unfold_special(q))
+        out = rescale_fixed(unfold_special(q))
         for x in _samples(ctx):
-            _assert_agrees(q, old, x)
-            _assert_agrees(q, new, x)
+            _assert_agrees(q, out, x)
 
     def test_unblocks_the_rescale(self):
         """A finite substituted constant does not commute with scaling, so

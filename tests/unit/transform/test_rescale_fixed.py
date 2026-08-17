@@ -19,7 +19,7 @@ import pytest
 from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef, Integer
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
-from fpy2.transform import RescaleFixed
+from fpy2.transform import RescaleFixed, UnfoldSpecial
 from fpy2.transform.rescale_fixed import _scale_of
 
 
@@ -283,58 +283,56 @@ class TestContextVariants:
 # Folding the special values
 
 
-class TestFoldSpecials:
-    """``fold_specials`` takes NaN and the infinities out of the rounding,
-    where the format defines what they become."""
+class TestSubstitutingFormats:
+    """A finite substitute for NaN or an infinity would have to shift with
+    the format, so the pass declines it — until ``UnfoldSpecial`` takes the
+    rule out of the context."""
 
     _SUBST = _SUBSTITUTING
 
-    def test_substituting_format_is_rescalable(self):
-        """A finite substitute would have to shift with the format, so the
-        pass refuses it — unless the specials are folded out first."""
+    def test_substituting_format_is_declined(self):
         f = _quantizer(self._SUBST)
         assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
 
-        out = RescaleFixed.apply(f.ast, fold_specials=True)
-        assert not out.is_equiv(f.ast)
-        assert _fixed_scales(out) == [0]
+    def test_unfold_special_unblocks_the_rescale(self):
+        f = _quantizer(self._SUBST)
+        unfolded = UnfoldSpecial.apply(f.ast)
+        out = RescaleFixed.apply(unfolded)
+        assert not out.is_equiv(unfolded)
+        # the unfold rebuilt the format as its base class, rules shed
+        assert _fixed_scales(out, fp.MPBFixedContext) == [0]
 
     @pytest.mark.parametrize('x', [
         0.1, -3.25, 1000.0, 0.0, -0.0, float('nan'), float('inf'), float('-inf'),
     ])
     def test_preserves_results(self, x):
         f = _quantizer(self._SUBST)
-        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        out = RescaleFixed.apply(UnfoldSpecial.apply(f.ast))
         assert _same(_eval(out, f, x), f(x)), x
 
     def test_undefined_specials_are_left_to_the_rounding(self):
-        """A plain fixed format defines none of them, so nothing is folded
-        and they keep raising exactly as before."""
+        """A plain fixed format defines none of them, so the unfold has
+        nothing to state and they keep raising exactly as before."""
         f = _quantizer(fp.FixedContext(True, -16, 32))
-        plain = RescaleFixed.apply(f.ast)
-        folded = RescaleFixed.apply(f.ast, fold_specials=True)
-        assert folded.is_equiv(plain)
+        out = RescaleFixed.apply(UnfoldSpecial.apply(f.ast))
+        assert out.is_equiv(RescaleFixed.apply(f.ast))
 
         for x in (float('nan'), float('inf')):
             with pytest.raises(ValueError):
                 f(x)
             with pytest.raises(ValueError):
-                _eval(folded, f, x)
+                _eval(out, f, x)
 
-    def test_off_by_default(self):
-        f = _quantizer(self._SUBST)
-        assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
-
-    def test_folding_drops_nan_from_the_format(self):
-        """A NaN reaches a rounding only as its operand, and that case is
-        folded away, so the rescaled format has no need of NaN."""
+    def test_unfolding_drops_nan_from_the_format(self):
+        """A NaN reaches a rounding only as its operand, and that case is a
+        branch now, so the rescaled format has no need of NaN."""
         src = fp.MPBFixedContext(
             -17, fp.FixedContext(True, -16, 32).maxval().as_real(),
             RoundingMode.RNE, OverflowMode.SATURATE,
             enable_nan=True, enable_inf=True,
         )
         f = _quantizer(src)
-        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        out = RescaleFixed.apply(UnfoldSpecial.apply(f.ast))
 
         dst = next(
             s.ctx.val for s in _blocks(out)
@@ -342,28 +340,23 @@ class TestFoldSpecials:
             and isinstance(s.ctx.val, fp.MPBFixedContext)
         )
         assert not dst.enable_nan
-        # an overflow can still produce one, so infinity stays
-        assert dst.enable_inf
+        # saturating overflow never produces one, so infinity comes out too
+        assert not dst.enable_inf
         for x in (float('nan'), float('inf'), float('-inf'), 0.5, -1e9):
             assert _same(_eval(out, f, x), f(x)), x
 
-    def test_overflow_keeps_its_substitute(self):
-        """Folding takes NaN out of the rounding, but an overflow still
-        *produces* an infinity, so the substitute for one has to stay."""
+    def test_non_finite_substitute_needs_no_unfolding(self):
+        """Overflow *produces* the infinity here, so its NaN substitute must
+        stay in the format — and being scale-invariant, it rescales as is."""
         src = fp.MPBFixedContext(
             -4, RealFloat(exp=0, c=100), RoundingMode.RNE, OverflowMode.OVERFLOW,
             enable_nan=True, inf_value=fp.Float(isnan=True),
         )
         f = _quantizer(src)
-        out = RescaleFixed.apply(f.ast, fold_specials=True)
+        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        out = RescaleFixed.apply(f.ast)
+        assert not out.is_equiv(f.ast)
         assert _same(_eval(out, f, 1000.0), f(1000.0))
-
-    def test_zeros_are_not_folded(self):
-        """A zero survives the shift on its own, so it needs no branch."""
-        f = _quantizer(self._SUBST)
-        out = RescaleFixed.apply(f.ast, fold_specials=True)
-        for x in (0.0, -0.0):
-            assert _same(_eval(out, f, x), f(x)), x
 
 
 # ----------------------------------------------------------------------
@@ -560,7 +553,7 @@ class TestSymbolicPosition:
                 seen.add(id(e))
                 super()._visit_expr(e, ctx)
 
-        _C()._visit_function(RescaleFixed.apply(f.ast, fold_specials=True), None)
+        _C()._visit_function(RescaleFixed.apply(UnfoldSpecial.apply(f.ast)), None)
         assert not shared
 
     def test_unrecognized_call_is_left_alone(self):
