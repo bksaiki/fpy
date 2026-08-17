@@ -29,6 +29,8 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.split
 
+.. autofunction:: fpy2.strategies.unfold_neg_zero
+
 .. autofunction:: fpy2.strategies.unfold_overflow
 
 .. autofunction:: fpy2.strategies.unroll_for

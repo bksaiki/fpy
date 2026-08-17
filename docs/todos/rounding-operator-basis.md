@@ -59,9 +59,13 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
 - **Should `rescale_fixed`'s `fold_specials` merge with `unfold_overflow`?**
   Both take a value class out of the context and into a branch — overflow in one
   case, NaN and the infinities in the other. They are separate knobs today, and
-  a third is proposed in [unfold-neg-zero.md](unfold-neg-zero.md) for the sign
-  of zero. If all three land, one operator parameterized by *which* edge rule to
-  externalize may read better than three.
+  a third has landed as `unfold_neg_zero` for the sign of zero. With all three
+  in place, one operator parameterized by *which* edge rule to externalize may
+  read better than three. One asymmetry for that design to respect: NaN and the
+  infinities are *operand*-driven (test `x` before the rounding), while the
+  sign of zero is *result*-driven (any tiny negative rounds to zero, so the
+  rounding has to happen before the sign can be restored) — related, but not
+  the same branch shape.
 
 - **`where` counts candidate blocks, and these operators change how many there
   are.** Unfolding overflow turns one rounding into several statements, so a
