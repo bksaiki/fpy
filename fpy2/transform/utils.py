@@ -35,7 +35,14 @@ from ..ast.fpyast import (
     Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
-from ..number import INTEGER, Context, Float, RealFloat
+from ..number import (
+    INTEGER,
+    Context,
+    Float,
+    MPBFixedContext,
+    MPFixedContext,
+    RealFloat,
+)
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -144,6 +151,42 @@ def agrees(a: Float | None, b: Float | None) -> bool:
     if a is None or b is None:
         return a is None and b is None
     return same_value(a, b)
+
+
+def fixed_probes(
+    ctx: MPFixedContext | MPBFixedContext,
+) -> list[Float | RealFloat]:
+    """
+    The edge values of a fixed-point format, on which a rewrite of its
+    rounding could disagree with it: both zeros, values rounding to zero from
+    either side, the specials, and — for a bounded format — operands at and
+    past the bound, including one full trip around the wrapped range, which
+    lands back on zero.
+    """
+    nan = Float(isnan=True)
+    xs: list[Float | RealFloat] = [
+        nan, Float(x=nan, s=True),
+        Float(isinf=True), Float(isinf=True, s=True),
+        Float(c=0), Float(c=0, s=True),
+    ]
+    grid = [
+        RealFloat(exp=ctx.nmin - 3, c=1),   # far below the grid
+        RealFloat(exp=ctx.nmin, c=1),       # the tie at half a step
+        RealFloat(exp=ctx.nmin, c=3),
+        RealFloat(exp=ctx.nmin + 1, c=1),   # the grid's finest step
+    ]
+    if isinstance(ctx, MPBFixedContext):
+        step = RealFloat(exp=ctx.nmin + 1, c=1)
+        span = ctx.pos_maxval - ctx.neg_maxval + step
+        grid += [
+            ctx.pos_maxval, ctx.neg_maxval,
+            shift(ctx.pos_maxval, 1), shift(ctx.pos_maxval, 64),
+            span, span + step, shift(span, 1),
+        ]
+    for g in grid:
+        xs.append(RealFloat(exp=g.exp, c=g.c))
+        xs.append(RealFloat(s=True, exp=g.exp, c=g.c))
+    return xs
 
 
 def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> Expr:

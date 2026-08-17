@@ -77,9 +77,7 @@ from ..number import (
     RealFloat,
 )
 from ..utils import CompareOp, Gensym
-from .utils import BlockRewriter, agrees, check_where, shift, try_round
-
-_NAN = Float(isnan=True)
+from .utils import BlockRewriter, agrees, check_where, fixed_probes, try_round
 
 _FixedCtx = MPFixedContext | MPBFixedContext
 """
@@ -124,38 +122,6 @@ def _without_neg_zero(ctx: _FixedCtx) -> _FixedCtx | None:
         return None
 
 
-def _probes(ctx: _FixedCtx) -> list[Float | RealFloat]:
-    """
-    Values on which the emitted program could disagree with `ctx`: both
-    zeros, values rounding to zero from either side, the specials, and — for
-    a bounded format — operands past the bound, including one full trip
-    around the wrapped range, which lands back on zero.
-    """
-    xs: list[Float | RealFloat] = [
-        _NAN, Float(x=_NAN, s=True),
-        Float(isinf=True), Float(isinf=True, s=True),
-        Float(c=0), Float(c=0, s=True),
-    ]
-    grid = [
-        RealFloat(exp=ctx.nmin - 3, c=1),   # far below the grid
-        RealFloat(exp=ctx.nmin, c=1),       # the tie at half a step
-        RealFloat(exp=ctx.nmin, c=3),
-        RealFloat(exp=ctx.nmin + 1, c=1),   # the grid's finest step
-    ]
-    if isinstance(ctx, MPBFixedContext):
-        step = RealFloat(exp=ctx.nmin + 1, c=1)
-        span = ctx.pos_maxval - ctx.neg_maxval + step
-        grid += [
-            ctx.pos_maxval, ctx.neg_maxval,
-            shift(ctx.pos_maxval, 1), shift(ctx.pos_maxval, 64),
-            span, span + step, shift(span, 1),
-        ]
-    for g in grid:
-        xs.append(RealFloat(exp=g.exp, c=g.c))
-        xs.append(RealFloat(s=True, exp=g.exp, c=g.c))
-    return xs
-
-
 def _emitted(dropped: _FixedCtx, x: Float | RealFloat) -> Float | None:
     """What the generated code yields for `x`: the rounding under the
     format without the signed zero, then `copysign` from the operand where
@@ -171,7 +137,7 @@ def _emitted(dropped: _FixedCtx, x: Float | RealFloat) -> Float | None:
 def _reproduced(ctx: _FixedCtx, dropped: _FixedCtx) -> bool:
     """Whether the emitted program agrees with `ctx` on every probe."""
     return all(
-        agrees(try_round(ctx, x), _emitted(dropped, x)) for x in _probes(ctx)
+        agrees(try_round(ctx, x), _emitted(dropped, x)) for x in fixed_probes(ctx)
     )
 
 
