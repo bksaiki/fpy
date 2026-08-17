@@ -199,9 +199,21 @@ sequence, verified bit-for-bit against the interpreter across fourteen formats i
 but is not in that check. It deserves one entry point rather than a comment in a
 sandbox.
 
-Unrelated to lowering, but found here: `fp.round_at(x, n)` raises `IndexError:
-tuple index out of range` from `fpy2/analysis/type_infer.py:440` — a crash in
-type inference where a diagnostic belongs.
+Unrelated to lowering, but found along this path — each reproduces well before
+the change that turned it up, so none is a regression:
+
+- `fp.round_at(x, n)` raises `IndexError: tuple index out of range` from
+  `fpy2/analysis/type_infer.py:440` — a crash in type inference where a
+  diagnostic belongs.
+- **`unfold_overflow` emits an unconstructible context.** A source with a
+  `nan_value` / `inf_value` substitute has it written into the rewritten program
+  as a *numeric literal*, and `MPFixedContext` requires a `Float` — so
+  `MPFixedContext(-4, inf_value=7)` raises and the rewritten program cannot be
+  evaluated at all.
+- **An integer-typed source cannot be compiled.** `with fp.FP16: round(x)` over a
+  `SINT32` argument lowers cleanly but crashes format inference on the way to
+  C++: `AbstractFormat.format()` builds an `MPBFixedFormat` whose `pos_maxval` of
+  `1024` is unrepresentable at the chosen `nmin`.
 
 ## Order of work
 

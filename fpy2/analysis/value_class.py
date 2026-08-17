@@ -6,9 +6,15 @@ finite non-zero?  The four atoms form a 16-element lattice — union is the join
 intersection the meet, height 4, so no widening is needed — and it is *refined*
 at every branch that tests a value's class.
 
-Format inference cannot answer this.  A value's format bounds its magnitude and
-says whether the format has a NaN, but not whether this particular value is one,
-and it structurally cannot say **not zero** (every format represents ``+0``).
+Format inference cannot answer this, and this is deliberately not a fourth flag
+on :class:`~fpy2.analysis.format_infer.AbstractFormat`, which already carries
+``has_nan`` / ``has_pos_inf`` / ``has_neg_inf``.  A format bounds a value's
+magnitude and says whether the *format* has a NaN, not whether *this* value is
+one, and it structurally cannot say **not zero**: ``pos_bound >= 0 >= neg_bound``
+holds by convention there, so every format represents a ``+0``.  A no-zero bit
+would have to be threaded through ``__add__``, ``__mul__``, the join and storage
+selection to buy nothing those need.
+
 That bit is the load-bearing one: the emitted guards a consumer wants to drop
 follow from ``x`` being finite *and non-zero*, which is what an ``elif`` ladder
 establishes::
