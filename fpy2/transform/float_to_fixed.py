@@ -52,7 +52,9 @@ rounding at the clamped position against ``B`` produces.
 
 ``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch
 of its own.  All three are constants, so the branches assign what the format
-makes of them.  Only the roundings sit under a rounding context; the rest is
+makes of them.  A branch is emitted only where the operand can *be* that kind of
+value, per :class:`fpy2.analysis.ValueClassInfer` — which needs a concrete
+argument type to say anything, so an unmonomorphized program gets all three.  Only the roundings sit under a rounding context; the rest is
 exact under ``REAL``, whatever context encloses the statement.
 
 Run :func:`fpy2.strategies.rescale_fixed` afterwards to shift the resulting

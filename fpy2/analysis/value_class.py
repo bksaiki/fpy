@@ -43,8 +43,9 @@ element gives the top class.
 
 Not yet taught: sign (splitting ``±0`` and ``±Inf`` would let ``signbit`` refine),
 magnitudes (``x > 1`` says nothing here), ``assert`` statements as refinements,
-a bool-valued variable holding a test's result, and the class of a numeric free
-variable.
+a bool-valued variable holding a test's result, the class of a numeric free
+variable, and a ``for`` target -- a loop counter over ``range`` is an integer and
+so neither special, but it reports the top class.
 """
 
 import enum
@@ -209,8 +210,10 @@ class ValueClassAnalysis:
 
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
-    expression had, joined across incoming edges at a phi.  Consumers want
-    :attr:`by_expr`; this is here to be read and tested."""
+    expression had, joined across incoming edges at a phi.  A consumer wants
+    :attr:`by_expr`, which is where a branch's refinement shows up; this is the
+    per-definition view the other analyses expose, and what
+    ``tests/infra/analysis/value_class.py`` dumps."""
 
     type_info: TypeAnalysis
     """Underlying basic-type analysis, which decides what carries a class."""
@@ -478,14 +481,11 @@ class _ValueClassInstance(DefaultVisitor):
             case _:
                 return self._rounded(e, _TOP)
 
+    # `RoundAt` needs no case of its own: the base visitor sends it to
+    # `_visit_binaryop`, whose fallback is what it would get anyway -- it rounds
+    # digits away even under `REAL`, so the operand's class does not carry over.
     def _visit_round(self, e: Round, ctx: None) -> ValueClass:
         return self._rounded(e, self._operand(e.arg, ctx))
-
-    def _visit_round_at(self, e: RoundAt, ctx: None) -> ValueClass:
-        a = self._operand(e.first, ctx)
-        self._visit_expr(e.second, ctx)
-        # unlike `Round`, this rounds away digits even under `REAL`
-        return self._rounded(e, a | (_ZERO if a & _FINITE else _BOT))
 
     def _visit_binaryop(self, e: BinaryOp, ctx: None) -> ValueClass:
         a = self._operand(e.first, ctx)

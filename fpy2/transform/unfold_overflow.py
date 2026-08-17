@@ -69,6 +69,9 @@ cannot state is a refusal, and a fixed-point format commonly refuses NaN and the
 infinities outright — hence the finiteness test in front of the early
 check, which would otherwise claim an infinity as an overflow.
 
+That test, and each special's branch, is emitted only where the operand can be
+such a value, per :class:`fpy2.analysis.ValueClassInfer`.
+
 Applies to a format whose overflow is a constant of its own: wrapping gives a
 different answer at every magnitude, and an unsigned format states no bound
 below zero, so neither is rewritten.

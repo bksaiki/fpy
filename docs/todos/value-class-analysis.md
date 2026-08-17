@@ -1,5 +1,8 @@
 # Path-sensitive value classes
 
+**Done** — see the plan below for what each phase closed.  The listings in *Why*
+are the *before* picture, kept because they are what the analysis was built for.
+
 A four-atom lattice — is this value a NaN, an infinity, a zero, or a finite
 non-zero? — refined at every branch. Much weaker than the numeric reasoning in
 [symbolic-exponent-inference.md](symbolic-exponent-inference.md), and it closes a
@@ -7,8 +10,8 @@ different and larger set of holes.
 
 ## Why
 
-The lowered `FP16` rounding emits four guards, all from one fact nothing can
-prove:
+The lowered `FP16` rounding *emitted* four guards, all from one fact nothing
+could prove:
 
 ```c++
 assert(std::isfinite(_t)  && "fpy: rounding is undefined for this value");
@@ -95,18 +98,19 @@ x : {NaN, Inf, Zero, Finite}
 and then `logb(x) : {Zero, Finite}`, `e - 10 : {Zero, Finite}` — neither `NaN`
 nor `Inf`, which is exactly what the four guards ask.
 
-## What it closes
+## What it closed
 
-- **The four guards above.** Two runtime branches and two assertions gone from
-  every lowered rounding.
+- **The four guards above.** Gone, along with the two `std::pow` calls the
+  fallbacks needed: the lowered `FP16` rounding went from 4 assertions, 4
+  `isfinite` and 2 `pow` to **2, 0 and 0**.  The two survivors are bound checks.
 - **The libm mapping's specials condition** — the one unmet correctness
   side-condition in that lowering.  The interpreter raises where `std::trunc`
-  returns a NaN; today only a branch nothing reads reconciles them, so the
-  mapping rests on an unproven claim.  See gap 3 of
+  returns a NaN, and only a branch nothing read reconciled them, so the mapping
+  rested on an unproven claim.  See gap 6 of
   [native-lowering-roadmap.md](native-lowering-roadmap.md).
 - **`float_to_fixed`'s deliberate `enable_nan` omission.** It leaves the flag off
   because "a NaN reaches a rounding only as its operand, and the branches above
-  take that case" — a comment asserting precisely what this analysis would prove.
+  take that case" — a comment asserting precisely what the analysis now proves.
 
 ## What it does not close
 
@@ -116,8 +120,8 @@ that needs `|x| < 2^16` from a comparison and the relational
 numeric half is recorded separately.
 
 The split is clean enough to state as a rule: **classes fix the specials
-problems, magnitudes fix the width problems.**  Four of the five open items in
-the roadmap are the former.
+problems, magnitudes fix the width problems.**  Everything the roadmap has left
+open is the latter.
 
 ## Why a separate lattice, not three more flags
 
@@ -166,9 +170,12 @@ Commit-sized phases; the full suites run only at the end.
   branch is less forgiving than dropping an assertion: nothing checks it at
   runtime, so the equivalence tests compare the rewritten program against the
   reference in the interpreter, bit-exactly.
-- [ ] **5 — full suites, and the stale listings.**  The emitted-program excerpt
-  in this file and in [native-lowering-roadmap.md](native-lowering-roadmap.md)
-  both predate phases 2–3; refresh them once, at the end.
+- [x] **5 — full suites, and the stale listings.**  The roadmap's excerpt is now
+  byte-identical to what the pipeline emits, checked by regenerating and diffing
+  rather than by eye; the excerpt here is deliberately kept as the *before*
+  picture.  A line-level trace over the suites found two unreached spots: the
+  `RoundAt` case, deleted since the base visitor's fallback is what it would
+  have produced anyway, and the `or` refinement, which now has a test.
 
 ### Found along the way, unrelated and pre-existing
 

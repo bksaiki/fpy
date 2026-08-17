@@ -340,6 +340,19 @@ class TestRefinement:
 
         assert _cls(f, 'abs(x)') == FINITE
 
+    def test_a_failed_disjunction_refines_by_every_disjunct(self):
+        """The natural spelling of the ladder in one test: neither disjunct held,
+        so both are ruled out."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(x):
+                y = 0
+            else:
+                y = fp.fabs(x)
+            return y
+
+        assert _cls(f, 'abs(x)') == ZERO | FINITE
+
     def test_a_negation_swaps_the_arms(self):
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:

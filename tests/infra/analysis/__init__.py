@@ -11,3 +11,4 @@ from .reaching_defs import test_reaching_defs
 from .partial_eval import test_partial_eval
 from .purity import test_purity
 from .tcheck import test_tcheck
+from .value_class import test_value_class
