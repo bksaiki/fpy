@@ -115,9 +115,7 @@ class TestAgreesWithTheInterpreter:
         )
 
 
-class TestTheTwoOriginalHoles:
-    """The values that made this a bug: exact in `float`, not in the context."""
-
+class TestValuesExactInStorageOnly:
     @pytest.mark.parametrize('x, why', [
         (2048.0, 'past the bound'),
         (0.5, 'not an integer'),
@@ -149,7 +147,8 @@ class TestWhatIsEmitted:
 
     def test_a_float_operand_is_checked_three_ways(self):
         out = _emit(fp.SINT8)
-        assert out.count('assert(') == 4  # specials, integral, bound, roundtrip
+        # specials, integral, bound, and the storage round-trip
+        assert out.count('assert(') == 4
         assert 'isfinite' in out
         assert 'std::trunc' in out
         assert '-128 <= v && v <= 127' in out
@@ -164,10 +163,27 @@ class TestWhatIsEmitted:
 
 
 class TestUncheckableIsRefused:
-    def test_a_non_zero_position_is_refused_not_assumed(self):
-        """Scaling the operand to test representability would round it first, so
-        there is no test to emit -- and silently emitting none is what this whole
-        change is about."""
+    """At a non-zero position the representable values are multiples of
+    ``2 ** (nmin + 1)``; scaling the operand to test that would round it first,
+    so there is no test to emit."""
+
+    # integer storage, so `_validate_context_rm` (which checks the position only
+    # for float storage) does not catch it first
+    _INT_STORAGE = fp.MPBFixedContext(
+        3, fp.RealFloat(exp=8, c=1), rm=fp.RM.RTZ, enable_neg_zero=False)
+
+    @pytest.mark.parametrize('arg_ctx', [fp.FP64, fp.SINT32],
+                             ids=['float_operand', 'integer_operand'])
+    def test_a_non_zero_position_is_refused_not_assumed(self, arg_ctx):
+        """Both operand types, because the integer one skipped this check: it
+        takes a shortcut past the representability test, and would have claimed
+        ``cast(5)`` exact where only multiples of 16 are representable."""
+        with pytest.raises(CppCompileError, match='cannot be checked'):
+            _emit(self._INT_STORAGE, arg_ctx=arg_ctx)
+
+    def test_float_storage_is_refused_earlier(self):
+        """`_validate_context_rm` gets there first for float storage, naming the
+        same fix."""
         ctx = fp.MPBFixedContext(-8, fp.RealFloat(exp=4, c=1), rm=fp.RM.RTZ)
-        with pytest.raises(CppCompileError, match='rescale_fixed'):
+        with pytest.raises(CppCompileError, match='digits at position zero'):
             _emit(ctx)

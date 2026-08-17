@@ -258,11 +258,9 @@ class CppCompiler(Backend):
         return list(CPP_HEADERS)
 
     def helpers(self) -> str:
-        """Support code an emitted unit needs -- now empty, since there is none.
+        """Support code an emitted unit needs: currently none.
 
-        Kept so callers can keep concatenating headers, helpers and body without
-        caring whether the backend currently emits any.  See
-        :data:`.utils.CPP_HELPERS`."""
+        See :data:`.utils.CPP_HELPERS`."""
         return CPP_HELPERS
 
     def prelude(self) -> str:

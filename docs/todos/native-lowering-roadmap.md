@@ -18,7 +18,7 @@ rescale_fixed     MPFixedContext   -> position zero, integer values
 ```
 
 The result compiles to plain C++ and is bit-exact against the interpreter across
-fourteen target formats — all eight IEEE rounding modes, the MX family, a
+fourteen target formats — all eight FPy rounding modes, the MX family, a
 saturating `IEEEContext`, and an `EFloatNanKind.NEG_ZERO` format. It
 needs no support library, and now unconditionally: the backend emits no support
 code at all, so `CPP_HELPERS` is empty. Pinned by
@@ -136,8 +136,8 @@ to have the builtin, and adding it as an `fpy::` helper would break
 dynamic rounding mode, so `RTE` inherits `RNE`'s `FE_TONEAREST` precondition and
 is refused inside a scope that set another mode. `RTO` has no such dependency.
 
-Every step of all eight is exact. Verified bit-for-bit against the interpreter,
-62 values per mode, and the three new modes are in
+Every step of all eight is exact. Verified bit-for-bit against the interpreter
+in `test_round_fixed_bound.py`, and the three new modes are in
 `test_lowered_roundtrip.py`'s target list, which now covers fourteen formats.
 
 ### 3. `Round` / `Cast` checked storage, not the context
@@ -160,14 +160,9 @@ faithfully or refuses it, and a non-`ASSERT` rule is refused rather than dropped
 Verified value-for-value against the interpreter in
 `tests/unit/backend/cpp/test_round_fixed_bound.py`.
 
-The predicate for "the cast *is* the rounding" is `target.is_native_ctx`, the
-same one gap 4 introduced, for the same reason: a format carries no overflow
-rule, so a `-128..127` context under `ASSERT` is format-equal to `int8_t` and
-still needs the assertion.
-
-One item in this area stays open — `static_cast` to an integer type is undefined
-for a non-finite operand, on the native integer path that emits no assertions at
-all. Recorded in [backend-cpp.md](backend-cpp.md).
+The predicate for "the cast *is* the rounding" is `target.is_native_ctx`,
+introduced here: a format carries no overflow rule, so a `-128..127` context
+under `ASSERT` is format-equal to `int8_t` and still needs the assertion.
 
 The libm mapping has a second, subtler hole in the same area: the interpreter
 *raises* where `std::trunc` returns a NaN, and today only an unread branch
@@ -198,8 +193,7 @@ type inference where a diagnostic belongs.
 
 Gaps 2 and 3 are done, and with them the non-finite integer conversion: a
 float-to-integer cast now asserts `std::isfinite` first, on the native integer
-path as well. Measured before landing — it changed three tests and no corpus
-program. What is left, cheapest first:
+path as well. What is left, cheapest first:
 
 1. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
    at branches.  Removes two runtime branches and two assertions from every

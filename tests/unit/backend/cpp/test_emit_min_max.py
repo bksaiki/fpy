@@ -7,9 +7,8 @@ NaN where these propagate it, and they leave the choice between ``-0.0`` and
 ``(a < b) ? a : b``, so ``fmin(-0.0, +0.0)`` gives ``+0.0`` where ``minimum``
 gives ``-0.0``.
 
-That used to be an ``fpy::min``/``max`` template in ``CPP_HELPERS``, the backend's
-only support code.  It is now emitted inline, so the no-support-library property
-holds for every program rather than only for those that avoid min/max.
+Emitted inline rather than as an ``fpy::`` template, so the emitted program
+depends on ``std::`` alone.
 """
 
 import shutil
@@ -163,8 +162,8 @@ class TestAgreesWithTheInterpreter:
         assert not bad, '; '.join(bad)
 
 
-class TestTheTwoWaysFminDiffers:
-    """Named, because each is why the inline form cannot be one libm call."""
+class TestTheInterpreterReference:
+    """The premise the differentials above compare against -- interpreter only."""
 
     def test_a_nan_propagates(self):
         """``std::fmin(NaN, 1.0)`` is ``1.0``; ``minimum`` is a NaN."""
@@ -187,8 +186,6 @@ class TestNoSupportLibrary:
         assert 'fpy::' not in src
 
     def test_the_helper_block_is_empty(self):
-        """`Min`/`Max` were its last entry, so the property is now
-        unconditional rather than true only of programs that avoid them."""
         assert CPP_HELPERS == ''
         assert CppCompiler().helpers() == ''
 
@@ -205,7 +202,33 @@ class TestNoSupportLibrary:
         assert r.returncode == 0, r.stderr[-2000:]
 
 
+class TestTheNaryFold:
+    def test_three_operands_nest_two_steps(self):
+        """Each step's result becomes the next step's first operand, which the
+        predicate names twice -- so the intermediate has to be bound."""
+        @fp.fpy
+        def q(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return fp.fmin(a, fp.fmin(b, c))
+
+        out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 3)
+        assert out.count('std::signbit(') == 2
+        # the inner result is named, not re-evaluated
+        assert out.count('auto&&') >= 1
+
+
 class TestIntegerPathUnchanged:
+    def test_an_integer_reduction_keeps_the_library_form(self):
+        """The fold in ``_emit_amin_amax`` chooses per storage kind too."""
+        @fp.fpy
+        def q(xs) -> fp.Real:
+            with fp.SINT32:
+                return min(xs)
+
+        out = CppCompiler().compile(q, arg_types=[ListType(RealType(fp.SINT32))])
+        assert 'std::min(' in out
+        assert 'signbit' not in out
+
     def test_integers_keep_the_library_form(self):
         """No NaN and no signed zero, so ``std::min``/``max`` is already exact
         and there is nothing to inline."""

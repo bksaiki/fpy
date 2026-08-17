@@ -83,9 +83,7 @@ class TestRefusedContexts:
         assert _compile(target, cast=cast)
 
 
-class TestTheMiscompileItself:
-    """The values that made this a bug rather than a missing feature."""
-
+class TestFormatEqualityIsNotEnough:
     def test_fp16_no_longer_answers_in_fp32(self):
         """``static_cast<float>`` left these four unchanged where `FP16` rounds
         them; refusing is the fix, since the backend cannot round to `FP16`."""
@@ -137,9 +135,19 @@ class TestTheSupportedPathSurvives:
 
 class TestIsNativeCtx:
     def test_it_agrees_with_what_the_op_table_dispatches(self):
-        """The predicate is not a second list to keep in sync -- it reads the
-        same one the op table is built from."""
-        from fpy2.backend.cpp.target import _all_arith_ctxs
+        """Reading the same list the op table is built from makes the two agree
+        by construction; this checks that they *do*, via the table itself.
 
-        for ctx in _all_arith_ctxs():
-            assert is_native_ctx(ctx), ctx
+        ``Add`` stands in for the table: a context it has a signature for is one
+        a cast can perform, and one it does not is not.
+        """
+        from fpy2.ast import Add
+        from fpy2.backend.cpp.target import make_op_table
+
+        sigs = make_op_table().binary[Add]
+        dispatched = {s.out_ctx for s in sigs}
+        for ctx in dispatched:
+            assert is_native_ctx(ctx), f'dispatched but not native: {ctx}'
+        # and the converse, on a context deliberately absent from the table
+        assert not any(_SATURATING == s.out_ctx for s in sigs)
+        assert not is_native_ctx(_SATURATING)

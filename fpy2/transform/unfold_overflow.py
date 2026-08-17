@@ -143,7 +143,7 @@ member covers every bounded fixed-point format.
 """
 
 _Unbounded = MPSFloatContext | MPFixedContext
-"""their counterparts, which state which values are represented and nothing else"""
+"""their counterparts, which state only the representable values"""
 
 
 @dataclass(frozen=True)
@@ -508,7 +508,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
             return StmtBlock([IfStmt(cond, assign(value_literal(over, loc)), rest, loc)])
 
         # the rounding, under the format the bound came out of: with nothing
-        # left to overflow, it only selects a representable value
+        # left to overflow, it only rounds
         t = self.gensym.fresh('t')
         self.used_alias |= self.alias is not None
         rounding = ContextStmt(

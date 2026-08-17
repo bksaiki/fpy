@@ -545,11 +545,11 @@ class AbstractFormat:
         return REAL_FORMAT
 
     def _prec_constrains(self) -> bool:
-        """Does ``prec`` actually thin the representable values inside the bounds?
+        """Does ``prec`` actually thin the values inside the bounds?
 
-        They are spaced ``2**exp`` apart; spanning the bounds at that spacing
-        needs some number of significand bits.  If ``prec`` supplies at least
-        that many it removes nothing, and the value set is *every* such value —
+        Values sit ``2**exp`` apart; spanning the bounds at that spacing needs
+        some number of significand bits.  If ``prec`` supplies at least that many
+        it removes nothing and every such value is representable —
         which is exactly what a fixed-point format describes.  If ``prec`` is
         smaller, values thin out as the magnitude grows, and only a floating-point
         format can say that.

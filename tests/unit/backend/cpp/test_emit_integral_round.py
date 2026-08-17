@@ -155,30 +155,35 @@ class TestModeTable:
 
 
 class TestAssertions:
-    """A context states which values it has no result for; each statement
-    becomes an assertion."""
+    """A context states which values it has no result for; each statement becomes
+    an assertion.  The *bound* assertions live in `test_round_fixed_bound.py`,
+    with the differential that checks which values they admit."""
 
     def test_operand_guard_when_specials_are_refused(self):
         """Neither NaN nor infinity representable and no substitute stated, so
         both collapse to one finiteness test."""
         out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), overflow=ASSERT))
-        assert 'assert(std::isfinite(' in out
+        assert 'assert((std::isfinite(' in out
         assert 'rounding is undefined for this value' in out
 
     def test_only_nan_refused(self):
         """With infinity representable, the guard narrows to NaN alone."""
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), overflow=ASSERT, enable_inf=True))
-        assert 'assert(!std::isnan(' in out
-        assert 'std::isfinite' not in out
+        assert 'assert((!std::isnan(' in out
 
-    def test_no_guard_when_both_are_representable(self):
+    def test_no_operand_guard_when_both_are_representable(self):
         """libm passes NaN and the infinities through unchanged, so a context
-        that admits them needs nothing said."""
+        admitting both needs no guard on its operand.
+
+        The bound assertion still has to *exempt* them: no magnitude test admits
+        an infinity, and this context represents one.
+        """
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), overflow=ASSERT,
             enable_nan=True, enable_inf=True))
-        assert 'isfinite' not in out and 'isnan' not in out
+        assert 'rounding is undefined for this value' not in out
+        assert '!std::isfinite(x) || std::fabs(' in out
 
     def test_bound_assertion_for_overflow_assert(self):
         out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=11, c=1), overflow=ASSERT))
@@ -197,40 +202,6 @@ class TestAssertions:
         assert '-128' in out and '127' in out
         assert 'overflow occurred so rounding is undefined' in out
 
-    @pytest.mark.parametrize('overflow', [
-        fp.OverflowMode.SATURATE, fp.OverflowMode.WRAP, fp.OverflowMode.OVERFLOW,
-    ], ids=['saturate', 'wrap', 'overflow'])
-    @pytest.mark.parametrize('neg_zero', [True, False], ids=['float', 'integer'])
-    def test_an_edge_rule_is_refused_not_ignored(self, overflow, neg_zero):
-        """An edge *rule* is behavior, and this lowering implements none of it.
-
-        Emitting the rounding without it is what made a context bounded at 100
-        return 120 where `SATURATE` says 100 and `WRAP` says -81.  ``ASSERT``
-        alone is a *claim* that the edge is never reached, which an assertion
-        states exactly.  Both storage paths are checked: the bound is narrower
-        than either type, so neither the range nor the wrapping of `int16_t`
-        reproduces the rule.
-        """
-        with pytest.raises(CppCompileError, match='has no C'):
-            _emit(MPBFixedContext(
-                -1, fp.RealFloat(exp=11, c=1), rm=RM.RTZ, overflow=overflow,
-                enable_neg_zero=neg_zero))
-
-    def test_a_native_integer_context_asserts_only_finiteness(self):
-        """`SINT8`'s format *is* ``int8_t``'s, so the type's own range and
-        wrapping are the context's and its *bound* needs nothing said -- verified
-        against the interpreter for 128, 200, 255, 256 and -129.
-
-        Its specials still do: converting a NaN or an infinity to an integer type
-        is undefined, and gives ``INT_MIN`` on x86-64 where the interpreter
-        raises.
-        """
-        out = _emit(fp.SINT8)
-        assert 'static_cast<int8_t>' in out
-        assert out.count('assert(') == 1
-        assert 'std::isfinite' in out
-        assert 'overflow occurred' not in out
-
 
 class TestDeclines:
     """Shapes the libm lowering must not claim."""
@@ -239,28 +210,9 @@ class TestDeclines:
         """A position other than zero rounds to a multiple of ``2 ** n``, which
         needs the operand scaled first — `rescale_fixed`'s job, not the
         backend's, since doing it here would reintroduce an inexact ``exp2``."""
-        with pytest.raises(CppCompileError, match='position zero'):
+        # float storage, so `_validate_context_rm` names it first
+        with pytest.raises(CppCompileError, match='digits at position zero'):
             _emit(MPBFixedContext(-4, fp.RealFloat(exp=10, c=1), overflow=ASSERT))
-
-    def test_integer_storage_rounds_by_the_cast(self):
-        """Without a signed zero the format lands in an integer type, where the
-        cast *is* the rounding -- C++ integer conversion is ``RTZ``.
-
-        The bound still has to be asserted, since ``int16_t`` is wider than the
-        format: this emitted a bare cast and returned 120 where the interpreter
-        raised.  It is asserted on the *rounded* value, which also keeps the
-        conversion in range -- an operand past ``int16_t`` would be undefined.
-        """
-        out = _emit(MPBFixedContext(
-            -1, fp.RealFloat(exp=10, c=1), rm=RM.RTZ, overflow=ASSERT,
-            enable_neg_zero=False))
-        assert 'static_cast<int16_t>' in out
-        assert 'assert((std::fabs(std::trunc(' in out
-        assert 'overflow occurred' in out
-        # the cast does the rounding; `trunc` appears only inside the assertion
-        assert not any(
-            'std::trunc' in ln and 'assert' not in ln for ln in out.splitlines()
-        )
 
     def test_signed_zero_decides_the_lowering(self):
         """The two lowerings want opposite answers: libm keeps a signed zero

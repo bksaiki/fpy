@@ -50,8 +50,8 @@ def unfold_overflow(
         Also test the operand before rounding it, so nothing certain to
         overflow is rounded at all. The threshold is the format's ``infval``,
         the next value above ``maxval`` — not ``maxval`` itself, which a value
-        may exceed and still round back to a representable value. This test is sound but
-        not complete, so the one after the rounding stays either way.
+        may exceed and still round back to a representable value. This test is
+        sound but not complete, so the one after the rounding stays either way.
 
     Returns
     -------

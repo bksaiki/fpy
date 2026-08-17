@@ -87,8 +87,12 @@ class TestLiteralArgumentsStateTheirType:
 
         out = _emit(f, 1)
         assert 'static_cast<float>(1.5)' in out, out
-        # nothing in the expression is a `double`
-        assert 'double' not in out, out
+        # the inline compare-and-select, not a call that would deduce a type
+        assert 'std::signbit(' in out, out
+        assert 'fpy::' not in out, out
+        # and the conditional itself carries no `double`
+        (line,) = [ln for ln in out.splitlines() if 'std::signbit(' in ln]
+        assert 'double' not in line, line
 
     def test_min_max_integer_path(self):
         """The integer path keeps ``std::max``, and is the one place the failure

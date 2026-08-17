@@ -62,6 +62,11 @@ _INPUTS = [
     0.0, -0.0, 1.0, -1.0, 50.0, 99.5, 100.0, 100.7, -100.7, 101.0,
     127.0, 128.0, 200.0, 255.0, 256.0, -128.0, -129.0, 300.0,
     65535.0, 65536.0, 1e300, float('inf'), float('-inf'), float('nan'),
+    # halves and odd integers separate the parity modes; the minimum subnormal
+    # is where `RTO` returned +1 for a negative input, because halving the
+    # operand underflowed and `floor` lost the sign
+    0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 3.5, -3.5, 3.0, -3.0,
+    5e-324, -5e-324, 2.0 ** 52, 2.0 ** 53, -(2.0 ** 53),
 ]
 
 
@@ -83,6 +88,16 @@ class TestAgreesWithTheInterpreter:
         pytest.param(_INT_STORAGE, id='int_storage'),
         pytest.param(_FLOAT_STORAGE, id='float_storage'),
         pytest.param(_ASYMMETRIC, id='asymmetric_assert'),
+        # native integer contexts: the C++ conversion is the whole lowering, so
+        # the wrapping the docstrings claim is checked rather than assumed
+        pytest.param(fp.SINT8, id='sint8'),
+        pytest.param(fp.UINT16, id='uint16'),
+    ] + [
+        # every mode, so a composed spelling is diffed and not just inspected
+        pytest.param(
+            fp.MPBFixedContext(-1, fp.RealFloat(exp=53, c=1), rm=rm, overflow=A),
+            id=f'mode_{rm.name.lower()}')
+        for rm in fp.RoundingMode
     ])
     def test_value_for_value(self, ctx):
         """Same value where both succeed, and an abort exactly where the
@@ -117,9 +132,10 @@ class TestAgreesWithTheInterpreter:
         assert not bad, '; '.join(bad[:6])
 
 
-class TestTheOriginalHole:
+class TestBoundAndSpecialsAreAsserted:
     def test_the_bound_is_asserted_in_integer_storage(self):
-        """This emitted only ``int8_t y = static_cast<int8_t>(v);``."""
+        """Integer storage is wider than the format, so the bound needs its own
+        assertion; the cast alone wraps at the type's range."""
         out = _emit(_INT_STORAGE)
         assert 'overflow occurred' in out
         # 120 is representable in `int8_t` but not in this context
@@ -155,15 +171,78 @@ class TestEdgeRulesAreRefused:
             _emit(ctx)
 
 
+class TestOperandTypesAndSpecials:
+    """Cases the bound test has to spell differently, all found in review."""
+
+    def test_an_unsigned_operand_gets_no_negative_literal(self):
+        """``-100 <= v`` with ``v`` unsigned converts the literal to a huge
+        unsigned, making the test false for *every* input.  An unsigned value
+        cannot go below zero, so the lower bound is already met."""
+        out = _emit(_INT_STORAGE, arg_ctx=fp.UINT32)
+        assert '-100' not in out
+        assert 'v <= 100' in out
+
+    def test_a_signed_operand_keeps_both_comparisons(self):
+        out = _emit(_INT_STORAGE, arg_ctx=fp.SINT32)
+        assert '-100 <= v && v <= 100' in out
+
+    def test_a_representable_special_is_exempt_from_the_bound(self):
+        """No magnitude test admits an infinity, so a context that represents one
+        would abort on a value it can hold.
+
+        The exemption tests the *operand*: a finite value too large for the
+        storage narrows to an infinity on the way in, and that one does overflow.
+        """
+        ctx = fp.MPBFixedContext(
+            -1, fp.RealFloat(exp=0, c=100), rm=fp.RM.RTZ, overflow=A,
+            enable_nan=True, enable_inf=True)
+        out = _emit(ctx)
+        assert '!std::isfinite(v) || std::fabs(' in out
+
+
+class TestRefusalsOnTheIntegerStoragePath:
+    """``_validate_context_rm`` checks these only for float storage, so the
+    integer path needs its own -- otherwise a bare cast drops them."""
+
+    def test_a_non_zero_position_is_refused(self):
+        ctx = fp.MPBFixedContext(3, fp.RealFloat(exp=8, c=1), rm=fp.RM.RTZ,
+                                 overflow=A, enable_neg_zero=False)
+        with pytest.raises(CppCompileError, match='digits at position zero'):
+            _emit(ctx)
+
+    def test_stochastic_rounding_is_refused(self):
+        ctx = fp.MPBFixedContext(-1, fp.RealFloat(exp=8, c=1), rm=fp.RM.RTZ,
+                                 overflow=A, enable_neg_zero=False,
+                                 num_randbits=4)
+        with pytest.raises(CppCompileError, match='draws random bits'):
+            _emit(ctx)
+
+    @pytest.mark.parametrize('kw, what', [
+        ({'nan_value': fp.Float(x=fp.RealFloat(exp=0, c=7), ctx=fp.REAL)}, 'nan'),
+        ({'inf_value': fp.Float(x=fp.RealFloat(exp=0, c=7), ctx=fp.REAL)}, 'inf'),
+    ], ids=['nan_value', 'inf_value'])
+    def test_a_substituted_special_is_refused(self, kw, what):
+        """A substitute is a *value* the rounding must produce, and neither the
+        libm form nor the cast produces one.  Dropping it aborted on a NaN where
+        the interpreter returns 7."""
+        ctx = fp.MPBFixedContext(-1, fp.RealFloat(exp=8, c=1), rm=fp.RM.RTZ,
+                                 overflow=A, enable_neg_zero=False, **kw)
+        with pytest.raises(CppCompileError, match='substitutes a value'):
+            _emit(ctx)
+
+
 class TestNativeContextsAreUntouched:
     @pytest.mark.parametrize('ctx, ty', [
         pytest.param(fp.SINT8, 'int8_t', id='sint8'),
         pytest.param(fp.UINT16, 'uint16_t', id='uint16'),
     ])
     def test_a_native_integer_context_asserts_no_bound(self, ctx, ty):
-        """Its whole context matches what the cast does, wrapping included --
-        `SINT8` maps 128 to -128 and -129 to 127 in both languages -- so there is
-        no bound to state.  Only the specials are guarded."""
+        """Its whole context matches what the cast does, wrapping included, so
+        there is no bound to state -- only the specials are guarded.
+
+        The wrapping itself is checked by ``test_value_for_value``, which
+        includes both of these contexts.
+        """
         out = _emit(ctx)
         assert f'static_cast<{ty}>' in out
         assert 'overflow occurred' not in out

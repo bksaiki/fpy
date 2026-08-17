@@ -2,8 +2,8 @@
 Express floating-point rounding as fixed-point rounding.
 
 A float format rounds at a digit position that depends on the value: its
-representable values thin out as the magnitude grows.  For a format with precision ``P``, subnormal position
-``EXP``, largest exponent ``EMAX``, and bound ``B``,
+values thin out as the magnitude grows.  For a format with precision ``P``,
+subnormal position ``EXP``, largest exponent ``EMAX``, and bound ``B``,
 
 .. math::
 
@@ -46,8 +46,8 @@ Below ``emin`` the format is fixed-point already: every value there rounds at
 the exponent.  The normal branch needs no lower clamp because of it.
 
 The upper clamp keeps the context constructible and the format shiftable:
-``B`` is representable at every position up to ``EMAX - P + 1`` and stops being
-so immediately above.  Anything above that exceeds ``B`` and overflows, which
+``B`` is representable at every position up to ``EMAX - P + 1`` and at none
+above it.  Anything above that exceeds ``B`` and overflows, which
 rounding at the clamped position against ``B`` produces.
 
 ``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch
