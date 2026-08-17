@@ -11,6 +11,7 @@ from .iter_elim import elim_iter
 from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
 from .mono import monomorphize
+from .neg_zero_unfold import unfold_neg_zero
 from .overflow_unfold import unfold_overflow
 from .reduce_fusion import fuse
 from .round_elim import elim_round
@@ -28,6 +29,7 @@ __all__ = [
     'rescale_fixed',
     'simplify',
     'split',
+    'unfold_neg_zero',
     'unfold_overflow',
     'unroll_for',
     'unroll_while',
