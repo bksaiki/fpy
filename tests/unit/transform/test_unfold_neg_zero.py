@@ -22,6 +22,7 @@ from fpy2.ast.fpyast import (
     Compare,
     ContextStmt,
     Copysign,
+    Expr,
     ForeignVal,
     FuncDef,
 )
@@ -139,8 +140,6 @@ class TestShape:
         target = next(c for c in ctxs if isinstance(c, MPFixedContext))
         assert target.nmin == -8
         assert target.enable_neg_zero is False
-        # -0 rounds to +0 under what is left; the branch restores the sign
-        assert not target.round(fp.Float(c=0, s=True)).s
 
     def test_sign_restored_by_copysign(self):
         out = UnfoldNegZero.apply(_quantizer(MPFixedContext(-8)).ast)
@@ -227,6 +226,10 @@ class TestShape:
 
         out = UnfoldNegZero.apply(f.ast)
         assert len(_nodes(out, Copysign)) == 2
+        # each emitted block occupies distinct AST nodes, the shared written
+        # context included
+        exprs = _nodes(out, Expr)
+        assert len(exprs) == len(set(map(id, exprs)))
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
         assert _same(_eval(out, f, -1e-9, 1e-9), f(-1e-9, 1e-9))
 

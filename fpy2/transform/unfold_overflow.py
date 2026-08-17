@@ -108,7 +108,6 @@ from ..ast.fpyast import (
 from ..env import fpy_alias
 from ..number import (
     REAL,
-    Context,
     EFloatContext,
     Float,
     MPBFixedContext,
@@ -121,12 +120,14 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    agrees,
     attribute,
     check_where,
     number_literal,
     same_value,
     shift,
     sign_choice,
+    try_round,
     value_literal,
 )
 
@@ -256,7 +257,7 @@ class _Prober:
             self.unbounded, maxval, neg_maxval, infval, neg_infval,
             over_pos, over_neg,
             drop_neg_zero=self.unbounded.round(zero).s and not ctx.round(zero).s,
-            check_finite=_rounded(self.unbounded, _POS_INF) is None,
+            check_finite=try_round(self.unbounded, _POS_INF) is None,
             specials=(),
         )
         # which specials need a branch depends on what the rest of `src` makes
@@ -296,9 +297,9 @@ class _Prober:
         """
         out: list[tuple[Float, Float] | None] = []
         for pos, neg in ((_NAN, Float(x=_NAN, s=True)), (_POS_INF, _NEG_INF)):
-            want = (_rounded(self.ctx, pos), _rounded(self.ctx, neg))
+            want = (try_round(self.ctx, pos), try_round(self.ctx, neg))
             got = (self._emitted(pos, src), self._emitted(neg, src))
-            if all(_agrees(a, b) for a, b in zip(want, got)):
+            if all(agrees(a, b) for a, b in zip(want, got)):
                 out.append(None)
             elif want[0] is None or want[1] is None:
                 # the source rejects it where the rewrite would not, and a
@@ -319,7 +320,7 @@ class _Prober:
             if _holds(x, CompareOp.LE, src.neg_infval):
                 return src.over_neg
 
-        t = _rounded(self.unbounded, x)
+        t = try_round(self.unbounded, x)
         if t is None:
             return None
         if _holds(t, CompareOp.GT, src.maxval):
@@ -329,23 +330,6 @@ class _Prober:
         if src.drop_neg_zero and not t.is_nar() and t.is_zero():
             return Float(c=0)
         return t
-
-
-def _rounded(ctx: Context, x: Float) -> Float | None:
-    """`x` under `ctx`, or `None` where the format has no value for it.
-
-    A fixed-point format commonly rejects NaN and the infinities outright."""
-    try:
-        return ctx.round(x)
-    except ValueError:
-        return None
-
-
-def _agrees(a: Float | None, b: Float | None) -> bool:
-    """Whether two rounding outcomes match, a refusal counting as an outcome."""
-    if a is None or b is None:
-        return a is None and b is None
-    return same_value(a, b)
 
 
 def _unbounded(ctx: _BoundedCtx) -> _Unbounded | None:

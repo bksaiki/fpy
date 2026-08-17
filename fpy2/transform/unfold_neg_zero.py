@@ -24,12 +24,6 @@ plus a sign restoration:
 The sign comes from the operand, which is what the format would have kept.
 ``fp.copysign`` under ``fp.REAL`` is exact for every value.
 
-C++ has no integer type with a signed zero, so no integer rung on the storage
-ladder admits one: this one flag decides whether a rounding reaches integer
-storage.  Anything targeting integer arithmetic — fixed-point hardware, an
-integer-only DSP, a bit-exact reference in ``int16_t`` — needs the sign out of
-the format.
-
 The claim behind the rewrite is that ``C`` and ``C_`` agree everywhere except
 on the sign of a zero result, and that a zero result carries the operand's
 sign.  Both are checked against the source rather than assumed, over the
@@ -74,16 +68,16 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
+from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     REAL,
-    Context,
     Float,
     MPBFixedContext,
     MPFixedContext,
     RealFloat,
 )
 from ..utils import CompareOp, Gensym
-from .utils import BlockRewriter, check_where, same_value, shift
+from .utils import BlockRewriter, agrees, check_where, shift, try_round
 
 _NAN = Float(isnan=True)
 
@@ -105,21 +99,6 @@ class _Source:
     dropped: _FixedCtx
     """the same format with the signed zero dropped, which the block rounds
     under instead"""
-
-
-def _rounded(ctx: Context, x: Float | RealFloat) -> Float | None:
-    """`x` under `ctx`, or `None` where the format has no value for it."""
-    try:
-        return ctx.round(x)
-    except (ValueError, OverflowError):
-        return None
-
-
-def _agrees(a: Float | None, b: Float | None) -> bool:
-    """Whether two rounding outcomes match, a refusal counting as an outcome."""
-    if a is None or b is None:
-        return a is None and b is None
-    return same_value(a, b)
 
 
 def _without_neg_zero(ctx: _FixedCtx) -> _FixedCtx | None:
@@ -181,7 +160,7 @@ def _emitted(dropped: _FixedCtx, x: Float | RealFloat) -> Float | None:
     """What the generated code yields for `x`: the rounding under the
     format without the signed zero, then `copysign` from the operand where
     the result is zero."""
-    t = _rounded(dropped, x)
+    t = try_round(dropped, x)
     if t is None:
         return None
     if not t.is_nar() and t.is_zero():
@@ -192,24 +171,29 @@ def _emitted(dropped: _FixedCtx, x: Float | RealFloat) -> Float | None:
 def _reproduced(ctx: _FixedCtx, dropped: _FixedCtx) -> bool:
     """Whether the emitted program agrees with `ctx` on every probe."""
     return all(
-        _agrees(_rounded(ctx, x), _emitted(dropped, x)) for x in _probes(ctx)
+        agrees(try_round(ctx, x), _emitted(dropped, x)) for x in _probes(ctx)
     )
 
 
 def _ctx_expr(e: Expr, src: _Source) -> Expr:
     """
-    The dropped context as an expression.  A constructor call keeps its
-    written form with only the flag stated, so the rewritten program reads
-    like the original; anything else — the rebuilt context itself.
+    The dropped context as an expression, in fresh nodes.  A constructor call
+    keeps its written form with only the flag stated, so the rewritten
+    program reads like the original; anything else — the rebuilt context
+    itself.
     """
     if (
         isinstance(e, Call) and e.fn is type(src.ctx)
         and type(src.dropped) is type(src.ctx)
     ):
+        # a structurally-fresh copy: each emitted block must occupy distinct
+        # AST nodes, and the source expression stays in place under `where`
+        call = DefaultTransformVisitor()._visit_expr(e, None)
+        assert isinstance(call, Call)
         # the flag is keyword-only in both constructors
-        kwargs = tuple(kv for kv in e.kwargs if kv[0] != 'enable_neg_zero')
+        kwargs = tuple(kv for kv in call.kwargs if kv[0] != 'enable_neg_zero')
         kwargs += (('enable_neg_zero', BoolVal(False, e.loc)),)
-        return Call(e.func, e.fn, e.args, kwargs, e.loc)
+        return Call(call.func, call.fn, call.args, kwargs, call.loc)
     return ForeignVal(src.dropped, e.loc)
 
 
@@ -270,8 +254,7 @@ class _UnfoldNegZeroInstance(BlockRewriter):
         return _Source(ctx, dropped)
 
     def _unfold(
-        self, e: Round, target: NamedId, loc: Location | None, src: _Source,
-        ctx_expr: Expr,
+        self, e: Round, target: NamedId, loc: Location | None, ctx_expr: Expr,
     ) -> Stmt:
         """`target = round(v)` as a one-zero rounding plus a sign restoration."""
         assert isinstance(e.arg, Var)
@@ -314,12 +297,12 @@ class _UnfoldNegZeroInstance(BlockRewriter):
             ctx_expr = _ctx_expr(stmt.ctx, src)
             if isinstance(s, Assign):
                 assert isinstance(s.expr, Round) and isinstance(s.target, NamedId)
-                stmts.append(self._unfold(s.expr, s.target, s.loc, src, ctx_expr))
+                stmts.append(self._unfold(s.expr, s.target, s.loc, ctx_expr))
             else:
                 # a returned round lands in a temporary, which the return names
                 assert isinstance(s, ReturnStmt) and isinstance(s.expr, Round)
                 out = self.gensym.fresh('t')
-                stmts.append(self._unfold(s.expr, out, s.loc, src, ctx_expr))
+                stmts.append(self._unfold(s.expr, out, s.loc, ctx_expr))
                 stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
         return stmts
 

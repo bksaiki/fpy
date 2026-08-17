@@ -35,7 +35,7 @@ from ..ast.fpyast import (
     Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
-from ..number import INTEGER, Float, RealFloat
+from ..number import INTEGER, Context, Float, RealFloat
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -127,6 +127,23 @@ def same_value(a: Float, b: Float) -> bool:
     if a.is_nar():
         return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
     return not b.is_nar() and a.as_real() == b.as_real() and a.s == b.s
+
+
+def try_round(ctx: Context, x: Float | RealFloat) -> Float | None:
+    """`x` under `ctx`, or `None` where the format has no value for it.
+
+    A fixed-point format commonly rejects NaN and the infinities outright."""
+    try:
+        return ctx.round(x)
+    except (ValueError, OverflowError):
+        return None
+
+
+def agrees(a: Float | None, b: Float | None) -> bool:
+    """Whether two rounding outcomes match, a refusal counting as an outcome."""
+    if a is None or b is None:
+        return a is None and b is None
+    return same_value(a, b)
 
 
 def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> Expr:
