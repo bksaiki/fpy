@@ -97,6 +97,7 @@ from ...ast.fpyast import (
     Min,
     Mul,
     NamedId,
+    NamedUnaryOp,
     NaryOp,
     Not,
     NullaryOp,
@@ -2047,8 +2048,8 @@ class CppEmitter(Visitor):
         if not isinstance(fmt, AbstractableFormat):
             return None
         af = AbstractFormat.from_format(fmt)
-        # a grid whose finest digit sits at or above position zero holds
-        # integers only
+        # a format whose finest digit sits at or above position zero has
+        # only integers among its representable values
         if not isinstance(af.exp, int) or af.exp < 0:
             return None
         bounds = (af.pos_bound, af.neg_bound)
@@ -2066,7 +2067,7 @@ class CppEmitter(Visitor):
         rounds twice and rests on ``std::pow`` returning ``2 ** n`` exactly,
         which C11 F.10 does not require of any math function and IEEE 754 only
         *recommends* for ``exp2`` -- so a conforming libm within one ulp would
-        put the scale on the wrong grid.  This is the shape `rescale_fixed`
+        make the scale unrepresentable.  This is the shape `rescale_fixed`
         emits for every rounding it moves.
 
         Because ``ldexp`` computes the *exact* product, it stands in for
@@ -2683,7 +2684,7 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return result
 
-    def _require_cast_is_round(self, e) -> None:
+    def _require_cast_is_round(self, e: NamedUnaryOp) -> None:
         """Refuse a `Round`/`Cast` whose context a ``static_cast`` cannot perform.
 
         Storage is chosen to *contain* a format, not to equal it, so a cast into
@@ -2737,6 +2738,12 @@ class CppEmitter(Visitor):
         # `Round` has to pass before the equality below means anything.
         self._require_cast_is_round(e)
         arg_ty, target_ty = self._scalar_cast_types(e)
+        active = self._active_ctx_for(e)
+        if isinstance(active, MPFixedContext | MPBFixedContext):
+            # storage *contains* such a context rather than equalling it, so the
+            # roundtrip below cannot see which values it represents, nor its
+            # bound
+            arg = self._assert_fixed_exact(active, arg, arg_ty, e)
         # Same-type is a guaranteed no-op, no assert.
         if arg_ty == target_ty:
             return arg
@@ -2760,6 +2767,58 @@ class CppEmitter(Visitor):
             check = f'{arg} == {tmp}'
         self.writer.add_line(f'assert({check});')
         return tmp
+
+    def _assert_fixed_exact(
+        self,
+        ctx: MPFixedContext | MPBFixedContext,
+        arg: str,
+        arg_ty: CppScalar | None,
+        e: NamedUnaryOp,
+    ) -> str:
+        """Assert *arg* is representable in the fixed-point context *ctx*.
+
+        `fp.cast` claims exactness *in the context*, and the storage roundtrip in
+        the caller only claims it in the storage -- which contains the context
+        rather than equalling it.  Under a context bounded at 1024 at position
+        zero, both `cast(2048.0)` and `cast(0.5)` raise in the interpreter and
+        both satisfy that roundtrip.
+
+        Returns the operand, bound to a temporary where the assertions need to
+        name it more than once.
+        """
+        # an integer operand is already one of a position-zero context's
+        # representable values, and can be neither a NaN nor an infinity, so only
+        # the bound is in question
+        integral = arg_ty is not None and arg_ty.is_integer()
+        if integral and not isinstance(ctx, MPBFixedContext):
+            return arg
+        if not integral and self._integral_value_test(ctx, 'x') is None:
+            raise CppEmitError(
+                f'`fp.cast` under `{ctx}` cannot be checked: its digits sit at '
+                f'position {ctx.nmin + 1}, and scaling the operand to test '
+                'representability would round it first.  Run '
+                '`fpy2.strategies.rescale_fixed` to move them to zero.',
+                at=e,
+            )
+
+        operand = self._bind_operand(arg)
+
+        def say(test: str, why: str) -> None:
+            self.writer.add_line(
+                f'assert(({test}) && "fpy: cast is not exact: {why}");'
+            )
+
+        if not integral:
+            guard = self._undefined_guard(ctx, operand)
+            if guard is not None:
+                say(guard, 'a NaN or an infinity is not representable here')
+            integral_test = self._integral_value_test(ctx, operand)
+            assert integral_test is not None  # checked above
+            say(integral_test, 'this context represents only integers')
+        if isinstance(ctx, MPBFixedContext):
+            say(self._bound_test(ctx, operand, at=e),
+                "value is outside the context's bound")
+        return operand
 
     def _fold_rounded_literal(self, e) -> str | None:
         """``Round(<literal>)`` as a C++ literal, or ``None`` to emit a cast.
@@ -2869,7 +2928,8 @@ class CppEmitter(Visitor):
         if not isinstance(active, MPFixedContext | MPBFixedContext):
             return None
         # position zero: `nmin` is the last unrepresentable digit, so -1 is the
-        # integer grid.  Any other position needs the operand scaled first,
+        # case whose representable values are the integers.  Any other position
+        # needs the operand scaled first,
         # which is `rescale_fixed`'s job rather than the backend's.
         if active.nmin != -1 or active.num_randbits != 0:
             return None
@@ -2901,22 +2961,46 @@ class CppEmitter(Visitor):
             f'{target_ty.format()} {out} = {fn}({operand});'
         )
         if isinstance(active, MPBFixedContext) and active.overflow is OverflowMode.ASSERT:
-            hi = active.maxval().as_real().as_rational()
-            lo = active.maxval(s=True).as_real().as_rational()
-            if lo == -hi:
-                test = f'std::fabs({out}) <= {self._emit_numeric_literal(hi, at=e)}'
-            else:
-                # the two bounds are independent -- a two's-complement grid runs
-                # to -128 but only to 127 -- and `fabs` cannot say that
-                test = (
-                    f'{self._emit_numeric_literal(lo, at=e)} <= {out} && '
-                    f'{out} <= {self._emit_numeric_literal(hi, at=e)}'
-                )
             self.writer.add_line(
-                f'assert(({test}) '
+                f'assert(({self._bound_test(active, out, at=e)}) '
                 f'&& "fpy: overflow occurred so rounding is undefined");'
             )
         return out
+
+    def _bound_test(
+        self, ctx: MPBFixedContext, operand: str, *, at: Expr,
+    ) -> str:
+        """A C++ test that *operand* lies within `ctx`'s bounds.
+
+        Reads the two bounds directly rather than through ``maxval(s=True)``,
+        which refuses an unsigned context instead of answering zero.
+        """
+        hi = ctx.pos_maxval.as_rational()
+        lo = ctx.neg_maxval.as_rational()
+        if lo == -hi:
+            return f'std::fabs({operand}) <= {self._emit_numeric_literal(hi, at=at)}'
+        # the two bounds are independent -- a two's-complement format runs to
+        # -128 but only to 127 -- and `fabs` cannot say that
+        return (
+            f'{self._emit_numeric_literal(lo, at=at)} <= {operand} && '
+            f'{operand} <= {self._emit_numeric_literal(hi, at=at)}'
+        )
+
+    def _integral_value_test(
+        self, ctx: MPFixedContext | MPBFixedContext, operand: str,
+    ) -> str | None:
+        """A C++ test that *operand* is one of `ctx`'s representable values,
+        ignoring its bounds, or `None` if that cannot be expressed.
+
+        Only for a fixed-point context at position zero, whose representable
+        values are the integers -- ``nmin`` is the last unrepresentable digit, so
+        ``-1`` is that case.  Any other position would need the operand scaled
+        first, and scaling it here would round before the test could read it;
+        `rescale_fixed` is what normalizes the position.
+        """
+        if ctx.nmin != -1:
+            return None
+        return f'{operand} == std::trunc({operand})'
 
     def _visit_round_at(self, e, ctx):
         self._unsupported('RoundAt', at=e)
