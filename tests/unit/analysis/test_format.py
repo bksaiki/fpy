@@ -94,7 +94,7 @@ class TestAbstractFormat():
         print(list(generate(A2.prec, Fraction(2) ** A2.exp, A2.bound)))
 
     # `has_neg_zero`: the one special-value flag whose value sits *inside* the
-    # finite grid.  `pos_bound >= 0 >= neg_bound` holds by convention and the
+    # finite range.  `pos_bound >= 0 >= neg_bound` holds by convention and the
     # bounds are compared by magnitude, so conditions 1-3 of containment cannot
     # tell `+0.0` from `-0.0`; only this flag can.
 
@@ -210,7 +210,7 @@ class TestAbstractFormat():
     def test_sub_derives_neg_zero_from_the_left_operand(self):
         """`a - b` is `a + (-b)`, so by the sum rule both addends must be able to
         be `-0.0`: `a` directly, and `-b` whenever `b` can be `+0.0` — which
-        every grid can.  So only `a` matters.  Confirmed against the
+        every format can.  So only `a` matters.  Confirmed against the
         interpreter: `(-0)-(+0)` is `-0.0`, while `(+0)-(+0)`, `(-0)-(-0)` and
         `1-1` are `+0.0`."""
         f32 = AbstractFormat.from_format(fp.FP32.format())
@@ -221,7 +221,7 @@ class TestAbstractFormat():
         assert not (i8 - i8).has_neg_zero
 
     def test_neg_carries_neg_zero_over(self):
-        """Negation maps `+0.0` to `-0.0`, and every grid contains a `+0.0` — so
+        """Negation maps `+0.0` to `-0.0`, and every format represents a `+0.0` — so
         the image holds one exactly when the number system does.
 
         Checked against the interpreter: `-(+0)` is `-0.0` under FP64, while
@@ -235,7 +235,7 @@ class TestAbstractFormat():
     def test_mul_derives_neg_zero_as_a_disjunction(self):
         """A zero product takes the XOR of the operand signs, so a `-0.0` needs a
         sign disagreement — and one is always available once *either* system has
-        a signed zero, since every grid contains a `+0.0` and negative times
+        a signed zero, since every format represents a `+0.0` and negative times
         that zero is `-0.0`.
 
         Checked against the interpreter: `(-1)*(+0)`, `(+0)*(-1)` and `(-0)*(+2)`

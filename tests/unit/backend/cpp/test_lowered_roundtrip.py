@@ -76,7 +76,7 @@ def _inputs() -> list[fp.Float]:
         fp.Float(c=0), fp.Float(c=0, s=True), fp.Float(isnan=True),
         fp.Float(isinf=True), fp.Float(isinf=True, s=True),
     ]
-    grid = [
+    points = [
         (5, 2047),          # FP16 maxval
         (5, 2048),          # just past it
         (4, 4095),          # the RNE tie above maxval
@@ -86,7 +86,7 @@ def _inputs() -> list[fp.Float]:
         (fp.FP16.emin, 1), (fp.FP16.emin - 1, 3),
         (0, 1), (3, 3), (-4, 11), (-30, 1), (10, 1365),
     ]
-    for exp, c in grid:
+    for exp, c in points:
         for s in (False, True):
             out.append(fp.FP32.round(RealFloat(s=s, exp=exp, c=c)))
     return out
@@ -147,6 +147,9 @@ class TestLoweredRoundtrip:
         fp.IEEEContext(5, 16, fp.RoundingMode.RTP),
         fp.IEEEContext(5, 16, fp.RoundingMode.RTN),
         fp.IEEEContext(5, 16, fp.RoundingMode.RNA),
+        fp.IEEEContext(5, 16, fp.RoundingMode.RAZ),
+        fp.IEEEContext(5, 16, fp.RoundingMode.RTO),
+        fp.IEEEContext(5, 16, fp.RoundingMode.RTE),
         fp.IEEEContext(4, 8),
         fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
         fp.MX_E5M2,
@@ -154,6 +157,7 @@ class TestLoweredRoundtrip:
         fp.MX_E2M1,
         EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
     ], ids=['fp16_rne', 'fp16_rtz', 'fp16_rtp', 'fp16_rtn', 'fp16_rna',
+            'fp16_raz', 'fp16_rto', 'fp16_rte',
             'ieee_4_8', 'ieee_saturating', 'e5m2', 'e4m3', 'e2m1', 'neg_zero'])
     def test_matches_the_interpreter(self, target):
         _run(target)

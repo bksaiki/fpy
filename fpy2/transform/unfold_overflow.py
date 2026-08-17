@@ -1,8 +1,8 @@
 """
 Unfold a rounding context's overflow into program text.
 
-A bounded format decides two things at once: where its grid lies, and what
-becomes of a value too large for it.  IEEE 754 defines the second in terms of
+A bounded format decides two things at once: which values it represents, and
+what becomes of a value too large for it.  IEEE 754 defines the second in terms of
 the first — round with an unbounded exponent range, then see whether the result
 fits.  For a bounded context ``C`` with unbounded counterpart ``U``, and a
 finite ``x``,
@@ -143,7 +143,7 @@ member covers every bounded fixed-point format.
 """
 
 _Unbounded = MPSFloatContext | MPFixedContext
-"""their counterparts, which state a grid and nothing else"""
+"""their counterparts, which state only the representable values"""
 
 
 @dataclass(frozen=True)
@@ -350,7 +350,8 @@ def _agrees(a: Float | None, b: Float | None) -> bool:
 
 def _unbounded(ctx: _BoundedCtx) -> _Unbounded | None:
     """
-    `ctx` with its bound removed: the same grid, with nothing to overflow.
+    `ctx` with its bound removed: the same representable values, with nothing to
+    overflow.
 
     A float format keeps its precision and subnormal floor; a fixed-point one
     keeps its digit position.  `None` if the result will not construct.
@@ -507,7 +508,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
             return StmtBlock([IfStmt(cond, assign(value_literal(over, loc)), rest, loc)])
 
         # the rounding, under the format the bound came out of: with nothing
-        # left to overflow, it is the grid and no more
+        # left to overflow, it only rounds
         t = self.gensym.fresh('t')
         self.used_alias |= self.alias is not None
         rounding = ContextStmt(

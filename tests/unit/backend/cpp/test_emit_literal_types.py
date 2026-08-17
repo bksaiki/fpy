@@ -29,9 +29,9 @@ from fpy2.types import RealType
 _R32 = RealType(fp.FP32)
 
 
-def _emit(func, nargs: int) -> str:
+def _emit(func, nargs: int, ctx=fp.FP32) -> str:
     return CppCompiler(optimize=False).compile(
-        func, ctx=fp.FP32, arg_types=[_R32] * nargs,
+        func, ctx=ctx, arg_types=[RealType(ctx)] * nargs,
     )
 
 
@@ -75,20 +75,36 @@ class TestLiteralArgumentsStateTheirType:
         out = _emit(f, 2)
         assert 'std::fma(y, z, static_cast<float>(0.25))' in out, out
 
-    def test_min_max_template(self):
-        """``_emit_min_max``, which emits our own ``fpy::max`` template.
-
-        The only path where the failure is a *compile error* rather than a
-        silent choice: template deduction sees ``float`` and ``double`` and
-        reports conflicting types for ``T``.
-        """
+    def test_min_max_float_path(self):
+        """``_emit_ieee_min_max`` compares and selects inline, so an unspelled
+        ``double`` literal would widen both: the comparison would run in
+        ``double`` and the conditional's common type would be ``double``, adding
+        a rounding on the way back to ``float``."""
 
         @fp.fpy(ctx=fp.FP32)
         def f(y: fp.Real) -> fp.Real:
             return fp.fmax(y, 1.5)
 
         out = _emit(f, 1)
-        assert 'fpy::max(y, static_cast<float>(1.5))' in out, out
+        assert 'static_cast<float>(1.5)' in out, out
+        # the inline compare-and-select, not a call that would deduce a type
+        assert 'std::signbit(' in out, out
+        assert 'fpy::' not in out, out
+        # and the conditional itself carries no `double`
+        (line,) = [ln for ln in out.splitlines() if 'std::signbit(' in ln]
+        assert 'double' not in line, line
+
+    def test_min_max_integer_path(self):
+        """The integer path keeps ``std::max``, and is the one place the failure
+        is a *compile error* rather than a silent choice: template deduction sees
+        two types and reports conflicting candidates for ``T``."""
+
+        @fp.fpy(ctx=fp.SINT16)
+        def g(y: fp.Real) -> fp.Real:
+            return fp.fmax(y, 3)
+
+        out = _emit(g, 1, ctx=fp.SINT16)
+        assert 'std::max(y, static_cast<int16_t>' in out, out
 
     def test_a_literal_already_of_the_target_type_is_left_alone(self):
         """The rule that stops this becoming the uniform-cast alternative.

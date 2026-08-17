@@ -146,7 +146,7 @@ class TestPipeline:
 
     def test_every_rounding_lands_at_position_zero(self):
         """Nothing rounds under a float format afterwards, and every
-        fixed-point block sits on the integer grid."""
+        fixed-point block sits at position zero."""
         out = rescale_fixed(float_to_fixed(_quantized_sum))
 
         positions = []

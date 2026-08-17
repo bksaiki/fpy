@@ -18,10 +18,10 @@ rescale_fixed     MPFixedContext   -> position zero, integer values
 ```
 
 The result compiles to plain C++ and is bit-exact against the interpreter across
-eleven target formats — every IEEE rounding mode with a libm counterpart, the MX
-family, a saturating `IEEEContext`, and an `EFloatNanKind.NEG_ZERO` format. It
-needs no support library: zero `fpy::` references, and it still compiles with the
-helper namespace stripped. Pinned by
+fourteen target formats — all eight FPy rounding modes, the MX family, a
+saturating `IEEEContext`, and an `EFloatNanKind.NEG_ZERO` format. It
+needs no support library, and now unconditionally: the backend emits no support
+code at all, so `CPP_HELPERS` is empty. Pinned by
 `tests/unit/backend/cpp/test_lowered_roundtrip.py`.
 
 ```c++
@@ -79,10 +79,10 @@ Three ideas, each recorded where it was learned:
 
 - **Integer rounding needs no integer type.** `std::trunc` and friends are
   `double -> double`, so the rounding stays in a float type. That keeps the
-  signed zero, needs no integer wide enough for the value, and covers more than
-  just `RTZ`. Five of FPy's eight modes have a libm function — `RTZ`/`RTN`/`RTP`/
-  `RNA`/`RNE` as `trunc`/`floor`/`ceil`/`round`/`nearbyint`; `RAZ`, `RTO` and
-  `RTE` have none and are declined (see gap 2).
+  signed zero, needs no integer wide enough for the value, and covers all eight
+  FPy modes. Five are one libm call — `RTZ`/`RTN`/`RTP`/`RNA`/`RNE` as
+  `trunc`/`floor`/`ceil`/`round`/`nearbyint`; the other three are composed from
+  those (see gap 2).
 - **A context's unrepresentable values compile to assertions.** The bound
   becomes `assert(std::fabs(r) <= B)` — or a pair of comparisons where the two
   bounds are asymmetric — and an operand the format has no result for becomes
@@ -114,23 +114,55 @@ Not fixable by annotation — see
 [symbolic-exponent-inference.md](symbolic-exponent-inference.md), which records
 both the designs that would work and the one that was tried and does not.
 
-### 2. `RAZ` has no libm function
+### 2. The mode table is complete
 
-`copysign(std::ceil(std::fabs(x)), x)` is the two-operation spelling. The only
-rounding mode the lowering still declines, and the last entry missing from the
-mode table.
+**Closed**, and it was three modes short rather than one. `RAZ` is
+`copysign(ceil(fabs(x)), x)` — the same spelling
+[mpfx](https://github.com/bksaiki/mpfx)'s `round_to_integral` uses.
 
-### 3. `Cast` checks storage, not the context
+`RTO` and `RTE` ask for the parity of the *result*, which no libm function
+reports, so each is built from what is already there:
 
-`fp.cast(v)` under a bounded context compiles to `static_cast` plus
-`assert(arg == tmp)`, which tests *storage* exactness only. Neither the bound
-nor the grid is checked: under a context bounded at 1024 at position zero,
-`cast(2048.0)` and `cast(0.5)` both raise in the interpreter and pass silently
-in C++. When argument and target share a storage type, no cast and no assertion
-are emitted at all.
+- `RTO` — `o = floor(x * 0.5) * 2` is the even integer at or below `x`, and `o +
+  1` is the odd neighbour, which serves both `(o, o+1)` and `(o+1, o+2)`.
+- `RTE` — halve, round to nearest-even, double. `fabs` then separates the one
+  case that must not move: an odd integer, already exact and a full step from
+  that even neighbour.
 
-The bound and grid checks exist in `_emit_integral_round`; they belong in the
-general round/cast path.
+`RTE` is mpfx's spelling, with `std::nearbyint` standing in for C23 `roundeven`.
+That is the same substitution `RNE` already makes here — no compiler is required
+to have the builtin, and adding it as an `fpy::` helper would break
+`test_needs_no_support_library`. It carries the same cost: `nearbyint` follows the
+dynamic rounding mode, so `RTE` inherits `RNE`'s `FE_TONEAREST` precondition and
+is refused inside a scope that set another mode. `RTO` has no such dependency.
+
+Every step of all eight is exact. Verified bit-for-bit against the interpreter
+in `test_round_fixed_bound.py`, and the three new modes are in
+`test_lowered_roundtrip.py`'s target list, which now covers fourteen formats.
+
+### 3. `Round` / `Cast` checked storage, not the context
+
+**Closed.** `fp.cast(v)` tested *storage* exactness only
+(`assert(arg == tmp)`), so under a context bounded at 1024 whose representable
+values are the integers, `cast(2048.0)` and `cast(0.5)` both raised in the
+interpreter and passed silently in C++. `_assert_fixed_exact` now emits the
+specials, representability and bound checks for a fixed-point context, and
+refuses a non-zero position rather than assuming it; the same-storage shortcut no
+longer skips them. Verified against the interpreter per value, 88/88, in
+`tests/unit/backend/cpp/test_cast_exactness.py`.
+
+The mirror of it on `Round` is closed too, and was worse than expected: a
+fixed-point context reaching a bare `static_cast` dropped its bound *and* its
+overflow rule. A context bounded at 100 returned 120 where `ASSERT` raises,
+`SATURATE` says 100 and `WRAP` says -81 — on **both** storage paths, not only the
+integer one. `_emit_integral_round` now either lowers a fixed-point context
+faithfully or refuses it, and a non-`ASSERT` rule is refused rather than dropped.
+Verified value-for-value against the interpreter in
+`tests/unit/backend/cpp/test_round_fixed_bound.py`.
+
+The predicate for "the cast *is* the rounding" is `target.is_native_ctx`,
+introduced here: a format carries no overflow rule, so a `-128..127` context
+under `ASSERT` is format-equal to `int8_t` and still needs the assertion.
 
 The libm mapping has a second, subtler hole in the same area: the interpreter
 *raises* where `std::trunc` returns a NaN, and today only an unread branch
@@ -142,16 +174,13 @@ one, and four emitted guards with it.
 - `(2 ** n) * x` fails for an `n` typed `SINT64` or `INTEGER`: `cannot implicitly
   cast int64_t to double: conversion is lossy`. `SINT8`/`SINT16`/`SINT32` work,
   since those convert exactly. The message does not suggest the fix.
-- `fpy::min` / `fpy::max` are support-library calls on the float path where the
-  integer path uses `std::`. The lowered program happens to use neither, so the
-  no-library claim holds today, but a program that does would break it.
 - Cosmetic: redundant `static_cast<double>` on integer literals, and a doubled
   `static_cast<double>(static_cast<double>(2))`.
 
 ### 5. A recipe
 
 `monomorphize → unfold_overflow → float_to_fixed → rescale_fixed` is the
-sequence, verified bit-for-bit against the interpreter across eleven formats in
+sequence, verified bit-for-bit against the interpreter across fourteen formats in
 `tests/unit/backend/cpp/test_lowered_roundtrip.py`. `simplify` composes with it
 but is not in that check. It deserves one entry point rather than a comment in a
 sandbox.
@@ -162,16 +191,16 @@ type inference where a diagnostic belongs.
 
 ## Order of work
 
+Gaps 2 and 3 are done, and with them the non-finite integer conversion: a
+float-to-integer cast now asserts `std::isfinite` first, on the native integer
+path as well. What is left, cheapest first:
+
 1. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
    at branches.  Removes two runtime branches and two assertions from every
    lowered rounding and discharges the libm mapping's last side-condition.
-   Cheapest of these and the only one that fixes a correctness gap.
-2. **`RAZ`** — small, completes the mode table.
-3. **`Cast` checks the context** — a soundness gap, independent of everything
-   else.
-4. **An `FP64` source** — the largest, and gated on the *numeric* half of
+2. **An `FP64` source** — the largest, and gated on the *numeric* half of
    inference rather than on the backend.
-5. **Backend cleanups and a recipe.**
+3. **Backend cleanups and a recipe.**
 
 ## Open questions
 

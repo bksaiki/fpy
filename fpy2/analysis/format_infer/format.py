@@ -58,7 +58,7 @@ class AbstractFormat:
     - `has_neg_zero`: whether `-0.0` is a representable value
 
     A special-value flag is independent of the corresponding bound: e.g.
-    `pos_bound = inf` means the finite grid is unbounded, not that `+inf` is a
+    `pos_bound = inf` means the finite values are unbounded, not that `+inf` is a
     member (that is `has_pos_inf`).
     """
 
@@ -138,7 +138,7 @@ class AbstractFormat:
         """Negation of the format (swaps positive and negative bounds).
 
         ``has_neg_zero`` carries over unchanged.  Negation maps ``+0.0`` to
-        ``-0.0``, and every grid contains a ``+0.0`` -- ``pos_bound >= 0 >=
+        ``-0.0``, and every format represents a ``+0.0`` -- ``pos_bound >= 0 >=
         neg_bound`` holds by convention and nothing excludes zero -- so the image
         holds a ``-0.0`` exactly when this number system has one at all.  A
         system without: ``-(0)`` under ``SINT8`` is ``+0.0``, since
@@ -264,8 +264,8 @@ class AbstractFormat:
             or (self.has_neg_inf and other.has_neg_inf)
         )
         # `a - b` is `a + (-b)`, so by the sum rule both addends must be able to
-        # be `-0.0`: `a` directly, and `-b` when *b* can be `+0.0`.  Every grid
-        # contains a `+0.0` -- `pos_bound >= 0 >= neg_bound` holds by convention
+        # be `-0.0`: `a` directly, and `-b` when *b* can be `+0.0`.  Every format
+        # represents a `+0.0` -- `pos_bound >= 0 >= neg_bound` holds by convention
         # and nothing excludes zero -- so only `a` is in question.
         has_neg_zero = self.has_neg_zero
 
@@ -319,7 +319,7 @@ class AbstractFormat:
         # A zero product takes the XOR of the operand signs (IEEE-754 §6.3, in
         # every rounding mode), so a `-0.0` needs a sign disagreement -- and one
         # is always available once *either* number system has a signed zero:
-        # every grid contains a `+0.0`, and a negative times that zero is
+        # every format represents a `+0.0`, and a negative times that zero is
         # `-0.0`.  When neither system has one, no product can be one:
         # two's-complement has a single zero, and `(-2) * 0` under `SINT8` is
         # `+0.0`.
@@ -411,7 +411,7 @@ class AbstractFormat:
         if not isinstance(fmt, Format):
             raise TypeError(f'Expected \'Format\', got {fmt}')
 
-        # finite grid: quantum, precision, and bounds
+        # finite values: quantum, precision, and bounds
         match fmt:
             case RealFormat():
                 af = AbstractFormat(
@@ -499,7 +499,7 @@ class AbstractFormat:
                 assert isinstance(self.pos_bound, RealFloat)
                 assert isinstance(self.neg_bound, RealFloat)
                 if not self._prec_constrains():
-                    # An integer grid: describe it as fixed-point.  Materializing
+                    # Only integers: describe it as fixed-point.  Materializing
                     # as a float would be correct but perverse — every value would
                     # be subnormal — and, more to the point, a float format has a
                     # signed zero.  `int8 + int8` lands here, and describing it as a
@@ -545,11 +545,11 @@ class AbstractFormat:
         return REAL_FORMAT
 
     def _prec_constrains(self) -> bool:
-        """Does ``prec`` actually thin the grid inside the bounds?
+        """Does ``prec`` actually thin the values inside the bounds?
 
-        The grid has spacing ``2**exp``; spanning the bounds at that spacing
-        needs some number of significand bits.  If ``prec`` supplies at least
-        that many it removes nothing, and the value set is the *whole* grid —
+        Values sit ``2**exp`` apart; spanning the bounds at that spacing needs
+        some number of significand bits.  If ``prec`` supplies at least that many
+        it removes nothing and every such value is representable —
         which is exactly what a fixed-point format describes.  If ``prec`` is
         smaller, values thin out as the magnitude grows, and only a floating-point
         format can say that.

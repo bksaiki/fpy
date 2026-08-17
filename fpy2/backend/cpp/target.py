@@ -127,6 +127,19 @@ def _all_arith_ctxs() -> list[Context]:
     return _fp_ctxs() + _int_ctxs()
 
 
+_NATIVE_CTXS = frozenset(_all_arith_ctxs())
+
+
+def is_native_ctx(ctx: Context) -> bool:
+    """Does the op table dispatch on *ctx*?
+
+    Equivalently: is a ``static_cast`` into its storage the same operation as its
+    ``round``?  Whole contexts, not formats, as :meth:`CppOp.matches` compares
+    them -- a format carries neither the overflow rule nor the random bits.
+    """
+    return ctx in _NATIVE_CTXS
+
+
 def _ty_of(ctx: Context) -> CppScalar:
     """Map a same-context signature's context to the C++ scalar that
     its inputs (and output) carry."""

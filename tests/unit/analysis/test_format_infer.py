@@ -2152,7 +2152,7 @@ class TestSpecialConversions:
             assert af is not None
             assert getattr(af, attr), f'{member!r} did not set {attr}'
 
-    def test_a_special_stays_off_the_finite_grid(self):
+    def test_a_special_stays_outside_the_finite_range(self):
         """An infinity must not widen the bounds -- the finite part of
         ``{1, +inf}`` is still just ``1``."""
         from fpy2.analysis.format_infer.analysis import (
@@ -2167,7 +2167,7 @@ class TestSpecialConversions:
         assert with_inf.prec == finite.prec
         assert with_inf.has_pos_inf and not finite.has_pos_inf
 
-    def test_an_all_special_set_lifts_to_the_empty_grid(self):
+    def test_an_all_special_set_lifts_to_an_empty_finite_range(self):
         from fpy2.analysis.format_infer.analysis import (
             Special, _setformat_to_abstract,
         )
@@ -2378,7 +2378,7 @@ class TestExponentOps:
         assert claim.exp == 0, 'the result is an integer'
 
     def test_logb_admits_the_edges_it_can_produce(self):
-        """``logb(±0)`` is ``-inf`` and every grid holds a zero, so the result
+        """``logb(±0)`` is ``-inf`` and every format represents a zero, so the result
         always admits one; ``+inf`` and NaN only when the argument does."""
         from fpy2.analysis.format_infer.analysis import exact_logb
         claim = exact_logb(fp.FP16.format())
@@ -2417,8 +2417,8 @@ class TestExponentOps:
         assert claim.neg_bound == fp.RealFloat.from_int(0), 'never negative'
 
     def test_exp2_declines_a_non_integer_exponent(self):
-        """``2 ** 0.5`` is irrational, so no format states it.  A grid whose
-        finest digit is below position zero holds such an exponent."""
+        """``2 ** 0.5`` is irrational, so no format states it.  A format whose
+        finest digit is below position zero represents such an exponent."""
         from fpy2.analysis.format_infer.analysis import exact_exp2
         half = AbstractFormat(4, -1, fp.RealFloat.from_int(4),
                               neg_bound=fp.RealFloat.from_int(-4))

@@ -15,7 +15,9 @@ Module layout:
 - `storage_infer.py` — per-SSA-def storage assignment via union-find.
 - `unbox.py` — which lists may drop the `std::shared_ptr` handle.
 - `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
-- `target.py`, `utils.py` — target description, header / helper preamble.
+- `target.py`, `utils.py` — target description and header preamble.  There is no
+  runtime: `CPP_HELPERS` is empty, and every spelling the emitter produces is
+  `std::`.
 
 Read the design before changing anything; [Open issues](#open-issues) is at
 the bottom.
@@ -25,10 +27,25 @@ not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
-compile and must behave as the FPy interpreter does.* A refusal is always
-acceptable — the compiler may be limited — so a shape it cannot handle should
-raise, never miscompile. The one place that still violates this is unchecked
-subscripts, below.
+compile and must behave as the FPy interpreter does wherever FPy's semantics are
+defined.* A refusal is always acceptable — the compiler may be limited — so a
+shape it cannot handle should raise, never miscompile.
+
+The qualifier is load-bearing. FPy has undefined behavior, and the interpreter's
+checks are not the contract: it raises on an out-of-range subscript and on a
+mismatched-length `zip`, but neither is promised, so the backend owes nothing
+there. Nothing currently violates the criterion as stated.
+
+**Storage *contains* a format; it does not equal it.** `choose_storage` picks the
+smallest ladder type holding a format, which is right for storing a value and
+wrong as a *rounding*. Three separate miscompiles came from conflating the two,
+so the rule is worth stating once: a `static_cast` into a context's storage is
+that context's `round` only when the whole *context* is one the op table
+dispatches on (`target.is_native_ctx`). Comparing formats is not enough, because
+a format carries neither the overflow rule nor the random bits — a saturating
+`IEEEContext(8, 32)` and a `-128..127` context under `ASSERT` are format-equal to
+`FP32` and `int8_t` respectively, and neither behaves like the cast. Anything
+else must be lowered explicitly or refused; see `native-lowering-roadmap.md`.
 
 ## Design
 
@@ -113,17 +130,30 @@ When a scope is used:
   case where a nested concrete `with` must set the mode unconditionally.
 - **Integer contexts** must use RTZ — that is what C++ integer truncation does.
 
-`Round` / `Cast`:
+`Round` / `Cast`: both bypass the op table, so both carry its discipline
+themselves (`_require_cast_is_round`) — see the storage-versus-format rule at the
+top.
 
-- `Round(arg)` lowers to `static_cast<target>(arg)`, whose rounding mode comes
-  from the surrounding `fesetround` boundary. A **literal** argument is folded at
-  compile time instead (`_fold_rounded_literal`) — C++ has no exact-real literal,
-  so this is the only way an inexact constant is representable at all, and it
-  also gets the mode the program asked for rather than whatever `fesetround`
-  last left behind.
+- `Round(arg)` under a **native** context is `static_cast<target>(arg)`, whose
+  rounding mode comes from the surrounding `fesetround` boundary. A **literal**
+  argument is folded at compile time instead (`_fold_rounded_literal`) — C++ has
+  no exact-real literal, so this is the only way an inexact constant is
+  representable at all, and it also gets the mode the program asked for rather
+  than whatever `fesetround` last left behind.
+- `Round(arg)` under a **fixed-point** context goes to `_emit_integral_round`,
+  which either lowers it faithfully or refuses; it never falls through to a bare
+  cast. Float storage rounds by libm (`trunc`/`floor`/`ceil`/`round`/`nearbyint`),
+  integer storage by the cast itself. Either way the bound is asserted, on the
+  *rounded* value — `100.7` is in bounds under `RTZ` even though `100.7 > 100`.
+  An overflow *rule* other than `ASSERT` is refused: `SATURATE`/`WRAP`/`OVERFLOW`
+  are behavior this lowering does not implement, and `unfold_overflow` is what
+  turns them into program text.
 - `Cast(arg)` — the node `fp.cast` and `fp.round_exact` both parse to — is the
-  same cast plus a runtime assertion that it was lossless, NaN-aware for FP
-  operands. Same-type short-circuits to the identity.
+  same cast plus a runtime assertion that it was lossless. Under a native context
+  a storage round-trip *is* that claim, NaN-aware for FP operands. Under a
+  fixed-point context it is not, since storage is wider than the format, so
+  `_assert_fixed_exact` adds the specials, representability and bound tests; the
+  same-type short-circuit no longer skips them.
 
 ### Pipeline
 
@@ -148,36 +178,34 @@ list is automatically instantiated wider, which is the workaround
 
 `CppCompiler.compile` returns a function definition only, so single-function
 tests can use exact-string equality. Callers wanting a full translation unit
-pull `headers()`, `helpers()`, or `prelude()`. `helpers()` carries the runtime:
-the nary `fpy::min` / `fpy::max`, and nothing else — list code is emitted in
-standard-library spellings (`std::shared_ptr<std::vector<T>>`, `std::array`)
-at the use site. Headers track exactly what the emitted code uses.
+pull `headers()`, `helpers()`, or `prelude()`. `helpers()` is **empty** —
+everything is emitted in standard-library spellings at the use site
+(`std::shared_ptr<std::vector<T>>`, `std::array`), including the IEEE
+`minimum`/`maximum` that used to be an `fpy::min`/`max` template. It is kept as a
+method so callers need not care whether the backend currently emits any support
+code. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
-### Bounds-checked list operations
+### Unchecked subscripts are not a bug
 
-**A silent wrong answer, and the only one left.** `_visit_list_ref`,
-`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]` with no range
-check. The interpreter raises on `xs[10]` over a shorter list; C++ does not
-report anything. A read returns whatever occupies that memory, so the program
-carries on and produces a wrong number. A write — `xs[10] = v` — stores outside
-the vector's buffer, which can corrupt unrelated data or the heap, with the
-damage surfacing far from its cause.
+**Settled: an out-of-range subscript is undefined in FPy.** `_visit_list_ref`,
+`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]`, and that is the
+intended lowering. The interpreter happens to raise on `xs[10]` over a shorter
+list, but that is an artifact of how it is written, not a promise the language
+makes — so a backend is free to do anything, and a raw subscript is the normal
+C/C++ idiom.
 
-So this is not a difference in how an error is reported, and it is the last
-violation of the criterion above. It is narrow only in needing the program to
-index out of range in the first place.
+Recorded because the shape invites the opposite conclusion: it looks like the
+emitted code disagrees with the interpreter, so it reads as the criterion above
+being violated. It is not. Do not add a checked-subscript helper on this
+reasoning; the criterion applies where FPy's semantics are *defined*, and here
+they are not.
 
-Likely shape: a checked subscript helper in `CPP_HELPERS`, called from each
-subscript site. Deliberately not done yet, for two reasons that argue for doing
-it together with the array-size work rather than alone:
-
-- an unconditional check costs something at every subscript, and
-- the checks worth keeping are the ones that cannot be discharged statically.
-  `array-size-symbolic.md` already tracks the size equalities that would
-  discharge them (`is_size_eq` proving `len(ys) == len(xs)` where `i < len(xs)`)
-  and says the two belong together. Nothing consumes those equalities yet.
+(Should bounds checking ever be wanted, it would be a debug-build feature like the
+rounding assertions, and it would want the array-size work first — the checks
+worth keeping are the ones `array-size-symbolic.md`'s size equalities cannot
+discharge statically.)
 
 ### One question answered in four places
 

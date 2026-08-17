@@ -138,7 +138,7 @@ def _samples(ctx) -> list:
         fp.Float(isnan=True), fp.Float(isinf=True), fp.Float(isinf=True, s=True),
         fp.Float(c=0), fp.Float(c=0, s=True),
     ]
-    grid = [
+    points = [
         B, ctx.infval().as_real(),
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),   # just below the bound
         RealFloat(exp=B.exp, c=B.c + 1),           # the tie above it
@@ -147,7 +147,7 @@ def _samples(ctx) -> list:
         RealFloat(exp=ctx.expmin - 1, c=1),        # below it: rounds to zero
         RealFloat(exp=ctx.emin, c=1), RealFloat(exp=-2, c=1), RealFloat(exp=1, c=3),
     ]
-    for g in grid:
+    for g in points:
         xs.append(fp.Float(x=g, ctx=fp.REAL))
         xs.append(fp.Float(x=RealFloat(s=True, exp=g.exp, c=g.c), ctx=fp.REAL))
     return xs
@@ -228,7 +228,7 @@ class TestPipeline:
 
     def test_no_upper_clamp(self):
         """`float_to_fixed` clamps the digit position so the *bound* stays on
-        the format's grid.  With no bound there is nothing to keep on it, so
+        representable.  With no bound there is nothing to keep representable, so
         the position follows the exponent alone."""
         alone = float_to_fixed(_quantizer(fp.FP16))
         composed = float_to_fixed(unfold_overflow(_quantizer(fp.FP16)))

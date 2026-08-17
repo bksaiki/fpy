@@ -244,8 +244,8 @@ class TestStorageBottom:
 
     def test_bottom_takes_the_smallest_rung(self):
         """Every rung contains it vacuously, so the cheapest wins.
-        ``_to_abstract`` cannot answer this: every ``AbstractFormat`` grid
-        holds a ``+0.0``, so none of them *is* the empty set."""
+        ``_to_abstract`` cannot answer this: every ``AbstractFormat``
+        represents a ``+0.0``, so none of them *is* the empty set."""
         assert choose_storage_scalar(SetFormat.bottom()) == CppScalar.U8
 
     def test_bottom_recurses_through_a_list(self):

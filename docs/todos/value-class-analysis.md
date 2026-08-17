@@ -124,7 +124,7 @@ the roadmap are the former.
 `AbstractFormat` already carries `has_nan`, `has_pos_inf`, `has_neg_inf` — three
 of the four atoms.  What it structurally cannot say is **not zero**: its own
 documentation notes that `pos_bound >= 0 >= neg_bound` holds by convention and
-nothing excludes zero, so every grid contains a `+0.0`.
+nothing excludes zero, so every format represents a `+0.0`.
 
 That bit is load-bearing.  Knowing only `x : {Zero, Finite}` leaves `logb(x)`
 possibly an infinity and every guard stays.  The chain needs `x : {Finite}`.

@@ -258,9 +258,9 @@ class CppCompiler(Backend):
         return list(CPP_HEADERS)
 
     def helpers(self) -> str:
-        """The ``fpy::`` runtime every emitted unit needs: NaN-correct
-        ``min``/``max``, and nothing else -- list code is generated in
-        standard-library spellings at the use site."""
+        """Support code an emitted unit needs: currently none.
+
+        See :data:`.utils.CPP_HELPERS`."""
         return CPP_HELPERS
 
     def prelude(self) -> str:

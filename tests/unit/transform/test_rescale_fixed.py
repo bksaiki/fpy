@@ -443,7 +443,7 @@ class TestSymbolicPosition:
 
         out = RescaleFixed.apply(f.ast)
         assert not out.is_equiv(f.ast)
-        # the position is now the integer grid; the bound came along
+        # the position is now zero, so the values are integers; the bound came along
         call = _blocks(out)[0].ctx
         assert isinstance(call, Call) and call.fn is fp.MPBFixedContext
         assert call.args[0].val == -1

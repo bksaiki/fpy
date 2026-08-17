@@ -115,7 +115,7 @@ Three findings, in increasing order of how fatal they are:
 
 So the bound has to exist where the value is *computed*, which is what makes this
 an inference problem rather than an annotation problem. Finding (3) is a separate
-gap worth fixing on its own: the bound and grid checks live in
+gap worth fixing on its own: the bound and representability checks live in
 `_emit_integral_round` and should be hoisted into the general round/cast path.
 
 ## Design A — symbolic exponents

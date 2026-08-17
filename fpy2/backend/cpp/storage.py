@@ -129,8 +129,8 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
     if is_bottom(bound):
         # A slot holding no value -- an element of a fresh `empty(...)`.  Every
         # rung contains it vacuously, so the smallest wins.  `_to_abstract`
-        # cannot serve this: every grid holds a `+0.0`, so none *is* the empty
-        # set.
+        # cannot serve this: every format represents a `+0.0`, so none *is* the
+        # empty set.
         return _LADDER[0][0]
 
     af = _to_abstract(bound)

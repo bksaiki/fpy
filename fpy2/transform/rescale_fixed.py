@@ -420,8 +420,8 @@ class _RescaleFixedInstance(BlockRewriter):
 
         The format still shifts by a power of two, so the factors become
         `2 ** scale` expressions rather than constants.  The bound comes along:
-        a constructible source format states a bound on its own grid, so the
-        shifted bound lands exactly on the integer grid.
+        a constructible source format states a bound that is one of its own
+        values, so the shifted bound is an exact integer.
         """
         info = _CTOR_ARGS.get(e.fn if isinstance(e.fn, type) else type(None))
         if info is None:
@@ -486,8 +486,8 @@ class _RescaleFixedInstance(BlockRewriter):
             return Mul(b, up(), loc)
 
         def build_ctx() -> Expr:
-            """The position becomes the integer grid; a stated bound shifts
-            with it, while an unstated one is derived and follows on its own."""
+            """The position becomes zero, so the values are integers; a stated
+            bound shifts with it, while an unstated one follows on its own."""
             built = _replace_arg(
                 e, info.position, info.index,
                 _const(Integer(-1 if info.from_nmin else 0, loc)),

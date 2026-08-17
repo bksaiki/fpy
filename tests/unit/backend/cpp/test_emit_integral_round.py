@@ -1,13 +1,17 @@
 """
-Rounding under an integer context, emitted as a libm call.
+Rounding under a fixed-point context, emitted in floating-point.
 
-C++ rounds to an integral *value* in a floating-point type — ``std::trunc``
-and friends are ``double -> double`` — so an integer rounding needs no integer
-type.  That keeps the signed zero, needs no integer wide enough for the value,
-and covers every rounding mode rather than only ``RTZ``.
+C++ rounds to an integral *value* in a floating-point type — ``std::trunc`` and
+friends are ``double -> double`` — so an integer rounding needs no integer type.
+That keeps the signed zero and needs no integer wide enough for the value.
 
-The context's edges become assertions bracketing the call: an operand it has no
-result for, and a result past its bound.
+All eight FPy modes are covered.  Five are one libm call; ``RAZ`` takes three,
+and ``RTO``/``RTE`` ask for the parity of the *result*, which no libm function
+reports — those are composed from the same calls, so the lowered program still
+depends on ``std::`` alone.
+
+The context's edges become assertions around it: an operand it has no result
+for, and a result past its bound.
 """
 
 import pytest
@@ -50,46 +54,136 @@ class TestModeTable:
         (RM.RTP, 'std::ceil'),
         (RM.RNA, 'std::round'),
         (RM.RNE, 'std::nearbyint'),
-    ], ids=['rtz', 'rtn', 'rtp', 'rna', 'rne'])
+        (RM.RAZ, 'std::copysign'),
+    ], ids=['rtz', 'rtn', 'rtp', 'rna', 'rne', 'raz'])
     def test_mode_picks_its_function(self, rm, fn):
         out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=rm, overflow=ASSERT))
         assert fn in out
         # not a cast to an integer type: the value stays in a float
         assert 'static_cast<int' not in out
 
-    @pytest.mark.parametrize('rm', [RM.RAZ, RM.RTO, RM.RTE],
-                             ids=['raz', 'rto', 'rte'])
-    def test_mode_without_a_function_is_refused(self, rm):
-        """A refusal with a location, not a crash."""
-        with pytest.raises(CppCompileError, match='no libm function'):
-            _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=rm, overflow=ASSERT))
+    def test_away_from_zero_takes_three_calls(self):
+        """``ceil`` rounds away from zero only above zero, so the sign comes off
+        and goes back on.  ``copysign`` also carries a ``-0.0`` through, which the
+        other five modes do natively and this lowering requires.
+
+        The operand is named twice, so it has to be bound first -- otherwise a
+        temporary-producing argument would be evaluated twice.
+        """
+        out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=RM.RAZ,
+                                    overflow=ASSERT))
+        assert 'std::copysign(std::ceil(std::fabs(x)), x)' in out
+
+    def test_the_table_covers_every_mode(self):
+        """The table is complete, so no rounding mode is refused any more.
+
+        Asked as a question rather than assumed: a mode added to
+        :class:`RoundingMode` later gets a refusal with a location from
+        `_INTEGRAL_MODES` instead of being silently mis-lowered.
+        """
+        from fpy2.backend.cpp.emitter import CppEmitter
+
+        missing = set(RM) - CppEmitter._INTEGRAL_MODES
+        assert not missing, f'no integral spelling for {missing}'
+
+    @pytest.mark.parametrize('rm', [RM.RTO, RM.RTE], ids=['rto', 'rte'])
+    def test_parity_modes_need_no_support_library(self, rm):
+        """Both ask for the parity of the *result*, which no libm function
+        reports, so each is composed -- but out of ``std::`` alone.
+
+        In particular not C23 ``roundeven``, which no compiler is required to
+        have; `RTE` uses ``std::nearbyint`` for it, the same stand-in `RNE`
+        already makes.
+        """
+        out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=rm,
+                                    overflow=ASSERT))
+        assert 'fpy::' not in out
+        assert 'roundeven' not in out
+        # a conditional, not a single call
+        assert '?' in out
+
+    def test_toward_even_halves_rounds_to_nearest_and_doubles(self):
+        """`mpfx`'s ``round_to_integral``, with ``std::nearbyint`` standing in for
+        C23 ``roundeven``.  The ``fabs`` comparison separates the one case that
+        must not move -- an odd integer, already exact and a full step from that
+        even neighbour."""
+        out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=RM.RTE,
+                                    overflow=ASSERT))
+        assert 'std::nearbyint(x * 0.5)' in out
+        assert 'std::fabs(x - ' in out
+
+    def test_toward_even_inherits_the_fe_tonearest_precondition(self):
+        """``std::nearbyint`` follows the dynamic mode, so `RTE` is refused where
+        `RNE` is -- under an enclosing scope that set another one."""
+        outer = fp.IEEEContext(8, 32, RM.RTZ)
+        inner = MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=RM.RTE,
+                                overflow=ASSERT)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with outer:
+                t = fp.round(x)
+                with inner:
+                    y = fp.round(t)
+            return y
+
+        with pytest.raises(CppCompileError, match='FE_TONEAREST'):
+            CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])
+
+    def test_the_new_modes_are_not_aliases_of_the_old(self):
+        """Keeps the differential from being vacuous.
+
+        One value cannot separate all four directed modes -- at 2.5, ``RTZ`` and
+        ``RTE`` agree and so do ``RAZ`` and ``RTO``.  It takes 3.5 as well, where
+        the parity pair swaps and the other two do not move.
+        """
+        def r(rm, x):
+            ctx = MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=rm,
+                                  overflow=ASSERT)
+
+            @fp.fpy(ctx=fp.REAL)
+            def f(v: fp.Real) -> fp.Real:
+                with ctx:
+                    y = fp.round(v)
+                return y
+            return float(f(x))
+
+        assert [r(rm, 2.5) for rm in (RM.RTZ, RM.RAZ, RM.RTO, RM.RTE)] == \
+            [2.0, 3.0, 3.0, 2.0]
+        assert [r(rm, 3.5) for rm in (RM.RTZ, RM.RAZ, RM.RTO, RM.RTE)] == \
+            [3.0, 4.0, 3.0, 4.0]
 
 
 class TestAssertions:
-    """A context states which values it has no result for; each statement
-    becomes an assertion."""
+    """A context states which values it has no result for; each statement becomes
+    an assertion.  The *bound* assertions live in `test_round_fixed_bound.py`,
+    with the differential that checks which values they admit."""
 
     def test_operand_guard_when_specials_are_refused(self):
         """Neither NaN nor infinity representable and no substitute stated, so
         both collapse to one finiteness test."""
         out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), overflow=ASSERT))
-        assert 'assert(std::isfinite(' in out
+        assert 'assert((std::isfinite(' in out
         assert 'rounding is undefined for this value' in out
 
     def test_only_nan_refused(self):
         """With infinity representable, the guard narrows to NaN alone."""
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), overflow=ASSERT, enable_inf=True))
-        assert 'assert(!std::isnan(' in out
-        assert 'std::isfinite' not in out
+        assert 'assert((!std::isnan(' in out
 
-    def test_no_guard_when_both_are_representable(self):
+    def test_no_operand_guard_when_both_are_representable(self):
         """libm passes NaN and the infinities through unchanged, so a context
-        that admits them needs nothing said."""
+        admitting both needs no guard on its operand.
+
+        The bound assertion still has to *exempt* them: no magnitude test admits
+        an infinity, and this context represents one.
+        """
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), overflow=ASSERT,
             enable_nan=True, enable_inf=True))
-        assert 'isfinite' not in out and 'isnan' not in out
+        assert 'rounding is undefined for this value' not in out
+        assert '!std::isfinite(x) || std::fabs(' in out
 
     def test_bound_assertion_for_overflow_assert(self):
         out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=11, c=1), overflow=ASSERT))
@@ -99,7 +193,7 @@ class TestAssertions:
 
     def test_asymmetric_bounds_get_two_comparisons(self):
         """``fabs`` states one magnitude, but the two bounds are independent --
-        a two's-complement grid runs to -128 and only to 127, and the legal
+        a two's-complement format runs to -128 and only to 127, and the legal
         most-negative value must not trip the assertion."""
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=0, c=127),
@@ -107,13 +201,6 @@ class TestAssertions:
         assert 'fabs' not in out
         assert '-128' in out and '127' in out
         assert 'overflow occurred so rounding is undefined' in out
-
-    def test_no_bound_assertion_without_assert_mode(self):
-        """``SATURATE`` is an edge *rule*, not a claim; it has no assertion to
-        make and is not this lowering's business."""
-        out = _emit(MPBFixedContext(
-            -1, fp.RealFloat(exp=11, c=1), overflow=fp.OverflowMode.SATURATE))
-        assert 'overflow occurred' not in out
 
 
 class TestDeclines:
@@ -123,17 +210,9 @@ class TestDeclines:
         """A position other than zero rounds to a multiple of ``2 ** n``, which
         needs the operand scaled first — `rescale_fixed`'s job, not the
         backend's, since doing it here would reintroduce an inexact ``exp2``."""
-        with pytest.raises(CppCompileError, match='position zero'):
+        # float storage, so `_validate_context_rm` names it first
+        with pytest.raises(CppCompileError, match='digits at position zero'):
             _emit(MPBFixedContext(-4, fp.RealFloat(exp=10, c=1), overflow=ASSERT))
-
-    def test_integer_storage_still_casts(self):
-        """Without a signed zero the format lands in an integer type, where a
-        cast is the better lowering and ``RTZ`` is what C++ does."""
-        out = _emit(MPBFixedContext(
-            -1, fp.RealFloat(exp=10, c=1), rm=RM.RTZ, overflow=ASSERT,
-            enable_neg_zero=False))
-        assert 'static_cast<int16_t>' in out
-        assert 'std::trunc' not in out
 
     def test_signed_zero_decides_the_lowering(self):
         """The two lowerings want opposite answers: libm keeps a signed zero
@@ -143,8 +222,14 @@ class TestDeclines:
                                         enable_neg_zero=True, **kw))
         without = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1),
                                         enable_neg_zero=False, **kw))
-        assert 'std::trunc' in with_nz and 'static_cast<int' not in with_nz
-        assert 'static_cast<int' in without and 'std::trunc' not in without
+        # libm computes the result under one; the cast computes it under the other
+        assert 'float _tmp1 = std::trunc(' in with_nz
+        assert 'static_cast<int' not in with_nz
+        assert 'static_cast<int' in without
+        assert not any(
+            'std::trunc' in ln and 'assert' not in ln
+            for ln in without.splitlines()
+        )
 
 
 class TestFloatContextUnaffected:
@@ -241,7 +326,7 @@ class TestScaleByPowerOfTwo:
 
     def test_a_bare_power_of_two_also_uses_ldexp(self):
         """Not only as a multiply's operand: a power on its own would otherwise
-        go through ``std::pow`` and land on the wrong grid."""
+        go through ``std::pow``, which may not return the exact power."""
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:
             with fp.FP64:

@@ -34,7 +34,7 @@ MinimalFn: TypeAlias = Callable[[Format], Format]
 
 
 # ---------------------------------------------------------------------------
-# (p, exp, b) <-> context / grid helpers
+# (p, exp, b) <-> context / representable-value helpers
 # ---------------------------------------------------------------------------
 
 def _cvt_to_context(p: Prec, exp: int, b: fp.RealFloat) -> fp.Context:
@@ -48,16 +48,16 @@ def _cvt_to_context(p: Prec, exp: int, b: fp.RealFloat) -> fp.Context:
         return fp.MPBFloatContext(pmax=p, emin=emin, maxval=b)
 
 
-def _round_up_to_grid(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
-    """Round `b` away from zero onto the (p, exp) grid."""
+def _round_up_representable(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
+    """Round `b` away from zero to a value (p, exp) represents."""
     if p == float('inf'):
         return b.round(min_n=exp - 1, rm=fp.RM.RAZ)
     else:
         return b.round(p, exp - 1, rm=fp.RM.RAZ)
 
 
-def _round_down_to_grid(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
-    """Round `b` toward zero onto the (p, exp) grid."""
+def _round_down_representable(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
+    """Round `b` toward zero to a value (p, exp) represents."""
     if p == float('inf'):
         return b.round(min_n=exp - 1, rm=fp.RM.RTZ)
     else:
@@ -65,7 +65,7 @@ def _round_down_to_grid(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
 
 
 def _next_pe(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
-    """next_{p, exp}(b): one ordinal step above b in the A(p, exp, ·) grid.
+    """next_{p, exp}(b): one ordinal step above b in A(p, exp, ·).
 
     b must already be representable at (p, exp); otherwise the result is the
     successor of whatever b snaps to, which is not what the rules require.
@@ -84,7 +84,7 @@ def _next_pe(p: Prec, exp: int, b: fp.RealFloat) -> fp.RealFloat:
 # ---------------------------------------------------------------------------
 
 def _extend(F: Format, k: int) -> Format:
-    """Move to a finer grid: (p + k, exp - k, b). Bound unchanged."""
+    """Move to a finer quantum: (p + k, exp - k, b). Bound unchanged."""
     p, exp, b = F
     return p + k, exp - k, b
 
@@ -131,7 +131,7 @@ def _min_rto_rne(F1: Format) -> Format:
 
 def _make_F1(p1: Prec, exp1: int, k1: int) -> Format:
     b1_raw = fp.RealFloat(exp=exp1, c=k1)
-    b1 = _round_down_to_grid(p1, exp1, b1_raw)
+    b1 = _round_down_representable(p1, exp1, b1_raw)
     return p1, exp1, b1
 
 
@@ -144,7 +144,7 @@ def _pad(F_min: Format, pad_p: int, pad_exp: int, pad_steps: int) -> Format:
         b = b_min
     else:
         b_raw = b_min + fp.RealFloat(exp=exp, c=pad_steps)
-        b = _round_up_to_grid(p, exp, b_raw)
+        b = _round_up_representable(p, exp, b_raw)
     return p, exp, b
 
 

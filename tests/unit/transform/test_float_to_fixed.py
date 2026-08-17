@@ -110,7 +110,7 @@ def _samples(ctx) -> list[float]:
         0.0, -0.0, float('inf'), float('-inf'), float('nan'),
         1.0, -1.0, B, -B, B * 1.001, B * 2, -B * 2,          # bound and past it
         2.0 ** ctx.emin, -2.0 ** ctx.emin,                    # smallest normal
-        2.0 ** ctx.expmin, 3 * 2.0 ** (ctx.expmin - 1),       # subnormal grid
+        2.0 ** ctx.expmin, 3 * 2.0 ** (ctx.expmin - 1),       # subnormal range
         2.0 ** (ctx.expmin - 1), -2.0 ** (ctx.expmin - 1),    # below it: rounds to zero
     ]
 
@@ -171,7 +171,7 @@ class TestLowering:
         assert static[0].args[0].val == fp.FP16.expmin - 1
 
     def test_subnormal_branch_format(self):
-        """The subnormal branch rounds at the format's finest grid, against
+        """The subnormal branch rounds at the format's finest position, against
         the format's own bound and rounding mode."""
         src = fp.IEEEContext(5, 16, fp.RoundingMode.RTZ)
 
@@ -293,9 +293,9 @@ class TestUnchanged:
         ))
         assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
 
-    def test_bound_off_the_format_grid(self):
-        """A bound needing more digits than the format has does not lie on
-        the grid the clamp rounds at."""
+    def test_bound_the_format_cannot_represent(self):
+        """A bound needing more digits than the format has is not representable
+        at the position the clamp rounds at."""
         f = _quantizer(MPBFloatContext(3, -3, fp.RealFloat(exp=0, c=13)))
         assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
 
@@ -435,7 +435,7 @@ class TestEquivalence:
         ctx = fp.IEEEContext(5, 16, rm)
         f = _quantizer(ctx)
         out = FloatToFixed.apply(f.ast)
-        # values that land between grid points, where the mode decides
+        # values that land between representable ones, where the mode decides
         xs = _samples(ctx) + [0.1, -0.1, 65519.0, 65519.996, -65519.996, 1.0009765625]
         for x in xs:
             assert _same(_eval(out, f, x), f(x)), (rm, x)
