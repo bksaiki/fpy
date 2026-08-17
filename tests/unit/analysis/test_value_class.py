@@ -35,10 +35,6 @@ _SAMPLES: dict[ValueClass, list[float]] = {
 }
 
 
-def _analyze(func):
-    return ValueClassInfer.analyze(func.ast)
-
-
 def _find_all(ast, text: str) -> list[Expr]:
     """Every expression in *ast* that prints as *text*.
 
@@ -66,7 +62,7 @@ def _find(ast, text: str) -> Expr:
 
 def _cls(func, text: str) -> ValueClass:
     """The class the analysis gives the expression printing as *text*."""
-    info = _analyze(func)
+    info = ValueClassInfer.analyze(func.ast)
     return info.classify(_find(func.ast, text))
 
 

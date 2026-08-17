@@ -50,12 +50,14 @@ The upper clamp keeps the context constructible and the format shiftable:
 above it.  Anything above that exceeds ``B`` and overflows, which
 rounding at the clamped position against ``B`` produces.
 
-``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch
-of its own.  All three are constants, so the branches assign what the format
-makes of them.  A branch is emitted only where the operand can *be* that kind of
-value, per :class:`fpy2.analysis.ValueClassInfer` — which needs a concrete
-argument type to say anything, so an unmonomorphized program gets all three.  Only the roundings sit under a rounding context; the rest is
-exact under ``REAL``, whatever context encloses the statement.
+``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch of
+its own.  All three are constants, so the branches assign what the format makes
+of them.  A branch is emitted only where the operand can *be* that kind of value,
+per :class:`fpy2.analysis.ValueClassInfer` — which needs a concrete argument type
+to say anything, so an unmonomorphized program gets all three.
+
+Only the roundings sit under a rounding context; the rest is exact under
+``REAL``, whatever context encloses the statement.
 
 Run :func:`fpy2.strategies.rescale_fixed` afterwards to shift the resulting
 fixed-point rounding to digit position zero, where its values are integers.
@@ -64,9 +66,10 @@ Applies to a float format that rounds deterministically and whose overflow a
 fixed-point round can reproduce — an infinity, the bound, or a NaN.  An
 unbounded format (``MPSFloatContext``, ``MPFloatContext``) needs no upper
 clamp -- its target's bound states how far the operand reaches, not what the
-format does at an edge; one without subnormals needs no branch for them.  Only a block whose body is entirely ``x = fp.round(v)`` (or a returned
-round) over variables is rewritten.  The rewrite needs ``fpy2`` in scope,
-since it names the context constructor.
+format does at an edge; one without subnormals needs no branch for them.  Only a
+block whose body is entirely ``x = fp.round(v)`` (or a returned round) over
+variables is rewritten.  The rewrite needs ``fpy2`` in scope, since it names the
+context constructor.
 """
 
 from dataclasses import dataclass, replace
@@ -550,6 +553,4 @@ class FloatToFixed:
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        return _FloatToFixedInstance(
-            func, eval_info, class_info, where,
-        ).apply()
+        return _FloatToFixedInstance(func, eval_info, class_info, where).apply()

@@ -117,10 +117,9 @@ def _build(src: str, name: str, td: str) -> Path:
 class TestRoundingSpecialsGuard:
     """``_undefined_guard``: an operand a context has no result for."""
 
-    @pytest.mark.parametrize('ctx, id_', [
-        (FLOAT_STORAGE, 'libm'), (INT_STORAGE, 'cast'),
-    ], ids=['float_storage', 'integer_storage'])
-    def test_a_finiteness_test_removes_the_assert(self, ctx, id_):
+    @pytest.mark.parametrize('ctx', [FLOAT_STORAGE, INT_STORAGE],
+                             ids=['float_storage', 'integer_storage'])
+    def test_a_finiteness_test_removes_the_assert(self, ctx):
         bare, guarded = _round_pair(ctx)
         assert 'undefined for this value' in _asserts(_emit(bare))
         assert 'undefined for this value' not in _asserts(_emit(guarded))

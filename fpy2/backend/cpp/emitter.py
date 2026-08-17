@@ -2073,7 +2073,7 @@ class CppEmitter(Visitor):
         # value the branches above showed is neither
         return (
             not (af.has_nan or af.has_pos_inf or af.has_neg_inf)
-            or self.class_info.is_finite(e)
+            or self._is_finite(e)
         )
 
     def _emit_scale_by_pow2(self, e: Mul, ctx) -> str | None:
@@ -2484,9 +2484,9 @@ class CppEmitter(Visitor):
             result = casted[0]
             # a step's first operand is every earlier operand's result, so the
             # NaN propagation goes only once nothing folded in so far can be one
-            seen = self.class_info.classify(e.args[0])
+            seen = self._value_class(e.args[0])
             for nxt, src in zip(casted[1:], e.args[1:]):
-                seen |= self.class_info.classify(src)
+                seen |= self._value_class(src)
                 result = self._emit_ieee_min_max(
                     result, nxt, target, is_min=isinstance(e, Min),
                     nan_free=not (seen & ValueClass.NAN),
@@ -2813,8 +2813,8 @@ class CppEmitter(Visitor):
         # need an extra ``isnan`` guard to avoid false asserts when both sides
         # round to NaN.  Skipped for purely integer operand pairs, and for an
         # operand no NaN reaches.
-        if (target_ty.is_float() or (arg_ty is not None and arg_ty.is_float())) \
-                and ValueClass.NAN & self._operand_class(e):
+        floats = target_ty.is_float() or (arg_ty is not None and arg_ty.is_float())
+        if floats and ValueClass.NAN & self._value_class(e.arg):
             check = (
                 f'{arg} == {tmp} || '
                 f'(std::isnan({arg}) && std::isnan({tmp}))'
@@ -2862,7 +2862,7 @@ class CppEmitter(Visitor):
         operand = self._bind_operand(arg)
 
         if not integral:
-            guard = self._undefined_guard(ctx, operand, self._operand_class(e))
+            guard = self._undefined_guard(ctx, operand, self._value_class(e.arg))
             if guard is not None:
                 self._emit_assert(
                     guard, 'cast is not exact: a NaN or an infinity is not '
@@ -2927,7 +2927,7 @@ class CppEmitter(Visitor):
             return arg
         if arg_ty is not None and not arg_ty.is_float():
             return arg
-        if self.class_info.is_finite(src):
+        if self._is_finite(src):
             return arg
         operand = self._bind_operand(arg)
         self._emit_assert(
@@ -3018,8 +3018,8 @@ class CppEmitter(Visitor):
             case _:
                 return None
 
-    def _operand_class(self, e: NamedUnaryOp) -> ValueClass:
-        """Which of NaN / infinity / zero / finite *e*'s operand can be.
+    def _value_class(self, e: Expr) -> ValueClass:
+        """Which of NaN / infinity / zero / finite *e* can be.
 
         A class is a fact about the FPy value, where the guards below protect a
         C++ operation on its *storage*.  The two coincide because storage is
@@ -3029,7 +3029,11 @@ class CppEmitter(Visitor):
         through the target context, so casting ``1e300`` to `FP32` comes back
         admitting an infinity, and the guard stays.
         """
-        return self.class_info.classify(e.arg)
+        return self.class_info.classify(e)
+
+    def _is_finite(self, e: Expr) -> bool:
+        """Is *e* neither a NaN nor an infinity?  See :meth:`_value_class`."""
+        return not (self._value_class(e) & (ValueClass.NAN | ValueClass.INF))
 
     def _undefined_guard(
         self, ctx: MPFixedContext | MPBFixedContext, operand: str,
@@ -3134,7 +3138,7 @@ class CppEmitter(Visitor):
                 at=e,
             )
 
-        cls = self._operand_class(e)
+        cls = self._value_class(e.arg)
         operand = self._bind_operand(arg)
         guard = self._undefined_guard(active, operand, cls)
         if guard is not None:
@@ -3175,7 +3179,7 @@ class CppEmitter(Visitor):
         # an integer operand is already integral and never a NaN or an infinity;
         # only its magnitude is in question
         if not integral:
-            guard = self._undefined_guard(ctx, operand, self._operand_class(e))
+            guard = self._undefined_guard(ctx, operand, self._value_class(e.arg))
             if guard is not None:
                 self._emit_assert(guard, 'rounding is undefined for this value')
         rounded = operand if integral else f'std::trunc({operand})'

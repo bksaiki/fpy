@@ -602,5 +602,5 @@ class UnfoldOverflow:
             class_info = ValueClassInfer.analyze(func)
 
         return _UnfoldOverflowInstance(
-            func, eval_info, class_info, where, early_check,
+            func, eval_info, class_info, where, early_check
         ).apply()

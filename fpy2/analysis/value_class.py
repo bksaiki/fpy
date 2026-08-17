@@ -50,12 +50,15 @@ so neither special, but it reports the top class.
 
 import enum
 import functools
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
+from fractions import Fraction
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import REAL, Context, Float
-from ..types import RealType
+from ..types import RealType, Type
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 from .type_infer import TypeAnalysis, TypeInfer
@@ -326,19 +329,24 @@ class _ValueClassInstance(DefaultVisitor):
     # ------------------------------------------------------------------
     # Refinement
 
-    def _narrowed(
-        self, base: dict[Definition, ValueClass], cond: Expr, truth: bool
-    ) -> dict[Definition, ValueClass]:
-        """*base*, tightened by *cond* evaluating to *truth*.
+    @contextmanager
+    def _refined(self, cond: Expr, truth: bool) -> Iterator[None]:
+        """Walk an arm with *cond* known to be *truth*.
 
-        The base mask is a parameter rather than ``self._refine`` so that both
-        arms of a branch narrow the same one: reading the field after entering an
-        arm would carry that arm's refinement into its sibling.
+        Both arms narrow the *enclosing* mask.  Narrowing whatever
+        ``self._refine`` happens to hold would carry the first arm's refinement
+        into its sibling -- intersecting ``{NaN}`` with ``{Inf}`` down an ``elif``
+        ladder and driving every later use to the empty class.
         """
-        out = dict(base)
+        saved = self._refine
+        out = dict(saved)
         for d, cls in self._implied(cond, truth):
             out[d] = out.get(d, _TOP) & cls
-        return out
+        self._refine = out
+        try:
+            yield
+        finally:
+            self._refine = saved
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the definitions it tests."""
@@ -374,19 +382,21 @@ class _ValueClassInstance(DefaultVisitor):
         because a NaN takes that arm too.  The exception is an equality against
         zero, whose failure rules out a zero and nothing else.
         """
-        ops, args = cond.ops, cond.args
-        if not truth:
-            if len(ops) != 1:
-                return []       # a failed chain does not say which link broke
-            if ops[0] is CompareOp.EQ:
-                return [i for x, y in _both(args) if _is_zero_literal(y)
-                        for i in self._at(x, _NAN | _INF | _FINITE)]
-            if ops[0] is not CompareOp.NE:
-                return []       # a failed ordering admits a NaN
-            ops = (CompareOp.EQ,)                   # `not (a != b)` is `a == b`
+        args = cond.args
+        if truth:
+            pairs = list(zip(cond.ops, args, args[1:]))
+        elif len(cond.ops) != 1:
+            return []           # a failed chain does not say which link broke
+        elif cond.ops[0] is CompareOp.NE:
+            pairs = [(CompareOp.EQ, args[0], args[1])]   # `not (a != b)` is `a == b`
+        elif cond.ops[0] is CompareOp.EQ:
+            return [i for x, y in _both(args) if _is_zero_literal(y)
+                    for i in self._at(x, _NAN | _INF | _FINITE)]
+        else:
+            return []           # a failed ordering admits a NaN
 
         out: list[tuple[Definition, ValueClass]] = []
-        for op, a, b in zip(ops, args, args[1:]):
+        for op, a, b in pairs:
             for x, y in _both((a, b)):
                 v = _literal_value(y)
                 if op is CompareOp.NE:
@@ -403,7 +413,9 @@ class _ValueClassInstance(DefaultVisitor):
     def _at(self, e: Expr, cls: ValueClass) -> list[tuple[Definition, ValueClass]]:
         """*cls*, against the definition *e* names -- nothing unless *e* is a
         real-valued variable, since only a definition can be refined."""
-        if not isinstance(e, Var) or not isinstance(self.type_info.by_expr.get(e), RealType):
+        if not isinstance(e, Var):
+            return []
+        if not isinstance(self.type_info.by_expr.get(e), RealType):
             return []
         return [(self.def_use.find_def_from_use(e), cls)]
 
@@ -531,12 +543,10 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> ValueClass:
         self._visit_expr(e.cond, ctx)
-        saved = self._refine
-        self._refine = self._narrowed(saved, e.cond, True)
-        ift = self._operand(e.ift, ctx)
-        self._refine = self._narrowed(saved, e.cond, False)
-        iff = self._operand(e.iff, ctx)
-        self._refine = saved
+        with self._refined(e.cond, True):
+            ift = self._operand(e.ift, ctx)
+        with self._refined(e.cond, False):
+            iff = self._operand(e.iff, ctx)
         return ift | iff
 
     # ------------------------------------------------------------------
@@ -554,29 +564,23 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        saved = self._refine
-        self._refine = self._narrowed(saved, stmt.cond, True)
-        self._visit_block(stmt.body, ctx)
-        self._refine = saved
+        with self._refined(stmt.cond, True):
+            self._visit_block(stmt.body, ctx)
         self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        saved = self._refine
-        self._refine = self._narrowed(saved, stmt.cond, True)
-        self._visit_block(stmt.ift, ctx)
-        self._refine = self._narrowed(saved, stmt.cond, False)
-        self._visit_block(stmt.iff, ctx)
-        self._refine = saved
+        with self._refined(stmt.cond, True):
+            self._visit_block(stmt.ift, ctx)
+        with self._refined(stmt.cond, False):
+            self._visit_block(stmt.iff, ctx)
         self._merge_phis(stmt)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         def body():
             self._visit_expr(stmt.cond, ctx)
-            saved = self._refine
-            self._refine = self._narrowed(saved, stmt.cond, True)
-            self._visit_block(stmt.body, ctx)
-            self._refine = saved
+            with self._refined(stmt.cond, True):
+                self._visit_block(stmt.body, ctx)
 
         self._fixpoint(stmt, body)
 
@@ -590,7 +594,7 @@ class _ValueClassInstance(DefaultVisitor):
 
         self._fixpoint(stmt, body)
 
-    def _fixpoint(self, stmt: Stmt, run_body):
+    def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]):
         """Drives a loop's phi classes to convergence.
 
         Each phi starts at its pre-loop class and only ever joins, so the walk
@@ -633,14 +637,14 @@ class _ValueClassInstance(DefaultVisitor):
         self._visit_block(func.body, ctx)
 
 
-def _both(pair) -> tuple[tuple[Expr, Expr], ...]:
+def _both(pair: Sequence[Expr]) -> tuple[tuple[Expr, Expr], ...]:
     """Both orderings of a comparison's operands: either side may be the literal
     and either side may be the variable to refine."""
     a, b = pair
     return ((a, b), (b, a))
 
 
-def _literal_value(e: Expr):
+def _literal_value(e: Expr) -> Fraction | None:
     """The exact value of a numeric literal, or `None` if *e* is not one."""
     return e.as_rational() if isinstance(e, RationalVal) else None
 
@@ -654,7 +658,7 @@ def _literal_class(e: RationalVal) -> ValueClass:
     return _ZERO if e.as_rational() == 0 else _FINITE
 
 
-def _arg_class(ty) -> ValueClass:
+def _arg_class(ty: Type | None) -> ValueClass:
     """A parameter's class, from the context its declared type pins it to."""
     if isinstance(ty, RealType) and isinstance(ty.ctx, Context):
         return representable_classes(ty.ctx)
