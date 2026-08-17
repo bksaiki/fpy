@@ -30,6 +30,7 @@ from ...analysis import (
     DefineUseAnalysis,
     Definition,
     FormatAnalysis,
+    ValueClassAnalysis,
 )
 from ...analysis.format_infer import (
     AbstractableFormat,
@@ -305,6 +306,7 @@ class CppEmitter(Visitor):
     storage: StorageAnalysis
     def_use: DefineUseAnalysis
     format_info: FormatAnalysis
+    class_info: ValueClassAnalysis
     ctx_use: ContextUseAnalysis
     writer: _IndentedWriter
 
@@ -314,6 +316,7 @@ class CppEmitter(Visitor):
         storage: StorageAnalysis,
         def_use: DefineUseAnalysis,
         format_info: FormatAnalysis,
+        class_info: ValueClassAnalysis,
         ctx_use: ContextUseAnalysis,
         *,
         func_name_override: str | None = None,
@@ -326,6 +329,7 @@ class CppEmitter(Visitor):
         self.storage = storage
         self.def_use = def_use
         self.format_info = format_info
+        self.class_info = class_info
         self.ctx_use = ctx_use
         # How each list is represented, or ``None`` to keep every handle.
         self.unbox = unbox
@@ -2040,10 +2044,9 @@ class CppEmitter(Visitor):
         - ``None`` -- no: not known to be an integer within ``int``'s range, so
           the caller must emit a product instead.
         - ``True`` -- yes, unconditionally.
-        - ``False`` -- yes, but only under a runtime finiteness guard: the
-          format admits a NaN or an infinity, neither of which has an ``int``,
-          and the branches that rule them out are not something the analysis
-          reads.
+        - ``False`` -- yes, but only under a runtime finiteness guard: a NaN or
+          an infinity has no ``int``, and neither the format nor the branches
+          above rule one out.
         """
         fmt = self.format_info.by_expr.get(e)
         if isinstance(fmt, SetFormat):
@@ -2065,7 +2068,12 @@ class CppEmitter(Visitor):
             return None
         if any(abs(int(b)) >= self._LDEXP_EXP_LIMIT for b in bounds):
             return None
-        return not (af.has_nan or af.has_pos_inf or af.has_neg_inf)
+        # two independent proofs of finiteness: a format with no specials, or a
+        # value the branches above showed is neither
+        return (
+            not (af.has_nan or af.has_pos_inf or af.has_neg_inf)
+            or self.class_info.is_finite(e)
+        )
 
     def _emit_scale_by_pow2(self, e: Mul, ctx) -> str | None:
         """``2 ** n * v`` as ``std::ldexp(v, n)``, or `None` to emit a product.
@@ -2169,8 +2177,9 @@ class CppEmitter(Visitor):
         finite.  An assertion would not do: it compiles out under ``NDEBUG``,
         leaving the undefined conversion in a release build.
 
-        The analysis proves finiteness whenever the exponent's format admits no
-        specials -- a bounded integer one, say -- and then this costs nothing.
+        Finiteness is proven whenever the exponent's format admits no specials
+        -- a bounded integer one, say -- or value classes rule them out for this
+        expression, and then this costs nothing.
         """
         n = self._bind_operand(self._visit_expr(exp, ctx))
         if finite:

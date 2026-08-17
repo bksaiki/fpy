@@ -19,12 +19,14 @@ from ...analysis import (
     DefineUse,
     Escape,
     FormatInfer,
+    ValueClassInfer,
 )
 from ...analysis.alias import AliasAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
+from ...analysis.value_class import ValueClassAnalysis
 from ...ast.fpyast import Call, FuncDef, NamedId
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -80,6 +82,7 @@ class SpecAnalyses:
     def_use: DefineUseAnalysis
     ctx_use: ContextUseAnalysis
     format_info: FormatAnalysis
+    class_info: ValueClassAnalysis
     storage: StorageAnalysis
     alias: AliasAnalysis
     summary: EscapeSummary
@@ -390,6 +393,9 @@ class CppCompiler(Backend):
             ctx_use=ctx_use,
             array_size=array_size,
         )
+        class_info = ValueClassInfer.analyze(
+            ast, type_info=format_info.type_info, ctx_use=ctx_use,
+        )
 
         try:
             du = format_info.type_info.def_use
@@ -453,6 +459,7 @@ class CppCompiler(Backend):
             def_use=def_use,
             ctx_use=ctx_use,
             format_info=format_info,
+            class_info=class_info,
             storage=storage,
             alias=alias,
             summary=summary,
@@ -518,6 +525,7 @@ class CppCompiler(Backend):
             storage=a.storage,
             def_use=a.def_use,
             format_info=a.format_info,
+            class_info=a.class_info,
             ctx_use=a.ctx_use,
             call_names=call_names,
             unsafe_cast_int=self._unsafe_cast_int,

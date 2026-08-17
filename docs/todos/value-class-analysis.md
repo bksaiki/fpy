@@ -134,18 +134,79 @@ lattice — which also keeps it independent of the format lattice's arithmetic,
 where a no-zero bit would have to be threaded through `__add__`, `__mul__`, the
 join, and storage selection for no benefit.
 
-## Open questions
+## Plan
 
-- **Where does it live?**  A standalone analysis whose result the emitter and
-  the transforms both query, or a pre-pass that annotates the AST?  The emitter
-  wants it per-expression, like `format_info.by_expr`.
-- **Does it need sign?**  Splitting `Inf` into `±Inf` and `Zero` into `±0` would
-  let `signbit` refine too, and would let `unfold_overflow` decide its
-  sign-choice branches statically.  Sixteen elements becomes sixty-four; the
-  chain above needs none of it.
-- **Should `unfold_overflow` and friends consume it?**  They currently probe the
-  context at transform time and emit branches for whatever they cannot rule out.
-  With this analysis they could skip branches for classes the operand cannot
-  hold — smaller output from the same passes.
-- **Loops.**  The lattice has height 4 so a fixpoint converges immediately, but
-  the refinement still has to be undone correctly at a join.
+Commit-sized phases; the full suites run only at the end.
+
+- [x] **1 — the analysis alone, no consumers.**  `fpy2/analysis/value_class.py`,
+  exported from `fpy2.analysis`.  Transfer functions swept against the
+  interpreter, refinement checked per arm, and the suite mutation-tested (break
+  the `logb` table, drop `0 * inf → NaN`, disable refinement: 15 failures each).
+- [x] **2 — `_ldexp_exponent`.**  Threaded into `SpecAnalyses` and the emitter;
+  the predicate answers `True` where the class rules out a NaN and an infinity
+  even though the format admits them.  Both selects and both `pow` calls gone
+  from the lowered `FP16` output, with `test_lowered_roundtrip.py` still
+  bit-exact across all fourteen formats — that suite is the proof, not the token
+  count, and its inputs include a NaN, both infinities and both zeros.
+- [ ] **3 — the specials guards.**  The five remaining emitter sites below.
+- [ ] **4 (optional) — the transforms.**  `float_to_fixed` and
+  `unfold_overflow` skipping a branch whose class is already excluded.
+- [ ] **5 — full suites, and the stale listings.**  The emitted-program excerpt
+  in this file and in [native-lowering-roadmap.md](native-lowering-roadmap.md)
+  both predate phases 2–3; refresh them once, at the end.
+
+### Where the results are consumed
+
+Measured on the lowered `FP16` rounding, which emits **4 asserts, 4
+`isfinite`, 2 `std::pow`** today:
+
+| site | drops |
+|---|---|
+| `_ldexp_exponent` (`emitter.py`) | 2 `isfinite ? ldexp : pow` selects, 2 `pow` calls |
+| `_undefined_guard` | 2 `assert(isfinite(...))` |
+| `_guard_float_to_integer` | the assert before a float→int cast |
+| `_bound_test`'s `!isfinite(operand) ||` exemption | a disjunct |
+| `_assert_fixed_exact`'s specials assert | one assert per `fp.cast` |
+| `_emit_ieee_min_max`'s NaN select | the select, and both operand bindings |
+
+Phases 2–3 should leave **2 asserts, 0 `isfinite`, 0 `pow`**; the two survivors
+are `fabs(_tmp1) <= 1024` bound checks, which are magnitude facts classes cannot
+touch.
+
+The **transforms are weaker consumers than they look.**  `float_to_fixed`
+*creates* the `isnan`/`isinf`/`== 0` ladder because `logb` is undefined on all
+three — it cannot be removed, and it is what establishes the refinement.
+`unfold_overflow`'s `check_finite` and its NaN/Inf branches could be skipped for
+an excluded class, but on the standard pipeline the operand is a parameter at
+top, so it pays nothing.  `round_elim` and `format_infer` are not consumers at
+all: both ask magnitude questions.
+
+An expression key is an identity, so **any rewrite invalidates the result** — a
+transform must query the AST it was handed, before rewriting it.
+
+## Decisions the implementation settled
+
+- **Rounding is not modelled per context.**  Any operation that rounds yields a
+  value its context represents, so the result class under a concrete non-`REAL`
+  context is just what the context can hold — probed by rounding a NaN and both
+  infinities and seeing what comes back (`representable_classes`).  Under `REAL`
+  the exact table stands.  Two cases instead of an overflow/underflow/substitute
+  model per context, and it is precise for an integer context for free.
+- **That default is unsound for an operation that does not round.**  `min`
+  returns an operand untouched, so it can carry a NaN out of a context with no
+  NaN; likewise `fst`/`snd`, and a `Call` whose result the callee produced.
+  Those four are handled explicitly.
+- **Executions that error are not described.**  An operation handed a value its
+  context refuses has no result, so it contributes no class.  That is what makes
+  a guard removable; a consumer drops one only where no class reaching the
+  operation is refused, so the abort survives wherever FPy has no answer.
+- **Sign stays out.**  Splitting `±Inf` and `±0` would let `signbit` refine and
+  would let `unfold_overflow` decide its sign-choice branches statically, but the
+  chain above needs none of it and sixteen elements becomes sixty-four.
+- **Loops need no widening.**  Each phi starts at its pre-loop class and only
+  joins, so a height-4 lattice settles; the bound is four rounds per phi, and
+  exceeding it drops the phis to top rather than spinning.
+
+Still untaught: magnitudes (`x > 1` says nothing), `assert` statements as
+refinements, a bool variable holding a test's result, structural classes for a
+list or tuple element, and the class of a numeric free variable.

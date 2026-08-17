@@ -47,6 +47,7 @@ def _emitter() -> CppEmitter:
         storage=a.storage,
         def_use=a.def_use,
         format_info=a.format_info,
+        class_info=a.class_info,
         ctx_use=a.ctx_use,
         call_names={},
         unsafe_cast_int=True,
