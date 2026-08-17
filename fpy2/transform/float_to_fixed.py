@@ -70,7 +70,13 @@ since it names the context constructor.
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
-from ..analysis import PartialEval, PartialEvalInfo
+from ..analysis import (
+    PartialEval,
+    PartialEvalInfo,
+    ValueClass,
+    ValueClassAnalysis,
+    ValueClassInfer,
+)
 from ..ast.fpyast import (
     Add,
     Assign,
@@ -333,16 +339,19 @@ class _FloatToFixedInstance(BlockRewriter):
 
     func: FuncDef
     eval_info: PartialEvalInfo
+    class_info: ValueClassAnalysis
     gensym: Gensym
     alias: str | None
     where: int | None
     site_idx: int
 
     def __init__(
-        self, func: FuncDef, eval_info: PartialEvalInfo, where: int | None = None
+        self, func: FuncDef, eval_info: PartialEvalInfo,
+        class_info: ValueClassAnalysis, where: int | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
+        self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
         # Counts *candidate* blocks (those the rewrite could lower) in visit
@@ -470,27 +479,29 @@ class _FloatToFixedInstance(BlockRewriter):
         def assign(value: Expr) -> StmtBlock:
             return StmtBlock([Assign(target, None, value, loc)])
 
-        chain = IfStmt(
-            IsNan(None, arg(), loc),
-            assign(value_literal(nan_v, loc)),
-            StmtBlock([IfStmt(
+        # `logb` is undefined on all three, so each takes a branch -- unless the
+        # operand cannot be that kind of value, in which case the branch is one
+        # nothing reaches.  Built innermost-first.
+        cls = self.class_info.classify(e.arg)
+        chain: StmtBlock = StmtBlock(body)
+        if ValueClass.ZERO & cls:
+            chain = StmtBlock([IfStmt(
+                Compare([CompareOp.EQ], [arg(), Integer(0, loc)], loc),
+                assign(by_sign(pos_zero, neg_zero)), chain, loc,
+            )])
+        if ValueClass.INF & cls:
+            chain = StmtBlock([IfStmt(
                 IsInf(None, arg(), loc),
-                assign(by_sign(pos_inf, neg_inf)),
-                StmtBlock([IfStmt(
-                    Compare([CompareOp.EQ], [arg(), Integer(0, loc)], loc),
-                    assign(by_sign(pos_zero, neg_zero)),
-                    StmtBlock(body),
-                    loc,
-                )]),
-                loc,
-            )]),
-            loc,
-        )
+                assign(by_sign(pos_inf, neg_inf)), chain, loc,
+            )])
+        if ValueClass.NAN & cls:
+            chain = StmtBlock([IfStmt(
+                IsNan(None, arg(), loc),
+                assign(value_literal(nan_v, loc)), chain, loc,
+            )])
 
         # only the roundings need a rounding context; the rest is exact
-        return ContextStmt(
-            UnderscoreId(), ForeignVal(REAL, loc), StmtBlock([chain]), loc,
-        )
+        return ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), chain, loc)
 
     def _rewrite(self, stmt: ContextStmt, src: _Source) -> list[Stmt]:
         """The block's rounds, lowered.  Nothing rounds under the float context
@@ -519,6 +530,7 @@ class FloatToFixed:
         func: FuncDef, *,
         where: int | None = None,
         eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
         """
         Expresses float rounding in `func` as fixed-point rounding.
@@ -533,5 +545,9 @@ class FloatToFixed:
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)
+        if class_info is None:
+            class_info = ValueClassInfer.analyze(func)
 
-        return _FloatToFixedInstance(func, eval_info, where).apply()
+        return _FloatToFixedInstance(
+            func, eval_info, class_info, where,
+        ).apply()

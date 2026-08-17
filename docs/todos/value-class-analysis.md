@@ -154,11 +154,37 @@ Commit-sized phases; the full suites run only at the end.
   checks.  Each site is tested as a pair of programs differing only in a branch;
   an unsound version that drops every guard is caught by 20 tests, two of them
   compile-and-run differentials.
-- [ ] **4 (optional) — the transforms.**  `float_to_fixed` and
-  `unfold_overflow` skipping a branch whose class is already excluded.
+- [x] **4 — the transforms.**  `float_to_fixed` drops its `isnan` / `isinf` /
+  `== 0` branches per class, and `unfold_overflow` drops the finiteness test in
+  front of the early check and a specials branch.  Both compute the analysis
+  themselves when the caller does not supply one.
+
+  It needs **concrete argument types**: an unmonomorphized parameter is a type
+  variable and carries no class, so every branch stays.  Two cases where it pays
+  — an integer-typed operand, and a program that has already tested — and the
+  standard `FP32`-source pipeline is not one of them, as predicted.  Dropping a
+  branch is less forgiving than dropping an assertion: nothing checks it at
+  runtime, so the equivalence tests compare the rewritten program against the
+  reference in the interpreter, bit-exactly.
 - [ ] **5 — full suites, and the stale listings.**  The emitted-program excerpt
   in this file and in [native-lowering-roadmap.md](native-lowering-roadmap.md)
   both predate phases 2–3; refresh them once, at the end.
+
+### Found along the way, unrelated and pre-existing
+
+Both reproduce at the commit before this work, so neither is a regression, and
+neither is a value-class problem — recorded here only because that is where they
+turned up.
+
+- **`unfold_overflow` emits an unconstructible context.** A source with a
+  `nan_value` / `inf_value` substitute has it written into the rewritten
+  program as a *numeric literal*, and `MPFixedContext` requires a `Float` —
+  so `MPFixedContext(-4, inf_value=7)` raises and the rewritten program cannot
+  be evaluated at all.
+- **An integer-typed source cannot be compiled.** `with fp.FP16: round(x)` over
+  a `SINT32` argument lowers cleanly but crashes format inference on the way to
+  C++: `AbstractFormat.format()` builds an `MPBFixedFormat` whose `pos_maxval`
+  of `1024` is unrepresentable at the chosen `nmin`.
 
 ### Where the results are consumed
 
