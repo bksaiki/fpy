@@ -26,6 +26,7 @@ from fpy2.ast.fpyast import (
     FuncDef,
     IsInf,
     IsNan,
+    Signbit,
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import (
@@ -288,10 +289,11 @@ class TestShape:
 
 class TestPartialShed:
 
-    def test_overflow_keeps_its_infinity(self):
+    def test_overflow_keeps_its_infinity_in_the_format(self):
         """Overflow of a *finite* operand produces the infinity, which the
-        branches never see — so that side stays in the format and only the
-        NaN rule is stated."""
+        branches never see — so that side cannot leave the format.  It is still
+        *stated*, which is what leaves the surviving rounding a finite operand;
+        only the NaN rule comes out of the format itself."""
         src = MPBFixedContext(-4, RealFloat(exp=0, c=255),
                               overflow=fp.OverflowMode.OVERFLOW,
                               enable_inf=True, nan_value=_ZERO)
@@ -299,20 +301,53 @@ class TestPartialShed:
         out = UnfoldSpecial.apply(f.ast)
 
         assert len(_nodes(out, IsNan)) == 1
-        assert not _nodes(out, IsInf)
+        assert len(_nodes(out, IsInf)) == 1     # stated
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
-        assert target.enable_inf is True
-        assert target.nan_value is None
+        assert target.enable_inf is True        # but not shed
+        assert target.nan_value is None         # this one is
         for x in _samples(src):
             _assert_agrees(f, out, x)
 
-    def test_only_an_unsheddable_side(self):
-        """With nothing else to state, the block is left alone."""
-        f = _quantizer(MPBFixedContext(
+    def test_a_shed_side_is_stated_even_where_the_class_rules_it_out(self):
+        """The branch is the only thing that can supply the value once the rule
+        has left the format, so it is emitted whatever the operand's class.
+
+        Omitting it here would make the rewrite rest on the class analysis being
+        right -- a NaN reaching the shed format has no answer at all.
+        """
+        src = MPFixedContext(-8, enable_nan=True, enable_inf=True)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            if fp.isfinite(x):          # so the operand can be neither special
+                with src:
+                    y = fp.round(x)
+            else:
+                y = 0
+            return y
+
+        out = UnfoldSpecial.apply(f.ast)
+        assert len(_nodes(out, IsNan)) == 1
+        assert len(_nodes(out, IsInf)) == 1
+        shed = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
+        assert not shed.enable_nan and not shed.enable_inf
+
+    def test_a_side_that_cannot_be_shed_is_still_stated(self):
+        """Nothing leaves the format, so the block keeps its context verbatim --
+        and the branch is still worth emitting for the operand it leaves."""
+        src = MPBFixedContext(
             -4, RealFloat(exp=0, c=255),
             overflow=fp.OverflowMode.OVERFLOW, enable_inf=True,
-        ))
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        )
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+
+        assert len(_nodes(out, IsInf)) == 1
+        assert not _nodes(out, IsNan)           # refused, so unstateable
+        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        assert target == src                    # untouched
+        for x in _samples(src):
+            _assert_agrees(f, out, x)
 
 
 # ----------------------------------------------------------------------
@@ -330,11 +365,6 @@ class TestUnchanged:
         """A refusal cannot be stated as a branch, so a format with no
         special value of its own has nothing to unfold."""
         f = _quantizer(src)
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
-
-    def test_float_context(self):
-        """A float format cannot shed its specials."""
-        f = _quantizer(fp.FP16)
         assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
 
     def test_arithmetic_body(self):
@@ -519,3 +549,63 @@ class TestEquivalence:
         out = UnfoldSpecial.apply(f.ast)
         A = [0.1, 0.25, -3.5, 1e-6, -1e-6, 7.0]
         assert _same(_eval(out, f, A), f(A))
+
+
+# ----------------------------------------------------------------------
+# Hoisting without shedding
+
+
+class TestFloatFormats:
+    """A float format states no special-value rule as a parameter — an encoded
+    float always has a NaN by construction — so it can shed nothing.  It can
+    still have its specials *stated*, which is the half that leaves the
+    surviving rounding a finite non-zero operand.
+
+    Getting the sign from the format rather than assuming it is the point: a
+    hand-written ``return fp.inf()`` is wrong for ``-inf``, and
+    ``return 0`` for ``-0.0``.
+    """
+
+    @pytest.mark.parametrize('src', [
+        fp.FP16, fp.FP32, fp.MX_E4M3, fp.MX_E5M2,
+        fp.IEEEContext(5, 16, fp.RoundingMode.RNE, _SAT),
+    ], ids=['fp16', 'fp32', 'e4m3', 'e5m2', 'saturating'])
+    def test_the_specials_are_stated_and_the_format_kept(self, src):
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+
+        assert len(_nodes(out, IsNan)) == 1
+        assert _block_ctxs(out).count(src) == 1, 'the format itself is unchanged'
+        for x in _samples(src):
+            _assert_agrees(f, out, x)
+
+    def test_the_sign_comes_from_the_format(self):
+        """`FP16` keeps both signs, so each branch has to choose."""
+        out = UnfoldSpecial.apply(_quantizer(fp.FP16).ast)
+        assert len(_nodes(out, Signbit)) == 2      # one per signed pair
+        f = _quantizer(fp.FP16)
+        for x in (fp.Float(isinf=True, s=True), fp.Float(c=0, s=True)):
+            _assert_agrees(f, out, x)
+
+    def test_a_real_context_states_nothing(self):
+        """``REAL`` rounds exactly, so its specials pass through untouched and
+        the branches would be pure noise."""
+        f = _quantizer(fp.REAL)
+        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+
+    def test_it_is_idempotent(self):
+        """The second pass sees an operand the branches already made finite and
+        non-zero, so it states nothing."""
+        once = UnfoldSpecial.apply(_quantizer(fp.FP16).ast)
+        assert UnfoldSpecial.apply(once).is_equiv(once)
+
+    def test_a_context_built_per_value_is_declined(self):
+        """The branch values are the context's own answers, so a context that is
+        not known until run time cannot be unfolded."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, n):
+            with fp.MPBFixedContext(n, 255, enable_nan=True):
+                y = fp.round(x)
+            return y
+
+        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)

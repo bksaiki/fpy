@@ -8,10 +8,12 @@ no soft-float, no `fpy::` runtime.
 
 ## Where we are
 
-**Reached, for an `FP32` source.** Three operators, each one idea:
+**Reached, for an `FP32` source.** Four operators, each one idea, plus an
+optional fifth:
 
 ```
 monomorphize      pin the argument format
+unfold_special    NaN / infinity / zero -> branches on the operand   (optional)
 unfold_overflow   IEEEContext      -> MPSFloatContext + bound checks
 float_to_fixed    unbounded float  -> MPFixedContext at a position from logb
 rescale_fixed     MPFixedContext   -> position zero, integer values
@@ -198,6 +200,12 @@ sequence, verified bit-for-bit against the interpreter across fourteen formats i
 `tests/unit/backend/cpp/test_lowered_roundtrip.py`. `simplify` composes with it
 but is not in that check. It deserves one entry point rather than a comment in a
 sandbox.
+
+`unfold_special` composes in front of `unfold_overflow` and is worth including:
+it states the specials once at the outside, so `float_to_fixed` emits no ladder of
+its own (gap 6 reads the branches) and `logb` hoists to a single call. Same
+instruction count, one ladder instead of two nested inside the rounding. Not in
+the roundtrip check either.
 
 Unrelated to lowering, but found along this path — each reproduces well before
 the change that turned it up, so none is a regression:

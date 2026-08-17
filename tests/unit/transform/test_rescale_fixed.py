@@ -347,13 +347,21 @@ class TestSubstitutingFormats:
 
     def test_non_finite_substitute_needs_no_unfolding(self):
         """Overflow *produces* the infinity here, so its NaN substitute must
-        stay in the format — and being scale-invariant, it rescales as is."""
+        stay in the format — and being scale-invariant, it rescales as is.
+
+        ``UnfoldSpecial`` still *states* the specials as branches, which is
+        independent of shedding; what matters here is that the format it leaves
+        behind is the original, so the rescale has nothing extra to shift.
+        """
         src = fp.MPBFixedContext(
             -4, RealFloat(exp=0, c=100), RoundingMode.RNE, OverflowMode.OVERFLOW,
             enable_nan=True, inf_value=fp.Float(isnan=True),
         )
         f = _quantizer(src)
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        kept = [b.ctx for b in _blocks(UnfoldSpecial.apply(f.ast))]
+        surviving = next(e.val for e in kept if isinstance(e, ForeignVal)
+                         and isinstance(e.val, fp.MPBFixedContext))
+        assert surviving.enable_nan and surviving.inf_value is not None
         out = RescaleFixed.apply(f.ast)
         assert not out.is_equiv(f.ast)
         assert _same(_eval(out, f, 1000.0), f(1000.0))
