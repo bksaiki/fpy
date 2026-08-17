@@ -114,9 +114,11 @@ Three findings, in increasing order of how fatal they are:
    type, no cast and no assert are emitted at all.
 
 So the bound has to exist where the value is *computed*, which is what makes this
-an inference problem rather than an annotation problem. Finding (3) is a separate
-gap worth fixing on its own: the bound and representability checks live in
-`_emit_integral_round` and should be hoisted into the general round/cast path.
+an inference problem rather than an annotation problem. Finding (3) is **fixed**:
+`_assert_fixed_exact` now emits the specials, representability and bound checks on
+the general `Cast` path, so a fixed-point context no longer passes a
+storage-exactness test off as a context one. See gap 3 of
+[native-lowering-roadmap.md](native-lowering-roadmap.md).
 
 ## Design A — symbolic exponents
 

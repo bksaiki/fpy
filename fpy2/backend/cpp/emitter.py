@@ -2463,17 +2463,24 @@ class CppEmitter(Visitor):
     def _emit_min_max(self, e: 'Min | Max', ctx) -> str:
         """Reduce an ``n``-ary ``min`` / ``max`` to nested pairwise steps.
 
-        Each operand is cast losslessly into the active context's storage, so
-        the integer form has a single deduced template type."""
+        Each operand is cast losslessly into one storage type, so the integer
+        form has a single deduced template type.  That type is the smallest one
+        holding every operand -- *not* the active context's.  These ops return an
+        operand unrounded, so they need no rounding context at all: asking one
+        for a type fails outright under `REAL`, and elsewhere it can be narrower
+        than an operand (a `uint16_t` context beside an `int16_t` operand) or
+        wider than any of them for no reason."""
         if not e.args:
             raise CppInternalError(
                 f'{type(e).__name__} requires at least one argument',
                 at=e,
             )
-        active = self._active_ctx_for(e)
-        target = self._scalar_for_ctx(active, at=e)
         args = [self._visit_expr(a, ctx) for a in e.args]
         arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
+        try:
+            target = scalar_sup(arg_storages)
+        except StorageSelectionError as err:
+            raise CppEmitError(f'{type(e).__name__}: {err}', at=e) from err
         casted = [
             self._call_arg(self._maybe_cast(a, s, target, at=e), src, target)
             for a, s, src in zip(args, arg_storages, e.args)

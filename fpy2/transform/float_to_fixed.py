@@ -101,6 +101,7 @@ from ..ast.fpyast import (
     IsNan,
     Location,
     Logb,
+    Max,
     Min,
     NamedId,
     Pow,
@@ -447,6 +448,17 @@ class _FloatToFixedInstance(BlockRewriter):
         # unrepresentable, and everything up there overflows anyway
         pos_name = self.gensym.fresh('exp')
         scale: Expr = Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc)
+        if src.emin is not None:
+            # Redundant at run time: the subnormal branch below takes every
+            # `logb(x) < emin`, and `emin - P + 1 == expmin` for every format
+            # with subnormals, so the position here already cannot go lower.
+            # Stated anyway because format inference reads a `max` and not a
+            # branch condition -- without it the scale-in `2 ** -exp` is inferred
+            # to reach `2 ** -expmin` times too far (`2 ** 287` rather than
+            # `2 ** 152` for an `FP32` source), and the rounded value is then
+            # given an integer that wide.
+            assert src.expmin is not None
+            scale = Max(None, [scale, Integer(src.expmin, loc)], loc)
         if src.expmax is not None:
             scale = Min(None, [scale, Integer(src.expmax, loc)], loc)
         position = Assign(pos_name, None, scale, loc)
