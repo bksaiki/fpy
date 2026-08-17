@@ -1639,7 +1639,7 @@ class CppEmitter(Visitor):
         matches the ``float`` signature while the token is a ``double``.  Harmless
         where a declaration supplies the type, and exact for ``+ - * /`` since
         ``2p + 2 <= 53``.  Not where the callee deduces from the argument:
-        ``fpy::min``/``max`` fail to deduce, and the ``<cmath>`` overload sets pick
+        ``std::min``/``max`` fail to deduce, and the ``<cmath>`` overload sets pick
         the wider one -- which for ``fma``, outside that bound, rounds twice.
         """
         if not isinstance(e, RationalVal):
@@ -2463,16 +2463,46 @@ class CppEmitter(Visitor):
             for a, s, src in zip(args, arg_storages, e.args)
         ]
         if target.is_float():
-            # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``
-            # (see :data:`CPP_HELPERS`).  ±0 ordering is delegated to the
-            # underlying ``std::fmin`` / ``std::fmax``.
-            fn = 'fpy::min' if isinstance(e, Min) else 'fpy::max'
-        else:
-            fn = 'std::min' if isinstance(e, Min) else 'std::max'
+            # `_emit_ieee_min_max` binds its own operands, so folding an
+            # expression into the next step names it once
+            result = casted[0]
+            for nxt in casted[1:]:
+                result = self._emit_ieee_min_max(
+                    result, nxt, target, is_min=isinstance(e, Min),
+                )
+            return result
+        # integers have no NaN and no signed zero, so the library form is exact
+        fn = 'std::min' if isinstance(e, Min) else 'std::max'
         result = casted[0]
         for nxt in casted[1:]:
             result = f'{fn}({result}, {nxt})'
         return result
+
+    def _emit_ieee_min_max(
+        self, a: str, b: str, ty: CppScalar, *, is_min: bool,
+    ) -> str:
+        """IEEE 754-2019 ``minimum`` / ``maximum`` of *a* and *b*, inline.
+
+        Not ``std::fmin`` / ``std::fmax``, which differ twice over: they *ignore*
+        a NaN where these propagate it, and they leave the choice between ``-0.0``
+        and ``+0.0`` unspecified -- libstdc++ compiles the variable-operand path
+        to ``(a < b) ? a : b``, so ``fmin(-0.0, +0.0)`` gives ``+0.0`` where
+        ``minimum`` gives ``-0.0``.
+
+        One predicate covers both: *a* wins a ``min`` when it is smaller, or when
+        the two compare equal and *a* carries the sign -- which can only be the
+        ±0 case, since equal non-zero values are indistinguishable.  ``max`` uses
+        the same predicate and swaps the results.
+
+        Emitted inline rather than called, so the lowered program depends on
+        ``std::`` alone.  Both operands are named several times, so both are
+        bound.
+        """
+        a, b = self._bind_operand(a), self._bind_operand(b)
+        a_wins = f'({a} < {b} || ({a} == {b} && std::signbit({a})))'
+        chosen = f'{a_wins} ? {a} : {b}' if is_min else f'{a_wins} ? {b} : {a}'
+        nan = f'std::numeric_limits<{ty.format()}>::quiet_NaN()'
+        return f'((std::isnan({a}) || std::isnan({b})) ? {nan} : ({chosen}))'
 
     def _emit_sum(self, e: Sum, arg: str) -> str:
         """``sum(xs)`` as the fold the interpreter performs.
@@ -2570,12 +2600,7 @@ class CppEmitter(Visitor):
                 at=e,
             )
         elt_ty = arg_storage.elt
-        if result_ty.is_float():
-            # NaN-propagating wrapper around ``std::fmin`` / ``std::fmax``;
-            # see :meth:`_emit_min_max` and :data:`CPP_HELPERS`.
-            fn = 'fpy::min' if isinstance(e, AMin) else 'fpy::max'
-        else:
-            fn = 'std::min' if isinstance(e, AMin) else 'std::max'
+        is_min = isinstance(e, AMin)
 
         src = self._bind_operand(arg_str)
         acc = self._fresh_temp()
@@ -2591,7 +2616,13 @@ class CppEmitter(Visitor):
         elt = self._maybe_cast(
             self._list_at_raw(arg_storage, src, i), elt_ty, result_ty, at=e,
         )
-        self.writer.add_line(f'{acc} = {fn}({acc}, {elt});')
+        if result_ty.is_float():
+            step = self._emit_ieee_min_max(acc, elt, result_ty, is_min=is_min)
+        else:
+            # integers have no NaN and no signed zero
+            fn = 'std::min' if is_min else 'std::max'
+            step = f'{fn}({acc}, {elt})'
+        self.writer.add_line(f'{acc} = {step};')
         self.writer.dedent()
         self.writer.add_line('}')
         return acc
@@ -2856,6 +2887,28 @@ class CppEmitter(Visitor):
             return lit
         return self._explicit_cast(lit, target_ty)
 
+    def _guard_float_to_integer(self, arg: str, arg_ty, target_ty: CppScalar) -> str:
+        """Assert *arg* is finite before a float-to-integer conversion.
+
+        Converting a NaN or an infinity to an integer type is undefined -- on
+        x86-64 it yields ``INT_MIN`` -- where the interpreter raises.  A native
+        integer context needs nothing said about its *bound*, since the type's own
+        range and wrapping are the format's, but nothing makes a special value
+        finite.
+
+        Returns the operand, bound where the assertion has to name it.
+        """
+        if not target_ty.is_integer():
+            return arg
+        if arg_ty is not None and not arg_ty.is_float():
+            return arg
+        operand = self._bind_operand(arg)
+        self.writer.add_line(
+            f'assert(std::isfinite({operand}) '
+            f'&& "fpy: rounding is undefined for this value");'
+        )
+        return operand
+
     def _visit_round(self, e, ctx) -> str:
         # A `static_cast`, whose rounding mode is the one the surrounding
         # `with` set.  The user asked for it, so it is emitted even when lossy;
@@ -2873,6 +2926,7 @@ class CppEmitter(Visitor):
         arg_ty, target_ty = self._scalar_cast_types(e)
         if arg_ty == target_ty:
             return arg
+        arg = self._guard_float_to_integer(arg, arg_ty, target_ty)
         return self._explicit_cast(arg, target_ty)
 
     _INTEGRAL_ONE_CALL: ClassVar[dict[RM, str]] = {

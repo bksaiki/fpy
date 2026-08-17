@@ -11,13 +11,14 @@ explicitly and concatenate them — same shape as the legacy
 Headers track exactly what the emitter uses; the list below is the whole
 dependency set.
 
-The runtime is ``fpy::min``/``max`` and nothing else: everything a list needs
-is generated at the use site in standard-library spellings
-(``std::shared_ptr<std::vector<T>>``, ``std::make_shared``), so a program
-embedding a kernel depends on nothing of ours.  See :class:`.types.CppList`
-for why the boxed representation is a ``shared_ptr`` at all.  The conversions
-a *caller* needs to hand a ``std::vector`` to a boxed kernel are in
-``CPP_INTEROP``, with the tests that exercise that boundary.
+**There is no runtime.**  Everything is generated at the use site in
+standard-library spellings (``std::shared_ptr<std::vector<T>>``,
+``std::make_shared``), so a program embedding a kernel depends on nothing of
+ours -- unconditionally, not just for the programs that happen to avoid a
+helper.  See :class:`.types.CppList` for why the boxed representation is a
+``shared_ptr`` at all.  The conversions a *caller* needs to hand a
+``std::vector`` to a boxed kernel are in ``CPP_INTEROP``, with the tests that
+exercise that boundary.
 """
 
 
@@ -36,31 +37,12 @@ CPP_HEADERS: tuple[str, ...] = (
     '#include <tuple>',
 )
 
-# `fpy::min`/`max` are IEEE 754-2019 minimum/maximum: NaN-propagating and
-# signed-zero-correct.  `std::fmin`/`fmax` are neither -- they ignore NaN, and
-# libstdc++ compiles the variable-operand path to `(a < b) ? a : b`, which
-# returns +0 for `fmin(-0.0, +0.0)`.  The `a == b` tie-break fixes both.
-# Integer min/max use `std::min`/`max`: no NaN, no signed zero.
-CPP_HELPERS: str = '''\
-namespace fpy {
+CPP_HELPERS: str = ''
+"""Empty: the backend emits no support code.
 
-template <typename T>
-inline T min(T a, T b) {
-    if (std::isnan(a) || std::isnan(b))
-        return std::numeric_limits<T>::quiet_NaN();
-    if (a == b)
-        return std::signbit(a) ? a : b;
-    return (a < b) ? a : b;
-}
-
-template <typename T>
-inline T max(T a, T b) {
-    if (std::isnan(a) || std::isnan(b))
-        return std::numeric_limits<T>::quiet_NaN();
-    if (a == b)
-        return std::signbit(a) ? b : a;
-    return (a < b) ? b : a;
-}
-
-}  // namespace fpy
-'''
+`Min`/`Max` were the last entry -- IEEE 754-2019 ``minimum``/``maximum``, which
+``std::fmin``/``fmax`` are not (they ignore a NaN, and leave the ±0 choice
+unspecified).  `CppEmitter._emit_ieee_min_max` now emits that inline.  Kept as a
+symbol because :meth:`CppCompiler.helpers` is part of the public shape and every
+caller concatenates it.
+"""

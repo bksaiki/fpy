@@ -18,10 +18,10 @@ rescale_fixed     MPFixedContext   -> position zero, integer values
 ```
 
 The result compiles to plain C++ and is bit-exact against the interpreter across
-eleven target formats — every IEEE rounding mode with a libm counterpart, the MX
-family, a saturating `IEEEContext`, and an `EFloatNanKind.NEG_ZERO` format. It
-needs no support library: zero `fpy::` references, and it still compiles with the
-helper namespace stripped. Pinned by
+fourteen target formats — all eight IEEE rounding modes, the MX family, a
+saturating `IEEEContext`, and an `EFloatNanKind.NEG_ZERO` format. It
+needs no support library, and now unconditionally: the backend emits no support
+code at all, so `CPP_HELPERS` is empty. Pinned by
 `tests/unit/backend/cpp/test_lowered_roundtrip.py`.
 
 ```c++
@@ -179,16 +179,13 @@ one, and four emitted guards with it.
 - `(2 ** n) * x` fails for an `n` typed `SINT64` or `INTEGER`: `cannot implicitly
   cast int64_t to double: conversion is lossy`. `SINT8`/`SINT16`/`SINT32` work,
   since those convert exactly. The message does not suggest the fix.
-- `fpy::min` / `fpy::max` are support-library calls on the float path where the
-  integer path uses `std::`. The lowered program happens to use neither, so the
-  no-library claim holds today, but a program that does would break it.
 - Cosmetic: redundant `static_cast<double>` on integer literals, and a doubled
   `static_cast<double>(static_cast<double>(2))`.
 
 ### 5. A recipe
 
 `monomorphize → unfold_overflow → float_to_fixed → rescale_fixed` is the
-sequence, verified bit-for-bit against the interpreter across eleven formats in
+sequence, verified bit-for-bit against the interpreter across fourteen formats in
 `tests/unit/backend/cpp/test_lowered_roundtrip.py`. `simplify` composes with it
 but is not in that check. It deserves one entry point rather than a comment in a
 sandbox.
@@ -199,17 +196,17 @@ type inference where a diagnostic belongs.
 
 ## Order of work
 
-Gaps 2 and 3 are done. What is left, cheapest first:
+Gaps 2 and 3 are done, and with them the non-finite integer conversion: a
+float-to-integer cast now asserts `std::isfinite` first, on the native integer
+path as well. Measured before landing — it changed three tests and no corpus
+program. What is left, cheapest first:
 
-1. **The non-finite integer conversion** — one assertion, undefined behavior
-   today; the only thing holding it is measuring how much emitted output changes.
-   Recorded in [backend-cpp.md](backend-cpp.md).
-2. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
+1. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
    at branches.  Removes two runtime branches and two assertions from every
    lowered rounding and discharges the libm mapping's last side-condition.
-3. **An `FP64` source** — the largest, and gated on the *numeric* half of
+2. **An `FP64` source** — the largest, and gated on the *numeric* half of
    inference rather than on the backend.
-4. **Backend cleanups and a recipe.**
+3. **Backend cleanups and a recipe.**
 
 ## Open questions
 

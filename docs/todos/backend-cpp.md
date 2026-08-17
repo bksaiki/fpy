@@ -15,7 +15,9 @@ Module layout:
 - `storage_infer.py` — per-SSA-def storage assignment via union-find.
 - `unbox.py` — which lists may drop the `std::shared_ptr` handle.
 - `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
-- `target.py`, `utils.py` — target description, header / helper preamble.
+- `target.py`, `utils.py` — target description and header preamble.  There is no
+  runtime: `CPP_HELPERS` is empty, and every spelling the emitter produces is
+  `std::`.
 
 Read the design before changing anything; [Open issues](#open-issues) is at
 the bottom.
@@ -25,10 +27,14 @@ not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
-compile and must behave as the FPy interpreter does.* A refusal is always
-acceptable — the compiler may be limited — so a shape it cannot handle should
-raise, never miscompile. Two places still violate it: unchecked subscripts and
-non-finite integer conversions, both below.
+compile and must behave as the FPy interpreter does wherever FPy's semantics are
+defined.* A refusal is always acceptable — the compiler may be limited — so a
+shape it cannot handle should raise, never miscompile.
+
+The qualifier is load-bearing. FPy has undefined behavior, and the interpreter's
+checks are not the contract: it raises on an out-of-range subscript and on a
+mismatched-length `zip`, but neither is promised, so the backend owes nothing
+there. Nothing currently violates the criterion as stated.
 
 **Storage *contains* a format; it does not equal it.** `choose_storage` picks the
 smallest ladder type holding a format, which is right for storing a value and
@@ -172,59 +178,34 @@ list is automatically instantiated wider, which is the workaround
 
 `CppCompiler.compile` returns a function definition only, so single-function
 tests can use exact-string equality. Callers wanting a full translation unit
-pull `headers()`, `helpers()`, or `prelude()`. `helpers()` carries the runtime:
-the nary `fpy::min` / `fpy::max`, and nothing else — list code is emitted in
-standard-library spellings (`std::shared_ptr<std::vector<T>>`, `std::array`)
-at the use site. Headers track exactly what the emitted code uses.
+pull `headers()`, `helpers()`, or `prelude()`. `helpers()` is **empty** —
+everything is emitted in standard-library spellings at the use site
+(`std::shared_ptr<std::vector<T>>`, `std::array`), including the IEEE
+`minimum`/`maximum` that used to be an `fpy::min`/`max` template. It is kept as a
+method so callers need not care whether the backend currently emits any support
+code. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
-### A non-finite operand converted to an integer type
+### Unchecked subscripts are not a bug
 
-**Undefined behavior, on the most ordinary integer path.** Under a *native*
-integer context (`SINT8` … `UINT64`), `Round` emits a bare
-`static_cast<int8_t>(v)`. That is right for the bound and for the wrapping —
-`SINT8`'s `WRAP` is exactly what the cast does, verified against the interpreter
-for 128, 200, 255, 256 and -129 — but wrong for the specials:
-`static_cast<int8_t>(inf)` is undefined and yields `INT_MIN` on x86-64, where the
-interpreter raises `ValueError`. Measured 21/24 agreement over a value sweep, the
-three failures being `±inf` and NaN.
+**Settled: an out-of-range subscript is undefined in FPy.** `_visit_list_ref`,
+`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]`, and that is the
+intended lowering. The interpreter happens to raise on `xs[10]` over a shorter
+list, but that is an artifact of how it is written, not a promise the language
+makes — so a backend is free to do anything, and a raw subscript is the normal
+C/C++ idiom.
 
-The fix is one line, `assert(std::isfinite(v))` before the conversion, which
-every *non*-native path already emits (`_emit_cast_round`); it is missing here
-only because the native path emits no assertions at all. It is deliberately not
-applied yet because it changes the emitted output of every float-to-integer
-rounding, and that blast radius wants measuring first.
+Recorded because the shape invites the opposite conclusion: it looks like the
+emitted code disagrees with the interpreter, so it reads as the criterion above
+being violated. It is not. Do not add a checked-subscript helper on this
+reasoning; the criterion applies where FPy's semantics are *defined*, and here
+they are not.
 
-Strictly, an out-of-range *finite* operand is undefined too —
-`static_cast<int8_t>(200.0)` — even though gcc happens to wrap exactly as the
-context's `WRAP` says. Making the guard a bound check rather than a finiteness
-check would cover both, at the cost of asserting on programs that rely on
-wrapping.
-
-### Bounds-checked list operations
-
-**A silent wrong answer.** `_visit_list_ref`,
-`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]` with no range
-check. The interpreter raises on `xs[10]` over a shorter list; C++ does not
-report anything. A read returns whatever occupies that memory, so the program
-carries on and produces a wrong number. A write — `xs[10] = v` — stores outside
-the vector's buffer, which can corrupt unrelated data or the heap, with the
-damage surfacing far from its cause.
-
-So this is not a difference in how an error is reported, and it is the last
-violation of the criterion above. It is narrow only in needing the program to
-index out of range in the first place.
-
-Likely shape: a checked subscript helper in `CPP_HELPERS`, called from each
-subscript site. Deliberately not done yet, for two reasons that argue for doing
-it together with the array-size work rather than alone:
-
-- an unconditional check costs something at every subscript, and
-- the checks worth keeping are the ones that cannot be discharged statically.
-  `array-size-symbolic.md` already tracks the size equalities that would
-  discharge them (`is_size_eq` proving `len(ys) == len(xs)` where `i < len(xs)`)
-  and says the two belong together. Nothing consumes those equalities yet.
+(Should bounds checking ever be wanted, it would be a debug-build feature like the
+rounding assertions, and it would want the array-size work first — the checks
+worth keeping are the ones `array-size-symbolic.md`'s size equalities cannot
+discharge statically.)
 
 ### One question answered in four places
 

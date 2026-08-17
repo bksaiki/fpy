@@ -160,12 +160,15 @@ class TestNativeContextsAreUntouched:
         pytest.param(fp.SINT8, 'int8_t', id='sint8'),
         pytest.param(fp.UINT16, 'uint16_t', id='uint16'),
     ])
-    def test_a_native_integer_context_keeps_its_bare_cast(self, ctx, ty):
+    def test_a_native_integer_context_asserts_no_bound(self, ctx, ty):
         """Its whole context matches what the cast does, wrapping included --
-        `SINT8` maps 128 to -128 and -129 to 127 in both languages."""
+        `SINT8` maps 128 to -128 and -129 to 127 in both languages -- so there is
+        no bound to state.  Only the specials are guarded."""
         out = _emit(ctx)
         assert f'static_cast<{ty}>' in out
-        assert 'assert(' not in out
+        assert 'overflow occurred' not in out
+        assert out.count('assert(') == 1
+        assert 'std::isfinite' in out
 
     def test_wrapping_matches_for_a_native_context(self):
         q = _round_fn(fp.SINT8)

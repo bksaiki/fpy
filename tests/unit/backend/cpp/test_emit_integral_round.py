@@ -7,8 +7,8 @@ That keeps the signed zero and needs no integer wide enough for the value.
 
 All eight FPy modes are covered.  Five are one libm call; ``RAZ`` takes three,
 and ``RTO``/``RTE`` ask for the parity of the *result*, which no libm function
-reports — those are built from ``trunc``/``floor``/``copysign`` and a comparison
-so the lowered program still depends on ``std::`` alone.
+reports — those are composed from the same calls, so the lowered program still
+depends on ``std::`` alone.
 
 The context's edges become assertions around it: an operand it has no result
 for, and a result past its bound.
@@ -216,13 +216,20 @@ class TestAssertions:
                 -1, fp.RealFloat(exp=11, c=1), rm=RM.RTZ, overflow=overflow,
                 enable_neg_zero=neg_zero))
 
-    def test_a_native_integer_context_keeps_its_bare_cast(self):
-        """`SINT8` is the one case where the rule needs no help: its format *is*
-        ``int8_t``'s, so the type's own wrapping is the context's -- verified
-        against the interpreter for 128, 200, 255, 256 and -129."""
+    def test_a_native_integer_context_asserts_only_finiteness(self):
+        """`SINT8`'s format *is* ``int8_t``'s, so the type's own range and
+        wrapping are the context's and its *bound* needs nothing said -- verified
+        against the interpreter for 128, 200, 255, 256 and -129.
+
+        Its specials still do: converting a NaN or an infinity to an integer type
+        is undefined, and gives ``INT_MIN`` on x86-64 where the interpreter
+        raises.
+        """
         out = _emit(fp.SINT8)
         assert 'static_cast<int8_t>' in out
-        assert 'assert(' not in out
+        assert out.count('assert(') == 1
+        assert 'std::isfinite' in out
+        assert 'overflow occurred' not in out
 
 
 class TestDeclines:
