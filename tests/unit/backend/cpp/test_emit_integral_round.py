@@ -108,12 +108,32 @@ class TestAssertions:
         assert '-128' in out and '127' in out
         assert 'overflow occurred so rounding is undefined' in out
 
-    def test_no_bound_assertion_without_assert_mode(self):
-        """``SATURATE`` is an edge *rule*, not a claim; it has no assertion to
-        make and is not this lowering's business."""
-        out = _emit(MPBFixedContext(
-            -1, fp.RealFloat(exp=11, c=1), overflow=fp.OverflowMode.SATURATE))
-        assert 'overflow occurred' not in out
+    @pytest.mark.parametrize('overflow', [
+        fp.OverflowMode.SATURATE, fp.OverflowMode.WRAP, fp.OverflowMode.OVERFLOW,
+    ], ids=['saturate', 'wrap', 'overflow'])
+    @pytest.mark.parametrize('neg_zero', [True, False], ids=['float', 'integer'])
+    def test_an_edge_rule_is_refused_not_ignored(self, overflow, neg_zero):
+        """An edge *rule* is behavior, and this lowering implements none of it.
+
+        Emitting the rounding without it is what made a context bounded at 100
+        return 120 where `SATURATE` says 100 and `WRAP` says -81.  ``ASSERT``
+        alone is a *claim* that the edge is never reached, which an assertion
+        states exactly.  Both storage paths are checked: the bound is narrower
+        than either type, so neither the range nor the wrapping of `int16_t`
+        reproduces the rule.
+        """
+        with pytest.raises(CppCompileError, match='has no C'):
+            _emit(MPBFixedContext(
+                -1, fp.RealFloat(exp=11, c=1), rm=RM.RTZ, overflow=overflow,
+                enable_neg_zero=neg_zero))
+
+    def test_a_native_integer_context_keeps_its_bare_cast(self):
+        """`SINT8` is the one case where the rule needs no help: its format *is*
+        ``int8_t``'s, so the type's own wrapping is the context's -- verified
+        against the interpreter for 128, 200, 255, 256 and -129."""
+        out = _emit(fp.SINT8)
+        assert 'static_cast<int8_t>' in out
+        assert 'assert(' not in out
 
 
 class TestDeclines:
@@ -126,14 +146,25 @@ class TestDeclines:
         with pytest.raises(CppCompileError, match='position zero'):
             _emit(MPBFixedContext(-4, fp.RealFloat(exp=10, c=1), overflow=ASSERT))
 
-    def test_integer_storage_still_casts(self):
-        """Without a signed zero the format lands in an integer type, where a
-        cast is the better lowering and ``RTZ`` is what C++ does."""
+    def test_integer_storage_rounds_by_the_cast(self):
+        """Without a signed zero the format lands in an integer type, where the
+        cast *is* the rounding -- C++ integer conversion is ``RTZ``.
+
+        The bound still has to be asserted, since ``int16_t`` is wider than the
+        format: this emitted a bare cast and returned 120 where the interpreter
+        raised.  It is asserted on the *rounded* value, which also keeps the
+        conversion in range -- an operand past ``int16_t`` would be undefined.
+        """
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), rm=RM.RTZ, overflow=ASSERT,
             enable_neg_zero=False))
         assert 'static_cast<int16_t>' in out
-        assert 'std::trunc' not in out
+        assert 'assert((std::fabs(std::trunc(' in out
+        assert 'overflow occurred' in out
+        # the cast does the rounding; `trunc` appears only inside the assertion
+        assert not any(
+            'std::trunc' in ln and 'assert' not in ln for ln in out.splitlines()
+        )
 
     def test_signed_zero_decides_the_lowering(self):
         """The two lowerings want opposite answers: libm keeps a signed zero
@@ -143,8 +174,14 @@ class TestDeclines:
                                         enable_neg_zero=True, **kw))
         without = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1),
                                         enable_neg_zero=False, **kw))
-        assert 'std::trunc' in with_nz and 'static_cast<int' not in with_nz
-        assert 'static_cast<int' in without and 'std::trunc' not in without
+        # libm computes the result under one; the cast computes it under the other
+        assert 'float _tmp1 = std::trunc(' in with_nz
+        assert 'static_cast<int' not in with_nz
+        assert 'static_cast<int' in without
+        assert not any(
+            'std::trunc' in ln and 'assert' not in ln
+            for ln in without.splitlines()
+        )
 
 
 class TestFloatContextUnaffected:

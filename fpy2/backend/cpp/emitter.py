@@ -2816,7 +2816,7 @@ class CppEmitter(Visitor):
             assert integral_test is not None  # checked above
             say(integral_test, 'this context represents only integers')
         if isinstance(ctx, MPBFixedContext):
-            say(self._bound_test(ctx, operand, at=e),
+            say(self._bound_test(ctx, operand, at=e, integral=integral),
                 "value is outside the context's bound")
         return operand
 
@@ -2913,36 +2913,83 @@ class CppEmitter(Visitor):
         return tests[0] if tests else None
 
     def _emit_integral_round(self, e, arg: str) -> str | None:
-        """``round(v)`` under an integer context, as a libm call.
+        """``round(v)`` under a fixed-point context, as a libm call or a cast.
 
-        `None` when this rounding is not of that shape, leaving the caller's
-        cast in place.  Applies when the context's digits sit at position zero
-        and its storage is a floating-point type: the result is then an integral
-        *value* in a float, which is what C++ rounds to natively.
+        `None` only when the context is not fixed-point, leaving the caller's
+        cast to a *native* context in place.  A fixed-point context is either
+        lowered faithfully here or refused: letting one reach a bare
+        ``static_cast`` drops its bound and its edge rule silently, which is what
+        made a context bounded at 100 return 120.
 
-        The context's edges become assertions bracketing the call -- an operand
-        it cannot round, and a result past its bound.  Both vanish under
-        ``NDEBUG``, as every FPy assertion does.
+        Float storage rounds by libm -- the result is an integral *value* in a
+        float, which is what C++ rounds to natively.  Integer storage rounds by
+        the cast itself, ``RTZ`` being what C++ integer conversion does.
+
+        The context's edges become assertions around it -- an operand it cannot
+        round, and a result past its bound.  Both vanish under ``NDEBUG``, as
+        every FPy assertion does.
         """
         active = self._active_ctx_for(e)
         if not isinstance(active, MPFixedContext | MPBFixedContext):
             return None
-        # position zero: `nmin` is the last unrepresentable digit, so -1 is the
-        # case whose representable values are the integers.  Any other position
-        # needs the operand scaled first,
-        # which is `rescale_fixed`'s job rather than the backend's.
-        if active.nmin != -1 or active.num_randbits != 0:
-            return None
-        # libm keeps a signed zero; a format without one would disagree
-        if not active.enable_neg_zero:
-            return None
-        fn = self._integral_fn(active.rm)
-        if fn is None:
+        # A context the op table dispatches on is the one case needing no help:
+        # the C++ type's own range and wrapping *are* the context's, so the plain
+        # cast reproduces the rounding and the edge rule together -- `SINT8`'s
+        # `WRAP` is what `static_cast<int8_t>` already does.  Matching *formats*
+        # would not be enough, since a format carries no edge rule: the same
+        # -128..127 values under `ASSERT` still need the assertion.
+        if is_native_ctx(active):
             return None
         target_ty = self._scalar_for_ctx(active, at=e)
-        if not target_ty.is_float():
-            # integer storage: the existing cast is the better lowering
+        # position zero: `nmin` is the last unrepresentable digit, so -1 is the
+        # case whose representable values are the integers.  Any other position
+        # needs the operand scaled first, which is `rescale_fixed`'s job rather
+        # than the backend's.
+        if active.nmin != -1:
+            raise CppEmitError(
+                f'rounding under `{active}` needs its digits at position zero; '
+                'run `fpy2.strategies.rescale_fixed` first',
+                at=e,
+            )
+        if active.num_randbits != 0:
+            raise CppEmitError(
+                f'stochastic rounding under `{active}` has no C++ analogue: no '
+                'libm function draws random bits',
+                at=e,
+            )
+        if not isinstance(active, MPBFixedContext):
+            # unbounded: no bound to assert, and `_validate_context_rm` has
+            # already gated the `int64_t` truncation on `unsafe_cast_int`
             return None
+        # An edge *rule* is behavior, and this lowering implements none of it.
+        # `ASSERT` alone is a claim that the edge is never reached, which an
+        # assertion states exactly.
+        if active.overflow is not OverflowMode.ASSERT:
+            raise CppEmitError(
+                f'overflow mode {active.overflow} under `{active}` has no C++ '
+                f'analogue: `{target_ty.format()}` is wider than the format, so '
+                'neither its range nor its wrapping reproduces the rule.  Run '
+                '`fpy2.strategies.unfold_overflow` to state the rule as program '
+                'text.',
+                at=e,
+            )
+        if target_ty.is_integer():
+            return self._emit_cast_round(active, arg, target_ty, e)
+        # libm keeps a signed zero; a format without one would disagree
+        if not active.enable_neg_zero:
+            raise CppEmitError(
+                f'context `{active}` drops the negative zero that its '
+                'floating-point storage keeps, and the libm rounding functions '
+                'preserve',
+                at=e,
+            )
+        fn = self._integral_fn(active.rm)
+        if fn is None:
+            raise CppEmitError(
+                f'rounding mode {active.rm} for context `{active}` has no libm '
+                'function rounding to an integral value',
+                at=e,
+            )
         if active.rm is RM.RNE and self._current_rm not in (None, RM.RNE):
             raise CppEmitError(
                 f'rounding to nearest under `{active}` needs `std::nearbyint` '
@@ -2960,15 +3007,51 @@ class CppEmitter(Visitor):
         self.writer.add_line(
             f'{target_ty.format()} {out} = {fn}({operand});'
         )
-        if isinstance(active, MPBFixedContext) and active.overflow is OverflowMode.ASSERT:
-            self.writer.add_line(
-                f'assert(({self._bound_test(active, out, at=e)}) '
-                f'&& "fpy: overflow occurred so rounding is undefined");'
-            )
+        self.writer.add_line(
+            f'assert(({self._bound_test(active, out, at=e)}) '
+            f'&& "fpy: overflow occurred so rounding is undefined");'
+        )
+        return out
+
+    def _emit_cast_round(
+        self, ctx: MPBFixedContext, arg: str, target_ty: CppScalar, e,
+    ) -> str:
+        """``round(v)`` into integer storage wider than *ctx*'s own format.
+
+        The cast rounds (C++ integer conversion is ``RTZ``, which
+        `_validate_context_rm` has already required) but it wraps at the *type*'s
+        range, not the format's.  So the bound is asserted first, on the rounded
+        value -- ``100.7`` is in bounds under ``RTZ`` even though ``100.7 > 100``
+        -- which also keeps the conversion itself in range, since an operand past
+        the type's range would be undefined.
+        """
+        arg_ty, _ = self._scalar_cast_types(e)
+        integral = arg_ty is not None and arg_ty.is_integer()
+        operand = self._bind_operand(arg)
+        # an integer operand is already integral and never a NaN or an infinity;
+        # only its magnitude is in question
+        if not integral:
+            guard = self._undefined_guard(ctx, operand)
+            if guard is not None:
+                self.writer.add_line(
+                    f'assert({guard} '
+                    f'&& "fpy: rounding is undefined for this value");'
+                )
+        rounded = operand if integral else f'std::trunc({operand})'
+        self.writer.add_line(
+            f'assert(({self._bound_test(ctx, rounded, at=e, integral=integral)}) '
+            f'&& "fpy: overflow occurred so rounding is undefined");'
+        )
+        out = self._fresh_temp()
+        self.writer.add_line(
+            f'{target_ty.format()} {out} = '
+            f'{self._explicit_cast(operand, target_ty)};'
+        )
         return out
 
     def _bound_test(
         self, ctx: MPBFixedContext, operand: str, *, at: Expr,
+        integral: bool = False,
     ) -> str:
         """A C++ test that *operand* lies within `ctx`'s bounds.
 
@@ -2977,7 +3060,9 @@ class CppEmitter(Visitor):
         """
         hi = ctx.pos_maxval.as_rational()
         lo = ctx.neg_maxval.as_rational()
-        if lo == -hi:
+        # `fabs` would promote an integer operand to `double`, which is lossy past
+        # 2**53; the two-sided form below is exact in integer arithmetic
+        if lo == -hi and not integral:
             return f'std::fabs({operand}) <= {self._emit_numeric_literal(hi, at=at)}'
         # the two bounds are independent -- a two's-complement format runs to
         # -128 but only to 127 -- and `fabs` cannot say that

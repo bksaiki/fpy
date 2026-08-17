@@ -27,8 +27,19 @@ not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
 compile and must behave as the FPy interpreter does.* A refusal is always
 acceptable — the compiler may be limited — so a shape it cannot handle should
-raise, never miscompile. The one place that still violates this is unchecked
-subscripts, below.
+raise, never miscompile. Two places still violate it: unchecked subscripts and
+non-finite integer conversions, both below.
+
+**Storage *contains* a format; it does not equal it.** `choose_storage` picks the
+smallest ladder type holding a format, which is right for storing a value and
+wrong as a *rounding*. Three separate miscompiles came from conflating the two,
+so the rule is worth stating once: a `static_cast` into a context's storage is
+that context's `round` only when the whole *context* is one the op table
+dispatches on (`target.is_native_ctx`). Comparing formats is not enough, because
+a format carries neither the overflow rule nor the random bits — a saturating
+`IEEEContext(8, 32)` and a `-128..127` context under `ASSERT` are format-equal to
+`FP32` and `int8_t` respectively, and neither behaves like the cast. Anything
+else must be lowered explicitly or refused; see `native-lowering-roadmap.md`.
 
 ## Design
 
@@ -113,17 +124,30 @@ When a scope is used:
   case where a nested concrete `with` must set the mode unconditionally.
 - **Integer contexts** must use RTZ — that is what C++ integer truncation does.
 
-`Round` / `Cast`:
+`Round` / `Cast`: both bypass the op table, so both carry its discipline
+themselves (`_require_cast_is_round`) — see the storage-versus-format rule at the
+top.
 
-- `Round(arg)` lowers to `static_cast<target>(arg)`, whose rounding mode comes
-  from the surrounding `fesetround` boundary. A **literal** argument is folded at
-  compile time instead (`_fold_rounded_literal`) — C++ has no exact-real literal,
-  so this is the only way an inexact constant is representable at all, and it
-  also gets the mode the program asked for rather than whatever `fesetround`
-  last left behind.
+- `Round(arg)` under a **native** context is `static_cast<target>(arg)`, whose
+  rounding mode comes from the surrounding `fesetround` boundary. A **literal**
+  argument is folded at compile time instead (`_fold_rounded_literal`) — C++ has
+  no exact-real literal, so this is the only way an inexact constant is
+  representable at all, and it also gets the mode the program asked for rather
+  than whatever `fesetround` last left behind.
+- `Round(arg)` under a **fixed-point** context goes to `_emit_integral_round`,
+  which either lowers it faithfully or refuses; it never falls through to a bare
+  cast. Float storage rounds by libm (`trunc`/`floor`/`ceil`/`round`/`nearbyint`),
+  integer storage by the cast itself. Either way the bound is asserted, on the
+  *rounded* value — `100.7` is in bounds under `RTZ` even though `100.7 > 100`.
+  An overflow *rule* other than `ASSERT` is refused: `SATURATE`/`WRAP`/`OVERFLOW`
+  are behavior this lowering does not implement, and `unfold_overflow` is what
+  turns them into program text.
 - `Cast(arg)` — the node `fp.cast` and `fp.round_exact` both parse to — is the
-  same cast plus a runtime assertion that it was lossless, NaN-aware for FP
-  operands. Same-type short-circuits to the identity.
+  same cast plus a runtime assertion that it was lossless. Under a native context
+  a storage round-trip *is* that claim, NaN-aware for FP operands. Under a
+  fixed-point context it is not, since storage is wider than the format, so
+  `_assert_fixed_exact` adds the specials, representability and bound tests; the
+  same-type short-circuit no longer skips them.
 
 ### Pipeline
 
@@ -155,9 +179,32 @@ at the use site. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
+### A non-finite operand converted to an integer type
+
+**Undefined behavior, on the most ordinary integer path.** Under a *native*
+integer context (`SINT8` … `UINT64`), `Round` emits a bare
+`static_cast<int8_t>(v)`. That is right for the bound and for the wrapping —
+`SINT8`'s `WRAP` is exactly what the cast does, verified against the interpreter
+for 128, 200, 255, 256 and -129 — but wrong for the specials:
+`static_cast<int8_t>(inf)` is undefined and yields `INT_MIN` on x86-64, where the
+interpreter raises `ValueError`. Measured 21/24 agreement over a value sweep, the
+three failures being `±inf` and NaN.
+
+The fix is one line, `assert(std::isfinite(v))` before the conversion, which
+every *non*-native path already emits (`_emit_cast_round`); it is missing here
+only because the native path emits no assertions at all. It is deliberately not
+applied yet because it changes the emitted output of every float-to-integer
+rounding, and that blast radius wants measuring first.
+
+Strictly, an out-of-range *finite* operand is undefined too —
+`static_cast<int8_t>(200.0)` — even though gcc happens to wrap exactly as the
+context's `WRAP` says. Making the guard a bound check rather than a finiteness
+check would cover both, at the cost of asserting on programs that rely on
+wrapping.
+
 ### Bounds-checked list operations
 
-**A silent wrong answer, and the only one left.** `_visit_list_ref`,
+**A silent wrong answer.** `_visit_list_ref`,
 `_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]` with no range
 check. The interpreter raises on `xs[10]` over a shorter list; C++ does not
 report anything. A read returns whatever occupies that memory, so the program

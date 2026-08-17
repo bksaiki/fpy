@@ -120,9 +120,9 @@ both the designs that would work and the one that was tried and does not.
 rounding mode the lowering still declines, and the last entry missing from the
 mode table.
 
-### 3. `Cast` checks storage, not the context
+### 3. `Round` / `Cast` checked storage, not the context
 
-**Mostly closed.** `fp.cast(v)` tested *storage* exactness only
+**Closed.** `fp.cast(v)` tested *storage* exactness only
 (`assert(arg == tmp)`), so under a context bounded at 1024 whose representable
 values are the integers, `cast(2048.0)` and `cast(0.5)` both raised in the
 interpreter and passed silently in C++. `_assert_fixed_exact` now emits the
@@ -131,13 +131,23 @@ refuses a non-zero position rather than assuming it; the same-storage shortcut n
 longer skips them. Verified against the interpreter per value, 88/88, in
 `tests/unit/backend/cpp/test_cast_exactness.py`.
 
-What remains is the mirror of it on `Round`: into a bounded fixed-point context
-with *integer* storage, the emitted `static_cast<int8_t>(v)` carries no bound
-assertion at all, so a context bounded at 100 returns 120 where the interpreter
-raises `OverflowError` — and an operand past `int8_t`'s range makes the
-float-to-int conversion outright UB. It needs `enable_neg_zero=False` to reach,
-since no integer rung has a signed zero, which is why the natural spellings land
-on the libm path instead.
+The mirror of it on `Round` is closed too, and was worse than expected: a
+fixed-point context reaching a bare `static_cast` dropped its bound *and* its
+overflow rule. A context bounded at 100 returned 120 where `ASSERT` raises,
+`SATURATE` says 100 and `WRAP` says -81 — on **both** storage paths, not only the
+integer one. `_emit_integral_round` now either lowers a fixed-point context
+faithfully or refuses it, and a non-`ASSERT` rule is refused rather than dropped.
+Verified value-for-value against the interpreter in
+`tests/unit/backend/cpp/test_round_fixed_bound.py`.
+
+The predicate for "the cast *is* the rounding" is `target.is_native_ctx`, the
+same one gap 4 introduced, for the same reason: a format carries no overflow
+rule, so a `-128..127` context under `ASSERT` is format-equal to `int8_t` and
+still needs the assertion.
+
+One item in this area stays open — `static_cast` to an integer type is undefined
+for a non-finite operand, on the native integer path that emits no assertions at
+all. Recorded in [backend-cpp.md](backend-cpp.md).
 
 The libm mapping has a second, subtler hole in the same area: the interpreter
 *raises* where `std::trunc` returns a NaN, and today only an unread branch
@@ -169,13 +179,16 @@ type inference where a diagnostic belongs.
 
 ## Order of work
 
-1. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
+Gap 3 is done. What is left, cheapest first:
+
+1. **The non-finite integer conversion** — one assertion, undefined behavior
+   today; the only thing holding it is measuring how much emitted output changes.
+   Recorded in [backend-cpp.md](backend-cpp.md).
+2. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
    at branches.  Removes two runtime branches and two assertions from every
    lowered rounding and discharges the libm mapping's last side-condition.
-   Cheapest of these and the only one that fixes a correctness gap.
-2. **`RAZ`** — small, completes the mode table.
-3. **`Cast` checks the context** — a soundness gap, independent of everything
-   else.
+3. **`RAZ`** — small, completes the mode table, and needs a branch rather than a
+   function.
 4. **An `FP64` source** — the largest, and gated on the *numeric* half of
    inference rather than on the backend.
 5. **Backend cleanups and a recipe.**
