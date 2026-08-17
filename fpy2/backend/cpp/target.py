@@ -127,6 +127,24 @@ def _all_arith_ctxs() -> list[Context]:
     return _fp_ctxs() + _int_ctxs()
 
 
+_NATIVE_CTXS = _all_arith_ctxs()
+
+
+def is_native_ctx(ctx: Context) -> bool:
+    """Does the op table dispatch on *ctx*?
+
+    Equivalently: is a ``static_cast`` into this context's storage the same
+    operation as its ``round``?  Only for a context on this list, whose storage
+    the hardware implements directly.
+
+    Compares whole contexts rather than formats, as :meth:`CppOp.matches` does,
+    because a format does not carry the overflow rule or the random bits: a
+    saturating ``IEEEContext(8, 32)`` is format-equal to ``FP32`` yet rounds
+    ``1e300`` to ``maxval`` where a ``float`` cast gives an infinity.
+    """
+    return any(ctx == native for native in _NATIVE_CTXS)
+
+
 def _ty_of(ctx: Context) -> CppScalar:
     """Map a same-context signature's context to the C++ scalar that
     its inputs (and output) carry."""

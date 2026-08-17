@@ -149,7 +149,7 @@ from .storage_infer import (
     binds_by_reference,
     is_rebound,
 )
-from .target import make_op_table
+from .target import is_native_ctx, make_op_table
 from .types import CppList, CppScalar, CppTuple, CppType
 from .unbox import ParamAbi, UnboxAnalysis, contains_boxed, return_storage
 
@@ -2683,6 +2683,35 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
         return result
 
+    def _require_cast_is_round(self, e) -> None:
+        """Refuse a `Round`/`Cast` whose context a ``static_cast`` cannot perform.
+
+        Storage is chosen to *contain* a format, not to equal it, so a cast into
+        it rounds to the storage's format rather than the context's: `FP16` gets
+        ``float``, and ``static_cast<float>(1024.5)`` is ``1024.5`` where
+        `FP16.round` says ``1024``.  Arithmetic never had this problem because the
+        op table matches on whole contexts (:meth:`CppOp.matches`); these two
+        bypass it, so the same discipline is applied here.
+
+        Fixed-point contexts are exempt: `_validate_context_rm` has already
+        checked that either the libm lowering or an integer cast reproduces the
+        rounding.
+        """
+        active = self._active_ctx_for(e)
+        if isinstance(active, MPFixedContext | MPBFixedContext):
+            return
+        # resolved first: a context with no storage at all -- ``REAL``, or a
+        # format wider than the ladder -- has a more specific complaint than this
+        storage = self._scalar_for_ctx(active, at=e)
+        if not is_native_ctx(active):
+            raise CppEmitError(
+                f'rounding under `{active}` has no C++ analogue: its storage '
+                f'`{storage.format()}` rounds to that type\'s own format, not '
+                'to this one.  Lower it first with `monomorphize -> '
+                'unfold_overflow -> float_to_fixed -> rescale_fixed`.',
+                at=e,
+            )
+
     def _scalar_cast_types(self, e):
         """Source/target scalar storage for a round-like node *e*.
 
@@ -2702,6 +2731,11 @@ class CppEmitter(Visitor):
         # ``Cast(arg)`` is a ``static_cast`` plus a runtime assertion
         # that the cast was lossless: cast → bind to a temp →
         # ``assert(arg == tmp || (NaN-aware equality))``.
+        #
+        # That assertion tests exactness in the *storage*, which is the context's
+        # own question only where the two formats agree -- so the same guard as
+        # `Round` has to pass before the equality below means anything.
+        self._require_cast_is_round(e)
         arg_ty, target_ty = self._scalar_cast_types(e)
         # Same-type is a guaranteed no-op, no assert.
         if arg_ty == target_ty:
@@ -2774,6 +2808,9 @@ class CppEmitter(Visitor):
         integral = self._emit_integral_round(e, arg)
         if integral is not None:
             return integral
+        # only now that the exact paths above have declined does the rounding
+        # fall to a cast, which not every context's `round` agrees with
+        self._require_cast_is_round(e)
         arg_ty, target_ty = self._scalar_cast_types(e)
         if arg_ty == target_ty:
             return arg
