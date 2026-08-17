@@ -16,6 +16,7 @@ from .overflow_unfold import unfold_overflow
 from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .simple import simplify
+from .special_unfold import unfold_special
 
 __all__ = [
     'close',
@@ -31,6 +32,7 @@ __all__ = [
     'split',
     'unfold_neg_zero',
     'unfold_overflow',
+    'unfold_special',
     'unroll_for',
     'unroll_while',
 ]
