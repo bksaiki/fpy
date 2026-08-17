@@ -122,15 +122,22 @@ mode table.
 
 ### 3. `Cast` checks storage, not the context
 
-`fp.cast(v)` under a bounded context compiles to `static_cast` plus
-`assert(arg == tmp)`, which tests *storage* exactness only. Neither the bound
-nor the grid is checked: under a context bounded at 1024 at position zero,
-`cast(2048.0)` and `cast(0.5)` both raise in the interpreter and pass silently
-in C++. When argument and target share a storage type, no cast and no assertion
-are emitted at all.
+**Mostly closed.** `fp.cast(v)` tested *storage* exactness only
+(`assert(arg == tmp)`), so under a context bounded at 1024 whose representable
+values are the integers, `cast(2048.0)` and `cast(0.5)` both raised in the
+interpreter and passed silently in C++. `_assert_fixed_exact` now emits the
+specials, representability and bound checks for a fixed-point context, and
+refuses a non-zero position rather than assuming it; the same-storage shortcut no
+longer skips them. Verified against the interpreter per value, 88/88, in
+`tests/unit/backend/cpp/test_cast_exactness.py`.
 
-The bound and grid checks exist in `_emit_integral_round`; they belong in the
-general round/cast path.
+What remains is the mirror of it on `Round`: into a bounded fixed-point context
+with *integer* storage, the emitted `static_cast<int8_t>(v)` carries no bound
+assertion at all, so a context bounded at 100 returns 120 where the interpreter
+raises `OverflowError` — and an operand past `int8_t`'s range makes the
+float-to-int conversion outright UB. It needs `enable_neg_zero=False` to reach,
+since no integer rung has a signed zero, which is why the natural spellings land
+on the libm path instead.
 
 The libm mapping has a second, subtler hole in the same area: the interpreter
 *raises* where `std::trunc` returns a NaN, and today only an unread branch

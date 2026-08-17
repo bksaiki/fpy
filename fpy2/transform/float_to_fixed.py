@@ -1,8 +1,8 @@
 """
 Express floating-point rounding as fixed-point rounding.
 
-A float format rounds at a digit position that depends on the value: its grid
-coarsens with magnitude.  For a format with precision ``P``, subnormal position
+A float format rounds at a digit position that depends on the value: its
+representable values thin out as the magnitude grows.  For a format with precision ``P``, subnormal position
 ``EXP``, largest exponent ``EMAX``, and bound ``B``,
 
 .. math::
@@ -46,8 +46,8 @@ Below ``emin`` the format is fixed-point already: every value there rounds at
 the exponent.  The normal branch needs no lower clamp because of it.
 
 The upper clamp keeps the context constructible and the format shiftable:
-``B`` lies on the grid at every position up to ``EMAX - P + 1`` and falls off
-it immediately above.  Anything above that exceeds ``B`` and overflows, which
+``B`` is representable at every position up to ``EMAX - P + 1`` and stops being
+so immediately above.  Anything above that exceeds ``B`` and overflows, which
 rounding at the clamped position against ``B`` produces.
 
 ``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch
@@ -154,10 +154,10 @@ class _Source:
     them: every value rounds at a position taken from its own exponent.
     """
     expmin: int | None
-    """position of the format's finest grid, if it has one"""
+    """position of the format's finest digit, if it has one"""
     expmax: int | None
     """
-    position of the bound's last digit, above which the bound leaves the grid.
+    position of the bound's last digit, above which the bound is unrepresentable.
 
     `None` for an unbounded format, whose position needs no upper clamp.
     """
@@ -238,8 +238,9 @@ def _describe(ctx: Context) -> _Source | None:
         # construction has no way to pass the other, so the two must agree
         if neg_maxval != RealFloat(s=True, x=maxval):
             return None
-        # the format's grid in its top binade, which is where the clamp puts
-        # a value too large for one of its own; the bound has to lie on it
+        # the format's finest position in its top binade, which is where the clamp
+        # puts a value too large for one of its own; the bound has to be
+        # representable there
         expmax = ctx.emax - ctx.pmax + 1
         if maxval.exp < expmax:
             return None
@@ -427,9 +428,9 @@ class _FloatToFixedInstance(BlockRewriter):
         e_name = self.gensym.fresh('e')
         exponent = Assign(e_name, None, Logb(None, arg(), loc), loc)
 
-        # in the normal range the grid follows the magnitude, capped by the
-        # position of the bound's last digit: above that the bound leaves the
-        # grid, and everything up there overflows anyway
+        # in the normal range the position follows the magnitude, capped by the
+        # position of the bound's last digit: above that the bound is
+        # unrepresentable, and everything up there overflows anyway
         pos_name = self.gensym.fresh('exp')
         scale: Expr = Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc)
         if src.expmax is not None:

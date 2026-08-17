@@ -907,8 +907,8 @@ def exact_unop(
 def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
     """The least and greatest values of *af*, as integers, or ``None`` when
     either is unbounded or *af* holds a non-integer."""
-    # a grid whose finest digit sits at or above position zero holds integers
-    # only, which is what lets the bounds be read off as exact `int`s
+    # a format whose finest digit sits at or above position zero represents
+    # only integers, which lets the bounds be read off as exact `int`s
     if not isinstance(af.exp, int) or af.exp < 0:
         return None
     if not isinstance(af.pos_bound, RealFloat) or not isinstance(af.neg_bound, RealFloat):
@@ -925,7 +925,7 @@ def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
     bound, so a finite non-zero ``x`` gives ``logb(x)`` in ``[exp, bound.e]``.
 
     The edges come from the definition, not the range.  ``logb(±0)`` is
-    ``-inf`` and every grid holds a zero, so the result always admits one;
+    ``-inf`` and every format represents a zero, so the result always admits one;
     ``logb(±inf)`` is ``+inf`` and ``logb(NaN)`` is NaN, each admitted only
     when the argument admits the value it comes from.
 
@@ -940,11 +940,11 @@ def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
 
     mags = [b for b in (af.pos_bound, af.neg_bound) if isinstance(b, RealFloat)]
     if len(mags) != 2 or any(b.is_zero() for b in mags):
-        # unbounded, or the zero-only grid whose `logb` is `-inf` alone
+        # unbounded, or the zero-only format whose `logb` is `-inf` alone
         return None
     lo, hi = af.exp, max(b.e for b in mags)
 
-    # the result is an integer grid spanning `[lo, hi]`; `prec` has to cover
+    # the result represents the integers spanning `[lo, hi]`; `prec` has to cover
     # the larger magnitude, and the bounds keep the class's sign convention
     prec = max(max(abs(lo), abs(hi)).bit_length(), 1)
     return AbstractFormat(
@@ -971,7 +971,7 @@ def exact_exp2(arg: 'FormatBound') -> 'AbstractFormat | None':
     range is — that is the whole value of knowing the base.  Applies only when
     *arg* holds integers: ``2 ** 0.5`` is irrational, so no format states it.
 
-    ``2 ** -inf`` is zero, which every grid holds already; ``2 ** +inf`` is an
+    ``2 ** -inf`` is zero, which every format represents already; ``2 ** +inf`` is an
     infinity and ``2 ** NaN`` a NaN, each admitted only when the argument
     admits the value it comes from.
     """

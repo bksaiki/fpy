@@ -11,7 +11,7 @@ def float_to_fixed(func: Function, where: int | None = None) -> Function:
     Express floating-point rounding in `func` as fixed-point rounding.
 
     A float format rounds at a digit position that depends on the value, since
-    its grid coarsens with magnitude.  Once that position is computed, the
+    its representable values thin out as the magnitude grows.  Once that position is computed, the
     rounding is a fixed-point one: for a format with precision ``P``, subnormal
     position ``EXP``, largest exponent ``EMAX``, and bound ``B``,
 

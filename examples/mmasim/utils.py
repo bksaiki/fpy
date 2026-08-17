@@ -29,7 +29,7 @@ def fused_sum(xs, n, rm):
     """
     Fused summation of a non-empty list.
 
-    Each summand is rounded with mode `rm` onto the fixed-point grid
+    Each summand is rounded with mode `rm` to a fixed-point value
     whose first unrepresentable digit is `n` (so the least significant
     representable digit has exponent `exp = n + 1`), then the rounded
     summands are added exactly. `sum` folds from the first element
@@ -52,7 +52,7 @@ def exponent(x, emin):
 @fp.fpy(ctx=fp.REAL)
 def round_down_at(x, n):
     """
-    Rounds `x` toward negative infinity on the fixed-point grid whose
+    Rounds `x` toward negative infinity to a fixed-point value whose
     first unrepresentable digit is `n` (so the least significant
     representable digit has exponent `exp = n + 1`).
     """

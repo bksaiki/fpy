@@ -12,8 +12,8 @@ def unfold_overflow(
     """
     Take the bound out of `func`'s rounding contexts and state it as program text.
 
-    A bounded format decides two things at once: where its grid lies, and what
-    becomes of a value too large for it.  IEEE 754 defines the second in terms
+    A bounded format decides two things at once: which values it represents, and
+    what becomes of a value too large for it.  IEEE 754 defines the second in terms
     of the first — round with an unbounded exponent range, then see whether the
     result fits — so for a bounded context ``C`` with unbounded counterpart
     ``U``, and a finite ``x``,
@@ -50,7 +50,7 @@ def unfold_overflow(
         Also test the operand before rounding it, so nothing certain to
         overflow is rounded at all. The threshold is the format's ``infval``,
         the next value above ``maxval`` — not ``maxval`` itself, which a value
-        may exceed and still round back onto the grid. This test is sound but
+        may exceed and still round back to a representable value. This test is sound but
         not complete, so the one after the rounding stays either way.
 
     Returns

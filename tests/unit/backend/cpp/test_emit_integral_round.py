@@ -99,7 +99,7 @@ class TestAssertions:
 
     def test_asymmetric_bounds_get_two_comparisons(self):
         """``fabs`` states one magnitude, but the two bounds are independent --
-        a two's-complement grid runs to -128 and only to 127, and the legal
+        a two's-complement format runs to -128 and only to 127, and the legal
         most-negative value must not trip the assertion."""
         out = _emit(MPBFixedContext(
             -1, fp.RealFloat(exp=0, c=127),
@@ -241,7 +241,7 @@ class TestScaleByPowerOfTwo:
 
     def test_a_bare_power_of_two_also_uses_ldexp(self):
         """Not only as a multiply's operand: a power on its own would otherwise
-        go through ``std::pow`` and land on the wrong grid."""
+        go through ``std::pow``, which may not return the exact power."""
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:
             with fp.FP64:

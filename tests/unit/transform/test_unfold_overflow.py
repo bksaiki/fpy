@@ -110,7 +110,7 @@ def _samples(ctx) -> list:
         fp.Float(isinf=True), fp.Float(isinf=True, s=True),
         fp.Float(c=0), fp.Float(c=0, s=True),
     ]
-    grid = [
+    points = [
         B,                                          # the bound itself
         ctx.infval().as_real(),                     # certain overflow
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
@@ -123,29 +123,29 @@ def _samples(ctx) -> list:
         RealFloat(exp=ctx.emin, c=1),               # smallest normal
         RealFloat(exp=-2, c=1), RealFloat(exp=0, c=1), RealFloat(exp=1, c=3),
     ]
-    for g in grid:
+    for g in points:
         xs.append(fp.Float(x=g, ctx=REAL))
         xs.append(fp.Float(x=RealFloat(s=True, exp=g.exp, c=g.c), ctx=REAL))
     return xs
 
 
 def _fixed_samples(ctx) -> list:
-    """As `_samples`, for a format whose grid is uniform and which commonly
-    has no value for NaN or an infinity."""
+    """As `_samples`, for a format whose values are evenly spaced and which
+    commonly has no value for NaN or an infinity."""
     B, N = ctx.maxval().as_real(), ctx.maxval(s=True).as_real()
-    grid = [
+    points = [
         B, N, ctx.infval().as_real(), ctx.infval(s=True).as_real(),
         RealFloat(exp=B.exp - 1, c=2 * B.c - 1),    # just below the bound
         RealFloat(exp=B.exp - 1, c=2 * B.c + 1),    # just above it
         RealFloat(exp=B.exp + 1, c=B.c),            # well past
         RealFloat(exp=B.exp + 30, c=B.c),
-        RealFloat(exp=ctx.nmin, c=1),               # below the grid
+        RealFloat(exp=ctx.nmin, c=1),               # too fine to represent
         RealFloat(exp=ctx.nmin, c=3),
-        RealFloat(exp=ctx.nmin + 1, c=1),           # the grid's finest step
+        RealFloat(exp=ctx.nmin + 1, c=1),           # the finest value represented
         RealFloat(exp=0, c=1),
     ]
     xs = [fp.Float(c=0), fp.Float(c=0, s=True)]
-    for g in grid:
+    for g in points:
         xs.append(fp.Float(x=g, ctx=REAL))
         xs.append(fp.Float(x=RealFloat(s=True, exp=g.exp, c=g.c), ctx=REAL))
     return xs
@@ -182,7 +182,7 @@ class TestShape:
         target = next(c for c in _block_ctxs(out) if isinstance(c, MPSFloatContext))
         assert not hasattr(target, 'maxval')
         assert not hasattr(target, 'overflow')
-        # its grid runs as far as the value does
+        # it represents values as large as this one
         big = RealFloat(exp=ctx.maxval().as_real().exp + 300, c=1)
         assert target.round(big).as_real() == big
 
@@ -217,7 +217,7 @@ class TestShape:
         out = UnfoldOverflow.apply(f.ast, early_check=True)
 
         bounds = {int(c.args[1].val) for c in _nodes(out, Compare)}  # type: ignore[attr-defined]
-        # the guard uses `infval`, one grid point above the bound
+        # the guard uses `infval`, the next representable value above the bound
         assert bounds == {65504, -65504, 65536, -65536}
 
     def test_early_check_is_not_complete(self):

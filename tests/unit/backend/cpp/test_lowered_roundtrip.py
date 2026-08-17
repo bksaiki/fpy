@@ -76,7 +76,7 @@ def _inputs() -> list[fp.Float]:
         fp.Float(c=0), fp.Float(c=0, s=True), fp.Float(isnan=True),
         fp.Float(isinf=True), fp.Float(isinf=True, s=True),
     ]
-    grid = [
+    points = [
         (5, 2047),          # FP16 maxval
         (5, 2048),          # just past it
         (4, 4095),          # the RNE tie above maxval
@@ -86,7 +86,7 @@ def _inputs() -> list[fp.Float]:
         (fp.FP16.emin, 1), (fp.FP16.emin - 1, 3),
         (0, 1), (3, 3), (-4, 11), (-30, 1), (10, 1365),
     ]
-    for exp, c in grid:
+    for exp, c in points:
         for s in (False, True):
             out.append(fp.FP32.round(RealFloat(s=s, exp=exp, c=c)))
     return out
