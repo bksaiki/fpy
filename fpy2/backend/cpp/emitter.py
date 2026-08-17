@@ -18,7 +18,7 @@ import math
 from collections.abc import Callable, Sequence
 from contextlib import contextmanager
 from fractions import Fraction
-from typing import NoReturn
+from typing import ClassVar, NoReturn
 
 from ... import ops as fpy_ops
 from ...analysis import (
@@ -1414,10 +1414,10 @@ class CppEmitter(Visitor):
                         '`fpy2.strategies.rescale_fixed` first',
                         at=at,
                     )
-                if self._integral_fn(rctx.rm) is None:
+                if rctx.rm not in self._INTEGRAL_MODES:
                     raise CppEmitError(
                         f'rounding mode {rctx.rm} for context `{rctx}` has no '
-                        'libm function rounding to an integral value',
+                        'spelling that rounds to an integral value',
                         at=at,
                     )
                 # Everything the libm lowering refuses has to be refused *here*
@@ -2875,22 +2875,69 @@ class CppEmitter(Visitor):
             return arg
         return self._explicit_cast(arg, target_ty)
 
-    def _integral_fn(self, rm: RM) -> str | None:
-        """The libm function rounding to an integral value under *rm*.
+    _INTEGRAL_ONE_CALL: ClassVar[dict[RM, str]] = {
+        RM.RTZ: 'std::trunc',
+        RM.RTN: 'std::floor',
+        RM.RTP: 'std::ceil',
+        RM.RNA: 'std::round',
+        # follows the *current* mode, so it is RNE only under FE_TONEAREST
+        RM.RNE: 'std::nearbyint',
+    }
+    """Modes libm spells in one call."""
 
-        Each is exact and stays in the floating-point type, so unlike a cast to
-        an integer it keeps a signed zero and needs no integer wide enough for
-        the value.  ``RAZ`` has no single spelling and ``RTO``/``RTE`` none at
-        all.
+    _INTEGRAL_MODES = frozenset(_INTEGRAL_ONE_CALL) | {RM.RAZ, RM.RTO, RM.RTE}
+    """Every mode :meth:`_emit_integral_value` can spell -- currently all of
+    them, but asked as a question so a mode added later is refused rather than
+    silently mis-lowered.  `_validate_context_rm` needs the answer before there
+    is an operand to spell with."""
+
+    def _emit_integral_value(self, rm: RM, operand: str) -> str | None:
+        """*operand* rounded to an integral value under *rm*, or `None` for a mode
+        with no spelling.
+
+        Every step is exact and stays in the floating-point type, so unlike a
+        cast to an integer this keeps a signed zero and needs no integer wide
+        enough for the value.  Nothing here is a support-library call: the
+        lowered program must depend on ``std::`` alone.
+
+        Three modes take more than one call, and each names *operand* more than
+        once, so it must already be bound.  Temporaries may be emitted.
+
+        - ``RAZ``: ``ceil`` rounds away from zero only above zero, so the sign
+          comes off and goes back on.
+        - ``RTO``: the even integer at or below the value; the odd neighbour is
+          one above it, which serves both ``(o, o+1)`` and ``(o+1, o+2)``.
+        - ``RTE``: halve, round to nearest-even, and double -- so the even
+          integer either side of the value, whichever is nearer.  ``fabs`` then
+          separates the one case that must not move: an *odd* integer, which is
+          already exact and sits a full step from that even neighbour.
+
+        ``RTE`` is `mpfx`'s ``round_to_integral`` with ``std::nearbyint``
+        standing in for C23 ``roundeven`` -- the same substitution ``RNE``
+        itself makes here, and it carries the same ``FE_TONEAREST``
+        precondition, which `_emit_integral_round` checks.
         """
-        return {
-            RM.RTZ: 'std::trunc',
-            RM.RTN: 'std::floor',
-            RM.RTP: 'std::ceil',
-            RM.RNA: 'std::round',
-            # follows the *current* mode, so it is RNE only under FE_TONEAREST
-            RM.RNE: 'std::nearbyint',
-        }.get(rm)
+        single = self._INTEGRAL_ONE_CALL.get(rm)
+        if single is not None:
+            return f'{single}({operand})'
+        match rm:
+            case RM.RAZ:
+                return (
+                    f'std::copysign(std::ceil(std::fabs({operand})), {operand})'
+                )
+            case RM.RTO:
+                # doubling is exact, so `* 2` needs no temporary of its own
+                even = self._bind_operand(f'std::floor({operand} * 0.5) * 2')
+                return f'({operand} == {even} ? {operand} : {even} + 1)'
+            case RM.RTE:
+                half = self._bind_operand(f'std::nearbyint({operand} * 0.5)')
+                even = self._bind_operand(f'{half} + {half}')
+                return (
+                    f'(std::fabs({operand} - {even}) == 1 '
+                    f'? {operand} : {even})'
+                )
+            case _:
+                return None
 
     def _undefined_guard(
         self, ctx: MPFixedContext | MPBFixedContext, operand: str,
@@ -2983,17 +3030,20 @@ class CppEmitter(Visitor):
                 'preserve',
                 at=e,
             )
-        fn = self._integral_fn(active.rm)
-        if fn is None:
+        if active.rm not in self._INTEGRAL_MODES:
             raise CppEmitError(
-                f'rounding mode {active.rm} for context `{active}` has no libm '
-                'function rounding to an integral value',
+                f'rounding mode {active.rm} for context `{active}` has no '
+                'spelling that rounds to an integral value',
                 at=e,
             )
-        if active.rm is RM.RNE and self._current_rm not in (None, RM.RNE):
+        # `RTE` is built on the same call, so it inherits the precondition
+        if (
+            active.rm in (RM.RNE, RM.RTE)
+            and self._current_rm not in (None, RM.RNE)
+        ):
             raise CppEmitError(
-                f'rounding to nearest under `{active}` needs `std::nearbyint` '
-                f'in FE_TONEAREST, but the enclosing scope set {self._current_rm}',
+                f'rounding under `{active}` needs `std::nearbyint` in '
+                f'FE_TONEAREST, but the enclosing scope set {self._current_rm}',
                 at=e,
             )
 
@@ -3005,7 +3055,8 @@ class CppEmitter(Visitor):
             )
         out = self._fresh_temp()
         self.writer.add_line(
-            f'{target_ty.format()} {out} = {fn}({operand});'
+            f'{target_ty.format()} {out} = '
+            f'{self._emit_integral_value(active.rm, operand)};'
         )
         self.writer.add_line(
             f'assert(({self._bound_test(active, out, at=e)}) '

@@ -79,10 +79,10 @@ Three ideas, each recorded where it was learned:
 
 - **Integer rounding needs no integer type.** `std::trunc` and friends are
   `double -> double`, so the rounding stays in a float type. That keeps the
-  signed zero, needs no integer wide enough for the value, and covers more than
-  just `RTZ`. Five of FPy's eight modes have a libm function — `RTZ`/`RTN`/`RTP`/
-  `RNA`/`RNE` as `trunc`/`floor`/`ceil`/`round`/`nearbyint`; `RAZ`, `RTO` and
-  `RTE` have none and are declined (see gap 2).
+  signed zero, needs no integer wide enough for the value, and covers all eight
+  FPy modes. Five are one libm call — `RTZ`/`RTN`/`RTP`/`RNA`/`RNE` as
+  `trunc`/`floor`/`ceil`/`round`/`nearbyint`; the other three are composed from
+  those (see gap 2).
 - **A context's unrepresentable values compile to assertions.** The bound
   becomes `assert(std::fabs(r) <= B)` — or a pair of comparisons where the two
   bounds are asymmetric — and an operand the format has no result for becomes
@@ -114,11 +114,31 @@ Not fixable by annotation — see
 [symbolic-exponent-inference.md](symbolic-exponent-inference.md), which records
 both the designs that would work and the one that was tried and does not.
 
-### 2. `RAZ` has no libm function
+### 2. The mode table is complete
 
-`copysign(std::ceil(std::fabs(x)), x)` is the two-operation spelling. The only
-rounding mode the lowering still declines, and the last entry missing from the
-mode table.
+**Closed**, and it was three modes short rather than one. `RAZ` is
+`copysign(ceil(fabs(x)), x)` — the same spelling
+[mpfx](https://github.com/bksaiki/mpfx)'s `round_to_integral` uses.
+
+`RTO` and `RTE` ask for the parity of the *result*, which no libm function
+reports, so each is built from what is already there:
+
+- `RTO` — `o = floor(x * 0.5) * 2` is the even integer at or below `x`, and `o +
+  1` is the odd neighbour, which serves both `(o, o+1)` and `(o+1, o+2)`.
+- `RTE` — halve, round to nearest-even, double. `fabs` then separates the one
+  case that must not move: an odd integer, already exact and a full step from
+  that even neighbour.
+
+`RTE` is mpfx's spelling, with `std::nearbyint` standing in for C23 `roundeven`.
+That is the same substitution `RNE` already makes here — no compiler is required
+to have the builtin, and adding it as an `fpy::` helper would break
+`test_needs_no_support_library`. It carries the same cost: `nearbyint` follows the
+dynamic rounding mode, so `RTE` inherits `RNE`'s `FE_TONEAREST` precondition and
+is refused inside a scope that set another mode. `RTO` has no such dependency.
+
+Every step of all eight is exact. Verified bit-for-bit against the interpreter,
+62 values per mode, and the three new modes are in
+`test_lowered_roundtrip.py`'s target list, which now covers fourteen formats.
 
 ### 3. `Round` / `Cast` checked storage, not the context
 
@@ -179,7 +199,7 @@ type inference where a diagnostic belongs.
 
 ## Order of work
 
-Gap 3 is done. What is left, cheapest first:
+Gaps 2 and 3 are done. What is left, cheapest first:
 
 1. **The non-finite integer conversion** — one assertion, undefined behavior
    today; the only thing holding it is measuring how much emitted output changes.
@@ -187,11 +207,9 @@ Gap 3 is done. What is left, cheapest first:
 2. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
    at branches.  Removes two runtime branches and two assertions from every
    lowered rounding and discharges the libm mapping's last side-condition.
-3. **`RAZ`** — small, completes the mode table, and needs a branch rather than a
-   function.
-4. **An `FP64` source** — the largest, and gated on the *numeric* half of
+3. **An `FP64` source** — the largest, and gated on the *numeric* half of
    inference rather than on the backend.
-5. **Backend cleanups and a recipe.**
+4. **Backend cleanups and a recipe.**
 
 ## Open questions
 

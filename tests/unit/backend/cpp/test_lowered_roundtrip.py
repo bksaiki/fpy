@@ -147,6 +147,9 @@ class TestLoweredRoundtrip:
         fp.IEEEContext(5, 16, fp.RoundingMode.RTP),
         fp.IEEEContext(5, 16, fp.RoundingMode.RTN),
         fp.IEEEContext(5, 16, fp.RoundingMode.RNA),
+        fp.IEEEContext(5, 16, fp.RoundingMode.RAZ),
+        fp.IEEEContext(5, 16, fp.RoundingMode.RTO),
+        fp.IEEEContext(5, 16, fp.RoundingMode.RTE),
         fp.IEEEContext(4, 8),
         fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
         fp.MX_E5M2,
@@ -154,6 +157,7 @@ class TestLoweredRoundtrip:
         fp.MX_E2M1,
         EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
     ], ids=['fp16_rne', 'fp16_rtz', 'fp16_rtp', 'fp16_rtn', 'fp16_rna',
+            'fp16_raz', 'fp16_rto', 'fp16_rte',
             'ieee_4_8', 'ieee_saturating', 'e5m2', 'e4m3', 'e2m1', 'neg_zero'])
     def test_matches_the_interpreter(self, target):
         _run(target)
