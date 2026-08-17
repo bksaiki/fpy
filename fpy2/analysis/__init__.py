@@ -37,3 +37,10 @@ from .reaching_defs import (
 )
 from .syntax_check import FPySyntaxError, SyntaxCheck
 from .type_infer import TypeAnalysis, TypeInfer, TypeInferError
+from .value_class import (
+    ValueClass,
+    ValueClassAnalysis,
+    ValueClassInfer,
+    class_of,
+    representable_classes,
+)

@@ -26,6 +26,7 @@ def _run_tests():
     test_array_size_infer()
     test_purity()
     test_format_infer()
+    test_value_class()
     # transformations
     test_copy_prop()
     test_const_fold()

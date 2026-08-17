@@ -11,11 +11,9 @@ def unfold_special(func: Function, where: int | None = None) -> Function:
     Take the special values out of `func`'s rounding contexts and state them
     as program text.
 
-    A fixed-point format states what NaN and the infinities become — a
-    representable value of their own (``enable_nan``/``enable_inf``), a
-    substituted constant (``nan_value``/``inf_value``), or a refusal.  Each
-    rule that names a value becomes a branch on the operand, since a special
-    operand is the only way a special reaches the rounding::
+    A format's answer for NaN, an infinity and a zero is a constant, since a
+    special operand is the only way a special reaches the rounding.  So each
+    becomes a branch on the operand::
 
         if fp.isnan(x):
             r = v                 # what the format made of NaN
@@ -24,24 +22,30 @@ def unfold_special(func: Function, where: int | None = None) -> Function:
         elif x == 0:
             r = -0.0 if fp.signbit(x) else 0
         else:
-            with C_:              # C with the stated rules removed
+            with C_:              # C, less any rule the branches took over
                 r = fp.round(x)
 
-    The zero branch removes nothing from the format, but with it the
-    surviving rounding's operand is finite *and* non-zero — structure a
-    value-class analysis can use to discharge the format's remaining guards,
-    and a format free of NaN is one an integer type can store.
+    The surviving rounding is then left an operand that is finite *and*
+    non-zero — structure a value-class analysis reads to discharge the guards
+    below it, and a format free of NaN is one an integer type can store.
 
-    The two sides come out independently: a format whose overflow *produces*
-    an infinity keeps that side (finite operands past the bound land there,
-    which the branches never see) while its NaN rule still comes out.  A
-    refusal also stays — a branch can only assign a value, not refuse one —
-    so a format with no stated special of its own is left unchanged, as is a
-    float format, which cannot shed its specials.  Only blocks whose body is
-    entirely ``x = fp.round(v)`` or ``x = fp.cast(v)`` (or a returned round)
-    are rewritten; a cast substitutes a special exactly as a round does, and
-    a stochastic rounding sheds its rules too, since a special never reaches
-    the random draw.
+    Stating a special and *shedding* its rule from the format are separate.
+    Stating one needs only a statically-known context, since the branch
+    assigns what the rounding would have returned.  Shedding needs a format
+    that states the rule as a parameter (``enable_nan``/``enable_inf``,
+    ``nan_value``/``inf_value``) *and* an agreement check against the source,
+    so a format whose overflow *produces* an infinity keeps that rule while
+    its branch is still emitted, and a float format is stated but never shed.
+    A refusal is neither: a branch cannot refuse a value, and leaving it to
+    the rounding refuses it identically — so a format that refuses both
+    specials is left unchanged, as is ``REAL``, which rounds exactly.
+
+    Which branches appear is decided per operand, so a class the operand
+    cannot hold gets none — which also makes the rewrite idempotent.  Only
+    blocks whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
+    (or a returned round) are rewritten; a cast substitutes a special exactly
+    as a round does, and a stochastic rounding takes the branches too, since
+    a special never reaches the random draw.
 
     Run :func:`fpy2.strategies.rescale_fixed` afterwards: a substituted
     constant does not commute with scaling, so the rescale declines a format

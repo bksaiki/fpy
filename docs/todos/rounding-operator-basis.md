@@ -5,7 +5,9 @@ A scheduling operator should be one idea, and the set of them should be
 only by accident. The rounding operators are not there yet, and this records
 the one place where they are not, along with what it would take to fix it.
 
-## The non-orthogonal seam
+## The non-orthogonal seams
+
+### The bound axis
 
 `float_to_fixed` does two things when its source is bounded:
 
@@ -18,6 +20,21 @@ branches, the `inf_value=nan` trick for `E4M3`, and the trailing `Copysign` that
 restores the sign a substituted NaN drops — about 120 lines, a quarter of
 `float_to_fixed`, all of it there only because a *context* has to produce the
 overflow value.
+
+### The specials axis
+
+`float_to_fixed` also emits the `isnan` / `isinf` / `== 0` ladder itself, because
+`logb` is undefined on all three. That is now `unfold_special`'s axis: it applies
+to any statically-known context, float ones included, and states the same three
+branches from the format's own answers.
+
+The two are not redundant — `float_to_fixed` must still work when run alone — but
+they overlap, and running `unfold_special` first is strictly better output:
+value classes then make `float_to_fixed` skip its ladder, so the specials are
+handled once at the outside and `logb` hoists to a single call. The decomposition
+would be for `float_to_fixed` to *require* the operand already be finite and
+non-zero, leaving the ladder to `unfold_special` alone. Not scheduled, and it
+costs `float_to_fixed` its standalone use.
 
 ## Deleting it is not expressibility-neutral
 
@@ -58,7 +75,9 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
 
 - **Resolved: the edge rules are standalone operators, not knobs.**
   `unfold_special` states NaN, the infinities, and the operand's zero as
-  branches; `unfold_neg_zero` states the sign of a zero *result*; and
+  branches — for a float source as well as a fixed-point one, since stating a
+  special needs only a known context while *shedding* its rule from the format
+  needs a format that states it as a parameter; `unfold_neg_zero` states the sign of a zero *result*; and
   `rescale_fixed`'s `fold_specials` is gone — a format with a finite
   `nan_value`/`inf_value` is declined until `unfold_special` has taken the
   rule out of the context. The asymmetry that kept them separate: NaN and

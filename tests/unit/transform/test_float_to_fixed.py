@@ -14,10 +14,20 @@ the tests assert:
 """
 
 import fpy2 as fp
+import fpy2.strategies as st
 import pytest
 
 from fpy2.analysis import PartialEval
-from fpy2.ast.fpyast import Call, ContextStmt, FuncDef, Integer, Round
+from fpy2.ast.fpyast import (
+    Call,
+    ContextStmt,
+    FuncDef,
+    Integer,
+    IsFinite,
+    IsInf,
+    IsNan,
+    Round,
+)
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import (
     REAL,
@@ -29,6 +39,7 @@ from fpy2.number import (
     MPSFloatContext,
 )
 from fpy2.transform import FloatToFixed
+from fpy2.types import RealType
 
 
 # ----------------------------------------------------------------------
@@ -448,3 +459,77 @@ class TestEquivalence:
         for x in (65504.0, 65515.0, 65519.0, 65519.996, 65520.0, 65536.0, 1e5, 1e10):
             for sx in (x, -x):
                 assert _same(_eval(out, f, sx), f(sx)), sx
+
+
+# ----------------------------------------------------------------------
+# Branches the operand cannot take
+
+
+def _guarded_quantizer(ctx) -> fp.Function:
+    """A quantizer whose caller has already ruled out the specials."""
+    @fp.fpy(ctx=fp.REAL)
+    def q(x: fp.Real) -> fp.Real:
+        if fp.isfinite(x):
+            with ctx:
+                y = fp.round(x)
+        else:
+            y = 0
+        return y
+    return q
+
+
+class TestBranchesTheOperandCannotTake:
+    """``logb`` is undefined on a NaN, an infinity and a zero, so each gets a
+    branch -- but only where the operand can be one.
+
+    The information is :class:`fpy2.analysis.ValueClassInfer`'s, which needs
+    *concrete* argument types: an unmonomorphized parameter is a type variable
+    and carries no class, so every branch stays.  The zero branch is not a
+    special case of the other two -- ``logb(0)`` is undefined however the
+    operand got there -- so it goes only when the operand cannot be zero.
+    """
+
+    def test_an_integer_operand_needs_neither_specials_branch(self):
+        mono = st.monomorphize(_quantizer(fp.FP16), args=[RealType(fp.SINT32)])
+        out = FloatToFixed.apply(mono.ast)
+        assert not _has_node(out, IsNan)
+        assert not _has_node(out, IsInf)
+        assert 'x == 0' in out.format()
+
+    def test_a_float_operand_keeps_them(self):
+        """The same program, one argument type apart."""
+        mono = st.monomorphize(_quantizer(fp.FP16), args=[RealType(fp.FP32)])
+        out = FloatToFixed.apply(mono.ast)
+        assert _has_node(out, IsNan)
+        assert _has_node(out, IsInf)
+
+    def test_a_guarded_program_needs_neither(self):
+        mono = st.monomorphize(
+            _guarded_quantizer(fp.FP16), args=[RealType(fp.FP32)])
+        out = FloatToFixed.apply(mono.ast)
+        # the program's own test survives; the lowering adds none of its own
+        assert _has_node(out, IsFinite)
+        assert not _has_node(out, IsNan)
+        assert not _has_node(out, IsInf)
+
+    def test_an_unmonomorphized_program_keeps_them(self):
+        out = FloatToFixed.apply(_quantizer(fp.FP16).ast)
+        assert _has_node(out, IsNan)
+        assert _has_node(out, IsInf)
+
+    def test_the_guarded_lowering_is_still_bit_exact(self):
+        """The branches are dropped as unreachable, so the value cannot change
+        -- checked over every class, the specials included: those take the
+        program's own ``else`` arm."""
+        f = _guarded_quantizer(fp.FP16)
+        mono = st.monomorphize(f, args=[RealType(fp.FP32)])
+        out = FloatToFixed.apply(mono.ast)
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, mono, x), mono(x)), x
+
+    def test_an_integer_operand_lowering_is_still_bit_exact(self):
+        f = _quantizer(fp.FP16)
+        mono = st.monomorphize(f, args=[RealType(fp.SINT32)])
+        out = FloatToFixed.apply(mono.ast)
+        for x in (0, 1, -1, 3, -3, 65504, 65505, 65536, -65536, 2 ** 30):
+            assert _same(_eval(out, mono, x), mono(x)), x

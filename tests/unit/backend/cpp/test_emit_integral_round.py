@@ -280,13 +280,11 @@ class TestScaleByPowerOfTwo:
         return CppCompiler().compile(low)
 
     def test_the_lowering_uses_ldexp_not_pow(self):
+        """No ``pow`` at all: value classes prove both exponents finite, so even
+        the guard's fallback arm is gone."""
         out = self._lowered()
         assert 'std::ldexp(' in out
-        # `pow` survives only as the non-finite arm of the guard, never as the
-        # way a finite scale is computed
-        for line in out.splitlines():
-            if 'std::pow(' in line:
-                assert 'std::isfinite(' in line, line
+        assert 'std::pow(' not in out
 
     def test_the_lowering_widens_before_scaling(self):
         """``std::ldexp`` is overloaded on its first argument, so scaling the
@@ -308,14 +306,55 @@ class TestScaleByPowerOfTwo:
         the undefined conversion in a release build.  ``std::pow`` defines all
         three cases exactly as FPy does, so the product is the faithful
         lowering precisely where the exponent is not finite.
+
+        Reached by an exponent whose *format* admits both specials while still
+        representing only integers, since neither a lowered rounding nor an
+        integer-typed exponent leaves the question open any more.
         """
-        out = self._lowered()
-        assert 'std::isfinite(' in out
+        exp_ctx = MPBFixedContext(
+            -1, fp.RealFloat(exp=0, c=100), enable_nan=True, enable_inf=True)
+
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = (2 ** n) * x
+            return y
+
+        out = CppCompiler().compile(
+            q, arg_types=[RealType(fp.FP64), RealType(exp_ctx)])
+        assert 'std::isfinite(n)' in out
         assert 'std::ldexp(' in out
         assert 'std::pow(2.0,' in out, 'the non-finite arm must be a product'
         assert 'scaling is undefined' not in out, (
             'an assertion is not enough: NDEBUG would erase it'
         )
+
+    def test_a_guarding_branch_is_what_removes_the_select(self):
+        """Two programs differing only in a branch, so the removal is due to the
+        branch and not to the exponent's format -- which admits both specials
+        either way.  Reading the branch is what value classes add; the lowered
+        rounding above gets the same treatment from its ``elif`` ladder."""
+        exp_ctx = MPBFixedContext(
+            -1, fp.RealFloat(exp=0, c=100), enable_nan=True, enable_inf=True)
+
+        @fp.fpy(ctx=fp.REAL)
+        def bare(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = (2 ** n) * x
+            return y
+
+        @fp.fpy(ctx=fp.REAL)
+        def guarded(x: fp.Real, n: fp.Real) -> fp.Real:
+            if fp.isfinite(n):
+                with fp.FP64:
+                    y = (2 ** n) * x
+            else:
+                y = 0
+            return y
+
+        tys = [RealType(fp.FP64), RealType(exp_ctx)]
+        assert 'std::pow(2.0,' in CppCompiler().compile(bare, arg_types=tys)
+        assert 'std::pow(' not in CppCompiler().compile(guarded, arg_types=tys)
 
     def test_a_constant_scale_stays_a_multiply(self):
         """A constant power of two needs no call: the literal multiply is

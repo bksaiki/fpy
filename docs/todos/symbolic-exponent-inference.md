@@ -195,31 +195,22 @@ An `FP64` source additionally needs `x` itself bounded, which `early_check`
 states in program text and only path sensitivity reads. That is why the whole
 matrix passes for an `FP32` source and fails for `FP64`.
 
-### The class half has its own doc
+### The class half was separable, and is done
 
 Refining special-value membership at branches turned out to be worth separating:
 it is a four-atom lattice rather than a numeric domain, it needs none of the
-machinery below, and it closes a correctness gap as well as tightening bounds.
-See [value-class-analysis.md](value-class-analysis.md).  What follows concerns
-only the *magnitude* half, which that analysis cannot help with.
+machinery below, and it closed a correctness gap as well as tightening bounds.
+That is `fpy2/analysis/value_class.py`; see gap 6 of
+[native-lowering-roadmap.md](native-lowering-roadmap.md).  What follows concerns
+only the *magnitude* half, which it cannot help with.
 
 ### A second payoff for the `isnan`/`isinf` refinement
 
-The `ldexp` lowering asks whether the scale exponent can be non-finite, and
-answers from the exponent's *format*.  An exponent from `logb` admits a NaN and
-the infinities, so it costs a runtime branch:
-
-```c++
-(std::isfinite(n) ? std::ldexp(x, static_cast<int>(n)) : std::pow(2.0, n) * x)
-```
-
-An exponent that is finite by its type — a bounded integer format — emits the
-bare call.  The branches upstream already exclude the specials; refining
-`has_nan` / `has_pos_inf` / `has_neg_inf` from an `isnan` / `isinf` test would
-let the analysis see that and drop the branch.  That refinement is the cheapest
-form of path sensitivity — a boolean flag off a syntactically obvious test, no
-interval arithmetic and no backward transfer function — and it now buys two
-things rather than one.
+**Done**, by the class half rather than by anything here: the `ldexp` lowering
+asked whether its exponent could be non-finite and answered from the exponent's
+*format*, which for an exponent out of `logb` admits both specials and so cost a
+runtime branch.  Reading the upstream tests instead drops it.  See gap 6 of
+[native-lowering-roadmap.md](native-lowering-roadmap.md).
 
 ## Open questions
 

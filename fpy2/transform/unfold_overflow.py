@@ -69,6 +69,9 @@ cannot state is a refusal, and a fixed-point format commonly refuses NaN and the
 infinities outright — hence the finiteness test in front of the early
 check, which would otherwise claim an infinity as an overflow.
 
+That test, and each special's branch, is emitted only where the operand can be
+such a value, per :class:`fpy2.analysis.ValueClassInfer`.
+
 Applies to a format whose overflow is a constant of its own: wrapping gives a
 different answer at every magnitude, and an unsigned format states no bound
 below zero, so neither is rewritten.
@@ -80,7 +83,13 @@ this rewrite does not preserve.
 
 from dataclasses import dataclass, replace
 
-from ..analysis import PartialEval, PartialEvalInfo
+from ..analysis import (
+    PartialEval,
+    PartialEvalInfo,
+    ValueClass,
+    ValueClassAnalysis,
+    ValueClassInfer,
+)
 from ..ast.fpyast import (
     And,
     Assign,
@@ -404,6 +413,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
 
     func: FuncDef
     eval_info: PartialEvalInfo
+    class_info: ValueClassAnalysis
     gensym: Gensym
     where: int | None
     early_check: bool
@@ -413,10 +423,12 @@ class _UnfoldOverflowInstance(BlockRewriter):
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
+        class_info: ValueClassAnalysis,
         where: int | None = None, early_check: bool = False,
     ):
         self.func = func
         self.eval_info = eval_info
+        self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
         self.early_check = early_check
@@ -474,6 +486,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
         """`target = round(v)` as an unbounded rounding plus a bound check."""
         assert isinstance(e.arg, Var)
         name = e.arg.name
+        cls = self.class_info.classify(e.arg)
 
         def arg() -> Var:
             return Var(name, loc)
@@ -516,13 +529,17 @@ class _UnfoldOverflowInstance(BlockRewriter):
 
         # an operand already past the bound needs no rounding to know it
         if self.early_check:
-            g = src.check_finite
+            # the finiteness test keeps an infinity from being claimed as an
+            # overflow; an operand that cannot be one does not need it
+            g = src.check_finite and bool(cls & (ValueClass.NAN | ValueClass.INF))
             body = past(arg(), CompareOp.LE, src.neg_infval, src.over_neg, body, g)
             body = past(arg(), CompareOp.GE, src.infval, src.over_pos, body, g)
 
-        # a special value the rounding and the checks would not reproduce
-        for test, want in zip((IsNan, IsInf), src.specials):
-            if want is None:
+        # a special value the rounding and the checks would not reproduce --
+        # unless the operand is never that kind of value
+        atoms = (ValueClass.NAN, ValueClass.INF)
+        for atom, test, want in zip(atoms, (IsNan, IsInf), src.specials):
+            if want is None or not (atom & cls):
                 continue
             body = StmtBlock([IfStmt(
                 test(None, arg(), loc),
@@ -563,6 +580,7 @@ class UnfoldOverflow:
         where: int | None = None,
         early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
         """
         Takes the bound out of every qualifying rounding context in `func`.
@@ -580,5 +598,9 @@ class UnfoldOverflow:
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)
+        if class_info is None:
+            class_info = ValueClassInfer.analyze(func)
 
-        return _UnfoldOverflowInstance(func, eval_info, where, early_check).apply()
+        return _UnfoldOverflowInstance(
+            func, eval_info, class_info, where, early_check
+        ).apply()

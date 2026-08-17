@@ -1,11 +1,9 @@
 """
 Unfold a rounding context's special values into program text.
 
-A fixed-point format states what NaN and the infinities become — a
-representable value of their own (``enable_nan``/``enable_inf``), a
-substituted constant (``nan_value``/``inf_value``), or a refusal.  Each rule
-that names a value can be stated as a branch on the operand instead, since a
-special operand is the only way a special reaches the rounding:
+A format's answer for NaN, an infinity and a zero is a constant, since a special
+operand is the only way a special reaches the rounding.  So each can be stated as
+a branch on the operand instead:
 
 .. code-block:: python
 
@@ -22,29 +20,44 @@ special operand is the only way a special reaches the rounding:
        elif x == 0:
            r = -0.0 if fp.signbit(x) else 0
        else:
-           with C_:              # C with the stated rules removed
+           with C_:              # C, less any rule the branches took over
                r = fp.round(x)
 
-The zero branch removes nothing from the format — a zero is always
-representable — but with it the surviving rounding's operand is finite *and*
-non-zero, which is what a value-class analysis needs to discharge the
-format's remaining guards.
+That leaves the surviving rounding an operand that is finite *and* non-zero,
+which is what a value-class analysis reads to discharge the guards below it.
 
-The two sides come out independently: dropping ``enable_inf`` from a format
-whose overflow *produces* an infinity changes what finite operands past the
-bound become, which the branches never see — so that side stays in the format
-and only the NaN side is stated.  Which sides can come out is checked against
-the source rather than assumed, over the values where the rewrite could
-disagree; a format where neither side survives the check is left unchanged.
-A refusal also stays: a branch can only assign a value, not refuse one.
+**Stating a special and shedding its rule are separate.**  Stating one needs only
+that the context be statically known: the branch assigns exactly what the
+rounding would have returned, the format is untouched, and no check is required.
+Shedding the rule from the format on top of that changes what the surviving
+rounding does, so it is checked against the source over the values where the two
+could disagree — and only a format that states the rule as a parameter
+(``enable_nan``/``enable_inf``, ``nan_value``/``inf_value``) can do it at all.
+
+The two come apart in both directions.  Dropping ``enable_inf`` from a format
+whose overflow *produces* an infinity changes what finite operands past the bound
+become, which the branches never see, so that rule stays while its branch is
+still emitted.  And no *float* format states a rule this way — an encoded float
+always has a NaN by construction — so a float context is stated and never shed.
+A refusal is neither: a branch assigns a value and cannot refuse one, and leaving
+the value to the rounding refuses it identically.
+
+Which branches appear is decided per operand by
+:class:`~fpy2.analysis.ValueClassInfer`: a class the operand cannot hold takes a
+branch nothing reaches.  That is also what makes the rewrite idempotent — after
+one pass the surviving operand is finite and non-zero, so a second pass states
+nothing.  Stating a zero alone is not worth a rewrite, so a format that refuses
+both specials is left unchanged.
 
 Only a block whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
-(or a returned round) over variables is rewritten.  A cast substitutes a
-special exactly as a round does — the substitution happens before the
-exactness check — so it sheds the same rules.  Stochastic rounding sheds them
-too: a special never reaches the random draw, so the branches are
-deterministic and the surviving context keeps its random bits; the agreement
-probes run with the randomness turned off, where the two formats coincide.
+(or a returned round) over variables is rewritten.  A cast substitutes a special
+exactly as a round does — the substitution happens before the exactness check —
+so it takes the same branches.  Stochastic rounding takes them too: a special
+never reaches the random draw, so the branches are deterministic and the
+surviving context keeps its random bits; the agreement probes run with the
+randomness turned off, where the two formats coincide.  ``REAL`` is declined:
+it rounds exactly, so its specials pass through and the branches would say
+nothing.
 
 `SMFixedContext` and `FixedContext` state no NaN or infinity of their own, so
 what they shed is a substituted *value* — which comes off in-class, keeping
@@ -54,7 +67,13 @@ the source's format and the written form of its constructor.
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ..analysis import PartialEval, PartialEvalInfo
+from ..analysis import (
+    PartialEval,
+    PartialEvalInfo,
+    ValueClass,
+    ValueClassAnalysis,
+    ValueClassInfer,
+)
 from ..ast.fpyast import (
     Assign,
     Call,
@@ -80,6 +99,7 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     REAL,
+    Context,
     Float,
     MPBFixedContext,
     MPFixedContext,
@@ -95,12 +115,13 @@ from .utils import (
     try_round,
 )
 
-_FixedCtx = MPFixedContext | MPBFixedContext
+_Shedable = MPFixedContext | MPBFixedContext
 """
-the fixed-point contexts that state their special values as parameters.
+the contexts that state their special values as parameters, and so can have one
+removed from the format rather than only stated alongside it.
 
-`SMFixedContext` and `FixedContext` derive from `MPBFixedContext`, so the
-second member covers every bounded fixed-point format.
+`SMFixedContext` and `FixedContext` derive from `MPBFixedContext`, so the second
+member covers every bounded fixed-point format.  No float context is one.
 """
 
 _Pair = tuple[Float, Float]
@@ -111,20 +132,25 @@ _Pair = tuple[Float, Float]
 class _Source:
     """A format with stated special values, in the terms the rewrite needs."""
 
-    ctx: _FixedCtx
+    ctx: Context
     """the source format"""
-    dropped: _FixedCtx
-    """the same format with the shed rules removed, which the block rounds
-    under instead"""
+    dropped: Context
+    """the same format with the shed rules removed -- `ctx` itself where nothing
+    could be shed, in which case the block keeps its context verbatim"""
     nan: _Pair | None
-    """what NaN becomes, where that rule comes out of the format"""
+    """what NaN becomes, or `None` where the format has no result for one"""
     inf: _Pair | None
-    """what an infinity becomes, where that rule comes out of the format"""
+    """what an infinity becomes, or `None` where the format has no result"""
     zero: _Pair
     """what each zero rounds to; stated so the surviving operand is non-zero"""
+    shed: ValueClass
+    """the sides whose rule `dropped` no longer states.  Their branch is what
+    supplies the value, so it is emitted whatever the operand's class -- where a
+    side is *not* shed, the format still answers and the branch is only a
+    shortcut."""
 
 
-def _special_pair(ctx: _FixedCtx, positive: Float) -> _Pair | None:
+def _special_pair(ctx: Context, positive: Float) -> _Pair | None:
     """What `ctx` makes of `positive` and its negative, or `None` where it
     refuses either — a branch can only assign a value, not refuse one."""
     pos = try_round(ctx, positive)
@@ -134,18 +160,16 @@ def _special_pair(ctx: _FixedCtx, positive: Float) -> _Pair | None:
     return pos, neg
 
 
-def _without_specials(
-    ctx: _FixedCtx, *, drop_nan: bool, drop_inf: bool
-) -> _FixedCtx | None:
-    """`ctx` with the selected special-value rules removed, its class kept.
+def _without_specials(ctx: _Shedable, shed: ValueClass) -> _Shedable | None:
+    """`ctx` with the *shed* special-value rules removed, its class kept.
     `None` if the result will not construct."""
     # only the parameters that change are passed, so a subclass that fixes a
     # flag by construction (`SMFixedContext`, `FixedContext` state no NaN or
     # infinity) still sheds a substituted *value* in-class
     kwargs: dict[str, Any] = {}
-    if drop_nan:
+    if ValueClass.NAN & shed:
         kwargs |= {'nan_value': None} | ({'enable_nan': False} if ctx.enable_nan else {})
-    if drop_inf:
+    if ValueClass.INF & shed:
         kwargs |= {'inf_value': None} | ({'enable_inf': False} if ctx.enable_inf else {})
     try:
         return ctx.with_params(**kwargs)
@@ -156,20 +180,27 @@ def _without_specials(
 
 
 def _emitted(src: _Source, x: Float | RealFloat) -> Float | None:
-    """What the generated code yields for `x`: the branches in emission
-    order, then the rounding under the format with the rules removed."""
+    """What the generated code yields for `x`: the branches in emission order,
+    then the rounding under the format with the rules removed.
+
+    A special is modelled only where its rule was *shed*.  A side that stays in
+    the format answers the same whether the branch or the rounding handles it --
+    as the zero row always does -- so modelling it either way gives the same
+    comparison, and leaving it out keeps the probe independent of anything the
+    class analysis had to say.
+    """
     isnan = isinstance(x, Float) and x.isnan
     isinf = isinstance(x, Float) and x.isinf
-    if src.nan is not None and isnan:
+    if src.nan is not None and isnan and ValueClass.NAN & src.shed:
         return src.nan[1] if x.s else src.nan[0]
-    if src.inf is not None and isinf:
+    if src.inf is not None and isinf and ValueClass.INF & src.shed:
         return src.inf[1] if x.s else src.inf[0]
     if not isnan and not isinf and x.is_zero():
         return src.zero[1] if x.s else src.zero[0]
     return try_round(src.dropped, x)
 
 
-def _deterministic(ctx: _FixedCtx) -> _FixedCtx:
+def _deterministic(ctx: _Shedable) -> _Shedable:
     """`ctx` with its randomness off, for probing.  The shed rules touch only
     NaN, the infinities, and zero, none of which reach the random draw — so
     agreement of the deterministic twins carries over."""
@@ -178,40 +209,68 @@ def _deterministic(ctx: _FixedCtx) -> _FixedCtx:
     return ctx.with_params(num_randbits=0)
 
 
-def _describe(ctx: _FixedCtx) -> _Source | None:
+def _describe(ctx: Context) -> _Source:
     """
-    `ctx` with as many of its special-value rules shed as the probes allow,
-    most first; `None` where neither side comes out.
+    What `ctx` makes of each special, and as many of its stated rules shed from
+    the format as the probes allow.
+
+    The two jobs are separate.  **Hoisting** a special into a branch needs only
+    that `ctx` be statically known, since the branch then assigns exactly what
+    the rounding would have returned -- the format is untouched, so no probe is
+    needed and every concrete context qualifies.  **Shedding** the rule from the
+    format on top of that changes what the surviving rounding does, so it is
+    checked against the source over the values where the two could disagree, and
+    only a format that states the rule as a parameter can do it at all.
     """
-    nan = _special_pair(ctx, Float(isnan=True)) if (
-        ctx.enable_nan or ctx.nan_value is not None) else None
-    inf = _special_pair(ctx, Float(isinf=True)) if (
-        ctx.enable_inf or ctx.inf_value is not None) else None
+    nan = _special_pair(ctx, Float(isnan=True))
+    inf = _special_pair(ctx, Float(isinf=True))
     zero = _special_pair(ctx, Float(c=0))
     assert zero is not None  # a zero is always representable
 
+    hoisted = _Source(ctx, ctx, nan=nan, inf=inf, zero=zero, shed=ValueClass(0))
+    if not isinstance(ctx, _Shedable):
+        return hoisted
+
     # the probes and the source's answers are the same for every attempt;
-    # only the dropped side varies
+    # only the shed side varies
     det = _deterministic(ctx)
     probes = fixed_probes(ctx)
     want = [try_round(det, x) for x in probes]
 
-    for drop_nan, drop_inf in ((True, True), (True, False), (False, True)):
-        if drop_nan and nan is None or drop_inf and inf is None:
-            continue
-        dropped = _without_specials(ctx, drop_nan=drop_nan, drop_inf=drop_inf)
+    # most first, so a format that can lose both does
+    for shed in (ValueClass.NAN | ValueClass.INF, ValueClass.NAN, ValueClass.INF):
+        if (ValueClass.NAN & shed and nan is None
+                or ValueClass.INF & shed and inf is None):
+            continue        # a refusal has no value for the branch to take over
+        dropped = _without_specials(ctx, shed)
         if dropped is None:
             continue
-        src = _Source(
-            ctx, dropped,
-            nan=nan if drop_nan else None,
-            inf=inf if drop_inf else None,
-            zero=zero,
-        )
+        src = replace(hoisted, dropped=dropped, shed=shed)
         probed = replace(src, dropped=_deterministic(dropped))
         if all(agrees(w, _emitted(probed, x)) for w, x in zip(want, probes)):
             return src
-    return None
+    return hoisted
+
+
+def _hoisted(src: _Source, cls: ValueClass) -> ValueClass:
+    """The sides to state as branches for an operand of class *cls*.
+
+    A side the format has no value for cannot be stated at all -- a branch
+    assigns a value, it cannot refuse one -- and leaving the value to fall
+    through to the rounding refuses it identically.
+
+    Otherwise a side is stated where the operand can *be* that kind of value, or
+    where the format no longer states the rule and the branch is the only thing
+    that can supply it.  Skipping a class the operand cannot hold is also what
+    makes the rewrite idempotent: after one pass the surviving operand is finite
+    and non-zero, so a second pass states nothing and declines.
+    """
+    out = ValueClass(0)
+    for atom, pair in ((ValueClass.NAN, src.nan), (ValueClass.INF, src.inf),
+                       (ValueClass.ZERO, src.zero)):
+        if pair is not None and atom & (cls | src.shed):
+            out |= atom
+    return out
 
 
 def _ctx_expr(e: Expr, src: _Source) -> Expr:
@@ -226,9 +285,9 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
         and type(src.dropped) is type(src.ctx)
     ):
         shed = set()
-        if src.nan is not None:
+        if ValueClass.NAN & src.shed:
             shed |= {'enable_nan', 'nan_value'}
-        if src.inf is not None:
+        if ValueClass.INF & src.shed:
             shed |= {'enable_inf', 'inf_value'}
         # a structurally-fresh copy: each emitted block must occupy distinct
         # AST nodes, and the source expression stays in place under `where`
@@ -246,16 +305,18 @@ class _UnfoldSpecialInstance(BlockRewriter):
 
     func: FuncDef
     eval_info: PartialEvalInfo
+    class_info: ValueClassAnalysis
     gensym: Gensym
     where: int | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        where: int | None = None,
+        class_info: ValueClassAnalysis, where: int | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
+        self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
         # Counts *candidate* blocks (those the rewrite could unfold) in
@@ -266,27 +327,41 @@ class _UnfoldSpecialInstance(BlockRewriter):
         return self._visit_function(self.func, None)
 
     def _candidate(self, stmt: ContextStmt) -> _Source | None:
-        """The block's format, if a special-value rule can be taken out of
-        its context."""
+        """The block's format, if any of its special values can be stated as a
+        branch or shed from it."""
         # a bound context is visible to the body as a value, which the rewrite changes
         if not isinstance(stmt.target, UnderscoreId):
             return None
 
+        # the branch values are the context's own answers, so it has to be known
+        # here; `REAL` rounds exactly, so stating its specials says nothing
         ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, _FixedCtx):
+        if not isinstance(ctx, Context) or ctx is REAL:
             return None
 
         # a cast substitutes a special exactly as a round does: the
         # substitution happens before the exactness check
+        args: list[Var] = []
         for s in stmt.body.stmts:
             match s:
                 case Assign(target=NamedId()) | ReturnStmt():
                     if not isinstance(s.expr, (Round, Cast)) or not isinstance(s.expr.arg, Var):
                         return None
+                    args.append(s.expr.arg)
                 case _:
                     return None
 
-        return _describe(ctx)
+        # a zero rides along wherever the rewrite already happens, but stating
+        # it alone buys nothing: the guards a class analysis discharges are about
+        # the specials, and a format that refuses both has none to state
+        src = _describe(ctx)
+        specials = ValueClass.NAN | ValueClass.INF
+        if src.shed or any(self._hoist(src, arg) & specials for arg in args):
+            return src
+        return None
+
+    def _hoist(self, src: _Source, arg: Var) -> ValueClass:
+        return _hoisted(src, self.class_info.classify(arg))
 
     def _unfold(
         self, e: Round | Cast, target: NamedId, loc: Location | None,
@@ -296,6 +371,7 @@ class _UnfoldSpecialInstance(BlockRewriter):
         rounding that sees only a finite, non-zero value."""
         assert isinstance(e.arg, Var)
         name = e.arg.name
+        hoist = self._hoist(src, e.arg)
 
         def arg() -> Var:
             return Var(name, loc)
@@ -311,14 +387,17 @@ class _UnfoldSpecialInstance(BlockRewriter):
 
         # a zero is a constant of the format, and taking it out leaves the
         # rounding a non-zero operand for an analysis to rely on
-        body = StmtBlock([IfStmt(
-            Compare([CompareOp.EQ], [arg(), Integer(0, loc)], loc),
-            assign(sign_choice(src.zero[0], src.zero[1], arg(), loc)),
-            body, loc,
-        )])
-        for test, pair in ((IsInf, src.inf), (IsNan, src.nan)):
-            if pair is None:
+        if ValueClass.ZERO & hoist:
+            body = StmtBlock([IfStmt(
+                Compare([CompareOp.EQ], [arg(), Integer(0, loc)], loc),
+                assign(sign_choice(src.zero[0], src.zero[1], arg(), loc)),
+                body, loc,
+            )])
+        for atom, test, pair in ((ValueClass.INF, IsInf, src.inf),
+                                 (ValueClass.NAN, IsNan, src.nan)):
+            if not (atom & hoist):
                 continue
+            assert pair is not None
             body = StmtBlock([IfStmt(
                 test(None, arg(), loc),
                 assign(sign_choice(pair[0], pair[1], arg(), loc)),
@@ -359,6 +438,7 @@ class UnfoldSpecial:
         func: FuncDef, *,
         where: int | None = None,
         eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
         """
         Takes the special-value rules out of every qualifying rounding
@@ -375,5 +455,9 @@ class UnfoldSpecial:
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)
+        if class_info is None:
+            class_info = ValueClassInfer.analyze(func)
 
-        return _UnfoldSpecialInstance(func, eval_info, where).apply()
+        return _UnfoldSpecialInstance(
+            func, eval_info, class_info, where
+        ).apply()

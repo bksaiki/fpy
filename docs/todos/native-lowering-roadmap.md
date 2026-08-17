@@ -8,10 +8,12 @@ no soft-float, no `fpy::` runtime.
 
 ## Where we are
 
-**Reached, for an `FP32` source.** Three operators, each one idea:
+**Reached, for an `FP32` source.** Four operators, each one idea, plus an
+optional fifth:
 
 ```
 monomorphize      pin the argument format
+unfold_special    NaN / infinity / zero -> branches on the operand   (optional)
 unfold_overflow   IEEEContext      -> MPSFloatContext + bound checks
 float_to_fixed    unbounded float  -> MPFixedContext at a position from logb
 rescale_fixed     MPFixedContext   -> position zero, integer values
@@ -43,22 +45,18 @@ double f(float x) {
             float e = std::logb(x);
             if ((e < static_cast<float>(-14))) {
                 double _t = (static_cast<double>(16777216) * static_cast<double>(x));
-                assert(std::isfinite(_t) && "fpy: rounding is undefined for this value");
                 float _tmp1 = std::nearbyint(_t);
                 assert((std::fabs(_tmp1) <= 1024) && "fpy: overflow occurred so rounding is undefined");
-                float _t7 = _tmp1;
-                t = (5.960464477539063e-08 * _t7);
+                float _t6 = _tmp1;
+                t = (5.960464477539063e-08 * _t6);
             } else {
                 float exp = (e - static_cast<float>(10));
                 auto&& _tmp2 = (-exp);
-                auto&& _tmp3 = static_cast<double>(x);
-                double _t8 = (std::isfinite(_tmp2) ? std::ldexp(_tmp3, static_cast<int>(_tmp2)) : std::pow(2.0, _tmp2) * _tmp3);
-                assert(std::isfinite(_t8) && "fpy: rounding is undefined for this value");
-                float _tmp4 = std::nearbyint(_t8);
-                assert((std::fabs(_tmp4) <= 2048) && "fpy: overflow occurred so rounding is undefined");
-                float _t9 = _tmp4;
-                auto&& _tmp5 = static_cast<double>(_t9);
-                t = (std::isfinite(exp) ? std::ldexp(_tmp5, static_cast<int>(exp)) : std::pow(2.0, exp) * _tmp5);
+                double _t7 = std::ldexp(static_cast<double>(x), static_cast<int>(_tmp2));
+                float _tmp3 = std::nearbyint(_t7);
+                assert((std::fabs(_tmp3) <= 2048) && "fpy: overflow occurred so rounding is undefined");
+                float _t8 = _tmp3;
+                t = std::ldexp(static_cast<double>(_t8), static_cast<int>(exp));
             }
         }
         if ((t > static_cast<double>(65504))) {
@@ -87,7 +85,8 @@ Three ideas, each recorded where it was learned:
   becomes `assert(std::fabs(r) <= B)` — or a pair of comparisons where the two
   bounds are asymmetric — and an operand the format has no result for becomes
   `assert(std::isfinite(v))`. Derived from the context's own flags, so a format
-  that admits NaN gets no guard.
+  that admits NaN gets no guard, and from the *value*, so neither does an operand
+  a branch has already ruled out (gap 6).
 - **A scale must be `ldexp`, not `pow`.** `std::pow(2, n)` is not required to be
   exact — C11 F.10 requires correct rounding of no math function and IEEE 754
   only *recommends* it for `exp2`. On this platform it happens to be exact for
@@ -164,10 +163,27 @@ The predicate for "the cast *is* the rounding" is `target.is_native_ctx`,
 introduced here: a format carries no overflow rule, so a `-128..127` context
 under `ASSERT` is format-equal to `int8_t` and still needs the assertion.
 
-The libm mapping has a second, subtler hole in the same area: the interpreter
-*raises* where `std::trunc` returns a NaN, and today only an unread branch
-reconciles them.  [value-class-analysis.md](value-class-analysis.md) closes that
-one, and four emitted guards with it.
+The libm mapping had a second, subtler hole in the same area: the interpreter
+*raises* where `std::trunc` returns a NaN, and only an unread branch reconciled
+them. Closed by gap 6.
+
+### 6. Value classes read the branches
+
+**Closed.** A four-atom lattice — `{NaN, Inf, Zero, Finite}` — refined at every
+branch that tests a value's kind, in `fpy2/analysis/value_class.py`. It answers
+the question the guards above were asking and the *format* could not: a format
+says whether some value in it is a NaN, not whether this one is, and it
+structurally cannot say **not zero**.
+
+The lowered `FP16` rounding went from **4 assertions, 4 `isfinite`, 2 `std::pow`**
+to **2, 0, 0** — the survivors are the two bound checks, which are magnitude
+facts. `std::ldexp` no longer needs its `isfinite ? … : pow` fallback, and the
+libm mapping's specials side-condition is discharged rather than assumed.
+
+The transforms read it too: `float_to_fixed` drops an `isnan`/`isinf`/`== 0`
+branch and `unfold_overflow` its finiteness test where the operand cannot be that
+kind of value. That needs concrete argument types and pays nothing on the
+standard `FP32`-source pipeline, where the operand is a parameter at top.
 
 ### 4. Backend cleanups
 
@@ -185,22 +201,38 @@ sequence, verified bit-for-bit against the interpreter across fourteen formats i
 but is not in that check. It deserves one entry point rather than a comment in a
 sandbox.
 
-Unrelated to lowering, but found here: `fp.round_at(x, n)` raises `IndexError:
-tuple index out of range` from `fpy2/analysis/type_infer.py:440` — a crash in
-type inference where a diagnostic belongs.
+`unfold_special` composes in front of `unfold_overflow` and is worth including:
+it states the specials once at the outside, so `float_to_fixed` emits no ladder of
+its own (gap 6 reads the branches) and `logb` hoists to a single call. Same
+instruction count, one ladder instead of two nested inside the rounding. Not in
+the roundtrip check either.
+
+Unrelated to lowering, but found along this path — each reproduces well before
+the change that turned it up, so none is a regression:
+
+- `fp.round_at(x, n)` raises `IndexError: tuple index out of range` from
+  `fpy2/analysis/type_infer.py:440` — a crash in type inference where a
+  diagnostic belongs.
+- **`unfold_overflow` emits an unconstructible context.** A source with a
+  `nan_value` / `inf_value` substitute has it written into the rewritten program
+  as a *numeric literal*, and `MPFixedContext` requires a `Float` — so
+  `MPFixedContext(-4, inf_value=7)` raises and the rewritten program cannot be
+  evaluated at all.
+- **An integer-typed source cannot be compiled.** `with fp.FP16: round(x)` over a
+  `SINT32` argument lowers cleanly but crashes format inference on the way to
+  C++: `AbstractFormat.format()` builds an `MPBFixedFormat` whose `pos_maxval` of
+  `1024` is unrepresentable at the chosen `nmin`.
 
 ## Order of work
 
-Gaps 2 and 3 are done, and with them the non-finite integer conversion: a
-float-to-integer cast now asserts `std::isfinite` first, on the native integer
-path as well. What is left, cheapest first:
+Gaps 2, 3 and 6 are done, and with them the non-finite integer conversion: a
+float-to-integer cast asserts `std::isfinite` first where it can arrive, on the
+native integer path as well. What is left, cheapest first:
 
-1. **[Value classes](value-class-analysis.md)** — a four-atom lattice, refined
-   at branches.  Removes two runtime branches and two assertions from every
-   lowered rounding and discharges the libm mapping's last side-condition.
+1. **Backend cleanups and a recipe** — gaps 4 and 5, both small, and the recipe
+   is what makes the path usable by someone who did not write it.
 2. **An `FP64` source** — the largest, and gated on the *numeric* half of
    inference rather than on the backend.
-3. **Backend cleanups and a recipe.**
 
 ## Open questions
 

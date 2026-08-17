@@ -14,6 +14,7 @@ assert:
 """
 
 import fpy2 as fp
+import fpy2.strategies as st
 import pytest
 
 from fpy2.analysis import PartialEval
@@ -39,6 +40,7 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.transform import UnfoldOverflow
+from fpy2.types import RealType
 
 
 # ----------------------------------------------------------------------
@@ -638,3 +640,56 @@ class TestEquivalence:
         for x in (65504.0, 65515.0, 65519.0, 65519.996, 65520.0, 65536.0, 1e5, 1e10):
             for sx in (x, -x):
                 assert _same(_eval(out, f, sx), f(sx)), sx
+
+
+# ----------------------------------------------------------------------
+# Branches the operand cannot take
+
+
+class TestBranchesTheOperandCannotTake:
+    """Two of the rewrite's emitted tests exist only for a special operand.
+
+    The finiteness test in front of the early check keeps an infinity from being
+    claimed as an overflow, and a specials branch assigns what the format makes
+    of a NaN or an infinity.  Neither is needed where the operand can be
+    neither, which :class:`fpy2.analysis.ValueClassInfer` reads off a concrete
+    argument type or an enclosing branch.
+    """
+
+    # a bounded fixed-point format: its unbounded counterpart refuses an
+    # infinity, so the early check needs the finiteness test in front
+    _SATURATING = MPBFixedContext(
+        -4, RealFloat(exp=0, c=100), overflow=fp.OverflowMode.SATURATE)
+    # substitutes a finite value for an infinity, which needs its own branch
+    _INF_SUB = MPBFixedContext(
+        -4, RealFloat(exp=0, c=100), overflow=fp.OverflowMode.SATURATE,
+        inf_value=fp.Float(x=RealFloat(exp=0, c=7), ctx=REAL))
+
+    def _apply(self, ctx, arg_ctx):
+        mono = st.monomorphize(_quantizer(ctx), args=[RealType(arg_ctx)])
+        return mono, UnfoldOverflow.apply(mono.ast, early_check=True)
+
+    def test_the_finiteness_test_goes_for_an_integer_operand(self):
+        _, kept = self._apply(self._SATURATING, fp.FP64)
+        assert _nodes(kept, IsFinite)
+        _, dropped = self._apply(self._SATURATING, fp.SINT32)
+        assert not _nodes(dropped, IsFinite)
+
+    def test_a_specials_branch_goes_for_an_integer_operand(self):
+        _, kept = self._apply(self._INF_SUB, fp.FP64)
+        assert _nodes(kept, IsInf)
+        _, dropped = self._apply(self._INF_SUB, fp.SINT32)
+        assert not _nodes(dropped, IsInf)
+
+    def test_the_rewrite_is_still_bit_exact(self):
+        """An integer operand, so the dropped test really is unreachable: no
+        `SINT32` value is a NaN or an infinity.
+
+        Only the saturating context: a rewrite of ``_INF_SUB`` writes its
+        substitute into the emitted context as a numeric literal, which
+        ``MPFixedContext`` refuses to be constructed from -- so that program
+        cannot be evaluated at all, before or after this change.
+        """
+        mono, out = self._apply(self._SATURATING, fp.SINT32)
+        for x in (0, 1, -1, 7, 99, 100, 101, -100, -101, 12345, -12345):
+            assert _same(_eval(out, mono, x), mono(x)), x
