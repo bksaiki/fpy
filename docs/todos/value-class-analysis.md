@@ -148,7 +148,12 @@ Commit-sized phases; the full suites run only at the end.
   from the lowered `FP16` output, with `test_lowered_roundtrip.py` still
   bit-exact across all fourteen formats — that suite is the proof, not the token
   count, and its inputs include a NaN, both infinities and both zeros.
-- [ ] **3 — the specials guards.**  The five remaining emitter sites below.
+- [x] **3 — the specials guards.**  The remaining emitter sites below, plus the
+  `Cast` round-trip's NaN-aware equality disjunct.  The lowered `FP16` rounding
+  is down to **2 asserts, 0 `isfinite`, 0 `pow`** — the two survivors are bound
+  checks.  Each site is tested as a pair of programs differing only in a branch;
+  an unsound version that drops every guard is caught by 20 tests, two of them
+  compile-and-run differentials.
 - [ ] **4 (optional) — the transforms.**  `float_to_fixed` and
   `unfold_overflow` skipping a branch whose class is already excluded.
 - [ ] **5 — full suites, and the stale listings.**  The emitted-program excerpt

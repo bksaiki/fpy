@@ -30,6 +30,7 @@ from ...analysis import (
     DefineUseAnalysis,
     Definition,
     FormatAnalysis,
+    ValueClass,
     ValueClassAnalysis,
 )
 from ...analysis.format_infer import (
@@ -2481,9 +2482,14 @@ class CppEmitter(Visitor):
             # `_emit_ieee_min_max` binds its own operands, so folding an
             # expression into the next step names it once
             result = casted[0]
-            for nxt in casted[1:]:
+            # a step's first operand is every earlier operand's result, so the
+            # NaN propagation goes only once nothing folded in so far can be one
+            seen = self.class_info.classify(e.args[0])
+            for nxt, src in zip(casted[1:], e.args[1:]):
+                seen |= self.class_info.classify(src)
                 result = self._emit_ieee_min_max(
                     result, nxt, target, is_min=isinstance(e, Min),
+                    nan_free=not (seen & ValueClass.NAN),
                 )
             return result
         # integers have no NaN and no signed zero, so the library form is exact
@@ -2495,6 +2501,7 @@ class CppEmitter(Visitor):
 
     def _emit_ieee_min_max(
         self, a: str, b: str, ty: CppScalar, *, is_min: bool,
+        nan_free: bool = False,
     ) -> str:
         """IEEE 754-2019 ``minimum`` / ``maximum`` of *a* and *b*, inline.
 
@@ -2510,10 +2517,15 @@ class CppEmitter(Visitor):
         the same predicate and swaps the results.
 
         Inline, and both operands bound -- the predicate names each twice.
+        With *nan_free* the propagation is dropped: neither operand can be a NaN,
+        so the predicate alone is the whole operation.  The ``signbit`` term
+        stays, since a signed zero is not what that rules out.
         """
         a, b = self._bind_operand(a), self._bind_operand(b)
         a_wins = f'({a} < {b} || ({a} == {b} && std::signbit({a})))'
         chosen = f'{a_wins} ? {a} : {b}' if is_min else f'{a_wins} ? {b} : {a}'
+        if nan_free:
+            return f'({chosen})'
         nan = f'std::numeric_limits<{ty.format()}>::quiet_NaN()'
         return f'((std::isnan({a}) || std::isnan({b})) ? {nan} : ({chosen}))'
 
@@ -2797,11 +2809,12 @@ class CppEmitter(Visitor):
             f'{target_ty.format()} {tmp} = '
             f'{self._explicit_cast(arg, target_ty)};'
         )
-        # NaN-aware comparison: ``NaN == NaN`` is false in
-        # C++, so FP operands need an extra ``isnan`` guard
-        # to avoid false asserts when both sides round to
-        # NaN.  Skipped for purely integer operand pairs.
-        if target_ty.is_float() or (arg_ty is not None and arg_ty.is_float()):
+        # NaN-aware comparison: ``NaN == NaN`` is false in C++, so FP operands
+        # need an extra ``isnan`` guard to avoid false asserts when both sides
+        # round to NaN.  Skipped for purely integer operand pairs, and for an
+        # operand no NaN reaches.
+        if (target_ty.is_float() or (arg_ty is not None and arg_ty.is_float())) \
+                and ValueClass.NAN & self._operand_class(e):
             check = (
                 f'{arg} == {tmp} || '
                 f'(std::isnan({arg}) && std::isnan({tmp}))'
@@ -2849,7 +2862,7 @@ class CppEmitter(Visitor):
         operand = self._bind_operand(arg)
 
         if not integral:
-            guard = self._undefined_guard(ctx, operand)
+            guard = self._undefined_guard(ctx, operand, self._operand_class(e))
             if guard is not None:
                 self._emit_assert(
                     guard, 'cast is not exact: a NaN or an infinity is not '
@@ -2899,17 +2912,22 @@ class CppEmitter(Visitor):
             return lit
         return self._explicit_cast(lit, target_ty)
 
-    def _guard_float_to_integer(self, arg: str, arg_ty, target_ty: CppScalar) -> str:
+    def _guard_float_to_integer(
+        self, arg: str, arg_ty, target_ty: CppScalar, src: Expr,
+    ) -> str:
         """Assert *arg* is finite before a float-to-integer conversion.
 
         Converting a NaN or an infinity to an integer type is undefined -- on
-        x86-64 it yields ``INT_MIN`` -- where the interpreter raises.
+        x86-64 it yields ``INT_MIN`` -- where the interpreter raises.  Where the
+        branches above *src* have ruled both out there is nothing to assert.
 
         Returns the operand, bound where the assertion has to name it.
         """
         if not target_ty.is_integer():
             return arg
         if arg_ty is not None and not arg_ty.is_float():
+            return arg
+        if self.class_info.is_finite(src):
             return arg
         operand = self._bind_operand(arg)
         self._emit_assert(
@@ -2934,7 +2952,7 @@ class CppEmitter(Visitor):
         arg_ty, target_ty = self._scalar_cast_types(e)
         if arg_ty == target_ty:
             return arg
-        arg = self._guard_float_to_integer(arg, arg_ty, target_ty)
+        arg = self._guard_float_to_integer(arg, arg_ty, target_ty, e.arg)
         return self._explicit_cast(arg, target_ty)
 
     _INTEGRAL_ONE_CALL: ClassVar[dict[RM, str]] = {
@@ -3000,8 +3018,22 @@ class CppEmitter(Visitor):
             case _:
                 return None
 
+    def _operand_class(self, e: NamedUnaryOp) -> ValueClass:
+        """Which of NaN / infinity / zero / finite *e*'s operand can be.
+
+        A class is a fact about the FPy value, where the guards below protect a
+        C++ operation on its *storage*.  The two coincide because storage is
+        chosen to contain the expression's format, so a value in that format
+        survives the trip -- the invariant the rest of the backend already rests
+        on.  A narrowing `Cast` is not a counterexample: the analysis rounds
+        through the target context, so casting ``1e300`` to `FP32` comes back
+        admitting an infinity, and the guard stays.
+        """
+        return self.class_info.classify(e.arg)
+
     def _undefined_guard(
         self, ctx: MPFixedContext | MPBFixedContext, operand: str,
+        cls: ValueClass,
     ) -> str | None:
         """A test that *operand* is a value `ctx` can round, or `None`.
 
@@ -3009,11 +3041,14 @@ class CppEmitter(Visitor):
         compiles to an assertion.  A stated *substitute* (``nan_value`` /
         ``inf_value``) is a value rather than a refusal, so it needs an emitted
         branch instead -- callers decline those.
+
+        A refusal *cls* already rules out needs no assertion: the branches above
+        the operand have said what the format could not.
         """
         tests = []
-        if not ctx.enable_nan and ctx.nan_value is None:
+        if not ctx.enable_nan and ctx.nan_value is None and ValueClass.NAN & cls:
             tests.append(f'!std::isnan({operand})')
-        if not ctx.enable_inf and ctx.inf_value is None:
+        if not ctx.enable_inf and ctx.inf_value is None and ValueClass.INF & cls:
             tests.append(f'!std::isinf({operand})')
         if len(tests) == 2:
             # both refused: one call says it
@@ -3099,8 +3134,9 @@ class CppEmitter(Visitor):
                 at=e,
             )
 
+        cls = self._operand_class(e)
         operand = self._bind_operand(arg)
-        guard = self._undefined_guard(active, operand)
+        guard = self._undefined_guard(active, operand, cls)
         if guard is not None:
             self._emit_assert(guard, 'rounding is undefined for this value')
         out = self._fresh_temp()
@@ -3109,11 +3145,14 @@ class CppEmitter(Visitor):
             f'{self._emit_integral_value(active.rm, operand)};'
         )
         bound = self._bound_test(active, out, at=e, ty=target_ty)
-        if active.enable_nan or active.enable_inf:
+        if (active.enable_nan or active.enable_inf) and cls & (
+            ValueClass.NAN | ValueClass.INF
+        ):
             # A special this context *does* represent reaches here, and no
             # magnitude test admits one.  Tested on the *operand*: a finite value
             # too large for the storage narrows to an infinity on the way in, and
-            # that one does overflow the bound.
+            # that one does overflow the bound.  An operand that cannot be either
+            # never takes the exemption, so it is left out.
             bound = f'!std::isfinite({operand}) || {bound}'
         self._emit_assert(bound, 'overflow occurred so rounding is undefined')
         return out
@@ -3136,7 +3175,7 @@ class CppEmitter(Visitor):
         # an integer operand is already integral and never a NaN or an infinity;
         # only its magnitude is in question
         if not integral:
-            guard = self._undefined_guard(ctx, operand)
+            guard = self._undefined_guard(ctx, operand, self._operand_class(e))
             if guard is not None:
                 self._emit_assert(guard, 'rounding is undefined for this value')
         rounded = operand if integral else f'std::trunc({operand})'
