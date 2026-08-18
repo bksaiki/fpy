@@ -1613,7 +1613,12 @@ class _FormatInferInstance(Visitor):
         it tests.  Only a comparison against a numeric literal, and only the
         direction that tightens a *bound* -- the convention
         ``pos_bound >= 0 >= neg_bound`` leaves no room to state that a value is
-        bounded away from zero on the far side."""
+        bounded away from zero on the far side.
+
+        Read at ``if``/``if1`` only.  A loop condition and an ``IfExpr`` carry
+        the same facts and are simply not read yet; missing a refinement costs
+        precision, never soundness.
+        """
         match cond:
             case Not():
                 return self._implied(cond.arg, not truth)
@@ -1667,6 +1672,8 @@ class _FormatInferInstance(Visitor):
         if v is None:
             return []
         d_v = self.def_use.find_def_from_use(v)
+        # the stored bound, not `_bound_of_def`: this runs while the mask that
+        # method reads is still being built, and only the precision is wanted
         fmt = self.by_def.get(d_v)
         if not isinstance(fmt, AbstractableFormat):
             return []
