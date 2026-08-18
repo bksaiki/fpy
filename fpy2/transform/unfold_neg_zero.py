@@ -77,7 +77,7 @@ from ..number import (
     RealFloat,
 )
 from ..utils import CompareOp, Gensym
-from .utils import BlockRewriter, agrees, check_where, fixed_probes, try_round
+from .utils import BlockRewriter, agrees, check_site, check_where, fixed_probes, try_round
 
 _FixedCtx = MPFixedContext | MPBFixedContext
 """
@@ -299,4 +299,7 @@ class UnfoldNegZero:
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _UnfoldNegZeroInstance(func, eval_info, where).apply()
+        vtor = _UnfoldNegZeroInstance(func, eval_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

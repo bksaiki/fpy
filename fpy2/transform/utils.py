@@ -35,6 +35,7 @@ from ..ast.fpyast import (
     Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
+from .error import TransformReferenceError
 from ..number import (
     INTEGER,
     Context,
@@ -208,6 +209,16 @@ def check_where(where: int | None) -> None:
     """Rejects a `where` that is not an index."""
     if where is not None and not isinstance(where, int):
         raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
+
+
+def check_site(where: int | None, count: int, what: str) -> None:
+    """Rejects an explicit `where` that named no candidate: fail rather
+    than silently no-op.  `count` must be the true candidate count."""
+    if where is not None and not (0 <= where < count):
+        raise TransformReferenceError(
+            f'where={where} does not correspond to {what}; '
+            f'the function has {count} candidate site(s)'
+        )
 
 
 class BlockRewriter(DefaultTransformVisitor):

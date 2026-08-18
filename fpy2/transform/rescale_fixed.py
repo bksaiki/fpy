@@ -105,6 +105,7 @@ from ..number.format import (
 from ..utils import Gensym
 from .utils import (
     BlockRewriter,
+    check_site,
     check_where,
     number_literal,
     shift,
@@ -501,4 +502,7 @@ class RescaleFixed:
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _RescaleFixedInstance(func, eval_info, where).apply()
+        vtor = _RescaleFixedInstance(func, eval_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

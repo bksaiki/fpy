@@ -19,7 +19,7 @@ import pytest
 from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef, Integer
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
-from fpy2.transform import RescaleFixed, UnfoldSpecial
+from fpy2.transform import RescaleFixed, TransformReferenceError, UnfoldSpecial
 from fpy2.transform.rescale_fixed import _scale_of
 
 
@@ -403,7 +403,8 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._three()
-        assert RescaleFixed.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            RescaleFixed.apply(f.ast, where=9)
 
     def test_rejects_a_non_integer(self):
         f = self._three()

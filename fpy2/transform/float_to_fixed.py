@@ -133,6 +133,7 @@ from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
     attribute,
+    check_site,
     check_where,
     number_literal,
     sign_choice,
@@ -562,4 +563,7 @@ class FloatToFixed:
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        return _FloatToFixedInstance(func, eval_info, class_info, where).apply()
+        vtor = _FloatToFixedInstance(func, eval_info, class_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

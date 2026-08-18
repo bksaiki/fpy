@@ -109,6 +109,7 @@ from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
     agrees,
+    check_site,
     check_where,
     fixed_probes,
     sign_choice,
@@ -458,6 +459,7 @@ class UnfoldSpecial:
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        return _UnfoldSpecialInstance(
-            func, eval_info, class_info, where
-        ).apply()
+        vtor = _UnfoldSpecialInstance(func, eval_info, class_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

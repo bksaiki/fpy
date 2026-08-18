@@ -33,7 +33,7 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import UnfoldNegZero
+from fpy2.transform import TransformReferenceError, UnfoldNegZero
 
 
 # ----------------------------------------------------------------------
@@ -364,7 +364,8 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert UnfoldNegZero.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            UnfoldNegZero.apply(f.ast, where=9)
 
     def test_rejects_a_non_integer(self):
         f = self._two()

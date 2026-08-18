@@ -131,6 +131,7 @@ from .utils import (
     BlockRewriter,
     agrees,
     attribute,
+    check_site,
     check_where,
     number_literal,
     same_value,
@@ -604,6 +605,7 @@ class UnfoldOverflow:
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        return _UnfoldOverflowInstance(
-            func, eval_info, class_info, where, early_check
-        ).apply()
+        vtor = _UnfoldOverflowInstance(func, eval_info, class_info, where, early_check)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

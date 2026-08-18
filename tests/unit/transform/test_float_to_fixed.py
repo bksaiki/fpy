@@ -38,7 +38,7 @@ from fpy2.number import (
     MPFloatContext,
     MPSFloatContext,
 )
-from fpy2.transform import FloatToFixed
+from fpy2.transform import FloatToFixed, TransformReferenceError
 from fpy2.types import RealType
 
 
@@ -281,7 +281,8 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert FloatToFixed.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            FloatToFixed.apply(f.ast, where=9)
 
     def test_rejects_a_non_integer(self):
         f = self._two()

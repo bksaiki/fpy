@@ -22,9 +22,18 @@ Adopt the two-kind taxonomy every surveyed system converged on (Exo 2:
 
 - **declined** — the transform refused, the program is unchanged, and the
   message says *why* ("declined: `inf_value` not reproducible under probes").
-  Recoverable; this is what `try`/fallback schedules catch.
+  Recoverable; this is what `try`/fallback strategies catch.
 - **bad reference** — the `where` (later: cursor) does not point at anything.
 - anything else is a bug and propagates.
+
+One hierarchy across both layers, no translation: the exceptions are named for
+what happened (`TransformDeclined`, `TransformReferenceError`, base
+`TransformError`), defined at the transform layer that raises them, and
+re-exported from `fpy2.strategies`. A wrapper-level rename would force
+internal callers of `Transform.apply` onto a different vocabulary than the
+documented one and add a catch-and-reraise to every strategy for nothing —
+Exo 2 likewise shares one `SchedulingError` between primitives and user
+libraries.
 
 An explicit `where` that matches nothing is a bad reference; `where=None`
 keeps its apply-everywhere meaning, including to zero sites.

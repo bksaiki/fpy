@@ -35,7 +35,7 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import UnfoldSpecial
+from fpy2.transform import TransformReferenceError, UnfoldSpecial
 
 
 # ----------------------------------------------------------------------
@@ -433,7 +433,8 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert UnfoldSpecial.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            UnfoldSpecial.apply(f.ast, where=9)
 
     def test_rejects_a_non_integer(self):
         f = self._two()
