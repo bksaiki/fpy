@@ -144,6 +144,7 @@ from .storage import (
     StorageSelectionError,
     bound_fits_in_scalar,
     choose_storage,
+    exact_integer_bits,
     scalar_fits_in,
     scalar_sup,
 )
@@ -207,6 +208,24 @@ def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
         return CppScalar.S64
     return None
 
+
+def _cast_advice(arg_ty: CppScalar, target_ty: CppScalar) -> str:
+    """How to make a conversion :meth:`_maybe_cast` refused legal.
+
+    Widening the active context is the usual answer, but it cannot fix an
+    integer too wide for a float's significand -- no float rung holds one -- so
+    there the advice is to narrow the *operand*'s context instead.
+    """
+    if arg_ty.is_integer() and (bits := exact_integer_bits(target_ty)) is not None:
+        return (
+            f'`{target_ty.format()}` holds integers exactly only up to {bits} '
+            f'bits.  Bind the operand in a narrower integer context, or wrap '
+            f'it in ``fp.round(...)`` to accept the rounding.'
+        )
+    return (
+        'Wrap the operand in ``fp.round(...)`` to make the rounding explicit, '
+        'or use a context whose format contains the operand.'
+    )
 
 
 def _as_exact_double(v: Fraction) -> float | None:
@@ -1627,9 +1646,7 @@ class CppEmitter(Visitor):
             raise CppEmitError(
                 f'cannot implicitly cast `{arg_ty.format()}` to '
                 f'`{target_ty.format()}`: conversion is lossy.  '
-                f'Wrap the operand in ``fp.round(...)`` to make the '
-                f'rounding explicit, or use a context whose format '
-                f'contains the operand.',
+                + _cast_advice(arg_ty, target_ty),
                 at=at,
             )
         return self._explicit_cast(arg, target_ty)

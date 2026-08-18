@@ -16,6 +16,8 @@ The module also exposes:
   for a chained comparison.
 - :func:`bound_fits_in_scalar` — value-level containment, for a
   conversion the type-level test refuses.
+- :func:`exact_integer_bits` — a float rung's exact-integer width, for
+  diagnosing a refused conversion.
 """
 
 from ...analysis.format_infer import (
@@ -87,6 +89,13 @@ def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
     if a is CppScalar.BOOL or b is CppScalar.BOOL:
         return a is b
     return _LADDER_LOOKUP[a] <= _LADDER_LOOKUP[b]
+
+
+def exact_integer_bits(ty: CppScalar) -> int | None:
+    """How wide an integer float *ty* holds exactly -- its significand -- or
+    ``None`` for a non-float rung, which has no such limit.  Used to explain a
+    refused integer-to-float conversion."""
+    return int(_LADDER_LOOKUP[ty].prec) if ty.is_float() else None
 
 
 def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:

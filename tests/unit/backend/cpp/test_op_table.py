@@ -170,3 +170,94 @@ class TestDispatchCastFallback:
         )
         # ``fp.round(x)`` emits the lossy ``static_cast<float>(x)``.
         assert 'static_cast<float>(x)' in out
+
+
+class TestLossyCastAdvice:
+    """A refused conversion names a fix that works.  An integer wider than the
+    target float's significand is the case where the usual advice -- widen the
+    context -- has no answer, since no float rung holds one."""
+
+    @staticmethod
+    def _scale(int_ctx):
+        @fp.fpy
+        def f(n: fp.Real, x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** n) * x
+
+        return lambda: CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(int_ctx), RealType(fp.FP64)],
+        )
+
+    @pytest.mark.parametrize('int_ctx', [fp.SINT64, fp.INTEGER])
+    def test_a_wide_integer_exponent_names_the_bit_limit(self, int_ctx):
+        with pytest.raises(CppCompileError) as exc:
+            self._scale(int_ctx)()
+        msg = str(exc.value)
+        assert 'holds integers exactly only up to 53 bits' in msg
+        assert 'narrower integer context' in msg
+        # the generic advice would send the user to widen the *active* context
+        assert 'format contains the operand' not in msg
+
+    @pytest.mark.parametrize('int_ctx', [fp.SINT8, fp.SINT16, fp.SINT32])
+    def test_a_narrow_integer_exponent_needs_no_advice(self, int_ctx):
+        assert self._scale(int_ctx)()
+
+    def test_the_suggested_explicit_round_compiles(self):
+        """One half of the advice: accept the rounding."""
+
+        @fp.fpy
+        def f(n: fp.Real, x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** fp.round(n)) * x
+
+        assert CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.SINT64), RealType(fp.FP64)],
+        )
+
+    def test_the_suggested_narrower_context_compiles(self):
+        """The other half: bind the operand where it converts exactly."""
+
+        @fp.fpy
+        def f(n: fp.Real, x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                with fp.SINT32:
+                    m = fp.round(n)
+                return (2 ** m) * x
+
+        assert CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[RealType(fp.SINT64), RealType(fp.FP64)],
+        )
+
+    def test_narrowing_a_float_keeps_the_context_advice(self):
+        """Not an integer source, so the bit limit says nothing."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return x + 1
+
+        with pytest.raises(CppCompileError) as exc:
+            CppCompiler().compile(
+                f, ctx=fp.FP32, arg_types=[RealType(fp.FP64)],
+            )
+        msg = str(exc.value)
+        assert 'format contains the operand' in msg
+        assert 'bits' not in msg
+
+    def test_narrowing_an_integer_keeps_the_context_advice(self):
+        """Widening the active context *is* the fix here, so the bit limit --
+        which only a float target has -- must not displace it."""
+
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.SINT32:
+                return n + 1
+
+        with pytest.raises(CppCompileError) as exc:
+            CppCompiler().compile(
+                f, ctx=fp.SINT32, arg_types=[RealType(fp.SINT64)],
+            )
+        assert 'format contains the operand' in str(exc.value)

@@ -108,9 +108,12 @@ Three ideas, each recorded where it was learned:
 
 ### 1. Backend cleanups
 
-- `(2 ** n) * x` fails for an `n` typed `SINT64` or `INTEGER`: `cannot implicitly
-  cast int64_t to double: conversion is lossy`. `SINT8`/`SINT16`/`SINT32` work,
-  since those convert exactly. The message does not suggest the fix.
+- `(2 ** n) * x` still fails for an `n` typed `SINT64` or `INTEGER` --- correctly,
+  since no float holds every `int64_t` --- but the refusal now names the limit
+  (`double` holds integers exactly only up to 53 bits) and points at the operand's
+  own context rather than the active one, which widening cannot fix. Both
+  suggestions are pinned as compiling tests. `SINT8`/`SINT16`/`SINT32` convert
+  exactly and need no advice.
 - Cosmetic: redundant `static_cast<double>` on integer literals, and a doubled
   `static_cast<double>(static_cast<double>(2))`.
 
