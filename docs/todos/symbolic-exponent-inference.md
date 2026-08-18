@@ -1,10 +1,16 @@
 # Relating a value to its own exponent in format inference
 
-Follow-up to gap 1 of [native-lowering-roadmap.md](native-lowering-roadmap.md).
-Not blocking: `logb`/`pow` inference (619ed2b) took the lowered program from
-unbounded to bounded, and the asserted bound (7e9e8a4) gets the widths right.
-This records what it would take for the analysis to *derive* what the transform
-currently asserts.
+**Not blocking, and no longer the route to anything.** The `FP64` source it was
+written for is done — by ordinary path sensitivity over magnitudes plus a lower
+clamp on the position, neither of which needs the machinery below (see *What will
+not work*, and *What the path rests on* in
+[native-lowering-roadmap.md](native-lowering-roadmap.md)).
+
+What is left for a symbolic design is a *tighter* answer than refinement reaches
+— `2^11` where it gets `2^40` — and retiring the bound the transform currently
+asserts in favour of one the analysis derives. That also extends to a
+hand-written program that scales by its own exponent, which no branch of ours
+conditions.
 
 ## The problem, measured
 
@@ -74,9 +80,9 @@ adds no relational power, and the descriptions are already tight. Only
 claim was that the normal branch has no condition to exploit, so refinement
 leaves `2^286` untouched — true when the position was unclamped, since the
 looseness lived in `2 ** -exp`. The clamp caps that side syntactically, and what
-remains is `x`, which *both* branches condition. Measured, path sensitivity alone
-now compiles an `FP64` source; see gap 1 of
-[native-lowering-roadmap.md](native-lowering-roadmap.md) for the matrix.
+remains is `x`, which *both* branches condition. **Shipped** in `FormatInfer`
+(`_refined` / `_implied` / `_implied_logb`), and an `FP64` source now compiles and
+is bit-exact against the interpreter across fourteen targets.
 
 Two facts, fixing different fields:
 
@@ -93,9 +99,9 @@ Two facts, fixing different fields:
   at `exp=-1090`, sixteen binades past what `F64` holds, because the analysis
   still believes a subnormal `x` can be scaled by a small factor.
 
-So the designs below are no longer the *route* to an `FP64` source. What they
-still buy is a tighter answer — `2^11` where refinement reaches `2^40` — and
-retiring the asserted bound, which is a different and smaller prize.
+Measured after both: `_t7` at `exp=-82, bound=2^40` for an `FP64` source, where
+the truth is `[2^10, 2^11)`. Loose, and inside `F64` — which is what storage
+selection needed. Closing the remaining slack is what the designs below are for.
 
 **Annotating the result with a bounded `Cast`.** Tried and abandoned; recorded so
 it is not re-attempted. The idea was that since `float_to_fixed` knows `maxval`
@@ -213,9 +219,9 @@ branch condition:
 It costs two lines and a redundant `signbit` comparison per rounding, since the
 position is stored as a float and so takes the IEEE `maximum` spelling.
 
-An `FP64` source additionally needs `x` itself constrained, from both directions
-— see *Path sensitivity alone* above, which the clamp turned from a dead end into
-the route.
+An `FP64` source additionally needed `x` itself constrained, from both
+directions — see *Path sensitivity alone* above, which the clamp turned from a
+dead end into the route.
 
 ### The class half was separable, and is done
 
@@ -235,9 +241,9 @@ runtime branch.  Reading the upstream tests instead drops it, in
 
 ## Open questions
 
-- Does the tag in design B survive `min`/`max` on the exponent? The clamp is
-  gone on the composed path, but `float_to_fixed` still emits one when run
-  alone.
+- Does the tag in design B survive `min`/`max` on the exponent? Now load-bearing
+  rather than hypothetical: the *lower* clamp is emitted on every path, so a
+  `max` always sits between `logb` and the scale.
 - Should the mantissa interval be signed, or should sign be tracked separately?
   `logb` discards sign, so `x = ±m·2^e` needs the sign from elsewhere.
 - Is `logb` the only introducer worth having? `frexp`-style splitting and

@@ -2761,3 +2761,109 @@ class TestBranchRefinement:
         info = FormatInfer.analyze(low.ast)
         scale_in = next(b for d, b in info.by_def.items() if str(d.name) == '_t7')
         assert self._pos(scale_in) < 2.0 ** 64
+
+
+class TestZeroOnlyIntersection:
+    """An intersection can leave nothing but zero, and no `Format` says that.
+
+    Every format represents *some* non-zero value, so the shape has no concrete
+    counterpart -- `MPBFixedFormat` refuses a bound finer than its finest digit
+    outright, which used to surface as a `ValueError` out of the analysis.  A
+    `SetFormat` says it exactly.
+
+    It arises from a branch a value never reaches: the `FP16` lowering's
+    subnormal arm scales by ``2 ** 24`` under a context bounded at ``1024``, and
+    for an integer-valued operand ``logb(x) < -14`` means ``x == 0``, which the
+    zero branch has already taken.
+    """
+
+    @staticmethod
+    def _lower(src):
+        import fpy2.strategies as strat
+
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        return strat.rescale_fixed(strat.float_to_fixed(strat.unfold_overflow(
+            strat.unfold_special(strat.monomorphize(q, args=[RealType(src)])),
+            early_check=True)))
+
+    def test_the_empty_overlap_reports_only_zero(self):
+        info = FormatInfer.analyze(self._lower(fp.SINT32).ast)
+        zeros = [b for b in info.by_def.values()
+                 if isinstance(b, SetFormat) and b.values
+                 and all(v == 0 for v in b.values)]
+        assert zeros, 'the unreachable branch should report only zero'
+
+    def test_it_is_not_widened_to_top(self):
+        """The point of using a set: `REAL_FORMAT` would be sound and useless,
+        and storage selection cannot store it."""
+        info = FormatInfer.analyze(self._lower(fp.SINT32).ast)
+        assert not any(b is REAL_FORMAT for b in info.by_def.values())
+
+    @pytest.mark.parametrize('src', [fp.SINT8, fp.SINT16, fp.SINT32],
+                             ids=['sint8', 'sint16', 'sint32'])
+    def test_a_signed_integer_source_now_compiles(self, src):
+        from fpy2.backend.cpp import CppCompiler
+
+        assert CppCompiler().compile(self._lower(src))
+
+    @pytest.mark.parametrize('src', [fp.UINT8, fp.UINT16, fp.UINT32],
+                             ids=['uint8', 'uint16', 'uint32'])
+    def test_an_unsigned_source_still_fails_elsewhere(self, src):
+        """A separate blocker, upstream of this one and left standing.
+
+        The scale-out's overlap cannot be materialized inside an unsigned scope
+        (`_materialize_in_scope` says why), and the fall-back is the *scope*
+        format -- which here is `REAL`, so it is top.  ``t`` is unconstrained
+        before any join happens, and storage selection has nothing to pick.
+        """
+        from fpy2.backend.cpp import CppCompiler
+        from fpy2.backend.cpp.compiler import CppCompileError
+
+        info = FormatInfer.analyze(self._lower(src).ast)
+        assert any(b is REAL_FORMAT for d, b in info.by_def.items()
+                   if str(d.name) == 't')
+        with pytest.raises(CppCompileError, match='cannot pick storage'):
+            CppCompiler().compile(self._lower(src))
+
+    @pytest.mark.parametrize('src', [fp.SINT16, fp.SINT32], ids=['sint16', 'sint32'])
+    def test_a_signed_integer_source_is_bit_exact(self, src):
+        """Compiling is not the property; agreeing is."""
+        import fpy2.strategies as strat
+
+        def same(a, b):
+            if a.isnan or b.isnan:
+                return a.isnan and b.isnan
+            if a.isinf or b.isinf:
+                return a.isinf and b.isinf and a.s == b.s
+            return a.as_rational() == b.as_rational() and a.s == b.s
+
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        ref = strat.monomorphize(q, args=[RealType(src)])
+        low = self._lower(src)
+        for x in (0, 1, 2, 3, -1, -3, 1023, 1024, 1025, 2049, 2051,
+                  32767, -32768):
+            assert same(low(x), ref(x)), x
+
+    def test_format_itself_states_the_zero(self):
+        """`format()` clamps a bound short of the finest digit to zero, which is
+        exact -- it used to raise.  A bound merely *off* the grid still raises;
+        that is a different shape, and it holds values."""
+        af = AbstractFormat(float('inf'), 24, fp.RealFloat(exp=0, c=1024),
+                            neg_bound=fp.RealFloat(s=True, exp=0, c=1024))
+        fmt = af.format()
+        assert fmt.representable_in(fp.Float(0))
+        assert not fmt.representable_in(
+            fp.Float(x=fp.RealFloat(exp=24, c=1), ctx=fp.FP64))
+        with pytest.raises(ValueError):
+            AbstractFormat(float('inf'), 4, fp.RealFloat(exp=0, c=127),
+                           neg_bound=fp.RealFloat(s=True, exp=0, c=128)).format()

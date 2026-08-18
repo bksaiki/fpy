@@ -8,8 +8,8 @@ no soft-float, no `fpy::` runtime.
 
 ## Where we are
 
-**Reached, for an `FP32` source.** Four operators, each one idea, plus an
-optional fifth:
+**Reached, for `FP32` *and* `FP64` sources.** Four operators, each one idea, plus
+an optional fifth:
 
 ```
 monomorphize      pin the argument format
@@ -19,22 +19,22 @@ float_to_fixed    unbounded float  -> MPFixedContext at a position from logb
 rescale_fixed     MPFixedContext   -> position zero, integer values
 ```
 
-The result compiles to plain C++ and is bit-exact against the interpreter across
-fourteen target formats — all eight FPy rounding modes, the MX family, a
+The result compiles to plain C++ and is bit-exact against the interpreter for
+both sources across fourteen target formats — all eight FPy rounding modes, the MX family, a
 saturating `IEEEContext`, and an `EFloatNanKind.NEG_ZERO` format. It
 needs no support library, and now unconditionally: the backend emits no support
 code at all, so `CPP_HELPERS` is empty. Pinned by
 `tests/unit/backend/cpp/test_lowered_roundtrip.py`.
 
 ```c++
-double f(float x) {
-    double y{};
+float f(float x) {
+    float y{};
     if ((static_cast<double>(x) >= static_cast<double>(65536))) {
         y = std::numeric_limits<float>::infinity();
     } else if ((static_cast<double>(x) <= static_cast<double>(-65536))) {
         y = (-std::numeric_limits<float>::infinity());
     } else {
-        double t{};
+        float t{};
         if (std::isnan(x)) {
             t = std::numeric_limits<float>::quiet_NaN();
         } else if (std::isinf(x)) {
@@ -44,24 +44,26 @@ double f(float x) {
         } else {
             float e = std::logb(x);
             if ((e < static_cast<float>(-14))) {
-                double _t = (static_cast<double>(16777216) * static_cast<double>(x));
+                float _t = static_cast<float>((static_cast<double>(16777216) * static_cast<double>(x)));
                 float _tmp1 = std::nearbyint(_t);
                 assert((std::fabs(_tmp1) <= 1024) && "fpy: overflow occurred so rounding is undefined");
                 float _t6 = _tmp1;
                 t = (5.960464477539063e-08 * _t6);
             } else {
-                float exp = (e - static_cast<float>(10));
-                auto&& _tmp2 = (-exp);
-                double _t7 = std::ldexp(static_cast<double>(x), static_cast<int>(_tmp2));
-                float _tmp3 = std::nearbyint(_t7);
-                assert((std::fabs(_tmp3) <= 2048) && "fpy: overflow occurred so rounding is undefined");
-                float _t8 = _tmp3;
-                t = std::ldexp(static_cast<double>(_t8), static_cast<int>(exp));
+                auto&& _tmp2 = (e - static_cast<float>(10));
+                auto&& _tmp3 = static_cast<float>(static_cast<float>(-24));
+                float exp = ((_tmp2 < _tmp3 || (_tmp2 == _tmp3 && std::signbit(_tmp2))) ? _tmp3 : _tmp2);
+                auto&& _tmp4 = (-exp);
+                float _t7 = std::ldexp(x, static_cast<int>(_tmp4));
+                float _tmp5 = std::nearbyint(_t7);
+                assert((std::fabs(_tmp5) <= 2048) && "fpy: overflow occurred so rounding is undefined");
+                float _t8 = _tmp5;
+                t = std::ldexp(_t8, static_cast<int>(exp));
             }
         }
-        if ((t > static_cast<double>(65504))) {
+        if ((t > static_cast<float>(65504))) {
             y = std::numeric_limits<float>::infinity();
-        } else if ((t < static_cast<double>(-65504))) {
+        } else if ((static_cast<double>(t) < static_cast<double>(-65504))) {
             y = (-std::numeric_limits<float>::infinity());
         } else {
             y = t;
@@ -88,6 +90,14 @@ Three ideas, each recorded where it was learned:
   that admits NaN gets no guard — and from the *value*, per
   `fpy2/analysis/value_class.py`, so neither does an operand a branch has already
   ruled out.
+- **A width comes from a branch, not only from a format.** The scale-in
+  `(2 ** -exp) * x` is in `[2^10, 2^11)` for any source, because `exp` comes from
+  `logb(x)` — but the two are *correlated* and the domain describes them
+  separately, so the product was inferred at `2^2108` for an `FP64` source. Two
+  facts the program already states close it: `|x| < infval` from `early_check`
+  fixes the **bound**, and `logb(x) >= emin` from the subnormal branch fixes the
+  **digit position**, the half a bound alone never reaches. Both are ordinary
+  path sensitivity over magnitudes (`FormatInfer._refined`), not a new domain.
 - **A scale must be `ldexp`, not `pow`.** `std::pow(2, n)` is not required to be
   exact — C11 F.10 requires correct rounding of no math function and IEEE 754
   only *recommends* it for `exp2`. On this platform it happens to be exact for
@@ -96,58 +106,39 @@ Three ideas, each recorded where it was learned:
 
 ## The gaps that remain
 
-### 1. An `FP64` source has no storage
+### 1. Backend cleanups
 
-The blocker for the format that matters most. Storage selection fails on the
-scale-in, because `exp` and the value it scales are *correlated* and the domain
-represents them independently. An `FP32` source works only because the same
-products stay inside `F64`'s `2^1024`.
-
-**Two path-sensitive facts are enough** — measured, by pinning the argument's
-declared context to what each branch guarantees and running the real pipeline:
-
-| refinement available | result |
-|---|---|
-| none | fails on `y` |
-| `\|x\| < 65536` only | fails on `_t7` |
-| `\|x\| >= 2**-14` only | fails on `y` |
-| **both** | **compiles** |
-
-They fix different fields. `\|x\| < 65536`, from the else arm of `early_check`,
-is a forward refinement against a constant and fixes the **bound**. `\|x\| >=
-2**-14`, from the else arm of `e < -14`, needs the backward `logb` transfer
-(`logb(x) ∈ [lo, hi] ⟹ \|x\| ∈ [2^lo, 2^(hi+1))`) and fixes the **digit
-position** — which is what survives once the lower clamp has handled the bound,
-and which a bound-only refinement leaves at `2^-1090`.
-
-So this is path sensitivity over magnitudes, not a new abstract domain; the
-symbolic design in
-[symbolic-exponent-inference.md](symbolic-exponent-inference.md) would derive a
-*tighter* answer and retire the asserted bound, but is not what unblocks the
-format. That doc also records the annotation approach, which was tried and does
-not work.
-
-### 2. Backend cleanups
-
-- `(2 ** n) * x` fails for an `n` typed `SINT64` or `INTEGER`: `cannot implicitly
-  cast int64_t to double: conversion is lossy`. `SINT8`/`SINT16`/`SINT32` work,
-  since those convert exactly. The message does not suggest the fix.
+- `(2 ** n) * x` still fails for an `n` typed `SINT64` or `INTEGER` --- correctly,
+  since no float holds every `int64_t` --- but the refusal now names the limit
+  (`double` holds integers exactly only up to 53 bits) and points at the operand's
+  own context rather than the active one, which widening cannot fix. Both
+  suggestions are pinned as compiling tests. `SINT8`/`SINT16`/`SINT32` convert
+  exactly and need no advice.
 - Cosmetic: redundant `static_cast<double>` on integer literals, and a doubled
   `static_cast<double>(static_cast<double>(2))`.
 
-### 3. A recipe
+### 2. A recipe
 
-`monomorphize → unfold_overflow → float_to_fixed → rescale_fixed` is the
-sequence, verified bit-for-bit against the interpreter across fourteen formats in
-`tests/unit/backend/cpp/test_lowered_roundtrip.py`. `simplify` composes with it
-but is not in that check. It deserves one entry point rather than a comment in a
-sandbox.
+`monomorphize → unfold_special → unfold_overflow → float_to_fixed →
+rescale_fixed → simplify` is the sequence, and all six are now verified together,
+bit-for-bit against the interpreter, from both an `FP32` and an `FP64` source
+across fourteen targets — `_lower` in
+`tests/unit/backend/cpp/test_lowered_roundtrip.py`. Each of `unfold_special` and
+`simplify` changes the result there, so the coverage is real and not nominal.
 
-`unfold_special` composes in front of `unfold_overflow` and is worth including:
-it states the specials once at the outside, so `float_to_fixed` emits no ladder of
-its own (value classes read the branches) and `logb` hoists to a single call. Same
-instruction count, one ladder instead of two nested inside the rounding. Not in
-the roundtrip check either.
+`unfold_special` belongs in front of `unfold_overflow`: it states the specials
+once at the outside, so `float_to_fixed` emits no ladder of its own (value classes
+read the branches) and `logb` is computed once. `unfold_neg_zero` is *not* in the
+sequence — nothing reaches it, since the zero branch has already said what each
+zero rounds to.
+
+**Not exposed as one entry point, deliberately.** Composition has no way to carry
+a *location*: once the first operator rewrites at a program point, the later ones
+re-scan the whole program with a `where` index that no longer counts the same
+candidates. A composed operator would therefore only be honest for the whole
+program at once. See *Smaller questions in the same area* in
+[rounding-operator-basis.md](rounding-operator-basis.md); giving a rewrite a
+location that survives its neighbours is the prerequisite.
 
 Unrelated to lowering, but found along this path — each reproduces well before
 the change that turned it up, so none is a regression:
@@ -167,16 +158,16 @@ the change that turned it up, so none is a regression:
 
 ## Order of work
 
-The mode table, the `Round`/`Cast` context checks and the value-class analysis
-are done and their sections retired; what they settled is recorded under *What
-the path rests on*. What is left, cheapest first:
+The mode table, the `Round`/`Cast` context checks, the value-class analysis and
+the `FP64` source are done and their sections retired; what they settled is
+recorded under *What the path rests on*. Both remaining gaps are small, and
+neither blocks anything:
 
-1. **An `FP64` source** — two path-sensitive facts, as gap 1 measures. The
-   traversal is the work: `FormatInfer` is flow-insensitive by construction,
-   though `fpy2/analysis/value_class.py` has the refinement pattern already, and
-   in SSA a definition inside a refined arm has one path to it, so the result
-   still keys per definition as storage selection expects.
-2. **Backend cleanups and a recipe** — gaps 2 and 3, both small.
+1. **Backend cleanups** — gap 1, a diagnostic and some redundant casts.
+2. **A recipe** — gap 2, the thing that makes the path usable by someone who did
+   not write it.
+
+With the goal reached, the open questions below are now the interesting work.
 
 ## Open questions
 

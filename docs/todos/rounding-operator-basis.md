@@ -87,8 +87,17 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
   fixed-point lowering is now a composition of one-idea operators:
   `unfold_special → unfold_neg_zero → unfold_overflow → rescale_fixed`.
 
-- **`where` counts candidate blocks, and these operators change how many there
-  are.** Unfolding overflow turns one rounding into several statements, so a
-  later pass selecting "the *n*th candidate" sees a different structure than it
-  would on the original program. Composing `where` across operators is therefore
-  order-dependent in a way nothing currently documents.
+- **Composition has no way to carry a location, and that is what blocks a
+  composed operator.** `where` counts candidate blocks, and these operators change
+  how many there are: unfolding overflow turns one rounding into several
+  statements, so a later pass selecting "the *n*th candidate" sees a different
+  structure than the one the index was chosen against.
+
+  The consequence is sharper than order-dependence. Once the first operator has
+  matched and rewritten at a program point, every later operator in the sequence
+  should be aimed at *that* point — and instead each re-scans the whole program
+  with an index that no longer means what it did. So a composed operator can only
+  honestly be offered for the whole program at once, which is why the sequence in
+  `native-lowering-roadmap.md` is pinned by a test rather than exposed as an
+  entry point. Giving a rewrite a *location* that survives the rewrites around it
+  is the prerequisite.

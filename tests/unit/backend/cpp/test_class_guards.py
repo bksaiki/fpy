@@ -1,8 +1,9 @@
 """
 Guards the emitter drops because a branch already ruled the value out.
 
-Every assertion here protects an operation against a NaN or an infinity, and
-every one of them is unnecessary where the program has already tested for those.
+Every assertion here protects an operation against a NaN, an infinity or a zero,
+and every one of them is unnecessary where the program has already tested for
+those.
 Value classes are what read the test; format inference cannot, since a format
 says whether *some* value in it is a NaN, not whether *this* one is.
 
@@ -258,6 +259,56 @@ class TestMinMax:
         out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 3)
         assert out.count('quiet_NaN') == 1
         assert out.count('std::signbit') == 2
+
+    def test_the_signbit_term_goes_when_an_operand_cannot_be_zero(self):
+        """Only ``a = -0`` against ``b = +0`` needs the term, so ruling out a
+        zero on *either* side is enough."""
+        @fp.fpy
+        def bare(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return fp.fmin(a, b)
+
+        @fp.fpy(ctx=fp.REAL)
+        def guarded(a: fp.Real, b: fp.Real) -> fp.Real:
+            if a != 0:
+                with fp.FP64:
+                    y = fp.fmin(a, b)
+            else:
+                y = 0
+            return y
+
+        tys = [RealType(fp.FP64)] * 2
+        assert 'std::signbit' in CppCompiler().compile(bare, arg_types=tys)
+        out = CppCompiler().compile(guarded, arg_types=tys)
+        assert 'std::signbit' not in out
+        # a zero test says nothing about a NaN, so that half stays
+        assert 'quiet_NaN' in out
+
+    def test_a_non_zero_literal_is_enough_on_either_side(self):
+        @fp.fpy
+        def second(a: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return fp.fmin(a, 1)
+
+        @fp.fpy
+        def first(a: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return fp.fmax(1, a)
+
+        for q in (second, first):
+            assert 'std::signbit' not in CppCompiler().compile(
+                q, arg_types=[RealType(fp.FP64)])
+
+    def test_a_later_step_of_a_fold_keeps_the_term_alone(self):
+        """The middle operand cannot be zero, so the first step needs no term;
+        the accumulator it produces can be, so the second step does."""
+        @fp.fpy
+        def q(a: fp.Real, c: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return min(a, 1, c)
+
+        out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 2)
+        assert out.count('std::signbit') == 1
 
 
 _BIN_DRIVER = r'''

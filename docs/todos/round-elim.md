@@ -19,6 +19,11 @@ rounding to the active context is provably an identity:
 The decision uses the public helpers `exact_binop`, `exact_unop`,
 and `round_is_identity` from `fpy2.analysis.format_infer`.
 
+Those read bounds that are now **branch-refined** — a comparison against a
+literal narrows the tested variable inside the arm where it holds — so
+`round_is_identity` fires in places it did not before, and this pass eliminates
+correspondingly more.  Sound, and worth knowing when reading its output.
+
 Hoisting is suppressed inside `ListComp` element / iterable
 positions and inside `IfExpr` branches — those positions either
 reference loop-scoped variables or are conditionally evaluated,

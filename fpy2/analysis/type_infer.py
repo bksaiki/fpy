@@ -99,7 +99,7 @@ _binary_table: dict[type[BinaryOp], FunctionType] = {
     Hypot: _Real2ary,
     Atan2: _Real2ary,
     Pow: _Real2ary,
-    RoundAt: _Real1ary,
+    RoundAt: _Real2ary,
 }
 
 _ternary_table: dict[type[TernaryOp], FunctionType] = {

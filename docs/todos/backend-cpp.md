@@ -47,6 +47,16 @@ a format carries neither the overflow rule nor the random bits — a saturating
 `FP32` and `int8_t` respectively, and neither behaves like the cast. Anything
 else must be lowered explicitly or refused; see `native-lowering-roadmap.md`.
 
+**An expression's storage can disagree with its declaration's.**
+`_storage_for_expr` answers from `format_info.by_expr`, while a variable is
+*declared* with what `StorageInfer` chose for its coalesced class — and the two
+are not the same type. Anything deciding whether a cast is needed has to read the
+one the operand is actually emitted as, or the cast silently goes missing.
+`_emit_min_max` takes its target from the active context for this reason, oddly
+for an operation that does no rounding: `library_core.max_e` puts an `int16_t`
+accumulator beside an `int64_t` `logb`, and an operand-derived target leaves
+`std::max` with two types to deduce from.
+
 ## Design
 
 ### Storage vs. rounding

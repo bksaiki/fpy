@@ -144,6 +144,7 @@ from .storage import (
     StorageSelectionError,
     bound_fits_in_scalar,
     choose_storage,
+    exact_integer_bits,
     scalar_fits_in,
     scalar_sup,
 )
@@ -207,6 +208,28 @@ def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
         return CppScalar.S64
     return None
 
+
+def _cast_advice(arg_ty: CppScalar, target_ty: CppScalar) -> str:
+    """How to make a conversion :meth:`_maybe_cast` refused legal.
+
+    Widening the active context is the usual answer, and has none for an integer
+    *no* float holds -- only there does the operand's own context have to narrow.
+    An ``int32_t`` an `FP32` context refuses is not that case: `FP64` converts it
+    exactly.
+    """
+    widest = CppScalar.F64
+    if (arg_ty.is_integer() and target_ty.is_float()
+            and not scalar_fits_in(arg_ty, widest)):
+        return (
+            f'no float holds every `{arg_ty.format()}`: `{widest.format()}` holds '
+            f'integers exactly only up to {exact_integer_bits(widest)} bits.  '
+            f'Bind the operand in a narrower integer context, or wrap it in '
+            f'``fp.round(...)`` to accept the rounding.'
+        )
+    return (
+        'Wrap the operand in ``fp.round(...)`` to make the rounding explicit, '
+        'or use a context whose format contains the operand.'
+    )
 
 
 def _as_exact_double(v: Fraction) -> float | None:
@@ -1627,9 +1650,7 @@ class CppEmitter(Visitor):
             raise CppEmitError(
                 f'cannot implicitly cast `{arg_ty.format()}` to '
                 f'`{target_ty.format()}`: conversion is lossy.  '
-                f'Wrap the operand in ``fp.round(...)`` to make the '
-                f'rounding explicit, or use a context whose format '
-                f'contains the operand.',
+                + _cast_advice(arg_ty, target_ty),
                 at=at,
             )
         return self._explicit_cast(arg, target_ty)
@@ -2490,15 +2511,19 @@ class CppEmitter(Visitor):
             # `_emit_ieee_min_max` binds its own operands, so folding an
             # expression into the next step names it once
             result = casted[0]
-            # a step's first operand is every earlier operand's result, so the
-            # NaN propagation goes only once nothing folded in so far can be one
-            seen = self._value_class(e.args[0])
+            # a step's first operand is every earlier operand's result, so its
+            # class is their join: each guard goes only once nothing folded in
+            # so far can trip it
+            acc = self._value_class(e.args[0])
             for nxt, src in zip(casted[1:], e.args[1:]):
-                seen |= self._value_class(src)
+                cls = self._value_class(src)
                 result = self._emit_ieee_min_max(
                     result, nxt, target, is_min=isinstance(e, Min),
-                    nan_free=not (seen & ValueClass.NAN),
+                    nan_free=not ((acc | cls) & ValueClass.NAN),
+                    zero_tie_free=not (acc & ValueClass.ZERO)
+                    or not (cls & ValueClass.ZERO),
                 )
+                acc |= cls
             return result
         # integers have no NaN and no signed zero, so the library form is exact
         fn = 'std::min' if isinstance(e, Min) else 'std::max'
@@ -2509,7 +2534,7 @@ class CppEmitter(Visitor):
 
     def _emit_ieee_min_max(
         self, a: str, b: str, ty: CppScalar, *, is_min: bool,
-        nan_free: bool = False,
+        nan_free: bool = False, zero_tie_free: bool = False,
     ) -> str:
         """IEEE 754-2019 ``minimum`` / ``maximum`` of *a* and *b*, inline.
 
@@ -2525,12 +2550,15 @@ class CppEmitter(Visitor):
         the same predicate and swaps the results.
 
         Inline, and both operands bound -- the predicate names each twice.
-        With *nan_free* the propagation is dropped: neither operand can be a NaN,
-        so the predicate alone is the whole operation.  The ``signbit`` term
-        stays, since a signed zero is not what that rules out.
+        Two facts each drop a piece.  With *nan_free* the propagation goes:
+        neither operand can be a NaN.  With *zero_tie_free* the ``signbit`` term
+        goes: the two cannot both be zero, and only ``a = -0`` against
+        ``b = +0`` needs it -- the mirror case already picks the right zero,
+        since ``min``/``max`` return *b* when the predicate fails.
         """
         a, b = self._bind_operand(a), self._bind_operand(b)
-        a_wins = f'({a} < {b} || ({a} == {b} && std::signbit({a})))'
+        tie = '' if zero_tie_free else f' || ({a} == {b} && std::signbit({a}))'
+        a_wins = f'({a} < {b}{tie})'
         chosen = f'{a_wins} ? {a} : {b}' if is_min else f'{a_wins} ? {b} : {a}'
         if nan_free:
             return f'({chosen})'

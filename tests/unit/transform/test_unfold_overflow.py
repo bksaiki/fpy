@@ -681,6 +681,18 @@ class TestBranchesTheOperandCannotTake:
         _, dropped = self._apply(self._INF_SUB, fp.SINT32)
         assert not _nodes(dropped, IsInf)
 
+    def test_a_substituted_special_survives_into_a_usable_program(self):
+        """The rewrite writes the source's substitute into the context it emits,
+        and the constructor takes a `Float`.  Written as a numeric literal it
+        evaluated to a `Fraction`, which `MPFixedContext` refuses -- so the
+        rewrite succeeded and produced a program that could not be run at all.
+        """
+        mono, out = self._apply(self._INF_SUB, fp.FP64)
+        # no NaN: this format refuses one, so the reference raises too, which is
+        # a different property (`_fixed_samples` cases cover it elsewhere)
+        for x in (0, 1, -1, 7, 99, 100, 101, -100, float('inf'), float('-inf')):
+            assert _same(_eval(out, mono, x), mono(x)), x
+
     def test_the_rewrite_is_still_bit_exact(self):
         """An integer operand, so the dropped test really is unreachable: no
         `SINT32` value is a NaN or an infinity.

@@ -109,6 +109,41 @@ def _reduction(is_min: bool):
     return q
 
 
+def _binary_nonzero(is_min: bool):
+    """As :func:`_binary`, with a literal operand no zero can equal.  ``b`` is
+    unused, so one driver serves both."""
+    if is_min:
+        @fp.fpy
+        def q(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return fp.fmin(a, 1)
+    else:
+        @fp.fpy
+        def q(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return fp.fmax(a, 1)
+    return q
+
+
+def _diff_pairs(q) -> None:
+    """Run the compiled *q* on :data:`_PAIRS` and diff against the interpreter."""
+    if _CXX is None:
+        pytest.skip('no C++ compiler')
+    src = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 2)
+    with tempfile.TemporaryDirectory() as td:
+        exe = _build(src, _BIN_DRIVER, td)
+        bad = []
+        for a, b in _PAIRS:
+            r = subprocess.run(
+                [str(exe), f'{_bits(a):016x}', f'{_bits(b):016x}'],
+                capture_output=True, text=True)
+            got, want = int(r.stdout.strip(), 16), _bits(float(q(a, b)))
+            if got != want:
+                g = struct.unpack('<d', struct.pack('<Q', got))[0]
+                bad.append(f'({a!r},{b!r}) cpp {g!r} vs py {float(q(a, b))!r}')
+    assert not bad, '; '.join(bad)
+
+
 def _build(src: str, driver: str, td: str) -> Path:
     cpp, exe = Path(td) / 'm.cpp', Path(td) / 'm'
     cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src + driver)
@@ -123,22 +158,16 @@ class TestAgreesWithTheInterpreter:
 
     @pytest.mark.parametrize('is_min', [True, False], ids=['min', 'max'])
     def test_binary(self, is_min):
-        if _CXX is None:
-            pytest.skip('no C++ compiler')
-        q = _binary(is_min)
-        src = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 2)
-        with tempfile.TemporaryDirectory() as td:
-            exe = _build(src, _BIN_DRIVER, td)
-            bad = []
-            for a, b in _PAIRS:
-                r = subprocess.run(
-                    [str(exe), f'{_bits(a):016x}', f'{_bits(b):016x}'],
-                    capture_output=True, text=True)
-                got, want = int(r.stdout.strip(), 16), _bits(float(q(a, b)))
-                if got != want:
-                    g = struct.unpack('<d', struct.pack('<Q', got))[0]
-                    bad.append(f'({a!r},{b!r}) cpp {g!r} vs py {float(q(a, b))!r}')
-        assert not bad, '; '.join(bad)
+        _diff_pairs(_binary(is_min))
+
+    @pytest.mark.parametrize('is_min', [True, False], ids=['min', 'max'])
+    def test_binary_without_the_signbit_term(self, is_min):
+        """A non-zero second operand drops the term, and ``a`` still ranges over
+        both zeros -- so the values it was protecting are exercised without it."""
+        q = _binary_nonzero(is_min)
+        assert 'std::signbit' not in CppCompiler().compile(
+            q, arg_types=[RealType(fp.FP64)] * 2)
+        _diff_pairs(q)
 
     @pytest.mark.parametrize('is_min', [True, False], ids=['min', 'max'])
     def test_reduction(self, is_min):

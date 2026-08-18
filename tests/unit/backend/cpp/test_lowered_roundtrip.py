@@ -12,9 +12,11 @@ have been caught here --
 - ``Round`` under such a context emitting ``static_cast<float>``, a float
   narrowing rather than a rounding to an integral value.
 
-The pipeline is ``monomorphize -> unfold_overflow -> float_to_fixed ->
-rescale_fixed``; an ``FP32`` source is used because an ``FP64`` one still
-exceeds every storage type (see ``docs/todos/symbolic-exponent-inference.md``).
+The pipeline is ``monomorphize -> unfold_special -> unfold_overflow ->
+float_to_fixed -> rescale_fixed -> simplify`` (see :func:`_lower`), run from both
+an ``FP32`` and an ``FP64`` source.  This is the only bit-exact check any of those
+six operators get *composed*, so it is also what keeps ``unfold_special`` and
+``simplify`` honest -- each of them changes the result here, for both sources.
 """
 
 import shutil
@@ -109,6 +111,23 @@ def _inputs(src) -> list[fp.Float]:
     return out
 
 
+def _lower(func, src):
+    """The whole sequence, which is the thing under test as much as any one step.
+
+    ``unfold_special`` first, so the branches it states are upstream of
+    everything: `float_to_fixed` then emits no ladder of its own, because value
+    classes read them.  ``unfold_overflow`` before ``float_to_fixed``, so the
+    latter sees an unbounded format and does the position axis alone.  And
+    ``simplify`` last, to fold the scale constants into their neighbours.
+
+    ``unfold_neg_zero`` is absent because nothing here reaches it: the zero
+    branch ``unfold_special`` states has already said what each zero rounds to.
+    """
+    return st.simplify(st.rescale_fixed(st.float_to_fixed(st.unfold_overflow(
+        st.unfold_special(st.monomorphize(func, args=[RealType(src)])),
+        early_check=True))))
+
+
 def _run(target, src=fp.FP32) -> None:
     """Lower ``round`` into *target* from a *src* source, compile, and diff."""
     if _CXX is None:
@@ -121,8 +140,7 @@ def _run(target, src=fp.FP32) -> None:
         return y
 
     ref = st.monomorphize(q, args=[RealType(src)])
-    low = st.rescale_fixed(st.float_to_fixed(
-        st.unfold_overflow(ref, early_check=True)))
+    low = _lower(q, src)
 
     cc = CppCompiler()
     mod = Module()

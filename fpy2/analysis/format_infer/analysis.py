@@ -227,6 +227,23 @@ def _unconstrained(
     )
 
 
+def _holds_only_zero(af: AbstractFormat) -> bool:
+    """Whether *af* describes no non-zero value: both bounds fall short of its
+    smallest positive representable value.
+
+    Arises where an intersection is empty -- a multiple of ``2 ** 24`` bounded by
+    ``1024``.  Not the same question as whether a bound is *on* the grid: a bound
+    can be off-grid and still leave many values in range.
+    """
+    if isinstance(af.exp, float) or not isinstance(af.pos_bound, RealFloat):
+        return False
+    if not isinstance(af.neg_bound, RealFloat):
+        return False
+    quantum = RealFloat(exp=af.exp, c=1)
+    return (af.pos_bound < quantum
+            and RealFloat(s=False, x=af.neg_bound) < quantum)
+
+
 def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
     """`x op c` as a description to meet with, or `None` where it tightens
     nothing.
@@ -1856,7 +1873,16 @@ class _FormatInferInstance(Visitor):
         float an unsigned scope rejects, and an integral one becomes a float
         format, which admits a ``-0.0`` an integer scope does not.  The scope
         format is a sound superset and emittable under the context.
+
+        The one shape *no* format expresses is "nothing but zero", since every
+        format represents some non-zero value.  A :class:`SetFormat` does, and it
+        is the exact answer rather than a superset.
         """
+        if _holds_only_zero(cand):
+            zeros: set[SetValue] = {Fraction(0)}
+            if cand.has_neg_zero:
+                zeros.add(NEG_ZERO)
+            return SetFormat(frozenset(zeros))
         mat = cand.format()
         if (isinstance(mat, AbstractableFormat)
                 and isinstance(scope_fmt, AbstractableFormat)

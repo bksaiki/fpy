@@ -400,7 +400,10 @@ def _unbounded_expr(
             kwargs.append(('enable_neg_zero', BoolVal(False, loc)))
         for name, v in (('nan_value', ctx.nan_value), ('inf_value', ctx.inf_value)):
             if v is not None:
-                kwargs.append((name, value_literal(v, loc)))
+                # the constructor takes a `Float`, and a numeric literal
+                # evaluates to a `Fraction` -- which it refuses, leaving a
+                # rewritten program that cannot be evaluated at all
+                kwargs.append((name, ForeignVal(v, loc)))
 
     return Call(
         attribute(alias, type(ctx).__name__, loc=loc),
