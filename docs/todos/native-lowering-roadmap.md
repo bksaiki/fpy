@@ -116,17 +116,26 @@ Three ideas, each recorded where it was learned:
 
 ### 2. A recipe
 
-`monomorphize → unfold_overflow → float_to_fixed → rescale_fixed` is the
-sequence, verified bit-for-bit against the interpreter across fourteen formats in
-`tests/unit/backend/cpp/test_lowered_roundtrip.py`. `simplify` composes with it
-but is not in that check. It deserves one entry point rather than a comment in a
-sandbox.
+`monomorphize → unfold_special → unfold_overflow → float_to_fixed →
+rescale_fixed → simplify` is the sequence, and all six are now verified together,
+bit-for-bit against the interpreter, from both an `FP32` and an `FP64` source
+across fourteen targets — `_lower` in
+`tests/unit/backend/cpp/test_lowered_roundtrip.py`. Each of `unfold_special` and
+`simplify` changes the result there, so the coverage is real and not nominal.
 
-`unfold_special` composes in front of `unfold_overflow` and is worth including:
-it states the specials once at the outside, so `float_to_fixed` emits no ladder of
-its own (value classes read the branches) and `logb` hoists to a single call. Same
-instruction count, one ladder instead of two nested inside the rounding. Not in
-the roundtrip check either.
+`unfold_special` belongs in front of `unfold_overflow`: it states the specials
+once at the outside, so `float_to_fixed` emits no ladder of its own (value classes
+read the branches) and `logb` is computed once. `unfold_neg_zero` is *not* in the
+sequence — nothing reaches it, since the zero branch has already said what each
+zero rounds to.
+
+**Not exposed as one entry point, deliberately.** Composition has no way to carry
+a *location*: once the first operator rewrites at a program point, the later ones
+re-scan the whole program with a `where` index that no longer counts the same
+candidates. A composed operator would therefore only be honest for the whole
+program at once. See *Smaller questions in the same area* in
+[rounding-operator-basis.md](rounding-operator-basis.md); giving a rewrite a
+location that survives its neighbours is the prerequisite.
 
 Unrelated to lowering, but found along this path — each reproduces well before
 the change that turned it up, so none is a regression:
