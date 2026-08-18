@@ -212,15 +212,19 @@ def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
 def _cast_advice(arg_ty: CppScalar, target_ty: CppScalar) -> str:
     """How to make a conversion :meth:`_maybe_cast` refused legal.
 
-    Widening the active context is the usual answer, but it cannot fix an
-    integer too wide for a float's significand -- no float rung holds one -- so
-    there the advice is to narrow the *operand*'s context instead.
+    Widening the active context is the usual answer, and has none for an integer
+    *no* float holds -- only there does the operand's own context have to narrow.
+    An ``int32_t`` an `FP32` context refuses is not that case: `FP64` converts it
+    exactly.
     """
-    if arg_ty.is_integer() and (bits := exact_integer_bits(target_ty)) is not None:
+    widest = CppScalar.F64
+    if (arg_ty.is_integer() and target_ty.is_float()
+            and not scalar_fits_in(arg_ty, widest)):
         return (
-            f'`{target_ty.format()}` holds integers exactly only up to {bits} '
-            f'bits.  Bind the operand in a narrower integer context, or wrap '
-            f'it in ``fp.round(...)`` to accept the rounding.'
+            f'no float holds every `{arg_ty.format()}`: `{widest.format()}` holds '
+            f'integers exactly only up to {exact_integer_bits(widest)} bits.  '
+            f'Bind the operand in a narrower integer context, or wrap it in '
+            f'``fp.round(...)`` to accept the rounding.'
         )
     return (
         'Wrap the operand in ``fp.round(...)`` to make the rounding explicit, '

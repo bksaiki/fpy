@@ -231,6 +231,34 @@ class TestLossyCastAdvice:
             arg_types=[RealType(fp.SINT64), RealType(fp.FP64)],
         )
 
+    def test_an_exactly_convertible_integer_keeps_the_context_advice(self):
+        """`int32_t` does not fit `float`, but it fits `double` -- so widening
+        the active context is the fix, and the advice must not withhold it."""
+        @fp.fpy
+        def f(n: fp.Real, x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return (2 ** n) * x
+
+        tys = [RealType(fp.SINT32), RealType(fp.FP32)]
+        with pytest.raises(CppCompileError) as exc:
+            CppCompiler().compile(f, ctx=fp.FP32, arg_types=tys)
+        msg = str(exc.value)
+        assert 'format contains the operand' in msg
+        assert 'narrower integer context' not in msg
+        # and that advice works: the same program under `FP64`
+        assert CppCompiler().compile(
+            self._widened(), ctx=fp.FP64,
+            arg_types=[RealType(fp.SINT32), RealType(fp.FP64)])
+
+    @staticmethod
+    def _widened():
+        @fp.fpy
+        def f(n: fp.Real, x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return (2 ** n) * x
+
+        return f
+
     def test_narrowing_a_float_keeps_the_context_advice(self):
         """Not an integer source, so the bit limit says nothing."""
 
