@@ -88,10 +88,10 @@ class TestLiteralArgumentsStateTheirType:
         out = _emit(f, 1)
         assert 'static_cast<float>(1.5)' in out, out
         # the inline compare-and-select, not a call that would deduce a type
-        assert 'std::signbit(' in out, out
+        assert 'std::isnan(' in out, out
         assert 'fpy::' not in out, out
         # and the conditional itself carries no `double`
-        (line,) = [ln for ln in out.splitlines() if 'std::signbit(' in ln]
+        (line,) = [ln for ln in out.splitlines() if 'std::isnan(' in ln]
         assert 'double' not in line, line
 
     def test_min_max_integer_path(self):

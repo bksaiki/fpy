@@ -2507,15 +2507,19 @@ class CppEmitter(Visitor):
             # `_emit_ieee_min_max` binds its own operands, so folding an
             # expression into the next step names it once
             result = casted[0]
-            # a step's first operand is every earlier operand's result, so the
-            # NaN propagation goes only once nothing folded in so far can be one
-            seen = self._value_class(e.args[0])
+            # a step's first operand is every earlier operand's result, so its
+            # class is their join: each guard goes only once nothing folded in
+            # so far can trip it
+            acc = self._value_class(e.args[0])
             for nxt, src in zip(casted[1:], e.args[1:]):
-                seen |= self._value_class(src)
+                cls = self._value_class(src)
                 result = self._emit_ieee_min_max(
                     result, nxt, target, is_min=isinstance(e, Min),
-                    nan_free=not (seen & ValueClass.NAN),
+                    nan_free=not ((acc | cls) & ValueClass.NAN),
+                    zero_tie_free=not (acc & ValueClass.ZERO)
+                    or not (cls & ValueClass.ZERO),
                 )
+                acc |= cls
             return result
         # integers have no NaN and no signed zero, so the library form is exact
         fn = 'std::min' if isinstance(e, Min) else 'std::max'
@@ -2526,7 +2530,7 @@ class CppEmitter(Visitor):
 
     def _emit_ieee_min_max(
         self, a: str, b: str, ty: CppScalar, *, is_min: bool,
-        nan_free: bool = False,
+        nan_free: bool = False, zero_tie_free: bool = False,
     ) -> str:
         """IEEE 754-2019 ``minimum`` / ``maximum`` of *a* and *b*, inline.
 
@@ -2542,12 +2546,15 @@ class CppEmitter(Visitor):
         the same predicate and swaps the results.
 
         Inline, and both operands bound -- the predicate names each twice.
-        With *nan_free* the propagation is dropped: neither operand can be a NaN,
-        so the predicate alone is the whole operation.  The ``signbit`` term
-        stays, since a signed zero is not what that rules out.
+        Two facts each drop a piece.  With *nan_free* the propagation goes:
+        neither operand can be a NaN.  With *zero_tie_free* the ``signbit`` term
+        goes: the two cannot both be zero, and only ``a = -0`` against
+        ``b = +0`` needs it -- the mirror case already picks the right zero,
+        since ``min``/``max`` return *b* when the predicate fails.
         """
         a, b = self._bind_operand(a), self._bind_operand(b)
-        a_wins = f'({a} < {b} || ({a} == {b} && std::signbit({a})))'
+        tie = '' if zero_tie_free else f' || ({a} == {b} && std::signbit({a}))'
+        a_wins = f'({a} < {b}{tie})'
         chosen = f'{a_wins} ? {a} : {b}' if is_min else f'{a_wins} ? {b} : {a}'
         if nan_free:
             return f'({chosen})'
