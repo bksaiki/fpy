@@ -533,17 +533,16 @@ class AbstractFormat:
             if bounds_bounded:
                 assert isinstance(self.pos_bound, RealFloat)
                 assert isinstance(self.neg_bound, RealFloat)
-                if not (self.pos_bound.is_more_significant(nmin)
-                        and self.neg_bound.is_more_significant(nmin)):
-                    # A bound finer than the finest representable digit: the
-                    # description holds nothing but zero, which arises where an
-                    # intersection is empty -- a multiple of `2 ** 24` under a
-                    # context bounded at `1024`, say, from a branch no value
-                    # reaches.  `MPBFixedFormat` rejects such a bound outright,
-                    # so fall back rather than raise from an analysis.
-                    return REAL_FORMAT
+                # A bound short of the finest representable digit leaves only
+                # zero -- an empty intersection, e.g. a multiple of `2 ** 24`
+                # bounded by `1024`.  Clamping to zero states that exactly: no
+                # representable value lies in between.
+                pos_bound, neg_bound = self.pos_bound, self.neg_bound
+                quantum = RealFloat(exp=self.exp, c=1)
+                if pos_bound < quantum and RealFloat(s=False, x=neg_bound) < quantum:
+                    pos_bound, neg_bound = RealFloat(), RealFloat(s=True)
                 return MPBFixedFormat(
-                    nmin, self.pos_bound, self.neg_bound,
+                    nmin, pos_bound, neg_bound,
                     enable_nan=enable_nan, enable_inf=enable_inf,
                     enable_neg_zero=self.has_neg_zero,
                 )

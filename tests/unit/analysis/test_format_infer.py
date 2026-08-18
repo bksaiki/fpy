@@ -2854,10 +2854,16 @@ class TestZeroOnlyIntersection:
                   32767, -32768):
             assert same(low(x), ref(x)), x
 
-    def test_format_itself_no_longer_raises(self):
-        """`AbstractFormat.format` documents a sound fall-back for a shape it
-        cannot express; it was raising instead.  Kept as a backstop, since
-        `format()` is called from storage selection and the emitter too."""
+    def test_format_itself_states_the_zero(self):
+        """`format()` clamps a bound short of the finest digit to zero, which is
+        exact -- it used to raise.  A bound merely *off* the grid still raises;
+        that is a different shape, and it holds values."""
         af = AbstractFormat(float('inf'), 24, fp.RealFloat(exp=0, c=1024),
                             neg_bound=fp.RealFloat(s=True, exp=0, c=1024))
-        assert af.format() is REAL_FORMAT
+        fmt = af.format()
+        assert fmt.representable_in(fp.Float(0))
+        assert not fmt.representable_in(
+            fp.Float(x=fp.RealFloat(exp=24, c=1), ctx=fp.FP64))
+        with pytest.raises(ValueError):
+            AbstractFormat(float('inf'), 4, fp.RealFloat(exp=0, c=127),
+                           neg_bound=fp.RealFloat(s=True, exp=0, c=128)).format()

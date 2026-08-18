@@ -228,20 +228,20 @@ def _unconstrained(
 
 
 def _holds_only_zero(af: AbstractFormat) -> bool:
-    """Whether *af* describes no non-zero value.
+    """Whether *af* describes no non-zero value: both bounds fall short of its
+    smallest positive representable value.
 
-    Its finest representable digit sits above both bounds, so every non-zero
-    value on that grid is out of range.  Arises where an intersection is empty --
-    a multiple of ``2 ** 24`` under a context bounded at ``1024``, from a branch
-    an integer-valued operand never reaches.
+    Arises where an intersection is empty -- a multiple of ``2 ** 24`` bounded by
+    ``1024``.  Not the same question as whether a bound is *on* the grid: a bound
+    can be off-grid and still leave many values in range.
     """
     if isinstance(af.exp, float) or not isinstance(af.pos_bound, RealFloat):
         return False
     if not isinstance(af.neg_bound, RealFloat):
         return False
-    nmin = af.exp - 1
-    return not (af.pos_bound.is_more_significant(nmin)
-                and af.neg_bound.is_more_significant(nmin))
+    quantum = RealFloat(exp=af.exp, c=1)
+    return (af.pos_bound < quantum
+            and RealFloat(s=False, x=af.neg_bound) < quantum)
 
 
 def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
