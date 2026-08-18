@@ -100,4 +100,5 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
   honestly be offered for the whole program at once, which is why the sequence in
   `native-lowering-roadmap.md` is pinned by a test rather than exposed as an
   entry point. Giving a rewrite a *location* that survives the rewrites around it
-  is the prerequisite.
+  is the prerequisite; the plan for that mechanism is
+  [scheduling-language.md](scheduling-language.md).

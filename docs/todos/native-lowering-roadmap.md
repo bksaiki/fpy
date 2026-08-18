@@ -138,7 +138,9 @@ re-scan the whole program with a `where` index that no longer counts the same
 candidates. A composed operator would therefore only be honest for the whole
 program at once. See *Smaller questions in the same area* in
 [rounding-operator-basis.md](rounding-operator-basis.md); giving a rewrite a
-location that survives its neighbours is the prerequisite.
+location that survives its neighbours is the prerequisite, and
+[scheduling-language.md](scheduling-language.md) is the plan for it and for the
+recipe's eventual shape.
 
 Unrelated to lowering, but found along this path — each reproduces well before
 the change that turned it up, so none is a regression:
