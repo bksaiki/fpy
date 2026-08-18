@@ -516,3 +516,37 @@ class TestPolymorphicEquality:
             return a == b
 
         assert isinstance(TypeInfer.check(f.ast).return_type, BoolType)
+
+
+class TestBinaryArity:
+    """Every entry in ``_binary_table`` has to be a *two*-argument signature.
+
+    ``RoundAt`` was registered with a one-argument one, so checking it indexed
+    past the end of ``arg_types`` -- an ``IndexError`` out of the analysis where
+    a type or a diagnostic belongs.
+    """
+
+    def test_round_at_type_checks(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round_at(x, 3)
+
+        assert isinstance(TypeInfer.check(f.ast).return_type, RealType)
+
+    def test_round_at_evaluates(self):
+        """The signature was the only thing wrong: the operation itself works."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round_at(x, 3)
+
+        assert float(f(1e10)) == 1e10
+        assert float(f(1.7)) == 0.0     # every digit below position 3 is gone
+
+    def test_every_binary_signature_takes_two(self):
+        """Asked of the table rather than of one operator, so the next entry
+        added with the wrong arity fails here instead of at a call site."""
+        from fpy2.analysis.type_infer import _binary_table
+
+        wrong = {op.__name__: len(ty.arg_types)
+                 for op, ty in _binary_table.items() if len(ty.arg_types) != 2}
+        assert not wrong
