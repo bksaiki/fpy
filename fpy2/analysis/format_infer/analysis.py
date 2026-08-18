@@ -214,13 +214,12 @@ def _unconstrained(
     *, exp: float = -_INF,
     pos_bound: RealFloat | float = _INF, neg_bound: RealFloat | float = -_INF,
 ) -> AbstractFormat:
-    """A description that constrains only the bounds given.  Every other axis is
-    that axis's top, so meeting with it leaves the rest of a format alone -- the
-    specials included, which are :class:`~fpy2.analysis.ValueClassInfer`'s to
-    narrow and not a comparison's.
+    """A description pinning only the axes given; every other one is its own top,
+    so the meet leaves it alone -- the specials included, which are
+    :class:`~fpy2.analysis.ValueClassInfer`'s to narrow, not a comparison's.
 
-    A bound has to be a :class:`RealFloat`: a plain ``float`` is how this domain
-    *spells* unbounded, so passing one would widen the axis rather than pin it.
+    A bound must be a :class:`RealFloat`: a plain ``float`` is how this domain
+    spells *unbounded*, so one would widen the axis rather than pin it.
     """
     return AbstractFormat(
         _INF, exp, pos_bound, neg_bound=neg_bound,
@@ -232,11 +231,10 @@ def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
     """`x op c` as a description to meet with, or `None` where it tightens
     nothing.
 
-    Only the side that shrinks a bound *toward* zero.  `pos_bound >= 0 >=
-    neg_bound` holds by convention, so `x < 5` is statable and `x > 5` -- which
-    bounds `x` away from zero -- is not.  A NaN makes every ordering false, so a
-    failed comparison does not exclude one; the specials are left untouched
-    above, which keeps that sound.
+    Only the side that shrinks a bound *toward* zero: `pos_bound >= 0 >=
+    neg_bound` holds by convention, so `x < 5` is statable and `x > 5` is not.
+    A NaN makes every ordering false, so a failed comparison does not exclude
+    one -- which is sound only because the specials are left untouched above.
     """
     if not is_dyadic(c):
         # a rounded bound could be tighter than the truth
@@ -1575,27 +1573,21 @@ class _FormatInferInstance(Visitor):
         af = AbstractFormat.from_format(fmt)
         met = af & cons
         if met == af:
-            # Nothing was narrowed, and going back through `format()` would
-            # still cost something: it picks a canonical shape rather than
-            # inverting `from_format`, so the round trip is lossy for every
-            # format.  Only pay it where the constraint bought something.
+            # `format()` picks a canonical shape rather than inverting
+            # `from_format`, so the round trip loses something for every format;
+            # pay it only where the constraint bought something.
             return fmt
         try:
             return met.format()
         except (ValueError, OverflowError):
-            # a narrower description that no `Format` materializes; the
-            # unrefined bound is still sound
-            return fmt
+            return fmt      # no `Format` materializes it; unrefined is sound
 
     @contextmanager
     def _refined(self, cond: Expr, truth: bool) -> Iterator[None]:
         """Walk an arm with *cond* known to be *truth*.
 
-        Both arms narrow the *enclosing* mask: narrowing whatever ``self._refine``
-        happens to hold would carry the first arm's constraint into its sibling.
-        The mask is a description to meet with, not a replacement -- a definition
-        made inside the arm records the met bound, which is what storage
-        selection reads, while one made outside keeps its own.
+        Both arms narrow the *enclosing* mask; narrowing whatever ``self._refine``
+        holds would carry the first arm's constraint into its sibling.
         """
         saved = self._refine
         out = dict(saved)
@@ -1609,14 +1601,12 @@ class _FormatInferInstance(Visitor):
             self._refine = saved
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, AbstractFormat]]:
-        """What *cond* being *truth* says about the magnitude of the variables
-        it tests.  Only a comparison against a numeric literal, and only the
-        direction that tightens a *bound* -- the convention
-        ``pos_bound >= 0 >= neg_bound`` leaves no room to state that a value is
-        bounded away from zero on the far side.
+        """What *cond* being *truth* says about the variables it tests: only a
+        comparison against a numeric literal, and only the direction
+        :func:`_magnitude_constraint` can state.
 
         Read at ``if``/``if1`` only.  A loop condition and an ``IfExpr`` carry
-        the same facts and are simply not read yet; missing a refinement costs
+        the same facts and are simply not read yet; a missed refinement costs
         precision, never soundness.
         """
         match cond:
@@ -1653,18 +1643,13 @@ class _FormatInferInstance(Visitor):
     def _implied_logb(
         self, d: Definition, op: CompareOp, c: Fraction
     ) -> list[tuple[Definition, AbstractFormat]]:
-        """What a bound on `logb(v)` says about `v` itself.
+        """What a *lower* bound on `logb(v)` says about `v` itself.
 
-        `logb` is the one operation that names a value's exponent, so a *lower*
-        bound on it runs backwards to the operand: ``logb(v) >= lo`` gives
-        ``|v| >= 2 ** lo``, and a value that large with at most ``p``
-        significant bits has no digit finer than ``lo - p + 1``.  This domain has
-        no field for "bounded away from zero", but it does have one for the
-        finest digit, and that is where the fact lands.
-
-        The inverse of the forward rule, and the half a bound alone cannot reach:
-        an unrefined `FP64` operand keeps a digit at ``2 ** -1074`` however
-        tightly its magnitude is bounded above.
+        ``logb(v) >= lo`` gives ``|v| >= 2 ** lo``, and a value that large with at
+        most ``p`` significant bits has no digit finer than ``lo - p + 1``.  This
+        domain cannot say "bounded away from zero", but it can say that, and it
+        is the half a bound alone never reaches: an `FP64` operand keeps a digit
+        at ``2 ** -1074`` however tightly its magnitude is bounded above.
         """
         if op not in (CompareOp.GE, CompareOp.GT):
             return []

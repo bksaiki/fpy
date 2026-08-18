@@ -79,7 +79,7 @@ def float_to_fixed(func: Function, where: int | None = None) -> Function:
                         with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
                             y = fp.round(x)
                     else:
-                        exp = min((e - 10), 5)
+                        exp = min(max((e - 10), -24), 5)
                         with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
                             y = fp.round(x)
             return y
