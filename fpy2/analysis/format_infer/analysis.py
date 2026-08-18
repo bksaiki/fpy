@@ -135,6 +135,7 @@ Format inference rules
 """
 
 import enum
+import math
 import operator
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -170,7 +171,7 @@ from ..array_size import (
 from ..call_graph import CallGraph, CallGraphError
 from ..context_use import ContextScope, ContextUse, ContextUseAnalysis, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
-from ..reaching_defs import Definition, DefSite, PhiDef
+from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
 from .format import AbstractableFormat, AbstractFormat
 
@@ -201,8 +202,17 @@ bounds a magnitude."""
 _INF = float('inf')
 
 
+def _logb_operand(d: Definition) -> Var | None:
+    """The ``v`` in ``d = logb(v)``, where that is how *d* was defined."""
+    if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+        return None
+    e = d.site.expr
+    return e.arg if isinstance(e, Logb) and isinstance(e.arg, Var) else None
+
+
 def _unconstrained(
-    *, pos_bound: RealFloat | float = _INF, neg_bound: RealFloat | float = -_INF,
+    *, exp: float = -_INF,
+    pos_bound: RealFloat | float = _INF, neg_bound: RealFloat | float = -_INF,
 ) -> AbstractFormat:
     """A description that constrains only the bounds given.  Every other axis is
     that axis's top, so meeting with it leaves the rest of a format alone -- the
@@ -213,7 +223,7 @@ def _unconstrained(
     *spells* unbounded, so passing one would widen the axis rather than pin it.
     """
     return AbstractFormat(
-        _INF, -_INF, pos_bound, neg_bound=neg_bound,
+        _INF, exp, pos_bound, neg_bound=neg_bound,
         has_pos_inf=True, has_neg_inf=True, has_nan=True, has_neg_zero=True,
     )
 
@@ -1627,10 +1637,45 @@ class _FormatInferInstance(Visitor):
         for x, y, o in ((a, b, op), (b, a, op.invert())):
             if not isinstance(x, Var) or not isinstance(y, RationalVal):
                 continue
-            cons = _magnitude_constraint(o, y.as_rational())
+            c = y.as_rational()
+            d = self.def_use.find_def_from_use(x)
+            cons = _magnitude_constraint(o, c)
             if cons is not None:
-                out.append((self.def_use.find_def_from_use(x), cons))
+                out.append((d, cons))
+            out += self._implied_logb(d, o, c)
         return out
+
+    def _implied_logb(
+        self, d: Definition, op: CompareOp, c: Fraction
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        """What a bound on `logb(v)` says about `v` itself.
+
+        `logb` is the one operation that names a value's exponent, so a *lower*
+        bound on it runs backwards to the operand: ``logb(v) >= lo`` gives
+        ``|v| >= 2 ** lo``, and a value that large with at most ``p``
+        significant bits has no digit finer than ``lo - p + 1``.  This domain has
+        no field for "bounded away from zero", but it does have one for the
+        finest digit, and that is where the fact lands.
+
+        The inverse of the forward rule, and the half a bound alone cannot reach:
+        an unrefined `FP64` operand keeps a digit at ``2 ** -1074`` however
+        tightly its magnitude is bounded above.
+        """
+        if op not in (CompareOp.GE, CompareOp.GT):
+            return []
+        v = _logb_operand(d)
+        if v is None:
+            return []
+        d_v = self.def_use.find_def_from_use(v)
+        fmt = self.by_def.get(d_v)
+        if not isinstance(fmt, AbstractableFormat):
+            return []
+        prec = AbstractFormat.from_format(fmt).prec
+        if not isinstance(prec, int):
+            return []       # unbounded precision pins no position
+        # `logb(v) >= c` gives `|v| >= 2 ** floor(c)` whether or not `logb`'s
+        # result is known to be integral
+        return [(d_v, _unconstrained(exp=math.floor(c) - prec + 1))]
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""

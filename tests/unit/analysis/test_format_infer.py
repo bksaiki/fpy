@@ -2672,6 +2672,77 @@ class TestBranchRefinement:
 
         assert self._pos(self._defs(f)['y']) > 1e300
 
+    def test_a_lower_bound_on_logb_raises_the_operands_finest_digit(self):
+        """The backward rule.  ``logb(x) >= -14`` gives ``|x| >= 2 ** -14``, and
+        a value that large with 53 significant bits has no digit below
+        ``-14 - 52``.  A bound alone cannot reach this: `FP64`'s digit stays at
+        ``2 ** -1074`` however tightly its magnitude is bounded above."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                e = fp.logb(x)
+            if e < -14:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        assert AbstractFormat.from_format(self._defs(f)['y']).exp == -66
+
+    def test_an_upper_bound_on_logb_moves_nothing(self):
+        """``logb(x) <= -14`` says `x` is *small*, and the rule only runs on the
+        direction that says it is large.  Using it here would claim a finest
+        digit of ``-66`` for values that go all the way down to ``2 ** -1074``."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                e = fp.logb(x)
+            if e > -14:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        assert AbstractFormat.from_format(self._defs(f)['y']).exp == -1074
+
+    def test_the_backward_rule_needs_the_defining_logb(self):
+        """It runs backwards from `logb`, not from any variable that happens to
+        be compared -- so a bound on something else moves nothing."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, k: fp.Real) -> fp.Real:
+            if k < -14:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        from fpy2.transform import Monomorphize
+        info = FormatInfer.analyze(Monomorphize.apply(
+            f.ast, None, [RealType(fp.FP64), RealType(fp.FP64)]))
+        got = {d.name.base: b for d, b in info.by_def.items()}
+        assert AbstractFormat.from_format(got['y']).exp == -1074
+
+    def test_an_fp64_source_now_has_storage(self):
+        """Gap 1: both facts together, end to end.  Neither alone suffices --
+        the bound leaves the digit position at ``2 ** -1090``, and the position
+        alone leaves the magnitude at ``2 ** 2108``."""
+        import fpy2.strategies as strat
+        from fpy2.backend.cpp import CppCompiler
+
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        ref = strat.monomorphize(q, args=[RealType(fp.FP64)])
+        low = strat.rescale_fixed(strat.float_to_fixed(
+            strat.unfold_overflow(ref, early_check=True)))
+        assert CppCompiler().compile(low)
+
     def test_it_tightens_the_lowered_scale_in(self):
         """The payoff: on an `FP64` source the scale-in was inferred at `2**2108`
         against a true `[2**10, 2**11)`; the `early_check` guard brings it inside
