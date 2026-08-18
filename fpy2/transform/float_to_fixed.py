@@ -37,13 +37,14 @@ that position.
                with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
                    y = fp.round(x)
            else:
-               exp = min((e - 10), 5)
+               exp = min(max((e - 10), -24), 5)
                with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
                    y = fp.round(x)
 
 Below ``emin`` the format is fixed-point already: every value there rounds at
 ``EXP``, so that branch's context is a constant and nothing in it depends on
-the exponent.  The normal branch needs no lower clamp because of it.
+the exponent.  The normal branch's *lower* clamp is redundant because of it, and
+emitted anyway: inference reads a ``max`` where it cannot read a branch.
 
 The upper clamp keeps the context constructible and the format shiftable:
 ``B`` is representable at every position up to ``EMAX - P + 1`` and at none
@@ -101,6 +102,7 @@ from ..ast.fpyast import (
     IsNan,
     Location,
     Logb,
+    Max,
     Min,
     NamedId,
     Pow,
@@ -447,6 +449,13 @@ class _FloatToFixedInstance(BlockRewriter):
         # unrepresentable, and everything up there overflows anyway
         pos_name = self.gensym.fresh('exp')
         scale: Expr = Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc)
+        if src.emin is not None:
+            # Redundant at run time -- the subnormal branch below takes every
+            # `logb(x) < emin`, and `emin - P + 1 == expmin` -- but stated
+            # because inference reads a `max` and not a branch condition.
+            # Without it the scale-in is inferred `2 ** -expmin` times too far.
+            assert src.expmin is not None
+            scale = Max(None, [scale, Integer(src.expmin, loc)], loc)
         if src.expmax is not None:
             scale = Min(None, [scale, Integer(src.expmax, loc)], loc)
         position = Assign(pos_name, None, scale, loc)

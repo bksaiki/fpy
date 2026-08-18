@@ -70,18 +70,32 @@ are concrete.
 adds no relational power, and the descriptions are already tight. Only
 *symbolic* `lsb`/`msb` would help, which is the design below.
 
-**Path sensitivity alone.** Worth having for other reasons — refining `x` from
-`|x| < 65536`, and clearing `has_nan`/`has_inf` from the `isnan`/`isinf` guards,
-would tighten every program these passes touch. It also fixes the *subnormal*
-branch, whose looseness really is a branch condition (`e < -14` ⟹ `|x| < 2^-14`),
-though that needs a backward transfer function for `logb`:
+**~~Path sensitivity alone.~~** This was wrong, and the lower clamp is why. The
+claim was that the normal branch has no condition to exploit, so refinement
+leaves `2^286` untouched — true when the position was unclamped, since the
+looseness lived in `2 ** -exp`. The clamp caps that side syntactically, and what
+remains is `x`, which *both* branches condition. Measured, path sensitivity alone
+now compiles an `FP64` source; see gap 1 of
+[native-lowering-roadmap.md](native-lowering-roadmap.md) for the matrix.
 
-```
-logb(x) ∈ [lo, hi]   ⟹   |x| ∈ [2^lo, 2^(hi+1))
-```
+Two facts, fixing different fields:
 
-the exact inverse of the forward rule already implemented. But the normal branch
-has no condition to exploit, so path sensitivity leaves `2^286` untouched.
+- `|x| < 65536`, from the else arm of `early_check` — a forward refinement
+  against a constant. Fixes the **bound**.
+- `|x| >= 2^-14`, from the else arm of `e < -14` — needs a backward transfer for
+  `logb`, the exact inverse of the forward rule already implemented:
+
+  ```
+  logb(x) ∈ [lo, hi]   ⟹   |x| ∈ [2^lo, 2^(hi+1))
+  ```
+
+  Fixes the **digit position**. Without it a bound-only refinement leaves `_t7`
+  at `exp=-1090`, sixteen binades past what `F64` holds, because the analysis
+  still believes a subnormal `x` can be scaled by a small factor.
+
+So the designs below are no longer the *route* to an `FP64` source. What they
+still buy is a tighter answer — `2^11` where refinement reaches `2^40` — and
+retiring the asserted bound, which is a different and smaller prize.
 
 **Annotating the result with a bounded `Cast`.** Tried and abandoned; recorded so
 it is not re-attempted. The idea was that since `float_to_fixed` knows `maxval`
@@ -114,9 +128,10 @@ Three findings, in increasing order of how fatal they are:
    type, no cast and no assert are emitted at all.
 
 So the bound has to exist where the value is *computed*, which is what makes this
-an inference problem rather than an annotation problem. Finding (3) is a separate
-gap worth fixing on its own: the bound and representability checks live in
-`_emit_integral_round` and should be hoisted into the general round/cast path.
+an inference problem rather than an annotation problem. Finding (3) is **fixed**:
+`_assert_fixed_exact` now emits the specials, representability and bound checks on
+the general `Cast` path, so a fixed-point context no longer passes a
+storage-exactness test off as a context one.
 
 ## Design A — symbolic exponents
 
@@ -180,37 +195,43 @@ distinction `test_no_overflow_behavior_survives` now pins.
 
 `min`/`max` now tighten by ordering rather than only joining, so a clamp against
 a constant bounds its result: `min(logb(x), 5)` over `FP64` reads `[-1074, 5]`
-instead of `[-1074, 1023]`. That bounds the digit position, but not the values
-scaled by it — `float_to_fixed` emits only an *upper* clamp, and `2 ** -exp`
-needs the lower end, which comes from the subnormal branch rather than a `max`.
-Adding a lower clamp is semantically free in the normal branch (`e >= emin`
-already holds there) and measurably helps, though not enough on its own:
+instead of `[-1074, 1023]`.
 
-| scale-in bound | today | with a lower clamp |
+**The lower clamp is now emitted.** `float_to_fixed` used to state only the
+*upper* one, leaving `2 ** -exp` free to reach as far as the smallest subnormal
+of the source. `max(logb(x) - P + 1, expmin)` is redundant at run time — the
+subnormal branch takes every `logb(x) < emin`, and `emin - P + 1 == expmin` for
+every format with subnormals, verified across nine of them — and it fires on none
+of 428,977 `FP32` values. It is stated because inference reads a `max` and not a
+branch condition:
+
+| scale-in bound | before | after |
 |---|---|---|
-| `FP32` source | `2^286` | `2^151` — fits `F64` |
-| `FP64` source | `2^2107` | `2^1047` — still over `2^1024` |
+| `FP32` source | `2^287` | `2^152` |
+| `FP64` source | `~2^2108` | `~2^1048` |
 
-An `FP64` source additionally needs `x` itself bounded, which `early_check`
-states in program text and only path sensitivity reads. That is why the whole
-matrix passes for an `FP32` source and fails for `FP64`.
+It costs two lines and a redundant `signbit` comparison per rounding, since the
+position is stored as a float and so takes the IEEE `maximum` spelling.
+
+An `FP64` source additionally needs `x` itself constrained, from both directions
+— see *Path sensitivity alone* above, which the clamp turned from a dead end into
+the route.
 
 ### The class half was separable, and is done
 
 Refining special-value membership at branches turned out to be worth separating:
 it is a four-atom lattice rather than a numeric domain, it needs none of the
 machinery below, and it closed a correctness gap as well as tightening bounds.
-That is `fpy2/analysis/value_class.py`; see gap 6 of
-[native-lowering-roadmap.md](native-lowering-roadmap.md).  What follows concerns
-only the *magnitude* half, which it cannot help with.
+That is `fpy2/analysis/value_class.py`.  What follows concerns only the
+*magnitude* half, which it cannot help with.
 
 ### A second payoff for the `isnan`/`isinf` refinement
 
 **Done**, by the class half rather than by anything here: the `ldexp` lowering
 asked whether its exponent could be non-finite and answered from the exponent's
 *format*, which for an exponent out of `logb` admits both specials and so cost a
-runtime branch.  Reading the upstream tests instead drops it.  See gap 6 of
-[native-lowering-roadmap.md](native-lowering-roadmap.md).
+runtime branch.  Reading the upstream tests instead drops it, in
+`fpy2/analysis/value_class.py`.
 
 ## Open questions
 

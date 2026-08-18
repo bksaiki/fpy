@@ -41,37 +41,54 @@ _DRIVER = r'''
 #include <cstdint>
 #include <cstdlib>
 int main() {
-    char buf[32];
-    while (std::scanf("%31s", buf) == 1) {
-        uint32_t b = (uint32_t) std::strtoul(buf, nullptr, 16);
-        float x; std::memcpy(&x, &b, 4);
-        float r = q(x);
-        uint32_t out; std::memcpy(&out, &r, 4);
+    char buf[64];
+    while (std::scanf("%63s", buf) == 1) {
+        uint64_t b = (uint64_t) std::strtoull(buf, nullptr, 16);
+        SRCTY x; std::memcpy(&x, &b, sizeof(x));
+        /* the result is a value of the *target* format, exact in either
+           storage, so widening it makes one comparison serve both sources */
+        double r = (double) q(x);
+        uint64_t out; std::memcpy(&out, &r, 8);
         /* NaN payloads are unspecified in both languages; canonicalize */
-        if (r != r) out = 0x7fc00000u;
-        std::printf("%08x\n", out);
+        if (r != r) out = 0x7ff8000000000000ull;
+        std::printf("%016llx\n", (unsigned long long) out);
     }
     return 0;
 }
 '''
 
+_CTYPE = {32: 'float', 64: 'double'}
+
+
+def _in_bits(v: fp.Float, width: int) -> int:
+    """`v` as source-format bits, zero-extended to 64 so one hex column feeds
+    either driver."""
+    if width == 32:
+        if v.isnan:
+            return 0x7fc00000
+        if v.isinf:
+            return 0xff800000 if v.s else 0x7f800000
+        return struct.unpack('<I', struct.pack('<f', float(v)))[0]
+    return _bits(v)
+
 
 def _bits(v: fp.Float) -> int:
-    """`v` as FP32 bits, NaN canonicalized -- payload *and* sign, both
+    """`v` as FP64 bits, NaN canonicalized -- payload *and* sign, both
     unspecified in either language.  A restored sign is still tested: the
     ``neg_zero`` target turns a NaN into a signed finite value, which is
     compared as-is.
     """
     if v.isnan:
-        return 0x7fc00000
+        return 0x7ff8000000000000
     if v.isinf:
-        return 0xff800000 if v.s else 0x7f800000
-    return struct.unpack('<I', struct.pack('<f', float(v)))[0]
+        return 0xfff0000000000000 if v.s else 0x7ff0000000000000
+    return struct.unpack('<Q', struct.pack('<d', float(v)))[0]
 
 
-def _inputs() -> list[fp.Float]:
-    """FP32 values covering every class the lowering branches on."""
-    B = fp.FP32.maxval().as_real()
+def _inputs(src) -> list[fp.Float]:
+    """Values of the source format covering every class the lowering branches
+    on."""
+    B = src.maxval().as_real()
     out = [
         fp.Float(c=0), fp.Float(c=0, s=True), fp.Float(isnan=True),
         fp.Float(isinf=True), fp.Float(isinf=True, s=True),
@@ -80,20 +97,20 @@ def _inputs() -> list[fp.Float]:
         (5, 2047),          # FP16 maxval
         (5, 2048),          # just past it
         (4, 4095),          # the RNE tie above maxval
-        (B.exp, B.c),       # FP32 maxval
-        (fp.FP32.expmin, 1),
+        (B.exp, B.c),       # the source's own maxval
+        (src.expmin, 1),
         (fp.FP16.expmin, 1), (fp.FP16.expmin - 1, 1),
         (fp.FP16.emin, 1), (fp.FP16.emin - 1, 3),
         (0, 1), (3, 3), (-4, 11), (-30, 1), (10, 1365),
     ]
     for exp, c in points:
         for s in (False, True):
-            out.append(fp.FP32.round(RealFloat(s=s, exp=exp, c=c)))
+            out.append(src.round(RealFloat(s=s, exp=exp, c=c)))
     return out
 
 
-def _run(target) -> None:
-    """Lower ``round`` into *target* from an FP32 source, compile, and diff."""
+def _run(target, src=fp.FP32) -> None:
+    """Lower ``round`` into *target* from a *src* source, compile, and diff."""
     if _CXX is None:
         pytest.skip('no C++ compiler')
 
@@ -103,22 +120,24 @@ def _run(target) -> None:
             y = fp.round(x)
         return y
 
-    ref = st.monomorphize(q, args=[RealType(fp.FP32)])
+    ref = st.monomorphize(q, args=[RealType(src)])
     low = st.rescale_fixed(st.float_to_fixed(
         st.unfold_overflow(ref, early_check=True)))
 
     cc = CppCompiler()
     mod = Module()
     mod.add(low)
-    src = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(mod), _DRIVER])
+    width = src.nbits
+    driver = _DRIVER.replace('SRCTY', _CTYPE[width])
+    text = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(mod), driver])
 
-    xs = _inputs()
-    stdin = '\n'.join(f'{_bits(x):08x}' for x in xs)
-    want = [f'{_bits(fp.FP32.round(ref(x))):08x}' for x in xs]
+    xs = _inputs(src)
+    stdin = '\n'.join(f'{_in_bits(x, width):016x}' for x in xs)
+    want = [f'{_bits(ref(x)):016x}' for x in xs]
 
     with tempfile.TemporaryDirectory() as td:
         cpp, exe = Path(td) / 'm.cpp', Path(td) / 'm'
-        cpp.write_text(src)
+        cpp.write_text(text)
         build = subprocess.run([_CXX, *_OPTS, '-o', str(exe), str(cpp)],
                                capture_output=True, text=True)
         assert build.returncode == 0, (
@@ -138,29 +157,45 @@ def _run(target) -> None:
     )
 
 
+_TARGETS = [
+    fp.FP16,
+    fp.IEEEContext(5, 16, fp.RoundingMode.RTZ),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RTP),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RTN),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RNA),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RAZ),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RTO),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RTE),
+    fp.IEEEContext(4, 8),
+    fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
+    fp.MX_E5M2,
+    fp.MX_E4M3,
+    fp.MX_E2M1,
+    EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
+]
+_TARGET_IDS = ['fp16_rne', 'fp16_rtz', 'fp16_rtp', 'fp16_rtn', 'fp16_rna',
+               'fp16_raz', 'fp16_rto', 'fp16_rte',
+               'ieee_4_8', 'ieee_saturating', 'e5m2', 'e4m3', 'e2m1', 'neg_zero']
+
+
 class TestLoweredRoundtrip:
     """Compiled output against the interpreter, bit for bit."""
 
-    @pytest.mark.parametrize('target', [
-        fp.FP16,
-        fp.IEEEContext(5, 16, fp.RoundingMode.RTZ),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RTP),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RTN),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RNA),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RAZ),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RTO),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RTE),
-        fp.IEEEContext(4, 8),
-        fp.IEEEContext(5, 16, fp.RoundingMode.RNE, fp.OverflowMode.SATURATE),
-        fp.MX_E5M2,
-        fp.MX_E4M3,
-        fp.MX_E2M1,
-        EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0),
-    ], ids=['fp16_rne', 'fp16_rtz', 'fp16_rtp', 'fp16_rtn', 'fp16_rna',
-            'fp16_raz', 'fp16_rto', 'fp16_rte',
-            'ieee_4_8', 'ieee_saturating', 'e5m2', 'e4m3', 'e2m1', 'neg_zero'])
+    @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
     def test_matches_the_interpreter(self, target):
         _run(target)
+
+    @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
+    def test_matches_the_interpreter_from_fp64(self, target):
+        """The source format that matters, and the one this path could not
+        reach until branch refinement read the guards.
+
+        Storage selection used to fail here: the scale-in was inferred at
+        ``2 ** 2108`` against a true ``[2 ** 10, 2 ** 11)``, and its finest digit
+        at ``2 ** -1090``.  Compiling is only half of it -- this is the half that
+        says the answer is right.
+        """
+        _run(target, src=fp.FP64)
 
     def test_needs_no_support_library(self):
         """The goal is C++ that depends on nothing of ours.  The lowered

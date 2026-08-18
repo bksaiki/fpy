@@ -135,8 +135,10 @@ Format inference rules
 """
 
 import enum
+import math
 import operator
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
@@ -169,7 +171,7 @@ from ..array_size import (
 from ..call_graph import CallGraph, CallGraphError
 from ..context_use import ContextScope, ContextUse, ContextUseAnalysis, ContextUseSite
 from ..define_use import DefineUse, DefineUseAnalysis
-from ..reaching_defs import Definition, DefSite, PhiDef
+from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
 from .format import AbstractableFormat, AbstractFormat
 
@@ -185,6 +187,64 @@ __all__ = [
     'is_bottom',
     'round_is_identity',
 ]
+
+
+#####################################################################
+# Branch refinement
+
+_NEGATE = {
+    CompareOp.LT: CompareOp.GE, CompareOp.GE: CompareOp.LT,
+    CompareOp.LE: CompareOp.GT, CompareOp.GT: CompareOp.LE,
+}
+"""`not (a op b)`, for the orderings.  `EQ`/`NE` are absent: neither negation
+bounds a magnitude."""
+
+_INF = float('inf')
+
+
+def _logb_operand(d: Definition) -> Var | None:
+    """The ``v`` in ``d = logb(v)``, where that is how *d* was defined."""
+    if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+        return None
+    e = d.site.expr
+    return e.arg if isinstance(e, Logb) and isinstance(e.arg, Var) else None
+
+
+def _unconstrained(
+    *, exp: float = -_INF,
+    pos_bound: RealFloat | float = _INF, neg_bound: RealFloat | float = -_INF,
+) -> AbstractFormat:
+    """A description pinning only the axes given; every other one is its own top,
+    so the meet leaves it alone -- the specials included, which are
+    :class:`~fpy2.analysis.ValueClassInfer`'s to narrow, not a comparison's.
+
+    A bound must be a :class:`RealFloat`: a plain ``float`` is how this domain
+    spells *unbounded*, so one would widen the axis rather than pin it.
+    """
+    return AbstractFormat(
+        _INF, exp, pos_bound, neg_bound=neg_bound,
+        has_pos_inf=True, has_neg_inf=True, has_nan=True, has_neg_zero=True,
+    )
+
+
+def _magnitude_constraint(op: CompareOp, c: Fraction) -> AbstractFormat | None:
+    """`x op c` as a description to meet with, or `None` where it tightens
+    nothing.
+
+    Only the side that shrinks a bound *toward* zero: `pos_bound >= 0 >=
+    neg_bound` holds by convention, so `x < 5` is statable and `x > 5` is not.
+    A NaN makes every ordering false, so a failed comparison does not exclude
+    one -- which is sound only because the specials are left untouched above.
+    """
+    if not is_dyadic(c):
+        # a rounded bound could be tighter than the truth
+        return None
+    b = RealFloat.from_rational(c)
+    if op in (CompareOp.LT, CompareOp.LE) and c >= 0:
+        return _unconstrained(pos_bound=b)
+    if op in (CompareOp.GT, CompareOp.GE) and c <= 0:
+        return _unconstrained(neg_bound=b)
+    return None
 
 
 #####################################################################
@@ -1422,6 +1482,9 @@ class _FormatInferInstance(Visitor):
         self.array_size = pre.array_size
         self.alias = pre.alias
         self.by_def = {}
+        # Per-definition description to meet with on every *read*, from the
+        # branches enclosing that read.  Saved and restored around each arm.
+        self._refine: dict[Definition, AbstractFormat] = {}
         self._region_inserts: dict[
             Region, list[tuple[int, FormatBound, frozenset[Definition]]]
         ] = {}
@@ -1503,7 +1566,108 @@ class _FormatInferInstance(Visitor):
         return fmt
 
     def _bound_of_def(self, d: Definition) -> FormatBound:
-        return self.by_def[d]
+        fmt = self.by_def[d]
+        cons = self._refine.get(d)
+        if cons is None or not isinstance(fmt, AbstractableFormat):
+            return fmt
+        af = AbstractFormat.from_format(fmt)
+        met = af & cons
+        if met == af:
+            # `format()` picks a canonical shape rather than inverting
+            # `from_format`, so the round trip loses something for every format;
+            # pay it only where the constraint bought something.
+            return fmt
+        try:
+            return met.format()
+        except (ValueError, OverflowError):
+            return fmt      # no `Format` materializes it; unrefined is sound
+
+    @contextmanager
+    def _refined(self, cond: Expr, truth: bool) -> Iterator[None]:
+        """Walk an arm with *cond* known to be *truth*.
+
+        Both arms narrow the *enclosing* mask; narrowing whatever ``self._refine``
+        holds would carry the first arm's constraint into its sibling.
+        """
+        saved = self._refine
+        out = dict(saved)
+        for d, cons in self._implied(cond, truth):
+            prev = out.get(d)
+            out[d] = cons if prev is None else prev & cons
+        self._refine = out
+        try:
+            yield
+        finally:
+            self._refine = saved
+
+    def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, AbstractFormat]]:
+        """What *cond* being *truth* says about the variables it tests: only a
+        comparison against a numeric literal, and only the direction
+        :func:`_magnitude_constraint` can state.
+
+        Read at ``if``/``if1`` only.  A loop condition and an ``IfExpr`` carry
+        the same facts and are simply not read yet; a missed refinement costs
+        precision, never soundness.
+        """
+        match cond:
+            case Not():
+                return self._implied(cond.arg, not truth)
+            case And() if truth:
+                return [i for a in cond.args for i in self._implied(a, True)]
+            case Or() if not truth:
+                return [i for a in cond.args for i in self._implied(a, False)]
+            case Compare() if len(cond.ops) == 1:
+                return self._implied_compare(cond, truth)
+            case _:
+                return []
+
+    def _implied_compare(
+        self, cond: Compare, truth: bool
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        op = cond.ops[0] if truth else _NEGATE.get(cond.ops[0])
+        if op is None:
+            return []
+        a, b = cond.args
+        out: list[tuple[Definition, AbstractFormat]] = []
+        for x, y, o in ((a, b, op), (b, a, op.invert())):
+            if not isinstance(x, Var) or not isinstance(y, RationalVal):
+                continue
+            c = y.as_rational()
+            d = self.def_use.find_def_from_use(x)
+            cons = _magnitude_constraint(o, c)
+            if cons is not None:
+                out.append((d, cons))
+            out += self._implied_logb(d, o, c)
+        return out
+
+    def _implied_logb(
+        self, d: Definition, op: CompareOp, c: Fraction
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        """What a *lower* bound on `logb(v)` says about `v` itself.
+
+        ``logb(v) >= lo`` gives ``|v| >= 2 ** lo``, and a value that large with at
+        most ``p`` significant bits has no digit finer than ``lo - p + 1``.  This
+        domain cannot say "bounded away from zero", but it can say that, and it
+        is the half a bound alone never reaches: an `FP64` operand keeps a digit
+        at ``2 ** -1074`` however tightly its magnitude is bounded above.
+        """
+        if op not in (CompareOp.GE, CompareOp.GT):
+            return []
+        v = _logb_operand(d)
+        if v is None:
+            return []
+        d_v = self.def_use.find_def_from_use(v)
+        # the stored bound, not `_bound_of_def`: this runs while the mask that
+        # method reads is still being built, and only the precision is wanted
+        fmt = self.by_def.get(d_v)
+        if not isinstance(fmt, AbstractableFormat):
+            return []
+        prec = AbstractFormat.from_format(fmt).prec
+        if not isinstance(prec, int):
+            return []       # unbounded precision pins no position
+        # `logb(v) >= c` gives `|v| >= 2 ** floor(c)` whether or not `logb`'s
+        # result is known to be integral
+        return [(d_v, _unconstrained(exp=math.floor(c) - prec + 1))]
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""
@@ -2256,7 +2420,8 @@ class _FormatInferInstance(Visitor):
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.body, ctx)
+        with self._refined(stmt.cond, True):
+            self._visit_block(stmt.body, ctx)
         for phi in self.def_use.phis[stmt]:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
@@ -2264,8 +2429,10 @@ class _FormatInferInstance(Visitor):
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self._visit_block(stmt.ift, ctx)
-        self._visit_block(stmt.iff, ctx)
+        with self._refined(stmt.cond, True):
+            self._visit_block(stmt.ift, ctx)
+        with self._refined(stmt.cond, False):
+            self._visit_block(stmt.iff, ctx)
         for phi in self.def_use.phis[stmt]:
             lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
             rhs = self._bound_of_def(self.def_use.defs[phi.rhs])

@@ -79,14 +79,15 @@ Three ideas, each recorded where it was learned:
   `double -> double`, so the rounding stays in a float type. That keeps the
   signed zero, needs no integer wide enough for the value, and covers all eight
   FPy modes. Five are one libm call — `RTZ`/`RTN`/`RTP`/`RNA`/`RNE` as
-  `trunc`/`floor`/`ceil`/`round`/`nearbyint`; the other three are composed from
-  those (see gap 2).
+  `trunc`/`floor`/`ceil`/`round`/`nearbyint`; `RAZ`, `RTO` and `RTE` are
+  composed from those.
 - **A context's unrepresentable values compile to assertions.** The bound
   becomes `assert(std::fabs(r) <= B)` — or a pair of comparisons where the two
   bounds are asymmetric — and an operand the format has no result for becomes
   `assert(std::isfinite(v))`. Derived from the context's own flags, so a format
-  that admits NaN gets no guard, and from the *value*, so neither does an operand
-  a branch has already ruled out (gap 6).
+  that admits NaN gets no guard — and from the *value*, per
+  `fpy2/analysis/value_class.py`, so neither does an operand a branch has already
+  ruled out.
 - **A scale must be `ldexp`, not `pow`.** `std::pow(2, n)` is not required to be
   exact — C11 F.10 requires correct rounding of no math function and IEEE 754
   only *recommends* it for `exp2`. On this platform it happens to be exact for
@@ -98,94 +99,35 @@ Three ideas, each recorded where it was learned:
 ### 1. An `FP64` source has no storage
 
 The blocker for the format that matters most. Storage selection fails on the
-scale-in and scale-out, because `exp` and the value it scales are *correlated*
-and the domain represents them independently:
+scale-in, because `exp` and the value it scales are *correlated* and the domain
+represents them independently. An `FP32` source works only because the same
+products stay inside `F64`'s `2^1024`.
 
-| | inferred | true |
-|---|---|---|
-| `(2 ** -exp) * x` | `2^2107` | `[2^10, 2^11)` |
-| `(2 ** exp) * _t8` | `2^1034` | `65504` |
+**Two path-sensitive facts are enough** — measured, by pinning the argument's
+declared context to what each branch guarantees and running the real pipeline:
 
-`F64` holds `2^1024`, so both exceed it. An `FP32` source works only because
-the same products land at `2^286` and `2^138`.
+| refinement available | result |
+|---|---|
+| none | fails on `y` |
+| `\|x\| < 65536` only | fails on `_t7` |
+| `\|x\| >= 2**-14` only | fails on `y` |
+| **both** | **compiles** |
 
-Not fixable by annotation — see
-[symbolic-exponent-inference.md](symbolic-exponent-inference.md), which records
-both the designs that would work and the one that was tried and does not.
+They fix different fields. `\|x\| < 65536`, from the else arm of `early_check`,
+is a forward refinement against a constant and fixes the **bound**. `\|x\| >=
+2**-14`, from the else arm of `e < -14`, needs the backward `logb` transfer
+(`logb(x) ∈ [lo, hi] ⟹ \|x\| ∈ [2^lo, 2^(hi+1))`) and fixes the **digit
+position** — which is what survives once the lower clamp has handled the bound,
+and which a bound-only refinement leaves at `2^-1090`.
 
-### 2. The mode table is complete
+So this is path sensitivity over magnitudes, not a new abstract domain; the
+symbolic design in
+[symbolic-exponent-inference.md](symbolic-exponent-inference.md) would derive a
+*tighter* answer and retire the asserted bound, but is not what unblocks the
+format. That doc also records the annotation approach, which was tried and does
+not work.
 
-**Closed**, and it was three modes short rather than one. `RAZ` is
-`copysign(ceil(fabs(x)), x)` — the same spelling
-[mpfx](https://github.com/bksaiki/mpfx)'s `round_to_integral` uses.
-
-`RTO` and `RTE` ask for the parity of the *result*, which no libm function
-reports, so each is built from what is already there:
-
-- `RTO` — `o = floor(x * 0.5) * 2` is the even integer at or below `x`, and `o +
-  1` is the odd neighbour, which serves both `(o, o+1)` and `(o+1, o+2)`.
-- `RTE` — halve, round to nearest-even, double. `fabs` then separates the one
-  case that must not move: an odd integer, already exact and a full step from
-  that even neighbour.
-
-`RTE` is mpfx's spelling, with `std::nearbyint` standing in for C23 `roundeven`.
-That is the same substitution `RNE` already makes here — no compiler is required
-to have the builtin, and adding it as an `fpy::` helper would break
-`test_needs_no_support_library`. It carries the same cost: `nearbyint` follows the
-dynamic rounding mode, so `RTE` inherits `RNE`'s `FE_TONEAREST` precondition and
-is refused inside a scope that set another mode. `RTO` has no such dependency.
-
-Every step of all eight is exact. Verified bit-for-bit against the interpreter
-in `test_round_fixed_bound.py`, and the three new modes are in
-`test_lowered_roundtrip.py`'s target list, which now covers fourteen formats.
-
-### 3. `Round` / `Cast` checked storage, not the context
-
-**Closed.** `fp.cast(v)` tested *storage* exactness only
-(`assert(arg == tmp)`), so under a context bounded at 1024 whose representable
-values are the integers, `cast(2048.0)` and `cast(0.5)` both raised in the
-interpreter and passed silently in C++. `_assert_fixed_exact` now emits the
-specials, representability and bound checks for a fixed-point context, and
-refuses a non-zero position rather than assuming it; the same-storage shortcut no
-longer skips them. Verified against the interpreter per value, 88/88, in
-`tests/unit/backend/cpp/test_cast_exactness.py`.
-
-The mirror of it on `Round` is closed too, and was worse than expected: a
-fixed-point context reaching a bare `static_cast` dropped its bound *and* its
-overflow rule. A context bounded at 100 returned 120 where `ASSERT` raises,
-`SATURATE` says 100 and `WRAP` says -81 — on **both** storage paths, not only the
-integer one. `_emit_integral_round` now either lowers a fixed-point context
-faithfully or refuses it, and a non-`ASSERT` rule is refused rather than dropped.
-Verified value-for-value against the interpreter in
-`tests/unit/backend/cpp/test_round_fixed_bound.py`.
-
-The predicate for "the cast *is* the rounding" is `target.is_native_ctx`,
-introduced here: a format carries no overflow rule, so a `-128..127` context
-under `ASSERT` is format-equal to `int8_t` and still needs the assertion.
-
-The libm mapping had a second, subtler hole in the same area: the interpreter
-*raises* where `std::trunc` returns a NaN, and only an unread branch reconciled
-them. Closed by gap 6.
-
-### 6. Value classes read the branches
-
-**Closed.** A four-atom lattice — `{NaN, Inf, Zero, Finite}` — refined at every
-branch that tests a value's kind, in `fpy2/analysis/value_class.py`. It answers
-the question the guards above were asking and the *format* could not: a format
-says whether some value in it is a NaN, not whether this one is, and it
-structurally cannot say **not zero**.
-
-The lowered `FP16` rounding went from **4 assertions, 4 `isfinite`, 2 `std::pow`**
-to **2, 0, 0** — the survivors are the two bound checks, which are magnitude
-facts. `std::ldexp` no longer needs its `isfinite ? … : pow` fallback, and the
-libm mapping's specials side-condition is discharged rather than assumed.
-
-The transforms read it too: `float_to_fixed` drops an `isnan`/`isinf`/`== 0`
-branch and `unfold_overflow` its finiteness test where the operand cannot be that
-kind of value. That needs concrete argument types and pays nothing on the
-standard `FP32`-source pipeline, where the operand is a parameter at top.
-
-### 4. Backend cleanups
+### 2. Backend cleanups
 
 - `(2 ** n) * x` fails for an `n` typed `SINT64` or `INTEGER`: `cannot implicitly
   cast int64_t to double: conversion is lossy`. `SINT8`/`SINT16`/`SINT32` work,
@@ -193,7 +135,7 @@ standard `FP32`-source pipeline, where the operand is a parameter at top.
 - Cosmetic: redundant `static_cast<double>` on integer literals, and a doubled
   `static_cast<double>(static_cast<double>(2))`.
 
-### 5. A recipe
+### 3. A recipe
 
 `monomorphize → unfold_overflow → float_to_fixed → rescale_fixed` is the
 sequence, verified bit-for-bit against the interpreter across fourteen formats in
@@ -203,7 +145,7 @@ sandbox.
 
 `unfold_special` composes in front of `unfold_overflow` and is worth including:
 it states the specials once at the outside, so `float_to_fixed` emits no ladder of
-its own (gap 6 reads the branches) and `logb` hoists to a single call. Same
+its own (value classes read the branches) and `logb` hoists to a single call. Same
 instruction count, one ladder instead of two nested inside the rounding. Not in
 the roundtrip check either.
 
@@ -225,14 +167,16 @@ the change that turned it up, so none is a regression:
 
 ## Order of work
 
-Gaps 2, 3 and 6 are done, and with them the non-finite integer conversion: a
-float-to-integer cast asserts `std::isfinite` first where it can arrive, on the
-native integer path as well. What is left, cheapest first:
+The mode table, the `Round`/`Cast` context checks and the value-class analysis
+are done and their sections retired; what they settled is recorded under *What
+the path rests on*. What is left, cheapest first:
 
-1. **Backend cleanups and a recipe** — gaps 4 and 5, both small, and the recipe
-   is what makes the path usable by someone who did not write it.
-2. **An `FP64` source** — the largest, and gated on the *numeric* half of
-   inference rather than on the backend.
+1. **An `FP64` source** — two path-sensitive facts, as gap 1 measures. The
+   traversal is the work: `FormatInfer` is flow-insensitive by construction,
+   though `fpy2/analysis/value_class.py` has the refinement pattern already, and
+   in SSA a definition inside a refined arm has one path to it, so the result
+   still keys per definition as storage selection expects.
+2. **Backend cleanups and a recipe** — gaps 2 and 3, both small.
 
 ## Open questions
 

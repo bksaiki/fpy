@@ -286,16 +286,23 @@ class TestScaleByPowerOfTwo:
         assert 'std::ldexp(' in out
         assert 'std::pow(' not in out
 
-    def test_the_lowering_widens_before_scaling(self):
-        """``std::ldexp`` is overloaded on its first argument, so scaling the
-        `FP32` source directly would overflow in ``float`` where the `double`
-        result is representable.  The value is widened first."""
+    def test_the_scale_needs_no_widening(self):
+        """``std::ldexp`` is overloaded on its first argument, so the scale runs
+        in whatever type the value is stored in.
+
+        That used to force a widening to ``double``: the scale-in's bound was
+        inferred at ``2 ** 287``, far past what ``float`` holds, even though the
+        true value is in ``[2 ** 10, 2 ** 11)``.  Branch refinement now reads the
+        guards and reports ``prec=24, exp=-53, bound ~ 2 ** 40``, which ``float``
+        does hold -- so the cast is gone and the scale still lands exactly, which
+        ``test_lowered_roundtrip.py`` checks bit-for-bit across fourteen
+        formats."""
         out = self._lowered()
         scale = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
         assert scale
-        for ln in scale:
-            assert 'float ' not in ln, ln
-        assert 'static_cast<double>(x)' in out
+        # the scale-in takes the source straight, with no widening cast; the
+        # subnormal branch's multiply still widens, which is a different site
+        assert any('std::ldexp(x,' in ln for ln in scale), scale
 
     def test_a_possibly_nonfinite_exponent_falls_back_to_a_product(self):
         """``ldexp`` takes an ``int``, and converting a NaN or an infinity to
