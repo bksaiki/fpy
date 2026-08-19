@@ -11,8 +11,8 @@ import pytest
 import fpy2 as fp
 
 from fpy2.strategies import (
-    Block,
-    Cursor,
+    BlockCursor,
+    StmtCursor,
     FuncBody,
     TransformReferenceError,
     inline,
@@ -78,7 +78,7 @@ def _loops(func) -> int:
 
 
 def test_a_cursor_unrolls_one_loop():
-    out = unroll_for(two_loops, Cursor(two_loops.ast, FuncBody().stmt(1)), times=1)
+    out = unroll_for(two_loops, StmtCursor(two_loops.ast, FuncBody().stmt(1)), times=1)
     assert out.edits is not None
     edit, = out.edits.edits
     assert (edit.block_path, edit.index) == (FuncBody(), 1)
@@ -87,11 +87,11 @@ def test_a_cursor_unrolls_one_loop():
 def test_a_split_shifts_what_followed_it():
     """A split expands one loop into several statements, so the second loop
     moves — and its cursor moves with it."""
-    second = Cursor(two_loops.ast, FuncBody().stmt(3))
-    out = split(two_loops, 2, Cursor(two_loops.ast, FuncBody().stmt(1)))
+    second = StmtCursor(two_loops.ast, FuncBody().stmt(3))
+    out = split(two_loops, 2, StmtCursor(two_loops.ast, FuncBody().stmt(1)))
 
     moved = out.forward(second)
-    assert isinstance(moved, Cursor)
+    assert isinstance(moved, StmtCursor)
     assert moved.index > 3
     assert moved.resolve().format() == second.resolve().format()
 
@@ -99,8 +99,8 @@ def test_a_split_shifts_what_followed_it():
 def test_a_cursor_inside_an_unrolled_body_does_not_forward():
     """The body now exists in several copies, so no single statement is its
     image."""
-    inside = Cursor(two_loops.ast, FuncBody().stmt(1).block('body').stmt(0))
-    out = unroll_for(two_loops, Cursor(two_loops.ast, FuncBody().stmt(1)), times=1)
+    inside = StmtCursor(two_loops.ast, FuncBody().stmt(1).block('body').stmt(0))
+    out = unroll_for(two_loops, StmtCursor(two_loops.ast, FuncBody().stmt(1)), times=1)
     with pytest.raises(TransformReferenceError, match='which was rewritten'):
         out.forward(inside)
 
@@ -108,7 +108,7 @@ def test_a_cursor_inside_an_unrolled_body_does_not_forward():
 def test_one_cursor_drives_a_loop_schedule():
     """Split the pinned loop, then unroll the loops the split produced — the
     region a split forwards to is what names them."""
-    site = Cursor(two_loops.ast, FuncBody().stmt(1))
+    site = StmtCursor(two_loops.ast, FuncBody().stmt(1))
     f = split(two_loops, 4, site)
     assert _loops(f) > _loops(two_loops)
 
@@ -118,7 +118,7 @@ def test_one_cursor_drives_a_loop_schedule():
 
 
 def test_a_region_takes_every_loop_within_it():
-    whole = Block(two_loops.ast, FuncBody(), range(0, 4))
+    whole = BlockCursor(two_loops.ast, FuncBody(), range(0, 4))
     out = unroll_for(two_loops, whole, times=1)
     assert out.edits is not None
     assert [e.index for e in out.edits.edits] == [1, 3]
@@ -126,7 +126,7 @@ def test_a_region_takes_every_loop_within_it():
 
 def test_a_cursor_naming_no_loop_is_a_bad_reference():
     with pytest.raises(TransformReferenceError, match='does not name'):
-        unroll_for(two_loops, Cursor(two_loops.ast, FuncBody().stmt(0)), times=1)
+        unroll_for(two_loops, StmtCursor(two_loops.ast, FuncBody().stmt(0)), times=1)
 
 
 # ----------------------------------------------------------------------
@@ -134,14 +134,14 @@ def test_a_cursor_naming_no_loop_is_a_bad_reference():
 
 
 def test_a_while_unroll_replaces_the_loop_with_one_statement():
-    site = Cursor(counted.ast, FuncBody().stmt(1))
+    site = StmtCursor(counted.ast, FuncBody().stmt(1))
     out = unroll_while(counted, site, times=1)
 
     assert out.edits is not None
     edit, = out.edits.edits
     assert (edit.removed, edit.inserted) == (1, 1)
     image = out.forward(site)
-    assert isinstance(image, Cursor)
+    assert isinstance(image, StmtCursor)
     assert image.resolve().format().startswith('if ')
 
 
@@ -158,7 +158,7 @@ def test_a_zero_times_unroll_records_nothing():
 
 
 def test_a_cursor_inlines_the_call_in_one_statement():
-    out = inline(call_each, Cursor(call_each.ast, FuncBody().stmt(0)))
+    out = inline(call_each, StmtCursor(call_each.ast, FuncBody().stmt(0)))
     assert out.format().count('sq(') == 1  # the second call survives
 
 
@@ -168,16 +168,16 @@ def test_a_cursor_is_coarser_than_the_index_for_inline():
     by_index = inline(two_calls, 0)
     assert by_index.format().count('sq(') == 1
 
-    by_cursor = inline(two_calls, Cursor(two_calls.ast, FuncBody().stmt(0)))
+    by_cursor = inline(two_calls, StmtCursor(two_calls.ast, FuncBody().stmt(0)))
     assert 'sq(' not in by_cursor.format()
 
 
 def test_inlining_shifts_what_followed_the_call():
-    after = Cursor(call_each.ast, FuncBody().stmt(1))
-    out = inline(call_each, Cursor(call_each.ast, FuncBody().stmt(0)))
+    after = StmtCursor(call_each.ast, FuncBody().stmt(1))
+    out = inline(call_each, StmtCursor(call_each.ast, FuncBody().stmt(0)))
 
     moved = out.forward(after)
-    assert isinstance(moved, Cursor)
+    assert isinstance(moved, StmtCursor)
     assert moved.index > 1
     assert moved.resolve().format() == after.resolve().format()
 
@@ -188,4 +188,4 @@ def test_inline_everywhere_still_reports_its_edits():
     out = inline(call_each)
     assert out.edits is not None
     assert [e.index for e in out.edits.edits] == [0, 1]
-    assert out.forward(Cursor(call_each.ast, FuncBody().stmt(2))).func is out.ast
+    assert out.forward(StmtCursor(call_each.ast, FuncBody().stmt(2))).func is out.ast

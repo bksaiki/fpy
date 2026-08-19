@@ -30,7 +30,6 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..utils import Gensym
 from .utils import (
-    Block,
     Cursor,
     EditLog,
     SiteRewriter,
@@ -65,7 +64,7 @@ class _SplitLoop(SiteRewriter):
 
     func: FuncDef
     factor: Expr
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     strategy: SplitLoopStrategy
     temp_id: NamedId
     outer_id: NamedId
@@ -80,7 +79,7 @@ class _SplitLoop(SiteRewriter):
         self,
         func: FuncDef,
         factor: Expr,
-        where: int | Cursor | Block | None,
+        where: int | Cursor | None,
         strategy: SplitLoopStrategy,
         reaching_defs: ReachingDefsAnalysis,
         temp_id: NamedId,
@@ -364,7 +363,7 @@ class SplitLoop:
     def apply(
         func: FuncDef,
         factor: Expr,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
@@ -380,7 +379,7 @@ class SplitLoop:
         factor : Expr
             The chunk size; a literal ``Integer`` must be positive, and
             any other expression is guarded by a runtime ``assert``.
-        where : int | Cursor | Block | None
+        where : int | Cursor | None
             Which `for` loop to split: an index counting loops in visit
             order, or a cursor or region naming a program point, which
             takes every loop at or beneath it. If `None`, split every
@@ -413,7 +412,7 @@ class SplitLoop:
     def apply_with_edits(
         func: FuncDef,
         factor: Expr,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,

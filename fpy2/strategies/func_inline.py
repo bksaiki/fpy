@@ -6,12 +6,12 @@ from collections.abc import Iterable
 
 from ..function import Function
 from ..transform import FuncInline
-from ..transform.utils.cursor import Block, Cursor
+from ..transform.utils.cursor import Cursor
 
 
 def inline(
     func: Function,
-    where: int | Cursor | Block | None = None,
+    where: int | Cursor | None = None,
     *,
     funcs: Iterable[Function] | None = None,
     recursive: bool = True
@@ -23,11 +23,11 @@ def inline(
     ----------
     func : Function
         The function to transform.
-    where : int | Cursor | Block | None
+    where : int | Cursor | None
         Which call site to inline, among the candidates -- calls to FPy
         functions that pass the `funcs` filter. An index counts them in visit
-        order, outermost-first; a :class:`fpy2.strategies.Cursor` /
-        :class:`fpy2.strategies.Block` names a program point and takes every
+        order, outermost-first; a :class:`fpy2.strategies.StmtCursor` /
+        :class:`fpy2.strategies.BlockCursor` names a program point and takes every
         candidate call at or beneath it, which is coarser than the index: a
         statement holding two candidate calls names both. A cursor or region
         from an earlier program is forwarded to this one first. If `None`,

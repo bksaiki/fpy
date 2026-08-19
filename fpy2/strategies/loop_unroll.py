@@ -5,11 +5,11 @@ Scheduling language: loop unroll
 from ..ast import NamedId
 from ..function import Function
 from ..transform import ForUnroll, ForUnrollStrategy, WhileUnroll
-from ..transform.utils.cursor import Block, Cursor
+from ..transform.utils.cursor import Cursor
 
 
 def unroll_while(
-    func: Function, where: int | Cursor | Block | None = None, times: int = 1
+    func: Function, where: int | Cursor | None = None, times: int = 1
 ) -> Function:
     """
     Unroll `while` loops in the function.
@@ -18,10 +18,10 @@ def unroll_while(
     ----------
     func : Function
         The function to transform.
-    where : int | Cursor | Block | None
+    where : int | Cursor | None
         Which `while` loop to unroll: an index counting `while` loops in visit
-        order, outermost-first; or a :class:`fpy2.strategies.Cursor` /
-        :class:`fpy2.strategies.Block` naming a program point, which takes
+        order, outermost-first; or a :class:`fpy2.strategies.StmtCursor` /
+        :class:`fpy2.strategies.BlockCursor` naming a program point, which takes
         every loop at or beneath it. A cursor or region from an earlier
         program is forwarded to this one first. If `None`, unroll every
         `while` loop.
@@ -73,7 +73,7 @@ def unroll_while(
 
 def unroll_for(
     func: Function,
-    where: int | Cursor | Block | None = None,
+    where: int | Cursor | None = None,
     times: int = 1,
     *,
     strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
@@ -86,10 +86,10 @@ def unroll_for(
 
     Parameters
     ----------
-    where : int | Cursor | Block | None
+    where : int | Cursor | None
         Which `for` loop to unroll: an index counting `for` loops in visit
-        order, outermost-first; or a :class:`fpy2.strategies.Cursor` /
-        :class:`fpy2.strategies.Block` naming a program point, which takes
+        order, outermost-first; or a :class:`fpy2.strategies.StmtCursor` /
+        :class:`fpy2.strategies.BlockCursor` naming a program point, which takes
         every loop at or beneath it. A cursor or region from an earlier
         program is forwarded to this one first. If `None`, unroll every
         `for` loop.

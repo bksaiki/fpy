@@ -14,6 +14,7 @@ than a silent mis-hit.  Holding that reference also keeps the tree alive, so no
 
 from dataclasses import dataclass
 from itertools import pairwise
+from typing import TypeAlias
 
 from ...ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
 from .error import TransformReferenceError
@@ -31,7 +32,7 @@ from .path import (
 
 
 @dataclass(frozen=True)
-class Cursor:
+class StmtCursor:
     """A statement of a program, named so that a rewrite can forward it.
 
     Validated on construction: a cursor always names a statement of its own
@@ -75,7 +76,7 @@ class Cursor:
 
 
 @dataclass(frozen=True)
-class Block:
+class BlockCursor:
     """A run of consecutive statements of one block.
 
     What a rewritten statement forwards to: a transform replaces it with
@@ -111,12 +112,12 @@ class Block:
 
     def __iter__(self):
         for idx in self.span:
-            yield Cursor(self.func, StmtPath(self.block_path, idx))
+            yield StmtCursor(self.func, StmtPath(self.block_path, idx))
 
-    def __getitem__(self, i: int) -> Cursor:
-        return Cursor(self.func, StmtPath(self.block_path, self.span[i]))
+    def __getitem__(self, i: int) -> StmtCursor:
+        return StmtCursor(self.func, StmtPath(self.block_path, self.span[i]))
 
-    def one(self) -> Cursor:
+    def one(self) -> StmtCursor:
         """The single statement of this region."""
         if len(self.span) != 1:
             raise bad_path(self.block_path, f'names {len(self.span)} statements, not one')
@@ -129,6 +130,18 @@ class Block:
 
     def __str__(self):
         return f'{format_path(self.block_path)}[{self.span.start}:{self.span.stop}]'
+
+
+Cursor: TypeAlias = StmtCursor | BlockCursor
+"""What a rewrite can be aimed at, and what forwarding hands back.
+
+A union rather than a base class: the kinds share only `func`, and the image's
+kind is a property of what a rewrite did, not of the cursor handed in -- a
+statement replaced by several statements forwards to a :class:`BlockCursor`, and a
+region that collapses to one statement forwards to a :class:`StmtCursor`.  So
+`isinstance(x, Cursor)` and `match` over the arms both work, and a transform that
+accepts only one kind names it.
+"""
 
 
 @dataclass(frozen=True)
@@ -186,19 +199,20 @@ class EditLog:
                 if a is not b and _overlaps(a, b):
                     raise ValueError(f'edits are not disjoint: {a} and {b}')
 
-    def forward(self, cursor: Cursor | Block) -> Cursor | Block:
+    def forward(self, cursor: Cursor) -> Cursor:
         """*cursor*, in the program this pass produced.
 
         A statement the pass rewrote forwards to the region that replaced it --
-        a :class:`Cursor` where that is a single statement, a :class:`Block`
+        a :class:`StmtCursor` where that is a single statement, a
+        :class:`BlockCursor`
         otherwise.  A statement *inside* one it rewrote does not forward at
         all: that subtree was rebuilt, and only the pass could say what became
         of it.
         """
-        if isinstance(cursor, Block):
+        if isinstance(cursor, BlockCursor):
             return self._forward_region(cursor)
-        if not isinstance(cursor, Cursor):
-            raise TypeError(f'expected a \'Cursor\' or \'Block\', got {cursor}')
+        if not isinstance(cursor, StmtCursor):
+            raise TypeError(f'expected a \'StmtCursor\' or \'BlockCursor\', got {cursor}')
         if cursor.func is not self.source:
             raise TransformReferenceError(
                 f'`{cursor}` names a statement of another program'
@@ -206,12 +220,12 @@ class EditLog:
 
         block, index, edit = _forward_stmt(cursor.path, self.edits, cursor.path)
         if edit is None or edit.inserted == 1:
-            return Cursor(self.result, StmtPath(block, index))
+            return StmtCursor(self.result, StmtPath(block, index))
         if edit.inserted == 0:
             raise TransformReferenceError(f'`{cursor}` was deleted')
-        return Block(self.result, block, range(index, index + edit.inserted))
+        return BlockCursor(self.result, block, range(index, index + edit.inserted))
 
-    def _forward_region(self, region: Block) -> Cursor | Block:
+    def _forward_region(self, region: BlockCursor) -> Cursor:
         """Every statement of *region*, forwarded and re-joined.
 
         An edit replaces a run of statements in place, so the images stay in
@@ -221,7 +235,7 @@ class EditLog:
             raise TransformReferenceError(f'`{region}` holds no statements')
         images = [self.forward(c) for c in region]
         spans = [
-            img.span if isinstance(img, Block) else range(img.index, img.index + 1)
+            img.span if isinstance(img, BlockCursor) else range(img.index, img.index + 1)
             for img in images
         ]
         paths = {img.block_path for img in images}
@@ -232,8 +246,8 @@ class EditLog:
         span = range(spans[0].start, spans[-1].stop)
         block_path = paths.pop()
         if len(span) == 1:
-            return Cursor(self.result, StmtPath(block_path, span.start))
-        return Block(self.result, block_path, span)
+            return StmtCursor(self.result, StmtPath(block_path, span.start))
+        return BlockCursor(self.result, block_path, span)
 
 
 def _overlaps(a: Edit, b: Edit) -> bool:

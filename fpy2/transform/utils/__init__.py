@@ -52,7 +52,7 @@ from ...number import (
     MPFixedContext,
     RealFloat,
 )
-from .cursor import Block, Cursor, Edit, EditLog
+from .cursor import BlockCursor, Cursor, Edit, EditLog, StmtCursor
 from .error import TransformDeclined, TransformReferenceError
 from .path import (
     BlockField,
@@ -228,11 +228,11 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     )
 
 
-def check_where(where: int | Cursor | Block | None) -> None:
+def check_where(where: int | Cursor | None) -> None:
     """Rejects a `where` that names nothing of the kind."""
-    if where is not None and not isinstance(where, (int, Cursor, Block)):
+    if where is not None and not isinstance(where, (int, Cursor)):
         raise TypeError(
-            f'expected an \'int\', \'Cursor\', \'Block\' or None for where, got `{where}`'
+            f'expected an \'int\', a cursor or None for where, got `{where}`'
         )
 
 
@@ -263,14 +263,14 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
 
 
 def _target_of(
-    where: int | Cursor | Block | None, func: FuncDef
+    where: int | Cursor | None, func: FuncDef
 ) -> tuple[BlockPath, range] | None:
     """The block path and indices an explicit cursor or region names."""
     if where is None or isinstance(where, int):
         return None
     if where.func is not func:
         raise TransformReferenceError(f'`{where}` names a statement of another program')
-    if isinstance(where, Cursor):
+    if isinstance(where, StmtCursor):
         where.resolve()  # a cursor of this program still has to name something
         return where.path.parent, range(where.index, where.index + 1)
     return where.block_path, where.span
@@ -288,7 +288,8 @@ class SiteRewriter(DefaultTransformVisitor):
     aimed, and what it replaced.
 
     `where` aims the rewrite: an index picks one candidate, counting in visit
-    order, outermost-first; a :class:`Cursor` or :class:`Block` picks every
+    order, outermost-first; a :class:`StmtCursor` or :class:`BlockCursor` picks
+    every
     candidate at or beneath the program point it names; `None` takes them all.
 
     Every rewrite is recorded in `edits`, which is what forwards a cursor
@@ -298,7 +299,7 @@ class SiteRewriter(DefaultTransformVisitor):
     A subclass that overrides `_visit_function` must call `_begin` itself.
     """
 
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
     declined: list[str]

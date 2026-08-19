@@ -21,7 +21,7 @@ from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
 from .rename_target import RenameTarget
-from .utils import Block, Cursor, Edit, EditLog, SiteRewriter, check_where
+from .utils import Cursor, Edit, EditLog, SiteRewriter, check_where
 
 
 def _replace_ret(block: StmtBlock, new_var: NamedId):
@@ -55,7 +55,7 @@ class _FuncInline(SiteRewriter):
     funcs: set[Function] | None
     inlined: dict[FuncDef, FuncDef]
     recursive: bool
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
 
     gensym: Gensym
     free_vars: set[NamedId]
@@ -68,7 +68,7 @@ class _FuncInline(SiteRewriter):
         funcs: set[Function] | None,
         inlined: dict[FuncDef, FuncDef] | None = None,
         recursive: bool = True,
-        where: int | Cursor | Block | None = None
+        where: int | Cursor | None = None
     ):
         self.func = func
         self.def_use = def_use
@@ -237,7 +237,7 @@ class FuncInline:
         def_use: DefineUseAnalysis | None = None,
         funcs: Iterable[Function] | None = None,
         recursive: bool = True,
-        where: int | Cursor | Block | None = None
+        where: int | Cursor | None = None
     ) -> FuncDef:
         """
         Applies function inlining to `func` returning the transformed function.
@@ -270,7 +270,7 @@ class FuncInline:
         def_use: DefineUseAnalysis | None = None,
         funcs: Iterable[Function] | None = None,
         recursive: bool = True,
-        where: int | Cursor | Block | None = None
+        where: int | Cursor | None = None
     ) -> EditLog:
         """:meth:`apply`, with the record of what it replaced; the rewritten
         program is the log's `result`."""

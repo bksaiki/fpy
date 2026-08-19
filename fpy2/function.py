@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .interpret import Interpreter
 
     # `transform` imports `function` too (see `forward`)
-    from .transform.utils.cursor import Block, Cursor, EditLog
+    from .transform.utils.cursor import Cursor, EditLog
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -134,13 +134,14 @@ class Function(Generic[P, R]):
         A cursor or region from an ancestor is forwarded, so a schedule pins a
         point once and keeps aiming at it; anything else passes through.
         """
-        from .transform.utils.cursor import Block, Cursor
+        from .transform.utils.cursor import Cursor
 
-        if isinstance(where, (Cursor, Block)):
+        # `Cursor` is a union of the kinds, which `isinstance` accepts
+        if isinstance(where, Cursor):
             return self.forward(where)
         return where
 
-    def forward(self, cursor: 'Cursor | Block') -> 'Cursor | Block':
+    def forward(self, cursor: 'Cursor') -> 'Cursor':
         """*cursor*, in this program.
 
         Walks back to the program the cursor names, then replays what each

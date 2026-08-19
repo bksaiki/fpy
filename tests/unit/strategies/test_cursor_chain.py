@@ -12,8 +12,8 @@ import pytest
 import fpy2 as fp
 
 from fpy2.strategies import (
-    Block,
-    Cursor,
+    BlockCursor,
+    StmtCursor,
     FuncBody,
     TransformReferenceError,
     float_to_fixed,
@@ -57,14 +57,14 @@ def one_site(x: fp.Real) -> fp.Real:
     return y
 
 
-def _first(func) -> Cursor:
+def _first(func) -> StmtCursor:
     """The first rounding block of `two_sites`-shaped programs."""
-    return Cursor(func.ast, FuncBody().stmt(1))
+    return StmtCursor(func.ast, FuncBody().stmt(1))
 
 
-def _text(site: Cursor | Block) -> str:
+def _text(site: StmtCursor | BlockCursor) -> str:
     """The source of what a cursor or region names."""
-    if isinstance(site, Block):
+    if isinstance(site, BlockCursor):
         return '\n'.join(s.format() for s in site.resolve())
     return site.resolve().format()
 
@@ -92,7 +92,7 @@ def test_a_declined_site_is_not_an_edit():
     """`REAL` rounds exactly, so the candidate is skipped and nothing moves."""
     out = unfold_special(exact)
     assert out.edits is not None and out.edits.edits == ()
-    assert out.forward(Cursor(exact.ast, FuncBody().stmt(1))) == Cursor(out.ast, FuncBody().stmt(1))
+    assert out.forward(StmtCursor(exact.ast, FuncBody().stmt(1))) == StmtCursor(out.ast, FuncBody().stmt(1))
 
 
 # ----------------------------------------------------------------------
@@ -101,12 +101,12 @@ def test_a_declined_site_is_not_an_edit():
 
 def test_untouched_statements_survive_a_rewrite_that_grew_the_block():
     """Two rounds become two statements, so what followed them shifts."""
-    after = Cursor(two_rounds.ast, FuncBody().stmt(1))
+    after = StmtCursor(two_rounds.ast, FuncBody().stmt(1))
     out = unfold_special(two_rounds, where=0)
     assert out.edits is not None and out.edits.edits[0].inserted == 2
 
     moved = out.forward(after)
-    assert isinstance(moved, Cursor)
+    assert isinstance(moved, StmtCursor)
     assert moved.index == 2
     assert moved.resolve().format() == after.resolve().format()
 
@@ -115,14 +115,14 @@ def test_a_rewritten_statement_forwards_to_its_replacement():
     out = unfold_special(two_sites, where=0)
     image = out.forward(_first(two_sites))
     # one rounding in the block, so one statement replaced it
-    assert isinstance(image, Cursor)
+    assert isinstance(image, StmtCursor)
     assert 'round(' in _text(image)
 
 
 def test_forwarding_composes_across_two_passes():
     """A cursor chosen against the *original* program reaches the program two
     rewrites later — the thing a `where` index cannot do."""
-    untouched = Cursor(two_sites.ast, FuncBody().stmt(2))
+    untouched = StmtCursor(two_sites.ast, FuncBody().stmt(2))
     f1 = unfold_special(two_sites, where=0)
     f2 = unfold_overflow(f1, where=0, early_check=True)
 
@@ -137,21 +137,21 @@ def test_forwarding_composes_across_two_passes():
 def test_a_region_forwards_as_a_region():
     """A block of two rounds lowers to two statements, so the image of its
     site is a region — which forwards on through the next pass as one."""
-    site = Cursor(two_rounds.ast, FuncBody().stmt(0))
+    site = StmtCursor(two_rounds.ast, FuncBody().stmt(0))
     f1 = float_to_fixed(two_rounds, where=0)
 
     region = f1.forward(site)
-    assert isinstance(region, Block)
+    assert isinstance(region, BlockCursor)
     assert len(region) == 2
 
     f2 = rescale_fixed(f1)
     again = f2.forward(site)
-    assert isinstance(again, Block)
+    assert isinstance(again, BlockCursor)
     assert again.func is f2.ast and len(again) == 2
 
 
 def test_a_cursor_inside_a_rewritten_statement_does_not_forward():
-    inside = Cursor(two_sites.ast, FuncBody().stmt(1).block('body').stmt(0))
+    inside = StmtCursor(two_sites.ast, FuncBody().stmt(1).block('body').stmt(0))
     out = unfold_special(two_sites, where=0)
     with pytest.raises(TransformReferenceError, match='which was rewritten'):
         out.forward(inside)
@@ -160,7 +160,7 @@ def test_a_cursor_inside_a_rewritten_statement_does_not_forward():
 def test_a_cursor_of_an_unrelated_program_does_not_forward():
     out = unfold_special(two_sites, where=0)
     with pytest.raises(TransformReferenceError, match='unrelated program'):
-        out.forward(Cursor(one_site.ast, FuncBody().stmt(0)))
+        out.forward(StmtCursor(one_site.ast, FuncBody().stmt(0)))
 
 
 def test_an_opaque_pass_stops_the_walk():

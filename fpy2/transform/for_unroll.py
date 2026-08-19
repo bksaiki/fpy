@@ -27,7 +27,6 @@ from ..ast.fpyast import *
 from ..utils import Gensym
 from .rename_target import RenameTarget
 from .utils import (
-    Block,
     Cursor,
     EditLog,
     SiteRewriter,
@@ -123,7 +122,7 @@ class _ForUnroll(SiteRewriter):
     """
 
     func: FuncDef
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     times: int
     strategy: ForUnrollStrategy
     gensym: Gensym
@@ -137,7 +136,7 @@ class _ForUnroll(SiteRewriter):
     def __init__(
         self,
         func: FuncDef,
-        where: int | Cursor | Block | None,
+        where: int | Cursor | None,
         times: int,
         strategy: ForUnrollStrategy,
         reaching_defs: ReachingDefsAnalysis,
@@ -356,7 +355,7 @@ class ForUnroll:
     @staticmethod
     def apply(
         func: FuncDef,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         times: int = 1,
         strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
@@ -370,7 +369,7 @@ class ForUnroll:
 
         Parameters
         ----------
-        where : int | Cursor | Block | None
+        where : int | Cursor | None
             Which `for` loop to unroll: an index counting loops in visit
             order, or a cursor or region naming a program point, which
             takes every loop at or beneath it. If `None`, unroll every
@@ -404,7 +403,7 @@ class ForUnroll:
     @staticmethod
     def apply_with_edits(
         func: FuncDef,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         times: int = 1,
         strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,

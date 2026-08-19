@@ -107,7 +107,6 @@ from ..number import (
 )
 from ..utils import CompareOp, Gensym
 from .utils import (
-    Block,
     BlockRewriter,
     Cursor,
     Declined,
@@ -312,12 +311,12 @@ class _UnfoldSpecialInstance(BlockRewriter):
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
     gensym: Gensym
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        class_info: ValueClassAnalysis, where: int | Cursor | Block | None = None,
+        class_info: ValueClassAnalysis, where: int | Cursor | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -435,7 +434,7 @@ class UnfoldSpecial:
     @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
@@ -458,7 +457,7 @@ class UnfoldSpecial:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:

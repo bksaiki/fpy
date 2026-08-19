@@ -13,7 +13,7 @@ import fpy2 as fp
 
 from fpy2.ast import Assign, ContextStmt, ForStmt, IfStmt, ReturnStmt
 from fpy2.transform import (
-    Cursor,
+    StmtCursor,
     FuncBody,
     StmtPath,
     SubBlock,
@@ -136,7 +136,7 @@ def test_resolve_stmt_rejects(path):
 
 
 def test_cursor_parts():
-    cur = Cursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(0))
+    cur = StmtCursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(0))
     assert cur.block_path == FuncBody().stmt(1).block('ift')
     assert cur.index == 0
     assert isinstance(cur.resolve(), ContextStmt)
@@ -149,23 +149,23 @@ def test_cursor_parts():
 def test_cursor_validated_on_construction():
     """A cursor always names a statement of its own program."""
     with pytest.raises(TransformReferenceError):
-        Cursor(nested.ast, FuncBody().stmt(9))
+        StmtCursor(nested.ast, FuncBody().stmt(9))
     with pytest.raises(TypeError):
-        Cursor(nested.ast, FuncBody())   # type: ignore[arg-type]
+        StmtCursor(nested.ast, FuncBody())   # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        Cursor(nested, FuncBody().stmt(0))      # type: ignore[arg-type]
+        StmtCursor(nested, FuncBody().stmt(0))      # type: ignore[arg-type]
 
 
 def test_cursor_equality_is_per_program():
     """Same path, different program: different cursor."""
-    a = Cursor(nested.ast, FuncBody().stmt(0))
-    assert a == Cursor(nested.ast, FuncBody().stmt(0))
-    assert a != Cursor(nested.ast, FuncBody().stmt(1))
-    assert a != Cursor(flat.ast, FuncBody().stmt(0))
+    a = StmtCursor(nested.ast, FuncBody().stmt(0))
+    assert a == StmtCursor(nested.ast, FuncBody().stmt(0))
+    assert a != StmtCursor(nested.ast, FuncBody().stmt(1))
+    assert a != StmtCursor(flat.ast, FuncBody().stmt(0))
 
 
 def test_cursor_str_names_the_source():
-    cur = Cursor(flat.ast, FuncBody().stmt(0))
+    cur = StmtCursor(flat.ast, FuncBody().stmt(0))
     text = str(cur)
     assert text.startswith('body[0] at ')
     assert 'test_cursor.py' in text

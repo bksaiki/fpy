@@ -129,7 +129,6 @@ from ..number import (
 )
 from ..utils import CompareOp, Gensym
 from .utils import (
-    Block,
     BlockRewriter,
     Cursor,
     Declined,
@@ -432,7 +431,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
     gensym: Gensym
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     early_check: bool
     alias: str | None
     used_alias: bool
@@ -441,7 +440,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
         class_info: ValueClassAnalysis,
-        where: int | Cursor | Block | None = None, early_check: bool = False,
+        where: int | Cursor | None = None, early_check: bool = False,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -590,7 +589,7 @@ class UnfoldOverflow:
     @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
@@ -616,7 +615,7 @@ class UnfoldOverflow:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,

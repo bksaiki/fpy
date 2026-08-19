@@ -26,7 +26,7 @@ from .subst_var import SubstVar
 from .unfold_neg_zero import UnfoldNegZero
 from .unfold_overflow import UnfoldOverflow
 from .unfold_special import UnfoldSpecial
-from .utils.cursor import Block, Cursor, Edit, EditLog
+from .utils.cursor import BlockCursor, Cursor, Edit, EditLog, StmtCursor
 from .utils.error import TransformDeclined, TransformError, TransformReferenceError
 from .utils.path import BlockPath, FuncBody, StmtPath, SubBlock
 from .while_bundling import WhileBundling

@@ -4,7 +4,7 @@ Unroller for `while` loops.
 
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
-from .utils import Block, Cursor, EditLog, SiteRewriter, check_where
+from .utils import Cursor, EditLog, SiteRewriter, check_where
 
 
 class _WhileUnroll(SiteRewriter):
@@ -26,11 +26,11 @@ class _WhileUnroll(SiteRewriter):
     """
 
     func: FuncDef
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     times: int
 
     def __init__(
-        self, func: FuncDef, where: int | Cursor | Block | None, times: int
+        self, func: FuncDef, where: int | Cursor | None, times: int
     ) -> None:
         super().__init__()
         self.func = func
@@ -86,14 +86,14 @@ class WhileUnroll:
 
     @staticmethod
     def apply(
-        func: FuncDef, where: int | Cursor | Block | None = None, times: int = 1
+        func: FuncDef, where: int | Cursor | None = None, times: int = 1
     ) -> FuncDef:
         """
         Apply the transformation.
 
         Parameters
         ----------
-        where : int | Cursor | Block | None
+        where : int | Cursor | None
             Which `while` loop to unroll: an index counting loops in visit
             order, or a cursor or region naming a program point, which takes
             every loop at or beneath it. If `None`, unroll every `while` loop.
@@ -104,7 +104,7 @@ class WhileUnroll:
 
     @staticmethod
     def apply_with_edits(
-        func: FuncDef, where: int | Cursor | Block | None = None, times: int = 1
+        func: FuncDef, where: int | Cursor | None = None, times: int = 1
     ) -> EditLog:
         """:meth:`apply`, with the record of what it replaced; the rewritten
         program is the log's `result`."""

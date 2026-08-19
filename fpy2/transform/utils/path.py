@@ -3,11 +3,15 @@ Where a block or a statement sits in a program.
 
 A path is the grammar the AST already has, written down::
 
-    BlockPath ::= FuncBody | StmtPath . field       -- 'body' | 'ift' | 'iff'
-    StmtPath  ::= BlockPath [ index ]
+    BlockPath ::= FuncBody                  -- base: the function's own body
+                | StmtPath . field          -- a block held by a statement
+    StmtPath  ::= BlockPath [ index ]       -- a statement of a block
 
 as parent-linked frozen dataclasses, so every ill-formed path is unrepresentable:
-a sub-block hangs off a statement, and a statement sits in a block.  Linking to
+a sub-block hangs off a statement, and a statement sits in a block.  `FuncBody` is
+the only constructor without a parent, so every path is *absolute* -- there is no
+relative path to be ambiguous about, which is what makes cursor equality total and
+lets :func:`beneath` walk to the root without being told where to stop.  Linking to
 the *parent* is what makes a path's type the type of its leaf, which is what a
 cursor is named by -- a :class:`~fpy2.transform.utils.cursor.Cursor` takes a
 `StmtPath` and mypy checks it.

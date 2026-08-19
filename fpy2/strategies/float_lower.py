@@ -4,10 +4,10 @@ Scheduling language: floating-point to fixed-point rounding
 
 from ..function import Function
 from ..transform import FloatToFixed
-from ..transform.utils.cursor import Block, Cursor
+from ..transform.utils.cursor import Cursor
 
 
-def float_to_fixed(func: Function, where: int | Cursor | Block | None = None) -> Function:
+def float_to_fixed(func: Function, where: int | Cursor | None = None) -> Function:
     """
     Express floating-point rounding in `func` as fixed-point rounding.
 
@@ -40,16 +40,15 @@ def float_to_fixed(func: Function, where: int | Cursor | Block | None = None) ->
     ----------
     func : Function
         The function to transform.
-    where : int | Cursor | Block | None
+    where : int | Cursor | None
         Which block to lower: an index counting candidate blocks (the
         structurally-matching rounding blocks, whether or not they verify)
-        in visit order, outermost-first; or a
-        :class:`fpy2.strategies.Cursor` / :class:`fpy2.strategies.Block`
-        naming a program point, which takes every candidate *at or
-        beneath* it -- so the statement an earlier rewrite left behind
-        names the rounding now nested inside it. A cursor or region from
-        an earlier program is forwarded to this one first. If `None`,
-        lower every candidate that verifies and skip the rest.
+        in visit order, outermost-first; or a :class:`fpy2.strategies.StmtCursor`
+        / :class:`fpy2.strategies.BlockCursor` naming a program point, which
+        takes every candidate *at or beneath* it -- so the statement an earlier
+        rewrite left behind names the rounding now nested inside it. A cursor or
+        region from an earlier program is forwarded to this one first. If
+        `None`, lower every candidate that verifies and skip the rest.
 
     Returns
     -------

@@ -104,7 +104,6 @@ from ..number.format import (
 )
 from ..utils import Gensym
 from .utils import (
-    Block,
     BlockRewriter,
     Cursor,
     Declined,
@@ -283,12 +282,12 @@ class _RescaleFixedInstance(BlockRewriter):
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
-    where: int | Cursor | Block | None
+    where: int | Cursor | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -489,7 +488,7 @@ class RescaleFixed:
     @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
@@ -513,7 +512,7 @@ class RescaleFixed:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
-        where: int | Cursor | Block | None = None,
+        where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
     ) -> EditLog:
         """:meth:`apply`, with the record of what it replaced; the

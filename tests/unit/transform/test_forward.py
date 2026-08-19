@@ -11,8 +11,8 @@ import pytest
 import fpy2 as fp
 
 from fpy2.transform import (
-    Block,
-    Cursor,
+    BlockCursor,
+    StmtCursor,
     Edit,
     EditLog,
     FuncBody,
@@ -44,22 +44,22 @@ _SPLIT = EditLog(flat.ast, flat_split.ast, (Edit(FuncBody(), 1, 1, 2),))
 
 
 def test_untouched_statement_before_the_edit():
-    assert _SPLIT.forward(Cursor(flat.ast, FuncBody().stmt(0))) == Cursor(flat_split.ast, FuncBody().stmt(0))
+    assert _SPLIT.forward(StmtCursor(flat.ast, FuncBody().stmt(0))) == StmtCursor(flat_split.ast, FuncBody().stmt(0))
 
 
 def test_later_siblings_shift():
     for old, new in ((2, 3), (3, 4)):
-        cur = _SPLIT.forward(Cursor(flat.ast, FuncBody().stmt(old)))
-        assert cur == Cursor(flat_split.ast, FuncBody().stmt(new))
+        cur = _SPLIT.forward(StmtCursor(flat.ast, FuncBody().stmt(old)))
+        assert cur == StmtCursor(flat_split.ast, FuncBody().stmt(new))
 
 
 def test_rewritten_statement_forwards_to_its_region():
-    region = _SPLIT.forward(Cursor(flat.ast, FuncBody().stmt(1)))
-    assert isinstance(region, Block)
-    assert region == Block(flat_split.ast, FuncBody(), range(1, 3))
+    region = _SPLIT.forward(StmtCursor(flat.ast, FuncBody().stmt(1)))
+    assert isinstance(region, BlockCursor)
+    assert region == BlockCursor(flat_split.ast, FuncBody(), range(1, 3))
     assert len(region) == 2
     assert [c.path for c in region] == [FuncBody().stmt(1), FuncBody().stmt(2)]
-    assert region[0] == Cursor(flat_split.ast, FuncBody().stmt(1))
+    assert region[0] == StmtCursor(flat_split.ast, FuncBody().stmt(1))
     assert region.resolve() == flat_split.ast.body.stmts[1:3]
     assert str(region) == 'body[1:3]'
     with pytest.raises(TransformReferenceError):
@@ -69,13 +69,13 @@ def test_rewritten_statement_forwards_to_its_region():
 def test_forwarding_is_per_program():
     """A cursor of another program is a bad reference, not a coincidence."""
     with pytest.raises(TransformReferenceError):
-        _SPLIT.forward(Cursor(flat_split.ast, FuncBody().stmt(0)))
+        _SPLIT.forward(StmtCursor(flat_split.ast, FuncBody().stmt(0)))
 
 
 def test_empty_log_rebases():
     """A pass that leaves the tree alone still hands back a live cursor."""
     log = EditLog(flat.ast, flat_split.ast)
-    assert log.forward(Cursor(flat.ast, FuncBody().stmt(2))) == Cursor(flat_split.ast, FuncBody().stmt(2))
+    assert log.forward(StmtCursor(flat.ast, FuncBody().stmt(2))) == StmtCursor(flat_split.ast, FuncBody().stmt(2))
 
 
 # ----------------------------------------------------------------------
@@ -100,7 +100,7 @@ _CONSUMED = EditLog(wrapped.ast, wrapped_after.ast, (Edit(FuncBody(), 0, 1, 2),)
 
 
 def test_statement_inside_a_rewritten_one_does_not_forward():
-    inside = Cursor(wrapped.ast, FuncBody().stmt(0).block('body').stmt(0))
+    inside = StmtCursor(wrapped.ast, FuncBody().stmt(0).block('body').stmt(0))
     with pytest.raises(TransformReferenceError, match='which was rewritten'):
         _CONSUMED.forward(inside)
 
@@ -108,7 +108,7 @@ def test_statement_inside_a_rewritten_one_does_not_forward():
 def test_deleted_statement_does_not_forward():
     log = EditLog(flat.ast, flat_split.ast, (Edit(FuncBody(), 1, 1, 0),))
     with pytest.raises(TransformReferenceError, match='was deleted'):
-        log.forward(Cursor(flat.ast, FuncBody().stmt(1)))
+        log.forward(StmtCursor(flat.ast, FuncBody().stmt(1)))
 
 
 # ----------------------------------------------------------------------
@@ -149,25 +149,25 @@ _NESTED = EditLog(nested.ast, nested_after.ast, (
 
 def test_insertion_shifts_an_ancestor():
     """The `if` moved, so a cursor *under* it moves with it."""
-    cur = _NESTED.forward(Cursor(nested.ast, FuncBody().stmt(1).block('iff').stmt(0)))
-    assert cur == Cursor(nested_after.ast, FuncBody().stmt(2).block('iff').stmt(0))
+    cur = _NESTED.forward(StmtCursor(nested.ast, FuncBody().stmt(1).block('iff').stmt(0)))
+    assert cur == StmtCursor(nested_after.ast, FuncBody().stmt(2).block('iff').stmt(0))
 
 
 def test_shifts_at_two_levels_compose():
     """`z = y * 2` shifts once for the insertion above the `if`, once for the
     two statements that replaced the `with` block beside it."""
-    cur = _NESTED.forward(Cursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(1)))
-    assert cur == Cursor(nested_after.ast, FuncBody().stmt(2).block('ift').stmt(2))
+    cur = _NESTED.forward(StmtCursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(1)))
+    assert cur == StmtCursor(nested_after.ast, FuncBody().stmt(2).block('ift').stmt(2))
 
 
 def test_region_lands_in_the_shifted_block():
-    region = _NESTED.forward(Cursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(0)))
-    assert region == Block(nested_after.ast, FuncBody().stmt(2).block('ift'), range(0, 2))
+    region = _NESTED.forward(StmtCursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(0)))
+    assert region == BlockCursor(nested_after.ast, FuncBody().stmt(2).block('ift'), range(0, 2))
 
 
 def test_statement_after_both_edits():
-    cur = _NESTED.forward(Cursor(nested.ast, FuncBody().stmt(2)))
-    assert cur == Cursor(nested_after.ast, FuncBody().stmt(3))
+    cur = _NESTED.forward(StmtCursor(nested.ast, FuncBody().stmt(2)))
+    assert cur == StmtCursor(nested_after.ast, FuncBody().stmt(3))
 
 
 # ----------------------------------------------------------------------
@@ -199,9 +199,9 @@ def test_shifts_accumulate_within_a_block():
         Edit(FuncBody(), 1, 1, 2),
         Edit(FuncBody(), 3, 1, 2),
     ))
-    assert log.forward(Cursor(five.ast, FuncBody().stmt(2))) == Cursor(five_after.ast, FuncBody().stmt(3))
-    assert log.forward(Cursor(five.ast, FuncBody().stmt(4))) == Cursor(five_after.ast, FuncBody().stmt(6))
-    assert log.forward(Cursor(five.ast, FuncBody().stmt(3))) == Block(
+    assert log.forward(StmtCursor(five.ast, FuncBody().stmt(2))) == StmtCursor(five_after.ast, FuncBody().stmt(3))
+    assert log.forward(StmtCursor(five.ast, FuncBody().stmt(4))) == StmtCursor(five_after.ast, FuncBody().stmt(6))
+    assert log.forward(StmtCursor(five.ast, FuncBody().stmt(3))) == BlockCursor(
         five_after.ast, FuncBody(), range(4, 6)
     )
 
@@ -209,7 +209,7 @@ def test_shifts_accumulate_within_a_block():
 def test_single_statement_image_is_a_cursor():
     """A one-for-one rewrite forwards to a cursor, not a region of one."""
     log = EditLog(five.ast, five_after.ast, (Edit(FuncBody(), 1, 1, 1),))
-    assert log.forward(Cursor(five.ast, FuncBody().stmt(1))) == Cursor(five_after.ast, FuncBody().stmt(1))
+    assert log.forward(StmtCursor(five.ast, FuncBody().stmt(1))) == StmtCursor(five_after.ast, FuncBody().stmt(1))
 
 
 # ----------------------------------------------------------------------

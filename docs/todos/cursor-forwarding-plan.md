@@ -37,15 +37,20 @@ the `FuncDef`.
 statement); phase 6 replaces it with the grammar the paths actually have:
 
 ```
-BlockPath ::= FuncBody | StmtPath . field        -- 'body' | 'ift' | 'iff'
+BlockPath ::= FuncBody                              -- base: the function's body
+            | StmtPath . field                      -- 'body' | 'ift' | 'iff'
 StmtPath  ::= BlockPath [ index ]
 ExprPath  ::= (StmtPath | ExprPath) . field [ index? ]
 ```
 
 as parent-linked frozen dataclasses. Every ill-formed path is then
 unrepresentable: a sub-block hangs off a statement, a statement sits in a block, an
-expression hangs off a statement or another expression. The block field is a
-`Literal['body', 'ift', 'iff']` (precedent: `_Missing` in
+expression hangs off a statement or another expression. `FuncBody` is the only
+constructor without a parent, so every path is *absolute*: cursor equality is total,
+and `beneath` can walk to the root without being told where to stop. A relative
+path would need a second base — a hole — and every consumer would then have to ask
+"relative to what?"; if item 4's pattern matching wants one, it is its own type.
+The block field is a `Literal['body', 'ift', 'iff']` (precedent: `_Missing` in
 `fpy2/analysis/alias.py`), so a typo'd field is a type error too; expression fields
 stay `str`, there being ~20 of them.
 

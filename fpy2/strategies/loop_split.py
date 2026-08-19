@@ -5,13 +5,13 @@ Scheduling language: loop split
 from ..ast import Expr, Integer, NamedId, Var
 from ..function import Function
 from ..transform import SplitLoop, SplitLoopStrategy
-from ..transform.utils.cursor import Block, Cursor
+from ..transform.utils.cursor import Cursor
 
 
 def split(
     func: Function,
     factor: int | str,
-    where: int | Cursor | Block | None = None,
+    where: int | Cursor | None = None,
     *,
     strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
     temp_id: str = 't',
@@ -30,10 +30,10 @@ def split(
         The chunk size — a positive constant, or the name of a free
         variable of the function holding it (a variable factor is
         guarded by a runtime ``assert factor >= 1``).
-    where : int | Cursor | Block | None
+    where : int | Cursor | None
         Which `for` loop to split: an index counting `for` loops in visit
-        order, outermost-first; or a :class:`fpy2.strategies.Cursor` /
-        :class:`fpy2.strategies.Block` naming a program point, which takes
+        order, outermost-first; or a :class:`fpy2.strategies.StmtCursor` /
+        :class:`fpy2.strategies.BlockCursor` naming a program point, which takes
         every loop at or beneath it. A cursor or region from an earlier
         program is forwarded to this one first. If `None`, split every
         `for` loop.
