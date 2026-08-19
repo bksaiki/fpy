@@ -106,6 +106,7 @@ from ..utils import Gensym
 from .utils import (
     BlockRewriter,
     Declined,
+    EditLog,
     check_site,
     check_where,
     number_literal,
@@ -502,6 +503,20 @@ class RescaleFixed:
         Run :class:`fpy2.transform.UnfoldSpecial` first, which takes those
         rules out of the context.
         """
+        return RescaleFixed.apply_with_edits(
+            func,
+            where=where,
+            eval_info=eval_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | None = None,
+        eval_info: PartialEvalInfo | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it replaced; the
+        rewritten program is the log's `result`."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -512,4 +527,4 @@ class RescaleFixed:
         vtor = _RescaleFixedInstance(func, eval_info, where)
         out = vtor.apply()
         check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        return EditLog(func, out, tuple(vtor.edits))

@@ -133,6 +133,7 @@ from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
     Declined,
+    EditLog,
     TransformDeclined,
     attribute,
     check_site,
@@ -553,6 +554,22 @@ class FloatToFixed:
         `None` rewrites every one that verifies.  Raises
         :class:`TransformDeclined` up front where `fpy2` is not in scope.
         """
+        return FloatToFixed.apply_with_edits(
+            func,
+            where=where,
+            eval_info=eval_info,
+            class_info=class_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | None = None,
+        eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it replaced; the
+        rewritten program is the log's `result`."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -572,4 +589,4 @@ class FloatToFixed:
         vtor = _FloatToFixedInstance(func, eval_info, class_info, where)
         out = vtor.apply()
         check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        return EditLog(func, out, tuple(vtor.edits))

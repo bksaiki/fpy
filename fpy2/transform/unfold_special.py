@@ -109,6 +109,7 @@ from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
     Declined,
+    EditLog,
     agrees,
     check_site,
     check_where,
@@ -446,6 +447,22 @@ class UnfoldSpecial:
         (see :class:`.utils.BlockRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
         """
+        return UnfoldSpecial.apply_with_edits(
+            func,
+            where=where,
+            eval_info=eval_info,
+            class_info=class_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | None = None,
+        eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it replaced; the
+        rewritten program is the log's `result`."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -458,4 +475,4 @@ class UnfoldSpecial:
         vtor = _UnfoldSpecialInstance(func, eval_info, class_info, where)
         out = vtor.apply()
         check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        return EditLog(func, out, tuple(vtor.edits))

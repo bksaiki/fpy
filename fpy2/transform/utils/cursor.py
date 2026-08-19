@@ -15,6 +15,7 @@ than a silent mis-hit.  Holding that reference also keeps the tree alive, so no
 """
 
 from dataclasses import dataclass
+from itertools import pairwise
 from typing import TypeAlias
 
 from ...ast.fpyast import (
@@ -277,7 +278,7 @@ class EditLog:
                 if a is not b and _overlaps(a, b):
                     raise ValueError(f'edits are not disjoint: {a} and {b}')
 
-    def forward(self, cursor: Cursor) -> Cursor | Block:
+    def forward(self, cursor: Cursor | Block) -> Cursor | Block:
         """*cursor*, in the program this pass produced.
 
         A statement the pass rewrote forwards to the region that replaced it --
@@ -286,8 +287,10 @@ class EditLog:
         all: that subtree was rebuilt, and only the pass could say what became
         of it.
         """
+        if isinstance(cursor, Block):
+            return self._forward_region(cursor)
         if not isinstance(cursor, Cursor):
-            raise TypeError(f'expected a \'Cursor\', got {cursor}')
+            raise TypeError(f'expected a \'Cursor\' or \'Block\', got {cursor}')
         if cursor.func is not self.source:
             raise TransformReferenceError(
                 f'`{cursor}` names a statement of another program'
@@ -301,6 +304,30 @@ class EditLog:
         if edit.inserted == 1:
             return Cursor(self.result, (*path, start))
         return Block(self.result, path, range(start, start + edit.inserted))
+
+    def _forward_region(self, region: Block) -> Cursor | Block:
+        """Every statement of *region*, forwarded and re-joined.
+
+        An edit replaces a run of statements in place, so the images stay in
+        one block and stay adjacent; a region that comes apart means the log
+        is wrong, not that there is a case to handle."""
+        if len(region) == 0:
+            raise TransformReferenceError(f'`{region}` holds no statements')
+        images = [self.forward(c) for c in region]
+        spans = [
+            img.span if isinstance(img, Block) else range(img.index, img.index + 1)
+            for img in images
+        ]
+        paths = {img.block_path for img in images}
+        adjacent = all(b.start == a.stop for a, b in pairwise(spans))
+        if len(paths) != 1 or not adjacent:
+            raise TransformReferenceError(f'`{region}` no longer lies in one run')
+
+        span = range(spans[0].start, spans[-1].stop)
+        block_path = paths.pop()
+        if len(span) == 1:
+            return Cursor(self.result, (*block_path, span.start))
+        return Block(self.result, block_path, span)
 
 
 def _overlaps(a: Edit, b: Edit) -> bool:

@@ -52,7 +52,7 @@ from ...number import (
     MPFixedContext,
     RealFloat,
 )
-from .cursor import Block, Cursor, Edit, EditLog
+from .cursor import Block, Cursor, Edit, EditLog, Path, block_paths
 from .error import TransformDeclined, TransformReferenceError
 
 
@@ -273,10 +273,22 @@ class BlockRewriter(DefaultTransformVisitor):
     outermost-first; `None` takes them all.  A candidate `_verify` declines
     is skipped under `None` and raises :class:`TransformDeclined` where an
     explicit `where` names it.
+
+    Every rewrite is recorded in `edits`, which is what forwards a cursor
+    across the pass.  The record is structural -- a statement span replaced by
+    another -- so no subclass says anything about it.
     """
 
     where: int | None
     site_idx: int
+    edits: list[Edit]
+    _paths: dict[int, Path]
+
+    def _visit_function(self, func: FuncDef, ctx):
+        # the edits name blocks of *this* tree, so both are set up here
+        self.edits = []
+        self._paths = block_paths(func)
+        return super()._visit_function(func, ctx)
 
     def _candidate(self, stmt: ContextStmt):
         """What `_verify` needs for this block, or `None` where it does not
@@ -296,7 +308,7 @@ class BlockRewriter(DefaultTransformVisitor):
         # a rewritten block expands into several statements, so the splice
         # happens here rather than in `_visit_context`
         stmts: list[Stmt] = []
-        for s in block.stmts:
+        for pos, s in enumerate(block.stmts):
             if isinstance(s, ContextStmt):
                 info = self._candidate(s)
                 if info is not None:
@@ -311,7 +323,11 @@ class BlockRewriter(DefaultTransformVisitor):
                                 )
                             # apply-everywhere skips a declined candidate
                         else:
-                            stmts.extend(self._rewrite(s, verified))
+                            emitted = self._rewrite(s, verified)
+                            self.edits.append(
+                                Edit(self._paths[id(block)], pos, 1, len(emitted))
+                            )
+                            stmts.extend(emitted)
                             continue
             new_s, ctx = self._visit_statement(s, ctx)
             stmts.append(new_s)

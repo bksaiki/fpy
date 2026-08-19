@@ -107,5 +107,6 @@ def unfold_overflow(
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = UnfoldOverflow.apply(func.ast, where=where, early_check=early_check)
-    return func.with_ast(ast)
+    return func.with_edits(UnfoldOverflow.apply_with_edits(
+        func.ast, where=where, early_check=early_check
+    ))

@@ -131,6 +131,7 @@ from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
     Declined,
+    EditLog,
     agrees,
     attribute,
     check_site,
@@ -603,6 +604,24 @@ class UnfoldOverflow:
         With `early_check`, a check on the operand precedes the rounding, so
         nothing certain to overflow is rounded at all.
         """
+        return UnfoldOverflow.apply_with_edits(
+            func,
+            where=where,
+            early_check=early_check,
+            eval_info=eval_info,
+            class_info=class_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | None = None,
+        early_check: bool = False,
+        eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it replaced; the
+        rewritten program is the log's `result`."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -615,4 +634,4 @@ class UnfoldOverflow:
         vtor = _UnfoldOverflowInstance(func, eval_info, class_info, where, early_check)
         out = vtor.apply()
         check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        return EditLog(func, out, tuple(vtor.edits))

@@ -138,10 +138,11 @@ the cursor module at runtime: annotate under `if TYPE_CHECKING` and call
 `log.forward(cursor)` without naming the class, the pattern `Function` already uses
 for `Interpreter`.
 
-`Function` gains `_parent` / `_edits`, `with_ast(ast, *, edits=None)`,
-`forward(cursor) -> Cursor | Block`, and `site` — the region just rewritten, where
-`where` was explicit. Default is opaque, so every pass not yet updated stays
-honest.
+`Function` gains `parent` / `edits`, `with_edits(log)` beside the existing
+`with_ast` (which stays, and is now the *opaque* step), and
+`forward(cursor) -> Cursor | Block`. Default is opaque, so every pass not yet
+updated stays honest. Forwarding a `Block` comes along here rather than in phase
+2: the chain needs it as soon as any pass yields a region.
 
 Tests (`tests/unit/strategies/`): a two-step chain (`unfold_special` then
 `unfold_overflow`) aimed at the site the first rewrote, asserting the second lands

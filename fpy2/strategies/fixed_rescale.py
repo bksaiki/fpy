@@ -84,5 +84,4 @@ def rescale_fixed(func: Function, where: int | None = None) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = RescaleFixed.apply(func.ast, where=where)
-    return func.with_ast(ast)
+    return func.with_edits(RescaleFixed.apply_with_edits(func.ast, where=where))
