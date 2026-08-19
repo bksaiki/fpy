@@ -30,6 +30,7 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
+from .error import TransformReferenceError
 from .utils import clone_block, copy_target, infer_array_size, integer_ctx, static_size
 
 
@@ -404,7 +405,7 @@ class SplitLoop:
         # fail rather than silently no-op.  `index` is the true loop
         # count: generated loops are never re-visited.
         if where is not None and not (0 <= where < vtor.index):
-            raise ValueError(
+            raise TransformReferenceError(
                 f'where={where} does not correspond to a `for` loop; '
                 f'the function has {vtor.index} `for` loop(s)'
             )

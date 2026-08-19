@@ -93,8 +93,8 @@ class TestWhileUnrollWhere():
         for bad in (1, 2, 5):
             try:
                 fp.transform.WhileUnroll.apply(one_loop.ast, where=bad, times=1)
-                assert False, f'expected ValueError for where={bad}'
-            except ValueError:
+                assert False, f'expected TransformReferenceError for where={bad}'
+            except fp.transform.TransformReferenceError:
                 pass
 
     def test_negative_raises(self):
@@ -106,8 +106,8 @@ class TestWhileUnrollWhere():
 
         try:
             fp.transform.WhileUnroll.apply(one_loop.ast, where=-1, times=1)
-            assert False, 'expected ValueError for where=-1'
-        except ValueError:
+            assert False, 'expected TransformReferenceError for where=-1'
+        except fp.transform.TransformReferenceError:
             pass
 
     def test_no_loops_raises(self):
@@ -117,8 +117,8 @@ class TestWhileUnrollWhere():
 
         try:
             fp.transform.WhileUnroll.apply(no_loop.ast, where=0, times=1)
-            assert False, 'expected ValueError: no loop at index 0'
-        except ValueError:
+            assert False, 'expected TransformReferenceError: no loop at index 0'
+        except fp.transform.TransformReferenceError:
             pass
 
     def test_valid_where_selects_one_loop(self):

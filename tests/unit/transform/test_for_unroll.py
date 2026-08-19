@@ -7,7 +7,7 @@ from collections import Counter
 
 import fpy2 as fp
 
-from fpy2.transform import ForUnroll, ForUnrollStrategy
+from fpy2.transform import ForUnroll, ForUnrollStrategy, TransformReferenceError
 
 PEEL = ForUnrollStrategy.PEEL
 STRICT = ForUnrollStrategy.STRICT
@@ -277,8 +277,8 @@ class TestForUnrollWhere():
         for bad in (1, 2, 5):
             try:
                 ForUnroll.apply(one_loop.ast, where=bad, times=1)
-                assert False, f'expected ValueError for where={bad}'
-            except ValueError:
+                assert False, f'expected TransformReferenceError for where={bad}'
+            except TransformReferenceError:
                 pass
 
     def test_negative_raises(self):
@@ -291,8 +291,8 @@ class TestForUnrollWhere():
 
         try:
             ForUnroll.apply(one_loop.ast, where=-1, times=1)
-            assert False, 'expected ValueError for where=-1'
-        except ValueError:
+            assert False, 'expected TransformReferenceError for where=-1'
+        except TransformReferenceError:
             pass
 
     def test_no_loops_raises(self):
@@ -302,8 +302,8 @@ class TestForUnrollWhere():
 
         try:
             ForUnroll.apply(no_loop.ast, where=0, times=1)
-            assert False, 'expected ValueError: no loop at index 0'
-        except ValueError:
+            assert False, 'expected TransformReferenceError: no loop at index 0'
+        except TransformReferenceError:
             pass
 
     def test_valid_where_selects_one_loop(self):

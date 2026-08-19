@@ -5,6 +5,7 @@ Unroller for `while` loops.
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
+from .error import TransformReferenceError
 
 
 class _WhileUnroll(DefaultTransformVisitor):
@@ -102,7 +103,7 @@ class WhileUnroll:
         # count; an in-range `where` matches (so `index` exceeds it, even
         # though re-visiting a matched loop's body can inflate the counter).
         if where is not None and not (0 <= where < unroller.index):
-            raise ValueError(
+            raise TransformReferenceError(
                 f'where={where} does not correspond to a `while` loop; '
                 f'the function has {unroller.index} `while` loop(s)'
             )

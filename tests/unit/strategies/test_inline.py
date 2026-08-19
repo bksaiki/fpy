@@ -6,7 +6,7 @@ import fpy2 as fp
 
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
-from fpy2.strategies import inline
+from fpy2.strategies import TransformReferenceError, inline
 
 
 def _fpy_callees(ast) -> list[Function]:
@@ -183,9 +183,9 @@ class TestInlineWhere:
             assert _two_callees(x) == out(x)
 
     def test_where_out_of_range(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(TransformReferenceError):
             inline(_top, 2)
-        with pytest.raises(ValueError):
+        with pytest.raises(TransformReferenceError):
             inline(_top, -1)
-        with pytest.raises(ValueError):
+        with pytest.raises(TransformReferenceError):
             inline(_two_callees, 1, funcs=[_other])

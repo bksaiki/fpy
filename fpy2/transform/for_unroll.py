@@ -27,6 +27,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
 from .rename_target import RenameTarget
+from .error import TransformReferenceError
 from .utils import clone_block, copy_target, infer_array_size, integer_ctx, static_size
 
 
@@ -394,7 +395,7 @@ class ForUnroll:
         # `where` outside `[0, index)` names no loop: fail rather than
         # silently returning the function unchanged.
         if where is not None and not (0 <= where < unroller.index):
-            raise ValueError(
+            raise TransformReferenceError(
                 f'where={where} does not correspond to a `for` loop; '
                 f'the function has {unroller.index} `for` loop(s)'
             )
