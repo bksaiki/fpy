@@ -43,10 +43,6 @@ class _Purity(DefaultVisitor):
 
     def _visit_call(self, e: Call, ctx: None):
         super()._visit_call(e, ctx)
-        # `super()._visit_call` visits positional arguments only; also visit
-        # keyword-argument values so an impure call nested in a kwarg is caught.
-        for _, kwarg in e.kwargs:
-            self._visit_expr(kwarg, ctx)
         match e.fn:
             case None:
                 # unknown function -> impure by default

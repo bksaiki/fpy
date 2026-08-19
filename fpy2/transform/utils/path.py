@@ -174,7 +174,10 @@ def sub_blocks(stmt: Stmt) -> tuple[tuple[BlockField, StmtBlock], ...]:
 def sub_exprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...]:
     """The expressions *node* holds, each with the field and position naming it.
 
-    The only place the AST's expression field names appear.
+    The only place the AST's expression field names appear, and the reason the
+    walks below are not visitors: a path has to resolve as well as be built, and
+    resolving needs this field-to-child lookup, which a visitor's dispatch does
+    not expose.  `test_the_walks_agree_with_the_visitor` pins the two in step.
     """
     def at(field: ExprField, es) -> tuple[tuple[ExprField, int | None, Expr], ...]:
         return tuple((field, i, e) for i, e in enumerate(es))

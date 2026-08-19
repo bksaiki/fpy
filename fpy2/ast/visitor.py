@@ -289,6 +289,8 @@ class DefaultVisitor(Visitor):
     def _visit_call(self, e: Call, ctx: Any):
         for arg in e.args:
             self._visit_expr(arg, ctx)
+        for _, arg in e.kwargs:
+            self._visit_expr(arg, ctx)
 
     def _visit_compare(self, e: Compare, ctx: Any):
         for c in e.args:

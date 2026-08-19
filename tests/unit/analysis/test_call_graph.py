@@ -119,9 +119,7 @@ class TestStructure:
         assert len(cg.call_sites[outer.ast]) == 2
 
     def test_nested_call_in_kwarg_value_discovered(self):
-        # ``DefaultVisitor._visit_call`` only walks positional args; the
-        # collector must also descend into keyword-argument values, or a
-        # callee reached only through a kwarg is missed entirely.
+        # a callee reachable only through a kwarg value must still be found
         @fp.fpy
         def leaf(x: fp.Real) -> fp.Real:
             return x + 1
