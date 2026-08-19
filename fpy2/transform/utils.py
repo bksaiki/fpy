@@ -41,7 +41,6 @@ from ..ast.fpyast import (
     Var,
 )
 from ..ast.visitor import DefaultTransformVisitor
-from .error import TransformDeclined, TransformReferenceError
 from ..number import (
     INTEGER,
     Context,
@@ -50,6 +49,7 @@ from ..number import (
     MPFixedContext,
     RealFloat,
 )
+from .error import TransformDeclined, TransformReferenceError
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -229,14 +229,16 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
     # a bound context is visible to the body as a value, which a rewrite changes
     if not isinstance(stmt.target, UnderscoreId):
         return None
-    kinds: tuple[type, ...] = (Round, Cast) if casts else (Round,)
     args: list[Var] = []
     for s in stmt.body.stmts:
         match s:
             case Assign(target=NamedId()) | ReturnStmt():
-                if not isinstance(s.expr, kinds) or not isinstance(s.expr.arg, Var):
+                e = s.expr
+                if not isinstance(e, (Round, Cast)) or (not casts and isinstance(e, Cast)):
                     return None
-                args.append(s.expr.arg)
+                if not isinstance(e.arg, Var):
+                    return None
+                args.append(e.arg)
             case _:
                 return None
     return args

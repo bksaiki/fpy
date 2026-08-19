@@ -26,6 +26,11 @@ def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Fu
     Function
         The transformed function.
 
+    Raises
+    ------
+    TransformReferenceError
+        If `where` does not correspond to a `while` loop.
+
     Examples
     --------
     ::
@@ -77,6 +82,11 @@ def unroll_for(
     times : int
         The number of times to unroll the loop; the rewritten loop
         consumes ``times + 1`` consecutive elements per iteration.
+
+    Raises
+    ------
+    TransformReferenceError
+        If `where` does not correspond to a `for` loop.
 
     Examples
     --------

@@ -26,8 +26,8 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
-from .rename_target import RenameTarget
 from .error import TransformReferenceError
+from .rename_target import RenameTarget
 from .utils import clone_block, copy_target, infer_array_size, integer_ctx, static_size
 
 

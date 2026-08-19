@@ -3,10 +3,10 @@ This module defines compiler transforms over FPy IR.
 """
 
 from .const_fold import ConstFold
-from .error import TransformDeclined, TransformError, TransformReferenceError
 from .copy_propagate import CopyPropagate
 from .dead_code import DeadCodeEliminate
 from .enumerate_elim import EnumerateElim
+from .error import TransformDeclined, TransformError, TransformReferenceError
 from .float_to_fixed import FloatToFixed
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack

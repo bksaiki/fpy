@@ -26,7 +26,7 @@ Adopt the two-kind taxonomy every surveyed system converged on (Exo 2:
 - **bad reference** — the `where` (later: cursor) does not point at anything.
 - anything else is a bug and propagates.
 
-In progress — the phase plan and status live in
+**Done** — the phase record lives in
 [failure-contract.md](failure-contract.md).
 
 One hierarchy across both layers, no translation: the exceptions are named for
