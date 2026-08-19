@@ -189,11 +189,41 @@ no match being a bad reference (unlike `find`, which returns `[]`).
 
 ### Phase 6 — surface and docs
 
-Re-export `Rewrite`, `find` and the pattern types from `fpy2.strategies`, so a
-schedule needs one import. Document them on `docs/source/strategies.rst` beside
-`sites` and the cursors. Mark item 4 done in
+`fpy2.rewrite` is the surface, not `fpy2.strategies`: matching and user rewrites
+are their own layer, and re-exporting them into the scheduling language would blur
+that. So `fpy2/rewrite/__init__.py` exposes `Rewrite`, `find`, `find_all` and the
+pattern types, and what remains for this phase is deciding whether any of them
+also belongs at `fpy2` top level, where `@fp.pattern` already lives.
+
+Document them on `docs/source/strategies.rst` beside `sites` and the cursors --
+the page is about aiming a rewrite, whichever package defines it. Mark item 4 done in
 [scheduling-language.md](scheduling-language.md), and add the `NEXT` entry to
 `HISTORY.md`.
+
+### Phase 7 — one home for the location vocabulary (conditional)
+
+**Trigger: what phase 3 settles.** `path.py`, `cursor.py` and `error.py` live in
+`fpy2/transform/utils/`, and eighteen sites outside `transform` now reach into it —
+`strategies` from eleven modules, `function.py` from three, `rewrite` from two.
+That is a vocabulary shared by four packages, living inside one of them, which is
+why each new consumer writes `from ..transform.utils.cursor import ...`.
+
+Not under `rewrite`: `transform` has fifteen modules using it against `rewrite`'s
+two, so that would invert the dependency. A top-level home (`fpy2/location/`) has
+everything import *down* instead of sideways into a sibling's `utils`.
+
+All three files move together or none do: `bad_path` and the cursors raise
+`TransformReferenceError`, so paths cannot hoist without the error hierarchy
+following. And that hierarchy is named `Transform*`, documented in
+`docs/source/strategies.rst`, and deliberately named by item 1 — so the move
+carries a public naming decision with it. Phase 3 is what answers it: if a *user
+rewrite* raising `TransformReferenceError` reads right once rewrites are in the
+hierarchy, the names stay; if it reads wrong, the neutral name is chosen with
+evidence rather than guessed now.
+
+Cheap preparation, whenever: the eleven `strategies/*.py` modules import `Cursor`
+from `..transform.utils.cursor`; importing it from `..transform` — the package's
+own re-export — leaves one name to redirect later instead of eleven deep paths.
 
 ## Out of scope
 

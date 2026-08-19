@@ -3,8 +3,7 @@ Scheduling language: the sign of zero as program text
 """
 
 from ..function import Function
-from ..transform import UnfoldNegZero
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, UnfoldNegZero
 
 
 def unfold_neg_zero(func: Function, where: int | Cursor | None = None) -> Function:

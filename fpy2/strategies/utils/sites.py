@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from ...function import Function
 from ...transform import (
+    Cursor,
     FloatToFixed,
     ForUnroll,
     FuncInline,
@@ -16,7 +17,6 @@ from ...transform import (
     UnfoldSpecial,
     WhileUnroll,
 )
-from ...transform.utils.cursor import Cursor
 from ..fixed_rescale import rescale_fixed
 from ..float_lower import float_to_fixed
 from ..func_inline import inline

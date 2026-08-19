@@ -33,9 +33,18 @@ from .utils.cursor import (
     EditLog,
     ExprCursor,
     StmtCursor,
+    contains,
 )
 from .utils.error import TransformDeclined, TransformError, TransformReferenceError
-from .utils.path import BlockPath, ExprPath, FuncBody, StmtPath, SubBlock
+from .utils.path import (
+    BlockPath,
+    ExprPath,
+    FuncBody,
+    StmtPath,
+    SubBlock,
+    walk_blocks,
+    walk_exprs,
+)
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
 from .zip_elim import ZipElim

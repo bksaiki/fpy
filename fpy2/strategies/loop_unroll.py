@@ -4,8 +4,7 @@ Scheduling language: loop unroll
 
 from ..ast import NamedId
 from ..function import Function
-from ..transform import ForUnroll, ForUnrollStrategy, WhileUnroll
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, ForUnroll, ForUnrollStrategy, WhileUnroll
 
 
 def unroll_while(

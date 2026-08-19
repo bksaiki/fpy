@@ -3,8 +3,7 @@ Scheduling language: floating-point to fixed-point rounding
 """
 
 from ..function import Function
-from ..transform import FloatToFixed
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, FloatToFixed
 
 
 def float_to_fixed(func: Function, where: int | Cursor | None = None) -> Function:

@@ -3,8 +3,7 @@ Scheduling language: fixed-point rescaling
 """
 
 from ..function import Function
-from ..transform import RescaleFixed
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, RescaleFixed
 
 
 def rescale_fixed(func: Function, where: int | Cursor | None = None) -> Function:

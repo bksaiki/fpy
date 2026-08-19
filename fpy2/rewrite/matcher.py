@@ -8,8 +8,15 @@ from fractions import Fraction
 from ..ast import *
 from ..function import Function
 from ..number import Float
-from ..transform.utils.cursor import BlockCursor, Cursor, ExprCursor, StmtCursor
-from ..transform.utils.path import StmtPath, walk_blocks, walk_exprs
+from ..transform import (
+    BlockCursor,
+    Cursor,
+    ExprCursor,
+    StmtCursor,
+    StmtPath,
+    walk_blocks,
+    walk_exprs,
+)
 from ..utils import default_repr, sliding_window
 from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst

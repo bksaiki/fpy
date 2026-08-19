@@ -340,6 +340,18 @@ def _under_expr(path: ExprPath, ancestor: ExprPath) -> bool:
     return False
 
 
+def contains(outer: Cursor, inner: Cursor) -> bool:
+    """Whether *inner* lies at or beneath *outer*, both of one program.
+
+    Raises where the question is ill-posed: *outer* an expression and *inner* a
+    statement, since no statement sits beneath an expression.
+    """
+    keep = _restrict(inner.func, outer, stmts=not isinstance(inner, ExprCursor))
+    if isinstance(inner, BlockCursor):
+        return all(keep(StmtPath(inner.block_path, i)) for i in inner.span)
+    return keep(inner.path)
+
+
 def stmt_sites(
     func: FuncDef,
     match: Callable[[Stmt], bool],
