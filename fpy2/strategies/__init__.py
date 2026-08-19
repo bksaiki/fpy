@@ -2,7 +2,7 @@
 Scheduling language constructs for FPy programs.
 """
 
-from ..transform.utils.cursor import Cursor
+from ..transform.utils.cursor import Block, Cursor
 from ..transform.utils.error import (
     TransformDeclined,
     TransformError,
@@ -25,6 +25,7 @@ from .simple import simplify
 from .special_unfold import unfold_special
 
 __all__ = [
+    'Block',
     'Cursor',
     'TransformDeclined',
     'TransformError',

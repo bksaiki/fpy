@@ -165,3 +165,195 @@ class Cursor:
         loc = self.resolve().loc
         where = '' if loc is None else f' at {loc.format()}'
         return f'{format_path(self.path)}{where}'
+
+
+@dataclass(frozen=True)
+class Block:
+    """A run of consecutive statements of one block.
+
+    What a rewritten statement forwards to: a transform replaces it with
+    several statements, and the region they occupy is the honest image.  A
+    region is also what a transform aims at when told to rewrite every
+    candidate *within* one.
+    """
+
+    func: FuncDef
+    """the program this region belongs to"""
+    block_path: Path
+    """the path of the block holding the run"""
+    span: range
+    """the indices the run covers"""
+
+    def __post_init__(self):
+        if not isinstance(self.func, FuncDef):
+            raise TypeError(f'expected a \'FuncDef\', got {self.func}')
+        if not isinstance(self.span, range) or self.span.step != 1:
+            raise TypeError(f'expected a contiguous \'range\', got {self.span}')
+        block = resolve_block(self.func, self.block_path)
+        if not (0 <= self.span.start and self.span.stop <= len(block.stmts)):
+            raise _bad(
+                self.block_path,
+                f'has no statements {self.span.start}:{self.span.stop}; '
+                f'the block holds {len(block.stmts)}'
+            )
+
+    def __len__(self):
+        return len(self.span)
+
+    def __iter__(self):
+        for idx in self.span:
+            yield Cursor(self.func, (*self.block_path, idx))
+
+    def __getitem__(self, i: int) -> Cursor:
+        return Cursor(self.func, (*self.block_path, self.span[i]))
+
+    def one(self) -> Cursor:
+        """The single statement of this region."""
+        if len(self.span) != 1:
+            raise _bad(self.block_path, f'names {len(self.span)} statements, not one')
+        return self[0]
+
+    def resolve(self) -> list[Stmt]:
+        """The statements this region covers."""
+        block = resolve_block(self.func, self.block_path)
+        return block.stmts[self.span.start:self.span.stop]
+
+    def __str__(self):
+        return f'{format_path(self.block_path)}[{self.span.start}:{self.span.stop}]'
+
+
+@dataclass(frozen=True)
+class Edit:
+    """One run of statements replaced by another, in the *old* program's terms.
+
+    Purely structural -- how many statements the rewrite consumed and how many
+    it emitted -- so no transform has to say what its output *means*.
+    """
+
+    block_path: Path
+    """the path, in the old program, of the block the rewrite happened in"""
+    index: int
+    """the old index of the first statement consumed"""
+    removed: int
+    """how many statements the rewrite consumed"""
+    inserted: int
+    """how many statements it emitted in their place"""
+
+    def __post_init__(self):
+        if self.index < 0 or self.removed < 0 or self.inserted < 0:
+            raise ValueError(f'ill-formed edit: {self}')
+
+    @property
+    def span(self) -> range:
+        """The indices consumed, in the old program."""
+        return range(self.index, self.index + self.removed)
+
+
+@dataclass(frozen=True)
+class EditLog:
+    """What one pass did to a program, and the forwarding it supports.
+
+    An empty log is the identity: a pass that leaves the statement tree alone
+    still rebases its cursors, since the program is a new object.
+    """
+
+    source: FuncDef
+    """the program the pass was given"""
+    result: FuncDef
+    """the program it produced"""
+    edits: tuple[Edit, ...] = ()
+    """the rewrites, disjoint, in the source program's terms"""
+
+    def __post_init__(self):
+        for e in self.edits:
+            block = resolve_block(self.source, e.block_path)
+            if e.index + e.removed > len(block.stmts):
+                raise ValueError(
+                    f'edit consumes statements {e.span.start}:{e.span.stop} of a '
+                    f'block of {len(block.stmts)}: {e}'
+                )
+        for a in self.edits:
+            for b in self.edits:
+                if a is not b and _overlaps(a, b):
+                    raise ValueError(f'edits are not disjoint: {a} and {b}')
+
+    def forward(self, cursor: Cursor) -> Cursor | Block:
+        """*cursor*, in the program this pass produced.
+
+        A statement the pass rewrote forwards to the region that replaced it --
+        a :class:`Cursor` where that is a single statement, a :class:`Block`
+        otherwise.  A statement *inside* one it rewrote does not forward at
+        all: that subtree was rebuilt, and only the pass could say what became
+        of it.
+        """
+        if not isinstance(cursor, Cursor):
+            raise TypeError(f'expected a \'Cursor\', got {cursor}')
+        if cursor.func is not self.source:
+            raise TransformReferenceError(
+                f'`{cursor}` names a statement of another program'
+            )
+
+        path, edit, start = _forward(cursor.path, self.edits)
+        if edit is None:
+            return Cursor(self.result, path)
+        if edit.inserted == 0:
+            raise TransformReferenceError(f'`{cursor}` was deleted')
+        if edit.inserted == 1:
+            return Cursor(self.result, (*path, start))
+        return Block(self.result, path, range(start, start + edit.inserted))
+
+
+def _overlaps(a: Edit, b: Edit) -> bool:
+    """Whether *b* sits within what *a* consumed -- in the same block, or in a
+    block below one of the statements *a* replaced."""
+    if a.block_path == b.block_path:
+        return b.index in a.span or a.index in b.span
+    n = len(a.block_path)
+    return (
+        len(b.block_path) > n
+        and b.block_path[:n] == a.block_path
+        and b.block_path[n] in a.span
+    )
+
+
+def _forward(path: Path, edits: tuple[Edit, ...]) -> tuple[Path, Edit | None, int]:
+    """*path* under *edits*, level by level.
+
+    Returns the forwarded path, and -- where the path's last step lands in what
+    an edit replaced -- that edit and the new index its replacement starts at.
+    An edit shifts every later statement of its own block by
+    ``inserted - removed``; the shifts of a block accumulate, and a path
+    descending through a rewritten statement does not forward at all.
+    """
+    out: list[str | int] = []
+    prefix: list[str | int] = []
+    for i in range(0, len(path), 2):
+        field = path[i]
+        out.append(field)
+        prefix.append(field)
+        if i + 1 == len(path):
+            break  # a block path: no index at this level
+
+        idx = path[i + 1]
+        assert isinstance(idx, int)
+        shift = 0
+        containing: Edit | None = None
+        for e in edits:
+            if e.block_path != tuple(prefix):
+                continue
+            if idx >= e.index + e.removed:
+                shift += e.inserted - e.removed
+            elif idx >= e.index:
+                containing = e
+
+        if containing is not None:
+            if i + 2 < len(path):
+                raise TransformReferenceError(
+                    f'`{format_path(path)}` is inside `'
+                    f'{format_path((*prefix, idx))}`, which was rewritten'
+                )
+            return tuple(out), containing, containing.index + shift
+
+        out.append(idx + shift)
+        prefix.append(idx)
+    return tuple(out), None, 0

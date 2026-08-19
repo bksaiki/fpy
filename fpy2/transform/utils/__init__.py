@@ -52,7 +52,7 @@ from ...number import (
     MPFixedContext,
     RealFloat,
 )
-from .cursor import Cursor
+from .cursor import Block, Cursor, Edit, EditLog
 from .error import TransformDeclined, TransformReferenceError
 
 

@@ -26,38 +26,55 @@ survives the rewrites around it, so a schedule can aim a sequence at one site.
 **A cursor is a path, not a node.** Every transform is a
 `DefaultTransformVisitor` (`fpy2/ast/visitor.py`), which rebuilds every node it
 visits — node identity dies at the first rewrite. A cursor is the statement's path
-from the `FuncDef`: a tuple of `(field, index)` steps, `field` naming the
-sub-block of the enclosing statement (`body`, `ift`, `iff`). Statement-level only.
+from the `FuncDef`: block field, statement index, block field, ... where a field
+names a sub-block of the enclosing statement (`body`, `ift`, `iff`). Odd length
+names a block, even a statement, so a block path is `path[:-1]`. Statement-level
+only. (Exo pairs them instead — `[("body", 0), ("orelse", 2)]` — which extends to
+expressions; if expression cursors ever land, that is the shape to move to.)
 
 **A cursor is owned by one program version.** It holds the `FuncDef` it resolved
 against; use on another program is a `TransformReferenceError`. Holding the
 reference also keeps that tree alive, so no `id()` is recycled underneath it.
 
 **Forwarding is an edit log, not a diff.** A rewriting transform reports, per
-site: the old path of the replaced statement, how many statements went out and
-in, and where the *successor* sites landed. Forwarding is three rules:
+site: the old path of the replaced statement, how many statements it consumed,
+and how many it emitted. Forwarding is three rules:
 
 - later sibling of an edit, at any level of the path → shift index by
-  `inserted - removed`;
-- *is* the edited statement → becomes the edit's successors;
+  `inserted - removed` (Exo's `i + n_diff * (i >= del_range.stop)`);
+- *is* the edited statement → becomes the region that replaced it;
 - strictly inside the edited statement → invalidated. That subtree was rebuilt;
   only the transform could say what became of it, and it does not claim to.
 
-**Successors are a set, not a point.** `float_to_fixed` emits a subnormal branch
-and a normal branch, each with its own rounding; `unfold_special` emits one ladder
-per round in the block. So `forward` returns one cursor and raises when the
-successor is not unique, and `forward_all` returns the list. Real consequence for
-item 7: after `float_to_fixed` a schedule is aimed at two points, not one.
+**A statement forwards to a region, not to a point.** Exo's `Block` cursor — a
+contiguous range of statements in one block — is the honest image of a rewritten
+statement: `unfold_special` replaces a block of *n* rounds with *n* ladders, and
+`float_to_fixed` puts a rounding in each of two branches. So `forward` returns a
+`Cursor` where the image is a single statement and a `Block` otherwise, and the
+forwarding stays *purely structural* — the edit records four numbers and no
+transform has to name a semantic successor.
 
-**The successor scan is shared.** All five rounding transforms recognize sites
-with the same predicate — `rounding_block` in `fpy2/transform/utils/`. A site's
-successors are the rounding blocks in its replacement, found by one scan in
-`BlockRewriter`. No subclass declares anything.
+**`where` accepts a region.** Aiming the next operator at the previous one's
+output is then `unfold_overflow(f, where=f.forward(c))`: a `Block` means "every
+candidate inside this region", which is `where=None` scoped to a region rather
+than a new idea. It handles `float_to_fixed`'s two roundings in one call, and it
+is what keeps forwarding free of per-transform successor logic.
 
 **The chain lives on `Function`.** `Function` (`fpy2/function.py`) gains a parent
 link plus the log that produced it, so `f3.forward(cursor_from_f0)` walks the
-chain. A pass that reports no edits is *opaque*: forwarding across it raises,
-naming the pass, rather than guessing.
+chain — Exo's `Procedure.forward`, which collects each `_forward` back along
+`_provenance_eq_Procedure` and applies them in order. A pass that reports no edits
+is *opaque*: forwarding across it raises, naming the pass, rather than guessing —
+Exo's default `_forward` raises too. One difference: where Exo's loop simply ends
+when the cursor's procedure is not in the chain, leaving the cursor silently
+misaligned, a cursor from an unrelated program is a bad reference here.
+
+**A stale cursor is forwarded on arrival.** Exo's operators never make the user
+call `forward`: `CursorArgumentProcessor.__call__` runs `p.forward(cur)` on every
+cursor argument before validating it, so a cursor from any ancestor program is
+rebased on entry and a schedule pins a point once. Same here, with one placement
+difference — the rebase belongs in the strategy wrappers, since a transform is
+handed a bare `FuncDef` and has no chain to walk, while `Function` does.
 
 **No path tracking inside the visitors.** A cursor resolves against the very tree
 the visitor is about to walk, so a transform matches with
@@ -74,7 +91,7 @@ to a phase run during it; the full suite runs once, at the end.
 ### Phase 1 — the cursor
 
 New `fpy2/transform/utils/cursor.py`: `Cursor` (frozen; `func: FuncDef`,
-`path: tuple[tuple[str, int], ...]`), `resolve() -> Stmt`,
+`path: tuple[str | int, ...]`), `resolve() -> Stmt`,
 `parent() -> tuple[StmtBlock, int]`, `__str__` naming the statement's source
 `Location` where it has one, and `block_paths(func) -> dict[int, path]`.
 
@@ -88,10 +105,10 @@ wrong-field failures.
 
 ### Phase 2 — edits and forwarding
 
-Pure; no transform touched. In `fpy2/transform/utils/cursor.py`: `Edit` (old block path,
-index, `removed`, `inserted`, `successors: tuple[tuple[int, subpath], ...]` —
-offset among inserted statements plus a path within one), `EditLog`, and
-`forward(path, log) -> list[path]` implementing the three rules.
+Pure; no transform touched. In `fpy2/transform/utils/cursor.py`: `Block` (frozen;
+`func`, `block_path`, `range`, with `__len__` / `__iter__` / `__getitem__` /
+`one()`), `Edit` (old block path, index, `removed`, `inserted` — four values, no
+successor logic), `EditLog`, and `forward` implementing the three rules.
 
 Two invariants asserted on construction: edits are **disjoint** (a transform that
 rewrites nested sites inside one it already rewrote records only the outermost —
@@ -100,40 +117,50 @@ are **old-tree** paths, so a sequence composes by accumulating sibling shifts
 level by level.
 
 Tests: synthetic logs only — sibling shift at depth, ancestor shift, invalidation
-inside, multi-successor, empty log. The subtle piece; pin it before anything
-depends on it.
+inside, a one-statement image forwarding to a `Cursor` and a many-statement image
+to a `Block`, empty log. The subtle piece; pin it before anything depends on it.
 
 ### Phase 3 — the rounding transforms report, `Function` carries
 
 Largest phase; phases 1–2 are inert until it lands.
 
 `BlockRewriter._visit_block` (`fpy2/transform/utils/`) already knows the block
-and index of every site it replaces: record an `Edit` per rewrite, scanning the
-emitted statements with `rounding_block` for successors, and expose the log on the
-instance. The five transforms — `unfold_special`, `unfold_neg_zero`,
-`unfold_overflow`, `float_to_fixed`, `rescale_fixed` — gain `apply_with_edits`,
+and index of every site it replaces, and `_rewrite` returns the statements that
+replace it: record an `Edit` per rewrite and expose the log on the instance. No
+subclass changes — the edit is structural. The five transforms —
+`unfold_special`, `unfold_neg_zero`, `unfold_overflow`, `float_to_fixed`,
+`rescale_fixed` — gain `apply_with_edits`,
 mirroring the existing `apply_with_status` convention (`fpy2/transform/const_fold.py`
 et al.); `apply` keeps its signature and its callers.
 
+`fpy2/transform` already imports `fpy2.function`, so `function.py` must not import
+the cursor module at runtime: annotate under `if TYPE_CHECKING` and call
+`log.forward(cursor)` without naming the class, the pattern `Function` already uses
+for `Interpreter`.
+
 `Function` gains `_parent` / `_edits`, `with_ast(ast, *, edits=None)`,
-`forward(cursor)`, `forward_all(cursor)`, and `site` — the cursor of the single
-site just rewritten, where `where` was explicit. Default is opaque, so every pass
-not yet updated stays honest.
+`forward(cursor) -> Cursor | Block`, and `site` — the region just rewritten, where
+`where` was explicit. Default is opaque, so every pass not yet updated stays
+honest.
 
 Tests (`tests/unit/strategies/`): a two-step chain (`unfold_special` then
 `unfold_overflow`) aimed at the site the first rewrote, asserting the second lands
 there and not at index 0; a cursor to an untouched later sibling surviving a
-rewrite that grew its block; `float_to_fixed` yielding two successors — `forward`
-raises, `forward_all` returns both.
+rewrite that grew its block; a single-statement image forwarding to a `Cursor`;
+`float_to_fixed`'s two roundings both reached through one forwarded region.
 
-### Phase 4 — `where` accepts a cursor
+### Phase 4 — `where` accepts a cursor and a region
 
-`check_where` (`fpy2/transform/utils/`) accepts `int | Cursor`; `BlockRewriter`
-matches by identity against the resolved `(block, index)`. A cursor owned by
-another program, one whose path no longer resolves, and one resolving to a
-statement that is not a candidate are all `TransformReferenceError` — item 1's
-"does not point at anything" covers all three. The five strategy wrappers take
-`where: int | Cursor` and say so in `Parameters` and `Raises`.
+`check_where` (`fpy2/transform/utils/`) accepts `int | Cursor | Block`;
+`BlockRewriter` matches by identity against the resolved `(block, index)`, and a
+`Block` scopes the apply-everywhere walk to a region. The strategy wrappers
+forward a cursor from an ancestor program before handing it down, so a schedule
+aims the whole sequence with one cursor variable — declines inside it are
+skipped, as under `where=None`. A cursor owned by another program, one whose path
+no longer resolves, and one resolving to a statement that is not a candidate are
+all `TransformReferenceError` — item 1's "does not point at anything" covers all
+three. The five strategy wrappers take `where: int | Cursor | Block` and say so in
+`Parameters` and `Raises`.
 
 Split from phase 3 deliberately: produce, then consume.
 
@@ -144,18 +171,21 @@ Split from phase 3 deliberately: produce, then consume.
 `check_site`. Unify them onto the shared helpers, then give them both
 capabilities: an edit log and a cursor `where`.
 
-Successors are transform-specific and small: the chunked loop for `split`, the
-main loop for `unroll_for`, the peeled body for `unroll_while`. `inline` splices a
-body where a call statement stood and has no successor of the same kind — its edit
-records none, so a cursor at an inlined call invalidates. That is the answer, not
-a gap.
+Nothing here is transform-specific: each replaces one statement with the list it
+emitted, which is the same structural edit `BlockRewriter` records. A cursor at an
+inlined call forwards to the region the callee's body became — the honest answer,
+and one `inline` does not have to describe.
 
 ### Phase 6 — listing sites
 
-`sites(strategy, func) -> list[Cursor]` in `fpy2/strategies`, backed by a `sites`
-classmethod per transform (free for the five via `BlockRewriter`). Without it a
-cursor can only be born from an `int`, and "pin several points, then rewrite" —
-item 3's stated capability — stays unreachable.
+`sites(strategy, func, within=None) -> list[Cursor]` in `fpy2/strategies`, backed
+by a `sites` classmethod per transform (free for the five via `BlockRewriter`).
+`within` takes a `Block`, so a forwarded region can be asked what it holds.
+Without this a cursor can only be born from an `int`, and "pin several points,
+then rewrite" — item 3's stated capability — stays unreachable.
+
+Same shape as Exo's `proc.find(pattern)`, which is where item 4 lands: pattern
+matching that returns cursors is this function with a different predicate.
 
 This is the half of item 2 that item 3 needs. The presentation half — rendered
 listings with source locations, before/after step diffs, the Exo Appendix-A
@@ -190,6 +220,18 @@ location*), `docs/todos/native-lowering-roadmap.md` (*Not exposed as one entry
 point, deliberately* — the stated reason is gone; the recipe itself is item 7 and
 stays open), and item 3 of `docs/todos/scheduling-language.md`, including its
 `value_class.py` claim (below).
+
+## Not taken from Exo
+
+- **Gap cursors** (`before()` / `after()`, an insertion point that survives edits).
+  They exist to serve an `insert` primitive, and FPy has none: no transform lets a
+  schedule name where to put a statement. Revisit with the first one.
+- **`InvalidCursor` as a falsy value.** Exo has both — a sentinel returned by
+  `next()` past the end, and an `InvalidCursorError` raised by forwarding. A
+  second failure vocabulary is what item 1 exists to remove; a bad reference
+  raises, always.
+- **Navigation** (`next`, `prev`, `parent`, `expand`) and **expression cursors**.
+  Nothing in items 3–7 asks a schedule to walk the tree by hand.
 
 ## Out of scope
 
