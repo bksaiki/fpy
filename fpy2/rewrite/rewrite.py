@@ -6,7 +6,7 @@ from ..ast import *
 from ..function import Function
 from ..utils import default_repr, sliding_window
 from .applier import Applier
-from .matcher import ExprMatch, Matcher, StmtMatch
+from .matcher import Matcher
 from .pattern import ExprPattern, Pattern, StmtPattern
 
 
@@ -92,12 +92,10 @@ class _RewriteEngine(DefaultTransformVisitor):
         e = super()._visit_expr(e, ctx)
         if isinstance(self.matcher.pattern, ExprPattern):
             # check if rewrite applies here
-            pmatch = self.matcher.match_exact(e)
-            if pmatch:
-                if not isinstance(pmatch, ExprMatch):
-                    raise TypeError(f'Matcher produced \'ExprMatch\', got {type(pmatch)} for {pmatch}')
+            subst = self.matcher.match_exact(e)
+            if subst:
                 if ctx.occurence is None or ctx.times_matched == ctx.occurence:
-                    e = self.applier.apply(pmatch)
+                    e = self.applier.apply(subst)
                     if not isinstance(e, Expr):
                         raise TypeError(f'Substitution produced \'Expr\', got {type(e)} for {e}')
                     self.times_applied += 1
@@ -116,14 +114,12 @@ class _RewriteEngine(DefaultTransformVisitor):
                 # termination guaranteed by finitely-sized iterator
                 while True:
                     stmts = list(next(iterator))
-                    pmatch = self.matcher.match_exact(StmtBlock(stmts))
-                    if pmatch:
-                        if not isinstance(pmatch, StmtMatch):
-                            raise TypeError(f'Matcher produced \'StmtMatch\', got {type(pmatch)} for {pmatch}')
+                    subst = self.matcher.match_exact(StmtBlock(stmts))
+                    if subst:
                         if ctx.occurence is None or ctx.times_matched == ctx.occurence:
                             # apply the substitution
                             applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
-                            rw = applier.apply(pmatch)
+                            rw = applier.apply(subst)
                             if not isinstance(rw, StmtBlock):
                                 raise TypeError(f'Substitution produced \'StmtBlock\', got {type(rw)} for {rw}')
                             new_stmts.extend(rw.stmts)

@@ -4,7 +4,6 @@ This module defines subsitution for FPy AST.
 
 from ..ast import *
 from ..utils import Gensym
-from .matcher import ExprMatch, LocatedMatch, StmtMatch
 from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst
 
@@ -30,19 +29,19 @@ class _ExprApplierInst(DefaultTransformVisitor):
     """
 
     pattern: ExprPattern
-    pmatch: ExprMatch
+    subst: Subst
 
-    def __init__(self, pattern: ExprPattern, pmatch: ExprMatch):
+    def __init__(self, pattern: ExprPattern, subst: Subst):
         self.pattern = pattern
-        self.pmatch = pmatch
+        self.subst = subst
 
     def run(self):
         return self._visit_expr(self.pattern.expr, {})
 
     def _visit_var(self, e: Var, ctx: None):
-        if e.name in self.pmatch.subst:
+        if e.name in self.subst:
             # lookup name in the substitution
-            return self.pmatch.subst[e.name]
+            return self.subst[e.name]
         else:
             # otherwise, name is an inserted variable
             return super()._visit_var(e, ctx)
@@ -57,14 +56,14 @@ class _StmtApplierInst(DefaultTransformVisitor):
     """
 
     pattern: StmtPattern
-    pmatch: StmtMatch
+    subst: Subst
     free: dict[NamedId, NamedId]
 
-    def __init__(self, pattern: StmtPattern, pmatch: StmtMatch):
+    def __init__(self, pattern: StmtPattern, subst: Subst):
         self.pattern = pattern
-        self.pmatch = pmatch
+        self.subst = subst
         self.free = {}
-        for pvar in pattern.vars() - pmatch.subst.vars():
+        for pvar in pattern.vars() - subst.vars():
             # TODO: generate a fresh identifier
             self.free[pvar] = pvar
 
@@ -74,9 +73,9 @@ class _StmtApplierInst(DefaultTransformVisitor):
         return block
 
     def _visit_target(self, name: NamedId):
-        if name in self.pmatch.subst:
+        if name in self.subst:
             # name in the substitution
-            e = self.pmatch.subst[name]
+            e = self.subst[name]
             if not isinstance(e, Var):
                 raise TypeError(f'Expected \'Var\', got {type(e)} for {e}')
             return e.name
@@ -92,9 +91,9 @@ class _StmtApplierInst(DefaultTransformVisitor):
                 return ident
 
     def _visit_var(self, e: Var, ctx: None):
-        if e.name in self.pmatch.subst:
+        if e.name in self.subst:
             # name in the substitution
-            return self.pmatch.subst[e.name]
+            return self.subst[e.name]
         else:
             # variable is free in the pattern
             return Var(self.free[e.name], None)
@@ -204,23 +203,17 @@ class Applier:
             raise TypeError(f'Expected \'Pattern\', got {type(pattern)}')
         self.pattern = pattern
 
-    def apply(self, pmatch: LocatedMatch):
+    def apply(self, subst: Subst):
         """
         Applies the substitution to the pattern.
         The result is always a valid IR fragment (including locally SSA).
         """
-        # check that type of pattern matches type of pattern match
+        self._check_valid_subst(subst)
         match self.pattern:
             case ExprPattern():
-                if not isinstance(pmatch, ExprMatch):
-                    raise TypeError(f'Expected \'ExprMatch\', got {type(pmatch)}')
-                self._check_valid_subst(pmatch.subst)
-                return _ExprApplierInst(self.pattern, pmatch).run()
+                return _ExprApplierInst(self.pattern, subst).run()
             case StmtPattern():
-                if not isinstance(pmatch, StmtMatch):
-                    raise TypeError(f'Expected \'StmtMatch\', got {type(pmatch)}')
-                self._check_valid_subst(pmatch.subst)
-                return _StmtApplierInst(self.pattern, pmatch).run()
+                return _StmtApplierInst(self.pattern, subst).run()
             case _:
                 raise RuntimeError(f'unreachable case: {self.pattern}')
 

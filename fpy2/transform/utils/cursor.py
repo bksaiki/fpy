@@ -32,7 +32,7 @@ from .path import (
     resolve_block,
     resolve_expr,
     resolve_stmt,
-    sub_exprs,
+    walk_exprs,
     walk_stmts,
 )
 
@@ -369,18 +369,11 @@ def expr_sites(
     before the blocks it holds -- the order a visitor reaches them in.
     """
     keep = _restrict(func, within, stmts=False)
-    out: list[ExprCursor] = []
-
-    def walk(path: ExprPath, e: Expr) -> None:
-        if match(e) and keep(path):
-            out.append(ExprCursor(func, path))
-        for field, index, sub in sub_exprs(e):
-            walk(path.expr(field, index), sub)
-
-    for stmt_path, stmt in walk_stmts(func):
-        for field, index, e in sub_exprs(stmt):
-            walk(stmt_path.expr(field, index), e)
-    return out
+    return [
+        ExprCursor(func, path)
+        for path, e in walk_exprs(func)
+        if match(e) and keep(path)
+    ]
 
 
 def _overlaps(a: Edit, b: Edit) -> bool:

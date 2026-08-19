@@ -301,18 +301,37 @@ def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:
     yield from walk(func.body, FuncBody())
 
 
+def walk_blocks(func: FuncDef) -> Iterator[tuple[BlockPath, StmtBlock]]:
+    """Every block of *func* with its path, a block before the blocks it holds."""
+    def walk(block: StmtBlock, path: BlockPath) -> Iterator[tuple[BlockPath, StmtBlock]]:
+        yield path, block
+        for i, stmt in enumerate(block.stmts):
+            here = StmtPath(path, i)
+            for field, sub in sub_blocks(stmt):
+                yield from walk(sub, SubBlock(here, field))
+
+    yield from walk(func.body, FuncBody())
+
+
+def walk_exprs(func: FuncDef) -> Iterator[tuple[ExprPath, Expr]]:
+    """Every expression of *func* with its path, in visit order.
+
+    Outermost first within a statement, and a statement's own expressions before
+    the blocks it holds.
+    """
+    def descend(path: ExprPath, e: Expr) -> Iterator[tuple[ExprPath, Expr]]:
+        yield path, e
+        for field, index, sub in sub_exprs(e):
+            yield from descend(path.expr(field, index), sub)
+
+    for stmt_path, stmt in walk_stmts(func):
+        for field, index, e in sub_exprs(stmt):
+            yield from descend(stmt_path.expr(field, index), e)
+
+
 def block_paths(func: FuncDef) -> dict[int, BlockPath]:
     """The path of every block in *func*, keyed by `id`.
 
     Valid only while *func* is alive.
     """
-    paths: dict[int, BlockPath] = {}
-
-    def walk(block: StmtBlock, path: BlockPath) -> None:
-        paths[id(block)] = path
-        for i, stmt in enumerate(block.stmts):
-            for field, sub in sub_blocks(stmt):
-                walk(sub, SubBlock(StmtPath(path, i), field))
-
-    walk(func.body, FuncBody())
-    return paths
+    return {id(block): path for path, block in walk_blocks(func)}

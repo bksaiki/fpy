@@ -43,7 +43,7 @@ class ApplierExprTestCase(_ApplierTestCase):
         m = Matcher(insert_fma_l)
         a = Applier(insert_fma_r)
         matches = m.match(f)
-        f2 = a.apply(matches[0])
+        f2 = a.apply(matches[0].subst)
         self.assertAstEqual(f2, Fma(
             Var(NamedId('fma'), None),
             Var(NamedId('x'), None),
@@ -57,7 +57,7 @@ class ApplierExprTestCase(_ApplierTestCase):
         m = Matcher(insert_fma_l)
         a = Applier(insert_fma_r)
         matches = m.match(g)
-        f2 = a.apply(matches[0])
+        f2 = a.apply(matches[0].subst)
         self.assertAstEqual(f2, Fma(
             Var(NamedId('fma'), None),
             Var(NamedId('x'), None),
@@ -99,7 +99,7 @@ class ApplierStmtTestCase(_ApplierTestCase):
         m = Matcher(insert_sum_l)
         a = Applier(insert_sum_r)
         matches = m.match(h)
-        h2 = a.apply(matches[0])
+        h2 = a.apply(matches[0].subst)
         self.assertAstEqual(
             h2, 
             StmtBlock([
