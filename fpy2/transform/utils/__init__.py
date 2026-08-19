@@ -1,17 +1,22 @@
 """
 Shared machinery for the transforms: the loop rewrites and the rounding
 rewrites.
+
+The vocabulary a transform refers to a site with lives in the submodules:
+:mod:`~fpy2.transform.utils.error` for what it raises, and
+:mod:`~fpy2.transform.utils.cursor` for what it points with.  Both are
+re-exported here, so a transform needs one import.
 """
 
 from dataclasses import dataclass
 
-from ..analysis import (
+from ...analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
     ListSize,
     concrete_size,
 )
-from ..ast.fpyast import (
+from ...ast.fpyast import (
     Assign,
     Attribute,
     Cast,
@@ -38,8 +43,8 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
-from ..ast.visitor import DefaultTransformVisitor
-from ..number import (
+from ...ast.visitor import DefaultTransformVisitor
+from ...number import (
     INTEGER,
     Context,
     Float,
@@ -47,6 +52,7 @@ from ..number import (
     MPFixedContext,
     RealFloat,
 )
+from .cursor import Cursor
 from .error import TransformDeclined, TransformReferenceError
 
 

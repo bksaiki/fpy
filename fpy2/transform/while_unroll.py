@@ -5,7 +5,7 @@ Unroller for `while` loops.
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
-from .error import TransformReferenceError
+from .utils import TransformReferenceError
 
 
 class _WhileUnroll(DefaultTransformVisitor):

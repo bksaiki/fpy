@@ -21,8 +21,8 @@ from ..env import ForeignEnv
 from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
-from .error import TransformReferenceError
 from .rename_target import RenameTarget
+from .utils import TransformReferenceError
 
 
 def _replace_ret(block: StmtBlock, new_var: NamedId):

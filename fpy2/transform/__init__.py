@@ -6,7 +6,6 @@ from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate
 from .dead_code import DeadCodeEliminate
 from .enumerate_elim import EnumerateElim
-from .error import TransformDeclined, TransformError, TransformReferenceError
 from .float_to_fixed import FloatToFixed
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
@@ -27,6 +26,8 @@ from .subst_var import SubstVar
 from .unfold_neg_zero import UnfoldNegZero
 from .unfold_overflow import UnfoldOverflow
 from .unfold_special import UnfoldSpecial
+from .utils.cursor import Cursor
+from .utils.error import TransformDeclined, TransformError, TransformReferenceError
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
 from .zip_elim import ZipElim

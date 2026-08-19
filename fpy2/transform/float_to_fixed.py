@@ -130,10 +130,10 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
-from .error import TransformDeclined
 from .utils import (
     BlockRewriter,
     Declined,
+    TransformDeclined,
     attribute,
     check_site,
     check_where,

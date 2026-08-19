@@ -30,8 +30,14 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
-from .error import TransformReferenceError
-from .utils import clone_block, copy_target, infer_array_size, integer_ctx, static_size
+from .utils import (
+    TransformReferenceError,
+    clone_block,
+    copy_target,
+    infer_array_size,
+    integer_ctx,
+    static_size,
+)
 
 
 class SplitLoopStrategy(enum.Enum):
