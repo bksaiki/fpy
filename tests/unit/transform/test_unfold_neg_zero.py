@@ -33,7 +33,7 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import UnfoldNegZero
+from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldNegZero
 
 
 # ----------------------------------------------------------------------
@@ -364,7 +364,34 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert UnfoldNegZero.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            UnfoldNegZero.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """A float format is structurally a candidate; naming it says why it
+        cannot be rewritten."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='fixed-point'):
+            UnfoldNegZero.apply(f.ast, where=0)
+
+    def test_a_declined_block_counts_toward_where(self):
+        """Candidacy is structural: the declining `FP16` block is index 0,
+        so index 1 names the fixed-point block."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.FP16:
+                p = fp.round(a)
+            with fp.MPFixedContext(-8):
+                aq = fp.round(a)
+            return aq
+
+        out = UnfoldNegZero.apply(f.ast, where=1)
+        assert not out.is_equiv(f.ast)
 
     def test_rejects_a_non_integer(self):
         f = self._two()

@@ -117,6 +117,7 @@ from ..ast.fpyast import (
 from ..env import fpy_alias
 from ..number import (
     REAL,
+    Context,
     EFloatContext,
     Float,
     MPBFixedContext,
@@ -129,10 +130,13 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Declined,
     agrees,
     attribute,
+    check_site,
     check_where,
     number_literal,
+    rounding_block,
     same_value,
     shift,
     sign_choice,
@@ -241,8 +245,8 @@ class _Prober:
         self.unbounded = unbounded
         self.early_check = early_check
 
-    def describe(self) -> _Source | None:
-        """`ctx` as a lowerable bounded format, or `None`."""
+    def describe(self) -> _Source | Declined:
+        """`ctx` as a lowerable bounded format, or why it is not one."""
         ctx = self.ctx
         try:
             maxval = ctx.maxval().as_real()
@@ -250,15 +254,18 @@ class _Prober:
             infval = ctx.infval().as_real()
             neg_infval = ctx.infval(s=True).as_real()
         except ValueError:
-            # an unsigned format states no bound below zero
-            return None
+            return Declined('an unsigned format states no bound below zero')
         if maxval.is_zero() or not neg_maxval.s:
-            # a format representing no non-zero value has no overflow to state
-            return None
+            return Declined(
+                'a format representing no non-zero value has no overflow to state'
+            )
 
         over = self._overflow(maxval, neg_maxval)
         if over is None:
-            return None
+            return Declined(
+                'the overflow value varies with the operand, or the format '
+                'refuses to round an overflow at all'
+            )
         over_pos, over_neg = over
 
         zero = Float(c=0, s=True)
@@ -272,7 +279,12 @@ class _Prober:
         # which specials need a branch depends on what the rest of `src` makes
         # of them, so they are filled in against it
         specials = self._specials(src)
-        return None if specials is None else replace(src, specials=specials)
+        if specials is None:
+            return Declined(
+                'the format refuses a special the rewrite would have to '
+                'produce a value for'
+            )
+        return replace(src, specials=specials)
 
     def _overflow(
         self, maxval: RealFloat, neg_maxval: RealFloat
@@ -439,8 +451,6 @@ class _UnfoldOverflowInstance(BlockRewriter):
         # written with; without one it falls back to the context value itself
         self.alias = fpy_alias(func.env)
         self.used_alias = False
-        # Counts *candidate* blocks (those the rewrite could unfold) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
@@ -455,32 +465,30 @@ class _UnfoldOverflowInstance(BlockRewriter):
             func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
         return func
 
-    def _candidate(self, stmt: ContextStmt) -> _Source | None:
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """Only a rounding is a bounded rounding in disguise; `Cast`
+        asserts exactness, which the rewrite would not preserve."""
+        return rounding_block(stmt, casts=False)
+
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if its bound can be taken out of its context."""
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
-
         ctx = self.eval_info.by_expr.get(stmt.ctx)
+        if not isinstance(ctx, Context):
+            return Declined('the context is not statically known')
         if not isinstance(ctx, _BoundedCtx):
-            return None
-        # stochastic rounding would have to draw its bits under the same format
+            return Declined(
+                'the context is not a bounded format (`EFloatContext`, '
+                '`MPBFloatContext`, or `MPBFixedContext`)'
+            )
         if ctx.num_randbits != 0:
-            return None
-
-        # only a rounding is a bounded rounding in disguise; `Cast` asserts
-        # exactness, which the rewrite would not preserve
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, Round) or not isinstance(s.expr.arg, Var):
-                        return None
-                case _:
-                    return None
+            return Declined(
+                'stochastic rounding would have to draw its bits under the '
+                'same format'
+            )
 
         unbounded = _unbounded(ctx)
         if unbounded is None:
-            return None
+            return Declined('no unbounded counterpart of the format can be built')
         return _Prober(ctx, unbounded, self.early_check).describe()
 
     def _unfold(
@@ -588,9 +596,9 @@ class UnfoldOverflow:
         """
         Takes the bound out of every qualifying rounding context in `func`.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could rewrite.
-        If `None`, every candidate is rewritten.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
 
         With `early_check`, a check on the operand precedes the rounding, so
         nothing certain to overflow is rounded at all.
@@ -604,6 +612,7 @@ class UnfoldOverflow:
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        return _UnfoldOverflowInstance(
-            func, eval_info, class_info, where, early_check
-        ).apply()
+        vtor = _UnfoldOverflowInstance(func, eval_info, class_info, where, early_check)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

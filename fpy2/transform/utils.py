@@ -1,9 +1,9 @@
 """
-Shared machinery for the transforms: the loop rewrites
-(:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`) and the
-rounding rewrites (:class:`fpy2.transform.UnfoldOverflow`,
-:class:`fpy2.transform.FloatToFixed`, :class:`fpy2.transform.RescaleFixed`).
+Shared machinery for the transforms: the loop rewrites and the rounding
+rewrites.
 """
+
+from dataclasses import dataclass
 
 from ..analysis import (
     ArraySizeAnalysis,
@@ -12,7 +12,9 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
+    Assign,
     Attribute,
+    Cast,
     ConstInf,
     ConstNan,
     ContextStmt,
@@ -27,6 +29,8 @@ from ..ast.fpyast import (
     NamedId,
     Neg,
     Rational,
+    ReturnStmt,
+    Round,
     Signbit,
     Stmt,
     StmtBlock,
@@ -43,6 +47,7 @@ from ..number import (
     MPFixedContext,
     RealFloat,
 )
+from .error import TransformDeclined, TransformReferenceError
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -210,21 +215,72 @@ def check_where(where: int | None) -> None:
         raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
 
 
+def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
+    """The rounded operands of a structurally-matching block: an
+    underscore-bound context whose every statement assigns or returns a
+    round (or a cast too, where `casts`) of a variable.  `None` otherwise.
+    Pure syntax: this is what a `where` index counts.  An annotated assign
+    is no match: the rewrites cannot carry the annotation.
+    """
+    # a bound context is visible to the body as a value, which a rewrite changes
+    if not isinstance(stmt.target, UnderscoreId):
+        return None
+    args: list[Var] = []
+    for s in stmt.body.stmts:
+        match s:
+            case Assign(target=NamedId(), type=None) | ReturnStmt():
+                match s.expr:
+                    case Round(arg=Var() as v):
+                        args.append(v)
+                    case Cast(arg=Var() as v) if casts:
+                        args.append(v)
+                    case _:
+                        return None
+            case _:
+                return None
+    return args
+
+
+def check_site(where: int | None, count: int, what: str) -> None:
+    """Rejects an explicit `where` that named no candidate: fail rather
+    than silently no-op.  `count` must be the true candidate count."""
+    if where is not None and not (0 <= where < count):
+        raise TransformReferenceError(
+            f'where={where} does not correspond to {what}; '
+            f'the function has {count} candidate site(s)'
+        )
+
+
+@dataclass(frozen=True)
+class Declined:
+    """A verification refusal: why a candidate block was not rewritten."""
+    reason: str
+
+
 class BlockRewriter(DefaultTransformVisitor):
     """
     Rewrites selected `with` blocks, each into several statements.
 
-    A subclass says which blocks it can rewrite (`_candidate`) and what to put
-    in their place (`_rewrite`).  `where` picks one candidate by index, in
-    visit order, outermost-first; `None` takes them all.
+    A subclass says which blocks structurally match (`_candidate`), whether a
+    match may be rewritten (`_verify`), and what to put in its place
+    (`_rewrite`).  `where` picks one candidate by index, in visit order,
+    outermost-first; `None` takes them all.  A candidate `_verify` declines
+    is skipped under `None` and raises :class:`TransformDeclined` where an
+    explicit `where` names it.
     """
 
     where: int | None
     site_idx: int
 
     def _candidate(self, stmt: ContextStmt):
-        """What `_rewrite` needs for this block, or `None` to leave it be."""
+        """What `_verify` needs for this block, or `None` where it does not
+        structurally match.  Only matches count toward `where`."""
         raise NotImplementedError
+
+    def _verify(self, stmt: ContextStmt, info):
+        """What `_rewrite` needs for this match, or a `Declined` saying why
+        it cannot be rewritten.  By default every match verifies."""
+        return info
 
     def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
         """The statements that replace `stmt`."""
@@ -241,8 +297,16 @@ class BlockRewriter(DefaultTransformVisitor):
                     idx = self.site_idx
                     self.site_idx += 1
                     if self.where is None or idx == self.where:
-                        stmts.extend(self._rewrite(s, info))
-                        continue
+                        verified = self._verify(s, info)
+                        if isinstance(verified, Declined):
+                            if self.where is not None:
+                                raise TransformDeclined(
+                                    f'where={idx}: {verified.reason}'
+                                )
+                            # apply-everywhere skips a declined candidate
+                        else:
+                            stmts.extend(self._rewrite(s, verified))
+                            continue
             new_s, ctx = self._visit_statement(s, ctx)
             stmts.append(new_s)
         return StmtBlock(stmts), ctx

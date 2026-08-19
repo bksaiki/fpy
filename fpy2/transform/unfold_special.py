@@ -108,9 +108,12 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Declined,
     agrees,
+    check_site,
     check_where,
     fixed_probes,
+    rounding_block,
     sign_choice,
     try_round,
 )
@@ -319,37 +322,28 @@ class _UnfoldSpecialInstance(BlockRewriter):
         self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        # Counts *candidate* blocks (those the rewrite could unfold) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> _Source | None:
-        """The block's format, if any of its special values can be stated as a
-        branch or shed from it."""
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """A cast substitutes a special exactly as a round does: the
+        substitution happens before the exactness check."""
+        return rounding_block(stmt, casts=True)
 
-        # the branch values are the context's own answers, so it has to be known
-        # here; `REAL` rounds exactly, so stating its specials says nothing
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
+        """The block's format, if any of its special values can be stated as
+        a branch or shed from it."""
+        # the branch values are the context's own answers, so it has to be known here
         ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, Context) or ctx is REAL:
-            return None
-
-        # a cast substitutes a special exactly as a round does: the
-        # substitution happens before the exactness check
-        args: list[Var] = []
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, (Round, Cast)) or not isinstance(s.expr.arg, Var):
-                        return None
-                    args.append(s.expr.arg)
-                case _:
-                    return None
+        if not isinstance(ctx, Context):
+            return Declined(
+                'the context is not statically known, so the branch values '
+                'cannot be computed'
+            )
+        if ctx is REAL:
+            return Declined('`REAL` rounds exactly; it has no special-value rules to state')
 
         # a zero rides along wherever the rewrite already happens, but stating
         # it alone buys nothing: the guards a class analysis discharges are about
@@ -358,7 +352,10 @@ class _UnfoldSpecialInstance(BlockRewriter):
         specials = ValueClass.NAN | ValueClass.INF
         if src.shed or any(self._hoist(src, arg) & specials for arg in args):
             return src
-        return None
+        return Declined(
+            'nothing to state: no special-value rule can be shed from the '
+            'format and no operand can be a special value'
+        )
 
     def _hoist(self, src: _Source, arg: Var) -> ValueClass:
         return _hoisted(src, self.class_info.classify(arg))
@@ -445,9 +442,9 @@ class UnfoldSpecial:
         context in `func`, stating each as a branch on the operand; the
         surviving rounding sees only a finite, non-zero value.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could rewrite.
-        If `None`, every candidate is rewritten.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
@@ -458,6 +455,7 @@ class UnfoldSpecial:
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        return _UnfoldSpecialInstance(
-            func, eval_info, class_info, where
-        ).apply()
+        vtor = _UnfoldSpecialInstance(func, eval_info, class_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

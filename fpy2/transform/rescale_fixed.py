@@ -105,8 +105,11 @@ from ..number.format import (
 from ..utils import Gensym
 from .utils import (
     BlockRewriter,
+    Declined,
+    check_site,
     check_where,
     number_literal,
+    rounding_block,
     shift,
 )
 
@@ -289,33 +292,26 @@ class _RescaleFixedInstance(BlockRewriter):
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        # Counts *candidate* blocks (those the rewrite could rescale) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> _Shift | None:
-        """How to rescale this block, or `None` if it must be left alone."""
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """Rounding commutes with the shift; arithmetic does not."""
+        return rounding_block(stmt, casts=True)
 
-        # rounding commutes with the shift; arithmetic does not
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, (Round, Cast)) or not isinstance(s.expr.arg, Var):
-                        return None
-                case _:
-                    return None
-
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Shift | Declined:
+        """How to rescale this block, or why it must be left alone."""
         ctx = self.eval_info.by_expr.get(stmt.ctx)
         if isinstance(ctx, _FixedCtx):
             # a known format shifts by a constant, so the factors fold away
-            if _scale_of(ctx) == 0:
-                return None
+            scale = _scale_of(ctx)
+            if scale == 0:
+                return Declined(
+                    'the format is already at digit position zero; there is '
+                    'nothing to rescale'
+                )
             # a *finite* substitute for NaN or infinity is a value in the
             # format, so it would have to shift along with it; a non-finite
             # one is the same at every scale.  `UnfoldSpecial` takes the
@@ -325,8 +321,11 @@ class _RescaleFixedInstance(BlockRewriter):
                 v is not None and not v.is_nar()
                 for v in (ctx.nan_value, ctx.inf_value)
             ):
-                return None
-            scale = _scale_of(ctx)
+                return Declined(
+                    'a finite NaN or infinity substitute is a value in the '
+                    'format and would have to shift with it; run '
+                    '`unfold_special` first'
+                )
             return _Shift(
                 ctx=lambda: _rescale_expr(stmt.ctx, ctx, 0),
                 up=lambda: _pow2(-scale, stmt.loc),
@@ -334,8 +333,17 @@ class _RescaleFixedInstance(BlockRewriter):
             )
 
         if isinstance(stmt.ctx, Call):
-            return self._symbolic_shift(stmt.ctx)
-        return None
+            sym = self._symbolic_shift(stmt.ctx)
+            if sym is None:
+                return Declined(
+                    'the constructor call is not a fixed-point context whose '
+                    'position can be shifted symbolically'
+                )
+            return sym
+        return Declined(
+            'the context is neither a statically-known fixed-point format '
+            'nor a constructor call to shift symbolically'
+        )
 
     def _symbolic_shift(self, e: Call) -> _Shift | None:
         """
@@ -485,9 +493,9 @@ class RescaleFixed:
         """
         Rescales fixed-point rounding in `func` to digit position zero.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could
-        rescale.  If `None`, every candidate is rescaled.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
 
         A format that substitutes a *finite* value for NaN or an infinity is
         declined: the substitute would have to shift along with the format.
@@ -501,4 +509,7 @@ class RescaleFixed:
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _RescaleFixedInstance(func, eval_info, where).apply()
+        vtor = _RescaleFixedInstance(func, eval_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

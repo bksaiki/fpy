@@ -46,7 +46,7 @@ def inline(
         If the call graph reachable from `func` contains a cycle
         (FPy forbids recursion; inlining a recursive call would not
         terminate).
-    ValueError
+    TransformReferenceError
         If `where` does not correspond to a candidate call site.
     RuntimeError
         If a callee cannot be inlined: its body must end in exactly

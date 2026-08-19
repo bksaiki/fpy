@@ -71,13 +71,23 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     REAL,
+    Context,
     Float,
     MPBFixedContext,
     MPFixedContext,
     RealFloat,
 )
 from ..utils import CompareOp, Gensym
-from .utils import BlockRewriter, agrees, check_where, fixed_probes, try_round
+from .utils import (
+    BlockRewriter,
+    Declined,
+    agrees,
+    check_site,
+    check_where,
+    fixed_probes,
+    rounding_block,
+    try_round,
+)
 
 _FixedCtx = MPFixedContext | MPBFixedContext
 """
@@ -180,43 +190,44 @@ class _UnfoldNegZeroInstance(BlockRewriter):
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        # Counts *candidate* blocks (those the rewrite could unfold) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> _Source | None:
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """Only a rounding rounds onto zero; `Cast` asserts exactness, and
+        an exact result never rounds to zero from anything but zero."""
+        return rounding_block(stmt, casts=False)
+
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if its sign of zero can be taken out of its
         context."""
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
-
         ctx = self.eval_info.by_expr.get(stmt.ctx)
+        if not isinstance(ctx, Context):
+            return Declined('the context is not statically known')
         if not isinstance(ctx, _FixedCtx):
-            return None
-        # stochastic rounding would have to draw its bits under the same format
+            return Declined(
+                'the context is not a fixed-point format '
+                '(`MPFixedContext` or `MPBFixedContext`)'
+            )
         if ctx.num_randbits != 0:
-            return None
-
-        # only a rounding rounds onto zero; `Cast` asserts exactness, and an
-        # exact result never rounds to zero from anything but zero
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, Round) or not isinstance(s.expr.arg, Var):
-                        return None
-                case _:
-                    return None
+            return Declined(
+                'stochastic rounding would have to draw its bits under the '
+                'same format'
+            )
 
         # only a format that keeps its signed zero has anything to unfold
         if not ctx.round(Float(c=0, s=True)).s:
-            return None
+            return Declined('the format has one zero; there is no sign to take out')
         dropped = _without_neg_zero(ctx)
-        if dropped is None or not _reproduced(ctx, dropped):
-            return None
+        if dropped is None:
+            return Declined('the format cannot be rebuilt without its signed zero')
+        if not _reproduced(ctx, dropped):
+            return Declined(
+                'the rewrite would disagree with the format on an edge value '
+                '(wrapping overflow is the common cause)'
+            )
         return _Source(ctx, dropped)
 
     def _unfold(
@@ -288,9 +299,9 @@ class UnfoldNegZero:
         Takes the signed zero out of every qualifying rounding context in
         `func`, restoring the sign with `copysign` after the rounding.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could rewrite.
-        If `None`, every candidate is rewritten.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
@@ -299,4 +310,7 @@ class UnfoldNegZero:
         if eval_info is None:
             eval_info = PartialEval.apply(func)
 
-        return _UnfoldNegZeroInstance(func, eval_info, where).apply()
+        vtor = _UnfoldNegZeroInstance(func, eval_info, where)
+        out = vtor.apply()
+        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        return out

@@ -25,7 +25,7 @@ from fpy2.ast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import INTEGER
-from fpy2.transform import SplitLoop, SplitLoopStrategy
+from fpy2.transform import SplitLoop, SplitLoopStrategy, TransformReferenceError
 
 _BOTH = (SplitLoopStrategy.STRICT, SplitLoopStrategy.PEEL)
 
@@ -345,9 +345,9 @@ class TestWhere:
             assert _nested(xss) == _run(out, _nested, xss)
 
     def test_where_out_of_range(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(TransformReferenceError):
             _split(_total, 2, where=1)
-        with pytest.raises(ValueError):
+        with pytest.raises(TransformReferenceError):
             _split(_total, 2, where=-1)
 
     def test_type_errors(self):

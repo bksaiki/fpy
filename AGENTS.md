@@ -63,7 +63,8 @@ The main package lives in `fpy2/`. Its top-level modules and subpackages are:
 
 Tests live in `tests/` and are split into two suites:
 
-- `tests/unit/` — Unit tests, run with `pytest`.
+- `tests/unit/` — Unit tests, run with `pytest`. When running the full
+  suite, parallelize with `python -m pytest tests/unit -q -n <threads>`.
 - `tests/infra/` — Infrastructure tests (e.g., FPBench integration).
 
 Run tests via `make`:

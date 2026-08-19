@@ -19,7 +19,7 @@ import pytest
 from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef, Integer
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
-from fpy2.transform import RescaleFixed, UnfoldSpecial
+from fpy2.transform import RescaleFixed, TransformDeclined, TransformReferenceError, UnfoldSpecial
 from fpy2.transform.rescale_fixed import _scale_of
 
 
@@ -403,25 +403,52 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._three()
-        assert RescaleFixed.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            RescaleFixed.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """A float format is structurally a candidate; naming it says why it
+        cannot be rescaled."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='neither'):
+            RescaleFixed.apply(f.ast, where=0)
 
     def test_rejects_a_non_integer(self):
         f = self._three()
         with pytest.raises(TypeError):
             RescaleFixed.apply(f.ast, where='first')  # type: ignore[arg-type]
 
-    def test_counts_only_candidates(self):
-        """A block the rewrite would skip does not consume an index."""
+    def test_counts_only_structural_matches(self):
+        """A block whose body is not a rounding does not consume an index."""
 
         @fp.fpy(ctx=fp.REAL)
         def f(a, b):
-            with fp.FP64:                       # not fixed-point: not a candidate
+            with fp.FP64:                       # arithmetic body: no match
                 p = a * b
             with fp.FixedContext(True, -16, 32):
                 aq = fp.round(a)
             return aq
 
         out = RescaleFixed.apply(f.ast, where=0)
+        assert _fixed_scales(out) == [0]
+
+    def test_a_declined_block_counts_toward_where(self):
+        """Candidacy is structural: the declining `FP16` block is index 0,
+        so index 1 names the fixed-point block."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.FP16:
+                p = fp.round(a)
+            with fp.FixedContext(True, -16, 32):
+                aq = fp.round(a)
+            return aq
+
+        out = RescaleFixed.apply(f.ast, where=1)
         assert _fixed_scales(out) == [0]
 
 

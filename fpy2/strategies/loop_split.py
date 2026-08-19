@@ -47,10 +47,11 @@ def split(
     Raises
     ------
     ValueError
-        If `factor` is a non-positive constant, `where` does not
-        correspond to a `for` loop, or ``STRICT`` is used on an
-        iterable whose statically-known length is not a multiple of
-        a constant `factor`.
+        If `factor` is a non-positive constant, or ``STRICT`` is used
+        on an iterable whose statically-known length is not a multiple
+        of a constant `factor`.
+    TransformReferenceError
+        If `where` does not correspond to a `for` loop.
 
     Examples
     --------

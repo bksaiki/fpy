@@ -21,6 +21,7 @@ from ..env import ForeignEnv
 from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
+from .error import TransformReferenceError
 from .rename_target import RenameTarget
 
 
@@ -282,7 +283,7 @@ class FuncInline:
             # the true candidate count (spliced callee bodies are never
             # re-visited).
             if where is not None and not (0 <= where < vtor.site_idx):
-                raise ValueError(
+                raise TransformReferenceError(
                     f'where={where} does not correspond to a call site; '
                     f'the function has {vtor.site_idx} candidate call site(s)'
                 )

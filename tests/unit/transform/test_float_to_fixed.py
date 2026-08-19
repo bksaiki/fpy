@@ -38,7 +38,7 @@ from fpy2.number import (
     MPFloatContext,
     MPSFloatContext,
 )
-from fpy2.transform import FloatToFixed
+from fpy2.transform import FloatToFixed, TransformDeclined, TransformReferenceError
 from fpy2.types import RealType
 
 
@@ -281,7 +281,46 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert FloatToFixed.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            FloatToFixed.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """A fixed-point format is structurally a candidate; naming it says
+        why it cannot be lowered."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8):
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='float format'):
+            FloatToFixed.apply(f.ast, where=0)
+
+    def test_a_declined_block_counts_toward_where(self):
+        """Candidacy is structural: the declining fixed-point block is index
+        0, so index 1 names the `FP16` block."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.MPFixedContext(-8):
+                p = fp.round(a)
+            with fp.FP16:
+                aq = fp.round(a)
+            return aq
+
+        out = FloatToFixed.apply(f.ast, where=1)
+        assert not out.is_equiv(f.ast)
+
+    def test_no_rewrite_adds_no_free_var(self):
+        """A run where every candidate declined must not grow `free_vars`
+        with the `fpy2` alias only emitted contexts need."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8):
+                y = fp.round(x)
+            return y
+
+        out = FloatToFixed.apply(f.ast)
+        assert out.free_vars == f.ast.free_vars
 
     def test_rejects_a_non_integer(self):
         f = self._two()

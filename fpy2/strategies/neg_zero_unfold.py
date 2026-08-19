@@ -47,14 +47,23 @@ def unfold_neg_zero(func: Function, where: int | None = None) -> Function:
     func : Function
         The function to transform.
     where : int | None
-        The index of the block to rewrite, counting candidate blocks (those
-        this rewrite could apply to) in visit order, outermost-first. If
-        `None`, rewrite every candidate.
+        The index of the block to rewrite, counting candidate blocks (the
+        structurally-matching rounding blocks, whether or not they verify)
+        in visit order, outermost-first. If `None`, rewrite every candidate
+        that verifies and skip the rest.
 
     Returns
     -------
     Function
         The transformed function.
+
+    Raises
+    ------
+    TransformDeclined
+        If an explicit `where` names a candidate this rewrite refuses;
+        the message says why.
+    TransformReferenceError
+        If an explicit `where` names no candidate block.
 
     Examples
     --------

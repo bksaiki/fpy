@@ -35,7 +35,7 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import UnfoldSpecial
+from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldSpecial
 
 
 # ----------------------------------------------------------------------
@@ -433,12 +433,67 @@ class TestWhere:
 
     def test_index_past_the_last_site(self):
         f = self._two()
-        assert UnfoldSpecial.apply(f.ast, where=9).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            UnfoldSpecial.apply(f.ast, where=9)
 
     def test_rejects_a_non_integer(self):
         f = self._two()
         with pytest.raises(TypeError):
             UnfoldSpecial.apply(f.ast, where='first')  # type: ignore[arg-type]
+
+    @staticmethod
+    def _real_then_fp16() -> fp.Function:
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.REAL:
+                aq = fp.round(a)
+            with fp.FP16:
+                bq = fp.round(b)
+            return aq + bq
+        return f
+
+    def test_a_declined_block_counts_toward_where(self):
+        """Candidacy is structural: the ``REAL`` block is index 0 whether or
+        not it verifies, so index 1 names the ``FP16`` block."""
+        f = self._real_then_fp16()
+        out = UnfoldSpecial.apply(f.ast, where=1)
+        assert not out.is_equiv(f.ast)
+        assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
+
+    def test_naming_a_real_block_is_declined(self):
+        f = self._real_then_fp16()
+        with pytest.raises(TransformDeclined, match='REAL'):
+            UnfoldSpecial.apply(f.ast, where=0)
+
+    def test_naming_a_runtime_context_is_declined(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, n):
+            with fp.MPBFixedContext(n, 255, enable_nan=True):
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='statically known'):
+            UnfoldSpecial.apply(f.ast, where=0)
+
+    def test_naming_an_unfolded_block_is_declined(self):
+        """The second pass has nothing left to state, and saying so beats a
+        silent no-op."""
+        once = UnfoldSpecial.apply(_quantizer(fp.FP16).ast)
+        with pytest.raises(TransformDeclined, match='nothing to state'):
+            UnfoldSpecial.apply(once, where=0)
+
+    def test_an_annotated_assign_is_not_a_candidate(self):
+        """The rewrites cannot carry an annotation, so the block is left
+        alone rather than rewritten without it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y: fp.Real = fp.round(x)
+            return y
+
+        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            UnfoldSpecial.apply(f.ast, where=0)
 
 
 # ----------------------------------------------------------------------

@@ -2,6 +2,7 @@
 Scheduling language constructs for FPy programs.
 """
 
+from ..transform.error import TransformDeclined, TransformError, TransformReferenceError
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
@@ -19,6 +20,9 @@ from .simple import simplify
 from .special_unfold import unfold_special
 
 __all__ = [
+    'TransformDeclined',
+    'TransformError',
+    'TransformReferenceError',
     'close',
     'elim_iter',
     'elim_round',
