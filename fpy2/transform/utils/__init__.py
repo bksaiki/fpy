@@ -404,12 +404,18 @@ class SiteRewriter(DefaultTransformVisitor):
     def _record(self, block: StmtBlock, pos: int, inserted: int, *, removed: int = 1) -> None:
         """Record that `inserted` statements took the place of `removed` at
         `block[pos]`; `removed=0` records an insertion, which replaces nothing.
+        """
+        self._record_at(self._paths[id(block)], pos, inserted, removed=removed)
+
+    def _record_at(
+        self, path: BlockPath, pos: int, inserted: int, *, removed: int = 1
+    ) -> None:
+        """:meth:`_record`, where the caller already has the block's path.
 
         A rewrite of an enclosing statement subsumes anything recorded inside
         it -- nothing under a rebuilt statement forwards anyway, and the edits
         of one pass have to stay disjoint.
         """
-        path = self._paths[id(block)]
         if removed:
             replaced = range(pos, pos + removed)
             self.edits = [

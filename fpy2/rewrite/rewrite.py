@@ -2,11 +2,16 @@
 This module defines a rewrite rule.
 """
 
+from itertools import combinations
+
+from ..analysis import SyntaxCheck
 from ..ast import *
 from ..function import Function
-from ..transform import TransformReferenceError
+from ..transform import BlockCursor, EditLog, TransformDeclined, TransformReferenceError
+from ..transform.utils import SiteRewriter
 from ..utils import default_repr, sliding_window
 from .applier import Applier
+from .find import find_all
 from .matcher import Matcher
 from .pattern import ExprPattern, Pattern, StmtPattern
 
@@ -32,13 +37,13 @@ class _RewriteContext:
 
 
 
-class _RewriteEngine(DefaultTransformVisitor):
+class _RewriteEngine(SiteRewriter):
     """Rewrite rule applier for a given rewrite rule."""
 
     matcher: Matcher
-    """rewrite rule applier"""
+    """matcher for the rule's left-hand side"""
     applier: Applier
-    """rewrite rule applier"""
+    """applier for the rule's right-hand side"""
 
     times_applied: int
     """number of times the rewrite rule was applied"""
@@ -46,7 +51,8 @@ class _RewriteEngine(DefaultTransformVisitor):
     def __init__(self, lhs: Pattern, rhs: Pattern):
         self.matcher = Matcher(lhs)
         self.applier = Applier(rhs)
-
+        self.where = None       # a `Rewrite` is aimed by its pattern (and phase 5)
+        self.site_idx = 0
         self.times_applied = 0
 
     def apply(
@@ -100,48 +106,54 @@ class _RewriteEngine(DefaultTransformVisitor):
                     if not isinstance(e, Expr):
                         raise TypeError(f'Substitution produced \'Expr\', got {type(e)} for {e}')
                     self.times_applied += 1
+                    if not ctx.is_nested:
+                        # the statement survives with an expression rewritten, so
+                        # no edit -- but an expression cursor in it is stale
+                        self._mark_exprs(*self._site)
                 ctx.times_matched += 1
         return e
 
     def _visit_block(self, block: StmtBlock, ctx: _RewriteContext):
         pattern = self.matcher.pattern
-        block, _ = super()._visit_block(block, ctx)
+        # the path of the block being visited, before the visit rebuilds it
+        path = self._paths.get(id(block))
+
+        rebuilt: list[Stmt] = []
+        for pos, stmt in enumerate(block.stmts):
+            # `_visit_expr` marks the statement it rewrote an expression of
+            self._site = (block, pos)
+            s, _ = self._visit_statement(stmt, ctx)
+            rebuilt.append(s)
+        block = StmtBlock(rebuilt)
+
         if isinstance(pattern, StmtPattern):
-            # check if rewrite applies here
-            pattern_size = len(pattern.block.stmts)
-            iterator = sliding_window(block.stmts, pattern_size)
+            # every window of `k` consecutive statements is a candidate; a match
+            # that is rewritten consumes its whole window, and one that is not
+            # keeps its statements
+            k = len(pattern.block.stmts)
+            stmts = block.stmts
             new_stmts: list[Stmt] = []
-            try:
-                # termination guaranteed by finitely-sized iterator
-                while True:
-                    stmts = list(next(iterator))
-                    subst = self.matcher.match_exact(StmtBlock(stmts))
-                    if subst:
-                        if ctx.occurence is None or ctx.times_matched == ctx.occurence:
-                            # apply the substitution
-                            applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
-                            rw = applier.apply(subst)
-                            if not isinstance(rw, StmtBlock):
-                                raise TypeError(f'Substitution produced \'StmtBlock\', got {type(rw)} for {rw}')
-                            new_stmts.extend(rw.stmts)
-                            self.times_applied += 1
-                            # skip rest of the block
-                            for _ in range(pattern_size - 1):
-                                next(iterator)
-                        ctx.times_matched += 1
-                    else:
-                        # rewrite does not apply
-                        new_stmts.append(stmts[0])
-            except StopIteration:
-                # end of the block to check
-                # we are missing the last N - 1 statements
-                # where N is the size of the pattern
-                if pattern_size > 1:
-                    # sanity check
-                    end_stmts = block.stmts[-(pattern_size - 1):]
-                    assert len(end_stmts) == pattern_size - 1
-                    # add the last N - 1 statements
-                    new_stmts.extend(end_stmts)
+            pos = 0
+            while pos + k <= len(stmts):
+                subst = self.matcher.match_exact(StmtBlock(list(stmts[pos:pos + k])))
+                if subst is not None:
+                    selected = ctx.occurence is None or ctx.times_matched == ctx.occurence
+                    ctx.times_matched += 1
+                    if selected:
+                        applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
+                        rw = applier.apply(subst)
+                        if not isinstance(rw, StmtBlock):
+                            raise TypeError(f'Substitution produced \'StmtBlock\', got {type(rw)} for {rw}')
+                        new_stmts.extend(rw.stmts)
+                        self.times_applied += 1
+                        if path is not None:
+                            self._record_at(path, pos, len(rw.stmts), removed=k)
+                        pos += k
+                        continue
+                new_stmts.append(stmts[pos])
+                pos += 1
+            # the trailing `k - 1` statements no window covered
+            new_stmts.extend(stmts[pos:])
 
             new_block = StmtBlock(new_stmts)
             return new_block, None
@@ -203,12 +215,9 @@ class Rewrite:
         if repeat < 1:
             raise ValueError(f'Expected positive integer, got {repeat}')
 
-        ast, applied, matched = self._engine.apply(
-            func.ast, occurence=occurence, repeat=repeat
+        return func.with_edits(
+            self.apply_with_edits(func, occurence=occurence, repeat=repeat)
         )
-        if applied == 0:
-            raise self._no_match(func, matched, occurence)
-        return func.with_ast(ast)
 
 
     def apply_all(self, func: Function):
@@ -220,10 +229,60 @@ class Rewrite:
         if not isinstance(func, Function):
             raise TypeError(f'Expected \'Function\', got {type(func)}')
 
-        ast, applied, matched = self._engine.apply(func.ast)
+        return func.with_edits(self.apply_with_edits(func, occurence=None))
+
+    def apply_with_edits(
+        self,
+        func: Function, *,
+        occurence: int | None = 0,
+        repeat: int = 1,
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced.
+
+        A statement rule records the window it replaced; an expression rule
+        records no edit -- the statement survives -- and marks it as one whose
+        expressions moved.
+        """
+        if not isinstance(func, Function):
+            raise TypeError(f'Expected \'Function\', got {type(func)} for {func}')
+        if occurence is not None and (not isinstance(occurence, int) or occurence < 0):
+            raise TypeError(f'Expected a non-negative \'int\' or None, got {occurence}')
+        if not isinstance(repeat, int) or repeat < 1:
+            raise TypeError(f'Expected a positive \'int\' for repeat, got {repeat}')
+
+        if occurence is None:
+            self._check_disjoint(func)
+
+        ast, applied, matched = self._engine.apply(
+            func.ast, occurence=occurence, repeat=repeat
+        )
         if applied == 0:
-            raise self._no_match(func, matched, None)
-        return func.with_ast(ast)
+            raise self._no_match(func, matched, occurence)
+        # a user rewrite is unverified, so at least hold it to a valid program
+        SyntaxCheck.check(ast, ignore_unknown=True)
+        return EditLog(
+            func.ast, ast, tuple(self._engine.edits),
+            exprs_rewritten=tuple(self._engine.dirty_exprs),
+            exprs_preserved=True,
+        )
+
+    def _check_disjoint(self, func: Function) -> None:
+        """Declines where two matches share a statement.
+
+        A statement pattern is matched by a sliding window, so windows *i* and
+        *i+1* can both match; both cannot be rewritten, and rewriting one and
+        skipping the other would quietly do less than asked.
+        """
+        if not isinstance(self.lhs, StmtPattern):
+            return
+        found = [c for c in find_all(self.lhs, func) if isinstance(c, BlockCursor)]
+        for a, b in combinations(found, 2):
+            if a.block_path == b.block_path and set(a.span) & set(b.span):
+                raise TransformDeclined(
+                    f'matches of `{self.lhs.name}` overlap (`{a}` and `{b}`), so '
+                    'they cannot both be rewritten; narrow the pattern or aim one '
+                    'match'
+                )
 
     def _no_match(
         self, func: Function, matched: int, occurence: int | None
