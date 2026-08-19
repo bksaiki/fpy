@@ -62,9 +62,9 @@ def test_the_failure_is_catchable_as_a_transform_error():
             act()
 
 
-def test_an_occurrence_past_the_end_says_how_many_matched():
-    with pytest.raises(TransformReferenceError, match='occurence=5') as exc:
-        fma.apply(twice, occurence=5)
+def test_an_index_past_the_end_says_how_many_matched():
+    with pytest.raises(TransformReferenceError, match='where=5') as exc:
+        fma.apply(twice, 5)
     assert 'matches 2 place(s)' in str(exc.value)
     assert 'fma_l' in str(exc.value)
 
@@ -74,14 +74,14 @@ def test_the_two_failures_are_distinguishable():
     with pytest.raises(TransformReferenceError) as nothing:
         fma.apply(plain)
     with pytest.raises(TransformReferenceError) as wrong:
-        fma.apply(twice, occurence=5)
+        fma.apply(twice, 5)
     assert 'matches nothing' in str(nothing.value)
     assert 'does not correspond' in str(wrong.value)
 
 
 def test_apply_all_reports_the_same_way():
     with pytest.raises(TransformReferenceError, match='matches nothing'):
-        Rewrite(fma_l, fma_r).apply_all(plain)
+        Rewrite(fma_l, fma_r).apply(plain)
 
 
 def test_a_malformed_rule_is_not_a_transform_error():

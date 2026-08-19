@@ -384,13 +384,20 @@ class SiteRewriter(DefaultTransformVisitor):
         selects are the ones *at or beneath* it -- so the statement an earlier
         rewrite left behind names the site now nested inside it.
         """
+        return self._selects_at(self._paths.get(id(block)), pos, idx)
+
+    def _selects_at(self, here: BlockPath | None, pos: int, idx: int) -> bool:
+        """:meth:`_selects`, where the caller already has the block's path.
+
+        `here` is `None` for a block the rewrite synthesized rather than one it
+        was aimed at, which selects nothing.
+        """
         if self._target is None:
             return self.where is None or idx == self.where
+        if here is None:
+            return False
 
         path, span = self._target
-        here = self._paths.get(id(block))
-        if here is None:
-            return False  # a block the rewrite synthesized, not one it was aimed at
         return beneath(StmtPath(here, pos), path, span)
 
     def _selects_expr(self, e: Expr, block: StmtBlock, pos: int, idx: int) -> bool:

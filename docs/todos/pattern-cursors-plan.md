@@ -188,11 +188,21 @@ to forward; and overlapping matches declining with both locations named.
 other strategy uses: an index counts matches in traversal order, a cursor names
 one (at or beneath, as everywhere else), `None` rewrites every match.
 
-Replacing `occurence` rather than keeping it is a deliberate break: it is the
-defect item 3 exists to remove, and this package is pre-1.0.
+Two consequences worth stating, both deliberate:
 
-Small, now that `where` needs no new shape — this is the consume half of phase 4's
-produce.
+- **`apply_all` is gone.** With `where=None` meaning everywhere, and *defaulting*
+  to it as every other strategy does, `apply_all(f)` is `apply(f)`. The cost is
+  that `apply(f)` used to mean the first match only, so a call that meant that now
+  says `apply(f, 0)`.
+- **`occurence` is not kept as an alias**: it is the defect item 3 exists to
+  remove, and this package is pre-1.0.
+
+The engine gets its selection from `SiteRewriter._selects` rather than counting by
+hand, which is what makes a cursor work at all; expression rules select by
+identity against the *source* node, since the visit rebuilds the one it matches.
+Expanding a rule (`repeat > 1`) is a pass in its own right, so it counts its own
+matches — sharing the program's counter silently stopped the expansion after one
+round.
 
 Tests: `Rewrite` aimed by index and by cursor, agreeing where both name the same
 match; `find(pattern, f)[i]` aiming the same rewrite as `where=i`; a cursor naming

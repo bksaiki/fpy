@@ -237,7 +237,7 @@ class RewriteTestCase():
         assert isinstance(f, Function)
         assert isinstance(f1, Function)
 
-        f_rw = rw_fma.apply(f)
+        f_rw = rw_fma.apply(f, 0)
         assert isinstance(f_rw, Function)
         self.assertAstEqual(f_rw.ast.body, f1.ast.body)
 
@@ -245,8 +245,8 @@ class RewriteTestCase():
         assert isinstance(f, Function)
         assert isinstance(f2, Function)
 
-        f_rw = rw_fma.apply(f)
-        f_rw = rw_fma.apply(f_rw)
+        f_rw = rw_fma.apply(f, 0)
+        f_rw = rw_fma.apply(f_rw, 0)
         assert isinstance(f_rw, Function)
         self.assertAstEqual(f_rw.ast.body, f2.ast.body)
 
@@ -254,7 +254,7 @@ class RewriteTestCase():
         assert isinstance(f, Function)
         assert isinstance(f2, Function)
 
-        f_rw = rw_fma.apply_all(f)
+        f_rw = rw_fma.apply(f)
         assert isinstance(f_rw, Function)
         self.assertAstEqual(f_rw.ast.body, f2.ast.body)
 

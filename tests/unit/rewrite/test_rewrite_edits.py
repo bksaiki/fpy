@@ -194,10 +194,10 @@ def test_overlapping_matches_decline_the_whole_application():
 
     assert len(find_all(pair_l, three)) == 2      # windows [0:2] and [1:3]
     with pytest.raises(TransformDeclined, match='overlap'):
-        widen.apply_all(three)
+        widen.apply(three)
 
 
-def test_a_named_occurrence_is_unaffected_by_other_overlaps():
+def test_a_named_match_is_unaffected_by_other_overlaps():
     """Only one match is rewritten, so nothing conflicts."""
     @fp.fpy
     def three(x):
@@ -206,8 +206,87 @@ def test_a_named_occurrence_is_unaffected_by_other_overlaps():
         w = x + 1
         return y + z + w
 
-    out = widen.apply(three, occurence=0)
+    out = widen.apply(three, 0)
     assert out.edits is not None and len(out.edits.edits) == 1
+
+
+# ----------------------------------------------------------------------
+# Aiming
+
+
+def test_a_cursor_names_the_match_to_rewrite():
+    @fp.fpy
+    def two(x):
+        y = x + 1
+        z = y * 3
+        y = x + 1
+        return y + z
+
+    second = find_all(bump_l, two)[1]
+    out = bump.apply(two, second)
+
+    assert out.edits is not None
+    edit, = out.edits.edits
+    assert edit.index == 2
+
+
+def test_an_index_and_the_cursor_it_lists_aim_alike():
+    @fp.fpy
+    def two(x):
+        y = x + 1
+        z = y * 3
+        y = x + 1
+        return y + z
+
+    for i, cursor in enumerate(find_all(bump_l, two)):
+        assert bump.apply(two, cursor).format() == bump.apply(two, i).format()
+
+
+def test_a_cursor_naming_no_match_is_a_bad_reference():
+    site = StmtCursor(stmt_prog.ast, FuncBody().stmt(1))   # `z = y * 3`
+    with pytest.raises(TransformReferenceError, match='does not correspond'):
+        bump.apply(stmt_prog, site)
+
+
+def test_an_expression_cursor_names_one_match_of_an_expression_rule():
+    @fp.fpy
+    def two(x, y, z):
+        a = x * y + z
+        b = z * y + x
+        return a + b
+
+    second = find_all(fma_l, two)[1]
+    out = fma.apply(two, second)
+
+    assert out.format().count('fp.fma') == 1
+    assert 'z * y + x' not in out.format()
+
+
+def test_a_stale_cursor_is_forwarded_on_arrival():
+    """A cursor chosen against the original program aims a rewrite of a later
+    one, without the caller rebasing it."""
+    @fp.fpy
+    def two(x):
+        y = x + 1
+        z = y * 3
+        y = x + 1
+        return y + z
+
+    site = find_all(bump_l, two)[1]
+    once = bump.apply(two, 0)          # rewrite the first match
+    twice_ = bump.apply(once, site)    # the second, named against the original
+
+    assert twice_.format().count('x + 2') == 2
+
+
+def test_where_defaults_to_every_match():
+    @fp.fpy
+    def two(x, y, z):
+        a = x * y + z
+        b = z * y + x
+        return a + b
+
+    assert fma.apply(two).format().count('fp.fma') == 2
 
 
 def test_an_unselected_match_keeps_its_statements():
@@ -220,7 +299,7 @@ def test_an_unselected_match_keeps_its_statements():
         y = x + 1
         return y + z
 
-    out = bump.apply(two, occurence=1)
+    out = bump.apply(two, 1)
     assert out.format().count('x + 1') == 1
     assert out.format().count('x + 2') == 1
     assert len(out.ast.body.stmts) == len(two.ast.body.stmts)
