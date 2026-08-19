@@ -28,10 +28,13 @@ from ..analysis import (
     SyntaxCheck,
 )
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
 from .utils import (
-    TransformReferenceError,
+    Block,
+    Cursor,
+    EditLog,
+    SiteRewriter,
+    check_where,
     clone_block,
     copy_target,
     infer_array_size,
@@ -55,21 +58,20 @@ class SplitLoopStrategy(enum.Enum):
     Correct for any length."""
 
 
-class _SplitLoop(DefaultTransformVisitor):
+class _SplitLoop(SiteRewriter):
     """
     Split loop visitor.
     """
 
     func: FuncDef
     factor: Expr
-    where: int | None
+    where: int | Cursor | Block | None
     strategy: SplitLoopStrategy
     temp_id: NamedId
     outer_id: NamedId
     inner_id: NamedId
 
     gensym: Gensym
-    index: int
     # Static list sizes of iterables; with a literal factor, enables
     # discharging the remainder handling at compile time.
     array_size: ArraySizeAnalysis | None
@@ -78,7 +80,7 @@ class _SplitLoop(DefaultTransformVisitor):
         self,
         func: FuncDef,
         factor: Expr,
-        where: int | None,
+        where: int | Cursor | Block | None,
         strategy: SplitLoopStrategy,
         reaching_defs: ReachingDefsAnalysis,
         temp_id: NamedId,
@@ -97,7 +99,7 @@ class _SplitLoop(DefaultTransformVisitor):
         self.array_size = array_size
 
         self.gensym = Gensym(reaching_defs.names())
-        self.index = 0
+        self.site_idx = 0
 
     def _static_factor(self) -> int | None:
         """The factor as a positive compile-time constant, or ``None``."""
@@ -280,10 +282,12 @@ class _SplitLoop(DefaultTransformVisitor):
         return emitted
 
     def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
-        selected = self.where is None or self.index == self.where
-        self.index += 1
-        if not selected:
+        block, pos = self._site
+        idx = self.site_idx
+        self.site_idx += 1
+        if not self._selects(block, pos, idx):
             return super()._visit_for(stmt, ctx)
+        self._matched += 1
 
         iterable = self._visit_expr(stmt.iterable, ctx)
         factor = self._visit_expr(self.factor, ctx)
@@ -299,14 +303,23 @@ class _SplitLoop(DefaultTransformVisitor):
 
         # The loop expands to several statements: emit all but the last
         # into the enclosing block and return the last as the replacement.
+        self._replaced = True
         ctx.extend(emitted[:-1])
         return emitted[-1], None
 
     def _visit_block(self, block: StmtBlock, ctx: list[Stmt] | None):
         out: list[Stmt] = []
-        for stmt in block.stmts:
+        for pos, stmt in enumerate(block.stmts):
+            self._site = (block, pos)
+            self._replaced = False
+            before = len(out)
             s, _ = self._visit_statement(stmt, out)
             out.append(s)
+            # the statement itself is appended above, so growth past one is
+            # what the rewrite spliced into this block
+            if self._replaced or len(out) > before + 1:
+                self._record(block, pos, len(out) - before)
+                self._replaced = False
         return StmtBlock(out), None
 
     def apply(self):
@@ -351,7 +364,7 @@ class SplitLoop:
     def apply(
         func: FuncDef,
         factor: Expr,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
         array_size: ArraySizeAnalysis | None = None,
@@ -367,9 +380,11 @@ class SplitLoop:
         factor : Expr
             The chunk size; a literal ``Integer`` must be positive, and
             any other expression is guarded by a runtime ``assert``.
-        where : int | None
-            The index of the `for` loop to split. If `None`, split all
-            `for` loops.
+        where : int | Cursor | Block | None
+            Which `for` loop to split: an index counting loops in visit
+            order, or a cursor or region naming a program point, which
+            takes every loop at or beneath it. If `None`, split every
+            `for` loop.
         strategy : SplitLoopStrategy
             How to handle a length that is not a multiple of the factor
             (see :class:`SplitLoopStrategy`). Defaults to ``PEEL``,
@@ -382,14 +397,39 @@ class SplitLoop:
             remainder handling when an iterable's length is statically
             known.
         """
+        return SplitLoop.apply_with_edits(
+            func,
+            factor=factor,
+            where=where,
+            strategy=strategy,
+            reaching_defs=reaching_defs,
+            array_size=array_size,
+            temp_id=temp_id,
+            outer_id=outer_id,
+            inner_id=inner_id,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef,
+        factor: Expr,
+        where: int | Cursor | Block | None = None,
+        strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
+        reaching_defs: ReachingDefsAnalysis | None = None,
+        array_size: ArraySizeAnalysis | None = None,
+        temp_id: NamedId | None = None,
+        outer_id: NamedId | None = None,
+        inner_id: NamedId | None = None
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it replaced; the rewritten
+        program is the log's `result`."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
         if not isinstance(factor, Expr):
             raise TypeError(f"Expected an \'Expr\' for factor, got {factor}")
         if isinstance(factor, Integer) and factor.val < 1:
             raise ValueError(f"Expected a positive factor, got {factor.val}")
-        if where is not None and not isinstance(where, int):
-            raise TypeError(f"Expected an \'int\' or None for where, got {where}")
+        check_where(where)
 
         if reaching_defs is None:
             reaching_defs = ReachingDefs.analyze(func)
@@ -406,14 +446,10 @@ class SplitLoop:
             func, factor, where, strategy, reaching_defs,
             temp_id, outer_id, inner_id, array_size
         )
-        func = vtor.apply()
+        out = vtor.apply()
         # A `where` that named no loop leaves the function unchanged;
-        # fail rather than silently no-op.  `index` is the true loop
+        # fail rather than silently no-op.  `site_idx` is the true loop
         # count: generated loops are never re-visited.
-        if where is not None and not (0 <= where < vtor.index):
-            raise TransformReferenceError(
-                f'where={where} does not correspond to a `for` loop; '
-                f'the function has {vtor.index} `for` loop(s)'
-            )
-        SyntaxCheck.check(func, ignore_unknown=True)
-        return func
+        vtor.check_site('a `for` loop')
+        SyntaxCheck.check(out, ignore_unknown=True)
+        return EditLog(func, out, tuple(vtor.edits))

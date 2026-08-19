@@ -175,13 +175,19 @@ Split from phase 3 deliberately: produce, then consume.
 
 `split_loop`, `for_unroll`, `while_unroll`, `func_inline` count sites by hand
 (`self.index`) and check them inline rather than through `check_where` /
-`check_site`. Unify them onto the shared helpers, then give them both
-capabilities: an edit log and a cursor `where`.
+`check_site`. The shared half of `BlockRewriter` — the target, the edit log, the
+site check — moves up into a `SiteRewriter` base the four inherit; `BlockRewriter`
+keeps only `_candidate` / `_verify` / `_rewrite`.
 
-Nothing here is transform-specific: each replaces one statement with the list it
-emitted, which is the same structural edit `BlockRewriter` records. A cursor at an
-inlined call forwards to the region the callee's body became — the honest answer,
-and one `inline` does not have to describe.
+These four splice their replacement into the *enclosing* block through the visit
+context rather than returning it, so `_visit_block` reads the edit off the
+accumulator's growth (plus a flag, for a rewrite that emits exactly one
+statement). `_record` drops any edit recorded beneath a statement later replaced
+wholesale, which is what keeps `for_unroll`'s nested unrolling disjoint.
+
+`inline`'s sites are `Call` *expressions*, so a statement-level cursor is coarser
+than its index: a statement holding two candidate calls names both. Documented,
+not worked around — expression cursors are out of scope.
 
 ### Phase 6 — listing sites
 

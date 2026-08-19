@@ -267,22 +267,20 @@ class Declined:
     reason: str
 
 
-class BlockRewriter(DefaultTransformVisitor):
+class SiteRewriter(DefaultTransformVisitor):
     """
-    Rewrites selected `with` blocks, each into several statements.
+    The site vocabulary a rewrite with countable sites shares: where it is
+    aimed, and what it replaced.
 
-    A subclass says which blocks structurally match (`_candidate`), whether a
-    match may be rewritten (`_verify`), and what to put in its place
-    (`_rewrite`).  `where` aims the rewrite: an index picks one candidate,
-    counting in visit order, outermost-first; a :class:`Cursor` or
-    :class:`Block` picks every candidate at or beneath the program point it
-    names; `None` takes them all.  A candidate `_verify` declines is skipped,
-    except that an index naming one raises :class:`TransformDeclined`, as does
-    a cursor or region whose candidates *all* declined.
+    `where` aims the rewrite: an index picks one candidate, counting in visit
+    order, outermost-first; a :class:`Cursor` or :class:`Block` picks every
+    candidate at or beneath the program point it names; `None` takes them all.
 
     Every rewrite is recorded in `edits`, which is what forwards a cursor
     across the pass.  The record is structural -- a statement span replaced by
-    another -- so no subclass says anything about it.
+    another -- so no subclass says anything about what its output means.
+
+    A subclass that overrides `_visit_function` must call `_begin` itself.
     """
 
     where: int | Cursor | Block | None
@@ -290,23 +288,34 @@ class BlockRewriter(DefaultTransformVisitor):
     edits: list[Edit]
     declined: list[str]
     _matched: int
+    _replaced: bool
+    """set by a statement visitor that replaced the statement it was handed;
+    `_visit_block` turns it into an edit, since it is what knows where the
+    statement was"""
+    _site: tuple[StmtBlock, int]
+    """the block and index of the statement being visited, for a visitor whose
+    context carries something else"""
     _paths: dict[int, Path]
     _target: tuple[Path, range] | None
-    """the block and indices an explicit cursor or region names"""
+    """the block path and indices an explicit cursor or region names"""
 
-    def _visit_function(self, func: FuncDef, ctx):
-        # the edits and the target name nodes of *this* tree, so both are
-        # resolved here, against the tree about to be walked
+    def _begin(self, func: FuncDef) -> None:
+        """Set up against the tree about to be walked: both the paths an edit
+        is recorded with and the target a cursor names are nodes of it."""
         self.edits = []
         self.declined = []
         self._matched = 0
+        self._replaced = False
         self._paths = block_paths(func)
         self._target = _target_of(self.where, func)
+
+    def _visit_function(self, func: FuncDef, ctx):
+        self._begin(func)
         return super()._visit_function(func, ctx)
 
     def check_site(self, what: str) -> None:
-        """Rejects an explicit `where` that named no candidate, or a region
-        where every candidate declined: fail rather than silently no-op."""
+        """Rejects an explicit `where` that named no candidate, or one whose
+        candidates all declined: fail rather than silently no-op."""
         where = self.where
         if where is None:
             return
@@ -318,22 +327,8 @@ class BlockRewriter(DefaultTransformVisitor):
                 )
         elif self._matched == 0:
             raise TransformReferenceError(f'`{where}` does not name {what}')
-        elif not self.edits:
+        elif self.declined and not self.edits:
             raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
-
-    def _candidate(self, stmt: ContextStmt):
-        """What `_verify` needs for this block, or `None` where it does not
-        structurally match.  Only matches count toward `where`."""
-        raise NotImplementedError
-
-    def _verify(self, stmt: ContextStmt, info):
-        """What `_rewrite` needs for this match, or a `Declined` saying why
-        it cannot be rewritten.  By default every match verifies."""
-        return info
-
-    def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
-        """The statements that replace `stmt`."""
-        raise NotImplementedError
 
     def _selects(self, block: StmtBlock, pos: int, idx: int) -> bool:
         """Whether the candidate at `block[pos]`, the `idx`th of the program,
@@ -355,6 +350,44 @@ class BlockRewriter(DefaultTransformVisitor):
             return pos in span
         n = len(path)
         return len(here) > n and here[:n] == path and here[n] in span
+
+    def _record(self, block: StmtBlock, pos: int, inserted: int) -> None:
+        """Record that `block[pos]` was replaced by `inserted` statements.
+
+        A rewrite of an enclosing statement subsumes anything recorded inside
+        it -- nothing under a rebuilt statement forwards anyway, and the edits
+        of one pass have to stay disjoint.
+        """
+        path = self._paths[id(block)]
+        inner = (*path, pos)
+        self.edits = [e for e in self.edits if e.block_path[:len(inner)] != inner]
+        self.edits.append(Edit(path, pos, 1, inserted))
+
+
+class BlockRewriter(SiteRewriter):
+    """
+    Rewrites selected `with` blocks, each into several statements.
+
+    A subclass says which blocks structurally match (`_candidate`), whether a
+    match may be rewritten (`_verify`), and what to put in its place
+    (`_rewrite`).  A candidate `_verify` declines is skipped, except that an
+    index naming one raises :class:`TransformDeclined`, as does a cursor or
+    region whose candidates *all* declined.
+    """
+
+    def _candidate(self, stmt: ContextStmt):
+        """What `_verify` needs for this block, or `None` where it does not
+        structurally match.  Only matches count toward `where`."""
+        raise NotImplementedError
+
+    def _verify(self, stmt: ContextStmt, info):
+        """What `_rewrite` needs for this match, or a `Declined` saying why
+        it cannot be rewritten.  By default every match verifies."""
+        return info
+
+    def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
+        """The statements that replace `stmt`."""
+        raise NotImplementedError
 
     def _visit_block(self, block: StmtBlock, ctx):
         # a rewritten block expands into several statements, so the splice
@@ -378,9 +411,7 @@ class BlockRewriter(DefaultTransformVisitor):
                             # a region, or the whole program, skips it
                         else:
                             emitted = self._rewrite(s, verified)
-                            self.edits.append(
-                                Edit(self._paths[id(block)], pos, 1, len(emitted))
-                            )
+                            self._record(block, pos, len(emitted))
                             stmts.extend(emitted)
                             continue
             new_s, ctx = self._visit_statement(s, ctx)

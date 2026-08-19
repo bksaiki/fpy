@@ -4,11 +4,10 @@ Unroller for `while` loops.
 
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultTransformVisitor
-from .utils import TransformReferenceError
+from .utils import Block, Cursor, EditLog, SiteRewriter, check_where
 
 
-class _WhileUnroll(DefaultTransformVisitor):
+class _WhileUnroll(SiteRewriter):
     """
     Unroll visitor.
 
@@ -27,20 +26,24 @@ class _WhileUnroll(DefaultTransformVisitor):
     """
 
     func: FuncDef
-    where: int | None
+    where: int | Cursor | Block | None
     times: int
-    index: int
 
-    def __init__(self, func: FuncDef, where: int | None, times: int) -> None:
+    def __init__(
+        self, func: FuncDef, where: int | Cursor | Block | None, times: int
+    ) -> None:
         super().__init__()
         self.func = func
         self.where = where
         self.times = times
-        self.index = 0
+        self.site_idx = 0
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
-        if self.where is None or self.index == self.where:
-            self.index += 1
+        block, pos = self._site
+        idx = self.site_idx
+        self.site_idx += 1
+        if self._selects(block, pos, idx):
+            self._matched += 1
             # original loop
             cond = self._visit_expr(stmt.cond, ctx)
             body, _ = self._visit_block(stmt.body, ctx)
@@ -49,19 +52,27 @@ class _WhileUnroll(DefaultTransformVisitor):
             for _ in range(self.times):
                 cond = self._visit_expr(stmt.cond, ctx)
                 body, _ = self._visit_block(stmt.body, ctx)
-                block = StmtBlock(body.stmts + [ret_stmt])
-                ret_stmt = If1Stmt(cond, block, stmt.loc)
+                unrolled = StmtBlock(body.stmts + [ret_stmt])
+                ret_stmt = If1Stmt(cond, unrolled, stmt.loc)
 
+            # a zero-times unroll rebuilds the loop and changes nothing, so
+            # cursors inside its body still name what they named
+            self._replaced = self.times > 0
             return ret_stmt, None
         else:
-            self.index += 1
             return super()._visit_while(stmt, ctx)
 
     def _visit_block(self, block: StmtBlock, ctx: None):
-        new_stmts = []
-        for stmt in block.stmts:
-            stmt, _ = self._visit_statement(stmt, ctx)
-            new_stmts.append(stmt)
+        new_stmts: list[Stmt] = []
+        for pos, stmt in enumerate(block.stmts):
+            self._site = (block, pos)
+            self._replaced = False
+            s, _ = self._visit_statement(stmt, ctx)
+            new_stmts.append(s)
+            if self._replaced:
+                # the loop became one statement: an `if` guarding the rest
+                self._record(block, pos, 1)
+                self._replaced = False
         return StmtBlock(new_stmts), None
 
     def apply(self):
@@ -74,38 +85,44 @@ class WhileUnroll:
     """
 
     @staticmethod
-    def apply(func: FuncDef, where: int | None = None, times: int = 1):
+    def apply(
+        func: FuncDef, where: int | Cursor | Block | None = None, times: int = 1
+    ) -> FuncDef:
         """
         Apply the transformation.
 
         Parameters
         ----------
-        where : int | None
-            The index of the `while` loop to unroll. If `None`, unroll all
-            `while` loops.
+        where : int | Cursor | Block | None
+            Which `while` loop to unroll: an index counting loops in visit
+            order, or a cursor or region naming a program point, which takes
+            every loop at or beneath it. If `None`, unroll every `while` loop.
         times : int
             The number of times to unroll the loop.
         """
+        return WhileUnroll.apply_with_edits(func, where, times).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, where: int | Cursor | Block | None = None, times: int = 1
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it replaced; the rewritten
+        program is the log's `result`."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
-        if where is not None and not isinstance(where, int):
-            raise TypeError(f"Expected an \'int\' or None for where, got {where}")
+        check_where(where)
         if not isinstance(times, int):
             raise TypeError(f"Expected an \'int\' for times, got {times}")
         if times < 0:
             raise ValueError(f"Expected a non-negative integer for times, got {times}")
 
         unroller = _WhileUnroll(func, where, times)
-        func = unroller.apply()
+        out = unroller.apply()
         # A `where` that named no loop leaves the function unchanged; fail
         # rather than silently no-op.  When `where` is out of range no loop
-        # matches, so no body is re-visited and `index` is the true loop
-        # count; an in-range `where` matches (so `index` exceeds it, even
+        # matches, so no body is re-visited and `site_idx` is the true loop
+        # count; an in-range `where` matches (so `site_idx` exceeds it, even
         # though re-visiting a matched loop's body can inflate the counter).
-        if where is not None and not (0 <= where < unroller.index):
-            raise TransformReferenceError(
-                f'where={where} does not correspond to a `while` loop; '
-                f'the function has {unroller.index} `while` loop(s)'
-            )
-        SyntaxCheck.check(func, ignore_unknown=True)
-        return func
+        unroller.check_site('a `while` loop')
+        SyntaxCheck.check(out, ignore_unknown=True)
+        return EditLog(func, out, tuple(unroller.edits))

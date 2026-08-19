@@ -5,12 +5,13 @@ Scheduling language: loop split
 from ..ast import Expr, Integer, NamedId, Var
 from ..function import Function
 from ..transform import SplitLoop, SplitLoopStrategy
+from ..transform.utils.cursor import Block, Cursor
 
 
 def split(
     func: Function,
     factor: int | str,
-    where: int | None = None,
+    where: int | Cursor | Block | None = None,
     *,
     strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
     temp_id: str = 't',
@@ -29,9 +30,13 @@ def split(
         The chunk size — a positive constant, or the name of a free
         variable of the function holding it (a variable factor is
         guarded by a runtime ``assert factor >= 1``).
-    where : int | None
-        The index of the `for` loop to split. If `None`, split all
-        `for` loops.
+    where : int | Cursor | Block | None
+        Which `for` loop to split: an index counting `for` loops in visit
+        order, outermost-first; or a :class:`fpy2.strategies.Cursor` /
+        :class:`fpy2.strategies.Block` naming a program point, which takes
+        every loop at or beneath it. A cursor or region from an earlier
+        program is forwarded to this one first. If `None`, split every
+        `for` loop.
     strategy : SplitLoopStrategy
         How to handle a length that is not a multiple of `factor`.
         Defaults to ``PEEL``, which runs the remainder in a residual
@@ -99,9 +104,9 @@ def split(
     else:
         raise TypeError(f"Expected an \'int\' or \'str\' for factor, got {factor}")
 
-    ast = SplitLoop.apply(
-        func.ast, factor_e, where, strategy,
+    log = SplitLoop.apply_with_edits(
+        func.ast, factor_e, func.rebase(where), strategy,
         temp_id=NamedId(temp_id), outer_id=NamedId(outer_id), inner_id=NamedId(inner_id)
     )
 
-    return func.with_ast(ast)
+    return func.with_edits(log)
