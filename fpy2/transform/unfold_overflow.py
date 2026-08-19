@@ -451,8 +451,6 @@ class _UnfoldOverflowInstance(BlockRewriter):
         # written with; without one it falls back to the context value itself
         self.alias = fpy_alias(func.env)
         self.used_alias = False
-        # Counts *candidate* blocks (those the rewrite could unfold) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
@@ -468,8 +466,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
         return func
 
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """The block's rounded operands, if it is structurally a rounding
-        block.  Only a rounding is a bounded rounding in disguise; `Cast`
+        """Only a rounding is a bounded rounding in disguise; `Cast`
         asserts exactness, which the rewrite would not preserve."""
         return rounding_block(stmt, casts=False)
 
@@ -599,15 +596,9 @@ class UnfoldOverflow:
         """
         Takes the bound out of every qualifying rounding context in `func`.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the structurally-matching rounding
-        blocks, whether or not they verify.  If `None`, every candidate that
-        verifies is rewritten and the rest are skipped.
-
-        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
-        `where` names a candidate this pass refuses, and
-        :class:`fpy2.transform.TransformReferenceError` where it names no
-        candidate at all.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
 
         With `early_check`, a check on the operand precedes the rounding, so
         nothing certain to overflow is rounded at all.

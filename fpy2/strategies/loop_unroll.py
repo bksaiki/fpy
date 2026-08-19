@@ -28,6 +28,8 @@ def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Fu
 
     Raises
     ------
+    ValueError
+        If `times` is not positive.
     TransformReferenceError
         If `where` does not correspond to a `while` loop.
 
@@ -85,6 +87,8 @@ def unroll_for(
 
     Raises
     ------
+    ValueError
+        If `times` is not positive.
     TransformReferenceError
         If `where` does not correspond to a `for` loop.
 

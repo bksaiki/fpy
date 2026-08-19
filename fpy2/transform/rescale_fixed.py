@@ -292,16 +292,13 @@ class _RescaleFixedInstance(BlockRewriter):
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        # Counts *candidate* blocks (those the rewrite could rescale) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """The block's rounded operands, if it is structurally a rounding
-        block.  Rounding commutes with the shift; arithmetic does not."""
+        """Rounding commutes with the shift; arithmetic does not."""
         return rounding_block(stmt, casts=True)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Shift | Declined:
@@ -309,7 +306,8 @@ class _RescaleFixedInstance(BlockRewriter):
         ctx = self.eval_info.by_expr.get(stmt.ctx)
         if isinstance(ctx, _FixedCtx):
             # a known format shifts by a constant, so the factors fold away
-            if _scale_of(ctx) == 0:
+            scale = _scale_of(ctx)
+            if scale == 0:
                 return Declined(
                     'the format is already at digit position zero; there is '
                     'nothing to rescale'
@@ -328,7 +326,6 @@ class _RescaleFixedInstance(BlockRewriter):
                     'format and would have to shift with it; run '
                     '`unfold_special` first'
                 )
-            scale = _scale_of(ctx)
             return _Shift(
                 ctx=lambda: _rescale_expr(stmt.ctx, ctx, 0),
                 up=lambda: _pow2(-scale, stmt.loc),
@@ -336,13 +333,13 @@ class _RescaleFixedInstance(BlockRewriter):
             )
 
         if isinstance(stmt.ctx, Call):
-            shift = self._symbolic_shift(stmt.ctx)
-            if shift is None:
+            sym = self._symbolic_shift(stmt.ctx)
+            if sym is None:
                 return Declined(
                     'the constructor call is not a fixed-point context whose '
                     'position can be shifted symbolically'
                 )
-            return shift
+            return sym
         return Declined(
             'the context is neither a statically-known fixed-point format '
             'nor a constructor call to shift symbolically'
@@ -496,15 +493,9 @@ class RescaleFixed:
         """
         Rescales fixed-point rounding in `func` to digit position zero.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the structurally-matching rounding
-        blocks, whether or not they verify.  If `None`, every candidate that
-        verifies is rewritten and the rest are skipped.
-
-        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
-        `where` names a candidate this pass refuses, and
-        :class:`fpy2.transform.TransformReferenceError` where it names no
-        candidate at all.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
 
         A format that substitutes a *finite* value for NaN or an infinity is
         declined: the substitute would have to shift along with the format.

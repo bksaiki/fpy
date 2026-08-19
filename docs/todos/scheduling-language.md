@@ -10,14 +10,13 @@ Each item says what transfers and what it fixes here.
 
 ## 1. One failure contract
 
-Failure is inconsistent today: an out-of-range `where` raises `ValueError` in
-`inline`, `split`, and `unroll_for`, but silently no-ops in the
-`BlockRewriter`-based rounding operators (pinned as intended by
-`tests/unit/transform/test_unfold_special.py`), and a *declined* rewrite —
-`agrees` refusing a format it cannot reproduce — is also a silent no-op, so
-"it worked" and "nothing happened" print the same.
+Failure used to be inconsistent: an out-of-range `where` raised `ValueError`
+in `inline`, `split`, and `unroll_for`, but silently no-opped in the
+`BlockRewriter`-based rounding operators, and a *declined* rewrite —
+`agrees` refusing a format it cannot reproduce — was also a silent no-op, so
+"it worked" and "nothing happened" printed the same.
 
-Adopt the two-kind taxonomy every surveyed system converged on (Exo 2:
+The contract is the two-kind taxonomy every surveyed system converged on (Exo 2:
 `SchedulingError` vs `InvalidCursorError`; MLIR: silenceable vs definite):
 
 - **declined** — the transform refused, the program is unchanged, and the
@@ -27,7 +26,12 @@ Adopt the two-kind taxonomy every surveyed system converged on (Exo 2:
 - anything else is a bug and propagates.
 
 **Done** — the phase record lives in
-[failure-contract.md](failure-contract.md).
+[failure-contract.md](failure-contract.md). Still outside the hierarchy,
+deliberately: `monomorphize`'s conflict errors (caller-supplied
+contradictions, not references) and the STRICT-divisibility `ValueError`s in
+`split`/`unroll_for`, which are declined-shaped but uncatchable via
+`except TransformError` — revisit if a strategy ever wants to fall back on
+them.
 
 One hierarchy across both layers, no translation: the exceptions are named for
 what happened (`TransformDeclined`, `TransformReferenceError`, base

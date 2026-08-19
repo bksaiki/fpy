@@ -482,6 +482,19 @@ class TestWhere:
         with pytest.raises(TransformDeclined, match='nothing to state'):
             UnfoldSpecial.apply(once, where=0)
 
+    def test_an_annotated_assign_is_not_a_candidate(self):
+        """The rewrites cannot carry an annotation, so the block is left
+        alone rather than rewritten without it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y: fp.Real = fp.round(x)
+            return y
+
+        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        with pytest.raises(TransformReferenceError):
+            UnfoldSpecial.apply(f.ast, where=0)
+
 
 # ----------------------------------------------------------------------
 # Semantic equivalence

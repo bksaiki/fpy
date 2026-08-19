@@ -130,6 +130,7 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
+from .error import TransformDeclined
 from .utils import (
     BlockRewriter,
     Declined,
@@ -375,18 +376,18 @@ class _FloatToFixedInstance(BlockRewriter):
         self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        # Counts *candidate* blocks (those the rewrite could lower) in visit
-        # order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
         # the name the program calls `fpy2` by: the rewrite constructs a
         # context per value, so it has to name the constructor
         self.alias = fpy_alias(func.env)
+        self.used_alias = False
 
     def apply(self) -> FuncDef:
         func = self._visit_function(self.func, None)
-        if self.alias is not None:
+        if self.used_alias:
             # the emitted contexts name `fpy2`, which the environment binds
             # but the body may not have referred to before
+            assert self.alias is not None
             meta = replace(
                 func.meta,
                 free_vars=func.free_vars | {NamedId(self.alias)},
@@ -395,20 +396,12 @@ class _FloatToFixedInstance(BlockRewriter):
         return func
 
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """The block's rounded operands, if it is structurally a rounding
-        block.  Only a rounding is a fixed-point rounding in disguise; `Cast`
+        """Only a rounding is a fixed-point rounding in disguise; `Cast`
         asserts exactness, which the lowering would not preserve."""
         return rounding_block(stmt, casts=False)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's context, if its rounding can be lowered to fixed-point."""
-        # the position varies per value, so the rewrite has to name a context
-        # constructor; without `fpy2` in scope there is nothing to name it by
-        if self.alias is None:
-            return Declined(
-                'the rewrite names a context constructor, and `fpy2` is not '
-                'in scope to name it by'
-            )
         ctx = self.eval_info.by_expr.get(stmt.ctx)
         if not isinstance(ctx, Context):
             return Declined('the context is not statically known')
@@ -525,6 +518,7 @@ class _FloatToFixedInstance(BlockRewriter):
     def _rewrite(self, stmt: ContextStmt, src: _Source) -> list[Stmt]:
         """The block's rounds, lowered.  Nothing rounds under the float context
         afterwards, so the block itself goes away."""
+        self.used_alias = True
         stmts: list[Stmt] = []
         for s in stmt.body.stmts:
             if isinstance(s, Assign):
@@ -554,19 +548,21 @@ class FloatToFixed:
         """
         Expresses float rounding in `func` as fixed-point rounding.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the structurally-matching rounding
-        blocks, whether or not they verify.  If `None`, every candidate that
-        verifies is rewritten and the rest are skipped.
-
-        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
-        `where` names a candidate this pass refuses, and
-        :class:`fpy2.transform.TransformReferenceError` where it names no
-        candidate at all.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.  Raises
+        :class:`TransformDeclined` up front where `fpy2` is not in scope.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
+        # the position varies per value, so the rewrite has to name a context
+        # constructor; a whole-function precondition, not a per-site decline
+        if fpy_alias(func.env) is None:
+            raise TransformDeclined(
+                'the rewrite names a context constructor, and `fpy2` is not '
+                'in scope to name it by'
+            )
 
         if eval_info is None:
             eval_info = PartialEval.apply(func)

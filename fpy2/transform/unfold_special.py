@@ -322,16 +322,13 @@ class _UnfoldSpecialInstance(BlockRewriter):
         self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        # Counts *candidate* blocks (those the rewrite could unfold) in
-        # visit order, outermost-first.  `where` selects one by this index.
         self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """The block's rounded operands, if it is structurally a rounding
-        block.  A cast substitutes a special exactly as a round does: the
+        """A cast substitutes a special exactly as a round does: the
         substitution happens before the exactness check."""
         return rounding_block(stmt, casts=True)
 
@@ -445,16 +442,9 @@ class UnfoldSpecial:
         context in `func`, stating each as a branch on the operand; the
         surviving rounding sees only a finite, non-zero value.
 
-        `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the structurally-matching rounding
-        blocks, whether or not they verify.  If `None`, every candidate that
-        verifies is rewritten and the rest are skipped.
-
-        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
-        `where` names a candidate this pass refuses — a context that is not
-        statically known, `REAL`, or a format with nothing to state — and
-        :class:`fpy2.transform.TransformReferenceError` where it names no
-        candidate at all.
+        `where` selects one structurally-matching rounding block by index
+        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `None` rewrites every one that verifies.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')

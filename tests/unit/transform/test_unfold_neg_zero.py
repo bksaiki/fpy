@@ -379,6 +379,20 @@ class TestWhere:
         with pytest.raises(TransformDeclined, match='fixed-point'):
             UnfoldNegZero.apply(f.ast, where=0)
 
+    def test_a_declined_block_counts_toward_where(self):
+        """Candidacy is structural: the declining `FP16` block is index 0,
+        so index 1 names the fixed-point block."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.FP16:
+                p = fp.round(a)
+            with fp.MPFixedContext(-8):
+                aq = fp.round(a)
+            return aq
+
+        out = UnfoldNegZero.apply(f.ast, where=1)
+        assert not out.is_equiv(f.ast)
+
     def test_rejects_a_non_integer(self):
         f = self._two()
         with pytest.raises(TypeError):

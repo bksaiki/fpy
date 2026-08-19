@@ -8,7 +8,7 @@ exception whether it applied a strategy or a raw transform.
 
 
 class TransformError(Exception):
-    """Base of the errors a transform raises as part of its contract."""
+    """Base class of the hierarchy."""
 
 
 class TransformDeclined(TransformError):

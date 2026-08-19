@@ -1,8 +1,6 @@
 """
-Shared machinery for the transforms: the loop rewrites
-(:class:`fpy2.transform.SplitLoop`, :class:`fpy2.transform.ForUnroll`) and the
-rounding rewrites (:class:`fpy2.transform.UnfoldOverflow`,
-:class:`fpy2.transform.FloatToFixed`, :class:`fpy2.transform.RescaleFixed`).
+Shared machinery for the transforms: the loop rewrites and the rounding
+rewrites.
 """
 
 from dataclasses import dataclass
@@ -221,10 +219,8 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
     """The rounded operands of a structurally-matching block: an
     underscore-bound context whose every statement assigns or returns a
     round (or a cast too, where `casts`) of a variable.  `None` otherwise.
-
-    This is the shared candidacy test of the rounding rewrites: it is pure
-    syntax, so it is what a `where` index counts, and whether a match may
-    actually be rewritten is its `_verify`'s question.
+    Pure syntax: this is what a `where` index counts.  An annotated assign
+    is no match: the rewrites cannot carry the annotation.
     """
     # a bound context is visible to the body as a value, which a rewrite changes
     if not isinstance(stmt.target, UnderscoreId):
@@ -232,13 +228,14 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
     args: list[Var] = []
     for s in stmt.body.stmts:
         match s:
-            case Assign(target=NamedId()) | ReturnStmt():
-                e = s.expr
-                if not isinstance(e, (Round, Cast)) or (not casts and isinstance(e, Cast)):
-                    return None
-                if not isinstance(e.arg, Var):
-                    return None
-                args.append(e.arg)
+            case Assign(target=NamedId(), type=None) | ReturnStmt():
+                match s.expr:
+                    case Round(arg=Var() as v):
+                        args.append(v)
+                    case Cast(arg=Var() as v) if casts:
+                        args.append(v)
+                    case _:
+                        return None
             case _:
                 return None
     return args
