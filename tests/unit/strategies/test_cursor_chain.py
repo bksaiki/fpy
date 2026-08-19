@@ -2,9 +2,8 @@
 Cursors across the rounding strategies: what a rewrite reports, and how a
 cursor reaches the program a later pass produced.
 
-The point being pinned is composition — a location chosen against one program
-still names the same program point after the rewrites around it, which is what
-`where=<index>` cannot do.
+The point being pinned is composition: a location chosen against one program
+still names the same program point after the rewrites around it.
 """
 
 import pytest
@@ -13,8 +12,8 @@ import fpy2 as fp
 
 from fpy2.strategies import (
     BlockCursor,
-    StmtCursor,
     FuncBody,
+    StmtCursor,
     TransformReferenceError,
     float_to_fixed,
     rescale_fixed,
@@ -121,7 +120,7 @@ def test_a_rewritten_statement_forwards_to_its_replacement():
 
 def test_forwarding_composes_across_two_passes():
     """A cursor chosen against the *original* program reaches the program two
-    rewrites later — the thing a `where` index cannot do."""
+    rewrites later."""
     untouched = StmtCursor(two_sites.ast, FuncBody().stmt(2))
     f1 = unfold_special(two_sites, where=0)
     f2 = unfold_overflow(f1, where=0, early_check=True)

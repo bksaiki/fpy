@@ -169,12 +169,8 @@ class Monomorphize:
         *,
         ty_info: TypeAnalysis | None = None
     ) -> EditLog:
-        """:meth:`apply`, with the (empty) record of what it replaced.
-
-        This pass rewrites argument annotations and the function's own context;
-        the body goes through :class:`DefaultTransformVisitor` untouched, so
-        every cursor -- statement, region, or expression -- survives it.
-        """
+        """:meth:`apply`, with an empty :class:`EditLog`: the body is untouched,
+        so every cursor survives."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got `{func}`')
         if ctx is not None and not isinstance(ctx, Context):

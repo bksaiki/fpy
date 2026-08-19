@@ -100,7 +100,6 @@ class _SplitLoop(SiteRewriter):
         self.array_size = array_size
 
         self.gensym = Gensym(reaching_defs.names())
-        self.site_idx = 0
 
     def _static_factor(self) -> int | None:
         """The factor as a positive compile-time constant, or ``None``."""
@@ -308,21 +307,6 @@ class _SplitLoop(SiteRewriter):
         ctx.extend(emitted[:-1])
         return emitted[-1], None
 
-    def _visit_block(self, block: StmtBlock, ctx: list[Stmt] | None):
-        out: list[Stmt] = []
-        for pos, stmt in enumerate(block.stmts):
-            self._site = (block, pos)
-            self._replaced = False
-            before = len(out)
-            s, _ = self._visit_statement(stmt, out)
-            out.append(s)
-            # the statement itself is appended above, so growth past one is
-            # what the rewrite spliced into this block
-            if self._replaced or len(out) > before + 1:
-                self._record(block, pos, len(out) - before)
-                self._replaced = False
-        return StmtBlock(out), None
-
     def apply(self):
         return self._visit_function(self.func, None)
 
@@ -363,9 +347,8 @@ class SplitLoop:
 
     @staticmethod
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The `for` loops of `func`, in visit order -- what a `where` index
-        counts.  `within` keeps only those at or beneath a cursor or region.
-        """
+        """The `for` loops of `func`, in visit order: what a `where`
+        index counts."""
         return stmt_sites(func, lambda s: isinstance(s, ForStmt), within)
 
     @staticmethod
@@ -429,8 +412,7 @@ class SplitLoop:
         outer_id: NamedId | None = None,
         inner_id: NamedId | None = None
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the rewritten
-        program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
         if not isinstance(factor, Expr):
@@ -455,9 +437,7 @@ class SplitLoop:
             temp_id, outer_id, inner_id, array_size
         )
         out = vtor.apply()
-        # A `where` that named no loop leaves the function unchanged;
-        # fail rather than silently no-op.  `site_idx` is the true loop
-        # count: generated loops are never re-visited.
+        # `site_idx` is the true loop count: generated loops are never re-visited
         vtor.check_site('a `for` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

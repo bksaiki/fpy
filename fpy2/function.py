@@ -112,11 +112,8 @@ class Function(Generic[P, R]):
         return Function(self.ast, runtime=rt, parent=self.parent, edits=self.edits)
 
     def with_ast(self, ast: fpyast.FuncDef):
-        """The result of a pass that does not say what it rewrote.
-
-        Cursors do not forward across such a step; :meth:`with_edits` is the
-        one that carries them.
-        """
+        """The result of a pass that does not report its rewrites, so cursors do
+        not forward across it; :meth:`with_edits` is the one that carries them."""
         if not isinstance(ast, fpyast.FuncDef):
             raise TypeError(f'expected \'FuncDef\', got {ast}')
         return Function(ast, runtime=self.runtime, parent=self)
@@ -129,11 +126,8 @@ class Function(Generic[P, R]):
         return Function(log.result, runtime=self.runtime, parent=self, edits=log)
 
     def rebase(self, where):
-        """A `where` aimed at this program.
-
-        A cursor or region from an ancestor is forwarded, so a schedule pins a
-        point once and keeps aiming at it; anything else passes through.
-        """
+        """A `where` aimed at this program: a cursor from an ancestor is
+        forwarded, anything else passes through."""
         from .transform.utils.cursor import Cursor
 
         # `Cursor` is a union of the kinds, which `isinstance` accepts
@@ -144,10 +138,9 @@ class Function(Generic[P, R]):
     def forward(self, cursor: 'Cursor') -> 'Cursor':
         """*cursor*, in this program.
 
-        Walks back to the program the cursor names, then replays what each
-        pass reported.  A pass that reported nothing stops the walk: a cursor
-        cannot cross it, and guessing that it survived is exactly the silent
-        mis-aim cursors exist to prevent.
+        Walks back to the program the cursor names, then replays what each pass
+        reported.  A pass that reported nothing stops the walk rather than
+        guessing the cursor survived.
         """
         from .transform.utils.error import TransformReferenceError
 

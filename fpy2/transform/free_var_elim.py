@@ -50,10 +50,9 @@ class FreeVarElim:
 
     @staticmethod
     def apply_with_edits(func: FuncDef) -> EditLog:
-        """:meth:`apply`, with the record of what it added: a prelude of leading
-        assignments, so every cursor below it shifts by that many.
+        """:meth:`apply`, with the record of the prelude it added.
 
-        The body's statements are reused verbatim, so expressions survive too.
+        The body's statements are reused verbatim, so expression cursors survive.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got `{func}`")

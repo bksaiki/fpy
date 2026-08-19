@@ -3,7 +3,7 @@ Unit tests for the edit log and forwarding (:mod:`fpy2.transform.utils.cursor`).
 
 No transform is involved: each test pairs two hand-written programs with an
 :class:`EditLog` describing the difference, so the forwarding rules are pinned
-on their own, before anything depends on them.
+on their own.
 """
 
 import pytest
@@ -204,6 +204,17 @@ def test_shifts_accumulate_within_a_block():
     assert log.forward(StmtCursor(five.ast, FuncBody().stmt(3))) == BlockCursor(
         five_after.ast, FuncBody(), range(4, 6)
     )
+
+
+def test_a_region_one_edit_consumed_forwards_to_its_image():
+    """Both members share the replacement, so the region is that replacement --
+    not a region that came apart."""
+    log = EditLog(five.ast, five_after.ast, (Edit(FuncBody(), 0, 2, 1),))
+    region = BlockCursor(five.ast, FuncBody(), range(0, 2))
+    assert log.forward(region) == StmtCursor(five_after.ast, FuncBody().stmt(0))
+
+    log = EditLog(five.ast, five_after.ast, (Edit(FuncBody(), 0, 2, 3),))
+    assert log.forward(region) == BlockCursor(five_after.ast, FuncBody(), range(0, 3))
 
 
 def test_single_statement_image_is_a_cursor():

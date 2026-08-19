@@ -310,6 +310,9 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
 class _UnfoldSpecialInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
+    _casts = True
+    """whether a `fp.cast` block counts as a candidate"""
+
     func: FuncDef
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
@@ -326,7 +329,6 @@ class _UnfoldSpecialInstance(BlockRewriter):
         self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -334,7 +336,7 @@ class _UnfoldSpecialInstance(BlockRewriter):
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """A cast substitutes a special exactly as a round does: the
         substitution happens before the exactness check."""
-        return rounding_block(stmt, casts=True)
+        return rounding_block(stmt, casts=self._casts)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if any of its special values can be stated as
@@ -439,12 +441,10 @@ class UnfoldSpecial:
         """The candidate rounding blocks of `func`, in visit order --
         what a `where` index counts, whether or not each verifies.
 
-        `within` keeps only the candidates at or beneath a cursor or
-        region.
-
         A cast substitutes a special exactly as a round does, so it counts too.
         """
-        return stmt_sites(func, lambda s: is_rounding_block(s, casts=True), within)
+        casts = _UnfoldSpecialInstance._casts
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
 
     @staticmethod
     def apply(
@@ -476,8 +476,7 @@ class UnfoldSpecial:
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the
-        rewritten program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)

@@ -2,8 +2,7 @@
 Listing the sites a strategy can be aimed at.
 
 The claim that matters is the correspondence: `sites(strategy, f)[i]` names the
-same site as `where=i`, so a cursor can be *chosen* rather than counted out by
-hand — which is what makes cursors reachable at all.
+same site as `where=i`, so a cursor can be chosen rather than counted out by hand.
 """
 
 import pytest
@@ -49,6 +48,15 @@ def nested(x: fp.Real) -> fp.Real:
     else:
         y = -x
     return y
+
+
+@fp.fpy(ctx=fp.REAL)
+def cast_and_round(a: fp.Real) -> fp.Real:
+    with fp.FixedContext(True, -4, 16):
+        aq = fp.cast(a)
+    with fp.FixedContext(True, -8, 16):
+        bq = fp.round(a)
+    return aq + bq
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -141,20 +149,40 @@ def test_a_strategy_that_takes_no_where_has_no_sites():
 # The correspondence with `where=<index>`
 
 
+def _aims_alike(strategy, func, i, cursor):
+    """Whether `where=i` and `where=cursor` do the same thing, a refusal
+    counting as an outcome."""
+    try:
+        expect = strategy(func, where=i).format()
+    except TransformDeclined:
+        with pytest.raises(TransformDeclined):
+            strategy(func, where=cursor)
+        return
+    assert strategy(func, where=cursor).format() == expect
+
+
 @pytest.mark.parametrize('strategy', [
     unfold_special, unfold_neg_zero, unfold_overflow, float_to_fixed, rescale_fixed,
 ])
 def test_a_listed_site_aims_the_same_as_its_index(strategy):
-    """Including the refusals: a strategy that declines the site by index
-    declines it by cursor too."""
     for i, cursor in enumerate(sites(strategy, two_sites)):
-        try:
-            expect = strategy(two_sites, where=i).format()
-        except TransformDeclined:
-            with pytest.raises(TransformDeclined):
-                strategy(two_sites, where=cursor)
-            continue
-        assert strategy(two_sites, where=cursor).format() == expect
+        _aims_alike(strategy, two_sites, i, cursor)
+
+
+@pytest.mark.parametrize('strategy', [unfold_special, rescale_fixed])
+def test_a_cast_block_is_listed_where_it_counts(strategy):
+    """A `cast` block is a candidate for these two, so it has to appear in the
+    listing at the index `where` gives it."""
+    listed = sites(strategy, cast_and_round)
+    assert [c.index for c in listed] == [0, 1]
+    for i, cursor in enumerate(listed):
+        _aims_alike(strategy, cast_and_round, i, cursor)
+
+
+def test_a_cast_block_is_not_listed_where_it_does_not_count():
+    """...and must not, for the three that only take a round."""
+    for strategy in (unfold_neg_zero, unfold_overflow, float_to_fixed):
+        assert [c.index for c in sites(strategy, cast_and_round)] == [1]
 
 
 def test_a_listed_call_aims_the_same_as_its_index():
@@ -193,8 +221,16 @@ def test_within_asks_a_forwarded_site_what_it_now_holds():
 
 def test_within_of_another_program_is_a_bad_reference():
     other = StmtCursor(nested.ast, FuncBody().stmt(0))
-    with pytest.raises(TransformReferenceError, match='another program'):
+    with pytest.raises(TransformReferenceError, match='unrelated program'):
         sites(unfold_special, two_sites, other)
+
+
+def test_within_is_forwarded_like_a_where():
+    """A site listed against one program narrows a listing against a later
+    one, without the caller forwarding it by hand."""
+    site = sites(unfold_special, two_sites)[0]
+    out = unfold_special(two_sites, where=site)
+    assert len(sites(unfold_overflow, out, site)) == 1
 
 
 def test_an_expression_cannot_narrow_a_statement_listing():

@@ -58,7 +58,10 @@ def sites(
     :class:`fpy2.strategies.StmtCursor` for the rounding and loop rewrites, an
     :class:`fpy2.strategies.ExprCursor` for :func:`fpy2.strategies.inline`,
     whose sites are calls.  Listing is *syntactic*: a site that appears here may
-    still be declined, which is the difference between a candidate and a rewrite.
+    still be declined.
+
+    Some strategies do not forward cursors (they rewrite at sites they do not
+    report); aim what you need before one of those, or re-list afterwards.
 
     Parameters
     ----------
@@ -67,8 +70,10 @@ def sites(
     func : Function
         The function to scan.
     within : Cursor | None
-        Keep only the sites at or beneath this cursor or region — a forwarded
-        site, asked what it now holds. If `None`, list the whole program.
+        Keep only the sites at or beneath this cursor or region; one from an
+        earlier program is forwarded first. An expression cursor bounds a search
+        here, where as a `where` it names one site exactly. If `None`, list the
+        whole program.
     kwargs
         Forwarded to the strategy's own listing; :func:`fpy2.strategies.inline`
         takes `funcs`, matching its filter.
@@ -106,4 +111,4 @@ def sites(
     if lister is None:
         name = getattr(strategy, '__name__', strategy)
         raise ValueError(f'`{name}` takes no `where`, so it has no sites')
-    return lister(func.ast, within, **kwargs)
+    return lister(func.ast, func.rebase(within), **kwargs)

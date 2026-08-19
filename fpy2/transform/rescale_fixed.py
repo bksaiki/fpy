@@ -282,6 +282,9 @@ def _arg_of(e: Call, name: str, index: int | None) -> Expr | None:
 class _RescaleFixedInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
+    _casts = True
+    """whether a `fp.cast` block counts as a candidate"""
+
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
@@ -296,14 +299,13 @@ class _RescaleFixedInstance(BlockRewriter):
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """Rounding commutes with the shift; arithmetic does not."""
-        return rounding_block(stmt, casts=True)
+        return rounding_block(stmt, casts=self._casts)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Shift | Declined:
         """How to rescale this block, or why it must be left alone."""
@@ -492,11 +494,9 @@ class RescaleFixed:
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
         """The candidate rounding blocks of `func`, in visit order --
         what a `where` index counts, whether or not each verifies.
-
-        `within` keeps only the candidates at or beneath a cursor or
-        region.
         """
-        return stmt_sites(func, lambda s: is_rounding_block(s, casts=False), within)
+        casts = _RescaleFixedInstance._casts
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
 
     @staticmethod
     def apply(
@@ -528,8 +528,7 @@ class RescaleFixed:
         where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the
-        rewritten program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)

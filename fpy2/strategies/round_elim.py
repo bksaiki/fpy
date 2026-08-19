@@ -22,10 +22,8 @@ def elim_round(func: Function) -> Function:
     provably redundant; run :func:`fpy2.strategies.simplify` afterwards
     to clean up the temporaries the rewrite introduces.
 
-    A cursor does not cross this pass: hoisting an operation into its own
-    ``with fp.REAL:`` block inserts statements ahead of the one that held it,
-    at sites the pass does not report. Aim what you need before it, or
-    re-list the sites after.
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
 
     Parameters
     ----------

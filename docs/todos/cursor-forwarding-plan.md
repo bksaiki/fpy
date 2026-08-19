@@ -334,12 +334,17 @@ not in the alias fails to type.
 touched is *rebuilt with the same shape*, so an expression path still resolves —
 no forwarding map, no visitor changes. What it needs is something no pass says
 today: that expressions *outside* the recorded edits were left alone. `EditLog`
-gains `exprs_preserved: bool`. The nine transforms of phases 3–5 set it (each only
-rewrites expressions inside a statement it also records — `func_inline` included,
-since inlining always splices at least one statement, so a rewritten call is
-always inside a recorded edit); everything else leaves it `False`, and
-`forward(ExprCursor)` raises rather than silently mis-aiming. An expression inside
-a *replaced* statement invalidates, exactly as a statement inside one does.
+gains `exprs_preserved: bool`, which the nine transforms of phases 3–5 set and
+everything else leaves `False`, so `forward(ExprCursor)` raises rather than
+silently mis-aiming. An expression inside a *replaced* statement invalidates,
+exactly as a statement inside one does.
+
+One pass needs a narrower claim than that flag can make. `func_inline` splices the
+callee's body *ahead of* the statement that held the call, so the statement
+survives — an insertion, not a replacement — but its call became a variable. Hence
+`EditLog.exprs_rewritten`: the statements a pass changed the expressions of without
+replacing them. An expression cursor in one of those does not forward, while the
+statements beneath it still do.
 
 **Aiming.** `inline`'s sites *are* expressions, so an `ExprCursor` names exactly
 one call: `_visit_call` compares node identity against the resolved target — the

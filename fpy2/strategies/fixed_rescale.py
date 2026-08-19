@@ -41,12 +41,9 @@ def rescale_fixed(func: Function, where: int | Cursor | None = None) -> Function
     where : int | Cursor | None
         Which block to rescale: an index counting candidate blocks (the
         structurally-matching rounding blocks, whether or not they verify)
-        in visit order, outermost-first; or a :class:`fpy2.strategies.StmtCursor`
-        / :class:`fpy2.strategies.BlockCursor` naming a program point, which
-        takes every candidate *at or beneath* it -- so the statement an earlier
-        rewrite left behind names the rounding now nested inside it. A cursor or
-        region from an earlier program is forwarded to this one first. If
-        `None`, rescale every candidate that verifies and skip the rest.
+        in visit order, outermost-first, or a cursor or region, which takes every
+        candidate at or beneath it. If `None`, rescale every candidate that
+        verifies and skip the rest.
 
     Returns
     -------

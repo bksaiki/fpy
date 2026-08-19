@@ -27,6 +27,7 @@ from .utils import (
     EditLog,
     ExprCursor,
     SiteRewriter,
+    StmtPath,
     check_where,
     expr_sites,
 )
@@ -84,10 +85,6 @@ class _FuncInline(SiteRewriter):
         self.def_use = def_use
         self.funcs = funcs
         self.where = where
-        # Counts *candidate* call sites (calls to a `Function` that pass
-        # the `funcs` filter) in visit order, outermost-first.  `where`
-        # selects one by this index.
-        self.site_idx = 0
         # Cache of fully-inlined callee bodies, keyed by callee
         # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
         # sites instead of re-inlining the whole callee subtree each
@@ -219,10 +216,12 @@ class _FuncInline(SiteRewriter):
             before = len(block_ctx.stmts)
             stmt, _ = self._visit_statement(stmt, block_ctx)
             block_ctx.stmts.append(stmt)
-            # a call is inlined by splicing the callee's body in ahead of the
-            # statement that held it, so growth here is the edit
-            if len(block_ctx.stmts) > before + 1:
-                self._record(block, pos, len(block_ctx.stmts) - before)
+            # the callee's body is spliced in *ahead* of the statement that held
+            # the call, which survives with the call replaced by a variable
+            spliced = len(block_ctx.stmts) - before - 1
+            if spliced > 0:
+                self._record(block, pos, spliced, removed=0)
+                self._mark_exprs(block, pos)
         b = StmtBlock(block_ctx.stmts)
         return b, None
 
@@ -248,14 +247,8 @@ class FuncInline:
         *,
         funcs: Iterable[Function] | None = None,
     ) -> list[ExprCursor]:
-        """The candidate call sites of `func`, in visit order -- what a `where`
-        index counts.
-
-        Expressions, since that is what a call is: each names one call, where a
-        statement cursor would name every call it holds.  `funcs` filters as it
-        does for :meth:`apply`, and `within` keeps only the calls at or beneath a
-        cursor or region.
-        """
+        """The candidate call sites of `func`, in visit order: what a `where`
+        index counts.  `funcs` filters as it does for :meth:`apply`."""
         keep = None if funcs is None else set(funcs)
         return expr_sites(
             func,
@@ -278,13 +271,9 @@ class FuncInline:
         Applies function inlining to `func` returning the transformed function.
 
         `where` selects candidate call sites -- calls to a `Function` that pass
-        the `funcs` filter -- either by index, in visit order
-        (outermost-first), or by a cursor or region naming a program point,
-        which takes every candidate call at or beneath it.  A statement-level
-        cursor is coarser than the index: where one statement holds two
-        candidate calls, it names both.  If `None`, every candidate site is
-        inlined.  With `recursive=True` the selected site's callee is still
-        fully flattened.
+        the `funcs` filter -- by index, in visit order (outermost-first), or by a
+        cursor.  If `None`, every candidate site is inlined.  With
+        `recursive=True` the selected site's callee is still fully flattened.
 
         Raises `CallGraphError` if the call graph reachable from `func`
         contains a cycle (FPy forbids recursion; inlining a recursive
@@ -307,8 +296,7 @@ class FuncInline:
         recursive: bool = True,
         where: int | Cursor | None = None
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the rewritten
-        program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
         check_where(where)
@@ -328,6 +316,7 @@ class FuncInline:
             # free-variable merges consume the pruned free-var sets.
             inlined: dict[FuncDef, FuncDef] = {}
             edits: tuple[Edit, ...] = ()
+            dirty: tuple[StmtPath, ...] = ()
             for fdef in cg.order:
                 fdef_du = DefineUse.analyze(fdef)
                 vtor = _FuncInline(
@@ -336,9 +325,12 @@ class FuncInline:
                 out = FuncInline._finish(vtor.apply())
                 if fdef is func:
                     # only this function's own rewrites forward its cursors
-                    edits = tuple(vtor.edits)
+                    edits, dirty = tuple(vtor.edits), tuple(vtor.dirty_exprs)
                 inlined[fdef] = out
-            return EditLog(func, inlined[func], edits, exprs_preserved=True)
+            return EditLog(
+                func, inlined[func], edits,
+                exprs_rewritten=dirty, exprs_preserved=True,
+            )
         else:
             # One-level inlining, or selective inlining via `funcs` /
             # `where`: keep the per-call-site strategy.
@@ -346,14 +338,12 @@ class FuncInline:
                 def_use = DefineUse.analyze(func)
             vtor = _FuncInline(func, def_use, funcs, recursive=recursive, where=where)
             result = vtor.apply()
-            # A `where` that named no candidate site leaves the function
-            # unchanged; fail rather than silently no-op.  `site_idx` is
-            # the true candidate count (spliced callee bodies are never
-            # re-visited).
+            # `site_idx` is the true candidate count: spliced callee bodies are
+            # never re-visited
             vtor.check_site('a call site')
             return EditLog(
                 func, FuncInline._finish(result), tuple(vtor.edits),
-                exprs_preserved=True,
+                exprs_rewritten=tuple(vtor.dirty_exprs), exprs_preserved=True,
             )
 
     @staticmethod

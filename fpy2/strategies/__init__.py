@@ -1,5 +1,11 @@
 """
 Scheduling language constructs for FPy programs.
+
+A strategy with sites takes a `where`: an index into its candidates, or a cursor.
+A cursor or region selects every candidate *at or beneath* the program point it
+names, so the statement an earlier rewrite left behind names the site now nested
+inside it; one from an earlier program is forwarded to this one first.
+:func:`sites` lists what a `where` may name.
 """
 
 from ..transform.utils.cursor import BlockCursor, Cursor, ExprCursor, StmtCursor

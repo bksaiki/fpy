@@ -101,12 +101,10 @@ class LiftContext:
     def apply_with_edits(
         func: FuncDef, *, eval_info: PartialEvalInfo | None = None
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it added: a binding per lifted
-        context, prepended, so every cursor below shifts by that many.
+        """:meth:`apply`, with the record of the bindings it prepended.
 
-        Statement cursors survive; expression cursors do not, since the lifted
-        context expressions are replaced by variables in place, at sites no edit
-        records.
+        Expression cursors do not survive: the lifted context expressions are
+        replaced by variables in place, at sites no edit records.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')

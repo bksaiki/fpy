@@ -28,9 +28,8 @@ def simplify(
     ``enable_const_fold_context=False`` to simplify boolean / numeric
     expressions while leaving ``with``-block contexts untouched.
 
-    A cursor does not cross this pass: dead-code elimination deletes statements
-    it cannot attribute to any one site. It runs last in a schedule, so pin what
-    you need before it.
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
 
     Examples
     --------

@@ -12,10 +12,11 @@ import fpy2 as fp
 
 from fpy2.strategies import (
     BlockCursor,
-    StmtCursor,
     FuncBody,
+    StmtCursor,
     TransformReferenceError,
     inline,
+    sites,
     split,
     unroll_for,
     unroll_while,
@@ -180,6 +181,45 @@ def test_inlining_shifts_what_followed_the_call():
     assert isinstance(moved, StmtCursor)
     assert moved.index > 1
     assert moved.resolve().format() == after.resolve().format()
+
+
+@fp.fpy
+def call_in_a_loop(xs: list[fp.Real]) -> fp.Real:
+    acc = 0.0
+    for v in xs:
+        acc = acc + sq(v)
+    return acc
+
+
+def test_inlining_only_prefixes_the_statement_that_held_the_call():
+    """The callee's body goes in *ahead* of that statement, which survives — so
+    a cursor beneath it forwards, and an edit recorded inside it stands."""
+    loop = StmtCursor(call_in_a_loop.ast, FuncBody().stmt(1))
+    inside = StmtCursor(call_in_a_loop.ast, FuncBody().stmt(1).block('body').stmt(0))
+
+    out = inline(call_in_a_loop, recursive=False)
+    edit, = out.edits.edits if out.edits else ()
+    assert edit.removed == 0                     # an insertion, not a replacement
+
+    assert out.forward(loop).resolve().format().startswith('for ')
+    assert isinstance(out.forward(inside), StmtCursor)
+
+
+def test_an_expression_of_an_inlined_statement_does_not_forward():
+    """That statement's call became a variable, so an expression cursor in it
+    names something else now."""
+    call = sites(inline, call_in_a_loop)[0]
+    out = inline(call_in_a_loop, recursive=False)
+    with pytest.raises(TransformReferenceError, match='whose expressions'):
+        out.forward(call)
+
+
+def test_two_pinned_calls_inline_one_at_a_time():
+    """Each cursor is chosen against the original program, so the second has to
+    survive the first rewrite."""
+    first, second = sites(inline, call_each)
+    out = inline(inline(call_each, first), second)
+    assert 'sq(' not in out.format()
 
 
 def test_inline_everywhere_still_reports_its_edits():

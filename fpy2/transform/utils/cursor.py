@@ -39,11 +39,7 @@ from .path import (
 
 @dataclass(frozen=True)
 class StmtCursor:
-    """A statement of a program, named so that a rewrite can forward it.
-
-    Validated on construction: a cursor always names a statement of its own
-    program.  Use it against any other program and the transform rejects it.
-    """
+    """A statement of a program; validated on construction."""
 
     func: FuncDef
     """the program this cursor names a statement of"""
@@ -71,10 +67,6 @@ class StmtCursor:
         """The statement this cursor names."""
         return resolve_stmt(self.func, self.path)
 
-    def parent(self) -> tuple[StmtBlock, int]:
-        """The block holding the statement, and its index within it."""
-        return resolve_block(self.func, self.block_path), self.index
-
     def __str__(self):
         loc = self.resolve().loc
         where = '' if loc is None else f' at {loc.format()}'
@@ -83,13 +75,8 @@ class StmtCursor:
 
 @dataclass(frozen=True)
 class BlockCursor:
-    """A run of consecutive statements of one block.
-
-    What a rewritten statement forwards to: a transform replaces it with
-    several statements, and the region they occupy is the honest image.  A
-    region is also what a transform aims at when told to rewrite every
-    candidate *within* one.
-    """
+    """A run of consecutive statements of one block: what a statement replaced
+    by several forwards to, and what a rewrite aimed at a region names."""
 
     func: FuncDef
     """the program this region belongs to"""
@@ -140,12 +127,8 @@ class BlockCursor:
 
 @dataclass(frozen=True)
 class ExprCursor:
-    """An expression of a program.
-
-    What a rewrite whose sites *are* expressions is aimed at -- `inline`, whose
-    candidates are calls.  It forwards while its statement is only shifted; a
-    statement that was rewritten takes its expressions with it.
-    """
+    """An expression of a program: what a rewrite whose sites *are* expressions
+    is aimed at, `inline` being the one."""
 
     func: FuncDef
     """the program this cursor names an expression of"""
@@ -174,24 +157,12 @@ class ExprCursor:
 
 
 Cursor: TypeAlias = ExprCursor | StmtCursor | BlockCursor
-"""What a rewrite can be aimed at, and what forwarding hands back.
-
-A union rather than a base class: the kinds share only `func`, and the image's
-kind is a property of what a rewrite did, not of the cursor handed in -- a
-statement replaced by several statements forwards to a :class:`BlockCursor`, and a
-region that collapses to one statement forwards to a :class:`StmtCursor`.  So
-`isinstance(x, Cursor)` and `match` over the arms both work, and a transform that
-accepts only one kind names it.
-"""
+"""What a rewrite can be aimed at, and what forwarding hands back."""
 
 
 @dataclass(frozen=True)
 class Edit:
-    """One run of statements replaced by another, in the *old* program's terms.
-
-    Purely structural -- how many statements the rewrite consumed and how many
-    it emitted -- so no transform has to say what its output *means*.
-    """
+    """One run of statements replaced by another, in the *old* program's terms."""
 
     block_path: BlockPath
     """the block, in the old program, the rewrite happened in"""
@@ -226,6 +197,8 @@ class EditLog:
     """the program it produced"""
     edits: tuple[Edit, ...] = ()
     """the rewrites, disjoint, in the source program's terms"""
+    exprs_rewritten: tuple[StmtPath, ...] = ()
+    """statements whose expressions the pass rewrote without replacing them"""
     exprs_preserved: bool = False
     """whether the pass left every expression *outside* those rewrites alone.
 
@@ -251,12 +224,9 @@ class EditLog:
     def forward(self, cursor: Cursor) -> Cursor:
         """*cursor*, in the program this pass produced.
 
-        A statement the pass rewrote forwards to the region that replaced it --
-        a :class:`StmtCursor` where that is a single statement, a
-        :class:`BlockCursor`
-        otherwise.  A statement *inside* one it rewrote does not forward at
-        all: that subtree was rebuilt, and only the pass could say what became
-        of it.
+        A statement the pass rewrote forwards to the region that replaced it.  A
+        statement *inside* one it rewrote does not forward: that subtree was
+        rebuilt, and only the pass could say what became of it.
         """
         if isinstance(cursor, BlockCursor):
             return self._forward_region(cursor)
@@ -277,12 +247,7 @@ class EditLog:
         return BlockCursor(self.result, block, range(index, index + edit.inserted))
 
     def _forward_expr(self, cursor: ExprCursor) -> ExprCursor:
-        """*cursor*, under its statement's image.
-
-        A statement the pass only *moved* is rebuilt with the same shape, so the
-        expression path still resolves; one the pass *replaced* takes its
-        expressions with it.
-        """
+        """*cursor*, under its statement's image."""
         if cursor.func is not self.source:
             raise TransformReferenceError(
                 f'`{cursor}` names an expression of another program'
@@ -294,6 +259,11 @@ class EditLog:
             )
 
         stmt = cursor.path.stmt()
+        if stmt in self.exprs_rewritten:
+            raise TransformReferenceError(
+                f'`{cursor}` is in `{format_path(stmt)}`, whose expressions the '
+                'pass rewrote'
+            )
         block, index, edit = _forward_stmt(stmt, self.edits, cursor.path)
         if edit is not None:
             raise TransformReferenceError(
@@ -312,19 +282,18 @@ class EditLog:
         spans: list[range] = []
         paths: set[BlockPath] = set()
         for img in (self.forward(c) for c in region):
-            # a statement forwards to a statement or a run of them, never to an
-            # expression, so the region's image is still statements
-            assert isinstance(img, (StmtCursor, BlockCursor))
+            assert isinstance(img, (StmtCursor, BlockCursor))  # never an expression
             spans.append(
                 img.span if isinstance(img, BlockCursor)
                 else range(img.index, img.index + 1)
             )
             paths.add(img.block_path)
-        adjacent = all(b.start == a.stop for a, b in pairwise(spans))
+        # members one edit consumed together share its image, so `==` counts
+        adjacent = all(b.start in (a.stop, a.start) for a, b in pairwise(spans))
         if len(paths) != 1 or not adjacent:
             raise TransformReferenceError(f'`{region}` no longer lies in one run')
 
-        span = range(spans[0].start, spans[-1].stop)
+        span = range(spans[0].start, max(s.stop for s in spans))
         block_path = paths.pop()
         if len(span) == 1:
             return StmtCursor(self.result, StmtPath(block_path, span.start))
@@ -338,6 +307,14 @@ def region_of(where: StmtCursor | BlockCursor) -> tuple[BlockPath, range]:
     return where.block_path, where.span
 
 
+def not_a_statement(cursor: ExprCursor) -> TransformReferenceError:
+    """An expression cursor handed to a statement-sited rewrite or listing."""
+    return TransformReferenceError(
+        f'`{cursor}` names an expression, and these sites are statements: '
+        'no statement sits beneath an expression'
+    )
+
+
 def _restrict(func: FuncDef, within: Cursor | None, *, stmts: bool):
     """What `within` narrows a listing to, as a predicate over paths."""
     if within is None:
@@ -346,10 +323,7 @@ def _restrict(func: FuncDef, within: Cursor | None, *, stmts: bool):
         raise TransformReferenceError(f'`{within}` names part of another program')
     if isinstance(within, ExprCursor):
         if stmts:
-            raise TransformReferenceError(
-                f'`{within}` names an expression, and these sites are statements: '
-                'no statement sits beneath an expression'
-            )
+            raise not_a_statement(within)
         under = within.path
         return lambda path: path == under or _under_expr(path, under)
     block, span = region_of(within)

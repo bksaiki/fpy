@@ -3,8 +3,7 @@ What the passes that are not site-rewrites do to a cursor.
 
 Each claim is per *kind*: a pass can leave the statement tree alone while
 rewriting expressions in it, so one verdict per pass would make one of the two
-answers a lie.  A wrong claim here is a silent mis-aim, which is what the
-failure contract exists to prevent — so each is pinned.
+answers a lie.
 """
 
 import pytest
@@ -136,9 +135,8 @@ def test_lift_context_shifts_statements_but_not_expressions():
 
 @pytest.mark.parametrize('strategy', [simplify, elim_round, fuse, elim_iter])
 def test_an_opaque_pass_stops_a_cursor(strategy):
-    """These rewrite at sites they do not report — a seed and a loop for `fuse`,
-    a hoisted block for `elim_round`, a preamble for `elim_iter`, a deletion for
-    `simplify` — so forwarding says so rather than guessing."""
+    """These rewrite at sites they do not report, so forwarding says so rather
+    than guessing."""
     site = _site(rounded)
     out = strategy(rounded)
 

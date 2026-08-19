@@ -151,7 +151,6 @@ class _ForUnroll(SiteRewriter):
         self.func = func
         self.where = where
         self.times = times
-        self.site_idx = 0
         self.strategy = strategy
         self.gensym = Gensym(reaching_defs.names())
         self.temp_id = temp_id
@@ -323,21 +322,6 @@ class _ForUnroll(SiteRewriter):
 
         return emitted
 
-    def _visit_block(self, block: StmtBlock, ctx: list[Stmt] | None):
-        out: list[Stmt] = []
-        for pos, stmt in enumerate(block.stmts):
-            self._site = (block, pos)
-            self._replaced = False
-            before = len(out)
-            s, _ = self._visit_statement(stmt, out)
-            out.append(s)
-            # the statement itself is appended above, so growth past one is
-            # what the rewrite spliced into this block
-            if self._replaced or len(out) > before + 1:
-                self._record(block, pos, len(out) - before)
-                self._replaced = False
-        return StmtBlock(out), None
-
     def apply(self):
         return self._visit_function(self.func, None)
 
@@ -356,9 +340,8 @@ class ForUnroll:
 
     @staticmethod
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The `for` loops of `func`, in visit order -- what a `where` index
-        counts.  `within` keeps only those at or beneath a cursor or region.
-        """
+        """The `for` loops of `func`, in visit order: what a `where`
+        index counts."""
         return stmt_sites(func, lambda s: isinstance(s, ForStmt), within)
 
     @staticmethod
@@ -421,8 +404,7 @@ class ForUnroll:
         len_id: NamedId | None = None,
         idx_id: NamedId | None = None
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the rewritten
-        program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
         check_where(where)
@@ -447,9 +429,7 @@ class ForUnroll:
             temp_id, len_id, idx_id, array_size
         )
         out = unroller.apply()
-        # After traversal, `site_idx` counts every `for` loop visited, so a
-        # `where` outside `[0, site_idx)` names no loop: fail rather than
-        # silently returning the function unchanged.
+        # `site_idx` is the true loop count: generated loops are never re-visited
         unroller.check_site('a `for` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(func, out, tuple(unroller.edits), exprs_preserved=True)

@@ -27,10 +27,8 @@ def elim_iter(
     :class:`fpy2.transform.ZipElim` for what is recognized
     (``enumerate(zip(...))`` collapses both intermediates at once).
 
-    A cursor does not cross this pass: the loop path emits a preamble binding
-    each source and replaces the loop, and the comprehension path rewrites
-    expressions in place, neither of which the pass reports. Aim what you need
-    before it, or re-list the sites after.
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
 
     Parameters
     ----------

@@ -9,14 +9,9 @@ A path is the grammar the AST already has, written down::
     ExprPath  ::= StmtPath . field [ i? ]   -- an expression of a statement
                 | ExprPath . field [ i? ]   -- ... or of another expression
 
-as parent-linked frozen dataclasses, so every ill-formed path is unrepresentable:
-a sub-block hangs off a statement, and a statement sits in a block.  `FuncBody` is
-the only constructor without a parent, so every path is *absolute* -- there is no
-relative path to be ambiguous about, which is what makes cursor equality total and
-lets :func:`beneath` walk to the root without being told where to stop.  Linking to
-the *parent* is what makes a path's type the type of its leaf, which is what a
-cursor is named by -- a :class:`~fpy2.transform.utils.cursor.Cursor` takes a
-`StmtPath` and mypy checks it.
+as parent-linked frozen dataclasses, so every ill-formed path is unrepresentable.
+`FuncBody` is the only constructor without a parent, so every path is absolute; a
+path's type is the type of its leaf, which is what a cursor is named by.
 
 Build one by descending::
 
@@ -72,9 +67,8 @@ ExprField: TypeAlias = Literal[
 ]
 """The fields a statement or expression can hold an expression in.
 
-Declared rather than left as `str` for the same reason :data:`BlockField` is: a
-typo'd field is then a type error.  It also checks :func:`sub_exprs` against
-itself -- an arm returning a field not named here fails to type.
+A typo'd field is then a type error, and :func:`sub_exprs` is checked against
+this list.
 """
 
 
@@ -180,8 +174,7 @@ def sub_blocks(stmt: Stmt) -> tuple[tuple[BlockField, StmtBlock], ...]:
 def sub_exprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...]:
     """The expressions *node* holds, each with the field and position naming it.
 
-    The one producer of :data:`ExprField`, and the only place the AST's field
-    names appear: :func:`resolve_expr` reads a path by scanning this.
+    The only place the AST's expression field names appear.
     """
     def at(field: ExprField, es) -> tuple[tuple[ExprField, int | None, Expr], ...]:
         return tuple((field, i, e) for i, e in enumerate(es))
@@ -278,12 +271,8 @@ def rebase_expr(path: ExprPath, stmt: StmtPath) -> ExprPath:
 
 
 def beneath(path: Path, block: BlockPath, span: range) -> bool:
-    """Whether *path* lies at or under one of *block*'s statements in *span*.
-
-    The upward walk a parent-linked path is for: what a rewrite aimed at a
-    region selects, and what an edit inside a replaced statement fails.
-    """
-    p: Path = path.stmt() if isinstance(path, ExprPath) else path
+    """Whether *path* lies at or under one of *block*'s statements in *span*."""
+    p: BlockPath | StmtPath = path.stmt() if isinstance(path, ExprPath) else path
     while True:
         match p:
             case FuncBody():
@@ -294,15 +283,13 @@ def beneath(path: Path, block: BlockPath, span: range) -> bool:
                 if parent == block and index in span:
                     return True
                 p = parent
-            case _:
-                raise RuntimeError(f'unreachable case: {p}')
 
 
 def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:
     """Every statement of *func* with its path, in visit order.
 
-    A statement comes before the blocks it holds, which is the order a transform
-    counts its candidates in -- outermost first.
+    A statement comes before the blocks it holds: the order a `where` index
+    counts candidates in.
     """
     def walk(block: StmtBlock, path: BlockPath) -> Iterator[tuple[StmtPath, Stmt]]:
         for i, stmt in enumerate(block.stmts):
@@ -317,8 +304,6 @@ def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:
 def block_paths(func: FuncDef) -> dict[int, BlockPath]:
     """The path of every block in *func*, keyed by `id`.
 
-    The inverse of :func:`resolve_block`, for the transforms: a visitor knows
-    the block object it is rewriting in, and needs its path to record an edit.
     Valid only while *func* is alive.
     """
     paths: dict[int, BlockPath] = {}

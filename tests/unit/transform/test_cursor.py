@@ -13,8 +13,8 @@ import fpy2 as fp
 
 from fpy2.ast import Assign, ContextStmt, ForStmt, IfStmt, ReturnStmt
 from fpy2.transform import (
-    StmtCursor,
     FuncBody,
+    StmtCursor,
     StmtPath,
     SubBlock,
     TransformReferenceError,
@@ -106,10 +106,7 @@ def test_sub_blocks():
 # Bad references
 
 
-# What a path cannot even say, now that it is an ADT: a block where a statement
-# belongs, a field where an index belongs, a path that starts anywhere but the
-# function body.  Those were runtime failures under the flat tuple; they are type
-# errors here, so only the *resolvable-but-wrong* cases remain.
+# only resolvable-but-wrong paths remain; the ill-formed ones are type errors
 
 
 @pytest.mark.parametrize('path', [
@@ -141,9 +138,8 @@ def test_cursor_parts():
     assert cur.index == 0
     assert isinstance(cur.resolve(), ContextStmt)
 
-    block, idx = cur.parent()
-    assert block.stmts[idx] is cur.resolve()
-    assert block is resolve_block(nested.ast, FuncBody().stmt(1).block('ift'))
+    block = resolve_block(nested.ast, cur.block_path)
+    assert block.stmts[cur.index] is cur.resolve()
 
 
 def test_cursor_validated_on_construction():

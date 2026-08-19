@@ -194,7 +194,7 @@ def test_a_statement_sited_rewrite_refuses_an_expression_cursor():
         return y
 
     cur = ExprCursor(rounded.ast, FuncBody().stmt(1).expr('expr'))
-    with pytest.raises(TransformReferenceError, match='aimed at statements'):
+    with pytest.raises(TransformReferenceError, match='these sites are statements'):
         unfold_special(rounded, where=cur)
 
 

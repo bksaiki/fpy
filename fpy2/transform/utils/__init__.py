@@ -1,11 +1,6 @@
 """
 Shared machinery for the transforms: the loop rewrites and the rounding
-rewrites.
-
-The vocabulary a transform refers to a site with lives in the submodules:
-:mod:`~fpy2.transform.utils.error` for what it raises, and
-:mod:`~fpy2.transform.utils.cursor` for what it points with.  Both are
-re-exported here, so a transform needs one import.
+rewrites.  The `error`, `cursor` and `path` submodules are re-exported here.
 """
 
 from dataclasses import dataclass
@@ -60,6 +55,7 @@ from .cursor import (
     ExprCursor,
     StmtCursor,
     expr_sites,
+    not_a_statement,
     region_of,
     stmt_sites,
 )
@@ -239,14 +235,15 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
 
 
 def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
-    """Whether *stmt* is a candidate rounding block: what a `where` index counts
-    for the rounding rewrites, and what :meth:`sites` lists."""
+    """Whether *stmt* is a candidate rounding block: what :meth:`sites` lists."""
     return isinstance(stmt, ContextStmt) and rounding_block(stmt, casts=casts) is not None
 
 
 def check_where(where: int | Cursor | None) -> None:
     """Rejects a `where` that names nothing of the kind."""
-    if where is not None and not isinstance(where, (int, Cursor)):
+    if isinstance(where, bool) or (
+        where is not None and not isinstance(where, (int, Cursor))
+    ):
         raise TypeError(
             f'expected an \'int\', a cursor or None for where, got `{where}`'
         )
@@ -290,10 +287,7 @@ def _target_of(
         case StmtCursor() | BlockCursor():
             return region_of(where)
         case ExprCursor():
-            raise TransformReferenceError(
-                f'`{where}` names an expression, and this rewrite is aimed at '
-                'statements: no statement sits beneath an expression'
-            )
+            raise not_a_statement(where)
 
 
 @dataclass(frozen=True)
@@ -314,8 +308,7 @@ class SiteRewriter(DefaultTransformVisitor):
     expressions (`_expr_sited`); `None` takes them all.
 
     Every rewrite is recorded in `edits`, which is what forwards a cursor
-    across the pass.  The record is structural -- a statement span replaced by
-    another -- so no subclass says anything about what its output means.
+    across the pass.
 
     A subclass that overrides `_visit_function` must call `_begin` itself.
     """
@@ -323,18 +316,18 @@ class SiteRewriter(DefaultTransformVisitor):
     where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
+    dirty_exprs: list[StmtPath]
+    """statements this rewrite changed the expressions of without replacing"""
     declined: list[str]
     _matched: int
     _replaced: bool
     """set by a statement visitor that replaced the statement it was handed;
-    `_visit_block` turns it into an edit, since it is what knows where the
-    statement was"""
+    `_visit_block` turns it into an edit"""
     _site: tuple[StmtBlock, int]
     """the block and index of the statement being visited, for a visitor whose
     context carries something else"""
     _paths: dict[int, BlockPath]
     _target: tuple[BlockPath, range] | None
-    """the block path and indices an explicit cursor or region names"""
     _target_expr: Expr | None
     """the expression an explicit cursor names, where the sites are expressions"""
     _expr_sited: bool = False
@@ -344,7 +337,9 @@ class SiteRewriter(DefaultTransformVisitor):
     def _begin(self, func: FuncDef) -> None:
         """Set up against the tree about to be walked: both the paths an edit
         is recorded with and the target a cursor names are nodes of it."""
+        self.site_idx = 0
         self.edits = []
+        self.dirty_exprs = []
         self.declined = []
         self._matched = 0
         self._replaced = False
@@ -386,9 +381,8 @@ class SiteRewriter(DefaultTransformVisitor):
         is one this rewrite is aimed at.
 
         A cursor or region names a piece of program, and the candidates it
-        selects are the ones *at or beneath* it -- which is what makes a
-        forwarded site usable: the statement a rewrite leaves behind is a
-        wrapper, and the next operator's site sits inside it.
+        selects are the ones *at or beneath* it -- so the statement an earlier
+        rewrite left behind names the site now nested inside it.
         """
         if self._target is None:
             return self.where is None or idx == self.where
@@ -407,19 +401,46 @@ class SiteRewriter(DefaultTransformVisitor):
             return e is self._target_expr
         return self._selects(block, pos, idx)
 
-    def _record(self, block: StmtBlock, pos: int, inserted: int) -> None:
-        """Record that `block[pos]` was replaced by `inserted` statements.
+    def _record(self, block: StmtBlock, pos: int, inserted: int, *, removed: int = 1) -> None:
+        """Record that `inserted` statements took the place of `removed` at
+        `block[pos]`; `removed=0` records an insertion, which replaces nothing.
 
         A rewrite of an enclosing statement subsumes anything recorded inside
         it -- nothing under a rebuilt statement forwards anyway, and the edits
         of one pass have to stay disjoint.
         """
         path = self._paths[id(block)]
-        replaced = range(pos, pos + 1)
-        self.edits = [
-            e for e in self.edits if not beneath(e.block_path, path, replaced)
-        ]
-        self.edits.append(Edit(path, pos, 1, inserted))
+        if removed:
+            replaced = range(pos, pos + removed)
+            self.edits = [
+                e for e in self.edits if not beneath(e.block_path, path, replaced)
+            ]
+        self.edits.append(Edit(path, pos, removed, inserted))
+
+    def _visit_block(self, block: StmtBlock, ctx):
+        """Visit a block, recording what each statement was replaced by.
+
+        A statement visitor emits its replacement into the list handed to it as
+        the context and returns the last statement, so the count is the growth
+        of that list.  It signals the rewrite with `_replaced`, which it must set
+        *after* visiting any nested block, since those reset it.
+        """
+        out: list[Stmt] = []
+        for pos, stmt in enumerate(block.stmts):
+            self._site = (block, pos)
+            self._replaced = False
+            before = len(out)
+            s, _ = self._visit_statement(stmt, out)
+            out.append(s)
+            if self._replaced:
+                self._record(block, pos, len(out) - before)
+                self._replaced = False
+        return StmtBlock(out), None
+
+    def _mark_exprs(self, block: StmtBlock, pos: int) -> None:
+        """Record that `block[pos]` survives with its expressions rewritten, so
+        an expression cursor in it does not forward."""
+        self.dirty_exprs.append(StmtPath(self._paths[id(block)], pos))
 
 
 class BlockRewriter(SiteRewriter):

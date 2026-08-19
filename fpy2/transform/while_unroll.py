@@ -43,7 +43,6 @@ class _WhileUnroll(SiteRewriter):
         self.func = func
         self.where = where
         self.times = times
-        self.site_idx = 0
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
         block, pos = self._site
@@ -69,19 +68,6 @@ class _WhileUnroll(SiteRewriter):
         else:
             return super()._visit_while(stmt, ctx)
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
-        new_stmts: list[Stmt] = []
-        for pos, stmt in enumerate(block.stmts):
-            self._site = (block, pos)
-            self._replaced = False
-            s, _ = self._visit_statement(stmt, ctx)
-            new_stmts.append(s)
-            if self._replaced:
-                # the loop became one statement: an `if` guarding the rest
-                self._record(block, pos, 1)
-                self._replaced = False
-        return StmtBlock(new_stmts), None
-
     def apply(self):
         return self._visit_function(self.func, None)
 
@@ -93,9 +79,8 @@ class WhileUnroll:
 
     @staticmethod
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The `while` loops of `func`, in visit order -- what a `where` index
-        counts.  `within` keeps only those at or beneath a cursor or region.
-        """
+        """The `while` loops of `func`, in visit order: what a `where`
+        index counts."""
         return stmt_sites(func, lambda s: isinstance(s, WhileStmt), within)
 
     @staticmethod
@@ -120,8 +105,7 @@ class WhileUnroll:
     def apply_with_edits(
         func: FuncDef, where: int | Cursor | None = None, times: int = 1
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the rewritten
-        program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
         check_where(where)
@@ -132,11 +116,8 @@ class WhileUnroll:
 
         unroller = _WhileUnroll(func, where, times)
         out = unroller.apply()
-        # A `where` that named no loop leaves the function unchanged; fail
-        # rather than silently no-op.  When `where` is out of range no loop
-        # matches, so no body is re-visited and `site_idx` is the true loop
-        # count; an in-range `where` matches (so `site_idx` exceeds it, even
-        # though re-visiting a matched loop's body can inflate the counter).
+        # An in-range `where` matches, so `site_idx` exceeds it even though
+        # re-visiting a matched loop's body inflates the counter
         unroller.check_site('a `while` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(func, out, tuple(unroller.edits), exprs_preserved=True)

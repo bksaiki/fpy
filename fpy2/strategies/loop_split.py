@@ -32,11 +32,8 @@ def split(
         guarded by a runtime ``assert factor >= 1``).
     where : int | Cursor | None
         Which `for` loop to split: an index counting `for` loops in visit
-        order, outermost-first; or a :class:`fpy2.strategies.StmtCursor` /
-        :class:`fpy2.strategies.BlockCursor` naming a program point, which takes
-        every loop at or beneath it. A cursor or region from an earlier
-        program is forwarded to this one first. If `None`, split every
-        `for` loop.
+        order, outermost-first, or a cursor or region, which takes every loop at
+        or beneath it. If `None`, split every `for` loop.
     strategy : SplitLoopStrategy
         How to handle a length that is not a multiple of `factor`.
         Defaults to ``PEEL``, which runs the remainder in a residual

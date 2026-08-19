@@ -12,8 +12,8 @@ import fpy2 as fp
 
 from fpy2.strategies import (
     BlockCursor,
-    StmtCursor,
     FuncBody,
+    StmtCursor,
     SubBlock,
     TransformDeclined,
     TransformReferenceError,
@@ -167,9 +167,12 @@ def test_a_cursor_whose_every_candidate_declines_says_why():
         unfold_special(exact, where=site)
 
 
-def test_where_rejects_something_that_is_not_a_site():
+@pytest.mark.parametrize('bad', ['body[0]', True, False, 1.0])
+def test_where_rejects_something_that_is_not_a_site(bad):
+    """`True` in particular: it is an `int` to Python, and would silently mean
+    the site at index 1."""
     with pytest.raises(TypeError, match='for where'):
-        unfold_special(two_sites, where='body[0]')  # type: ignore[arg-type]
+        unfold_special(two_sites, where=bad)  # type: ignore[arg-type]
 
 
 def test_the_transform_layer_takes_only_cursors_of_its_own_program():

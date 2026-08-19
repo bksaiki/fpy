@@ -17,12 +17,6 @@ float_to_fixed -> rescale_fixed -> simplify`` (see :func:`_lower`), run from bot
 an ``FP32`` and an ``FP64`` source.  This is the only bit-exact check any of those
 six operators get *composed*, so it is also what keeps ``unfold_special`` and
 ``simplify`` honest -- each of them changes the result here, for both sources.
-
-:func:`test_a_cursor_aims_the_whole_sequence` is the other half: the same
-sequence aimed at *one* rounding of a two-rounding program, which is what
-``where=None`` cannot express and what a location surviving its neighbours is
-for.  It asserts where the rewrites landed rather than re-running the bit-exact
-check.
 """
 
 import shutil
@@ -269,8 +263,7 @@ def _two_roundings(x: fp.Real, y: fp.Real) -> fp.Real:
 
 def _lower_at(func, src, site):
     """:func:`_lower`, aimed at one site by cursor instead of at the whole
-    program.  ``simplify`` is left off: it is deliberately opaque to cursors, and
-    what is under test here is where the rewrites landed."""
+    program.  ``simplify`` is left off: cursors do not cross it."""
     f = st.monomorphize(func, args=[RealType(src), RealType(src)])
     f = st.unfold_special(f, where=site)
     f = st.unfold_overflow(f, where=site, early_check=True)

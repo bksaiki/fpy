@@ -20,11 +20,8 @@ def unroll_while(
         The function to transform.
     where : int | Cursor | None
         Which `while` loop to unroll: an index counting `while` loops in visit
-        order, outermost-first; or a :class:`fpy2.strategies.StmtCursor` /
-        :class:`fpy2.strategies.BlockCursor` naming a program point, which takes
-        every loop at or beneath it. A cursor or region from an earlier
-        program is forwarded to this one first. If `None`, unroll every
-        `while` loop.
+        order, outermost-first, or a cursor or region, which takes every loop at
+        or beneath it. If `None`, unroll every `while` loop.
     times : int
         The number of times to unroll the loop.
 
@@ -88,11 +85,8 @@ def unroll_for(
     ----------
     where : int | Cursor | None
         Which `for` loop to unroll: an index counting `for` loops in visit
-        order, outermost-first; or a :class:`fpy2.strategies.StmtCursor` /
-        :class:`fpy2.strategies.BlockCursor` naming a program point, which takes
-        every loop at or beneath it. A cursor or region from an earlier
-        program is forwarded to this one first. If `None`, unroll every
-        `for` loop.
+        order, outermost-first, or a cursor or region, which takes every loop at
+        or beneath it. If `None`, unroll every `for` loop.
     times : int
         The number of times to unroll the loop; the rewritten loop
         consumes ``times + 1`` consecutive elements per iteration.

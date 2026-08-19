@@ -363,6 +363,9 @@ def _ctx_call(
 class _FloatToFixedInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
+    _casts = False
+    """whether a `fp.cast` block counts as a candidate"""
+
     func: FuncDef
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
@@ -380,7 +383,6 @@ class _FloatToFixedInstance(BlockRewriter):
         self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        self.site_idx = 0
         # the name the program calls `fpy2` by: the rewrite constructs a
         # context per value, so it has to name the constructor
         self.alias = fpy_alias(func.env)
@@ -402,7 +404,7 @@ class _FloatToFixedInstance(BlockRewriter):
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """Only a rounding is a fixed-point rounding in disguise; `Cast`
         asserts exactness, which the lowering would not preserve."""
-        return rounding_block(stmt, casts=False)
+        return rounding_block(stmt, casts=self._casts)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's context, if its rounding can be lowered to fixed-point."""
@@ -546,11 +548,9 @@ class FloatToFixed:
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
         """The candidate rounding blocks of `func`, in visit order --
         what a `where` index counts, whether or not each verifies.
-
-        `within` keeps only the candidates at or beneath a cursor or
-        region.
         """
-        return stmt_sites(func, lambda s: is_rounding_block(s, casts=False), within)
+        casts = _FloatToFixedInstance._casts
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
 
     @staticmethod
     def apply(
@@ -581,8 +581,7 @@ class FloatToFixed:
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:
-        """:meth:`apply`, with the record of what it replaced; the
-        rewritten program is the log's `result`."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
