@@ -105,8 +105,10 @@ from ..number.format import (
 from ..utils import Gensym
 from .utils import (
     BlockRewriter,
+    Declined,
     check_site,
     check_where,
+    rounding_block,
     number_literal,
     shift,
 )
@@ -297,26 +299,21 @@ class _RescaleFixedInstance(BlockRewriter):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> _Shift | None:
-        """How to rescale this block, or `None` if it must be left alone."""
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """The block's rounded operands, if it is structurally a rounding
+        block.  Rounding commutes with the shift; arithmetic does not."""
+        return rounding_block(stmt, casts=True)
 
-        # rounding commutes with the shift; arithmetic does not
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, (Round, Cast)) or not isinstance(s.expr.arg, Var):
-                        return None
-                case _:
-                    return None
-
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Shift | Declined:
+        """How to rescale this block, or why it must be left alone."""
         ctx = self.eval_info.by_expr.get(stmt.ctx)
         if isinstance(ctx, _FixedCtx):
             # a known format shifts by a constant, so the factors fold away
             if _scale_of(ctx) == 0:
-                return None
+                return Declined(
+                    'the format is already at digit position zero; there is '
+                    'nothing to rescale'
+                )
             # a *finite* substitute for NaN or infinity is a value in the
             # format, so it would have to shift along with it; a non-finite
             # one is the same at every scale.  `UnfoldSpecial` takes the
@@ -326,7 +323,11 @@ class _RescaleFixedInstance(BlockRewriter):
                 v is not None and not v.is_nar()
                 for v in (ctx.nan_value, ctx.inf_value)
             ):
-                return None
+                return Declined(
+                    'a finite NaN or infinity substitute is a value in the '
+                    'format and would have to shift with it; run '
+                    '`unfold_special` first'
+                )
             scale = _scale_of(ctx)
             return _Shift(
                 ctx=lambda: _rescale_expr(stmt.ctx, ctx, 0),
@@ -335,8 +336,17 @@ class _RescaleFixedInstance(BlockRewriter):
             )
 
         if isinstance(stmt.ctx, Call):
-            return self._symbolic_shift(stmt.ctx)
-        return None
+            shift = self._symbolic_shift(stmt.ctx)
+            if shift is None:
+                return Declined(
+                    'the constructor call is not a fixed-point context whose '
+                    'position can be shifted symbolically'
+                )
+            return shift
+        return Declined(
+            'the context is neither a statically-known fixed-point format '
+            'nor a constructor call to shift symbolically'
+        )
 
     def _symbolic_shift(self, e: Call) -> _Shift | None:
         """
@@ -487,8 +497,14 @@ class RescaleFixed:
         Rescales fixed-point rounding in `func` to digit position zero.
 
         `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could
-        rescale.  If `None`, every candidate is rescaled.
+        (outermost-first); candidates are the structurally-matching rounding
+        blocks, whether or not they verify.  If `None`, every candidate that
+        verifies is rewritten and the rest are skipped.
+
+        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
+        `where` names a candidate this pass refuses, and
+        :class:`fpy2.transform.TransformReferenceError` where it names no
+        candidate at all.
 
         A format that substitutes a *finite* value for NaN or an infinity is
         declined: the substitute would have to shift along with the format.

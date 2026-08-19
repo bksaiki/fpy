@@ -132,10 +132,12 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Declined,
     attribute,
     check_site,
     check_where,
     number_literal,
+    rounding_block,
     sign_choice,
     value_literal,
 )
@@ -215,9 +217,9 @@ def _overflow_policy(
     return None
 
 
-def _describe(ctx: Context) -> _Source | None:
+def _describe(ctx: Context) -> _Source | Declined:
     """
-    `ctx` as a lowerable float format, or `None`.
+    `ctx` as a lowerable float format, or why it is not one.
 
     A format qualifies when the fixed-point round can reproduce it exactly:
     it must state a precision, its rounding must be deterministic, and its
@@ -230,15 +232,20 @@ def _describe(ctx: Context) -> _Source | None:
         case EFloatContext():
             # a shifted exponent encoding is not accounted for below
             if ctx.eoffset != 0:
-                return None
+                return Declined('a shifted exponent encoding is not accounted for')
         case MPBFloatContext() | MPSFloatContext() | MPFloatContext():
             pass
         case _:
-            return None
+            return Declined(
+                'the context is not a float format this lowering knows '
+                '(`IEEEContext`, `EFloatContext`, `MPBFloatContext`, '
+                '`MPSFloatContext`, or `MPFloatContext`)'
+            )
 
-    # stochastic rounding would have to draw its bits at the same position
     if ctx.num_randbits != 0:
-        return None
+        return Declined(
+            'stochastic rounding would have to draw its bits at the same position'
+        )
 
     # an unbounded format cannot overflow; a bounded one has to say where to
     maxval: RealFloat | None = None
@@ -251,16 +258,21 @@ def _describe(ctx: Context) -> _Source | None:
         # an emitted context states one bound and mirrors it, and FPy's context
         # construction has no way to pass the other, so the two must agree
         if neg_maxval != RealFloat(s=True, x=maxval):
-            return None
+            return Declined('the format states two bounds that are not mirror images')
         # the format's finest position in its top binade, which is where the clamp
         # puts a value too large for one of its own; the bound has to be
         # representable there
         expmax = ctx.emax - ctx.pmax + 1
         if maxval.exp < expmax:
-            return None
+            return Declined(
+                'the bound is not representable at the finest position of '
+                "the format's top binade"
+            )
         found = _overflow_policy(ctx, maxval, neg_maxval)
         if found is None:
-            return None
+            return Declined(
+                'overflow lands nowhere a fixed-point context can also land'
+            )
         policy = found
 
     # constants, so what the format makes of them is known here
@@ -273,8 +285,9 @@ def _describe(ctx: Context) -> _Source | None:
             ctx.round(Float(c=0, s=True)),
         )
     except ValueError:
-        # a format that cannot represent one of them at all
-        return None
+        return Declined(
+            'the format cannot represent one of NaN, the infinities, or the zeros'
+        )
 
     # a format without subnormals states no `emin`: every value then rounds
     # at a position read off its own exponent
@@ -381,34 +394,25 @@ class _FloatToFixedInstance(BlockRewriter):
             func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
         return func
 
-    def _candidate(self, stmt: ContextStmt) -> _Source | None:
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """The block's rounded operands, if it is structurally a rounding
+        block.  Only a rounding is a fixed-point rounding in disguise; `Cast`
+        asserts exactness, which the lowering would not preserve."""
+        return rounding_block(stmt, casts=False)
+
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's context, if its rounding can be lowered to fixed-point."""
         # the position varies per value, so the rewrite has to name a context
         # constructor; without `fpy2` in scope there is nothing to name it by
         if self.alias is None:
-            return None
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
-
+            return Declined(
+                'the rewrite names a context constructor, and `fpy2` is not '
+                'in scope to name it by'
+            )
         ctx = self.eval_info.by_expr.get(stmt.ctx)
         if not isinstance(ctx, Context):
-            return None
-        src = _describe(ctx)
-        if src is None:
-            return None
-
-        # only a rounding is a fixed-point rounding in disguise; `Cast` asserts
-        # exactness, which the lowering would not preserve
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, Round) or not isinstance(s.expr.arg, Var):
-                        return None
-                case _:
-                    return None
-
-        return src
+            return Declined('the context is not statically known')
+        return _describe(ctx)
 
     def _lower_round(
         self, e: Round, target: NamedId, loc: Location | None, src: _Source
@@ -551,8 +555,14 @@ class FloatToFixed:
         Expresses float rounding in `func` as fixed-point rounding.
 
         `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could lower.
-        If `None`, every candidate is lowered.
+        (outermost-first); candidates are the structurally-matching rounding
+        blocks, whether or not they verify.  If `None`, every candidate that
+        verifies is rewritten and the rest are skipped.
+
+        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
+        `where` names a candidate this pass refuses, and
+        :class:`fpy2.transform.TransformReferenceError` where it names no
+        candidate at all.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')

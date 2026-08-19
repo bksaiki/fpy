@@ -113,6 +113,7 @@ from .utils import (
     check_site,
     check_where,
     fixed_probes,
+    rounding_block,
     sign_choice,
     try_round,
 )
@@ -330,23 +331,9 @@ class _UnfoldSpecialInstance(BlockRewriter):
 
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """The block's rounded operands, if it is structurally a rounding
-        block: every statement a round or cast of a variable."""
-        # a bound context is visible to the body as a value, which the rewrite changes
-        if not isinstance(stmt.target, UnderscoreId):
-            return None
-
-        # a cast substitutes a special exactly as a round does: the
-        # substitution happens before the exactness check
-        args: list[Var] = []
-        for s in stmt.body.stmts:
-            match s:
-                case Assign(target=NamedId()) | ReturnStmt():
-                    if not isinstance(s.expr, (Round, Cast)) or not isinstance(s.expr.arg, Var):
-                        return None
-                    args.append(s.expr.arg)
-                case _:
-                    return None
-        return args
+        block.  A cast substitutes a special exactly as a round does: the
+        substitution happens before the exactness check."""
+        return rounding_block(stmt, casts=True)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if any of its special values can be stated as

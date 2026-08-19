@@ -19,7 +19,7 @@ import pytest
 from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef, Integer
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
-from fpy2.transform import RescaleFixed, TransformReferenceError, UnfoldSpecial
+from fpy2.transform import RescaleFixed, TransformDeclined, TransformReferenceError, UnfoldSpecial
 from fpy2.transform.rescale_fixed import _scale_of
 
 
@@ -405,6 +405,18 @@ class TestWhere:
         f = self._three()
         with pytest.raises(TransformReferenceError):
             RescaleFixed.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """A float format is structurally a candidate; naming it says why it
+        cannot be rescaled."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='neither'):
+            RescaleFixed.apply(f.ast, where=0)
 
     def test_rejects_a_non_integer(self):
         f = self._three()

@@ -39,7 +39,7 @@ from fpy2.number import (
     MPSFloatContext,
     RealFloat,
 )
-from fpy2.transform import TransformReferenceError, UnfoldOverflow
+from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldOverflow
 from fpy2.types import RealType
 
 
@@ -487,6 +487,18 @@ class TestWhere:
         f = self._two()
         with pytest.raises(TransformReferenceError):
             UnfoldOverflow.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """An unbounded format is structurally a candidate; naming it says
+        why it cannot be rewritten."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8):
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='bounded'):
+            UnfoldOverflow.apply(f.ast, where=0)
 
     def test_rejects_a_non_integer(self):
         f = self._two()

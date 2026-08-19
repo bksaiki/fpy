@@ -33,7 +33,7 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import TransformReferenceError, UnfoldNegZero
+from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldNegZero
 
 
 # ----------------------------------------------------------------------
@@ -366,6 +366,18 @@ class TestWhere:
         f = self._two()
         with pytest.raises(TransformReferenceError):
             UnfoldNegZero.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """A float format is structurally a candidate; naming it says why it
+        cannot be rewritten."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='fixed-point'):
+            UnfoldNegZero.apply(f.ast, where=0)
 
     def test_rejects_a_non_integer(self):
         f = self._two()

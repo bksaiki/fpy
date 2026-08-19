@@ -5,6 +5,8 @@ rounding rewrites (:class:`fpy2.transform.UnfoldOverflow`,
 :class:`fpy2.transform.FloatToFixed`, :class:`fpy2.transform.RescaleFixed`).
 """
 
+from dataclasses import dataclass
+
 from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -12,7 +14,9 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
+    Assign,
     Attribute,
+    Cast,
     ConstInf,
     ConstNan,
     ContextStmt,
@@ -27,6 +31,8 @@ from ..ast.fpyast import (
     NamedId,
     Neg,
     Rational,
+    ReturnStmt,
+    Round,
     Signbit,
     Stmt,
     StmtBlock,
@@ -34,8 +40,6 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
-from dataclasses import dataclass
-
 from ..ast.visitor import DefaultTransformVisitor
 from .error import TransformDeclined, TransformReferenceError
 from ..number import (
@@ -211,6 +215,31 @@ def check_where(where: int | None) -> None:
     """Rejects a `where` that is not an index."""
     if where is not None and not isinstance(where, int):
         raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
+
+
+def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
+    """The rounded operands of a structurally-matching block: an
+    underscore-bound context whose every statement assigns or returns a
+    round (or a cast too, where `casts`) of a variable.  `None` otherwise.
+
+    This is the shared candidacy test of the rounding rewrites: it is pure
+    syntax, so it is what a `where` index counts, and whether a match may
+    actually be rewritten is its `_verify`'s question.
+    """
+    # a bound context is visible to the body as a value, which a rewrite changes
+    if not isinstance(stmt.target, UnderscoreId):
+        return None
+    kinds: tuple[type, ...] = (Round, Cast) if casts else (Round,)
+    args: list[Var] = []
+    for s in stmt.body.stmts:
+        match s:
+            case Assign(target=NamedId()) | ReturnStmt():
+                if not isinstance(s.expr, kinds) or not isinstance(s.expr.arg, Var):
+                    return None
+                args.append(s.expr.arg)
+            case _:
+                return None
+    return args
 
 
 def check_site(where: int | None, count: int, what: str) -> None:

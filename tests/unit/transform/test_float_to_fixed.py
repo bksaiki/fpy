@@ -38,7 +38,7 @@ from fpy2.number import (
     MPFloatContext,
     MPSFloatContext,
 )
-from fpy2.transform import FloatToFixed, TransformReferenceError
+from fpy2.transform import FloatToFixed, TransformDeclined, TransformReferenceError
 from fpy2.types import RealType
 
 
@@ -283,6 +283,18 @@ class TestWhere:
         f = self._two()
         with pytest.raises(TransformReferenceError):
             FloatToFixed.apply(f.ast, where=9)
+
+    def test_naming_a_declined_block_raises(self):
+        """A fixed-point format is structurally a candidate; naming it says
+        why it cannot be lowered."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8):
+                y = fp.round(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='float format'):
+            FloatToFixed.apply(f.ast, where=0)
 
     def test_rejects_a_non_integer(self):
         f = self._two()
