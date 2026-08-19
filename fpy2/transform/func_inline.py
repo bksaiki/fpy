@@ -21,7 +21,15 @@ from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
 from .rename_target import RenameTarget
-from .utils import Cursor, Edit, EditLog, SiteRewriter, check_where
+from .utils import (
+    Cursor,
+    Edit,
+    EditLog,
+    ExprCursor,
+    SiteRewriter,
+    check_where,
+    expr_sites,
+)
 
 
 def _replace_ret(block: StmtBlock, new_var: NamedId):
@@ -232,6 +240,31 @@ class FuncInline:
     """
     Function inlining.
     """
+
+    @staticmethod
+    def sites(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        funcs: Iterable[Function] | None = None,
+    ) -> list[ExprCursor]:
+        """The candidate call sites of `func`, in visit order -- what a `where`
+        index counts.
+
+        Expressions, since that is what a call is: each names one call, where a
+        statement cursor would name every call it holds.  `funcs` filters as it
+        does for :meth:`apply`, and `within` keeps only the calls at or beneath a
+        cursor or region.
+        """
+        keep = None if funcs is None else set(funcs)
+        return expr_sites(
+            func,
+            lambda e: (
+                isinstance(e, Call) and isinstance(e.fn, Function)
+                and (keep is None or e.fn in keep)
+            ),
+            within,
+        )
 
     @staticmethod
     def apply(

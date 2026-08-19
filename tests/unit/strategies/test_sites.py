@@ -1,0 +1,212 @@
+"""
+Listing the sites a strategy can be aimed at.
+
+The claim that matters is the correspondence: `sites(strategy, f)[i]` names the
+same site as `where=i`, so a cursor can be *chosen* rather than counted out by
+hand — which is what makes cursors reachable at all.
+"""
+
+import pytest
+
+import fpy2 as fp
+
+from fpy2.ast import Call
+from fpy2.strategies import (
+    BlockCursor,
+    ExprCursor,
+    FuncBody,
+    StmtCursor,
+    TransformDeclined,
+    TransformReferenceError,
+    float_to_fixed,
+    inline,
+    rescale_fixed,
+    simplify,
+    sites,
+    split,
+    unfold_neg_zero,
+    unfold_overflow,
+    unfold_special,
+    unroll_for,
+    unroll_while,
+)
+
+
+@fp.fpy(ctx=fp.REAL)
+def two_sites(x: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        p = fp.round(x)
+    with fp.FP16:
+        q = fp.round(y)
+    return p + q
+
+
+@fp.fpy(ctx=fp.REAL)
+def nested(x: fp.Real) -> fp.Real:
+    if x > 0:
+        with fp.FP16:
+            y = fp.round(x)
+    else:
+        y = -x
+    return y
+
+
+@fp.fpy(ctx=fp.REAL)
+def declining(x: fp.Real) -> fp.Real:
+    with fp.REAL:      # a candidate that `unfold_special` refuses
+        y = fp.round(x)
+    return y
+
+
+@fp.fpy
+def loops(xs: list[fp.Real], n: fp.Real) -> fp.Real:
+    a = 0.0
+    for x in xs:
+        a = a + x
+    i = 0.0
+    while i < n:
+        i = i + 1
+    return a + i
+
+
+@fp.fpy
+def sq(x: fp.Real) -> fp.Real:
+    return x * x
+
+
+@fp.fpy
+def cube(x: fp.Real) -> fp.Real:
+    return x * x * x
+
+
+@fp.fpy
+def calls(x: fp.Real, y: fp.Real) -> fp.Real:
+    return sq(x) + cube(y)
+
+
+# ----------------------------------------------------------------------
+# What a listing names
+
+
+def test_the_rounding_strategies_list_their_blocks():
+    for strategy in (unfold_special, unfold_neg_zero, unfold_overflow,
+                     float_to_fixed, rescale_fixed):
+        found = sites(strategy, two_sites)
+        assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
+        assert all(isinstance(c, StmtCursor) for c in found)
+
+
+def test_a_listing_is_outermost_first():
+    found = sites(unfold_special, nested)
+    assert [c.path for c in found] == [FuncBody().stmt(0).block('ift').stmt(0)]
+
+
+def test_the_loop_strategies_list_their_loops():
+    assert [c.path for c in sites(split, loops)] == [FuncBody().stmt(1)]
+    assert [c.path for c in sites(unroll_for, loops)] == [FuncBody().stmt(1)]
+    assert [c.path for c in sites(unroll_while, loops)] == [FuncBody().stmt(3)]
+
+
+def _callee(cursor: ExprCursor) -> str:
+    call = cursor.resolve()
+    assert isinstance(call, Call)
+    return call.fn.name
+
+
+def test_inline_lists_expressions():
+    found = sites(inline, calls)
+    assert all(isinstance(c, ExprCursor) for c in found)
+    assert [_callee(c) for c in found] == ['sq', 'cube']
+
+
+def test_inline_honours_the_funcs_filter():
+    only = sites(inline, calls, funcs=[cube])
+    assert [_callee(c) for c in only] == ['cube']
+
+
+def test_a_listing_is_syntactic():
+    """A site that declines still appears: listing says what a `where` may name,
+    not what will be rewritten."""
+    assert len(sites(unfold_special, declining)) == 1
+    with pytest.raises(TransformDeclined, match='rounds exactly'):
+        unfold_special(declining, where=0)
+
+
+def test_a_strategy_that_takes_no_where_has_no_sites():
+    with pytest.raises(ValueError, match='takes no `where`'):
+        sites(simplify, two_sites)
+
+
+# ----------------------------------------------------------------------
+# The correspondence with `where=<index>`
+
+
+@pytest.mark.parametrize('strategy', [
+    unfold_special, unfold_neg_zero, unfold_overflow, float_to_fixed, rescale_fixed,
+])
+def test_a_listed_site_aims_the_same_as_its_index(strategy):
+    """Including the refusals: a strategy that declines the site by index
+    declines it by cursor too."""
+    for i, cursor in enumerate(sites(strategy, two_sites)):
+        try:
+            expect = strategy(two_sites, where=i).format()
+        except TransformDeclined:
+            with pytest.raises(TransformDeclined):
+                strategy(two_sites, where=cursor)
+            continue
+        assert strategy(two_sites, where=cursor).format() == expect
+
+
+def test_a_listed_call_aims_the_same_as_its_index():
+    for i, cursor in enumerate(sites(inline, calls)):
+        assert inline(calls, cursor).format() == inline(calls, i).format()
+
+
+# ----------------------------------------------------------------------
+# `within`
+
+
+def test_within_narrows_to_a_region():
+    part = BlockCursor(two_sites.ast, FuncBody(), range(1, 2))
+    assert [c.path for c in sites(unfold_special, two_sites, part)] == [
+        FuncBody().stmt(1)
+    ]
+
+
+def test_within_narrows_to_what_a_cursor_holds():
+    """The `if` is one statement, and the rounding is beneath it."""
+    branch = StmtCursor(nested.ast, FuncBody().stmt(0))
+    assert len(sites(unfold_special, nested, branch)) == 1
+    assert sites(unfold_special, nested, StmtCursor(nested.ast, FuncBody().stmt(1))) == []
+
+
+def test_within_asks_a_forwarded_site_what_it_now_holds():
+    """The step a schedule takes: rewrite at a site, then look inside its image."""
+    site = sites(unfold_special, two_sites)[0]
+    out = unfold_special(two_sites, where=site)
+
+    inner = sites(unfold_overflow, out, out.rebase(site))
+    assert len(inner) == 1
+    # ... and it is inside the wrapper the rewrite left behind
+    assert inner[0].path != site.path
+
+
+def test_within_of_another_program_is_a_bad_reference():
+    other = StmtCursor(nested.ast, FuncBody().stmt(0))
+    with pytest.raises(TransformReferenceError, match='another program'):
+        sites(unfold_special, two_sites, other)
+
+
+def test_an_expression_cannot_narrow_a_statement_listing():
+    cur = ExprCursor(calls.ast, FuncBody().stmt(0).expr('expr'))
+    with pytest.raises(TransformReferenceError, match='these sites are statements'):
+        sites(unfold_special, calls, cur)
+
+
+def test_an_expression_narrows_a_call_listing():
+    """Both calls are under the returned sum; only one is under each operand."""
+    whole = ExprCursor(calls.ast, FuncBody().stmt(0).expr('expr'))
+    assert len(sites(inline, calls, whole)) == 2
+
+    left = ExprCursor(calls.ast, FuncBody().stmt(0).expr('expr').expr('args', 0))
+    assert [c.path for c in sites(inline, calls, left)] == [left.path]

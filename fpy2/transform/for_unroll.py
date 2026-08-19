@@ -30,12 +30,14 @@ from .utils import (
     Cursor,
     EditLog,
     SiteRewriter,
+    StmtCursor,
     check_where,
     clone_block,
     copy_target,
     infer_array_size,
     integer_ctx,
     static_size,
+    stmt_sites,
 )
 
 
@@ -351,6 +353,13 @@ class ForUnroll:
     rounding (see the module docstring).  When the array-size analysis proves
     the iterable's length, the remainder handling is resolved at compile time.
     """
+
+    @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The `for` loops of `func`, in visit order -- what a `where` index
+        counts.  `within` keeps only those at or beneath a cursor or region.
+        """
+        return stmt_sites(func, lambda s: isinstance(s, ForStmt), within)
 
     @staticmethod
     def apply(

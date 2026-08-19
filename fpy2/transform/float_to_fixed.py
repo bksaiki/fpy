@@ -135,12 +135,15 @@ from .utils import (
     Cursor,
     Declined,
     EditLog,
+    StmtCursor,
     TransformDeclined,
     attribute,
     check_where,
+    is_rounding_block,
     number_literal,
     rounding_block,
     sign_choice,
+    stmt_sites,
     value_literal,
 )
 
@@ -538,6 +541,16 @@ class FloatToFixed:
     """
     Transformation pass to express float rounding as fixed-point rounding.
     """
+
+    @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+
+        `within` keeps only the candidates at or beneath a cursor or
+        region.
+        """
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=False), within)
 
     @staticmethod
     def apply(

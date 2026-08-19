@@ -4,7 +4,14 @@ Unroller for `while` loops.
 
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
-from .utils import Cursor, EditLog, SiteRewriter, check_where
+from .utils import (
+    Cursor,
+    EditLog,
+    SiteRewriter,
+    StmtCursor,
+    check_where,
+    stmt_sites,
+)
 
 
 class _WhileUnroll(SiteRewriter):
@@ -83,6 +90,13 @@ class WhileUnroll:
     """
     Unrolling for `while` loops.
     """
+
+    @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The `while` loops of `func`, in visit order -- what a `where` index
+        counts.  `within` keeps only those at or beneath a cursor or region.
+        """
+        return stmt_sites(func, lambda s: isinstance(s, WhileStmt), within)
 
     @staticmethod
     def apply(

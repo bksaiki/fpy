@@ -83,10 +83,13 @@ from .utils import (
     Cursor,
     Declined,
     EditLog,
+    StmtCursor,
     agrees,
     check_where,
     fixed_probes,
+    is_rounding_block,
     rounding_block,
+    stmt_sites,
     try_round,
 )
 
@@ -289,6 +292,16 @@ class UnfoldNegZero:
     """
     Transformation pass to state a context's sign of zero as program text.
     """
+
+    @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+
+        `within` keeps only the candidates at or beneath a cursor or
+        region.
+        """
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=False), within)
 
     @staticmethod
     def apply(

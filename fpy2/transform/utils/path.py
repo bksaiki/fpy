@@ -24,6 +24,7 @@ Build one by descending::
     FuncBody().stmt(0).expr('expr').expr('args', 1)  # body[0].expr.args[1]
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
@@ -295,6 +296,22 @@ def beneath(path: Path, block: BlockPath, span: range) -> bool:
                 p = parent
             case _:
                 raise RuntimeError(f'unreachable case: {p}')
+
+
+def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:
+    """Every statement of *func* with its path, in visit order.
+
+    A statement comes before the blocks it holds, which is the order a transform
+    counts its candidates in -- outermost first.
+    """
+    def walk(block: StmtBlock, path: BlockPath) -> Iterator[tuple[StmtPath, Stmt]]:
+        for i, stmt in enumerate(block.stmts):
+            here = StmtPath(path, i)
+            yield here, stmt
+            for field, sub in sub_blocks(stmt):
+                yield from walk(sub, SubBlock(here, field))
+
+    yield from walk(func.body, FuncBody())
 
 
 def block_paths(func: FuncDef) -> dict[int, BlockPath]:

@@ -111,11 +111,14 @@ from .utils import (
     Cursor,
     Declined,
     EditLog,
+    StmtCursor,
     agrees,
     check_where,
     fixed_probes,
+    is_rounding_block,
     rounding_block,
     sign_choice,
+    stmt_sites,
     try_round,
 )
 
@@ -430,6 +433,18 @@ class UnfoldSpecial:
     """
     Transformation pass to state a context's special values as program text.
     """
+
+    @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+
+        `within` keeps only the candidates at or beneath a cursor or
+        region.
+
+        A cast substitutes a special exactly as a round does, so it counts too.
+        """
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=True), within)
 
     @staticmethod
     def apply(

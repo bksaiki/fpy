@@ -133,14 +133,17 @@ from .utils import (
     Cursor,
     Declined,
     EditLog,
+    StmtCursor,
     agrees,
     attribute,
     check_where,
+    is_rounding_block,
     number_literal,
     rounding_block,
     same_value,
     shift,
     sign_choice,
+    stmt_sites,
     try_round,
     value_literal,
 )
@@ -585,6 +588,16 @@ class UnfoldOverflow:
     """
     Transformation pass to state a context's overflow as program text.
     """
+
+    @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+
+        `within` keeps only the candidates at or beneath a cursor or
+        region.
+        """
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=False), within)
 
     @staticmethod
     def apply(

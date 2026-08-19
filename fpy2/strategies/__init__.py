@@ -30,6 +30,7 @@ from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .simple import simplify
 from .special_unfold import unfold_special
+from .utils.sites import sites
 
 __all__ = [
     'BlockCursor',
@@ -54,6 +55,7 @@ __all__ = [
     'monomorphize',
     'rescale_fixed',
     'simplify',
+    'sites',
     'split',
     'unfold_neg_zero',
     'unfold_overflow',

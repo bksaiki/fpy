@@ -354,13 +354,21 @@ the refusal across a pass that does not preserve expressions.
 
 ### Phase 9 — listing sites
 
-`sites(strategy, func, within=None) -> list[Cursor]` in `fpy2/strategies`, backed
-by a `sites` classmethod per transform (free for the five via `BlockRewriter`).
-It returns the kind the transform is sited on — `StmtCursor` for the rounding and
-loop rewrites, `ExprCursor` for `inline`. `within` takes any cursor, so a
-forwarded region can be asked what it holds.
+`sites(strategy, func, within=None, **kwargs) -> list[Cursor]` in
+`fpy2/strategies/utils/sites.py`, dispatching through a table of the aimable strategies
+to a `sites` staticmethod per transform. It returns the kind the transform is sited
+on — `StmtCursor` for the rounding and loop rewrites, `ExprCursor` for `inline` —
+and `within` takes any cursor, so a forwarded region can be asked what it holds.
 Without this a cursor can only be born from an `int`, and "pin several points,
 then rewrite" — item 3's stated capability — stays unreachable.
+
+Two shared scanners do the work, over one `walk_stmts` that yields each statement
+before the blocks it holds, which is the order a transform counts candidates in:
+`stmt_sites(func, match, within)` and `expr_sites(func, match, within)`. The
+predicate is syntactic and shared with the rewrite — `is_rounding_block(stmt,
+casts=)` for the five, `isinstance(s, ForStmt)` for the loops — so a listing cannot
+drift from what `where` accepts. A strategy absent from the table raises rather
+than returning `[]`: it takes no `where` at all.
 
 Same shape as Exo's `proc.find(pattern)`, which is where item 4 lands: pattern
 matching that returns cursors is this function with a different predicate.

@@ -52,7 +52,17 @@ from ...number import (
     MPFixedContext,
     RealFloat,
 )
-from .cursor import BlockCursor, Cursor, Edit, EditLog, ExprCursor, StmtCursor
+from .cursor import (
+    BlockCursor,
+    Cursor,
+    Edit,
+    EditLog,
+    ExprCursor,
+    StmtCursor,
+    expr_sites,
+    region_of,
+    stmt_sites,
+)
 from .error import TransformDeclined, TransformReferenceError
 from .path import (
     BlockField,
@@ -228,6 +238,12 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     )
 
 
+def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
+    """Whether *stmt* is a candidate rounding block: what a `where` index counts
+    for the rounding rewrites, and what :meth:`sites` lists."""
+    return isinstance(stmt, ContextStmt) and rounding_block(stmt, casts=casts) is not None
+
+
 def check_where(where: int | Cursor | None) -> None:
     """Rejects a `where` that names nothing of the kind."""
     if where is not None and not isinstance(where, (int, Cursor)):
@@ -271,11 +287,8 @@ def _target_of(
     if where.func is not func:
         raise TransformReferenceError(f'`{where}` names a statement of another program')
     match where:
-        case StmtCursor():
-            where.resolve()  # a cursor of this program still has to name something
-            return where.path.parent, range(where.index, where.index + 1)
-        case BlockCursor():
-            return where.block_path, where.span
+        case StmtCursor() | BlockCursor():
+            return region_of(where)
         case ExprCursor():
             raise TransformReferenceError(
                 f'`{where}` names an expression, and this rewrite is aimed at '

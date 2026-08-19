@@ -12,6 +12,7 @@ than a silent mis-hit.  Holding that reference also keeps the tree alive, so no
 `id` is recycled underneath a live cursor.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import TypeAlias
@@ -31,6 +32,8 @@ from .path import (
     resolve_block,
     resolve_expr,
     resolve_stmt,
+    sub_exprs,
+    walk_stmts,
 )
 
 
@@ -326,6 +329,84 @@ class EditLog:
         if len(span) == 1:
             return StmtCursor(self.result, StmtPath(block_path, span.start))
         return BlockCursor(self.result, block_path, span)
+
+
+def region_of(where: StmtCursor | BlockCursor) -> tuple[BlockPath, range]:
+    """The block and indices *where* names: one statement, or a run of them."""
+    if isinstance(where, StmtCursor):
+        return where.path.parent, range(where.index, where.index + 1)
+    return where.block_path, where.span
+
+
+def _restrict(func: FuncDef, within: Cursor | None, *, stmts: bool):
+    """What `within` narrows a listing to, as a predicate over paths."""
+    if within is None:
+        return lambda path: True
+    if within.func is not func:
+        raise TransformReferenceError(f'`{within}` names part of another program')
+    if isinstance(within, ExprCursor):
+        if stmts:
+            raise TransformReferenceError(
+                f'`{within}` names an expression, and these sites are statements: '
+                'no statement sits beneath an expression'
+            )
+        under = within.path
+        return lambda path: path == under or _under_expr(path, under)
+    block, span = region_of(within)
+    return lambda path: beneath(path, block, span)
+
+
+def _under_expr(path: ExprPath, ancestor: ExprPath) -> bool:
+    """Whether *path* lies under *ancestor*, both expressions."""
+    p = path.parent
+    while isinstance(p, ExprPath):
+        if p == ancestor:
+            return True
+        p = p.parent
+    return False
+
+
+def stmt_sites(
+    func: FuncDef,
+    match: Callable[[Stmt], bool],
+    within: Cursor | None = None,
+) -> list[StmtCursor]:
+    """The statements of *func* that *match*, in visit order.
+
+    What a `where` index counts, and what `within` narrows: a cursor or region
+    keeps the sites at or beneath it.
+    """
+    keep = _restrict(func, within, stmts=True)
+    return [
+        StmtCursor(func, path)
+        for path, stmt in walk_stmts(func)
+        if match(stmt) and keep(path)
+    ]
+
+
+def expr_sites(
+    func: FuncDef,
+    match: Callable[[Expr], bool],
+    within: Cursor | None = None,
+) -> list[ExprCursor]:
+    """The expressions of *func* that *match*, in visit order.
+
+    Outermost first within each statement, and each statement's own expressions
+    before the blocks it holds -- the order a visitor reaches them in.
+    """
+    keep = _restrict(func, within, stmts=False)
+    out: list[ExprCursor] = []
+
+    def walk(path: ExprPath, e: Expr) -> None:
+        if match(e) and keep(path):
+            out.append(ExprCursor(func, path))
+        for field, index, sub in sub_exprs(e):
+            walk(path.expr(field, index), sub)
+
+    for stmt_path, stmt in walk_stmts(func):
+        for field, index, e in sub_exprs(stmt):
+            walk(stmt_path.expr(field, index), e)
+    return out
 
 
 def _overlaps(a: Edit, b: Edit) -> bool:
