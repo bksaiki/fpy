@@ -1,5 +1,27 @@
 # Version History
 
+## [0.2.2] - 2026-08-19
+### Features:
+ - Analysis:
+   - value-class analysis:
+     - new analysis to classify real-valued expressions
+   - format inference:
+     - handle power operator
+     - minimal path sensitivity
+ - Strategies:
+   - float-to-fixed: rewrites a floating-point rounding into fixed-point roundings
+   - rescale fixed: rewrites a fixed-point rounding into an integer rounding
+   - unfold negative zero: makes negative zero handling explicit
+   - unfold overflow: makes overflow handling explicit
+   - unfold special: makes special-value handling explicit
+
+### Fixes:
+ - Backend:
+   - C++:
+     - many fixes 
+ - Strategies:
+   - split: overhaul to be similar to loop unrolling
+
 ## [0.2.1] - 2026-08-11
 ### Features:
  - Analyses:
