@@ -99,14 +99,30 @@ transforms already do; the carry-over is its own item if a use appears.
 
 ## 4. Patterns produce references
 
-`fpy2/rewrite` (`@fp.pattern` + `Rewrite`) already does structural matching
-with an occurrence index, but it is an island — unreachable from
-`fpy2.strategies`. Unify the layers: matching a pattern (over a function, or
-under a cursor) returns cursors; strategy `where=` accepts an int, a cursor,
-or a pattern. Exo 2 treats the checked user rewrite — `rewrite_expr(p, e, e')`,
-verified equivalent — as a core primitive with the same type as every built-in;
-`Rewrite.apply` should become a strategy on the same terms, probe-verified
-where a context is known.
+**Done.** `fpy2/rewrite` was an island: it named locations by an occurrence
+index, raised its own `RewriteError`, and returned an opaque program no cursor
+could cross. Now a match carries a cursor (`ExprCursor` for an expression
+pattern, `StmtCursor` / `BlockCursor` for a statement one), `find` / `find_all`
+name a location by what it looks like, `Rewrite` reports an edit log and takes
+the same `where` as every other strategy, and its failures are
+`TransformReferenceError` / `TransformDeclined` — so a user rule sits in a
+`try`/fallback beside a built-in, and a cursor crosses it.
+
+`where=` does *not* accept a pattern. Exo's operators do, but only because
+occurrence disambiguation lives inside the pattern string (`#2`); FPy patterns
+are decorated functions with nowhere to put an index, so `find_all(p, f)[i]`
+keeps that index on a list instead of smuggling it back into `where`. "Apply at
+every match" is a combinator (item 5), not a location.
+
+Not delivered: **verification**. Exo 2 treats the checked user rewrite —
+`rewrite_expr(p, e, e')`, verified equivalent — as a core primitive. A user
+rewrite here has a built-in's *type*, failure contract and location vocabulary,
+but not its guarantee: nothing checks that `l` and `r` compute the same thing.
+The existing probes test whether a *format's* rounding is reproduced, which says
+nothing about two expressions, so this needs interpreting both sides on sampled
+inputs — its own item, and sampling rather than proof (SMT stays rejected on
+cost). The plan and what it settled are in
+[pattern-cursors-plan.md](pattern-cursors-plan.md).
 
 ## 5. Combinators, in user space
 

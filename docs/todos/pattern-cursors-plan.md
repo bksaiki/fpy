@@ -3,6 +3,12 @@
 Item 4 of [scheduling-language.md](scheduling-language.md), on top of item 3
 ([cursor-forwarding-plan.md](cursor-forwarding-plan.md)).
 
+**Done — phases 1–6.** Phase 7 (one home for the location vocabulary) stays open
+and conditional; its naming question was answered by phase 3, so what remains is
+the file move. Kept as the record of what each phase settled, including the three
+pre-existing bugs the work turned up: a dropped statement, `repeat` expanding
+once, and the visitors disagreeing about keyword arguments.
+
 ## Context
 
 `fpy2/rewrite` already does structural matching: `@fp.pattern` builds an

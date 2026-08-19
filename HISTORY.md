@@ -1,12 +1,24 @@
 # Version History
 
-## [NEXT]
+## [NEXT] - ???
 ### Features:
  - Strategies:
    - cursors: a location that survives the rewrites around it, so one site aims a
      whole sequence of strategies; `where` takes a statement, region or expression
      cursor as well as an index
    - sites: lists the sites a strategy can be aimed at
+ - Rewriter:
+   - a pattern match carries a cursor
+   - `find` / `find_all` return cursors to pattern matches
+   - `Rewrite` uses the cursor abstraction
+
+### Fixes:
+ - Rewriter:
+   - blocks sometimes lost their first statement
+   - `repeat` expanded the replacement once regardless of the count
+ - AST:
+   - `DefaultVisitor`: skipped keyword arguments to function calls
+   - `LiveVars`: skipped keyword arguments to function calls
 
 ## [0.2.2] - 2026-08-19
 ### Features:
