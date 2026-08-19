@@ -315,15 +315,18 @@ four cursor test modules under `tests/unit/`. Every other test must pass *untouc
 ### Phase 8 — expression cursors
 
 `ExprPath` joins the ADT of phase 6 — `parent: StmtPath | ExprPath`, a `field`, and
-an optional `index`, so `arg` / `cond` carry `None` and `args` carries a position.
-Parent-linking gives `ExprCursor.stmt() -> StmtCursor` for free: walk up to the
-`StmtPath`.
+an optional `index`, which positions it where a field holds several. Parent-linking
+gives `ExprCursor.stmt() -> StmtCursor` for free: walk up to the `StmtPath`.
 
 Beside `sub_blocks`, a `sub_exprs(node)` giving the child expressions of a
-statement or expression with the field naming each: about twenty match arms
-following `DefaultTransformVisitor`'s own grouping (`UnaryOp` / `BinaryOp` /
-`TernaryOp` / `NaryOp`, `Call`'s args and kwargs, `ListComp`'s iterables and elt,
-`ListSlice`'s optional bounds).
+statement or expression with the field naming each — the only place the AST's
+field names appear, since `resolve_expr` reads a path by scanning it. **Every
+operator stores its operands in `args`** whatever its arity (`arg` / `first` /
+`second` are properties over that), so one arm covers all of them rather than one
+per arity, and the field set stays small enough to declare: `ExprField` is a
+`Literal` of the eighteen names, mirroring `BlockField`. Typing `sub_exprs`'
+return with it also checks the two against each other — an arm returning a field
+not in the alias fails to type.
 
 **Forwarding is nearly free, and needs one honest claim.** A statement no edit
 touched is *rebuilt with the same shape*, so an expression path still resolves —

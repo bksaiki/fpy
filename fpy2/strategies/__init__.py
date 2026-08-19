@@ -2,13 +2,19 @@
 Scheduling language constructs for FPy programs.
 """
 
-from ..transform.utils.cursor import BlockCursor, Cursor, StmtCursor
+from ..transform.utils.cursor import BlockCursor, Cursor, ExprCursor, StmtCursor
 from ..transform.utils.error import (
     TransformDeclined,
     TransformError,
     TransformReferenceError,
 )
-from ..transform.utils.path import BlockPath, FuncBody, StmtPath, SubBlock
+from ..transform.utils.path import (
+    BlockPath,
+    ExprPath,
+    FuncBody,
+    StmtPath,
+    SubBlock,
+)
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
@@ -29,6 +35,8 @@ __all__ = [
     'BlockCursor',
     'BlockPath',
     'Cursor',
+    'ExprCursor',
+    'ExprPath',
     'FuncBody',
     'StmtCursor',
     'StmtPath',

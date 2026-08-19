@@ -25,13 +25,14 @@ def inline(
         The function to transform.
     where : int | Cursor | None
         Which call site to inline, among the candidates -- calls to FPy
-        functions that pass the `funcs` filter. An index counts them in visit
-        order, outermost-first; a :class:`fpy2.strategies.StmtCursor` /
-        :class:`fpy2.strategies.BlockCursor` names a program point and takes every
-        candidate call at or beneath it, which is coarser than the index: a
-        statement holding two candidate calls names both. A cursor or region
-        from an earlier program is forwarded to this one first. If `None`,
-        inline every candidate site.
+        functions that pass the `funcs` filter. An
+        :class:`fpy2.strategies.ExprCursor` names one call exactly, since the
+        candidates *are* expressions; an index counts them in visit order,
+        outermost-first; and a :class:`fpy2.strategies.StmtCursor` /
+        :class:`fpy2.strategies.BlockCursor` names a program point and takes
+        every candidate call at or beneath it, which is coarser -- a statement
+        holding two candidate calls names both. A cursor from an earlier program
+        is forwarded to this one first. If `None`, inline every candidate site.
     funcs : Iterable[Function] | None
         Restrict inlining to calls to these functions.
         If `None`, every call to an FPy function is a candidate.

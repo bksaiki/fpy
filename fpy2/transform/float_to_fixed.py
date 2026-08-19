@@ -589,4 +589,4 @@ class FloatToFixed:
         vtor = _FloatToFixedInstance(func, eval_info, class_info, where)
         out = vtor.apply()
         vtor.check_site('a candidate rounding block')
-        return EditLog(func, out, tuple(vtor.edits))
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

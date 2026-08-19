@@ -52,7 +52,7 @@ from ...number import (
     MPFixedContext,
     RealFloat,
 )
-from .cursor import BlockCursor, Cursor, Edit, EditLog, StmtCursor
+from .cursor import BlockCursor, Cursor, Edit, EditLog, ExprCursor, StmtCursor
 from .error import TransformDeclined, TransformReferenceError
 from .path import (
     BlockField,
@@ -270,10 +270,17 @@ def _target_of(
         return None
     if where.func is not func:
         raise TransformReferenceError(f'`{where}` names a statement of another program')
-    if isinstance(where, StmtCursor):
-        where.resolve()  # a cursor of this program still has to name something
-        return where.path.parent, range(where.index, where.index + 1)
-    return where.block_path, where.span
+    match where:
+        case StmtCursor():
+            where.resolve()  # a cursor of this program still has to name something
+            return where.path.parent, range(where.index, where.index + 1)
+        case BlockCursor():
+            return where.block_path, where.span
+        case ExprCursor():
+            raise TransformReferenceError(
+                f'`{where}` names an expression, and this rewrite is aimed at '
+                'statements: no statement sits beneath an expression'
+            )
 
 
 @dataclass(frozen=True)
@@ -289,8 +296,9 @@ class SiteRewriter(DefaultTransformVisitor):
 
     `where` aims the rewrite: an index picks one candidate, counting in visit
     order, outermost-first; a :class:`StmtCursor` or :class:`BlockCursor` picks
-    every
-    candidate at or beneath the program point it names; `None` takes them all.
+    every candidate at or beneath the program point it names; an
+    :class:`ExprCursor` picks exactly one, and only where the candidates are
+    expressions (`_expr_sited`); `None` takes them all.
 
     Every rewrite is recorded in `edits`, which is what forwards a cursor
     across the pass.  The record is structural -- a statement span replaced by
@@ -314,6 +322,11 @@ class SiteRewriter(DefaultTransformVisitor):
     _paths: dict[int, BlockPath]
     _target: tuple[BlockPath, range] | None
     """the block path and indices an explicit cursor or region names"""
+    _target_expr: Expr | None
+    """the expression an explicit cursor names, where the sites are expressions"""
+    _expr_sited: bool = False
+    """whether this rewrite's candidates are expressions rather than statements;
+    only such a rewrite can be aimed with an :class:`ExprCursor`"""
 
     def _begin(self, func: FuncDef) -> None:
         """Set up against the tree about to be walked: both the paths an edit
@@ -323,7 +336,16 @@ class SiteRewriter(DefaultTransformVisitor):
         self._matched = 0
         self._replaced = False
         self._paths = block_paths(func)
-        self._target = _target_of(self.where, func)
+        self._target = None
+        self._target_expr = None
+        if self._expr_sited and isinstance(self.where, ExprCursor):
+            if self.where.func is not func:
+                raise TransformReferenceError(
+                    f'`{self.where}` names an expression of another program'
+                )
+            self._target_expr = self.where.resolve()
+        else:
+            self._target = _target_of(self.where, func)
 
     def _visit_function(self, func: FuncDef, ctx):
         self._begin(func)
@@ -363,6 +385,14 @@ class SiteRewriter(DefaultTransformVisitor):
         if here is None:
             return False  # a block the rewrite synthesized, not one it was aimed at
         return beneath(StmtPath(here, pos), path, span)
+
+    def _selects_expr(self, e: Expr, block: StmtBlock, pos: int, idx: int) -> bool:
+        """Whether the candidate expression *e*, in `block[pos]`, is one this
+        rewrite is aimed at.  An expression cursor names it exactly; a statement
+        cursor or region names every candidate at or beneath it."""
+        if self._target_expr is not None:
+            return e is self._target_expr
+        return self._selects(block, pos, idx)
 
     def _record(self, block: StmtBlock, pos: int, inserted: int) -> None:
         """Record that `block[pos]` was replaced by `inserted` statements.

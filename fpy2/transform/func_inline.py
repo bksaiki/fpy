@@ -50,6 +50,8 @@ class _Ctx:
 class _FuncInline(SiteRewriter):
     """Function inline visitor."""
 
+    _expr_sited = True   # the candidates are `Call` expressions
+
     func: FuncDef
     def_use: DefineUseAnalysis
     funcs: set[Function] | None
@@ -102,7 +104,7 @@ class _FuncInline(SiteRewriter):
         block, pos = self._site
         idx = self.site_idx
         self.site_idx += 1
-        if not self._selects(block, pos, idx):
+        if not self._selects_expr(e, block, pos, idx):
             # a candidate site, but not the selected one
             return super()._visit_call(e, ctx)
         self._matched += 1
@@ -303,7 +305,7 @@ class FuncInline:
                     # only this function's own rewrites forward its cursors
                     edits = tuple(vtor.edits)
                 inlined[fdef] = out
-            return EditLog(func, inlined[func], edits)
+            return EditLog(func, inlined[func], edits, exprs_preserved=True)
         else:
             # One-level inlining, or selective inlining via `funcs` /
             # `where`: keep the per-call-site strategy.
@@ -316,7 +318,10 @@ class FuncInline:
             # the true candidate count (spliced callee bodies are never
             # re-visited).
             vtor.check_site('a call site')
-            return EditLog(func, FuncInline._finish(result), tuple(vtor.edits))
+            return EditLog(
+                func, FuncInline._finish(result), tuple(vtor.edits),
+                exprs_preserved=True,
+            )
 
     @staticmethod
     def _finish(result: FuncDef) -> FuncDef:

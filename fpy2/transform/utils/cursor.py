@@ -20,13 +20,16 @@ from ...ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
 from .error import TransformReferenceError
 from .path import (
     BlockPath,
+    ExprPath,
     FuncBody,
     StmtPath,
     SubBlock,
     bad_path,
     beneath,
     format_path,
+    rebase_expr,
     resolve_block,
+    resolve_expr,
     resolve_stmt,
 )
 
@@ -132,7 +135,42 @@ class BlockCursor:
         return f'{format_path(self.block_path)}[{self.span.start}:{self.span.stop}]'
 
 
-Cursor: TypeAlias = StmtCursor | BlockCursor
+@dataclass(frozen=True)
+class ExprCursor:
+    """An expression of a program.
+
+    What a rewrite whose sites *are* expressions is aimed at -- `inline`, whose
+    candidates are calls.  It forwards while its statement is only shifted; a
+    statement that was rewritten takes its expressions with it.
+    """
+
+    func: FuncDef
+    """the program this cursor names an expression of"""
+    path: ExprPath
+    """where the expression sits"""
+
+    def __post_init__(self):
+        if not isinstance(self.func, FuncDef):
+            raise TypeError(f'expected a \'FuncDef\', got {self.func}')
+        if not isinstance(self.path, ExprPath):
+            raise TypeError(f'expected an \'ExprPath\', got {self.path}')
+        self.resolve()
+
+    def resolve(self) -> Expr:
+        """The expression this cursor names."""
+        return resolve_expr(self.func, self.path)
+
+    def stmt(self) -> StmtCursor:
+        """The statement the expression belongs to."""
+        return StmtCursor(self.func, self.path.stmt())
+
+    def __str__(self):
+        loc = self.resolve().loc
+        where = '' if loc is None else f' at {loc.format()}'
+        return f'{format_path(self.path)}{where}'
+
+
+Cursor: TypeAlias = ExprCursor | StmtCursor | BlockCursor
 """What a rewrite can be aimed at, and what forwarding hands back.
 
 A union rather than a base class: the kinds share only `func`, and the image's
@@ -185,6 +223,14 @@ class EditLog:
     """the program it produced"""
     edits: tuple[Edit, ...] = ()
     """the rewrites, disjoint, in the source program's terms"""
+    exprs_preserved: bool = False
+    """whether the pass left every expression *outside* those rewrites alone.
+
+    An expression cursor forwards only under this claim: a pass may rewrite
+    expressions in statements it never replaces -- folding a constant, pinning a
+    context -- and no edit would record it.  False is the safe default, and makes
+    forwarding an :class:`ExprCursor` across the pass fail rather than mis-aim.
+    """
 
     def __post_init__(self):
         for e in self.edits:
@@ -211,6 +257,8 @@ class EditLog:
         """
         if isinstance(cursor, BlockCursor):
             return self._forward_region(cursor)
+        if isinstance(cursor, ExprCursor):
+            return self._forward_expr(cursor)
         if not isinstance(cursor, StmtCursor):
             raise TypeError(f'expected a \'StmtCursor\' or \'BlockCursor\', got {cursor}')
         if cursor.func is not self.source:
@@ -225,6 +273,31 @@ class EditLog:
             raise TransformReferenceError(f'`{cursor}` was deleted')
         return BlockCursor(self.result, block, range(index, index + edit.inserted))
 
+    def _forward_expr(self, cursor: ExprCursor) -> ExprCursor:
+        """*cursor*, under its statement's image.
+
+        A statement the pass only *moved* is rebuilt with the same shape, so the
+        expression path still resolves; one the pass *replaced* takes its
+        expressions with it.
+        """
+        if cursor.func is not self.source:
+            raise TransformReferenceError(
+                f'`{cursor}` names an expression of another program'
+            )
+        if not self.exprs_preserved:
+            raise TransformReferenceError(
+                f'`{cursor}` does not forward: the pass does not say what it did '
+                'to expressions outside the statements it replaced'
+            )
+
+        stmt = cursor.path.stmt()
+        block, index, edit = _forward_stmt(stmt, self.edits, cursor.path)
+        if edit is not None:
+            raise TransformReferenceError(
+                f'`{cursor}` is inside `{format_path(stmt)}`, which was rewritten'
+            )
+        return ExprCursor(self.result, rebase_expr(cursor.path, StmtPath(block, index)))
+
     def _forward_region(self, region: BlockCursor) -> Cursor:
         """Every statement of *region*, forwarded and re-joined.
 
@@ -233,12 +306,17 @@ class EditLog:
         is wrong, not that there is a case to handle."""
         if len(region) == 0:
             raise TransformReferenceError(f'`{region}` holds no statements')
-        images = [self.forward(c) for c in region]
-        spans = [
-            img.span if isinstance(img, BlockCursor) else range(img.index, img.index + 1)
-            for img in images
-        ]
-        paths = {img.block_path for img in images}
+        spans: list[range] = []
+        paths: set[BlockPath] = set()
+        for img in (self.forward(c) for c in region):
+            # a statement forwards to a statement or a run of them, never to an
+            # expression, so the region's image is still statements
+            assert isinstance(img, (StmtCursor, BlockCursor))
+            spans.append(
+                img.span if isinstance(img, BlockCursor)
+                else range(img.index, img.index + 1)
+            )
+            paths.add(img.block_path)
         adjacent = all(b.start == a.stop for a, b in pairwise(spans))
         if len(paths) != 1 or not adjacent:
             raise TransformReferenceError(f'`{region}` no longer lies in one run')

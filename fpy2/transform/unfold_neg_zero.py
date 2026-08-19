@@ -328,4 +328,4 @@ class UnfoldNegZero:
         vtor = _UnfoldNegZeroInstance(func, eval_info, where)
         out = vtor.apply()
         vtor.check_site('a candidate rounding block')
-        return EditLog(func, out, tuple(vtor.edits))
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

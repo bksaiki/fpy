@@ -125,4 +125,4 @@ class WhileUnroll:
         # though re-visiting a matched loop's body can inflate the counter).
         unroller.check_site('a `while` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
-        return EditLog(func, out, tuple(unroller.edits))
+        return EditLog(func, out, tuple(unroller.edits), exprs_preserved=True)

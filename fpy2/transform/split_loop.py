@@ -451,4 +451,4 @@ class SplitLoop:
         # count: generated loops are never re-visited.
         vtor.check_site('a `for` loop')
         SyntaxCheck.check(out, ignore_unknown=True)
-        return EditLog(func, out, tuple(vtor.edits))
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)
