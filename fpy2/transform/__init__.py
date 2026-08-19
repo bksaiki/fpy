@@ -28,6 +28,7 @@ from .unfold_overflow import UnfoldOverflow
 from .unfold_special import UnfoldSpecial
 from .utils.cursor import Block, Cursor, Edit, EditLog
 from .utils.error import TransformDeclined, TransformError, TransformReferenceError
+from .utils.path import BlockPath, FuncBody, StmtPath, SubBlock
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
 from .zip_elim import ZipElim

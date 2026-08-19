@@ -2,7 +2,11 @@
 
 Item 3 of `docs/todos/scheduling-language.md`. Item 2 (discoverability) is
 de-prioritized; the one slice of it this item needs — listing candidate sites as
-cursors — is phase 6 here.
+cursors — is phase 9 here.
+
+**Phases 1–5 are merged.** Phases 6–11 remain: the path ADT, the cursor kinds,
+expression cursors, site listing, the per-kind classification of the other passes,
+and retiring the blocker.
 
 ## Context
 
@@ -25,12 +29,32 @@ survives the rewrites around it, so a schedule can aim a sequence at one site.
 
 **A cursor is a path, not a node.** Every transform is a
 `DefaultTransformVisitor` (`fpy2/ast/visitor.py`), which rebuilds every node it
-visits — node identity dies at the first rewrite. A cursor is the statement's path
-from the `FuncDef`: block field, statement index, block field, ... where a field
-names a sub-block of the enclosing statement (`body`, `ift`, `iff`). Odd length
-names a block, even a statement, so a block path is `path[:-1]`. Statement-level
-only. (Exo pairs them instead — `[("body", 0), ("orelse", 2)]` — which extends to
-expressions; if expression cursors ever land, that is the shape to move to.)
+visits — node identity dies at the first rewrite. So a cursor names a *path* from
+the `FuncDef`.
+
+**A path is an ADT, linked to its parent.** Phases 1–5 used a flat
+`tuple[str | int, ...]` with a parity convention (odd length a block, even a
+statement); phase 6 replaces it with the grammar the paths actually have:
+
+```
+BlockPath ::= FuncBody | StmtPath . field        -- 'body' | 'ift' | 'iff'
+StmtPath  ::= BlockPath [ index ]
+ExprPath  ::= (StmtPath | ExprPath) . field [ index? ]
+```
+
+as parent-linked frozen dataclasses. Every ill-formed path is then
+unrepresentable: a sub-block hangs off a statement, a statement sits in a block, an
+expression hangs off a statement or another expression. The block field is a
+`Literal['body', 'ift', 'iff']` (precedent: `_Missing` in
+`fpy2/analysis/alias.py`), so a typo'd field is a type error too; expression fields
+stay `str`, there being ~20 of them.
+
+**Parent-linked, not root-linked, and that is what buys the type safety.** A
+path's type should be the type of its *leaf*, because the leaf is what the cursor
+is named by — so `StmtCursor` takes a `StmtPath`, `BlockCursor` a `BlockPath`,
+`ExprCursor` an `ExprPath`, and mypy checks it. Linking from the root instead would
+type every path as a `FuncBody` and leave the leaf kind — the only part that
+matters — invisible.
 
 **A cursor is owned by one program version.** It holds the `FuncDef` it resolved
 against; use on another program is a `TransformReferenceError`. Holding the
@@ -46,13 +70,48 @@ and how many it emitted. Forwarding is three rules:
 - strictly inside the edited statement → invalidated. That subtree was rebuilt;
   only the transform could say what became of it, and it does not claim to.
 
-**A statement forwards to a region, not to a point.** Exo's `Block` cursor — a
+**A statement forwards to a region, not to a point.** Exo's block cursor — a
 contiguous range of statements in one block — is the honest image of a rewritten
 statement: `unfold_special` replaces a block of *n* rounds with *n* ladders, and
 `float_to_fixed` puts a rounding in each of two branches. So `forward` returns a
-`Cursor` where the image is a single statement and a `Block` otherwise, and the
-forwarding stays *purely structural* — the edit records four numbers and no
-transform has to name a semantic successor.
+`StmtCursor` where the image is a single statement and a `BlockCursor` otherwise,
+and the forwarding stays *purely structural* — the edit records four numbers and no
+transform has to name a semantic successor. (Phases 1–5 shipped these two as
+`Cursor` and `Block`; phase 7 gives them their final names.)
+
+**Three kinds, one union.** Exo's taxonomy is `ExprCursor` / `StmtCursor` /
+`BlockCursor`, and FPy wants the same three — with `Cursor` as a *union alias*,
+not a base class:
+
+```python
+Cursor: TypeAlias = ExprCursor | StmtCursor | BlockCursor
+```
+
+`isinstance` accepts a union alias (3.10+), including inside a tuple, so the
+runtime checks in `check_where` and `Function.rebase` read the same as before, and
+`match` over the three arms is exhaustively checkable. Inheritance would buy
+little: `ExprCursor` carries a different payload (a statement path *plus* a path
+into its expressions), and the only field all three share is `func`. The union
+also collapses every signature from `int | Cursor | Block | None` to
+`int | Cursor | None`, while a transform that accepts only some kinds names them
+(`int | StmtCursor | None`) — the per-strategy contract, spelled out.
+
+**Forwarding is kind-polymorphic.** The image's kind is a property of what the
+rewrite did, not of the cursor handed in:
+
+| in | out | when |
+|---|---|---|
+| `StmtCursor` | `StmtCursor` | shifted, or replaced one-for-one |
+| `StmtCursor` | `BlockCursor` | replaced by several statements |
+| `BlockCursor` | `BlockCursor` | members forwarded and re-joined |
+| `BlockCursor` | `StmtCursor` | the run collapses to a single statement |
+| `ExprCursor` | `ExprCursor` | its statement was left alone |
+| `ExprCursor` | *raises* | its statement was rewritten |
+
+So `forward` is typed `Cursor -> Cursor` and callers narrow — `match`, or
+`BlockCursor.one()`. `StmtCursor -> ExprCursor` never happens: no pass in this
+item collapses a statement into an expression, and if one appears its edit has to
+say so rather than the forwarding guessing.
 
 **`where` accepts a region, and a region means *at or beneath*.** A cursor or
 region names a program point, and a rewrite takes every candidate at or under it
@@ -186,14 +245,112 @@ statement). `_record` drops any edit recorded beneath a statement later replaced
 wholesale, which is what keeps `for_unroll`'s nested unrolling disjoint.
 
 `inline`'s sites are `Call` *expressions*, so a statement-level cursor is coarser
-than its index: a statement holding two candidate calls names both. Documented,
-not worked around — expression cursors are out of scope.
+than its index: a statement holding two candidate calls names both. Documented in
+phase 5, retired in phase 8.
 
-### Phase 6 — listing sites
+### Phase 6 — the path ADT
+
+New `fpy2/transform/utils/path.py` — `cursor.py` is already 386 lines and paths are
+a self-contained language. It holds `FuncBody` / `SubBlock` / `StmtPath` (the
+grammar above; `ExprPath` lands with `ExprCursor` in phase 8, and the grammar
+already reserves its shape), plus the operations, each now structural recursion
+instead of arithmetic on a heterogeneous tuple:
+
+- `resolve_block(func, BlockPath)`, `resolve_stmt(func, StmtPath)`
+- `format_path` — still `body[1].ift[0]`
+- `beneath(path, block, span)` — the upward walk that replaces the slice-prefix test
+- a fluent builder, so a path is written by descending and each step's type says
+  what may follow it: `FuncBody().stmt(1).block('ift').stmt(0)`
+
+What gets simpler: `_selects` and `_overlaps` become `beneath` calls, and
+`block_paths` just nests constructors. What gets slightly longer: `_forward` is
+inherently top-down, since shifts accumulate from the root, so it reverses the
+ancestry once and folds, rebuilding nodes as it goes.
+
+`Edit.block_path`, `Cursor.path`, and `Block.block_path` take the typed paths;
+`Cursor.block_path` / `.index` survive as accessors over `path.parent` /
+`path.index`. Forwarding turns into two mutually recursive functions over the
+grammar (`_forward_block` / `_forward_stmt`) rather than a top-down walk with
+index arithmetic, and no reversal is needed after all.
+
+Behaviour is unchanged, so every test outside the four cursor modules passes
+untouched. Inside them the path constructions change, and the ill-formed-path
+cases *shrink*: a block where a statement belongs, a field where an index belongs,
+and a path not rooted at the function body are no longer expressible, so only the
+resolvable-but-wrong cases remain — which is the ADT paying for itself.
+
+### Phase 7 — the cursor kinds
+
+Mechanical; no behaviour changes. The class named `Cursor` becomes `StmtCursor`,
+`Block` becomes `BlockCursor`, and `Cursor` becomes the union alias (two arms here,
+three after phase 8).
+
+The rename is not only symmetry: **`Block` collides with what "block" already
+means here** — the AST has `StmtBlock`, the machinery has `BlockRewriter`, and
+every docstring says "candidate rounding block" for a `with` statement, so
+`where=Block(...)` reads like the one thing it is not.
+
+Then the ten signatures of phases 3–5 collapse to `int | Cursor | None`, and their
+`where` docs name the kinds. About 210 references across 33 files, nearly all
+imports, annotations, and test constructions.
+
+Landing it before phase 8 and phase 10 matters: phase 8 adds a third arm, and phase
+10's classification is *per kind* — a distinction that has no name until this
+lands.
+
+Files: the definitions and the union in `fpy2/transform/utils/cursor.py`; the
+`isinstance` checks in `fpy2/transform/utils/__init__.py` (`check_where`,
+`_target_of`) and `fpy2/function.py` (`rebase`, `forward`); the re-export lists in
+`fpy2/transform/__init__.py` and `fpy2/strategies/__init__.py`; annotations and
+docstrings in the nine transform modules and their nine wrappers (e.g.
+`fpy2/transform/unfold_special.py`, `fpy2/strategies/special_unfold.py`); and the
+four cursor test modules under `tests/unit/`. Every other test must pass *untouched*
+— that is the check that the rename changed no behaviour.
+
+### Phase 8 — expression cursors
+
+`ExprPath` joins the ADT of phase 6 — `parent: StmtPath | ExprPath`, a `field`, and
+an optional `index`, so `arg` / `cond` carry `None` and `args` carries a position.
+Parent-linking gives `ExprCursor.stmt() -> StmtCursor` for free: walk up to the
+`StmtPath`.
+
+Beside `sub_blocks`, a `sub_exprs(node)` giving the child expressions of a
+statement or expression with the field naming each: about twenty match arms
+following `DefaultTransformVisitor`'s own grouping (`UnaryOp` / `BinaryOp` /
+`TernaryOp` / `NaryOp`, `Call`'s args and kwargs, `ListComp`'s iterables and elt,
+`ListSlice`'s optional bounds).
+
+**Forwarding is nearly free, and needs one honest claim.** A statement no edit
+touched is *rebuilt with the same shape*, so an expression path still resolves —
+no forwarding map, no visitor changes. What it needs is something no pass says
+today: that expressions *outside* the recorded edits were left alone. `EditLog`
+gains `exprs_preserved: bool`. The nine transforms of phases 3–5 set it (each only
+rewrites expressions inside a statement it also records — `func_inline` included,
+since inlining always splices at least one statement, so a rewritten call is
+always inside a recorded edit); everything else leaves it `False`, and
+`forward(ExprCursor)` raises rather than silently mis-aiming. An expression inside
+a *replaced* statement invalidates, exactly as a statement inside one does.
+
+**Aiming.** `inline`'s sites *are* expressions, so an `ExprCursor` names exactly
+one call: `_visit_call` compares node identity against the resolved target — the
+trick `parent()` already uses, so nothing tracks expression paths during a visit.
+That retires phase 5's documented coarseness, while a `StmtCursor` / `BlockCursor`
+keeps the at-or-beneath reading. A statement-sited rewrite handed an `ExprCursor`
+fails in `_target_of` with a message saying why: no statement sits beneath an
+expression.
+
+Tests: expression paths round-tripping over the operator groups; `inline` aimed at
+one of two calls in a single statement; an expression cursor surviving a rounding
+rewrite elsewhere in the program; invalidation inside a replaced statement; and
+the refusal across a pass that does not preserve expressions.
+
+### Phase 9 — listing sites
 
 `sites(strategy, func, within=None) -> list[Cursor]` in `fpy2/strategies`, backed
 by a `sites` classmethod per transform (free for the five via `BlockRewriter`).
-`within` takes a `Block`, so a forwarded region can be asked what it holds.
+It returns the kind the transform is sited on — `StmtCursor` for the rounding and
+loop rewrites, `ExprCursor` for `inline`. `within` takes any cursor, so a
+forwarded region can be asked what it holds.
 Without this a cursor can only be born from an `int`, and "pin several points,
 then rewrite" — item 3's stated capability — stays unreachable.
 
@@ -204,9 +361,10 @@ This is the half of item 2 that item 3 needs. The presentation half — rendered
 listings with source locations, before/after step diffs, the Exo Appendix-A
 operator table — stays deferred.
 
-### Phase 7 — the passes that are not site-rewrites
+### Phase 10 — the passes that are not site-rewrites
 
-Classify every remaining strategy and make each say which it is:
+Classify every remaining strategy, **per cursor kind**, and make each say which it
+is:
 
 - **structure-preserving** — `monomorphize`, `elim_round`, `fuse` (verify each
   individually): statement tree unchanged, empty log, identity forwarding.
@@ -216,11 +374,16 @@ Classify every remaining strategy and make each say which it is:
   attribute. Forwarding across it raises, naming the pass. It runs last in every
   schedule we have, so this costs nothing today.
 
+Per kind is the sharp part, and the reason `exprs_preserved` exists:
+`monomorphize` and `lift_context` leave the statement tree alone while *rewriting
+context expressions*, so they are statement-identity and expression-opaque. A
+single verdict per pass would make one of the two answers a lie.
+
 Cheap, but each claim needs a test that a cursor survives or fails as declared: a
 wrong "structure-preserving" claim is a silent mis-aim, the exact failure mode
 item 1 exists to prevent.
 
-### Phase 8 — retire the blocker
+### Phase 11 — retire the blocker
 
 Add a test that lowers a **two-rounding** program at one site by cursor and leaves
 the other untouched — the thing `where=None` cannot express — near
@@ -243,19 +406,20 @@ stays open), and item 3 of `docs/todos/scheduling-language.md`, including its
   `next()` past the end, and an `InvalidCursorError` raised by forwarding. A
   second failure vocabulary is what item 1 exists to remove; a bad reference
   raises, always.
-- **Navigation** (`next`, `prev`, `parent`, `expand`) and **expression cursors**.
-  Nothing in items 3–7 asks a schedule to walk the tree by hand.
+- **Navigation** (`next`, `prev`, `parent`, `expand`), and `ExprListCursor` /
+  `ArgCursor`. Nothing in items 3–7 asks a schedule to walk the tree by hand.
 
 ## Out of scope
 
-**Expression-level cursors, and with them the `fpy2/analysis/value_class.py`
-carry-over.** Item 3 claims forwarding fixes results keyed by expression identity.
-Statement-level forwarding does not: `by_expr` is keyed on `Expr` nodes and every
-visitor rebuilds every expression, so carrying it needs a forwarding map through
-`DefaultTransformVisitor` itself, not just at the sites a transform knows it
-changed. It is not what item 7 needs, and item 6 can re-run the analysis on the
-rewritten program — which is what the transforms already do. Its own roadmap item;
-item 3's claim gets amended in phase 8.
+**The `fpy2/analysis/value_class.py` carry-over.** Item 3 claims forwarding fixes
+results keyed by expression identity. Expression *cursors* (phase 8) are not that:
+a cursor is a path, and a path resolves in the rebuilt tree for free. Carrying an
+analysis *result* needs the old-node → new-node correspondence threaded through
+`DefaultTransformVisitor` itself — a much larger mechanism, in every visitor rather
+than at the sites a transform knows it changed. It is not what item 7 needs, and
+item 6 can re-run the analysis on the rewritten program, which is what the
+transforms already do. Its own roadmap item; item 3's claim gets amended in phase
+11.
 
 **Trimming the forwarding chain.** Every `Function` in a schedule keeps its parent
 alive. Schedules are short and ASTs small — a note, not a problem.

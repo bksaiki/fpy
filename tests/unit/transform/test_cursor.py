@@ -1,5 +1,5 @@
 """
-Unit tests for :mod:`fpy2.transform.cursor`.
+Unit tests for :mod:`fpy2.transform.utils.path`.
 
 A cursor is a path from the :class:`FuncDef`, so the tests pin the two
 directions -- :func:`block_paths` writes paths for the blocks a visitor holds,
@@ -12,8 +12,14 @@ import pytest
 import fpy2 as fp
 
 from fpy2.ast import Assign, ContextStmt, ForStmt, IfStmt, ReturnStmt
-from fpy2.transform import Cursor, TransformReferenceError
-from fpy2.transform.utils.cursor import (
+from fpy2.transform import (
+    Cursor,
+    FuncBody,
+    StmtPath,
+    SubBlock,
+    TransformReferenceError,
+)
+from fpy2.transform.utils.path import (
     block_paths,
     format_path,
     resolve_block,
@@ -47,8 +53,16 @@ def flat(x: fp.Real) -> fp.Real:
 
 
 def test_format_path():
-    assert format_path(('body',)) == 'body'
-    assert format_path(('body', 1, 'ift', 0)) == 'body[1].ift[0]'
+    assert format_path(FuncBody()) == 'body'
+    assert format_path(FuncBody().stmt(1).block('ift').stmt(0)) == 'body[1].ift[0]'
+
+
+def test_a_path_is_built_by_descending():
+    """Each step's type says what may follow it: a block holds statements, a
+    statement holds blocks."""
+    p = FuncBody().stmt(1).block('ift').stmt(0)
+    assert p == StmtPath(SubBlock(StmtPath(FuncBody(), 1), 'ift'), 0)
+    assert p.parent.parent.index == 1
 
 
 def test_block_paths_round_trip():
@@ -64,27 +78,27 @@ def test_block_paths_shape():
     ast = nested.ast
     paths = set(block_paths(ast).values())
     assert paths == {
-        ('body',),
-        ('body', 1, 'ift'),
-        ('body', 1, 'ift', 0, 'body'),
-        ('body', 1, 'iff'),
-        ('body', 1, 'iff', 0, 'body'),
+        FuncBody(),
+        FuncBody().stmt(1).block('ift'),
+        FuncBody().stmt(1).block('ift').stmt(0).block('body'),
+        FuncBody().stmt(1).block('iff'),
+        FuncBody().stmt(1).block('iff').stmt(0).block('body'),
     }
 
 
 def test_resolve_stmt():
     ast = nested.ast
-    assert isinstance(resolve_stmt(ast, ('body', 0)), Assign)
-    assert isinstance(resolve_stmt(ast, ('body', 1)), IfStmt)
-    assert isinstance(resolve_stmt(ast, ('body', 2)), ReturnStmt)
-    assert isinstance(resolve_stmt(ast, ('body', 1, 'ift', 0)), ContextStmt)
-    assert isinstance(resolve_stmt(ast, ('body', 1, 'iff', 0)), ForStmt)
+    assert isinstance(resolve_stmt(ast, FuncBody().stmt(0)), Assign)
+    assert isinstance(resolve_stmt(ast, FuncBody().stmt(1)), IfStmt)
+    assert isinstance(resolve_stmt(ast, FuncBody().stmt(2)), ReturnStmt)
+    assert isinstance(resolve_stmt(ast, FuncBody().stmt(1).block('ift').stmt(0)), ContextStmt)
+    assert isinstance(resolve_stmt(ast, FuncBody().stmt(1).block('iff').stmt(0)), ForStmt)
 
 
 def test_sub_blocks():
     ast = nested.ast
-    assert sub_blocks(resolve_stmt(ast, ('body', 0))) == ()
-    fields = [f for f, _ in sub_blocks(resolve_stmt(ast, ('body', 1)))]
+    assert sub_blocks(resolve_stmt(ast, FuncBody().stmt(0))) == ()
+    fields = [f for f, _ in sub_blocks(resolve_stmt(ast, FuncBody().stmt(1)))]
     assert fields == ['ift', 'iff']
 
 
@@ -92,13 +106,16 @@ def test_sub_blocks():
 # Bad references
 
 
+# What a path cannot even say, now that it is an ADT: a block where a statement
+# belongs, a field where an index belongs, a path that starts anywhere but the
+# function body.  Those were runtime failures under the flat tuple; they are type
+# errors here, so only the *resolvable-but-wrong* cases remain.
+
+
 @pytest.mark.parametrize('path', [
-    ('body', 1),                      # even: not a block path
-    ('ift',),                         # does not start at the body
-    ('body', 9, 'ift'),               # index past the end
-    ('body', 1, 'body'),              # an `IfStmt` has no `body`
-    ('body', 0, 'body'),              # an `Assign` has no block at all
-    ('body', 'ift', 'ift'),           # a field where an index belongs
+    FuncBody().stmt(9).block('ift'),        # index past the end
+    FuncBody().stmt(1).block('body'),       # an `IfStmt` has no `body`
+    FuncBody().stmt(0).block('body'),       # an `Assign` has no block at all
 ])
 def test_resolve_block_rejects(path):
     with pytest.raises(TransformReferenceError):
@@ -106,10 +123,8 @@ def test_resolve_block_rejects(path):
 
 
 @pytest.mark.parametrize('path', [
-    (),                               # empty
-    ('body',),                        # odd: not a statement path
-    ('body', 9),                      # index past the end
-    ('body', 1, 'ift', 3),            # index past the end of a nested block
+    FuncBody().stmt(9),                          # index past the end
+    FuncBody().stmt(1).block('ift').stmt(3),     # past the end of a nested block
 ])
 def test_resolve_stmt_rejects(path):
     with pytest.raises(TransformReferenceError):
@@ -121,36 +136,36 @@ def test_resolve_stmt_rejects(path):
 
 
 def test_cursor_parts():
-    cur = Cursor(nested.ast, ('body', 1, 'ift', 0))
-    assert cur.block_path == ('body', 1, 'ift')
+    cur = Cursor(nested.ast, FuncBody().stmt(1).block('ift').stmt(0))
+    assert cur.block_path == FuncBody().stmt(1).block('ift')
     assert cur.index == 0
     assert isinstance(cur.resolve(), ContextStmt)
 
     block, idx = cur.parent()
     assert block.stmts[idx] is cur.resolve()
-    assert block is resolve_block(nested.ast, ('body', 1, 'ift'))
+    assert block is resolve_block(nested.ast, FuncBody().stmt(1).block('ift'))
 
 
 def test_cursor_validated_on_construction():
     """A cursor always names a statement of its own program."""
     with pytest.raises(TransformReferenceError):
-        Cursor(nested.ast, ('body', 9))
+        Cursor(nested.ast, FuncBody().stmt(9))
     with pytest.raises(TypeError):
-        Cursor(nested.ast, ['body', 0])  # type: ignore[arg-type]
+        Cursor(nested.ast, FuncBody())   # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        Cursor(nested, ('body', 0))      # type: ignore[arg-type]
+        Cursor(nested, FuncBody().stmt(0))      # type: ignore[arg-type]
 
 
 def test_cursor_equality_is_per_program():
     """Same path, different program: different cursor."""
-    a = Cursor(nested.ast, ('body', 0))
-    assert a == Cursor(nested.ast, ('body', 0))
-    assert a != Cursor(nested.ast, ('body', 1))
-    assert a != Cursor(flat.ast, ('body', 0))
+    a = Cursor(nested.ast, FuncBody().stmt(0))
+    assert a == Cursor(nested.ast, FuncBody().stmt(0))
+    assert a != Cursor(nested.ast, FuncBody().stmt(1))
+    assert a != Cursor(flat.ast, FuncBody().stmt(0))
 
 
 def test_cursor_str_names_the_source():
-    cur = Cursor(flat.ast, ('body', 0))
+    cur = Cursor(flat.ast, FuncBody().stmt(0))
     text = str(cur)
     assert text.startswith('body[0] at ')
     assert 'test_cursor.py' in text

@@ -8,6 +8,7 @@ from ..transform.utils.error import (
     TransformError,
     TransformReferenceError,
 )
+from ..transform.utils.path import BlockPath, FuncBody, StmtPath, SubBlock
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
@@ -26,7 +27,11 @@ from .special_unfold import unfold_special
 
 __all__ = [
     'Block',
+    'BlockPath',
     'Cursor',
+    'FuncBody',
+    'StmtPath',
+    'SubBlock',
     'TransformDeclined',
     'TransformError',
     'TransformReferenceError',

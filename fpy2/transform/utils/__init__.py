@@ -52,8 +52,21 @@ from ...number import (
     MPFixedContext,
     RealFloat,
 )
-from .cursor import Block, Cursor, Edit, EditLog, Path, block_paths
+from .cursor import Block, Cursor, Edit, EditLog
 from .error import TransformDeclined, TransformReferenceError
+from .path import (
+    BlockField,
+    BlockPath,
+    FuncBody,
+    StmtPath,
+    SubBlock,
+    beneath,
+    block_paths,
+    format_path,
+    resolve_block,
+    resolve_stmt,
+    sub_blocks,
+)
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -249,7 +262,9 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
     return args
 
 
-def _target_of(where: int | Cursor | Block | None, func: FuncDef) -> tuple[Path, range] | None:
+def _target_of(
+    where: int | Cursor | Block | None, func: FuncDef
+) -> tuple[BlockPath, range] | None:
     """The block path and indices an explicit cursor or region names."""
     if where is None or isinstance(where, int):
         return None
@@ -257,7 +272,7 @@ def _target_of(where: int | Cursor | Block | None, func: FuncDef) -> tuple[Path,
         raise TransformReferenceError(f'`{where}` names a statement of another program')
     if isinstance(where, Cursor):
         where.resolve()  # a cursor of this program still has to name something
-        return where.block_path, range(where.index, where.index + 1)
+        return where.path.parent, range(where.index, where.index + 1)
     return where.block_path, where.span
 
 
@@ -295,8 +310,8 @@ class SiteRewriter(DefaultTransformVisitor):
     _site: tuple[StmtBlock, int]
     """the block and index of the statement being visited, for a visitor whose
     context carries something else"""
-    _paths: dict[int, Path]
-    _target: tuple[Path, range] | None
+    _paths: dict[int, BlockPath]
+    _target: tuple[BlockPath, range] | None
     """the block path and indices an explicit cursor or region names"""
 
     def _begin(self, func: FuncDef) -> None:
@@ -346,10 +361,7 @@ class SiteRewriter(DefaultTransformVisitor):
         here = self._paths.get(id(block))
         if here is None:
             return False  # a block the rewrite synthesized, not one it was aimed at
-        if here == path:
-            return pos in span
-        n = len(path)
-        return len(here) > n and here[:n] == path and here[n] in span
+        return beneath(StmtPath(here, pos), path, span)
 
     def _record(self, block: StmtBlock, pos: int, inserted: int) -> None:
         """Record that `block[pos]` was replaced by `inserted` statements.
@@ -359,8 +371,10 @@ class SiteRewriter(DefaultTransformVisitor):
         of one pass have to stay disjoint.
         """
         path = self._paths[id(block)]
-        inner = (*path, pos)
-        self.edits = [e for e in self.edits if e.block_path[:len(inner)] != inner]
+        replaced = range(pos, pos + 1)
+        self.edits = [
+            e for e in self.edits if not beneath(e.block_path, path, replaced)
+        ]
         self.edits.append(Edit(path, pos, 1, inserted))
 
 
