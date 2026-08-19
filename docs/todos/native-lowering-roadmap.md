@@ -132,15 +132,16 @@ read the branches) and `logb` is computed once. `unfold_neg_zero` is *not* in th
 sequence — nothing reaches it, since the zero branch has already said what each
 zero rounds to.
 
-**Not exposed as one entry point, deliberately.** Composition has no way to carry
-a *location*: once the first operator rewrites at a program point, the later ones
-re-scan the whole program with a `where` index that no longer counts the same
-candidates. A composed operator would therefore only be honest for the whole
-program at once. See *Smaller questions in the same area* in
-[rounding-operator-basis.md](rounding-operator-basis.md); giving a rewrite a
-location that survives its neighbours is the prerequisite, and
-[scheduling-language.md](scheduling-language.md) is the plan for it and for the
-recipe's eventual shape.
+**Still not exposed as one entry point, but the reason has changed.** Composition
+used to have no way to carry a *location*: once the first operator rewrote at a
+program point, the later ones re-scanned the whole program with a `where` index
+that no longer counted the same candidates. That is fixed — `where` takes a cursor
+the strategies forward across each step, so one location aims the whole sequence
+(`_lower_at` in `tests/unit/backend/cpp/test_lowered_roundtrip.py` lowers one
+rounding of a two-rounding program and leaves the other alone). What remains is
+just the entry point itself: the parameterized recipe below, taking a function, a
+location and a target descriptor. See
+[scheduling-language.md](scheduling-language.md) items 3 and 7.
 
 Unrelated to lowering, but found along this path — each reproduces well before
 the change that turned it up, so none is a regression:

@@ -4,9 +4,11 @@ Item 3 of `docs/todos/scheduling-language.md`. Item 2 (discoverability) is
 de-prioritized; the one slice of it this item needs — listing candidate sites as
 cursors — is phase 9 here.
 
-**Phases 1–5 are merged.** Phases 6–11 remain: the path ADT, the cursor kinds,
-expression cursors, site listing, the per-kind classification of the other passes,
-and retiring the blocker.
+**Done — all eleven phases.** Kept as the record of the design decisions and of
+what was deliberately not taken from Exo, which item 3 of the roadmap now points
+at. What each phase settled is recorded in place, including the three guesses this
+plan started with that turned out wrong (`fuse` and `elim_round` are not
+structure-preserving; `monomorphize` preserves expressions too).
 
 ## Context
 
