@@ -11,6 +11,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..fpc_context import FPCoreContext
 from ..types import *
+from .utils import EditLog
 
 
 def _merge_length(a: int | NamedId | None, b: int | NamedId | None) -> int | NamedId | None:
@@ -154,7 +155,26 @@ class Monomorphize:
         args: Collection[Type | None] | None = None,
         *,
         ty_info: TypeAnalysis | None = None
-    ):
+    ) -> FuncDef:
+        """Pin `func`'s argument types and rounding context."""
+        return Monomorphize.apply_with_edits(
+            func, ctx, args, ty_info=ty_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef,
+        ctx: Context | None = None,
+        args: Collection[Type | None] | None = None,
+        *,
+        ty_info: TypeAnalysis | None = None
+    ) -> EditLog:
+        """:meth:`apply`, with the (empty) record of what it replaced.
+
+        This pass rewrites argument annotations and the function's own context;
+        the body goes through :class:`DefaultTransformVisitor` untouched, so
+        every cursor -- statement, region, or expression -- survives it.
+        """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got `{func}`')
         if ctx is not None and not isinstance(ctx, Context):
@@ -231,5 +251,5 @@ class Monomorphize:
                     _check_merge(curr_ty, new_ty, curr_ty, new_ty)
                 new_arg_types.append(new_ty)
 
-        func = _MonomorphizeVisitor(func, ctx, new_arg_types).apply()
-        return func
+        out = _MonomorphizeVisitor(func, ctx, new_arg_types).apply()
+        return EditLog(func, out, (), exprs_preserved=True)

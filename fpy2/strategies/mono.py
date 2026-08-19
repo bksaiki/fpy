@@ -85,5 +85,4 @@ def monomorphize(
             f'which is not equivalent to {ctx}'
         )
 
-    ast = Monomorphize.apply(func.ast, ctx, args)
-    return func.with_ast(ast)
+    return func.with_edits(Monomorphize.apply_with_edits(func.ast, ctx, args))

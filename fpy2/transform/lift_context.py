@@ -6,6 +6,7 @@ from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..utils import Gensym
+from .utils import Edit, EditLog, FuncBody
 
 
 class _ContextFinder(DefaultVisitor):
@@ -94,6 +95,19 @@ class LiftContext:
 
     @staticmethod
     def apply(func: FuncDef, *, eval_info: PartialEvalInfo | None = None) -> FuncDef:
+        return LiftContext.apply_with_edits(func, eval_info=eval_info).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *, eval_info: PartialEvalInfo | None = None
+    ) -> EditLog:
+        """:meth:`apply`, with the record of what it added: a binding per lifted
+        context, prepended, so every cursor below shifts by that many.
+
+        Statement cursors survive; expression cursors do not, since the lifted
+        context expressions are replaced by variables in place, at sites no edit
+        records.
+        """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
 
@@ -101,5 +115,9 @@ class LiftContext:
             eval_info = PartialEval.apply(func)
 
         ctx_exprs = _ContextFinder(func, eval_info).visit()
-        return _ContextLifter(func, eval_info, ctx_exprs).apply()
+        lifter = _ContextLifter(func, eval_info, ctx_exprs)
+        out = lifter.apply()
+        lifted = len(lifter.name_to_expr)
+        edits = () if lifted == 0 else (Edit(FuncBody(), 0, 0, lifted),)
+        return EditLog(func, out, edits)
 

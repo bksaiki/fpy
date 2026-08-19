@@ -11,6 +11,10 @@ def fuse(func: Function) -> Function:
     Fuse ``any`` / ``all`` reductions over list comprehensions in `func`
     into single loops, eliminating the intermediate list.
 
+    A cursor does not cross this pass: fusing a reduction replaces one
+    statement with a seed, a loop and a read, at a site the pass does not
+    report. Aim what you need before it, or re-list the sites after.
+
     Parameters
     ----------
     func : Function

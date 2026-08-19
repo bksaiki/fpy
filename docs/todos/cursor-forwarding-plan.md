@@ -380,20 +380,30 @@ operator table — stays deferred.
 ### Phase 10 — the passes that are not site-rewrites
 
 Classify every remaining strategy, **per cursor kind**, and make each say which it
-is:
+is. Reading them settled three of the guesses this plan started with — `elim_round`
+and `fuse` are *not* structure-preserving, and `monomorphize` preserves more than
+expected:
 
-- **structure-preserving** — `monomorphize`, `elim_round`, `fuse` (verify each
-  individually): statement tree unchanged, empty log, identity forwarding.
-- **prepending** — `close`, `lift_context`: leading assignments; an edit at index
-  0 with `removed=0`, so everything below shifts.
-- **opaque** — `simplify`: dead-code elimination deletes statements it cannot
-  attribute. Forwarding across it raises, naming the pass. It runs last in every
-  schedule we have, so this costs nothing today.
+- **structure-preserving, both kinds** — `monomorphize`: it overrides only
+  `_visit_argument` and `_visit_function`, so the body passes through
+  `DefaultTransformVisitor` untouched. Empty log, `exprs_preserved=True`, and a
+  cursor chosen before the first step of the lowering recipe survives it.
+- **prepending** — `close` (a binding per captured value) and `lift_context` (one
+  per lifted context): an edit at index 0 with `removed=0`, so everything below
+  shifts. `close` reuses the body's statements verbatim, so expressions survive
+  too; `lift_context` replaces the context expressions in place, so they do not —
+  the per-kind split, in one pass each way.
+- **opaque** — `simplify` (dead-code elimination deletes what it cannot
+  attribute), and three that turn out to be site-rewrites without an edit log:
+  `fuse` replaces one statement with a seed, a loop and a read; `elim_round`
+  hoists an operation into its own `with fp.REAL:` block ahead of the statement
+  that held it; `elim_iter` emits a preamble per source and rewrites comprehension
+  expressions in place. Each says so in its docstring — aim before it, or re-list
+  the sites after. Any of the three could report edits with phase 5's
+  `_visit_block` growth pattern, if a schedule ever wants to pin through it.
 
-Per kind is the sharp part, and the reason `exprs_preserved` exists:
-`monomorphize` and `lift_context` leave the statement tree alone while *rewriting
-context expressions*, so they are statement-identity and expression-opaque. A
-single verdict per pass would make one of the two answers a lie.
+Per kind is the sharp part, and the reason `exprs_preserved` exists: a single
+verdict per pass would make one of the two answers a lie.
 
 Cheap, but each claim needs a test that a cursor survives or fails as declared: a
 wrong "structure-preserving" claim is a silent mis-aim, the exact failure mode
