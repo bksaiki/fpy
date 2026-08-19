@@ -108,6 +108,7 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Declined,
     agrees,
     check_site,
     check_where,
@@ -327,17 +328,11 @@ class _UnfoldSpecialInstance(BlockRewriter):
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> _Source | None:
-        """The block's format, if any of its special values can be stated as a
-        branch or shed from it."""
+    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
+        """The block's rounded operands, if it is structurally a rounding
+        block: every statement a round or cast of a variable."""
         # a bound context is visible to the body as a value, which the rewrite changes
         if not isinstance(stmt.target, UnderscoreId):
-            return None
-
-        # the branch values are the context's own answers, so it has to be known
-        # here; `REAL` rounds exactly, so stating its specials says nothing
-        ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, Context) or ctx is REAL:
             return None
 
         # a cast substitutes a special exactly as a round does: the
@@ -351,6 +346,20 @@ class _UnfoldSpecialInstance(BlockRewriter):
                     args.append(s.expr.arg)
                 case _:
                     return None
+        return args
+
+    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
+        """The block's format, if any of its special values can be stated as
+        a branch or shed from it."""
+        # the branch values are the context's own answers, so it has to be known here
+        ctx = self.eval_info.by_expr.get(stmt.ctx)
+        if not isinstance(ctx, Context):
+            return Declined(
+                'the context is not statically known, so the branch values '
+                'cannot be computed'
+            )
+        if ctx is REAL:
+            return Declined('`REAL` rounds exactly; it has no special-value rules to state')
 
         # a zero rides along wherever the rewrite already happens, but stating
         # it alone buys nothing: the guards a class analysis discharges are about
@@ -359,7 +368,10 @@ class _UnfoldSpecialInstance(BlockRewriter):
         specials = ValueClass.NAN | ValueClass.INF
         if src.shed or any(self._hoist(src, arg) & specials for arg in args):
             return src
-        return None
+        return Declined(
+            'nothing to state: no special-value rule can be shed from the '
+            'format and no operand can be a special value'
+        )
 
     def _hoist(self, src: _Source, arg: Var) -> ValueClass:
         return _hoisted(src, self.class_info.classify(arg))
@@ -447,8 +459,15 @@ class UnfoldSpecial:
         surviving rounding sees only a finite, non-zero value.
 
         `where` selects a single candidate block by index, in visit order
-        (outermost-first); candidates are the blocks this pass could rewrite.
-        If `None`, every candidate is rewritten.
+        (outermost-first); candidates are the structurally-matching rounding
+        blocks, whether or not they verify.  If `None`, every candidate that
+        verifies is rewritten and the rest are skipped.
+
+        Raises :class:`fpy2.transform.TransformDeclined` where an explicit
+        `where` names a candidate this pass refuses — a context that is not
+        statically known, `REAL`, or a format with nothing to state — and
+        :class:`fpy2.transform.TransformReferenceError` where it names no
+        candidate at all.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')

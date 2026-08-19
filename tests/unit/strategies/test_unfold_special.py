@@ -19,6 +19,7 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.strategies import (
+    TransformDeclined,
     unfold_special,
     unfold_neg_zero,
     unfold_overflow,
@@ -92,6 +93,13 @@ class TestUnfoldSpecial:
     def test_rejects_non_function(self):
         with pytest.raises(TypeError):
             unfold_special(_quantized_sum.ast)  # type: ignore[arg-type]
+
+    def test_naming_a_declined_block_raises(self):
+        """The error is catchable from the strategy layer without importing
+        from the transform layer."""
+        once = unfold_special(_quantized_sum)
+        with pytest.raises(TransformDeclined):
+            unfold_special(once, 0)
 
     def test_removes_the_rules_from_the_context(self):
         assert any(

@@ -34,8 +34,10 @@ from ..ast.fpyast import (
     UnderscoreId,
     Var,
 )
+from dataclasses import dataclass
+
 from ..ast.visitor import DefaultTransformVisitor
-from .error import TransformReferenceError
+from .error import TransformDeclined, TransformReferenceError
 from ..number import (
     INTEGER,
     Context,
@@ -221,21 +223,36 @@ def check_site(where: int | None, count: int, what: str) -> None:
         )
 
 
+@dataclass(frozen=True)
+class Declined:
+    """A verification refusal: why a candidate block was not rewritten."""
+    reason: str
+
+
 class BlockRewriter(DefaultTransformVisitor):
     """
     Rewrites selected `with` blocks, each into several statements.
 
-    A subclass says which blocks it can rewrite (`_candidate`) and what to put
-    in their place (`_rewrite`).  `where` picks one candidate by index, in
-    visit order, outermost-first; `None` takes them all.
+    A subclass says which blocks structurally match (`_candidate`), whether a
+    match may be rewritten (`_verify`), and what to put in its place
+    (`_rewrite`).  `where` picks one candidate by index, in visit order,
+    outermost-first; `None` takes them all.  A candidate `_verify` declines
+    is skipped under `None` and raises :class:`TransformDeclined` where an
+    explicit `where` names it.
     """
 
     where: int | None
     site_idx: int
 
     def _candidate(self, stmt: ContextStmt):
-        """What `_rewrite` needs for this block, or `None` to leave it be."""
+        """What `_verify` needs for this block, or `None` where it does not
+        structurally match.  Only matches count toward `where`."""
         raise NotImplementedError
+
+    def _verify(self, stmt: ContextStmt, info):
+        """What `_rewrite` needs for this match, or a `Declined` saying why
+        it cannot be rewritten.  By default every match verifies."""
+        return info
 
     def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
         """The statements that replace `stmt`."""
@@ -252,8 +269,16 @@ class BlockRewriter(DefaultTransformVisitor):
                     idx = self.site_idx
                     self.site_idx += 1
                     if self.where is None or idx == self.where:
-                        stmts.extend(self._rewrite(s, info))
-                        continue
+                        verified = self._verify(s, info)
+                        if isinstance(verified, Declined):
+                            if self.where is not None:
+                                raise TransformDeclined(
+                                    f'where={idx}: {verified.reason}'
+                                )
+                            # apply-everywhere skips a declined candidate
+                        else:
+                            stmts.extend(self._rewrite(s, verified))
+                            continue
             new_s, ctx = self._visit_statement(s, ctx)
             stmts.append(new_s)
         return StmtBlock(stmts), ctx
