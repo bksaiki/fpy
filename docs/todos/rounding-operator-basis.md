@@ -87,18 +87,21 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
   fixed-point lowering is now a composition of one-idea operators:
   `unfold_special → unfold_neg_zero → unfold_overflow → rescale_fixed`.
 
-- **Composition has no way to carry a location, and that is what blocks a
-  composed operator.** `where` counts candidate blocks, and these operators change
-  how many there are: unfolding overflow turns one rounding into several
-  statements, so a later pass selecting "the *n*th candidate" sees a different
-  structure than the one the index was chosen against.
+- **Resolved: composition carries a location.** `where` counted candidate blocks,
+  and these operators change how many there are — unfolding overflow turns one
+  rounding into several statements — so a later pass selecting "the *n*th
+  candidate" saw a different structure than the one the index was chosen against.
+  Once the first operator had rewritten at a program point, every later operator
+  should have been aimed at *that* point, and instead each re-scanned the whole
+  program with an index that no longer meant what it did. A composed operator was
+  therefore honest only for the whole program at once.
 
-  The consequence is sharper than order-dependence. Once the first operator has
-  matched and rewritten at a program point, every later operator in the sequence
-  should be aimed at *that* point — and instead each re-scans the whole program
-  with an index that no longer means what it did. So a composed operator can only
-  honestly be offered for the whole program at once, which is why the sequence in
-  `native-lowering-roadmap.md` is pinned by a test rather than exposed as an
-  entry point. Giving a rewrite a *location* that survives the rewrites around it
-  is the prerequisite; the plan for that mechanism is
-  [scheduling-language.md](scheduling-language.md).
+  `where` now also takes a cursor, which the strategies forward across each step,
+  so one location aims a whole sequence: `_lower_at` in
+  `tests/unit/backend/cpp/test_lowered_roundtrip.py` runs
+  `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed` at one
+  rounding of a two-rounding program and leaves the other untouched. See
+  [scheduling-language.md](scheduling-language.md) item 3 and
+  [cursor-forwarding-plan.md](cursor-forwarding-plan.md); what remains for a
+  composed *operator* is the recipe itself, gap 2 of
+  [native-lowering-roadmap.md](native-lowering-roadmap.md).

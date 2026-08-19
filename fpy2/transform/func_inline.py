@@ -16,13 +16,21 @@ from ..analysis import (
     SyntaxCheck,
 )
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultTransformVisitor
 from ..env import ForeignEnv
 from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
-from .error import TransformReferenceError
 from .rename_target import RenameTarget
+from .utils import (
+    Cursor,
+    Edit,
+    EditLog,
+    ExprCursor,
+    SiteRewriter,
+    StmtPath,
+    check_where,
+    expr_sites,
+)
 
 
 def _replace_ret(block: StmtBlock, new_var: NamedId):
@@ -48,16 +56,17 @@ class _Ctx:
         return _Ctx(stmts=[], is_ctx_expr=False)
 
 
-class _FuncInline(DefaultTransformVisitor):
+class _FuncInline(SiteRewriter):
     """Function inline visitor."""
+
+    _expr_sited = True   # the candidates are `Call` expressions
 
     func: FuncDef
     def_use: DefineUseAnalysis
     funcs: set[Function] | None
     inlined: dict[FuncDef, FuncDef]
     recursive: bool
-    where: int | None
-    site_idx: int
+    where: int | Cursor | None
 
     gensym: Gensym
     free_vars: set[NamedId]
@@ -70,16 +79,12 @@ class _FuncInline(DefaultTransformVisitor):
         funcs: set[Function] | None,
         inlined: dict[FuncDef, FuncDef] | None = None,
         recursive: bool = True,
-        where: int | None = None
+        where: int | Cursor | None = None
     ):
         self.func = func
         self.def_use = def_use
         self.funcs = funcs
         self.where = where
-        # Counts *candidate* call sites (calls to a `Function` that pass
-        # the `funcs` filter) in visit order, outermost-first.  `where`
-        # selects one by this index.
-        self.site_idx = 0
         # Cache of fully-inlined callee bodies, keyed by callee
         # ``FuncDef``.  ``_visit_call`` reuses a cached body across call
         # sites instead of re-inlining the whole callee subtree each
@@ -101,11 +106,13 @@ class _FuncInline(DefaultTransformVisitor):
             # not a candidate for inlining
             return super()._visit_call(e, ctx)
 
+        block, pos = self._site
         idx = self.site_idx
         self.site_idx += 1
-        if self.where is not None and idx != self.where:
+        if not self._selects_expr(e, block, pos, idx):
             # a candidate site, but not the selected one
             return super()._visit_call(e, ctx)
+        self._matched += 1
         if ctx.in_while_cond:
             raise RuntimeError(
                 f'cannot inline call to `{e.fn.name}` in a `while` condition: '
@@ -204,13 +211,22 @@ class _FuncInline(DefaultTransformVisitor):
 
     def _visit_block(self, block: StmtBlock, ctx: _Ctx | None):
         block_ctx = _Ctx.default()
-        for stmt in block.stmts:
+        for pos, stmt in enumerate(block.stmts):
+            self._site = (block, pos)
+            before = len(block_ctx.stmts)
             stmt, _ = self._visit_statement(stmt, block_ctx)
             block_ctx.stmts.append(stmt)
+            # the callee's body is spliced in *ahead* of the statement that held
+            # the call, which survives with the call replaced by a variable
+            spliced = len(block_ctx.stmts) - before - 1
+            if spliced > 0:
+                self._record(block, pos, spliced, removed=0)
+                self._mark_exprs(block, pos)
         b = StmtBlock(block_ctx.stmts)
         return b, None
 
     def _visit_function(self, func: FuncDef, ctx: None):
+        self._begin(func)
         body, _ = self._visit_block(func.body, None)
         meta = FuncMeta(self.free_vars, func.meta.ctx, func.meta.spec, func.meta.props, self.env)
         return FuncDef(func.name, func.args, body, meta, loc=func.loc)
@@ -225,30 +241,65 @@ class FuncInline:
     """
 
     @staticmethod
+    def sites(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        funcs: Iterable[Function] | None = None,
+    ) -> list[ExprCursor]:
+        """The candidate call sites of `func`, in visit order: what a `where`
+        index counts.  `funcs` filters as it does for :meth:`apply`."""
+        keep = None if funcs is None else set(funcs)
+        return expr_sites(
+            func,
+            lambda e: (
+                isinstance(e, Call) and isinstance(e.fn, Function)
+                and (keep is None or e.fn in keep)
+            ),
+            within,
+        )
+
+    @staticmethod
     def apply(
         func: FuncDef, *,
         def_use: DefineUseAnalysis | None = None,
         funcs: Iterable[Function] | None = None,
         recursive: bool = True,
-        where: int | None = None
+        where: int | Cursor | None = None
     ) -> FuncDef:
         """
         Applies function inlining to `func` returning the transformed function.
 
-        `where` selects a single candidate call site by index, in visit
-        order (outermost-first); candidates are calls to a `Function`
-        that pass the `funcs` filter.  If `None`, every candidate site
-        is inlined.  With `recursive=True` the selected site's callee is
-        still fully flattened.
+        `where` selects candidate call sites -- calls to a `Function` that pass
+        the `funcs` filter -- by index, in visit order (outermost-first), or by a
+        cursor.  If `None`, every candidate site is inlined.  With
+        `recursive=True` the selected site's callee is still fully flattened.
 
         Raises `CallGraphError` if the call graph reachable from `func`
         contains a cycle (FPy forbids recursion; inlining a recursive
         call would not terminate).
         """
+        return FuncInline.apply_with_edits(
+            func,
+            def_use=def_use,
+            funcs=funcs,
+            recursive=recursive,
+            where=where,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef,
+        *,
+        def_use: DefineUseAnalysis | None = None,
+        funcs: Iterable[Function] | None = None,
+        recursive: bool = True,
+        where: int | Cursor | None = None
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
-        if where is not None and not isinstance(where, int):
-            raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
+        check_where(where)
 
         # Recursion guard — see the method docstring.  Also gives us
         # the leaves-first order for the bottom-up path below.
@@ -264,13 +315,22 @@ class FuncInline:
             # Entries are finished as they are built: later functions'
             # free-variable merges consume the pruned free-var sets.
             inlined: dict[FuncDef, FuncDef] = {}
+            edits: tuple[Edit, ...] = ()
+            dirty: tuple[StmtPath, ...] = ()
             for fdef in cg.order:
                 fdef_du = DefineUse.analyze(fdef)
-                out = _FuncInline(
+                vtor = _FuncInline(
                     fdef, fdef_du, None, recursive=True, inlined=inlined,
-                ).apply()
-                inlined[fdef] = FuncInline._finish(out)
-            return inlined[func]
+                )
+                out = FuncInline._finish(vtor.apply())
+                if fdef is func:
+                    # only this function's own rewrites forward its cursors
+                    edits, dirty = tuple(vtor.edits), tuple(vtor.dirty_exprs)
+                inlined[fdef] = out
+            return EditLog(
+                func, inlined[func], edits,
+                exprs_rewritten=dirty, exprs_preserved=True,
+            )
         else:
             # One-level inlining, or selective inlining via `funcs` /
             # `where`: keep the per-call-site strategy.
@@ -278,16 +338,13 @@ class FuncInline:
                 def_use = DefineUse.analyze(func)
             vtor = _FuncInline(func, def_use, funcs, recursive=recursive, where=where)
             result = vtor.apply()
-            # A `where` that named no candidate site leaves the function
-            # unchanged; fail rather than silently no-op.  `site_idx` is
-            # the true candidate count (spliced callee bodies are never
-            # re-visited).
-            if where is not None and not (0 <= where < vtor.site_idx):
-                raise TransformReferenceError(
-                    f'where={where} does not correspond to a call site; '
-                    f'the function has {vtor.site_idx} candidate call site(s)'
-                )
-            return FuncInline._finish(result)
+            # `site_idx` is the true candidate count: spliced callee bodies are
+            # never re-visited
+            vtor.check_site('a call site')
+            return EditLog(
+                func, FuncInline._finish(result), tuple(vtor.edits),
+                exprs_rewritten=tuple(vtor.dirty_exprs), exprs_preserved=True,
+            )
 
     @staticmethod
     def _finish(result: FuncDef) -> FuncDef:

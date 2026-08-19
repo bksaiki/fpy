@@ -4,10 +4,11 @@ Scheduling language: overflow as program text
 
 from ..function import Function
 from ..transform import UnfoldOverflow
+from ..transform.utils.cursor import Cursor
 
 
 def unfold_overflow(
-    func: Function, where: int | None = None, *, early_check: bool = False
+    func: Function, where: int | Cursor | None = None, *, early_check: bool = False
 ) -> Function:
     """
     Take the bound out of `func`'s rounding contexts and state it as program text.
@@ -42,11 +43,12 @@ def unfold_overflow(
     ----------
     func : Function
         The function to transform.
-    where : int | None
-        The index of the block to rewrite, counting candidate blocks (the
+    where : int | Cursor | None
+        Which block to rewrite: an index counting candidate blocks (the
         structurally-matching rounding blocks, whether or not they verify)
-        in visit order, outermost-first. If `None`, rewrite every candidate
-        that verifies and skip the rest.
+        in visit order, outermost-first, or a cursor or region, which takes every
+        candidate at or beneath it. If `None`, rewrite every candidate that
+        verifies and skip the rest.
     early_check : bool
         Also test the operand before rounding it, so nothing certain to
         overflow is rounded at all. The threshold is the format's ``infval``,
@@ -62,10 +64,11 @@ def unfold_overflow(
     Raises
     ------
     TransformDeclined
-        If an explicit `where` names a candidate this rewrite refuses;
-        the message says why.
+        If an explicit `where` names a candidate this rewrite refuses, or a
+        region whose every candidate it refuses; the message says why.
     TransformReferenceError
-        If an explicit `where` names no candidate block.
+        If an explicit `where` names no candidate block, or a cursor of a
+        program this one was not derived from.
 
     Examples
     --------
@@ -107,5 +110,6 @@ def unfold_overflow(
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = UnfoldOverflow.apply(func.ast, where=where, early_check=early_check)
-    return func.with_ast(ast)
+    return func.with_edits(UnfoldOverflow.apply_with_edits(
+        func.ast, where=func.rebase(where), early_check=early_check
+    ))

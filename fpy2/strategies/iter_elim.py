@@ -27,6 +27,9 @@ def elim_iter(
     :class:`fpy2.transform.ZipElim` for what is recognized
     (``enumerate(zip(...))`` collapses both intermediates at once).
 
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
+
     Parameters
     ----------
     func : Function

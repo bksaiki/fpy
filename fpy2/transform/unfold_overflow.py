@@ -130,16 +130,20 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Cursor,
     Declined,
+    EditLog,
+    StmtCursor,
     agrees,
     attribute,
-    check_site,
     check_where,
+    is_rounding_block,
     number_literal,
     rounding_block,
     same_value,
     shift,
     sign_choice,
+    stmt_sites,
     try_round,
     value_literal,
 )
@@ -426,11 +430,14 @@ def _unbounded_expr(
 class _UnfoldOverflowInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
+    _casts = False
+    """whether a `fp.cast` block counts as a candidate"""
+
     func: FuncDef
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
     gensym: Gensym
-    where: int | None
+    where: int | Cursor | None
     early_check: bool
     alias: str | None
     used_alias: bool
@@ -439,7 +446,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
         class_info: ValueClassAnalysis,
-        where: int | None = None, early_check: bool = False,
+        where: int | Cursor | None = None, early_check: bool = False,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -451,7 +458,6 @@ class _UnfoldOverflowInstance(BlockRewriter):
         # written with; without one it falls back to the context value itself
         self.alias = fpy_alias(func.env)
         self.used_alias = False
-        self.site_idx = 0
 
     def apply(self) -> FuncDef:
         func = self._visit_function(self.func, None)
@@ -468,7 +474,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """Only a rounding is a bounded rounding in disguise; `Cast`
         asserts exactness, which the rewrite would not preserve."""
-        return rounding_block(stmt, casts=False)
+        return rounding_block(stmt, casts=self._casts)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if its bound can be taken out of its context."""
@@ -586,9 +592,17 @@ class UnfoldOverflow:
     """
 
     @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+        """
+        casts = _UnfoldOverflowInstance._casts
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
+
+    @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | None = None,
         early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
@@ -603,6 +617,23 @@ class UnfoldOverflow:
         With `early_check`, a check on the operand precedes the rounding, so
         nothing certain to overflow is rounded at all.
         """
+        return UnfoldOverflow.apply_with_edits(
+            func,
+            where=where,
+            early_check=early_check,
+            eval_info=eval_info,
+            class_info=class_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | Cursor | None = None,
+        early_check: bool = False,
+        eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -614,5 +645,5 @@ class UnfoldOverflow:
 
         vtor = _UnfoldOverflowInstance(func, eval_info, class_info, where, early_check)
         out = vtor.apply()
-        check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        vtor.check_site('a candidate rounding block')
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

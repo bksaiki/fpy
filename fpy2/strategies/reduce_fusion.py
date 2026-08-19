@@ -11,6 +11,9 @@ def fuse(func: Function) -> Function:
     Fuse ``any`` / ``all`` reductions over list comprehensions in `func`
     into single loops, eliminating the intermediate list.
 
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
+
     Parameters
     ----------
     func : Function

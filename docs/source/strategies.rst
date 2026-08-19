@@ -16,6 +16,32 @@ names no site raises :class:`~fpy2.strategies.TransformReferenceError`;
 
 .. autoexception:: fpy2.strategies.TransformReferenceError
 
+Cursors
+-------
+
+A ``where`` may also be a *cursor*: a location that survives the rewrites
+around it, so a schedule pins a program point once and aims a whole sequence
+of strategies at it. A cursor from an earlier program is forwarded to the
+current one on arrival, and one that no longer names anything raises
+:class:`~fpy2.strategies.TransformReferenceError` rather than landing
+somewhere else.
+
+.. autoclass:: fpy2.strategies.StmtCursor
+   :members:
+
+.. autoclass:: fpy2.strategies.BlockCursor
+   :members:
+
+.. autoclass:: fpy2.strategies.ExprCursor
+   :members:
+
+:func:`~fpy2.strategies.sites` is how a cursor is obtained:
+
+.. autofunction:: fpy2.strategies.sites
+
+Strategies
+----------
+
 The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.close

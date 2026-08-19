@@ -1,5 +1,13 @@
 # Version History
 
+## [NEXT]
+### Features:
+ - Strategies:
+   - cursors: a location that survives the rewrites around it, so one site aims a
+     whole sequence of strategies; `where` takes a statement, region or expression
+     cursor as well as an index
+   - sites: lists the sites a strategy can be aimed at
+
 ## [0.2.2] - 2026-08-19
 ### Features:
  - Analysis:

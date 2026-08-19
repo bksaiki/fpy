@@ -108,13 +108,17 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Cursor,
     Declined,
+    EditLog,
+    StmtCursor,
     agrees,
-    check_site,
     check_where,
     fixed_probes,
+    is_rounding_block,
     rounding_block,
     sign_choice,
+    stmt_sites,
     try_round,
 )
 
@@ -306,23 +310,25 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
 class _UnfoldSpecialInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
+    _casts = True
+    """whether a `fp.cast` block counts as a candidate"""
+
     func: FuncDef
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
     gensym: Gensym
-    where: int | None
+    where: int | Cursor | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        class_info: ValueClassAnalysis, where: int | None = None,
+        class_info: ValueClassAnalysis, where: int | Cursor | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
         self.class_info = class_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -330,7 +336,7 @@ class _UnfoldSpecialInstance(BlockRewriter):
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """A cast substitutes a special exactly as a round does: the
         substitution happens before the exactness check."""
-        return rounding_block(stmt, casts=True)
+        return rounding_block(stmt, casts=self._casts)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if any of its special values can be stated as
@@ -431,9 +437,19 @@ class UnfoldSpecial:
     """
 
     @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+
+        A cast substitutes a special exactly as a round does, so it counts too.
+        """
+        casts = _UnfoldSpecialInstance._casts
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
+
+    @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
@@ -446,6 +462,21 @@ class UnfoldSpecial:
         (see :class:`.utils.BlockRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
         """
+        return UnfoldSpecial.apply_with_edits(
+            func,
+            where=where,
+            eval_info=eval_info,
+            class_info=class_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | Cursor | None = None,
+        eval_info: PartialEvalInfo | None = None,
+        class_info: ValueClassAnalysis | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -457,5 +488,5 @@ class UnfoldSpecial:
 
         vtor = _UnfoldSpecialInstance(func, eval_info, class_info, where)
         out = vtor.apply()
-        check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        vtor.check_site('a candidate rounding block')
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

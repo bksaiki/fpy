@@ -6,11 +6,12 @@ from collections.abc import Iterable
 
 from ..function import Function
 from ..transform import FuncInline
+from ..transform.utils.cursor import Cursor
 
 
 def inline(
     func: Function,
-    where: int | None = None,
+    where: int | Cursor | None = None,
     *,
     funcs: Iterable[Function] | None = None,
     recursive: bool = True
@@ -22,10 +23,14 @@ def inline(
     ----------
     func : Function
         The function to transform.
-    where : int | None
-        The index of the call site to inline, counting candidate sites
-        (calls to FPy functions that pass the `funcs` filter) in visit
-        order, outermost-first. If `None`, inline every candidate site.
+    where : int | Cursor | None
+        Which call site to inline, among the candidates -- calls to FPy
+        functions that pass the `funcs` filter. An
+        :class:`fpy2.strategies.ExprCursor` names one call exactly, since the
+        candidates *are* expressions; an index counts them in visit order,
+        outermost-first; and a statement cursor or region takes every candidate
+        call at or beneath it, which is coarser -- a statement holding two
+        candidate calls names both. If `None`, inline every candidate site.
     funcs : Iterable[Function] | None
         Restrict inlining to calls to these functions.
         If `None`, every call to an FPy function is a candidate.
@@ -88,5 +93,6 @@ def inline(
             if not isinstance(f, Function):
                 raise TypeError(f"Expected a \'Function\', got {f}")
 
-    ast = FuncInline.apply(func.ast, funcs=funcs, recursive=recursive, where=where)
-    return func.with_ast(ast)
+    return func.with_edits(FuncInline.apply_with_edits(
+        func.ast, funcs=funcs, recursive=recursive, where=func.rebase(where)
+    ))

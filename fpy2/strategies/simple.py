@@ -28,6 +28,9 @@ def simplify(
     ``enable_const_fold_context=False`` to simplify boolean / numeric
     expressions while leaving ``with``-block contexts untouched.
 
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
+
     Examples
     --------
     ::

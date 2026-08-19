@@ -1,8 +1,26 @@
 """
 Scheduling language constructs for FPy programs.
+
+A strategy with sites takes a `where`: an index into its candidates, or a cursor.
+A cursor or region selects every candidate *at or beneath* the program point it
+names, so the statement an earlier rewrite left behind names the site now nested
+inside it; one from an earlier program is forwarded to this one first.
+:func:`sites` lists what a `where` may name.
 """
 
-from ..transform.error import TransformDeclined, TransformError, TransformReferenceError
+from ..transform.utils.cursor import BlockCursor, Cursor, ExprCursor, StmtCursor
+from ..transform.utils.error import (
+    TransformDeclined,
+    TransformError,
+    TransformReferenceError,
+)
+from ..transform.utils.path import (
+    BlockPath,
+    ExprPath,
+    FuncBody,
+    StmtPath,
+    SubBlock,
+)
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
@@ -18,8 +36,18 @@ from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .simple import simplify
 from .special_unfold import unfold_special
+from .utils.sites import sites
 
 __all__ = [
+    'BlockCursor',
+    'BlockPath',
+    'Cursor',
+    'ExprCursor',
+    'ExprPath',
+    'FuncBody',
+    'StmtCursor',
+    'StmtPath',
+    'SubBlock',
     'TransformDeclined',
     'TransformError',
     'TransformReferenceError',
@@ -33,6 +61,7 @@ __all__ = [
     'monomorphize',
     'rescale_fixed',
     'simplify',
+    'sites',
     'split',
     'unfold_neg_zero',
     'unfold_overflow',

@@ -22,6 +22,9 @@ def elim_round(func: Function) -> Function:
     provably redundant; run :func:`fpy2.strategies.simplify` afterwards
     to clean up the temporaries the rewrite introduces.
 
+    Cursors do not forward across this pass: it rewrites at sites it does
+    not report.
+
     Parameters
     ----------
     func : Function

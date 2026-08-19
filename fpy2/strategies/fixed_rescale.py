@@ -4,9 +4,10 @@ Scheduling language: fixed-point rescaling
 
 from ..function import Function
 from ..transform import RescaleFixed
+from ..transform.utils.cursor import Cursor
 
 
-def rescale_fixed(func: Function, where: int | None = None) -> Function:
+def rescale_fixed(func: Function, where: int | Cursor | None = None) -> Function:
     """
     Rescale fixed-point rounding in `func` to digit position zero.
 
@@ -37,11 +38,12 @@ def rescale_fixed(func: Function, where: int | None = None) -> Function:
     ----------
     func : Function
         The function to transform.
-    where : int | None
-        The index of the block to rescale, counting candidate blocks (the
+    where : int | Cursor | None
+        Which block to rescale: an index counting candidate blocks (the
         structurally-matching rounding blocks, whether or not they verify)
-        in visit order, outermost-first. If `None`, rescale every candidate
-        that verifies and skip the rest.
+        in visit order, outermost-first, or a cursor or region, which takes every
+        candidate at or beneath it. If `None`, rescale every candidate that
+        verifies and skip the rest.
 
     Returns
     -------
@@ -51,10 +53,11 @@ def rescale_fixed(func: Function, where: int | None = None) -> Function:
     Raises
     ------
     TransformDeclined
-        If an explicit `where` names a candidate this rewrite refuses;
-        the message says why.
+        If an explicit `where` names a candidate this rewrite refuses, or a
+        region whose every candidate it refuses; the message says why.
     TransformReferenceError
-        If an explicit `where` names no candidate block.
+        If an explicit `where` names no candidate block, or a cursor of a
+        program this one was not derived from.
 
     Examples
     --------
@@ -84,5 +87,6 @@ def rescale_fixed(func: Function, where: int | None = None) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = RescaleFixed.apply(func.ast, where=where)
-    return func.with_ast(ast)
+    return func.with_edits(RescaleFixed.apply_with_edits(
+        func.ast, where=func.rebase(where)
+    ))

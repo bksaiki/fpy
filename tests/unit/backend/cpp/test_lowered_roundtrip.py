@@ -246,3 +246,48 @@ class TestLoweredRoundtrip:
         assert r.returncode == 0, (
             f'needs the support library after all:\n{r.stderr[-2000:]}'
         )
+
+
+# ----------------------------------------------------------------------
+# The sequence, aimed at one site
+
+
+@fp.fpy(ctx=fp.REAL)
+def _two_roundings(x: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        p = fp.round(x)
+    with fp.FP16:
+        q = fp.round(y)
+    return p + q
+
+
+def _lower_at(func, src, site):
+    """:func:`_lower`, aimed at one site by cursor instead of at the whole
+    program.  ``simplify`` is left off: cursors do not cross it."""
+    f = st.monomorphize(func, args=[RealType(src), RealType(src)])
+    f = st.unfold_special(f, where=site)
+    f = st.unfold_overflow(f, where=site, early_check=True)
+    f = st.float_to_fixed(f, where=site)
+    return st.rescale_fixed(f, where=site)
+
+
+@pytest.mark.parametrize('which', [0, 1])
+def test_a_cursor_aims_the_whole_sequence(which):
+    """One cursor, chosen once, carries four rewrites to the same program point
+    and leaves the other rounding exactly as it was."""
+    found = st.sites(st.unfold_special, _two_roundings)
+    chosen, other = found[which], found[1 - which]
+
+    out = _lower_at(_two_roundings, fp.FP32, chosen)
+
+    # the pinned rounding is now fixed-point, at a position from `logb`
+    text = out.format()
+    assert 'MPBFixedContext' in text
+    assert 'fp.logb' in text
+
+    # the other one is the block it always was, and only it is left
+    assert text.count('fp.FP16') == 1
+    assert out.forward(other).resolve().format() == other.resolve().format()
+
+    # and the site the sequence was aimed at still names something
+    assert out.rebase(chosen).func is out.ast

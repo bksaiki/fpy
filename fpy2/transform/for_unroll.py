@@ -24,11 +24,21 @@ from ..analysis import (
     SyntaxCheck,
 )
 from ..ast.fpyast import *
-from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
-from .error import TransformReferenceError
 from .rename_target import RenameTarget
-from .utils import clone_block, copy_target, infer_array_size, integer_ctx, static_size
+from .utils import (
+    Cursor,
+    EditLog,
+    SiteRewriter,
+    StmtCursor,
+    check_where,
+    clone_block,
+    copy_target,
+    infer_array_size,
+    integer_ctx,
+    static_size,
+    stmt_sites,
+)
 
 
 class ForUnrollStrategy(enum.Enum):
@@ -81,7 +91,7 @@ def _eq(a: Expr, b: Expr) -> Compare:
 def _assign(target: Id | TupleBinding, expr: Expr) -> Assign:
     return Assign(target, None, expr, None)
 
-class _ForUnroll(DefaultTransformVisitor):
+class _ForUnroll(SiteRewriter):
     """
     Unroll visitor.
 
@@ -114,9 +124,8 @@ class _ForUnroll(DefaultTransformVisitor):
     """
 
     func: FuncDef
-    where: int | None
+    where: int | Cursor | None
     times: int
-    index: int
     strategy: ForUnrollStrategy
     gensym: Gensym
     temp_id: NamedId
@@ -129,7 +138,7 @@ class _ForUnroll(DefaultTransformVisitor):
     def __init__(
         self,
         func: FuncDef,
-        where: int | None,
+        where: int | Cursor | None,
         times: int,
         strategy: ForUnrollStrategy,
         reaching_defs: ReachingDefsAnalysis,
@@ -142,7 +151,6 @@ class _ForUnroll(DefaultTransformVisitor):
         self.func = func
         self.where = where
         self.times = times
-        self.index = 0
         self.strategy = strategy
         self.gensym = Gensym(reaching_defs.names())
         self.temp_id = temp_id
@@ -213,9 +221,13 @@ class _ForUnroll(DefaultTransformVisitor):
         return ForStmt(idx, _range(_int(0), bound, _int(k)), StmtBlock(main_body), loc)
 
     def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
-        selected = (self.where is None or self.index == self.where) and self.times > 0
-        self.index += 1
-        if not selected:
+        block, pos = self._site
+        idx = self.site_idx
+        self.site_idx += 1
+        aimed = self._selects(block, pos, idx)
+        if aimed:
+            self._matched += 1
+        if not (aimed and self.times > 0):
             return super()._visit_for(stmt, ctx)
 
         # ``k`` consecutive elements are consumed per rewritten iteration.
@@ -237,6 +249,7 @@ class _ForUnroll(DefaultTransformVisitor):
 
         # The loop expands to several statements: emit all but the last into
         # the enclosing block and return the last as the replacement.
+        self._replaced = True
         ctx.extend(emitted[:-1])
         return emitted[-1], None
 
@@ -309,13 +322,6 @@ class _ForUnroll(DefaultTransformVisitor):
 
         return emitted
 
-    def _visit_block(self, block: StmtBlock, ctx: list[Stmt] | None):
-        out: list[Stmt] = []
-        for stmt in block.stmts:
-            s, _ = self._visit_statement(stmt, out)
-            out.append(s)
-        return StmtBlock(out), None
-
     def apply(self):
         return self._visit_function(self.func, None)
 
@@ -333,9 +339,15 @@ class ForUnroll:
     """
 
     @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The `for` loops of `func`, in visit order: what a `where`
+        index counts."""
+        return stmt_sites(func, lambda s: isinstance(s, ForStmt), within)
+
+    @staticmethod
     def apply(
         func: FuncDef,
-        where: int | None = None,
+        where: int | Cursor | None = None,
         times: int = 1,
         strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
         reaching_defs: ReachingDefsAnalysis | None = None,
@@ -343,15 +355,17 @@ class ForUnroll:
         temp_id: NamedId | None = None,
         len_id: NamedId | None = None,
         idx_id: NamedId | None = None
-    ):
+    ) -> FuncDef:
         """
         Apply the transformation.
 
         Parameters
         ----------
-        where : int | None
-            The index of the `for` loop to unroll. If `None`, unroll all
-            `for` loops.
+        where : int | Cursor | None
+            Which `for` loop to unroll: an index counting loops in visit
+            order, or a cursor or region naming a program point, which
+            takes every loop at or beneath it. If `None`, unroll every
+            `for` loop.
         times : int
             Number of *extra* body copies per iteration; the unroll factor is
             ``k = times + 1`` elements consumed per rewritten iteration.
@@ -366,10 +380,34 @@ class ForUnroll:
             Pre-computed array-size analysis, used to discharge the
             remainder check when an iterable's length is statically known.
         """
+        return ForUnroll.apply_with_edits(
+            func,
+            where=where,
+            times=times,
+            strategy=strategy,
+            reaching_defs=reaching_defs,
+            array_size=array_size,
+            temp_id=temp_id,
+            len_id=len_id,
+            idx_id=idx_id,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef,
+        where: int | Cursor | None = None,
+        times: int = 1,
+        strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
+        reaching_defs: ReachingDefsAnalysis | None = None,
+        array_size: ArraySizeAnalysis | None = None,
+        temp_id: NamedId | None = None,
+        len_id: NamedId | None = None,
+        idx_id: NamedId | None = None
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a \'FuncDef\', got {func}")
-        if where is not None and not isinstance(where, int):
-            raise TypeError(f"Expected an \'int\' or None for where, got {where}")
+        check_where(where)
         if not isinstance(times, int):
             raise TypeError(f"Expected an \'int\' for times, got {times}")
         if times < 0:
@@ -390,14 +428,8 @@ class ForUnroll:
             func, where, times, strategy, reaching_defs,
             temp_id, len_id, idx_id, array_size
         )
-        func = unroller.apply()
-        # After traversal, `index` counts every `for` loop visited, so a
-        # `where` outside `[0, index)` names no loop: fail rather than
-        # silently returning the function unchanged.
-        if where is not None and not (0 <= where < unroller.index):
-            raise TransformReferenceError(
-                f'where={where} does not correspond to a `for` loop; '
-                f'the function has {unroller.index} `for` loop(s)'
-            )
-        SyntaxCheck.check(func, ignore_unknown=True)
-        return func
+        out = unroller.apply()
+        # `site_idx` is the true loop count: generated loops are never re-visited
+        unroller.check_site('a `for` loop')
+        SyntaxCheck.check(out, ignore_unknown=True)
+        return EditLog(func, out, tuple(unroller.edits), exprs_preserved=True)

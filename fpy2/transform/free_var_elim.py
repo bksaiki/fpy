@@ -12,6 +12,7 @@ from ..analysis import SyntaxCheck
 from ..ast.fpyast import Assign, Expr, FuncDef, FuncMeta, StmtBlock
 from ..number import Context
 from .const_fold import value_to_literal
+from .utils import Edit, EditLog, FuncBody
 
 
 def inline_literal(val: object) -> Expr | None:
@@ -45,6 +46,14 @@ class FreeVarElim:
     def apply(func: FuncDef) -> FuncDef:
         """Return a new ``FuncDef`` closed over its data free variables (the
         input is not mutated); returns it unchanged when there are none."""
+        return FreeVarElim.apply_with_edits(func).result
+
+    @staticmethod
+    def apply_with_edits(func: FuncDef) -> EditLog:
+        """:meth:`apply`, with the record of the prelude it added.
+
+        The body's statements are reused verbatim, so expression cursors survive.
+        """
         if not isinstance(func, FuncDef):
             raise TypeError(f"expected a 'FuncDef', got `{func}`")
 
@@ -63,7 +72,7 @@ class FreeVarElim:
             bound.add(fv)
 
         if not prelude:
-            return func
+            return EditLog(func, func, (), exprs_preserved=True)
 
         new_body = StmtBlock(prelude + list(func.body.stmts))
         meta = FuncMeta(
@@ -75,4 +84,5 @@ class FreeVarElim:
         )
         out = FuncDef(func.name, func.args, new_body, meta, loc=func.loc)
         SyntaxCheck.check(out, ignore_unknown=True)
-        return out
+        prepend = Edit(FuncBody(), 0, 0, len(prelude))
+        return EditLog(func, out, (prepend,), exprs_preserved=True)

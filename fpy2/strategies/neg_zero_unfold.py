@@ -4,9 +4,10 @@ Scheduling language: the sign of zero as program text
 
 from ..function import Function
 from ..transform import UnfoldNegZero
+from ..transform.utils.cursor import Cursor
 
 
-def unfold_neg_zero(func: Function, where: int | None = None) -> Function:
+def unfold_neg_zero(func: Function, where: int | Cursor | None = None) -> Function:
     """
     Take the signed zero out of `func`'s rounding contexts and state it as
     program text.
@@ -46,11 +47,12 @@ def unfold_neg_zero(func: Function, where: int | None = None) -> Function:
     ----------
     func : Function
         The function to transform.
-    where : int | None
-        The index of the block to rewrite, counting candidate blocks (the
+    where : int | Cursor | None
+        Which block to rewrite: an index counting candidate blocks (the
         structurally-matching rounding blocks, whether or not they verify)
-        in visit order, outermost-first. If `None`, rewrite every candidate
-        that verifies and skip the rest.
+        in visit order, outermost-first, or a cursor or region, which takes every
+        candidate at or beneath it. If `None`, rewrite every candidate that
+        verifies and skip the rest.
 
     Returns
     -------
@@ -60,10 +62,11 @@ def unfold_neg_zero(func: Function, where: int | None = None) -> Function:
     Raises
     ------
     TransformDeclined
-        If an explicit `where` names a candidate this rewrite refuses;
-        the message says why.
+        If an explicit `where` names a candidate this rewrite refuses, or a
+        region whose every candidate it refuses; the message says why.
     TransformReferenceError
-        If an explicit `where` names no candidate block.
+        If an explicit `where` names no candidate block, or a cursor of a
+        program this one was not derived from.
 
     Examples
     --------
@@ -94,5 +97,6 @@ def unfold_neg_zero(func: Function, where: int | None = None) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    ast = UnfoldNegZero.apply(func.ast, where=where)
-    return func.with_ast(ast)
+    return func.with_edits(UnfoldNegZero.apply_with_edits(
+        func.ast, where=func.rebase(where)
+    ))

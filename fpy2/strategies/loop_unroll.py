@@ -5,9 +5,12 @@ Scheduling language: loop unroll
 from ..ast import NamedId
 from ..function import Function
 from ..transform import ForUnroll, ForUnrollStrategy, WhileUnroll
+from ..transform.utils.cursor import Cursor
 
 
-def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Function:
+def unroll_while(
+    func: Function, where: int | Cursor | None = None, times: int = 1
+) -> Function:
     """
     Unroll `while` loops in the function.
 
@@ -15,9 +18,10 @@ def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Fu
     ----------
     func : Function
         The function to transform.
-    where : int | None
-        The index of the `while` loop to unroll. If `None`, unroll all
-        `while` loops.
+    where : int | Cursor | None
+        Which `while` loop to unroll: an index counting `while` loops in visit
+        order, outermost-first, or a cursor or region, which takes every loop at
+        or beneath it. If `None`, unroll every `while` loop.
     times : int
         The number of times to unroll the loop.
 
@@ -60,12 +64,13 @@ def unroll_while(func: Function, where: int | None = None, times: int = 1) -> Fu
     if times < 1:
         raise ValueError(f"Expected a positive integer for times, got {times}")
 
-    ast = WhileUnroll.apply(func.ast, where, times)
-    return func.with_ast(ast)
+    return func.with_edits(
+        WhileUnroll.apply_with_edits(func.ast, func.rebase(where), times)
+    )
 
 def unroll_for(
     func: Function,
-    where: int | None = None,
+    where: int | Cursor | None = None,
     times: int = 1,
     *,
     strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
@@ -78,9 +83,10 @@ def unroll_for(
 
     Parameters
     ----------
-    where : int | None
-        The index of the `for` loop to unroll. If `None`, unroll all
-        `for` loops.
+    where : int | Cursor | None
+        Which `for` loop to unroll: an index counting `for` loops in visit
+        order, outermost-first, or a cursor or region, which takes every loop at
+        or beneath it. If `None`, unroll every `for` loop.
     times : int
         The number of times to unroll the loop; the rewritten loop
         consumes ``times + 1`` consecutive elements per iteration.
@@ -132,10 +138,10 @@ def unroll_for(
     if times < 1:
         raise ValueError(f"Expected a positive integer for times, got {times}")
 
-    ast = ForUnroll.apply(
-         func.ast, where, times, strategy,
+    log = ForUnroll.apply_with_edits(
+         func.ast, func.rebase(where), times, strategy,
          temp_id=NamedId(temp_id), len_id=NamedId(len_id), idx_id=NamedId(idx_id)
     )
 
-    return func.with_ast(ast)
+    return func.with_edits(log)
 

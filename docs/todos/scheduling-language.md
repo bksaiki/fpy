@@ -70,28 +70,32 @@ is the right shape, and item 1 makes the conditions column honest.
 
 ## 3. Locations that survive rewrites
 
-The known blocker, recorded in
-[rounding-operator-basis.md](rounding-operator-basis.md): `where` counts
-candidate blocks, transforms change how many there are, so composition cannot
-carry a location — which is why the lowering sequence in
-[native-lowering-roadmap.md](native-lowering-roadmap.md) is pinned by a test
-rather than exposed as an entry point.
+**Done**, and it retires the blocker recorded in
+[rounding-operator-basis.md](rounding-operator-basis.md): `where` counted
+candidate blocks, transforms change how many there are, so composition could not
+carry a location.
 
-Exo 2's answer is cursors with *forwarding*: a reference is a path into the
-AST; every primitive edit (insert / delete / replace / wrap) carries a
-function mapping old paths to new; applying a transform forwards every live
-cursor, and an un-forwardable cursor invalidates loudly (the bad-reference
-error from item 1). Multiple cursors coexist, so a schedule can pin several
-points before rewriting any of them.
+Exo 2's answer is cursors with *forwarding*, and that is what was built — with the
+scope FPy's transforms allow, since each already knows which statements it
+replaced. A cursor is a parent-linked path (`StmtCursor` / `BlockCursor` /
+`ExprCursor`, united as `Cursor`); a rewriting pass reports a purely structural
+edit log, which `Function.forward` replays back along the chain of programs; and
+the strategies rebase a stale cursor on arrival, so a schedule pins a point once
+and aims a whole sequence at it. `sites(strategy, func, within=)` lists what a
+`where` may name. An un-forwardable cursor invalidates loudly (item 1's
+bad-reference error) — including across the passes that rewrite at sites they do
+not report, which say so rather than guessing.
 
-Scope here is far smaller than Exo's: transforms are statement-level and few,
-and each already knows exactly which statements it replaced. Strategies accept
-`where: int | Cursor`, and `Function` gains `forward(cursor)`.
+The plan, the design decisions and what was deliberately not taken from Exo are in
+[cursor-forwarding-plan.md](cursor-forwarding-plan.md).
 
-Forwarding also fixes the standing hazard in `fpy2/analysis/value_class.py` —
-results keyed by expression identity die on any rewrite. The forwarding map is
-precisely the old-node → new-node correspondence that lets an analysis result
-carry across a schedule step.
+Not delivered, and the claim this item used to make: **forwarding does not carry an
+analysis result.** `fpy2/analysis/value_class.py` keys results by expression
+identity, and every visitor rebuilds every expression, so carrying one needs the
+old-node → new-node correspondence threaded through `DefaultTransformVisitor`
+itself — a different mechanism from a path, which resolves in the rebuilt tree for
+free. Item 6 can re-run the analysis on the rewritten program, which is what the
+transforms already do; the carry-over is its own item if a use appears.
 
 ## 4. Patterns produce references
 
@@ -121,8 +125,9 @@ context, the inferred format, and the value class
 (`fpy2/analysis/value_class.py`, `fpy2/analysis/format_infer/`). Exo 2's
 claim, borne out by their `vectorize`, is that user-written automation is
 impossible without inspection — "does this format state NaN?" is the guard on
-whether `unfold_special` has anything to do. Depends on item 3: without
-forwarding, an analysis result is dead after the first rewrite.
+whether `unfold_special` has anything to do. What it needs from item 3 is the
+cursor to ask *about*, not carried analysis results — those are cheap to re-run on
+the rewritten program, and forwarding does not carry them (see item 3).
 
 ## 7. The recipe as a parameterized function
 
@@ -130,8 +135,8 @@ Gap 2 of [native-lowering-roadmap.md](native-lowering-roadmap.md). Exo 2's
 `optimize_level_1` is the model: one entry point taking the function, a
 location, and a target descriptor object, built by composing the public
 operators, with deviations as hooks rather than policy baked into transforms.
-Item 3 removes the stated reason the sequence is deliberately not exposed
-today. Along the way, transforms without wrappers that the recipe wants
+Item 3 has removed the stated reason the sequence was not exposed: a cursor now
+aims the whole sequence at one site. Along the way, transforms without wrappers that the recipe wants
 (`Specialize` first — Exo 2 generates all its tail cases from `specialize` +
 simplification) get strategy wrappers, and `SplitLoopStrategy` /
 `ForUnrollStrategy` get re-exported from `fpy2.strategies` so no schedule

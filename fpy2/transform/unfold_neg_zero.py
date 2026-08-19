@@ -80,12 +80,16 @@ from ..number import (
 from ..utils import CompareOp, Gensym
 from .utils import (
     BlockRewriter,
+    Cursor,
     Declined,
+    EditLog,
+    StmtCursor,
     agrees,
-    check_site,
     check_where,
     fixed_probes,
+    is_rounding_block,
     rounding_block,
+    stmt_sites,
     try_round,
 )
 
@@ -176,21 +180,23 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
 class _UnfoldNegZeroInstance(BlockRewriter):
     """Rewrites every qualifying context statement in a function."""
 
+    _casts = False
+    """whether a `fp.cast` block counts as a candidate"""
+
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
-    where: int | None
+    where: int | Cursor | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        where: int | None = None,
+        where: int | Cursor | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
         self.gensym = Gensym(eval_info.def_use.names())
         self.where = where
-        self.site_idx = 0
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -198,7 +204,7 @@ class _UnfoldNegZeroInstance(BlockRewriter):
     def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
         """Only a rounding rounds onto zero; `Cast` asserts exactness, and
         an exact result never rounds to zero from anything but zero."""
-        return rounding_block(stmt, casts=False)
+        return rounding_block(stmt, casts=self._casts)
 
     def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
         """The block's format, if its sign of zero can be taken out of its
@@ -290,9 +296,17 @@ class UnfoldNegZero:
     """
 
     @staticmethod
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+        """The candidate rounding blocks of `func`, in visit order --
+        what a `where` index counts, whether or not each verifies.
+        """
+        casts = _UnfoldNegZeroInstance._casts
+        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
+
+    @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | None = None,
         eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
@@ -303,6 +317,19 @@ class UnfoldNegZero:
         (see :class:`.utils.BlockRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
         """
+        return UnfoldNegZero.apply_with_edits(
+            func,
+            where=where,
+            eval_info=eval_info,
+        ).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef, *,
+        where: int | Cursor | None = None,
+        eval_info: PartialEvalInfo | None = None,
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
@@ -312,5 +339,5 @@ class UnfoldNegZero:
 
         vtor = _UnfoldNegZeroInstance(func, eval_info, where)
         out = vtor.apply()
-        check_site(where, vtor.site_idx, 'a candidate rounding block')
-        return out
+        vtor.check_site('a candidate rounding block')
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)
