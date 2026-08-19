@@ -54,11 +54,16 @@ statement: `unfold_special` replaces a block of *n* rounds with *n* ladders, and
 forwarding stays *purely structural* — the edit records four numbers and no
 transform has to name a semantic successor.
 
-**`where` accepts a region.** Aiming the next operator at the previous one's
-output is then `unfold_overflow(f, where=f.forward(c))`: a `Block` means "every
-candidate inside this region", which is `where=None` scoped to a region rather
-than a new idea. It handles `float_to_fixed`'s two roundings in one call, and it
-is what keeps forwarding free of per-transform successor logic.
+**`where` accepts a region, and a region means *at or beneath*.** A cursor or
+region names a program point, and a rewrite takes every candidate at or under it
+— `where=None` scoped to a subtree rather than a new idea. The at-or-beneath part
+is load-bearing, not a generalization: the statement a rewrite leaves behind is a
+*wrapper* (`unfold_special` emits `with REAL: if isnan(x): … else: <the
+rounding>`), so the forwarded site is one level above the next operator's site.
+Selecting only the named statement makes the second step of every schedule a bad
+reference; selecting beneath it makes one pinned cursor aim the whole sequence.
+It also handles `float_to_fixed`'s two roundings in one call, and keeps forwarding
+free of per-transform successor logic.
 
 **The chain lives on `Function`.** `Function` (`fpy2/function.py`) gains a parent
 link plus the log that produced it, so `f3.forward(cursor_from_f0)` walks the
@@ -76,11 +81,10 @@ rebased on entry and a schedule pins a point once. Same here, with one placement
 difference — the rebase belongs in the strategy wrappers, since a transform is
 handed a bare `FuncDef` and has no chain to walk, while `Function` does.
 
-**No path tracking inside the visitors.** A cursor resolves against the very tree
-the visitor is about to walk, so a transform matches with
-`block is target_block and idx == target_idx` — identity is valid *within* one
-traversal. Paths are needed only at the boundaries: one helper walks a `FuncDef`
-and returns `{id(block): path}`, used to write the log and to resolve a cursor.
+**No path tracking inside the visitors.** One helper walks a `FuncDef` and
+returns `{id(block): path}`; a transform looks up the block it is visiting and
+compares paths with what the cursor names — a prefix test, which is also what
+makes *at or beneath* a one-liner. Nothing threads a path through the visit.
 
 ## Phases
 
@@ -152,16 +156,18 @@ rewrite that grew its block; a single-statement image forwarding to a `Cursor`;
 
 ### Phase 4 — `where` accepts a cursor and a region
 
-`check_where` (`fpy2/transform/utils/`) accepts `int | Cursor | Block`;
-`BlockRewriter` matches by identity against the resolved `(block, index)`, and a
-`Block` scopes the apply-everywhere walk to a region. The strategy wrappers
-forward a cursor from an ancestor program before handing it down, so a schedule
-aims the whole sequence with one cursor variable — declines inside it are
+`check_where` (`fpy2/transform/utils/`) accepts `int | Cursor | Block`, and
+`BlockRewriter._selects` takes every candidate at or beneath what the cursor or
+region names. The strategy wrappers call `Function.rebase` to forward a cursor
+from an ancestor program before handing it down, so a schedule aims the whole
+sequence with one cursor variable — declines inside it are
 skipped, as under `where=None`. A cursor owned by another program, one whose path
 no longer resolves, and one resolving to a statement that is not a candidate are
 all `TransformReferenceError` — item 1's "does not point at anything" covers all
-three. The five strategy wrappers take `where: int | Cursor | Block` and say so in
-`Parameters` and `Raises`.
+three, and a region whose every candidate declines is a `TransformDeclined`
+carrying the reasons — an explicit aim never silently no-ops. The five strategy
+wrappers spell the type out rather than sharing an alias, since phase 5's
+transforms need not accept the same forms.
 
 Split from phase 3 deliberately: produce, then consume.
 

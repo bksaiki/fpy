@@ -79,11 +79,12 @@ from ..number import (
 )
 from ..utils import CompareOp, Gensym
 from .utils import (
+    Block,
     BlockRewriter,
+    Cursor,
     Declined,
     EditLog,
     agrees,
-    check_site,
     check_where,
     fixed_probes,
     rounding_block,
@@ -180,12 +181,12 @@ class _UnfoldNegZeroInstance(BlockRewriter):
     func: FuncDef
     eval_info: PartialEvalInfo
     gensym: Gensym
-    where: int | None
+    where: int | Cursor | Block | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -293,7 +294,7 @@ class UnfoldNegZero:
     @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
@@ -313,7 +314,7 @@ class UnfoldNegZero:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         eval_info: PartialEvalInfo | None = None,
     ) -> EditLog:
         """:meth:`apply`, with the record of what it replaced; the
@@ -327,5 +328,5 @@ class UnfoldNegZero:
 
         vtor = _UnfoldNegZeroInstance(func, eval_info, where)
         out = vtor.apply()
-        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        vtor.check_site('a candidate rounding block')
         return EditLog(func, out, tuple(vtor.edits))

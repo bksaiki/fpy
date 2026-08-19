@@ -131,12 +131,13 @@ from ..number import (
 )
 from ..utils import CompareOp, Gensym
 from .utils import (
+    Block,
     BlockRewriter,
+    Cursor,
     Declined,
     EditLog,
     TransformDeclined,
     attribute,
-    check_site,
     check_where,
     number_literal,
     rounding_block,
@@ -365,12 +366,12 @@ class _FloatToFixedInstance(BlockRewriter):
     class_info: ValueClassAnalysis
     gensym: Gensym
     alias: str | None
-    where: int | None
+    where: int | Cursor | Block | None
     site_idx: int
 
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
-        class_info: ValueClassAnalysis, where: int | None = None,
+        class_info: ValueClassAnalysis, where: int | Cursor | Block | None = None,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -542,7 +543,7 @@ class FloatToFixed:
     @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
@@ -564,7 +565,7 @@ class FloatToFixed:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:
@@ -588,5 +589,5 @@ class FloatToFixed:
 
         vtor = _FloatToFixedInstance(func, eval_info, class_info, where)
         out = vtor.apply()
-        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        vtor.check_site('a candidate rounding block')
         return EditLog(func, out, tuple(vtor.edits))

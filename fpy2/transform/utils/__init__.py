@@ -215,10 +215,12 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     )
 
 
-def check_where(where: int | None) -> None:
-    """Rejects a `where` that is not an index."""
-    if where is not None and not isinstance(where, int):
-        raise TypeError(f'expected an \'int\' or None for where, got `{where}`')
+def check_where(where: int | Cursor | Block | None) -> None:
+    """Rejects a `where` that names nothing of the kind."""
+    if where is not None and not isinstance(where, (int, Cursor, Block)):
+        raise TypeError(
+            f'expected an \'int\', \'Cursor\', \'Block\' or None for where, got `{where}`'
+        )
 
 
 def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
@@ -247,14 +249,16 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
     return args
 
 
-def check_site(where: int | None, count: int, what: str) -> None:
-    """Rejects an explicit `where` that named no candidate: fail rather
-    than silently no-op.  `count` must be the true candidate count."""
-    if where is not None and not (0 <= where < count):
-        raise TransformReferenceError(
-            f'where={where} does not correspond to {what}; '
-            f'the function has {count} candidate site(s)'
-        )
+def _target_of(where: int | Cursor | Block | None, func: FuncDef) -> tuple[Path, range] | None:
+    """The block path and indices an explicit cursor or region names."""
+    if where is None or isinstance(where, int):
+        return None
+    if where.func is not func:
+        raise TransformReferenceError(f'`{where}` names a statement of another program')
+    if isinstance(where, Cursor):
+        where.resolve()  # a cursor of this program still has to name something
+        return where.block_path, range(where.index, where.index + 1)
+    return where.block_path, where.span
 
 
 @dataclass(frozen=True)
@@ -269,26 +273,53 @@ class BlockRewriter(DefaultTransformVisitor):
 
     A subclass says which blocks structurally match (`_candidate`), whether a
     match may be rewritten (`_verify`), and what to put in its place
-    (`_rewrite`).  `where` picks one candidate by index, in visit order,
-    outermost-first; `None` takes them all.  A candidate `_verify` declines
-    is skipped under `None` and raises :class:`TransformDeclined` where an
-    explicit `where` names it.
+    (`_rewrite`).  `where` aims the rewrite: an index picks one candidate,
+    counting in visit order, outermost-first; a :class:`Cursor` or
+    :class:`Block` picks every candidate at or beneath the program point it
+    names; `None` takes them all.  A candidate `_verify` declines is skipped,
+    except that an index naming one raises :class:`TransformDeclined`, as does
+    a cursor or region whose candidates *all* declined.
 
     Every rewrite is recorded in `edits`, which is what forwards a cursor
     across the pass.  The record is structural -- a statement span replaced by
     another -- so no subclass says anything about it.
     """
 
-    where: int | None
+    where: int | Cursor | Block | None
     site_idx: int
     edits: list[Edit]
+    declined: list[str]
+    _matched: int
     _paths: dict[int, Path]
+    _target: tuple[Path, range] | None
+    """the block and indices an explicit cursor or region names"""
 
     def _visit_function(self, func: FuncDef, ctx):
-        # the edits name blocks of *this* tree, so both are set up here
+        # the edits and the target name nodes of *this* tree, so both are
+        # resolved here, against the tree about to be walked
         self.edits = []
+        self.declined = []
+        self._matched = 0
         self._paths = block_paths(func)
+        self._target = _target_of(self.where, func)
         return super()._visit_function(func, ctx)
+
+    def check_site(self, what: str) -> None:
+        """Rejects an explicit `where` that named no candidate, or a region
+        where every candidate declined: fail rather than silently no-op."""
+        where = self.where
+        if where is None:
+            return
+        if isinstance(where, int):
+            if not 0 <= where < self.site_idx:
+                raise TransformReferenceError(
+                    f'where={where} does not correspond to {what}; '
+                    f'the function has {self.site_idx} candidate site(s)'
+                )
+        elif self._matched == 0:
+            raise TransformReferenceError(f'`{where}` does not name {what}')
+        elif not self.edits:
+            raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
 
     def _candidate(self, stmt: ContextStmt):
         """What `_verify` needs for this block, or `None` where it does not
@@ -304,6 +335,27 @@ class BlockRewriter(DefaultTransformVisitor):
         """The statements that replace `stmt`."""
         raise NotImplementedError
 
+    def _selects(self, block: StmtBlock, pos: int, idx: int) -> bool:
+        """Whether the candidate at `block[pos]`, the `idx`th of the program,
+        is one this rewrite is aimed at.
+
+        A cursor or region names a piece of program, and the candidates it
+        selects are the ones *at or beneath* it -- which is what makes a
+        forwarded site usable: the statement a rewrite leaves behind is a
+        wrapper, and the next operator's site sits inside it.
+        """
+        if self._target is None:
+            return self.where is None or idx == self.where
+
+        path, span = self._target
+        here = self._paths.get(id(block))
+        if here is None:
+            return False  # a block the rewrite synthesized, not one it was aimed at
+        if here == path:
+            return pos in span
+        n = len(path)
+        return len(here) > n and here[:n] == path and here[n] in span
+
     def _visit_block(self, block: StmtBlock, ctx):
         # a rewritten block expands into several statements, so the splice
         # happens here rather than in `_visit_context`
@@ -314,14 +366,16 @@ class BlockRewriter(DefaultTransformVisitor):
                 if info is not None:
                     idx = self.site_idx
                     self.site_idx += 1
-                    if self.where is None or idx == self.where:
+                    if self._selects(block, pos, idx):
+                        self._matched += 1
                         verified = self._verify(s, info)
                         if isinstance(verified, Declined):
-                            if self.where is not None:
+                            self.declined.append(verified.reason)
+                            if isinstance(self.where, int):
                                 raise TransformDeclined(
                                     f'where={idx}: {verified.reason}'
                                 )
-                            # apply-everywhere skips a declined candidate
+                            # a region, or the whole program, skips it
                         else:
                             emitted = self._rewrite(s, verified)
                             self.edits.append(

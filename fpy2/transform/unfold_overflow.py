@@ -129,12 +129,13 @@ from ..number import (
 )
 from ..utils import CompareOp, Gensym
 from .utils import (
+    Block,
     BlockRewriter,
+    Cursor,
     Declined,
     EditLog,
     agrees,
     attribute,
-    check_site,
     check_where,
     number_literal,
     rounding_block,
@@ -431,7 +432,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
     eval_info: PartialEvalInfo
     class_info: ValueClassAnalysis
     gensym: Gensym
-    where: int | None
+    where: int | Cursor | Block | None
     early_check: bool
     alias: str | None
     used_alias: bool
@@ -440,7 +441,7 @@ class _UnfoldOverflowInstance(BlockRewriter):
     def __init__(
         self, func: FuncDef, eval_info: PartialEvalInfo,
         class_info: ValueClassAnalysis,
-        where: int | None = None, early_check: bool = False,
+        where: int | Cursor | Block | None = None, early_check: bool = False,
     ):
         self.func = func
         self.eval_info = eval_info
@@ -589,7 +590,7 @@ class UnfoldOverflow:
     @staticmethod
     def apply(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
@@ -615,7 +616,7 @@ class UnfoldOverflow:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
-        where: int | None = None,
+        where: int | Cursor | Block | None = None,
         early_check: bool = False,
         eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
@@ -633,5 +634,5 @@ class UnfoldOverflow:
 
         vtor = _UnfoldOverflowInstance(func, eval_info, class_info, where, early_check)
         out = vtor.apply()
-        check_site(where, vtor.site_idx, 'a candidate rounding block')
+        vtor.check_site('a candidate rounding block')
         return EditLog(func, out, tuple(vtor.edits))

@@ -128,6 +128,18 @@ class Function(Generic[P, R]):
             raise ValueError('edit log was not produced from this program')
         return Function(log.result, runtime=self.runtime, parent=self, edits=log)
 
+    def rebase(self, where):
+        """A `where` aimed at this program.
+
+        A cursor or region from an ancestor is forwarded, so a schedule pins a
+        point once and keeps aiming at it; anything else passes through.
+        """
+        from .transform.utils.cursor import Block, Cursor
+
+        if isinstance(where, (Cursor, Block)):
+            return self.forward(where)
+        return where
+
     def forward(self, cursor: 'Cursor | Block') -> 'Cursor | Block':
         """*cursor*, in this program.
 
