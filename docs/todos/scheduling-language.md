@@ -25,8 +25,7 @@ The contract is the two-kind taxonomy every surveyed system converged on (Exo 2:
 - **bad reference** — the `where` (later: cursor) does not point at anything.
 - anything else is a bug and propagates.
 
-**Done** — the phase record lives in
-[failure-contract.md](failure-contract.md). Still outside the hierarchy,
+**Done.** Still outside the hierarchy,
 deliberately: `monomorphize`'s conflict errors (caller-supplied
 contradictions, not references) and the STRICT-divisibility `ValueError`s in
 `split`/`unroll_for`, which are declined-shaped but uncatchable via
