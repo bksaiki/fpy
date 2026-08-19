@@ -9,8 +9,11 @@ from .subst import Subst
 
 
 class SubstitutionError(Exception):
-    """
-    Exception raised when a substitution fails.
+    """A rule whose replacement names a variable its pattern never bound.
+
+    Deliberately outside the :class:`TransformError` hierarchy: this is a
+    malformed *rule*, not a bad reference to a place in a program, so a
+    try/fallback schedule should not catch it.
     """
 
     def __init__(self, message: str):

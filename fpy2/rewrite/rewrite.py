@@ -4,6 +4,7 @@ This module defines a rewrite rule.
 
 from ..ast import *
 from ..function import Function
+from ..transform import TransformReferenceError
 from ..utils import default_repr, sliding_window
 from .applier import Applier
 from .matcher import Matcher
@@ -59,7 +60,7 @@ class _RewriteEngine(DefaultTransformVisitor):
         # apply the rewrite rule
         options = _RewriteContext(occurence, repeat)
         ast = self._visit_function(func, options)
-        return ast, self.times_applied
+        return ast, self.times_applied, options.times_matched
 
     def _nested_applier(self, num_times: int):
         if num_times == 1:
@@ -149,14 +150,6 @@ class _RewriteEngine(DefaultTransformVisitor):
             return block, None
 
 
-class RewriteError(Exception):
-    """Exception raised when a rewrite rule fails to apply."""
-
-    def __init__(self, message: str):
-        super().__init__(message)
-        self.message = message
-
-
 @default_repr
 class Rewrite:
     """A rewrite rule from L to R."""
@@ -210,9 +203,11 @@ class Rewrite:
         if repeat < 1:
             raise ValueError(f'Expected positive integer, got {repeat}')
 
-        ast, times_applied = self._engine.apply(func.ast, occurence=occurence, repeat=repeat)
-        if times_applied == 0:
-            raise RewriteError(f'could not apply rewrite rule: {self.lhs.format()} => {self.rhs.format()}')
+        ast, applied, matched = self._engine.apply(
+            func.ast, occurence=occurence, repeat=repeat
+        )
+        if applied == 0:
+            raise self._no_match(func, matched, occurence)
         return func.with_ast(ast)
 
 
@@ -225,7 +220,21 @@ class Rewrite:
         if not isinstance(func, Function):
             raise TypeError(f'Expected \'Function\', got {type(func)}')
 
-        ast, times_applied = self._engine.apply(func.ast)
-        if times_applied == 0:
-            raise RewriteError(f'could not apply rewrite rule: {self.lhs} => {self.rhs}')
+        ast, applied, matched = self._engine.apply(func.ast)
+        if applied == 0:
+            raise self._no_match(func, matched, None)
         return func.with_ast(ast)
+
+    def _no_match(
+        self, func: Function, matched: int, occurence: int | None
+    ) -> TransformReferenceError:
+        """Why nothing was rewritten: the pattern named no place, or the
+        occurrence index named no match."""
+        if matched == 0:
+            return TransformReferenceError(
+                f'pattern `{self.lhs.name}` matches nothing in `{func.name}`'
+            )
+        return TransformReferenceError(
+            f'occurence={occurence} does not correspond to a match of '
+            f'`{self.lhs.name}`; it matches {matched} place(s) in `{func.name}`'
+        )

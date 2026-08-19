@@ -141,10 +141,21 @@ error a user will actually hit.
 
 ### Phase 3 — one failure contract
 
-`RewriteError` joins the hierarchy: a rewrite whose pattern matches nothing is a
-`TransformReferenceError` ("names no match"), and one that matches but cannot be
-applied is `TransformDeclined` with the reason. Keep the name as an alias if
-anything depends on it, but `except TransformError` must catch both.
+`RewriteError` is *gone*, not aliased: nothing outside `fpy2/rewrite/` referenced
+it, and it named who raised it rather than what happened — the per-layer
+vocabulary item 1 removed. A rewrite that named no place raises
+`TransformReferenceError`, in two distinguishable forms: the pattern matched
+nothing, or the occurrence index named no match (the engine already counted, so
+the message says which and how many).
+
+No `TransformDeclined` producer here yet. Nothing in `Rewrite` refuses on
+semantic grounds, because nothing verifies it — that arrives with verification, if
+it does.
+
+`SubstitutionError` stays *outside* the hierarchy, with its reason written down: a
+replacement naming variables the pattern never binds is a malformed rule, not a
+bad reference to a program, so a try/fallback schedule must not swallow it. Same
+call item 1 made for `monomorphize`'s conflicts.
 
 Small, and it is what lets a user rewrite sit inside a `try`/fallback beside a
 built-in.
@@ -220,6 +231,11 @@ carries a public naming decision with it. Phase 3 is what answers it: if a *user
 rewrite* raising `TransformReferenceError` reads right once rewrites are in the
 hierarchy, the names stay; if it reads wrong, the neutral name is chosen with
 evidence rather than guessed now.
+
+**Answered by phase 3: the names stay.** A user rewrite raising
+`TransformReferenceError` reads correctly — the prefix describes the kind of
+failure, not the package, and the class name never appears in the message. So the
+reorg is a file move, not a rename.
 
 Cheap preparation, whenever: the eleven `strategies/*.py` modules import `Cursor`
 from `..transform.utils.cursor`; importing it from `..transform` — the package's
