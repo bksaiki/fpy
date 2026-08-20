@@ -4,7 +4,7 @@ A reference to a statement that survives the rewrites around it.
 Every transform is a :class:`DefaultTransformVisitor`, which rebuilds every node
 it visits, so node identity dies at the first rewrite and cannot be the
 reference.  A cursor is a *path* instead -- see
-:mod:`~fpy2.transform.utils.path` for the shape.
+:mod:`~fpy2.transform.path` for the shape.
 
 A cursor is owned by one program version -- it holds the :class:`FuncDef` it
 resolved against -- so aiming it at another program is a bad reference rather
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import TypeAlias
 
-from ...ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
+from ..ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
 from .error import TransformReferenceError
 from .path import (
     BlockPath,
@@ -32,7 +32,7 @@ from .path import (
     resolve_block,
     resolve_expr,
     resolve_stmt,
-    sub_exprs,
+    walk_exprs,
     walk_stmts,
 )
 
@@ -340,6 +340,17 @@ def _under_expr(path: ExprPath, ancestor: ExprPath) -> bool:
     return False
 
 
+def contains(outer: Cursor, inner: Cursor) -> bool:
+    """Whether *inner* lies at or beneath *outer*, both of one program.
+
+    Raises where *outer* is an expression and *inner* a statement.
+    """
+    keep = _restrict(inner.func, outer, stmts=not isinstance(inner, ExprCursor))
+    if isinstance(inner, BlockCursor):
+        return all(keep(StmtPath(inner.block_path, i)) for i in inner.span)
+    return keep(inner.path)
+
+
 def stmt_sites(
     func: FuncDef,
     match: Callable[[Stmt], bool],
@@ -369,18 +380,11 @@ def expr_sites(
     before the blocks it holds -- the order a visitor reaches them in.
     """
     keep = _restrict(func, within, stmts=False)
-    out: list[ExprCursor] = []
-
-    def walk(path: ExprPath, e: Expr) -> None:
-        if match(e) and keep(path):
-            out.append(ExprCursor(func, path))
-        for field, index, sub in sub_exprs(e):
-            walk(path.expr(field, index), sub)
-
-    for stmt_path, stmt in walk_stmts(func):
-        for field, index, e in sub_exprs(stmt):
-            walk(stmt_path.expr(field, index), e)
-    return out
+    return [
+        ExprCursor(func, path)
+        for path, e in walk_exprs(func)
+        if match(e) and keep(path)
+    ]
 
 
 def _overlaps(a: Edit, b: Edit) -> bool:

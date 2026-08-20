@@ -3,8 +3,7 @@ Scheduling language: overflow as program text
 """
 
 from ..function import Function
-from ..transform import UnfoldOverflow
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, UnfoldOverflow
 
 
 def unfold_overflow(

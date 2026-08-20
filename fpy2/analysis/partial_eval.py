@@ -231,10 +231,7 @@ class _PartialEvalInstance(DefaultVisitor):
             self._record(e, self._try_eval(e_eval, ctx))
 
     def _visit_call(self, e: Call, ctx: Context | None):
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
-        for _, v in e.kwargs:
-            self._visit_expr(v, ctx)
+        super()._visit_call(e, ctx)
         if (
             ctx is not None
             and isinstance(e.fn, type)

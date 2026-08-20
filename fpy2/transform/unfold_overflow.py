@@ -128,12 +128,10 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
+from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
     BlockRewriter,
-    Cursor,
     Declined,
-    EditLog,
-    StmtCursor,
     agrees,
     attribute,
     check_where,
@@ -143,7 +141,6 @@ from .utils import (
     same_value,
     shift,
     sign_choice,
-    stmt_sites,
     try_round,
     value_literal,
 )

@@ -11,7 +11,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..fpc_context import FPCoreContext
 from ..types import *
-from .utils import EditLog
+from .cursor import EditLog
 
 
 def _merge_length(a: int | NamedId | None, b: int | NamedId | None) -> int | NamedId | None:

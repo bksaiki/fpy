@@ -1,9 +1,10 @@
 """
-The errors a transform raises as part of its contract.
+The failures of a rewrite, as part of its contract.
 
-One hierarchy serves both layers: the transforms raise these directly, and
-:mod:`fpy2.strategies` re-exports them, so a caller catches the same
-exception whether it applied a strategy or a raw transform.
+One hierarchy for every layer that rewrites: :mod:`fpy2.transform` and
+:mod:`fpy2.rewrite` raise these directly and :mod:`fpy2.strategies` re-exports
+them, so one `except` covers a strategy, a raw transform and a user rewrite
+alike.
 """
 
 
@@ -20,4 +21,4 @@ class TransformDeclined(TransformError):
 
 
 class TransformReferenceError(TransformError):
-    """A `where` that named no candidate site."""
+    """A reference -- a `where`, a cursor, a path -- that names no such place."""

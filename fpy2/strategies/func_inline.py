@@ -5,8 +5,7 @@ Scheduling language: function inlining
 from collections.abc import Iterable
 
 from ..function import Function
-from ..transform import FuncInline
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, FuncInline
 
 
 def inline(

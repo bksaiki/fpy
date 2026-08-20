@@ -2,11 +2,21 @@
 This module defines pattern matching facilities for FPy AST.
 """
 
+from dataclasses import dataclass
 from fractions import Fraction
 
 from ..ast import *
 from ..function import Function
 from ..number import Float
+from ..transform import (
+    BlockCursor,
+    Cursor,
+    ExprCursor,
+    StmtCursor,
+    StmtPath,
+    walk_blocks,
+    walk_exprs,
+)
 from ..utils import default_repr, sliding_window
 from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst
@@ -33,34 +43,18 @@ class _MatchFailure(Exception):
         super().__init__(msg)
         self.msg = msg
 
-class LocatedMatch:
-    """Result of a pattern match."""
+@dataclass(frozen=True)
+class Match:
+    """Where a pattern matched, and what its variables bound to.
+
+    The cursor's kind is the pattern's kind: an :class:`ExprCursor` for an
+    expression pattern, a :class:`StmtCursor` or :class:`BlockCursor` for a
+    statement pattern of one or several statements.
+    """
+
     pattern: Pattern
     subst: Subst
-
-    def __init__(self, pattern: Pattern, subst: Subst):
-        self.pattern = pattern
-        self.subst = subst
-
-@default_repr
-class ExprMatch(LocatedMatch):
-    """Result of pattern matching on an expression."""
-    expr: Expr
-
-    def __init__(self, pattern: Pattern, subst: Subst, expr: Expr):
-        super().__init__(pattern, subst)
-        self.expr = expr
-
-@default_repr
-class StmtMatch(LocatedMatch):
-    """Result of a pattern match: a location and a substitution."""
-    block: StmtBlock
-    idx: int
-
-    def __init__(self, pattern: Pattern, subst: Subst, block: StmtBlock, idx: int):
-        super().__init__(pattern, subst)
-        self.block = block
-        self.idx = idx
+    cursor: Cursor
 
 
 class _MatcherInst(Visitor):
@@ -79,26 +73,22 @@ class _MatcherInst(Visitor):
         self.ast = ast
         self.subst = Subst()
 
-    def match(self):
-        """
-        Attempts to match the pattern against the program slice.
-        Produces a `LocatedMatch` either `ExprMatch` or `StatementMatch`
-        depending on the kind of pattern.
-        """
+    def match(self) -> Subst | None:
+        """What the pattern's variables bind to here, or `None` where it does
+        not match."""
         try:
             match self.pattern:
                 case ExprPattern():
                     if not isinstance(self.ast, Expr):
-                        raise TypeError(f'Expected \'Expr\', got {type(self.ast)} for {self.ast}')    
+                        raise TypeError(f'Expected \'Expr\', got {type(self.ast)} for {self.ast}')
                     self._visit_expr(self.ast, self.pattern.expr)
-                    return ExprMatch(self.pattern, self.subst, self.ast)
                 case StmtPattern():
                     if not isinstance(self.ast, StmtBlock):
                         raise TypeError(f'Expected \'StmtBlock\', got {type(self.ast)} for {self.ast}')
                     self._visit_block(self.ast, self.pattern.block)
-                    return StmtMatch(self.pattern, self.subst, self.ast, 0)
                 case _:
                     raise RuntimeError(f'unreachable case: {self.pattern}')
+            return self.subst
         except _MatchFailure as _:
             # match failed
             return None
@@ -393,60 +383,35 @@ class _MatcherInst(Visitor):
         return super()._visit_statement(stmt, pat)
 
 
-class _ExprMatcherEngine(DefaultVisitor):
-    """FPy pattern matching for expression patterns"""
-    pattern: ExprPattern
-    func: FuncDef
-    matches: list[ExprMatch]
+def _match_exprs(pattern: ExprPattern, func: FuncDef) -> list[Match]:
+    """Every expression of *func* the pattern matches, outermost first."""
+    out: list[Match] = []
+    for path, e in walk_exprs(func):
+        subst = _MatcherInst(pattern, e).match()
+        if subst is not None:
+            out.append(Match(pattern, subst, ExprCursor(func, path)))
+    return out
 
-    def __init__(self, pattern: ExprPattern, func: FuncDef):
-        self.pattern = pattern
-        self.func = func
-        self.matches = []
 
-    def run(self) -> list[ExprMatch]:
-        self._visit_function(self.func, None)
-        return self.matches
+def _match_stmts(pattern: StmtPattern, func: FuncDef) -> list[Match]:
+    """Every run of statements the pattern matches: a window of *k* consecutive
+    statements, at every position of every block.
 
-    def _visit_expr(self, e: Expr, ctx: None):
-        m = _MatcherInst(self.pattern, e)
-        pmatch = m.match()
-        if pmatch is not None:
-            if not isinstance(pmatch, ExprMatch):
-                raise TypeError(f'Expected \'ExprMatch\', got {type(pmatch)} for {pmatch}')
-            self.matches.append(pmatch)
-        super()._visit_expr(e, ctx)
-
-class _StmtMatcherEngine(DefaultVisitor):
-    """FPy pattern matching for statement patterns"""
-    pattern: StmtPattern
-    func: FuncDef
-    matches: list[StmtMatch]
-
-    def __init__(self, pattern: StmtPattern, func: FuncDef):
-        self.pattern = pattern
-        self.func = func
-        self.matches = []
-
-    def run(self) -> list[StmtMatch]:
-        self._visit_function(self.func, None)
-        return self.matches
-
-    def _visit_block(self, block: StmtBlock, ctx: None):
-        # pattern is a statement block of length k
-        # match on subsets of the statement block of length k
-        pattern_block = self.pattern.block
-        for i, stmts in enumerate(sliding_window(block.stmts, len(pattern_block.stmts))):
-            # check if the pattern matches
-            m = _MatcherInst(self.pattern, StmtBlock(list(stmts)))
-            pmatch = m.match()
-            if pmatch is not None:
-                if not isinstance(pmatch, StmtMatch):
-                    raise TypeError(f'Expected \'StmtMatch\', got {type(pmatch)} for {pmatch}')
-                # adjust statement index and add to matches
-                pmatch.idx = i
-                self.matches.append(pmatch)
-        super()._visit_block(block, ctx)
+    Windows overlap, so two matches can name statements in common -- fine for a
+    cursor, but a rewrite cannot apply to both.
+    """
+    k = len(pattern.block.stmts)
+    out: list[Match] = []
+    for path, block in walk_blocks(func):
+        for i, window in enumerate(sliding_window(block.stmts, k)):
+            subst = _MatcherInst(pattern, StmtBlock(list(window))).match()
+            if subst is not None:
+                cursor: Cursor = (
+                    StmtCursor(func, StmtPath(path, i)) if k == 1
+                    else BlockCursor(func, path, range(i, i + k))
+                )
+                out.append(Match(pattern, subst, cursor))
+    return out
 
 
 class Matcher:
@@ -464,27 +429,20 @@ class Matcher:
             raise TypeError(f'Expected \'Pattern\', got {type(pattern)}')
         self.pattern = pattern
 
-    def match(self, func: Function) -> list[ExprMatch] | list[StmtMatch]:
-        """
-        Pattern matches recursively over the function.
-        For each match, returns the substitution (and its location).
-        """
+    def match(self, func: Function) -> list[Match]:
+        """Every match in *func*, each with the cursor naming where it is."""
         if not isinstance(func, Function):
             raise TypeError(f'Expected \'Function\', got {type(func)}')
         match self.pattern:
             case ExprPattern():
-                return _ExprMatcherEngine(self.pattern, func.ast).run()
+                return _match_exprs(self.pattern, func.ast)
             case StmtPattern():
-                return _StmtMatcherEngine(self.pattern, func.ast).run()
+                return _match_stmts(self.pattern, func.ast)
             case _:
                 raise RuntimeError(f'unreachable case: {self.pattern}')
 
-    def match_exact(self, e: StmtBlock | Expr) -> ExprMatch | StmtMatch | None:
-        """
-        Pattern matches exactly over the function.
-        Returns the substitution or `None` if no match is found.
-        """
+    def match_exact(self, e: StmtBlock | Expr) -> Subst | None:
+        """What the pattern binds to at exactly this node, or `None`."""
         if not isinstance(e, StmtBlock | Expr):
             raise TypeError(f'Expected \'StmtBlock\' or \'Expr\', got {type(e)}')
-        m = _MatcherInst(self.pattern, e)
-        return m.match()
+        return _MatcherInst(self.pattern, e).match()

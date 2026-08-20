@@ -138,10 +138,7 @@ class _DefineUseInstance(DefaultVisitor):
         # FPCore-origin AST) has no environment binding and is not a var use.
         if e.fn is not None:
             self._visit_expr(e.func, ctx)
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
-        for _, kwarg in e.kwargs:
-            self._visit_expr(kwarg, ctx)
+        super()._visit_call(e, ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx: DefCtx):
         ctx = ctx.copy()

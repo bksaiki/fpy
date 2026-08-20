@@ -4,8 +4,9 @@ Scheduling language: listing the sites a strategy can be aimed at
 
 from collections.abc import Callable
 
-from ...function import Function
-from ...transform import (
+from ..function import Function
+from ..transform import (
+    Cursor,
     FloatToFixed,
     ForUnroll,
     FuncInline,
@@ -16,15 +17,14 @@ from ...transform import (
     UnfoldSpecial,
     WhileUnroll,
 )
-from ...transform.utils.cursor import Cursor
-from ..fixed_rescale import rescale_fixed
-from ..float_lower import float_to_fixed
-from ..func_inline import inline
-from ..loop_split import split
-from ..loop_unroll import unroll_for, unroll_while
-from ..neg_zero_unfold import unfold_neg_zero
-from ..overflow_unfold import unfold_overflow
-from ..special_unfold import unfold_special
+from .fixed_rescale import rescale_fixed
+from .float_lower import float_to_fixed
+from .func_inline import inline
+from .loop_split import split
+from .loop_unroll import unroll_for, unroll_while
+from .neg_zero_unfold import unfold_neg_zero
+from .overflow_unfold import unfold_overflow
+from .special_unfold import unfold_special
 
 _SITES: dict[Callable, Callable] = {
     unfold_special: UnfoldSpecial.sites,

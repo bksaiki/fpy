@@ -3,8 +3,7 @@ Scheduling language: special values as program text
 """
 
 from ..function import Function
-from ..transform import UnfoldSpecial
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, UnfoldSpecial
 
 
 def unfold_special(func: Function, where: int | Cursor | None = None) -> Function:

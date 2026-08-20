@@ -24,6 +24,16 @@ class Pattern(ABC):
         """Returns a string representation of the pattern."""
         ...
 
+    @abstractmethod
+    def to_ast(self) -> FuncDef:
+        """The function the pattern was written as."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """The name of the function the pattern was written as."""
+        return self.to_ast().name
+
 
 @default_repr
 class ExprPattern(Pattern):

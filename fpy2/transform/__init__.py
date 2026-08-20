@@ -4,8 +4,18 @@ This module defines compiler transforms over FPy IR.
 
 from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate
+from .cursor import (
+    BlockCursor,
+    Cursor,
+    Edit,
+    EditLog,
+    ExprCursor,
+    StmtCursor,
+    contains,
+)
 from .dead_code import DeadCodeEliminate
 from .enumerate_elim import EnumerateElim
+from .error import TransformDeclined, TransformError, TransformReferenceError
 from .float_to_fixed import FloatToFixed
 from .for_bundling import ForBundling
 from .for_unpack import ForUnpack
@@ -15,6 +25,15 @@ from .func_inline import FuncInline
 from .if_bundling import IfBundling
 from .lift_context import LiftContext
 from .monomorphize import Monomorphize
+from .path import (
+    BlockPath,
+    ExprPath,
+    FuncBody,
+    StmtPath,
+    SubBlock,
+    walk_blocks,
+    walk_exprs,
+)
 from .reduce_fusion import ReduceFusion
 from .rename_target import RenameTarget
 from .rescale_fixed import RescaleFixed
@@ -26,16 +45,7 @@ from .subst_var import SubstVar
 from .unfold_neg_zero import UnfoldNegZero
 from .unfold_overflow import UnfoldOverflow
 from .unfold_special import UnfoldSpecial
-from .utils.cursor import (
-    BlockCursor,
-    Cursor,
-    Edit,
-    EditLog,
-    ExprCursor,
-    StmtCursor,
-)
-from .utils.error import TransformDeclined, TransformError, TransformReferenceError
-from .utils.path import BlockPath, ExprPath, FuncBody, StmtPath, SubBlock
+from .utils import SiteRewriter, check_where, clone
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
 from .zip_elim import ZipElim

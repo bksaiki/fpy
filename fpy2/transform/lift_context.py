@@ -6,7 +6,8 @@ from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..utils import Gensym
-from .utils import Edit, EditLog, FuncBody
+from .cursor import Edit, EditLog
+from .path import FuncBody
 
 
 class _ContextFinder(DefaultVisitor):

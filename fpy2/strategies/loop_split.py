@@ -4,8 +4,7 @@ Scheduling language: loop split
 
 from ..ast import Expr, Integer, NamedId, Var
 from ..function import Function
-from ..transform import SplitLoop, SplitLoopStrategy
-from ..transform.utils.cursor import Cursor
+from ..transform import Cursor, SplitLoop, SplitLoopStrategy
 
 
 def split(

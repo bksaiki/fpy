@@ -21,7 +21,7 @@ from fpy2.transform import (
     StmtCursor,
     TransformReferenceError,
 )
-from fpy2.transform.utils.path import format_path, resolve_expr, sub_exprs
+from fpy2.transform.path import format_path, resolve_expr, sub_exprs
 
 
 @fp.fpy(ctx=fp.REAL)

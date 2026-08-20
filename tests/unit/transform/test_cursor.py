@@ -1,5 +1,5 @@
 """
-Unit tests for :mod:`fpy2.transform.utils.path`.
+Unit tests for :mod:`fpy2.transform.path`.
 
 A cursor is a path from the :class:`FuncDef`, so the tests pin the two
 directions -- :func:`block_paths` writes paths for the blocks a visitor holds,
@@ -19,12 +19,17 @@ from fpy2.transform import (
     SubBlock,
     TransformReferenceError,
 )
-from fpy2.transform.utils.path import (
+from fpy2.ast.visitor import DefaultTransformVisitor
+from fpy2.transform.path import (
     block_paths,
     format_path,
     resolve_block,
+    resolve_expr,
     resolve_stmt,
     sub_blocks,
+    walk_blocks,
+    walk_exprs,
+    walk_stmts,
 )
 
 
@@ -100,6 +105,74 @@ def test_sub_blocks():
     assert sub_blocks(resolve_stmt(ast, FuncBody().stmt(0))) == ()
     fields = [f for f, _ in sub_blocks(resolve_stmt(ast, FuncBody().stmt(1)))]
     assert fields == ['ift', 'iff']
+
+
+# ----------------------------------------------------------------------
+# The walks agree with the visitor
+
+
+@fp.fpy(ctx=fp.REAL)
+def busy(x: fp.Real, xs: list[fp.Real], n: fp.Real) -> fp.Real:
+    a = x * 2 + 1
+    acc = 0.0
+    for v in xs[0:3]:
+        with fp.MPBFixedContext(-4, 1024, overflow=fp.OverflowMode.WRAP):
+            acc = fp.round(acc + v * a)
+    if x > 0:
+        b = min(x, n)
+    else:
+        b = -x
+    i = 0.0
+    while i < n:
+        i = i + 1
+    ys = [v * 2 for v in xs]
+    assert len(ys) >= 0, 'nonneg'
+    return acc + b + i + a
+
+
+class _Recorder(DefaultTransformVisitor):
+    """What the visitor reaches, in the order it reaches it.
+
+    The *transform* visitor: the traversal every rewrite is built on, so the
+    one a path has to agree with.
+    """
+
+    def __init__(self):
+        self.exprs: list = []
+        self.stmts: list = []
+        self.blocks: list = []
+
+    def _visit_expr(self, e, ctx):
+        self.exprs.append(e)
+        return super()._visit_expr(e, ctx)
+
+    def _visit_statement(self, s, ctx):
+        self.stmts.append(s)
+        return super()._visit_statement(s, ctx)
+
+    def _visit_block(self, b, ctx):
+        self.blocks.append(b)
+        return super()._visit_block(b, ctx)
+
+
+def test_the_walks_agree_with_the_visitor():
+    """`sub_blocks` / `sub_exprs` name the fields the visitor descends through
+    without naming, so the two must encode the same tree shape and order."""
+    seen = _Recorder()
+    seen._visit_function(busy.ast, None)
+
+    assert [e for _, e in walk_exprs(busy.ast)] == seen.exprs
+    assert [s for _, s in walk_stmts(busy.ast)] == seen.stmts
+    assert [b for _, b in walk_blocks(busy.ast)] == seen.blocks
+
+
+def test_every_walked_path_resolves_to_what_was_walked():
+    for path, e in walk_exprs(busy.ast):
+        assert resolve_expr(busy.ast, path) is e
+    for path, s in walk_stmts(busy.ast):
+        assert resolve_stmt(busy.ast, path) is s
+    for path, b in walk_blocks(busy.ast):
+        assert resolve_block(busy.ast, path) is b
 
 
 # ----------------------------------------------------------------------

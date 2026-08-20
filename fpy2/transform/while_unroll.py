@@ -4,14 +4,8 @@ Unroller for `while` loops.
 
 from ..analysis import SyntaxCheck
 from ..ast.fpyast import *
-from .utils import (
-    Cursor,
-    EditLog,
-    SiteRewriter,
-    StmtCursor,
-    check_where,
-    stmt_sites,
-)
+from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .utils import SiteRewriter, check_where
 
 
 class _WhileUnroll(SiteRewriter):

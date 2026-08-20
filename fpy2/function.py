@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from .interpret import Interpreter
 
     # `transform` imports `function` too (see `forward`)
-    from .transform.utils.cursor import Cursor, EditLog
+    from .transform import Cursor, EditLog
 
 P = ParamSpec('P')
 R = TypeVar('R')
@@ -128,7 +128,7 @@ class Function(Generic[P, R]):
     def rebase(self, where):
         """A `where` aimed at this program: a cursor from an ancestor is
         forwarded, anything else passes through."""
-        from .transform.utils.cursor import Cursor
+        from .transform import Cursor
 
         # `Cursor` is a union of the kinds, which `isinstance` accepts
         if isinstance(where, Cursor):
@@ -142,7 +142,7 @@ class Function(Generic[P, R]):
         reported.  A pass that reported nothing stops the walk rather than
         guessing the cursor survived.
         """
-        from .transform.utils.error import TransformReferenceError
+        from .transform import TransformReferenceError
 
         logs: list[EditLog | None] = []
         f: Function | None = self

@@ -8,18 +8,19 @@ inside it; one from an earlier program is forwarded to this one first.
 :func:`sites` lists what a `where` may name.
 """
 
-from ..transform.utils.cursor import BlockCursor, Cursor, ExprCursor, StmtCursor
-from ..transform.utils.error import (
+from ..transform import (
+    BlockCursor,
+    BlockPath,
+    Cursor,
+    ExprCursor,
+    ExprPath,
+    FuncBody,
+    StmtCursor,
+    StmtPath,
+    SubBlock,
     TransformDeclined,
     TransformError,
     TransformReferenceError,
-)
-from ..transform.utils.path import (
-    BlockPath,
-    ExprPath,
-    FuncBody,
-    StmtPath,
-    SubBlock,
 )
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
@@ -35,8 +36,8 @@ from .overflow_unfold import unfold_overflow
 from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .simple import simplify
+from .sites import sites
 from .special_unfold import unfold_special
-from .utils.sites import sites
 
 __all__ = [
     'BlockCursor',

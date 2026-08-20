@@ -148,10 +148,7 @@ class _ContextUseInstance(DefaultVisitor):
         self._record_use(e, scope)
 
     def _visit_call(self, e: Call, scope: ContextScope):
-        for arg in e.args:
-            self._visit_expr(arg, scope)
-        for _, kwarg in e.kwargs:
-            self._visit_expr(kwarg, scope)
+        super()._visit_call(e, scope)
         self._record_use(e, scope)
 
     # ------------------------------------------------------------------

@@ -1,5 +1,5 @@
 """
-Unit tests for the edit log and forwarding (:mod:`fpy2.transform.utils.cursor`).
+Unit tests for the edit log and forwarding (:mod:`fpy2.transform.cursor`).
 
 No transform is involved: each test pairs two hand-written programs with an
 :class:`EditLog` describing the difference, so the forwarding rules are pinned

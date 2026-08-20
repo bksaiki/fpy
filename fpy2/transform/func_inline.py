@@ -20,17 +20,10 @@ from ..env import ForeignEnv
 from ..function import Function
 from ..number import REAL
 from ..utils import Gensym
+from .cursor import Cursor, Edit, EditLog, ExprCursor, expr_sites
+from .path import StmtPath
 from .rename_target import RenameTarget
-from .utils import (
-    Cursor,
-    Edit,
-    EditLog,
-    ExprCursor,
-    SiteRewriter,
-    StmtPath,
-    check_where,
-    expr_sites,
-)
+from .utils import SiteRewriter, check_where
 
 
 def _replace_ret(block: StmtBlock, new_var: NamedId):
@@ -106,10 +99,9 @@ class _FuncInline(SiteRewriter):
             # not a candidate for inlining
             return super()._visit_call(e, ctx)
 
-        block, pos = self._site
         idx = self.site_idx
         self.site_idx += 1
-        if not self._selects_expr(e, block, pos, idx):
+        if not self._selects_expr(e, idx):
             # a candidate site, but not the selected one
             return super()._visit_call(e, ctx)
         self._matched += 1

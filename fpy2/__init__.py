@@ -19,7 +19,17 @@ These number systems guarantee correct rounding via MPFR.
 # base library
 # standard library
 # submodules
-from . import analysis, ast, libraries, number, strategies, transform, types, utils
+from . import (
+    analysis,
+    ast,
+    libraries,
+    number,
+    rewrite,
+    strategies,
+    transform,
+    types,
+    utils,
+)
 
 # compiler
 from .backend import (
@@ -40,6 +50,7 @@ from .libraries.base import *
 
 # module
 from .module import Module, ModuleCallGraph, ModuleEntry
+from .rewrite import Rewrite, find, find_all
 
 # runner
 from .runner import Runner, RunnerWorkerTask
