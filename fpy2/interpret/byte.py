@@ -9,7 +9,7 @@ import inspect
 import sys
 from collections.abc import Callable
 from fractions import Fraction
-from typing import Any, TypeAlias
+from typing import Any
 
 from .. import ops
 from ..analysis.define_use import DefineUse
@@ -21,16 +21,10 @@ from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
 from .interpreter import Interpreter, get_default_interpreter
+from .value import RealValue, ScalarValue, Value
 
 ###########################################################
 # Runtime
-
-RealValue: TypeAlias = Float | Fraction
-"""Type of real values in FPy programs."""
-ScalarValue: TypeAlias = bool | Context | RealValue
-"""Type of scalar values in FPy programs."""
-Value: TypeAlias = ScalarValue | list['Value'] | tuple['Value', ...]
-"""Type of values in FPy programs."""
 
 CTX_NAME = '__ctx__'
 REAL_NAME = '__fpy_real'
