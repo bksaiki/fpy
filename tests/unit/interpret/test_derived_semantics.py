@@ -6,11 +6,14 @@ Every AST node outside the core fragment is documented there as either
 (iii) elaborating to core syntax with no FPy spelling of its own.
 These tests make each claim executable:
 
-* **desugarings** are checked by running the node form against the *exact
-  baseline FPy function given in the doc* and asserting they agree **under
+* **desugarings** are checked by running the node form against a baseline
+  encoding the doc's stated equivalence, and asserting they agree **under
   several rounding contexts** (``REAL``, ``FP16``, ``FP64``) — so the check
   catches any place where the rounding context would make the two diverge.
-  The ``*_desugar`` / ``*_node`` pairs below mirror the doc's functions.
+  The ``*_desugar`` / ``*_node`` pairs below spell out that equivalence as a
+  program even where the doc gives it as a one-line ``≡`` (``fst``, ``snd``,
+  ``and``, ``or``, ``zip``, ``enumerate``) or omits it as a mirror of a
+  neighbour (``min``).
 * **rounding primitives** are checked for the documented rounding behaviour
   (exact under ``REAL``, correctly rounded under a finite context).
 
@@ -153,9 +156,10 @@ class TestConstants:
             assert float(f(ctx=FP64)) == pytest.approx(expected), const
 
     def test_simple_constants_match_their_definitions(self):
-        # the doc defines the "simple" constants as ordinary computable FPy
-        # functions (final rounding op in the return); each must equal the
-        # corresponding builtin constant, under every context.
+        # each "simple" constant is an FPy function whose final operation
+        # rounds, and must equal the corresponding builtin under every context.
+        # pi_2 / pi_4 / sqrt1_2 apply that operation to an already-rounded or
+        # exact operand; halving is exact in binary, so no double rounding.
         @fp.fpy
         def def_e() -> fp.Real:
             return fp.exp(1)
