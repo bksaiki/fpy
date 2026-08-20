@@ -7,6 +7,7 @@ be found in the :doc:`derived semantics <derived-semantics>` page.
 
 It describes how FPy programs *evaluate*, and in particular how the *active
 rounding context* governs every arithmetic operation.
+The rules follow the grammar: expressions, then statements, then the top level.
 
 Syntax
 ------
@@ -24,8 +25,7 @@ evaluates.
 In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
 over a countable set of identifiers :math:`\mathit{Var}`, and :math:`f` ranges
 over a separate set of function names :math:`\mathit{FuncName}`, since a
-function is not a value and is never bound in the environment (see :math:`\Phi`
-under *Evaluation*).
+function is not a value and is never bound in the environment (see *Top level*).
 
 There are two context constants. :math:`\R` is the *real rounding context*,
 whose rounding operation is the identity, so no rounding occurs;
@@ -123,78 +123,31 @@ compared—they are used only by :math:`\texttt{!}` and :math:`:=`. Evaluation i
 therefore deterministic only *up to renaming of locations*: **E-Ref** may pick
 any location not already in use.
 
-Evaluation
-----------
+Expressions
+-----------
 
 Evaluation requires an environment :math:`\sigma`, a finite map from identifiers
 to values, a *store* :math:`\mu`, a finite map from locations to the values they
-currently contain, and an *active rounding context* :math:`C`.
-
-Functions live in a separate *top-level environment* :math:`\Phi`, a finite map
-from function names to pairs :math:`(y, s)` of a parameter and a body. A program
-is a pair :math:`(\Phi, f_{\mathit{main}})`, and :math:`\Phi` is fixed
-throughout its evaluation: every judgement is implicitly parameterized by it, so
-it is elided from the rules, and only **E-App** consults it.
-
-Execution begins by applying :math:`f_{\mathit{main}}` to the program's argument
-:math:`v`. Where :math:`\Phi(f_{\mathit{main}}) = (y, s)`, the program runs its
-body from the initial state:
+currently contain, and an *active rounding context* :math:`C`. An expression
+evaluates under all three:
 
 .. math::
 
-   \langle [\, y \mapsto v \,], \emptyset, \R, s \rangle
-   \Downarrow_S \mathsf{return}\ v' \,;\, \mu'
+   \langle \sigma, \mu, C, e \rangle \Downarrow v
 
-The only binding is the parameter, the store starts empty, and the active context
-is :math:`\R`, so nothing rounds until a ``with`` sets one. The program's result
-is :math:`v'`; the final store :math:`\mu'` is discarded. Entry needs no rule of
-its own—this is **E-App**'s third premise started from an empty store.
+read ":math:`e` evaluates to value :math:`v`". The judgement returns no store
+because expressions are pure. They still *read* :math:`\mu`—:math:`\texttt{!}`
+and list indexing both do—so it remains an input, but no expression writes it and
+none rebinds :math:`\sigma`. The order in which a rule evaluates its
+sub-expressions is therefore unobservable.
 
-The program state is the quadruple :math:`\langle \sigma, \mu, C, p \rangle`,
-where :math:`p` is the expression or statement under evaluation. Two big-step
-judgements relate states to results:
-
-* :math:`\langle \sigma, \mu, C, e \rangle \Downarrow v`—expression :math:`e`
-  evaluates to value :math:`v`;
-* :math:`\langle \sigma, \mu, C, s \rangle \Downarrow_S o \,;\, \mu'`—statement
-  :math:`s` evaluates to an *outcome* :math:`o`, leaving the store :math:`\mu'`.
-
-The expression judgement returns no store because expressions are pure. They
-still *read* :math:`\mu`—:math:`\texttt{!}` and list indexing both do—so it
-remains an input, but no expression writes it and none rebinds :math:`\sigma`.
-The order in which a rule evaluates its sub-expressions is therefore
-unobservable.
-
-A rule that writes a lookup—:math:`\sigma(x)`, :math:`\mu(\ell)`, or an equation
-such as :math:`\Phi(f) = (y, s)`—requires it to be defined. Where it is not, no
-rule applies and evaluation is stuck.
-
-A statement either completes normally with an updated environment or returns a
-value, so an outcome is one of:
-
-.. math::
-
-   o ::= \mathsf{normal}\ \sigma \mid \mathsf{return}\ v
-
-A :math:`\mathsf{normal}` outcome carries the environment threaded to the next
-statement; a :math:`\mathsf{return}` outcome carries a function's result and
-short-circuits the rest of the body. The store is carried alongside the
-outcome rather than inside it, since both outcomes leave one.
+A rule that writes a lookup, such as :math:`\sigma(x)` or :math:`\mu(\ell)`,
+requires it to be defined. Where it is not, no rule applies and evaluation is
+stuck.
 
 The active rounding context :math:`C` is the crux of FPy's semantics: it is
 threaded through every expression and rounds the exact result of each
 arithmetic operation (see **E-Add**).
-
-The store is threaded through the premises of each statement rule—only
-statements write it, and only allocation and update do. A prime names what a
-premise leaves behind, as in :math:`\mu'` and :math:`\sigma'`, and a rule that
-threads two stores in sequence names the second :math:`\mu''`. The store is the
-only thing that mutates, and it only grows: :math:`\sigma` changes only by
-binding, while :math:`\mu` is global, shared by caller and callee, and never
-deallocates.
-
-Expressions
-^^^^^^^^^^^
 
 Constants and variables evaluate to themselves and to their bound value,
 respectively. Both context constants are values; a context is never rounded, so
@@ -299,14 +252,40 @@ boolean; unlike arithmetic, the result is exact and no rounding is applied.
    \tag{E-Lt}
 
 Statements
-^^^^^^^^^^
+----------
 
-Every statement evaluates to an outcome. Assignment, allocation, update,
-application, skip, and a passing assertion complete normally
-(:math:`\mathsf{normal}`) and :math:`\texttt{ret}` returns
-(:math:`\mathsf{return}`); sequencing, conditionals, and the context statement
-pass along the outcome of whatever sub-statement they run, so a
-:math:`\mathsf{return}` propagates out to the enclosing function.
+A statement evaluates in the same state, but it may write the store, so its
+judgement carries one out:
+
+.. math::
+
+   \langle \sigma, \mu, C, s \rangle \Downarrow_S o \,;\, \mu'
+
+read ":math:`s` evaluates to an *outcome* :math:`o`, leaving the store
+:math:`\mu'`". A statement either completes normally with an updated environment
+or returns a value, so an outcome is one of:
+
+.. math::
+
+   o ::= \mathsf{normal}\ \sigma \mid \mathsf{return}\ v
+
+A :math:`\mathsf{normal}` outcome carries the environment threaded to the next
+statement; a :math:`\mathsf{return}` outcome carries a function's result and
+short-circuits the rest of the body. The store is carried alongside the
+outcome rather than inside it, since both outcomes leave one.
+
+Assignment, allocation, update, application, skip, and a passing assertion
+complete normally and :math:`\texttt{ret}` returns; sequencing, conditionals, and
+the context statement pass along the outcome of whatever sub-statement they run,
+so a :math:`\mathsf{return}` propagates out to the enclosing function.
+
+The store is threaded through the premises of each statement rule—only
+statements write it, and only allocation and update do. A prime names what a
+premise leaves behind, as in :math:`\mu'` and :math:`\sigma'`, and a rule that
+threads two stores in sequence names the second :math:`\mu''`. The store is the
+only thing that mutates, and it only grows: :math:`\sigma` changes only by
+binding, while :math:`\mu` is global, shared by caller and callee, and never
+deallocates.
 
 Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
@@ -372,7 +351,8 @@ which is why every other name for that location observes the write.
          \mathsf{normal}\ \sigma \,;\, \mu[\ell \mapsto v]}
    \tag{E-Update}
 
-A function application looks its callee up in :math:`\Phi`, evaluates the
+A function application looks its callee up in the top-level environment
+:math:`\Phi`, evaluates the
 argument, and runs the body to the value it returns, binding that value to
 :math:`x`. The body runs in a fresh environment that binds only the parameter,
 so it can never see its caller's variables. It does run under the caller's
@@ -482,3 +462,26 @@ The context is scoped; the store is not.
         {\langle \sigma, \mu, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle
          \Downarrow_S o \,;\, \mu'}
    \tag{E-Context}
+
+Top level
+---------
+
+Functions live in a *top-level environment* :math:`\Phi`, a finite map from
+function names to pairs :math:`(y, s)` of a parameter and a body. A program is a
+pair :math:`(\Phi, f_{\mathit{main}})`, and :math:`\Phi` is fixed throughout its
+evaluation: every judgement is implicitly parameterized by it, so it is elided
+from the rules, and only **E-App** consults it.
+
+Execution begins by applying :math:`f_{\mathit{main}}` to the program's argument
+:math:`v`. Where :math:`\Phi(f_{\mathit{main}}) = (y, s)`, the program runs its
+body from the initial state:
+
+.. math::
+
+   \langle [\, y \mapsto v \,], \emptyset, \R, s \rangle
+   \Downarrow_S \mathsf{return}\ v' \,;\, \mu'
+
+The only binding is the parameter, the store starts empty, and the active context
+is :math:`\R`, so nothing rounds until a ``with`` sets one. The program's result
+is :math:`v'`; the final store :math:`\mu'` is discarded. Entry needs no rule of
+its own—it is **E-App**'s third premise started from an empty store.
