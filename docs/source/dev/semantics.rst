@@ -2,8 +2,8 @@ Language Semantics
 ======================
 
 This page documents the semantics of FPy. To stay tractable, it covers only
-the *core* of the language. The semantics for the full language can
-be found in the :doc:`derived semantics <derived-semantics>` page.
+the *core* of the language. The :doc:`derived semantics <derived-semantics>`
+page covers the full language.
 
 It describes how FPy programs *evaluate*, and in particular how the *active
 rounding context* governs every arithmetic operation.
@@ -85,9 +85,9 @@ An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position, the only way to take a tuple apart.
 
-``+`` and ``<`` stand in for arithmetic and comparison in general; every other
-FPy operator evaluates the same way, though comparison and classification
-operators yield booleans rather than rounded reals.
+``+`` and ``<`` stand in for arithmetic and comparison in general: every rounded
+operator rounds its exact result as ``+`` does, and every predicate yields a
+boolean as ``<`` does.
 
 Values
 ------
@@ -111,9 +111,8 @@ operation, written :math:`C(\cdot)`, whose result need not be finite.
 Full FPy provides constructors for the common rounding contexts, all of which
 the core abstracts as :math:`\texttt{ctx}\ \{ \ldots \}`.
 
-A *location* :math:`\ell` is the value of a reference: the allocation statement
-:math:`x = \texttt{ref}\ e` binds :math:`x` to a location whose store entry
-holds :math:`e`'s value. Locations are drawn from a countable set
+A *location* :math:`\ell` is the value of a reference. Locations are drawn from
+a countable set
 :math:`\mathit{Loc}` and are used only by :math:`\texttt{!}` and :math:`:=`.
 
 Expressions
@@ -130,18 +129,16 @@ evaluates under all three:
 
 read ":math:`e` evaluates to value :math:`v`". Expressions are pure, so the
 judgement yields no store; :math:`\mu` remains an input because
-:math:`\texttt{!}` reads it. The order in which a rule
-evaluates its sub-expressions is therefore unobservable.
+:math:`\texttt{!}` reads it. Sub-expression evaluation order is therefore
+unobservable.
 
 A rule that writes a lookup, such as :math:`\sigma(x)` or :math:`\mu(\ell)`,
-requires it to be defined. Where it is not, no rule applies and evaluation is
-stuck.
+requires it to be defined; otherwise no rule applies and evaluation is stuck.
 
-The active rounding context :math:`C` is the crux of FPy's semantics: it is
-threaded through every expression and rounds the exact result of each
-arithmetic operation (see **E-Add**).
 
-Values evaluate to themselves.
+Values evaluate to themselves. A location is not an expression, so **E-Val**
+applies only where a value can be written in a program: the boolean, numerical,
+and context constants.
 
 .. math::
 
@@ -185,9 +182,9 @@ Tuples evaluate like lists.
          (\, v_1, \ldots, v_m \,)}
    \tag{E-Tuple}
 
-A reference is a mutable cell. Dereferencing reads the value its location
-currently contains out of the store; allocating the cell is a statement, since
-it writes one (see **E-Ref**).
+A reference is a mutable cell. Dereferencing reads the location's current value
+from the store; allocating the cell is a statement, since it writes one (see
+**E-Ref**).
 
 .. math::
 
@@ -212,8 +209,8 @@ under a finite context, an out-of-range result rounds to :math:`\pm\infty`.
    \tag{E-Add}
 
 A comparison evaluates its operands and tests them, producing a boolean;
-nothing rounds. NaN is unordered: an ordering test with a NaN operand is false.
-``<`` is the representative—the other comparisons behave identically.
+nothing rounds. NaN is unordered: an ordering test with a NaN operand is
+false.
 
 .. math::
 
@@ -246,25 +243,20 @@ statement; a :math:`\mathsf{return}` outcome carries a function's result and
 short-circuits the rest of the body.
 
 Assignment, allocation, update, application, skip, and a passing assertion
-complete normally and :math:`\texttt{ret}` returns; sequencing, conditionals,
-loops, and the context statement pass along the outcome of whatever
-sub-statement they run,
+complete normally; :math:`\texttt{ret}` returns. Sequencing, conditionals, loops,
+and the context statement pass along the outcome of the sub-statement they run,
 so a :math:`\mathsf{return}` propagates out to the enclosing function.
 
 Only statements write the store, and only allocation and update do. A rule with
-two statement premises threads it from the first into the second. A prime names what a
-premise leaves behind, as in :math:`\mu'` and :math:`\sigma'`, and a rule that
-threads two stores in sequence names the second :math:`\mu''`. The store is the
+two statement premises threads it from the first into the second. The store is the
 only thing that mutates, and its domain only grows: :math:`\sigma` changes only by
 binding, while :math:`\mu` is global, shared by caller and callee, and never
 deallocates.
 
 Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
-A variable matches anything and binds it; a tuple pattern matches a tuple
-position by position, combining the per-component bindings by disjoint union
-:math:`\uplus`. Matching inspects a value without allocating, so it needs no
-store.
+Bindings combine by disjoint union :math:`\uplus`. Matching inspects a value
+without allocating, so it needs no store.
 
 .. math::
 
@@ -313,9 +305,9 @@ itself, not to the value.
          \mathsf{normal}\ \sigma[x \mapsto \ell] \,;\, \mu[\ell \mapsto v]}
    \tag{E-Ref}
 
-An update statement replaces the value contained by a reference.
-The environment is unchanged—an update mutates the store and only the store,
-which is why every other name for that location observes the write.
+An update statement replaces a reference's value. The environment is unchanged:
+an update mutates only the store, so every other name for that location observes
+the write.
 
 .. math::
 
@@ -330,16 +322,16 @@ which is why every other name for that location observes the write.
 
 Functions live in a *top-level environment* :math:`\Phi`, a finite map from
 function names to pairs :math:`(y, s)` of a parameter and a body. It is fixed
-throughout evaluation: every judgement is implicitly parameterized by it, so the
-rules elide it. Only **E-App** reads it, along with program entry below.
+throughout evaluation: every judgement takes it implicitly, so the rules elide
+it. Only **E-App** reads it, along with program entry below.
 
 A function application looks its callee up in :math:`\Phi`, evaluates the
 argument, and runs the body to the value it returns, binding that value to
 :math:`x`. The body runs in a fresh environment binding only the parameter, but
-under the caller's context :math:`C`, and a well-formed body always returns, so
-its outcome is :math:`\mathsf{return}\ v'`. The store is *not* fresh: the body
-runs in the caller's store and its writes outlive the call, which is how a callee
-mutates a reference its caller holds.
+under the caller's context :math:`C`. Its outcome must be
+:math:`\mathsf{return}\ v'`, so a body that completes normally is stuck. The
+store is *not* fresh: the body runs in the caller's store and its writes outlive
+the call, which is how a callee mutates a reference its caller holds.
 
 .. math::
 
@@ -401,8 +393,7 @@ the sequence's outcome.
    \tag{E-Seq-Return}
 
 A conditional evaluates its condition to a boolean and runs the matching
-branch; the branch's outcome becomes the conditional's, so a :math:`\texttt{ret}`
-in either branch returns from the enclosing function. Only the taken branch
+branch; the branch's outcome becomes the conditional's. Only the taken branch
 touches the store.
 
 .. math::
@@ -423,9 +414,9 @@ touches the store.
          \Downarrow_S o \,;\, \mu'}
    \tag{E-If-False}
 
-A loop tests its condition before each iteration. If the condition is false the
+A loop tests its condition before each iteration. If the condition is false, the
 loop completes with the environment unchanged; if it holds, the loop runs its
-body followed by the loop again, so **E-Seq-Normal** threads the body's
+body followed by the loop again. **E-Seq-Normal** then threads the body's
 environment and store into the next iteration and **E-Seq-Return** carries a
 :math:`\texttt{ret}` in the body straight out of the enclosing function.
 
@@ -457,9 +448,8 @@ evaluated under :math:`\R` to a new context :math:`C'`, and the body :math:`s`
 runs under :math:`C'` with :math:`x` bound to :math:`C'`, so it can refer to its
 governing context as a value. :math:`C'` governs only the body—the
 surrounding context :math:`C` is unchanged and still applies after the
-``with``. The body's outcome becomes the statement's outcome, so a
-:math:`\texttt{ret}` inside a ``with`` returns from the enclosing function.
-The context is scoped; the store is not.
+``with``. The body's outcome becomes the statement's outcome.
+The context is scoped; the store and environment are not.
 
 .. math::
 
@@ -490,6 +480,4 @@ initial state:
    \langle [\, y \mapsto v \,], \emptyset, \R, s \rangle
    \Downarrow_S \mathsf{return}\ v' \,;\, \mu'
 
-The only binding is the parameter, the store starts empty, and the active context
-is :math:`\R`. The program's result is :math:`v'`; the final store :math:`\mu'`
-is discarded.
+The program's result is :math:`v'`; the final store :math:`\mu'` is discarded.
