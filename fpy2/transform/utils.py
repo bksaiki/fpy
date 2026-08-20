@@ -1,17 +1,17 @@
 """
 Shared machinery for the transforms: the loop rewrites and the rounding
-rewrites.  The `error`, `cursor` and `path` submodules are re-exported here.
+rewrites.  The `error`, `cursor` and `path` siblings are re-exported here.
 """
 
 from dataclasses import dataclass
 
-from ...analysis import (
+from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
     ListSize,
     concrete_size,
 )
-from ...ast.fpyast import (
+from ..ast.fpyast import (
     Assign,
     Attribute,
     Cast,
@@ -38,8 +38,8 @@ from ...ast.fpyast import (
     UnderscoreId,
     Var,
 )
-from ...ast.visitor import DefaultTransformVisitor
-from ...number import (
+from ..ast.visitor import DefaultTransformVisitor
+from ..number import (
     INTEGER,
     Context,
     Float,
@@ -54,15 +54,17 @@ from .cursor import (
     EditLog,
     ExprCursor,
     StmtCursor,
+    contains,
     expr_sites,
     not_a_statement,
     region_of,
     stmt_sites,
 )
-from .error import TransformDeclined, TransformReferenceError
+from .error import TransformDeclined, TransformError, TransformReferenceError
 from .path import (
     BlockField,
     BlockPath,
+    ExprPath,
     FuncBody,
     StmtPath,
     SubBlock,
@@ -72,6 +74,8 @@ from .path import (
     resolve_block,
     resolve_stmt,
     sub_blocks,
+    walk_blocks,
+    walk_exprs,
 )
 
 

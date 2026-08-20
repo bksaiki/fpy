@@ -4,7 +4,7 @@ A reference to a statement that survives the rewrites around it.
 Every transform is a :class:`DefaultTransformVisitor`, which rebuilds every node
 it visits, so node identity dies at the first rewrite and cannot be the
 reference.  A cursor is a *path* instead -- see
-:mod:`~fpy2.transform.utils.path` for the shape.
+:mod:`~fpy2.transform.path` for the shape.
 
 A cursor is owned by one program version -- it holds the :class:`FuncDef` it
 resolved against -- so aiming it at another program is a bad reference rather
@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from itertools import pairwise
 from typing import TypeAlias
 
-from ...ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
+from ..ast.fpyast import Expr, FuncDef, Stmt, StmtBlock
 from .error import TransformReferenceError
 from .path import (
     BlockPath,

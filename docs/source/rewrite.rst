@@ -44,7 +44,7 @@ survives the rewrites around it — see :doc:`strategies`.
 Finding
 --------------------
 
-A pattern is the other way to name a location: not "the *n*th candidate" but
+A pattern is the other way to name a location: not "the *n*\ th candidate" but
 "the place that looks like this". :func:`fpy2.rewrite.find` insists on one
 match, since a pattern that matches three places has identified nothing;
 :func:`fpy2.rewrite.find_all` lists them.

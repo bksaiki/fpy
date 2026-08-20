@@ -23,7 +23,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from ...ast.fpyast import (
+from ..ast.fpyast import (
     AssertStmt,
     Assign,
     Attribute,

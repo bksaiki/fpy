@@ -1,5 +1,5 @@
 """
-Unit tests for :mod:`fpy2.transform.utils.path`.
+Unit tests for :mod:`fpy2.transform.path`.
 
 A cursor is a path from the :class:`FuncDef`, so the tests pin the two
 directions -- :func:`block_paths` writes paths for the blocks a visitor holds,
@@ -20,7 +20,7 @@ from fpy2.transform import (
     TransformReferenceError,
 )
 from fpy2.ast.visitor import DefaultTransformVisitor
-from fpy2.transform.utils.path import (
+from fpy2.transform.path import (
     block_paths,
     format_path,
     resolve_block,
