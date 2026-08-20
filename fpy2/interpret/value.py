@@ -97,18 +97,24 @@ def to_value(arg: Any) -> Value:
 
 def _is_boundary_value(x) -> bool:
     match x:
+        case bool() | Float() | Context():
+            return True
         case Fraction():
             return not is_dyadic(x)
         case Foreign():
             return False
         case tuple() | list():
             return all(_is_boundary_value(v) for v in x)
-        case _:
+        case _ if x is UNINIT:
             return True
+        case _:
+            raise TypeError(f'not an FPy value: {x!r}')
 
 
 def _cvt_boundary(x: Value):
     match x:
+        case bool() | Float() | Context():
+            return x
         case Fraction():
             return Float.from_rational(x) if is_dyadic(x) else x
         case Foreign():
@@ -117,8 +123,10 @@ def _cvt_boundary(x: Value):
             return tuple(from_value(v) for v in x)
         case list():
             return [from_value(v) for v in x]
-        case _:
+        case _ if x is UNINIT:
             return x
+        case _:
+            raise TypeError(f'not an FPy value: {x!r}')
 
 
 def from_value(x: Value):

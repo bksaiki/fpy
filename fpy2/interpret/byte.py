@@ -168,8 +168,8 @@ def _eval_call(fn, ctx, *args, **kwargs):
                 raise RuntimeError('foreign functions do not support keyword arguments')
             if fn == print:
                 print(*(_unwrap_foreign(arg) for arg in args))
-                # TODO: should we allow `None` to return
-                return None
+                # `print` returns `None`, which is a foreign value
+                return Foreign(None)
             else:
                 raise RuntimeError(f'attempting to call a Python function: `{fn}`')
 

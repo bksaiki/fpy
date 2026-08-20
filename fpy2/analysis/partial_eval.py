@@ -10,21 +10,14 @@ and :class:`fpy2.transform.LiftContext`.
 """
 
 from dataclasses import dataclass
-from fractions import Fraction
-from types import ModuleType
-from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..fpc_context import FPCoreContext
-from ..interpret import Interpreter, get_default_interpreter
-from ..number import REAL, Float
+from ..interpret import Foreign, Interpreter, Value, get_default_interpreter
+from ..interpret.value import to_value
+from ..number import REAL
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
-
-ScalarValue: TypeAlias = bool | Float | Fraction | Context
-TupleValue: TypeAlias = tuple['Value', ...]
-ListValue: TypeAlias = list['Value']
-Value: TypeAlias = ScalarValue | TupleValue | ListValue
 
 
 class _TopType:
@@ -133,7 +126,11 @@ class _PartialEvalInstance(DefaultVisitor):
         self.by_expr[e] = e.val
 
     def _visit_foreign(self, e: ForeignVal, ctx: Context | None):
-        self.by_expr[e] = e.val
+        self.by_expr[e] = to_value(e.val)
+
+    def _lit(self, e: Expr) -> ForeignVal:
+        """Re-inject the known value of `e` as a synthetic literal."""
+        return ForeignVal(self.by_expr[e], None)
 
     def _visit_decnum(self, e: Decnum, ctx: Context | None):
         # `as_real` (not `as_rational`) so a `-0.0` literal folds to a signed
@@ -156,7 +153,7 @@ class _PartialEvalInstance(DefaultVisitor):
         """Evaluate via the interpreter; return ``None`` on any
         exception (PE is best-effort)."""
         try:
-            return self.rt.eval_expr(e_eval, self._base_env(), ctx)
+            return to_value(self.rt.eval_expr(e_eval, self._base_env(), ctx))
         except Exception:  # noqa: BLE001 -- partial eval is best-effort
             return None
 
@@ -171,7 +168,7 @@ class _PartialEvalInstance(DefaultVisitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: Context | None):
         self._visit_expr(e.arg, ctx)
         if self._is_value(e.arg) and ctx is not None:
-            e_arg = ForeignVal(self.by_expr[e.arg], None)
+            e_arg = self._lit(e.arg)
             if isinstance(e, NamedUnaryOp):
                 e_eval: UnaryOp = type(e)(e.func, e_arg, e.loc)
             else:
@@ -182,8 +179,8 @@ class _PartialEvalInstance(DefaultVisitor):
         self._visit_expr(e.first, ctx)
         self._visit_expr(e.second, ctx)
         if self._is_value(e.first) and self._is_value(e.second) and ctx is not None:
-            e_fst = ForeignVal(self.by_expr[e.first], None)
-            e_snd = ForeignVal(self.by_expr[e.second], None)
+            e_fst = self._lit(e.first)
+            e_snd = self._lit(e.second)
             if isinstance(e, NamedBinaryOp):
                 e_eval: BinaryOp = type(e)(e.func, e_fst, e_snd, e.loc)
             else:
@@ -195,9 +192,9 @@ class _PartialEvalInstance(DefaultVisitor):
         self._visit_expr(e.second, ctx)
         self._visit_expr(e.third, ctx)
         if self._is_value(e.first) and self._is_value(e.second) and self._is_value(e.third) and ctx is not None:
-            e_fst = ForeignVal(self.by_expr[e.first], None)
-            e_snd = ForeignVal(self.by_expr[e.second], None)
-            e_trd = ForeignVal(self.by_expr[e.third], None)
+            e_fst = self._lit(e.first)
+            e_snd = self._lit(e.second)
+            e_trd = self._lit(e.third)
             if isinstance(e, NamedTernaryOp):
                 e_eval: TernaryOp = type(e)(e.func, e_fst, e_snd, e_trd, e.loc)
             else:
@@ -215,7 +212,7 @@ class _PartialEvalInstance(DefaultVisitor):
             and len(e.args) > 0
             and all(self._is_value(arg) for arg in e.args)
         ):
-            e_args = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
+            e_args = [self._lit(arg) for arg in e.args]
             if isinstance(e, NamedNaryOp):
                 e_eval: NaryOp = type(e)(e.func, e_args, e.loc)
             else:
@@ -226,7 +223,7 @@ class _PartialEvalInstance(DefaultVisitor):
         for arg in e.args:
             self._visit_expr(arg, ctx)
         if ctx is not None and all(self._is_value(arg) for arg in e.args):
-            e_args = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
+            e_args = [self._lit(arg) for arg in e.args]
             e_eval = Compare(e.ops, e_args, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
@@ -239,8 +236,8 @@ class _PartialEvalInstance(DefaultVisitor):
             and all(self._is_value(arg) for arg in e.args)
             and all(self._is_value(v) for _, v in e.kwargs)
         ):
-            arg_vals = [ForeignVal(self.by_expr[arg], None) for arg in e.args]
-            kwarg_vals = [ (k, ForeignVal(self.by_expr[v], None)) for k, v in e.kwargs ]
+            arg_vals = [self._lit(arg) for arg in e.args]
+            kwarg_vals = [ (k, self._lit(v)) for k, v in e.kwargs ]
             e_eval = Call(e.func, e.fn, arg_vals, kwarg_vals, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
@@ -264,8 +261,8 @@ class _PartialEvalInstance(DefaultVisitor):
             and self._is_value(e.value)
             and self._is_value(e.index)
         ):
-            v = ForeignVal(self.by_expr[e.value], None)
-            i = ForeignVal(self.by_expr[e.index], None)
+            v = self._lit(e.value)
+            i = self._lit(e.index)
             e_eval = ListRef(v, i, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
@@ -283,9 +280,9 @@ class _PartialEvalInstance(DefaultVisitor):
             and (e.start is None or self._is_value(e.start))
             and (e.stop is None or self._is_value(e.stop))
         ):
-            v = ForeignVal(self.by_expr[e.value], None)
-            s = ForeignVal(self.by_expr[e.start], None) if e.start is not None else None
-            t = ForeignVal(self.by_expr[e.stop], None) if e.stop is not None else None
+            v = self._lit(e.value)
+            s = self._lit(e.start) if e.start is not None else None
+            t = self._lit(e.stop) if e.stop is not None else None
             e_eval = ListSlice(v, s, t, e.loc)
             self._record(e, self._try_eval(e_eval, ctx))
 
@@ -308,12 +305,14 @@ class _PartialEvalInstance(DefaultVisitor):
         self._visit_expr(e.value, ctx)
         if self._is_value(e.value):
             val = self.by_expr[e.value]
+            if isinstance(val, Foreign):
+                val = val.val
             if isinstance(val, dict):
                 if e.attr not in val:
                     raise RuntimeError(f'unknown attribute {e.attr} for {val}')
-                self.by_expr[e] = val[e.attr]
+                self.by_expr[e] = to_value(val[e.attr])
             elif hasattr(val, e.attr):
-                self.by_expr[e] = getattr(val, e.attr)
+                self.by_expr[e] = to_value(getattr(val, e.attr))
             else:
                 raise RuntimeError(f'unknown attribute {e.attr} for {val}')
 
@@ -433,7 +432,7 @@ class _PartialEvalInstance(DefaultVisitor):
             if str(name) not in func.env:
                 raise KeyError(f'free variable `{name}` missing from env')
             d = self.def_use.find_def_from_site(name, func)
-            self.by_def[d] = self.func.env[str(name)]
+            self.by_def[d] = to_value(self.func.env[str(name)])
 
         # visit statements
         self._visit_block(func.body, fctx)
