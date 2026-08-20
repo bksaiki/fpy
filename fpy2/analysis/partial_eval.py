@@ -10,6 +10,7 @@ and :class:`fpy2.transform.LiftContext`.
 """
 
 from dataclasses import dataclass
+from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor

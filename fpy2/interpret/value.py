@@ -90,7 +90,7 @@ def to_value(arg: Any) -> Value:
             return [to_value(x) for x in arg]
         case _ if arg is UNINIT:
             # `empty` placeholder: interpreter-internal, never foreign
-            return arg
+            return arg  # type: ignore[return-value]
         case _:
             return Foreign(arg)
 

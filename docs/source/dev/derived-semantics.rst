@@ -49,7 +49,10 @@ Literals and values
   rounds until arithmetic uses the value, so ``0.1`` is exactly :math:`1/10`.
 * ``BoolVal`` — ``True`` / ``False``, **E-Val**.
 * ``Var`` — a variable reference, **E-Var**.
-* ``ForeignVal`` — a native Python value; evaluates to itself, **E-Val**.
+* ``ForeignVal`` — a native Python value; evaluates to an opaque *foreign*
+  value, **E-Val** — a seventh kind of value beyond the core's six. No
+  operation applies to one: a program may only pass it along, hand it to a
+  context constructor, or read an attribute of it.
 
 Classification and inspection
 -----------------------------
@@ -148,8 +151,9 @@ Miscellaneous
   :math:`\texttt{if}\ c\ \texttt{then}\ r = a\ \texttt{else}\ r = b`, the
   expression form of the conditional. Only the selected branch runs, so a call
   under it cannot lift out; lifting applies inside each branch.
-* ``Attribute`` — ``e.name`` reads an attribute of a foreign value (no
-  rounding).
+* ``Attribute`` — ``e.name`` reads an attribute of a foreign value and
+  classifies the result: a native number becomes a numerical value; anything
+  opaque stays foreign. No rounding.
 * ``Call`` — **E-App**, generalized to many arguments and foreign callables, so
   :math:`\Phi` maps a name to a parameter *list* and a body. Being a statement, a
   call outside assignment position lifts: ``z = f(x) + 1`` :math:`\equiv`
