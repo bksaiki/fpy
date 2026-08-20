@@ -75,7 +75,7 @@ class _MatcherInst(Visitor):
 
     def match(self) -> Subst | None:
         """What the pattern's variables bind to here, or `None` where it does
-        not match.  Says nothing about *where*: the caller knows that."""
+        not match."""
         try:
             match self.pattern:
                 case ExprPattern():

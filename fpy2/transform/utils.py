@@ -1,6 +1,6 @@
 """
 Shared machinery for the transforms: the loop rewrites and the rounding
-rewrites.  The `error`, `cursor` and `path` siblings are re-exported here.
+rewrites.
 """
 
 from dataclasses import dataclass
@@ -51,32 +51,13 @@ from .cursor import (
     BlockCursor,
     Cursor,
     Edit,
-    EditLog,
     ExprCursor,
     StmtCursor,
-    contains,
-    expr_sites,
     not_a_statement,
     region_of,
-    stmt_sites,
 )
-from .error import TransformDeclined, TransformError, TransformReferenceError
-from .path import (
-    BlockField,
-    BlockPath,
-    ExprPath,
-    FuncBody,
-    StmtPath,
-    SubBlock,
-    beneath,
-    block_paths,
-    format_path,
-    resolve_block,
-    resolve_stmt,
-    sub_blocks,
-    walk_blocks,
-    walk_exprs,
-)
+from .error import TransformDeclined, TransformReferenceError
+from .path import BlockPath, StmtPath, beneath, block_paths
 
 
 def infer_array_size(func: FuncDef) -> ArraySizeAnalysis | None:
@@ -115,6 +96,12 @@ def clone_block(block: StmtBlock) -> StmtBlock:
     rebuilds every node)."""
     block, _ = DefaultTransformVisitor()._visit_block(block, None)
     return block
+
+
+def clone(e: Expr) -> Expr:
+    """A structurally fresh copy of *e*, so no AST node is shared between two
+    places (a plain transform visit rebuilds every node)."""
+    return DefaultTransformVisitor()._visit_expr(e, None)
 
 
 def copy_target(target: Id | TupleBinding) -> Id | TupleBinding:
@@ -380,37 +367,40 @@ class SiteRewriter(DefaultTransformVisitor):
         elif self.declined and not self.edits:
             raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
 
-    def _selects(self, block: StmtBlock, pos: int, idx: int) -> bool:
-        """Whether the candidate at `block[pos]`, the `idx`th of the program,
-        is one this rewrite is aimed at.
+    def _selects(self, block: StmtBlock, pos: int, idx: int, count: int = 1) -> bool:
+        """Whether the candidate at `block[pos:pos+count]`, the `idx`th of the
+        program, is one this rewrite is aimed at.
 
         A cursor or region names a piece of program, and the candidates it
         selects are the ones *at or beneath* it -- so the statement an earlier
         rewrite left behind names the site now nested inside it.
         """
-        return self._selects_at(self._paths.get(id(block)), pos, idx)
+        return self._selects_at(self._paths.get(id(block)), pos, idx, count)
 
-    def _selects_at(self, here: BlockPath | None, pos: int, idx: int) -> bool:
-        """:meth:`_selects`, where the caller already has the block's path.
-
-        `here` is `None` for a block the rewrite synthesized rather than one it
-        was aimed at, which selects nothing.
-        """
+    def _selects_at(
+        self, here: BlockPath | None, pos: int, idx: int, count: int = 1
+    ) -> bool:
+        """:meth:`_selects`, where the caller already has the block's path."""
         if self._target is None:
             return self.where is None or idx == self.where
         if here is None:
+            # a block the rewrite synthesized: no cursor can name it
             return False
 
         path, span = self._target
-        return beneath(StmtPath(here, pos), path, span)
+        # a multi-statement candidate is selected only in full, so a rewrite
+        # never reaches past what the caller named
+        return all(
+            beneath(StmtPath(here, p), path, span) for p in range(pos, pos + count)
+        )
 
-    def _selects_expr(self, e: Expr, block: StmtBlock, pos: int, idx: int) -> bool:
-        """Whether the candidate expression *e*, in `block[pos]`, is one this
-        rewrite is aimed at.  An expression cursor names it exactly; a statement
-        cursor or region names every candidate at or beneath it."""
+    def _selects_expr(self, e: Expr, idx: int) -> bool:
+        """Whether the candidate expression *e* of the current statement is one
+        this rewrite is aimed at.  An expression cursor names it exactly; a
+        statement cursor or region names every candidate at or beneath it."""
         if self._target_expr is not None:
             return e is self._target_expr
-        return self._selects(block, pos, idx)
+        return self._selects(*self._site, idx)
 
     def _record(self, block: StmtBlock, pos: int, inserted: int, *, removed: int = 1) -> None:
         """Record that `inserted` statements took the place of `removed` at

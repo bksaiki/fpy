@@ -4,7 +4,7 @@ The failures of a rewrite, as part of its contract.
 One hierarchy for every layer that rewrites: :mod:`fpy2.transform` and
 :mod:`fpy2.rewrite` raise these directly and :mod:`fpy2.strategies` re-exports
 them, so one `except` covers a strategy, a raw transform and a user rewrite
-alike.  Named for what happened, not for who raised it.
+alike.
 """
 
 
@@ -21,4 +21,4 @@ class TransformDeclined(TransformError):
 
 
 class TransformReferenceError(TransformError):
-    """A `where` that named no candidate site."""
+    """A reference -- a `where`, a cursor, a path -- that names no such place."""

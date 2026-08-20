@@ -121,8 +121,7 @@ but not its guarantee: nothing checks that `l` and `r` compute the same thing.
 The existing probes test whether a *format's* rounding is reproduced, which says
 nothing about two expressions, so this needs interpreting both sides on sampled
 inputs — its own item, and sampling rather than proof (SMT stays rejected on
-cost). The plan and what it settled are in
-[pattern-cursors-plan.md](pattern-cursors-plan.md).
+cost).
 
 ## 5. Combinators, in user space
 

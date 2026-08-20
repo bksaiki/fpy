@@ -3,7 +3,7 @@ This module defines subsitution for FPy AST.
 """
 
 from ..ast import *
-from ..utils import Gensym
+from ..transform import clone
 from .pattern import ExprPattern, Pattern, StmtPattern
 from .subst import Subst
 
@@ -11,9 +11,8 @@ from .subst import Subst
 class SubstitutionError(Exception):
     """A rule whose replacement names a variable its pattern never bound.
 
-    Deliberately outside the :class:`TransformError` hierarchy: this is a
-    malformed *rule*, not a bad reference to a place in a program, so a
-    try/fallback schedule should not catch it.
+    Outside the :class:`TransformError` hierarchy: a malformed *rule*, not a bad
+    reference into a program, so a try/fallback schedule must not swallow it.
     """
 
     def __init__(self, message: str):
@@ -43,8 +42,9 @@ class _ExprApplierInst(DefaultTransformVisitor):
 
     def _visit_var(self, e: Var, ctx: None):
         if e.name in self.subst:
-            # lookup name in the substitution
-            return self.subst[e.name]
+            # a replacement may use a variable twice, and two program points
+            # must not share AST nodes
+            return clone(self.subst[e.name])
         else:
             # otherwise, name is an inserted variable
             return super()._visit_var(e, ctx)
@@ -95,8 +95,7 @@ class _StmtApplierInst(DefaultTransformVisitor):
 
     def _visit_var(self, e: Var, ctx: None):
         if e.name in self.subst:
-            # name in the substitution
-            return self.subst[e.name]
+            return clone(self.subst[e.name])
         else:
             # variable is free in the pattern
             return Var(self.free[e.name], None)

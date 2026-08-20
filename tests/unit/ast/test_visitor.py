@@ -1,10 +1,8 @@
 """
 Unit tests for the AST visitors' traversal.
 
-A keyword argument is an expression like any other.  `DefaultVisitor` used to
-walk positional arguments only, so anything built on it silently ignored
-expressions in keyword arguments -- `LiveVars` among them, which is what
-`Pattern.vars()` is computed from.
+A keyword argument is an expression like any other, so every visitor has to
+reach it -- `LiveVars` among them, which `Pattern.vars()` is computed from.
 """
 
 import fpy2 as fp
@@ -42,7 +40,7 @@ def test_both_visitors_reach_a_keyword_argument():
 
 def test_a_keyword_argument_is_visited_once():
     """A visitor that walks kwargs itself *and* calls `super()` counts them
-    twice, which is what `call_graph` and `purity` used to do."""
+    twice."""
     seen: list[Var] = []
 
     class _C(DefaultVisitor):

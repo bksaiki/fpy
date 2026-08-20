@@ -343,8 +343,7 @@ def _under_expr(path: ExprPath, ancestor: ExprPath) -> bool:
 def contains(outer: Cursor, inner: Cursor) -> bool:
     """Whether *inner* lies at or beneath *outer*, both of one program.
 
-    Raises where the question is ill-posed: *outer* an expression and *inner* a
-    statement, since no statement sits beneath an expression.
+    Raises where *outer* is an expression and *inner* a statement.
     """
     keep = _restrict(inner.func, outer, stmts=not isinstance(inner, ExprCursor))
     if isinstance(inner, BlockCursor):

@@ -46,8 +46,7 @@ Finding
 
 A pattern is the other way to name a location: not "the *n*\ th candidate" but
 "the place that looks like this". :func:`fpy2.rewrite.find` insists on one
-match, since a pattern that matches three places has identified nothing;
-:func:`fpy2.rewrite.find_all` lists them.
+match; :func:`fpy2.rewrite.find_all` lists them all.
 
 .. autofunction:: fpy2.rewrite.find
 
@@ -74,8 +73,7 @@ produced by matches of `l` are applied to `r`.
 A rewrite is aimed like any other strategy — by index, by cursor, or everywhere
 — and reports what it replaced, so a cursor crosses it and a schedule can put a
 user rule between two built-in operators. It is *not* verified: nothing checks
-that `l` and `r` compute the same thing, which is the one respect in which a
-user rewrite is not a built-in.
+that `l` and `r` compute the same thing.
 
 .. autoclass:: fpy2.rewrite.Rewrite
    :members:

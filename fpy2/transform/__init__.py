@@ -45,7 +45,7 @@ from .subst_var import SubstVar
 from .unfold_neg_zero import UnfoldNegZero
 from .unfold_overflow import UnfoldOverflow
 from .unfold_special import UnfoldSpecial
-from .utils import SiteRewriter, check_where
+from .utils import SiteRewriter, check_where, clone
 from .while_bundling import WhileBundling
 from .while_unroll import WhileUnroll
 from .zip_elim import ZipElim

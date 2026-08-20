@@ -103,18 +103,15 @@ from ..number.format import (
     SMFixedFormat,
 )
 from ..utils import Gensym
+from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
     BlockRewriter,
-    Cursor,
     Declined,
-    EditLog,
-    StmtCursor,
     check_where,
     is_rounding_block,
     number_literal,
     rounding_block,
     shift,
-    stmt_sites,
 )
 
 _FixedCtx = FixedContext | SMFixedContext | MPBFixedContext | MPFixedContext

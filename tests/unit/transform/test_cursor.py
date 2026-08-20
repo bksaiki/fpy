@@ -133,9 +133,8 @@ def busy(x: fp.Real, xs: list[fp.Real], n: fp.Real) -> fp.Real:
 class _Recorder(DefaultTransformVisitor):
     """What the visitor reaches, in the order it reaches it.
 
-    The *transform* visitor: it is the one every rewrite is built on, so it is
-    the traversal a path has to agree with.  (`DefaultVisitor` differs — see
-    `_visit_call`, which skips keyword arguments.)
+    The *transform* visitor: the traversal every rewrite is built on, so the
+    one a path has to agree with.
     """
 
     def __init__(self):
@@ -158,10 +157,7 @@ class _Recorder(DefaultTransformVisitor):
 
 def test_the_walks_agree_with_the_visitor():
     """`sub_blocks` / `sub_exprs` name the fields the visitor descends through
-    without naming, so the two encode the same tree shape and order.  A `where`
-    index counts in the visitor's order and a listing reports in the walks', so a
-    drift between them would silently aim one place and report another.
-    """
+    without naming, so the two must encode the same tree shape and order."""
     seen = _Recorder()
     seen._visit_function(busy.ast, None)
 

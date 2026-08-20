@@ -29,18 +29,15 @@ from ..analysis import (
 )
 from ..ast.fpyast import *
 from ..utils import Gensym
+from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
-    Cursor,
-    EditLog,
     SiteRewriter,
-    StmtCursor,
     check_where,
     clone_block,
     copy_target,
     infer_array_size,
     integer_ctx,
     static_size,
-    stmt_sites,
 )
 
 

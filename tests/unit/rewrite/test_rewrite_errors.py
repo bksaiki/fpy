@@ -54,8 +54,7 @@ def test_a_pattern_that_matches_nothing_is_a_bad_reference():
 
 
 def test_the_failure_is_catchable_as_a_transform_error():
-    """The point of the phase: one `except` covers a user rewrite and a
-    built-in."""
+    """One `except` covers a user rewrite and a built-in."""
     for act in (lambda: fma.apply(plain),
                 lambda: unfold_special(plain, where=3)):
         with pytest.raises(TransformError):
@@ -79,16 +78,10 @@ def test_the_two_failures_are_distinguishable():
     assert 'does not correspond' in str(wrong.value)
 
 
-def test_apply_all_reports_the_same_way():
-    with pytest.raises(TransformReferenceError, match='matches nothing'):
-        Rewrite(fma_l, fma_r).apply(plain)
-
-
 def test_a_malformed_rule_is_not_a_transform_error():
     """A replacement whose variables the pattern never binds is a bug in the
     rule, not a bad reference to a program, so a fallback schedule must not
-    swallow it.  (An *unbound* name cannot even be written: the pattern's own
-    syntax check rejects it.)"""
+    swallow it."""
     bad = Rewrite(fma_l, extra_var_r)
     with pytest.raises(SubstitutionError):
         bad.apply(twice)

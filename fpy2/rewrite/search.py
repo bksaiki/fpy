@@ -17,14 +17,12 @@ def find_all(
     Every place in `func` that matches `pattern`, in visit order.
 
     The kind of cursor is the kind of the pattern: an
-    :class:`fpy2.strategies.ExprCursor` for an expression pattern, a
-    :class:`fpy2.strategies.StmtCursor` or
-    :class:`fpy2.strategies.BlockCursor` for a statement pattern of one or
-    several statements.
+    :class:`~fpy2.transform.ExprCursor` for an expression pattern, a
+    :class:`~fpy2.transform.StmtCursor` or :class:`~fpy2.transform.BlockCursor`
+    for a statement pattern of one or several statements.
 
-    A statement pattern of *k* statements is matched by a sliding window, so
-    two matches can share statements.  They are all listed; a rewrite cannot
-    apply to more than one of an overlapping pair.
+    A *k*-statement pattern is matched by a sliding window, so two matches can
+    share statements; all are listed.
 
     Parameters
     ----------
@@ -69,9 +67,8 @@ def find(
     """
     The one place in `func` that matches `pattern`.
 
-    A pattern is meant to identify something, so matching nothing and matching
-    several places are both bad references — use :func:`find_all` where a
-    pattern is expected to match more than once.
+    Matching nothing and matching several places are both bad references; use
+    :func:`find_all` for a pattern expected to match more than once.
 
     Parameters
     ----------
@@ -105,8 +102,8 @@ def find(
         def f(x, y, z):
             return x * y + z
 
-    ``find(fma_l, f)`` names the sum, which ``inline`` or a
-    :class:`fpy2.strategies.Rewrite` can then be aimed at.
+    ``find(fma_l, f)`` names the sum, which a :class:`fpy2.Rewrite` can then be
+    aimed at.
     """
     found = find_all(pattern, func, within)
     if not found:

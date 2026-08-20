@@ -1,10 +1,8 @@
 """
 The cursor a match carries.
 
-A match used to hold its location by object identity -- an `Expr`, or a
-`(block, idx)` pair whose block was a *synthetic* wrapper around the window, not
-a block of the program.  Now it holds a cursor, so the location can be resolved,
-compared, and forwarded.
+A match holds a cursor, so its location can be resolved, compared and
+forwarded.
 """
 
 import pytest
@@ -69,7 +67,7 @@ def test_an_expression_match_carries_an_expression_cursor():
 
 
 def test_expression_cursors_are_in_traversal_order():
-    """The order the occurrence index counted, so match `i` is occurrence `i`."""
+    """Match `i` is the `i`th in visit order, which is what `where=i` names."""
     matches = Matcher(mul_add).match(twice)
     assert [m.cursor.path.stmt() for m in matches] == [
         FuncBody().stmt(0), FuncBody().stmt(1)
@@ -143,7 +141,7 @@ def three_adds(x):
 
 def test_the_window_produces_overlapping_matches():
     """Windows at 0 and 1 both match, sharing statement 1 -- fine for a cursor,
-    but a rewrite cannot apply to both (see the plan's overlap contract)."""
+    but a rewrite cannot apply to both."""
     matches = Matcher(two_adds).match(three_adds)
     spans = [m.cursor.span for m in matches if isinstance(m.cursor, BlockCursor)]
     assert spans == [range(0, 2), range(1, 3)]
@@ -153,7 +151,7 @@ def test_the_window_produces_overlapping_matches():
 
 
 def test_a_substitution_still_reaches_its_bindings():
-    """The match is a value now; `subst` is what the applier reads."""
+    """`subst` is what the applier reads."""
     m, = Matcher(one_stmt).match(two_then_one)
     assert 'a' in {str(v) for v in m.subst.vars()}
     assert m.pattern is one_stmt

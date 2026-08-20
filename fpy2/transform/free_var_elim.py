@@ -12,7 +12,8 @@ from ..analysis import SyntaxCheck
 from ..ast.fpyast import Assign, Expr, FuncDef, FuncMeta, StmtBlock
 from ..number import Context
 from .const_fold import value_to_literal
-from .utils import Edit, EditLog, FuncBody
+from .cursor import Edit, EditLog
+from .path import FuncBody
 
 
 def inline_literal(val: object) -> Expr | None:

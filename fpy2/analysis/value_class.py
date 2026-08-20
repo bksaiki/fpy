@@ -540,10 +540,7 @@ class _ValueClassInstance(DefaultVisitor):
             self._visit_expr(arg, ctx)
 
     def _visit_call(self, e: Call, ctx: None) -> ValueClass:
-        for arg in e.args:
-            self._visit_expr(arg, ctx)
-        for _, kwarg in e.kwargs:
-            self._visit_expr(kwarg, ctx)
+        super()._visit_call(e, ctx)
         # the callee produces the result, so the caller's context says nothing
         return _TOP
 

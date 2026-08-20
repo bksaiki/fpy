@@ -1,7 +1,7 @@
 """
 What a user rewrite reports, and what a cursor makes of it.
 
-A rewrite is now a pass like any other: it says which statements it replaced, so
+A rewrite is a pass like any other: it says which statements it replaced, so
 a cursor crosses it, and a schedule can put a user rule between two built-ins.
 """
 
@@ -290,8 +290,7 @@ def test_where_defaults_to_every_match():
 
 
 def test_an_unselected_match_keeps_its_statements():
-    """A window that matches but is not the chosen occurrence is left alone --
-    it used to lose its first statement."""
+    """A window that matches but is not the chosen match keeps its statements."""
     @fp.fpy
     def two(x):
         y = x + 1

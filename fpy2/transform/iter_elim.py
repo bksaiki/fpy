@@ -42,6 +42,7 @@ from ..ast.fpyast import (
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Id
+from .utils import clone
 
 
 @dataclasses.dataclass
@@ -125,12 +126,6 @@ def is_access_path(e: Expr) -> bool:
             return True
         case _:
             return False
-
-
-def clone(e: Expr) -> Expr:
-    """A structurally fresh copy of *e* (no AST shared between substituted
-    occurrences); ``DefaultTransformVisitor`` rebuilds every node."""
-    return DefaultTransformVisitor()._visit_expr(e, None)
 
 
 def index_access(arg: Expr, idx: NamedId) -> Callable[[], Expr]:

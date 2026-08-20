@@ -15,6 +15,7 @@ from ..transform import (
     TransformDeclined,
     TransformReferenceError,
     check_where,
+    contains,
 )
 from ..utils import default_repr, sliding_window
 from .applier import Applier
@@ -51,30 +52,21 @@ class _RewriteEngine(SiteRewriter):
     def __init__(self, lhs: Pattern, rhs: Pattern):
         self.matcher = Matcher(lhs)
         self.applier = Applier(rhs)
-        # the sites are the pattern's matches, which are expressions for an
-        # expression rule and statements for a statement one
+        # only an expression rule may be aimed with an `ExprCursor`
         self._expr_sited = isinstance(lhs, ExprPattern)
-        self.where = None
-        self.site_idx = 0
         self.times_applied = 0
 
-    def apply(
-        self,
-        func: FuncDef, *,
-        where: int | Cursor | None = None,
-        repeat: int = 1
-    ):
+    def apply(self, func: FuncDef, *, where: Cursor | None = None, repeat: int = 1):
         self.where = where
         self.times_applied = 0
         ast = self._visit_function(func, _RewriteContext(repeat))
-        return ast, self.times_applied, self.site_idx
+        return ast, self.times_applied
 
     def _nested_applier(self, num_times: int):
         if num_times == 1:
             return self.applier
         else:
-            # expanding the rule is its own pass: it counts its own matches, so
-            # the program-level count is neither consumed nor inflated
+            # expanding the rule counts its own matches, not the program's
             outer, self.site_idx = self.site_idx, 0
             try:
                 return Applier(self._expand(num_times))
@@ -86,19 +78,19 @@ class _RewriteEngine(SiteRewriter):
         more times."""
         pattern = self.applier.pattern
         for _ in range(1, num_times):
-            # each round is a pass in its own right, matching from zero
             self.site_idx = 0
             nested = _RewriteContext(1, is_nested=True)
+            # a fresh `FuncDef` each round: the pattern may be a module-level
+            # `@fp.pattern` the caller still holds
+            ast = DefaultTransformVisitor()._visit_function(pattern.to_ast(), None)
             match pattern:
                 case ExprPattern():
                     # run the rule over its own replacement, to emulate taint
                     expr = self._visit_expr(pattern.expr, nested)
-                    ast = pattern.to_ast()
                     ast.body.stmts[0] = EffectStmt(expr, None)
                     pattern = ExprPattern(ast)
                 case StmtPattern():
                     block, _ = self._visit_block(pattern.block, nested)
-                    ast = pattern.to_ast()
                     ast.body = block
                     pattern = StmtPattern(ast)
                 case _:
@@ -118,8 +110,9 @@ class _RewriteEngine(SiteRewriter):
                 self.site_idx += 1
                 # expanding the rule takes its first match, whatever the
                 # program-level `where` says
-                if idx == 0 if ctx.is_nested else self._selects_expr_src(src, idx):
-                    e = self.applier.apply(subst)
+                if idx == 0 if ctx.is_nested else self._selects_expr(src, idx):
+                    applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
+                    e = applier.apply(subst)
                     if not isinstance(e, Expr):
                         raise TypeError(f'Substitution produced \'Expr\', got {type(e)} for {e}')
                     self.times_applied += 1
@@ -128,13 +121,6 @@ class _RewriteEngine(SiteRewriter):
                         # no edit -- but an expression cursor in it is stale
                         self._mark_exprs(*self._site)
         return e
-
-    def _selects_expr_src(self, src: Expr, idx: int) -> bool:
-        """Whether the match at *src* is the one this rewrite is aimed at."""
-        if self._target_expr is not None:
-            return src is self._target_expr
-        block, pos = self._site
-        return self._selects(block, pos, idx)
 
     def _visit_block(self, block: StmtBlock, ctx: _RewriteContext):
         pattern = self.matcher.pattern
@@ -150,9 +136,7 @@ class _RewriteEngine(SiteRewriter):
         block = StmtBlock(rebuilt)
 
         if isinstance(pattern, StmtPattern):
-            # every window of `k` consecutive statements is a candidate; a match
-            # that is rewritten consumes its whole window, and one that is not
-            # keeps its statements
+            # a rewritten match consumes its whole window
             k = len(pattern.block.stmts)
             stmts = block.stmts
             new_stmts: list[Stmt] = []
@@ -164,7 +148,7 @@ class _RewriteEngine(SiteRewriter):
                     self.site_idx += 1
                     selected = (
                         idx == 0 if ctx.is_nested
-                        else self._selects_at(path, pos, idx)
+                        else self._selects_at(path, pos, idx, k)
                     )
                     if selected:
                         applier = self._nested_applier(1 if ctx.is_nested else ctx.repeat)
@@ -278,14 +262,22 @@ class Rewrite:
             raise TypeError(f'Expected a positive \'int\' for repeat, got {repeat}')
 
         where = func.rebase(where)
-        if where is None:
-            self._check_disjoint(func)
+        matches = find_all(self.lhs, func)
+        if not matches:
+            raise TransformReferenceError(
+                f'pattern `{self.lhs.name}` matches nothing in `{func.name}`'
+            )
+        if isinstance(where, int):
+            # an index is resolved through `find_all`, so `where=i` and
+            # `find_all(...)[i]` cannot disagree about which match they name
+            if not 0 <= where < len(matches):
+                raise self._bad_aim(func, len(matches), f'where={where}')
+            where = matches[where]
+        self._check_disjoint(matches, where)
 
-        ast, applied, matched = self._engine.apply(
-            func.ast, where=where, repeat=repeat
-        )
+        ast, applied = self._engine.apply(func.ast, where=where, repeat=repeat)
         if applied == 0:
-            raise self._no_match(func, matched, where)
+            raise self._bad_aim(func, len(matches), f'`{where}`')
         # a user rewrite is unverified, so at least hold it to a valid program
         SyntaxCheck.check(ast, ignore_unknown=True)
         return EditLog(
@@ -294,16 +286,15 @@ class Rewrite:
             exprs_preserved=True,
         )
 
-    def _check_disjoint(self, func: Function) -> None:
-        """Declines where two matches share a statement.
-
-        A statement pattern is matched by a sliding window, so windows *i* and
-        *i+1* can both match; both cannot be rewritten, and rewriting one and
-        skipping the other would quietly do less than asked.
+    def _check_disjoint(self, matches: list[Cursor], where: Cursor | None) -> None:
+        """Declines where two matches this application would rewrite share a
+        statement: a sliding window can match at *i* and *i+1*, and rewriting
+        one while skipping the other would quietly do less than asked.
         """
-        if not isinstance(self.lhs, StmtPattern):
-            return
-        found = [c for c in find_all(self.lhs, func) if isinstance(c, BlockCursor)]
+        found = [c for c in matches if isinstance(c, BlockCursor)]
+        if where is not None:
+            # only the matches this aim selects can conflict
+            found = [c for c in found if contains(where, c)]
         for a, b in combinations(found, 2):
             if a.block_path == b.block_path and set(a.span) & set(b.span):
                 raise TransformDeclined(
@@ -312,16 +303,10 @@ class Rewrite:
                     'match'
                 )
 
-    def _no_match(
-        self, func: Function, matched: int, where: int | Cursor | None
+    def _bad_aim(
+        self, func: Function, matched: int, aim: str
     ) -> TransformReferenceError:
-        """Why nothing was rewritten: the pattern named no place, or `where`
-        named no match."""
-        if matched == 0:
-            return TransformReferenceError(
-                f'pattern `{self.lhs.name}` matches nothing in `{func.name}`'
-            )
-        aim = f'where={where}' if isinstance(where, int) else f'`{where}`'
+        """The reference error for a `where` that named no match."""
         return TransformReferenceError(
             f'{aim} does not correspond to a match of `{self.lhs.name}`; '
             f'it matches {matched} place(s) in `{func.name}`'

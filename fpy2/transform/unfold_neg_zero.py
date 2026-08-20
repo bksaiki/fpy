@@ -78,18 +78,15 @@ from ..number import (
     RealFloat,
 )
 from ..utils import CompareOp, Gensym
+from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
     BlockRewriter,
-    Cursor,
     Declined,
-    EditLog,
-    StmtCursor,
     agrees,
     check_where,
     fixed_probes,
     is_rounding_block,
     rounding_block,
-    stmt_sites,
     try_round,
 )
 
