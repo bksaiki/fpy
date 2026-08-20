@@ -19,13 +19,16 @@ reference allocation, update, and function application. One is unique to FPy: th
 *context statement*, which sets the active rounding context for the expressions
 it evaluates.
 
-In the formal syntax, :math:`n` is an arbitrary real number, :math:`x` ranges
-over a countable set of identifiers :math:`\mathit{Var}`, and :math:`f` ranges
-over a separate set of function names :math:`\mathit{FuncName}`.
+In the formal syntax, :math:`n` ranges over the reals together with
+:math:`\pm\infty` and NaN, :math:`x` over a countable set of identifiers
+:math:`\mathit{Var}`, and :math:`f` over a separate set of function names
+:math:`\mathit{FuncName}`.
 
-There are two context constants. :math:`\R` is the *real rounding context*,
-whose rounding operation is the identity; :math:`\texttt{ctx}\ \{ \ldots \}` is
-an arbitrary one.
+There are two forms of context constant. :math:`\R` is the *real rounding
+context*, whose rounding operation is the identity.
+:math:`\texttt{ctx}\ \{ \ldots \}` is a schema standing for every other context,
+its :math:`\{ \ldots \}` the parameters that fix a rounding operation; distinct
+parameters give distinct constants, so a program may use several at once.
 
 .. math::
 
@@ -90,8 +93,8 @@ Values
 ------
 
 Evaluating an FPy expression produces one of six kinds of value: a boolean, a
-real number :math:`n`, a *rounding context* :math:`C`, a list of values, a
-tuple of values, or a *location* :math:`\ell`.
+number :math:`n`, a *rounding context* :math:`C`, a list of values, a tuple of
+values, or a *location* :math:`\ell`.
 
 .. math::
 
@@ -101,9 +104,10 @@ tuple of values, or a *location* :math:`\ell`.
    C & ::= & \R \mid \texttt{ctx}\ \{ \ldots \}
    \end{array}
 
-A rounding context :math:`C` is one of the two context constants, each a value
-in its own right (**E-Real**, **E-Ctx**). A context is opaque: the semantics
-uses only its rounding operation, written :math:`C(\cdot)`.
+A rounding context :math:`C` is a context constant—:math:`\R`, or one of the
+family :math:`\texttt{ctx}\ \{ \ldots \}` schematizes—and is a value in its own
+right (**E-Val**). A context is opaque: the semantics uses only its rounding
+operation, written :math:`C(\cdot)`, whose result need not be finite.
 Full FPy provides constructors for the common rounding contexts, all of which
 the core abstracts as :math:`\texttt{ctx}\ \{ \ldots \}`.
 
@@ -126,7 +130,7 @@ evaluates under all three:
 
 read ":math:`e` evaluates to value :math:`v`". Expressions are pure, so the
 judgement yields no store; :math:`\mu` remains an input because
-:math:`\texttt{!}` and list indexing read it. The order in which a rule
+:math:`\texttt{!}` reads it. The order in which a rule
 evaluates its sub-expressions is therefore unobservable.
 
 A rule that writes a lookup, such as :math:`\sigma(x)` or :math:`\mu(\ell)`,
@@ -191,10 +195,12 @@ it writes one (see **E-Ref**).
         {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
-Arithmetic is where rounding happens. The operands evaluate to real numbers,
-and the active context :math:`C` rounds their exact sum :math:`\exact{n_1 + n_2}`
-to a representable value. Under :math:`\R`, rounding is the identity, so the
-exact result is returned unchanged.
+Arithmetic is where rounding happens. The operands evaluate to numbers, and the
+active context :math:`C` rounds their sum. The brackets :math:`\exact{\cdot}`
+mark a value computed exactly, with no intermediate rounding, so
+:math:`\exact{n_1 + n_2}` is the true sum and :math:`C` rounds it once. Under
+:math:`\R`, rounding is the identity, so the exact result is returned unchanged;
+under a finite context, an out-of-range result rounds to :math:`\pm\infty`.
 
 .. math::
 
@@ -205,8 +211,8 @@ exact result is returned unchanged.
          C(\exact{n_1 + n_2})}
    \tag{E-Add}
 
-A comparison evaluates its operands and tests them as real numbers, producing a
-boolean; the result is exact.
+A comparison evaluates its operands and tests them, producing a boolean;
+nothing rounds. NaN is unordered: an ordering test with a NaN operand is false.
 ``<`` is the representative—the other comparisons behave identically.
 
 .. math::
@@ -245,11 +251,11 @@ loops, and the context statement pass along the outcome of whatever
 sub-statement they run,
 so a :math:`\mathsf{return}` propagates out to the enclosing function.
 
-The store is threaded through the premises of each statement rule—only
-statements write it, and only allocation and update do. A prime names what a
+Only statements write the store, and only allocation and update do. A rule with
+two statement premises threads it from the first into the second. A prime names what a
 premise leaves behind, as in :math:`\mu'` and :math:`\sigma'`, and a rule that
 threads two stores in sequence names the second :math:`\mu''`. The store is the
-only thing that mutates, and it only grows: :math:`\sigma` changes only by
+only thing that mutates, and its domain only grows: :math:`\sigma` changes only by
 binding, while :math:`\mu` is global, shared by caller and callee, and never
 deallocates.
 
@@ -324,8 +330,8 @@ which is why every other name for that location observes the write.
 
 Functions live in a *top-level environment* :math:`\Phi`, a finite map from
 function names to pairs :math:`(y, s)` of a parameter and a body. It is fixed
-throughout evaluation: every judgement is implicitly parameterized by it, so it
-is elided from the rules, and only **E-App** consults it.
+throughout evaluation: every judgement is implicitly parameterized by it, so the
+rules elide it. Only **E-App** reads it, along with program entry below.
 
 A function application looks its callee up in :math:`\Phi`, evaluates the
 argument, and runs the body to the value it returns, binding that value to
@@ -475,9 +481,9 @@ Programs
 --------
 
 A program is a pair :math:`(\Phi, f_{\mathit{main}})` of a top-level environment
-and an entry point. Execution begins by applying :math:`f_{\mathit{main}}` to the
-program's argument :math:`v`. Where :math:`\Phi(f_{\mathit{main}}) = (y, s)`, the
-program runs its body from the initial state:
+and an entry point, run on an argument :math:`v` supplied by the host. Where
+:math:`\Phi(f_{\mathit{main}}) = (y, s)`, the program runs its body from the
+initial state:
 
 .. math::
 
