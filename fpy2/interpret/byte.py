@@ -21,7 +21,7 @@ from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
 from .interpreter import Interpreter, get_default_interpreter
-from .value import RealValue, ScalarValue, Value
+from .value import Foreign, RealValue, ScalarValue, Value, from_value, to_value
 
 ###########################################################
 # Runtime
@@ -39,59 +39,6 @@ def _is_integer(x: Float | Fraction) -> bool:
             return x.denominator == 1
         case _:
             raise TypeError(f'expected a real number, got `{x}`')
-
-def _cvt_arg(arg):
-    match arg:
-        case bool() | Float() | Context():
-            return arg
-        case RealFloat():
-            return Float.from_real(arg, ctx=REAL)
-        case int():
-            return Float.from_int(arg, ctx=INTEGER, checked=False)
-        case float():
-            return Float.from_float(arg, ctx=FP64, checked=False)
-        case tuple():
-            return tuple(_cvt_arg(x) for x in arg)
-        case list():
-            return [_cvt_arg(x) for x in arg]
-        case _:
-            return arg
-
-def _arg_to_value(arg: Any):
-    """Convert a value crossing the *Python* boundary into an FPy value.
-
-    Containers are rebuilt unconditionally so the caller is isolated: FPy lists
-    are shared, so an FPy callee's ``xs[i] = e`` would otherwise write the Python
-    caller's own list.  Skipping the rebuild when the elements were already FPy
-    values made that isolation depend on how the caller built the list.
-
-    One deep copy per *outer* call only — FPy-to-FPy calls bypass this entirely
-    (``eval(..., convert=False)``) and keep sharing.
-    """
-    return _cvt_arg(arg)
-
-def _is_return_value(x) -> bool:
-    match x:
-        case Fraction():
-            return not is_dyadic(x)
-        case tuple() | list():
-            return all(_is_return_value(v) for v in x)
-        case _:
-            return True
-
-def _cvt_return_value(x: Value):
-    match x:
-        case Fraction():
-            return Float.from_rational(x) if is_dyadic(x) else x
-        case tuple():
-            return tuple(_cvt_return(v) for v in x)
-        case list():
-            return [_cvt_return(v) for v in x]
-        case _:
-            return x
-
-def _cvt_return(x: Value):
-    return x if _is_return_value(x) else _cvt_return_value(x)
 
 def _neg_zero() -> Float:
     """Constructs an exact negative zero (not representable as a `Fraction`)."""
@@ -135,6 +82,9 @@ def _cvt_index(val: Value):
     return idx
 
 def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
+    if isinstance(arg, Foreign):
+        # opaque payload crossing back to Python (e.g. an `rng`)
+        arg = arg.val
     if ty is int:
         # convert to int
         val = _cvt_float(arg)
@@ -190,7 +140,13 @@ def _call_fpy(fn: Function, args, ctx):
     return rt.eval(fn, args, ctx, convert=False)
 
 
+def _unwrap_foreign(x):
+    """Unwraps a top-level `Foreign` for a value crossing to native Python."""
+    return x.val if isinstance(x, Foreign) else x
+
 def _eval_call(fn, ctx, *args, **kwargs):
+    # callables (functions, primitives, context classes) are foreign values
+    fn = _unwrap_foreign(fn)
     match fn:
         case Function():
             # calling FPy function
@@ -201,7 +157,8 @@ def _eval_call(fn, ctx, *args, **kwargs):
             # calling FPy primitive
             if kwargs:
                 raise RuntimeError('FPy primitives do not support keyword arguments')
-            return fn(*args, ctx=ctx)
+            args = tuple(_unwrap_foreign(arg) for arg in args)
+            return to_value(fn(*args, ctx=ctx))
         case type() if issubclass(fn, Context):
             # calling context constructor
             return _construct_context(fn, args, kwargs)
@@ -210,11 +167,16 @@ def _eval_call(fn, ctx, *args, **kwargs):
             if kwargs:
                 raise RuntimeError('foreign functions do not support keyword arguments')
             if fn == print:
-                print(*args)
+                print(*(_unwrap_foreign(arg) for arg in args))
                 # TODO: should we allow `None` to return
                 return None
             else:
                 raise RuntimeError(f'attempting to call a Python function: `{fn}`')
+
+def _eval_attribute(base, attr: str):
+    """``e.name``: read a native attribute and re-classify the result."""
+    val = getattr(_unwrap_foreign(base), attr)
+    return to_value(val)
 
 def _eval_enumerate(val: list[Value], ctx: Context):
     if not isinstance(val, list):
@@ -598,6 +560,7 @@ def make_namespace() -> dict[str, object]:
         '__fpy_any': _eval_any,
         '__fpy_all': _eval_all,
         '__fpy_eq': _eval_eq,
+        '__fpy_attribute': _eval_attribute,
         '__fpy_ordered': _eval_ordered,
         REAL_NAME: REAL,
     }
@@ -651,7 +614,7 @@ class BytecodeCompiler(Visitor):
         # add free variables to the namespace
         for var in self.func.free_vars:
             name = str(var)
-            namespace[name] = _arg_to_value(self.env[name])
+            namespace[name] = to_value(self.env[name])
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
         # return the function object
@@ -716,7 +679,7 @@ class BytecodeCompiler(Visitor):
     def _visit_foreign(self, e: ForeignVal, ctx: None):
         # create a fresh name for the foreign value and add it to the namespace
         name = str(self.gensym.fresh('__fpy_foreign'))
-        self.foreign_vals[name] = e.val
+        self.foreign_vals[name] = to_value(e.val)
 
         # lookup the identifier
         attrs = self._location_to_attributes(e.loc)
@@ -1028,9 +991,13 @@ class BytecodeCompiler(Visitor):
         return pyast.IfExp(test=cond, body=ift, orelse=iff, **attrs)
 
     def _visit_attribute(self, e: Attribute, ctx: None):
+        # routed through `__fpy_attribute`: the base may be a `Foreign`
+        # and the result must be re-classified as an FPy value
         value = self._visit_expr(e.value, ctx)
         attrs = self._location_to_attributes(e.loc)
-        return pyast.Attribute(value=value, attr=e.attr, ctx=pyast.Load(), **attrs)
+        func = pyast.Name(id='__fpy_attribute', ctx=pyast.Load(), **attrs)
+        attr = pyast.Constant(value=e.attr, kind=None, **attrs)
+        return pyast.Call(func=func, args=[value, attr], keywords=[], **attrs)
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         expr = self._visit_expr(stmt.expr, ctx)
@@ -1261,10 +1228,10 @@ class BytecodeInterpreter(Interpreter):
         # compute the context to use during evaluation
         ctx = self._func_ctx(func.ast, ctx)
         if convert:
-            args = tuple(_arg_to_value(arg) for arg in args)
+            args = tuple(to_value(arg) for arg in args)
         # call the function with the given arguments
         res = fn(*args, __ctx__=ctx)
-        return _cvt_return(res) if convert else res
+        return from_value(res) if convert else res
 
     def eval_expr(self, expr: Expr, env: dict[NamedId, Any], ctx: Context):
         # Always converts: the only caller is `PartialEval`, whose environment
@@ -1280,6 +1247,6 @@ class BytecodeInterpreter(Interpreter):
         # compute the context to use during evaluation
         ctx = self._func_ctx(ast, ctx)
         # call the function with the given arguments
-        args = tuple(_arg_to_value(env[name]) for name in names)
+        args = tuple(to_value(env[name]) for name in names)
         res = fn(*args, __ctx__=ctx)
-        return _cvt_return(res)
+        return from_value(res)

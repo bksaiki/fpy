@@ -68,8 +68,12 @@ def to_value(arg: Any) -> Value:
     """
     Converts a Python object crossing into FPy to a :data:`Value`.
 
-    Idempotent: FPy values pass through unchanged. Containers are
-    rebuilt; anything with no FPy form is wrapped as :class:`Foreign`.
+    Idempotent: FPy values pass through unchanged; anything with no FPy
+    form is wrapped as :class:`Foreign`. Containers are rebuilt
+    unconditionally so the caller is isolated: FPy lists are shared, so
+    an FPy callee's ``xs[i] = e`` would otherwise write the Python
+    caller's own list. One deep copy per *outer* call only — FPy-to-FPy
+    calls skip conversion entirely and keep sharing.
     """
     match arg:
         case bool() | Float() | Fraction() | Context() | Foreign():
