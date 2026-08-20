@@ -9,17 +9,26 @@ explains every other *evaluable* node in :mod:`fpy2.ast.fpyast`, each either
 syntax that has no FPy spelling of its own, as lists do (see *Lists*).
 
 Most entries instantiate one of two schemas, generalizing the core's
-representatives **E-Add** and **E-Lt** to any arity. Each :math:`e_i` evaluates
-first; **E-Op** needs reals :math:`n_i`, **E-Pred** takes any values :math:`v_i`.
+representatives **E-Add** and **E-Lt** to any arity. A *rounded operator*
+:math:`\mathit{op}` rounds the exact result of applying it:
 
-* **E-Op** — a *rounded operator* :math:`op` denoting the exact function
-  :math:`f`:
-  :math:`\langle \sigma, \mu, C, op(e_1, \ldots, e_k) \rangle \Downarrow
-  C(\exact{f(n_1, \ldots, n_k)})`.
-* **E-Pred** — an *exact predicate* :math:`p`, yielding a boolean with no
-  rounding:
-  :math:`\langle \sigma, \mu, C, p(e_1, \ldots, e_k) \rangle \Downarrow
-  p(v_1, \ldots, v_k)`.
+.. math::
+
+   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow n_i
+         \quad (1 \le i \le k)}
+        {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
+         \Downarrow C(\exact{\mathit{op}(n_1, \ldots, n_k)})}
+   \tag{E-Op}
+
+An *exact predicate* :math:`\mathit{op}` yields a boolean, and nothing rounds:
+
+.. math::
+
+   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
+         \quad (1 \le i \le k)}
+        {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
+         \Downarrow \mathit{op}(v_1, \ldots, v_k)}
+   \tag{E-Pred}
 
 A node shown with an ``@fp.fpy`` program stands for that program, which is
 ordinary FPy and elaborates in turn by the entries here: an expression node
@@ -46,13 +55,13 @@ Classification and inspection
 -----------------------------
 
 * ``IsFinite``, ``IsInf``, ``IsNan``, ``IsNormal``, ``Signbit`` — **E-Pred**,
-  each :math:`p` testing its operand.
-* ``Logb`` — **E-Op** with :math:`f` the normalized (integer) exponent.
+  each testing its operand.
+* ``Logb`` — **E-Op** for the normalized (integer) exponent.
 
 Arithmetic
 ----------
 
-These are **E-Op**, differing only in the function :math:`f` computed:
+These are **E-Op**, differing only in the operation:
 ``Sub`` (``-``), ``Mul`` (``*``), ``Div`` (``/``), ``Neg``, ``Abs``, ``Sqrt``,
 ``Cbrt``, ``Pow`` (``**``), ``Copysign``, ``Atan2``, ``Mod`` (``%``), ``Fmod``,
 ``Remainder``, and the elementary functions ``Sin``, ``Cos``, ``Tan``,
@@ -70,7 +79,7 @@ Rounding operators
 ------------------
 
 * ``Round`` — ``fp.round(e)`` rounds ``e`` to the active context, :math:`C(v)`
-  (**E-Op** with :math:`f` the identity); idempotent.
+  (**E-Op** with the identity operation); idempotent.
 * ``RoundAt`` — ``fp.round_at(e, n)`` rounds ``e`` at digit position ``n``, then
   under :math:`C`.
 * ``Cast`` — ``fp.cast(e)`` rounds ``e`` but is stuck unless the result is
@@ -150,7 +159,7 @@ Miscellaneous
 Logical operators
 -----------------
 
-* ``Not`` — **E-Pred** with :math:`p` boolean negation.
+* ``Not`` — **E-Pred** for boolean negation.
 * ``And`` / ``Or`` — ``a and b`` :math:`\equiv` ``b if a else False``, and
   ``a or b`` :math:`\equiv` ``True if a else b``.
 
@@ -221,21 +230,31 @@ List comprehensions
             j = j + 1
         return acc
 
-* ``ListSlice`` — ``xs[start:stop]`` :math:`\equiv`
-  ``[xs[i] for i in range(start, stop)]``, exactly ``stop - start`` elements. An
-  omitted bound defaults to ``0`` or ``len(xs)``, as in ``xs[1:]``; bounds are not
-  clamped.
+* ``ListSlice`` — ``xs[start:stop]`` extracts exactly ``stop - start`` elements.
+  An omitted bound defaults to ``0`` or ``len(xs)``, as in ``xs[1:]``; bounds are
+  not clamped::
+
+    @fp.fpy
+    def slice(xs: list[Any], start: int, stop: int) -> list[Any]:
+        return [xs[i] for i in range(start, stop)]
+
   Reading each element and rebuilding allocates a fresh cell per element, so a
   slice copies the cells rather than sharing them: for ``ys = xs[i:j]``, a write to
   ``ys[k]`` does not reach ``xs``. Those cells hold the same rows, though, so
   ``ys[k][l] = e`` does.
 
-* ``Zip`` — corresponding elements as tuples: ``zip(xs, ys)`` :math:`\equiv`
-  ``[(xs[i], ys[i]) for i in range(len(xs))]``, where ``len(xs) == len(ys)``;
-  unequal lengths are undefined.
+* ``Zip`` — corresponding elements as tuples. ``zip`` takes any number of lists;
+  the two-list case is shown, and unequal lengths are undefined::
 
-* ``Enumerate`` — ``enumerate(xs)`` :math:`\equiv`
-  ``[(i, xs[i]) for i in range(len(xs))]``, pairs with integer ``i``.
+    @fp.fpy
+    def zip2(xs: list[Any], ys: list[Any]) -> list[tuple[Any, Any]]:
+        return [(xs[i], ys[i]) for i in range(len(xs))]
+
+* ``Enumerate`` — pairs each element with its integer index::
+
+    @fp.fpy
+    def enumerate(xs: list[Any]) -> list[tuple[fp.Real, Any]]:
+        return [(i, xs[i]) for i in range(len(xs))]
 
 Composite and selection
 -----------------------
@@ -248,6 +267,12 @@ propagate NaN and break ``±0`` ties by sign, independent of argument order::
         if fp.isnan(x) or fp.isnan(y):
             return x if fp.isnan(x) else y   # any NaN operand propagates
         return x if x > y or (x == y and not fp.signbit(x)) else y  # tie: +0
+
+    @fp.fpy
+    def minimum(x: fp.Real, y: fp.Real) -> fp.Real:
+        if fp.isnan(x) or fp.isnan(y):
+            return x if fp.isnan(x) else y
+        return x if x < y or (x == y and fp.signbit(x)) else y      # tie: -0
 
 The variadic ``max`` / ``min`` and the single-list reduce forms ``AMax`` /
 ``AMin`` fold this binary operation left-to-right.
@@ -334,10 +359,10 @@ Three more round twice, since their operand is itself a rounded result:
 * ``ConstPi_4`` (π/4) — ``fp.const_pi() / 4``
 
 A *truly composed* constant keeps its inner value exact under ``with fp.REAL:``
-and rounds only at the ``return``. That inner value is not exactly
-representable, so these are **FPCore-compatibility** shims that do not evaluate:
-the elementary functions and ``const_pi`` have no implementation under
-``fp.REAL``::
+and rounds only at the ``return``. The inner operation runs under ``fp.REAL``,
+which cannot represent its result, so the program below *specifies* the constant
+rather than computing it; the engine evaluates these **FPCore-compatibility**
+constants directly::
 
     @fp.fpy
     def const_2_sqrt_pi() -> fp.Real:

@@ -127,10 +127,8 @@ evaluates under all three:
 
    \langle \sigma, \mu, C, e \rangle \Downarrow v
 
-read ":math:`e` evaluates to value :math:`v`". Expressions are pure, so the
-judgement yields no store; :math:`\mu` remains an input because
-:math:`\texttt{!}` reads it. Sub-expression evaluation order is therefore
-unobservable.
+read ":math:`e` evaluates to value :math:`v`". Expressions are pure;
+:math:`\mu` remains an input because :math:`\texttt{!}` reads it.
 
 A rule that writes a lookup, such as :math:`\sigma(x)` or :math:`\mu(\ell)`,
 requires it to be defined; otherwise no rule applies and evaluation is stuck.
@@ -196,8 +194,7 @@ Arithmetic is where rounding happens. The operands evaluate to numbers, and the
 active context :math:`C` rounds their sum. The brackets :math:`\exact{\cdot}`
 mark a value computed exactly, with no intermediate rounding, so
 :math:`\exact{n_1 + n_2}` is the true sum and :math:`C` rounds it once. Under
-:math:`\R`, rounding is the identity, so the exact result is returned unchanged;
-under a finite context, an out-of-range result rounds to :math:`\pm\infty`.
+:math:`\R`, rounding is the identity, so the exact result is returned unchanged.
 
 .. math::
 
@@ -464,8 +461,8 @@ The context is scoped; the store and environment are not.
 
    The context expression is evaluated under :math:`\R` rather than the active
    context :math:`C` because a constructor's arguments in the full FPy language
-   are usually precisions, bitwidths, maximum values, etc. Rounding may inadvertently
-   change the desired result.
+   are usually precisions, bitwidths, maximum values, etc. Rounding under :math:`C`
+   may inadvertently change the desired result.
 
 Programs
 --------
