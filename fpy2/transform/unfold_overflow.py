@@ -374,13 +374,15 @@ def _unbounded(ctx: _BoundedCtx) -> _Unbounded | None:
                 nan_value=ctx.nan_value,
                 inf_value=ctx.inf_value,
             )
-        # `MPSFloatContext` is built through its constructor rather than
-        # `from_format`, which rejects a format without NaN or infinity (see
-        # the `TODO` in `fpy2.number.context.mps_float`).  Handing those back
-        # is harmless: they reach a rounding only as its operand, and the
-        # caller branches on whichever of them the source treats differently.
-        # A shifted exponent encoding needs no attention either — `pmax` and
-        # `emin` account for it.
+        # NaN and infinity are deliberately left enabled rather than carried
+        # over from `ctx`.  For a float format the infinity *is* the overflow
+        # value, so an unbounded counterpart that kept a disabled one would
+        # refuse the operand that the bound check is there to absorb, forcing a
+        # branch where the generic path already agrees with the source.  The
+        # caller still branches on whichever special the source treats
+        # differently, so nothing is lost by being permissive here.  A shifted
+        # exponent encoding needs no attention either — `pmax` and `emin`
+        # account for it.
         return MPSFloatContext(ctx.pmax, ctx.emin, ctx.rm)
     except ValueError:
         return None

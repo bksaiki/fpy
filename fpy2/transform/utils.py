@@ -44,7 +44,10 @@ from ..number import (
     Context,
     Float,
     MPBFixedContext,
+    MPBFloatContext,
     MPFixedContext,
+    MPFloatContext,
+    MPSFloatContext,
     RealFloat,
 )
 from .cursor import (
@@ -174,15 +177,18 @@ def agrees(a: Float | None, b: Float | None) -> bool:
     return same_value(a, b)
 
 
-def fixed_probes(
-    ctx: MPFixedContext | MPBFixedContext,
-) -> list[Float | RealFloat]:
+_Probeable = (
+    MPFixedContext | MPBFixedContext
+    | MPFloatContext | MPSFloatContext | MPBFloatContext
+)
+"""the contexts whose grid a probe set can be built from"""
+
+
+def special_probes(ctx: _Probeable) -> list[Float | RealFloat]:
     """
-    The edge values of a fixed-point format, on which a rewrite of its
-    rounding could disagree with it: both zeros, values rounding to zero from
-    either side, the specials, and — for a bounded format — operands at and
-    past the bound, including one full trip around the wrapped range, which
-    lands back on zero.
+    The edge values of a format, on which a rewrite of its rounding could
+    disagree with it: both zeros, the specials, the values its grid has to
+    round, and — for a bounded format — operands at and past the bound.
     """
     nan = Float(isnan=True)
     xs: list[Float | RealFloat] = [
@@ -190,20 +196,32 @@ def fixed_probes(
         Float(isinf=True), Float(isinf=True, s=True),
         Float(c=0), Float(c=0, s=True),
     ]
-    grid = [
-        RealFloat(exp=ctx.nmin - 3, c=1),   # far below the grid
-        RealFloat(exp=ctx.nmin, c=1),       # the tie at half a step
-        RealFloat(exp=ctx.nmin, c=3),
-        RealFloat(exp=ctx.nmin + 1, c=1),   # the grid's finest step
-    ]
-    if isinstance(ctx, MPBFixedContext):
-        step = RealFloat(exp=ctx.nmin + 1, c=1)
-        span = ctx.pos_maxval - ctx.neg_maxval + step
+    grid: list[RealFloat] = []
+    if isinstance(ctx, MPFloatContext | MPSFloatContext | MPBFloatContext):
+        grid += [
+            RealFloat(exp=0, c=1),
+            RealFloat(exp=0, c=1 << ctx.pmax),          # one digit past `pmax`
+            RealFloat(exp=0, c=(1 << ctx.pmax) | 1),    # ... and an odd remainder
+            RealFloat(exp=0, c=(3 << ctx.pmax) | 1),    # a tie, rounded either way
+        ]
+    if not isinstance(ctx, MPFloatContext):
+        # `MPFloatContext` alone has no least digit: it is unbounded either way
+        grid += [
+            RealFloat(exp=ctx.nmin - 3, c=1),   # far below the grid
+            RealFloat(exp=ctx.nmin, c=1),       # the tie at half a step
+            RealFloat(exp=ctx.nmin, c=3),
+            RealFloat(exp=ctx.nmin + 1, c=1),   # the grid's finest step
+        ]
+    if isinstance(ctx, MPBFixedContext | MPBFloatContext):
         grid += [
             ctx.pos_maxval, ctx.neg_maxval,
             shift(ctx.pos_maxval, 1), shift(ctx.pos_maxval, 64),
-            span, span + step, shift(span, 1),
         ]
+    if isinstance(ctx, MPBFixedContext):
+        # one full trip around the wrapped range, which lands back on zero
+        step = RealFloat(exp=ctx.nmin + 1, c=1)
+        span = ctx.pos_maxval - ctx.neg_maxval + step
+        grid += [span, span + step, shift(span, 1)]
     for g in grid:
         xs.append(RealFloat(exp=g.exp, c=g.c))
         xs.append(RealFloat(s=True, exp=g.exp, c=g.c))

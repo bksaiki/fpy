@@ -84,7 +84,7 @@ from .utils import (
     Declined,
     agrees,
     check_where,
-    fixed_probes,
+    special_probes,
     is_rounding_block,
     rounding_block,
     try_round,
@@ -148,7 +148,7 @@ def _emitted(dropped: _FixedCtx, x: Float | RealFloat) -> Float | None:
 def _reproduced(ctx: _FixedCtx, dropped: _FixedCtx) -> bool:
     """Whether the emitted program agrees with `ctx` on every probe."""
     return all(
-        agrees(try_round(ctx, x), _emitted(dropped, x)) for x in fixed_probes(ctx)
+        agrees(try_round(ctx, x), _emitted(dropped, x)) for x in special_probes(ctx)
     )
 
 

@@ -8,8 +8,9 @@ assert:
    surviving context with the shed rules removed — its operand provably
    finite and non-zero.
 2. **Negative checks**: contexts and bodies the rewrite must not touch —
-   refusals, float formats, and sides the format itself needs (overflow that
-   produces an infinity) — compare via ``is_equiv`` against the original AST.
+   refusals, encoded float formats, and sides the format itself needs (overflow
+   that produces an infinity) — compare via ``is_equiv`` against the original
+   AST.
 3. **Semantic equivalence** via the interpreter, bit-exactly, refusals
    included, across formats and every value class.
 """
@@ -17,7 +18,7 @@ assert:
 import fpy2 as fp
 import pytest
 
-from fpy2.analysis import PartialEval
+from fpy2.analysis import PartialEval, ValueClass
 from fpy2.ast.fpyast import (
     Compare,
     ContextStmt,
@@ -35,7 +36,13 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldSpecial
+from fpy2.transform import (
+    TransformDeclined,
+    TransformReferenceError,
+    UnfoldSpecial,
+    unfold_special,
+)
+from fpy2.transform.unfold_special import _describe
 
 
 # ----------------------------------------------------------------------
@@ -108,13 +115,16 @@ def _samples(ctx) -> list:
         fp.Float(isinf=True), fp.Float(isinf=True, s=True),
         fp.Float(c=0), fp.Float(c=0, s=True),
     ]
-    grid = [
-        RealFloat(exp=ctx.nmin - 3, c=1),   # rounds to zero
-        RealFloat(exp=ctx.nmin, c=1),       # the tie at half a step
-        RealFloat(exp=ctx.nmin + 1, c=1),   # the grid's finest step
-        RealFloat(exp=0, c=1),
-    ]
-    if isinstance(ctx, MPBFixedContext):
+    grid = [RealFloat(exp=0, c=1)]
+    # `MPFloatContext` has no least digit: it is unbounded in both directions
+    nmin = getattr(ctx, 'nmin', None)
+    if nmin is not None:
+        grid += [
+            RealFloat(exp=nmin - 3, c=1),   # rounds to zero
+            RealFloat(exp=nmin, c=1),       # the tie at half a step
+            RealFloat(exp=nmin + 1, c=1),   # the grid's finest step
+        ]
+    if isinstance(ctx, MPBFixedContext | fp.MPBFloatContext):
         B = ctx.pos_maxval
         grid += [B, RealFloat(exp=B.exp + 1, c=B.c), RealFloat(exp=B.exp + 30, c=B.c)]
     for g in grid:
@@ -611,10 +621,12 @@ class TestEquivalence:
 
 
 class TestFloatFormats:
-    """A float format states no special-value rule as a parameter — an encoded
-    float always has a NaN by construction — so it can shed nothing.  It can
-    still have its specials *stated*, which is the half that leaves the
-    surviving rounding a finite non-zero operand.
+    """An *encoded* float states no special-value rule as a parameter — it
+    spells NaN as a ``nan_kind``, and an encoding always has a NaN by
+    construction — so it can shed nothing.  It can still have its specials
+    *stated*, which is the half that leaves the surviving rounding a finite
+    non-zero operand.  (The MP float family does shed; see
+    ``TestMPFloatFormats``.)
 
     Getting the sign from the format rather than assuming it is the point: a
     hand-written ``return fp.inf()`` is wrong for ``-inf``, and
@@ -664,3 +676,154 @@ class TestFloatFormats:
             return y
 
         assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+
+
+###########################################################
+# Tests: the MP float family sheds its stated rules
+
+
+_MAXVAL = RealFloat(exp=5, c=0x7ff)
+"""an `FP16`-shaped bound, for the bounded float context"""
+
+
+class TestMPFloatFormats:
+    """`MPFloatContext`, `MPSFloatContext` and `MPBFloatContext` state NaN and
+    infinity as flags, so they shed like the fixed-point contexts do.
+
+    Their flags default to *enabled*, the opposite of the fixed-point ones, so a
+    shed rule has to be written into the surviving constructor call rather than
+    dropped from it -- a context that merely lost the keyword would still have
+    the rule.
+    """
+
+    @pytest.mark.parametrize('src', [
+        fp.MPFloatContext(11),
+        fp.MPSFloatContext(11, -14),
+    ], ids=['mp', 'mps'])
+    def test_an_unbounded_float_sheds_both(self, src):
+        """Nothing finite rounds to a special without a bound to overflow, so
+        both rules come off."""
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+
+        assert len(_nodes(out, IsNan)) == 1
+        assert len(_nodes(out, IsInf)) == 1
+        surviving, = [c for c in _block_ctxs(out) if c != REAL]
+        assert not surviving.enable_nan
+        assert not surviving.enable_inf
+        for x in _samples(src):
+            _assert_agrees(f, out, x)
+
+    def test_a_bounded_float_keeps_the_infinity_its_overflow_makes(self):
+        """An overflow under `OVERFLOW` *produces* an infinity, which the
+        branches never see, so that rule stays while its branch is still
+        emitted.  The NaN has no such source and comes off."""
+        src = fp.MPBFloatContext(11, -14, _MAXVAL)
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+
+        surviving, = [c for c in _block_ctxs(out) if c != REAL]
+        assert not surviving.enable_nan
+        assert surviving.enable_inf, 'the overflow still has to reach infinity'
+        for x in _samples(src):
+            _assert_agrees(f, out, x)
+
+    def test_a_saturating_bound_sheds_the_infinity_too(self):
+        """Saturation never produces an infinity, so nothing finite needs the
+        rule and it comes off -- the same format, shed differently, decided by
+        the probes rather than by the class."""
+        src = fp.MPBFloatContext(11, -14, _MAXVAL, fp.RoundingMode.RNE, _SAT)
+        f = _quantizer(src)
+        out = UnfoldSpecial.apply(f.ast)
+
+        surviving, = [c for c in _block_ctxs(out) if c != REAL]
+        assert not surviving.enable_nan
+        assert not surviving.enable_inf
+        for x in _samples(src):
+            _assert_agrees(f, out, x)
+
+    def test_the_shed_rule_is_written_into_the_call(self):
+        """The constructor defaults the flags on, so shedding one is saying so
+        outright -- dropping the keyword would leave the rule in place."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPSFloatContext(11, -14):
+                y = fp.round(x)
+            return y
+
+        out = UnfoldSpecial.apply(f.ast)
+        text = out.format()
+        assert 'enable_nan=False' in text
+        assert 'enable_inf=False' in text
+
+    @pytest.mark.parametrize('src', [
+        fp.MPFloatContext(11),
+        fp.MPSFloatContext(11, -14),
+        fp.MPBFloatContext(11, -14, _MAXVAL),
+    ], ids=['mp', 'mps', 'mpb'])
+    def test_it_is_idempotent(self, src):
+        once = UnfoldSpecial.apply(_quantizer(src).ast)
+        assert UnfoldSpecial.apply(once).is_equiv(once)
+
+
+###########################################################
+# Tests: which rules a finite operand still needs
+
+
+class TestShedable:
+    """`_shedable` decides the shed analytically -- a rule stays iff a *finite*
+    operand can still reach it, which only an overflow does -- and the probes
+    assert the answer rather than produce it.  These are the cases the shape
+    tests above do not reach.
+    """
+
+    def _shed(self, ctx) -> tuple[bool, bool]:
+        src = _describe(ctx)
+        return bool(ValueClass.NAN & src.shed), bool(ValueClass.INF & src.shed)
+
+    def _bounded(self, **kwargs):
+        return fp.MPBFloatContext(11, -14, _MAXVAL, **kwargs)
+
+    def test_a_saturating_direction_keeps_nothing_back(self):
+        """`RTZ` rounds an overflow down to the bound, so no finite operand ever
+        reaches the infinity and the rule comes off."""
+        assert self._shed(self._bounded(rm=fp.RoundingMode.RTZ)) == (True, True)
+
+    def test_a_one_sided_direction_still_keeps_the_rule(self):
+        """`RTP` overflows to `+inf` but saturates below, so the rule is needed
+        on one side -- which is enough to keep it."""
+        assert self._shed(self._bounded(rm=fp.RoundingMode.RTP)) == (True, False)
+
+    @pytest.mark.parametrize('mode', [fp.OverflowMode.SATURATE, fp.OverflowMode.ASSERT])
+    def test_an_overflow_that_makes_no_special_keeps_nothing_back(self, mode):
+        """Saturation stays finite and an assertion raises, so neither reaches a
+        special and both rules come off."""
+        assert self._shed(self._bounded(overflow=mode)) == (True, True)
+
+    def test_a_substituted_overflow_keeps_the_rule(self):
+        """With the infinity off, a finite overflow lands on `inf_value` --
+        shedding would clear it, so the rule stays."""
+        ctx = self._bounded(enable_inf=False, inf_value=fp.Float(x=_MAXVAL))
+        assert self._shed(ctx) == (True, False)
+
+    def test_a_refused_overflow_has_no_rule_to_keep(self):
+        """With the infinity off and no substitute the overflow is refused, and
+        shedding leaves it refused -- but there is also no value for a branch to
+        take over, so the infinity is neither stated nor shed."""
+        ctx = self._bounded(enable_inf=False)
+        assert self._shed(ctx) == (True, False)
+
+    def test_an_unbounded_float_has_no_overflow_at_all(self):
+        for ctx in (fp.MPFloatContext(11), fp.MPSFloatContext(11, -14)):
+            assert self._shed(ctx) == (True, True)
+
+    def test_the_probes_catch_a_wrong_answer(self, monkeypatch):
+        """The probes are a cross-check, so a predicate that over-claims trips
+        the assertion instead of emitting a bad program."""
+        ctx = self._bounded()                       # keeps its infinity
+        assert self._shed(ctx) == (True, False)
+
+        both = ValueClass.NAN | ValueClass.INF
+        monkeypatch.setattr(unfold_special, '_shedable', lambda _: both)
+        with pytest.raises(AssertionError):
+            _describe(ctx)
