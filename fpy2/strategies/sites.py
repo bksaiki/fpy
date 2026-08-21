@@ -60,8 +60,13 @@ def sites(
     The kind of cursor is the kind of site the strategy is aimed at: a
     :class:`fpy2.strategies.StmtCursor` for the rounding and loop rewrites, an
     :class:`fpy2.strategies.ExprCursor` for :func:`fpy2.strategies.inline`,
-    whose sites are calls.  Listing is *syntactic*: a site that appears here may
-    still be declined.
+    whose sites are calls.
+
+    For the rounding rewrites a listing is *what `where=None` would rewrite*: a
+    candidate the strategy refuses is not a site, so it neither appears here nor
+    consumes an index.  Naming one with a cursor still says why it was refused.
+    The loop and call rewrites refuse nothing, so the distinction does not
+    arise for them.
 
     Some strategies do not forward cursors (they rewrite at sites they do not
     report); aim what you need before one of those, or re-list afterwards.

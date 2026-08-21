@@ -61,6 +61,15 @@ def cast_and_round(a: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.REAL)
+def cast_and_round_fp16(a: fp.Real) -> fp.Real:
+    with fp.FP16:
+        aq = fp.cast(a)
+    with fp.FP16:
+        bq = fp.round(a)
+    return aq + bq
+
+
+@fp.fpy(ctx=fp.REAL)
 def declining(x: fp.Real) -> fp.Real:
     with fp.REAL:      # a candidate that `unfold_special` refuses
         y = fp.round(x)
@@ -98,11 +107,18 @@ def calls(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 def test_the_rounding_strategies_list_their_blocks():
-    for strategy in (unfold_special, unfold_neg_zero, unfold_overflow,
-                     float_to_fixed, rescale_fixed):
+    """The three that apply to a float format list both of its rounds."""
+    for strategy in (unfold_special, unfold_overflow, float_to_fixed):
         found = sites(strategy, two_sites)
         assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
         assert all(isinstance(c, StmtCursor) for c in found)
+
+
+def test_a_strategy_that_applies_to_nothing_lists_nothing():
+    """`two_sites` rounds to `FP16`, which has no negative-zero rule to shed and
+    nothing fixed-point to rescale, so neither strategy has a site in it."""
+    for strategy in (unfold_neg_zero, rescale_fixed):
+        assert sites(strategy, two_sites) == []
 
 
 def test_a_listing_is_outermost_first():
@@ -142,12 +158,13 @@ def test_inline_honours_the_funcs_filter():
     assert [_callee(c) for c in only] == ['cube']
 
 
-def test_a_listing_is_syntactic():
-    """A site that declines still appears: listing says what a `where` may name,
-    not what will be rewritten."""
-    assert len(sites(unfold_special, declining)) == 1
+def test_a_listing_is_semantic():
+    """A candidate the strategy refuses is not a site: it neither appears in a
+    listing nor consumes an index.  A cursor naming it still says why."""
+    assert sites(unfold_special, declining) == []
+    at_block = StmtCursor(declining.ast, FuncBody().stmt(0))
     with pytest.raises(TransformDeclined, match='rounds exactly'):
-        unfold_special(declining, where=0)
+        unfold_special(declining, where=at_block)
 
 
 def test_a_strategy_that_takes_no_where_has_no_sites():
@@ -179,20 +196,25 @@ def test_a_listed_site_aims_the_same_as_its_index(strategy):
         _aims_alike(strategy, two_sites, i, cursor)
 
 
-@pytest.mark.parametrize('strategy', [unfold_special, rescale_fixed])
-def test_a_cast_block_is_listed_where_it_counts(strategy):
+@pytest.mark.parametrize('strategy,func', [
+    (unfold_special, cast_and_round_fp16),
+    (rescale_fixed, cast_and_round),
+])
+def test_a_cast_block_is_listed_where_it_counts(strategy, func):
     """A `cast` block is a candidate for these two, so it has to appear in the
     listing at the index `where` gives it."""
-    listed = sites(strategy, cast_and_round)
+    listed = sites(strategy, func)
     assert [c.index for c in listed] == [0, 1]
     for i, cursor in enumerate(listed):
-        _aims_alike(strategy, cast_and_round, i, cursor)
+        _aims_alike(strategy, func, i, cursor)
 
 
 def test_a_cast_block_is_not_listed_where_it_does_not_count():
-    """...and must not, for the three that only take a round."""
-    for strategy in (unfold_neg_zero, unfold_overflow, float_to_fixed):
-        assert [c.index for c in sites(strategy, cast_and_round)] == [1]
+    """...and must not, for the two that only take a round.  `unfold_neg_zero`
+    is absent: it refuses a float format outright, so there is no program where
+    it both verifies and sees a cast."""
+    for strategy in (unfold_overflow, float_to_fixed):
+        assert [c.index for c in sites(strategy, cast_and_round_fp16)] == [1]
 
 
 def test_a_listed_insert_round_site_aims_the_same_as_its_index():

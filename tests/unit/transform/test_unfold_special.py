@@ -36,7 +36,13 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldSpecial
+from fpy2.transform import (
+    FuncBody,
+    StmtCursor,
+    TransformDeclined,
+    TransformReferenceError,
+    UnfoldSpecial,
+)
 from fpy2.transform.unfold_special import _describe
 
 
@@ -457,34 +463,40 @@ class TestWhere:
             return aq + bq
         return f
 
-    def test_a_declined_block_counts_toward_where(self):
-        """Candidacy is structural: the ``REAL`` block is index 0 whether or
-        not it verifies, so index 1 names the ``FP16`` block."""
+    def test_a_refused_block_does_not_count_toward_where(self):
+        """A refusal is not a site, so the ``FP16`` block is index 0 even
+        though a structurally-matching ``REAL`` block precedes it."""
         f = self._real_then_fp16()
-        out = UnfoldSpecial.apply(f.ast, where=1)
+        out = UnfoldSpecial.apply(f.ast, where=0)
         assert not out.is_equiv(f.ast)
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
-    def test_naming_a_real_block_is_declined(self):
+    def test_a_real_block_is_not_a_site(self):
+        """It rounds exactly, so there is nothing to state.  No index reaches
+        it -- but a cursor that names it still says why."""
         f = self._real_then_fp16()
-        with pytest.raises(TransformDeclined, match='REAL'):
-            UnfoldSpecial.apply(f.ast, where=0)
+        listed = UnfoldSpecial.sites(f.ast)
+        assert [c.path for c in listed] == [FuncBody().stmt(1)]
 
-    def test_naming_a_runtime_context_is_declined(self):
+        at_real = StmtCursor(f.ast, FuncBody().stmt(0))
+        with pytest.raises(TransformDeclined, match='REAL'):
+            UnfoldSpecial.apply(f.ast, where=at_real)
+
+    def test_naming_a_runtime_context_is_refused(self):
         @fp.fpy(ctx=fp.REAL)
         def f(x, n):
             with fp.MPBFixedContext(n, 255, enable_nan=True):
                 y = fp.round(x)
             return y
 
-        with pytest.raises(TransformDeclined, match='statically known'):
+        with pytest.raises(TransformReferenceError, match='statically known'):
             UnfoldSpecial.apply(f.ast, where=0)
 
-    def test_naming_an_unfolded_block_is_declined(self):
+    def test_naming_an_unfolded_block_is_refused(self):
         """The second pass has nothing left to state, and saying so beats a
         silent no-op."""
         once = UnfoldSpecial.apply(_quantizer(fp.FP16).ast)
-        with pytest.raises(TransformDeclined, match='nothing to state'):
+        with pytest.raises(TransformReferenceError, match='nothing to state'):
             UnfoldSpecial.apply(once, where=0)
 
     def test_an_annotated_assign_is_not_a_candidate(self):

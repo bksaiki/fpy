@@ -56,6 +56,7 @@ from .cursor import (
     Edit,
     ExprCursor,
     StmtCursor,
+    contains,
     not_a_statement,
     region_of,
 )
@@ -294,6 +295,8 @@ class SiteRewriter(DefaultTransformVisitor):
     A subclass that overrides `_visit_function` must call `_begin` itself.
     """
 
+    func: FuncDef
+    """the program being walked; set by the subclass"""
     where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
@@ -314,6 +317,12 @@ class SiteRewriter(DefaultTransformVisitor):
     _expr_sited: bool = False
     """whether this rewrite's candidates are expressions rather than statements;
     only such a rewrite can be aimed with an :class:`ExprCursor`"""
+    listing: bool = False
+    """report the sites this rewrite would act on, instead of acting on them"""
+    found: list[StmtPath]
+    """the sites, while listing"""
+    refused: list[str]
+    """why each candidate that is not a site was refused"""
 
     def _begin(self, func: FuncDef) -> None:
         """Set up against the tree about to be walked: both the paths an edit
@@ -322,6 +331,8 @@ class SiteRewriter(DefaultTransformVisitor):
         self.edits = []
         self.dirty_exprs = []
         self.declined = []
+        self.found = []
+        self.refused = []
         self._matched = 0
         self._replaced = False
         self._paths = block_paths(func)
@@ -340,6 +351,31 @@ class SiteRewriter(DefaultTransformVisitor):
         self._begin(func)
         return super()._visit_function(func, ctx)
 
+    def list_sites(self, within: Cursor | None = None) -> list[StmtCursor]:
+        """The sites this pass would rewrite, in visit order -- what a `where`
+        index counts, and what `within` narrows.
+
+        Runs the pass's own decisions rather than a predicate beside them, so a
+        listing and an `apply` cannot disagree about what a site is.  Requires
+        `self.func`.
+        """
+        if within is not None:
+            # checked before the walk: an empty listing must reject a `within`
+            # that names nothing of the kind just as a populated one does
+            if within.func is not self.func:
+                raise TransformReferenceError(
+                    f'`{within}` names part of another program'
+                )
+            if isinstance(within, ExprCursor):
+                raise not_a_statement(within)
+        self.where = None
+        self.listing = True
+        self._visit_function(self.func, None)
+        cursors = [StmtCursor(self.func, path) for path in self.found]
+        if within is None:
+            return cursors
+        return [c for c in cursors if contains(within, c)]
+
     def check_site(self, what: str) -> None:
         """Rejects an explicit `where` that named no candidate, or one whose
         candidates all declined: fail rather than silently no-op."""
@@ -348,14 +384,21 @@ class SiteRewriter(DefaultTransformVisitor):
             return
         if isinstance(where, int):
             if not 0 <= where < self.site_idx:
+                refused = (
+                    f'; {len(self.refused)} candidate(s) were refused: '
+                    + '; '.join(self.refused)
+                    if self.refused else ''
+                )
                 raise TransformReferenceError(
                     f'where={where} does not correspond to {what}; '
-                    f'the function has {self.site_idx} candidate site(s)'
+                    f'the function has {self.site_idx} site(s){refused}'
                 )
+        elif self.declined and not self.edits:
+            # a refused candidate is not a site, so a cursor naming one matches
+            # nothing -- but saying why beats saying it named nothing
+            raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
         elif self._matched == 0:
             raise TransformReferenceError(f'`{where}` does not name {what}')
-        elif self.declined and not self.edits:
-            raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
 
     def _selects(self, block: StmtBlock, pos: int, idx: int, count: int = 1) -> bool:
         """Whether the candidate at `block[pos:pos+count]`, the `idx`th of the
@@ -473,19 +516,27 @@ class BlockRewriter(SiteRewriter):
             if isinstance(s, ContextStmt):
                 info = self._candidate(s)
                 if info is not None:
-                    idx = self.site_idx
-                    self.site_idx += 1
-                    if self._selects(block, pos, idx):
-                        self._matched += 1
-                        verified = self._verify(s, info)
-                        if isinstance(verified, Declined):
+                    # every candidate is verified, whether or not it is the one
+                    # aimed at: a refusal is not a site, so it must not consume
+                    # an index that a listing would not report
+                    verified = self._verify(s, info)
+                    if isinstance(verified, Declined):
+                        self.refused.append(verified.reason)
+                        if self._target is not None and self._selects(block, pos, -1):
+                            # a cursor named this candidate: say why, rather
+                            # than report that it named nothing
                             self.declined.append(verified.reason)
-                            if isinstance(self.where, int):
-                                raise TransformDeclined(
-                                    f'where={idx}: {verified.reason}'
+                    else:
+                        idx = self.site_idx
+                        self.site_idx += 1
+                        if self._selects(block, pos, idx):
+                            self._matched += 1
+                            if self.listing:
+                                self.found.append(
+                                    StmtPath(self._paths[id(block)], pos)
                                 )
-                            # a region, or the whole program, skips it
-                        else:
+                                stmts.append(s)
+                                continue
                             emitted = self._rewrite(s, verified)
                             self._record(block, pos, len(emitted))
                             stmts.extend(emitted)

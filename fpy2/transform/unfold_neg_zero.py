@@ -297,11 +297,15 @@ class UnfoldNegZero:
 
     @staticmethod
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The candidate rounding blocks of `func`, in visit order --
-        what a `where` index counts, whether or not each verifies.
+        """The sites of `func`, in visit order -- what a `where` index counts,
+        and what `within` narrows.
+
+        Runs the same decisions the rewrite does, so a listing reports exactly
+        the blocks `where=None` would rewrite: no candidate that this pass
+        refuses appears here or consumes an index.
         """
-        casts = _UnfoldNegZeroInstance._casts
-        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
+        eval_info = PartialEval.apply(func)
+        return _UnfoldNegZeroInstance(func, eval_info).list_sites(within)
 
     @staticmethod
     def apply(

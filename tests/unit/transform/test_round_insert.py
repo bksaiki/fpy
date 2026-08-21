@@ -214,7 +214,7 @@ class TestDeclines:
 
     def test_a_where_out_of_range(self):
         ast = _fp32_args(_sum_of_squares, 2)
-        with pytest.raises(TransformReferenceError, match='candidate site'):
+        with pytest.raises(TransformReferenceError, match='does not correspond'):
             RoundInsert.apply(ast, fp.FP64, where=99)
 
     def test_a_where_of_the_wrong_type(self):

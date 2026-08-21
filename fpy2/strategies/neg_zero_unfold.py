@@ -47,11 +47,11 @@ def unfold_neg_zero(func: Function, where: int | Cursor | None = None) -> Functi
     func : Function
         The function to transform.
     where : int | Cursor | None
-        Which block to rewrite: an index counting candidate blocks (the
-        structurally-matching rounding blocks, whether or not they verify)
-        in visit order, outermost-first, or a cursor or region, which takes every
-        candidate at or beneath it. If `None`, rewrite every candidate that
-        verifies and skip the rest.
+        Which block to rewrite: an index counting the blocks this rewrite acts
+        on, in visit order, outermost-first, or a cursor or region, which takes
+        every one at or beneath it. If `None`, rewrite them all. A block this
+        rewrite refuses is not one of them and takes no index; naming it with a
+        cursor says why it was refused.
 
     Returns
     -------

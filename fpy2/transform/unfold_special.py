@@ -444,13 +444,16 @@ class UnfoldSpecial:
 
     @staticmethod
     def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The candidate rounding blocks of `func`, in visit order --
-        what a `where` index counts, whether or not each verifies.
+        """The sites of `func`, in visit order -- what a `where` index counts,
+        and what `within` narrows.
 
-        A cast substitutes a special exactly as a round does, so it counts too.
+        Runs the same decisions the rewrite does, so a listing reports exactly
+        the blocks `where=None` would rewrite: no candidate that this pass
+        refuses appears here or consumes an index.
         """
-        casts = _UnfoldSpecialInstance._casts
-        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
+        eval_info = PartialEval.apply(func)
+        class_info = ValueClassInfer.analyze(func)
+        return _UnfoldSpecialInstance(func, eval_info, class_info).list_sites(within)
 
     @staticmethod
     def apply(

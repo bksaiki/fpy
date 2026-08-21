@@ -488,21 +488,21 @@ class TestWhere:
         with pytest.raises(TransformReferenceError):
             UnfoldOverflow.apply(f.ast, where=9)
 
-    def test_naming_a_declined_block_raises(self):
-        """An unbounded format is structurally a candidate; naming it says
-        why it cannot be rewritten."""
+    def test_naming_a_refused_block_raises(self):
+        """A refused block is not a site, so no index names it -- and the
+        out-of-range error still says why."""
         @fp.fpy(ctx=fp.REAL)
         def f(x):
             with fp.MPFixedContext(-8):
                 y = fp.round(x)
             return y
 
-        with pytest.raises(TransformDeclined, match='bounded'):
+        with pytest.raises(TransformReferenceError, match='bounded'):
             UnfoldOverflow.apply(f.ast, where=0)
 
-    def test_a_declined_block_counts_toward_where(self):
-        """Candidacy is structural: the declining unbounded block is index 0,
-        so index 1 names the `FP16` block."""
+    def test_a_refused_block_does_not_count_toward_where(self):
+        """A refusal is not a site, so the `FP16` block is index 0 even though
+        a structurally-matching unbounded block precedes it."""
         @fp.fpy(ctx=fp.REAL)
         def f(a):
             with fp.MPFixedContext(-8):
@@ -511,7 +511,7 @@ class TestWhere:
                 aq = fp.round(a)
             return aq
 
-        out = UnfoldOverflow.apply(f.ast, where=1)
+        out = UnfoldOverflow.apply(f.ast, where=0)
         assert not out.is_equiv(f.ast)
 
     def test_rejects_a_non_integer(self):

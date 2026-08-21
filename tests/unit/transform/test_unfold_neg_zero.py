@@ -368,8 +368,9 @@ class TestWhere:
         with pytest.raises(TransformReferenceError):
             UnfoldNegZero.apply(f.ast, where=9)
 
-    def test_naming_a_declined_block_raises(self):
-        """A float format is structurally a candidate; naming it says why it
+    def test_naming_a_refused_block_raises(self):
+        """A refused block is not a site, so no index names it -- and the
+        out-of-range error still says why it
         cannot be rewritten."""
         @fp.fpy(ctx=fp.REAL)
         def f(x):
@@ -377,12 +378,12 @@ class TestWhere:
                 y = fp.round(x)
             return y
 
-        with pytest.raises(TransformDeclined, match='fixed-point'):
+        with pytest.raises(TransformReferenceError, match='fixed-point'):
             UnfoldNegZero.apply(f.ast, where=0)
 
-    def test_a_declined_block_counts_toward_where(self):
-        """Candidacy is structural: the declining `FP16` block is index 0,
-        so index 1 names the fixed-point block."""
+    def test_a_refused_block_does_not_count_toward_where(self):
+        """A refusal is not a site, so the fixed-point block is index 0 even
+        though a structurally-matching `FP16` block precedes it."""
         @fp.fpy(ctx=fp.REAL)
         def f(a):
             with fp.FP16:
@@ -391,7 +392,7 @@ class TestWhere:
                 aq = fp.round(a)
             return aq
 
-        out = UnfoldNegZero.apply(f.ast, where=1)
+        out = UnfoldNegZero.apply(f.ast, where=0)
         assert not out.is_equiv(f.ast)
 
     def test_rejects_a_non_integer(self):
