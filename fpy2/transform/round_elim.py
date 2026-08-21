@@ -113,11 +113,13 @@ from ..ast.fpyast import (
     Sub,
     UnderscoreId,
     Var,
+    WhileStmt,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..number.context.context import Context
 from ..utils import Gensym
+from .utils import operands, rebuild
 
 
 @dataclasses.dataclass
@@ -350,33 +352,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
             return self._hoist(e, ctx)
         return super()._visit_expr(e, ctx)
 
-    def _operands(self, e: Expr) -> list[Expr]:
-        """Return *e*'s direct operands (left-to-right) for the
-        rounded ops the hoist handles.  Used to enumerate the
-        positions :meth:`_hoist` may need to bind to temps."""
-        match e:
-            case Add() | Sub() | Mul():
-                return [e.first, e.second]
-            case Abs() | Neg():
-                return [e.arg]
-            case _:
-                raise RuntimeError(
-                    f'_operands called on non-rounded-arithmetic op: {e!r}'
-                )
-
-    def _rebuild(self, e: Expr, operands: list[Expr]) -> Expr:
-        """Reconstruct an arithmetic op *e* with new *operands*.
-        Mirrors the inverse of :meth:`_operands`."""
-        match e:
-            case Add() | Sub() | Mul():
-                return type(e)(operands[0], operands[1], e.loc)
-            case Abs() | Neg():
-                return type(e)(operands[0], e.loc)
-            case _:
-                raise RuntimeError(
-                    f'_rebuild called on non-rounded-arithmetic op: {e!r}'
-                )
-
     def _hoist(self, e: Expr, ctx: _Ctx) -> Expr:
         """Per-op hoist: compute *e* under ``with fp.REAL:`` and
         return ``Var(_tN)`` for the original expression site.
@@ -413,7 +388,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         # the original source position.
         loc = e.loc
         new_operands: list[Expr] = []
-        for operand in self._operands(e):
+        for operand in operands(e):
             new_operand = self._visit_expr(operand, ctx)
             if isinstance(new_operand, Var):
                 # Bind would be a pure copy — no rounds to preserve
@@ -429,7 +404,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
             ctx.stmts.append(Assign(t_op, None, new_operand, loc))
             new_operands.append(Var(t_op, loc))
 
-        rebuilt = self._rebuild(e, new_operands)
+        rebuilt = rebuild(e, new_operands)
         result_name = self.gensym.fresh('_t')
         block = StmtBlock([Assign(result_name, None, rebuilt, loc)])
         wrapped = ContextStmt(
@@ -441,6 +416,13 @@ class _RoundElimInstance(DefaultTransformVisitor):
     # ------------------------------------------------------------------
     # Sentinel-ctx propagation for nested expression positions where
     # statement-level hoisting would be unsound.
+
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
+        # The condition is re-evaluated every iteration, but a preamble lands
+        # before the loop and would compute it once -- a hoist here turns a
+        # terminating loop into one that never advances.  The conditions of
+        # `if` / `for` are each evaluated once, so they need no such guard.
+        return super()._visit_while(stmt, None)[0], ctx
 
     def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
         # ``[elt for t in iter]``: the elt sees the loop targets,

@@ -25,7 +25,8 @@ from fpy2.ast.fpyast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL
-from fpy2.transform import RoundElim
+from fpy2.transform import Monomorphize, RoundElim
+from fpy2.types import RealType
 
 
 # ----------------------------------------------------------------------
@@ -310,8 +311,25 @@ class TestScopeGuards:
 
 class TestSuppressionPositions:
     """Hoisting needs a statement-level preamble slot — disabled
-    inside ListComp elt/iterables and IfExpr branches.  Round /
-    Cast collapse still fires (pure node rewrite)."""
+    inside ListComp elt/iterables, IfExpr branches, and a `while`
+    condition.  Round / Cast collapse still fires (pure node rewrite)."""
+
+    def test_no_hoist_out_of_a_while_condition(self):
+        """A `while` condition is re-evaluated every iteration, but a preamble
+        lands *before* the loop and computes it once.  Hoisting here used to
+        turn a terminating loop into one that never advances."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            while (x * x) < 100.0:
+                with fp.FP32:
+                    x = x + 1.0
+            return x
+
+        pinned = Monomorphize.apply(f.ast, fp.FP64, [RealType(fp.FP32)])
+        out = RoundElim.apply(pinned)
+        assert _count_real_blocks(out) == _count_real_blocks(pinned)
+        assert _eval(out, f, 2.0) == _eval(pinned, f, 2.0)
 
     def test_no_hoist_inside_list_comp(self):
         """``[a + b for a, b in zip(xs, ys)]`` under FP64 — the Add

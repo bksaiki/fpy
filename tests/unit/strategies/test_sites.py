@@ -19,6 +19,7 @@ from fpy2.strategies import (
     TransformReferenceError,
     float_to_fixed,
     inline,
+    insert_round,
     rescale_fixed,
     simplify,
     sites,
@@ -121,6 +122,15 @@ def _callee(cursor: ExprCursor) -> str:
     return call.fn.name
 
 
+def test_insert_round_lists_operations():
+    """Its candidates are operations whose scope rounds exactly, so the two
+    `fp.round` blocks here are not sites at all -- only the final add, which is
+    under the function's own `fp.REAL` scope."""
+    found = sites(insert_round, two_sites)
+    assert all(isinstance(c, ExprCursor) for c in found)
+    assert [type(c.resolve()).__name__ for c in found] == ['Add']
+
+
 def test_inline_lists_expressions():
     found = sites(inline, calls)
     assert all(isinstance(c, ExprCursor) for c in found)
@@ -183,6 +193,16 @@ def test_a_cast_block_is_not_listed_where_it_does_not_count():
     """...and must not, for the three that only take a round."""
     for strategy in (unfold_neg_zero, unfold_overflow, float_to_fixed):
         assert [c.index for c in sites(strategy, cast_and_round)] == [1]
+
+
+def test_a_listed_insert_round_site_aims_the_same_as_its_index():
+    """`insert_round` takes a `ctx` as well, so it binds one rather than
+    joining the parametrization above."""
+    def aim(func, where):
+        return insert_round(func, fp.FP64, where=where)
+
+    for i, cursor in enumerate(sites(insert_round, two_sites)):
+        _aims_alike(aim, two_sites, i, cursor)
 
 
 def test_a_listed_call_aims_the_same_as_its_index():

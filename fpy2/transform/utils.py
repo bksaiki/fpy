@@ -12,6 +12,8 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
+    Abs,
+    Add,
     Assign,
     Attribute,
     Cast,
@@ -26,6 +28,7 @@ from ..ast.fpyast import (
     IfExpr,
     Integer,
     Location,
+    Mul,
     NamedId,
     Neg,
     Rational,
@@ -34,6 +37,7 @@ from ..ast.fpyast import (
     Signbit,
     Stmt,
     StmtBlock,
+    Sub,
     TupleBinding,
     UnderscoreId,
     Var,
@@ -184,6 +188,36 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
 def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
     """Whether *stmt* is a candidate rounding block: what :meth:`sites` lists."""
     return isinstance(stmt, ContextStmt) and rounding_block(stmt, casts=casts) is not None
+
+
+def operands(e: Expr) -> list[Expr]:
+    """The direct operands, left to right, of an operation that carries a
+    context-driven rounding.
+
+    Shared by the two halves of the rounding axis, :class:`.RoundElim` and
+    :class:`.RoundInsert`, so they cannot disagree about which operations one
+    eliminates and the other inserts.
+    """
+    match e:
+        case Add() | Sub() | Mul():
+            return [e.first, e.second]
+        case Abs() | Neg() | Round() | Cast():
+            return [e.arg]
+        case _:
+            raise RuntimeError(f'not a rounded operation: {e!r}')
+
+
+def rebuild(e: Expr, args: list[Expr]) -> Expr:
+    """*e* with its operands replaced: the inverse of :func:`operands`."""
+    match e:
+        case Add() | Sub() | Mul():
+            return type(e)(args[0], args[1], e.loc)
+        case Abs() | Neg():
+            return type(e)(args[0], e.loc)
+        case Round() | Cast():
+            return type(e)(e.func, args[0], e.loc)
+        case _:
+            raise RuntimeError(f'not a rounded operation: {e!r}')
 
 
 def check_where(where: int | Cursor | None) -> None:
