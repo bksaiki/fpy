@@ -951,7 +951,7 @@ class RealFloat(numbers.Rational):
     def is_identical_to(self, other: 'RealFloat') -> bool:
         """Is the value encoded identically to another `RealFloat` value?"""
         if not isinstance(other, RealFloat):
-            return TypeError(f'expected RealFloat, got {type(other)}')
+            raise TypeError(f'expected RealFloat, got {type(other)}')
         return (
             self._s == other._s
             and self._exp == other._exp

@@ -30,17 +30,21 @@ which is what a value-class analysis reads to discharge the guards below it.
 that the context be statically known: the branch assigns exactly what the
 rounding would have returned, the format is untouched, and no check is required.
 Shedding the rule from the format on top of that changes what the surviving
-rounding does, so it is checked against the source over the values where the two
-could disagree — and only a format that states the rule as a parameter
-(``enable_nan``/``enable_inf``, ``nan_value``/``inf_value``) can do it at all.
+rounding does, so it is allowed only where no *finite* operand depends on the
+rule — a branch never covers one — and only a format that states the rule as a
+parameter (``enable_nan``/``enable_inf``, ``nan_value``/``inf_value``) can do it
+at all.  Rounding a finite value reaches a special in exactly one way, an
+overflow, so that is the whole of the question.
 
 The two come apart in both directions.  Dropping ``enable_inf`` from a format
 whose overflow *produces* an infinity changes what finite operands past the bound
 become, which the branches never see, so that rule stays while its branch is
-still emitted.  And no *float* format states a rule this way — an encoded float
-always has a NaN by construction — so a float context is stated and never shed.
-A refusal is neither: a branch assigns a value and cannot refuse one, and leaving
-the value to the rounding refuses it identically.
+still emitted — which is what keeps a bounded float from shedding its infinity
+while it still sheds its NaN.  An *encoded* float sheds neither: it spells NaN as
+a ``nan_kind`` rather than a flag, and an encoding always has a NaN by
+construction.  A refusal is neither stating nor shedding: a branch assigns a
+value and cannot refuse one, and leaving the value to the rounding refuses it
+identically.
 
 Which branches appear is decided per operand by
 :class:`~fpy2.analysis.ValueClassInfer`: a class the operand cannot hold takes a
@@ -54,8 +58,7 @@ Only a block whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
 exactly as a round does — the substitution happens before the exactness check —
 so it takes the same branches.  Stochastic rounding takes them too: a special
 never reaches the random draw, so the branches are deterministic and the
-surviving context keeps its random bits; the agreement probes run with the
-randomness turned off, where the two formats coincide.  ``REAL`` is declined:
+surviving context keeps its random bits.  ``REAL`` is declined:
 it rounds exactly, so its specials pass through and the branches would say
 nothing.
 
@@ -76,6 +79,7 @@ from ..analysis import (
 )
 from ..ast.fpyast import (
     Assign,
+    BoolVal,
     Call,
     Cast,
     Compare,
@@ -102,30 +106,41 @@ from ..number import (
     Context,
     Float,
     MPBFixedContext,
+    MPBFloatContext,
     MPFixedContext,
-    RealFloat,
+    MPFloatContext,
+    MPSFloatContext,
+    OverflowMode,
 )
 from ..utils import CompareOp, Gensym
 from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
     BlockRewriter,
     Declined,
-    agrees,
     check_where,
-    fixed_probes,
     is_rounding_block,
     rounding_block,
     sign_choice,
     try_round,
 )
 
-_Shedable = MPFixedContext | MPBFixedContext
+_FloatShedable = MPFloatContext | MPSFloatContext | MPBFloatContext
+"""
+the float contexts that state their special values as parameters.
+
+Their flags default to *enabled*, the opposite of the fixed-point ones, so
+shedding a rule from one is written by adding a keyword rather than dropping it.
+"""
+
+_Shedable = MPFixedContext | MPBFixedContext | _FloatShedable
 """
 the contexts that state their special values as parameters, and so can have one
 removed from the format rather than only stated alongside it.
 
 `SMFixedContext` and `FixedContext` derive from `MPBFixedContext`, so the second
-member covers every bounded fixed-point format.  No float context is one.
+member covers every bounded fixed-point format.  An *encoded* float --
+`EFloatContext` and `IEEEContext` -- is not one: it spells NaN as a `nan_kind`
+rather than a flag, and an encoding always has a NaN by construction.
 """
 
 _Pair = tuple[Float, Float]
@@ -183,47 +198,39 @@ def _without_specials(ctx: _Shedable, shed: ValueClass) -> _Shedable | None:
         return None
 
 
-def _emitted(src: _Source, x: Float | RealFloat) -> Float | None:
-    """What the generated code yields for `x`: the branches in emission order,
-    then the rounding under the format with the rules removed.
-
-    A special is modelled only where its rule was *shed*.  A side that stays in
-    the format answers the same whether the branch or the rounding handles it --
-    as the zero row always does -- so modelling it either way gives the same
-    comparison, and leaving it out keeps the probe independent of anything the
-    class analysis had to say.
+def _shedable(ctx: _Shedable) -> ValueClass:
     """
-    isnan = isinstance(x, Float) and x.isnan
-    isinf = isinstance(x, Float) and x.isinf
-    if src.nan is not None and isnan and ValueClass.NAN & src.shed:
-        return src.nan[1] if x.s else src.nan[0]
-    if src.inf is not None and isinf and ValueClass.INF & src.shed:
-        return src.inf[1] if x.s else src.inf[0]
-    if not isnan and not isinf and x.is_zero():
-        return src.zero[1] if x.s else src.zero[0]
-    return try_round(src.dropped, x)
+    The rules no *finite* operand depends on, and so may be shed.
 
-
-def _deterministic(ctx: _Shedable) -> _Shedable:
-    """`ctx` with its randomness off, for probing.  The shed rules touch only
-    NaN, the infinities, and zero, none of which reach the random draw — so
-    agreement of the deterministic twins carries over."""
-    if ctx.num_randbits == 0:
-        return ctx
-    return ctx.with_params(num_randbits=0)
+    A branch only ever covers a special operand, so a rule that a finite one can
+    still reach has to stay behind for it.  Rounding a finite value produces a
+    special in exactly one way: an overflow.
+    """
+    both = ValueClass.NAN | ValueClass.INF
+    if not isinstance(ctx, MPBFloatContext | MPBFixedContext):
+        return both     # no bound, so nothing to overflow
+    if ctx.overflow is not OverflowMode.OVERFLOW:
+        return both     # saturating and wrapping stay finite; asserting raises
+    if not any(ctx._overflow_to_infinity(s) for s in (False, True)):
+        return both     # the overflow saturates whichever way it rounds
+    # a finite overflow lands wherever an infinite operand does, so that rule
+    # stays -- unless the format refuses it, which shedding leaves refused
+    if ctx.enable_inf or ctx.inf_value is not None:
+        return ValueClass.NAN
+    return both
 
 
 def _describe(ctx: Context) -> _Source:
     """
     What `ctx` makes of each special, and as many of its stated rules shed from
-    the format as the probes allow.
+    the format as `_shedable` allows.
 
     The two jobs are separate.  **Hoisting** a special into a branch needs only
     that `ctx` be statically known, since the branch then assigns exactly what
-    the rounding would have returned -- the format is untouched, so no probe is
-    needed and every concrete context qualifies.  **Shedding** the rule from the
+    the rounding would have returned -- the format is untouched, so nothing has
+    to be checked and every concrete context qualifies.  **Shedding** the rule from the
     format on top of that changes what the surviving rounding does, so it is
-    checked against the source over the values where the two could disagree, and
+    allowed only where `_shedable` finds no finite operand depending on it, and
     only a format that states the rule as a parameter can do it at all.
     """
     nan = _special_pair(ctx, Float(isnan=True))
@@ -235,24 +242,19 @@ def _describe(ctx: Context) -> _Source:
     if not isinstance(ctx, _Shedable):
         return hoisted
 
-    # the probes and the source's answers are the same for every attempt;
-    # only the shed side varies
-    det = _deterministic(ctx)
-    probes = fixed_probes(ctx)
-    want = [try_round(det, x) for x in probes]
+    safe = _shedable(ctx)
 
     # most first, so a format that can lose both does
     for shed in (ValueClass.NAN | ValueClass.INF, ValueClass.NAN, ValueClass.INF):
+        if shed & ~safe:
+            continue        # a finite operand still depends on this rule
         if (ValueClass.NAN & shed and nan is None
                 or ValueClass.INF & shed and inf is None):
             continue        # a refusal has no value for the branch to take over
         dropped = _without_specials(ctx, shed)
         if dropped is None:
             continue
-        src = replace(hoisted, dropped=dropped, shed=shed)
-        probed = replace(src, dropped=_deterministic(dropped))
-        if all(agrees(w, _emitted(probed, x)) for w, x in zip(want, probes)):
-            return src
+        return replace(hoisted, dropped=dropped, shed=shed)
     return hoisted
 
 
@@ -297,9 +299,16 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
         # AST nodes, and the source expression stays in place under `where`
         call = DefaultTransformVisitor()._visit_expr(e, None)
         assert isinstance(call, Call)
-        # the rules are keyword-only in both constructors, and their defaults
-        # are exactly "no rule", so shedding one is dropping its keyword
+        # the rules are keyword-only in every constructor, so shedding one
+        # starts by dropping its keyword
         kwargs = tuple(kv for kv in call.kwargs if kv[0] not in shed)
+        if isinstance(src.ctx, _FloatShedable):
+            # ... but a float constructor defaults its flags to *enabled*, so
+            # dropping alone would leave the rule in place: say so outright
+            kwargs += tuple(
+                (name, BoolVal(False, e.loc))
+                for name in ('enable_nan', 'enable_inf') if name in shed
+            )
         return Call(call.func, call.fn, call.args, kwargs, call.loc)
     return ForeignVal(src.dropped, e.loc)
 

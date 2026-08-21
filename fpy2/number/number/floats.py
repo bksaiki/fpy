@@ -978,3 +978,20 @@ class Float:
         if not isinstance(self._ctx, OrdinalContext):
             raise TypeError(f'context must be an OrdinalContext to compute next_down: self={self}, ctx={self._ctx}')
         return self._ctx.next_down(self, allow_inf=allow_inf)
+
+
+def same_value(a: Float | None, b: Float | None) -> bool:
+    """
+    Whether two values are the same, sign and all, `None` included.
+
+    `==` is the IEEE comparison, which answers neither question a caller
+    holding two values needs: it calls a NaN unequal to itself and the two
+    zeros equal.  This compares the value rather than the encoding, so two
+    spellings of the same number agree, and the rounding context is not part
+    of the value.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    if a.is_nar() or b.is_nar():
+        return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
+    return a.as_real() == b.as_real() and a.s == b.s

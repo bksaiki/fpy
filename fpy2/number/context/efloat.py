@@ -5,7 +5,7 @@ from ..number import RNG, Float, RealFloat
 from ..round import OverflowMode, RoundingMode
 from .context import EncodableContext
 from .format import EncodableFormat
-from .mpb_float import MPBFloatFormat
+from .mpb_float import MPBFloatContext, MPBFloatFormat
 
 
 @enum_repr
@@ -444,6 +444,10 @@ class EFloatContext(EncodableContext):
     """
 
     _fmt: EFloatFormat
+    """precomputed format object"""
+
+    _mpb_ctx: MPBFloatContext
+    """precomputed context this one rounds through"""
 
     def __init__(
         self,
@@ -500,6 +504,13 @@ class EFloatContext(EncodableContext):
         self.rng = rng
         self.nan_value = nan_value
         self.inf_value = inf_value
+        self._mpb_ctx = MPBFloatContext(
+            self._fmt._mpb_fmt.pmax,
+            self._fmt._mpb_fmt.emin,
+            self._fmt._mpb_fmt.pos_maxval,
+            rm, overflow, num_randbits,
+            neg_maxval=self._fmt._mpb_fmt.neg_maxval, rng=rng,
+        )
 
     def __eq__(self, other):
         return (
@@ -640,17 +651,7 @@ class EFloatContext(EncodableContext):
         )
 
     def round_params(self):
-        return self._mpb_ctx().round_params()
-
-    def _mpb_ctx(self):
-        from .mpb_float import MPBFloatContext
-        return MPBFloatContext(
-            self._fmt._mpb_fmt.pmax,
-            self._fmt._mpb_fmt.emin,
-            self._fmt._mpb_fmt.pos_maxval,
-            self.rm, self.overflow, self.num_randbits,
-            neg_maxval=self._fmt._mpb_fmt.neg_maxval, rng=self.rng,
-        )
+        return self._mpb_ctx.round_params()
 
     def _fixup(self, x: Float):
         if x.isnan and self.nan_kind == EFloatNanKind.NONE:
@@ -670,12 +671,12 @@ class EFloatContext(EncodableContext):
         return x
 
     def round(self, x, *, exact: bool = False) -> Float:
-        y = self._mpb_ctx().round(x, exact=exact)
+        y = self._mpb_ctx.round(x, exact=exact)
         y._ctx = self
         return self._fixup(y)
 
     def round_at(self, x, n, *, exact: bool = False) -> Float:
-        x = self._mpb_ctx().round_at(x, n, exact=exact)
+        x = self._mpb_ctx.round_at(x, n, exact=exact)
         x._ctx = self
         return self._fixup(x)
 

@@ -151,9 +151,13 @@ class TestFormatRoundTrip:
         fmt = ctx.format()
         assert isinstance(fmt, fp.number.format.MPFloatFormat)
         assert fmt.pmax == ctx.pmax
+        assert fmt.enable_nan == ctx.enable_nan
+        assert fmt.enable_inf == ctx.enable_inf
         # Reconstruct context from format
         ctx2 = fp.MPFloatContext.from_format(fmt)
         assert ctx2.pmax == ctx.pmax
+        assert ctx2.enable_nan == ctx.enable_nan
+        assert ctx2.enable_inf == ctx.enable_inf
 
     @given(mp_fixed_contexts(min_n=-32, max_n=32))
     def test_mp_fixed_round_trip(self, ctx: fp.MPFixedContext):
@@ -173,9 +177,13 @@ class TestFormatRoundTrip:
         assert isinstance(fmt, fp.number.format.MPSFloatFormat)
         assert fmt.pmax == ctx.pmax
         assert fmt.emin == ctx.emin
+        assert fmt.enable_nan == ctx.enable_nan
+        assert fmt.enable_inf == ctx.enable_inf
         ctx2 = fp.MPSFloatContext.from_format(fmt)
         assert ctx2.pmax == ctx.pmax
         assert ctx2.emin == ctx.emin
+        assert ctx2.enable_nan == ctx.enable_nan
+        assert ctx2.enable_inf == ctx.enable_inf
 
     @given(efloat_contexts(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8))
     def test_efloat_round_trip(self, ctx: fp.EFloatContext):
@@ -385,11 +393,12 @@ class TestFloatFormatSpecialValues:
         with pytest.raises(ValueError):
             f_noinf.from_ordinal(sentinel, infval=True)
 
-    def test_context_from_format_guards_disabled_specials(self):
-        # contexts do not yet support disabling NaN/inf (see TODOs)
+    def test_context_from_format_keeps_disabled_specials(self):
         for fmt in (self._mpb(enable_nan=False), self._mpb(enable_inf=False)):
-            with pytest.raises(NotImplementedError):
-                fp.MPBFloatContext.from_format(fmt)
+            ctx = fp.MPBFloatContext.from_format(fmt)
+            assert ctx.format() == fmt
+            assert ctx.enable_nan == fmt.enable_nan
+            assert ctx.enable_inf == fmt.enable_inf
 
 
 ###########################################################

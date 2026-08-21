@@ -17,7 +17,9 @@ def mp_float_contexts(
     draw,
     max_p: int | None = None,
     rm: fp.RM | None = None,
-    max_randbits: int | None = 0
+    max_randbits: int | None = 0,
+    enable_nan: bool | None = None,
+    enable_inf: bool | None = None
 ) -> fp.MPFloatContext:
     """
     Returns a strategy for generating a `fp.MPFloatContext`.
@@ -27,12 +29,21 @@ def mp_float_contexts(
         rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
         max_randbits: Maximum number of random bits for the context. If `0`, rounding is
             deterministic. If `None`, no limit is set.
+        enable_nan: Whether NaN is representable. If `None`, either is chosen.
+        enable_inf: Whether infinity is representable. If `None`, either is chosen.
     """
     p = draw(st.integers(1, max_p))
     if rm is None:
         rm = draw(rounding_modes())
+    if enable_nan is None:
+        enable_nan = draw(st.booleans())
+    if enable_inf is None:
+        enable_inf = draw(st.booleans())
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
-    return fp.MPFloatContext(p, rm=rm, num_randbits=num_randbits)
+    return fp.MPFloatContext(
+        p, rm=rm, num_randbits=num_randbits,
+        enable_nan=enable_nan, enable_inf=enable_inf,
+    )
 
 @st.composite
 def mps_float_contexts(
@@ -42,6 +53,8 @@ def mps_float_contexts(
     max_emin: int | None = None,
     rm: fp.RM | None = None,
     max_randbits: int | None = 0,
+    enable_nan: bool | None = None,
+    enable_inf: bool | None = None,
 ):
     """
     Returns a strategy for generating a `fp.MPSFloatContext`.
@@ -53,13 +66,22 @@ def mps_float_contexts(
         rm: Rounding mode for the context. If `None`, a random rounding mode is chosen.
         max_randbits: Maximum number of random bits for the context. If `0`, rounding is
             deterministic. If `None`, no limit is set.
+        enable_nan: Whether NaN is representable. If `None`, either is chosen.
+        enable_inf: Whether infinity is representable. If `None`, either is chosen.
     """
     p = draw(st.integers(1, max_p))
     emin = draw(st.integers(min_emin, max_emin))
     if rm is None:
         rm = draw(rounding_modes())
+    if enable_nan is None:
+        enable_nan = draw(st.booleans())
+    if enable_inf is None:
+        enable_inf = draw(st.booleans())
     num_randbits = None if max_randbits is None else draw(st.integers(0, max_randbits))
-    return fp.MPSFloatContext(p, emin, rm=rm, num_randbits=num_randbits)
+    return fp.MPSFloatContext(
+        p, emin, rm=rm, num_randbits=num_randbits,
+        enable_nan=enable_nan, enable_inf=enable_inf,
+    )
 
 @st.composite
 def ieee_contexts(

@@ -116,8 +116,8 @@ def _format_to_ctx(fmt: Format) -> Context | None:
             case _:
                 return None
     except (NotImplementedError, TypeError, ValueError):
-        # some `from_format`s reject formats their context cannot express
-        # (e.g. NaN/Inf disabled); recovery is best-effort
+        # some `from_format`s reject formats their context cannot express;
+        # recovery is best-effort
         return None
 
 

@@ -56,7 +56,7 @@ from .context import (
 
 # Miscellaneous
 from .native import default_float_convert, default_str_convert
-from .number import Float, Real, RealFloat
+from .number import Float, Real, RealFloat, same_value
 
 # Rounding
 from .round import OV, RM, OverflowMode, RoundingDirection, RoundingMode
