@@ -83,8 +83,10 @@ def sites(
         here, where as a `where` it names one site exactly. If `None`, list the
         whole program.
     kwargs
-        Forwarded to the strategy's own listing; :func:`fpy2.strategies.inline`
-        takes `funcs`, matching its filter.
+        Forwarded to the strategy's own listing, matching that strategy's own
+        parameters: :func:`fpy2.strategies.inline` takes `funcs` and
+        :func:`fpy2.strategies.insert_round` takes `ctx`, which it needs because
+        whether an operation is a site depends on the format being inserted.
 
     Returns
     -------

@@ -139,12 +139,15 @@ def _callee(cursor: ExprCursor) -> str:
 
 
 def test_insert_round_lists_operations():
-    """Its candidates are operations whose scope rounds exactly, so the two
-    `fp.round` blocks here are not sites at all -- only the final add, which is
-    under the function's own `fp.REAL` scope."""
-    found = sites(insert_round, two_sites)
+    """Its sites are operations whose scope rounds exactly *and* that the target
+    format can hold, so it needs a `ctx` to answer at all.  The two `fp.round`
+    blocks here already round; the final add is under `fp.REAL` and fits FP64."""
+    found = sites(insert_round, two_sites, ctx=fp.FP64)
     assert all(isinstance(c, ExprCursor) for c in found)
     assert [type(c.resolve()).__name__ for c in found] == ['Add']
+
+    with pytest.raises(TypeError, match='ctx'):
+        sites(insert_round, two_sites)
 
 
 def test_inline_lists_expressions():
@@ -223,7 +226,7 @@ def test_a_listed_insert_round_site_aims_the_same_as_its_index():
     def aim(func, where):
         return insert_round(func, fp.FP64, where=where)
 
-    for i, cursor in enumerate(sites(insert_round, two_sites)):
+    for i, cursor in enumerate(sites(insert_round, two_sites, ctx=fp.FP64)):
         _aims_alike(aim, two_sites, i, cursor)
 
 

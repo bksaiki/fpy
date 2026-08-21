@@ -97,7 +97,7 @@ class TestInsertRound:
 class TestWhere:
     def test_an_index_aims_one_operation(self):
         f = _pinned(_sum_of_squares, 2)
-        for i in (1, 2):
+        for i in (0, 1):
             out = insert_round(f, fp.FP64, where=i)
             assert _blocks(out.ast, fp.FP64) == 1
             assert _agree(out, f, 2)
@@ -109,7 +109,7 @@ class TestWhere:
     def test_a_cursor_of_an_unrelated_program(self):
         # `_prod3`'s body is under FP64, so it has no exact operation until
         # `elim_round` hoists one
-        other = sites(insert_round, elim_round(_pinned(_prod3, 3)))[0]
+        other = sites(insert_round, elim_round(_pinned(_prod3, 3)), ctx=fp.FP64)[0]
         with pytest.raises(TransformReferenceError):
             insert_round(_pinned(_sum_of_squares, 2), fp.FP64, where=other)
 
@@ -165,7 +165,7 @@ class TestCursorForwarding:
             return t + s
 
         f0 = monomorphize(f, fp.FP64, [RealType(fp.FP32)] * 2)
-        cursors = sites(insert_round, f0)
+        cursors = sites(insert_round, f0, ctx=fp.FP64)
         assert len(cursors) == 2
 
         f1 = insert_round(f0, fp.FP64, where=cursors[0])

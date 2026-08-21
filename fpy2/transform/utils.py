@@ -57,6 +57,7 @@ from .cursor import (
     ExprCursor,
     StmtCursor,
     contains,
+    expr_sites,
     not_a_statement,
     region_of,
 )
@@ -320,7 +321,9 @@ class SiteRewriter(DefaultTransformVisitor):
     listing: bool = False
     """report the sites this rewrite would act on, instead of acting on them"""
     found: list[StmtPath]
-    """the sites, while listing"""
+    """the statement sites, while listing"""
+    found_exprs: list[Expr]
+    """the expression sites, while listing"""
     refused: list[str]
     """why each candidate that is not a site was refused"""
 
@@ -332,6 +335,7 @@ class SiteRewriter(DefaultTransformVisitor):
         self.dirty_exprs = []
         self.declined = []
         self.found = []
+        self.found_exprs = []
         self.refused = []
         self._matched = 0
         self._replaced = False
@@ -375,6 +379,25 @@ class SiteRewriter(DefaultTransformVisitor):
         if within is None:
             return cursors
         return [c for c in cursors if contains(within, c)]
+
+    def list_expr_sites(self, within: Cursor | None = None) -> list[ExprCursor]:
+        """:meth:`list_sites`, where the sites are expressions.
+
+        The walk records the nodes themselves; the paths come from a second
+        pass over the *unrewritten* tree, which is the one the nodes belong to.
+        """
+        self.where = None
+        self.listing = True
+        self._visit_function(self.func, None)
+        marked = {id(e) for e in self.found_exprs}
+        return expr_sites(self.func, lambda e: id(e) in marked, within)
+
+    def _named_by_cursor(self, e: Expr) -> bool:
+        """Whether an explicit cursor names the expression *e*, ignoring the
+        index: what decides whether a refusal is reported or merely counted."""
+        if self._target_expr is not None:
+            return self._target_expr is e
+        return self._target is not None and self._selects(*self._site, -1)
 
     def check_site(self, what: str) -> None:
         """Rejects an explicit `where` that named no candidate, or one whose

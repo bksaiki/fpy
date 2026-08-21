@@ -70,8 +70,7 @@ from ..ast.fpyast import (
 )
 from ..number import REAL, Context
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, ExprCursor, expr_sites
-from .error import TransformDeclined
+from .cursor import Cursor, EditLog, ExprCursor
 from .utils import Declined, SiteRewriter, check_where, operands, rebuild
 
 _ROUNDABLE = (Add, Sub, Mul, Abs, Neg, Round, Cast)
@@ -172,14 +171,8 @@ class _RoundInsertInstance(SiteRewriter):
         if not isinstance(e, _ROUNDABLE) or not self.scopes.is_exact(e):
             return super()._visit_expr(e, ctx)
 
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        # `ctx` is `None` where no statement-level preamble reaches: refuse for
-        # both spellings of `where`, rather than no-op for one and fail the other
+        # a refusal is not a site, so it is decided before an index is spent:
+        # `ctx` is `None` where no statement-level preamble reaches
         declined = (
             Declined(
                 'the operation has no statement-level position for the block '
@@ -189,9 +182,20 @@ class _RoundInsertInstance(SiteRewriter):
             else self._verify(e)
         )
         if declined is not None:
-            self.declined.append(declined.reason)
-            if isinstance(self.where, int):
-                raise TransformDeclined(f'where={idx}: {declined.reason}')
+            self.refused.append(declined.reason)
+            if self._named_by_cursor(e):
+                # a cursor named it: say why, rather than that it named nothing
+                self.declined.append(declined.reason)
+            return super()._visit_expr(e, ctx)
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if not self._selects_expr(e, idx):
+            return super()._visit_expr(e, ctx)
+
+        self._matched += 1
+        if self.listing:
+            self.found_exprs.append(e)
             return super()._visit_expr(e, ctx)
 
         hoisted = self._hoist(e, ctx)
@@ -269,19 +273,19 @@ class RoundInsert:
     """
 
     @staticmethod
-    def sites(func: FuncDef, within: Cursor | None = None) -> list[ExprCursor]:
-        """The candidate operations of `func`, in visit order -- what a `where`
-        index counts, whether or not each verifies.
+    def sites(
+        func: FuncDef, within: Cursor | None = None, *, ctx: Context
+    ) -> list[ExprCursor]:
+        """The operations of `func` that would be given the format `ctx`, in
+        visit order -- what a `where` index counts, and what `within` narrows.
 
-        A roundable operation whose scope rounds exactly; an operation that
-        already has a format is not a candidate.
+        `ctx` is required because it decides the answer: whether an operation is
+        a site is whether rounding *it* to *this* format is an identity.
         """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'Expected a \'Context\', got {ctx}')
         scopes = ExactScopes(func)
-        return expr_sites(
-            func,
-            lambda e: isinstance(e, _ROUNDABLE) and scopes.is_exact(e),
-            within,
-        )
+        return _RoundInsertInstance(func, ctx, scopes).list_expr_sites(within)
 
     @staticmethod
     def apply(

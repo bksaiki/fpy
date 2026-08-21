@@ -47,12 +47,13 @@ def insert_round(
         The format to round to. The rewrite is refused wherever rounding to it
         would change the result.
     where : int | Cursor | None
-        Which operation to round: an index counting candidate operations (the
-        roundable operations whose scope rounds exactly, whether or not they
-        verify) in visit order, outermost-first, or a cursor, which names one
-        exactly, or a statement cursor or region, which takes every candidate
-        at or beneath it. If `None`, round every candidate that verifies and
-        skip the rest.
+        Which operation to round: an index counting the operations this rewrite
+        would round to `ctx`, in visit order, outermost-first, or a cursor,
+        which names one exactly, or a statement cursor or region, which takes
+        every one at or beneath it. If `None`, round them all. An operation this
+        rewrite refuses is not one of them and takes no index; naming it with a
+        cursor says why it was refused.
+        :func:`fpy2.strategies.sites` lists them, and needs the same `ctx`.
 
     Returns
     -------
