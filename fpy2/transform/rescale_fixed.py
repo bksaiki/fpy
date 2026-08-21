@@ -500,6 +500,16 @@ class RescaleFixed:
         return _RescaleFixedInstance(func, eval_info).list_sites(within)
 
     @staticmethod
+    def refusals(
+        func: FuncDef, within: Cursor | None = None
+    ) -> list[tuple[Cursor, str]]:
+        """Why each rounding block of `func` that is not a site was refused,
+        in visit order.  A refusal takes no index, so this is how one is found.
+        """
+        eval_info = PartialEval.apply(func)
+        return _RescaleFixedInstance(func, eval_info).list_refusals(within)
+
+    @staticmethod
     def apply(
         func: FuncDef, *,
         where: int | Cursor | None = None,

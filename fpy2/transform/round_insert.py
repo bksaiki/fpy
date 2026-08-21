@@ -182,7 +182,7 @@ class _RoundInsertInstance(SiteRewriter):
             else self._verify(e)
         )
         if declined is not None:
-            self.refused.append(declined.reason)
+            self.refused.append((e, declined.reason))
             if self._named_by_cursor(e):
                 # a cursor named it: say why, rather than that it named nothing
                 self.declined.append(declined.reason)
@@ -286,6 +286,18 @@ class RoundInsert:
             raise TypeError(f'Expected a \'Context\', got {ctx}')
         scopes = ExactScopes(func)
         return _RoundInsertInstance(func, ctx, scopes).list_expr_sites(within)
+
+    @staticmethod
+    def refusals(
+        func: FuncDef, within: Cursor | None = None, *, ctx: Context
+    ) -> list[tuple[Cursor, str]]:
+        """Why each operation of `func` that is not a site for `ctx` was
+        refused, in visit order.  A refusal takes no index, so this is how one
+        is found.
+        """
+        if not isinstance(ctx, Context):
+            raise TypeError(f'Expected a \'Context\', got {ctx}')
+        return _RoundInsertInstance(func, ctx, ExactScopes(func)).list_refusals(within)
 
     @staticmethod
     def apply(

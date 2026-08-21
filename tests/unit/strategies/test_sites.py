@@ -20,6 +20,7 @@ from fpy2.strategies import (
     float_to_fixed,
     inline,
     insert_round,
+    refusals,
     rescale_fixed,
     simplify,
     sites,
@@ -291,3 +292,49 @@ def test_an_expression_narrows_a_call_listing():
 
     left = ExprCursor(calls.ast, FuncBody().stmt(0).expr('expr').expr('args', 0))
     assert [c.path for c in sites(inline, calls, left)] == [left.path]
+
+
+# ----------------------------------------------------------------------
+# `refusals`: the points a listing does not report
+
+
+def test_refusals_explains_what_a_listing_omits():
+    """`two_sites` rounds to a float format, so `rescale_fixed` has no site in
+    it.  The listing says nothing; this says why."""
+    assert sites(rescale_fixed, two_sites) == []
+    found = refusals(rescale_fixed, two_sites)
+    assert [c.path for c, _ in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
+    assert all('fixed-point' in why for _, why in found)
+
+
+def test_refusals_and_sites_are_disjoint_and_together_account_for_everything():
+    listed = sites(unfold_special, cast_and_round_fp16)
+    refused = refusals(unfold_special, cast_and_round_fp16)
+    assert {c.path for c in listed}.isdisjoint({c.path for c, _ in refused})
+    # this program's two blocks are all it considered
+    assert len(listed) + len(refused) == 2
+
+
+def test_a_refusal_can_be_aimed_at_to_get_the_same_reason():
+    """The cursor a refusal reports is the one that explains it."""
+    cursor, why = refusals(rescale_fixed, two_sites)[0]
+    with pytest.raises(TransformDeclined, match='fixed-point'):
+        rescale_fixed(two_sites, where=cursor)
+    assert 'fixed-point' in why
+
+
+def test_insert_round_refusals_need_the_same_ctx():
+    found = refusals(insert_round, two_sites, ctx=fp.FP16)
+    assert [type(c.resolve()).__name__ for c, _ in found] == ['Add']
+    with pytest.raises(TypeError, match='ctx'):
+        refusals(insert_round, two_sites)
+
+
+def test_a_strategy_that_refuses_nothing_has_no_refusals():
+    for strategy in (unroll_for, unroll_while, inline):
+        assert refusals(strategy, loops if strategy is not inline else calls) == []
+
+
+def test_a_strategy_that_takes_no_where_has_no_refusals():
+    with pytest.raises(ValueError, match='no sites to refuse'):
+        refusals(simplify, two_sites)

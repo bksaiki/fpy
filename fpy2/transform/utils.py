@@ -60,6 +60,7 @@ from .cursor import (
     expr_sites,
     not_a_statement,
     region_of,
+    stmt_sites,
 )
 from .error import TransformDeclined, TransformReferenceError
 from .path import BlockPath, StmtPath, beneath, block_paths
@@ -324,8 +325,8 @@ class SiteRewriter(DefaultTransformVisitor):
     """the statement sites, while listing"""
     found_exprs: list[Expr]
     """the expression sites, while listing"""
-    refused: list[str]
-    """why each candidate that is not a site was refused"""
+    refused: list[tuple[object, str]]
+    """each candidate that is not a site, and why: the AST node and the reason"""
 
     def _begin(self, func: FuncDef) -> None:
         """Set up against the tree about to be walked: both the paths an edit
@@ -392,6 +393,26 @@ class SiteRewriter(DefaultTransformVisitor):
         marked = {id(e) for e in self.found_exprs}
         return expr_sites(self.func, lambda e: id(e) in marked, within)
 
+    def list_refusals(
+        self, within: Cursor | None = None
+    ) -> list[tuple[Cursor, str]]:
+        """Why each program point this pass could have acted on is not a site,
+        in visit order.
+
+        A refusal takes no index and appears in no listing, so this is the only
+        way to find one without already knowing where it is.
+        """
+        self.where = None
+        self.listing = True
+        self._visit_function(self.func, None)
+        reasons = {id(node): why for node, why in self.refused}
+        found: list[Cursor] = (
+            list(expr_sites(self.func, lambda e: id(e) in reasons, within))
+            if self._expr_sited
+            else list(stmt_sites(self.func, lambda s: id(s) in reasons, within))
+        )
+        return [(c, reasons[id(c.resolve())]) for c in found]
+
     def _named_by_cursor(self, e: Expr) -> bool:
         """Whether an explicit cursor names the expression *e*, ignoring the
         index: what decides whether a refusal is reported or merely counted."""
@@ -409,7 +430,7 @@ class SiteRewriter(DefaultTransformVisitor):
             if not 0 <= where < self.site_idx:
                 refused = (
                     f'; {len(self.refused)} candidate(s) were refused: '
-                    + '; '.join(self.refused)
+                    + '; '.join(why for _, why in self.refused)
                     if self.refused else ''
                 )
                 raise TransformReferenceError(
@@ -544,7 +565,7 @@ class BlockRewriter(SiteRewriter):
                     # an index that a listing would not report
                     verified = self._verify(s, info)
                     if isinstance(verified, Declined):
-                        self.refused.append(verified.reason)
+                        self.refused.append((s, verified.reason))
                         if self._target is not None and self._selects(block, pos, -1):
                             # a cursor named this candidate: say why, rather
                             # than report that it named nothing

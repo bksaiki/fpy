@@ -39,6 +39,8 @@ somewhere else.
 
 .. autofunction:: fpy2.strategies.sites
 
+.. autofunction:: fpy2.strategies.refusals
+
 A pattern is the other way: :func:`fpy2.rewrite.find` names a location by what
 it looks like rather than by counting candidates. See :doc:`rewrite`.
 
