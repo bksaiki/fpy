@@ -12,8 +12,6 @@ from ..analysis import (
     concrete_size,
 )
 from ..ast.fpyast import (
-    Abs,
-    Add,
     Assign,
     Attribute,
     Cast,
@@ -28,7 +26,6 @@ from ..ast.fpyast import (
     IfExpr,
     Integer,
     Location,
-    Mul,
     NamedId,
     Neg,
     Rational,
@@ -37,7 +34,6 @@ from ..ast.fpyast import (
     Signbit,
     Stmt,
     StmtBlock,
-    Sub,
     TupleBinding,
     UnderscoreId,
     Var,
@@ -224,37 +220,6 @@ def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
             case _:
                 return None
     return args
-
-
-def exact_block(stmt: ContextStmt) -> list[Assign] | None:
-    """The assignments of a structurally-matching exact block: an
-    underscore-bound context whose every statement assigns a roundable op to a
-    plain name.  `None` otherwise.
-
-    Pure syntax, and it has to be: a hand-written ``with fp.REAL:`` parses to an
-    ``Attribute`` while :class:`.RoundElim` emits a ``ForeignVal``, so whether
-    the context *is* ``REAL`` is a question for verification, not for matching.
-    The op set is the one :class:`.RoundElim` eliminates, so the two operators
-    mirror each other's sites.
-    """
-    # a bound context is visible to the body as a value, which a rewrite changes
-    if not isinstance(stmt.target, UnderscoreId):
-        return None
-    assigns: list[Assign] = []
-    for s in stmt.body.stmts:
-        match s:
-            case Assign(target=NamedId(), type=None) if isinstance(
-                s.expr, (Add, Sub, Mul, Abs, Neg, Round, Cast)
-            ):
-                assigns.append(s)
-            case _:
-                return None
-    return assigns or None
-
-
-def is_exact_block(stmt: Stmt) -> bool:
-    """Whether *stmt* is a candidate exact block: what :meth:`sites` lists."""
-    return isinstance(stmt, ContextStmt) and exact_block(stmt) is not None
 
 
 def _target_of(
