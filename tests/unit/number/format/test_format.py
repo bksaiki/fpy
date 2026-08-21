@@ -385,11 +385,12 @@ class TestFloatFormatSpecialValues:
         with pytest.raises(ValueError):
             f_noinf.from_ordinal(sentinel, infval=True)
 
-    def test_context_from_format_guards_disabled_specials(self):
-        # contexts do not yet support disabling NaN/inf (see TODOs)
+    def test_context_from_format_keeps_disabled_specials(self):
         for fmt in (self._mpb(enable_nan=False), self._mpb(enable_inf=False)):
-            with pytest.raises(NotImplementedError):
-                fp.MPBFloatContext.from_format(fmt)
+            ctx = fp.MPBFloatContext.from_format(fmt)
+            assert ctx.format() == fmt
+            assert ctx.enable_nan == fmt.enable_nan
+            assert ctx.enable_inf == fmt.enable_inf
 
 
 ###########################################################

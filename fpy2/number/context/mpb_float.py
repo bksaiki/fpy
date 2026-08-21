@@ -253,6 +253,16 @@ class MPBFloatContext(SizedContext):
     Unlike `MPFloatContext`, the `MPBFloatContext` inherits from `SizedContext`
     since the set of representable values may be encoded in
     a finite amount of space.
+
+    Optionally, specify the following keywords:
+
+    - `enable_nan`: if `True`, then NaN is representable [default: `True`]
+    - `enable_inf`: if `True`, then infinity is representable [default: `True`]
+    - `nan_value`: if NaN is not enabled, what value should NaN round to? [default: `None`];
+      if not set, then `round()` will raise a `ValueError` on NaN.
+    - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
+      if not set, then `round()` will raise a `ValueError` on infinity. An overflow
+      that would round to infinity is substituted the same way.
     """
 
     pmax: int
@@ -279,6 +289,24 @@ class MPBFloatContext(SizedContext):
     rng: RNG | None
     """random number generator for stochastic rounding, if applicable"""
 
+    enable_nan: bool
+    """is NaN representable?"""
+
+    enable_inf: bool
+    """is infinity representable?"""
+
+    nan_value: Float | None
+    """
+    if NaN is not enabled, what value should NaN round to?
+    if not set, then `round()` will raise a `ValueError`.
+    """
+
+    inf_value: Float | None
+    """
+    if Inf is not enabled, what value should Inf round to?
+    if not set, then `round()` will raise a `ValueError`.
+    """
+
     _fmt: MPBFloatFormat
     """precomputed format object"""
 
@@ -292,7 +320,11 @@ class MPBFloatContext(SizedContext):
         num_randbits: int | None = 0,
         *,
         neg_maxval: RealFloat | None = None,
-        rng: RNG | None = None
+        rng: RNG | None = None,
+        enable_nan: bool = True,
+        enable_inf: bool = True,
+        nan_value: Float | None = None,
+        inf_value: Float | None = None
     ):
         if not isinstance(rm, RoundingMode):
             raise TypeError(f'Expected \'RoundingMode\' for rm={rm}, got {type(rm)}')
@@ -302,8 +334,24 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'int\' for num_randbits={num_randbits}, got {type(num_randbits)}')
         if overflow == OverflowMode.WRAP:
             raise ValueError('OverflowMode.WRAP is not supported for MPBFloatContext')
+        if not isinstance(enable_nan, bool):
+            raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
+        if not isinstance(enable_inf, bool):
+            raise TypeError(f'Expected \'bool\' for enable_inf={enable_inf}, got {type(enable_inf)}')
 
-        self._fmt = MPBFloatFormat(pmax, emin, maxval, neg_maxval)
+        self._fmt = MPBFloatFormat(pmax, emin, maxval, neg_maxval, enable_nan, enable_inf)
+
+        if nan_value is not None:
+            if not isinstance(nan_value, Float):
+                raise TypeError(f'Expected \'Float\' for nan_value={nan_value}, got {type(nan_value)}')
+            if not enable_nan and not self._fmt.representable_in(nan_value):
+                raise ValueError(f'Rounding NaN to unrepresentable value {nan_value}')
+
+        if inf_value is not None:
+            if not isinstance(inf_value, Float):
+                raise TypeError(f'Expected \'Float\' for inf_value={inf_value}, got {type(inf_value)}')
+            if not enable_inf and not self._fmt.representable_in(inf_value):
+                raise ValueError(f'Rounding Inf to unrepresentable value {inf_value}')
 
         self.pmax = pmax
         self.emin = emin
@@ -313,6 +361,10 @@ class MPBFloatContext(SizedContext):
         self.overflow = overflow
         self.num_randbits = num_randbits
         self.rng = rng
+        self.enable_nan = enable_nan
+        self.enable_inf = enable_inf
+        self.nan_value = nan_value
+        self.inf_value = inf_value
 
     def __eq__(self, other):
         return (
@@ -324,10 +376,26 @@ class MPBFloatContext(SizedContext):
             and self.rm == other.rm
             and self.overflow == other.overflow
             and self.num_randbits == other.num_randbits
+            and self.enable_nan == other.enable_nan
+            and self.enable_inf == other.enable_inf
+            and self.nan_value == other.nan_value
+            and self.inf_value == other.inf_value
         )
 
     def __hash__(self):
-        return hash((self.pmax, self.emin, self.pos_maxval, self.neg_maxval, self.rm, self.overflow, self.num_randbits))
+        return hash((
+            self.pmax,
+            self.emin,
+            self.pos_maxval,
+            self.neg_maxval,
+            self.rm,
+            self.overflow,
+            self.num_randbits,
+            self.enable_nan,
+            self.enable_inf,
+            self.nan_value,
+            self.inf_value
+        ))
 
     @property
     def emax(self):
@@ -359,6 +427,10 @@ class MPBFloatContext(SizedContext):
         neg_maxval: DefaultOr[RealFloat] = DEFAULT,
         num_randbits: DefaultOr[int | None] = DEFAULT,
         rng: DefaultOr[RNG | None] = DEFAULT,
+        enable_nan: DefaultOr[bool] = DEFAULT,
+        enable_inf: DefaultOr[bool] = DEFAULT,
+        nan_value: DefaultOr[Float | None] = DEFAULT,
+        inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
     ) -> 'MPBFloatContext':
         if pmax is DEFAULT:
@@ -377,9 +449,25 @@ class MPBFloatContext(SizedContext):
             num_randbits = self.num_randbits
         if rng is DEFAULT:
             rng = self.rng
+        if enable_nan is DEFAULT:
+            enable_nan = self.enable_nan
+        if enable_inf is DEFAULT:
+            enable_inf = self.enable_inf
+        if nan_value is DEFAULT:
+            nan_value = self.nan_value
+        if inf_value is DEFAULT:
+            inf_value = self.inf_value
         if kwargs:
             raise TypeError(f'Unexpected keyword arguments: {kwargs}')
-        return MPBFloatContext(pmax, emin, maxval, rm, overflow, num_randbits, neg_maxval=neg_maxval, rng=rng)
+        return MPBFloatContext(
+            pmax, emin, maxval, rm, overflow, num_randbits,
+            neg_maxval=neg_maxval,
+            rng=rng,
+            enable_nan=enable_nan,
+            enable_inf=enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value
+        )
 
     def is_stochastic(self) -> bool:
         return self.num_randbits != 0
@@ -395,19 +483,23 @@ class MPBFloatContext(SizedContext):
         rm: RoundingMode = RoundingMode.RNE,
         overflow: OverflowMode | None = None,
         num_randbits: int | None = 0,
-        rng: 'RNG | None' = None
+        rng: 'RNG | None' = None,
+        nan_value: Float | None = None,
+        inf_value: Float | None = None
     ) -> 'MPBFloatContext':
         """Creates a context from a `MPBFloatFormat` and rounding parameters."""
         if not isinstance(fmt, MPBFloatFormat):
             raise TypeError(f'Expected \'MPBFloatFormat\', got {type(fmt)}')
-        # TODO: thread enable_nan/enable_inf into the context and its rounding
-        if not fmt.enable_nan or not fmt.enable_inf:
-            raise NotImplementedError('MPBFloatContext does not yet support disabling NaN/inf')
         if overflow is None:
             overflow = OverflowMode.OVERFLOW
         return cls(
             fmt.pmax, fmt.emin, fmt.pos_maxval, rm, overflow, num_randbits,
-            neg_maxval=fmt.neg_maxval, rng=rng
+            neg_maxval=fmt.neg_maxval,
+            rng=rng,
+            enable_nan=fmt.enable_nan,
+            enable_inf=fmt.enable_inf,
+            nan_value=nan_value,
+            inf_value=inf_value
         )
 
     def round_params(self):
@@ -446,9 +538,19 @@ class MPBFloatContext(SizedContext):
         # step 1. handle special values
         if isinstance(x, Float):
             if x.isnan:
-                return Float(isnan=True, ctx=self)
+                if self.enable_nan:
+                    return Float(isnan=True, ctx=self)
+                elif self.nan_value is None:
+                    raise ValueError('Cannot round NaN under this context')
+                else:
+                    return Float(x=self.nan_value, ctx=self)
             elif x.isinf:
-                return Float(s=x.s, isinf=True, ctx=self)
+                if self.enable_inf:
+                    return Float(s=x.s, isinf=True, ctx=self)
+                elif self.inf_value is None:
+                    raise ValueError('Cannot round infinity under this context')
+                else:
+                    return Float(x=self.inf_value, ctx=self)
             else:
                 x = x.as_real()
 
@@ -471,7 +573,14 @@ class MPBFloatContext(SizedContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._overflow_to_infinity(rounded.s):
-                        result = Float(x=x, isinf=True, ctx=self)
+                        # an overflow that rounds to infinity is substituted
+                        # like an infinite input, since neither is representable
+                        if self.enable_inf:
+                            result = Float(x=x, isinf=True, ctx=self)
+                        elif self.inf_value is None:
+                            raise ValueError('Cannot round to infinity under this context')
+                        else:
+                            result = Float(x=self.inf_value, ctx=self)
                     else:
                         result = self.maxval(rounded.s)
                 case OverflowMode.SATURATE:
