@@ -5,7 +5,7 @@ and bounded. Hence, "MP-B."
 """
 
 from ...utils import DEFAULT, DefaultOr, default_repr
-from ..number import RNG, Float, RealFloat
+from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
 from .context import SizedContext
 from .format import SizedFormat
@@ -350,8 +350,10 @@ class MPBFloatContext(SizedContext):
         if inf_value is not None:
             if not isinstance(inf_value, Float):
                 raise TypeError(f'Expected \'Float\' for inf_value={inf_value}, got {type(inf_value)}')
-            if not enable_inf and not self._fmt.representable_in(inf_value):
-                raise ValueError(f'Rounding Inf to unrepresentable value {inf_value}')
+            # the substitute takes the operand's sign, so both are reachable
+            for signed in (Float(s=False, x=inf_value), Float(s=True, x=inf_value)):
+                if not enable_inf and not self._fmt.representable_in(signed):
+                    raise ValueError(f'Rounding Inf to unrepresentable value {signed}')
 
         self.pmax = pmax
         self.emin = emin
@@ -378,8 +380,8 @@ class MPBFloatContext(SizedContext):
             and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
-            and self.nan_value == other.nan_value
-            and self.inf_value == other.inf_value
+            and same_value(self.nan_value, other.nan_value)
+            and same_value(self.inf_value, other.inf_value)
         )
 
     def __hash__(self):
@@ -550,7 +552,7 @@ class MPBFloatContext(SizedContext):
                 elif self.inf_value is None:
                     raise ValueError('Cannot round infinity under this context')
                 else:
-                    return Float(x=self.inf_value, ctx=self)
+                    return Float(s=x.s, x=self.inf_value, ctx=self)
             else:
                 x = x.as_real()
 
@@ -573,14 +575,16 @@ class MPBFloatContext(SizedContext):
             match self.overflow:
                 case OverflowMode.OVERFLOW:
                     if self._overflow_to_infinity(rounded.s):
-                        # an overflow that rounds to infinity is substituted
-                        # like an infinite input, since neither is representable
+                        # the operand is a finite value whose magnitude ran out
+                        # of format, so its sign is carried through -- as every
+                        # other arm here does -- even where the infinity itself
+                        # is substituted
                         if self.enable_inf:
                             result = Float(x=x, isinf=True, ctx=self)
                         elif self.inf_value is None:
                             raise ValueError('Cannot round to infinity under this context')
                         else:
-                            result = Float(x=self.inf_value, ctx=self)
+                            result = Float(s=rounded.s, x=self.inf_value, ctx=self)
                     else:
                         result = self.maxval(rounded.s)
                 case OverflowMode.SATURATE:

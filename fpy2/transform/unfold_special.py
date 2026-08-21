@@ -34,9 +34,7 @@ rounding does, so it is allowed only where no *finite* operand depends on the
 rule — a branch never covers one — and only a format that states the rule as a
 parameter (``enable_nan``/``enable_inf``, ``nan_value``/``inf_value``) can do it
 at all.  Rounding a finite value reaches a special in exactly one way, an
-overflow, so that is the whole of the question; the probes then confirm the
-answer rather than establish it, which keeps a slip in the reasoning from
-reaching a rewritten program.
+overflow, so that is the whole of the question.
 
 The two come apart in both directions.  Dropping ``enable_inf`` from a format
 whose overflow *produces* an infinity changes what finite operands past the bound
@@ -60,8 +58,7 @@ Only a block whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
 exactly as a round does — the substitution happens before the exactness check —
 so it takes the same branches.  Stochastic rounding takes them too: a special
 never reaches the random draw, so the branches are deterministic and the
-surviving context keeps its random bits; the agreement probes run with the
-randomness turned off, where the two formats coincide.  ``REAL`` is declined:
+surviving context keeps its random bits.  ``REAL`` is declined:
 it rounds exactly, so its specials pass through and the branches would say
 nothing.
 
@@ -114,7 +111,6 @@ from ..number import (
     MPFloatContext,
     MPSFloatContext,
     OverflowMode,
-    RealFloat,
 )
 from ..utils import CompareOp, Gensym
 from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
@@ -227,12 +223,12 @@ def _shedable(ctx: _Shedable) -> ValueClass:
 def _describe(ctx: Context) -> _Source:
     """
     What `ctx` makes of each special, and as many of its stated rules shed from
-    the format as the probes allow.
+    the format as `_shedable` allows.
 
     The two jobs are separate.  **Hoisting** a special into a branch needs only
     that `ctx` be statically known, since the branch then assigns exactly what
-    the rounding would have returned -- the format is untouched, so no probe is
-    needed and every concrete context qualifies.  **Shedding** the rule from the
+    the rounding would have returned -- the format is untouched, so nothing has
+    to be checked and every concrete context qualifies.  **Shedding** the rule from the
     format on top of that changes what the surviving rounding does, so it is
     allowed only where `_shedable` finds no finite operand depending on it, and
     only a format that states the rule as a parameter can do it at all.

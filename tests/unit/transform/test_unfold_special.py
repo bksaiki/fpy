@@ -726,7 +726,7 @@ class TestMPFloatFormats:
     def test_a_saturating_bound_sheds_the_infinity_too(self):
         """Saturation never produces an infinity, so nothing finite needs the
         rule and it comes off -- the same format, shed differently, decided by
-        the probes rather than by the class."""
+        `_shedable` rather than by the class."""
         src = fp.MPBFloatContext(11, -14, _MAXVAL, fp.RoundingMode.RNE, _SAT)
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)

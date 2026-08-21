@@ -94,7 +94,7 @@ _FixedCtx = MPFixedContext | MPBFixedContext
 the fixed-point contexts that state a sign of zero as a flag.
 
 `SMFixedContext` derives from `MPBFixedContext`; `FixedContext` does too, but
-two's complement has no signed zero, so the probe never claims it.
+two's complement has no signed zero, so it is never a candidate.
 """
 
 

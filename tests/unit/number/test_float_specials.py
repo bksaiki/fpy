@@ -85,14 +85,21 @@ class TestSubstitution:
 
     @pytest.mark.parametrize('ctx', _contexts(enable_nan=False, nan_value=Float(c=3, exp=0)),
                              ids=_ids())
-    def test_nan_takes_its_value(self, ctx):
+    def test_nan_takes_its_value_verbatim(self, ctx):
+        """A NaN's sign carries no meaning, so the substitute is used as
+        written for either one."""
         assert ctx.round(_NAN) == 3
+        assert ctx.round(Float(isnan=True, s=True)) == 3
 
     @pytest.mark.parametrize('ctx', _contexts(enable_inf=False, inf_value=Float(c=3, exp=0)),
                              ids=_ids())
-    def test_infinity_takes_its_value(self, ctx):
+    def test_infinity_takes_its_value_with_the_operand_sign(self, ctx):
+        """An infinity is a signed magnitude, so the substitute names the
+        magnitude and the operand supplies the sign -- as `EFloatContext` has
+        always done.  A float format is sign-symmetric, so both are available.
+        """
         assert ctx.round(_INF) == 3
-        assert ctx.round(_NEG_INF) == 3
+        assert ctx.round(_NEG_INF) == -3
 
     @pytest.mark.parametrize('ctx', _contexts(enable_inf=False, inf_value=Float(isnan=True)),
                              ids=_ids())
@@ -130,6 +137,9 @@ class TestValidation:
             fp.MPFloatContext(11, enable_nan=False, nan_value=1.0)
 
 
+_SAT = fp.OverflowMode.SATURATE
+
+
 class TestOverflow:
     """Only `MPBFloatContext` has a bound, and an overflow that would round to
     infinity is substituted exactly like an infinite operand."""
@@ -144,9 +154,15 @@ class TestOverflow:
         with pytest.raises(ValueError):
             self._ctx(enable_inf=False).round(1e9)
 
-    def test_a_substituted_infinity_receives_the_overflow(self):
+    @pytest.mark.parametrize('sign', [False, True], ids=['pos', 'neg'])
+    def test_a_substituted_infinity_receives_the_overflow(self, sign):
+        """The operand is a finite value whose magnitude ran out of format, so
+        its sign is carried through -- as the `SATURATE` arm does."""
         ctx = self._ctx(enable_inf=False, inf_value=Float(x=_MAXVAL))
-        assert ctx.round(1e9) == ctx.maxval()
+        x = -1e9 if sign else 1e9
+        assert ctx.round(x) == ctx.maxval(sign)
+        # ... and it agrees with saturating the same operand
+        assert ctx.round(x) == self._ctx(overflow=_SAT).round(x)
 
     def test_an_overflow_that_saturates_is_untouched(self):
         """`RTZ` rounds an overflow down to the bound, so it never wanted the
@@ -155,7 +171,7 @@ class TestOverflow:
         assert ctx.round(1e9) == ctx.maxval()
 
     def test_saturating_overflow_is_untouched(self):
-        ctx = self._ctx(overflow=fp.OverflowMode.SATURATE, enable_inf=False)
+        ctx = self._ctx(overflow=_SAT, enable_inf=False)
         assert ctx.round(1e9) == ctx.maxval()
 
 
@@ -197,3 +213,35 @@ class TestEquality:
         same = ctx.with_params(enable_nan=True)
         assert same == ctx
         assert hash(same) == hash(ctx)
+
+
+class TestSubstituteIdentity:
+    """A context has to equal itself, so the substitutes are compared by
+    encoding rather than by `==`, which is numeric: it calls a NaN unequal to
+    itself and the two zeros equal."""
+
+    @pytest.mark.parametrize('ctx', _contexts(enable_inf=False, inf_value=Float(isnan=True)),
+                             ids=_ids())
+    def test_a_nan_substitute_still_equals_itself(self, ctx):
+        same = type(ctx)(*_args(ctx), enable_inf=False, inf_value=Float(isnan=True))
+        assert ctx == ctx
+        assert ctx == same
+        assert len({ctx, same}) == 1
+        assert {ctx: 1}[same] == 1
+
+    @pytest.mark.parametrize('ctx', _contexts(), ids=_ids())
+    def test_the_two_zeros_are_different_substitutes(self, ctx):
+        pos = ctx.with_params(enable_nan=False, nan_value=Float(c=0))
+        neg = ctx.with_params(enable_nan=False, nan_value=Float(c=0, s=True))
+        assert pos != neg
+        assert pos.round(_NAN).s is False
+        assert neg.round(_NAN).s is True
+
+
+def _args(ctx) -> tuple:
+    """The positional arguments `ctx` was built from."""
+    if isinstance(ctx, fp.MPBFloatContext):
+        return (ctx.pmax, ctx.emin, ctx.pos_maxval)
+    if isinstance(ctx, fp.MPSFloatContext):
+        return (ctx.pmax, ctx.emin)
+    return (ctx.pmax,)

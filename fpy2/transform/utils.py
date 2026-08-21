@@ -44,6 +44,7 @@ from ..number import (
     Context,
     Float,
     RealFloat,
+    same_value,
 )
 from .cursor import (
     BlockCursor,
@@ -146,13 +147,6 @@ def value_literal(v: Float, loc: Location | None) -> Expr:
 def shift(x: RealFloat, k: int) -> RealFloat:
     """`x * 2**k`, exactly."""
     return RealFloat(s=x.s, exp=x.exp + k, c=x.c)
-
-
-def same_value(a: Float, b: Float) -> bool:
-    """Whether two values are the same, sign and all."""
-    if a.is_nar():
-        return a.isnan == b.isnan and a.isinf == b.isinf and a.s == b.s
-    return not b.is_nar() and a.as_real() == b.as_real() and a.s == b.s
 
 
 def try_round(ctx: Context, x: Float | RealFloat) -> Float | None:

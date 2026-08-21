@@ -7,7 +7,7 @@ Hence, "MP-F".
 from fractions import Fraction
 
 from ...utils import DEFAULT, DefaultOr, default_repr
-from ..number import RNG, Float, RealFloat
+from ..number import RNG, Float, RealFloat, same_value
 from ..round import RoundingMode
 from .context import OrdinalContext
 from .format import OrdinalFormat
@@ -312,8 +312,8 @@ class MPFixedContext(OrdinalContext):
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
             and self.enable_neg_zero == other.enable_neg_zero
-            and self.nan_value == other.nan_value
-            and self.inf_value == other.inf_value
+            and same_value(self.nan_value, other.nan_value)
+            and same_value(self.inf_value, other.inf_value)
         )
 
     def __hash__(self):

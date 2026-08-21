@@ -5,6 +5,8 @@ import math
 from fractions import Fraction
 from hypothesis import given, strategies as st
 
+from fpy2.number import same_value
+
 from ...generators import floats
 
 
@@ -289,3 +291,58 @@ class TestFloatArithmetic(FloatTestCast):
             x ** -1
         with pytest.raises(TypeError):
             x ** 0.5
+
+
+class TestSameValue:
+    """`same_value` compares the value and its sign, drawing the two
+    distinctions `==` cannot: `==` calls a NaN unequal to itself and the two
+    zeros equal."""
+
+    @pytest.mark.parametrize('mk', [
+        lambda s: fp.Float(isnan=True, s=s),
+        lambda s: fp.Float(isinf=True, s=s),
+        lambda s: fp.Float(c=0, s=s),
+        lambda s: fp.Float(c=3, exp=1, s=s),
+    ], ids=['nan', 'inf', 'zero', 'finite'])
+    def test_a_value_is_the_same_as_itself(self, mk):
+        for s in (False, True):
+            assert same_value(mk(s), mk(s))
+
+    @pytest.mark.parametrize('mk', [
+        lambda s: fp.Float(isnan=True, s=s),
+        lambda s: fp.Float(isinf=True, s=s),
+        lambda s: fp.Float(c=0, s=s),
+        lambda s: fp.Float(c=3, exp=1, s=s),
+    ], ids=['nan', 'inf', 'zero', 'finite'])
+    def test_the_sign_is_part_of_the_encoding(self, mk):
+        assert not same_value(mk(False), mk(True))
+
+    def test_nan_is_the_same_value_as_itself_though_not_equal(self):
+        a, b = fp.Float(isnan=True), fp.Float(isnan=True)
+        assert a != b            # `==` is the IEEE comparison
+        assert same_value(a, b)
+
+    def test_the_zeros_are_equal_but_not_the_same_value(self):
+        pos, neg = fp.Float(c=0), fp.Float(c=0, s=True)
+        assert pos == neg        # `==` is the IEEE comparison
+        assert not same_value(pos, neg)
+
+    @pytest.mark.parametrize('a,b', [
+        (fp.Float(isnan=True), fp.Float(isinf=True)),
+        (fp.Float(isnan=True), fp.Float(c=1, exp=0)),
+        (fp.Float(isinf=True), fp.Float(c=1, exp=0)),
+    ], ids=['nan-inf', 'nan-finite', 'inf-finite'])
+    def test_the_classes_are_distinguished(self, a, b):
+        assert not same_value(a, b)
+        assert not same_value(b, a)
+
+    def test_the_same_value_encoded_differently_agrees(self):
+        """The value is compared, not the encoding, so two spellings of 1 are
+        the same value."""
+        assert same_value(fp.Float(c=1, exp=0), fp.Float(c=2, exp=-1))
+
+    def test_none_matches_only_none(self):
+        assert same_value(None, None)
+        assert not same_value(None, fp.Float(c=0))
+        assert not same_value(fp.Float(c=0), None)
+
