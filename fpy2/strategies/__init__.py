@@ -35,6 +35,7 @@ from .neg_zero_unfold import unfold_neg_zero
 from .overflow_unfold import unfold_overflow
 from .reduce_fusion import fuse
 from .round_elim import elim_round
+from .round_insert import insert_round
 from .simple import simplify
 from .sites import sites
 from .special_unfold import unfold_special
@@ -58,6 +59,7 @@ __all__ = [
     'float_to_fixed',
     'fuse',
     'inline',
+    'insert_round',
     'lift_context',
     'monomorphize',
     'rescale_fixed',

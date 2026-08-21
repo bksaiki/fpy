@@ -11,6 +11,7 @@ from ..transform import (
     ForUnroll,
     FuncInline,
     RescaleFixed,
+    RoundInsert,
     SplitLoop,
     UnfoldNegZero,
     UnfoldOverflow,
@@ -24,6 +25,7 @@ from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
 from .neg_zero_unfold import unfold_neg_zero
 from .overflow_unfold import unfold_overflow
+from .round_insert import insert_round
 from .special_unfold import unfold_special
 
 _SITES: dict[Callable, Callable] = {
@@ -32,6 +34,7 @@ _SITES: dict[Callable, Callable] = {
     unfold_overflow: UnfoldOverflow.sites,
     float_to_fixed: FloatToFixed.sites,
     rescale_fixed: RescaleFixed.sites,
+    insert_round: RoundInsert.sites,
     split: SplitLoop.sites,
     unroll_for: ForUnroll.sites,
     unroll_while: WhileUnroll.sites,

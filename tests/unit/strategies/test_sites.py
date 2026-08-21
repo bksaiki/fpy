@@ -19,6 +19,7 @@ from fpy2.strategies import (
     TransformReferenceError,
     float_to_fixed,
     inline,
+    insert_round,
     rescale_fixed,
     simplify,
     sites,
@@ -104,6 +105,14 @@ def test_the_rounding_strategies_list_their_blocks():
         assert all(isinstance(c, StmtCursor) for c in found)
 
 
+def test_insert_round_lists_its_blocks():
+    """Its candidates are exact blocks, which the `fp.round` blocks here match
+    structurally even though every one of them declines."""
+    found = sites(insert_round, two_sites)
+    assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
+    assert all(isinstance(c, StmtCursor) for c in found)
+
+
 def test_a_listing_is_outermost_first():
     found = sites(unfold_special, nested)
     assert [c.path for c in found] == [FuncBody().stmt(0).block('ift').stmt(0)]
@@ -183,6 +192,16 @@ def test_a_cast_block_is_not_listed_where_it_does_not_count():
     """...and must not, for the three that only take a round."""
     for strategy in (unfold_neg_zero, unfold_overflow, float_to_fixed):
         assert [c.index for c in sites(strategy, cast_and_round)] == [1]
+
+
+def test_a_listed_insert_round_site_aims_the_same_as_its_index():
+    """`insert_round` takes a `ctx` as well, so it binds one rather than
+    joining the parametrization above."""
+    def aim(func, where):
+        return insert_round(func, fp.FP64, where=where)
+
+    for i, cursor in enumerate(sites(insert_round, two_sites)):
+        _aims_alike(aim, two_sites, i, cursor)
 
 
 def test_a_listed_call_aims_the_same_as_its_index():
