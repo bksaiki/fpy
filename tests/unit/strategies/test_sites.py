@@ -105,14 +105,6 @@ def test_the_rounding_strategies_list_their_blocks():
         assert all(isinstance(c, StmtCursor) for c in found)
 
 
-def test_insert_round_lists_its_blocks():
-    """Its candidates are exact blocks, which the `fp.round` blocks here match
-    structurally even though every one of them declines."""
-    found = sites(insert_round, two_sites)
-    assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
-    assert all(isinstance(c, StmtCursor) for c in found)
-
-
 def test_a_listing_is_outermost_first():
     found = sites(unfold_special, nested)
     assert [c.path for c in found] == [FuncBody().stmt(0).block('ift').stmt(0)]
@@ -128,6 +120,15 @@ def _callee(cursor: ExprCursor) -> str:
     call = cursor.resolve()
     assert isinstance(call, Call)
     return call.fn.name
+
+
+def test_insert_round_lists_operations():
+    """Its candidates are operations whose scope rounds exactly, so the two
+    `fp.round` blocks here are not sites at all -- only the final add, which is
+    under the function's own `fp.REAL` scope."""
+    found = sites(insert_round, two_sites)
+    assert all(isinstance(c, ExprCursor) for c in found)
+    assert [type(c.resolve()).__name__ for c in found] == ['Add']
 
 
 def test_inline_lists_expressions():

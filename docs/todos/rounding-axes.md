@@ -116,15 +116,34 @@ boundary. Above it, the work is already done.
 
 ### 1. `insert_round`'s widening mode
 
-**Done: the result half.** `insert_round(func, ctx, where=None)` gives an
-operation under `with fp.REAL:` a format, verified by `round_is_identity` — the
-same helper `RoundElim` decides with, so nothing in the number tower changed.
-Its candidates are `UnderscoreId`-bound context blocks whose body assigns a
-roundable op to a plain name; whether the context *is* `REAL` is settled in
-verification rather than in matching, because a hand-written `with fp.REAL:`
-parses to an `Attribute` while `RoundElim` emits a `ForeignVal`. It declines a
-block that already rounds, a block of several assignments, a stochastic target,
-an unbounded operand, and a target too narrow to hold the operation.
+**Done: the result half.** `insert_round(func, ctx, where=None)` gives an exact
+operation a format, verified by `round_is_identity` — the same helper `RoundElim`
+decides with, so nothing in the number tower changed.
+
+Its candidates are **operations**, not blocks, and the rewrite mirrors
+`RoundElim._hoist`. A context applies to every operation in its block, so an
+operation is given a format of its own by being lifted into a block alone: each
+operand that is not already a `Var` is bound under the original scope first, and
+because contexts nest the new block goes *inside* the one it found rather than
+splitting it.
+
+```python
+with fp.REAL:                     with fp.REAL:
+    t = (x * x) + (y * y)   ->        with fp.FP64:
+                                          _t = (x * x)
+                                      t = _t + (y * y)
+```
+
+Per-operation granularity is what makes this usable, and it is sound for a
+reason worth stating plainly: **the inserted rounding is verified to be an
+identity, so it changes no value.** An operation reading the result sees what it
+would have seen, so operations can be given formats one at a time and in any
+order — including one whose result a later exact operation consumes. There is no
+dependence hazard, and no all-or-nothing per block.
+
+It declines a stochastic target, an unbounded operand, and an operation too wide
+for the target. An operation that already has a format is not a candidate at
+all, so the listing no longer carries sites that always refuse.
 
 **Remaining: operand sites.** Same predicate aimed at operands: wrap each in a
 cast to the target where the operand's inferred format is contained in it,
@@ -276,8 +295,8 @@ both directions, which is the whole of the specification-to-implementation step.
 - **Resolved: alternating `insert_round` and `elim_round` diverges, and the
   step-6 recipe needs explicit fuel.** Neither guard bounds the composition, and
   it does not cycle either — each round trip wraps the operation in one more
-  block, because `RoundElim` hoists into a *nested* `with fp.REAL:` rather than
-  replacing the scope it found. `simplify` in between clears the redundant
+  block, because *both* operators hoist into a nested block rather than
+  replacing the scope they found. `simplify` in between clears the redundant
   copies but not the nesting, so it does not help. Pinned by
   `test_alternating_the_two_does_not_converge`.
 

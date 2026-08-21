@@ -49,6 +49,16 @@ formats where inserting would change the result.
 
 ## Design
 
+> **Superseded during implementation.** The design below sites the rewrite on
+> *blocks*, which forces an all-or-nothing choice per block and declines any
+> block of several assignments. What shipped sites it on **operations** and
+> mirrors `RoundElim._hoist` instead; see gap 1 of
+> [rounding-axes.md](rounding-axes.md). The reason the block design gave for
+> declining several assignments — that rounding the first changes the second's
+> operand — is also wrong: a verified insertion is an identity, so it changes no
+> value. The phase plan and verification below still describe what was done.
+
+
 `insert_round(func, ctx, where=None)` — `ctx` is a **required** positional, as
 in `monomorphize(func, ctx, args)`. Inferring it is not worth it: reading the
 enclosing scope only reproduces `elim_round`'s own choice, and synthesizing one

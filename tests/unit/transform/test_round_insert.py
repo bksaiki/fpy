@@ -64,8 +64,8 @@ _SAMPLE = [1.5, -3.0, 0.5, 2.25, 7.5, 0.25, 1024.0, 0.0]
 
 
 def _agree(a: FuncDef, b: FuncDef, runtime, arity: int) -> bool:
-    fa = Function(a, runtime=runtime)
-    fb = Function(b, runtime=runtime)
+    fa: Function = Function(a, runtime=runtime)
+    fb: Function = Function(b, runtime=runtime)
     return all(
         fa(*args) == fb(*args)
         for args in itertools.product(_SAMPLE, repeat=arity)
