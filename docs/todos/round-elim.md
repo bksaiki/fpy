@@ -11,10 +11,12 @@ rounding to the active context is provably an identity:
   `_tN` under the *current* (original) context before being passed
   into the REAL block.  Operands that are already `Var` references
   skip the bind (a copy `_t = v` has no rounds to preserve).
-- **Explicit `Round` / `RoundExact` / `Cast` nodes** whose argument
+- **Explicit `Round` / `Cast` nodes** whose argument
   bound is already contained in the target context collapse to the
   argument — a pure node-level rewrite that fires anywhere, even
   inside positions where statement-level hoists are suppressed.
+  The other two rounding nodes, `RoundAt` and `RoundInt`, are not
+  handled.
 
 The decision uses the public helpers `exact_binop`, `exact_unop`,
 and `round_is_identity` from `fpy2.analysis.format_infer`.
@@ -39,6 +41,22 @@ for keeping the local rewrite small — downstream cleanup is
 expected to do the rest.
 
 ## Open items
+
+### The inverse operator
+
+`insert_round` — turn an op under `with fp.REAL:` back into a rounded
+one whose rounding is an identity — is this pass read backwards, and
+decides most of the questions below by deciding what shape the output
+of this one should be. It is gap 1 of
+[rounding-axes.md](rounding-axes.md), along with the two
+double-rounding operators that sit on the same axis. Note that the two
+are *not* inverses as written. `_is_eliminable` hoists only when the
+unrounded format is *strictly tighter* than the scope's, since an
+unbounded scope makes `round_is_identity` vacuously true while giving
+downstream consumers nothing to narrow with — and the cpp backend's
+storage selection cannot pick a type for a saturated format. Those are
+exactly the cases `insert_round` exists to undo, so composing the two
+is not obviously terminating.
 
 ### Pair RoundElim with a const-prop + copy-prop + DCE cleanup invocation
 
