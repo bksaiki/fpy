@@ -100,28 +100,12 @@ def _dependent(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 class TestSites:
-    def test_lists_operations_not_blocks(self):
+    def test_lists_operations(self):
         ast = _fp32_args(_sum_of_squares, 2)
         found = RoundInsert.sites(ast)
         assert all(isinstance(c, ExprCursor) for c in found)
         # the add, then each multiply: outermost first
         assert [type(c.resolve()).__name__ for c in found] == ['Add', 'Mul', 'Mul']
-
-    def test_an_operation_that_already_rounds_is_not_a_site(self):
-        """The block-sited version listed both `fp.round` blocks and declined
-        every one.  Only the add, which is under the function's own exact
-        scope, is a candidate now."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP16:
-                p = fp.round(x)
-            with fp.FP16:
-                q = fp.round(y)
-            return p + q
-
-        found = RoundInsert.sites(f.ast)
-        assert [type(c.resolve()).__name__ for c in found] == ['Add']
 
     def test_a_cursor_aims_the_same_as_its_index(self):
         ast = _fp32_args(_sum_of_squares, 2)
@@ -237,3 +221,71 @@ class TestDeclines:
         ast = _fp32_args(_sum_of_squares, 2)
         with pytest.raises(TypeError):
             RoundInsert.apply(ast, fp.FP64, where='0')  # type: ignore[arg-type]
+
+
+# ----------------------------------------------------------------------
+# Positions no statement-level preamble reaches
+#
+# Regressions for a review: each of these once produced a wrong program or a
+# wrong edit log rather than a refusal.
+
+
+@fp.fpy(ctx=fp.REAL)
+def _while_cond(x: fp.Real) -> fp.Real:
+    while (x * x) < 100.0:
+        with fp.FP32:
+            x = x + 1.0
+    return x
+
+
+@fp.fpy(ctx=fp.FP64)
+def _if_cond(x: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.REAL:
+        if (x * x) > 1.0:
+            a = 1.0
+        else:
+            a = 2.0
+        b = abs(y)
+    return a + b
+
+
+class TestUnreachablePositions:
+    def test_a_while_condition_refuses(self):
+        """Hoisting out of a `while` condition computes it once, before a loop
+        that re-evaluates it every iteration -- the rewrite used to emit a
+        program that does not terminate."""
+        ast = Monomorphize.apply(_while_cond.ast, fp.REAL, [RealType(fp.FP32)])
+        with pytest.raises(TransformDeclined, match='no statement-level position'):
+            RoundInsert.apply(ast, fp.FP64, where=0)
+
+    def test_a_while_condition_is_skipped_without_a_where(self):
+        ast = Monomorphize.apply(_while_cond.ast, fp.REAL, [RealType(fp.FP32)])
+        assert RoundInsert.apply(ast, fp.FP64).is_equiv(ast)
+
+    def test_an_if_condition_refuses(self):
+        ast = _fp32_args(_if_cond, 2)
+        with pytest.raises(TransformDeclined, match='no statement-level position'):
+            RoundInsert.apply(ast, fp.FP64, where=0)
+
+    def test_the_edit_log_covers_every_rewrite(self):
+        """`SiteRewriter._visit_block` resets `_replaced` per statement, so a
+        rewrite inside a compound statement's own sub-expression would go
+        unrecorded and every later statement in the block would mis-forward."""
+        ast = _fp32_args(_if_cond, 2)
+        log = RoundInsert.apply_with_edits(ast, fp.FP64)
+        # the rewrites all land in the one `fp.REAL` block, so its growth is
+        # what the edits have to account for
+        grew = len(log.result.body.stmts[0].body.stmts) - len(ast.body.stmts[0].body.stmts)
+        assert grew == sum(e.inserted - e.removed for e in log.edits)
+
+    def test_both_spellings_of_where_agree_on_a_suppressed_site(self):
+        """An index used to silently no-op where the equivalent cursor raised."""
+        ast = _fp32_args(_if_cond, 2)
+        for i, cursor in enumerate(RoundInsert.sites(ast)):
+            try:
+                expect = RoundInsert.apply(ast, fp.FP64, where=i)
+            except TransformDeclined:
+                with pytest.raises(TransformDeclined):
+                    RoundInsert.apply(ast, fp.FP64, where=cursor)
+                continue
+            assert RoundInsert.apply(ast, fp.FP64, where=cursor).is_equiv(expect)

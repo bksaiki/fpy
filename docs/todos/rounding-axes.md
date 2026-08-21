@@ -24,7 +24,7 @@ The paper's analysis half is **already built**, as
 | 𝒜-Contains-Prec and 𝒜-Contains-Sub (Fig. 7) | `AbstractFormat._is_contained_in` — condition 3's fallback (`pos_bound <= 2^(exp + other.prec)`) *is* 𝒜-Contains-Sub |
 | Format inference (§6.1) | `FormatInfer` / `FormatAnalysis` (`format_infer/analysis.py`), including loop fixpoints, call edges, and branch refinement |
 | Canonicalization (§6.2, left to right) | `RoundElim` / `elim_round` — see [round-elim.md](round-elim.md) |
-| Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` — **done**, see [insert-round-plan.md](insert-round-plan.md) |
+| Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` — **done**, see gap 1 below |
 
 So two of the paper's four rewrites are implemented, and the analysis the other
 two need is in place and in use.

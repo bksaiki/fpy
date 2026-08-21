@@ -24,25 +24,20 @@ def insert_round(
     under ``fp.FP64`` is a hardware multiply.  Inserting the rounding is what
     makes a real-valued specification implementable.
 
-    The sites are *operations*, not blocks.  A context applies to every
-    operation in its block, so an operation is given a format of its own by
-    being lifted into a block alone: each operand that is not already a
-    variable is bound under the original scope first, exactly as
-    :func:`fpy2.strategies.elim_round` binds them on the way out.  One
-    operation therefore gains a rounding and the rest of its statement stays
-    exact, so operations can be given formats one at a time, in any order.
+    The sites are individual operations.  A context applies to every operation
+    in its block, so an operation is given a format of its own by being lifted
+    into a block alone, each operand that is not already a variable bound under
+    the original scope first.  One operation therefore gains a rounding and the
+    rest of its statement stays exact — and since the inserted rounding is
+    verified an identity, it changes no value, so operations can be given
+    formats one at a time and in any order.
 
-    That is sound because the inserted rounding is verified to be an
-    *identity*: it changes no value, so a later operation reading the result
-    sees what it would have seen.
+    An operation whose scope already rounds is not a site, and neither is one
+    with nowhere to put the block: a loop condition, a comprehension, a
+    conditional branch.
 
     Run :func:`fpy2.strategies.simplify` afterwards to fold away the
     temporaries the rewrite introduces.
-
-    `ctx` is required and not inferred.  Reading the enclosing scope would only
-    reproduce ``elim_round``'s own choice, and deriving a format from the
-    operation's inferred bound yields formats no hardware has — the point of
-    the rewrite is to land on an operation the environment provides.
 
     Parameters
     ----------

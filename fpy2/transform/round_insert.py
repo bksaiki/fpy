@@ -8,17 +8,12 @@ function and either may replace the other.  :class:`.RoundElim` reads that
 identity left to right, dropping a rounding that cannot be observed; this pass
 reads it right to left, giving an exact operation a format.
 
-The point is not to add work.  An operation under ``fp.REAL`` names no format,
-so no environment's arithmetic implements it; the same operation under
-``fp.FP64`` is a hardware multiply.  Inserting the rounding is what makes a
-real-valued specification implementable.
-
-The candidates are *operations*, not blocks, and the rewrite mirrors
-:meth:`.RoundElim._hoist` exactly.  A context applies to every operation in its
-block, so an operation can only be given a format of its own by being alone in
-one.  Each operand that is not already a ``Var`` is therefore bound to a fresh
-temporary under the *original* scope, and the operation itself is emitted alone
-under the target:
+The candidates are individual operations, and the rewrite mirrors
+:class:`.RoundElim`'s hoist.  A context applies to every operation in its block,
+so an operation is given a format of its own by being lifted into a block alone:
+each operand that is not already a ``Var`` is bound to a fresh temporary under
+the *original* scope, which both keeps whatever rounding the operand already did
+and leaves the new block one operation to round.
 
 .. code-block:: python
 
@@ -32,37 +27,20 @@ under the target:
             _t = (x * x)
         t = _t + (y * y)
 
-The new block holds one ``Var``-argumented operation, so exactly one rounding is
-inserted and the rest of the statement stays exact.  Because the inserted
-rounding is verified to be an *identity*, it changes no value: a later operation
-reading the temporary sees what it would have seen, so operations may be given
-formats one at a time and in any order.
+Because the inserted rounding is verified an identity it changes no value, so
+operations may be given formats one at a time and in any order -- including one
+whose result a later exact operation reads.  Idempotence falls out: a second
+pass finds only ``Var``-argumented operations already under a format.
 
-The bind preserves whatever the operand already did -- an operand that is itself
-a rounded operation fires at its original scope before the new block sees the
-value -- and idempotence falls out, since a second pass finds only
-``Var``-argumented operations already under a format.
-
-Declined, with a reason, when the operation's scope does not round exactly
-(there is no rounding to insert), when the target is stochastic, when format
-inference cannot bound the operation, and when the bound is not contained in the
-target format -- including containment of the special values, which the
-magnitude conditions cannot see.
+The refusals, and why each one, are at :meth:`_RoundInsertInstance._verify`.
 """
 
 from typing import Any
 
-from ..analysis import (
-    ContextUse,
-    ContextUseAnalysis,
-    ContextUseSite,
-    DefineUse,
-    DefineUseAnalysis,
-)
+from ..analysis import ContextUse, DefineUse, SyntaxCheck
 from ..analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
-    FormatAnalysis,
     FormatInfer,
     SetFormat,
     round_is_identity,
@@ -75,10 +53,12 @@ from ..ast.fpyast import (
     ContextStmt,
     Expr,
     ForeignVal,
+    ForStmt,
     FuncDef,
+    If1Stmt,
     IfExpr,
+    IfStmt,
     ListComp,
-    Location,
     Mul,
     Neg,
     Round,
@@ -86,43 +66,16 @@ from ..ast.fpyast import (
     Sub,
     UnderscoreId,
     Var,
+    WhileStmt,
 )
 from ..number import REAL, Context
 from ..utils import Gensym
 from .cursor import Cursor, EditLog, ExprCursor, expr_sites
 from .error import TransformDeclined
-from .utils import Declined, SiteRewriter, check_where
+from .utils import Declined, SiteRewriter, check_where, operands, rebuild
 
 _ROUNDABLE = (Add, Sub, Mul, Abs, Neg, Round, Cast)
-"""The operations that carry a context-driven rounding.
-
-The set :class:`.RoundElim` eliminates, so the two operators mirror each
-other's sites.
-"""
-
-
-def _operands(e: Expr) -> list[Expr]:
-    """The operands of a roundable operation."""
-    match e:
-        case Add() | Sub() | Mul():
-            return [e.first, e.second]
-        case Abs() | Neg() | Round() | Cast():
-            return [e.arg]
-        case _:
-            raise RuntimeError(f'not a roundable operation: {e}')
-
-
-def _rebuild(e: Expr, operands: list[Expr]) -> Expr:
-    """*e* with its operands replaced."""
-    match e:
-        case Add() | Sub() | Mul():
-            return type(e)(operands[0], operands[1], e.loc)
-        case Abs() | Neg():
-            return type(e)(operands[0], e.loc)
-        case Round() | Cast():
-            return type(e)(e.func, operands[0], e.loc)
-        case _:
-            raise RuntimeError(f'not a roundable operation: {e}')
+"""The operations that carry a context-driven rounding."""
 
 
 class _RoundInsertInstance(SiteRewriter):
@@ -133,7 +86,6 @@ class _RoundInsertInstance(SiteRewriter):
     func: FuncDef
     ctx: Context
     scopes: 'ExactScopes'
-    format_info: FormatAnalysis
     gensym: Gensym
     where: int | Cursor | None
 
@@ -142,15 +94,12 @@ class _RoundInsertInstance(SiteRewriter):
         func: FuncDef,
         ctx: Context,
         scopes: 'ExactScopes',
-        format_info: FormatAnalysis,
-        def_use: DefineUseAnalysis,
         where: int | Cursor | None = None,
     ):
         self.func = func
         self.ctx = ctx
         self.scopes = scopes
-        self.format_info = format_info
-        self.gensym = Gensym(reserved=def_use.names())
+        self.gensym = Gensym(reserved=scopes.def_use.names())
         self.where = where
 
     def apply(self) -> FuncDef:
@@ -163,7 +112,7 @@ class _RoundInsertInstance(SiteRewriter):
                 'the target rounds stochastically, so it is not an identity on '
                 'a value it represents'
             )
-        stored = self.format_info.by_expr.get(e)
+        stored = self.scopes.format_info.by_expr.get(e)
         # a stored bound may be a `Format`; `round_is_identity` wants the lift
         bound = (
             AbstractFormat.from_format(stored)
@@ -200,20 +149,20 @@ class _RoundInsertInstance(SiteRewriter):
         visit as a non-``Var`` is bound under the *original* scope first, so the
         emitted block rounds this operation and nothing else.
         """
-        loc: Location | None = e.loc
-        operands: list[Expr] = []
-        for operand in _operands(e):
+        loc = e.loc
+        args: list[Expr] = []
+        for operand in operands(e):
             new = self._visit_expr(operand, out)
             if isinstance(new, Var):
                 # a name lookup rounds nothing, so the bind would be a pure copy
-                operands.append(new)
+                args.append(new)
                 continue
             t = self.gensym.fresh('_t')
             out.append(Assign(t, None, new, loc))
-            operands.append(Var(t, loc))
+            args.append(Var(t, loc))
 
         result = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(result, None, _rebuild(e, operands), loc)])
+        block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
         out.append(ContextStmt(
             UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
         ))
@@ -225,12 +174,20 @@ class _RoundInsertInstance(SiteRewriter):
 
         idx = self.site_idx
         self.site_idx += 1
-        # `ctx` is `None` in positions a statement-level preamble cannot reach
-        if ctx is None or not self._selects_expr(e, idx):
+        if not self._selects_expr(e, idx):
             return super()._visit_expr(e, ctx)
 
         self._matched += 1
-        declined = self._verify(e)
+        # `ctx` is `None` where no statement-level preamble reaches: refuse for
+        # both spellings of `where`, rather than no-op for one and fail the other
+        declined = (
+            Declined(
+                'the operation has no statement-level position for the block '
+                'the rewrite emits'
+            )
+            if ctx is None
+            else self._verify(e)
+        )
         if declined is not None:
             self.declined.append(declined.reason)
             if isinstance(self.where, int):
@@ -240,6 +197,28 @@ class _RoundInsertInstance(SiteRewriter):
         hoisted = self._hoist(e, ctx)
         self._replaced = True
         return hoisted
+
+    # A compound statement's own sub-expression cannot carry a preamble.  For a
+    # `while` condition that is soundness: the condition is re-evaluated every
+    # iteration, and a preamble before the loop computes it once, which does not
+    # terminate.  For the rest it is the edit log: `SiteRewriter._visit_block`
+    # resets `_replaced` per statement, so a rewrite recorded while visiting the
+    # sub-expression is lost once the nested block is visited, and every later
+    # statement in the block mis-forwards.
+    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
+        return super()._visit_if1(stmt, None)[0], ctx
+
+    def _visit_if(self, stmt: IfStmt, ctx: Any):
+        return super()._visit_if(stmt, None)[0], ctx
+
+    def _visit_while(self, stmt: WhileStmt, ctx: Any):
+        return super()._visit_while(stmt, None)[0], ctx
+
+    def _visit_for(self, stmt: ForStmt, ctx: Any):
+        return super()._visit_for(stmt, None)[0], ctx
+
+    def _visit_context(self, stmt: ContextStmt, ctx: Any):
+        return super()._visit_context(stmt, None)[0], ctx
 
     def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
         # the element sees the loop targets and later iterables see earlier
@@ -265,30 +244,22 @@ class ExactScopes:
     what a `where` index counts.
     """
 
-    def __init__(
-        self,
-        func: FuncDef,
-        ctx_use: ContextUseAnalysis,
-        format_info: FormatAnalysis,
-    ):
-        self.ctx_use = ctx_use
+    def __init__(self, func: FuncDef):
+        self.def_use = DefineUse.analyze(func)
+        self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.format_info = FormatInfer.analyze(
+            func, def_use=self.def_use, ctx_use=self.ctx_use,
+        )
         # symbolic scopes resolve against the caller's pin, as they do for
         # `FormatInfer` itself; without one they stay unresolvable
-        self.outer = None if format_info.fn_fmt is None else format_info.fn_fmt.ctx
-
-    def _resolved(self, e: ContextUseSite) -> Context | None:
-        scope = self.ctx_use.find_scope_from_use(e)
-        if isinstance(scope.ctx, Context):
-            return scope.ctx
-        return self.outer
+        fn_fmt = self.format_info.fn_fmt
+        self.outer = None if fn_fmt is None else fn_fmt.ctx
 
     def is_exact(self, e: Expr) -> bool:
         """Whether *e*'s active scope rounds exactly, so it has no rounding yet."""
-        try:
-            return self._resolved(e) is REAL   # type: ignore[arg-type]
-        except KeyError:
-            # a node built without going through scope analysis: not a site
-            return False
+        scope = self.ctx_use.find_scope_from_use(e)   # type: ignore[arg-type]
+        ctx = scope.ctx if isinstance(scope.ctx, Context) else self.outer
+        return ctx is REAL
 
 
 class RoundInsert:
@@ -305,7 +276,7 @@ class RoundInsert:
         A roundable operation whose scope rounds exactly; an operation that
         already has a format is not a candidate.
         """
-        scopes = _scopes_of(func)
+        scopes = ExactScopes(func)
         return expr_sites(
             func,
             lambda e: isinstance(e, _ROUNDABLE) and scopes.is_exact(e),
@@ -342,22 +313,9 @@ class RoundInsert:
             raise TypeError(f'Expected a \'Context\', got {ctx}')
         check_where(where)
 
-        def_use = DefineUse.analyze(func)
-        ctx_use = ContextUse.analyze(func, def_use=def_use)
-        format_info = FormatInfer.analyze(func, def_use=def_use, ctx_use=ctx_use)
-        scopes = ExactScopes(func, ctx_use, format_info)
-
-        vtor = _RoundInsertInstance(
-            func, ctx, scopes, format_info, def_use, where,
-        )
+        scopes = ExactScopes(func)
+        vtor = _RoundInsertInstance(func, ctx, scopes, where)
         out = vtor.apply()
         vtor.check_site('a candidate operation')
-        return EditLog(func, out, tuple(vtor.edits))
-
-
-def _scopes_of(func: FuncDef) -> ExactScopes:
-    """The scope map of `func`, for a listing that runs on its own."""
-    def_use = DefineUse.analyze(func)
-    ctx_use = ContextUse.analyze(func, def_use=def_use)
-    format_info = FormatInfer.analyze(func, def_use=def_use, ctx_use=ctx_use)
-    return ExactScopes(func, ctx_use, format_info)
+        SyntaxCheck.check(out, ignore_unknown=True)
+        return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

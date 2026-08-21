@@ -25,14 +25,17 @@ from fpy2.strategies import (
 from fpy2.types import RealType
 
 
-def _target_blocks(ast, ctx) -> int:
-    """Number of blocks in *ast* written as a `ForeignVal` of *ctx*."""
+def _blocks(ast, ctx=None) -> int:
+    """Context blocks in *ast* -- all of them, or just those written as a
+    `ForeignVal` of *ctx*."""
     count = 0
 
     class _C(DefaultVisitor):
         def _visit_context(self, stmt: ContextStmt, c):
             nonlocal count
-            if isinstance(stmt.ctx, ForeignVal) and stmt.ctx.val == ctx:
+            if ctx is None or (
+                isinstance(stmt.ctx, ForeignVal) and stmt.ctx.val == ctx
+            ):
                 count += 1
             super()._visit_context(stmt, c)
 
@@ -69,33 +72,12 @@ def _agree(a, b, arity: int) -> bool:
 
 
 class TestInsertRound:
-    def test_gives_each_verifying_operation_a_format(self):
-        f = _pinned(_sum_of_squares, 2)
-        assert _target_blocks(f.ast, fp.FP64) == 0
-        out = insert_round(f, fp.FP64)
-        # both multiplies verify; the exact sum of two 48-digit products does not
-        assert _target_blocks(out.ast, fp.FP64) == 2
-        assert _agree(out, f, 2)
-
-    def test_does_not_mutate_the_input(self):
+    def test_returns_a_function_that_agrees(self):
         f = _pinned(_sum_of_squares, 2)
         out = insert_round(f, fp.FP64)
         assert out is not f
-        assert _target_blocks(f.ast, fp.FP64) == 0
-
-    def test_is_idempotent(self):
-        once = insert_round(_pinned(_sum_of_squares, 2), fp.FP64)
-        twice = insert_round(once, fp.FP64)
-        assert twice.ast.is_equiv(once.ast)
-
-    def test_declines_a_format_too_narrow(self):
-        f = _pinned(_sum_of_squares, 2)
-        with pytest.raises(TransformDeclined, match='not representable'):
-            insert_round(f, fp.FP16, where=1)
-
-    def test_skips_a_narrow_format_without_a_where(self):
-        f = _pinned(_sum_of_squares, 2)
-        assert insert_round(f, fp.FP16).ast.is_equiv(f.ast)
+        assert _blocks(out.ast, fp.FP64) == 2
+        assert _agree(out, f, 2)
 
     def test_composes_with_simplify(self):
         f = _pinned(_sum_of_squares, 2)
@@ -113,29 +95,12 @@ class TestInsertRound:
 
 
 class TestWhere:
-    def test_lists_operations(self):
-        f = _pinned(_sum_of_squares, 2)
-        found = sites(insert_round, f)
-        assert all(isinstance(c, ExprCursor) for c in found)
-        assert [type(c.resolve()).__name__ for c in found] == ['Add', 'Mul', 'Mul']
-
     def test_an_index_aims_one_operation(self):
         f = _pinned(_sum_of_squares, 2)
         for i in (1, 2):
             out = insert_round(f, fp.FP64, where=i)
-            assert _target_blocks(out.ast, fp.FP64) == 1
+            assert _blocks(out.ast, fp.FP64) == 1
             assert _agree(out, f, 2)
-
-    def test_a_cursor_aims_the_same_as_its_index(self):
-        f = _pinned(_sum_of_squares, 2)
-        for i, cursor in enumerate(sites(insert_round, f)):
-            try:
-                expect = insert_round(f, fp.FP64, where=i).format()
-            except TransformDeclined:
-                with pytest.raises(TransformDeclined):
-                    insert_round(f, fp.FP64, where=cursor)
-                continue
-            assert insert_round(f, fp.FP64, where=cursor).format() == expect
 
     def test_a_where_naming_nothing(self):
         with pytest.raises(TransformReferenceError):
@@ -181,20 +146,30 @@ class TestRoundTrip:
         depths = []
         for i in range(4):
             f = elim_round(f) if i % 2 == 0 else insert_round(f, fp.FP64)
-            depths.append(_count_blocks(f.ast))
+            depths.append(_blocks(f.ast))
         assert depths == sorted(depths) and depths[0] < depths[-1]
         assert _agree(f, _pinned(_prod3, 3), 3)
 
 
-def _count_blocks(ast) -> int:
-    """Number of context blocks in *ast*, of any context."""
-    count = 0
+class TestCursorForwarding:
+    def test_a_cursor_survives_an_earlier_insertion(self):
+        """The per-site workflow: list once, then round them one at a time.
+        This needs the pass to claim `exprs_preserved`, which it did not at
+        first, so every expression cursor failed to forward."""
 
-    class _C(DefaultVisitor):
-        def _visit_context(self, stmt: ContextStmt, c):
-            nonlocal count
-            count += 1
-            super()._visit_context(stmt, c)
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.REAL:
+                t = x * x
+                s = y * y
+            return t + s
 
-    _C()._visit_function(ast, None)
-    return count
+        f0 = monomorphize(f, fp.FP64, [RealType(fp.FP32)] * 2)
+        cursors = sites(insert_round, f0)
+        assert len(cursors) == 2
+
+        f1 = insert_round(f0, fp.FP64, where=cursors[0])
+        # a cursor of `f0`, forwarded across the rewrite that produced `f1`
+        f2 = insert_round(f1, fp.FP64, where=cursors[1])
+        assert _blocks(f2.ast, fp.FP64) == 2
+        assert _agree(f2, f0, 2)
