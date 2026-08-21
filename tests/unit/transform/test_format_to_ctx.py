@@ -18,6 +18,7 @@ from fpy2.number.context.ieee754 import IEEEContext, IEEEFormat
 from fpy2.number.context.mp_fixed import MPFixedContext, MPFixedFormat
 from fpy2.number.context.mp_float import MPFloatContext, MPFloatFormat
 from fpy2.number.context.mpb_fixed import MPBFixedContext, MPBFixedFormat
+from fpy2.number import RealFloat
 from fpy2.number.context.real import REAL_FORMAT
 from fpy2.number.context.sm_fixed import SMFixedContext, SMFixedFormat
 from fpy2.transform.specialize import _format_to_ctx
@@ -57,6 +58,12 @@ class TestFormatRoundTrip():
         fp.SMFixedContext(-3, 16),
         fp.MPFloatContext(37),
         fp.MPFixedContext(-7),
+        # the float contexts state NaN and infinity as flags, so a format with
+        # one off has to recover as such rather than silently re-enabling it
+        fp.MPFloatContext(37, enable_nan=False),
+        fp.MPFloatContext(37, enable_inf=False),
+        fp.MPSFloatContext(11, -14, enable_nan=False, enable_inf=False),
+        fp.MPBFloatContext(11, -14, RealFloat(exp=5, c=0x7ff), enable_nan=False),
         fp.IEEEContext(6, 23),
         fp.IEEEContext(4, 8),
     ])
@@ -176,3 +183,23 @@ class TestUnrecoverableFormats():
             def round_params(self): return (None, None)
 
         assert _format_to_ctx(_Bogus()) is None
+
+
+class TestDisabledSpecialsRecover:
+    """A float format with NaN or infinity off used to have no context to
+    recover into: `from_format` raised `NotImplementedError` and
+    `_format_to_ctx` swallowed it, degrading the format to `None`."""
+
+    @pytest.mark.parametrize('ctx', [
+        fp.MPFloatContext(24, enable_nan=False, enable_inf=False),
+        fp.MPSFloatContext(11, -14, enable_nan=False, enable_inf=False),
+        fp.MPBFloatContext(11, -14, RealFloat(exp=5, c=0x7ff),
+                           enable_nan=False, enable_inf=False),
+    ], ids=['mp', 'mps', 'mpb'])
+    def test_a_format_without_specials_recovers(self, ctx):
+        rec = _format_to_ctx(ctx.format())
+        assert rec is not None, 'the format no longer degrades to `None`'
+        assert type(rec) is type(ctx)
+        assert not rec.enable_nan
+        assert not rec.enable_inf
+        assert rec.format() == ctx.format()
