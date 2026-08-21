@@ -42,6 +42,7 @@ from .backend import (
 from .fpc_context import FPCoreContext, NoSuchContextError
 from .interpret import (
     BytecodeInterpreter,
+    Foreign,
     Interpreter,
     get_default_interpreter,
     set_default_interpreter,

@@ -54,6 +54,7 @@ def value_to_literal(val: object, loc):
                 return None
             return TupleExpr(elts, loc) if isinstance(val, tuple) else ListExpr(elts, loc)
         case _:
+            # includes `Foreign`: opaque values have no literal form
             return None
 
 

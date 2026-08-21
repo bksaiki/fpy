@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 from typing import Any, Generic, ParamSpec, TypeVar
 
 from .ast import TypeAnn
-from .number import FP64, INTEGER, Context, Float
+from .number import FP64, Context
 from .utils import has_keyword
 
 P = ParamSpec('P')
@@ -67,7 +67,11 @@ class Primitive(Generic[P, R]):
         return f'{self.__class__.__name__}(func={self.func}, ...)'
 
     def __call__(self, *args, ctx: Context = FP64):
-        args = tuple(self._arg_to_value(arg) for arg in args)
+        # local import: the `interpret` package depends on this module
+        from .interpret.value import to_value, unwrap_foreign
+
+        # normalize numbers, but hand the body raw payloads, never `Foreign`
+        args = tuple(unwrap_foreign(to_value(arg)) for arg in args)
         if self.has_ctx_kwd:
             return self.func(*args, ctx=ctx)
         else:
@@ -77,23 +81,3 @@ class Primitive(Generic[P, R]):
     def name(self) -> str:
         """The name of the primitive function."""
         return self.func.__name__
-
-    def _arg_to_value(self, arg: Any):
-        """
-        Converts a Python argument to an FPy value.
-
-        Copied from `fpy2/interpret/default.py`.
-        """
-        match arg:
-            case Float():
-                return arg
-            case int():
-                return Float.from_int(arg, ctx=INTEGER, checked=False)
-            case float():
-                return Float.from_float(arg, ctx=FP64, checked=False)
-            case tuple():
-                return tuple(self._arg_to_value(x) for x in arg)
-            case list():
-                return [self._arg_to_value(x) for x in arg]
-            case _:
-                return arg

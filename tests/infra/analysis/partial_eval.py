@@ -36,7 +36,8 @@ def _test_analysis_unit():
         for e, v in info.by_expr.items():
             print(f' E[{e.format()}] = {v}')
         for d, v in info.by_def.items():
-            if not isinstance(v, fp.Function | fp.Primitive):
+            fn = v.val if isinstance(v, fp.Foreign) else v
+            if not isinstance(fn, fp.Function | fp.Primitive):
                 print(f' {d.name} = {v}')
 
 def _test_analysis_library():
@@ -49,7 +50,8 @@ def _test_analysis_library():
                     for e, v in info.by_expr.items():
                         print(f' E[{e.format()}] = {v}')
                     for d, v in info.by_def.items():
-                        if not isinstance(v, fp.Function | fp.Primitive):
+                        fn = v.val if isinstance(v, fp.Foreign) else v
+                        if not isinstance(fn, fp.Function | fp.Primitive):
                             print(f' {d.name} = {v}')
 
 def test_partial_eval():

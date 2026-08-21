@@ -1,0 +1,174 @@
+"""
+Runtime values of the FPy interpreter.
+
+An FPy value is one of::
+
+    value ::= bool                     # boolean
+            | Float | Fraction        # real number
+            | Context                  # rounding context
+            | tuple[value, ...]        # tuple
+            | list[value]              # list
+            | Foreign                  # opaque Python value
+
+:func:`to_value` classifies a Python object into this ADT at the
+Python boundary; :func:`from_value` converts back.
+"""
+
+from fractions import Fraction
+from typing import Any, TypeAlias
+
+from ..number import FP64, INTEGER, REAL, Context, Float, RealFloat
+from ..utils import UNINIT, is_dyadic
+
+__all__ = [
+    'Foreign',
+    'RealValue',
+    'ScalarValue',
+    'Value',
+    'from_value',
+    'to_value',
+    'unwrap_foreign',
+]
+
+
+class Foreign:
+    """
+    An opaque Python value inside an FPy program.
+
+    FPy cannot operate on such a value: it may only be passed along,
+    given to a rounding-context constructor, or read with `.attr`.
+    """
+
+    __slots__ = ('val',)
+    val: Any
+
+    def __init__(self, val: Any):
+        self.val = val
+
+    def __repr__(self):
+        return f'Foreign({self.val!r})'
+
+    # loud, not payload truthiness: a silently-truthy wrapper would
+    # flip branches on falsy payloads
+    def __bool__(self):
+        raise TypeError(f'cannot branch on a foreign value: {self.val!r}')
+
+    # identity, not `==`: a foreign `__eq__` may be arbitrary
+    # (e.g. numpy returns an array), and identity is total
+    def __eq__(self, other):
+        return isinstance(other, Foreign) and self.val is other.val
+
+    def __hash__(self):
+        return id(self.val)
+
+
+RealValue: TypeAlias = Float | Fraction
+"""Type of real values in FPy programs."""
+ScalarValue: TypeAlias = bool | Context | RealValue
+"""Type of scalar values in FPy programs."""
+Value: TypeAlias = ScalarValue | list['Value'] | tuple['Value', ...] | Foreign
+"""Type of values in FPy programs."""
+
+
+def to_value(arg: Any) -> Value:
+    """
+    Converts a Python object crossing into FPy to a :data:`Value`.
+
+    Idempotent: FPy values pass through unchanged; anything with no FPy
+    form is wrapped as :class:`Foreign`. Containers are rebuilt
+    unconditionally so the caller is isolated: FPy lists are shared, so
+    an FPy callee's ``xs[i] = e`` would otherwise write the Python
+    caller's own list. One deep copy per *outer* call only — FPy-to-FPy
+    calls skip conversion entirely and keep sharing.
+    """
+    match arg:
+        case bool() | Float() | Fraction() | Context() | Foreign():
+            return arg
+        case RealFloat():
+            return Float.from_real(arg, ctx=REAL)
+        case int():
+            return Float.from_int(arg, ctx=INTEGER, checked=False)
+        case float():
+            return Float.from_float(arg, ctx=FP64, checked=False)
+        case tuple():
+            return tuple(to_value(x) for x in arg)
+        case list():
+            return [to_value(x) for x in arg]
+        case _ if arg is UNINIT:
+            # `empty` placeholder: interpreter-internal, never foreign
+            return arg  # type: ignore[return-value]
+        case _:
+            return Foreign(arg)
+
+
+def _has_foreign(x) -> bool:
+    match x:
+        case Foreign():
+            return True
+        case tuple() | list():
+            return any(_has_foreign(v) for v in x)
+        case _:
+            return False
+
+
+def unwrap_foreign(x: Value):
+    """
+    Recursively unwraps :class:`Foreign` for a value crossing to native
+    Python. Containers are rebuilt only when one is inside, so sharing
+    is preserved otherwise.
+    """
+    if not _has_foreign(x):
+        return x
+    match x:
+        case Foreign():
+            return x.val
+        case tuple():
+            return tuple(unwrap_foreign(v) for v in x)
+        case list():
+            return [unwrap_foreign(v) for v in x]
+        case _:
+            raise TypeError(f'unreachable: {x!r}')
+
+
+def _is_boundary_value(x) -> bool:
+    match x:
+        case bool() | Float() | Context():
+            return True
+        case Fraction():
+            return not is_dyadic(x)
+        case Foreign():
+            return False
+        case tuple() | list():
+            return all(_is_boundary_value(v) for v in x)
+        case _ if x is UNINIT:
+            return True
+        case _:
+            raise TypeError(f'not an FPy value: {x!r}')
+
+
+def _cvt_boundary(x: Value):
+    match x:
+        case bool() | Float() | Context():
+            return x
+        case Fraction():
+            return Float.from_rational(x) if is_dyadic(x) else x
+        case Foreign():
+            return x.val
+        case tuple():
+            return tuple(from_value(v) for v in x)
+        case list():
+            return [from_value(v) for v in x]
+        case _ if x is UNINIT:
+            return x
+        case _:
+            raise TypeError(f'not an FPy value: {x!r}')
+
+
+def from_value(x: Value):
+    """
+    Converts a :data:`Value` crossing out of FPy to a Python object.
+
+    Dyadic rationals fold to :class:`Float`, :class:`Foreign` unwraps
+    to its payload; containers are rebuilt only when needed.
+    """
+    return x if _is_boundary_value(x) else _cvt_boundary(x)
