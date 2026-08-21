@@ -40,6 +40,20 @@ def _count_real_blocks(ast) -> int:
     return count
 
 
+def _count_blocks(ast) -> int:
+    """Number of context blocks in *ast*, of any context."""
+    count = 0
+
+    class _C(DefaultVisitor):
+        def _visit_context(self, stmt: ContextStmt, ctx):
+            nonlocal count
+            count += 1
+            super()._visit_context(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return count
+
+
 @fp.fpy(ctx=fp.FP64)
 def _prod3(x: fp.Real, y: fp.Real, z: fp.Real) -> fp.Real:
     return x * y * z
@@ -146,3 +160,32 @@ class TestRoundTrip:
         assert _count_real_blocks(out.ast) == 0
         for xyz in _SAMPLE:
             assert out(*xyz) == pinned(*xyz)
+
+    def test_an_unbounded_scope_leaves_nothing_to_insert(self):
+        """The other side of the asymmetry: under an unbounded scope
+        ``elim_round``'s strictly-tighter guard declines to hoist, so this
+        operator has no site.  The pair is a no-op rather than an inverse."""
+
+        @fp.fpy(ctx=fp.INTEGER)
+        def add2(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        pinned = monomorphize(add2, fp.INTEGER, [RealType(fp.INTEGER)] * 2)
+        hoisted = elim_round(pinned)
+        assert hoisted.ast.is_equiv(pinned.ast)
+        assert sites(insert_round, hoisted) == []
+
+    def test_alternating_the_two_does_not_converge(self):
+        """Neither operator's guard bounds the composition: each round trip
+        wraps the operation in one more block, because ``elim_round`` hoists
+        into a *nested* REAL block rather than replacing the scope it found.
+        A recipe that alternates them needs explicit fuel."""
+        f = monomorphize(_prod3, fp.FP64, [RealType(fp.FP32)] * 3)
+        depths = []
+        for i in range(4):
+            f = elim_round(f) if i % 2 == 0 else insert_round(f, fp.FP64)
+            depths.append(_count_blocks(f.ast))
+        assert depths == sorted(depths) and depths[0] < depths[-1]
+        # still correct at every step, just larger
+        for xyz in _SAMPLE:
+            assert f(*xyz) == _prod3(*xyz)

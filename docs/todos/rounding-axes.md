@@ -4,8 +4,8 @@
 
 Make the number of roundings in a program a schedulable axis, in both
 directions — insert a rounding that changes nothing, and expand one rounding
-into two that compose to the same answer. Today only the eliminating half of
-the first axis exists.
+into two that compose to the same answer. The first axis is now closed in both
+directions; the second is not built.
 
 Rules and terminology follow the double-rounding paper, *When Double Rounding
 is Correct*: format containment is §5.1, the correct-double-rounding table is
@@ -24,9 +24,10 @@ The paper's analysis half is **already built**, as
 | 𝒜-Contains-Prec and 𝒜-Contains-Sub (Fig. 7) | `AbstractFormat._is_contained_in` — condition 3's fallback (`pos_bound <= 2^(exp + other.prec)`) *is* 𝒜-Contains-Sub |
 | Format inference (§6.1) | `FormatInfer` / `FormatAnalysis` (`format_infer/analysis.py`), including loop fixpoints, call edges, and branch refinement |
 | Canonicalization (§6.2, left to right) | `RoundElim` / `elim_round` — see [round-elim.md](round-elim.md) |
+| Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` — **done**, see [insert-round-plan.md](insert-round-plan.md) |
 
-So `elim_round` is one of the paper's four rewrites, and the analysis every
-other one needs is in place and in use.
+So two of the paper's four rewrites are implemented, and the analysis the other
+two need is in place and in use.
 
 Two places where FPy is *ahead* of the paper, and which every new operator has
 to respect:
@@ -51,8 +52,12 @@ where `unfold_overflow` / `fold_overflow` are the bound axis in both directions:
 
 ```
 elim_round     rounded op  ->  with fp.REAL:      exists
-insert_round   with fp.REAL:  ->  rounded op      missing
+insert_round   with fp.REAL:  ->  rounded op      exists
 ```
+
+This axis is closed.  What remains of §6.2 is `insert_round`'s *widening mode*:
+the same predicate aimed at operands rather than results, which is what §8's
+operand promotion needs.
 
 **The double-rounding axis** — one rounding against two.
 
@@ -109,48 +114,38 @@ boundary. Above it, the work is already done.
 
 ## The gaps that remain
 
-### 1. `insert_round`
+### 1. `insert_round`'s widening mode
 
-The inverse of `elim_round`: an operation inside `with fp.REAL:` whose inferred
-format is contained in a target context becomes a rounded operation under that
-context.
+**Done: the result half.** `insert_round(func, ctx, where=None)` gives an
+operation under `with fp.REAL:` a format, verified by `round_is_identity` — the
+same helper `RoundElim` decides with, so nothing in the number tower changed.
+Its candidates are `UnderscoreId`-bound context blocks whose body assigns a
+roundable op to a plain name; whether the context *is* `REAL` is settled in
+verification rather than in matching, because a hand-written `with fp.REAL:`
+parses to an `Attribute` while `RoundElim` emits a `ForeignVal`. It declines a
+block that already rounds, a block of several assignments, a stochastic target,
+an unbounded operand, and a target too narrow to hold the operation.
 
-The verification already exists — `round_is_identity(inferred, ctx)`, the same
-helper `RoundElim` decides with. Nothing in the number tower has to change.
-That makes this the cheapest gap on the page and the one with the most reach:
-it is the step that maps a real-valued specification onto whatever operations
-the environment actually provides.
-
-Sites are expressions under a REAL scope that format inference can bound at
-all. Declines: an unresolvable bound; `specials_contained_in` failing; and
-`ctx.is_stochastic()`, at least until it is settled whether a stochastic draw
-on an exactly-representable value is an identity.
-
-One asymmetry to design around. `RoundElim` refuses to hoist unless the
-unrounded format is *strictly tighter* than the scope's, because an unbounded
-scope makes `round_is_identity` vacuously true while giving downstream
-consumers nothing — and the cpp backend's storage selection cannot pick a type
-for a saturated format. `insert_round` is precisely the operator that removes
-that saturation, so the two are not inverses, and composing them is not
-obviously terminating.
-
-**Widening mode.** Same predicate, operand sites: wrap each operand in a cast
-to the target where the operand's inferred format is contained in it, making
-the operation uniform-precision. This is the rewrite
+**Remaining: operand sites.** Same predicate aimed at operands: wrap each in a
+cast to the target where the operand's inferred format is contained in it,
+making the operation uniform-precision. This is the rewrite
 
 ```
 mul_R(E5M2, E5M2)  ->  mul_FP32(rnd_FP32(a), rnd_FP32(b))
 ```
 
-that §8 needs before SoftFloat or hardware can run the multiply. Whether this
-is a `mode=` on `insert_round` or a sibling operator is open: the verification
-is identical, the site kind is not.
+that §8 needs before SoftFloat or hardware can run the multiply. Whether it is
+a `mode=` on `insert_round` or a sibling operator is open: the verification is
+identical, the site kind is not. This is the next commit on the page.
 
 **The search variant.** `finitize(func, where, available=[...])` picks the
 smallest format from a list of environment-supported formats that contains the
 inferred format. That is §6.3's search, and it is what a user actually reaches
-for; `insert_round` with an explicit context is its primitive. It belongs with
-the recipes, not the operators — gap 2 of
+for; `insert_round` with an explicit context is its primitive. Inferring the
+context instead is not worth it: reading the enclosing scope only reproduces
+`elim_round`'s own choice, and deriving a format from the inferred bound (via
+`AbstractFormat.format()`) yields formats no hardware has. It belongs with the
+recipes, not the operators — gap 2 of
 [native-lowering-roadmap.md](native-lowering-roadmap.md) and item 7 of
 [scheduling-language.md](scheduling-language.md) are the same shape of
 question.
@@ -254,12 +249,13 @@ much of this operator is worth building.
 
 ## Order of work
 
-1. **`insert_round`** — no prerequisites, every check exists. Transform class in
-   `fpy2/transform/`, strategy wrapper in `fpy2/strategies/`, registration in
-   `sites.py`'s `_SITES`, tests in `tests/unit/strategies/`.
+1. ~~**`insert_round`**~~ — **done.** `RoundInsert` in `fpy2/transform/`,
+   `insert_round` in `fpy2/strategies/`, registered in `sites.py`'s `_SITES`,
+   tested in `tests/unit/transform/test_round_insert.py` and
+   `tests/unit/strategies/test_insert_round.py`.
 2. **Widening mode** — same predicate, operand sites. With step 1 this
    reproduces §8's SoftFloat mapping of the MX dot product, which is the
-   natural end-to-end test for both.
+   natural end-to-end test for both. **Next.**
 3. **Plumbing** (gap 2) — touches the number tower rather than the transform
    layer, so worth isolating from the operators that consume it.
 4. **`double_round_ok` and `split_round`** — the table as a predicate, plus the
@@ -277,12 +273,27 @@ both directions, which is the whole of the specification-to-implementation step.
 
 ## Open questions
 
-- **Do `insert_round` and `elim_round` cycle?** They nearly invert each other.
-  Does `RoundElim`'s strictly-tighter guard already break the loop, or does the
-  recipe in step 6 need explicit fuel?
-- **Stochastic contexts.** Is `round_is_identity` already right for
-  `is_stochastic()` contexts on exactly-representable values? If not,
-  `insert_round` declines on them.
+- **Resolved: alternating `insert_round` and `elim_round` diverges, and the
+  step-6 recipe needs explicit fuel.** Neither guard bounds the composition, and
+  it does not cycle either — each round trip wraps the operation in one more
+  block, because `RoundElim` hoists into a *nested* `with fp.REAL:` rather than
+  replacing the scope it found. `simplify` in between clears the redundant
+  copies but not the nesting, so it does not help. Pinned by
+  `test_alternating_the_two_does_not_converge`.
+
+  The cheap fix, if a recipe wants to alternate freely, is to flatten a block
+  nested directly inside a block of an equivalent context — sound, since the
+  inner scope only re-establishes what the outer already provides, and it would
+  make the composition converge. That belongs to `simplify` or `lift_context`,
+  not to either operator on this page.
+
+  Where `elim_round` *declines* to hoist — an unbounded scope, refused by the
+  strictly-tighter guard — `insert_round` has no site at all, so the pair is a
+  no-op rather than an inverse. Pinned by
+  `test_an_unbounded_scope_leaves_nothing_to_insert`.
+- **Stochastic contexts.** `insert_round` declines `is_stochastic()` targets
+  outright. Still open whether `round_is_identity` is already right for them on
+  an exactly-representable value, which would let the decline be dropped.
 - **`elim_round` takes no `where`.** It applies whole-program and does not
   forward cursors, which leaves it the odd one out once the rest of the axis is
   aimed — and it cannot join a per-rounding recipe of the kind `_lower_at` in
