@@ -356,42 +356,37 @@ class SiteRewriter(DefaultTransformVisitor):
         self._begin(func)
         return super()._visit_function(func, ctx)
 
-    def list_sites(self, within: Cursor | None = None) -> list[StmtCursor]:
+    def _list(self) -> None:
+        """Walk without rewriting, so `found` / `found_exprs` / `refused` hold
+        what the pass would have done."""
+        self.where = None
+        self.listing = True
+        self._visit_function(self.func, None)
+
+    def list_sites(self, within: Cursor | None = None) -> list[Cursor]:
         """The sites this pass would rewrite, in visit order -- what a `where`
         index counts, and what `within` narrows.
 
-        Runs the pass's own decisions rather than a predicate beside them, so a
-        listing and an `apply` cannot disagree about what a site is.  Requires
-        `self.func`.
+        The pass's own walk, so a listing and an `apply` cannot disagree about
+        what a site is.  Reports whichever kind of site the pass has.
         """
+        self._list()
+        if self._expr_sited:
+            marked = {id(e) for e in self.found_exprs}
+            return list(expr_sites(self.func, lambda e: id(e) in marked, within))
         if within is not None:
-            # checked before the walk: an empty listing must reject a `within`
-            # that names nothing of the kind just as a populated one does
+            # checked even when nothing was found, so an empty listing rejects a
+            # `within` naming nothing of the kind as a populated one would
             if within.func is not self.func:
                 raise TransformReferenceError(
                     f'`{within}` names part of another program'
                 )
             if isinstance(within, ExprCursor):
                 raise not_a_statement(within)
-        self.where = None
-        self.listing = True
-        self._visit_function(self.func, None)
-        cursors = [StmtCursor(self.func, path) for path in self.found]
+        cursors: list[Cursor] = [StmtCursor(self.func, q) for q in self.found]
         if within is None:
             return cursors
         return [c for c in cursors if contains(within, c)]
-
-    def list_expr_sites(self, within: Cursor | None = None) -> list[ExprCursor]:
-        """:meth:`list_sites`, where the sites are expressions.
-
-        The walk records the nodes themselves; the paths come from a second
-        pass over the *unrewritten* tree, which is the one the nodes belong to.
-        """
-        self.where = None
-        self.listing = True
-        self._visit_function(self.func, None)
-        marked = {id(e) for e in self.found_exprs}
-        return expr_sites(self.func, lambda e: id(e) in marked, within)
 
     def list_refusals(
         self, within: Cursor | None = None
@@ -402,9 +397,7 @@ class SiteRewriter(DefaultTransformVisitor):
         A refusal takes no index and appears in no listing, so this is the only
         way to find one without already knowing where it is.
         """
-        self.where = None
-        self.listing = True
-        self._visit_function(self.func, None)
+        self._list()
         reasons = {id(node): why for node, why in self.refused}
         found: list[Cursor] = (
             list(expr_sites(self.func, lambda e: id(e) in reasons, within))

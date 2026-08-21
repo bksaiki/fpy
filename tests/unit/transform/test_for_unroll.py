@@ -182,7 +182,9 @@ class TestForUnrollMutation():
 class TestForUnrollStrict():
     """STRICT strategy specifics (beyond the example round-trip tests)."""
 
-    def test_static_non_divisible_raises(self):
+    def test_static_non_divisible_is_refused(self):
+        """5 is not a multiple of k=2 and the length is statically known, so the
+        loop is not a site: nothing to unroll, and the refusal says why."""
         @fp.fpy
         def r() -> fp.Real:
             x = 0
@@ -190,12 +192,11 @@ class TestForUnrollStrict():
                 x = x + i
             return x
 
-        # 5 is not a multiple of k=2, and the length is statically known.
-        try:
-            ForUnroll.apply(r.ast, times=1, strategy=STRICT)
-            assert False, 'expected a ValueError for a provably-indivisible length'
-        except ValueError:
-            pass
+        strict = {'times': 1, 'strategy': STRICT}
+        assert ForUnroll.sites(r.ast, **strict) == []
+        why = ForUnroll.refusals(r.ast, **strict)
+        assert len(why) == 1 and 'multiple of 2' in why[0][1]
+        assert ForUnroll.apply(r.ast, times=1, strategy=STRICT).is_equiv(r.ast)
 
     def test_unknown_length_keeps_assert(self):
         @fp.fpy

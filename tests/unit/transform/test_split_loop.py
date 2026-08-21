@@ -312,9 +312,14 @@ class TestStaticSize:
         assert 'len(' not in txt and 'fmod(' not in txt and 'assert' not in txt
         assert _range8() == _run(out, _range8)
 
-    def test_strict_indivisible_raises(self):
-        with pytest.raises(ValueError):
-            _split(_range7, 2, strategy=SplitLoopStrategy.STRICT)
+    def test_strict_indivisible_is_refused(self):
+        """A provably-indivisible length is not a site: nothing to split, and
+        the refusal says why."""
+        strict = {'factor': Integer(2, None), 'strategy': SplitLoopStrategy.STRICT}
+        assert SplitLoop.sites(_range7.ast, **strict) == []
+        why = SplitLoop.refusals(_range7.ast, **strict)
+        assert len(why) == 1 and 'multiple of 2' in why[0][1]
+        assert _split(_range7, 2, strategy=SplitLoopStrategy.STRICT).is_equiv(_range7.ast)
 
     def test_unknown_length_keeps_runtime_check(self):
         # a list parameter has no statically-known length

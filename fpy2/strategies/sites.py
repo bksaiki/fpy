@@ -35,11 +35,14 @@ _REFUSALS: dict[Callable, Callable] = {
     float_to_fixed: FloatToFixed.refusals,
     rescale_fixed: RescaleFixed.refusals,
     insert_round: RoundInsert.refusals,
+    inline: FuncInline.refusals,
+    split: SplitLoop.refusals,
+    unroll_for: ForUnroll.refusals,
 }
-"""Which strategies can refuse, and what explains a refusal.
+"""Which strategies can explain a refusal, and what explains it.
 
-A strategy absent from this table refuses nothing, so it has no refusals to
-report -- the loop and call rewrites act on every site they find.
+A strategy absent from this table reports none, which is right only where it
+refuses nothing: `unroll_while` is the one such strategy.
 """
 
 
@@ -65,6 +68,7 @@ program or to nothing.
 def sites(
     strategy: Callable,
     func: Function,
+    /,
     within: Cursor | None = None,
     **kwargs,
 ) -> list[Cursor]:
@@ -80,8 +84,11 @@ def sites(
     For the rounding rewrites a listing is *what `where=None` would rewrite*: a
     candidate the strategy refuses is not a site, so it neither appears here nor
     consumes an index.  Naming one with a cursor still says why it was refused.
-    The loop and call rewrites refuse nothing, so the distinction does not
-    arise for them.
+
+    A listing depends on whatever else decides the answer, so pass the same
+    arguments the rewrite will get: `insert_round` needs `ctx`, and `split` and
+    `unroll_for` need the `strategy` (and its `factor` / `times`), since only
+    ``STRICT`` refuses a loop.
 
     Some strategies do not forward cursors (they rewrite at sites they do not
     report); aim what you need before one of those, or re-list afterwards.
@@ -89,13 +96,14 @@ def sites(
     Parameters
     ----------
     strategy : Callable
-        The strategy whose sites to list.
+        The strategy whose sites to list. Positional: a strategy of its own may
+        take a `strategy` argument, which `kwargs` then carries.
     func : Function
         The function to scan.
     within : Cursor | None
         Keep only the sites at or beneath this cursor or region; one from an
         earlier program is forwarded first. An expression cursor bounds a search
-        here, where as a `where` it names one site exactly. If `None`, list the
+        here, whereas a `where` names one site exactly. If `None`, list the
         whole program.
     kwargs
         Forwarded to the strategy's own listing, matching that strategy's own
@@ -142,6 +150,7 @@ def sites(
 def refusals(
     strategy: Callable,
     func: Function,
+    /,
     within: Cursor | None = None,
     **kwargs,
 ) -> list[tuple[Cursor, str]]:
@@ -155,8 +164,7 @@ def refusals(
     this the way to find one.  Together the two account for every point the
     strategy considered.
 
-    A strategy that refuses nothing has no refusals: the loop and call rewrites
-    act on every site they find, so this is always empty for them.
+    Always empty for `unroll_while`, which refuses nothing.
 
     Parameters
     ----------

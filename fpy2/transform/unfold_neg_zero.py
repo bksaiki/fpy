@@ -296,7 +296,7 @@ class UnfoldNegZero:
     """
 
     @staticmethod
-    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[Cursor]:
         """The sites of `func`, in visit order -- what a `where` index counts,
         and what `within` narrows.
 

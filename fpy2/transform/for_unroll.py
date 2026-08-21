@@ -26,6 +26,7 @@ from ..analysis import (
 from ..ast.fpyast import *
 from ..utils import Gensym
 from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .path import StmtPath
 from .rename_target import RenameTarget
 from .utils import (
     SiteRewriter,
@@ -217,14 +218,43 @@ class _ForUnroll(SiteRewriter):
 
         return ForStmt(idx, _range(_int(0), bound, _int(k)), StmtBlock(main_body), loc)
 
+    def _refuses(self, stmt: ForStmt) -> str | None:
+        """Why this loop cannot be unrolled, or `None` where it can.
+
+        Only ``STRICT`` refuses, and only where the length is statically known
+        and not a multiple of the step -- decided before an index is spent, so a
+        listing and the rewrite agree.
+        """
+        if self.strategy is not ForUnrollStrategy.STRICT or self.times <= 0:
+            return None
+        k = self.times + 1
+        size = static_size(self.array_size, stmt.iterable)
+        if size is None or size % k == 0:
+            return None
+        return (
+            f'a STRICT unroll by {k} needs the iterable length to be a multiple '
+            f'of {k}, and its statically-known length is {size}'
+        )
+
     def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
         block, pos = self._site
+        reason = self._refuses(stmt)
+        if reason is not None:
+            # a refusal is not a site, so it takes no index
+            self.refused.append((stmt, reason))
+            if self._target is not None and self._selects(block, pos, -1):
+                self.declined.append(reason)
+            return super()._visit_for(stmt, ctx)
+
         idx = self.site_idx
         self.site_idx += 1
         aimed = self._selects(block, pos, idx)
         if aimed:
             self._matched += 1
         if not (aimed and self.times > 0):
+            return super()._visit_for(stmt, ctx)
+        if self.listing:
+            self.found.append(StmtPath(self._paths[id(block)], pos))
             return super()._visit_for(stmt, ctx)
 
         # ``k`` consecutive elements are consumed per rewritten iteration.
@@ -261,11 +291,8 @@ class _ForUnroll(SiteRewriter):
         if size is not None:
             # Statically known length: verify divisibility at compile time and
             # drop the runtime `len`/`assert` entirely.
-            if size % k != 0:
-                raise ValueError(
-                    f'STRICT unroll by {k} requires the iterable length to be '
-                    f'a multiple of {k}, but its statically-known length is {size}'
-                )
+            # `_refuses` established divisibility before this site was counted
+            assert size % k == 0
             if size > 0:
                 emitted.append(self._main_loop(t, _int(size), k, stmt.target, body, stmt.loc, nested_gen))
         else:
@@ -323,6 +350,16 @@ class _ForUnroll(SiteRewriter):
         return self._visit_function(self.func, None)
 
 
+def _lister(
+    func: FuncDef, times: int, strategy: ForUnrollStrategy
+) -> '_ForUnroll':
+    """The pass instance a listing walks `func` with."""
+    return _ForUnroll(
+        func, None, times, strategy, ReachingDefs.analyze(func),
+        NamedId('t'), NamedId('n'), NamedId('i'), infer_array_size(func),
+    )
+
+
 class ForUnroll:
     """
     Unrolling for `for` loops.
@@ -336,10 +373,32 @@ class ForUnroll:
     """
 
     @staticmethod
-    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The `for` loops of `func`, in visit order: what a `where`
-        index counts."""
-        return stmt_sites(func, lambda s: isinstance(s, ForStmt), within)
+    def sites(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        times: int = 1,
+        strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
+    ) -> list[Cursor]:
+        """The `for` loops of `func` this rewrite would unroll, in visit order --
+        what a `where` index counts.
+
+        Pass the `times` and `strategy` the rewrite will get: only ``STRICT``
+        refuses a loop, and only where the length is known and not a multiple of
+        the step.  Under the default ``PEEL`` nothing is refused.
+        """
+        return _lister(func, times, strategy).list_sites(within)
+
+    @staticmethod
+    def refusals(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        times: int = 1,
+        strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
+    ) -> list[tuple[Cursor, str]]:
+        """Why each `for` loop of `func` that is not a site was refused."""
+        return _lister(func, times, strategy).list_refusals(within)
 
     @staticmethod
     def apply(

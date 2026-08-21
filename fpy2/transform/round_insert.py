@@ -275,7 +275,7 @@ class RoundInsert:
     @staticmethod
     def sites(
         func: FuncDef, within: Cursor | None = None, *, ctx: Context
-    ) -> list[ExprCursor]:
+    ) -> list[Cursor]:
         """The operations of `func` that would be given the format `ctx`, in
         visit order -- what a `where` index counts, and what `within` narrows.
 
@@ -285,7 +285,7 @@ class RoundInsert:
         if not isinstance(ctx, Context):
             raise TypeError(f'Expected a \'Context\', got {ctx}')
         scopes = ExactScopes(func)
-        return _RoundInsertInstance(func, ctx, scopes).list_expr_sites(within)
+        return _RoundInsertInstance(func, ctx, scopes).list_sites(within)
 
     @staticmethod
     def refusals(
