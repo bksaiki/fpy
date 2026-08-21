@@ -36,12 +36,7 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import (
-    TransformDeclined,
-    TransformReferenceError,
-    UnfoldSpecial,
-    unfold_special,
-)
+from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldSpecial
 from fpy2.transform.unfold_special import _describe
 
 
@@ -771,10 +766,13 @@ class TestMPFloatFormats:
 
 
 class TestShedable:
-    """`_shedable` decides the shed analytically -- a rule stays iff a *finite*
-    operand can still reach it, which only an overflow does -- and the probes
-    assert the answer rather than produce it.  These are the cases the shape
-    tests above do not reach.
+    """`_shedable` decides the shed analytically: a rule stays iff a *finite*
+    operand can still reach it, which only an overflow does.  These are the
+    cases the shape tests above do not reach.
+
+    The rewrites themselves are checked end-to-end by the classes above, which
+    round every sample under both the original and the rewritten program -- an
+    over-claiming predicate fails there, not here.
     """
 
     def _shed(self, ctx) -> tuple[bool, bool]:
@@ -816,14 +814,3 @@ class TestShedable:
     def test_an_unbounded_float_has_no_overflow_at_all(self):
         for ctx in (fp.MPFloatContext(11), fp.MPSFloatContext(11, -14)):
             assert self._shed(ctx) == (True, True)
-
-    def test_the_probes_catch_a_wrong_answer(self, monkeypatch):
-        """The probes are a cross-check, so a predicate that over-claims trips
-        the assertion instead of emitting a bad program."""
-        ctx = self._bounded()                       # keeps its infinity
-        assert self._shed(ctx) == (True, False)
-
-        both = ValueClass.NAN | ValueClass.INF
-        monkeypatch.setattr(unfold_special, '_shedable', lambda _: both)
-        with pytest.raises(AssertionError):
-            _describe(ctx)

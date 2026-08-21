@@ -121,9 +121,7 @@ from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
     BlockRewriter,
     Declined,
-    agrees,
     check_where,
-    special_probes,
     is_rounding_block,
     rounding_block,
     sign_choice,
@@ -204,36 +202,6 @@ def _without_specials(ctx: _Shedable, shed: ValueClass) -> _Shedable | None:
         return None
 
 
-def _emitted(src: _Source, x: Float | RealFloat) -> Float | None:
-    """What the generated code yields for `x`: the branches in emission order,
-    then the rounding under the format with the rules removed.
-
-    A special is modelled only where its rule was *shed*.  A side that stays in
-    the format answers the same whether the branch or the rounding handles it --
-    as the zero row always does -- so modelling it either way gives the same
-    comparison, and leaving it out keeps the probe independent of anything the
-    class analysis had to say.
-    """
-    isnan = isinstance(x, Float) and x.isnan
-    isinf = isinstance(x, Float) and x.isinf
-    if src.nan is not None and isnan and ValueClass.NAN & src.shed:
-        return src.nan[1] if x.s else src.nan[0]
-    if src.inf is not None and isinf and ValueClass.INF & src.shed:
-        return src.inf[1] if x.s else src.inf[0]
-    if not isnan and not isinf and x.is_zero():
-        return src.zero[1] if x.s else src.zero[0]
-    return try_round(src.dropped, x)
-
-
-def _deterministic(ctx: _Shedable) -> _Shedable:
-    """`ctx` with its randomness off, for probing.  The shed rules touch only
-    NaN, the infinities, and zero, none of which reach the random draw — so
-    agreement of the deterministic twins carries over."""
-    if ctx.num_randbits == 0:
-        return ctx
-    return ctx.with_params(num_randbits=0)
-
-
 def _shedable(ctx: _Shedable) -> ValueClass:
     """
     The rules no *finite* operand depends on, and so may be shed.
@@ -278,11 +246,6 @@ def _describe(ctx: Context) -> _Source:
     if not isinstance(ctx, _Shedable):
         return hoisted
 
-    # the probes and the source's answers are the same for every attempt;
-    # only the shed side varies
-    det = _deterministic(ctx)
-    probes = special_probes(ctx)
-    want = [try_round(det, x) for x in probes]
     safe = _shedable(ctx)
 
     # most first, so a format that can lose both does
@@ -295,14 +258,7 @@ def _describe(ctx: Context) -> _Source:
         dropped = _without_specials(ctx, shed)
         if dropped is None:
             continue
-        src = replace(hoisted, dropped=dropped, shed=shed)
-        probed = replace(src, dropped=_deterministic(dropped))
-        # `_shedable` decides; the probes only confirm it, so that an error in
-        # the reasoning shows up here rather than in a rewritten program
-        assert all(agrees(w, _emitted(probed, x)) for w, x in zip(want, probes)), (
-            f'shedding {shed} from {ctx} changes what a probe rounds to'
-        )
-        return src
+        return replace(hoisted, dropped=dropped, shed=shed)
     return hoisted
 
 

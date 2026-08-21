@@ -34,6 +34,7 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldNegZero
+from fpy2.transform.unfold_neg_zero import _sign_survives
 
 
 # ----------------------------------------------------------------------
@@ -471,3 +472,61 @@ class TestEquivalence:
         out = UnfoldNegZero.apply(f.ast)
         A = [0.1, 0.25, -3.5, 1e-6, -1e-6, 7.0]
         assert _same(_eval(out, f, A), f(A))
+
+
+###########################################################
+# Tests: when the operand's sign is the zero's sign
+
+
+_MV = RealFloat(exp=0, c=255)
+"""a bound for the fixed-point contexts below"""
+
+
+class TestSignSurvives:
+    """`_sign_survives` decides the rewrite analytically: dropping the flag
+    changes only the sign of a zero *result*, so the rewrite holds unless the
+    format can reach a zero the operand's sign does not explain.
+
+    `TestUnchanged` covers the same two decliners end-to-end; these pin the
+    predicate itself, including the combinations that look like decliners but
+    are not.
+    """
+
+    def _mpb(self, **kwargs):
+        return MPBFixedContext(-1, _MV, enable_neg_zero=True, **kwargs)
+
+    @pytest.mark.parametrize('overflow', [
+        _SAT, fp.OverflowMode.OVERFLOW, fp.OverflowMode.ASSERT,
+    ], ids=['saturate', 'overflow', 'assert'])
+    def test_an_overflow_that_cannot_reach_zero_is_fine(self, overflow):
+        assert _sign_survives(self._mpb(overflow=overflow, enable_inf=True))
+
+    def test_a_wrapping_overflow_is_refused(self):
+        """Wrapping lands by ordinal, so a negative operand can come back `+0`
+        -- a sign no `copysign` from the operand reproduces."""
+        assert not _sign_survives(self._mpb(overflow=fp.OverflowMode.WRAP))
+
+    def test_an_unbounded_format_has_no_overflow_to_worry_about(self):
+        assert _sign_survives(MPFixedContext(-1))
+
+    @pytest.mark.parametrize('sign', [False, True], ids=['pos', 'neg'])
+    def test_a_zero_substitute_is_refused(self, sign):
+        """The fixup would hand the zero the sign of the *special* that was
+        rounded, which says nothing about the sign that zero should carry."""
+        zero = fp.Float(c=0, s=sign)
+        assert not _sign_survives(MPFixedContext(-1, nan_value=zero))
+        assert not _sign_survives(MPFixedContext(-1, inf_value=zero))
+
+    def test_a_substitute_beside_an_enabled_rule_is_inert(self):
+        """A substitute is only consulted where its own rule is off, so one
+        paired with an enabled rule never runs and must not decline."""
+        zero = fp.Float(c=0)
+        assert _sign_survives(MPFixedContext(-1, enable_nan=True, nan_value=zero))
+        assert _sign_survives(
+            self._mpb(enable_inf=True, inf_value=zero, overflow=_SAT)
+        )
+
+    def test_a_non_zero_substitute_is_fine(self):
+        assert _sign_survives(MPFixedContext(-1, nan_value=fp.Float(x=_MV)))
+        assert _sign_survives(MPFixedContext(-1, enable_inf=True,
+                                             nan_value=fp.Float(isinf=True)))

@@ -26,13 +26,15 @@ The sign comes from the operand, which is what the format would have kept.
 
 The claim behind the rewrite is that ``C`` and ``C_`` agree everywhere except
 on the sign of a zero result, and that a zero result carries the operand's
-sign.  Both are checked against the source rather than assumed, over the
-values where they could fail: a format is declined when the emitted program
-would disagree with it.  Wrapping overflow is the common decliner — it wraps
-by ordinal over the full signed range, so a negative operand can land on
-``+0``, which no sign restoration from the operand reproduces.  A ``nan_value``
-or ``inf_value`` that is itself a zero is declined for the same reason: the
-fixup would hand it the special operand's sign.
+sign.  The flag changes nothing else, so the rewrite holds unless the format
+can reach a zero whose sign the operand does not supply — and only two things
+do.  Wrapping overflow is the common one: it wraps by ordinal over the full
+signed range, so a negative operand can land on ``+0``, which no sign
+restoration from the operand reproduces.  A ``nan_value`` or ``inf_value`` that
+is itself a zero is the other, for the same reason — the fixup would hand it
+the sign of the *special* that was rounded.  A substitute is only consulted
+where its own rule is off, so one paired with an enabled rule is inert and
+does not decline.
 
 Only a block whose body is entirely ``x = fp.round(v)`` (or a returned round)
 over variables is rewritten.  ``Cast`` is excluded: it asserts exactness, and
@@ -75,19 +77,16 @@ from ..number import (
     Float,
     MPBFixedContext,
     MPFixedContext,
-    RealFloat,
+    OverflowMode,
 )
 from ..utils import CompareOp, Gensym
 from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
 from .utils import (
     BlockRewriter,
     Declined,
-    agrees,
     check_where,
-    special_probes,
     is_rounding_block,
     rounding_block,
-    try_round,
 )
 
 _FixedCtx = MPFixedContext | MPBFixedContext
@@ -133,23 +132,27 @@ def _without_neg_zero(ctx: _FixedCtx) -> _FixedCtx | None:
         return None
 
 
-def _emitted(dropped: _FixedCtx, x: Float | RealFloat) -> Float | None:
-    """What the generated code yields for `x`: the rounding under the
-    format without the signed zero, then `copysign` from the operand where
-    the result is zero."""
-    t = try_round(dropped, x)
-    if t is None:
-        return None
-    if not t.is_nar() and t.is_zero():
-        return Float(c=0, s=x.s)
-    return t
+def _sign_survives(ctx: _FixedCtx) -> bool:
+    """
+    Whether every zero the rounding produces carries its operand's sign, which
+    is what the emitted `copysign` restores.
 
-
-def _reproduced(ctx: _FixedCtx, dropped: _FixedCtx) -> bool:
-    """Whether the emitted program agrees with `ctx` on every probe."""
-    return all(
-        agrees(try_round(ctx, x), _emitted(dropped, x)) for x in special_probes(ctx)
+    Dropping `enable_neg_zero` changes exactly one thing -- the sign of a zero
+    *result* -- so the rewrite holds unless the format can reach a zero whose
+    sign the operand does not supply.  There are two such routes.
+    """
+    # a wrapping overflow lands by ordinal over the signed range, so a negative
+    # operand can come back as `+0`
+    if isinstance(ctx, MPBFixedContext) and ctx.overflow is OverflowMode.WRAP:
+        return False
+    # a special substituted by a zero would take the sign of the *special* that
+    # was rounded, which says nothing about the sign of that zero.  A substitute
+    # is only consulted where its own rule is off
+    subs = (
+        ([] if ctx.enable_nan else [ctx.nan_value])
+        + ([] if ctx.enable_inf else [ctx.inf_value])
     )
+    return not any(v is not None and not v.is_nar() and v.is_zero() for v in subs)
 
 
 def _ctx_expr(e: Expr, src: _Source) -> Expr:
@@ -226,10 +229,10 @@ class _UnfoldNegZeroInstance(BlockRewriter):
         dropped = _without_neg_zero(ctx)
         if dropped is None:
             return Declined('the format cannot be rebuilt without its signed zero')
-        if not _reproduced(ctx, dropped):
+        if not _sign_survives(ctx):
             return Declined(
-                'the rewrite would disagree with the format on an edge value '
-                '(wrapping overflow is the common cause)'
+                'the format can reach a zero whose sign the operand does not '
+                'supply (wrapping overflow is the common cause)'
             )
         return _Source(ctx, dropped)
 
