@@ -15,8 +15,8 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..fpc_context import FPCoreContext
-from ..interpret import Foreign, Interpreter, Value, get_default_interpreter
-from ..interpret.value import to_value
+from ..interpret import Interpreter, Value, get_default_interpreter
+from ..interpret.value import to_value, unwrap_foreign
 from ..number import REAL
 from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
 
@@ -305,17 +305,13 @@ class _PartialEvalInstance(DefaultVisitor):
     def _visit_attribute(self, e: Attribute, ctx: Context | None):
         self._visit_expr(e.value, ctx)
         if self._is_value(e.value):
-            val = self.by_expr[e.value]
-            if isinstance(val, Foreign):
-                val = val.val
+            # a missing attribute is not recorded — PE is best-effort
+            val = unwrap_foreign(self.by_expr[e.value])
             if isinstance(val, dict):
-                if e.attr not in val:
-                    raise RuntimeError(f'unknown attribute {e.attr} for {val}')
-                self.by_expr[e] = to_value(val[e.attr])
+                if e.attr in val:
+                    self.by_expr[e] = to_value(val[e.attr])
             elif hasattr(val, e.attr):
                 self.by_expr[e] = to_value(getattr(val, e.attr))
-            else:
-                raise RuntimeError(f'unknown attribute {e.attr} for {val}')
 
     def _visit_binding(self, site: DefSite, binding: Id | TupleBinding, val: Value):
         match binding:
@@ -433,7 +429,7 @@ class _PartialEvalInstance(DefaultVisitor):
             if str(name) not in func.env:
                 raise KeyError(f'free variable `{name}` missing from env')
             d = self.def_use.find_def_from_site(name, func)
-            self.by_def[d] = to_value(self.func.env[str(name)])
+            self.by_def[d] = to_value(func.env[str(name)])
 
         # visit statements
         self._visit_block(func.body, fctx)

@@ -342,3 +342,17 @@ class TestRobustness:
                 return 1.0 / 0.0
 
         PartialEval.apply(f.ast)
+
+    def test_missing_attribute_does_not_crash(self):
+        """An attribute the folded value lacks is skipped, not raised —
+        e.g. a ``float``-subclass free var folds to ``Float``, losing
+        its native attributes."""
+        @fp.fpy
+        def f():
+            return _K.dtype
+
+        info = PartialEval.apply(f.ast)
+        assert _return_expr(f.ast) not in info.by_expr
+
+
+_K = 2.0

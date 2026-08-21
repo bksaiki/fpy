@@ -16,7 +16,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import FP64, REAL, Foreign
-from fpy2.interpret.value import from_value, to_value
+from fpy2.interpret.value import from_value, to_value, unwrap_foreign
 
 _OBJ = object()
 _ATTR = types.SimpleNamespace(x=5.0, inner=types.SimpleNamespace(y=2))
@@ -41,6 +41,12 @@ class TestForeignClass:
     def test_from_value_unwraps(self):
         assert from_value(Foreign(_OBJ)) is _OBJ
         assert from_value((Foreign(_OBJ),))[0] is _OBJ
+
+    def test_unwrap_foreign_deep(self):
+        assert unwrap_foreign([Foreign(_OBJ), (Foreign(_STR),)]) == [_OBJ, (_STR,)]
+        # sharing is preserved when nothing unwraps
+        xs = [fp.Float.from_float(1.0)]
+        assert unwrap_foreign(xs) is xs
 
     def test_value_kinds_never_wrap(self):
         for x in [True, fp.Float.from_float(1.0), Fraction(1, 3), FP64]:
@@ -120,6 +126,16 @@ class TestExits:
         assert f(1.0, ctx=FP64) is None
         assert _STR in capsys.readouterr().out
 
+    def test_print_unwraps_nested(self, capsys):
+        # payloads inside containers print as themselves, not `Foreign(...)`
+        @fp.fpy
+        def f(x: fp.Real):
+            print((_STR, x))
+            return x
+        f(1.0, ctx=FP64)
+        out = capsys.readouterr().out
+        assert _STR in out and 'Foreign' not in out
+
 
 class TestOpaque:
 
@@ -134,6 +150,17 @@ class TestOpaque:
         @fp.fpy
         def f() -> bool:
             return _OBJ < 1  # type: ignore[operator]
+        with pytest.raises(TypeError):
+            f(ctx=FP64)
+
+    def test_branch_rejected(self):
+        # a foreign value has no truth value — a falsy payload must not
+        # silently take the true branch
+        @fp.fpy
+        def f() -> fp.Real:
+            if _OBJ:
+                return 1.0
+            return 0.0
         with pytest.raises(TypeError):
             f(ctx=FP64)
 

@@ -21,7 +21,7 @@ from ..number import FP64, INTEGER, REAL, Float, RealFloat
 from ..primitive import Primitive
 from ..utils import Gensym, is_dyadic
 from .interpreter import Interpreter, get_default_interpreter
-from .value import Foreign, RealValue, ScalarValue, Value, from_value, to_value
+from .value import Foreign, RealValue, Value, from_value, to_value, unwrap_foreign
 
 ###########################################################
 # Runtime
@@ -82,9 +82,8 @@ def _cvt_index(val: Value):
     return idx
 
 def _cvt_context_arg(cls: type[Context], name: str, arg: Any, ty: type):
-    if isinstance(arg, Foreign):
-        # opaque payload crossing back to Python (e.g. an `rng`)
-        arg = arg.val
+    # opaque payloads (e.g. an `rng`) cross back to Python
+    arg = unwrap_foreign(arg)
     if ty is int:
         # convert to int
         val = _cvt_float(arg)
@@ -140,13 +139,9 @@ def _call_fpy(fn: Function, args, ctx):
     return rt.eval(fn, args, ctx, convert=False)
 
 
-def _unwrap_foreign(x):
-    """Unwraps a top-level `Foreign` for a value crossing to native Python."""
-    return x.val if isinstance(x, Foreign) else x
-
 def _eval_call(fn, ctx, *args, **kwargs):
     # callables (functions, primitives, context classes) are foreign values
-    fn = _unwrap_foreign(fn)
+    fn = unwrap_foreign(fn)
     match fn:
         case Function():
             # calling FPy function
@@ -157,7 +152,7 @@ def _eval_call(fn, ctx, *args, **kwargs):
             # calling FPy primitive
             if kwargs:
                 raise RuntimeError('FPy primitives do not support keyword arguments')
-            args = tuple(_unwrap_foreign(arg) for arg in args)
+            args = tuple(unwrap_foreign(arg) for arg in args)
             return to_value(fn(*args, ctx=ctx))
         case type() if issubclass(fn, Context):
             # calling context constructor
@@ -166,8 +161,8 @@ def _eval_call(fn, ctx, *args, **kwargs):
             # calling foreign function: only `print` is allowed
             if kwargs:
                 raise RuntimeError('foreign functions do not support keyword arguments')
-            if fn == print:
-                print(*(_unwrap_foreign(arg) for arg in args))
+            if fn is print:
+                print(*(unwrap_foreign(arg) for arg in args))
                 # `print` returns `None`, which is a foreign value
                 return Foreign(None)
             else:
@@ -175,7 +170,7 @@ def _eval_call(fn, ctx, *args, **kwargs):
 
 def _eval_attribute(base, attr: str):
     """``e.name``: read a native attribute and re-classify the result."""
-    val = getattr(_unwrap_foreign(base), attr)
+    val = getattr(unwrap_foreign(base), attr)
     return to_value(val)
 
 def _eval_enumerate(val: list[Value], ctx: Context):

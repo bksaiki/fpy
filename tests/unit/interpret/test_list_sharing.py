@@ -180,7 +180,7 @@ class TestPythonBoundary:
         )
 
     def test_non_dyadic_rational_stays_exact(self):
-        """``_cvt_return`` converts only *dyadic* rationals; a non-dyadic one is
+        """``from_value`` converts only *dyadic* rationals; a non-dyadic one is
         left as a ``Fraction`` so no precision is invented."""
         @fp.fpy(ctx=fp.REAL)
         def f() -> fp.Real:

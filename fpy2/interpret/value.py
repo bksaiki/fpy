@@ -27,6 +27,7 @@ __all__ = [
     'Value',
     'from_value',
     'to_value',
+    'unwrap_foreign',
 ]
 
 
@@ -46,6 +47,11 @@ class Foreign:
 
     def __repr__(self):
         return f'Foreign({self.val!r})'
+
+    # loud, not payload truthiness: a silently-truthy wrapper would
+    # flip branches on falsy payloads
+    def __bool__(self):
+        raise TypeError(f'cannot branch on a foreign value: {self.val!r}')
 
     # identity, not `==`: a foreign `__eq__` may be arbitrary
     # (e.g. numpy returns an array), and identity is total
@@ -93,6 +99,35 @@ def to_value(arg: Any) -> Value:
             return arg  # type: ignore[return-value]
         case _:
             return Foreign(arg)
+
+
+def _has_foreign(x) -> bool:
+    match x:
+        case Foreign():
+            return True
+        case tuple() | list():
+            return any(_has_foreign(v) for v in x)
+        case _:
+            return False
+
+
+def unwrap_foreign(x: Value):
+    """
+    Recursively unwraps :class:`Foreign` for a value crossing to native
+    Python. Containers are rebuilt only when one is inside, so sharing
+    is preserved otherwise.
+    """
+    if not _has_foreign(x):
+        return x
+    match x:
+        case Foreign():
+            return x.val
+        case tuple():
+            return tuple(unwrap_foreign(v) for v in x)
+        case list():
+            return [unwrap_foreign(v) for v in x]
+        case _:
+            raise TypeError(f'unreachable: {x!r}')
 
 
 def _is_boundary_value(x) -> bool:
