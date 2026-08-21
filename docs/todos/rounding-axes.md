@@ -69,6 +69,44 @@ instead of results. Keeping it as a mode rather than an operator is what stops
 this from repeating `float_to_fixed`'s seam, where one operator quietly owns
 part of another's axis.
 
+### Which axis a redundant second rounding belongs to
+
+"The second of two roundings is redundant" splits into two cases, and only one
+of them is §5's. The dividing line is whether the *final* format is narrower
+than the intermediate.
+
+**Widening, then a no-op.** The second rounding is an identity, so this is pure
+containment (§5.1) and `elim_round` already does it:
+
+```python
+@fp.fpy(ctx=fp.REAL)
+def f(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        y = fp.round(x)
+    with fp.FP32:
+        return fp.round(y)      # -> return y
+```
+
+`FP16 = 𝒜(11, -24, 65504)` is contained in `FP32 = 𝒜(24, -149, 3.4e38)`, so
+`round_is_identity` fires and `RoundElim`'s `Round`-node case collapses the
+round to its argument. No double-rounding reasoning is involved, and no new
+operator is needed.
+
+**Widening, then narrowing.** The second rounding is *not* an identity — it
+changes the value — and the question becomes whether the intermediate perturbed
+the final answer. This is the only case Figure 8 exists for, and `elim_round`
+correctly leaves it alone:
+
+```python
+    with fp.FP64:
+        y = fp.round(x)
+    with fp.FP32:
+        return fp.round(y)      # untouched: FP64 is not contained in FP32
+```
+
+So the double-rounding axis earns its keep only below the containment
+boundary. Above it, the work is already done.
+
 ## The gaps that remain
 
 ### 1. `insert_round`
@@ -192,6 +230,17 @@ This complements `elim_round`, which only removes roundings that are
 *identities*; `merge_round` removes roundings that change the value but not the
 final answer.
 
+**Its inputs come from `split_round`, not from hand-written programs.** Every
+`fp.FP*` context carries `rm=RoundingMode.RNE`, so the obvious hand-written
+narrowing — an FP64 intermediate re-rounded to FP32 — is RNE-RNE, the last row
+of the paper's Table 2 and unsound no matter how wide the intermediate. Figure
+8 has no RNE-RNE rule, so `merge_round` declines it. The programs it *can*
+merge have an RTO intermediate, or two agreeing modes drawn from RTZ / RAZ /
+RTO, and under FPy's default contexts nobody writes those by hand. That makes
+this operator worth building mainly to close the axis and to check
+`split_round`'s output, which is why it sits last in the order below despite
+sharing gap 3's predicate.
+
 **It shares gap 3's predicate.** Write `double_round_ok(f1, rm1, f2, rm2)`
 once: `split_round` uses it to validate a candidate intermediate,
 `merge_round` to validate one already in the program. This is the one
@@ -216,7 +265,8 @@ much of this operator is worth building.
 4. **`double_round_ok` and `split_round`** — the table as a predicate, plus the
    `via=None` derivation.
 5. **`merge_round`** — reuses step 4's predicate; survey the site spellings
-   first.
+   first. Deliberately after `split_round` rather than beside it: step 4 is what
+   produces the RTO intermediates this operator can actually merge.
 6. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
    `merge_round`), then finitize (widening, `insert_round`, `split_round`
    against an environment's format list). A documented composition and a worked
@@ -235,10 +285,15 @@ both directions, which is the whole of the specification-to-implementation step.
   `insert_round` declines on them.
 - **`elim_round` takes no `where`.** It applies whole-program and does not
   forward cursors, which leaves it the odd one out once the rest of the axis is
-  aimed. Worth deciding whether to retrofit sites onto it for symmetry — see
+  aimed — and it cannot join a per-rounding recipe of the kind `_lower_at` in
+  `tests/unit/backend/cpp/test_lowered_roundtrip.py` builds. Retrofitting is
+  not cheap: `RoundElim` uses its own `_Ctx` accumulator rather than
+  `SiteRewriter` / `BlockRewriter`, rewrites at expression level with a
+  greedy-outermost policy, and hoists — so it cannot claim
+  `exprs_preserved=True`, and forwarding, not site listing, is the work. See
   item 3 of [scheduling-language.md](scheduling-language.md).
 - **Negative tests for the ten unsound pairings.** Table 2 of the paper gives
-  counterexamples. RNE-RNE is the one to pin down: it fails except in trivial
-  cases like `F1 = F2`, no matter how large the intermediate format, and it is
-  both the counterintuitive result and the one a well-meaning future patch is
-  most likely to "fix".
+  counterexamples. RNE-RNE is the one to pin down, for the reason in gap 4: it
+  is both the pairing a hand-written FPy program falls into by default and the
+  one a well-meaning future patch is most likely to "fix". A test that asserts
+  the FP64-to-FP32 decline is the guard.

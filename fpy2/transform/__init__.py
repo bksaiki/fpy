@@ -38,6 +38,7 @@ from .reduce_fusion import ReduceFusion
 from .rename_target import RenameTarget
 from .rescale_fixed import RescaleFixed
 from .round_elim import RoundElim
+from .round_insert import RoundInsert
 from .simplify_if import SimplifyIf
 from .specialize import Specialize
 from .split_loop import SplitLoop, SplitLoopStrategy
