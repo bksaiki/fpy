@@ -6,7 +6,7 @@ import fpy2 as fp
 
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
-from fpy2.strategies import TransformReferenceError, inline
+from fpy2.strategies import TransformReferenceError, inline, sites
 
 
 def _fpy_callees(ast) -> list[Function]:
@@ -121,12 +121,12 @@ class TestInline:
         out = inline(_leaf)
         assert out.ast.is_equiv(_leaf.ast)
 
-    def test_while_cond_rejected(self):
-        # splicing a body before the loop would evaluate the condition
-        # only once — refuse rather than emit a non-terminating loop
-        with pytest.raises(RuntimeError):
-            inline(_while_call)
-        with pytest.raises(RuntimeError):
+    def test_while_cond_refused(self):
+        # splicing a body before the loop would evaluate the condition only
+        # once, so the call is not a site: nothing to inline, and no index
+        assert sites(inline, _while_call) == []
+        assert inline(_while_call).ast.is_equiv(_while_call.ast)
+        with pytest.raises(TransformReferenceError, match='while'):
             inline(_while_call, 0)
 
     def test_type_errors(self):

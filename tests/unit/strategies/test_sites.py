@@ -20,6 +20,7 @@ from fpy2.strategies import (
     float_to_fixed,
     inline,
     insert_round,
+    refusals,
     rescale_fixed,
     simplify,
     sites,
@@ -56,6 +57,15 @@ def cast_and_round(a: fp.Real) -> fp.Real:
     with fp.FixedContext(True, -4, 16):
         aq = fp.cast(a)
     with fp.FixedContext(True, -8, 16):
+        bq = fp.round(a)
+    return aq + bq
+
+
+@fp.fpy(ctx=fp.REAL)
+def cast_and_round_fp16(a: fp.Real) -> fp.Real:
+    with fp.FP16:
+        aq = fp.cast(a)
+    with fp.FP16:
         bq = fp.round(a)
     return aq + bq
 
@@ -98,11 +108,18 @@ def calls(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 def test_the_rounding_strategies_list_their_blocks():
-    for strategy in (unfold_special, unfold_neg_zero, unfold_overflow,
-                     float_to_fixed, rescale_fixed):
+    """The three that apply to a float format list both of its rounds."""
+    for strategy in (unfold_special, unfold_overflow, float_to_fixed):
         found = sites(strategy, two_sites)
         assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
         assert all(isinstance(c, StmtCursor) for c in found)
+
+
+def test_a_strategy_that_applies_to_nothing_lists_nothing():
+    """`two_sites` rounds to `FP16`, which has no negative-zero rule to shed and
+    nothing fixed-point to rescale, so neither strategy has a site in it."""
+    for strategy in (unfold_neg_zero, rescale_fixed):
+        assert sites(strategy, two_sites) == []
 
 
 def test_a_listing_is_outermost_first():
@@ -123,12 +140,15 @@ def _callee(cursor: ExprCursor) -> str:
 
 
 def test_insert_round_lists_operations():
-    """Its candidates are operations whose scope rounds exactly, so the two
-    `fp.round` blocks here are not sites at all -- only the final add, which is
-    under the function's own `fp.REAL` scope."""
-    found = sites(insert_round, two_sites)
+    """Its sites are operations whose scope rounds exactly *and* that the target
+    format can hold, so it needs a `ctx` to answer at all.  The two `fp.round`
+    blocks here already round; the final add is under `fp.REAL` and fits FP64."""
+    found = sites(insert_round, two_sites, ctx=fp.FP64)
     assert all(isinstance(c, ExprCursor) for c in found)
     assert [type(c.resolve()).__name__ for c in found] == ['Add']
+
+    with pytest.raises(TypeError, match='ctx'):
+        sites(insert_round, two_sites)
 
 
 def test_inline_lists_expressions():
@@ -142,12 +162,13 @@ def test_inline_honours_the_funcs_filter():
     assert [_callee(c) for c in only] == ['cube']
 
 
-def test_a_listing_is_syntactic():
-    """A site that declines still appears: listing says what a `where` may name,
-    not what will be rewritten."""
-    assert len(sites(unfold_special, declining)) == 1
+def test_a_listing_is_semantic():
+    """A candidate the strategy refuses is not a site: it neither appears in a
+    listing nor consumes an index.  A cursor naming it still says why."""
+    assert sites(unfold_special, declining) == []
+    at_block = StmtCursor(declining.ast, FuncBody().stmt(0))
     with pytest.raises(TransformDeclined, match='rounds exactly'):
-        unfold_special(declining, where=0)
+        unfold_special(declining, where=at_block)
 
 
 def test_a_strategy_that_takes_no_where_has_no_sites():
@@ -179,20 +200,25 @@ def test_a_listed_site_aims_the_same_as_its_index(strategy):
         _aims_alike(strategy, two_sites, i, cursor)
 
 
-@pytest.mark.parametrize('strategy', [unfold_special, rescale_fixed])
-def test_a_cast_block_is_listed_where_it_counts(strategy):
+@pytest.mark.parametrize('strategy,func', [
+    (unfold_special, cast_and_round_fp16),
+    (rescale_fixed, cast_and_round),
+])
+def test_a_cast_block_is_listed_where_it_counts(strategy, func):
     """A `cast` block is a candidate for these two, so it has to appear in the
     listing at the index `where` gives it."""
-    listed = sites(strategy, cast_and_round)
+    listed = sites(strategy, func)
     assert [c.index for c in listed] == [0, 1]
     for i, cursor in enumerate(listed):
-        _aims_alike(strategy, cast_and_round, i, cursor)
+        _aims_alike(strategy, func, i, cursor)
 
 
 def test_a_cast_block_is_not_listed_where_it_does_not_count():
-    """...and must not, for the three that only take a round."""
-    for strategy in (unfold_neg_zero, unfold_overflow, float_to_fixed):
-        assert [c.index for c in sites(strategy, cast_and_round)] == [1]
+    """...and must not, for the two that only take a round.  `unfold_neg_zero`
+    is absent: it refuses a float format outright, so there is no program where
+    it both verifies and sees a cast."""
+    for strategy in (unfold_overflow, float_to_fixed):
+        assert [c.index for c in sites(strategy, cast_and_round_fp16)] == [1]
 
 
 def test_a_listed_insert_round_site_aims_the_same_as_its_index():
@@ -201,7 +227,7 @@ def test_a_listed_insert_round_site_aims_the_same_as_its_index():
     def aim(func, where):
         return insert_round(func, fp.FP64, where=where)
 
-    for i, cursor in enumerate(sites(insert_round, two_sites)):
+    for i, cursor in enumerate(sites(insert_round, two_sites, ctx=fp.FP64)):
         _aims_alike(aim, two_sites, i, cursor)
 
 
@@ -266,3 +292,49 @@ def test_an_expression_narrows_a_call_listing():
 
     left = ExprCursor(calls.ast, FuncBody().stmt(0).expr('expr').expr('args', 0))
     assert [c.path for c in sites(inline, calls, left)] == [left.path]
+
+
+# ----------------------------------------------------------------------
+# `refusals`: the points a listing does not report
+
+
+def test_refusals_explains_what_a_listing_omits():
+    """`two_sites` rounds to a float format, so `rescale_fixed` has no site in
+    it.  The listing says nothing; this says why."""
+    assert sites(rescale_fixed, two_sites) == []
+    found = refusals(rescale_fixed, two_sites)
+    assert [c.path for c, _ in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
+    assert all('fixed-point' in why for _, why in found)
+
+
+def test_refusals_and_sites_are_disjoint_and_together_account_for_everything():
+    listed = sites(unfold_special, cast_and_round_fp16)
+    refused = refusals(unfold_special, cast_and_round_fp16)
+    assert {c.path for c in listed}.isdisjoint({c.path for c, _ in refused})
+    # this program's two blocks are all it considered
+    assert len(listed) + len(refused) == 2
+
+
+def test_a_refusal_can_be_aimed_at_to_get_the_same_reason():
+    """The cursor a refusal reports is the one that explains it."""
+    cursor, why = refusals(rescale_fixed, two_sites)[0]
+    with pytest.raises(TransformDeclined, match='fixed-point'):
+        rescale_fixed(two_sites, where=cursor)
+    assert 'fixed-point' in why
+
+
+def test_insert_round_refusals_need_the_same_ctx():
+    found = refusals(insert_round, two_sites, ctx=fp.FP16)
+    assert [type(c.resolve()).__name__ for c, _ in found] == ['Add']
+    with pytest.raises(TypeError, match='ctx'):
+        refusals(insert_round, two_sites)
+
+
+def test_a_strategy_that_refuses_nothing_has_no_refusals():
+    for strategy in (unroll_for, unroll_while, inline):
+        assert refusals(strategy, loops if strategy is not inline else calls) == []
+
+
+def test_a_strategy_that_takes_no_where_has_no_refusals():
+    with pytest.raises(ValueError, match='no sites to refuse'):
+        refusals(simplify, two_sites)

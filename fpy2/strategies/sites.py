@@ -28,6 +28,24 @@ from .overflow_unfold import unfold_overflow
 from .round_insert import insert_round
 from .special_unfold import unfold_special
 
+_REFUSALS: dict[Callable, Callable] = {
+    unfold_special: UnfoldSpecial.refusals,
+    unfold_neg_zero: UnfoldNegZero.refusals,
+    unfold_overflow: UnfoldOverflow.refusals,
+    float_to_fixed: FloatToFixed.refusals,
+    rescale_fixed: RescaleFixed.refusals,
+    insert_round: RoundInsert.refusals,
+    inline: FuncInline.refusals,
+    split: SplitLoop.refusals,
+    unroll_for: ForUnroll.refusals,
+}
+"""Which strategies can explain a refusal, and what explains it.
+
+A strategy absent from this table reports none, which is right only where it
+refuses nothing: `unroll_while` is the one such strategy.
+"""
+
+
 _SITES: dict[Callable, Callable] = {
     unfold_special: UnfoldSpecial.sites,
     unfold_neg_zero: UnfoldNegZero.sites,
@@ -50,6 +68,7 @@ program or to nothing.
 def sites(
     strategy: Callable,
     func: Function,
+    /,
     within: Cursor | None = None,
     **kwargs,
 ) -> list[Cursor]:
@@ -60,8 +79,16 @@ def sites(
     The kind of cursor is the kind of site the strategy is aimed at: a
     :class:`fpy2.strategies.StmtCursor` for the rounding and loop rewrites, an
     :class:`fpy2.strategies.ExprCursor` for :func:`fpy2.strategies.inline`,
-    whose sites are calls.  Listing is *syntactic*: a site that appears here may
-    still be declined.
+    whose sites are calls.
+
+    For the rounding rewrites a listing is *what `where=None` would rewrite*: a
+    candidate the strategy refuses is not a site, so it neither appears here nor
+    consumes an index.  Naming one with a cursor still says why it was refused.
+
+    A listing depends on whatever else decides the answer, so pass the same
+    arguments the rewrite will get: `insert_round` needs `ctx`, and `split` and
+    `unroll_for` need the `strategy` (and its `factor` / `times`), since only
+    ``STRICT`` refuses a loop.
 
     Some strategies do not forward cursors (they rewrite at sites they do not
     report); aim what you need before one of those, or re-list afterwards.
@@ -69,17 +96,20 @@ def sites(
     Parameters
     ----------
     strategy : Callable
-        The strategy whose sites to list.
+        The strategy whose sites to list. Positional: a strategy of its own may
+        take a `strategy` argument, which `kwargs` then carries.
     func : Function
         The function to scan.
     within : Cursor | None
         Keep only the sites at or beneath this cursor or region; one from an
         earlier program is forwarded first. An expression cursor bounds a search
-        here, where as a `where` it names one site exactly. If `None`, list the
+        here, whereas a `where` names one site exactly. If `None`, list the
         whole program.
     kwargs
-        Forwarded to the strategy's own listing; :func:`fpy2.strategies.inline`
-        takes `funcs`, matching its filter.
+        Forwarded to the strategy's own listing, matching that strategy's own
+        parameters: :func:`fpy2.strategies.inline` takes `funcs` and
+        :func:`fpy2.strategies.insert_round` takes `ctx`, which it needs because
+        whether an operation is a site depends on the format being inserted.
 
     Returns
     -------
@@ -114,4 +144,66 @@ def sites(
     if lister is None:
         name = getattr(strategy, '__name__', strategy)
         raise ValueError(f'`{name}` takes no `where`, so it has no sites')
+    return lister(func.ast, func.rebase(within), **kwargs)
+
+
+def refusals(
+    strategy: Callable,
+    func: Function,
+    /,
+    within: Cursor | None = None,
+    **kwargs,
+) -> list[tuple[Cursor, str]]:
+    """
+    Why each program point `strategy` could have acted on in `func` is not a
+    site, paired with the reason, in visit order.
+
+    :func:`fpy2.strategies.sites` reports what `strategy` *would* rewrite; this
+    reports what it passed over and why.  A refused point takes no index, so a
+    listing cannot show it and only a cursor can name it -- which is what makes
+    this the way to find one.  Together the two account for every point the
+    strategy considered.
+
+    Always empty for `unroll_while`, which refuses nothing.
+
+    Parameters
+    ----------
+    strategy : Callable
+        The strategy whose refusals to explain.
+    func : Function
+        The function to scan.
+    within : Cursor | None
+        Keep only the points at or beneath this cursor or region; one from an
+        earlier program is forwarded first. If `None`, scan the whole program.
+    kwargs
+        Forwarded as they are for :func:`fpy2.strategies.sites`, since the same
+        parameters decide the answer: :func:`fpy2.strategies.insert_round` takes
+        `ctx`.
+
+    Returns
+    -------
+    list[tuple[Cursor, str]]
+        Each refused point and its reason, in visit order, outermost-first.
+
+    Raises
+    ------
+    ValueError
+        If `strategy` takes no `where`, so has no sites to refuse.
+
+    Examples
+    --------
+    Why :func:`fpy2.strategies.rescale_fixed` leaves a float program alone::
+
+        [(body[0] at `f.py:8:8`,
+          'the context is neither a statically-known fixed-point format nor a '
+          'constructor call to shift symbolically'), ...]
+    """
+    if not isinstance(func, Function):
+        raise TypeError(f'Expected a \'Function\', got {func}')
+    if strategy not in _SITES:
+        name = getattr(strategy, '__name__', strategy)
+        raise ValueError(f'`{name}` takes no `where`, so it has no sites to refuse')
+    lister = _REFUSALS.get(strategy)
+    if lister is None:
+        return []
     return lister(func.ast, func.rebase(within), **kwargs)

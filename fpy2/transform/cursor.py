@@ -196,7 +196,11 @@ class EditLog:
     result: FuncDef
     """the program it produced"""
     edits: tuple[Edit, ...] = ()
-    """the rewrites, disjoint, in the source program's terms"""
+    """the rewrites, disjoint, in the source program's terms.
+
+    Not a count of what the pass did: an edit enclosing another subsumes it, and
+    one edit covers a statement whose expressions were rewritten more than once.
+    """
     exprs_rewritten: tuple[StmtPath, ...] = ()
     """statements whose expressions the pass rewrote without replacing them"""
     exprs_preserved: bool = False

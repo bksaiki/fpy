@@ -29,7 +29,8 @@ from ..analysis import (
 )
 from ..ast.fpyast import *
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .cursor import Cursor, EditLog, StmtCursor
+from .path import StmtPath
 from .utils import (
     SiteRewriter,
     check_where,
@@ -204,6 +205,24 @@ class _SplitLoop(SiteRewriter):
             loc
         )
 
+    def _refuses(self, stmt: ForStmt) -> str | None:
+        """Why this loop cannot be split, or `None` where it can.
+
+        Only ``STRICT`` refuses, and only where both the length and the factor
+        are statically known and indivisible -- decided before an index is
+        spent, so a listing and the rewrite agree.
+        """
+        if self.strategy is not SplitLoopStrategy.STRICT:
+            return None
+        size = static_size(self.array_size, stmt.iterable)
+        fval = self._static_factor()
+        if size is None or fval is None or size % fval == 0:
+            return None
+        return (
+            f'a STRICT split by {fval} needs the iterable length to be a '
+            f'multiple of {fval}, and its statically-known length is {size}'
+        )
+
     def _build_strict(self, stmt: ForStmt, iterable: Expr, factor: Expr, body: StmtBlock) -> list[Stmt]:
         # STRICT: the length must be an exact multiple of `f`, so the
         # chunked loop covers the whole (asserted-divisible) length.
@@ -215,12 +234,8 @@ class _SplitLoop(SiteRewriter):
         if size is not None and fval is not None:
             # Statically-known length and factor: verify divisibility at
             # compile time and drop the runtime `len`/`assert` entirely.
-            if size % fval != 0:
-                raise ValueError(
-                    f'STRICT split by {fval} requires the iterable length to '
-                    f'be a multiple of {fval}, but its statically-known '
-                    f'length is {size}'
-                )
+            # `_refuses` established divisibility before this site was counted
+            assert size % fval == 0
             if size > 0:
                 emitted.append(self._chunk_loop(t, fval, size, stmt.target, body, stmt.loc))
         else:
@@ -280,11 +295,22 @@ class _SplitLoop(SiteRewriter):
 
     def _visit_for(self, stmt: ForStmt, ctx: list[Stmt]) -> tuple[Stmt, None]:
         block, pos = self._site
+        reason = self._refuses(stmt)
+        if reason is not None:
+            # a refusal is not a site, so it takes no index
+            self.refused.append((stmt, reason))
+            if self._target is not None and self._selects(block, pos, -1):
+                self.declined.append(reason)
+            return super()._visit_for(stmt, ctx)
+
         idx = self.site_idx
         self.site_idx += 1
         if not self._selects(block, pos, idx):
             return super()._visit_for(stmt, ctx)
         self._matched += 1
+        if self.listing:
+            self.found.append(StmtPath(self._paths[id(block)], pos))
+            return super()._visit_for(stmt, ctx)
 
         iterable = self._visit_expr(stmt.iterable, ctx)
         factor = self._visit_expr(self.factor, ctx)
@@ -306,6 +332,21 @@ class _SplitLoop(SiteRewriter):
 
     def apply(self):
         return self._visit_function(self.func, None)
+
+
+def _lister(
+    func: FuncDef, factor: 'Expr | None', strategy: SplitLoopStrategy
+) -> '_SplitLoop':
+    """The pass instance a listing walks `func` with."""
+    return _SplitLoop(
+        func,
+        Integer(1, None) if factor is None else factor,
+        None,
+        strategy,
+        ReachingDefs.analyze(func),
+        NamedId('t'), NamedId('i'), NamedId('j'),
+        infer_array_size(func),
+    )
 
 
 class SplitLoop:
@@ -343,10 +384,33 @@ class SplitLoop:
     """
 
     @staticmethod
-    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The `for` loops of `func`, in visit order: what a `where`
-        index counts."""
-        return stmt_sites(func, lambda s: isinstance(s, ForStmt), within)
+    def sites(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        factor: Expr | None = None,
+        strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
+    ) -> list[Cursor]:
+        """The `for` loops of `func` this rewrite would split, in visit order --
+        what a `where` index counts.
+
+        Pass the `factor` and `strategy` the rewrite will get: only ``STRICT``
+        refuses a loop, and only where the length and factor are both known and
+        indivisible.  Under the default ``PEEL`` nothing is refused, so neither
+        argument changes the answer.
+        """
+        return _lister(func, factor, strategy).list_sites(within)
+
+    @staticmethod
+    def refusals(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        factor: Expr | None = None,
+        strategy: SplitLoopStrategy = SplitLoopStrategy.PEEL,
+    ) -> list[tuple[Cursor, str]]:
+        """Why each `for` loop of `func` that is not a site was refused."""
+        return _lister(func, factor, strategy).list_refusals(within)
 
     @staticmethod
     def apply(

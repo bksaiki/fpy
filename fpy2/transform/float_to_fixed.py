@@ -542,12 +542,28 @@ class FloatToFixed:
     """
 
     @staticmethod
-    def sites(func: FuncDef, within: Cursor | None = None) -> list[StmtCursor]:
-        """The candidate rounding blocks of `func`, in visit order --
-        what a `where` index counts, whether or not each verifies.
+    def sites(func: FuncDef, within: Cursor | None = None) -> list[Cursor]:
+        """The sites of `func`, in visit order -- what a `where` index counts,
+        and what `within` narrows.
+
+        Runs the same decisions the rewrite does, so a listing reports exactly
+        the blocks `where=None` would rewrite: no candidate that this pass
+        refuses appears here or consumes an index.
         """
-        casts = _FloatToFixedInstance._casts
-        return stmt_sites(func, lambda s: is_rounding_block(s, casts=casts), within)
+        eval_info = PartialEval.apply(func)
+        class_info = ValueClassInfer.analyze(func)
+        return _FloatToFixedInstance(func, eval_info, class_info).list_sites(within)
+
+    @staticmethod
+    def refusals(
+        func: FuncDef, within: Cursor | None = None
+    ) -> list[tuple[Cursor, str]]:
+        """Why each rounding block of `func` that is not a site was refused,
+        in visit order.  A refusal takes no index, so this is how one is found.
+        """
+        eval_info = PartialEval.apply(func)
+        class_info = ValueClassInfer.analyze(func)
+        return _FloatToFixedInstance(func, eval_info, class_info).list_refusals(within)
 
     @staticmethod
     def apply(

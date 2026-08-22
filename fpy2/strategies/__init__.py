@@ -37,7 +37,7 @@ from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .round_insert import insert_round
 from .simple import simplify
-from .sites import sites
+from .sites import refusals, sites
 from .special_unfold import unfold_special
 
 __all__ = [
@@ -62,6 +62,7 @@ __all__ = [
     'insert_round',
     'lift_context',
     'monomorphize',
+    'refusals',
     'rescale_fixed',
     'simplify',
     'sites',

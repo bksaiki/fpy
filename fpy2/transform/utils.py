@@ -56,8 +56,11 @@ from .cursor import (
     Edit,
     ExprCursor,
     StmtCursor,
+    contains,
+    expr_sites,
     not_a_statement,
     region_of,
+    stmt_sites,
 )
 from .error import TransformDeclined, TransformReferenceError
 from .path import BlockPath, StmtPath, beneath, block_paths
@@ -294,6 +297,8 @@ class SiteRewriter(DefaultTransformVisitor):
     A subclass that overrides `_visit_function` must call `_begin` itself.
     """
 
+    func: FuncDef
+    """the program being walked; set by the subclass"""
     where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
@@ -314,6 +319,14 @@ class SiteRewriter(DefaultTransformVisitor):
     _expr_sited: bool = False
     """whether this rewrite's candidates are expressions rather than statements;
     only such a rewrite can be aimed with an :class:`ExprCursor`"""
+    listing: bool = False
+    """report the sites this rewrite would act on, instead of acting on them"""
+    found: list[StmtPath]
+    """the statement sites, while listing"""
+    found_exprs: list[Expr]
+    """the expression sites, while listing"""
+    refused: list[tuple[object, str]]
+    """each candidate that is not a site, and why: the AST node and the reason"""
 
     def _begin(self, func: FuncDef) -> None:
         """Set up against the tree about to be walked: both the paths an edit
@@ -322,6 +335,9 @@ class SiteRewriter(DefaultTransformVisitor):
         self.edits = []
         self.dirty_exprs = []
         self.declined = []
+        self.found = []
+        self.found_exprs = []
+        self.refused = []
         self._matched = 0
         self._replaced = False
         self._paths = block_paths(func)
@@ -340,6 +356,63 @@ class SiteRewriter(DefaultTransformVisitor):
         self._begin(func)
         return super()._visit_function(func, ctx)
 
+    def _list(self) -> None:
+        """Walk without rewriting, so `found` / `found_exprs` / `refused` hold
+        what the pass would have done."""
+        self.where = None
+        self.listing = True
+        self._visit_function(self.func, None)
+
+    def list_sites(self, within: Cursor | None = None) -> list[Cursor]:
+        """The sites this pass would rewrite, in visit order -- what a `where`
+        index counts, and what `within` narrows.
+
+        The pass's own walk, so a listing and an `apply` cannot disagree about
+        what a site is.  Reports whichever kind of site the pass has.
+        """
+        self._list()
+        if self._expr_sited:
+            marked = {id(e) for e in self.found_exprs}
+            return list(expr_sites(self.func, lambda e: id(e) in marked, within))
+        if within is not None:
+            # checked even when nothing was found, so an empty listing rejects a
+            # `within` naming nothing of the kind as a populated one would
+            if within.func is not self.func:
+                raise TransformReferenceError(
+                    f'`{within}` names part of another program'
+                )
+            if isinstance(within, ExprCursor):
+                raise not_a_statement(within)
+        cursors: list[Cursor] = [StmtCursor(self.func, q) for q in self.found]
+        if within is None:
+            return cursors
+        return [c for c in cursors if contains(within, c)]
+
+    def list_refusals(
+        self, within: Cursor | None = None
+    ) -> list[tuple[Cursor, str]]:
+        """Why each program point this pass could have acted on is not a site,
+        in visit order.
+
+        A refusal takes no index and appears in no listing, so this is the only
+        way to find one without already knowing where it is.
+        """
+        self._list()
+        reasons = {id(node): why for node, why in self.refused}
+        found: list[Cursor] = (
+            list(expr_sites(self.func, lambda e: id(e) in reasons, within))
+            if self._expr_sited
+            else list(stmt_sites(self.func, lambda s: id(s) in reasons, within))
+        )
+        return [(c, reasons[id(c.resolve())]) for c in found]
+
+    def _named_by_cursor(self, e: Expr) -> bool:
+        """Whether an explicit cursor names the expression *e*, ignoring the
+        index: what decides whether a refusal is reported or merely counted."""
+        if self._target_expr is not None:
+            return self._target_expr is e
+        return self._target is not None and self._selects(*self._site, -1)
+
     def check_site(self, what: str) -> None:
         """Rejects an explicit `where` that named no candidate, or one whose
         candidates all declined: fail rather than silently no-op."""
@@ -348,14 +421,21 @@ class SiteRewriter(DefaultTransformVisitor):
             return
         if isinstance(where, int):
             if not 0 <= where < self.site_idx:
+                refused = (
+                    f'; {len(self.refused)} candidate(s) were refused: '
+                    + '; '.join(why for _, why in self.refused)
+                    if self.refused else ''
+                )
                 raise TransformReferenceError(
                     f'where={where} does not correspond to {what}; '
-                    f'the function has {self.site_idx} candidate site(s)'
+                    f'the function has {self.site_idx} site(s){refused}'
                 )
+        elif self.declined and not self.edits:
+            # a refused candidate is not a site, so a cursor naming one matches
+            # nothing -- but saying why beats saying it named nothing
+            raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
         elif self._matched == 0:
             raise TransformReferenceError(f'`{where}` does not name {what}')
-        elif self.declined and not self.edits:
-            raise TransformDeclined(f'`{where}`: ' + '; '.join(self.declined))
 
     def _selects(self, block: StmtBlock, pos: int, idx: int, count: int = 1) -> bool:
         """Whether the candidate at `block[pos:pos+count]`, the `idx`th of the
@@ -473,19 +553,27 @@ class BlockRewriter(SiteRewriter):
             if isinstance(s, ContextStmt):
                 info = self._candidate(s)
                 if info is not None:
-                    idx = self.site_idx
-                    self.site_idx += 1
-                    if self._selects(block, pos, idx):
-                        self._matched += 1
-                        verified = self._verify(s, info)
-                        if isinstance(verified, Declined):
+                    # every candidate is verified, whether or not it is the one
+                    # aimed at: a refusal is not a site, so it must not consume
+                    # an index that a listing would not report
+                    verified = self._verify(s, info)
+                    if isinstance(verified, Declined):
+                        self.refused.append((s, verified.reason))
+                        if self._target is not None and self._selects(block, pos, -1):
+                            # a cursor named this candidate: say why, rather
+                            # than report that it named nothing
                             self.declined.append(verified.reason)
-                            if isinstance(self.where, int):
-                                raise TransformDeclined(
-                                    f'where={idx}: {verified.reason}'
+                    else:
+                        idx = self.site_idx
+                        self.site_idx += 1
+                        if self._selects(block, pos, idx):
+                            self._matched += 1
+                            if self.listing:
+                                self.found.append(
+                                    StmtPath(self._paths[id(block)], pos)
                                 )
-                            # a region, or the whole program, skips it
-                        else:
+                                stmts.append(s)
+                                continue
                             emitted = self._rewrite(s, verified)
                             self._record(block, pos, len(emitted))
                             stmts.extend(emitted)

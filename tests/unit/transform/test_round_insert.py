@@ -21,7 +21,7 @@ import itertools
 import pytest
 
 import fpy2 as fp
-from fpy2.ast.fpyast import ContextStmt, ForeignVal, FuncDef
+from fpy2.ast.fpyast import Abs, Add, ContextStmt, ForeignVal, FuncDef, Mul
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.transform import (
@@ -32,6 +32,7 @@ from fpy2.transform import (
     TransformDeclined,
     TransformReferenceError,
 )
+from fpy2.transform.cursor import expr_sites
 from fpy2.types import RealType
 
 # ----------------------------------------------------------------------
@@ -51,6 +52,14 @@ def _target_blocks(ast: FuncDef, ctx) -> int:
 
     _C()._visit_function(ast, None)
     return count
+
+
+def _cursor_at(ast: FuncDef, kind) -> ExprCursor:
+    """A cursor at the first *kind* expression of *ast*, for naming an
+    operation the listing does not report."""
+    found = expr_sites(ast, lambda e: isinstance(e, kind))
+    assert found, f'no {kind.__name__} in the program'
+    return found[0]
 
 
 def _fp32_args(func, n: int) -> FuncDef:
@@ -100,22 +109,25 @@ def _dependent(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 class TestSites:
-    def test_lists_operations(self):
+    def test_lists_the_operations_it_would_round(self):
         ast = _fp32_args(_sum_of_squares, 2)
-        found = RoundInsert.sites(ast)
+        found = RoundInsert.sites(ast, ctx=fp.FP64)
         assert all(isinstance(c, ExprCursor) for c in found)
-        # the add, then each multiply: outermost first
-        assert [type(c.resolve()).__name__ for c in found] == ['Add', 'Mul', 'Mul']
+        # only the multiplies: the exact sum of two 48-digit products does not
+        # fit FP64, so the add is refused and is not a site
+        assert [type(c.resolve()).__name__ for c in found] == ['Mul', 'Mul']
+
+    def test_the_listing_depends_on_the_target(self):
+        """Whether an operation is a site is whether rounding it to *this*
+        format is an identity, which is why `sites` needs the target."""
+        ast = _fp32_args(_sum_of_squares, 2)
+        assert len(RoundInsert.sites(ast, ctx=fp.FP64)) == 2
+        assert RoundInsert.sites(ast, ctx=fp.FP32) == []
 
     def test_a_cursor_aims_the_same_as_its_index(self):
         ast = _fp32_args(_sum_of_squares, 2)
-        for i, cursor in enumerate(RoundInsert.sites(ast)):
-            try:
-                expect = RoundInsert.apply(ast, fp.FP64, where=i)
-            except TransformDeclined:
-                with pytest.raises(TransformDeclined):
-                    RoundInsert.apply(ast, fp.FP64, where=cursor)
-                continue
+        for i, cursor in enumerate(RoundInsert.sites(ast, ctx=fp.FP64)):
+            expect = RoundInsert.apply(ast, fp.FP64, where=i)
             assert RoundInsert.apply(ast, fp.FP64, where=cursor).is_equiv(expect)
 
 
@@ -126,7 +138,7 @@ class TestSites:
 class TestRoundInsert:
     def test_aims_one_operation_inside_a_statement(self):
         ast = _fp32_args(_sum_of_squares, 2)
-        out = RoundInsert.apply(ast, fp.FP64, where=1)   # the first multiply
+        out = RoundInsert.apply(ast, fp.FP64, where=0)   # the first multiply
         assert _target_blocks(out, fp.FP64) == 1
         assert _agree(ast, out, _sum_of_squares.runtime, 2)
 
@@ -140,7 +152,7 @@ class TestRoundInsert:
 
     def test_independent_operations_are_aimable_one_at_a_time(self):
         ast = _fp32_args(_independent, 2)
-        assert len(RoundInsert.sites(ast)) == 2
+        assert len(RoundInsert.sites(ast, ctx=fp.FP64)) == 2
         for i in (0, 1):
             out = RoundInsert.apply(ast, fp.FP64, where=i)
             assert _target_blocks(out, fp.FP64) == 1
@@ -176,15 +188,19 @@ class TestRoundInsert:
 
 class TestDeclines:
     def test_an_operation_too_wide_for_the_target(self):
+        """The add is not a site, so no index reaches it; a cursor that names
+        it still says why."""
         ast = _fp32_args(_sum_of_squares, 2)
+        assert [type(c.resolve()).__name__ for c in RoundInsert.sites(ast, ctx=fp.FP64)] == ['Mul', 'Mul']
         with pytest.raises(TransformDeclined, match='not representable'):
-            RoundInsert.apply(ast, fp.FP64, where=0)   # the add
+            RoundInsert.apply(ast, fp.FP64, where=_cursor_at(ast, Add))
 
     @pytest.mark.parametrize('ctx', [fp.FP32, fp.FP16])
     def test_a_format_too_narrow(self, ctx):
         ast = _fp32_args(_sum_of_squares, 2)
-        with pytest.raises(TransformDeclined, match='not representable'):
-            RoundInsert.apply(ast, ctx, where=1)
+        assert RoundInsert.sites(ast, ctx=ctx) == []
+        with pytest.raises(TransformReferenceError, match='not representable'):
+            RoundInsert.apply(ast, ctx, where=0)
 
     def test_a_narrow_format_is_skipped_without_a_where(self):
         ast = _fp32_args(_sum_of_squares, 2)
@@ -193,8 +209,9 @@ class TestDeclines:
     def test_a_stochastic_target(self):
         ast = _fp32_args(_sum_of_squares, 2)
         stochastic = fp.IEEEContext(8, 32, num_randbits=4)
-        with pytest.raises(TransformDeclined, match='stochastically'):
-            RoundInsert.apply(ast, stochastic, where=1)
+        assert RoundInsert.sites(ast, ctx=stochastic) == []
+        with pytest.raises(TransformReferenceError, match='stochastically'):
+            RoundInsert.apply(ast, stochastic, where=0)
 
     def test_an_unbounded_operand(self):
         # no argument formats, so inference cannot bound the product
@@ -204,7 +221,8 @@ class TestDeclines:
                 t = x * y
             return t
 
-        with pytest.raises(TransformDeclined):
+        assert RoundInsert.sites(f.ast, ctx=fp.FP64) == []
+        with pytest.raises(TransformReferenceError, match='not representable'):
             RoundInsert.apply(f.ast, fp.FP64, where=0)
 
     def test_rejects_a_non_context(self):
@@ -214,7 +232,7 @@ class TestDeclines:
 
     def test_a_where_out_of_range(self):
         ast = _fp32_args(_sum_of_squares, 2)
-        with pytest.raises(TransformReferenceError, match='candidate site'):
+        with pytest.raises(TransformReferenceError, match='does not correspond'):
             RoundInsert.apply(ast, fp.FP64, where=99)
 
     def test_a_where_of_the_wrong_type(self):
@@ -255,17 +273,22 @@ class TestUnreachablePositions:
         that re-evaluates it every iteration -- the rewrite used to emit a
         program that does not terminate."""
         ast = Monomorphize.apply(_while_cond.ast, fp.REAL, [RealType(fp.FP32)])
-        with pytest.raises(TransformDeclined, match='no statement-level position'):
+        assert RoundInsert.sites(ast, ctx=fp.FP64) == []
+        with pytest.raises(TransformReferenceError, match='no statement-level position'):
             RoundInsert.apply(ast, fp.FP64, where=0)
 
     def test_a_while_condition_is_skipped_without_a_where(self):
         ast = Monomorphize.apply(_while_cond.ast, fp.REAL, [RealType(fp.FP32)])
         assert RoundInsert.apply(ast, fp.FP64).is_equiv(ast)
 
-    def test_an_if_condition_refuses(self):
+    def test_an_if_condition_is_not_a_site(self):
+        """The multiply in the condition has nowhere to put the block, so it is
+        not a site; only `abs(y)` is.  A cursor at it still says why."""
         ast = _fp32_args(_if_cond, 2)
+        listed = RoundInsert.sites(ast, ctx=fp.FP64)
+        assert [type(c.resolve()).__name__ for c in listed] == ['Abs']
         with pytest.raises(TransformDeclined, match='no statement-level position'):
-            RoundInsert.apply(ast, fp.FP64, where=0)
+            RoundInsert.apply(ast, fp.FP64, where=_cursor_at(ast, Mul))
 
     def test_the_edit_log_covers_every_rewrite(self):
         """`SiteRewriter._visit_block` resets `_replaced` per statement, so a
@@ -278,14 +301,10 @@ class TestUnreachablePositions:
         grew = len(log.result.body.stmts[0].body.stmts) - len(ast.body.stmts[0].body.stmts)
         assert grew == sum(e.inserted - e.removed for e in log.edits)
 
-    def test_both_spellings_of_where_agree_on_a_suppressed_site(self):
-        """An index used to silently no-op where the equivalent cursor raised."""
+    def test_both_spellings_of_where_agree(self):
+        """An index used to silently no-op where the equivalent cursor raised;
+        now every index is a site, so both spellings simply rewrite."""
         ast = _fp32_args(_if_cond, 2)
-        for i, cursor in enumerate(RoundInsert.sites(ast)):
-            try:
-                expect = RoundInsert.apply(ast, fp.FP64, where=i)
-            except TransformDeclined:
-                with pytest.raises(TransformDeclined):
-                    RoundInsert.apply(ast, fp.FP64, where=cursor)
-                continue
+        for i, cursor in enumerate(RoundInsert.sites(ast, ctx=fp.FP64)):
+            expect = RoundInsert.apply(ast, fp.FP64, where=i)
             assert RoundInsert.apply(ast, fp.FP64, where=cursor).is_equiv(expect)

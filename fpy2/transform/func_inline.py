@@ -49,6 +49,30 @@ class _Ctx:
         return _Ctx(stmts=[], is_ctx_expr=False)
 
 
+def _refuses(e: Call, *, in_while_cond: bool) -> str | None:
+    """Why the call *e* cannot be inlined, or `None` where it can.
+
+    Decided from the call and the callee alone, so a listing and the rewrite
+    agree and neither spends an index on a call it will not inline.
+    """
+    assert isinstance(e.fn, Function)
+    if in_while_cond:
+        return (
+            f'inlining `{e.fn.name}` here would splice its body before the '
+            f'loop, where a `while` condition is evaluated every iteration'
+        )
+    # inlining rewrites the trailing return into an assignment to a temp (see
+    # `_replace_ret`): none leaves nothing to rewrite, and several would emit
+    # non-trailing returns into the caller and exit it early
+    n_rets = len(Reachability.analyze(e.fn.ast).ret_stmts)
+    if n_rets != 1:
+        return (
+            f'`{e.fn.name}` has {n_rets} return statements, and inlining needs '
+            f'exactly one, trailing'
+        )
+    return None
+
+
 class _FuncInline(SiteRewriter):
     """Function inline visitor."""
 
@@ -99,17 +123,23 @@ class _FuncInline(SiteRewriter):
             # not a candidate for inlining
             return super()._visit_call(e, ctx)
 
+        # a refusal is not a site, so it takes no index
+        reason = _refuses(e, in_while_cond=ctx.in_while_cond)
+        if reason is not None:
+            self.refused.append((e, reason))
+            if self._named_by_cursor(e):
+                self.declined.append(reason)
+            return super()._visit_call(e, ctx)
+
         idx = self.site_idx
         self.site_idx += 1
         if not self._selects_expr(e, idx):
             # a candidate site, but not the selected one
             return super()._visit_call(e, ctx)
         self._matched += 1
-        if ctx.in_while_cond:
-            raise RuntimeError(
-                f'cannot inline call to `{e.fn.name}` in a `while` condition: '
-                f'the spliced body would be evaluated only once, before the loop'
-            )
+        if self.listing:
+            self.found_exprs.append(e)
+            return super()._visit_call(e, ctx)
 
         # Inline the callee body.  Acyclicity is guaranteed by the
         # `CallGraph` guard in `FuncInline.apply`, so this terminates.
@@ -127,23 +157,9 @@ class _FuncInline(SiteRewriter):
         else:
             ast = e.fn.ast
 
-        # ASSUME: exactly one trailing return statement in the
-        # function body.  Inlining works by replacing the trailing
-        # return with an assignment to a fresh temp (see
-        # ``_replace_ret``); zero returns leaves nothing to rewrite,
-        # and multiple returns would leave non-trailing returns in
-        # the inlined block, which would prematurely exit the
-        # *caller*.  Reject explicitly with a clear error.
-        ret_check = Reachability.analyze(ast)
-        n_rets = len(ret_check.ret_stmts)
-        if n_rets != 1:
-            raise RuntimeError(
-                f'cannot inline function `{e.fn.name}`: expected exactly '
-                f'one trailing return statement, found {n_rets}.  Zero '
-                f'returns leave nothing to rewrite; multiple returns '
-                f'would emit non-trailing returns into the caller and '
-                f'exit it prematurely.'
-            )
+        # one trailing return, as `_refuses` established of the callee before
+        # this site was counted; recursive inlining preserves it
+        assert len(Reachability.analyze(ast).ret_stmts) == 1
 
         # first, rename all variables in the function body
         reachability = ReachingDefs.analyze(ast)
@@ -227,6 +243,16 @@ class _FuncInline(SiteRewriter):
         return self._visit_function(self.func, None)
 
 
+def _lister(func: FuncDef, funcs: 'Iterable[Function] | None') -> '_FuncInline':
+    """The pass instance a listing walks `func` with."""
+    return _FuncInline(
+        func,
+        DefineUse.analyze(func),
+        None if funcs is None else set(funcs),
+        recursive=False,
+    )
+
+
 class FuncInline:
     """
     Function inlining.
@@ -238,18 +264,24 @@ class FuncInline:
         within: Cursor | None = None,
         *,
         funcs: Iterable[Function] | None = None,
-    ) -> list[ExprCursor]:
-        """The candidate call sites of `func`, in visit order: what a `where`
-        index counts.  `funcs` filters as it does for :meth:`apply`."""
-        keep = None if funcs is None else set(funcs)
-        return expr_sites(
-            func,
-            lambda e: (
-                isinstance(e, Call) and isinstance(e.fn, Function)
-                and (keep is None or e.fn in keep)
-            ),
-            within,
-        )
+    ) -> list[Cursor]:
+        """The call sites of `func` that would be inlined, in visit order --
+        what a `where` index counts.  `funcs` filters as for :meth:`apply`.
+
+        A call this pass refuses is not a site: it neither appears here nor
+        takes an index.  :meth:`refusals` says why.
+        """
+        return _lister(func, funcs).list_sites(within)
+
+    @staticmethod
+    def refusals(
+        func: FuncDef,
+        within: Cursor | None = None,
+        *,
+        funcs: Iterable[Function] | None = None,
+    ) -> list[tuple[Cursor, str]]:
+        """Why each call of `func` that is not a site was refused."""
+        return _lister(func, funcs).list_refusals(within)
 
     @staticmethod
     def apply(
