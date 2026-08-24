@@ -9,6 +9,7 @@ from typing import Self
 from ...utils import is_dyadic
 from ..gmputils import mpfr_value
 from ..number import Float, RealFloat
+from ..round import RoundingMode
 from .format import EncodableFormat, Format, OrdinalFormat, SizedFormat
 
 __all__ = [
@@ -131,6 +132,14 @@ class Context(ABC):
         y = self.format().normalize(x)
         y._ctx = self
         return y
+
+    @abstractmethod
+    def rounding_mode(self) -> RoundingMode | None:
+        """
+        Returns the rounding mode used under this context, or `None` where
+        there is none.
+        """
+        ...
 
     @abstractmethod
     def round_params(self) -> tuple[int | None, int | None]:

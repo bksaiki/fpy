@@ -347,3 +347,29 @@ class TestEncodableContext():
         decoded = ctx.decode(encoded)
         assert isinstance(decoded, fp.Float)
         assert x == decoded
+
+
+class TestRoundingMode:
+    """`rounding_mode()` reports the rounding *rule*, where `round_params`
+    reports the precision it is applied at.  Double-rounding soundness is
+    decided by the pair of modes, so every context has to answer."""
+
+    def test_real_has_no_rounding_mode(self):
+        assert fp.REAL.rounding_mode() is None
+
+    def test_a_concrete_context_reports_its_mode(self):
+        assert fp.FP64.rounding_mode() is fp.RoundingMode.RNE
+        assert fp.INTEGER.rounding_mode() is fp.RoundingMode.RTZ
+
+    def test_it_follows_with_params(self):
+        ctx = fp.FP32.with_params(rm=fp.RoundingMode.RTO)
+        assert ctx.rounding_mode() is fp.RoundingMode.RTO
+        assert fp.FP32.rounding_mode() is fp.RoundingMode.RNE   # unchanged
+
+    @given(common_contexts())
+    def test_every_common_context_answers(self, ctx: fp.Context):
+        rm = ctx.rounding_mode()
+        assert rm is None or isinstance(rm, fp.RoundingMode)
+        # a context that rounds names its rule
+        if ctx.round_params() != (None, None):
+            assert rm is not None

@@ -671,6 +671,31 @@ class AbstractFormat:
         """Check if this format is contained in another format."""
         return self._is_contained_in(other)
 
+    def next_bound(self) -> 'AbstractFormat':
+        """
+        Return this format with both bounds moved one step away from zero, in
+        *this* format's own grid.
+
+        This is Figure 8's ``next(b)``.  There is no precision parameter: the
+        grid is the receiver's, so a caller wanting ``next`` at a wider
+        precision extends the format first and asks second.  An unbounded side
+        is left alone.
+        """
+        return AbstractFormat(
+            self.prec, self.exp,
+            self._next_away(self.pos_bound), neg_bound=self._next_away(self.neg_bound),
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
+        )
+
+    def _next_away(self, b: RealFloat | float) -> RealFloat | float:
+        """One step outward from *b* in this format's grid."""
+        if not isinstance(b, RealFloat) or b.is_zero():
+            return b        # unbounded, or a zero with no direction to step
+        p = self.prec if isinstance(self.prec, int) else None
+        n = self.exp if isinstance(self.exp, int) else None
+        return b.next_away_zero(p, n)
+
     def with_prec_offset(self, delta: int) -> 'AbstractFormat':
         """
         Return a new format with precision adjusted by delta.
@@ -685,7 +710,8 @@ class AbstractFormat:
             raise ValueError("resulting precision must be at least 1")
         return AbstractFormat(
             new_prec, self.exp, self.pos_bound, neg_bound=self.neg_bound,
-            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
         )
 
     def with_exp_offset(self, delta: int) -> 'AbstractFormat':
@@ -700,7 +726,8 @@ class AbstractFormat:
         new_exp = self.exp + delta
         return AbstractFormat(
             self.prec, new_exp, self.pos_bound, neg_bound=self.neg_bound,
-            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
         )
 
     def with_bounds_scale(self, factor: RealFloat) -> 'AbstractFormat':
@@ -721,5 +748,6 @@ class AbstractFormat:
         # scaling by a positive factor preserves special-value membership
         return AbstractFormat(
             self.prec, self.exp, new_pos_bound, neg_bound=new_neg_bound,
-            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
         )

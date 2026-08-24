@@ -119,9 +119,17 @@ Tests: every context reports its mode or `None`; `f1.next_bound()` and
 
 `double_round_ok(f1, rm1, f2, rm2)` beside `round_is_identity` in
 `format_infer/analysis.py` — same shape of decision procedure, same place a
-reader looks. Plus `derive_via(f1, rm1)` for `via=None`: `k = 2` for a
-round-to-nearest final, `1` for a directed one, then
-`with_prec_offset(k).with_exp_offset(-k)` and the `next` bump.
+reader looks.
+
+Plus **`derive_intermediate(target: Context) -> Context`**, which is how a
+caller *obtains* a `ctx` rather than hand-computing one: `k = 2` for a
+round-to-nearest target, `1` for a directed one, then
+`with_prec_offset(k).with_exp_offset(-k)`, the `next` bump, and an
+`MPBFloatContext` built from `.format()` with `rm=RTO`. Since `ctx` is required,
+this is a helper and not a `None` branch in the operator — which also settles
+what to derive: RTO, because that is §5.3's modular-library recipe. A caller who
+wants a same-mode intermediate (plain containment, so it succeeds more often)
+passes their own `ctx` and the predicate checks it.
 
 **The `-0` trap.** `with_exp_offset` drops `-0` from the special set:
 
@@ -142,8 +150,8 @@ Tests, with the proofs as oracle: the eight admitted rules hold; the unsound
 pairings decline, RNE-RNE by name; RTO-RTO's `p2 >= 2` and the absence of a
 bump on RTZ-RTZ or RTO-RTO each get a test, since both were corrections to
 this repo's written table; and a property test that
-`double_round_ok(f1, rm1, derive_via(f1, rm1), RTO)` holds for every admitted
-final mode.
+`double_round_ok` accepts `derive_intermediate(target)` for every admitted
+target mode.
 
 ### 3. The transform
 
@@ -155,17 +163,18 @@ final mode.
   whose enclosing scope is a *concrete* context with a mode the table admits.
   `insert_round` skips an operation that already has a format; this one requires
   one.
-- **Not sites, deliberately:** explicit `Round` / `Cast` nodes. Splitting a
-  rounding is `merge_round`'s inverse, and admitting them makes a second
-  application grow the tree twice as fast for nothing.
-- **`via`**: an explicit `Context` is checked against the table; `None` derives
-  the tightest sound RTO intermediate and builds an `MPBFloatContext` from
-  `derive_via(...).format()`.
+- **Not sites:** explicit `Round` / `Cast` nodes. Splitting a rounding is
+  `merge_round`'s inverse, and admitting them makes a second application grow
+  the tree twice as fast for nothing.
+- **`ctx` is the intermediate** — `F2` together with `rm2`, which is exactly
+  what a `Context` carries. Required, mirroring
+  `insert_round(func, ctx, where=None)`, where `ctx` is likewise the context the
+  rewrite installs. `F1` and `rm1` are read from the program.
 - **Refusals**: a REAL or symbolic scope (nothing to split — that direction is
-  `insert_round`'s), stochastic, a mode off the table, an explicit `via` failing
-  the premise, and the positions with no statement slot. That last set is now
-  only the `while` condition, for soundness, since the `_visit_block` fix landed
-  with the dead-context work.
+  `insert_round`'s), stochastic either side, a mode pair off the table, a `ctx`
+  failing the premise, and the positions with no statement slot. That last set
+  is now only the `while` condition, for soundness, since the `_visit_block` fix
+  landed with the dead-context work.
 - **Termination**: one pass over `where=None` terminates; *repeated* application
   re-splits the inner operation, which is by design for a scheduling operator
   and belongs beside `insert_round`'s divergence note.
@@ -176,8 +185,8 @@ really applies `rm1` — the assumption the whole rewrite rests on.
 
 ### 4. The strategy
 
-`split_round(func, where=None, *, via=None)` in `fpy2/strategies/`. No `ctx`
-parameter: `F1` is read from the program, which is the point. Registered in
+`split_round(func, ctx, where=None)` in `fpy2/strategies/`, the same shape as
+`insert_round`. Registered in
 `strategies/__init__.py`, `_SITES` / `_REFUSALS` in `sites.py`, and
 `docs/source/strategies.rst`, with `ACTS` and `REFUSES` rows in
 `tests/unit/strategies/test_where_contract.py`.

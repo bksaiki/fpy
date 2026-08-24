@@ -776,3 +776,53 @@ class TestLatticeLaws:
         assert (with_nz | with_nz).has_neg_zero
         assert not (with_nz & without).has_neg_zero
         assert (with_nz & with_nz).has_neg_zero
+
+
+class TestNextBound:
+    """Figure 8's ``next(b)``, and the special-value flags the builders used to
+    drop on the way."""
+
+    @staticmethod
+    def _fp32() -> AbstractFormat:
+        return AbstractFormat.from_format(fp.FP32.format())
+
+    def test_it_steps_both_bounds_away_from_zero(self):
+        f = self._fp32()
+        out = f.next_bound()
+        assert out.pos_bound > f.pos_bound
+        assert out.neg_bound < f.neg_bound
+        assert out.prec == f.prec and out.exp == f.exp
+
+    def test_the_grid_comes_from_the_receiver(self):
+        """The whole reason there is no precision parameter: RTO-RN needs
+        ``next`` in the once-extended grid, which is a *different* value from
+        ``next`` in the target's own grid."""
+        f = self._fp32()
+        once = f.with_prec_offset(1).with_exp_offset(-1)
+        assert f.next_bound().bound != once.next_bound().bound
+
+    def test_an_unbounded_side_is_left_alone(self):
+        f = AbstractFormat(24, -149, math.inf)
+        assert f.next_bound().pos_bound == math.inf
+
+    def test_the_step_is_one_grid_step(self):
+        f = self._fp32()
+        assert f.next_bound().pos_bound == f.pos_bound.next_away_zero(f.prec, f.exp)
+
+    def test_the_builders_preserve_the_special_flags(self):
+        """`with_prec_offset` / `with_exp_offset` / `with_bounds_scale` rebuild
+        the format, and each used to drop `has_neg_zero` -- the constructor
+        defaults it to `False`, so it vanished silently.  Nothing called them
+        before Figure 8's premises did."""
+        from fpy2.number.number.reals import RealFloat
+
+        f = self._fp32()
+        assert f.has_neg_zero
+        for out in (
+            f.with_prec_offset(2),
+            f.with_exp_offset(-2),
+            f.with_bounds_scale(RealFloat(c=2, exp=0)),
+            f.next_bound(),
+        ):
+            assert out.has_neg_zero, out
+            assert out.has_nan and out.has_pos_inf and out.has_neg_inf

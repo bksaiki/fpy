@@ -452,6 +452,9 @@ class MPSFloatContext(OrdinalContext):
             inf_value=inf_value
         )
 
+    def rounding_mode(self):
+        return self.rm
+
     def round_params(self):
         if self.num_randbits is None:
             return None, None
