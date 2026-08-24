@@ -2,6 +2,7 @@
 This module defines compiler transforms over FPy IR.
 """
 
+from .comp_to_loop import CompToLoop
 from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate
 from .cursor import (
