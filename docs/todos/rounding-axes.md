@@ -328,15 +328,17 @@ both directions, which is the whole of the specification-to-implementation step.
   step-6 recipe needs explicit fuel.** Neither guard bounds the composition, and
   it does not cycle either — each round trip wraps the operation in one more
   block, because *both* operators hoist into a nested block rather than
-  replacing the scope they found. `simplify` in between clears the redundant
-  copies but not the nesting, so it does not help. Pinned by
+  replacing the scope they found. Pinned by
   `test_alternating_the_two_does_not_converge`.
 
-  The cheap fix, if a recipe wants to alternate freely, is to flatten a block
-  nested directly inside a block of an equivalent context — sound, since the
-  inner scope only re-establishes what the outer already provides, and it would
-  make the composition converge. That belongs to `simplify` or `lift_context`,
-  not to either operator on this page.
+  **Fixed, in `DeadCodeEliminate`.** It now drops a `with` block that installs
+  the context already in force, and one that no operation under it reads at all
+  — the tower is all of the latter but its innermost block, which then matches
+  the function's own context. Measured on the four-round trip: 8 blocks to 0,
+  same values. So `simplify` does now converge the composition, and a recipe
+  that alternates freely wants it in between. The operators themselves are
+  unchanged: each still hoists into a fresh block, which is what
+  `test_alternating_the_two_does_not_converge` pins.
 
   Where `elim_round` *declines* to hoist — an unbounded scope, refused by the
   strictly-tighter guard — `insert_round` has no site at all, so the pair is a

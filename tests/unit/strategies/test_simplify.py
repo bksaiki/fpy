@@ -1,10 +1,10 @@
 """Unit tests for :func:`fpy2.strategies.simplify`.
 
-The expect-test fixtures use ``enable_const_fold_context=False`` so
-the ``with fp.FP64:`` expression stays as an ``Attribute`` — the
-concrete ``IEEEContext`` produced by the default context-fold can't
-be written in FPy surface syntax, so we'd have no way to express
-the expected AST.  Context-folding itself is tested separately.
+The expect-test fixtures keep the default, so a ``with fp.FP64:``
+expression stays an ``Attribute``: a folded context is the concrete
+:class:`Context` object, which cannot be written in FPy surface syntax, so
+there would be no way to express the expected AST.  That is also why folding
+is opt-in; :class:`TestSimplifyContextFold` covers both settings.
 """
 
 import fpy2 as fp
@@ -88,8 +88,9 @@ def _just_copy_prop(x: fp.Real) -> fp.Real:
 
 @fp.fpy
 def _just_copy_prop_expect(x: fp.Real) -> fp.Real:
-    with fp.FP64:
-        return x
+    # the copies were the only statements under the `with`, and a bare `return`
+    # reads no context, so the block goes too
+    return x
 
 
 @fp.fpy
@@ -103,8 +104,9 @@ def _just_dead_branches(x: fp.Real) -> fp.Real:
 
 @fp.fpy
 def _just_dead_branches_expect(x: fp.Real) -> fp.Real:
-    with fp.FP64:
-        return x
+    # once the dead branch and the assert are gone, nothing under the `with`
+    # reads the context
+    return x
 
 
 @fp.fpy
@@ -136,8 +138,8 @@ def _branch_merge(c: bool) -> fp.Real:
 
 @fp.fpy
 def _branch_merge_expect(c: bool) -> fp.Real:
-    with fp.FP64:
-        return 5
+    # the merged constant is exact, so the block has no use left
+    return 5
 
 
 _examples: list[tuple[fp.Function, fp.Function]] = [
@@ -219,12 +221,23 @@ class TestSimplifyIdempotent:
 
 
 class TestSimplifyContextFold:
-    """The default ``simplify`` folds ``fp.FP64`` (an ``Attribute``)
-    to a ``ForeignVal`` carrying the concrete ``IEEEContext``.  The
-    knob ``enable_const_fold_context=False`` opts out."""
+    """``simplify`` leaves a ``with``-block's expression as written; the knob
+    ``enable_const_fold_context=True`` folds it to a ``ForeignVal`` carrying
+    the resolved :class:`Context`."""
 
-    def test_default_folds_to_foreign_val(self):
+    def test_default_keeps_the_expression(self):
         simplified = simplify(_kitchen_sink).ast
+        assert _has_node(
+            simplified,
+            lambda n: isinstance(n, ContextStmt) and isinstance(n.ctx, Attribute),
+        )
+        assert not _has_node(
+            simplified,
+            lambda n: isinstance(n, ContextStmt) and isinstance(n.ctx, ForeignVal),
+        )
+
+    def test_enable_folds_to_foreign_val(self):
+        simplified = simplify(_kitchen_sink, enable_const_fold_context=True).ast
         assert _has_node(
             simplified,
             lambda n: isinstance(n, ContextStmt) and isinstance(n.ctx, ForeignVal),
@@ -235,17 +248,24 @@ class TestSimplifyContextFold:
             lambda n: isinstance(n, ContextStmt) and isinstance(n.ctx, Attribute),
         )
 
-    def test_disable_keeps_attribute(self):
-        simplified = simplify(_kitchen_sink, enable_const_fold_context=False).ast
-        assert _has_node(
-            simplified,
-            lambda n: isinstance(n, ContextStmt) and isinstance(n.ctx, Attribute),
-        )
+    def test_the_default_keeps_a_context_writable_in_fpy(self):
+        """Why it is the default: a folded context prints as the `Context`
+        object's `repr`, which is not FPy source for anything but the named
+        formats -- `MPBFixedContext` comes back as a keyword-argument dump, so
+        the folded output no longer re-parses."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.MPBFixedContext(-1, 128, overflow=fp.OverflowMode.ASSERT):
+                y = x * x
+            return y
+
+        assert 'fp.MPBFixedContext(-1, 128' in simplify(f).format()
+        folded = simplify(f, enable_const_fold_context=True).format()
+        assert 'pos_maxval=' in folded and 'fp.MPBFixedContext' not in folded
 
 
 class TestSimplifyOpFold:
-    """``enable_const_fold_op=False`` preserves arithmetic, leaves the
-    context-fold knob active."""
+    """``enable_const_fold_op=False`` preserves arithmetic."""
 
     def test_disable_keeps_arithmetic(self):
         simplified = simplify(_just_const_fold, enable_const_fold_op=False).ast
