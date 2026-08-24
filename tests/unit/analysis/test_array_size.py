@@ -1157,6 +1157,77 @@ class TestArraySizeInfer:
         assert isinstance(outer.elt, ListSize)
         assert outer.elt.size == 3
 
+    def test_empty_folds_a_len_dimension(self):
+        """``fp.empty(len(xs))`` keeps the length it was sized from.
+
+        The dimension is resolved with ``_const_int``, which folds ``len`` /
+        ``size`` / ``dim``; the partial-eval table alone does not, so this used
+        to come out unknown and cost the C++ backend its ``std::array``.
+        """
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return fp.empty(len(xs))
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 5, None)
+        bound = self._run(f).ret_size
+        assert isinstance(bound, ListSize)
+        assert concrete_size(bound.size) == 5
+
+    def test_empty_folds_a_len_dimension_per_axis(self):
+        """Each dimension folds on its own, outer to inner."""
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[list[fp.Real]]:
+            return fp.empty(len(xs), 3)
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 4, None)
+        outer = self._run(f).ret_size
+        assert isinstance(outer, ListSize)
+        assert concrete_size(outer.size) == 4
+        assert isinstance(outer.elt, ListSize)
+        assert concrete_size(outer.elt.size) == 3
+
+    def test_empty_over_an_unknown_length_stays_unknown(self):
+        """No length to fold, so the size is genuinely unknown -- not zero."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return fp.empty(len(xs))
+
+        bound = self._run(f).ret_size
+        assert isinstance(bound, ListSize)
+        assert concrete_size(bound.size) is None
+
+    def test_an_allocation_loop_matches_the_comprehension(self):
+        """The two ways of writing the same list agree on length.
+
+        This is what makes lowering a comprehension to ``empty`` + a loop
+        size-preserving.
+        """
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        @fp.fpy
+        def comp(xs: list[fp.Real]) -> list[fp.Real]:
+            return [x * x for x in xs]
+
+        @fp.fpy
+        def loop(xs: list[fp.Real]) -> list[fp.Real]:
+            acc = fp.empty(len(xs))
+            for i in range(len(xs)):
+                acc[i] = xs[i] * xs[i]
+            return acc
+
+        sizes = []
+        for f in (comp, loop):
+            f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 3, None)
+            bound = self._run(f).ret_size
+            assert isinstance(bound, ListSize)
+            sizes.append(concrete_size(bound.size))
+        assert sizes == [3, 3]
+
     def test_primitive_call_has_no_size(self):
         """Calling a primitive (non-FPy-function) doesn't crash and
         yields no list-size info."""

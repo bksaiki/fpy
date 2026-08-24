@@ -28,6 +28,10 @@ _ignore = [
     'example_static_context2',
     'keep_p_1',
 
+    # a comprehension clause iterating over an earlier target: `tensor` has one
+    # extent, and a ragged flatten's length is a sum
+    'test_list_comp5',
+
     # multiple return statements (FPCore is single-exit by design)
     'test_return1',
     'test_return2',

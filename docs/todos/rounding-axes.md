@@ -266,6 +266,38 @@ rounded operand, and nested `with` blocks are all candidate spellings of a
 nested rounding in FPy, and which of them appear in real programs decides how
 much of this operator is worth building.
 
+### Expression positions neither operator can reach
+
+Both operators need a statement slot for the block they hoist into, so an
+expression that is evaluated conditionally or repeatedly is closed to them.
+Three positions, in the order they were closed:
+
+- **A comprehension element** — *solved.* `comp_to_loop`
+  (`fpy2/transform/comp_to_loop.py`) lowers the comprehension into an `fp.empty`
+  allocation plus a `for` loop, after which the element is an ordinary statement.
+  Measured on `[x * x for x in xs]` with FP32 arguments: `elim_round` does
+  nothing and `insert_round` has 0 sites; lowered first, `elim_round` hoists the
+  product and `insert_round` has 1
+  (`tests/unit/strategies/test_comp_to_loop.py::TestUnblocksTheRoundingAxis`).
+  The lowering is precision-neutral — element format and length both survive it,
+  since `Empty` starts at the bottom of the type and each `IndexedAssign` joins
+  the stored value back in (`test_comp_to_loop.py::TestPrecision`).
+- **An `IfExpr` branch** — open, and the same shape of fix: bind the ternary to a
+  temp assigned in both arms of an `if` statement, which preserves semantics
+  exactly since one arm evaluates either way. No such transform exists
+  (`simplify_if` is unrelated). `RoundElim._visit_if_expr` and
+  `RoundInsert._visit_if_expr` are the two refusals it would open, and
+  `CompToLoop`'s a third.
+- **A dependent clause list** in a comprehension — `[b for a in xs for b in a]`,
+  whose length is a sum rather than a product, so `fp.empty` has nowhere to get
+  it. Left alone rather than refused. Totality here needs either a syntactic ban
+  or an append-shaped list builder in FPy, which would let `CompToLoop` drop the
+  size expression for every clause shape.
+- **A `while` condition** — open and hardest, since the condition is re-evaluated
+  every iteration; it needs loop rotation rather than a hoist. Suppressed in all
+  three passes; measured, hoisting out of it turns a terminating loop into an
+  out-of-bounds slice.
+
 ## Order of work
 
 1. ~~**`insert_round`**~~ — **done.** `RoundInsert` in `fpy2/transform/`,

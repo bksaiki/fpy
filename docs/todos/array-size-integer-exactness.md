@@ -191,6 +191,13 @@ Post-fix behavior:
 
 ## Out of scope / possible follow-up
 
+- **`_const_int` folds `len(xs)` but not arithmetic over it**, so
+  `fp.empty(len(xs) * len(ys))` has no static size while `fp.empty(len(xs))`
+  does. The product of two lengths is integer-valued, so this is the same
+  exactness witness as above rather than a new one. It is what makes a lowered
+  multi-clause comprehension compile to `std::vector` instead of `std::array`
+  (see [backend-cpp.md](backend-cpp.md)).
+
 - **Shared integer-valued analysis.** The cleaner long-term shape is a
   small standalone "is this expression integer-valued?" analysis that
   **both** `FormatInfer` and `ArraySize` consume, eliminating the

@@ -22,6 +22,7 @@ from ..transform import (
     TransformError,
     TransformReferenceError,
 )
+from .comp_lower import comp_to_loop
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
@@ -54,6 +55,7 @@ __all__ = [
     'TransformError',
     'TransformReferenceError',
     'close',
+    'comp_to_loop',
     'elim_iter',
     'elim_round',
     'float_to_fixed',

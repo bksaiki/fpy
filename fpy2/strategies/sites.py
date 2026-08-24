@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 from ..function import Function
 from ..transform import (
+    CompToLoop,
     Cursor,
     FloatToFixed,
     ForUnroll,
@@ -18,6 +19,7 @@ from ..transform import (
     UnfoldSpecial,
     WhileUnroll,
 )
+from .comp_lower import comp_to_loop
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
 from .func_inline import inline
@@ -35,6 +37,7 @@ _REFUSALS: dict[Callable, Callable] = {
     float_to_fixed: FloatToFixed.refusals,
     rescale_fixed: RescaleFixed.refusals,
     insert_round: RoundInsert.refusals,
+    comp_to_loop: CompToLoop.refusals,
     inline: FuncInline.refusals,
     split: SplitLoop.refusals,
     unroll_for: ForUnroll.refusals,
@@ -53,6 +56,7 @@ _SITES: dict[Callable, Callable] = {
     float_to_fixed: FloatToFixed.sites,
     rescale_fixed: RescaleFixed.sites,
     insert_round: RoundInsert.sites,
+    comp_to_loop: CompToLoop.sites,
     split: SplitLoop.sites,
     unroll_for: ForUnroll.sites,
     unroll_while: WhileUnroll.sites,

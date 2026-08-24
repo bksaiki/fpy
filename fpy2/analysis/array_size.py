@@ -471,13 +471,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
                 acc: ArraySizeBound = elt_ty
                 for arg in arg_rev:
-                    size_v = self._get_eval(arg)
-                    size = (
-                        int(INTEGER.round(size_v))
-                        if isinstance(size_v, Float | Fraction)
-                        else None
-                    )
-                    acc = ListSize(acc, size)
+                    # `_const_int`, not `_get_eval`: a dimension is commonly
+                    # `len(xs)`, which only the former folds
+                    acc = ListSize(acc, self._const_int(arg))
                 return acc
 
             case _:

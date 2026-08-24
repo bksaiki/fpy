@@ -17,6 +17,7 @@ from fpy2.ast.fpyast import Integer
 from fpy2.strategies import (
     ExprCursor,
     TransformReferenceError,
+    comp_to_loop,
     float_to_fixed,
     inline,
     insert_round,
@@ -171,6 +172,18 @@ def _sum_of_squares(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.FP64)
+def _comprehension(xs: list[fp.Real]) -> list[fp.Real]:
+    return [x * x for x in xs]
+
+
+@fp.fpy(ctx=fp.FP64)
+def _dependent_comprehension(xss: list[list[fp.Real]]) -> list[fp.Real]:
+    """A later iterable mentions an earlier target, so the length is a sum and
+    `fp.empty` has nowhere to get it."""
+    return [b for a in xss for b in a]
+
+
+@fp.fpy(ctx=fp.FP64)
 def _nested_ops(x: fp.Real) -> fp.Real:
     with fp.REAL:
         t = abs(x * x)
@@ -209,6 +222,7 @@ ACTS = [
     ('inline/nested', inline, _nested_calls, {}),
     ('insert_round', insert_round, _pin(_sum_of_squares, 2), _FP64),
     ('insert_round/nested', insert_round, _pin(_nested_ops, 1), _FP64),
+    ('comp_to_loop', comp_to_loop, _comprehension, {}),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the
@@ -224,6 +238,7 @@ REFUSES = [
     ('split/refuses', split, _odd_trip, _STRICT_SPLIT),
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),
+    ('comp_to_loop/refuses', comp_to_loop, _dependent_comprehension, {}),
 ]
 
 # `unroll_while` has no row: it refuses nothing at all.

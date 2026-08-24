@@ -373,6 +373,27 @@ class TestEndToEnd:
         )
         assert out.startswith('std::array<double, 2> f(')
 
+    def test_empty_sized_from_len_is_an_array(self):
+        """``fp.empty(len(xs))`` over a proven-length list is a `std::array`.
+
+        The dimension folds through `ArraySizeInfer`'s `_const_int`; before that
+        it resolved only partial-eval constants, so this shape lost its length
+        and fell back to `std::vector` even though the length was proven.
+        """
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            acc = fp.empty(len(xs))
+            for i in range(len(xs)):
+                acc[i] = xs[i] * 2.0
+            return acc
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64), 3)],
+        )
+        assert 'std::array<double, 3> acc' in out
+        assert 'std::vector' not in out
+
     def test_runtime_length_stays_a_vector(self):
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:
