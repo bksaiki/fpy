@@ -505,36 +505,6 @@ class TestListCompRewrite:
         assert new_ast.is_equiv(f.ast)
         assert _contains(new_ast, Enumerate)
 
-    def test_shadowed_target_in_nested_comp(self):
-        """The inner comp re-binds ``x``; that reference must not be
-        substituted by the outer rewrite."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
-            with fp.FP64:
-                return [sum([x for x in ys]) + x for i, x in enumerate(xs)]
-
-        new_ast = EnumerateElim.apply(f.ast)
-        outer = _find_listcomp(new_ast)
-        assert isinstance(outer.iterables[0], Range1)
-
-        inner_found: list[ListComp] = []
-
-        class _C(DefaultVisitor):
-            def _visit_list_comp(self, e, ctx):
-                if e is not outer:
-                    inner_found.append(e)
-                super()._visit_list_comp(e, ctx)
-
-        _C()._visit_function(new_ast, None)
-        assert len(inner_found) == 1
-        inner = inner_found[0]
-        # The inner elt is still a bare ``Var`` to ``x`` — not rewritten.
-        assert isinstance(inner.elt, Var)
-        assert inner.elt.name.base == 'x'
-        assert isinstance(inner.iterables[0], Var)
-        _assert_same(new_ast, f, _XS, _YS)
-
     def test_later_stage_iterable_references_rewritten_target(self):
         """A multi-stage comp whose second iterable reads the first stage's
         target: the substitution has to reach the iterable too, or the name

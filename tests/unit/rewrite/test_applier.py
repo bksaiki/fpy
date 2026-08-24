@@ -20,7 +20,7 @@ def f(x, y, z):
 @fpy
 def g(x, y, z):
     t = x * y + z
-    for x in range(10):
+    for i in range(10):
         t += 10 * y + z
     return t
 

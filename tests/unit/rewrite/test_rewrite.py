@@ -43,21 +43,21 @@ rw_sum_bad = Rewrite(insert_sum_l, expand_sum_bad)
 @fpy
 def f(x, y, z):
     t = x * y + z
-    for x in range(10):
+    for i in range(10):
         t += 10 * y + z
     return t
 
 @fpy
 def f1(x, y, z):
     t = fma(x, y, z)
-    for x in range(10):
+    for i in range(10):
         t += 10 * y + z
     return t
 
 @fpy
 def f2(x, y, z):
     t = fma(x, y, z)
-    for x in range(10):
+    for i in range(10):
         t += fma(10, y, z)
     return t
 

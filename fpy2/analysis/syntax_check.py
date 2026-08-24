@@ -48,6 +48,12 @@ class _Env:
         copy.env[var] = True
         return copy
 
+    def remove(self, vars: set[NamedId]):
+        copy = _Env(self.env, terminated=self.terminated)
+        for var in vars:
+            copy.env.pop(var, None)
+        return copy
+
     def merge(self, other: Self):
         # Terminated paths don't reach the merge point.  If one
         # side terminates, the other is the only path; if both
@@ -221,7 +227,7 @@ class SyntaxCheckInstance(Visitor):
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
-            env = self._visit_binding(target, ctx.env)
+            env = self._visit_binding(target, ctx.env, fresh=True)
             ctx = _Ctx(env, ctx.within_call)
         self._visit_expr(e.elt, _Ctx(env, ctx.within_call))
 
@@ -246,28 +252,46 @@ class SyntaxCheckInstance(Visitor):
             raise FPySyntaxError('attribute base in function position must be either a variable or another attribute')
         self._visit_expr(e.value, ctx)
 
+    @staticmethod
+    def _binding_names(binding: Id | TupleBinding) -> set[NamedId]:
+        match binding:
+            case NamedId():
+                return {binding}
+            case UnderscoreId():
+                return set()
+            case TupleBinding():
+                return binding.names()
+            case _:
+                raise RuntimeError('unreachable', binding)
+
     def _visit_binding(
         self,
         binding: Id | TupleBinding,
         env: _Env,
-        bound: set[NamedId] | None = None
+        bound: set[NamedId] | None = None,
+        *,
+        fresh: bool = False
     ):
-        # `bound` accumulates the names of this binding alone, so a name may
-        # still shadow an outer definition; it just cannot repeat within
-        # the same binding.
+        # `bound` accumulates the names of this binding alone: a name may
+        # shadow an outer definition (unless `fresh`), but never repeat
+        # within the same binding.
         if bound is None:
             bound = set()
         match binding:
             case NamedId():
                 if binding in bound:
                     raise FPySyntaxError(f'duplicate identifier `{binding}` in binding')
+                if fresh and binding in env:
+                    raise FPySyntaxError(
+                        f'iteration variable `{binding}` shadows an existing definition'
+                    )
                 bound.add(binding)
                 env = env.extend(binding)
             case UnderscoreId():
                 pass
             case TupleBinding():
                 for elt in binding.elts:
-                    env = self._visit_binding(elt, env, bound)
+                    env = self._visit_binding(elt, env, bound, fresh=fresh)
             case _:
                 raise RuntimeError('unreachable', binding)
         return env
@@ -307,9 +331,13 @@ class SyntaxCheckInstance(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         env = ctx.env
         self._visit_expr(stmt.iterable, ctx)
-        env = self._visit_binding(stmt.target, env)
-        body_env = self._visit_block(stmt.body, _Ctx(env, False))
-        return env.merge(body_env)
+        body_env = self._visit_block(
+            stmt.body,
+            _Ctx(self._visit_binding(stmt.target, env, fresh=True), False)
+        )
+        # the target is scoped to the loop: it neither shadows an outer
+        # definition (`fresh`) nor escapes past the loop
+        return env.merge(body_env).remove(self._binding_names(stmt.target))
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         env = ctx.env
@@ -379,6 +407,9 @@ class SyntaxCheck:
     - any variables must be defined before it is used;
     - a single binding must not bind the same name twice,
       e.g., `x, x = e` is invalid;
+    - a `for` loop or list comprehension target must introduce fresh
+      names and is scoped to its loop: it may neither shadow a
+      definition already in scope nor be referenced after the loop;
 
     If statements:
 
