@@ -246,15 +246,28 @@ class SyntaxCheckInstance(Visitor):
             raise FPySyntaxError('attribute base in function position must be either a variable or another attribute')
         self._visit_expr(e.value, ctx)
 
-    def _visit_binding(self, binding: Id | TupleBinding, env: _Env):
+    def _visit_binding(
+        self,
+        binding: Id | TupleBinding,
+        env: _Env,
+        bound: set[NamedId] | None = None
+    ):
+        # `bound` accumulates the names of this binding alone, so a name may
+        # still shadow an outer definition; it just cannot repeat within
+        # the same binding.
+        if bound is None:
+            bound = set()
         match binding:
             case NamedId():
+                if binding in bound:
+                    raise FPySyntaxError(f'duplicate identifier `{binding}` in binding')
+                bound.add(binding)
                 env = env.extend(binding)
             case UnderscoreId():
                 pass
             case TupleBinding():
                 for elt in binding.elts:
-                    env = self._visit_binding(elt, env)
+                    env = self._visit_binding(elt, env, bound)
             case _:
                 raise RuntimeError('unreachable', binding)
         return env
@@ -364,6 +377,8 @@ class SyntaxCheck:
     Variables:
 
     - any variables must be defined before it is used;
+    - a single binding must not bind the same name twice,
+      e.g., `x, x = e` is invalid;
 
     If statements:
 
