@@ -352,9 +352,8 @@ def _example_tuple_nested_scrub_expect(x: fp.Real) -> fp.Real:
 
 
 # ----------------------------------------------------------------------
-# A `with` block whose installed context nothing observes.  Only operations
-# and calls read the context, so a block over literals, copies, comparisons
-# or a nested `with` only nests, and its body is spliced into the parent.
+# A `with` block whose installed context nothing observes: the body is
+# spliced into the enclosing block.
 
 
 @fp.fpy(ctx=fp.FP64)
@@ -481,8 +480,7 @@ def _example_live_ctx_call_expect(x: fp.Real) -> fp.Real:
     return y
 
 
-# The block binds a name that escapes, so it stays even though no operation
-# under it reads the context.
+# The block binds a name that escapes, so it stays.
 @fp.fpy
 def _example_live_ctx_escapes():
     with fp.MPFixedContext(-4) as c:
@@ -497,8 +495,8 @@ def _example_live_ctx_escapes_expect():
 
 
 # ----------------------------------------------------------------------
-# A `with` block that installs the context already in force.  It changes
-# nothing even though operations under it do read a context.
+# A `with` block that installs the context already in force -- droppable even
+# though operations under it do read a context.
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -544,6 +542,81 @@ def _example_symbolic_ctx_expect(x: fp.Real) -> fp.Real:
     return y
 
 
+# Two blocks at the same level: neither is the other's ancestor, so the
+# innermost-only filter has to let both go in one round.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_siblings(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        p = 1.0
+    with fp.FP32:
+        q = 2.0
+    return (p + q) + x
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_siblings_expect(x: fp.Real) -> fp.Real:
+    p = 1.0
+    q = 2.0
+    return (p + q) + x
+
+
+# A context held in a variable: the block reads it, so `Purity` sees a `Var`
+# rather than a constructor call.
+@fp.fpy(ctx=fp.FP64)
+def _example_live_ctx_var(x: fp.Real) -> fp.Real:
+    ctx = fp.FP16
+    with ctx:
+        y = x * x
+    return y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_live_ctx_var_expect(x: fp.Real) -> fp.Real:
+    ctx = fp.FP16
+    with ctx:
+        y = x * x
+    return y
+
+
+# The same, with nothing under the block that reads it: the block goes, and
+# `ctx` goes with it as an unused assign.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_var(x: fp.Real) -> fp.Real:
+    ctx = fp.FP16
+    with ctx:
+        y = 1.0
+    return y + x
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_var_expect(x: fp.Real) -> fp.Real:
+    y = 1.0
+    return y + x
+
+
+# A list literal builds exact values, so it reads no context.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_list_literal(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        xs = [1.0, 2.0]
+    return xs[0] + x
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_list_literal_expect(x: fp.Real) -> fp.Real:
+    xs = [1.0, 2.0]
+    return xs[0] + x
+
+
+# An indexed store rounds nothing either -- it stores the value it is given.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_indexed_store(xs: list[fp.Real], x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        xs[0] = 1.0
+    return xs[0] + x
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_indexed_store_expect(xs: list[fp.Real], x: fp.Real) -> fp.Real:
+    xs[0] = 1.0
+    return xs[0] + x
+
+
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_simple_1, _example_simple_1_expect),
     (_example_simple_2, _example_simple_2_expect),
@@ -585,6 +658,11 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_same_ctx_as_function, _example_same_ctx_as_function_expect),
     (_example_diff_ctx_nested, _example_diff_ctx_nested_expect),
     (_example_symbolic_ctx, _example_symbolic_ctx_expect),
+    (_example_dead_ctx_siblings, _example_dead_ctx_siblings_expect),
+    (_example_live_ctx_var, _example_live_ctx_var_expect),
+    (_example_dead_ctx_var, _example_dead_ctx_var_expect),
+    (_example_dead_ctx_list_literal, _example_dead_ctx_list_literal_expect),
+    (_example_dead_ctx_indexed_store, _example_dead_ctx_indexed_store_expect),
 ]
 
 
@@ -602,12 +680,8 @@ class TestDeadCode():
 
 
 class TestDeadContext:
-    """Dropping a `with` whose context nothing observes.
-
-    The table above compares shapes; these check what a shape comparison
-    cannot -- that values survive, and that the elimination loop reaches the
-    blocks other rules strand.
-    """
+    """What a shape comparison cannot check: that the elimination loop reaches
+    the blocks other rules strand, and that the survivor is the right one."""
 
     def test_values_survive_the_splice(self):
         f_opt = fp.Function(
@@ -659,6 +733,21 @@ class TestDeadContext:
 
         out = fp.transform.DeadCodeEliminate.apply(f.ast)
         assert _with_count(out) == 1
+        assert 'with fp.FP16:' in fp.Function(out, runtime=f.runtime).format()
+        assert repr(fp.Function(out, runtime=f.runtime)(1.1)) == repr(f(1.1))
+
+    def test_two_structurally_equal_contexts_are_the_same_context(self):
+        """`_same_context` compares resolved values, not identity: the block
+        installs a distinct but equal `Context` object."""
+
+        @fp.fpy(ctx=fp.IEEEContext(5, 16, fp.RM.RNE))
+        def f(x: fp.Real) -> fp.Real:
+            with fp.IEEEContext(5, 16, fp.RM.RNE):
+                y = x * x
+            return y
+
+        out = fp.transform.DeadCodeEliminate.apply(f.ast)
+        assert _with_count(out) == 0
         assert repr(fp.Function(out, runtime=f.runtime)(1.1)) == repr(f(1.1))
 
     def test_alternating_rounding_rewrites_stop_diverging(self):
@@ -696,15 +785,73 @@ class TestDeadContext:
         g = st.rescale_fixed(st.float_to_fixed(
             st.unfold_overflow(st.unfold_special(f), early_check=True)
         ))
-        assert _with_count(g.ast) == 9
+        reals = g.format().count('with fp.REAL')
 
         out = fp.Function(fp.transform.DeadCodeEliminate.apply(g.ast), runtime=g.runtime)
-        assert _with_count(out.ast) == 6
-        # the branches those blocks guard: nan, both infinities, both zeros, a
-        # normal value, an overflow and a subnormal
+        # the three that went are REAL blocks nested in REAL scopes
+        assert _with_count(out.ast) == _with_count(g.ast) - 3
+        assert out.format().count('with fp.REAL') == reals - 3
         for v in (float('nan'), float('inf'), float('-inf'), 0.0, -0.0,
                   1.5, -1.5, 1e40, -1e-42):
             assert repr(out(v)) == repr(g(v)), f'disagree at {v}'
+
+    def test_a_target_read_after_a_loop_is_a_use(self):
+        """A name read after the loop has no *direct* use -- the read goes
+        through a phi -- so the successors have to decide it.  Missing that
+        dropped the binding and moved the multiply to the outer context."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real, x: fp.Real) -> fp.Real:
+            c = fp.FP64
+            for _i in range(n):
+                with fp.FP16 as c:
+                    y = 1.0
+            with c:
+                z = x * x
+            return z
+
+        out = fp.transform.DeadCodeEliminate.apply(f.ast)
+        assert 'fp.FP16 as c' in fp.Function(out, runtime=f.runtime).format()
+        # 1.1 * 1.1 rounds differently in FP16 than in FP64
+        assert repr(fp.Function(out, runtime=f.runtime)(1, 1.1)) == repr(f(1, 1.1))
+
+    def test_a_target_read_after_a_branch_is_a_use(self):
+        """The same through an `if` phi, where dropping the binding left the
+        phi pointing at a deleted definition -- a `KeyError`, not a wrong
+        answer, and `SyntaxCheck` did not catch it."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(b: fp.Real, x: fp.Real) -> fp.Real:
+            if b > 0.0:
+                with fp.FP16 as c:
+                    y = 1.0
+            else:
+                c = fp.FP32
+            with c:
+                z = x * x
+            return z
+
+        out = fp.transform.DeadCodeEliminate.apply(f.ast)      # no KeyError
+        assert 'fp.FP16 as c' in fp.Function(out, runtime=f.runtime).format()
+        for b in (1.0, -1.0):
+            assert repr(fp.Function(out, runtime=f.runtime)(b, 1.1)) == repr(f(b, 1.1))
+
+    def test_a_stochastic_context_is_never_redundant(self):
+        """`Context` equality ignores `rng`, so two seeded streams compare
+        equal; dropping the block would draw from the outer generator."""
+        import random
+
+        outer = fp.IEEEContext(5, 11, num_randbits=2, rng=random.Random(1))
+        inner = fp.IEEEContext(5, 11, num_randbits=2, rng=random.Random(999))
+        assert outer == inner and outer is not inner
+
+        @fp.fpy(ctx=outer)
+        def f(x: fp.Real) -> fp.Real:
+            with inner:
+                y = x * x
+            return y
+
+        assert _with_count(fp.transform.DeadCodeEliminate.apply(f.ast)) == 1
 
     def test_an_impure_context_expression_is_kept(self):
         """Dropping the block would skip evaluating the expression."""
