@@ -19,6 +19,10 @@ class _ReachabilityCtx:
 class ReachabilityError(Exception):
     """Assertion error from a `Reachability` analysis."""
 
+
+def _name_of(ast: FuncDef | StmtBlock) -> str:
+    return str(ast.name) if isinstance(ast, FuncDef) else '<block>'
+
 @dataclasses.dataclass
 class ReachabilityAnalysis:
     """Result type of a `Reachability` analysis."""
@@ -44,19 +48,26 @@ class _ReachabilityInstance(DefaultVisitor):
     that requires additional computation.
     """
 
-    func: FuncDef
+    func: FuncDef | StmtBlock
     has_entry: dict[Stmt, bool]
     has_exit: dict[Stmt, bool]
     ret_stmts: set[ReturnStmt]
 
-    def __init__(self, func: FuncDef):
+    def __init__(self, func: FuncDef | StmtBlock):
         self.func = func
         self.has_entry = {}
         self.has_exit = {}
         self.ret_stmts = set()
 
     def analyze(self):
-        has_fallthrough = self._visit_function(self.func, _ReachabilityCtx.default())
+        ctx = _ReachabilityCtx.default()
+        match self.func:
+            case FuncDef():
+                has_fallthrough = self._visit_function(self.func, ctx)
+            case StmtBlock():
+                has_fallthrough = self._visit_block(self.func, ctx)
+            case _:
+                raise RuntimeError(f'unexpected AST node {self.func}')
         return ReachabilityAnalysis(self.has_entry, self.has_exit, self.ret_stmts, has_fallthrough)
 
     def _visit_assign(self, stmt: Assign, ctx: _ReachabilityCtx) -> bool:
@@ -157,7 +168,7 @@ class Reachability:
 
     @staticmethod
     def analyze(
-        func: FuncDef,
+        func: FuncDef | StmtBlock,
         *,
         check_all_reachable: bool = False,
         check_no_fallthrough: bool = False,
@@ -165,8 +176,8 @@ class Reachability:
     ):
         """Run the analysis.  Each ``check_*`` flag opts into one of
         the three optional assertions documented on the class."""
-        if not isinstance(func, FuncDef):
-            raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
+        if not isinstance(func, FuncDef | StmtBlock):
+            raise TypeError(f'Expected \'FuncDef\' or \'StmtBlock\', got {type(func)} for {func}')
         analysis = _ReachabilityInstance(func).analyze()
 
         if check_all_reachable:
@@ -176,16 +187,16 @@ class Reachability:
                     unreachable.append(stmt)
 
             if unreachable:
-                fmt_str = [f'`{func.name}` has unreachable statements']
+                fmt_str = [f'`{_name_of(func)}` has unreachable statements']
                 fmt_str.extend(
                     f'at ???: `{stmt.format()}`' if stmt.loc is None else f'at {stmt.loc.format()}: `{stmt.format()}`'
                     for stmt in unreachable)
                 raise ReachabilityError('\n  '.join(fmt_str))
 
         if check_no_fallthrough and analysis.has_fallthrough:
-            raise ReachabilityError(f'in `{func.name}`: not all paths have a return statement')
+            raise ReachabilityError(f'in `{_name_of(func)}`: not all paths have a return statement')
 
         if check_single_exit and len(analysis.ret_stmts) != 1:
-            raise ReachabilityError(f'`{func.name}` must have a single return statement')
+            raise ReachabilityError(f'`{_name_of(func)}` must have a single return statement')
 
         return analysis
