@@ -197,30 +197,48 @@ Expand one correctly-rounded operation into two roundings. This is the operator
 step: compute in high precision under RTO, re-round to the target under
 whatever mode the target wants.
 
-Figure 8 admits six of the sixteen mode pairings. Following the paper's naming,
-`rm2` is the intermediate and `rm1` the final; `F1 = 𝒜(p1, exp1, b1)` is the
-target and `F2 = 𝒜(p2, exp2, b2)` the intermediate:
+**The source of truth is the Lean development**, not this table:
+[Mpfx/DoubleRounding.lean](https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean).
+An earlier revision of this page transcribed Figure 8 four ways that the proofs
+do not support; the rows below follow the theorems, each named.
 
-| rule | final `rm1` | intermediate `rm2` | premise |
+Following the paper's naming, `rm2` is the intermediate and `rm1` the final;
+`F1 = 𝒜(p1, exp1, b1)` is the target and `F2` the intermediate. `extend k` is
+precision `+k` with exponent `-k`, and `next_F(b)` is the successor of `b` *in
+`F`'s own grid* — which grid is the part worth reading twice, since the two
+RTO-to-nearest premises differ only in that.
+
+| final `rm1` | intermediate `rm2` | premise | theorem |
 |---|---|---|---|
-| RND-RTZ-RTZ | RTZ | RTZ | `𝒜(p1, exp1, next(b1))` ⊆ `F2` |
-| RND-RAZ-RAZ | RAZ | RAZ | `𝒜(p1, exp1, b1)` ⊆ `F2` |
-| RND-RTO-RTO | RTO | RTO | `𝒜(p1, exp1, next(b1))` ⊆ `F2` **and** `p2 >= 2` |
-| RND-RTO-RTZ | RTZ | RTO | `𝒜(p1+1, exp1-1, next(b1))` ⊆ `F2` |
-| RND-RTO-RAZ | RAZ | RTO | `𝒜(p1+1, exp1-1, next(b1))` ⊆ `F2` |
-| RND-RTO-RNE | RNE | RTO | `𝒜(p1+2, exp1-2, next_{p1+1,exp1-1}(b1))` ⊆ `F2` |
+| RTZ | RTZ | `F1` ⊆ `F2` | `rndRTZ_RTZ` |
+| RAZ | RAZ | `F1` ⊆ `F2` | `rndRAZ_RAZ` |
+| RTP | RTP | `F1` ⊆ `F2` | `rndRTP_RTP` |
+| RTN | RTN | `F1` ⊆ `F2` | `rndRTN_RTN` |
+| RTO | RTO | `F1` ⊆ `F2` **and** `p2 >= 2` | `rndRTO_RTO` |
+| RTZ | RTO | `𝒜(p1+1, exp1-1, next_{F1}(b1))` ⊆ `F2` | `rndRTO_RTZ` |
+| RAZ | RTO | `𝒜(p1+1, exp1-1, next_{F1}(b1))` ⊆ `F2` | `rndRTO_RAZ` |
+| RNE **or** RNA | RTO | `𝒜(p1+2, exp1-2, next_{extend(F1,1)}(b1))` ⊆ `F2` | `rndRTO_RN` |
 
-Two details that look like typos and are not: RAZ-RAZ needs no `next(b)` bump
-while RTZ-RTZ does, and the `p2 >= 2` side condition on RTO-RTO is there to
-avoid a parity mismatch when both formats have one bit of precision. Every rule
-is conditional on the target rounding not overflowing, and the paper chooses
-`b2` from `{b1, next(b1)}` precisely so that no-overflow transfers from the
-single rounding to the composition.
+Eight rules over nine mode pairs. Where this page used to differ:
 
-Modes off the table: **RTP** and **RTN** reduce to RAZ and RTZ *by the sign of
-the operand* (§3.2), which FPy's `value_class` analysis could discharge and
-which should otherwise decline; **RNA** appears nowhere in Figure 8 and always
-declines.
+- **No `next(b)` bump on the same-mode rules.** `rndRTZ_RTZ` and `rndRTO_RTO`
+  take plain containment, exactly as RAZ-RAZ does. The RTZ/RAZ asymmetry this
+  page called "a detail that looks like a typo and is not" is not in the proofs.
+- **RTP-RTP and RTN-RTN are admitted** on plain containment. The sign branching
+  is *internal* to the proofs — `rndRTP_RTP` splits into RAZ for `x > 0` and RTZ
+  for `x <= 0` — so the pair is sound unconditionally and needs no `value_class`
+  refinement.
+- **RNA is admitted as a final mode.** `rndRTO_RN` is parametric in
+  `tb : TieBreak`, covering `.toEven` and `.awayZero`; RNA declines only as an
+  *intermediate*.
+- **`p2 >= 2` is explicit only for RTO-RTO.** For the RTO-to-directed and
+  RTO-to-nearest rules the proofs *derive* it from the bound-aware containment,
+  so an implementation should not re-check it there.
+
+Still unsound, and the ones to pin negatively: **RNE-RNE** — no rule exists, it
+is the last row of the paper's Table 2, and it is the pairing every `fp.FP*`
+context falls into by default — plus **RNA or RTE as an intermediate**, and
+**stochastic** on either side.
 
 The interesting call is `via=None`, which *derives* the tightest sound RTO
 intermediate rather than asking the user for one:
