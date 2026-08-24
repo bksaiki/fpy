@@ -6,11 +6,12 @@ comparing against a hand-written golden AST is brittle.  These tests assert
 
 1. **Structural shape** — the comprehension is gone, replaced by an `fp.empty`
    allocation and a loop that writes every slot.
-2. **Semantic equivalence** via the interpreter, on the shapes that decide the
-   size formula: one clause, several independent clauses, and a ragged flatten
-   whose length is a sum rather than a product.  The ragged edge cases are the
-   ones that caught the formula: an empty inner list, all-empty, empty-outer.
-3. **Refusals**, by the reason each gives.
+2. **Semantic equivalence** via the interpreter: one clause, several
+   independent clauses, a `TupleBinding` target, and `[row for row in xss]`,
+   whose outer list is fresh over the *same* inner lists.
+3. **Refusals**, by the reason each gives -- a dependent clause list, whose
+   length is a sum rather than a product, and the positions with no statement
+   slot.
 4. **The `where` contract** — a listing reports exactly what `where=None`
    rewrites.
 """
@@ -299,7 +300,8 @@ class TestPrecision:
 
     def test_the_lowered_form_matches_the_comprehension(self):
         """Element format *and* length survive, which is what makes lowering
-        free: see ``docs/todos/comprehension-lowering.md``."""
+        free: `Empty` starts at the bottom of the type and each `IndexedAssign`
+        joins the stored value back in."""
 
         @fp.fpy(ctx=fp.FP64)
         def comp(xs: list[fp.Real]) -> list[fp.Real]:

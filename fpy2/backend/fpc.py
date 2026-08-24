@@ -242,6 +242,21 @@ class _FPCoreCompileInstance(Visitor):
                     raise FPCoreCompileError('unexpected tensor element', elt)
         return tuple_binds
 
+    def _compile_comp_binding(self, tuple_id: str, target, idx: fpc.Expr):
+        """The bindings one comprehension clause's target needs.
+
+        Under the target's own name: `elt` is compiled against those.
+        """
+        match target:
+            case NamedId():
+                return [(str(target), fpc.Ref(fpc.Var(tuple_id), idx))]
+            case UnderscoreId():
+                return []
+            case TupleBinding():
+                return self._compile_tuple_binding(tuple_id, target, [idx])
+            case _:
+                raise RuntimeError('unreachable', target)
+
     def _compile_compareop(self, op: CompareOp):
         match op:
             case CompareOp.LT:
@@ -990,15 +1005,7 @@ class _FPCoreCompileInstance(Visitor):
 
             let_bindings = [(tuple_id, iterable)]
             tensor_dims: list[tuple[str, fpc.Expr]] = [(iter_id, _size0_expr(tuple_id))]
-            match target:
-                case NamedId():
-                    ref_bindings = [(str(target), fpc.Ref(fpc.Var(tuple_id), fpc.Var(iter_id)))]
-                case UnderscoreId():
-                    ref_bindings = []
-                case TupleBinding():
-                    ref_bindings = self._compile_tuple_binding(tuple_id, target, [fpc.Var(iter_id)])
-                case _:
-                    raise RuntimeError('unreachable', target)
+            ref_bindings = self._compile_comp_binding(tuple_id, target, fpc.Var(iter_id))
             return fpc.Let(let_bindings, fpc.Tensor(tensor_dims, fpc.LetStar(ref_bindings, elt)))
         else:
             # hard case:
@@ -1051,22 +1058,10 @@ class _FPCoreCompileInstance(Visitor):
                     # the outermost index is already below its own length
                     idx_expr = quot if i == 0 else fpc.Fmod(quot, fpc.Var(size_ids[i]))
                 idx_binds.append((iid, fpc.Ctx(idx_ctx, idx_expr)))
-            # reference variables, under the targets' own names since `elt` is
-            # compiled against those
             ref_binds: list[tuple[str, fpc.Expr]] = []
             for target, tid, iid in zip(e.targets, tuple_ids, idx_ids):
-                match target:
-                    case NamedId():
-                        ref_binds.append((str(target), fpc.Ref(fpc.Var(tid), fpc.Var(iid))))
-                    case UnderscoreId():
-                        pass
-                    case TupleBinding():
-                        ref_binds += self._compile_tuple_binding(tid, target, [fpc.Var(iid)])
-                    case _:
-                        raise RuntimeError('unreachable', target)
-            # element expression
+                ref_binds += self._compile_comp_binding(tid, target, fpc.Var(iid))
             elt = self._visit_expr(e.elt, ctx)
-            # compose the expression
             tensor_expr = fpc.Tensor([(iter_id, iter_expr)], fpc.LetStar(idx_binds, fpc.LetStar(ref_binds, elt)))
             return fpc.Let(tuple_binds, fpc.Let(size_binds, tensor_expr))
 

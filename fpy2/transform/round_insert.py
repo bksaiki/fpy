@@ -202,13 +202,12 @@ class _RoundInsertInstance(SiteRewriter):
         self._replaced = True
         return hoisted
 
-    # A compound statement's own sub-expression cannot carry a preamble.  For a
+    # A compound statement's own sub-expression carries no preamble.  For a
     # `while` condition that is soundness: the condition is re-evaluated every
     # iteration, and a preamble before the loop computes it once, which does not
-    # terminate.  For the rest it is the edit log: `SiteRewriter._visit_block`
-    # resets `_replaced` per statement, so a rewrite recorded while visiting the
-    # sub-expression is lost once the nested block is visited, and every later
-    # statement in the block mis-forwards.
+    # terminate.  The rest is scope -- those positions are evaluated exactly
+    # once, so lifting the suppression is a capability question (`CompToLoop`
+    # does hoist out of them).
     def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         return super()._visit_if1(stmt, None)[0], ctx
 

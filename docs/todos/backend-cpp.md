@@ -394,6 +394,46 @@ docstring for the transform side.
 A short package README pointing at this file and listing the public surface
 (`CppCompiler.compile` / `headers` / `helpers` / `prelude`, exception types).
 
+## Considered: lowering comprehensions in the pipeline
+
+`CompToLoop` (`fpy2/transform/comp_to_loop.py`) rewrites a comprehension into an
+`fp.empty` allocation plus a `for` loop. **Not wired into this pipeline, and the
+emitter keeps its own support**, measured both ways.
+
+The emitter already performs the same lowering, and better: `_emit_list_comp_at`
+opens a list build, emits one `for` per clause, and appends, so it never needs a
+length up front — `_open_list_build` picks `std::array` filled through a running
+index where the length was proven, `std::vector` with `push_back` otherwise.
+That is why every clause shape compiles here, including the ragged flatten the
+FPy-level lowering leaves alone.
+
+```cpp
+// [x * 2 for x in xs], xs proven length 3
+std::array<double, 3> _tmp1{};  size_t _tmp2 = 0;
+for (double x : xs) { _tmp1[_tmp2++] = (x * 2); }
+```
+
+Lowering first is a regression today: a multi-clause comprehension loses its
+`std::array` for a `std::vector`, because `ArraySizeInfer._const_int` folds
+`len(xs)` but not arithmetic over it, so `fp.empty(len(xs) * len(ys))` has no
+static size — see
+[array-size-integer-exactness.md](array-size-integer-exactness.md). The
+single-clause form also leaves a dead `auto&& _tmp1 = xs.size();`.
+
+**Deleting the emitter's support** — so that only statements introduce
+identifiers, one less case for storage selection — buys ~90 lines
+(`_visit_list_comp`, `_emit_list_comp_at`, `_open_comp_loop`, the `_emit_at`
+case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry) and costs two
+program classes that compile today: a dependent clause list, and a comprehension
+in an `IfExpr` branch. It would also leave the invariant local — 22 files outside
+this backend still handle `ListComp`. The invariant is a language property, so
+the route to it is making `CompToLoop` total rather than lowering per-backend;
+what that needs is the last gap in
+[rounding-axes.md](rounding-axes.md).
+
+Were it ever wired in, the slot is after `ReduceFusion` — which pattern-matches a
+syntactic `ListComp` — and before `Specialize`, inside `optimize=True`.
+
 ## Out of scope
 
 - Linking an external multi-precision library.

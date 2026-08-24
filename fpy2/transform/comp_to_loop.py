@@ -21,9 +21,8 @@ comprehension.  Lowering it is what makes that code schedulable.
 
 Several clauses are a cartesian product -- CPython's nesting, outermost clause
 first and the last index varying fastest -- so they become nested loops over the
-original targets with a running write index.  The index is *not* linearized into
-``i0 * n1 + i1``; the FPCore backend does that and gets it wrong for three or
-more clauses.
+original targets with a running write index.  Nested loops need no linearized
+``i0 * n1 + i1``, and so cannot get its stride wrong.
 
 The allocation needs its length up front, and `fp.empty` fills with ``UNINIT``
 rather than zero, so every slot must be written.  Both hold where the clause
@@ -115,7 +114,7 @@ def _mentions(e: Expr, names: set[NamedId]) -> bool:
 def dependent_clauses(e: ListComp) -> list[int]:
     """The clauses whose iterable reads a target bound by an earlier clause.
 
-    These are the ones the size expression has to evaluate a second time.
+    Non-empty means the length is not the product of the clause lengths.
     """
     out: list[int] = []
     bound: set[NamedId] = set()
@@ -158,7 +157,7 @@ class _CompToLoopInstance(SiteRewriter):
         if dependent_clauses(e):
             # `fp.empty` needs its length first and there is no `append`, so a
             # length that is not a product of the clause lengths has nowhere to
-            # come from.  A free-variable check decides it exactly.
+            # come from.
             return Declined(
                 'a later clause\'s iterable mentions an earlier clause\'s '
                 'target, so the length is not a product of the clause lengths'
@@ -204,7 +203,7 @@ class _CompToLoopInstance(SiteRewriter):
 
         acc = self.gensym.fresh('acc')
         size = self._size(iters, e)
-        if isinstance(size, (Len, Var)):
+        if isinstance(size, Len):
             # a bare length needs no arithmetic, so no exact-integer block
             out.append(Assign(acc, None, Empty(None, [size], loc), loc))
         else:
@@ -293,40 +292,11 @@ class _CompToLoopInstance(SiteRewriter):
         return IfExpr(cond, ift, iff, e.loc)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        # The condition is re-evaluated every iteration, and a loop hoisted
-        # before the `while` runs once -- so a comprehension there would be
-        # frozen at its first value.  Measured: it turns a terminating loop into
-        # an out-of-bounds slice.
+        # The condition is re-evaluated every iteration and a loop hoisted before
+        # the `while` runs once, freezing the comprehension at its first value --
+        # which turns a terminating loop into an out-of-bounds slice.
         stmt, _ = super()._visit_while(stmt, None)
         return stmt, ctx
-
-    # An `if` condition and a `for` iterable are each evaluated exactly once, so
-    # hoisting out of them is sound -- but `SiteRewriter._visit_block` clears
-    # `_replaced` for every statement of the nested block, which would lose the
-    # edit and mis-forward every statement after this one.  Carry it across.
-
-    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
-        cond = self._visit_expr(stmt.cond, ctx)
-        rewrote = self._replaced
-        body, _ = self._visit_block(stmt.body, ctx)
-        self._replaced = self._replaced or rewrote
-        return If1Stmt(cond, body, stmt.loc), ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx: Any):
-        cond = self._visit_expr(stmt.cond, ctx)
-        rewrote = self._replaced
-        ift, _ = self._visit_block(stmt.ift, ctx)
-        iff, _ = self._visit_block(stmt.iff, ctx)
-        self._replaced = self._replaced or rewrote
-        return IfStmt(cond, ift, iff, stmt.loc), ctx
-
-    def _visit_for(self, stmt: ForStmt, ctx: Any):
-        iterable = self._visit_expr(stmt.iterable, ctx)
-        rewrote = self._replaced
-        target = self._visit_binding(stmt.target, ctx)
-        body, _ = self._visit_block(stmt.body, ctx)
-        self._replaced = self._replaced or rewrote
-        return ForStmt(target, iterable, body, stmt.loc), ctx
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)

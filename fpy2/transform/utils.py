@@ -499,10 +499,12 @@ class SiteRewriter(DefaultTransformVisitor):
 
         A statement visitor emits its replacement into the list handed to it as
         the context and returns the last statement, so the count is the growth
-        of that list.  It signals the rewrite with `_replaced`, which it must set
-        *after* visiting any nested block, since those reset it.
+        of that list, and signals the rewrite with `_replaced`.
         """
         out: list[Stmt] = []
+        # a nested block must not lose an edit the enclosing statement already
+        # made -- e.g. one hoisted out of the `if` condition above this block
+        outer = self._replaced
         for pos, stmt in enumerate(block.stmts):
             self._site = (block, pos)
             self._replaced = False
@@ -512,6 +514,7 @@ class SiteRewriter(DefaultTransformVisitor):
             if self._replaced:
                 self._record(block, pos, len(out) - before)
                 self._replaced = False
+        self._replaced = outer
         return StmtBlock(out), None
 
     def _mark_exprs(self, block: StmtBlock, pos: int) -> None:

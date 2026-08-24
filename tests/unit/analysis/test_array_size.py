@@ -1205,7 +1205,7 @@ class TestArraySizeInfer:
         """The two ways of writing the same list agree on length.
 
         This is what makes lowering a comprehension to ``empty`` + a loop
-        size-preserving; see ``docs/todos/comprehension-lowering.md``.
+        size-preserving.
         """
         from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
 
