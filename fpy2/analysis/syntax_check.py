@@ -281,7 +281,10 @@ class SyntaxCheckInstance(Visitor):
             case NamedId():
                 if binding in bound:
                     raise FPySyntaxError(f'duplicate identifier `{binding}` in binding')
-                if fresh and binding in env:
+                # a name bound on only some paths (an earlier loop's temp,
+                # one `if` arm) cannot be read here, so it is not a definition
+                # this target could shadow
+                if fresh and binding in env and env[binding]:
                     raise FPySyntaxError(
                         f'iteration variable `{binding}` shadows an existing definition'
                     )

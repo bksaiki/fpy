@@ -115,6 +115,49 @@ class TestTargetScope:
 
         assert f([1, 2], [3, 4]) == 10
 
+    def test_earlier_loop_temp_does_not_block_a_later_target(self):
+        # `t` is bound on only some paths after the first loop, so it cannot be
+        # read and is not a definition the second target shadows
+        @fp.fpy
+        def f(xs: list[fp.Real]):
+            s = 0
+            for a in xs:
+                t = a * 2
+                s = s + t
+            for t in xs:
+                s = s + t
+            return s
+
+        assert f([1, 2]) == 9
+
+    def test_context_target_in_a_loop_does_not_block_a_later_target(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]):
+            s = 0
+            for a in xs:
+                with fp.FP64 as c:
+                    s = fp.round(s + a)
+            for c in xs:
+                s = s + c
+            return s
+
+        assert f([1, 2]) == 6
+
+    def test_loop_body_assign_of_the_target_does_not_escape(self):
+        # the shape `ZipElim` / `EnumerateElim` / `ForUnroll` emit: the target
+        # becomes a body-local `Assign`, which must not block a later loop
+        @fp.fpy
+        def f(xs: list[fp.Real]):
+            s = 0
+            for i in range(len(xs)):
+                a = xs[i]
+                s = s + a
+            for a in xs:
+                s = s + a
+            return s
+
+        assert f([1, 2]) == 6
+
     def test_sibling_comprehension_may_reuse_a_loop_target(self):
         @fp.fpy
         def f(xs: list[fp.Real]):
