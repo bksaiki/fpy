@@ -18,12 +18,12 @@ def clamp(x: fp.Real, a: fp.Real, b: fp.Real):
 @fp.fpy(meta={'name': 'vector addition'})
 def vector_add(x: list[fp.Real], y: list[fp.Real]):
     assert len(x) == len(y)
-    return [x + y for x, y in zip(x, y)]
+    return [xi + yi for xi, yi in zip(x, y)]
 
 @fp.fpy(meta={'name': 'vector subtraction'})
 def vector_sub(x: list[fp.Real], y: list[fp.Real]):
     assert len(x) == len(y)
-    return [x - y for x, y in zip(x, y)]
+    return [xi - yi for xi, yi in zip(x, y)]
 
 @fp.fpy(meta={'name': 'scalar-vector multiplication'})
 def vector_mul(s: fp.Real, x: list[fp.Real]):

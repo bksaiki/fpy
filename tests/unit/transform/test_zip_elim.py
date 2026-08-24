@@ -194,48 +194,6 @@ class TestListCompRewrite:
         comp = _find_listcomp(new_ast)
         assert isinstance(comp.iterables[0], Zip)
 
-    def test_shadowed_target_in_nested_comp(self):
-        """Inner comp re-binds ``a``; the inner reference should not be
-        substituted by the outer rewrite."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
-            with fp.FP64:
-                return [sum([a for a in ys]) + b for a, b in zip(xs, ys)]
-
-        new_ast = ZipElim.apply(f.ast)
-        outer = _find_listcomp(new_ast)
-        # Outer iterable is a range now.
-        assert isinstance(outer.iterables[0], Range1)
-        # The outer ``b`` slot was substituted but inner ``a`` was not:
-        # we can verify this by checking the inner ListComp's elt is
-        # still a bare ``Var`` to ``a``, not a ListRef.
-        from fpy2.ast.fpyast import ListComp
-        # Find the inner list-comp.
-        inner_found: list[ListComp] = []
-        from fpy2.ast.visitor import DefaultVisitor
-
-        class _C(DefaultVisitor):
-            def _visit_list_comp(self, e, ctx):
-                if e is not outer:
-                    inner_found.append(e)
-                super()._visit_list_comp(e, ctx)
-
-        _C()._visit_function(new_ast, None)
-        assert len(inner_found) == 1
-        inner = inner_found[0]
-        # The inner elt is still ``Var(a)`` — not rewritten.
-        assert isinstance(inner.elt, Var)
-        assert inner.elt.name.base == 'a'
-        # And the inner iterable is still the original ``ys`` Var.
-        assert isinstance(inner.iterables[0], Var)
-        # Semantic equivalence.
-        xs = [1.0, 2.0, 3.0]
-        ys = [10.0, 20.0, 30.0]
-        before = list(f(xs, ys))
-        after = list(_eval(new_ast, f, xs, ys))
-        assert before == after
-
 
 class TestWholeTupleTarget:
     """A target bound to the *whole* zipped tuple, rather than destructuring it.

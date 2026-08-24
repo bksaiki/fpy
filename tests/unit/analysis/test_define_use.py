@@ -121,3 +121,99 @@ class TestConstFoldOnLoopCond:
         for n in (0.0, 1.0, 3.0, 10.0):
             assert float(f(n, ctx=fp.FP64)) == float(g(n, ctx=fp.FP64)), \
                 f'runtime mismatch at n={n}'
+
+
+class TestTerminatedBranchJoin:
+    """A branch that returns is not a predecessor of the join, so a name the
+    surviving branch alone introduces still reaches the code after the ``if``.
+    Before the fix, ``ReachingDefs`` dropped it and ``DefineUse`` raised a bare
+    ``KeyError`` on the use.
+    """
+
+    def test_ift_returns_iff_introduces(self):
+        @fp.fpy
+        def f(c: bool):
+            if c:
+                return 0
+            else:
+                y = 1
+            return y
+
+        DefineUse.analyze(f.ast)
+        assert f(True) == 0 and f(False) == 1
+
+    def test_iff_returns_ift_introduces(self):
+        @fp.fpy
+        def f(c: bool):
+            if c:
+                y = 1
+            else:
+                return 0
+            return y
+
+        DefineUse.analyze(f.ast)
+        assert f(True) == 1 and f(False) == 0
+
+    def test_both_inner_branches_return(self):
+        # the outer `ift` terminates only because the nested `if` does
+        @fp.fpy
+        def f(c: bool, d: bool):
+            if c:
+                if d:
+                    return 0
+                else:
+                    return 1
+            else:
+                y = 2
+            return y
+
+        DefineUse.analyze(f.ast)
+        assert f(True, False) == 1 and f(False, False) == 2
+
+    def test_context_body_returns(self):
+        @fp.fpy
+        def f(c: bool):
+            if c:
+                with fp.FP64:
+                    return 0
+            else:
+                y = 1
+            return y
+
+        DefineUse.analyze(f.ast)
+        assert f(False) == 1
+
+    def test_intro_gets_an_is_intro_phi(self):
+        # `cpp/storage_infer` hoists a declaration only for an `is_intro` phi,
+        # so the join must carry one or the name is declared inside the branch
+        @fp.fpy
+        def f(c: bool):
+            if c:
+                return 0
+            else:
+                y = 1
+            return y
+
+        info = DefineUse.analyze(f.ast)
+        stmt = f.ast.body.stmts[0]
+        phis = {str(p.name): p for p in info.phis[stmt]}
+        assert 'y' in phis
+        assert phis['y'].is_intro
+
+    def test_redefinition_keeps_its_two_operand_phi(self):
+        # `x` exists before the `if`, so the surviving branch's redefinition
+        # still merges the normal way -- the storage classes must stay unified
+        @fp.fpy
+        def f(c: bool):
+            x = 100000
+            if c:
+                return 0
+            else:
+                x = 1
+            return x
+
+        info = DefineUse.analyze(f.ast)
+        stmt = f.ast.body.stmts[1]
+        phis = {str(p.name): p for p in info.phis[stmt]}
+        assert 'x' in phis and not phis['x'].is_intro
+        assert f(False) == 1

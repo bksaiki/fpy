@@ -9,6 +9,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..utils import Unionfind, default_repr
 from .defs import DefAnalysis
+from .reachability import Reachability, ReachabilityAnalysis
 
 __all__ = [
     'AssignDef',
@@ -315,6 +316,7 @@ class _ReachingDefs(DefaultVisitor):
 
     ast: FuncDef | StmtBlock
     def_ids: dict[StmtBlock, set[NamedId]]
+    reachability: ReachabilityAnalysis
 
     indices: Unionfind[int]
     idx_to_def: dict[int, Definition]
@@ -327,6 +329,7 @@ class _ReachingDefs(DefaultVisitor):
     def __init__(self, ast: FuncDef | StmtBlock, def_ids: dict[StmtBlock, set[NamedId]]):
         self.ast = ast
         self.def_ids = def_ids
+        self.reachability = Reachability.analyze(ast)
 
         self.indices = Unionfind()
         self.idx_to_def = {}
@@ -369,6 +372,12 @@ class _ReachingDefs(DefaultVisitor):
         new_ctx = ctx.copy()
         new_ctx[name] = idx
         return idx, new_ctx
+
+    def _terminates(self, block: StmtBlock) -> bool:
+        """Does no path reach the end of `block`?  Such a branch contributes
+        nothing to the join that follows it, so the join has one predecessor
+        and needs no phi -- matching `SyntaxCheck`'s terminated envs."""
+        return bool(block.stmts) and not self.reachability.has_exit[block.stmts[-1]]
 
     def _unify_def(self, i1: int, i2: int):
         """
@@ -434,6 +443,19 @@ class _ReachingDefs(DefaultVisitor):
             if d_ift != d_iff:
                 phi, ctx = self._add_phi(name, stmt, d_ift, d_iff, ctx)
                 phis[name] = phi
+        # (iii) an introduction in the one branch that reaches the join.  A
+        # branch that returns is not a predecessor, so the name is live after
+        # the `if` even though the intersection above misses it.  The phi has
+        # one real operand but is still needed: `is_intro` is what tells
+        # `cpp/storage_infer` to declare the name outside the branch.
+        ift_end = self._terminates(stmt.ift)
+        iff_end = self._terminates(stmt.iff)
+        if ift_end != iff_end:
+            live_out = iff_out if ift_end else ift_out
+            for name, d in live_out.items():
+                if name not in ctx:
+                    phi, ctx = self._add_phi(name, stmt, d, d, ctx)
+                    phis[name] = phi
         # record the phi nodes and return the updated context
         self.phis[stmt] = phis
         return ctx
