@@ -2,6 +2,7 @@
 
 from ..analysis import (
     AssignDef,
+    ContextScope,
     ContextUse,
     DefineUse,
     DefineUseAnalysis,
@@ -10,6 +11,7 @@ from ..analysis import (
     SyntaxCheck,
 )
 from ..ast import *
+from ..number import Context
 
 
 class _Eliminator(DefaultTransformVisitor):
@@ -237,17 +239,31 @@ class _Eliminator(DefaultTransformVisitor):
         return func, self.eliminated
 
 
-def _has_context(func: FuncDef) -> bool:
-    """Whether *func* contains a `with` statement at all."""
-    found = False
+def _same_context(inner: ContextScope, outer: ContextScope) -> bool:
+    """Whether *inner* installs the context already in force.
+
+    Both must be resolved: a symbolic context means *unknown*, and two unknowns
+    are not known to be equal.
+    """
+    return (
+        isinstance(inner.ctx, Context)
+        and isinstance(outer.ctx, Context)
+        and inner.ctx == outer.ctx
+    )
+
+
+def _enclosing_context(func: FuncDef) -> dict[int, ContextStmt | None]:
+    """Each `with` block in *func* keyed by id, mapped to the `with` block
+    around it -- `None` for one at function level.  Empty if *func* has none."""
+    out: dict[int, ContextStmt | None] = {}
 
     class _Finder(DefaultVisitor):
-        def _visit_context(self, stmt: ContextStmt, ctx: None):
-            nonlocal found
-            found = True
+        def _visit_context(self, stmt: ContextStmt, parent: ContextStmt | None):
+            out[id(stmt)] = parent
+            super()._visit_context(stmt, stmt)
 
     _Finder()._visit_function(func, None)
-    return found
+    return out
 
 
 class _DeadCodeEliminate:
@@ -263,30 +279,47 @@ class _DeadCodeEliminate:
         self.def_use = def_use
 
     def _dead_contexts(self) -> set[ContextStmt]:
-        """The `with` blocks whose installed context nothing observes.
+        """The `with` blocks that install a context to no effect.
 
-        Only operations and calls read the context -- a literal, a list literal,
-        a comparison and an indexed store are all exact -- so an empty use set
-        means the block does nothing but nest.  An operation inside a *nested*
-        `with` belongs to that inner scope, which is what makes the outer one
-        droppable.
+        Either nothing under the block observes it, or it installs the context
+        already in force.  Only operations and calls read a context -- a
+        literal, a list literal, a comparison and an indexed store are all
+        exact -- so an empty use set means the block does nothing but nest.  An
+        operation inside a *nested* `with` belongs to that inner scope, which is
+        what makes the outer one droppable.
         """
-        if not _has_context(self.func):
+        enclosing = _enclosing_context(self.func)
+        if not enclosing:
             return set()      # no `with`, so skip the analysis entirely
 
         ctx_use = ContextUse.analyze(self.func, def_use=self.def_use)
-        dead: set[ContextStmt] = set()
+        by_site = {id(s.site): s for s in ctx_use.scopes}
+        found: list[ContextStmt] = []
         for scope in ctx_use.scopes:
             stmt = scope.site
+            if not isinstance(stmt, ContextStmt):
+                continue
+            parent = enclosing[id(stmt)]
+            outer = by_site[id(parent) if parent is not None else id(self.func)]
             if (
-                isinstance(stmt, ContextStmt)
-                and not ctx_use.uses[scope]
+                (not ctx_use.uses[scope] or _same_context(scope, outer))
                 and self._target_unused(stmt)
                 # dropping the block skips the context expression too
                 and Purity.analyze_expr(stmt.ctx, self.def_use)
             ):
-                dead.add(stmt)
-        return dead
+                found.append(stmt)
+
+        # Both verdicts are read off *this* tree, so dropping a block invalidates
+        # them for the blocks around it: the uses of a dropped block move out to
+        # its parent, and its children's parent becomes its own.  Take only the
+        # innermost of any chain and let the elimination loop revisit the rest.
+        chosen = set(found)
+        for stmt in found:
+            parent = enclosing[id(stmt)]
+            while parent is not None:
+                chosen.discard(parent)
+                parent = enclosing[id(parent)]
+        return chosen
 
     def _target_unused(self, stmt: ContextStmt) -> bool:
         """Whether the block's `as` name, if any, is itself dead."""

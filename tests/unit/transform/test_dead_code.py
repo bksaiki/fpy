@@ -496,6 +496,54 @@ def _example_live_ctx_escapes_expect():
     return a, c
 
 
+# ----------------------------------------------------------------------
+# A `with` block that installs the context already in force.  It changes
+# nothing even though operations under it do read a context.
+
+
+@fp.fpy(ctx=fp.REAL)
+def _example_same_ctx_as_function(x: fp.Real) -> fp.Real:
+    with fp.REAL:
+        y = x * x
+    return y
+
+@fp.fpy(ctx=fp.REAL)
+def _example_same_ctx_as_function_expect(x: fp.Real) -> fp.Real:
+    y = x * x
+    return y
+
+
+# Two contexts that differ: only the outer is dead, and only after the
+# elimination loop revisits it.
+@fp.fpy(ctx=fp.FP64)
+def _example_diff_ctx_nested(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        with fp.FP32:
+            y = x * x
+    return y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_diff_ctx_nested_expect(x: fp.Real) -> fp.Real:
+    with fp.FP32:
+        y = x * x
+    return y
+
+
+# A symbolic context is *unknown*, not equal to anything -- the function has
+# no annotation, so the block has to stay.
+@fp.fpy
+def _example_symbolic_ctx(x: fp.Real) -> fp.Real:
+    with fp.REAL:
+        y = x * x
+    return y
+
+@fp.fpy
+def _example_symbolic_ctx_expect(x: fp.Real) -> fp.Real:
+    with fp.REAL:
+        y = x * x
+    return y
+
+
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_simple_1, _example_simple_1_expect),
     (_example_simple_2, _example_simple_2_expect),
@@ -534,6 +582,9 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_live_ctx_op, _example_live_ctx_op_expect),
     (_example_live_ctx_call, _example_live_ctx_call_expect),
     (_example_live_ctx_escapes, _example_live_ctx_escapes_expect),
+    (_example_same_ctx_as_function, _example_same_ctx_as_function_expect),
+    (_example_diff_ctx_nested, _example_diff_ctx_nested_expect),
+    (_example_symbolic_ctx, _example_symbolic_ctx_expect),
 ]
 
 
@@ -592,6 +643,68 @@ class TestDeadContext:
         hoisted = fp.transform.RoundElim.apply(f.ast)
         assert _with_count(hoisted) == 1
         assert _with_count(fp.transform.DeadCodeEliminate.apply(hoisted)) == 0
+
+    def test_the_same_context_twice_keeps_one(self):
+        """The regression this rule needs care about: the inner block is
+        redundant with the outer, and the outer looks unused only because the
+        inner one owns the multiply.  Dropping both would leave the multiply
+        under the function's own FP64."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                with fp.FP16:
+                    y = x * x
+            return y
+
+        out = fp.transform.DeadCodeEliminate.apply(f.ast)
+        assert _with_count(out) == 1
+        assert repr(fp.Function(out, runtime=f.runtime)(1.1)) == repr(f(1.1))
+
+    def test_alternating_rounding_rewrites_stop_diverging(self):
+        """`elim_round` and `insert_round` each hoist into a fresh block, so
+        alternating them nests one deeper every round.  Every block but the
+        innermost is dead, and the innermost then matches the function's own
+        context."""
+        import fpy2.strategies as st
+        from fpy2.types import RealType
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x * y
+
+        g = st.monomorphize(f, fp.FP64, [RealType(fp.FP32), RealType(fp.FP32)])
+        for _ in range(4):
+            g = st.insert_round(st.elim_round(g), fp.FP64)
+        assert _with_count(g.ast) == 8
+
+        out = fp.transform.DeadCodeEliminate.apply(g.ast)
+        assert _with_count(out) == 0
+        assert repr(fp.Function(out, runtime=g.runtime)(1.5, 2.5)) == repr(g(1.5, 2.5))
+
+    def test_the_unfold_pipeline_loses_its_redundant_blocks(self):
+        """The motivating case: `unfold_*` / `float_to_fixed` / `rescale_fixed`
+        emit `with fp.REAL:` inside scopes that are already REAL."""
+        import fpy2.strategies as st
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.BF16:
+                y = fp.round(x)
+            return y
+
+        g = st.rescale_fixed(st.float_to_fixed(
+            st.unfold_overflow(st.unfold_special(f), early_check=True)
+        ))
+        assert _with_count(g.ast) == 9
+
+        out = fp.Function(fp.transform.DeadCodeEliminate.apply(g.ast), runtime=g.runtime)
+        assert _with_count(out.ast) == 6
+        # the branches those blocks guard: nan, both infinities, both zeros, a
+        # normal value, an overflow and a subnormal
+        for v in (float('nan'), float('inf'), float('-inf'), 0.0, -0.0,
+                  1.5, -1.5, 1e40, -1e-42):
+            assert repr(out(v)) == repr(g(v)), f'disagree at {v}'
 
     def test_an_impure_context_expression_is_kept(self):
         """Dropping the block would skip evaluating the expression."""
