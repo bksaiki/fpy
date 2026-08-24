@@ -26,39 +26,33 @@ original targets with a running write index.  The index is *not* linearized into
 more clauses.
 
 The allocation needs its length up front, and `fp.empty` fills with ``UNINIT``
-rather than zero, so every slot must be written.  Both hold: FPy rejects ``if``
-filters in a comprehension, so the length is exactly the product of the clause
-lengths.  Where a later clause's iterable is independent of the earlier targets
-that product is the size expression; where it is not -- ``[b for a in xs for b in
-a]``, a ragged flatten -- the size is a nest of sums instead.
+rather than zero, so every slot must be written.  Both hold where the clause
+lengths multiply: FPy rejects ``if`` filters in a comprehension, so the length is
+exactly that product, and every slot is written.
 
-The size expression re-evaluates a *dependent* iterable, so the two traversals
-have to agree on the lengths: such an iterable must be pure and must not compute
-under a stochastic rounding context.  An independent iterable is bound to a
-temporary and evaluated once, so it is unconstrained.
+**This pass lowers what it can and leaves the rest alone.**  It never errors on a
+comprehension it cannot lower; :meth:`CompToLoop.refusals` names each one and
+why, and a caller that needs a comprehension-free program checks for itself.
 
-Declined, with a reason, when a dependent iterable is impure or stochastic, and
-where the loop cannot be emitted: a ``while`` condition, which is re-evaluated
-every iteration; an ``IfExpr`` branch, which is conditional; and inside another
-comprehension, until the outer one is lowered and gives the inner a slot.
+What it leaves:
+
+- **A dependent clause list** -- some clause's iterable mentions an earlier
+  clause's target, as in ``[b for a in xs for b in a]``.  The length is then a
+  sum rather than a product, and `fp.empty` has nowhere to get it: there is no
+  ``append``, and computing it up front would mean evaluating that iterable a
+  second time.
+- **A comprehension with no statement slot** -- a ``while`` condition, which is
+  re-evaluated every iteration; an ``IfExpr`` branch, which is conditional; and
+  one nested in another comprehension, which gets a slot once the outer one is
+  lowered, so a further pass takes it.
 """
 
 from typing import Any
 
-from ..analysis import (
-    ContextUse,
-    ContextUseAnalysis,
-    DefineUse,
-    DefineUseAnalysis,
-    PartialEval,
-    PartialEvalInfo,
-    Purity,
-    SyntaxCheck,
-)
+from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast.fpyast import (
     Add,
     Assign,
-    ContextStmt,
     Empty,
     Expr,
     ForStmt,
@@ -77,7 +71,6 @@ from ..ast.fpyast import (
     Range1,
     Stmt,
     StmtBlock,
-    Sum,
     TupleBinding,
     Var,
     WhileStmt,
@@ -140,8 +133,6 @@ class _CompToLoopInstance(SiteRewriter):
 
     func: FuncDef
     def_use: DefineUseAnalysis
-    ctx_use: ContextUseAnalysis
-    eval_info: PartialEvalInfo
     temp_id: NamedId
     gensym: Gensym
     where: int | Cursor | None
@@ -150,15 +141,11 @@ class _CompToLoopInstance(SiteRewriter):
         self,
         func: FuncDef,
         def_use: DefineUseAnalysis,
-        ctx_use: ContextUseAnalysis,
-        eval_info: PartialEvalInfo,
         where: int | Cursor | None = None,
         temp_id: NamedId | None = None,
     ):
         self.func = func
         self.def_use = def_use
-        self.ctx_use = ctx_use
-        self.eval_info = eval_info
         self.temp_id = NamedId('t') if temp_id is None else temp_id
         self.gensym = Gensym(reserved=def_use.names())
         self.where = where
@@ -166,110 +153,51 @@ class _CompToLoopInstance(SiteRewriter):
     # ------------------------------------------------------------------
     # Verification
 
-    def _stochastic(self, e: Expr) -> bool:
-        """Whether any operation in *e* rounds stochastically.
-
-        Such an expression can produce a different *length* on a second
-        evaluation, which would leave the allocation the wrong size.
-        """
-        outer = self
-        found = False
-
-        class _C(DefaultVisitor):
-            def _visit_expr(self, sub: Expr, ctx: None):
-                nonlocal found
-                if outer._rounds_unpredictably(sub):
-                    found = True
-                super()._visit_expr(sub, ctx)
-
-        _C()._visit_expr(e, None)
-        return found
-
-    def _rounds_unpredictably(self, sub: Expr) -> bool:
-        """Whether the operation *sub* might round stochastically.
-
-        A scope that does not resolve to a concrete context counts: we cannot
-        show it is not stochastic, and a wrong answer here silently mis-sizes
-        the allocation.
-        """
-        try:
-            scope = self.ctx_use.find_scope_from_use(sub)   # type: ignore[arg-type]
-        except (KeyError, TypeError):
-            return False   # not an operation, so it rounds nothing
-        found: object = scope.ctx
-        if not isinstance(found, Context) and isinstance(scope.site, ContextStmt):
-            # a symbolic scope: the introducing `with` may still name a context
-            found = self.eval_info.by_expr.get(scope.site.ctx)
-        return not isinstance(found, Context) or found.is_stochastic()
-
     def _verify(self, e: ListComp) -> None | Declined:
         """`None` where *e* may be lowered, else why not."""
-        for j in _dependent(e):
-            it = e.iterables[j]
-            if not Purity.analyze_expr(it, self.def_use):
-                return Declined(
-                    'a later iterable is impure, and the size expression has to '
-                    'evaluate it a second time'
-                )
-            if self._stochastic(it):
-                return Declined(
-                    'a later iterable rounds stochastically, so its length may '
-                    'differ between the size expression and the loop'
-                )
+        if _dependent(e):
+            # `fp.empty` needs its length first and there is no `append`, so a
+            # length that is not a product of the clause lengths has nowhere to
+            # come from.  A free-variable check decides it exactly.
+            return Declined(
+                'a later clause\'s iterable mentions an earlier clause\'s '
+                'target, so the length is not a product of the clause lengths'
+            )
         return None
 
     # ------------------------------------------------------------------
     # The rewrite
 
-    def _size(self, iters: list[NamedId | None], e: ListComp) -> Expr:
-        """An expression for the comprehension's length.
+    def _size(self, iters: list[NamedId], e: ListComp) -> Expr:
+        """The comprehension's length: the product of the clause lengths.
 
-        `iters[j]` is the temporary an *independent* iterable was bound to, or
-        `None` where the clause is dependent and must be rebuilt in place.
+        Every clause is independent -- a dependent one is left alone -- so each
+        length is available here, before the loops.
         """
         loc = e.loc
-        if all(t is not None for t in iters):
-            # every length is available here: the product
-            lens: list[Expr] = [Len(None, Var(t, loc), loc) for t in iters]  # type: ignore[arg-type]
-            size: Expr = lens[0]
-            for nxt in lens[1:]:
-                size = Mul(size, nxt, loc)
-            return size
-
-        # ragged: sum over each clause of the next clause's length
-        def nest(j: int) -> Expr:
-            src = Var(iters[j], loc) if iters[j] is not None else clone(e.iterables[j])  # type: ignore[arg-type]
-            if j == len(iters) - 1:
-                return Len(None, src, loc)
-            inner = ListComp([copy_target(e.targets[j])], [src], nest(j + 1), loc)
-            return Sum(None, inner, loc)
-
-        return nest(0)
+        size: Expr = Len(None, Var(iters[0], loc), loc)
+        for t in iters[1:]:
+            size = Mul(size, Len(None, Var(t, loc), loc), loc)
+        return size
 
     def _descend(self, e: ListComp, out: list) -> None:
         """Visit *e*'s children the way :meth:`_lower` would.
 
         The listing has to reach exactly what the rewrite reaches, or it counts a
-        site the rewrite will not take: only an *independent* iterable ends up
-        outside the loops, so only it keeps a statement slot.
+        site the rewrite will not take: the iterables end up outside the loops
+        and keep their statement slot, the element does not.
         """
-        dependent = set(_dependent(e))
-        for j, iterable in enumerate(e.iterables):
-            self._visit_expr(iterable, None if j in dependent else out)
+        for iterable in e.iterables:
+            self._visit_expr(iterable, out)
         self._visit_expr(e.elt, None)
 
     def _lower(self, e: ListComp, out: list) -> Expr:
         """Emit the allocation and loops into *out*; return the result `Var`."""
         loc = e.loc
-        dependent = set(_dependent(e))
 
-        # An independent iterable is evaluated once, here.  A dependent one has
-        # to stay inside the loop that binds what it reads.
-        iters: list[NamedId | None] = []
-        for j, iterable in enumerate(e.iterables):
-            if j in dependent:
-                iters.append(None)
-                continue
+        # Every clause is independent, so each iterable is evaluated once, here.
+        iters: list[NamedId] = []
+        for iterable in e.iterables:
             t = self.gensym.refresh(self.temp_id)
             out.append(Assign(t, None, self._visit_expr(iterable, out), loc))
             iters.append(t)
@@ -285,13 +213,11 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(Assign(acc, None, Empty(None, [Var(n, loc)], loc), loc))
 
         elt = self._visit_expr(e.elt, None)
-        if len(e.targets) == 1 and iters[0] is not None:
+        if len(e.targets) == 1:
             # One clause over a bound temporary: index it, so nothing is
             # loop-carried and the store index is the loop variable itself.
             idx = self.gensym.fresh('i')
-            first = iters[0]
-            assert first is not None
-            src = Var(first, loc)
+            src = Var(iters[0], loc)
             body = StmtBlock([
                 Assign(copy_target(e.targets[0]), None,
                        ListRef(clone(src), Var(idx, loc), loc), loc),
@@ -314,12 +240,9 @@ class _CompToLoopInstance(SiteRewriter):
             ], loc),
         ]
         for j in reversed(range(len(e.targets))):
-            bound = iters[j]
-            nest_src: Expr = (
-                Var(bound, loc) if bound is not None
-                else self._visit_expr(e.iterables[j], None)
-            )
-            inner = [ForStmt(copy_target(e.targets[j]), nest_src, StmtBlock(inner), loc)]
+            inner = [ForStmt(
+                copy_target(e.targets[j]), Var(iters[j], loc), StmtBlock(inner), loc,
+            )]
         out.extend(inner)
         return Var(acc, loc)
 
@@ -411,13 +334,7 @@ class _CompToLoopInstance(SiteRewriter):
 
 def _lister(func: FuncDef) -> _CompToLoopInstance:
     """The pass instance a listing walks `func` with."""
-    def_use = DefineUse.analyze(func)
-    return _CompToLoopInstance(
-        func,
-        def_use,
-        ContextUse.analyze(func, def_use=def_use),
-        PartialEval.apply(func),
-    )
+    return _CompToLoopInstance(func, DefineUse.analyze(func))
 
 
 class CompToLoop:
@@ -431,8 +348,8 @@ class CompToLoop:
         """The comprehensions of `func` this rewrite would lower, in visit
         order -- what a `where` index counts, and what `within` narrows.
 
-        A comprehension this pass refuses is not a site: it neither appears here
-        nor takes an index.  :meth:`refusals` says why.
+        A comprehension this pass cannot lower is not a site: it neither appears
+        here nor takes an index.  :meth:`refusals` says why each was left.
         """
         return _lister(func).list_sites(within)
 
@@ -440,7 +357,7 @@ class CompToLoop:
     def refusals(
         func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
-        """Why each comprehension of `func` that is not a site was refused."""
+        """Why each comprehension of `func` that is not a site was left alone."""
         return _lister(func).list_refusals(within)
 
     @staticmethod
@@ -449,11 +366,11 @@ class CompToLoop:
         temp_id: NamedId | None = None
     ) -> FuncDef:
         """
-        Lowers every qualifying comprehension of `func` into an allocation
-        plus a loop.
+        Lowers every comprehension of `func` it can into an allocation plus a
+        loop, and leaves the rest alone.
 
-        `where` selects one comprehension by index in visit order; `None`
-        lowers every one that verifies.
+        `where` selects one comprehension by index in visit order; `None` takes
+        every one it can lower.
         """
         return CompToLoop.apply_with_edits(
             func, where=where, temp_id=temp_id,
@@ -464,16 +381,20 @@ class CompToLoop:
         func: FuncDef, *, where: int | Cursor | None = None,
         temp_id: NamedId | None = None
     ) -> EditLog:
-        """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced.
+
+        A comprehension this pass cannot lower is left exactly as it was, so the
+        result is not guaranteed comprehension-free.  A caller that needs it to
+        be checks: :meth:`refusals` names what was left and why, and a comprehension
+        nested in another needs a further pass rather than being unlowerable at
+        all.
+        """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
 
         def_use = DefineUse.analyze(func)
-        ctx_use = ContextUse.analyze(func, def_use=def_use)
-        vtor = _CompToLoopInstance(
-            func, def_use, ctx_use, PartialEval.apply(func), where, temp_id,
-        )
+        vtor = _CompToLoopInstance(func, def_use, where, temp_id)
         out = vtor.apply()
         vtor.check_site('a comprehension')
         SyntaxCheck.check(out, ignore_unknown=True)

@@ -158,42 +158,48 @@ class TestCompToLoop:
 
 
 # ----------------------------------------------------------------------
-# The ragged case: the length is a sum, not a product
+# A dependent clause list is left alone
 
 
-class TestRagged:
-    @pytest.mark.parametrize('arg', [
-        [[1.0, 2.0], [3.0], [4.0, 5.0, 6.0]],   # uneven
-        [[], [7.0]],                            # an empty inner list
-        [[]],                                   # all empty
-        [],                                     # empty outer
-    ])
-    def test_agrees_on_the_shapes_that_break_a_product(self, arg):
-        assert _agree(_ragged, arg)
+class TestDependentClauses:
+    @pytest.mark.parametrize('f', ['_ragged', '_ragged3'])
+    def test_a_dependent_clause_list_is_left_alone(self, f):
+        """`[b for a in xss for b in a]` has length `sum(len(a) for a in xss)`,
+        not a product -- and `fp.empty` needs its length up front with no
+        `append` to fall back on.  So the pass leaves it exactly as it was."""
+        func = {'_ragged': _ragged, '_ragged3': _ragged3}[f]
+        assert CompToLoop.sites(func.ast) == []
+        why = CompToLoop.refusals(func.ast)
+        assert len(why) == 1 and 'mentions an earlier' in why[0][1]
+        assert CompToLoop.apply(func.ast).is_equiv(func.ast)
 
-    def test_the_size_is_a_sum_over_the_clause(self):
-        out = CompToLoop.apply(_ragged.ast)
-        # the size expression is a `sum` over a comprehension of lengths, so one
-        # comprehension survives this pass -- see the fixpoint test below
-        assert 'sum(' in out.format()
+    def test_left_alone_is_not_an_error(self):
+        """The pass never raises over a comprehension it cannot lower; a caller
+        that needs none left checks `refusals` itself."""
+        out = CompToLoop.apply(_ragged.ast)     # no exception
+        assert _count(out, ListComp) == 1
 
-    @pytest.mark.parametrize('arg', [
-        [[[1.0, 2.0], [3.0]], [[4.0]]],
-        [[[]], [[5.0, 6.0], []]],
-        [],
-    ])
-    def test_three_clauses_nest_the_sums(self, arg):
-        assert _agree(_ragged3, arg)
-
-    def test_a_dependent_iterable_with_ordinary_ops_still_lowers(self):
-        """Only *stochastic* re-evaluation is refused; exact arithmetic is fine."""
+    def test_dependence_is_a_free_variable_check_not_a_syntactic_one(self):
+        """`range(len(a))` mentions `a`, so it is dependent even though it is
+        not the bare target."""
 
         @fp.fpy(ctx=fp.FP64)
         def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
             return [a[i] for a in xss for i in range(len(a))]
 
-        assert CompToLoop.sites(f.ast)
-        assert _agree(f, [[1.0, 2.0], [3.0]])
+        assert CompToLoop.sites(f.ast) == []
+
+    def test_an_independent_clause_that_merely_looks_dependent_lowers(self):
+        """`range(k)` reads an outer name, not an earlier target."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], k: fp.Real) -> list[fp.Real]:
+            with fp.INTEGER:
+                n = fp.round(k)
+            return [x for x in xs for _ in range(n)]
+
+        assert len(CompToLoop.sites(f.ast)) == 1
+        assert _agree(f, [1.0, 2.0], 2.0)
 
 
 # ----------------------------------------------------------------------
@@ -201,19 +207,6 @@ class TestRagged:
 
 
 class TestFixpoint:
-    def test_ragged_clears_after_a_second_pass(self):
-        """The size expression is itself a comprehension, so a ragged
-        comprehension takes one pass per level to clear."""
-        ast, arg = _ragged.ast, [[1.0, 2.0], [3.0]]
-        want = _vals(_ragged(arg))
-        for _ in range(4):
-            nxt = CompToLoop.apply(ast)
-            if nxt.is_equiv(ast):
-                break
-            ast = nxt
-            assert _vals(Function(ast, runtime=_ragged.runtime)(arg)) == want
-        assert _count(ast, ListComp) == 0
-
     def test_a_nested_comprehension_clears_after_a_second_pass(self):
         """The inner one has no statement slot until the outer is lowered."""
 
@@ -242,21 +235,6 @@ class TestRefusals:
         assert len(why) == 1 and 'no statement-level position' in why[0][1]
         assert CompToLoop.apply(f.ast).is_equiv(f.ast)
 
-    def test_a_stochastic_dependent_iterable(self):
-        """The size expression evaluates a dependent iterable a second time, so
-        a length that could round differently would mis-size the allocation."""
-
-        @fp.fpy(ctx=fp.FP64)
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            with fp.IEEEContext(8, 32, num_randbits=4):
-                r = [b for a in xs for b in range(fp.round(a))]
-            return r
-
-        assert CompToLoop.sites(f.ast) == []
-        why = CompToLoop.refusals(f.ast)
-        assert len(why) == 1 and 'stochastically' in why[0][1]
-        assert CompToLoop.apply(f.ast).is_equiv(f.ast)
-
     def test_naming_a_refused_comprehension_by_cursor_says_why(self):
         @fp.fpy(ctx=fp.FP64)
         def f(xs: list[fp.Real], p: bool) -> list[fp.Real]:
@@ -281,7 +259,7 @@ class TestWhere:
         assert all(isinstance(c, ExprCursor) for c in found)
         assert [type(c.resolve()).__name__ for c in found] == ['ListComp']
 
-    @pytest.mark.parametrize('f', [_one, _product, _ragged, _pairs])
+    @pytest.mark.parametrize('f', [_one, _product, _pairs])
     def test_every_index_rewrites_and_none_does_them_all(self, f):
         listed = CompToLoop.sites(f.ast)
         assert listed
