@@ -112,7 +112,7 @@ def _mentions(e: Expr, names: set[NamedId]) -> bool:
     return found
 
 
-def _dependent(e: ListComp) -> list[int]:
+def dependent_clauses(e: ListComp) -> list[int]:
     """The clauses whose iterable reads a target bound by an earlier clause.
 
     These are the ones the size expression has to evaluate a second time.
@@ -155,7 +155,7 @@ class _CompToLoopInstance(SiteRewriter):
 
     def _verify(self, e: ListComp) -> None | Declined:
         """`None` where *e* may be lowered, else why not."""
-        if _dependent(e):
+        if dependent_clauses(e):
             # `fp.empty` needs its length first and there is no `append`, so a
             # length that is not a product of the clause lengths has nowhere to
             # come from.  A free-variable check decides it exactly.

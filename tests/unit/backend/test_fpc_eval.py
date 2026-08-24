@@ -12,7 +12,9 @@ bugs in list-reduce and ``for``-loop lowering:
 - raw Python ``str`` passed where an :class:`fpc.Expr` operand was expected,
   which prints as the bare identifier but has no evaluator dispatch;
 - FPy's loop *target* used as the FPCore ``for`` *dimension* variable, binding
-  it to the index instead of the element.
+  it to the index instead of the element;
+
+and of three more in list comprehensions (see :class:`TestListComp`).
 
 So these tests run each program twice — once through the FPy interpreter, once
 through titanfp's interpreter on the compiled core — and require agreement.
@@ -25,13 +27,13 @@ executing rather than string-matching too.
 import math
 
 import pytest
-
 import titanfp.fpbench.fpcast as fpc
 from titanfp.arithmetic.mpmf import MPMF, Interpreter
 
 import fpy2 as fp
 from fpy2 import FPCoreCompiler
 from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+from fpy2.backend.fpc import FPCoreCompileError
 
 
 def _size(fn, *dims: int):
@@ -67,6 +69,17 @@ def _both(fn, *args):
 def _agree(fn, *args):
     want, got = _both(fn, *args)
     assert want == got, f'FPy {want} != FPCore {got}\n  {_compile(fn).e}'
+    return want
+
+
+def _agree_list(fn, *args):
+    """``_agree`` for list-returning programs, comparing element by element:
+    order is the whole point for a comprehension, and a sum over the elements
+    would pass for any permutation of them."""
+    core = _compile(fn)
+    got = [float(v) for v in Interpreter().interpret(core, [_to_mpmf(a) for a in args])]
+    want = [float(v) for v in fn(*args)]
+    assert want == got, f'FPy {want} != FPCore {got}\n  {core.e}'
     return want
 
 
@@ -366,3 +379,109 @@ class TestBooleanReduce:
         bad = [o for o in _operands(_compile(self._reduce(op, 3)).e)
                if isinstance(o, str)]
         assert not bad, f'bare str operands in emitted core: {bad}'
+
+
+class TestListComp:
+    """A comprehension lowers to a ``tensor``; several clauses lower to one
+    ``tensor`` over the product of the lengths, with the iteration variable
+    de-linearized into an index per clause.
+
+    Three bugs lived on that multi-clause path, all of which print cleanly:
+    reference bindings renamed with ``gensym.refresh`` while the element kept
+    the original target names; every index built against a hardcoded ``k``
+    rather than the tensor's own variable; and the middle index divided by
+    ``size_ids[1:]`` where its own comment said ``size_ids[i+1:]``.
+    """
+
+    def test_one_clause(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [x * x for x in xs]
+
+        assert _agree_list(_size(f, 3), [1.0, 2.0, 4.0]) == [1.0, 4.0, 16.0]
+
+    def test_two_clauses(self):
+        """The cartesian product, last clause varying fastest.  This is where
+        the element referenced the un-renamed target and went unbound."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [(x * 10) + y for x in xs for y in ys]
+
+        got = _agree_list(_size(f, 2, 3), [1.0, 2.0], [1.0, 2.0, 3.0])
+        assert got == [11.0, 12.0, 13.0, 21.0, 22.0, 23.0]
+
+    def test_three_clauses_with_distinct_lengths(self):
+        """Distinct lengths and a digit per clause, so the index arithmetic is
+        readable in the result: a wrong divisor repeats or skips combinations.
+        Equal lengths would not do -- the middle bug is a permutation there."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real], zs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [((x * 100) + (y * 10)) + z for x in xs for y in ys for z in zs]
+
+        got = _agree_list(
+            _size(f, 2, 3, 4),
+            [1.0, 2.0], [1.0, 2.0, 3.0], [1.0, 2.0, 3.0, 4.0],
+        )
+        assert got == [float(f'{x}{y}{z}')
+                       for x in (1, 2) for y in (1, 2, 3) for z in (1, 2, 3, 4)]
+
+    def test_a_program_variable_named_k(self):
+        """The index expressions must use the tensor's own variable.  With `k`
+        already taken the tensor gets `k2`, and a hardcoded `k` then reads the
+        *program's* `k` -- a core that evaluates fine and is simply wrong."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real], k: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                return [((x * 10) + y) * k for x in xs for y in ys]
+
+        got = _agree_list(_size(f, 2, 2), [1.0, 2.0], [1.0, 2.0], 2.0)
+        assert got == [22.0, 24.0, 42.0, 44.0]
+
+    def test_underscore_target(self):
+        """An underscore binds nothing, so its clause contributes a length and
+        no reference binding."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [y for _ in xs for y in ys]
+
+        got = _agree_list(_size(f, 2, 3), [0.0, 0.0], [7.0, 8.0, 9.0])
+        assert got == [7.0, 8.0, 9.0, 7.0, 8.0, 9.0]
+
+    @pytest.mark.parametrize('clauses', [1, 2])
+    def test_tuple_binding_target(self, clauses):
+        """A destructured target indexes the *element* position last: a list of
+        pairs is `t[i][0]`, not `t[0][i]`.  Transposed, it read down one column
+        instead of across each pair -- values, not an error."""
+        if clauses == 1:
+            @fp.fpy
+            def f(ps: list[fp.Real], qs: list[fp.Real], zs: list[fp.Real]) -> list[fp.Real]:
+                with fp.FP64:
+                    return [a + b for a, b in zip(ps, qs)]
+        else:
+            @fp.fpy
+            def f(ps: list[fp.Real], qs: list[fp.Real], zs: list[fp.Real]) -> list[fp.Real]:
+                with fp.FP64:
+                    return [(a + b) * z for a, b in zip(ps, qs) for z in zs]
+
+        got = _agree_list(_size(f, 2, 2, 2), [1.0, 2.0], [10.0, 20.0], [1.0, 3.0])
+        assert got == ([11.0, 22.0] if clauses == 1 else [11.0, 33.0, 22.0, 66.0])
+
+    def test_dependent_clauses_are_refused(self):
+        """`[b for a in xss for b in a]` has no FPCore form here: the iterables
+        are hoisted into one `let` outside the tensor, so `a` would escape its
+        binder, and the extent is the product of the lengths, which a ragged
+        flatten does not have."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
+            with fp.FP64:
+                return [b for a in xss for b in a]
+
+        f.ast.args[0].type = ListTypeAnn(
+            ListTypeAnn(RealTypeAnn(None, None), 2, None), 2, None,
+        )
+        with pytest.raises(FPCoreCompileError, match='mentions an earlier target'):
+            _compile(f)

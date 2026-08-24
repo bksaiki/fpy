@@ -20,6 +20,7 @@ from ..transform import (
     IfBundling,
     WhileBundling,
 )
+from ..transform.comp_to_loop import dependent_clauses
 from ..transform.free_var_elim import unclosed_data_free_vars
 from ..types import BoolType, ContextType, ListType, TupleType, Type
 from ..utils import Gensym
@@ -227,13 +228,15 @@ class _FPCoreCompileInstance(Visitor):
     def _compile_tuple_binding(self, tuple_id: str, binding: TupleBinding, pos: list[fpc.Expr]):
         tuple_binds: list[tuple[str, fpc.Expr]] = []
         for i, elt in enumerate(binding):
+            # `pos` indexes the outer dimensions, so the element position goes
+            # last: a comprehension over pairs is `t[i][0]`, not `t[0][i]`
             match elt:
                 case Id():
-                    idxs = [fpc.Integer(i), *pos]
+                    idxs = [*pos, fpc.Integer(i)]
                     tuple_bind = (str(elt), fpc.Ref(fpc.Var(tuple_id), *idxs))
                     tuple_binds.append(tuple_bind)
                 case TupleBinding():
-                    idxs = [fpc.Integer(i), *pos]
+                    idxs = [*pos, fpc.Integer(i)]
                     tuple_binds += self._compile_tuple_binding(tuple_id, elt, idxs)
                 case _:
                     raise FPCoreCompileError('unexpected tensor element', elt)
@@ -1009,6 +1012,15 @@ class _FPCoreCompileInstance(Visitor):
             #         (let ([v0 (ref t0 i0)] ...)
             #           <elt>))))
 
+            # every iterable is hoisted into one `let` outside the tensor, and
+            # the extent is the product of the lengths, so a clause iterating
+            # over an earlier target has neither a binder nor a length here
+            if dependent_clauses(e):
+                raise FPCoreCompileError(
+                    'a list comprehension whose iterable mentions an earlier '
+                    'target is not FPCore-compilable', e
+                )
+
             # bind the tuples to temporaries
             tuple_ids = [str(self.gensym.fresh('t')) for _ in e.targets]
             tuple_binds: list[tuple[str, fpc.Expr]] = [
@@ -1021,34 +1033,37 @@ class _FPCoreCompileInstance(Visitor):
                 (sid, _size0_expr(tid))
                 for sid, tid in zip(size_ids, tuple_ids)
             ]
-            # bind the indices to temporaries
+            # iteration variable, over the product of the lengths
+            iter_ctx = { 'precision': 'integer'}
+            iter_id = str(self.gensym.fresh('k'))
+            iter_expr = fpc.Ctx(iter_ctx, _nary_mul([fpc.Var(sid) for sid in size_ids]))
+            # de-linearize `k` into one index per clause, last varying fastest
             idx_ctx = { 'precision': 'integer', 'round': 'toZero' }
             idx_ids = [str(self.gensym.fresh('i')) for _ in e.targets]
             idx_binds: list[tuple[str, fpc.Expr]] = []
             for i, iid in enumerate(idx_ids):
-                if i == 0:
-                    mul_expr = _nary_mul([fpc.Var(id) for id in size_ids[1:]])
-                    idx_expr = fpc.Ctx(idx_ctx, fpc.Div(fpc.Var('k'), mul_expr))
-                elif i == len(size_ids) - 1:
-                    idx_expr = fpc.Ctx(idx_ctx, fpc.Fmod(fpc.Var('k'), fpc.Var(size_ids[i])))
+                if i == len(size_ids) - 1:
+                    idx_expr = fpc.Fmod(fpc.Var(iter_id), fpc.Var(size_ids[i]))
                 else:
-                    mul_expr = _nary_mul([fpc.Var(id) for id in size_ids[1:]])
-                    idx_expr = fpc.Ctx(idx_ctx, fpc.Fmod(fpc.Div(fpc.Var('k'), mul_expr), fpc.Var(size_ids[i])))
-                idx_binds.append((iid, idx_expr))
-            # iteration variable
-            iter_ctx = { 'precision': 'integer'}
-            iter_id = str(self.gensym.fresh('k'))
-            iter_expr = fpc.Ctx(iter_ctx, _nary_mul([fpc.Var(sid) for sid in size_ids]))
-            # reference variables
+                    # `size_ids[i+1:]`: the extent of everything faster than `i`
+                    stride = _nary_mul([fpc.Var(sid) for sid in size_ids[i+1:]])
+                    quot = fpc.Div(fpc.Var(iter_id), stride)
+                    # the outermost index is already below its own length
+                    idx_expr = quot if i == 0 else fpc.Fmod(quot, fpc.Var(size_ids[i]))
+                idx_binds.append((iid, fpc.Ctx(idx_ctx, idx_expr)))
+            # reference variables, under the targets' own names since `elt` is
+            # compiled against those
             ref_binds: list[tuple[str, fpc.Expr]] = []
             for target, tid, iid in zip(e.targets, tuple_ids, idx_ids):
                 match target:
                     case NamedId():
-                        ref_id = str(self.gensym.refresh(target))
-                        ref_bind = (ref_id, fpc.Ref(fpc.Var(tid), fpc.Var(iid)))
-                        ref_binds.append(ref_bind)
+                        ref_binds.append((str(target), fpc.Ref(fpc.Var(tid), fpc.Var(iid))))
+                    case UnderscoreId():
+                        pass
                     case TupleBinding():
                         ref_binds += self._compile_tuple_binding(tid, target, [fpc.Var(iid)])
+                    case _:
+                        raise RuntimeError('unreachable', target)
             # element expression
             elt = self._visit_expr(e.elt, ctx)
             # compose the expression
