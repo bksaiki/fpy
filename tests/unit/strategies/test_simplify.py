@@ -88,8 +88,9 @@ def _just_copy_prop(x: fp.Real) -> fp.Real:
 
 @fp.fpy
 def _just_copy_prop_expect(x: fp.Real) -> fp.Real:
-    with fp.FP64:
-        return x
+    # the copies were the only statements under the `with`, and a bare `return`
+    # reads no context, so the block goes too
+    return x
 
 
 @fp.fpy
@@ -103,8 +104,9 @@ def _just_dead_branches(x: fp.Real) -> fp.Real:
 
 @fp.fpy
 def _just_dead_branches_expect(x: fp.Real) -> fp.Real:
-    with fp.FP64:
-        return x
+    # once the dead branch and the assert are gone, nothing under the `with`
+    # reads the context
+    return x
 
 
 @fp.fpy
@@ -136,8 +138,8 @@ def _branch_merge(c: bool) -> fp.Real:
 
 @fp.fpy
 def _branch_merge_expect(c: bool) -> fp.Real:
-    with fp.FP64:
-        return 5
+    # the merged constant is exact, so the block has no use left
+    return 5
 
 
 _examples: list[tuple[fp.Function, fp.Function]] = [

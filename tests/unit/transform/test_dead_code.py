@@ -351,6 +351,151 @@ def _example_tuple_nested_scrub_expect(x: fp.Real) -> fp.Real:
     return c + x
 
 
+# ----------------------------------------------------------------------
+# A `with` block whose installed context nothing observes.  Only operations
+# and calls read the context, so a block over literals, copies, comparisons
+# or a nested `with` only nests, and its body is spliced into the parent.
+
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_pass(y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        pass
+    return y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_pass_expect(y: fp.Real) -> fp.Real:
+    return y
+
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_literal(y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        x = 1.0
+    return x + y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_literal_expect(y: fp.Real) -> fp.Real:
+    x = 1.0
+    return x + y
+
+
+# The inner block owns the operation, so the outer one has no use of its own.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_nested(y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        with fp.FP32:
+            z = y + y
+    return z
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_nested_expect(y: fp.Real) -> fp.Real:
+    with fp.FP32:
+        z = y + y
+    return z
+
+
+# Several statements: the whole body lifts, in order.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_many_stmts(xs: list[fp.Real]) -> fp.Real:
+    with fp.FP16:
+        a = xs[0]
+        b = xs[1]
+        c = a
+    return b + c
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_many_stmts_expect(xs: list[fp.Real]) -> fp.Real:
+    a = xs[0]
+    b = xs[1]
+    c = a
+    return b + c
+
+
+# A comparison is exact, so a block holding only one is dead.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_compare(x: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.FP64:
+        if x > y:
+            return x
+        else:
+            return y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_compare_expect(x: fp.Real, y: fp.Real) -> fp.Real:
+    if x > y:
+        return x
+    else:
+        return y
+
+
+# Nested in a loop body: the splice lands in the `for` block, not the function.
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_in_loop(xs: list[fp.Real]) -> fp.Real:
+    a = 0.0
+    for x in xs:
+        with fp.FP16:
+            y = x
+        a = a + y
+    return a
+
+@fp.fpy(ctx=fp.FP64)
+def _example_dead_ctx_in_loop_expect(xs: list[fp.Real]) -> fp.Real:
+    a = 0.0
+    for x in xs:
+        y = x
+        a = a + y
+    return a
+
+
+# An operation under the block is a use, so the block stays.
+@fp.fpy(ctx=fp.FP64)
+def _example_live_ctx_op(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        y = x * x
+    return y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_live_ctx_op_expect(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        y = x * x
+    return y
+
+
+@fp.fpy(ctx=fp.FP64)
+def _example_ctx_callee(x: fp.Real) -> fp.Real:
+    return x * x
+
+
+# A call inherits the ambient context, so it counts as a use.
+@fp.fpy(ctx=fp.FP64)
+def _example_live_ctx_call(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        y = _example_ctx_callee(x)
+    return y
+
+@fp.fpy(ctx=fp.FP64)
+def _example_live_ctx_call_expect(x: fp.Real) -> fp.Real:
+    with fp.FP16:
+        y = _example_ctx_callee(x)
+    return y
+
+
+# The block binds a name that escapes, so it stays even though no operation
+# under it reads the context.
+@fp.fpy
+def _example_live_ctx_escapes():
+    with fp.MPFixedContext(-4) as c:
+        a = 1.0
+    return a, c
+
+@fp.fpy
+def _example_live_ctx_escapes_expect():
+    with fp.MPFixedContext(-4) as c:
+        a = 1.0
+    return a, c
+
+
 _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_simple_1, _example_simple_1_expect),
     (_example_simple_2, _example_simple_2_expect),
@@ -380,7 +525,20 @@ _examples: list[tuple[fp.Function, fp.Function]] = [
     (_example_tuple_drop_all_unused, _example_tuple_drop_all_unused_expect),
     (_example_tuple_drop_with_underscore, _example_tuple_drop_with_underscore_expect),
     (_example_tuple_nested_scrub, _example_tuple_nested_scrub_expect),
+    (_example_dead_ctx_pass, _example_dead_ctx_pass_expect),
+    (_example_dead_ctx_literal, _example_dead_ctx_literal_expect),
+    (_example_dead_ctx_nested, _example_dead_ctx_nested_expect),
+    (_example_dead_ctx_many_stmts, _example_dead_ctx_many_stmts_expect),
+    (_example_dead_ctx_compare, _example_dead_ctx_compare_expect),
+    (_example_dead_ctx_in_loop, _example_dead_ctx_in_loop_expect),
+    (_example_live_ctx_op, _example_live_ctx_op_expect),
+    (_example_live_ctx_call, _example_live_ctx_call_expect),
+    (_example_live_ctx_escapes, _example_live_ctx_escapes_expect),
 ]
+
+
+def _with_count(ast) -> int:
+    return str(fp.Function(ast, runtime=None).format()).count('with ')
 
 
 class TestDeadCode():
@@ -390,3 +548,61 @@ class TestDeadCode():
             f_opt = fp.transform.DeadCodeEliminate.apply(f.ast)
             f_opt.name = f_expect.name
             assert f_opt.is_equiv(f_expect.ast), f'expect:\n{f_expect.format()}\nactual:\n{f_opt.format()}'
+
+
+class TestDeadContext:
+    """Dropping a `with` whose context nothing observes.
+
+    The table above compares shapes; these check what a shape comparison
+    cannot -- that values survive, and that the elimination loop reaches the
+    blocks other rules strand.
+    """
+
+    def test_values_survive_the_splice(self):
+        f_opt = fp.Function(
+            fp.transform.DeadCodeEliminate.apply(_example_dead_ctx_literal.ast),
+            runtime=_example_dead_ctx_literal.runtime,
+        )
+        for y in (0.0, 1.5, -3.25):
+            assert repr(f_opt(y)) == repr(_example_dead_ctx_literal(y))
+
+    def test_an_unused_assign_strands_its_block(self):
+        """The elimination loop is what makes this work: removing `y` leaves the
+        block with nothing that reads the context, so the next round drops it."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                y = x * x
+            return x
+
+        out = fp.transform.DeadCodeEliminate.apply(f.ast)
+        assert _with_count(out) == 0
+        assert repr(fp.Function(out, runtime=f.runtime)(1.5)) == repr(f(1.5))
+
+    def test_an_eliminated_rounding_strands_its_block(self):
+        """`RoundElim` is the main producer: dropping the only rounding in a
+        block leaves the context with no use."""
+
+        @fp.fpy
+        def f():
+            with fp.IEEEContext(8, 32, fp.RM.RNE):
+                return fp.round(0)
+
+        hoisted = fp.transform.RoundElim.apply(f.ast)
+        assert _with_count(hoisted) == 1
+        assert _with_count(fp.transform.DeadCodeEliminate.apply(hoisted)) == 0
+
+    def test_an_impure_context_expression_is_kept(self):
+        """Dropping the block would skip evaluating the expression."""
+
+        def make_ctx():
+            return fp.FP16
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            with make_ctx():
+                y = 1.0
+            return y + x
+
+        assert _with_count(fp.transform.DeadCodeEliminate.apply(f.ast)) == 1

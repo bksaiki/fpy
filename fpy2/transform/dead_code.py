@@ -2,6 +2,7 @@
 
 from ..analysis import (
     AssignDef,
+    ContextUse,
     DefineUse,
     DefineUseAnalysis,
     PhiDef,
@@ -20,6 +21,7 @@ class _Eliminator(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     unused_assign: set[Assign]
     unused_fv: set[NamedId]
+    dead_ctx: set[ContextStmt]
     eliminated: bool
 
     def __init__(
@@ -27,12 +29,14 @@ class _Eliminator(DefaultTransformVisitor):
         func: FuncDef,
         def_use: DefineUseAnalysis,
         unused_assign: set[Assign],
-        unused_fv: set[NamedId]
+        unused_fv: set[NamedId],
+        dead_ctx: set[ContextStmt],
     ):
         self.func = func
         self.def_use = def_use
         self.unused_assign = unused_assign
         self.unused_fv = unused_fv
+        self.dead_ctx = dead_ctx
         self.eliminated = False
 
     def _is_empty_block(self, block: StmtBlock) -> bool:
@@ -162,22 +166,13 @@ class _Eliminator(DefaultTransformVisitor):
         return super()._visit_while(stmt, ctx)
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
-        # eliminate if the body is empty
         body, _ = self._visit_block(stmt.body, ctx)
-
-        # check if the name is bound
-        if isinstance(stmt.target, NamedId):
-            d = self.def_use.find_def_from_site(stmt.target, stmt)
-            if len(self.def_use.uses[d]) == 0:
-                # context variable is never used -> so the context can be eliminated
-                if len(body.stmts) == 1 and isinstance(body.stmts[0], PassStmt):
-                    # empty body -> eliminate context statement
-                    self.eliminated = True
-                    return None, ctx
-                elif len(body.stmts) == 1 and isinstance(body.stmts[0], ContextStmt):
-                    # nested context statements -> eliminate this level
-                    self.eliminated = True
-                    return body.stmts[0], ctx
+        if stmt in self.dead_ctx:
+            # nothing under it observes the context, so the block only nests:
+            # splice the body into the enclosing one.  A body of `pass` leaves a
+            # stray `pass` behind, which `_visit_pass` then drops.
+            self.eliminated = True
+            return body, ctx
 
         s = ContextStmt(stmt.target, stmt.ctx, body, stmt.loc)
         return s, ctx
@@ -242,6 +237,19 @@ class _Eliminator(DefaultTransformVisitor):
         return func, self.eliminated
 
 
+def _has_context(func: FuncDef) -> bool:
+    """Whether *func* contains a `with` statement at all."""
+    found = False
+
+    class _Finder(DefaultVisitor):
+        def _visit_context(self, stmt: ContextStmt, ctx: None):
+            nonlocal found
+            found = True
+
+    _Finder()._visit_function(func, None)
+    return found
+
+
 class _DeadCodeEliminate:
     """
     Dead code elimination analysis.
@@ -253,6 +261,39 @@ class _DeadCodeEliminate:
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.def_use = def_use
+
+    def _dead_contexts(self) -> set[ContextStmt]:
+        """The `with` blocks whose installed context nothing observes.
+
+        Only operations and calls read the context -- a literal, a list literal,
+        a comparison and an indexed store are all exact -- so an empty use set
+        means the block does nothing but nest.  An operation inside a *nested*
+        `with` belongs to that inner scope, which is what makes the outer one
+        droppable.
+        """
+        if not _has_context(self.func):
+            return set()      # no `with`, so skip the analysis entirely
+
+        ctx_use = ContextUse.analyze(self.func, def_use=self.def_use)
+        dead: set[ContextStmt] = set()
+        for scope in ctx_use.scopes:
+            stmt = scope.site
+            if (
+                isinstance(stmt, ContextStmt)
+                and not ctx_use.uses[scope]
+                and self._target_unused(stmt)
+                # dropping the block skips the context expression too
+                and Purity.analyze_expr(stmt.ctx, self.def_use)
+            ):
+                dead.add(stmt)
+        return dead
+
+    def _target_unused(self, stmt: ContextStmt) -> bool:
+        """Whether the block's `as` name, if any, is itself dead."""
+        if not isinstance(stmt.target, NamedId):
+            return True
+        d = self.def_use.find_def_from_site(stmt.target, stmt)
+        return len(self.def_use.uses[d]) == 0
 
     def apply(self):
         # elimination status
@@ -304,7 +345,10 @@ class _DeadCodeEliminate:
                     unused_assign.add(rhs.site)
 
             # run code eliminator
-            self.func, eliminated = _Eliminator(self.func, self.def_use, unused_assign, unused_fv)._apply()
+            self.func, eliminated = _Eliminator(
+                self.func, self.def_use, unused_assign, unused_fv,
+                self._dead_contexts(),
+            )._apply()
             eliminated_any |= eliminated
             if not eliminated:
                 return self.func, eliminated_any
@@ -324,7 +368,8 @@ class DeadCodeEliminate:
     - collapses trivially-true / trivially-false ``if`` / ``while``
     - removes ``assert True`` and pure ``EffectStmt`` s
     - removes self-assignments (``x = x``) and stray ``pass``
-    - drops empty bodies and unused ``with``-block targets
+    - drops a ``with`` block whose installed context nothing under it
+      observes, splicing its body into the enclosing block
     """
 
     @staticmethod
