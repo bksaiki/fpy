@@ -17,13 +17,20 @@ from .analysis import (
     exact_unop,
     is_bottom,
     round_is_identity,
+    to_abstract,
 )
-from .double_round import derive_intermediate, double_round_ok
+from .double_round import (
+    DoubleRoundOp,
+    derive_intermediate,
+    double_round_ok,
+    double_round_op_ok,
+)
 from .format import AbstractableFormat, AbstractFormat
 
 __all__ = [
     'AbstractFormat',
     'AbstractableFormat',
+    'DoubleRoundOp',
     'FormatAnalysis',
     'FormatBound',
     'FormatInfer',
@@ -35,6 +42,7 @@ __all__ = [
     'TupleFormat',
     'derive_intermediate',
     'double_round_ok',
+    'double_round_op_ok',
     'exact_binop',
     'exact_exp2',
     'exact_logb',
@@ -42,4 +50,5 @@ __all__ = [
     'exact_unop',
     'is_bottom',
     'round_is_identity',
+    'to_abstract',
 ]

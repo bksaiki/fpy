@@ -29,7 +29,8 @@ def split_round(
     the operation already rounds to, read from the program.
     :func:`fpy2.analysis.format_infer.derive_intermediate` computes a suitable
     intermediate for a target, so a caller need not work out the extra precision
-    by hand.
+    by hand; pass it an `op` to get one sized for that operation's own rule
+    instead of a round-to-odd one.
 
     The sites are individual rounded operations — the complement of
     :func:`fpy2.strategies.insert_round`'s, which takes the exact ones.  An
@@ -37,12 +38,21 @@ def split_round(
     explicit rounding back to the target in the enclosing block, since an
     assignment rounds nothing in FPy.
 
-    Most pairs are unsound and refused.  In particular **round-to-nearest over
-    round-to-nearest is not sound**, whatever the intermediate's width — and
-    every ``fp.FP*`` context is round-to-nearest, so a hand-written program
-    almost always wants a round-to-odd intermediate.  Also refused: a scope that
-    rounds exactly or is symbolic, a stochastic context, a bounded intermediate,
-    and an operation with nowhere to put the block.
+    Most pairs are unsound and refused.  The one rule that holds for arbitrary
+    reals covers nine mode pairs of sixty-four, and **round-to-nearest over
+    round-to-nearest is not among them** at any width — so a program written in
+    ``fp.FP*`` contexts throughout needs one of two narrower rules, each
+    depending on *which operation* is split: either the intermediate represents
+    the operation's exact result, and then the modes do not matter, or the
+    operation is ``+``, ``-``, ``/`` or ``sqrt``, both contexts round to nearest,
+    and the intermediate is wide enough for that rule.
+
+    Both need the operand formats, so run
+    :func:`fpy2.strategies.monomorphize` first where the arguments carry no
+    context — otherwise every site is refused.  Also refused: a scope that rounds
+    exactly or is symbolic, a stochastic context, an intermediate missing a
+    special the target has, and an operation with nowhere to put the block.
+    :func:`fpy2.strategies.refusals` gives each reason.
 
     Not idempotent: round-to-odd over round-to-odd is itself admissible, so
     applying it again splits again.  Run :func:`fpy2.strategies.simplify`
@@ -100,8 +110,10 @@ def split_round(
                 _t = (x * y)
             return fp.round(_t)
 
-    Passing ``fp.FP64`` instead is declined: both it and the FP32 target round to
-    nearest, and no width of intermediate makes that composition an identity.
+    Passing ``fp.FP64`` works too, for a different reason: the exact FP32 product
+    is 48 digits, which FP64 holds, so the intermediate rounding is the identity
+    and both contexts keep their own round-to-nearest.  So do ``x + y``,
+    ``x / y`` and ``fp.sqrt(x)``, by those operations' rules.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

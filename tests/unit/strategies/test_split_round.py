@@ -12,16 +12,18 @@ import random
 import pytest
 
 import fpy2 as fp
-from fpy2.analysis.format_infer import derive_intermediate
+from fpy2.analysis.format_infer import DoubleRoundOp, derive_intermediate
 from fpy2.strategies import (
     ExprCursor,
     TransformDeclined,
     TransformReferenceError,
+    monomorphize,
     refusals,
     simplify,
     sites,
     split_round,
 )
+from fpy2.types import RealType
 
 VIA32 = derive_intermediate(fp.FP32)
 
@@ -73,10 +75,11 @@ class TestSplitRound:
 
 
 class TestRefused:
-    def test_round_to_nearest_twice(self):
-        """Every `fp.FP*` context rounds to nearest, so this is the pair a
-        hand-written program falls into -- and no width of intermediate makes
-        it sound."""
+    def test_round_to_nearest_twice_with_unknown_operands(self):
+        """Nearest over nearest is outside Figure 8 at every width, and the two
+        narrower rules both need the operand formats -- which an unannotated
+        `fp.Real` argument does not give.  `monomorphize` is what unlocks it; see
+        :class:`TestTheOperationRules`."""
         assert sites(split_round, _product, ctx=fp.FP64) == []
         out = split_round(_product, fp.FP64)          # no exception
         assert out.ast.is_equiv(_product.ast)
@@ -136,3 +139,44 @@ class TestTheRecipe:
     def test_the_intermediate_is_wider_than_the_target(self):
         assert VIA32.format().pmax > 24
         assert VIA32.rounding_mode() is fp.RoundingMode.RTO
+
+class TestTheOperationRules:
+    """The other half of the recipe: an intermediate the *environment actually
+    has*.  Round-to-odd is not a hardware mode, so a split that has to run on
+    real hardware needs one of the operation-specific rules instead."""
+
+    @staticmethod
+    def _pinned(f):
+        return monomorphize(f, args=[RealType(fp.FP32), RealType(fp.FP32)])
+
+    def test_a_product_splits_through_fp64(self):
+        """The exact FP32 product is 48 digits, which FP64 holds, so the
+        intermediate rounding is the identity and both contexts keep RNE."""
+        pinned = self._pinned(_product)
+        out = split_round(pinned, fp.FP64)
+        assert 'RoundingMode.RTO' not in out.format()
+        for a, b in _sweep(200):
+            assert str(out(a, b)) == str(pinned(a, b))
+
+    def test_a_sum_splits_through_a_derived_intermediate(self):
+        """An exact sum is 278 digits, so this is the addition rule rather than
+        exactness -- and `derive_intermediate` sizes it."""
+
+        @fp.fpy(ctx=fp.FP32)
+        def total(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        pinned = monomorphize(total, args=[RealType(fp.FP32), RealType(fp.FP32)])
+        via = derive_intermediate(fp.FP32, DoubleRoundOp.ADD)
+        assert via.rounding_mode() is fp.RoundingMode.RNE
+        out = split_round(pinned, via)
+        assert len(sites(split_round, pinned, ctx=via)) == 1
+        for a, b in _sweep(200):
+            assert str(out(a, b)) == str(pinned(a, b))
+
+    def test_without_monomorphize_it_refuses(self):
+        """The operand formats are the premise, so this is the order the two
+        operators go in."""
+        assert sites(split_round, _product, ctx=fp.FP64) == []
+        assert len(sites(split_round, self._pinned(_product), ctx=fp.FP64)) == 1
+

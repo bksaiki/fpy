@@ -21,12 +21,62 @@ where it picks up the target's own mode.
                                            _t = x * y
                                        t = round(_t)
 
-Which pairs are admissible is decided by
-:func:`fpy2.analysis.format_infer.double_round_ok`; the intermediate is the
-caller's, and :func:`fpy2.analysis.format_infer.derive_intermediate` computes a
-suitable one.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
-candidates: splitting a rounding is the inverse of merging two, and admitting
-them makes a second application grow the tree twice as fast.
+Explicit ``Round`` / ``Cast`` nodes are deliberately not candidates: splitting a
+rounding is the inverse of merging two, and admitting them makes a second
+application grow the tree twice as fast.
+
+When this fires
+---------------
+
+The intermediate is the caller's;
+:func:`fpy2.analysis.format_infer.derive_intermediate` computes a suitable one.
+For a target ``(F1, rm1)`` and an intermediate ``(F2, rm2)``, one of three rules
+must hold, tried in this order:
+
+1. **The exact intermediate** (``rndExact``): ``F2`` represents the operation's
+   exact result, so rounding to it is the identity and the composition *is* the
+   original computation.  The widest rule, since it asks nothing of the modes --
+   this is what admits an FP32 product through FP64 with both contexts at their
+   own round-to-nearest, which Figure 8 refuses at every width.  It reads the
+   operands' inferred formats, so it beats the closed form ``p2 >= 2*p1``: an
+   FP16 product needs 22 digits, not 48.
+2. **Figure 8** (:func:`.double_round_ok`): nine of the sixty-four mode pairs,
+   plus containment.  Holds for every real.
+3. **The operation's own rule** (:func:`.double_round_op_ok`, Roux 2014) for
+   ``+``, ``-``, ``/`` and ``sqrt`` -- the operations whose result is *not*
+   representable, an exact sum needing the operands' whole exponent range and a
+   quotient or root being irrational.
+
+Three conditions on the third rule are load-bearing, not cautious:
+
+* **Both roundings to nearest.** Measured: ``add`` through an intermediate far
+  wider than any rule asks still disagrees with a *directed* target.
+  Multiplication escapes this only by going through ``rndExact``.
+* **Every operand representable in the target.** FPy's signature is
+  ``op: Fx -> Fy -> F1`` -- only the result is rounded -- so this needs checking.
+  An operand on a finer grid lets the exact result land within half an
+  intermediate ulp of a target midpoint, which the proofs' separation argument
+  rules out.  Measured, 3-digit target over the rule's exact 7-digit
+  intermediate: 4-digit operands already disagree on 16 of 6400 pairs, 6-digit
+  on 1748 of 102400.  Containment is against ``F1``, not ``F2`` -- every one of
+  those operands is inside ``F2``.
+* **No mixed exponent family for ``/`` and ``sqrt``**, which are proved
+  separately for FLX and FLT.  ``+`` is stated over ``WithBot`` and spans both.
+
+Two things deliberately not gated:
+
+* **A bounded target.** A bounded rounding is the unbounded one plus a bound test
+  reading only its result, so an equality between unbounded roundings survives
+  it.  The apparent counterexample -- a value just under the target's overflow
+  threshold that the intermediate lifts onto it -- is not a possible operation
+  result, and the separation argument above is what excludes it, that threshold
+  being an ordinary midpoint of the unbounded target.
+* **A bounded intermediate is**, by :meth:`_composes_special`: its bound test
+  sits *between* the roundings, where it destroys information.
+
+Specials are not incidental.  Figure 8 gets them from containment; the operation
+rules ask separately, not requiring containment -- an intermediate without the
+target's ``NaN`` turns an infinite result into a raised error.
 """
 
 import operator
@@ -37,10 +87,13 @@ from ..analysis import SyntaxCheck
 from ..analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
+    DoubleRoundOp,
     SetFormat,
     double_round_ok,
+    double_round_op_ok,
     exact_binop,
     exact_unop,
+    to_abstract,
 )
 from ..ast.fpyast import (
     Abs,
@@ -50,6 +103,7 @@ from ..ast.fpyast import (
     ConstInf,
     ConstNan,
     Dim,
+    Div,
     Expr,
     Fst,
     FuncDef,
@@ -66,12 +120,13 @@ from ..ast.fpyast import (
     RoundInt,
     Size,
     Snd,
+    Sqrt,
     Sub,
     TernaryOp,
     UnaryOp,
     Var,
 )
-from ..number import REAL, Context, RealFloat
+from ..number import REAL, Context, Float, RealFloat
 from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
@@ -106,6 +161,13 @@ _EXACT_UNOP: dict[type, Callable[[Any], Any]] = {
     Abs: operator.abs, Neg: operator.neg,
 }
 """The operators `FormatInfer` computes each unrounded result with."""
+
+_OP_RULE: dict[type, DoubleRoundOp] = {
+    Add: DoubleRoundOp.ADD, Sub: DoubleRoundOp.ADD,
+    Div: DoubleRoundOp.DIV, Sqrt: DoubleRoundOp.SQRT,
+}
+"""Operations with a rule of their own.  `Mul`'s *is* the exact-intermediate
+one, which `_exact_result` checks against the real operand formats."""
 
 
 class _SplitRoundInstance(RoundingRewriter):
@@ -144,58 +206,120 @@ class _SplitRoundInstance(RoundingRewriter):
                 'composition cannot be checked'
             )
 
-        rm1, rm2 = target.rounding_mode(), self.ctx.rounding_mode()
-        if rm1 is None or rm2 is None:
-            return Declined('a context without a rounding mode has no rule')
-
         f1, f2 = target.format(), self.ctx.format()
         if not isinstance(f1, AbstractableFormat) or not isinstance(f2, AbstractableFormat):
             return Declined(
                 'one of the formats has no abstract form, so the premise '
                 'cannot be checked'
             )
-        if not double_round_ok(
-            AbstractFormat.from_format(f1), rm1,
-            AbstractFormat.from_format(f2), rm2,
+        f1a, f2a = AbstractFormat.from_format(f1), AbstractFormat.from_format(f2)
+
+        # `rndExact`: an intermediate holding the exact result rounds it
+        # identically, so the composition is the original computation
+        exact = self._exact_result(e)
+        if exact is not None and exact.contained_in(f2a):
+            return None
+
+        rm1, rm2 = target.rounding_mode(), self.ctx.rounding_mode()
+        if rm1 is None or rm2 is None:
+            return Declined('a context without a rounding mode has no rule')
+        if not double_round_ok(f1a, rm1, f2a, rm2):
+            # Figure 8 holds for every real; where it fails, the operation's own
+            # rule may still hold for the values this operation produces
+            rule = _OP_RULE.get(type(e))
+            if rule is None or not double_round_op_ok(rule, f1a, rm1, f2a, rm2):
+                return Declined(
+                    f'rounding to {rm2.name} and then {rm1.name} is not the same '
+                    f'as rounding to {rm1.name} for these formats'
+                )
+            if not self._operands_representable(e, f1a):
+                return Declined(
+                    f'the {rule.value} rule holds for operands of the target '
+                    'format, and one of these is finer'
+                )
+
+        # Figure 8 covers finite values inside the intermediate's range.  A
+        # bounded intermediate can also be handed a special or a value past its
+        # range, and the rule stays valid exactly where the composition agrees
+        # there too -- which is a finite check.
+        if isinstance(f2a.bound, RealFloat) and not (
+            self._composes_special(target, f2a) or self._within(exact, f2a)
         ):
             return Declined(
-                f'rounding to {rm2.name} and then {rm1.name} is not the same '
-                f'as rounding to {rm1.name} for these formats'
-            )
-
-        # A bounded intermediate has an overflow the premises do not cover, and
-        # no behaviour for it suits every target -- it is safe exactly where the
-        # operation cannot reach that range.
-        f2a = AbstractFormat.from_format(f2)
-        if isinstance(f2a.bound, RealFloat) and not self._within(e, f2a):
-            return Declined(
-                'the intermediate has a finite range that the operation could '
-                'exceed, so it would overflow where the single rounding did not'
+                'the composition disagrees with the single rounding on a '
+                'special or a value past the intermediate\'s range'
             )
         return None
 
-    def _within(self, e: Expr, f2: AbstractFormat) -> bool:
-        """Whether *e*'s real result provably stays inside *f2*'s finite range.
+    def _composes_special(self, target: Context, f2: AbstractFormat) -> bool:
+        """Whether the composition agrees with the single rounding on
+        ``{NaN, +Inf, -Inf, +Huge, -Huge}``.
 
-        The *unrounded* bound: `by_expr` holds the result after the target's
-        rounding, which is inside the target's format by construction and would
-        prove nothing.  Rounding a value no larger than the range cannot leave
-        it, so this rules the overflow out.
+        Those are the inputs the premise says nothing about: it quantifies over
+        finite values, and over values the intermediate can represent.  *Huge* is
+        one step past the intermediate's bound -- the smallest magnitude it
+        cannot hold, and so where the two paths first diverge, since above that
+        the intermediate's answer is constant while the target's is not.
+        """
+        probes: list[Float | RealFloat] = [
+            Float(isnan=True), Float(isinf=True), Float(isinf=True, s=True),
+        ]
+        for bound in (f2.pos_bound, f2.neg_bound):
+            if isinstance(bound, RealFloat) and not bound.is_zero():
+                probes.append(bound.next_away_zero())
+
+        try:
+            for v in probes:
+                once = target.round(v)
+                twice = target.round(self.ctx.round(v))
+                # `str` rather than `==`: it separates the zeros and is total on
+                # NaN, which compares equal to nothing
+                if str(once) != str(twice):
+                    return False
+        except (ValueError, OverflowError):
+            # a context that cannot represent a probe -- `enable_nan=False`, or
+            # `OverflowMode.ASSERT`
+            return False
+        return True
+
+    def _exact_result(self, e: Expr) -> AbstractFormat | None:
+        """*e*'s result before the target rounds it, as a format.
+
+        The *unrounded* one: `by_expr` holds the result after rounding, which is
+        inside the target by construction and would prove nothing.  `None` where
+        there is no abstract form -- no exact rule for the operation, a
+        constant-folded set, or an operand of unknown format.
         """
         args = [self.scopes.format_info.by_expr.get(a) for a in operands(e)]
-        if len(args) == 2 and type(e) in _EXACT_BINOP:
-            unrounded = exact_binop(args[0], args[1], _EXACT_BINOP[type(e)])
-        elif len(args) == 1 and type(e) in _EXACT_UNOP:
-            unrounded = exact_unop(args[0], _EXACT_UNOP[type(e)])
+        # the arity is implied by the table: unpacking asserts it
+        if type(e) in _EXACT_BINOP:
+            lhs, rhs = args
+            out = exact_binop(lhs, rhs, _EXACT_BINOP[type(e)])
+        elif type(e) in _EXACT_UNOP:
+            arg, = args
+            out = exact_unop(arg, _EXACT_UNOP[type(e)])
         else:
+            return None
+
+        return to_abstract(out)
+
+    def _operands_representable(self, e: Expr, f1: AbstractFormat) -> bool:
+        """Whether every operand of *e* is representable in the target format --
+        a premise of every operation rule, and load-bearing; see the module
+        docstring."""
+        for a in operands(e):
+            fmt = to_abstract(self.scopes.format_info.by_expr.get(a))
+            if fmt is None or not fmt.contained_in(f1):
+                return False
+        return True
+
+    @staticmethod
+    def _within(exact: AbstractFormat | None, f2: AbstractFormat) -> bool:
+        """Whether *exact* provably stays inside *f2*'s finite range, so that
+        rounding to *f2* cannot overflow."""
+        if exact is None:
             return False
-
-        if isinstance(unrounded, AbstractableFormat):
-            unrounded = AbstractFormat.from_format(unrounded)
-        if not isinstance(unrounded, AbstractFormat):
-            return False        # a constant-folded set, or no bound at all
-
-        pos, neg = unrounded.pos_bound, unrounded.neg_bound
+        pos, neg = exact.pos_bound, exact.neg_bound
         if isinstance(pos, float) or isinstance(neg, float):
             return False        # unbounded result: nothing to prove
         return pos <= f2.pos_bound and neg >= f2.neg_bound

@@ -717,6 +717,17 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
     )
 
 
+def to_abstract(f: 'FormatBound | AbstractFormat') -> AbstractFormat | None:
+    """Any format bound as an :class:`AbstractFormat`, or ``None`` where it has
+    none -- a list, a tuple, a non-dyadic :class:`SetFormat`, or nothing known.
+    """
+    if isinstance(f, AbstractFormat):
+        return f
+    if isinstance(f, (AbstractableFormat, SetFormat)):
+        return _to_abstract(f)
+    return None
+
+
 def _to_abstract(f: AbstractableFormatBound | SetFormat) -> AbstractFormat | None:
     """
     Lifts an abstractable :class:`FormatBound` to an

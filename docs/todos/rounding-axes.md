@@ -29,6 +29,7 @@ The paper's analysis half is **already built**, as
 | Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` — **done**, see gap 1 below |
 | Correct double rounding (§5.2, Fig. 8) | `double_round_ok` (`format_infer/double_round.py`) — **done** |
 | Splitting one rounding into two (§5) | `SplitRound` / `split_round` — **done**, see gap 3 below |
+| *Beyond the paper:* per-operation double rounding (Roux 2014) | `double_round_op_ok` — **done**, see [Operation-specific rules](#operation-specific-rules-roux-2014--done) |
 
 So two of the paper's four rewrites are implemented, and the analysis the other
 two need is in place and in use.
@@ -341,6 +342,39 @@ saturates *is* exact for an RTZ target, and is declined anyway. Admitting it
 needs the overflow boundary per mode pair, which Figure 8 does not cover — its
 theorems are `RoundsFinite`.
 
+### Operation-specific rules (Roux 2014) — **done**
+
+Figure 8 quantifies over every real, and pays for it: nine of sixty-four mode
+pairs, with round-to-nearest over round-to-nearest in none of them at any width.
+Every `fp.FP*` context is RNE, so before this no format the machine actually has
+could serve as an intermediate — only a synthetic round-to-odd one from
+`derive_intermediate`.
+
+Roux 2014, *Innocuous Double Rounding of Basic Arithmetic Operations*
+(`Mpfx/DoubleRounding{Add,Mul,Div,Sqrt}.lean`), holds only for the *results of
+one operation* but admits nearest over nearest. Two rules:
+
+- **The exact intermediate** (`rndExact`, and all of Roux's multiplication
+  theorem): if the intermediate represents the exact result, rounding to it is
+  the identity, so any mode pair works and the bounds do not enter. FPy's format
+  inference makes this stronger than the paper's closed form, reading the
+  operands' real formats — an FP16 product needs 22 digits, not 48.
+- **The operation's own rule** in `double_round_op_ok`: `+`/`-` at
+  p₂ ≥ 2p₁+1, `/` at 2p₁ (tight — Remark 30), `sqrt` at 2p₁+2, nearest to
+  nearest with independent tie-breaks.
+
+Result: all five basic operations split **FP32 → FP64** and **FP16 → FP32** under
+plain RNE. `derive_intermediate(target, op)` sizes one.
+
+Three conditions are load-bearing rather than cautious, and the
+`fpy2/transform/split_round.py` module docstring records why with the measured
+consequence of dropping each: nearest-only; every operand representable in the
+target (FPy's signature is `op: Fx → Fy → F1`, so unlike the paper this needs
+checking, and against F₁ rather than F₂); and no mixed exponent family for `/`
+and `sqrt`. A bounded *target* needs no gate — a bounded rounding is the
+unbounded one plus a bound test reading only its result — while a bounded
+*intermediate* still does, its test sitting between the two roundings.
+
 ### 5. `merge_round`
 
 Collapse a nested rounding into a single one when the Figure 8 premise holds.
@@ -348,22 +382,24 @@ This complements `elim_round`, which only removes roundings that are
 *identities*; `merge_round` removes roundings that change the value but not the
 final answer.
 
-**Its inputs come from `split_round`, not from hand-written programs.** Every
-`fp.FP*` context carries `rm=RoundingMode.RNE`, so the obvious hand-written
-narrowing — an FP64 intermediate re-rounded to FP32 — is RNE-RNE, the last row
-of the paper's Table 2 and unsound no matter how wide the intermediate. Figure
-8 has no RNE-RNE rule, so `merge_round` declines it. The programs it *can*
-merge have an RTO intermediate, or two agreeing modes drawn from RTZ / RAZ /
-RTO, and under FPy's default contexts nobody writes those by hand. That makes
-this operator worth building mainly to close the axis and to check
-`split_round`'s output, which is why it sits last in the order below despite
-sharing `split_round`'s predicate.
+**It now has hand-written inputs, which it did not when this was written.** The
+note here used to say its only inputs came from `split_round`, because the
+obvious hand-written narrowing — an FP64 intermediate re-rounded to FP32 — is
+RNE-RNE, which Figure 8 refuses at every width. The operation-specific rules
+above overturn exactly that case: an FP32 sum, product, quotient or root
+computed in FP64 and re-rounded is sound, so the shape a person actually writes
+is now the shape this operator collapses. That moves it from
+close-the-axis bookkeeping to the more useful of the two directions.
 
-**Its predicate is built.** `double_round_ok(f1, rm1, f2, rm2)` is in
-`format_infer/double_round.py` and `merge_round` reuses it unchanged --
-`split_round` validates a candidate intermediate with it, `merge_round` an
-intermediate already in the program. What remains here is site detection, not
-verification.
+**Its predicates are built** — all three of them, and it needs all three, since
+merging is splitting read right-to-left. `double_round_ok`,
+`double_round_op_ok`, and the exact-intermediate check in
+`SplitRound._exact_result` are in `format_infer/double_round.py` and
+`fpy2/transform/split_round.py`; `split_round` validates a candidate
+intermediate against them, `merge_round` an intermediate already in the program.
+The operand premise carries over too: the operation rules need every operand
+representable in the *final* format, which for a merge is the outer one. What
+remains here is site detection, not verification.
 
 The work here is site detection rather than verification, and that is genuinely
 unsurveyed: `Round` over `Round`, `Cast` over arithmetic, `RoundAt` over a
@@ -421,9 +457,36 @@ Three positions, in the order they were closed:
    `fpy2/transform/split_round.py` and `fpy2/strategies/round_split.py`.
 5. ~~**Bounded intermediates for `split_round`**~~ — **done.** A no-overflow
    proof from `format_info` in `SplitRound._within`.
-6. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
-   spellings first. The only operator left on the page.
-7. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
+6. ~~**Operation-specific double rounding**~~ — **done.** Roux 2014, from
+   `Mpfx/DoubleRounding{Add,Mul,Div,Sqrt}.lean`. Figure 8 refuses
+   round-to-nearest over round-to-nearest at every width, and every `fp.FP*`
+   context is round-to-nearest, so before this no *hardware* format could serve
+   as an intermediate — only a synthetic round-to-odd one. Two rules now do it:
+
+   - **The exact intermediate** (`rndExact`, which is also all of Roux's
+     multiplication theorem): if the intermediate represents the operation's
+     exact result, rounding to it is the identity, so any mode pair works and
+     the bounds do not enter. FPy's format inference makes this stronger than the
+     paper's closed form, since it reads the operands' real formats — an FP16
+     product needs 22 digits, not 48.
+   - **The operation's own rule** for `+`/`-` (p₂ ≥ 2p₁+1), `/` (2p₁) and `sqrt`
+     (2p₁+2), nearest-to-nearest, in `double_round_op_ok`.
+
+   Together: all five ops split **FP32 → FP64** and **FP16 → FP32** under plain
+   RNE. `derive_intermediate(target, op)` sizes one.
+
+   The firing conditions and, more importantly, *why each one is load-bearing*
+   are documented in the `fpy2/transform/split_round.py` module docstring — the
+   three that are not conservatism are nearest-only, operands representable in
+   the target (FPy's signature is `op: Fx → Fy → F1`, so this needs checking),
+   and no mixed exponent family for `/` and `sqrt`.
+7. **`merge_round`** — reuses *all three* of the predicates above, since merging
+   is splitting read right-to-left: the shape `split_round` emits is exactly what
+   it should collapse, so the Roux rules let the two undo each other. Survey how
+   a double rounding is spelled first (nested `with`, explicit `Round`, `Cast`,
+   an assignment across a scope boundary) — the predicate is the easy half. The
+   only operator left on the page.
+8. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
    `merge_round`), then finitize (`insert_round`, `split_round` against an
    environment's format list). A documented composition and a worked example,
    not a new operator; the MX dot product of §2 and §8 is the example.
@@ -468,7 +531,14 @@ Three positions, in the order they were closed:
   `exprs_preserved=True`, and forwarding, not site listing, is the work. See
   item 3 of [scheduling-language.md](scheduling-language.md).
 - **Negative tests for the ten unsound pairings.** Table 2 of the paper gives
-  counterexamples. RNE-RNE is the one to pin down, for the reason in gap 5: it
-  is both the pairing a hand-written FPy program falls into by default and the
-  one a well-meaning future patch is most likely to "fix". A test that asserts
-  the FP64-to-FP32 decline is the guard.
+  counterexamples. RNE-RNE is the one to pin down: it is the pairing a
+  hand-written FPy program falls into by default and the one a well-meaning
+  future patch is most likely to "fix". The guard is
+  `TestRefused.test_rne_over_rne` in `tests/unit/analysis/test_double_round.py`,
+  asserting `double_round_ok` refuses it at any width.
+
+  Note the example this bullet used to give — the FP64-to-FP32 decline — is no
+  longer one: that pairing is *admitted* now, by the operation-specific rules,
+  which is sound and is the point of them. What stays refused is RNE-RNE as a
+  rule for arbitrary reals. The two must not be conflated when writing the
+  negative tests.
