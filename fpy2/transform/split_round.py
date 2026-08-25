@@ -1,55 +1,48 @@
 """
-Rounding insertion: the inverse of :class:`.RoundElim`.
+Rounding splitting: one correctly-rounded operation into two roundings.
 
 A correctly-rounded operation is a real computation followed by a rounding,
-``f_F,rm = rnd_F,rm . f_R``.  Where format inference proves the real result
-already lies in ``F``, the rounding does nothing, so the two are the same
-function and either may replace the other.  :class:`.RoundElim` reads that
-identity left to right, dropping a rounding that cannot be observed; this pass
-reads it right to left, giving an exact operation a format.
+``f_F1,rm1 = rnd_F1,rm1 . f_R``.  Where the pair of formats and modes satisfies
+Figure 8 of *When Double Rounding is Correct*, that single rounding equals a
+rounding to an intermediate followed by a rounding to the target, so either may
+replace the other.  This pass reads that left to right, computing under the
+intermediate and re-rounding to the target.
 
-The candidates are individual operations, and the rewrite mirrors
-:class:`.RoundElim`'s hoist.  A context applies to every operation in its block,
-so an operation is given a format of its own by being lifted into a block alone:
-each operand that is not already a ``Var`` is bound to a fresh temporary under
-the *original* scope, which both keeps whatever rounding the operand already did
-and leaves the new block one operation to round.
+The candidates are the operations that *already* have a format, which is the
+complement of :class:`.RoundInsert`'s.  An assignment does not round in FPy, so
+the second rounding is emitted as an explicit ``round`` in the enclosing block,
+where it picks up the target's own mode.
 
 .. code-block:: python
 
-    # before, with FP32 arguments
-    with fp.REAL:
-        t = (x * x) + (y * y)
+    # before                       # after, split through an RTO intermediate
+    with fp.FP32:                  with fp.FP32:
+        t = x * y                      with <intermediate>:
+                                           _t = x * y
+                                       t = round(_t)
 
-    # after, aimed at `x * x` with a target of FP64
-    with fp.REAL:
-        with fp.FP64:
-            _t = (x * x)
-        t = _t + (y * y)
+Which pairs are admissible is decided by
+:func:`fpy2.analysis.format_infer.double_round_ok`; the intermediate is the
+caller's, and :func:`fpy2.analysis.format_infer.derive_intermediate` computes a
+suitable one.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
+candidates: splitting a rounding is :class:`.RoundMerge`'s inverse, and
+admitting them makes a second application grow the tree twice as fast.
 
-Because the inserted rounding is verified an identity it changes no value, so
-operations may be given formats one at a time and in any order -- including one
-whose result a later exact operation reads.  Idempotence falls out: a second
-pass finds only ``Var``-argumented operations already under a format.
-
-The refusals, and why each one, are at :meth:`_RoundInsertInstance._verify`.
+The refusals, and why each one, are at :meth:`_SplitRoundInstance._verify`.
 """
 
 from typing import Any
 
-from ..analysis import ContextUse, DefineUse, SyntaxCheck
+from ..analysis import SyntaxCheck
 from ..analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
-    FormatInfer,
-    SetFormat,
-    round_is_identity,
+    double_round_ok,
 )
 from ..ast.fpyast import (
     Abs,
     Add,
     Assign,
-    Cast,
     ContextStmt,
     Expr,
     ForeignVal,
@@ -70,7 +63,7 @@ from ..ast.fpyast import (
 )
 from ..number import REAL, Context
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, ExprCursor
+from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
     RoundingScopes,
@@ -80,18 +73,23 @@ from .utils import (
     rebuild,
 )
 
-_ROUNDABLE = (Add, Sub, Mul, Abs, Neg, Round, Cast)
-"""The operations that carry a context-driven rounding."""
+_SPLITTABLE = (Add, Sub, Mul, Abs, Neg)
+"""The operations whose rounding may be split.
+
+:class:`.RoundInsert`'s set minus ``Round`` and ``Cast``: an explicit rounding
+is not an arithmetic operation with a rounding attached, and splitting one is
+the inverse rewrite rather than this one.
+"""
 
 
-class _RoundInsertInstance(SiteRewriter):
-    """Gives selected exact operations in a function a format."""
+class _SplitRoundInstance(SiteRewriter):
+    """Splits selected rounded operations through an intermediate."""
 
-    _expr_sited = True   # the candidates are roundable operations
+    _expr_sited = True   # the candidates are rounded operations
 
     func: FuncDef
     ctx: Context
-    scopes: 'RoundingScopes'
+    scopes: RoundingScopes
     gensym: Gensym
     where: int | Cursor | None
 
@@ -99,7 +97,7 @@ class _RoundInsertInstance(SiteRewriter):
         self,
         func: FuncDef,
         ctx: Context,
-        scopes: 'RoundingScopes',
+        scopes: RoundingScopes,
         where: int | Cursor | None = None,
     ):
         self.func = func
@@ -112,48 +110,51 @@ class _RoundInsertInstance(SiteRewriter):
         return self._visit_function(self.func, None)
 
     def _verify(self, e: Expr) -> None | Declined:
-        """`None` where *e* may be given the target format, else why not."""
-        if self.ctx.is_stochastic():
+        """`None` where *e*'s rounding may be split, else why not."""
+        target = self.scopes.scope_ctx(e)
+        if target is None:
             return Declined(
-                'the target rounds stochastically, so it is not an identity on '
-                'a value it represents'
+                'the operation\'s scope is symbolic, so the rounding it '
+                'performs is unknown'
             )
-        stored = self.scopes.format_info.by_expr.get(e)
-        # a stored bound may be a `Format`; `round_is_identity` wants the lift
-        bound = (
-            AbstractFormat.from_format(stored)
-            if isinstance(stored, AbstractableFormat)
-            else stored
-        )
-        if not isinstance(bound, (AbstractFormat, SetFormat)):
+        if target is REAL:
             return Declined(
-                'format inference could not bound the operation, so the '
-                'inserted rounding cannot be proven an identity'
+                'the operation rounds exactly, so there is no rounding to '
+                'split; `insert_round` gives it one first'
             )
-        if not round_is_identity(bound, self.ctx):
+        if target.is_stochastic() or self.ctx.is_stochastic():
             return Declined(
-                'the operation is not representable in the target format, so '
-                'rounding to it would change the result'
+                'a stochastic rounding is not a function of its input, so the '
+                'composition cannot be checked'
             )
-        # containment compares magnitudes; a special the target lacks is invisible there
-        target = self.ctx.format()
-        if (
-            isinstance(bound, AbstractFormat)
-            and isinstance(target, AbstractableFormat)
-            and not bound.specials_contained_in(AbstractFormat.from_format(target))
+
+        rm1, rm2 = target.rounding_mode(), self.ctx.rounding_mode()
+        if rm1 is None or rm2 is None:
+            return Declined('a context without a rounding mode has no rule')
+
+        f1, f2 = target.format(), self.ctx.format()
+        if not isinstance(f1, AbstractableFormat) or not isinstance(f2, AbstractableFormat):
+            return Declined(
+                'one of the formats has no abstract form, so the premise '
+                'cannot be checked'
+            )
+        if not double_round_ok(
+            AbstractFormat.from_format(f1), rm1,
+            AbstractFormat.from_format(f2), rm2,
         ):
             return Declined(
-                'the operation can produce a special value the target format '
-                'does not represent'
+                f'rounding to {rm2.name} and then {rm1.name} is not the same '
+                f'as rounding to {rm1.name} for these formats'
             )
         return None
 
-    def _hoist(self, e: Expr, out: list) -> Expr:
-        """Compute *e* alone under the target and return a `Var` for its site.
+    def _split(self, e: Expr, out: list) -> Expr:
+        """Compute *e* under the intermediate; return the re-rounding of it.
 
-        The mirror of :meth:`.RoundElim._hoist`: each operand that survives the
-        visit as a non-``Var`` is bound under the *original* scope first, so the
-        emitted block rounds this operation and nothing else.
+        The operands are bound exactly as :meth:`.RoundInsert._hoist` binds
+        them, so the emitted block computes this operation and nothing else.
+        The returned ``round`` sits in the *enclosing* block, which is what
+        applies the target's rounding.
         """
         loc = e.loc
         args: list[Expr] = []
@@ -167,15 +168,15 @@ class _RoundInsertInstance(SiteRewriter):
             out.append(Assign(t, None, new, loc))
             args.append(Var(t, loc))
 
-        result = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
+        inner = self.gensym.fresh('_t')
+        block = StmtBlock([Assign(inner, None, rebuild(e, args), loc)])
         out.append(ContextStmt(
             UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
         ))
-        return Var(result, loc)
+        return Round(None, Var(inner, loc), loc)
 
     def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        if not isinstance(e, _ROUNDABLE) or not self.scopes.is_exact(e):
+        if not isinstance(e, _SPLITTABLE):
             return super()._visit_expr(e, ctx)
 
         # a refusal is not a site, so it is decided before an index is spent:
@@ -205,16 +206,15 @@ class _RoundInsertInstance(SiteRewriter):
             self.found_exprs.append(e)
             return super()._visit_expr(e, ctx)
 
-        hoisted = self._hoist(e, ctx)
+        split = self._split(e, ctx)
         self._replaced = True
-        return hoisted
+        return split
 
-    # A compound statement's own sub-expression carries no preamble.  For a
-    # `while` condition that is soundness: the condition is re-evaluated every
-    # iteration, and a preamble before the loop computes it once, which does not
-    # terminate.  The rest is scope -- those positions are evaluated exactly
-    # once, so lifting the suppression is a capability question (`CompToLoop`
-    # does hoist out of them).
+
+    # A compound statement's own sub-expression carries no preamble, exactly as
+    # for `RoundInsert`.  For a `while` condition that is soundness: the
+    # condition is re-evaluated every iteration, and a preamble before the loop
+    # computes it once, which does not terminate.  The rest is scope.
     def _visit_if1(self, stmt: If1Stmt, ctx: Any):
         return super()._visit_if1(stmt, None)[0], ctx
 
@@ -247,61 +247,55 @@ class _RoundInsertInstance(SiteRewriter):
         return IfExpr(cond, ift, iff, e.loc)
 
 
-class RoundInsert:
+class SplitRound:
     """
-    Transformation pass to give an exact operation a format, where the
-    rounding is provably an identity.
+    Transformation pass to split one rounding into two that compose to the
+    same answer.
     """
 
     @staticmethod
     def sites(
         func: FuncDef, within: Cursor | None = None, *, ctx: Context
     ) -> list[Cursor]:
-        """The operations of `func` that would be given the format `ctx`, in
-        visit order -- what a `where` index counts, and what `within` narrows.
+        """The operations of `func` whose rounding would be split through
+        `ctx`, in visit order -- what a `where` index counts, and what `within`
+        narrows.
 
         `ctx` is required because it decides the answer: whether an operation is
-        a site is whether rounding *it* to *this* format is an identity.
+        a site is whether *its* rounding composes with a rounding to *this*
+        intermediate.
         """
         if not isinstance(ctx, Context):
             raise TypeError(f'Expected a \'Context\', got {ctx}')
         scopes = RoundingScopes(func)
-        return _RoundInsertInstance(func, ctx, scopes).list_sites(within)
+        return _SplitRoundInstance(func, ctx, scopes).list_sites(within)
 
     @staticmethod
     def refusals(
         func: FuncDef, within: Cursor | None = None, *, ctx: Context
     ) -> list[tuple[Cursor, str]]:
-        """Why each operation of `func` that is not a site for `ctx` was
-        refused, in visit order.  A refusal takes no index, so this is how one
-        is found.
-        """
+        """Why each operation of `func` that is not a site was left alone."""
         if not isinstance(ctx, Context):
             raise TypeError(f'Expected a \'Context\', got {ctx}')
-        return _RoundInsertInstance(func, ctx, RoundingScopes(func)).list_refusals(within)
+        scopes = RoundingScopes(func)
+        return _SplitRoundInstance(func, ctx, scopes).list_refusals(within)
 
     @staticmethod
     def apply(
-        func: FuncDef,
-        ctx: Context,
-        *,
-        where: int | Cursor | None = None,
+        func: FuncDef, ctx: Context, *, where: int | Cursor | None = None
     ) -> FuncDef:
         """
-        Gives every qualifying exact operation of `func` the format `ctx`,
-        where the rounding is provably an identity.
+        Splits every rounding of `func` that composes with a rounding to `ctx`,
+        and leaves the rest alone.
 
-        `where` selects one candidate operation by index in visit order;
-        `None` rewrites every one that verifies.
+        `where` selects one operation by index in visit order; `None` takes
+        every one it can split.
         """
-        return RoundInsert.apply_with_edits(func, ctx, where=where).result
+        return SplitRound.apply_with_edits(func, ctx, where=where).result
 
     @staticmethod
     def apply_with_edits(
-        func: FuncDef,
-        ctx: Context,
-        *,
-        where: int | Cursor | None = None,
+        func: FuncDef, ctx: Context, *, where: int | Cursor | None = None
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
@@ -311,8 +305,8 @@ class RoundInsert:
         check_where(where)
 
         scopes = RoundingScopes(func)
-        vtor = _RoundInsertInstance(func, ctx, scopes, where)
+        vtor = _SplitRoundInstance(func, ctx, scopes, where)
         out = vtor.apply()
-        vtor.check_site('a candidate operation')
+        vtor.check_site('a rounded operation')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

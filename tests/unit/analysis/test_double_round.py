@@ -14,6 +14,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import (
+    AbstractableFormat,
     AbstractFormat,
     derive_intermediate,
     double_round_ok,
@@ -21,7 +22,7 @@ from fpy2.analysis.format_infer import (
 from fpy2.number import RoundingMode as RM
 
 # (final rm1, intermediate rm2) -> the theorem admitting it
-ADMITTED = {
+ADMITTED: dict[tuple[RM, RM], str] = {
     (RM.RTZ, RM.RTZ): 'rndRTZ_RTZ',
     (RM.RAZ, RM.RAZ): 'rndRAZ_RAZ',
     (RM.RTP, RM.RTP): 'rndRTP_RTP',
@@ -35,9 +36,14 @@ ADMITTED = {
 
 ALL_MODES = (RM.RNE, RM.RNA, RM.RTP, RM.RTN, RM.RTZ, RM.RAZ, RM.RTO, RM.RTE)
 
+_SORTED = sorted(ADMITTED, key=lambda p: (p[0].name, p[1].name))
+_IDS = [f'{a.name}_over_{b.name}' for a, b in _SORTED]
+
 
 def _fmt(ctx: fp.Context) -> AbstractFormat:
-    return AbstractFormat.from_format(ctx.format())
+    fmt = ctx.format()
+    assert isinstance(fmt, AbstractableFormat)
+    return AbstractFormat.from_format(fmt)
 
 
 def _fp32() -> AbstractFormat:
@@ -50,10 +56,9 @@ def _wide() -> AbstractFormat:
 
 
 class TestAdmitted:
-    @pytest.mark.parametrize('pair', sorted(ADMITTED, key=lambda p: (p[0].name, p[1].name)),
-                             ids=lambda p: f'{p[0].name}_over_{p[1].name}')
-    def test_holds_over_a_wide_intermediate(self, pair):
-        rm1, rm2 = pair
+    @pytest.mark.parametrize('rm1,rm2', _SORTED, ids=_IDS)
+    def test_holds_over_a_wide_intermediate(self, rm1, rm2):
+        pair = (rm1, rm2)
         assert double_round_ok(_fp32(), rm1, _wide(), rm2), ADMITTED[pair]
 
     def test_nothing_else_is_admitted(self):

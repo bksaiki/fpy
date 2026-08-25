@@ -8,9 +8,12 @@ from dataclasses import dataclass
 from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
+    ContextUse,
+    DefineUse,
     ListSize,
     concrete_size,
 )
+from ..analysis.format_infer import FormatInfer
 from ..ast.fpyast import (
     Abs,
     Add,
@@ -45,6 +48,7 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     INTEGER,
+    REAL,
     Context,
     Float,
     RealFloat,
@@ -279,6 +283,33 @@ class Declined:
     """A verification refusal: why a candidate block was not rewritten."""
     reason: str
 
+
+class RoundingScopes:
+    """What context each operation of a function is evaluated under.
+
+    Shared by the rounding rewrites so they agree on the question, and so a
+    `where` index counts the same operations for a listing and for the rewrite.
+    """
+
+    def __init__(self, func: FuncDef):
+        self.def_use = DefineUse.analyze(func)
+        self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.format_info = FormatInfer.analyze(
+            func, def_use=self.def_use, ctx_use=self.ctx_use,
+        )
+        # symbolic scopes resolve against the caller's pin, as they do for
+        # `FormatInfer` itself; without one they stay unresolvable
+        fn_fmt = self.format_info.fn_fmt
+        self.outer = None if fn_fmt is None else fn_fmt.ctx
+
+    def scope_ctx(self, e: Expr) -> Context | None:
+        """*e*'s active context, or `None` where the scope stays symbolic."""
+        scope = self.ctx_use.find_scope_from_use(e)   # type: ignore[arg-type]
+        return scope.ctx if isinstance(scope.ctx, Context) else self.outer
+
+    def is_exact(self, e: Expr) -> bool:
+        """Whether *e*'s active scope rounds exactly, so it has no rounding yet."""
+        return self.scope_ctx(e) is REAL
 
 class SiteRewriter(DefaultTransformVisitor):
     """
