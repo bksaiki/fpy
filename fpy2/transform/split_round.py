@@ -29,60 +29,101 @@ candidates: splitting a rounding is the inverse of merging two, and admitting
 them makes a second application grow the tree twice as fast.
 """
 
+import operator
+from collections.abc import Callable
 from typing import Any
 
 from ..analysis import SyntaxCheck
 from ..analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
+    SetFormat,
     double_round_ok,
+    exact_binop,
+    exact_unop,
 )
 from ..ast.fpyast import (
     Abs,
     Add,
-    Assign,
-    ContextStmt,
+    BinaryOp,
+    Cast,
+    ConstInf,
+    ConstNan,
+    Dim,
     Expr,
-    ForeignVal,
-    ForStmt,
+    Fst,
     FuncDef,
-    If1Stmt,
-    IfExpr,
-    IfStmt,
-    ListComp,
+    Len,
+    Max,
+    Min,
     Mul,
     NamedId,
+    NaryOp,
     Neg,
+    NullaryOp,
     Round,
-    StmtBlock,
+    RoundAt,
+    RoundInt,
+    Size,
+    Snd,
     Sub,
-    UnderscoreId,
+    TernaryOp,
+    UnaryOp,
     Var,
-    WhileStmt,
 )
 from ..number import REAL, Context, RealFloat
-from ..utils import Gensym
 from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
     RoundingRewriter,
     RoundingScopes,
-    SiteRewriter,
     check_where,
     operands,
-    rebuild,
 )
 
-_SPLITTABLE = (Add, Sub, Mul, Abs, Neg)
-""":class:`.RoundInsert`'s set, minus the explicit roundings."""
+_OPS = (NullaryOp, UnaryOp, BinaryOp, TernaryOp, NaryOp)
+"""The nodes that round under the active context.  A ``Call`` is not one: it
+inherits the context, but its callee's operations each round separately."""
+
+_NOT_SPLITTABLE = (
+    # the inverse rewrite's territory, not this one's
+    Round, Cast, RoundAt, RoundInt,
+    # exact queries and projections: nothing is rounded
+    Len, Size, Dim, Fst, Snd,
+    # `min`/`max` *select* an argument and hand it back with its own format
+    # rather than rounding to the active context, so there is no rounding here
+    # to split -- measured: every other real-valued operation does round
+    Min, Max,
+    # not finite reals, which is what the theorems quantify over
+    ConstInf, ConstNan,
+)
+"""Operations that are not a real computation followed by a rounding."""
+
+_EXACT_BINOP: dict[type, Callable[[Any, Any], Any]] = {
+    Add: operator.add, Sub: operator.sub, Mul: operator.mul,
+}
+_EXACT_UNOP: dict[type, Callable[[Any], Any]] = {
+    Abs: operator.abs, Neg: operator.neg,
+}
+"""The operators `FormatInfer` computes each unrounded result with."""
 
 
 class _SplitRoundInstance(RoundingRewriter):
     """Splits selected rounded operations through an intermediate."""
 
     def _candidate(self, e: Expr) -> bool:
-        return isinstance(e, _SPLITTABLE)
+        """Any operation that is a real computation followed by a rounding.
 
+        The rules quantify over an arbitrary real, so what produced it does not
+        matter -- ``sqrt``, ``fma``, a transcendental and ``pi`` are all as
+        splittable as a multiply.  A scalar format bound is what says the
+        operation is real-valued: a boolean has none and a list or tuple has a
+        bound of another kind.
+        """
+        if not isinstance(e, _OPS) or isinstance(e, _NOT_SPLITTABLE):
+            return False
+        bound = self.scopes.format_info.by_expr.get(e)
+        return isinstance(bound, (AbstractableFormat, AbstractFormat, SetFormat))
 
     def _verify(self, e: Expr) -> None | Declined:
         """`None` where *e*'s rounding may be split, else why not."""
@@ -122,21 +163,48 @@ class _SplitRoundInstance(RoundingRewriter):
                 f'as rounding to {rm1.name} for these formats'
             )
 
-        # The premises constrain what is representable, not what happens
-        # beyond it, so a bounded intermediate has an overflow they do not
-        # cover -- and no single behaviour suits every target.  See gap 4 of
-        # `docs/todos/rounding-axes.md`; `derive_intermediate` sidesteps it.
-        if isinstance(AbstractFormat.from_format(f2).bound, RealFloat):
+        # A bounded intermediate has an overflow the premises do not cover, and
+        # no behaviour for it suits every target -- it is safe exactly where the
+        # operation cannot reach that range.
+        f2a = AbstractFormat.from_format(f2)
+        if isinstance(f2a.bound, RealFloat) and not self._within(e, f2a):
             return Declined(
-                'the intermediate has a finite range, so it would overflow '
-                'where the single rounding did not; use an unbounded one'
+                'the intermediate has a finite range that the operation could '
+                'exceed, so it would overflow where the single rounding did not'
             )
         return None
+
+    def _within(self, e: Expr, f2: AbstractFormat) -> bool:
+        """Whether *e*'s real result provably stays inside *f2*'s finite range.
+
+        The *unrounded* bound: `by_expr` holds the result after the target's
+        rounding, which is inside the target's format by construction and would
+        prove nothing.  Rounding a value no larger than the range cannot leave
+        it, so this rules the overflow out.
+        """
+        args = [self.scopes.format_info.by_expr.get(a) for a in operands(e)]
+        if len(args) == 2 and type(e) in _EXACT_BINOP:
+            unrounded = exact_binop(args[0], args[1], _EXACT_BINOP[type(e)])
+        elif len(args) == 1 and type(e) in _EXACT_UNOP:
+            unrounded = exact_unop(args[0], _EXACT_UNOP[type(e)])
+        else:
+            return False
+
+        if isinstance(unrounded, AbstractableFormat):
+            unrounded = AbstractFormat.from_format(unrounded)
+        if not isinstance(unrounded, AbstractFormat):
+            return False        # a constant-folded set, or no bound at all
+
+        pos, neg = unrounded.pos_bound, unrounded.neg_bound
+        if isinstance(pos, float) or isinstance(neg, float):
+            return False        # unbounded result: nothing to prove
+        return pos <= f2.pos_bound and neg >= f2.neg_bound
 
     def _wrap(self, t: NamedId, loc) -> Expr:
         # an assignment rounds nothing in FPy, so the second rounding is
         # explicit -- and sits in the enclosing block, which applies `rm1`
         return Round(None, Var(t, loc), loc)
+
 
 class SplitRound:
     """

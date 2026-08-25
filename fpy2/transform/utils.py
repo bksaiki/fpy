@@ -4,6 +4,7 @@ rewrites.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 from ..analysis import (
     ArraySizeAnalysis,
@@ -19,6 +20,7 @@ from ..ast.fpyast import (
     Add,
     Assign,
     Attribute,
+    BinaryOp,
     Cast,
     ConstInf,
     ConstNan,
@@ -36,8 +38,14 @@ from ..ast.fpyast import (
     ListComp,
     Location,
     Mul,
+    NamedBinaryOp,
     NamedId,
+    NamedNaryOp,
+    NamedTernaryOp,
+    NamedUnaryOp,
+    NaryOp,
     Neg,
+    NullaryOp,
     Rational,
     ReturnStmt,
     Round,
@@ -45,7 +53,9 @@ from ..ast.fpyast import (
     Stmt,
     StmtBlock,
     Sub,
+    TernaryOp,
     TupleBinding,
+    UnaryOp,
     UnderscoreId,
     Var,
     WhileStmt,
@@ -204,33 +214,47 @@ def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
 
 
 def operands(e: Expr) -> list[Expr]:
-    """The direct operands, left to right, of an operation that carries a
-    context-driven rounding.
+    """The direct operands, left to right, of an operation.
 
-    Shared by the two halves of the rounding axis, :class:`.RoundElim` and
-    :class:`.RoundInsert`, so they cannot disagree about which operations one
-    eliminates and the other inserts.
+    Shared by the rounding rewrites so they cannot disagree about the shape of
+    what they lift.  Every arity is handled, not just arithmetic: the rounding
+    rules hold for any real-valued function, so `sqrt` and `fma` are lifted the
+    same way a multiply is.
     """
     match e:
-        case Add() | Sub() | Mul():
-            return [e.first, e.second]
-        case Abs() | Neg() | Round() | Cast():
+        case NullaryOp():
+            return []
+        case UnaryOp():
             return [e.arg]
+        case BinaryOp():
+            return [e.first, e.second]
+        case TernaryOp():
+            return [e.first, e.second, e.third]
+        case NaryOp():
+            return list(e.args)
         case _:
-            raise RuntimeError(f'not a rounded operation: {e!r}')
+            raise RuntimeError(f'not an operation: {e!r}')
 
 
 def rebuild(e: Expr, args: list[Expr]) -> Expr:
     """*e* with its operands replaced: the inverse of :func:`operands`."""
+    # a `Named*` op carries the symbol it was written with; a nullary one always
+    # does, since it has nothing else to identify it.  The arities are settled by
+    # the match, which mypy cannot follow through the star-args.
+    named = isinstance(
+        e, (NullaryOp, NamedUnaryOp, NamedBinaryOp, NamedTernaryOp, NamedNaryOp),
+    )
+    head = (e.func,) if named else ()   # type: ignore[attr-defined]
+    ctor: Any = type(e)
     match e:
-        case Add() | Sub() | Mul():
-            return type(e)(args[0], args[1], e.loc)
-        case Abs() | Neg():
-            return type(e)(args[0], e.loc)
-        case Round() | Cast():
-            return type(e)(e.func, args[0], e.loc)
+        case NullaryOp():
+            return ctor(*head, e.loc)
+        case NaryOp():
+            return ctor(*head, args, e.loc)
+        case UnaryOp() | BinaryOp() | TernaryOp():
+            return ctor(*head, *args, e.loc)
         case _:
-            raise RuntimeError(f'not a rounded operation: {e!r}')
+            raise RuntimeError(f'not an operation: {e!r}')
 
 
 def check_where(where: int | Cursor | None) -> None:
@@ -567,15 +591,9 @@ class RoundingRewriter(SiteRewriter):
 
     :class:`fpy2.transform.RoundInsert` gives an exact operation a format;
     :class:`fpy2.transform.SplitRound` splits a rounded one through an
-    intermediate.  Both pick individual operations, both emit the operation
-    alone under ``self.ctx`` with its non-``Var`` operands bound first, and both
-    refuse the positions with no statement slot.  A subclass says which
-    operations it considers (:meth:`_candidate`), whether one may be rewritten
-    (:meth:`_verify`), and what stands in its place (:meth:`_wrap`).
-
-    Sharing this is not only brevity: the two drifted once, and the `while`
-    suppression below is a soundness condition that a hand-copied pass got
-    wrong.
+    intermediate.  A subclass says which operations it considers
+    (:meth:`_candidate`), whether one may be rewritten (:meth:`_verify`), and
+    what stands in its place (:meth:`_wrap`).
     """
 
     _expr_sited = True   # the sites are expressions, not statements

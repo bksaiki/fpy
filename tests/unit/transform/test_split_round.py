@@ -16,23 +16,27 @@ names, so these tests assert
    rewrites.
 """
 
+import pathlib
 import random
 
 import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import derive_intermediate
+from fpy2.analysis.format_infer import AbstractFormat
 from fpy2.ast.fpyast import ContextStmt, ForeignVal, FuncDef, Mul, Round
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.number import RoundingMode as RM
 from fpy2.transform import (
     ExprCursor,
+    Monomorphize,
     SplitRound,
     TransformDeclined,
     TransformReferenceError,
 )
 from fpy2.transform.cursor import expr_sites
+from fpy2.types import RealType
 
 VIA32 = derive_intermediate(fp.FP32)
 """The tightest RTO intermediate for an FP32 / RNE target."""
@@ -71,6 +75,24 @@ def _via_blocks(ast: FuncDef, ctx) -> int:
 
     _C()._visit_function(ast, None)
     return n
+
+
+def _load(src: str, tag: str):
+    """An FPy function from generated source, since `fp.fpy` needs a real file."""
+    import importlib.util
+    import sys
+    import tempfile
+
+    d = pathlib.Path(tempfile.gettempdir()) / 'fpy_split_probes'
+    d.mkdir(exist_ok=True)
+    path = d / f'probe_{abs(hash(tag + src))}.py'
+    path.write_text(src)
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    assert spec is not None and spec.loader is not None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod.probe
 
 
 def _cursor_at(ast: FuncDef, kind) -> ExprCursor:
@@ -315,15 +337,14 @@ class TestDeclines:
         with pytest.raises(TransformReferenceError):
             SplitRound.apply(_product.ast, VIA32, where=7)
 
-    def test_a_bounded_intermediate(self):
+    def test_a_bounded_intermediate_the_operation_could_exceed(self):
         """A finite range gives the intermediate an overflow the premise cannot
-        see, so it is declined however wide it is."""
-        from fpy2.analysis.format_infer import AbstractFormat
-        bound = AbstractFormat.from_format(fp.FP64.format()).pos_bound
-        wide = fp.MPBFloatContext(64, -1074, bound, fp.RoundingMode.RTO)
+        see, so it is declined unless the operation provably cannot reach it --
+        and here the operands are unbounded, so nothing is provable."""
+        wide = fp.FP64.with_params(rm=fp.RoundingMode.RTO)
         assert SplitRound.sites(_product.ast, ctx=wide) == []
         why = SplitRound.refusals(_product.ast, ctx=wide)
-        assert len(why) == 1 and 'finite range' in why[0][1]
+        assert len(why) == 1 and 'could exceed' in why[0][1]
 
     def test_a_non_context_intermediate(self):
         with pytest.raises(TypeError):
@@ -402,6 +423,61 @@ class TestWhereContract:
             assert by_cursor.is_equiv(by_index)
 
 
+class TestBoundedIntermediate:
+    """A bounded intermediate is safe exactly where the operation cannot reach
+    its range, which format inference can prove from the argument formats."""
+
+    RTO64 = fp.FP64.with_params(rm=fp.RoundingMode.RTO)
+
+    @staticmethod
+    def _pinned(target=fp.FP32):
+        """`x * y` at *target* with FP32 arguments, so the exact product has a
+        bound: 48 digits, magnitude under FP32's maxval squared."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with target:
+                t = x * y
+            return t
+
+        return Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP32), RealType(fp.FP32)],
+        )
+
+    def test_a_provably_unreachable_range_is_admitted(self):
+        """FP32 x FP32 cannot leave FP64's range, so the intermediate never
+        overflows and the composition is the finite-value case the theorems
+        cover."""
+        ast = self._pinned()
+        assert len(SplitRound.sites(ast, ctx=self.RTO64)) == 1
+
+    @pytest.mark.parametrize('rm1', [RM.RNE, RM.RTZ, RM.RTO])
+    def test_and_it_is_exact(self, rm1):
+        """Including at the target's overflow boundary, which is where a tight
+        bounded intermediate goes wrong."""
+        ast = self._pinned(fp.FP32.with_params(rm=rm1))
+        out = SplitRound.apply(ast, self.RTO64)
+        edges = [(1.0e38, 4.0), (float(2 ** 127), 2.0), (3.4e38, 1.0000001),
+                 (1.7014118346046923e+38, 1.9999999), (1e-40, 1e-40), (1.0, 1.0)]
+        assert _agree(ast, out, None, edges)
+
+    def test_a_range_the_operation_could_exceed_is_declined(self):
+        """An intermediate bounded just above the target: the exact product runs
+        far past it, so the proof fails and the rewrite does not fire."""
+        f32 = AbstractFormat.from_format(fp.FP32.format())
+        tight = f32.next_bound().with_prec_offset(1).with_exp_offset(-1)
+        fmt = tight.format()
+        via = fp.MPBFloatContext(fmt.pmax, fmt.emin, fmt.pos_maxval,
+                                 fp.RoundingMode.RTO,
+                                 neg_maxval=fmt.neg_maxval)
+        ast = self._pinned(fp.FP32.with_params(rm=RM.RTZ))
+        assert SplitRound.sites(ast, ctx=via) == []
+
+    def test_an_unbounded_intermediate_needs_no_proof(self):
+        """It cannot overflow, so the argument formats are irrelevant."""
+        assert len(SplitRound.sites(_product.ast, ctx=VIA32)) == 1
+
+
 class TestNotCandidates:
     @pytest.mark.parametrize('op', ['round', 'cast'])
     def test_an_explicit_rounding_is_not_split(self, op):
@@ -437,3 +513,70 @@ class TestRepeatedApplication:
             assert _via_blocks(ast, VIA32) == expect
             assert str(Function(ast, runtime=_product.runtime)(1.5, 2.5)) \
                 == str(_product(1.5, 2.5))
+
+
+class TestAnyRealValuedOperation:
+    """The rules quantify over an arbitrary real, so what produced it does not
+    matter: every operation that rounds its result to the active context is
+    splittable, not just the arithmetic ones."""
+
+    ROUNDS = {
+        'sqrt': 'fp.sqrt(x)', 'div': 'x / y', 'fma': 'fp.fma(x, y, x)',
+        'sin': 'fp.sin(x)', 'exp': 'fp.exp(x)', 'hypot': 'fp.hypot(x, y)',
+        'floor': 'fp.floor(x)', 'pow': 'x ** y', 'atan2': 'fp.atan2(x, y)',
+        'fmod': 'fp.fmod(x, y)', 'cbrt': 'fp.cbrt(x)',
+    }
+
+    @pytest.mark.parametrize('name', sorted(ROUNDS))
+    def test_it_splits_and_agrees(self, name):
+        src = (
+            'import fpy2 as fp\n\n'
+            '@fp.fpy(ctx=fp.FP32)\n'
+            'def probe(x: fp.Real, y: fp.Real) -> fp.Real:\n'
+            f'    return {self.ROUNDS[name]}\n'
+        )
+        probe = _load(src, name)
+        assert len(SplitRound.sites(probe.ast, ctx=VIA32)) == 1
+        out = SplitRound.apply(probe.ast, VIA32)
+        args = [(1.1, 1.3), (2.0, 0.5), (7.25, 3.5), (0.5, 4.0)]
+        assert _agree(probe.ast, out, probe.runtime, args)
+
+    def test_an_irrational_constant_splits(self):
+        """`pi` is a real rounded to the context like any other."""
+
+        @fp.fpy(ctx=fp.FP32)
+        def f() -> fp.Real:
+            return fp.const_pi()
+
+        assert len(SplitRound.sites(f.ast, ctx=VIA32)) == 1
+        out = SplitRound.apply(f.ast, VIA32)
+        assert _agree(f.ast, out, f.runtime, [()])
+
+    @pytest.mark.parametrize('expr', ['min(x, y)', 'max(x, y)'])
+    def test_min_and_max_are_not_sites(self, expr):
+        """They *select* an argument and hand it back with its own format
+        rather than rounding to the active context, so there is no rounding to
+        split.  Measured: splitting `min` disagreed on 146 of 154 inputs."""
+        src = (
+            'import fpy2 as fp\n\n'
+            '@fp.fpy(ctx=fp.FP32)\n'
+            'def probe(x: fp.Real, y: fp.Real) -> fp.Real:\n'
+            f'    return {expr}\n'
+        )
+        probe = _load(src, expr[:3])
+        assert SplitRound.sites(probe.ast, ctx=VIA32) == []
+
+    @pytest.mark.parametrize('expr,ret', [
+        ('len(zs)', 'fp.Real'), ('fp.isnan(x)', 'bool'), ('fp.inf()', 'fp.Real'),
+    ])
+    def test_the_non_rounding_operations_are_not_sites(self, expr, ret):
+        """An exact query, a boolean and a non-finite constant: none is a real
+        computation followed by a rounding."""
+        src = (
+            'import fpy2 as fp\n\n'
+            '@fp.fpy(ctx=fp.FP32)\n'
+            f'def probe(x: fp.Real, zs: list[fp.Real]) -> {ret}:\n'
+            f'    return {expr}\n'
+        )
+        probe = _load(src, 'nr')
+        assert SplitRound.sites(probe.ast, ctx=VIA32) == []

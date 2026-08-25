@@ -221,6 +221,20 @@ fixed-point ones work, so the concern below about `float_to_fixed` overlap did
 not materialize. Explicit `Round` / `Cast` nodes are deliberately not sites:
 splitting a rounding is `merge_round`'s inverse.
 
+**Any real-valued operation, not just arithmetic.** The rules quantify over an
+arbitrary real, so what produced it does not matter: `sqrt`, `fma`, `pow`,
+`atan2`, the transcendentals and even `pi` split exactly as a multiply does.
+Measured: of the 33 real-valued operations probed, every one that rounds its
+result to the active context splits with no disagreement. The exceptions are
+`min` / `max`, which *select* an argument and hand it back with its own format
+rather than rounding — so there is no rounding there to split, and admitting
+them was wrong on 146 of 154 inputs. `operands` / `rebuild` in
+`transform/utils.py` are generic over arity for this reason.
+
+`insert_round` still has the narrow arithmetic-only candidate set, and the same
+argument applies to it: a rounding is an identity for any real-valued `f`.
+Widening it is the obvious follow-on.
+
 Two things worth knowing. The rewrite emits an explicit `round` in the
 *enclosing* block, because an assignment rounds nothing in FPy — that is what
 applies `rm1`, and it is asserted structurally rather than assumed. And it is
@@ -286,15 +300,12 @@ containment checks on 𝒜 that do not care which family the format comes from �
 but that overlaps `float_to_fixed` and `rescale_fixed`, so it needs thought
 rather than an assumption.
 
-### 4. Bounded intermediates for `split_round`
-
-`derive_intermediate` returns an **unbounded** intermediate, and `split_round`
-declines a bounded one. That is sound but leaves capability on the table.
+### 4. Bounded intermediates for `split_round` — **done**
 
 The premises are containment checks on `A`, which says what is representable and
 nothing about what happens beyond it — so a bounded intermediate has an overflow
-of its own that the premise cannot see. Measured on an FP32 target, products
-straddling its maxval:
+of its own that they cannot see. Measured on an FP32 target, products straddling
+its maxval:
 
 | target | intermediate bound | overflow mode | wrong |
 |---|---|---|---|
@@ -305,25 +316,30 @@ straddling its maxval:
 | RTO | `b1` | overflowing | **1** |
 | any | FP64-wide | either | 0 |
 
-Two things to read off this. A bounded intermediate is usually fine, and fails
-only where its bound sits close to the target's — the failure is the *boundary*,
-not the width. And no single overflow mode is right: a target that clamps (RTZ)
-needs the intermediate not to overflow, one that overflows (RTO) needs it to.
-That is why `derive_intermediate` sidesteps the question rather than answering
-it: an unbounded intermediate cannot overflow, so the only rounding that can is
-the target's, exactly as before the split.
+Two things to read off this. The failure is the *boundary*, not the width: a
+bounded intermediate goes wrong only where its bound sits close to the target's.
+And no single overflow mode is right — a target that clamps (RTZ) needs the
+intermediate not to overflow, one that overflows (RTO) needs it to.
 
-**The fix is a proof, not a mode.** `RoundingScopes` already carries
-`format_info`, so the operation's inferred bound is in hand: where that bound
-lies inside the intermediate's finite range, the intermediate provably cannot
-overflow and the boundary never arises. That admits every row above whose
-mismatch count is zero — including the FP64-wide case, which is what a caller
-reaching for a familiar format would pass — and declines the rest with a reason.
-`RoundInsert._verify` reads the same field, so the machinery is there.
+**The fix is a proof, not a mode.** `derive_intermediate` returns an *unbounded*
+intermediate, which cannot overflow at all, so the only rounding that can is the
+target's. A *bounded* one is admitted where format inference proves the
+operation cannot reach its range: `SplitRound._within` recomputes the operation's
+**unrounded** result with `exact_binop` / `exact_unop` over the operand bounds
+and requires it to fit. The unrounded part is load-bearing — `by_expr` holds the
+result *after* the target's rounding, which lies inside the target's format by
+construction and would prove nothing.
 
-The residue after that proof is the genuinely open part: a bounded intermediate
-whose range the operation *can* exceed. Settling it needs the overflow boundary
-per mode pair, which Figure 8 does not cover — its theorems are `RoundsFinite`.
+That admits the useful case (an FP64-RTO intermediate for an FP32 target with
+FP32 arguments — the exact product cannot leave FP64) and declines the tight
+bounds that were wrong. Verified across five target modes × two bounds × two
+overflow modes: **no unsound admission**, and every admitted pair exact on
+overflowing, subnormal and normal inputs.
+
+Deliberately conservative in one place: a tight bounded intermediate that
+saturates *is* exact for an RTZ target, and is declined anyway. Admitting it
+needs the overflow boundary per mode pair, which Figure 8 does not cover — its
+theorems are `RoundsFinite`.
 
 ### 5. `merge_round`
 
@@ -403,9 +419,8 @@ Three positions, in the order they were closed:
    `derive_intermediate` in `format_infer/double_round.py`, tested against the
    Lean theorems in `tests/unit/analysis/test_double_round.py`; the operator in
    `fpy2/transform/split_round.py` and `fpy2/strategies/round_split.py`.
-5. **Bounded intermediates for `split_round`** (gap 4) — a no-overflow proof
-   from `format_info`, which admits the useful cases the current blanket refusal
-   turns away.
+5. ~~**Bounded intermediates for `split_round`**~~ — **done.** A no-overflow
+   proof from `format_info` in `SplitRound._within`.
 6. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
    spellings first. The only operator left on the page.
 7. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then

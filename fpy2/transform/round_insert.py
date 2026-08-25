@@ -35,51 +35,33 @@ pass finds only ``Var``-argumented operations already under a format.
 The refusals, and why each one, are at :meth:`_RoundInsertInstance._verify`.
 """
 
-from typing import Any
-
-from ..analysis import ContextUse, DefineUse, SyntaxCheck
+from ..analysis import SyntaxCheck
 from ..analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
-    FormatInfer,
     SetFormat,
     round_is_identity,
 )
 from ..ast.fpyast import (
     Abs,
     Add,
-    Assign,
     Cast,
-    ContextStmt,
     Expr,
-    ForeignVal,
-    ForStmt,
     FuncDef,
-    If1Stmt,
-    IfExpr,
-    IfStmt,
-    ListComp,
     Mul,
     NamedId,
     Neg,
     Round,
-    StmtBlock,
     Sub,
-    UnderscoreId,
     Var,
-    WhileStmt,
 )
 from ..number import REAL, Context
-from ..utils import Gensym
-from .cursor import Cursor, EditLog, ExprCursor
+from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
     RoundingRewriter,
     RoundingScopes,
-    SiteRewriter,
     check_where,
-    operands,
-    rebuild,
 )
 
 _ROUNDABLE = (Add, Sub, Mul, Abs, Neg, Round, Cast)
