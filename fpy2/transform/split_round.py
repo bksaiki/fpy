@@ -24,7 +24,9 @@ where it picks up the target's own mode.
 Which pairs are admissible is decided by
 :func:`fpy2.analysis.format_infer.double_round_ok`; the intermediate is the
 caller's, and :func:`fpy2.analysis.format_infer.derive_intermediate` computes a
-suitable one.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
+suitable one.  An intermediate that represents the operation's *exact* result is
+admitted whatever the modes, since rounding to it is then the identity -- which is
+how a nearest-to-nearest split becomes possible at all.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
 candidates: splitting a rounding is the inverse of merging two, and admitting
 them makes a second application grow the tree twice as fast.
 """
@@ -144,20 +146,25 @@ class _SplitRoundInstance(RoundingRewriter):
                 'composition cannot be checked'
             )
 
-        rm1, rm2 = target.rounding_mode(), self.ctx.rounding_mode()
-        if rm1 is None or rm2 is None:
-            return Declined('a context without a rounding mode has no rule')
-
         f1, f2 = target.format(), self.ctx.format()
         if not isinstance(f1, AbstractableFormat) or not isinstance(f2, AbstractableFormat):
             return Declined(
                 'one of the formats has no abstract form, so the premise '
                 'cannot be checked'
             )
-        if not double_round_ok(
-            AbstractFormat.from_format(f1), rm1,
-            AbstractFormat.from_format(f2), rm2,
-        ):
+        f2a = AbstractFormat.from_format(f2)
+
+        # `rndExact`: where the intermediate represents this operation's exact
+        # result, rounding to it is the identity, so the composition *is* the
+        # original computation -- under any pair of modes, overflow included.
+        exact = self._exact_result(e)
+        if exact is not None and exact.contained_in(f2a):
+            return None
+
+        rm1, rm2 = target.rounding_mode(), self.ctx.rounding_mode()
+        if rm1 is None or rm2 is None:
+            return Declined('a context without a rounding mode has no rule')
+        if not double_round_ok(AbstractFormat.from_format(f1), rm1, f2a, rm2):
             return Declined(
                 f'rounding to {rm2.name} and then {rm1.name} is not the same '
                 f'as rounding to {rm1.name} for these formats'
@@ -167,9 +174,8 @@ class _SplitRoundInstance(RoundingRewriter):
         # bounded intermediate can also be handed a special or a value past its
         # range, and the rule stays valid exactly where the composition agrees
         # there too -- which is a finite check.
-        f2a = AbstractFormat.from_format(f2)
         if isinstance(f2a.bound, RealFloat) and not (
-            self._composes_special(target, f2a) or self._within(e, f2a)
+            self._composes_special(target, f2a) or self._within(exact, f2a)
         ):
             return Declined(
                 'the composition disagrees with the single rounding on a '
@@ -208,28 +214,36 @@ class _SplitRoundInstance(RoundingRewriter):
             return False
         return True
 
-    def _within(self, e: Expr, f2: AbstractFormat) -> bool:
-        """Whether *e*'s real result provably stays inside *f2*'s finite range.
+    def _exact_result(self, e: Expr) -> AbstractFormat | None:
+        """*e*'s result before the target rounds it, as a format.
 
-        The *unrounded* bound: `by_expr` holds the result after the target's
-        rounding, which is inside the target's format by construction and would
-        prove nothing.  Rounding a value no larger than the range cannot leave
-        it, so this rules the overflow out.
+        The *unrounded* one: `by_expr` holds the result after the rounding, which
+        is inside the target's format by construction and would prove nothing.
+        `None` where it has no abstract form -- an operation with no exact rule,
+        a constant-folded set, or an operand whose format is unknown.
         """
         args = [self.scopes.format_info.by_expr.get(a) for a in operands(e)]
-        if len(args) == 2 and type(e) in _EXACT_BINOP:
-            unrounded = exact_binop(args[0], args[1], _EXACT_BINOP[type(e)])
-        elif len(args) == 1 and type(e) in _EXACT_UNOP:
-            unrounded = exact_unop(args[0], _EXACT_UNOP[type(e)])
+        # the arity is implied by the table: unpacking asserts it
+        if type(e) in _EXACT_BINOP:
+            lhs, rhs = args
+            out = exact_binop(lhs, rhs, _EXACT_BINOP[type(e)])
+        elif type(e) in _EXACT_UNOP:
+            arg, = args
+            out = exact_unop(arg, _EXACT_UNOP[type(e)])
         else:
+            return None
+
+        if isinstance(out, AbstractableFormat):
+            out = AbstractFormat.from_format(out)
+        return out if isinstance(out, AbstractFormat) else None
+
+    @staticmethod
+    def _within(exact: AbstractFormat | None, f2: AbstractFormat) -> bool:
+        """Whether *exact* provably stays inside *f2*'s finite range, so that
+        rounding to *f2* cannot overflow."""
+        if exact is None:
             return False
-
-        if isinstance(unrounded, AbstractableFormat):
-            unrounded = AbstractFormat.from_format(unrounded)
-        if not isinstance(unrounded, AbstractFormat):
-            return False        # a constant-folded set, or no bound at all
-
-        pos, neg = unrounded.pos_bound, unrounded.neg_bound
+        pos, neg = exact.pos_bound, exact.neg_bound
         if isinstance(pos, float) or isinstance(neg, float):
             return False        # unbounded result: nothing to prove
         return pos <= f2.pos_bound and neg >= f2.neg_bound

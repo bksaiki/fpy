@@ -23,11 +23,11 @@ import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import derive_intermediate
-from fpy2.analysis.format_infer import AbstractFormat
+from fpy2.analysis.format_infer import AbstractFormat, double_round_ok
 from fpy2.ast.fpyast import ContextStmt, ForeignVal, FuncDef, Mul, Round
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
-from fpy2.number import RoundingMode as RM
+from fpy2.number import RealFloat, RoundingMode as RM
 from fpy2.transform import (
     ExprCursor,
     Monomorphize,
@@ -118,6 +118,64 @@ def _agree(before: FuncDef, after: FuncDef, runtime, args_list) -> bool:
     return all(str(fa(*a)) == str(fb(*a)) for a in args_list)
 
 
+def _sweep(n: int = 2000):
+    rng = random.Random(0)
+    for i in range(n):
+        a = rng.uniform(-1e3, 1e3) if i % 3 else rng.uniform(-1e-30, 1e-30)
+        b = rng.uniform(-1e3, 1e3) if i % 2 else rng.uniform(-1e30, 1e30)
+        yield a, b
+
+def _subnormal_sweep(n: int = 600):
+    """Products landing in FP32's *gradual*-underflow band.
+
+    The `exp - k` half of each premise exists for exactly this range, and
+    nothing else here reaches it: the products in `_sweep` either flush to
+    zero or stay normal.
+    """
+    rng = random.Random(1)
+    for _ in range(n):
+        k = rng.randint(-74, -60)
+        yield rng.uniform(1.0, 2.0) * 2.0 ** k, rng.uniform(0.5, 2.0)
+
+def _overflow_sweep(n: int = 400):
+    """Products above FP32's maxval, where a non-saturating intermediate
+    sends to `inf` what the target clamps."""
+    rng = random.Random(2)
+    for _ in range(n):
+        yield rng.uniform(1.0, 2.0) * 2.0 ** 127, rng.uniform(2.0, 8.0)
+
+
+def _pinned_mul(target=fp.FP32, argctx=fp.FP32) -> FuncDef:
+    """`x * y` at *target* with *argctx* arguments, so the operands have formats
+    -- which is what these premises are stated over.  With FP32 arguments the
+    exact product is 48 digits, bounded by FP32's maxval squared."""
+
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real, y: fp.Real) -> fp.Real:
+        with target:
+            t = x * y
+        return t
+
+    return Monomorphize.apply(
+        f.ast, fp.REAL, [RealType(argctx), RealType(argctx)],
+    )
+
+
+def _pinned_add(target=fp.FP32, argctx=fp.FP32) -> FuncDef:
+    """:func:`_pinned_mul` for a sum, whose exact format is far wider: the
+    operands' exponent range enters the precision."""
+
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real, y: fp.Real) -> fp.Real:
+        with target:
+            t = x + y
+        return t
+
+    return Monomorphize.apply(
+        f.ast, fp.REAL, [RealType(argctx), RealType(argctx)],
+    )
+
+
 @fp.fpy(ctx=fp.REAL)
 def _product(x: fp.Real, y: fp.Real) -> fp.Real:
     with fp.FP32:
@@ -168,38 +226,9 @@ class TestShape:
 
 
 class TestEquivalence:
-    @staticmethod
-    def _sweep(n: int = 2000):
-        rng = random.Random(0)
-        for i in range(n):
-            a = rng.uniform(-1e3, 1e3) if i % 3 else rng.uniform(-1e-30, 1e-30)
-            b = rng.uniform(-1e3, 1e3) if i % 2 else rng.uniform(-1e30, 1e30)
-            yield a, b
-
-    @staticmethod
-    def _subnormal_sweep(n: int = 600):
-        """Products landing in FP32's *gradual*-underflow band.
-
-        The `exp - k` half of each premise exists for exactly this range, and
-        nothing else here reaches it: the products in `_sweep` either flush to
-        zero or stay normal.
-        """
-        rng = random.Random(1)
-        for _ in range(n):
-            k = rng.randint(-74, -60)
-            yield rng.uniform(1.0, 2.0) * 2.0 ** k, rng.uniform(0.5, 2.0)
-
-    @staticmethod
-    def _overflow_sweep(n: int = 400):
-        """Products above FP32's maxval, where a non-saturating intermediate
-        sends to `inf` what the target clamps."""
-        rng = random.Random(2)
-        for _ in range(n):
-            yield rng.uniform(1.0, 2.0) * 2.0 ** 127, rng.uniform(2.0, 8.0)
-
     def test_a_split_changes_no_value(self):
         out = SplitRound.apply(_product.ast, VIA32)
-        assert _agree(_product.ast, out, _product.runtime, self._sweep())
+        assert _agree(_product.ast, out, _product.runtime, _sweep())
 
     def test_the_edge_cases_the_premises_exist_for(self):
         """Underflow to zero, overflow to infinity, and `-0` — the cases where a
@@ -214,7 +243,7 @@ class TestEquivalence:
 
     def test_gradual_underflow(self):
         out = SplitRound.apply(_product.ast, VIA32)
-        assert _agree(_product.ast, out, _product.runtime, self._subnormal_sweep())
+        assert _agree(_product.ast, out, _product.runtime, _subnormal_sweep())
 
     def test_overflow_matches_the_unsplit_program(self):
         """The derived intermediate is unbounded, so the only rounding that can
@@ -223,7 +252,7 @@ class TestEquivalence:
         behaviour gets right: a clamping target (RTZ) needs it not to overflow,
         an overflowing one (RTO) needs it to."""
         out = SplitRound.apply(_product.ast, VIA32)
-        assert _agree(_product.ast, out, _product.runtime, self._overflow_sweep())
+        assert _agree(_product.ast, out, _product.runtime, _overflow_sweep())
 
     @pytest.mark.parametrize('rm1', [RM.RTZ, RM.RTO, RM.RNE])
     def test_overflow_for_a_clamping_and_an_overflowing_target(self, rm1):
@@ -238,7 +267,7 @@ class TestEquivalence:
             return t
 
         out = SplitRound.apply(f.ast, derive_intermediate(target))
-        assert _agree(f.ast, out, f.runtime, self._overflow_sweep(150))
+        assert _agree(f.ast, out, f.runtime, _overflow_sweep(150))
 
     def test_a_nested_rounded_operand(self):
         """An operand that is itself a rounded operation has to be bound under
@@ -251,8 +280,8 @@ class TestEquivalence:
 
         assert len(SplitRound.sites(nested.ast, ctx=VIA32)) == 2
         out = SplitRound.apply(nested.ast, VIA32)
-        assert _agree(nested.ast, out, nested.runtime, self._sweep(800))
-        assert _agree(nested.ast, out, nested.runtime, self._subnormal_sweep(200))
+        assert _agree(nested.ast, out, nested.runtime, _sweep(800))
+        assert _agree(nested.ast, out, nested.runtime, _subnormal_sweep(200))
 
     def test_a_fixed_point_target(self):
         """The premises are containment checks on `A`, indifferent to the format
@@ -268,11 +297,11 @@ class TestEquivalence:
         via = derive_intermediate(target)
         assert len(SplitRound.sites(f.ast, ctx=via)) == 1
         out = SplitRound.apply(f.ast, via)
-        assert _agree(f.ast, out, f.runtime, self._sweep(400))
+        assert _agree(f.ast, out, f.runtime, _sweep(400))
 
     def test_both_sites_together(self):
         out = SplitRound.apply(_two_ops.ast, VIA32)
-        assert _agree(_two_ops.ast, out, _two_ops.runtime, self._sweep(500))
+        assert _agree(_two_ops.ast, out, _two_ops.runtime, _sweep(500))
 
     @pytest.mark.parametrize('rm1', [RM.RTZ, RM.RAZ, RM.RTO])
     def test_a_directed_target(self, rm1):
@@ -288,7 +317,7 @@ class TestEquivalence:
         via = derive_intermediate(target)
         assert len(SplitRound.sites(f.ast, ctx=via)) == 1
         out = SplitRound.apply(f.ast, via)
-        assert _agree(f.ast, out, f.runtime, self._sweep(500))
+        assert _agree(f.ast, out, f.runtime, _sweep(500))
 
 
 class TestDeclines:
@@ -481,26 +510,111 @@ class TestWhereContract:
             assert by_cursor.is_equiv(by_index)
 
 
+class TestExactIntermediate:
+    """`rndExact`: where the intermediate represents the operation's exact
+    result, rounding to it is the identity, so the composition *is* the original
+    computation.  That holds for any pair of modes -- including nearest over
+    nearest, which no width of intermediate makes sound in general."""
+
+    _EDGES = [(1.5, 2.5), (1e-40, 1e-40), (3.4e38, 1.0000001), (1e30, 1e30),
+              (0.0, -1.0), (float('nan'), 1.0), (float('inf'), 2.0)]
+
+    def test_a_product_splits_through_a_nearest_intermediate(self):
+        """The case the operator exists for: an FP32 multiply computed in FP64
+        and re-rounded, with both contexts left at their own RNE."""
+        ast = _pinned_mul()
+        assert len(SplitRound.sites(ast, ctx=fp.FP64)) == 1
+        out = SplitRound.apply(ast, fp.FP64)
+        assert _agree(ast, out, None, self._EDGES)
+        assert _agree(ast, out, None, _sweep(600))
+        assert _agree(ast, out, None, _subnormal_sweep(200))
+        assert _agree(ast, out, None, _overflow_sweep(200))
+
+    def test_the_generic_rule_refuses_the_same_pair(self):
+        """So the admission above comes from exactness, not from Figure 8."""
+        f32 = AbstractFormat.from_format(fp.FP32.format())
+        f64 = AbstractFormat.from_format(fp.FP64.format())
+        assert not double_round_ok(f32, RM.RNE, f64, RM.RNE)
+
+    @pytest.mark.parametrize('rm2', [RM.RTZ, RM.RTP, RM.RAZ, RM.RTE])
+    def test_the_intermediate_mode_is_unrestricted(self, rm2):
+        """An exact rounding is the identity whatever its mode, so a directed
+        intermediate is as good as a nearest one."""
+        ast = _pinned_mul()
+        via = fp.FP64.with_params(rm=rm2)
+        assert len(SplitRound.sites(ast, ctx=via)) == 1
+        assert _agree(ast, SplitRound.apply(ast, via), None, self._EDGES)
+
+    def test_narrow_operands_need_no_extra_width(self):
+        """Format inference makes this stronger than the closed form `p2 >= 2p1`:
+        an FP16 product needs 22 digits, so FP32 itself is a wide enough
+        intermediate for an FP32 target."""
+        ast = _pinned_mul(fp.FP32, argctx=fp.FP16)
+        assert len(SplitRound.sites(ast, ctx=fp.FP32)) == 1
+
+    def test_a_fixed_point_target(self):
+        """Containment is indifferent to which family a format comes from."""
+        ast = _pinned_add(fp.SINT8, argctx=fp.SINT8)
+        assert len(SplitRound.sites(ast, ctx=fp.INTEGER)) == 1
+
+    def test_a_sum_is_not_exact_in_the_intermediate(self):
+        """The operands' exponent range enters an exact sum's precision, so FP64
+        cannot hold one -- this is the generic rule's business again, and it
+        refuses nearest over nearest."""
+        ast = _pinned_add()
+        assert SplitRound.sites(ast, ctx=fp.FP64) == []
+        why = SplitRound.refusals(ast, ctx=fp.FP64)
+        assert len(why) == 1 and 'is not the same as' in why[0][1]
+
+    def test_an_exponent_range_the_intermediate_lacks(self):
+        """BF16 has FP32's exponent range, so an exact BF16 product needs more
+        of it than FP32 has -- precision alone is not containment."""
+        ast = _pinned_mul(fp.BF16, argctx=fp.BF16)
+        assert SplitRound.sites(ast, ctx=fp.FP32) == []
+
+    def test_the_bound_is_part_of_containment(self):
+        """Precision and exponent are not enough: an intermediate that cannot
+        hold the product's *magnitude* would overflow, so the rounding to it is
+        not the identity.  A directed mode keeps the generic rule out of it."""
+        wide = AbstractFormat.from_format(fp.FP64.format()).with_prec_offset(11)
+        ast = _pinned_mul()
+        roomy = fp.MPBFloatContext(
+            wide.prec, -1074, RealFloat(c=1, exp=300), RM.RTZ,
+            neg_maxval=RealFloat(s=True, c=1, exp=300),
+        )
+        cramped = fp.MPBFloatContext(
+            wide.prec, -1074, RealFloat(c=1, exp=0), RM.RTZ,
+            neg_maxval=RealFloat(s=True, c=1, exp=0),
+        )
+        assert len(SplitRound.sites(ast, ctx=roomy)) == 1
+        assert SplitRound.sites(ast, ctx=cramped) == []
+
+    @pytest.mark.parametrize('neg_exp,sites', [(300, 1), (133, 0)])
+    def test_the_range_proof_is_two_sided(self, neg_exp, sites):
+        """The range proof behind the bounded-intermediate case reads both
+        bounds.  An intermediate with room for the product on the positive side
+        only still overflows, so it is refused -- FP32 itself fits either way, so
+        the generic premise is not what separates these two."""
+        ast = _pinned_mul(fp.FP32.with_params(rm=RM.RTZ))
+        via = fp.MPBFloatContext(
+            60, -1074, RealFloat(c=1, exp=300), RM.RTO,
+            neg_maxval=RealFloat(s=True, c=1, exp=neg_exp),
+        )
+        assert len(SplitRound.sites(ast, ctx=via)) == sites
+
+    def test_an_operand_of_unknown_format_is_refused(self):
+        """An unannotated argument holds whatever the caller passes, so there is
+        no exact result to place -- `Monomorphize` is what makes this fire."""
+        assert SplitRound.sites(_product.ast, ctx=fp.FP64) == []
+
+
 class TestBoundedIntermediate:
     """A bounded intermediate is safe exactly where the operation cannot reach
     its range, which format inference can prove from the argument formats."""
 
     RTO64 = fp.FP64.with_params(rm=fp.RoundingMode.RTO)
 
-    @staticmethod
-    def _pinned(target=fp.FP32):
-        """`x * y` at *target* with FP32 arguments, so the exact product has a
-        bound: 48 digits, magnitude under FP32's maxval squared."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with target:
-                t = x * y
-            return t
-
-        return Monomorphize.apply(
-            f.ast, fp.REAL, [RealType(fp.FP32), RealType(fp.FP32)],
-        )
+    _pinned = staticmethod(_pinned_mul)
 
     def test_a_provably_unreachable_range_is_admitted(self):
         """FP32 x FP32 cannot leave FP64's range, so the intermediate never
