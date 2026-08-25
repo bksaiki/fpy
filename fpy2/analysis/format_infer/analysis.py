@@ -456,13 +456,34 @@ class FunctionFormat:
     :attr:`FunctionType.return_type`)."""
 
 
+@dataclass(frozen=True)
+class VarFormat:
+    """The format-level counterpart of :class:`fpy2.types.VarType`: a bound whose
+    *kind* type inference never resolved.
+
+    Neither ``None`` (a known non-number) nor ``SetFormat.bottom()`` (a real with
+    no values) is honest about one -- both claim a kind.  This is the bottom of
+    *every* lattice, so joining it with anything yields that thing and the first
+    store decides the kind.
+    """
+
+
+VAR_FORMAT = VarFormat()
+"""The sole :class:`VarFormat`, mirroring :data:`REAL_FORMAT`."""
+
+
 ScalarFormatBound: TypeAlias = None | SetFormat | Format
 AbstractableFormatBound: TypeAlias = SetFormat | AbstractableFormat
-FormatBound: TypeAlias = None | SetFormat | Format | TupleFormat | ListFormat
+FormatBound: TypeAlias = (
+    None | VarFormat | SetFormat | Format | TupleFormat | ListFormat
+)
 """
 Inferred format for an expression or variable definition.
 
 - ``None`` — no numeric format (booleans, contexts, foreign values, …).
+- :class:`VarFormat` — a bound whose kind type inference never resolved, the
+  mirror of :class:`fpy2.types.VarType`; not the same as knowing the value is
+  not a number.
 - :class:`SetFormat` — known finite set of real values; more precise than any
   format containing them.  Empty is the scalar bottom — no value at all.
 - :class:`Format` — scalar format; ``REAL_FORMAT`` is the top of the scalar
@@ -615,6 +636,8 @@ def is_bottom(fmt: FormatBound) -> bool:
     leaves are empty.  ``None`` is *not* bottom: it is a boolean's bound.
     """
     match fmt:
+        case VarFormat():
+            return True
         case SetFormat():
             return not fmt.values
         case TupleFormat():
@@ -631,8 +654,10 @@ def _bottom_of_type(ty: Type) -> FormatBound:
     empty set, so a ``list[tuple[real, real]]`` allocation is
     ``list[tuple[∅, ∅]]``: each slot starts empty, not at the top.
 
-    A :class:`VarType` leaf stays ``None`` as in :func:`_bound_of_type` — an
-    element type inference never resolved is not known to be numeric.
+    A :class:`VarType` leaf is :data:`VAR_FORMAT`, its format-level mirror: an
+    element type inference never resolved has no *kind*, so neither ``None`` (a
+    known non-number) nor the scalar bottom (a real with no values) is honest
+    about it.
     """
     match ty:
         case RealType():
@@ -641,8 +666,10 @@ def _bottom_of_type(ty: Type) -> FormatBound:
             return TupleFormat(tuple(_bottom_of_type(t) for t in ty.elts))
         case ListType():
             return ListFormat(_bottom_of_type(ty.elt))
-        case BoolType() | ContextType() | FunctionType() | VarType():
+        case BoolType() | ContextType() | FunctionType():
             return None
+        case VarType():
+            return VAR_FORMAT
         case _:
             raise RuntimeError(f'unreachable: unknown type {ty!r}')
 
@@ -1186,6 +1213,10 @@ def _join_bounds(
     arithmetic.
     """
     match s1, s2:
+        case VarFormat(), other:
+            return other
+        case other, VarFormat():
+            return other
         case None, None:
             return None
         case SetFormat(values=a), SetFormat(values=b):

@@ -171,9 +171,12 @@ def _check_signature_monomorphic(a: SpecAnalyses) -> None:
     """Refuse a spec whose signature still holds a type variable -- emitting it
     needs a template, which this backend does not do.
 
-    Storage selection will not catch this: a :class:`VarType` and a ``bool``
-    share the ``None`` format bound, so the ladder answers ``bool`` for both
-    and ``return []`` became ``std::vector<bool> f()``.
+    Storage selection will not catch this: an unresolved kind reads as
+    :class:`VarFormat`, whose storage is unobservable and so answers ``bool``
+    rather than refusing -- which is right for an internal type variable and
+    wrong only here.  Before ``VarFormat`` existed the two were indistinguishable
+    (a :class:`VarType` and a ``bool`` shared the ``None`` bound), and
+    ``return []`` became ``std::vector<bool> f()``.
 
     Scoped to the signature, which is where the template would be needed.  A
     type variable that stays internal belongs to a value no element is stored

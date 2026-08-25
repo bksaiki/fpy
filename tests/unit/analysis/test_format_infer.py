@@ -14,13 +14,20 @@ from fractions import Fraction
 from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
-from fpy2.analysis.format_infer import AbstractFormat, ListFormat, SetFormat, TupleFormat
+from fpy2.analysis.format_infer import (
+    AbstractFormat,
+    ListFormat,
+    SetFormat,
+    TupleFormat,
+)
 from fpy2.analysis.format_infer.analysis import _magnitude_constraint
 from fpy2.utils import CompareOp
 from fpy2.analysis.format_infer.analysis import (
+    VAR_FORMAT,
     _INTEGER_FORMAT,
     _join_bounds,
     _list_set_widen,
+    is_bottom,
 )
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
@@ -2038,10 +2045,11 @@ class TestEmptyIsBottom:
             SetFormat.from_value(Fraction(2)),
         ))) in self._bounds(info, 'xs')
 
-    def test_unresolved_element_type_stays_none(self):
+    def test_unresolved_element_type_is_unknown(self):
         """Nothing constrains the element type of an allocation that is never
-        written, so the leaf is the ``None`` :func:`_bound_of_type` also gives
-        a :class:`VarType` — not the scalar bottom."""
+        written, so the leaf is :data:`VAR_FORMAT` — not ``None``, which would claim
+        the element is not a number, and not the scalar bottom, which would claim
+        it is a real with no values.  Both are kind claims; there is no kind."""
 
         @fp.fpy
         def f():
@@ -2049,7 +2057,90 @@ class TestEmptyIsBottom:
             return xs
 
         info = FormatInfer.analyze(f.ast)
-        assert self._empty_bound(info) == ListFormat(None)
+        assert self._empty_bound(info) == ListFormat(VAR_FORMAT)
+        assert is_bottom(self._empty_bound(info))
+
+
+class TestUnknownKind:
+    """An unresolved type variable has no *kind*, so its bottom cannot be
+    ``None`` (a known non-number) or ``SetFormat.bottom()`` (a real with no
+    values).  :data:`VAR_FORMAT` is the bottom of every lattice, and the first
+    store decides the kind.
+
+    The crash this fixes: a generic callee that allocates with ``fp.empty`` and
+    fills by ``IndexedAssign`` gets its element format from the *type* (an
+    unsubstituted ``VarType``) while the stored value gets its own from the
+    *caller's* instantiation.  Format instantiation crosses a call edge; type
+    instantiation does not, so the two disagreed and the join had no case.
+    """
+
+    @staticmethod
+    def _generic_fill():
+        @fp.fpy(ctx=fp.REAL)
+        def fill(xs, ys):
+            n = len(xs)
+            m = len(ys)
+            zs = fp.empty(n + m)
+            for i in range(n):
+                zs[i] = xs[i]
+            for i in range(m):
+                zs[n + i] = ys[i]
+            return zs
+
+        return fill
+
+    def test_the_join_is_the_stored_kind(self):
+        """`VAR_FORMAT ⊔ x = x`, in either order and at either kind."""
+        assert _join_bounds(VAR_FORMAT, REAL_FORMAT) == REAL_FORMAT
+        assert _join_bounds(REAL_FORMAT, VAR_FORMAT) == REAL_FORMAT
+        assert _join_bounds(VAR_FORMAT, None) is None
+        assert _join_bounds(None, VAR_FORMAT) is None
+        assert _join_bounds(VAR_FORMAT, VAR_FORMAT) == VAR_FORMAT
+
+    def test_a_real_comprehension_across_a_call_edge(self):
+        """The reported crash.  The element format resolves from the caller, so
+        the store decides the kind and the result is a list of reals."""
+        fill = self._generic_fill()
+
+        @fp.fpy(ctx=fp.FP32)
+        def caller(A, c):
+            return fill([x * x for x in A], [c])
+
+        info = FormatInfer.analyze(caller.ast)
+        calls = [b for e, b in info.by_expr.items() if isinstance(b, ListFormat)]
+        assert ListFormat(REAL_FORMAT) in calls
+
+    def test_a_boolean_comprehension_across_a_call_edge(self):
+        """The mirror: the stored kind is *not* numeric, and survives just as
+        well.  A scalar bottom for the allocation would have crashed here."""
+        fill = self._generic_fill()
+
+        @fp.fpy(ctx=fp.REAL)
+        def caller(A, c):
+            return fill([x < c for x in A], [c < c])
+
+        FormatInfer.analyze(caller.ast)      # no exception is the assertion
+
+    def test_one_resolved_argument_is_enough_to_break_it(self):
+        """It crashed whenever *one* side resolved.  `fill(A, A)` was the only
+        combination that worked, both sides being unresolved — so a test using
+        only that shape would have missed this entirely."""
+        fill = self._generic_fill()
+
+        @fp.fpy(ctx=fp.REAL)
+        def literal_only(A, c):
+            return fill(A, [c])
+
+        @fp.fpy(ctx=fp.REAL)
+        def comprehension_only(A, c):
+            return fill([x * x for x in A], A)
+
+        @fp.fpy(ctx=fp.REAL)
+        def neither(A, c):
+            return fill(A, A)
+
+        for fn in (literal_only, comprehension_only, neither):
+            FormatInfer.analyze(fn.ast)
 
 
 class TestRoundIntoAFixedScope:

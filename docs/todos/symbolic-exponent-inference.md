@@ -10,7 +10,8 @@ What is left for a symbolic design is a *tighter* answer than refinement reaches
 — `2^11` where it gets `2^40` — and retiring the bound the transform currently
 asserts in favour of one the analysis derives. That also extends to a
 hand-written program that scales by its own exponent, which no branch of ours
-conditions.
+conditions — and *that* case has a cheaper route than either design here, being
+one transfer rule rather than a domain. See [Design C](#design-c--one-rule-not-a-relation).
 
 ## The problem, measured
 
@@ -183,6 +184,70 @@ It covers the whole family these passes emit, because they always compute
 `logb` and then scale by a function of it. It degrades gracefully: an
 unrecognized scale falls back to today's behavior rather than being wrong.
 
+## Design C — one rule, not a relation
+
+The cheapest of the three, and the only one that reaches a rounding whose
+position is *still* symbolic — which is the shape a hand-written program takes:
+
+```python
+e = fp.logb(x)
+with fp.MPFixedContext(e - 10):
+    y = fp.round(x)
+```
+
+`y` infers as `RealFormat()` today. `_scope_format` resolves the scope through
+`_resolve_active_ctx`, which returns a `Context` or nothing; `MPFixedContext(e -
+10)` is a `Call`, so the `REAL_FORMAT` fallback fires and the rounding reads as
+exact. Nothing is *degraded* — the scope's shape is right there in the AST — it is
+discarded.
+
+Measured on an `FP32` source, sweeping every binade including the subnormal
+extremes:
+
+| | |
+|---|---|
+| truth | `𝒜(11, -149, ~2^128)` |
+| inferred | `RealFormat()` |
+
+The width is `k + 1`, saturating at the operand's own precision — a quantum finer
+than `x`'s grid returns `x` unchanged, which is also why the digit position
+bottoms out at `x`'s own `exp` and *not* at `exp - k`:
+
+| `k` in `logb(x) - k` | 0 | 1 | 5 | 10 | 23 | 40 |
+|---|---|---|---|---|---|---|
+| observed `prec` | 1 | 2 | 6 | 11 | 24 | 24 |
+| `min(k + 1, 24)` | 1 | 2 | 6 | 11 | 24 | 24 |
+
+So the whole content is one closed-form transfer rule:
+
+```
+round_{𝒜(∞, logb(x) - k + 1)}(x)   →   𝒜(min(k + 1, prec_x), exp_x, 2^(e_max + 1))
+```
+
+with `e_max` the top of `logb(x)`'s inferred range. The exponents still cancel —
+`(e+1) - (e-9) = 10` — but inside the rule, so nothing symbolic escapes into the
+lattice: no linear arithmetic over program variables, no join or widening story
+for symbolic exponents, no threading through a 2600-line `FormatInfer`.
+
+It needs the first two of the three facts A and B need, and not the third:
+
+1. **A scope whose shape is known and whose position is an expression**, so
+   `_scope_format` stops falling back to `REAL_FORMAT`. The structure —
+   fixed-point, unbounded, one position parameter — is syntactic.
+2. **The `logb` relation at a definition rather than at a branch.**
+   `_implied_logb` already states `logb(v) >= lo ⟹ |v| >= 2^lo`, but only as a
+   refinement conditioned on a comparison; here there is no branch to hang it on.
+
+**What it does not cover** is the output of `rescale_fixed`, which is what the
+rest of this page is about: there the rounding has already been rewritten to
+`(2 ** -exp) * x` at position zero, so the correlation has to survive a `Mul` and
+needs Design B's tag. Design C is for `float_to_fixed`'s *input* rather than its
+output — and for the hand-written program the header calls out, which no branch of
+ours conditions.
+
+Degrades by falling back: a position not recognizably `logb` of the value being
+rounded reads as it does today.
+
 ## Relation to what shipped
 
 `float_to_fixed` now states the operand's reach as a bound with
@@ -248,3 +313,8 @@ runtime branch.  Reading the upstream tests instead drops it, in
   `logb` discards sign, so `x = ±m·2^e` needs the sign from elsewhere.
 - Is `logb` the only introducer worth having? `frexp`-style splitting and
   `round_at` would name an exponent too.
+- For design C: should the rule also fire for `RoundAt` and `Cast` at a symbolic
+  position, and for a *bounded* symbolic context (`MPBFixedContext`), where the
+  bound is concrete while the position is not? The `min`/`max` question above
+  applies to it unchanged, since the clamp sits between `logb` and the use on
+  every path.
