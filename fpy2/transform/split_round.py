@@ -71,7 +71,7 @@ from ..ast.fpyast import (
     UnaryOp,
     Var,
 )
-from ..number import REAL, Context, RealFloat
+from ..number import REAL, Context, Float, RealFloat
 from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
@@ -163,16 +163,50 @@ class _SplitRoundInstance(RoundingRewriter):
                 f'as rounding to {rm1.name} for these formats'
             )
 
-        # A bounded intermediate has an overflow the premises do not cover, and
-        # no behaviour for it suits every target -- it is safe exactly where the
-        # operation cannot reach that range.
+        # Figure 8 covers finite values inside the intermediate's range.  A
+        # bounded intermediate can also be handed a special or a value past its
+        # range, and the rule stays valid exactly where the composition agrees
+        # there too -- which is a finite check.
         f2a = AbstractFormat.from_format(f2)
-        if isinstance(f2a.bound, RealFloat) and not self._within(e, f2a):
+        if isinstance(f2a.bound, RealFloat) and not (
+            self._composes_special(target, f2a) or self._within(e, f2a)
+        ):
             return Declined(
-                'the intermediate has a finite range that the operation could '
-                'exceed, so it would overflow where the single rounding did not'
+                'the composition disagrees with the single rounding on a '
+                'special or a value past the intermediate\'s range'
             )
         return None
+
+    def _composes_special(self, target: Context, f2: AbstractFormat) -> bool:
+        """Whether the composition agrees with the single rounding on
+        ``{NaN, +Inf, -Inf, +Huge, -Huge}``.
+
+        Those are the inputs the premise says nothing about: it quantifies over
+        finite values, and over values the intermediate can represent.  *Huge* is
+        one step past the intermediate's bound -- the smallest magnitude it
+        cannot hold, and so where the two paths first diverge, since above that
+        the intermediate's answer is constant while the target's is not.
+        """
+        probes: list[Float | RealFloat] = [
+            Float(isnan=True), Float(isinf=True), Float(isinf=True, s=True),
+        ]
+        for bound in (f2.pos_bound, f2.neg_bound):
+            if isinstance(bound, RealFloat) and not bound.is_zero():
+                probes.append(bound.next_away_zero())
+
+        try:
+            for v in probes:
+                once = target.round(v)
+                twice = target.round(self.ctx.round(v))
+                # `str` rather than `==`: it separates the zeros and is total on
+                # NaN, which compares equal to nothing
+                if str(once) != str(twice):
+                    return False
+        except (ValueError, OverflowError):
+            # a context that cannot represent a probe -- `enable_nan=False`, or
+            # `OverflowMode.ASSERT`
+            return False
+        return True
 
     def _within(self, e: Expr, f2: AbstractFormat) -> bool:
         """Whether *e*'s real result provably stays inside *f2*'s finite range.

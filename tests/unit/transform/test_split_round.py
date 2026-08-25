@@ -95,6 +95,17 @@ def _load(src: str, tag: str):
     return mod.probe
 
 
+def _tight_via(rm, overflow=None):
+    """An intermediate bounded one step past FP32's range -- the width where the
+    boundary is observable."""
+    f32 = AbstractFormat.from_format(fp.FP32.format())
+    fmt = f32.next_bound().with_prec_offset(1).with_exp_offset(-1).format()
+    args = (fmt.pmax, fmt.emin, fmt.pos_maxval, rm)
+    if overflow is not None:
+        return fp.MPBFloatContext(*args, overflow, neg_maxval=fmt.neg_maxval)
+    return fp.MPBFloatContext(*args, neg_maxval=fmt.neg_maxval)
+
+
 def _cursor_at(ast: FuncDef, kind) -> ExprCursor:
     found = expr_sites(ast, lambda e: isinstance(e, kind))
     assert found, f'no {kind.__name__} in the program'
@@ -337,14 +348,61 @@ class TestDeclines:
         with pytest.raises(TransformReferenceError):
             SplitRound.apply(_product.ast, VIA32, where=7)
 
-    def test_a_bounded_intermediate_the_operation_could_exceed(self):
-        """A finite range gives the intermediate an overflow the premise cannot
-        see, so it is declined unless the operation provably cannot reach it --
-        and here the operands are unbounded, so nothing is provable."""
-        wide = fp.FP64.with_params(rm=fp.RoundingMode.RTO)
-        assert SplitRound.sites(_product.ast, ctx=wide) == []
-        why = SplitRound.refusals(_product.ast, ctx=wide)
-        assert len(why) == 1 and 'could exceed' in why[0][1]
+    def test_a_value_past_the_range_the_two_disagree_on(self):
+        """A target that *clamps* rather than reaching infinity, over an
+        intermediate that overflows: just past the intermediate's bound the
+        composition gives infinity where the single rounding gives maxval."""
+        via = _tight_via(fp.RoundingMode.RTO, fp.OverflowMode.OVERFLOW)
+
+        @fp.fpy(ctx=fp.FP32.with_params(rm=RM.RTZ))
+        def clamps(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x * y
+
+        assert SplitRound.sites(clamps.ast, ctx=via) == []
+        why = SplitRound.refusals(clamps.ast, ctx=via)
+        assert len(why) == 1 and 'past the intermediate' in why[0][1]
+
+    def test_the_same_intermediate_saturating_is_admitted(self):
+        """The mirror of the above: saturating, the intermediate hands back its
+        own maxval, which the target then clamps exactly as it would have."""
+        via = _tight_via(fp.RoundingMode.RTO, fp.OverflowMode.SATURATE)
+
+        @fp.fpy(ctx=fp.FP32.with_params(rm=RM.RTZ))
+        def clamps(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x * y
+
+        assert len(SplitRound.sites(clamps.ast, ctx=via)) == 1
+
+    def test_an_intermediate_that_raises_on_the_probe(self):
+        """A probe a context cannot answer at all: `OverflowMode.ASSERT` makes
+        rounding past the bound an exception, so the rewrite declines rather
+        than propagating the error."""
+        via = _tight_via(fp.RoundingMode.RTO, fp.OverflowMode.ASSERT)
+
+        @fp.fpy(ctx=fp.FP32.with_params(rm=RM.RTZ))
+        def clamps(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x * y
+
+        assert SplitRound.sites(clamps.ast, ctx=via) == []
+        why = SplitRound.refusals(clamps.ast, ctx=via)
+        assert len(why) == 1 and 'past the intermediate' in why[0][1]
+
+    def test_a_probe_no_context_here_represents(self):
+        """The other refusal: neither format has NaN, so the NaN probe raises.
+        Containment still holds — it is the target's specials that must be in
+        the intermediate, and it has none."""
+        via = fp.MPBFixedContext(
+            -2, fp.RealFloat(m=511, exp=-1), RM.RTZ, fp.OverflowMode.SATURATE,
+            neg_maxval=fp.RealFloat(m=-512, exp=-1),
+        )
+
+        @fp.fpy(ctx=fp.SINT8)
+        def product(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x * y
+
+        assert SplitRound.sites(product.ast, ctx=via) == []
+        why = SplitRound.refusals(product.ast, ctx=via)
+        assert len(why) == 1 and 'a special' in why[0][1]
 
     def test_a_non_context_intermediate(self):
         with pytest.raises(TypeError):
@@ -462,16 +520,27 @@ class TestBoundedIntermediate:
         assert _agree(ast, out, None, edges)
 
     def test_a_range_the_operation_could_exceed_is_declined(self):
-        """An intermediate bounded just above the target: the exact product runs
-        far past it, so the proof fails and the rewrite does not fire."""
-        f32 = AbstractFormat.from_format(fp.FP32.format())
-        tight = f32.next_bound().with_prec_offset(1).with_exp_offset(-1)
-        fmt = tight.format()
-        via = fp.MPBFloatContext(fmt.pmax, fmt.emin, fmt.pos_maxval,
-                                 fp.RoundingMode.RTO,
-                                 neg_maxval=fmt.neg_maxval)
+        """An intermediate bounded just above the target, overflowing where the
+        target clamps: neither the range proof nor the boundary check holds."""
+        via = _tight_via(fp.RoundingMode.RTO, fp.OverflowMode.OVERFLOW)
         ast = self._pinned(fp.FP32.with_params(rm=RM.RTZ))
         assert SplitRound.sites(ast, ctx=via) == []
+
+    def test_a_target_that_overflows_throughout_the_range_is_admitted(self):
+        """The boundary is unobservable when everything past the intermediate's
+        range is already infinite to the target, so a value it rounds finitely
+        and one it overflows both end up infinite."""
+        via = fp.FP32.with_params(rm=fp.RoundingMode.RTO)
+
+        @fp.fpy(ctx=fp.FP16)
+        def narrow(x: fp.Real) -> fp.Real:
+            return x + x
+
+        assert len(SplitRound.sites(narrow.ast, ctx=via)) == 1
+        out = SplitRound.apply(narrow.ast, via)
+        edges = [(1.0,), (32752.0,), (65504.0,), (1e38,), (3.4e38,),
+                 (1e-8,), (0.0,), (-65504.0,)]
+        assert _agree(narrow.ast, out, narrow.runtime, edges)
 
     def test_an_unbounded_intermediate_needs_no_proof(self):
         """It cannot overflow, so the argument formats are irrelevant."""
