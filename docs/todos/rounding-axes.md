@@ -4,13 +4,15 @@
 
 Make the number of roundings in a program a schedulable axis, in both
 directions — insert a rounding that changes nothing, and expand one rounding
-into two that compose to the same answer. The first axis is now closed in both
-directions; the second is not built.
+into two that compose to the same answer. The first axis is closed in both
+directions; the second has its forward direction and its predicate, and wants
+only `merge_round`.
 
 Rules and terminology follow the double-rounding paper, *When Double Rounding
 is Correct*: format containment is §5.1, the correct-double-rounding table is
 §5.2 Figure 8, format inference is §6.1, and the canonicalize/finitize pair is
-§6.2.
+§6.2. **The proofs are the source of truth** where this page and they disagree:
+[Mpfx/DoubleRounding.lean](https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean).
 
 ## Where we are
 
@@ -25,6 +27,8 @@ The paper's analysis half is **already built**, as
 | Format inference (§6.1) | `FormatInfer` / `FormatAnalysis` (`format_infer/analysis.py`), including loop fixpoints, call edges, and branch refinement |
 | Canonicalization (§6.2, left to right) | `RoundElim` / `elim_round` — see [round-elim.md](round-elim.md) |
 | Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` — **done**, see gap 1 below |
+| Correct double rounding (§5.2, Fig. 8) | `double_round_ok` (`format_infer/double_round.py`) — **done** |
+| Splitting one rounding into two (§5) | `SplitRound` / `split_round` — **done**, see gap 3 below |
 
 So two of the paper's four rewrites are implemented, and the analysis the other
 two need is in place and in use.
@@ -55,24 +59,28 @@ elim_round     rounded op  ->  with fp.REAL:      exists
 insert_round   with fp.REAL:  ->  rounded op      exists
 ```
 
-This axis is closed.  What remains of §6.2 is `insert_round`'s *widening mode*:
-the same predicate aimed at operands rather than results, which is what §8's
-operand promotion needs.
+This axis is closed, and §6.2 with it.
 
 **The double-rounding axis** — one rounding against two.
 
 ```
-split_round    rnd_F1,rm1  ->  rnd_F1,rm1 . rnd_F2,rm2    missing
+split_round    rnd_F1,rm1  ->  rnd_F1,rm1 . rnd_F2,rm2    exists
 merge_round    rnd_F1,rm1 . rnd_F2,rm2  ->  rnd_F1,rm1    missing
 ```
 
-Widening — §8's operand promotion, which makes a heterogeneous operation
-uniform-precision so a library like SoftFloat can implement it — is **not** a
-third axis. Promoting an operand to a larger format that contains it is
-inserting a rounding that does nothing; it is `insert_round` aimed at operands
-instead of results. Keeping it as a mode rather than an operator is what stops
-this from repeating `float_to_fixed`'s seam, where one operator quietly owns
-part of another's axis.
+The forward direction is built; only `merge_round` remains, and it reuses
+`split_round`'s predicate unchanged.
+
+**Widening is not on either axis, and not in FPy.** §8's operand promotion
+makes a heterogeneous operation uniform-precision so a library like SoftFloat
+can implement it. Promoting an operand to a format that contains it is
+inserting a rounding that does nothing — and *that is exactly why it says
+nothing here*: the cast is a verified identity, so `elim_round` removes it
+again, and no analysis, no backend and no interpreter result distinguishes the
+promoted program from the original. Measured: `elim_round` strips the casts
+straight back out. Uniform precision is a property of the *target* environment,
+so widening belongs to native lowering, not to a rewrite on FPy programs. See
+gap 2 of [native-lowering-roadmap.md](native-lowering-roadmap.md).
 
 ### Which axis a redundant second rounding belongs to
 
@@ -112,9 +120,9 @@ correctly leaves it alone:
 So the double-rounding axis earns its keep only below the containment
 boundary. Above it, the work is already done.
 
-## The gaps that remain
+## The gaps, and what closed them
 
-### 1. `insert_round`'s widening mode
+### 1. `insert_round` — **done**
 
 **Done: the result half.** `insert_round(func, ctx, where=None)` gives an exact
 operation a format, verified by `round_is_identity` — the same helper `RoundElim`
@@ -145,17 +153,10 @@ It declines a stochastic target, an unbounded operand, and an operation too wide
 for the target. An operation that already has a format is not a candidate at
 all, so the listing no longer carries sites that always refuse.
 
-**Remaining: operand sites.** Same predicate aimed at operands: wrap each in a
-cast to the target where the operand's inferred format is contained in it,
-making the operation uniform-precision. This is the rewrite
-
-```
-mul_R(E5M2, E5M2)  ->  mul_FP32(rnd_FP32(a), rnd_FP32(b))
-```
-
-that §8 needs before SoftFloat or hardware can run the multiply. Whether it is
-a `mode=` on `insert_round` or a sibling operator is open: the verification is
-identical, the site kind is not. This is the next commit on the page.
+**Nothing remains.** An operand-sites mode was planned — wrapping each operand
+in a cast to the target, giving `mul_R(E5M2, E5M2) -> mul_FP32(rnd_FP32(a),
+rnd_FP32(b))` for §8 — and dropped: see the widening note above. The rewrite is
+a no-op in FPy's semantics.
 
 **The search variant.** `finitize(func, where, available=[...])` picks the
 smallest format from a list of environment-supported formats that contains the
@@ -169,9 +170,24 @@ recipes, not the operators — gap 2 of
 [scheduling-language.md](scheduling-language.md) are the same shape of
 question.
 
-### 2. Rounding-mode plumbing
+### 2. Rounding-mode plumbing — **done**
 
-Blocks gaps 3 and 4, blocks nothing else, and is mechanical.
+- **`Context.rounding_mode() -> RoundingMode | None`**, abstract, implemented
+  across every concrete context; `RealContext` answers `None`. Note it has no
+  `rm` attribute at all, so a base implementation reading `self.rm` would have
+  raised.
+- **`AbstractFormat.next_bound()`**, Figure 8's `next(b)`, taking **no**
+  precision argument: the proofs call `boundAfterNext` on a format and read the
+  grid off the receiver, so a caller extends first and asks second. A `prec=`
+  parameter would also have been inert — `next_up` normalizes to *at most* `p`
+  bits, so raising `p` without lowering `n` cannot refine the grid, and the
+  RTO-to-nearest premise would have silently used the target's own grid.
+- Found on the way: `with_prec_offset`, `with_exp_offset` and
+  `with_bounds_scale` all dropped `has_neg_zero` when rebuilding, and the
+  constructor defaults it to `False`. None of the three had a caller, so nothing
+  had noticed. Fixed and pinned.
+
+What it was blocking, for the record:
 
 - **No rounding mode on the base `Context`.** `Context` exposes `format()`,
   `round_params()`, `is_stochastic()`, `with_params()`, `round()`, and
@@ -190,12 +206,27 @@ Blocks gaps 3 and 4, blocks nothing else, and is mechanical.
 `with_prec_offset` and `with_exp_offset` already exist on `AbstractFormat`, and
 they are exactly the `p+k, exp-k` knobs the table needs.
 
-### 3. `split_round`
+### 3. `split_round` — **done**
 
 Expand one correctly-rounded operation into two roundings. This is the operator
 §5 exists to justify, and §5.3's modular-library recipe as a single schedule
 step: compute in high precision under RTO, re-round to the target under
 whatever mode the target wants.
+
+`SplitRound` in `fpy2/transform/split_round.py`, `split_round(func, ctx, where)`
+in `fpy2/strategies/`. `ctx` is the **intermediate**; the target is read from
+the program. Sites are the operations that already round — the complement of
+`insert_round`'s. `derive_intermediate` computes a suitable intermediate, and
+fixed-point ones work, so the concern below about `float_to_fixed` overlap did
+not materialize. Explicit `Round` / `Cast` nodes are deliberately not sites:
+splitting a rounding is `merge_round`'s inverse.
+
+Two things worth knowing. The rewrite emits an explicit `round` in the
+*enclosing* block, because an assignment rounds nothing in FPy — that is what
+applies `rm1`, and it is asserted structurally rather than assumed. And it is
+**not idempotent**: the operation lands under an RTO intermediate and RTO over
+RTO is itself admissible, so a second application splits again. One pass
+terminates; a schedule wanting a fixpoint has to bound it.
 
 **The source of truth is the Lean development**, not this table:
 [Mpfx/DoubleRounding.lean](https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean).
@@ -273,10 +304,11 @@ this operator worth building mainly to close the axis and to check
 `split_round`'s output, which is why it sits last in the order below despite
 sharing gap 3's predicate.
 
-**It shares gap 3's predicate.** Write `double_round_ok(f1, rm1, f2, rm2)`
-once: `split_round` uses it to validate a candidate intermediate,
-`merge_round` to validate one already in the program. This is the one
-structural decision on the page that is expensive to get wrong.
+**Its predicate is built.** `double_round_ok(f1, rm1, f2, rm2)` is in
+`format_infer/double_round.py` and `merge_round` reuses it unchanged --
+`split_round` validates a candidate intermediate with it, `merge_round` an
+intermediate already in the program. What remains here is site detection, not
+verification.
 
 The work here is site detection rather than verification, and that is genuinely
 unsurveyed: `Round` over `Round`, `Cast` over arithmetic, `RoundAt` over a
@@ -322,23 +354,22 @@ Three positions, in the order they were closed:
    `insert_round` in `fpy2/strategies/`, registered in `sites.py`'s `_SITES`,
    tested in `tests/unit/transform/test_round_insert.py` and
    `tests/unit/strategies/test_insert_round.py`.
-2. **Widening mode** — same predicate, operand sites. With step 1 this
-   reproduces §8's SoftFloat mapping of the MX dot product, which is the
-   natural end-to-end test for both. **Next.**
-3. **Plumbing** (gap 2) — touches the number tower rather than the transform
-   layer, so worth isolating from the operators that consume it.
-4. **`double_round_ok` and `split_round`** — the table as a predicate, plus the
-   `via=None` derivation.
-5. **`merge_round`** — reuses step 4's predicate; survey the site spellings
-   first. Deliberately after `split_round` rather than beside it: step 4 is what
-   produces the RTO intermediates this operator can actually merge.
+2. ~~**Widening mode**~~ — **dropped**, not deferred: a widening cast is a
+   verified identity, so it says nothing in FPy. See the widening note under
+   [The two axes](#the-two-axes).
+3. ~~**Plumbing** (gap 2)~~ — **done.** `Context.rounding_mode()` and
+   `AbstractFormat.next_bound()`, tested in `tests/unit/number/test_context.py`
+   and `tests/unit/analysis/test_format.py`.
+4. ~~**`double_round_ok` and `split_round`**~~ — **done.** The predicate and
+   `derive_intermediate` in `format_infer/double_round.py`, tested against the
+   Lean theorems in `tests/unit/analysis/test_double_round.py`; the operator in
+   `fpy2/transform/split_round.py` and `fpy2/strategies/round_split.py`.
+5. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
+   spellings first. **Next**, and the only operator left on the page.
 6. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
-   `merge_round`), then finitize (widening, `insert_round`, `split_round`
-   against an environment's format list). A documented composition and a worked
-   example, not a new operator; the MX dot product of §2 and §8 is the example.
-
-Steps 1 and 2 are worth having even if the rest never lands: they close §6.2 in
-both directions, which is the whole of the specification-to-implementation step.
+   `merge_round`), then finitize (`insert_round`, `split_round` against an
+   environment's format list). A documented composition and a worked example,
+   not a new operator; the MX dot product of §2 and §8 is the example.
 
 ## Open questions
 
@@ -362,6 +393,11 @@ both directions, which is the whole of the specification-to-implementation step.
   strictly-tighter guard — `insert_round` has no site at all, so the pair is a
   no-op rather than an inverse. Pinned by
   `test_an_unbounded_scope_leaves_nothing_to_insert`.
+- **`split_round` is not idempotent, by construction.** The operation lands
+  under an RTO intermediate, and RTO over RTO is admissible, so each pass splits
+  again -- one more block every time, values unchanged. That is the same shape as
+  the loop rewrites rather than a defect, but it means a recipe that reaches a
+  fixpoint has to bound this operator explicitly, as it must bound `unroll`.
 - **Stochastic contexts.** `insert_round` declines `is_stochastic()` targets
   outright. Still open whether `round_is_identity` is already right for them on
   an exactly-representable value, which would let the decline be dropped.

@@ -10,8 +10,16 @@ Sibling of :func:`fpy2.analysis.format_infer.round_is_identity`, which decides t
 *single*-rounding question -- whether a rounding may be dropped rather than split.
 """
 
-from ...number import Context, MPBFloatContext, MPFixedContext, RoundingMode
+from ...number import (
+    Context,
+    MPBFixedContext,
+    MPBFloatContext,
+    MPFixedContext,
+    OverflowMode,
+    RoundingMode,
+)
 from ...number.context.mp_fixed import MPFixedFormat
+from ...number.context.mpb_fixed import MPBFixedFormat
 from ...number.context.mpb_float import MPBFloatFormat
 from .format import AbstractableFormat, AbstractFormat
 
@@ -137,16 +145,32 @@ def derive_intermediate(target: Context) -> Context:
 
 
 def _context_of(f: AbstractFormat, rm: RoundingMode) -> Context:
-    """A context representing *f*, rounding under *rm*."""
+    """A context representing *f*, rounding under *rm*.
+
+    Saturating, always.  The premises are containment checks on `A`, which says
+    what is representable and nothing about what happens above it -- so an
+    intermediate that overflowed to infinity would send a value the target
+    clamps to its maxval to `inf` instead, and the re-rounding could not pull it
+    back.  Saturating is what makes the composition agree at the top of the
+    range.
+    """
     fmt = f.format()
     match fmt:
         case MPBFloatFormat():
             return MPBFloatContext(
-                fmt.pmax, fmt.emin, fmt.pos_maxval, rm,
+                fmt.pmax, fmt.emin, fmt.pos_maxval, rm, OverflowMode.SATURATE,
                 neg_maxval=fmt.neg_maxval,
                 enable_nan=fmt.enable_nan, enable_inf=fmt.enable_inf,
             )
+        case MPBFixedFormat():
+            return MPBFixedContext(
+                fmt.nmin, fmt.pos_maxval, rm, OverflowMode.SATURATE,
+                neg_maxval=fmt.neg_maxval,
+                enable_nan=fmt.enable_nan, enable_inf=fmt.enable_inf,
+                enable_neg_zero=fmt.enable_neg_zero,
+            )
         case MPFixedFormat():
+            # unbounded, so there is nothing to saturate against
             return MPFixedContext(
                 fmt.nmin, rm,
                 enable_nan=fmt.enable_nan, enable_inf=fmt.enable_inf,
@@ -154,6 +178,5 @@ def _context_of(f: AbstractFormat, rm: RoundingMode) -> Context:
             )
         case _:
             raise ValueError(
-                f'cannot build a context for {type(fmt).__name__}; only '
-                'floating-point and fixed-point intermediates are supported'
+                f'cannot build a context for {type(fmt).__name__}'
             )

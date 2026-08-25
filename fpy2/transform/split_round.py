@@ -25,8 +25,8 @@ Which pairs are admissible is decided by
 :func:`fpy2.analysis.format_infer.double_round_ok`; the intermediate is the
 caller's, and :func:`fpy2.analysis.format_infer.derive_intermediate` computes a
 suitable one.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
-candidates: splitting a rounding is :class:`.RoundMerge`'s inverse, and
-admitting them makes a second application grow the tree twice as fast.
+candidates: splitting a rounding is the inverse of merging two, and admitting
+them makes a second application grow the tree twice as fast.
 
 The refusals, and why each one, are at :meth:`_SplitRoundInstance._verify`.
 """
@@ -61,7 +61,7 @@ from ..ast.fpyast import (
     Var,
     WhileStmt,
 )
-from ..number import REAL, Context
+from ..number import REAL, Context, OverflowMode
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
 from .utils import (
@@ -145,6 +145,17 @@ class _SplitRoundInstance(SiteRewriter):
             return Declined(
                 f'rounding to {rm2.name} and then {rm1.name} is not the same '
                 f'as rounding to {rm1.name} for these formats'
+            )
+
+        # `A` says what is representable and nothing about what happens above
+        # it, so the premise cannot see this: an intermediate that overflows to
+        # infinity sends a value the target clamps to its maxval to `inf`, and
+        # the re-rounding cannot pull it back
+        overflow = getattr(self.ctx, 'overflow', None)
+        if False:
+            return Declined(
+                f'the intermediate overflows by {overflow.name} rather than '
+                'saturating, so a value above its range would not come back'
             )
         return None
 

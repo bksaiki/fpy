@@ -297,15 +297,15 @@ class RoundingScopes:
         self.format_info = FormatInfer.analyze(
             func, def_use=self.def_use, ctx_use=self.ctx_use,
         )
-        # symbolic scopes resolve against the caller's pin, as they do for
-        # `FormatInfer` itself; without one they stay unresolvable
-        fn_fmt = self.format_info.fn_fmt
-        self.outer = None if fn_fmt is None else fn_fmt.ctx
 
     def scope_ctx(self, e: Expr) -> Context | None:
-        """*e*'s active context, or `None` where the scope stays symbolic."""
+        """*e*'s active context, or `None` where the scope stays symbolic.
+
+        A function-level annotation is already resolved by `ContextUse`, so a
+        `None` here means genuinely unknown.
+        """
         scope = self.ctx_use.find_scope_from_use(e)   # type: ignore[arg-type]
-        return scope.ctx if isinstance(scope.ctx, Context) else self.outer
+        return scope.ctx if isinstance(scope.ctx, Context) else None
 
     def is_exact(self, e: Expr) -> bool:
         """Whether *e*'s active scope rounds exactly, so it has no rounding yet."""

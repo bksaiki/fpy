@@ -143,6 +143,27 @@ class TestEquivalence:
             b = rng.uniform(-1e3, 1e3) if i % 2 else rng.uniform(-1e30, 1e30)
             yield a, b
 
+    @staticmethod
+    def _subnormal_sweep(n: int = 600):
+        """Products landing in FP32's *gradual*-underflow band.
+
+        The `exp - k` half of each premise exists for exactly this range, and
+        nothing else here reaches it: the products in `_sweep` either flush to
+        zero or stay normal.
+        """
+        rng = random.Random(1)
+        for _ in range(n):
+            k = rng.randint(-74, -60)
+            yield rng.uniform(1.0, 2.0) * 2.0 ** k, rng.uniform(0.5, 2.0)
+
+    @staticmethod
+    def _overflow_sweep(n: int = 400):
+        """Products above FP32's maxval, where a non-saturating intermediate
+        sends to `inf` what the target clamps."""
+        rng = random.Random(2)
+        for _ in range(n):
+            yield rng.uniform(1.0, 2.0) * 2.0 ** 127, rng.uniform(2.0, 8.0)
+
     def test_a_split_changes_no_value(self):
         out = SplitRound.apply(_product.ast, VIA32)
         assert _agree(_product.ast, out, _product.runtime, self._sweep())
@@ -157,6 +178,47 @@ class TestEquivalence:
             (float('nan'), 1.0), (float('inf'), 0.0),
         ]
         assert _agree(_product.ast, out, _product.runtime, edges)
+
+    def test_gradual_underflow(self):
+        out = SplitRound.apply(_product.ast, VIA32)
+        assert _agree(_product.ast, out, _product.runtime, self._subnormal_sweep())
+
+    def test_overflow_saturates_rather_than_going_to_infinity(self):
+        """The intermediate must saturate: overflowing to `inf` sends a value
+        the target clamps to its maxval somewhere the re-rounding cannot bring
+        it back from."""
+        out = SplitRound.apply(_product.ast, VIA32)
+        assert _agree(_product.ast, out, _product.runtime, self._overflow_sweep())
+
+    def test_a_nested_rounded_operand(self):
+        """An operand that is itself a rounded operation has to be bound under
+        the *original* scope; left inline it would be re-rounded to the
+        intermediate instead of to the target."""
+
+        @fp.fpy(ctx=fp.FP32)
+        def nested(x: fp.Real, y: fp.Real) -> fp.Real:
+            return (x * y) + y
+
+        assert len(SplitRound.sites(nested.ast, ctx=VIA32)) == 2
+        out = SplitRound.apply(nested.ast, VIA32)
+        assert _agree(nested.ast, out, nested.runtime, self._sweep(800))
+        assert _agree(nested.ast, out, nested.runtime, self._subnormal_sweep(200))
+
+    def test_a_fixed_point_target(self):
+        """The premises are containment checks on `A`, indifferent to the format
+        family."""
+        target = fp.MPFixedContext(-8, fp.RoundingMode.RTZ)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with target:
+                t = x * y
+            return t
+
+        via = derive_intermediate(target)
+        assert len(SplitRound.sites(f.ast, ctx=via)) == 1
+        out = SplitRound.apply(f.ast, via)
+        assert _agree(f.ast, out, f.runtime, self._sweep(400))
 
     def test_both_sites_together(self):
         out = SplitRound.apply(_two_ops.ast, VIA32)

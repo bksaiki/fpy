@@ -689,11 +689,15 @@ class AbstractFormat:
         )
 
     def _next_away(self, b: RealFloat | float) -> RealFloat | float:
-        """One step outward from *b* in this format's grid."""
+        """One step outward from *b* in this format's grid.
+
+        `RealFloat`'s `n` is the first *unrepresentable* digit, one below the
+        minimum representable exponent, so `exp - 1` is this format's grid.
+        """
         if not isinstance(b, RealFloat) or b.is_zero():
             return b        # unbounded, or a zero with no direction to step
         p = self.prec if isinstance(self.prec, int) else None
-        n = self.exp if isinstance(self.exp, int) else None
+        n = (self.exp - 1) if isinstance(self.exp, int) else None
         return b.next_away_zero(p, n)
 
     def with_prec_offset(self, delta: int) -> 'AbstractFormat':
