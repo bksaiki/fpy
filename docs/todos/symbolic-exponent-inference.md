@@ -10,8 +10,12 @@ What is left for a symbolic design is a *tighter* answer than refinement reaches
 — `2^11` where it gets `2^40` — and retiring the bound the transform currently
 asserts in favour of one the analysis derives. That also extends to a
 hand-written program that scales by its own exponent, which no branch of ours
-conditions — and *that* case has a cheaper route than either design here, being
-one transfer rule rather than a domain. See [Design C](#design-c--one-rule-not-a-relation).
+conditions. The simplest such program — one `logb`, rounded directly — has a
+cheaper route than either design here, being one transfer rule rather than a
+domain ([Design C](#design-c--one-rule-not-a-relation)); anything richer does
+not. [Which design each shape needs](#which-design-each-shape-needs) sorts
+them, and the shape this repo's own examples use needs an ingredient none of
+the three has.
 
 ## The problem, measured
 
@@ -238,15 +242,92 @@ It needs the first two of the three facts A and B need, and not the third:
    `_implied_logb` already states `logb(v) >= lo ⟹ |v| >= 2^lo`, but only as a
    refinement conditioned on a comparison; here there is no branch to hang it on.
 
-**What it does not cover** is the output of `rescale_fixed`, which is what the
-rest of this page is about: there the rounding has already been rewritten to
+**What it does not cover** is anything where the rounded value is not the value
+whose `logb` was taken. That includes the output of `rescale_fixed`, which is what
+the rest of this page is about — there the rounding has already been rewritten to
 `(2 ** -exp) * x` at position zero, so the correlation has to survive a `Mul` and
-needs Design B's tag. Design C is for `float_to_fixed`'s *input* rather than its
-output — and for the hand-written program the header calls out, which no branch of
-ours conditions.
+needs Design B's tag. It also excludes hand-written programs more interesting than
+the one above: see [Which design each shape
+needs](#which-design-each-shape-needs), where a two-factor version already falls
+to Design B. So Design C is the *one-`logb`, direct-rounding* rule, not "the
+hand-written case" in general.
 
 Degrades by falling back: a position not recognizably `logb` of the value being
 rounded reads as it does today.
+
+## Which design each shape needs
+
+Three shapes, measured. Each needs strictly more than the last, and the third
+needs something none of the designs above has.
+
+### One `logb`, rounded directly — Design C
+
+`with fp.MPFixedContext(logb(x) - k): y = fp.round(x)`.
+`prec = min(k + 1, prec_x)`, `exp = exp_x`. See above.
+
+### `n` `logb`s cancelling through arithmetic — Design B
+
+```python
+ex = fp.logb(x)
+ey = fp.logb(y)
+p = x * y                                   # exact, under REAL
+with fp.MPFixedContext(ex + ey - 10):
+    y = fp.round(p)
+```
+
+`prec = k + 2`, not `k + 1`: `mx · my ∈ [1, 4)` spans two binades where a single
+mantissa spans one. Measured, adversarially — both mantissas near 2, so the
+product's is near 4:
+
+| `k` | 0 | 1 | 5 | 10 | 20 |
+|---|---|---|---|---|---|
+| observed `prec` | 2 | 3 | 7 | 12 | 22 |
+| `k + 2` | 2 | 3 | 7 | 12 | 22 |
+
+Random sampling reports `k + 1` at larger `k`, because the extra bit needs
+`mx·my > 4 - 2^-k`; it has to be searched for. Generally
+`prec = min(k + n, prec_of_value)` for `n` tagged factors, with Design C the
+`n = 1` case. This is Design B's territory exactly — multiply mantissas, add
+exponents — and it is *hand-written*, which is why Design C cannot claim that
+whole class.
+
+### A `max`-aligned fused sum — Design B **plus an order relation**
+
+What `examples/mmasim/nv.py` and `amd.py` actually do:
+
+```python
+es = [exponent(a, emin_a) + exponent(b, emin_b) for a, b in zip(A, B)]
+e_max = max(max(es), e_c)
+s = fused_sum(join(prods, [c]), e_max - F - 1, fp.RM.RTZ)
+```
+
+with `exponent(x, emin) = max(fp.logb(x), emin)` and `fused_sum` rounding each
+summand at `2^(e_max - F)` before adding exactly. Bound
+`F + 2 + ⌈log₂(L+1)⌉`, sound with a few bits of slack because the terms'
+exponents are usually spread:
+
+| L, F | 4, 13 | 8, 13 | 16, 13 | 4, 35 | 16, 35 | 64, 35 |
+|---|---|---|---|---|---|---|
+| observed | 17 | 17 | 17 | 38 | 39 | 40 |
+| bound | 18 | 19 | 20 | 40 | 42 | 44 |
+
+Five requirements stack, and **the fourth is in none of the designs above**:
+
+1. the tag survives `max(logb(x), emin)` against a constant — listed under *Open
+   questions* as hypothetical; here it is on every term, unavoidably
+2. the tag survives a *sum of two tags* (Design B)
+3. `e_max = max(max(es), e_c)` — a `max` over a *list* of symbolic exponents
+4. **only the ordering `e_i ≤ e_max` is needed, never `e_max`'s value.** Each
+   term is `≤ 2^(e_i+2) ≤ 2^(e_max+2)`, so contributes `≤ 2^(F+2)` quanta. That
+   is an *inequality between symbolic exponents*; both designs above are built
+   entirely on cancellation, which is a different mechanism — and a cheaper one
+   to satisfy, since the value never has to be evaluated.
+5. it crosses a *call edge* into `fused_sum` and a *comprehension* inside it
+
+Today `s` reads as `RealFormat()`. Until recently `FormatInfer.analyze` did not
+get that far: it raised on these models, since a comprehension argument crossing a
+call edge into a callee that fills an `fp.empty` hit a join with no case. Fixed by
+`VarFormat` (`e433da8`).
 
 ## Relation to what shipped
 
@@ -307,8 +388,10 @@ runtime branch.  Reading the upstream tests instead drops it, in
 ## Open questions
 
 - Does the tag in design B survive `min`/`max` on the exponent? Now load-bearing
-  rather than hypothetical: the *lower* clamp is emitted on every path, so a
-  `max` always sits between `logb` and the scale.
+  twice over: the *lower* clamp is emitted on every path, so a `max` always sits
+  between `logb` and the scale — and `exponent(x, emin) = max(logb(x), emin)` puts
+  one on every term of the fused sum, which is what `examples/mmasim` is built
+  from. See [Which design each shape needs](#which-design-each-shape-needs).
 - Should the mantissa interval be signed, or should sign be tracked separately?
   `logb` discards sign, so `x = ±m·2^e` needs the sign from elsewhere.
 - Is `logb` the only introducer worth having? `frexp`-style splitting and

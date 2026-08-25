@@ -2061,7 +2061,7 @@ class TestEmptyIsBottom:
         assert is_bottom(self._empty_bound(info))
 
 
-class TestUnknownKind:
+class TestVarFormat:
     """An unresolved type variable has no *kind*, so its bottom cannot be
     ``None`` (a known non-number) or ``SetFormat.bottom()`` (a real with no
     values).  :data:`VAR_FORMAT` is the bottom of every lattice, and the first
