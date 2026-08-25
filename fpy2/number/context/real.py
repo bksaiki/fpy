@@ -88,6 +88,9 @@ class RealContext(Context):
     def is_stochastic(self) -> bool:
         return False
 
+    def rounding_mode(self):
+        return None
+
     def round_params(self):
         return (None, None)
 

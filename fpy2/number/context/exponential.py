@@ -366,6 +366,9 @@ class ExpContext(EncodableContext):
             overflow = OverflowMode.OVERFLOW
         return cls(fmt.nbits, fmt.eoffset, rm, overflow, inf_value=inf_value)
 
+    def rounding_mode(self):
+        return self.rm
+
     def round_params(self) -> tuple[int | None, int | None]:
         return 1, None
 

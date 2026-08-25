@@ -37,6 +37,7 @@ from .overflow_unfold import unfold_overflow
 from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .round_insert import insert_round
+from .round_split import split_round
 from .simple import simplify
 from .sites import refusals, sites
 from .special_unfold import unfold_special
@@ -69,6 +70,7 @@ __all__ = [
     'simplify',
     'sites',
     'split',
+    'split_round',
     'unfold_neg_zero',
     'unfold_overflow',
     'unfold_special',

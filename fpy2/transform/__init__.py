@@ -43,6 +43,7 @@ from .round_insert import RoundInsert
 from .simplify_if import SimplifyIf
 from .specialize import Specialize
 from .split_loop import SplitLoop, SplitLoopStrategy
+from .split_round import SplitRound
 from .subst_var import SubstVar
 from .unfold_neg_zero import UnfoldNegZero
 from .unfold_overflow import UnfoldOverflow

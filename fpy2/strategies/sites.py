@@ -14,6 +14,7 @@ from ..transform import (
     RescaleFixed,
     RoundInsert,
     SplitLoop,
+    SplitRound,
     UnfoldNegZero,
     UnfoldOverflow,
     UnfoldSpecial,
@@ -28,6 +29,7 @@ from .loop_unroll import unroll_for, unroll_while
 from .neg_zero_unfold import unfold_neg_zero
 from .overflow_unfold import unfold_overflow
 from .round_insert import insert_round
+from .round_split import split_round
 from .special_unfold import unfold_special
 
 _REFUSALS: dict[Callable, Callable] = {
@@ -37,6 +39,7 @@ _REFUSALS: dict[Callable, Callable] = {
     float_to_fixed: FloatToFixed.refusals,
     rescale_fixed: RescaleFixed.refusals,
     insert_round: RoundInsert.refusals,
+    split_round: SplitRound.refusals,
     comp_to_loop: CompToLoop.refusals,
     inline: FuncInline.refusals,
     split: SplitLoop.refusals,
@@ -56,6 +59,7 @@ _SITES: dict[Callable, Callable] = {
     float_to_fixed: FloatToFixed.sites,
     rescale_fixed: RescaleFixed.sites,
     insert_round: RoundInsert.sites,
+    split_round: SplitRound.sites,
     comp_to_loop: CompToLoop.sites,
     split: SplitLoop.sites,
     unroll_for: ForUnroll.sites,

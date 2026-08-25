@@ -650,6 +650,9 @@ class EFloatContext(EncodableContext):
             nan_value=nan_value, inf_value=inf_value,
         )
 
+    def rounding_mode(self):
+        return self.rm
+
     def round_params(self):
         return self._mpb_ctx.round_params()
 

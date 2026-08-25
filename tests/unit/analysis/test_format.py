@@ -776,3 +776,75 @@ class TestLatticeLaws:
         assert (with_nz | with_nz).has_neg_zero
         assert not (with_nz & without).has_neg_zero
         assert (with_nz & with_nz).has_neg_zero
+
+
+class TestNextBound:
+    """Figure 8's ``next(b)``, and the special-value flags the builders used to
+    drop on the way."""
+
+    @staticmethod
+    def _fp32() -> AbstractFormat:
+        return AbstractFormat.from_format(fp.FP32.format())
+
+    def test_it_steps_both_bounds_away_from_zero(self):
+        f = self._fp32()
+        out = f.next_bound()
+        assert out.pos_bound > f.pos_bound
+        assert out.neg_bound < f.neg_bound
+        assert out.prec == f.prec and out.exp == f.exp
+
+    def test_the_grid_comes_from_the_receiver(self):
+        """The whole reason there is no precision parameter: RTO-RN needs
+        ``next`` in the once-extended grid, which is a *different* value from
+        ``next`` in the target's own grid."""
+        f = self._fp32()
+        once = f.with_prec_offset(1).with_exp_offset(-1)
+        assert f.next_bound().bound != once.next_bound().bound
+
+    def test_an_unbounded_side_is_left_alone(self):
+        f = AbstractFormat(24, -149, math.inf)
+        assert f.next_bound().pos_bound == math.inf
+
+    def test_the_step_is_one_grid_step(self):
+        f = self._fp32()
+        assert f.next_bound().pos_bound == f.pos_bound.next_away_zero(f.prec, f.exp)
+
+    def test_the_builders_preserve_the_special_flags(self):
+        """Each rebuilds the format, and the constructor defaults
+        `has_neg_zero` to `False`, so a builder that forgets it drops the flag
+        silently."""
+        from fpy2.number.number.reals import RealFloat
+
+        f = self._fp32()
+        assert f.has_neg_zero
+        for out in (
+            f.with_prec_offset(2),
+            f.with_exp_offset(-2),
+            f.with_bounds_scale(RealFloat(c=2, exp=0)),
+            f.next_bound(),
+        ):
+            assert out.has_neg_zero, out
+            assert out.has_nan and out.has_pos_inf and out.has_neg_inf
+
+
+class TestUnboundedContainment:
+    def test_precision_binds_without_a_finite_exponent(self):
+        """Condition 3 used to be skipped whenever *other* had an unbounded
+        exponent, on the grounds that precision only binds against a finite
+        normal region.  It binds everywhere: the subnormal fallback is what
+        needs the finite exponent, not the plain comparison."""
+        wide = AbstractFormat(5, -math.inf, math.inf)
+        narrow = AbstractFormat(3, -math.inf, math.inf)
+        assert not wide.contained_in(narrow)
+        assert narrow.contained_in(wide)
+
+    def test_the_subnormal_fallback_still_applies(self):
+        """A format whose whole range sits inside *other*'s subnormal region is
+        contained however little precision *other* has -- which is the case the
+        finite exponent is needed for."""
+        from fpy2.number.number.reals import RealFloat
+
+        small = AbstractFormat(8, -20, RealFloat(c=1, exp=-18))
+        coarse = AbstractFormat(2, -20, RealFloat(c=1, exp=20))
+        assert small.prec > coarse.prec
+        assert small.contained_in(coarse)

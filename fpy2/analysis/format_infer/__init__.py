@@ -18,6 +18,7 @@ from .analysis import (
     is_bottom,
     round_is_identity,
 )
+from .double_round import derive_intermediate, double_round_ok
 from .format import AbstractableFormat, AbstractFormat
 
 __all__ = [
@@ -32,6 +33,8 @@ __all__ = [
     'PreAnalysisCache',
     'SetFormat',
     'TupleFormat',
+    'derive_intermediate',
+    'double_round_ok',
     'exact_binop',
     'exact_exp2',
     'exact_logb',

@@ -4,18 +4,23 @@ rewrites.
 """
 
 from dataclasses import dataclass
+from typing import Any
 
 from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
+    ContextUse,
+    DefineUse,
     ListSize,
     concrete_size,
 )
+from ..analysis.format_infer import FormatInfer
 from ..ast.fpyast import (
     Abs,
     Add,
     Assign,
     Attribute,
+    BinaryOp,
     Cast,
     ConstInf,
     ConstNan,
@@ -23,14 +28,24 @@ from ..ast.fpyast import (
     Decnum,
     Expr,
     ForeignVal,
+    ForStmt,
     FuncDef,
     Id,
+    If1Stmt,
     IfExpr,
+    IfStmt,
     Integer,
+    ListComp,
     Location,
     Mul,
+    NamedBinaryOp,
     NamedId,
+    NamedNaryOp,
+    NamedTernaryOp,
+    NamedUnaryOp,
+    NaryOp,
     Neg,
+    NullaryOp,
     Rational,
     ReturnStmt,
     Round,
@@ -38,18 +53,23 @@ from ..ast.fpyast import (
     Stmt,
     StmtBlock,
     Sub,
+    TernaryOp,
     TupleBinding,
+    UnaryOp,
     UnderscoreId,
     Var,
+    WhileStmt,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
     INTEGER,
+    REAL,
     Context,
     Float,
     RealFloat,
     same_value,
 )
+from ..utils import Gensym
 from .cursor import (
     BlockCursor,
     Cursor,
@@ -194,33 +214,47 @@ def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
 
 
 def operands(e: Expr) -> list[Expr]:
-    """The direct operands, left to right, of an operation that carries a
-    context-driven rounding.
+    """The direct operands, left to right, of an operation.
 
-    Shared by the two halves of the rounding axis, :class:`.RoundElim` and
-    :class:`.RoundInsert`, so they cannot disagree about which operations one
-    eliminates and the other inserts.
+    Shared by the rounding rewrites so they cannot disagree about the shape of
+    what they lift.  Every arity is handled, not just arithmetic: the rounding
+    rules hold for any real-valued function, so `sqrt` and `fma` are lifted the
+    same way a multiply is.
     """
     match e:
-        case Add() | Sub() | Mul():
-            return [e.first, e.second]
-        case Abs() | Neg() | Round() | Cast():
+        case NullaryOp():
+            return []
+        case UnaryOp():
             return [e.arg]
+        case BinaryOp():
+            return [e.first, e.second]
+        case TernaryOp():
+            return [e.first, e.second, e.third]
+        case NaryOp():
+            return list(e.args)
         case _:
-            raise RuntimeError(f'not a rounded operation: {e!r}')
+            raise RuntimeError(f'not an operation: {e!r}')
 
 
 def rebuild(e: Expr, args: list[Expr]) -> Expr:
     """*e* with its operands replaced: the inverse of :func:`operands`."""
+    # a `Named*` op carries the symbol it was written with; a nullary one always
+    # does, since it has nothing else to identify it.  The arities are settled by
+    # the match, which mypy cannot follow through the star-args.
+    named = isinstance(
+        e, (NullaryOp, NamedUnaryOp, NamedBinaryOp, NamedTernaryOp, NamedNaryOp),
+    )
+    head = (e.func,) if named else ()   # type: ignore[attr-defined]
+    ctor: Any = type(e)
     match e:
-        case Add() | Sub() | Mul():
-            return type(e)(args[0], args[1], e.loc)
-        case Abs() | Neg():
-            return type(e)(args[0], e.loc)
-        case Round() | Cast():
-            return type(e)(e.func, args[0], e.loc)
+        case NullaryOp():
+            return ctor(*head, e.loc)
+        case NaryOp():
+            return ctor(*head, args, e.loc)
+        case UnaryOp() | BinaryOp() | TernaryOp():
+            return ctor(*head, *args, e.loc)
         case _:
-            raise RuntimeError(f'not a rounded operation: {e!r}')
+            raise RuntimeError(f'not an operation: {e!r}')
 
 
 def check_where(where: int | Cursor | None) -> None:
@@ -278,6 +312,34 @@ def _target_of(
 class Declined:
     """A verification refusal: why a candidate block was not rewritten."""
     reason: str
+
+
+class RoundingScopes:
+    """What context each operation of a function is evaluated under.
+
+    Shared by the rounding rewrites so they agree on the question, and so a
+    `where` index counts the same operations for a listing and for the rewrite.
+    """
+
+    def __init__(self, func: FuncDef):
+        self.def_use = DefineUse.analyze(func)
+        self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.format_info = FormatInfer.analyze(
+            func, def_use=self.def_use, ctx_use=self.ctx_use,
+        )
+
+    def scope_ctx(self, e: Expr) -> Context | None:
+        """*e*'s active context, or `None` where the scope stays symbolic.
+
+        A function-level annotation is already resolved by `ContextUse`, so a
+        `None` here means genuinely unknown.
+        """
+        scope = self.ctx_use.find_scope_from_use(e)   # type: ignore[arg-type]
+        return scope.ctx if isinstance(scope.ctx, Context) else None
+
+    def is_exact(self, e: Expr) -> bool:
+        """Whether *e*'s active scope rounds exactly, so it has no rounding yet."""
+        return self.scope_ctx(e) is REAL
 
 
 class SiteRewriter(DefaultTransformVisitor):
@@ -521,6 +583,157 @@ class SiteRewriter(DefaultTransformVisitor):
         """Record that `block[pos]` survives with its expressions rewritten, so
         an expression cursor in it does not forward."""
         self.dirty_exprs.append(StmtPath(self._paths[id(block)], pos))
+
+
+class RoundingRewriter(SiteRewriter):
+    """Shared machinery for the rounding rewrites that lift one operation into
+    a block of its own.
+
+    :class:`fpy2.transform.RoundInsert` gives an exact operation a format;
+    :class:`fpy2.transform.SplitRound` splits a rounded one through an
+    intermediate.  A subclass says which operations it considers
+    (:meth:`_candidate`), whether one may be rewritten (:meth:`_verify`), and
+    what stands in its place (:meth:`_wrap`).
+    """
+
+    _expr_sited = True   # the sites are expressions, not statements
+
+    func: FuncDef
+    ctx: Context
+    scopes: 'RoundingScopes'
+    gensym: Gensym
+    where: 'Cursor | int | None'
+
+    def __init__(
+        self,
+        func: FuncDef,
+        ctx: Context,
+        scopes: 'RoundingScopes',
+        where=None,
+    ):
+        self.func = func
+        self.ctx = ctx
+        self.scopes = scopes
+        self.gensym = Gensym(reserved=scopes.def_use.names())
+        self.where = where
+
+    def apply(self) -> FuncDef:
+        return self._visit_function(self.func, None)
+
+    # ------------------------------------------------------------------
+    # What a subclass supplies
+
+    def _candidate(self, e: Expr) -> bool:
+        """Whether *e* is an operation this rewrite considers at all."""
+        raise NotImplementedError
+
+    def _verify(self, e: Expr) -> 'Declined | None':
+        """`None` where *e* may be rewritten, else why not."""
+        raise NotImplementedError
+
+    def _wrap(self, t: NamedId, loc: Location | None) -> Expr:
+        """What replaces the operation, given the temporary holding it."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+
+    def _emit(self, e: Expr, out: list) -> Expr:
+        """Compute *e* alone under `self.ctx`; return :meth:`_wrap` of it.
+
+        Each operand that survives the visit as a non-``Var`` is bound under the
+        *original* scope first, so the emitted block covers this operation and
+        nothing else.
+        """
+        loc = e.loc
+        args: list[Expr] = []
+        for operand in operands(e):
+            new = self._visit_expr(operand, out)
+            if isinstance(new, Var):
+                # a name lookup rounds nothing, so the bind would be a pure copy
+                args.append(new)
+                continue
+            t = self.gensym.fresh('_t')
+            out.append(Assign(t, None, new, loc))
+            args.append(Var(t, loc))
+
+        result = self.gensym.fresh('_t')
+        block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
+        out.append(ContextStmt(
+            UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
+        ))
+        return self._wrap(result, loc)
+
+    def _visit_expr(self, e: Expr, ctx) -> Expr:
+        if not self._candidate(e):
+            return super()._visit_expr(e, ctx)
+
+        # a refusal is not a site, so it is decided before an index is spent:
+        # `ctx` is `None` where no statement-level preamble reaches
+        declined = (
+            Declined(
+                'the operation has no statement-level position for the block '
+                'the rewrite emits'
+            )
+            if ctx is None
+            else self._verify(e)
+        )
+        if declined is not None:
+            self.refused.append((e, declined.reason))
+            if self._named_by_cursor(e):
+                # a cursor named it: say why, rather than that it named nothing
+                self.declined.append(declined.reason)
+            return super()._visit_expr(e, ctx)
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if not self._selects_expr(e, idx):
+            return super()._visit_expr(e, ctx)
+
+        self._matched += 1
+        if self.listing:
+            self.found_exprs.append(e)
+            return super()._visit_expr(e, ctx)
+
+        emitted = self._emit(e, ctx)
+        self._replaced = True
+        return emitted
+
+    # A compound statement's own sub-expression carries no preamble.  For a
+    # `while` condition that is soundness: the condition is re-evaluated every
+    # iteration, and a preamble before the loop computes it once, which does not
+    # terminate.  The rest is scope -- those positions are evaluated exactly
+    # once, so lifting the suppression is a capability question (`CompToLoop`
+    # does hoist out of them).
+    def _visit_if1(self, stmt: If1Stmt, ctx):
+        return super()._visit_if1(stmt, None)[0], ctx
+
+    def _visit_if(self, stmt: IfStmt, ctx):
+        return super()._visit_if(stmt, None)[0], ctx
+
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        return super()._visit_while(stmt, None)[0], ctx
+
+    def _visit_for(self, stmt: ForStmt, ctx):
+        return super()._visit_for(stmt, None)[0], ctx
+
+    def _visit_context(self, stmt: ContextStmt, ctx):
+        return super()._visit_context(stmt, None)[0], ctx
+
+    def _visit_list_comp(self, e: ListComp, ctx) -> ListComp:
+        # the element sees the loop targets and later iterables see earlier
+        # ones, so no statement-level preamble reaches inside a comprehension
+        targets = [self._visit_binding(t, ctx) for t in e.targets]
+        iterables = [self._visit_expr(i, None) for i in e.iterables]
+        elt = self._visit_expr(e.elt, None)
+        return ListComp(targets, iterables, elt, e.loc)
+
+    def _visit_if_expr(self, e: IfExpr, ctx) -> IfExpr:
+        # the condition is evaluated unconditionally; the branches are not, so
+        # hoisting one of them out would evaluate it either way
+        cond = self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, None)
+        iff = self._visit_expr(e.iff, None)
+        return IfExpr(cond, ift, iff, e.loc)
 
 
 class BlockRewriter(SiteRewriter):

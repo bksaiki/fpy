@@ -342,6 +342,9 @@ class MPFloatContext(Context):
         x = self._round_prepare(x)
         return self._round_at(x, n, exact)
 
+    def rounding_mode(self):
+        return self.rm
+
     def round_params(self) -> tuple[int | None, int | None]:
         if self.num_randbits is None:
             return None, None

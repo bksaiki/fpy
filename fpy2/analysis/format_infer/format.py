@@ -651,25 +651,52 @@ class AbstractFormat:
             return False
         if other.neg_bound > self.neg_bound:
             return False
-        # 3. precision — only constraining when other has a finite normal region
-        if not isinstance(other.prec, float) and not isinstance(other.exp, float):
-            if self.prec > other.prec:
-                # easy check failed: other's spacing in its normal region widens faster.
-                # Containment still holds if self's bound stays within the region where
-                # other's effective quantum is <= self's quantum 2^self.exp, i.e.,
-                # pos_bound1 <= 2^(self.exp + other.prec).
-                if not isinstance(self.exp, int):
-                    return False
-                cutoff = RealFloat(False, self.exp, 1 << other.prec)
-                if isinstance(self.pos_bound, float) or self.pos_bound > cutoff:
-                    return False
-                if isinstance(self.neg_bound, float) or abs(self.neg_bound) > cutoff:
-                    return False
+        # 3. precision
+        if not isinstance(other.prec, float) and self.prec > other.prec:
+            # Easy check failed: other's spacing in its normal region widens
+            # faster.  Containment still holds if self's bound stays within the
+            # region where other's effective quantum is <= self's quantum
+            # 2^self.exp, i.e. pos_bound1 <= 2^(self.exp + other.prec) -- but
+            # that region is other's *subnormal* one, which exists only where
+            # its exponent is finite.  Unbounded below, precision binds
+            # everywhere and less of it is less.
+            if not isinstance(self.exp, int) or not isinstance(other.exp, int):
+                return False
+            cutoff = RealFloat(False, self.exp, 1 << other.prec)
+            if isinstance(self.pos_bound, float) or self.pos_bound > cutoff:
+                return False
+            if isinstance(self.neg_bound, float) or abs(self.neg_bound) > cutoff:
+                return False
         return True
 
     def contained_in(self, other: 'AbstractFormat') -> bool:
         """Check if this format is contained in another format."""
         return self._is_contained_in(other)
+
+    def next_bound(self) -> 'AbstractFormat':
+        """
+        Figure 8's ``next(b)``: both bounds one step away from zero, in *this*
+        format's grid.  A caller wanting a wider grid extends the format first.
+        An unbounded side is left alone.
+        """
+        return AbstractFormat(
+            self.prec, self.exp,
+            self._next_away(self.pos_bound), neg_bound=self._next_away(self.neg_bound),
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
+        )
+
+    def _next_away(self, b: RealFloat | float) -> RealFloat | float:
+        """One step outward from *b* in this format's grid.
+
+        `RealFloat`'s `n` is the first *unrepresentable* digit, one below the
+        minimum representable exponent, so `exp - 1` is this format's grid.
+        """
+        if not isinstance(b, RealFloat) or b.is_zero():
+            return b        # unbounded, or a zero with no direction to step
+        p = self.prec if isinstance(self.prec, int) else None
+        n = (self.exp - 1) if isinstance(self.exp, int) else None
+        return b.next_away_zero(p, n)
 
     def with_prec_offset(self, delta: int) -> 'AbstractFormat':
         """
@@ -685,7 +712,8 @@ class AbstractFormat:
             raise ValueError("resulting precision must be at least 1")
         return AbstractFormat(
             new_prec, self.exp, self.pos_bound, neg_bound=self.neg_bound,
-            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
         )
 
     def with_exp_offset(self, delta: int) -> 'AbstractFormat':
@@ -700,7 +728,8 @@ class AbstractFormat:
         new_exp = self.exp + delta
         return AbstractFormat(
             self.prec, new_exp, self.pos_bound, neg_bound=self.neg_bound,
-            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
         )
 
     def with_bounds_scale(self, factor: RealFloat) -> 'AbstractFormat':
@@ -721,5 +750,6 @@ class AbstractFormat:
         # scaling by a positive factor preserves special-value membership
         return AbstractFormat(
             self.prec, self.exp, new_pos_bound, neg_bound=new_neg_bound,
-            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf, has_nan=self.has_nan,
+            has_pos_inf=self.has_pos_inf, has_neg_inf=self.has_neg_inf,
+            has_nan=self.has_nan, has_neg_zero=self.has_neg_zero,
         )
