@@ -183,12 +183,29 @@ class TestEquivalence:
         out = SplitRound.apply(_product.ast, VIA32)
         assert _agree(_product.ast, out, _product.runtime, self._subnormal_sweep())
 
-    def test_overflow_saturates_rather_than_going_to_infinity(self):
-        """The intermediate must saturate: overflowing to `inf` sends a value
-        the target clamps to its maxval somewhere the re-rounding cannot bring
-        it back from."""
+    def test_overflow_matches_the_unsplit_program(self):
+        """The derived intermediate is unbounded, so the only rounding that can
+        overflow is the target's -- as in the program before the split.  A
+        *bounded* intermediate has an overflow of its own that no single
+        behaviour gets right: a clamping target (RTZ) needs it not to overflow,
+        an overflowing one (RTO) needs it to."""
         out = SplitRound.apply(_product.ast, VIA32)
         assert _agree(_product.ast, out, _product.runtime, self._overflow_sweep())
+
+    @pytest.mark.parametrize('rm1', [RM.RTZ, RM.RTO, RM.RNE])
+    def test_overflow_for_a_clamping_and_an_overflowing_target(self, rm1):
+        """The two directions that a bounded intermediate cannot satisfy at
+        once, both exact here."""
+        target = fp.FP32.with_params(rm=rm1)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with target:
+                t = x * y
+            return t
+
+        out = SplitRound.apply(f.ast, derive_intermediate(target))
+        assert _agree(f.ast, out, f.runtime, self._overflow_sweep(150))
 
     def test_a_nested_rounded_operand(self):
         """An operand that is itself a rounded operation has to be bound under
@@ -283,6 +300,16 @@ class TestDeclines:
         with pytest.raises(TransformReferenceError):
             SplitRound.apply(_product.ast, VIA32, where=7)
 
+    def test_a_bounded_intermediate(self):
+        """A finite range gives the intermediate an overflow the premise cannot
+        see, so it is declined however wide it is."""
+        from fpy2.analysis.format_infer import AbstractFormat
+        bound = AbstractFormat.from_format(fp.FP64.format()).pos_bound
+        wide = fp.MPBFloatContext(64, -1074, bound, fp.RoundingMode.RTO)
+        assert SplitRound.sites(_product.ast, ctx=wide) == []
+        why = SplitRound.refusals(_product.ast, ctx=wide)
+        assert len(why) == 1 and 'finite range' in why[0][1]
+
     def test_a_non_context_intermediate(self):
         with pytest.raises(TypeError):
             SplitRound.sites(_product.ast, ctx=fp.FP32.format())  # type: ignore[arg-type]
@@ -291,8 +318,7 @@ class TestDeclines:
 class TestUnreachablePositions:
     def test_a_while_condition_is_left_alone(self):
         """The condition is re-evaluated every iteration, so a block hoisted
-        before the loop computes it once — which does not terminate.  Measured:
-        it hung before the suppression was added."""
+        before the loop computes it once — which does not terminate."""
 
         @fp.fpy(ctx=fp.FP32)
         def shrink(n: fp.Real) -> fp.Real:
@@ -305,6 +331,33 @@ class TestUnreachablePositions:
         # the body's `i + 1.0` is the one site; the condition's `i * 1.0` is not
         assert len(SplitRound.sites(shrink.ast, ctx=VIA32)) == 1
         assert str(Function(out, runtime=shrink.runtime)(3.0)) == str(shrink(3.0))
+
+    @pytest.mark.parametrize('build', ['if_cond', 'for_iterable', 'comprehension'])
+    def test_the_other_positions_with_no_statement_slot(self, build):
+        """Each is refused for the same reason as the `while` condition: there
+        is nowhere to put the block."""
+        if build == 'if_cond':
+            @fp.fpy(ctx=fp.FP32)
+            def f(x: fp.Real, y: fp.Real) -> fp.Real:
+                a = 0.0
+                if x * y > 0.0:
+                    a = 1.0
+                return a
+        elif build == 'for_iterable':
+            @fp.fpy(ctx=fp.FP32)
+            def f(xs: list[fp.Real], y: fp.Real) -> fp.Real:
+                a = 0.0
+                for v in xs[0:y * 2]:
+                    a = v
+                return a
+        else:
+            @fp.fpy(ctx=fp.FP32)
+            def f(xs: list[fp.Real], y: fp.Real) -> fp.Real:
+                return [v * y for v in xs][0]
+
+        assert SplitRound.sites(f.ast, ctx=VIA32) == []
+        why = SplitRound.refusals(f.ast, ctx=VIA32)
+        assert why and all('no statement-level position' in r for _, r in why)
 
     def test_an_if_expr_branch_is_left_alone(self):
         @fp.fpy(ctx=fp.FP32)
@@ -335,16 +388,23 @@ class TestWhereContract:
 
 
 class TestNotCandidates:
-    def test_an_explicit_rounding_is_not_split(self):
-        """Splitting a rounding is `merge_round`'s inverse; admitting `Round`
-        and `Cast` would also make a second application grow the tree twice as
-        fast."""
+    @pytest.mark.parametrize('op', ['round', 'cast'])
+    def test_an_explicit_rounding_is_not_split(self, op):
+        """Splitting a rounding is the inverse rewrite, and admitting these
+        would make a second application grow the tree twice as fast."""
 
-        @fp.fpy(ctx=fp.REAL)
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                t = fp.round(x)
-            return t
+        if op == 'round':
+            @fp.fpy(ctx=fp.REAL)
+            def f(x: fp.Real) -> fp.Real:
+                with fp.FP32:
+                    t = fp.round(x)
+                return t
+        else:
+            @fp.fpy(ctx=fp.REAL)
+            def f(x: fp.Real) -> fp.Real:
+                with fp.FP32:
+                    t = fp.cast(x)
+                return t
 
         assert SplitRound.sites(f.ast, ctx=VIA32) == []
         assert SplitRound.refusals(f.ast, ctx=VIA32) == []

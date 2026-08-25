@@ -3,6 +3,7 @@ Testing `Context` methods.
 """
 
 import fpy2 as fp
+import pytest
 
 from fractions import Fraction
 from hypothesis import assume, given, strategies as st
@@ -368,8 +369,23 @@ class TestRoundingMode:
 
     @given(common_contexts())
     def test_every_common_context_answers(self, ctx: fp.Context):
+        """The value, not just the type: `rounding_mode()` reports the `rm` the
+        context was built with."""
         rm = ctx.rounding_mode()
         assert rm is None or isinstance(rm, fp.RoundingMode)
+        assert rm == getattr(ctx, 'rm', None)
         # a context that rounds names its rule
         if ctx.round_params() != (None, None):
             assert rm is not None
+
+    @pytest.mark.parametrize('ctx', [
+        fp.MPBFloatContext(8, -14, fp.FP16.format().pos_maxval if False else
+                           __import__('fpy2.analysis.format_infer', fromlist=['AbstractFormat'])
+                           .AbstractFormat.from_format(fp.FP16.format()).pos_bound,
+                           fp.RoundingMode.RTZ),
+        fp.MPFloatContext(11, fp.RoundingMode.RAZ),
+        fp.MPSFloatContext(11, -14, fp.RoundingMode.RTO),
+        fp.MPFixedContext(-4, fp.RoundingMode.RTP),
+    ], ids=['mpb_float', 'mp_float', 'mps_float', 'mp_fixed'])
+    def test_each_family_reports_its_own_mode(self, ctx: fp.Context):
+        assert ctx.rounding_mode() is ctx.rm

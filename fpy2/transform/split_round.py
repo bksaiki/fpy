@@ -27,8 +27,6 @@ caller's, and :func:`fpy2.analysis.format_infer.derive_intermediate` computes a
 suitable one.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
 candidates: splitting a rounding is the inverse of merging two, and admitting
 them makes a second application grow the tree twice as fast.
-
-The refusals, and why each one, are at :meth:`_SplitRoundInstance._verify`.
 """
 
 from typing import Any
@@ -61,7 +59,7 @@ from ..ast.fpyast import (
     Var,
     WhileStmt,
 )
-from ..number import REAL, Context, OverflowMode
+from ..number import REAL, Context, RealFloat
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
 from .utils import (
@@ -74,18 +72,13 @@ from .utils import (
 )
 
 _SPLITTABLE = (Add, Sub, Mul, Abs, Neg)
-"""The operations whose rounding may be split.
-
-:class:`.RoundInsert`'s set minus ``Round`` and ``Cast``: an explicit rounding
-is not an arithmetic operation with a rounding attached, and splitting one is
-the inverse rewrite rather than this one.
-"""
+""":class:`.RoundInsert`'s set, minus the explicit roundings."""
 
 
 class _SplitRoundInstance(SiteRewriter):
     """Splits selected rounded operations through an intermediate."""
 
-    _expr_sited = True   # the candidates are rounded operations
+    _expr_sited = True   # the sites are expressions, not statements
 
     func: FuncDef
     ctx: Context
@@ -147,25 +140,24 @@ class _SplitRoundInstance(SiteRewriter):
                 f'as rounding to {rm1.name} for these formats'
             )
 
-        # `A` says what is representable and nothing about what happens above
-        # it, so the premise cannot see this: an intermediate that overflows to
-        # infinity sends a value the target clamps to its maxval to `inf`, and
-        # the re-rounding cannot pull it back
-        overflow = getattr(self.ctx, 'overflow', None)
-        if False:
+        # The premises constrain what is representable, not what happens
+        # beyond it, so a bounded intermediate has an overflow they do not
+        # cover -- and no single behaviour suits every target.  See gap 4 of
+        # `docs/todos/rounding-axes.md`; `derive_intermediate` sidesteps it.
+        if isinstance(AbstractFormat.from_format(f2).bound, RealFloat):
             return Declined(
-                f'the intermediate overflows by {overflow.name} rather than '
-                'saturating, so a value above its range would not come back'
+                'the intermediate has a finite range, so it would overflow '
+                'where the single rounding did not; use an unbounded one'
             )
         return None
 
     def _split(self, e: Expr, out: list) -> Expr:
         """Compute *e* under the intermediate; return the re-rounding of it.
 
-        The operands are bound exactly as :meth:`.RoundInsert._hoist` binds
-        them, so the emitted block computes this operation and nothing else.
-        The returned ``round`` sits in the *enclosing* block, which is what
-        applies the target's rounding.
+        Each operand that is not already a ``Var`` is bound first, so the
+        emitted block computes this operation and nothing else.  The returned
+        ``round`` sits in the *enclosing* block, which is what applies the
+        target's rounding.
         """
         loc = e.loc
         args: list[Expr] = []

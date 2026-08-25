@@ -673,13 +673,9 @@ class AbstractFormat:
 
     def next_bound(self) -> 'AbstractFormat':
         """
-        Return this format with both bounds moved one step away from zero, in
-        *this* format's own grid.
-
-        This is Figure 8's ``next(b)``.  There is no precision parameter: the
-        grid is the receiver's, so a caller wanting ``next`` at a wider
-        precision extends the format first and asks second.  An unbounded side
-        is left alone.
+        Figure 8's ``next(b)``: both bounds one step away from zero, in *this*
+        format's grid.  A caller wanting a wider grid extends the format first.
+        An unbounded side is left alone.
         """
         return AbstractFormat(
             self.prec, self.exp,

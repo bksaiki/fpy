@@ -2,13 +2,13 @@
 Figure 8 of *When Double Rounding is Correct*, as a predicate.
 
 The oracle is the Lean development, `Mpfx/DoubleRounding.lean
-<https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean>`_ --
-not this repo's prose, which had four rows wrong.  Each admitted pairing below
-names the theorem it comes from, and the pairings *not* listed have no theorem
-and must be refused.
+<https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean>`_.
+Each admitted pairing names the theorem it comes from; a pairing not listed has
+no theorem and must be refused.
 """
 
 import itertools
+import math
 
 import pytest
 
@@ -62,7 +62,7 @@ class TestAdmitted:
         assert double_round_ok(_fp32(), rm1, _wide(), rm2), ADMITTED[pair]
 
     def test_nothing_else_is_admitted(self):
-        """The complement, stated as a whole: 9 of the 64 mode pairs."""
+        """The admitted set exactly: 9 of the 64 mode pairs."""
         got = {
             (a, b) for a, b in itertools.product(ALL_MODES, ALL_MODES)
             if double_round_ok(_fp32(), a, _wide(), b)
@@ -95,7 +95,7 @@ class TestRefused:
 
 
 class TestPremiseDetails:
-    """The rows this repo's prose had wrong, each pinned so it stays fixed."""
+    """The premises that are easy to transcribe wrongly."""
 
     def test_the_same_mode_rules_need_no_bound_bump(self):
         """`rndRTZ_RTZ` and `rndRTO_RTO` take plain containment, exactly as
@@ -146,9 +146,25 @@ class TestDeriveIntermediate:
         assert via.rounding_mode() is RM.RTO
         assert double_round_ok(_fmt(target), rm1, _fmt(via), RM.RTO)
 
-    def test_it_is_wider_than_the_target(self):
+    def test_it_is_unbounded_and_strictly_wider(self):
+        """Unboundedness is what makes the composition agree at the ends of the
+        range: the intermediate cannot overflow or underflow, so the only
+        rounding that can is the target's.  `contained_in` alone would not say
+        this -- it is reflexive, so the target itself would pass."""
         via = derive_intermediate(fp.FP32)
-        assert _fmt(fp.FP32).contained_in(_fmt(via))
+        f1, f2 = _fmt(fp.FP32), _fmt(via)
+        assert f1.contained_in(f2)
+        assert f2.bound == math.inf and f2.exp == -math.inf
+        assert f2.prec > f1.prec
+
+    @pytest.mark.parametrize('name', ['SINT8', 'UINT8', 'MX_INT8', 'FP8P7', 'BF16'])
+    def test_every_format_family(self, name):
+        """Each derives an intermediate its own premise accepts."""
+        target = getattr(fp, name)
+        via = derive_intermediate(target)
+        assert double_round_ok(
+            _fmt(target), target.rounding_mode(), _fmt(via), RM.RTO,
+        )
 
     def test_a_fixed_point_target(self):
         """The premises are containment checks on `A`, indifferent to which

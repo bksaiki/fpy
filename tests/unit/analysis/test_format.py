@@ -810,10 +810,9 @@ class TestNextBound:
         assert f.next_bound().pos_bound == f.pos_bound.next_away_zero(f.prec, f.exp)
 
     def test_the_builders_preserve_the_special_flags(self):
-        """`with_prec_offset` / `with_exp_offset` / `with_bounds_scale` rebuild
-        the format, and each used to drop `has_neg_zero` -- the constructor
-        defaults it to `False`, so it vanished silently.  Nothing called them
-        before Figure 8's premises did."""
+        """Each rebuilds the format, and the constructor defaults
+        `has_neg_zero` to `False`, so a builder that forgets it drops the flag
+        silently."""
         from fpy2.number.number.reals import RealFloat
 
         f = self._fp32()

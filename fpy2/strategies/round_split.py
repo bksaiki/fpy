@@ -34,24 +34,19 @@ def split_round(
     The sites are individual rounded operations — the complement of
     :func:`fpy2.strategies.insert_round`'s, which takes the exact ones.  An
     operation is split by being lifted into a block of the intermediate, with an
-    explicit rounding back to the target in the enclosing block; an assignment
-    rounds nothing in FPy, so that rounding has to be written.
+    explicit rounding back to the target in the enclosing block, since an
+    assignment rounds nothing in FPy.
 
     Most pairs are unsound and refused.  In particular **round-to-nearest over
-    round-to-nearest is not**, whatever the intermediate's width — and every
-    ``fp.FP*`` context is round-to-nearest, so a hand-written program almost
-    always wants a round-to-odd intermediate.  Also refused: an operation whose
-    scope rounds exactly (:func:`fpy2.strategies.insert_round` gives it a format
-    first) or is symbolic, a stochastic context on either side, and an operation
-    with nowhere to put the block — a loop condition, a comprehension, a
-    conditional branch.
+    round-to-nearest is not sound**, whatever the intermediate's width — and
+    every ``fp.FP*`` context is round-to-nearest, so a hand-written program
+    almost always wants a round-to-odd intermediate.  Also refused: a scope that
+    rounds exactly or is symbolic, a stochastic context, a bounded intermediate,
+    and an operation with nowhere to put the block.
 
-    This is not idempotent: the operation lands under the intermediate, and
-    round-to-odd over round-to-odd is itself admissible, so applying it again
-    splits again.
-
-    Run :func:`fpy2.strategies.simplify` afterwards to fold away the temporaries
-    the rewrite introduces.
+    Not idempotent: round-to-odd over round-to-odd is itself admissible, so
+    applying it again splits again.  Run :func:`fpy2.strategies.simplify`
+    afterwards to fold away the temporaries.
 
     Parameters
     ----------

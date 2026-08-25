@@ -286,7 +286,46 @@ containment checks on 𝒜 that do not care which family the format comes from �
 but that overlaps `float_to_fixed` and `rescale_fixed`, so it needs thought
 rather than an assumption.
 
-### 4. `merge_round`
+### 4. Bounded intermediates for `split_round`
+
+`derive_intermediate` returns an **unbounded** intermediate, and `split_round`
+declines a bounded one. That is sound but leaves capability on the table.
+
+The premises are containment checks on `A`, which says what is representable and
+nothing about what happens beyond it — so a bounded intermediate has an overflow
+of its own that the premise cannot see. Measured on an FP32 target, products
+straddling its maxval:
+
+| target | intermediate bound | overflow mode | wrong |
+|---|---|---|---|
+| RNE / RNA / RAZ | `next(b1)` | either | 0 |
+| RTZ | `next(b1)` | saturating | 0 |
+| RTZ | `next(b1)` | overflowing | **175** |
+| RTO | `b1` (the premise *passes*) | saturating | **176** |
+| RTO | `b1` | overflowing | **1** |
+| any | FP64-wide | either | 0 |
+
+Two things to read off this. A bounded intermediate is usually fine, and fails
+only where its bound sits close to the target's — the failure is the *boundary*,
+not the width. And no single overflow mode is right: a target that clamps (RTZ)
+needs the intermediate not to overflow, one that overflows (RTO) needs it to.
+That is why `derive_intermediate` sidesteps the question rather than answering
+it: an unbounded intermediate cannot overflow, so the only rounding that can is
+the target's, exactly as before the split.
+
+**The fix is a proof, not a mode.** `RoundingScopes` already carries
+`format_info`, so the operation's inferred bound is in hand: where that bound
+lies inside the intermediate's finite range, the intermediate provably cannot
+overflow and the boundary never arises. That admits every row above whose
+mismatch count is zero — including the FP64-wide case, which is what a caller
+reaching for a familiar format would pass — and declines the rest with a reason.
+`RoundInsert._verify` reads the same field, so the machinery is there.
+
+The residue after that proof is the genuinely open part: a bounded intermediate
+whose range the operation *can* exceed. Settling it needs the overflow boundary
+per mode pair, which Figure 8 does not cover — its theorems are `RoundsFinite`.
+
+### 5. `merge_round`
 
 Collapse a nested rounding into a single one when the Figure 8 premise holds.
 This complements `elim_round`, which only removes roundings that are
@@ -302,7 +341,7 @@ merge have an RTO intermediate, or two agreeing modes drawn from RTZ / RAZ /
 RTO, and under FPy's default contexts nobody writes those by hand. That makes
 this operator worth building mainly to close the axis and to check
 `split_round`'s output, which is why it sits last in the order below despite
-sharing gap 3's predicate.
+sharing `split_round`'s predicate.
 
 **Its predicate is built.** `double_round_ok(f1, rm1, f2, rm2)` is in
 `format_infer/double_round.py` and `merge_round` reuses it unchanged --
@@ -364,9 +403,12 @@ Three positions, in the order they were closed:
    `derive_intermediate` in `format_infer/double_round.py`, tested against the
    Lean theorems in `tests/unit/analysis/test_double_round.py`; the operator in
    `fpy2/transform/split_round.py` and `fpy2/strategies/round_split.py`.
-5. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
-   spellings first. **Next**, and the only operator left on the page.
-6. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
+5. **Bounded intermediates for `split_round`** (gap 4) — a no-overflow proof
+   from `format_info`, which admits the useful cases the current blanket refusal
+   turns away.
+6. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
+   spellings first. The only operator left on the page.
+7. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
    `merge_round`), then finitize (`insert_round`, `split_round` against an
    environment's format list). A documented composition and a worked example,
    not a new operator; the MX dot product of §2 and §8 is the example.
@@ -411,7 +453,7 @@ Three positions, in the order they were closed:
   `exprs_preserved=True`, and forwarding, not site listing, is the work. See
   item 3 of [scheduling-language.md](scheduling-language.md).
 - **Negative tests for the ten unsound pairings.** Table 2 of the paper gives
-  counterexamples. RNE-RNE is the one to pin down, for the reason in gap 4: it
+  counterexamples. RNE-RNE is the one to pin down, for the reason in gap 5: it
   is both the pairing a hand-written FPy program falls into by default and the
   one a well-meaning future patch is most likely to "fix". A test that asserts
   the FP64-to-FP32 decline is the guard.

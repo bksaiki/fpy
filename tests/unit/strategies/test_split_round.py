@@ -104,6 +104,14 @@ class TestWhere:
         with pytest.raises(TransformReferenceError):
             split_round(_product, VIA32, 7)
 
+    def test_a_cursor_forwards_across_a_split(self):
+        """A cursor taken before the first split still names its operation
+        after, which is what `func.rebase` and `exprs_preserved` are for."""
+        listed = sites(split_round, _two_ops, ctx=VIA32)
+        once = split_round(_two_ops, VIA32, listed[0])
+        twice = split_round(once, VIA32, listed[1])
+        assert twice.format().count('RoundingMode.RTO') == 2
+
     def test_a_cursor_of_an_unrelated_program(self):
         other = sites(split_round, _two_ops, ctx=VIA32)[0]
         with pytest.raises(TransformReferenceError):
