@@ -21,14 +21,74 @@ where it picks up the target's own mode.
                                            _t = x * y
                                        t = round(_t)
 
-Which pairs are admissible is decided by
-:func:`fpy2.analysis.format_infer.double_round_ok`; the intermediate is the
-caller's, and :func:`fpy2.analysis.format_infer.derive_intermediate` computes a
-suitable one.  An intermediate that represents the operation's *exact* result is
-admitted whatever the modes, since rounding to it is then the identity -- which is
-how a nearest-to-nearest split becomes possible at all.  Explicit ``Round`` / ``Cast`` nodes are deliberately not
-candidates: splitting a rounding is the inverse of merging two, and admitting
-them makes a second application grow the tree twice as fast.
+Explicit ``Round`` / ``Cast`` nodes are deliberately not candidates: splitting a
+rounding is the inverse of merging two, and admitting them makes a second
+application grow the tree twice as fast.
+
+When this fires
+---------------
+
+The intermediate is the caller's; :func:`fpy2.analysis.format_infer.derive_intermediate`
+computes a suitable one.  Given a target ``(F1, rm1)`` and an intermediate
+``(F2, rm2)``, one of three rules must hold, tried in this order:
+
+=================== ================================================= =============================
+rule                condition                                         source
+=================== ================================================= =============================
+exact intermediate  the operation's exact result is representable      ``rndExact``
+                    in ``F2``
+Figure 8            a mode pair in :func:`.double_round_ok`'s table    ``Mpfx/DoubleRounding.lean``
+                    (nine of sixty-four), plus containment
+the operation's own :func:`.double_round_op_ok` for ``+``/``-``,       Roux 2014
+                    ``/``, ``sqrt``
+=================== ================================================= =============================
+
+The first is the widest, because it needs nothing of the modes: if ``F2`` holds
+the result exactly then rounding to it is the identity, so the composition *is*
+the original computation.  This is what admits an FP32 product through FP64 with
+both contexts at their own round-to-nearest, which Figure 8 refuses at every
+width.  It uses the operands' inferred formats, so it is stronger than the closed
+form ``p2 >= 2*p1``: an FP16 product needs 22 digits, not 48.
+
+The third covers the operations whose result is *not* representable -- an exact
+sum needs the operands' whole exponent range, and a quotient or root is generally
+irrational.  Three of its conditions are worth knowing, because each one is
+load-bearing rather than cautious:
+
+* **Both roundings must be to nearest.** Measured: ``add`` through an
+  intermediate far wider than any rule asks still disagrees with a *directed*
+  target.  Multiplication is exempt only because it goes through ``rndExact``,
+  which is mode-agnostic.
+* **Every operand must be representable in the target.** FPy's signature is
+  ``op: Fx -> Fy -> F1`` -- only the result is rounded -- so this is a real
+  check.  An operand on a finer grid lets the exact result land within half an
+  intermediate ulp of a target midpoint, which is exactly what the proofs'
+  separation argument rules out.  Measured with a 3-digit target and the rule's
+  exact 7-digit intermediate: operands at 4 digits already disagree on 16 of
+  6400 pairs, and at 6 digits on 1748 of 102400.  Containment is against ``F1``,
+  not ``F2`` -- every one of those operands is inside ``F2``.
+* **No mixed exponent families for ``/`` and ``sqrt``.** They are proved
+  separately for FLX and FLT with no mixed statement, so an unbounded exponent on
+  one side only is refused rather than assumed.  ``+`` is stated over ``WithBot``
+  and spans both.
+
+Two things a reader may expect to be checked and are not:
+
+* **A bounded target needs no check.** A bounded rounding is the unbounded one
+  followed by a bound test that reads only its result, so an equality between
+  unbounded roundings survives it.  The apparent counterexample -- a value just
+  under the target's overflow threshold that the intermediate lifts onto it -- is
+  not a possible operation result, and what excludes it is the separation
+  argument above, since that threshold is an ordinary midpoint of the unbounded
+  target.
+* **A bounded *intermediate* still does**, via :meth:`_composes_special`: its
+  bound test sits *between* the two roundings, where it destroys information the
+  premises need.
+
+Specials are not incidental.  Figure 8 gets them from containment; the operation
+rules ask for them separately, since they do not require containment -- an
+intermediate without the target's ``NaN`` would turn an infinite result into a
+raised error.
 """
 
 import operator

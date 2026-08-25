@@ -21,8 +21,14 @@ Sibling of :func:`fpy2.analysis.format_infer.round_is_identity`, which decides t
 
 from enum import Enum
 
-from ...number import Context, MPFixedContext, MPFloatContext, RoundingMode
-from .format import AbstractFormat
+from ...number import (
+    Context,
+    MPFixedContext,
+    MPFloatContext,
+    MPSFloatContext,
+    RoundingMode,
+)
+from .format import AbstractableFormat, AbstractFormat
 
 __all__ = [
     'DoubleRoundOp', 'derive_intermediate', 'double_round_ok',
@@ -133,7 +139,9 @@ def double_round_op_ok(
     midpoint, which is exactly what the proofs rule out. FPy's signature is
     ``op: Fx -> Fy -> F1``, so this does not come for free.
 
-    Both roundings must be to nearest; the tie-breaks may differ.  The bound
+    Both roundings must be to nearest; the tie-breaks may differ.  Any special
+    the target represents the intermediate must too, or the split loses it --
+    the premises are about finite values, but a program is not.  The bound
     plays no part -- the theorems are stated on unbounded formats, and a bounded
     rounding is the unbounded one followed by a bound check that reads only its
     result, so the conclusion survives it.  A bounded *intermediate* is another
@@ -146,6 +154,11 @@ def double_round_op_ok(
     refused rather than assumed.
     """
     if rm1 not in _NEAREST or rm2 not in _NEAREST:
+        return False
+    if not f1.specials_contained_in(f2):
+        # the theorems quantify over finite values, but a program carries
+        # specials through the split, and they survive it only if the
+        # intermediate represents them
         return False
 
     p1, p2, e1, e2 = f1.prec, f2.prec, f1.exp, f2.exp
@@ -170,7 +183,57 @@ def double_round_op_ok(
             )
 
 
-def derive_intermediate(target: Context) -> Context:
+_OP_WIDTH: dict[DoubleRoundOp, tuple[int, int, int]] = {
+    # op -> (precision multiple, precision slack, quanta dropped below `exp1`)
+    DoubleRoundOp.ADD: (2, 1, 0),
+    DoubleRoundOp.DIV: (2, 0, 2),
+    DoubleRoundOp.SQRT: (2, 2, 2),
+}
+"""The width each rule asks for, as read off :func:`double_round_op_ok`.  The
+quanta dropped are ``p1 + this`` where nonzero -- the underflow margin `div` and
+`sqrt` need because their results are irrational."""
+
+
+def _derive_for_op(
+    target: Context, op: DoubleRoundOp, rm1: RoundingMode,
+) -> Context:
+    """:func:`derive_intermediate` for an operation-specific rule."""
+    if rm1 not in _NEAREST:
+        raise ValueError(
+            f'the {op.value} rule is proved for round-to-nearest, and '
+            f'`{target}` rounds {rm1.name}'
+        )
+    fmt = target.format()
+    if not isinstance(fmt, AbstractableFormat):
+        raise TypeError(f'`{target}` has no abstract format')
+    f1 = AbstractFormat.from_format(fmt)
+    if f1.prec == float('inf'):
+        raise ValueError(
+            f'the {op.value} rule takes a finite precision, and `{target}` '
+            'names none'
+        )
+    p1, e1 = int(f1.prec), f1.exp
+
+    mult, slack, drop = _OP_WIDTH[op]
+    p2 = mult * p1 + slack
+    if not isinstance(e1, int):
+        # an FLX target takes an FLX intermediate: `div` and `sqrt` are proved
+        # per family, so a minimum quantum on one side only is not a theorem
+        return MPFloatContext(p2, rm1)
+    if op is DoubleRoundOp.SQRT and e1 > 0:
+        raise ValueError(
+            f'the sqrt rule needs `exp1 <= 0`, and `{target}` represents '
+            'nothing below one'
+        )
+    # `MPSFloatContext` takes the least *normalized* exponent, which sits
+    # `p2 - 1` above the least quantum
+    e2 = e1 - (p1 + drop if drop else 0)
+    return MPSFloatContext(p2, e2 + p2 - 1, rm1)
+
+
+def derive_intermediate(
+    target: Context, op: DoubleRoundOp | None = None,
+) -> Context:
     """
     An intermediate that :func:`double_round_ok` accepts for *target*, as a
     context ready to install.
@@ -179,6 +242,14 @@ def derive_intermediate(target: Context) -> Context:
     `p+k` / `exp-k` by hand.  Round-to-odd, because that is §5.3's
     modular-library recipe: compute wide under RTO, then re-round to the target
     under whatever mode it wants.
+
+    With *op*, the rule is that operation's own (:func:`double_round_op_ok`) and
+    the intermediate is a *nearest* one instead -- the target's own mode, since
+    the tie-breaks are independent.  That is what a hardware format can be, so
+    this is the derivation to ask for when the intermediate has to be one: FP64
+    satisfies every rule for an FP32 target.  ``MUL`` is not offered, because its
+    rule is exactness -- any format holding the exact product works under any
+    mode, and the transform checks that against the real operand formats.
 
     **Unbounded**, which is what makes the composition agree at the ends of
     the range: it cannot overflow or underflow, so the only rounding that can is
@@ -192,7 +263,11 @@ def derive_intermediate(target: Context) -> Context:
     ValueError
         If *target* has no rounding mode (:data:`REAL`), rounds stochastically,
         or its mode has no rule over an RTO intermediate (RTP and RTN, proved
-        only against themselves).
+        only against themselves).  With *op*: if *target* does not round to
+        nearest, has no finite precision, or -- for ``SQRT`` -- has no
+        representable value below one.
+    TypeError
+        If *target*'s format has no abstract form.
     """
     rm1 = target.rounding_mode()
     if rm1 is None:
@@ -200,6 +275,8 @@ def derive_intermediate(target: Context) -> Context:
     if target.is_stochastic():
         # not a function of its input, so no composition reproduces it
         raise ValueError(f'`{target}` rounds stochastically')
+    if op is not None:
+        return _derive_for_op(target, op, rm1)
     if rm1 in _NEAREST:
         k = 2
     elif rm1 in _DIRECTED or rm1 is RoundingMode.RTO:

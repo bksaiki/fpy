@@ -421,9 +421,32 @@ Three positions, in the order they were closed:
    `fpy2/transform/split_round.py` and `fpy2/strategies/round_split.py`.
 5. ~~**Bounded intermediates for `split_round`**~~ — **done.** A no-overflow
    proof from `format_info` in `SplitRound._within`.
-6. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
+6. ~~**Operation-specific double rounding**~~ — **done.** Roux 2014, from
+   `Mpfx/DoubleRounding{Add,Mul,Div,Sqrt}.lean`. Figure 8 refuses
+   round-to-nearest over round-to-nearest at every width, and every `fp.FP*`
+   context is round-to-nearest, so before this no *hardware* format could serve
+   as an intermediate — only a synthetic round-to-odd one. Two rules now do it:
+
+   - **The exact intermediate** (`rndExact`, which is also all of Roux's
+     multiplication theorem): if the intermediate represents the operation's
+     exact result, rounding to it is the identity, so any mode pair works and
+     the bounds do not enter. FPy's format inference makes this stronger than the
+     paper's closed form, since it reads the operands' real formats — an FP16
+     product needs 22 digits, not 48.
+   - **The operation's own rule** for `+`/`-` (p₂ ≥ 2p₁+1), `/` (2p₁) and `sqrt`
+     (2p₁+2), nearest-to-nearest, in `double_round_op_ok`.
+
+   Together: all five ops split **FP32 → FP64** and **FP16 → FP32** under plain
+   RNE. `derive_intermediate(target, op)` sizes one.
+
+   The firing conditions and, more importantly, *why each one is load-bearing*
+   are documented in the `fpy2/transform/split_round.py` module docstring — the
+   three that are not conservatism are nearest-only, operands representable in
+   the target (FPy's signature is `op: Fx → Fy → F1`, so this needs checking),
+   and no mixed exponent family for `/` and `sqrt`.
+7. **`merge_round`** — reuses step 4's predicate unchanged; survey the site
    spellings first. The only operator left on the page.
-7. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
+8. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
    `merge_round`), then finitize (`insert_round`, `split_round` against an
    environment's format list). A documented composition and a worked example,
    not a new operator; the MX dot product of §2 and §8 is the example.

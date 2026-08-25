@@ -305,9 +305,16 @@ class TestOperationRules:
         assert double_round_op_ok(op, _flx(1), RM.RNA, _flx(64), RM.RNE)
 
     @staticmethod
-    def _at_exp(e: int) -> AbstractFormat:
-        """A wide FLT intermediate whose least quantum is `e`."""
-        return AbstractFormat(64, e, float('inf'))
+    def _at_exp(e: int, prec: int = 64, **specials) -> AbstractFormat:
+        """A wide FLT intermediate whose least quantum is `e`.
+
+        It carries every special by default: the rules require the target's to
+        survive, so a bare format would fail that check rather than the one
+        under test.
+        """
+        flags = {'has_pos_inf': True, 'has_neg_inf': True, 'has_nan': True,
+                 'has_neg_zero': True}
+        return AbstractFormat(prec, e, float('inf'), **{**flags, **specials})
 
     def test_the_addition_exponent_condition(self):
         """`exp2 <= exp1`, stated over `WithBot`, so it spans both families."""
@@ -357,6 +364,22 @@ class TestOperationRules:
         assert double_round_op_ok(op, _fmt(fp.FP32), RM.RNE, _fmt(fp.FP64), RM.RNE)
         assert double_round_op_ok(op, _fmt(fp.FP32), RM.RNE, _flx(64), RM.RNE) is spans
 
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    @pytest.mark.parametrize('missing', ['has_nan', 'has_pos_inf', 'has_neg_zero'])
+    def test_a_special_the_intermediate_lacks(self, op, missing):
+        """The premises are about finite values, but a program carries specials
+        through the split: one the target has and the intermediate has not comes
+        back changed, or raises.  Figure 8 gets this from containment; these
+        rules need it stated, since they deliberately do not ask for
+        containment."""
+        f1 = _fmt(fp.FP32)
+        assert isinstance(f1.exp, int)
+        deep = f1.exp - 200
+        assert double_round_op_ok(op, f1, RM.RNE, self._at_exp(deep), RM.RNE)
+        assert not double_round_op_ok(
+            op, f1, RM.RNE, self._at_exp(deep, **{missing: False}), RM.RNE,
+        )
+
     def test_a_fixed_point_format(self):
         """The theorems take a finite precision, which a fixed-point format has
         not, so its rounding is Figure 8's business alone."""
@@ -364,6 +387,75 @@ class TestOperationRules:
             assert not double_round_op_ok(
                 op, _fmt(fp.INTEGER), RM.RNE, _flx(64), RM.RNE,
             )
+
+
+class TestDeriveForOperation:
+    """`derive_intermediate(target, op)`: the width that operation's own rule
+    asks for, as a context ready to install."""
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    @pytest.mark.parametrize('name', ['FP32', 'FP16', 'BF16', 'FP8P4', 'FP8P7'])
+    def test_what_it_derives_is_accepted(self, op, name):
+        """The property tying the two halves together, for every float family."""
+        target = getattr(fp, name)
+        via = derive_intermediate(target, op)
+        assert double_round_op_ok(
+            op, _fmt(target), target.rounding_mode(),
+            _fmt(via), via.rounding_mode(),
+        )
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_it_rounds_to_nearest_like_the_target(self, op):
+        """Not round-to-odd: these rules are nearest-only, and the tie-breaks are
+        independent, so the target's own mode serves."""
+        for rm in (RM.RNE, RM.RNA):
+            target = fp.FP32.with_params(rm=rm)
+            assert derive_intermediate(target, op).rounding_mode() is rm
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_it_is_narrower_than_the_round_to_odd_one_is_wide(self, op):
+        """The point of these rules: a *hardware* format can serve.  FP64 meets
+        every one of them for an FP32 target."""
+        assert double_round_op_ok(
+            op, _fmt(fp.FP32), RM.RNE, _fmt(fp.FP64), RM.RNE,
+        )
+        assert _fmt(derive_intermediate(fp.FP32, op)).prec <= 50
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_an_flx_target_takes_an_flx_intermediate(self, op):
+        """`div` and `sqrt` are proved per family, so the derivation must not
+        hand back a minimum quantum the target has not got."""
+        target = fp.MPFloatContext(11, RM.RNE)
+        via = derive_intermediate(target, op)
+        assert _fmt(via).exp == -math.inf
+        assert double_round_op_ok(op, _fmt(target), RM.RNE, _fmt(via), RM.RNE)
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_a_directed_target(self, op):
+        with pytest.raises(ValueError, match='round-to-nearest'):
+            derive_intermediate(fp.FP32.with_params(rm=RM.RTZ), op)
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_a_fixed_point_target(self, op):
+        """No finite precision, so no rule -- unlike the round-to-odd
+        derivation, which handles fixed point.  A nearest fixed-point target, so
+        that precision is what refuses it rather than the mode."""
+        target = fp.MPFixedContext(-1, RM.RNE)
+        with pytest.raises(ValueError, match='finite precision'):
+            derive_intermediate(target, op)
+        assert derive_intermediate(target) is not None
+
+    def test_a_sqrt_target_representing_nothing_below_one(self):
+        """`rndSqrt_FLT` states `emin1 <= 0`; a format whose least quantum sits
+        above one does not satisfy it."""
+        target = fp.MPSFloatContext(8, 12, RM.RNE)
+        assert _fmt(target).exp > 0
+        with pytest.raises(ValueError, match='exp1 <= 0'):
+            derive_intermediate(target, DoubleRoundOp.SQRT)
+        assert derive_intermediate(target, DoubleRoundOp.ADD) is not None
+
+    def test_the_default_is_still_round_to_odd(self):
+        assert derive_intermediate(fp.FP32).rounding_mode() is RM.RTO
 
 
 class TestOperationRulesAgainstArithmetic:
