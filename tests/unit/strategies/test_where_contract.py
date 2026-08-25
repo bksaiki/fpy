@@ -13,6 +13,7 @@ that, and every strategy in `_SITES` has to appear here at all --
 import pytest
 
 import fpy2 as fp
+from fpy2.analysis.format_infer import derive_intermediate
 from fpy2.ast.fpyast import Integer
 from fpy2.strategies import (
     ExprCursor,
@@ -26,6 +27,7 @@ from fpy2.strategies import (
     rescale_fixed,
     sites,
     split,
+    split_round,
     unfold_neg_zero,
     unfold_overflow,
     unfold_special,
@@ -171,6 +173,14 @@ def _sum_of_squares(x: fp.Real, y: fp.Real) -> fp.Real:
     return t
 
 
+@fp.fpy(ctx=fp.FP32)
+def _two_rounded(x: fp.Real, y: fp.Real) -> fp.Real:
+    """Two operations that already round, so `split_round` has two sites."""
+    t = x * y
+    s = x + y
+    return t + s
+
+
 @fp.fpy(ctx=fp.FP64)
 def _comprehension(xs: list[fp.Real]) -> list[fp.Real]:
     return [x * x for x in xs]
@@ -201,6 +211,7 @@ def _pin(func, n: int):
 # of the outer subsumes the inner in the edit log but not in the rewrite.
 
 _FP64 = {'ctx': fp.FP64}
+_VIA32 = {'ctx': derive_intermediate(fp.FP32)}
 _STRICT_SPLIT = {'factor': Integer(2, None), 'strategy': SplitLoopStrategy.STRICT}
 _STRICT_UNROLL = {'times': 1, 'strategy': ForUnrollStrategy.STRICT}
 
@@ -223,6 +234,7 @@ ACTS = [
     ('insert_round', insert_round, _pin(_sum_of_squares, 2), _FP64),
     ('insert_round/nested', insert_round, _pin(_nested_ops, 1), _FP64),
     ('comp_to_loop', comp_to_loop, _comprehension, {}),
+    ('split_round', split_round, _two_rounded, _VIA32),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the
@@ -239,6 +251,7 @@ REFUSES = [
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),
     ('comp_to_loop/refuses', comp_to_loop, _dependent_comprehension, {}),
+    ('split_round/refuses', split_round, _two_rounded, _FP64),
 ]
 
 # `unroll_while` has no row: it refuses nothing at all.
@@ -256,7 +269,7 @@ ROWS = _rows(CASES)
 
 def _apply(strategy, func, where, kw):
     """Run *strategy* aimed at *where*, passing whatever else it requires."""
-    if strategy is insert_round:
+    if strategy is insert_round or strategy is split_round:
         return strategy(func, kw['ctx'], where=where)
     if strategy is inline:
         return strategy(func, where)

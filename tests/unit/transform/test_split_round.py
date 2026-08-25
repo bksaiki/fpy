@@ -80,7 +80,8 @@ def _cursor_at(ast: FuncDef, kind) -> ExprCursor:
 
 
 def _agree(before: FuncDef, after: FuncDef, runtime, args_list) -> bool:
-    fa, fb = Function(before, runtime=runtime), Function(after, runtime=runtime)
+    fa: Function = Function(before, runtime=runtime)
+    fb: Function = Function(after, runtime=runtime)
     return all(str(fa(*a)) == str(fb(*a)) for a in args_list)
 
 
