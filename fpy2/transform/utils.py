@@ -26,10 +26,14 @@ from ..ast.fpyast import (
     Decnum,
     Expr,
     ForeignVal,
+    ForStmt,
     FuncDef,
     Id,
+    If1Stmt,
     IfExpr,
+    IfStmt,
     Integer,
+    ListComp,
     Location,
     Mul,
     NamedId,
@@ -44,6 +48,7 @@ from ..ast.fpyast import (
     TupleBinding,
     UnderscoreId,
     Var,
+    WhileStmt,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
@@ -54,6 +59,7 @@ from ..number import (
     RealFloat,
     same_value,
 )
+from ..utils import Gensym
 from .cursor import (
     BlockCursor,
     Cursor,
@@ -311,6 +317,7 @@ class RoundingScopes:
         """Whether *e*'s active scope rounds exactly, so it has no rounding yet."""
         return self.scope_ctx(e) is REAL
 
+
 class SiteRewriter(DefaultTransformVisitor):
     """
     The site vocabulary a rewrite with countable sites shares: where it is
@@ -552,6 +559,163 @@ class SiteRewriter(DefaultTransformVisitor):
         """Record that `block[pos]` survives with its expressions rewritten, so
         an expression cursor in it does not forward."""
         self.dirty_exprs.append(StmtPath(self._paths[id(block)], pos))
+
+
+class RoundingRewriter(SiteRewriter):
+    """Shared machinery for the rounding rewrites that lift one operation into
+    a block of its own.
+
+    :class:`fpy2.transform.RoundInsert` gives an exact operation a format;
+    :class:`fpy2.transform.SplitRound` splits a rounded one through an
+    intermediate.  Both pick individual operations, both emit the operation
+    alone under ``self.ctx`` with its non-``Var`` operands bound first, and both
+    refuse the positions with no statement slot.  A subclass says which
+    operations it considers (:meth:`_candidate`), whether one may be rewritten
+    (:meth:`_verify`), and what stands in its place (:meth:`_wrap`).
+
+    Sharing this is not only brevity: the two drifted once, and the `while`
+    suppression below is a soundness condition that a hand-copied pass got
+    wrong.
+    """
+
+    _expr_sited = True   # the sites are expressions, not statements
+
+    func: FuncDef
+    ctx: Context
+    scopes: 'RoundingScopes'
+    gensym: Gensym
+    where: 'Cursor | int | None'
+
+    def __init__(
+        self,
+        func: FuncDef,
+        ctx: Context,
+        scopes: 'RoundingScopes',
+        where=None,
+    ):
+        self.func = func
+        self.ctx = ctx
+        self.scopes = scopes
+        self.gensym = Gensym(reserved=scopes.def_use.names())
+        self.where = where
+
+    def apply(self) -> FuncDef:
+        return self._visit_function(self.func, None)
+
+    # ------------------------------------------------------------------
+    # What a subclass supplies
+
+    def _candidate(self, e: Expr) -> bool:
+        """Whether *e* is an operation this rewrite considers at all."""
+        raise NotImplementedError
+
+    def _verify(self, e: Expr) -> 'Declined | None':
+        """`None` where *e* may be rewritten, else why not."""
+        raise NotImplementedError
+
+    def _wrap(self, t: NamedId, loc: Location | None) -> Expr:
+        """What replaces the operation, given the temporary holding it."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+
+    def _emit(self, e: Expr, out: list) -> Expr:
+        """Compute *e* alone under `self.ctx`; return :meth:`_wrap` of it.
+
+        Each operand that survives the visit as a non-``Var`` is bound under the
+        *original* scope first, so the emitted block covers this operation and
+        nothing else.
+        """
+        loc = e.loc
+        args: list[Expr] = []
+        for operand in operands(e):
+            new = self._visit_expr(operand, out)
+            if isinstance(new, Var):
+                # a name lookup rounds nothing, so the bind would be a pure copy
+                args.append(new)
+                continue
+            t = self.gensym.fresh('_t')
+            out.append(Assign(t, None, new, loc))
+            args.append(Var(t, loc))
+
+        result = self.gensym.fresh('_t')
+        block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
+        out.append(ContextStmt(
+            UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
+        ))
+        return self._wrap(result, loc)
+
+    def _visit_expr(self, e: Expr, ctx) -> Expr:
+        if not self._candidate(e):
+            return super()._visit_expr(e, ctx)
+
+        # a refusal is not a site, so it is decided before an index is spent:
+        # `ctx` is `None` where no statement-level preamble reaches
+        declined = (
+            Declined(
+                'the operation has no statement-level position for the block '
+                'the rewrite emits'
+            )
+            if ctx is None
+            else self._verify(e)
+        )
+        if declined is not None:
+            self.refused.append((e, declined.reason))
+            if self._named_by_cursor(e):
+                # a cursor named it: say why, rather than that it named nothing
+                self.declined.append(declined.reason)
+            return super()._visit_expr(e, ctx)
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if not self._selects_expr(e, idx):
+            return super()._visit_expr(e, ctx)
+
+        self._matched += 1
+        if self.listing:
+            self.found_exprs.append(e)
+            return super()._visit_expr(e, ctx)
+
+        emitted = self._emit(e, ctx)
+        self._replaced = True
+        return emitted
+
+    # A compound statement's own sub-expression carries no preamble.  For a
+    # `while` condition that is soundness: the condition is re-evaluated every
+    # iteration, and a preamble before the loop computes it once, which does not
+    # terminate.  The rest is scope -- those positions are evaluated exactly
+    # once, so lifting the suppression is a capability question (`CompToLoop`
+    # does hoist out of them).
+    def _visit_if1(self, stmt: If1Stmt, ctx):
+        return super()._visit_if1(stmt, None)[0], ctx
+
+    def _visit_if(self, stmt: IfStmt, ctx):
+        return super()._visit_if(stmt, None)[0], ctx
+
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        return super()._visit_while(stmt, None)[0], ctx
+
+    def _visit_for(self, stmt: ForStmt, ctx):
+        return super()._visit_for(stmt, None)[0], ctx
+
+    def _visit_context(self, stmt: ContextStmt, ctx):
+        return super()._visit_context(stmt, None)[0], ctx
+
+    def _visit_list_comp(self, e: ListComp, ctx) -> ListComp:
+        # the element sees the loop targets and later iterables see earlier
+        # ones, so no statement-level preamble reaches inside a comprehension
+        targets = [self._visit_binding(t, ctx) for t in e.targets]
+        iterables = [self._visit_expr(i, None) for i in e.iterables]
+        elt = self._visit_expr(e.elt, None)
+        return ListComp(targets, iterables, elt, e.loc)
+
+    def _visit_if_expr(self, e: IfExpr, ctx) -> IfExpr:
+        # the condition is evaluated unconditionally; the branches are not, so
+        # hoisting one of them out would evaluate it either way
+        cond = self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, None)
+        iff = self._visit_expr(e.iff, None)
+        return IfExpr(cond, ift, iff, e.loc)
 
 
 class BlockRewriter(SiteRewriter):

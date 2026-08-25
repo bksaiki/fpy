@@ -9,6 +9,7 @@ no theorem and must be refused.
 
 import itertools
 import math
+from fractions import Fraction
 
 import pytest
 
@@ -175,6 +176,12 @@ class TestDeriveIntermediate:
             _fmt(fp.INTEGER), fp.INTEGER.rounding_mode(), _fmt(via), RM.RTO,
         )
 
+    def test_a_stochastic_target(self):
+        """No composition reproduces a rounding that is not a function of its
+        input, so there is no intermediate to hand back."""
+        with pytest.raises(ValueError, match='stochastically'):
+            derive_intermediate(fp.FP32.with_params(num_randbits=2))
+
     def test_a_context_that_does_not_round(self):
         with pytest.raises(ValueError, match='does not round'):
             derive_intermediate(fp.REAL)
@@ -183,3 +190,55 @@ class TestDeriveIntermediate:
     def test_a_mode_with_no_rto_rule(self, rm1):
         with pytest.raises(ValueError, match='no double-rounding rule'):
             derive_intermediate(fp.FP32.with_params(rm=rm1))
+
+
+class TestAgainstArithmetic:
+    """The predicate checked against actual rounding, not against the
+    derivation that shares its helpers.
+
+    Every other numeric test here routes through `derive_intermediate`, so an
+    error the predicate and the derivation share would be self-consistent and
+    invisible.  This rounds twice versus once over a grid fine enough to
+    straddle every midpoint of the target, and requires that an accepted pair
+    really does agree.
+    """
+
+    FINALS = (RM.RNE, RM.RNA, RM.RTZ, RM.RAZ, RM.RTO, RM.RTP, RM.RTN)
+
+    @staticmethod
+    def _values(p: int) -> list[Fraction]:
+        s, out = p + 3, []
+        for binade in (0, 1, 4):
+            lo, hi = 2 ** s, 2 ** (s + 1)
+            for m in range(lo, hi, max(1, (hi - lo) // 48)):
+                v = Fraction(m, 2 ** s) * Fraction(2) ** binade
+                out += [v, -v]
+        return out
+
+    @staticmethod
+    def _agrees(target, via, xs) -> bool:
+        return all(str(target.round(x)) == str(target.round(via.round(x)))
+                   for x in xs)
+
+    @pytest.mark.parametrize('p1', [3, 4])
+    def test_an_accepted_pair_agrees_with_rounding_once(self, p1):
+        for rm1 in self.FINALS:
+            target = fp.MPFloatContext(p1, rm1)
+            f1 = _fmt(target)
+            xs = self._values(p1)
+            for dp in (0, 1, 2, 3):
+                for rm2 in (rm1, RM.RTO):
+                    via = fp.MPFloatContext(p1 + dp, rm2)
+                    if double_round_ok(f1, rm1, _fmt(via), rm2):
+                        assert self._agrees(target, via, xs), (
+                            f'p1={p1} {rm1.name} over p2={p1 + dp} {rm2.name}'
+                        )
+
+    def test_the_sweep_can_detect_a_bad_pair(self):
+        """Otherwise the test above would pass on a predicate that accepts
+        nothing -- or on one that accepts everything, if the sweep were too
+        coarse to notice."""
+        target = fp.MPFloatContext(3, RM.RNE)
+        too_narrow = fp.MPFloatContext(3, RM.RTO)
+        assert not double_round_ok(_fmt(target), RM.RNE, _fmt(too_narrow), RM.RTO)
+        assert not self._agrees(target, too_narrow, self._values(3))

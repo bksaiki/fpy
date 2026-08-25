@@ -825,3 +825,26 @@ class TestNextBound:
         ):
             assert out.has_neg_zero, out
             assert out.has_nan and out.has_pos_inf and out.has_neg_inf
+
+
+class TestUnboundedContainment:
+    def test_precision_binds_without_a_finite_exponent(self):
+        """Condition 3 used to be skipped whenever *other* had an unbounded
+        exponent, on the grounds that precision only binds against a finite
+        normal region.  It binds everywhere: the subnormal fallback is what
+        needs the finite exponent, not the plain comparison."""
+        wide = AbstractFormat(5, -math.inf, math.inf)
+        narrow = AbstractFormat(3, -math.inf, math.inf)
+        assert not wide.contained_in(narrow)
+        assert narrow.contained_in(wide)
+
+    def test_the_subnormal_fallback_still_applies(self):
+        """A format whose whole range sits inside *other*'s subnormal region is
+        contained however little precision *other* has -- which is the case the
+        finite exponent is needed for."""
+        from fpy2.number.number.reals import RealFloat
+
+        small = AbstractFormat(8, -20, RealFloat(c=1, exp=-18))
+        coarse = AbstractFormat(2, -20, RealFloat(c=1, exp=20))
+        assert small.prec > coarse.prec
+        assert small.contained_in(coarse)

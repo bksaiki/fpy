@@ -651,20 +651,22 @@ class AbstractFormat:
             return False
         if other.neg_bound > self.neg_bound:
             return False
-        # 3. precision — only constraining when other has a finite normal region
-        if not isinstance(other.prec, float) and not isinstance(other.exp, float):
-            if self.prec > other.prec:
-                # easy check failed: other's spacing in its normal region widens faster.
-                # Containment still holds if self's bound stays within the region where
-                # other's effective quantum is <= self's quantum 2^self.exp, i.e.,
-                # pos_bound1 <= 2^(self.exp + other.prec).
-                if not isinstance(self.exp, int):
-                    return False
-                cutoff = RealFloat(False, self.exp, 1 << other.prec)
-                if isinstance(self.pos_bound, float) or self.pos_bound > cutoff:
-                    return False
-                if isinstance(self.neg_bound, float) or abs(self.neg_bound) > cutoff:
-                    return False
+        # 3. precision
+        if not isinstance(other.prec, float) and self.prec > other.prec:
+            # Easy check failed: other's spacing in its normal region widens
+            # faster.  Containment still holds if self's bound stays within the
+            # region where other's effective quantum is <= self's quantum
+            # 2^self.exp, i.e. pos_bound1 <= 2^(self.exp + other.prec) -- but
+            # that region is other's *subnormal* one, which exists only where
+            # its exponent is finite.  Unbounded below, precision binds
+            # everywhere and less of it is less.
+            if not isinstance(self.exp, int) or not isinstance(other.exp, int):
+                return False
+            cutoff = RealFloat(False, self.exp, 1 << other.prec)
+            if isinstance(self.pos_bound, float) or self.pos_bound > cutoff:
+                return False
+            if isinstance(self.neg_bound, float) or abs(self.neg_bound) > cutoff:
+                return False
         return True
 
     def contained_in(self, other: 'AbstractFormat') -> bool:

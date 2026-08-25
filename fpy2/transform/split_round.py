@@ -51,6 +51,7 @@ from ..ast.fpyast import (
     IfStmt,
     ListComp,
     Mul,
+    NamedId,
     Neg,
     Round,
     StmtBlock,
@@ -64,6 +65,7 @@ from ..utils import Gensym
 from .cursor import Cursor, EditLog
 from .utils import (
     Declined,
+    RoundingRewriter,
     RoundingScopes,
     SiteRewriter,
     check_where,
@@ -75,32 +77,12 @@ _SPLITTABLE = (Add, Sub, Mul, Abs, Neg)
 """:class:`.RoundInsert`'s set, minus the explicit roundings."""
 
 
-class _SplitRoundInstance(SiteRewriter):
+class _SplitRoundInstance(RoundingRewriter):
     """Splits selected rounded operations through an intermediate."""
 
-    _expr_sited = True   # the sites are expressions, not statements
+    def _candidate(self, e: Expr) -> bool:
+        return isinstance(e, _SPLITTABLE)
 
-    func: FuncDef
-    ctx: Context
-    scopes: RoundingScopes
-    gensym: Gensym
-    where: int | Cursor | None
-
-    def __init__(
-        self,
-        func: FuncDef,
-        ctx: Context,
-        scopes: RoundingScopes,
-        where: int | Cursor | None = None,
-    ):
-        self.func = func
-        self.ctx = ctx
-        self.scopes = scopes
-        self.gensym = Gensym(reserved=scopes.def_use.names())
-        self.where = where
-
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
 
     def _verify(self, e: Expr) -> None | Declined:
         """`None` where *e*'s rounding may be split, else why not."""
@@ -151,104 +133,10 @@ class _SplitRoundInstance(SiteRewriter):
             )
         return None
 
-    def _split(self, e: Expr, out: list) -> Expr:
-        """Compute *e* under the intermediate; return the re-rounding of it.
-
-        Each operand that is not already a ``Var`` is bound first, so the
-        emitted block computes this operation and nothing else.  The returned
-        ``round`` sits in the *enclosing* block, which is what applies the
-        target's rounding.
-        """
-        loc = e.loc
-        args: list[Expr] = []
-        for operand in operands(e):
-            new = self._visit_expr(operand, out)
-            if isinstance(new, Var):
-                # a name lookup rounds nothing, so the bind would be a pure copy
-                args.append(new)
-                continue
-            t = self.gensym.fresh('_t')
-            out.append(Assign(t, None, new, loc))
-            args.append(Var(t, loc))
-
-        inner = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(inner, None, rebuild(e, args), loc)])
-        out.append(ContextStmt(
-            UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
-        ))
-        return Round(None, Var(inner, loc), loc)
-
-    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        if not isinstance(e, _SPLITTABLE):
-            return super()._visit_expr(e, ctx)
-
-        # a refusal is not a site, so it is decided before an index is spent:
-        # `ctx` is `None` where no statement-level preamble reaches
-        declined = (
-            Declined(
-                'the operation has no statement-level position for the block '
-                'the rewrite emits'
-            )
-            if ctx is None
-            else self._verify(e)
-        )
-        if declined is not None:
-            self.refused.append((e, declined.reason))
-            if self._named_by_cursor(e):
-                # a cursor named it: say why, rather than that it named nothing
-                self.declined.append(declined.reason)
-            return super()._visit_expr(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
-            return super()._visit_expr(e, ctx)
-
-        split = self._split(e, ctx)
-        self._replaced = True
-        return split
-
-
-    # A compound statement's own sub-expression carries no preamble, exactly as
-    # for `RoundInsert`.  For a `while` condition that is soundness: the
-    # condition is re-evaluated every iteration, and a preamble before the loop
-    # computes it once, which does not terminate.  The rest is scope.
-    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
-        return super()._visit_if1(stmt, None)[0], ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx: Any):
-        return super()._visit_if(stmt, None)[0], ctx
-
-    def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        return super()._visit_while(stmt, None)[0], ctx
-
-    def _visit_for(self, stmt: ForStmt, ctx: Any):
-        return super()._visit_for(stmt, None)[0], ctx
-
-    def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        return super()._visit_context(stmt, None)[0], ctx
-
-    def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
-        # the element sees the loop targets and later iterables see earlier
-        # ones, so no statement-level preamble reaches inside a comprehension
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, None) for i in e.iterables]
-        elt = self._visit_expr(e.elt, None)
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # the condition is evaluated unconditionally; the branches are not, so
-        # hoisting one of them out would evaluate it either way
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
-
+    def _wrap(self, t: NamedId, loc) -> Expr:
+        # an assignment rounds nothing in FPy, so the second rounding is
+        # explicit -- and sits in the enclosing block, which applies `rm1`
+        return Round(None, Var(t, loc), loc)
 
 class SplitRound:
     """

@@ -60,6 +60,7 @@ from ..ast.fpyast import (
     IfStmt,
     ListComp,
     Mul,
+    NamedId,
     Neg,
     Round,
     StmtBlock,
@@ -73,6 +74,7 @@ from ..utils import Gensym
 from .cursor import Cursor, EditLog, ExprCursor
 from .utils import (
     Declined,
+    RoundingRewriter,
     RoundingScopes,
     SiteRewriter,
     check_where,
@@ -84,32 +86,14 @@ _ROUNDABLE = (Add, Sub, Mul, Abs, Neg, Round, Cast)
 """The operations that carry a context-driven rounding."""
 
 
-class _RoundInsertInstance(SiteRewriter):
+class _RoundInsertInstance(RoundingRewriter):
     """Gives selected exact operations in a function a format."""
 
-    _expr_sited = True   # the candidates are roundable operations
+    def _candidate(self, e: Expr) -> bool:
+        # an operation whose scope already rounds is not a candidate at all, so
+        # the listing carries no sites that always refuse
+        return isinstance(e, _ROUNDABLE) and self.scopes.is_exact(e)
 
-    func: FuncDef
-    ctx: Context
-    scopes: 'RoundingScopes'
-    gensym: Gensym
-    where: int | Cursor | None
-
-    def __init__(
-        self,
-        func: FuncDef,
-        ctx: Context,
-        scopes: 'RoundingScopes',
-        where: int | Cursor | None = None,
-    ):
-        self.func = func
-        self.ctx = ctx
-        self.scopes = scopes
-        self.gensym = Gensym(reserved=scopes.def_use.names())
-        self.where = where
-
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
 
     def _verify(self, e: Expr) -> None | Declined:
         """`None` where *e* may be given the target format, else why not."""
@@ -148,104 +132,9 @@ class _RoundInsertInstance(SiteRewriter):
             )
         return None
 
-    def _hoist(self, e: Expr, out: list) -> Expr:
-        """Compute *e* alone under the target and return a `Var` for its site.
-
-        The mirror of :meth:`.RoundElim._hoist`: each operand that survives the
-        visit as a non-``Var`` is bound under the *original* scope first, so the
-        emitted block rounds this operation and nothing else.
-        """
-        loc = e.loc
-        args: list[Expr] = []
-        for operand in operands(e):
-            new = self._visit_expr(operand, out)
-            if isinstance(new, Var):
-                # a name lookup rounds nothing, so the bind would be a pure copy
-                args.append(new)
-                continue
-            t = self.gensym.fresh('_t')
-            out.append(Assign(t, None, new, loc))
-            args.append(Var(t, loc))
-
-        result = self.gensym.fresh('_t')
-        block = StmtBlock([Assign(result, None, rebuild(e, args), loc)])
-        out.append(ContextStmt(
-            UnderscoreId(), ForeignVal(self.ctx, loc), block, loc,
-        ))
-        return Var(result, loc)
-
-    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        if not isinstance(e, _ROUNDABLE) or not self.scopes.is_exact(e):
-            return super()._visit_expr(e, ctx)
-
-        # a refusal is not a site, so it is decided before an index is spent:
-        # `ctx` is `None` where no statement-level preamble reaches
-        declined = (
-            Declined(
-                'the operation has no statement-level position for the block '
-                'the rewrite emits'
-            )
-            if ctx is None
-            else self._verify(e)
-        )
-        if declined is not None:
-            self.refused.append((e, declined.reason))
-            if self._named_by_cursor(e):
-                # a cursor named it: say why, rather than that it named nothing
-                self.declined.append(declined.reason)
-            return super()._visit_expr(e, ctx)
-
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
-            return super()._visit_expr(e, ctx)
-
-        hoisted = self._hoist(e, ctx)
-        self._replaced = True
-        return hoisted
-
-    # A compound statement's own sub-expression carries no preamble.  For a
-    # `while` condition that is soundness: the condition is re-evaluated every
-    # iteration, and a preamble before the loop computes it once, which does not
-    # terminate.  The rest is scope -- those positions are evaluated exactly
-    # once, so lifting the suppression is a capability question (`CompToLoop`
-    # does hoist out of them).
-    def _visit_if1(self, stmt: If1Stmt, ctx: Any):
-        return super()._visit_if1(stmt, None)[0], ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx: Any):
-        return super()._visit_if(stmt, None)[0], ctx
-
-    def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        return super()._visit_while(stmt, None)[0], ctx
-
-    def _visit_for(self, stmt: ForStmt, ctx: Any):
-        return super()._visit_for(stmt, None)[0], ctx
-
-    def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        return super()._visit_context(stmt, None)[0], ctx
-
-    def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
-        # the element sees the loop targets and later iterables see earlier
-        # ones, so no statement-level preamble reaches inside a comprehension
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, None) for i in e.iterables]
-        elt = self._visit_expr(e.elt, None)
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # the condition is evaluated unconditionally; the branches are not, so
-        # hoisting one of them out would evaluate it either way
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
-
+    def _wrap(self, t: NamedId, loc) -> Expr:
+        # the block's own rounding is the whole rewrite; the site just reads it
+        return Var(t, loc)
 
 class RoundInsert:
     """

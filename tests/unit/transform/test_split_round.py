@@ -279,6 +279,21 @@ class TestDeclines:
         why = SplitRound.refusals(_product.ast, ctx=via)
         assert len(why) == 1 and 'stochastic' in why[0][1]
 
+    def test_a_stochastic_target(self):
+        """The other side of the same condition: the *operation's* scope rounds
+        stochastically."""
+        target = fp.FP32.with_params(num_randbits=2)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with target:
+                t = x * y
+            return t
+
+        assert SplitRound.sites(f.ast, ctx=VIA32) == []
+        why = SplitRound.refusals(f.ast, ctx=VIA32)
+        assert len(why) == 1 and 'stochastic' in why[0][1]
+
     def test_a_symbolic_scope(self):
         """Without a pinned function context the scope stays symbolic, so the
         rounding it performs is unknown."""

@@ -96,12 +96,16 @@ def derive_intermediate(target: Context) -> Context:
     Raises
     ------
     ValueError
-        If *target* has no rounding mode (:data:`REAL`), or its mode has no rule
-        over an RTO intermediate (RTP and RTN, proved only against themselves).
+        If *target* has no rounding mode (:data:`REAL`), rounds stochastically,
+        or its mode has no rule over an RTO intermediate (RTP and RTN, proved
+        only against themselves).
     """
     rm1 = target.rounding_mode()
     if rm1 is None:
         raise ValueError(f'`{target}` does not round, so it has no intermediate')
+    if target.is_stochastic():
+        # not a function of its input, so no composition reproduces it
+        raise ValueError(f'`{target}` rounds stochastically')
     if rm1 in _NEAREST:
         k = 2
     elif rm1 in _DIRECTED or rm1 is RoundingMode.RTO:
