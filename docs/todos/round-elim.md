@@ -42,15 +42,13 @@ expected to do the rest.
 
 ## Open items
 
-### The inverse operator
+### The inverse operator — **built**
 
 `insert_round` — turn an op under `with fp.REAL:` back into a rounded
-one whose rounding is an identity — is this pass read backwards, and
-decides most of the questions below by deciding what shape the output
-of this one should be. It is gap 1 of
-[rounding-axes.md](rounding-axes.md), along with the two
-double-rounding operators that sit on the same axis. Note that the two
-are *not* inverses as written. `_is_eliminable` hoists only when the
+one whose rounding is an identity — is this pass read backwards. It is
+gap 1 of [rounding-axes.md](rounding-axes.md), now closed, as is
+`split_round` on the same axis; only `merge_round` is left. Note that
+the two are *not* inverses as written. `_is_eliminable` hoists only when the
 unrounded format is *strictly tighter* than the scope's, since an
 unbounded scope makes `round_is_identity` vacuously true while giving
 downstream consumers nothing to narrow with — and the cpp backend's
@@ -77,6 +75,26 @@ The latter is simpler; the former is friendlier.  The cpp
 backend's `optimize=True` pipeline currently does neither —
 adding the chain after `RoundElim` in `_run_pipeline` is the
 natural integration point.
+
+### Widen the candidate set past the arithmetic ops
+
+`_is_eliminable` handles `Add` / `Sub` / `Mul` / `Abs` / `Neg`, and
+`insert_round`'s `_ROUNDABLE` is the same five plus `Round` / `Cast`.
+`split_round` began with that set too, and the question was settled there
+empirically: **33 of the 35 real-valued operations do round to the active
+context**, the exceptions being `min` and `max`, which *select* an operand and
+hand it back carrying its own format. See `_NOT_SPLITTABLE` in
+`fpy2/transform/split_round.py`, which also excludes the exact queries and
+projections (`len` / `size` / `dim` / `fst` / `snd`) and the non-finite constants.
+
+So `sqrt`, `fma`, `div`, the transcendentals and `pi` are all as eliminable as a
+multiply, and today `elim_round` and `insert_round` silently report no site on
+them. The premise is `round_is_identity`, which is about a *value* and a format
+and so does not care what produced the value — the same argument that widened
+`split_round`. What each pass additionally needs is a way to name the unrounded
+result: the entries below (`Sum`, `Call`) are two instances of that, and the
+general version is a per-operation exact-image helper alongside `exact_binop` /
+`exact_unop`.
 
 ### Extend to `Sum`
 

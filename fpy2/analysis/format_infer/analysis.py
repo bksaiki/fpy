@@ -720,9 +720,6 @@ def _setformat_to_abstract(s: SetFormat) -> AbstractFormat | None:
 def to_abstract(f: 'FormatBound | AbstractFormat') -> AbstractFormat | None:
     """Any format bound as an :class:`AbstractFormat`, or ``None`` where it has
     none -- a list, a tuple, a non-dyadic :class:`SetFormat`, or nothing known.
-
-    The public face of :func:`_to_abstract`, for transforms that hold a
-    `by_expr` entry and need to compare it against a format.
     """
     if isinstance(f, AbstractFormat):
         return f

@@ -23,17 +23,19 @@ import random
 import pytest
 
 import fpy2 as fp
-from fpy2.analysis.format_infer import derive_intermediate
 from fpy2.analysis.format_infer import (
     AbstractFormat,
     DoubleRoundOp,
+    derive_intermediate,
     double_round_ok,
+    double_round_op_ok,
     exact_binop,
 )
 from fpy2.ast.fpyast import ContextStmt, ForeignVal, FuncDef, Mul, Round
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
-from fpy2.number import RealFloat, RoundingMode as RM
+from fpy2.number import RealFloat
+from fpy2.number import RoundingMode as RM
 from fpy2.transform import (
     ExprCursor,
     Monomorphize,
@@ -487,13 +489,6 @@ class TestOperationRules:
         assert _agree(ast, out, None, self._args(arity))
 
     @pytest.mark.parametrize('name', sorted(OPS))
-    def test_the_generic_rule_refuses_the_same_pair(self, name):
-        """So the admissions above are the operation rules', not Figure 8's."""
-        f32 = AbstractFormat.from_format(fp.FP32.format())
-        f64 = AbstractFormat.from_format(fp.FP64.format())
-        assert not double_round_ok(f32, RM.RNE, f64, RM.RNE)
-
-    @pytest.mark.parametrize('name', sorted(OPS))
     def test_an_operand_finer_than_the_target(self, name):
         """The `x, y in F1` premise, which is load-bearing: an operand on a finer
         grid lets the exact result land within half an intermediate ulp of a
@@ -510,6 +505,24 @@ class TestOperationRules:
         body, arity = self.OPS[name]
         ast = _pinned_expr(body, 'FP32', argctx=fp.FP16, arity=arity)
         assert len(SplitRound.sites(ast, ctx=fp.FP64)) == 1
+
+    def test_an_intermediate_narrower_in_range_than_the_target(self):
+        """These rules read precision, exponent and specials -- not the bound, the
+        theorems being stated unbounded.  So an intermediate with ample precision
+        but *less range* than the target passes the rule and is caught only by the
+        value probes, which is what keeps this sound."""
+        narrow = fp.MPBFloatContext(
+            49, -1500, RealFloat(c=1, exp=100), RM.RNE,
+            neg_maxval=RealFloat(s=True, c=1, exp=100),
+        )
+        assert double_round_op_ok(
+            DoubleRoundOp.ADD, AbstractFormat.from_format(fp.FP32.format()),
+            RM.RNE, AbstractFormat.from_format(narrow.format()), RM.RNE,
+        )
+        ast = _pinned_add()
+        assert SplitRound.sites(ast, ctx=narrow) == []
+        why = SplitRound.refusals(ast, ctx=narrow)
+        assert len(why) == 1 and 'past the intermediate' in why[0][1]
 
     def test_a_directed_target_is_refused(self):
         """These rules are proved for nearest only, and that is not
@@ -708,6 +721,25 @@ class TestExactIntermediate:
             neg_maxval=RealFloat(s=True, c=1, exp=neg_exp),
         )
         assert len(SplitRound.sites(ast, ctx=via)) == sites
+
+    @pytest.mark.parametrize('special', ['enable_nan', 'enable_inf'])
+    def test_a_special_the_intermediate_lacks(self, special):
+        """This rule returns before the special-value probes, on the grounds that
+        containment covers them -- which holds only because the exact result
+        format carries the operands' specials."""
+        big = RealFloat(c=2 ** 80 - 1, exp=300)
+        kwargs = {'enable_nan': True, 'enable_inf': True, special: False}
+        via = fp.MPBFloatContext(
+            80, -1500, big, RM.RNE,
+            neg_maxval=RealFloat(s=True, c=big.c, exp=big.exp), **kwargs,
+        )
+        ast = _pinned_mul()
+        assert SplitRound.sites(ast, ctx=via) == []
+        del kwargs[special]
+        assert len(SplitRound.sites(ast, ctx=fp.MPBFloatContext(
+            80, -1500, big, RM.RNE,
+            neg_maxval=RealFloat(s=True, c=big.c, exp=big.exp), **kwargs,
+        ))) == 1
 
     def test_an_operand_of_unknown_format_is_refused(self):
         """An unannotated argument holds whatever the caller passes, so there is

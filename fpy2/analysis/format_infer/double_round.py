@@ -99,11 +99,10 @@ def double_round_ok(
 class DoubleRoundOp(Enum):
     """An operation with a double-rounding rule of its own.
 
-    Multiplication has one too (Roux Theorem 10), but its proof is ``rndExact``
-    -- the exact product is representable in the intermediate, so the inner
-    rounding is the identity.  A caller holding the operand formats checks that
-    directly, and more generally than the closed form ``p2 >= 2*p1`` can, so it
-    is not listed here.
+    Multiplication has one too (Roux Theorem 10), but its proof is ``rndExact``:
+    the exact product is representable in the intermediate, so the inner rounding
+    is the identity.  A caller holding the operand formats checks that directly,
+    and more generally than ``p2 >= 2*p1`` can, so it is not listed here.
     """
 
     ADD = 'add'
@@ -114,6 +113,10 @@ class DoubleRoundOp(Enum):
 
     SQRT = 'sqrt'
     """``rndSqrt_FLX`` / ``rndSqrt_FLT``, Roux Theorem 25."""
+
+
+_SAME_FAMILY_ONLY = frozenset({DoubleRoundOp.DIV, DoubleRoundOp.SQRT})
+"""Rules proved separately for FLX and FLT, with no mixed-family statement."""
 
 
 def _flx(e: float) -> bool:
@@ -132,34 +135,23 @@ def double_round_op_ok(
     Decide the same question as :func:`double_round_ok`, but only for the
     *results of* *op* -- which buys a much narrower intermediate.
 
-    **The caller must have checked that every operand of the operation is
-    representable in** ``f1``. Every one of these theorems assumes it, and it is
-    load-bearing rather than presentational: an operand on a finer grid than the
-    target lets the exact result land within half an intermediate ulp of a target
-    midpoint, which is exactly what the proofs rule out. FPy's signature is
-    ``op: Fx -> Fy -> F1``, so this does not come for free.
+    **The caller must have checked that every operand is representable in**
+    ``f1``: every theorem here assumes it, and dropping it is unsound -- an
+    operand on a finer grid lets the exact result land within half an
+    intermediate ulp of a target midpoint, which the proofs rule out.  FPy's
+    signature is ``op: Fx -> Fy -> F1``, so it does not come for free.
 
-    Both roundings must be to nearest; the tie-breaks may differ.  Any special
-    the target represents the intermediate must too, or the split loses it --
-    the premises are about finite values, but a program is not.  The bound
-    plays no part -- the theorems are stated on unbounded formats, and a bounded
-    rounding is the unbounded one followed by a bound check that reads only its
-    result, so the conclusion survives it.  A bounded *intermediate* is another
-    matter, since its check sits between the two roundings; that stays the
-    caller's to gate.
-
-    ``ADD`` takes ``exp2 <= exp1`` over ``WithBot``, so it spans both families.
-    ``DIV`` and ``SQRT`` are proved separately for ``FLX`` and ``FLT`` and have
-    no mixed-family statement, so an unbounded exponent on one side only is
-    refused rather than assumed.
+    Both roundings must be to nearest, though the tie-breaks may differ, and the
+    intermediate must represent every special the target does -- the premises
+    cover finite values, a program does not.  The bound plays no part: a bounded
+    rounding is the unbounded one plus a bound check reading only its result, so
+    the conclusion survives it.  A bounded *intermediate* is the caller's to
+    gate, its check sitting between the two roundings.
     """
     if rm1 not in _NEAREST or rm2 not in _NEAREST:
         return False
     if not f1.specials_contained_in(f2):
-        # the theorems quantify over finite values, but a program carries
-        # specials through the split, and they survive it only if the
-        # intermediate represents them
-        return False
+        return False        # a special the intermediate would lose
 
     p1, p2, e1, e2 = f1.prec, f2.prec, f1.exp, f2.exp
     if not isinstance(p1, int) or not isinstance(p2, int):
@@ -167,31 +159,30 @@ def double_round_op_ok(
     if p1 == 1 and _flx(e1) and rm1 is RoundingMode.RNE:
         return False                # `IsUndefined`: the degenerate format
 
+    if op in _SAME_FAMILY_ONLY and _flx(e1) != _flx(e2):
+        return False
+
+    # no `case _`: a member added later must be a mypy error here, not a silent
+    # refusal
     match op:
         case DoubleRoundOp.ADD:
             return p2 >= 2 * p1 + 1 and e2 <= e1
         case DoubleRoundOp.DIV:
-            if _flx(e1) or _flx(e2):
-                return p2 >= 2 * p1 and _flx(e1) and _flx(e2)
-            return p2 >= 2 * p1 and e2 <= e1 - p1 - 2
+            return p2 >= 2 * p1 and (_flx(e1) or e2 <= e1 - p1 - 2)
         case DoubleRoundOp.SQRT:
-            if _flx(e1) or _flx(e2):
-                return p2 >= 2 * p1 + 2 and _flx(e1) and _flx(e2)
-            return (
-                p2 >= 2 * p1 + 2 and e1 <= 0
-                and (e2 <= e1 - p1 - 2 or 2 * e2 <= e1 - 4 * p1 - 2)
-            )
+            return p2 >= 2 * p1 + 2 and (_flx(e1) or (
+                e1 <= 0 and (e2 <= e1 - p1 - 2 or 2 * e2 <= e1 - 4 * p1 - 2)
+            ))
 
 
-_OP_WIDTH: dict[DoubleRoundOp, tuple[int, int, int]] = {
-    # op -> (precision multiple, precision slack, quanta dropped below `exp1`)
-    DoubleRoundOp.ADD: (2, 1, 0),
-    DoubleRoundOp.DIV: (2, 0, 2),
-    DoubleRoundOp.SQRT: (2, 2, 2),
+_OP_WIDTH: dict[DoubleRoundOp, tuple[int, bool]] = {
+    # op -> (digits past `2 * p1`, needs the `p1 + 2` underflow margin)
+    DoubleRoundOp.ADD: (1, False),
+    DoubleRoundOp.DIV: (0, True),
+    DoubleRoundOp.SQRT: (2, True),
 }
-"""The width each rule asks for, as read off :func:`double_round_op_ok`.  The
-quanta dropped are ``p1 + this`` where nonzero -- the underflow margin `div` and
-`sqrt` need because their results are irrational."""
+"""The width each rule asks for, read off :func:`double_round_op_ok`.  Only
+`div` and `sqrt` need the margin, their results being irrational."""
 
 
 def _derive_for_op(
@@ -214,8 +205,8 @@ def _derive_for_op(
         )
     p1, e1 = int(f1.prec), f1.exp
 
-    mult, slack, drop = _OP_WIDTH[op]
-    p2 = mult * p1 + slack
+    slack, margin = _OP_WIDTH[op]
+    p2 = 2 * p1 + slack
     if not isinstance(e1, int):
         # an FLX target takes an FLX intermediate: `div` and `sqrt` are proved
         # per family, so a minimum quantum on one side only is not a theorem
@@ -227,7 +218,7 @@ def _derive_for_op(
         )
     # `MPSFloatContext` takes the least *normalized* exponent, which sits
     # `p2 - 1` above the least quantum
-    e2 = e1 - (p1 + drop if drop else 0)
+    e2 = e1 - (p1 + 2) if margin else e1
     return MPSFloatContext(p2, e2 + p2 - 1, rm1)
 
 
@@ -244,12 +235,11 @@ def derive_intermediate(
     under whatever mode it wants.
 
     With *op*, the rule is that operation's own (:func:`double_round_op_ok`) and
-    the intermediate is a *nearest* one instead -- the target's own mode, since
-    the tie-breaks are independent.  That is what a hardware format can be, so
-    this is the derivation to ask for when the intermediate has to be one: FP64
-    satisfies every rule for an FP32 target.  ``MUL`` is not offered, because its
-    rule is exactness -- any format holding the exact product works under any
-    mode, and the transform checks that against the real operand formats.
+    the intermediate rounds to *nearest* instead -- the target's own mode, the
+    tie-breaks being independent.  Ask for this when the intermediate has to be a
+    format the machine has: FP64 satisfies every rule for an FP32 target.
+    ``MUL`` is not offered, its rule being exactness -- any format holding the
+    exact product serves, under any mode.
 
     **Unbounded**, which is what makes the composition agree at the ends of
     the range: it cannot overflow or underflow, so the only rounding that can is

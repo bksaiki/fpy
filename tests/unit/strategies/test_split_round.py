@@ -12,18 +12,18 @@ import random
 import pytest
 
 import fpy2 as fp
-from fpy2.types import RealType
 from fpy2.analysis.format_infer import DoubleRoundOp, derive_intermediate
 from fpy2.strategies import (
     ExprCursor,
     TransformDeclined,
     TransformReferenceError,
-    refusals,
     monomorphize,
+    refusals,
     simplify,
     sites,
     split_round,
 )
+from fpy2.types import RealType
 
 VIA32 = derive_intermediate(fp.FP32)
 

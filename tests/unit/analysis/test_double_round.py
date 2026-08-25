@@ -22,7 +22,8 @@ from fpy2.analysis.format_infer import (
     double_round_ok,
     double_round_op_ok,
 )
-from fpy2.number import RealFloat, RoundingMode as RM
+from fpy2.number import RealFloat
+from fpy2.number import RoundingMode as RM
 
 # (final rm1, intermediate rm2) -> the theorem admitting it
 ADMITTED: dict[tuple[RM, RM], str] = {
@@ -498,7 +499,7 @@ class TestOperationRulesAgainstArithmetic:
     def test_an_accepted_pair_agrees_with_rounding_once(self, op, p1):
         target = fp.MPFloatContext(p1, RM.RNE)
         f1 = _fmt(target)
-        for dp in range(0, 2 * p1 + 4):
+        for dp in range(2 * p1 + 4):
             via = fp.MPFloatContext(p1 + dp, RM.RNE)
             if double_round_op_ok(op, f1, RM.RNE, _fmt(via), RM.RNE):
                 assert self._mismatches(op, target, via) == 0, \

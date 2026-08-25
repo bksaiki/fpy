@@ -28,67 +28,55 @@ application grow the tree twice as fast.
 When this fires
 ---------------
 
-The intermediate is the caller's; :func:`fpy2.analysis.format_infer.derive_intermediate`
-computes a suitable one.  Given a target ``(F1, rm1)`` and an intermediate
-``(F2, rm2)``, one of three rules must hold, tried in this order:
+The intermediate is the caller's;
+:func:`fpy2.analysis.format_infer.derive_intermediate` computes a suitable one.
+For a target ``(F1, rm1)`` and an intermediate ``(F2, rm2)``, one of three rules
+must hold, tried in this order:
 
-=================== ================================================= =============================
-rule                condition                                         source
-=================== ================================================= =============================
-exact intermediate  the operation's exact result is representable      ``rndExact``
-                    in ``F2``
-Figure 8            a mode pair in :func:`.double_round_ok`'s table    ``Mpfx/DoubleRounding.lean``
-                    (nine of sixty-four), plus containment
-the operation's own :func:`.double_round_op_ok` for ``+``/``-``,       Roux 2014
-                    ``/``, ``sqrt``
-=================== ================================================= =============================
+1. **The exact intermediate** (``rndExact``): ``F2`` represents the operation's
+   exact result, so rounding to it is the identity and the composition *is* the
+   original computation.  The widest rule, since it asks nothing of the modes --
+   this is what admits an FP32 product through FP64 with both contexts at their
+   own round-to-nearest, which Figure 8 refuses at every width.  It reads the
+   operands' inferred formats, so it beats the closed form ``p2 >= 2*p1``: an
+   FP16 product needs 22 digits, not 48.
+2. **Figure 8** (:func:`.double_round_ok`): nine of the sixty-four mode pairs,
+   plus containment.  Holds for every real.
+3. **The operation's own rule** (:func:`.double_round_op_ok`, Roux 2014) for
+   ``+``, ``-``, ``/`` and ``sqrt`` -- the operations whose result is *not*
+   representable, an exact sum needing the operands' whole exponent range and a
+   quotient or root being irrational.
 
-The first is the widest, because it needs nothing of the modes: if ``F2`` holds
-the result exactly then rounding to it is the identity, so the composition *is*
-the original computation.  This is what admits an FP32 product through FP64 with
-both contexts at their own round-to-nearest, which Figure 8 refuses at every
-width.  It uses the operands' inferred formats, so it is stronger than the closed
-form ``p2 >= 2*p1``: an FP16 product needs 22 digits, not 48.
+Three conditions on the third rule are load-bearing, not cautious:
 
-The third covers the operations whose result is *not* representable -- an exact
-sum needs the operands' whole exponent range, and a quotient or root is generally
-irrational.  Three of its conditions are worth knowing, because each one is
-load-bearing rather than cautious:
+* **Both roundings to nearest.** Measured: ``add`` through an intermediate far
+  wider than any rule asks still disagrees with a *directed* target.
+  Multiplication escapes this only by going through ``rndExact``.
+* **Every operand representable in the target.** FPy's signature is
+  ``op: Fx -> Fy -> F1`` -- only the result is rounded -- so this needs checking.
+  An operand on a finer grid lets the exact result land within half an
+  intermediate ulp of a target midpoint, which the proofs' separation argument
+  rules out.  Measured, 3-digit target over the rule's exact 7-digit
+  intermediate: 4-digit operands already disagree on 16 of 6400 pairs, 6-digit
+  on 1748 of 102400.  Containment is against ``F1``, not ``F2`` -- every one of
+  those operands is inside ``F2``.
+* **No mixed exponent family for ``/`` and ``sqrt``**, which are proved
+  separately for FLX and FLT.  ``+`` is stated over ``WithBot`` and spans both.
 
-* **Both roundings must be to nearest.** Measured: ``add`` through an
-  intermediate far wider than any rule asks still disagrees with a *directed*
-  target.  Multiplication is exempt only because it goes through ``rndExact``,
-  which is mode-agnostic.
-* **Every operand must be representable in the target.** FPy's signature is
-  ``op: Fx -> Fy -> F1`` -- only the result is rounded -- so this is a real
-  check.  An operand on a finer grid lets the exact result land within half an
-  intermediate ulp of a target midpoint, which is exactly what the proofs'
-  separation argument rules out.  Measured with a 3-digit target and the rule's
-  exact 7-digit intermediate: operands at 4 digits already disagree on 16 of
-  6400 pairs, and at 6 digits on 1748 of 102400.  Containment is against ``F1``,
-  not ``F2`` -- every one of those operands is inside ``F2``.
-* **No mixed exponent families for ``/`` and ``sqrt``.** They are proved
-  separately for FLX and FLT with no mixed statement, so an unbounded exponent on
-  one side only is refused rather than assumed.  ``+`` is stated over ``WithBot``
-  and spans both.
+Two things deliberately not gated:
 
-Two things a reader may expect to be checked and are not:
-
-* **A bounded target needs no check.** A bounded rounding is the unbounded one
-  followed by a bound test that reads only its result, so an equality between
-  unbounded roundings survives it.  The apparent counterexample -- a value just
-  under the target's overflow threshold that the intermediate lifts onto it -- is
-  not a possible operation result, and what excludes it is the separation
-  argument above, since that threshold is an ordinary midpoint of the unbounded
-  target.
-* **A bounded *intermediate* still does**, via :meth:`_composes_special`: its
-  bound test sits *between* the two roundings, where it destroys information the
-  premises need.
+* **A bounded target.** A bounded rounding is the unbounded one plus a bound test
+  reading only its result, so an equality between unbounded roundings survives
+  it.  The apparent counterexample -- a value just under the target's overflow
+  threshold that the intermediate lifts onto it -- is not a possible operation
+  result, and the separation argument above is what excludes it, that threshold
+  being an ordinary midpoint of the unbounded target.
+* **A bounded intermediate is**, by :meth:`_composes_special`: its bound test
+  sits *between* the roundings, where it destroys information.
 
 Specials are not incidental.  Figure 8 gets them from containment; the operation
-rules ask for them separately, since they do not require containment -- an
-intermediate without the target's ``NaN`` would turn an infinite result into a
-raised error.
+rules ask separately, not requiring containment -- an intermediate without the
+target's ``NaN`` turns an infinite result into a raised error.
 """
 
 import operator
@@ -178,9 +166,8 @@ _OP_RULE: dict[type, DoubleRoundOp] = {
     Add: DoubleRoundOp.ADD, Sub: DoubleRoundOp.ADD,
     Div: DoubleRoundOp.DIV, Sqrt: DoubleRoundOp.SQRT,
 }
-"""Operations with a double-rounding rule of their own.  `Mul` is absent because
-its rule *is* the exact-intermediate one, which `_exact_result` already checks
-against the real operand formats rather than the target's."""
+"""Operations with a rule of their own.  `Mul`'s *is* the exact-intermediate
+one, which `_exact_result` checks against the real operand formats."""
 
 
 class _SplitRoundInstance(RoundingRewriter):
@@ -227,9 +214,8 @@ class _SplitRoundInstance(RoundingRewriter):
             )
         f1a, f2a = AbstractFormat.from_format(f1), AbstractFormat.from_format(f2)
 
-        # `rndExact`: where the intermediate represents this operation's exact
-        # result, rounding to it is the identity, so the composition *is* the
-        # original computation -- under any pair of modes, overflow included.
+        # `rndExact`: an intermediate holding the exact result rounds it
+        # identically, so the composition is the original computation
         exact = self._exact_result(e)
         if exact is not None and exact.contained_in(f2a):
             return None
@@ -239,7 +225,7 @@ class _SplitRoundInstance(RoundingRewriter):
             return Declined('a context without a rounding mode has no rule')
         if not double_round_ok(f1a, rm1, f2a, rm2):
             # Figure 8 holds for every real; where it fails, the operation's own
-            # rule may still hold for the values *this* operation produces.
+            # rule may still hold for the values this operation produces
             rule = _OP_RULE.get(type(e))
             if rule is None or not double_round_op_ok(rule, f1a, rm1, f2a, rm2):
                 return Declined(
@@ -299,10 +285,10 @@ class _SplitRoundInstance(RoundingRewriter):
     def _exact_result(self, e: Expr) -> AbstractFormat | None:
         """*e*'s result before the target rounds it, as a format.
 
-        The *unrounded* one: `by_expr` holds the result after the rounding, which
-        is inside the target's format by construction and would prove nothing.
-        `None` where it has no abstract form -- an operation with no exact rule,
-        a constant-folded set, or an operand whose format is unknown.
+        The *unrounded* one: `by_expr` holds the result after rounding, which is
+        inside the target by construction and would prove nothing.  `None` where
+        there is no abstract form -- no exact rule for the operation, a
+        constant-folded set, or an operand of unknown format.
         """
         args = [self.scopes.format_info.by_expr.get(a) for a in operands(e)]
         # the arity is implied by the table: unpacking asserts it
@@ -318,13 +304,9 @@ class _SplitRoundInstance(RoundingRewriter):
         return to_abstract(out)
 
     def _operands_representable(self, e: Expr, f1: AbstractFormat) -> bool:
-        """Whether every operand of *e* is representable in the target format.
-
-        Roux's premises assume it, and it is load-bearing: an operand on a finer
-        grid lets the exact result land within half an intermediate ulp of a
-        target midpoint, which the proofs' separation argument rules out.  FPy's
-        signature is ``op: Fx -> Fy -> F1``, so it has to be checked.
-        """
+        """Whether every operand of *e* is representable in the target format --
+        a premise of every operation rule, and load-bearing; see the module
+        docstring."""
         for a in operands(e):
             fmt = to_abstract(self.scopes.format_info.by_expr.get(a))
             if fmt is None or not fmt.contained_in(f1):
