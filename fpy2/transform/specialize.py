@@ -37,6 +37,7 @@ from ..analysis.format_infer import (
     ListFormat,
     SetFormat,
     TupleFormat,
+    VarFormat,
 )
 from ..ast import Call, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
@@ -130,7 +131,8 @@ def _bound_to_type(
     Scalar ``Format`` bounds attempt ``Format → Context`` recovery via
     :func:`_format_to_ctx` and become ``RealType(<recovered ctx>)`` on
     success (fallback ``RealType(None)`` otherwise).  ``SetFormat`` and
-    ``None`` collapse to ``RealType(None)`` / ``None``.
+    ``None`` collapse to ``RealType(None)`` / ``None``, as does
+    :class:`VarFormat` -- an unresolved kind names no type.
 
     *size* rides along structurally: a ``ListSize`` with a concrete ``int``
     length puts that length on the ``ListType``, which is how a caller's proven
@@ -138,7 +140,7 @@ def _bound_to_type(
     callee's own array-size analysis.  A shape mismatch or ``None`` contributes
     nothing.
     """
-    if bound is None:
+    if bound is None or isinstance(bound, VarFormat):
         return None
     if isinstance(bound, TupleFormat):
         sizes: tuple[ArraySizeBound, ...] = (
