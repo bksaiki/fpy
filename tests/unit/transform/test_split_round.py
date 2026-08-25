@@ -16,6 +16,7 @@ names, so these tests assert
    rewrites.
 """
 
+import operator
 import pathlib
 import random
 
@@ -23,7 +24,12 @@ import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import derive_intermediate
-from fpy2.analysis.format_infer import AbstractFormat, double_round_ok
+from fpy2.analysis.format_infer import (
+    AbstractFormat,
+    DoubleRoundOp,
+    double_round_ok,
+    exact_binop,
+)
 from fpy2.ast.fpyast import ContextStmt, ForeignVal, FuncDef, Mul, Round
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
@@ -143,6 +149,18 @@ def _overflow_sweep(n: int = 400):
     rng = random.Random(2)
     for _ in range(n):
         yield rng.uniform(1.0, 2.0) * 2.0 ** 127, rng.uniform(2.0, 8.0)
+
+
+def _pinned_expr(body: str, target: str = 'FP32', argctx=fp.FP32,
+                 arity: int = 2) -> FuncDef:
+    """:func:`_pinned_mul` for an arbitrary operation, via generated source.
+    The target is named rather than passed, so it must be a plain `fp.*`."""
+    args = ', '.join(f'{n}: fp.Real' for n in 'xy'[:arity])
+    src = (f'import fpy2 as fp\n\n@fp.fpy(ctx=fp.REAL)\n'
+           f'def probe({args}) -> fp.Real:\n'
+           f'    with fp.{target}:\n        t = {body}\n    return t\n')
+    f = _load(src, body + target)
+    return Monomorphize.apply(f.ast, fp.REAL, [RealType(argctx)] * arity)
 
 
 def _pinned_mul(target=fp.FP32, argctx=fp.FP32) -> FuncDef:
@@ -438,6 +456,96 @@ class TestDeclines:
             SplitRound.sites(_product.ast, ctx=fp.FP32.format())  # type: ignore[arg-type]
 
 
+class TestOperationRules:
+    """Roux 2014: rules for the *results of* one operation, which admit nearest
+    over nearest where Figure 8 cannot.  This is what lets a hardware format be
+    the intermediate -- every `fp.FP*` context rounds to nearest."""
+
+    OPS = {'add': ('x + y', 2), 'sub': ('x - y', 2),
+           'div': ('x / y', 2), 'sqrt': ('fp.sqrt(x)', 1)}
+
+    @staticmethod
+    def _args(arity: int, n: int = 400):
+        rng = random.Random(3)
+        for i in range(n):
+            x = rng.uniform(-1e30, 1e30) if i % 3 else rng.uniform(-1e-38, 1e-38)
+            if arity == 1:
+                yield (abs(x),)
+            else:
+                y = rng.uniform(-1e3, 1e3) if i % 2 else rng.uniform(1e-38, 1e38)
+                yield (x, y)
+
+    @pytest.mark.parametrize('name', sorted(OPS))
+    def test_it_splits_through_fp64(self, name):
+        """FP32 at plain RNE through FP64 at plain RNE -- the pairing a
+        hand-written program falls into, which Figure 8 refuses at every
+        width."""
+        body, arity = self.OPS[name]
+        ast = _pinned_expr(body, 'FP32', arity=arity)
+        assert len(SplitRound.sites(ast, ctx=fp.FP64)) == 1
+        out = SplitRound.apply(ast, fp.FP64)
+        assert _agree(ast, out, None, self._args(arity))
+
+    @pytest.mark.parametrize('name', sorted(OPS))
+    def test_the_generic_rule_refuses_the_same_pair(self, name):
+        """So the admissions above are the operation rules', not Figure 8's."""
+        f32 = AbstractFormat.from_format(fp.FP32.format())
+        f64 = AbstractFormat.from_format(fp.FP64.format())
+        assert not double_round_ok(f32, RM.RNE, f64, RM.RNE)
+
+    @pytest.mark.parametrize('name', sorted(OPS))
+    def test_an_operand_finer_than_the_target(self, name):
+        """The `x, y in F1` premise, which is load-bearing: an operand on a finer
+        grid lets the exact result land within half an intermediate ulp of a
+        target midpoint, and then the two roundings disagree."""
+        body, arity = self.OPS[name]
+        ast = _pinned_expr(body, 'FP32', argctx=fp.FP64, arity=arity)
+        assert SplitRound.sites(ast, ctx=fp.FP64) == []
+        why = SplitRound.refusals(ast, ctx=fp.FP64)
+        assert len(why) == 1 and 'operands of the target format' in why[0][1]
+
+    @pytest.mark.parametrize('name', sorted(OPS))
+    def test_an_operand_coarser_than_the_target(self, name):
+        """Coarser is still *in* the target, so the premise holds."""
+        body, arity = self.OPS[name]
+        ast = _pinned_expr(body, 'FP32', argctx=fp.FP16, arity=arity)
+        assert len(SplitRound.sites(ast, ctx=fp.FP64)) == 1
+
+    def test_a_directed_target_is_refused(self):
+        """These rules are proved for nearest only, and that is not
+        conservatism: `add` through a far wider intermediate still disagrees
+        with a directed target."""
+        ast = _pinned_add(fp.FP32.with_params(rm=RM.RTZ))
+        assert SplitRound.sites(ast, ctx=fp.FP64) == []
+
+    def test_a_directed_intermediate_is_refused(self):
+        ast = _pinned_add()
+        assert SplitRound.sites(ast, ctx=fp.FP64.with_params(rm=RM.RTZ)) == []
+
+    def test_the_tie_breaks_may_differ(self):
+        """`rndAdd` takes independent tie-breaks, so nearest-even over
+        nearest-away is admitted."""
+        ast = _pinned_add(fp.FP32.with_params(rm=RM.RNA))
+        assert len(SplitRound.sites(ast, ctx=fp.FP64)) == 1
+
+    def test_multiplication_has_no_rule_of_its_own_here(self):
+        """Its theorem is the exact-intermediate one, which
+        :class:`TestExactIntermediate` covers against the real operand formats
+        rather than the target's."""
+        assert {op.value for op in DoubleRoundOp} == {'add', 'div', 'sqrt'}
+
+    @pytest.mark.parametrize('name,admitted', [('add', True), ('div', False),
+                                               ('sqrt', False)])
+    def test_a_mixed_exponent_family(self, name, admitted):
+        """`rndAdd` is stated over `WithBot`, so it spans both families; `div`
+        and `sqrt` are proved separately for FLX and FLT with no mixed statement,
+        so an unbounded exponent on one side only is refused."""
+        body, arity = self.OPS[name]
+        ast = _pinned_expr(body, 'FP32', arity=arity)
+        via = fp.MPFloatContext(60, RM.RNE)      # FLX: no minimum quantum
+        assert bool(SplitRound.sites(ast, ctx=via)) is admitted
+
+
 class TestUnreachablePositions:
     def test_a_while_condition_is_left_alone(self):
         """The condition is re-evaluated every iteration, so a block hoisted
@@ -558,13 +666,12 @@ class TestExactIntermediate:
         assert len(SplitRound.sites(ast, ctx=fp.INTEGER)) == 1
 
     def test_a_sum_is_not_exact_in_the_intermediate(self):
-        """The operands' exponent range enters an exact sum's precision, so FP64
-        cannot hold one -- this is the generic rule's business again, and it
-        refuses nearest over nearest."""
-        ast = _pinned_add()
-        assert SplitRound.sites(ast, ctx=fp.FP64) == []
-        why = SplitRound.refusals(ast, ctx=fp.FP64)
-        assert len(why) == 1 and 'is not the same as' in why[0][1]
+        """The operands' exponent range enters an exact sum's precision, so no
+        hardware format holds one.  An FP32 sum still splits through FP64, but by
+        the addition rule -- see :class:`TestOperationRules`."""
+        exact = exact_binop(fp.FP32.format(), fp.FP32.format(), operator.add)
+        assert isinstance(exact, AbstractFormat) and exact.prec == 278
+        assert not exact.contained_in(AbstractFormat.from_format(fp.FP64.format()))
 
     def test_an_exponent_range_the_intermediate_lacks(self):
         """BF16 has FP32's exponent range, so an exact BF16 product needs more

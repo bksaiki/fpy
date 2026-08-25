@@ -17,10 +17,12 @@ import fpy2 as fp
 from fpy2.analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
+    DoubleRoundOp,
     derive_intermediate,
     double_round_ok,
+    double_round_op_ok,
 )
-from fpy2.number import RoundingMode as RM
+from fpy2.number import RealFloat, RoundingMode as RM
 
 # (final rm1, intermediate rm2) -> the theorem admitting it
 ADMITTED: dict[tuple[RM, RM], str] = {
@@ -242,3 +244,185 @@ class TestAgainstArithmetic:
         too_narrow = fp.MPFloatContext(3, RM.RTO)
         assert not double_round_ok(_fmt(target), RM.RNE, _fmt(too_narrow), RM.RTO)
         assert not self._agrees(target, too_narrow, self._values(3))
+
+def _flx(p: int) -> AbstractFormat:
+    """A precision-only format: no minimum quantum, no bound (Flocq `FLX`)."""
+    return _fmt(fp.MPFloatContext(p, RM.RNE))
+
+
+class TestOperationRules:
+    """Roux 2014's operation-specific rules, `Mpfx/DoubleRounding{Add,Div,Sqrt}
+    .lean`.  They hold only for the results of one operation, but admit nearest
+    over nearest -- which Figure 8 never does."""
+
+    NEED = {DoubleRoundOp.ADD: lambda p: 2 * p + 1,
+            DoubleRoundOp.DIV: lambda p: 2 * p,
+            DoubleRoundOp.SQRT: lambda p: 2 * p + 2}
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    @pytest.mark.parametrize('p1', [2, 3, 8, 24])
+    @pytest.mark.parametrize('flt', [False, True], ids=['flx', 'flt'])
+    def test_the_precision_bound_is_exact(self, op, p1, flt):
+        """Sound at the stated width, refused one digit below -- these bounds are
+        tight, and `div`'s counterexample is Roux's Remark 30.
+
+        Both families: each rule is proved twice, and only the FLX statements
+        drop the exponent conditions, so a bound transcribed wrongly in one
+        branch is invisible from the other.  The FLT intermediate here carries an
+        exponent margin deep enough for every rule, leaving precision the only
+        thing in play.
+        """
+        need = self.NEED[op](p1)
+
+        def f2(p: int) -> AbstractFormat:
+            return AbstractFormat(p, -4 * p1 - 2, float('inf')) if flt else _flx(p)
+
+        f1 = AbstractFormat(p1, 0, float('inf')) if flt else _flx(p1)
+        assert double_round_op_ok(op, f1, RM.RNE, f2(need), RM.RNE)
+        assert not double_round_op_ok(op, f1, RM.RNE, f2(need - 1), RM.RNE)
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    @pytest.mark.parametrize('rm1,rm2', [
+        (RM.RTZ, RM.RNE), (RM.RNE, RM.RTZ), (RM.RTO, RM.RNE), (RM.RNE, RM.RTO),
+        (RM.RTP, RM.RTP), (RM.RTE, RM.RNE),
+    ])
+    def test_only_nearest_over_nearest(self, op, rm1, rm2):
+        """Proved for `.nearest` on both sides.  Not conservatism: `add` over a
+        far wider intermediate still disagrees with a directed target."""
+        assert not double_round_op_ok(op, _flx(3), rm1, _flx(64), rm2)
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    @pytest.mark.parametrize('rm1', [RM.RNE, RM.RNA])
+    @pytest.mark.parametrize('rm2', [RM.RNE, RM.RNA])
+    def test_the_tie_breaks_are_independent(self, op, rm1, rm2):
+        assert double_round_op_ok(op, _flx(4), rm1, _flx(64), rm2)
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_the_degenerate_format(self, op):
+        """`IsUndefined`: one digit and no minimum quantum leaves nearest-even
+        with no answer, so the theorems exclude it.  Nearest-away is fine."""
+        assert not double_round_op_ok(op, _flx(1), RM.RNE, _flx(64), RM.RNE)
+        assert double_round_op_ok(op, _flx(1), RM.RNA, _flx(64), RM.RNE)
+
+    @staticmethod
+    def _at_exp(e: int) -> AbstractFormat:
+        """A wide FLT intermediate whose least quantum is `e`."""
+        return AbstractFormat(64, e, float('inf'))
+
+    def test_the_addition_exponent_condition(self):
+        """`exp2 <= exp1`, stated over `WithBot`, so it spans both families."""
+        f1 = _fmt(fp.FP32)
+        assert isinstance(f1.exp, int)
+        assert double_round_op_ok(DoubleRoundOp.ADD, f1, RM.RNE, _fmt(fp.FP64), RM.RNE)
+        assert double_round_op_ok(
+            DoubleRoundOp.ADD, f1, RM.RNE, self._at_exp(f1.exp), RM.RNE,
+        )
+        assert not double_round_op_ok(
+            DoubleRoundOp.ADD, f1, RM.RNE, self._at_exp(f1.exp + 1), RM.RNE,
+        )
+
+    def test_the_division_underflow_margin(self):
+        """A quotient is generally irrational, so `div` needs room *below* the
+        target's least quantum: `exp2 <= exp1 - p1 - 2`."""
+        f1 = _fmt(fp.FP32)
+        p1, e1 = f1.prec, f1.exp
+        assert isinstance(p1, int) and isinstance(e1, int)
+        for off, ok in [(0, True), (1, False)]:
+            assert double_round_op_ok(
+                DoubleRoundOp.DIV, f1, RM.RNE, self._at_exp(e1 - p1 - 2 + off), RM.RNE,
+            ) is ok
+
+    def test_the_sqrt_underflow_disjunction(self):
+        """`sqrt`'s Table II bound is a *disjunction*: either room below the
+        target's quantum, or twice as much exponent range.  Either alone
+        suffices, and only failing both refuses."""
+        f1 = _fmt(fp.FP32)
+        p1, e1 = f1.prec, f1.exp
+        assert isinstance(p1, int) and isinstance(e1, int)
+        first, second = e1 - p1 - 2, (e1 - 4 * p1 - 2) // 2
+        assert first < second      # the second disjunct is the weaker one
+        for e2, ok in [(first, True), (second, True), (second + 1, False)]:
+            assert double_round_op_ok(
+                DoubleRoundOp.SQRT, f1, RM.RNE, self._at_exp(e2), RM.RNE,
+            ) is ok, e2
+
+    @pytest.mark.parametrize('op,spans', [(DoubleRoundOp.ADD, True),
+                                          (DoubleRoundOp.DIV, False),
+                                          (DoubleRoundOp.SQRT, False)])
+    def test_a_mixed_exponent_family(self, op, spans):
+        """`div` and `sqrt` are proved for FLX and FLT separately, with no mixed
+        statement, so an unbounded exponent on one side only is refused rather
+        than assumed sound."""
+        assert double_round_op_ok(op, _flx(3), RM.RNE, _flx(64), RM.RNE)
+        assert double_round_op_ok(op, _fmt(fp.FP32), RM.RNE, _fmt(fp.FP64), RM.RNE)
+        assert double_round_op_ok(op, _fmt(fp.FP32), RM.RNE, _flx(64), RM.RNE) is spans
+
+    def test_a_fixed_point_format(self):
+        """The theorems take a finite precision, which a fixed-point format has
+        not, so its rounding is Figure 8's business alone."""
+        for op in DoubleRoundOp:
+            assert not double_round_op_ok(
+                op, _fmt(fp.INTEGER), RM.RNE, _flx(64), RM.RNE,
+            )
+
+
+class TestOperationRulesAgainstArithmetic:
+    """The predicate against actual rounding, per operation.
+
+    :class:`TestOperationRules` checks the transcribed inequalities; this rounds
+    twice versus once over every pair of operands *in the target format*, which
+    is the premise the rules are stated under.
+    """
+
+    OPS = {DoubleRoundOp.ADD: (fp.add, 2), DoubleRoundOp.DIV: (fp.div, 2),
+           DoubleRoundOp.SQRT: (fp.sqrt, 1)}
+
+    @staticmethod
+    def _values(p: int) -> list[fp.Float]:
+        out = [fp.Float(x=RealFloat())]
+        for m in range(2 ** (p - 1), 2 ** p):
+            for e in range(-3, 2):
+                out.append(fp.Float(x=RealFloat(m=m, exp=e)))
+                out.append(fp.Float(x=RealFloat(s=True, c=m, exp=e)))
+        return out
+
+    @classmethod
+    def _mismatches(cls, op, target, via) -> int:
+        fn, arity = cls.OPS[op]
+        xs = cls._values(target.pmax)
+        pairs = ((x,) for x in xs) if arity == 1 else itertools.product(xs, xs)
+        bad = 0
+        for args in pairs:
+            if arity == 1 and args[0].s:
+                continue
+            if op is DoubleRoundOp.DIV and args[1].is_zero():
+                continue
+            if str(fn(*args, target)) != str(target.round(fn(*args, via))):
+                bad += 1
+        return bad
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    @pytest.mark.parametrize('p1', [3, 4])
+    def test_an_accepted_pair_agrees_with_rounding_once(self, op, p1):
+        target = fp.MPFloatContext(p1, RM.RNE)
+        f1 = _fmt(target)
+        for dp in range(0, 2 * p1 + 4):
+            via = fp.MPFloatContext(p1 + dp, RM.RNE)
+            if double_round_op_ok(op, f1, RM.RNE, _fmt(via), RM.RNE):
+                assert self._mismatches(op, target, via) == 0, \
+                    f'{op.value}: p1={p1} over p2={p1 + dp}'
+
+    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
+    def test_the_sweep_can_detect_a_bad_pair(self, op):
+        """One digit under the stated bound really does break, so the test above
+        is not passing on a predicate that accepts nothing."""
+        p1 = 3
+        need = TestOperationRules.NEED[op](p1)
+        target = fp.MPFloatContext(p1, RM.RNE)
+        assert not double_round_op_ok(
+            op, _fmt(target), RM.RNE, _fmt(fp.MPFloatContext(need - 1, RM.RNE)), RM.RNE,
+        )
+        assert self._mismatches(
+            op, target, fp.MPFloatContext(need - 1, RM.RNE),
+        ) > 0
+

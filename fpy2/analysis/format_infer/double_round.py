@@ -1,19 +1,33 @@
 """
 Double-rounding soundness: when one rounding may be split into two.
 
-Figure 8 of *When Double Rounding is Correct*, as proved in `Mpfx/DoubleRounding.lean
-<https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean>`_, which
-is the source of truth for these rules.  :func:`double_round_ok` decides a
-candidate pair and :func:`derive_intermediate` produces one.
+Two families of rule, both mechanised in `mpfx-lean
+<https://github.com/bksaiki/mpfx-lean>`_, which is the source of truth:
+
+- :func:`double_round_ok` -- Figure 8 of *When Double Rounding is Correct*
+  (``Mpfx/DoubleRounding.lean``), which holds for *every* real and so needs
+  nothing but the two formats and modes.  It refuses nearest over nearest at
+  every width.
+- :func:`double_round_op_ok` -- Roux 2014, *Innocuous Double Rounding of Basic
+  Arithmetic Operations* (``Mpfx/DoubleRoundingAdd.lean`` and siblings), which
+  holds only for the *results of one operation* but admits nearest over nearest,
+  and so is what lets a hardware format serve as the intermediate.
+
+:func:`derive_intermediate` produces a pair the first accepts.
 
 Sibling of :func:`fpy2.analysis.format_infer.round_is_identity`, which decides the
 *single*-rounding question -- whether a rounding may be dropped rather than split.
 """
 
+from enum import Enum
+
 from ...number import Context, MPFixedContext, MPFloatContext, RoundingMode
 from .format import AbstractFormat
 
-__all__ = ['derive_intermediate', 'double_round_ok']
+__all__ = [
+    'DoubleRoundOp', 'derive_intermediate', 'double_round_ok',
+    'double_round_op_ok',
+]
 
 
 _NEAREST = frozenset({RoundingMode.RNE, RoundingMode.RNA})
@@ -74,6 +88,86 @@ def double_round_ok(
         return False
 
     return rm1 is rm2 and rm1 in _SAME_MODE and f1.contained_in(f2)
+
+
+class DoubleRoundOp(Enum):
+    """An operation with a double-rounding rule of its own.
+
+    Multiplication has one too (Roux Theorem 10), but its proof is ``rndExact``
+    -- the exact product is representable in the intermediate, so the inner
+    rounding is the identity.  A caller holding the operand formats checks that
+    directly, and more generally than the closed form ``p2 >= 2*p1`` can, so it
+    is not listed here.
+    """
+
+    ADD = 'add'
+    """Addition and subtraction: ``rndAdd`` / ``rndDiff``, Roux Theorem 20."""
+
+    DIV = 'div'
+    """``rndDiv_FLX`` / ``rndDiv_FLT``, Roux Theorem 29 -- tight (Remark 30)."""
+
+    SQRT = 'sqrt'
+    """``rndSqrt_FLX`` / ``rndSqrt_FLT``, Roux Theorem 25."""
+
+
+def _flx(e: float) -> bool:
+    """Whether a format has no minimum quantum -- Flocq's ``FLX``."""
+    return e == float('-inf')
+
+
+def double_round_op_ok(
+    op: DoubleRoundOp,
+    f1: AbstractFormat,
+    rm1: RoundingMode,
+    f2: AbstractFormat,
+    rm2: RoundingMode,
+) -> bool:
+    """
+    Decide the same question as :func:`double_round_ok`, but only for the
+    *results of* *op* -- which buys a much narrower intermediate.
+
+    **The caller must have checked that every operand of the operation is
+    representable in** ``f1``. Every one of these theorems assumes it, and it is
+    load-bearing rather than presentational: an operand on a finer grid than the
+    target lets the exact result land within half an intermediate ulp of a target
+    midpoint, which is exactly what the proofs rule out. FPy's signature is
+    ``op: Fx -> Fy -> F1``, so this does not come for free.
+
+    Both roundings must be to nearest; the tie-breaks may differ.  The bound
+    plays no part -- the theorems are stated on unbounded formats, and a bounded
+    rounding is the unbounded one followed by a bound check that reads only its
+    result, so the conclusion survives it.  A bounded *intermediate* is another
+    matter, since its check sits between the two roundings; that stays the
+    caller's to gate.
+
+    ``ADD`` takes ``exp2 <= exp1`` over ``WithBot``, so it spans both families.
+    ``DIV`` and ``SQRT`` are proved separately for ``FLX`` and ``FLT`` and have
+    no mixed-family statement, so an unbounded exponent on one side only is
+    refused rather than assumed.
+    """
+    if rm1 not in _NEAREST or rm2 not in _NEAREST:
+        return False
+
+    p1, p2, e1, e2 = f1.prec, f2.prec, f1.exp, f2.exp
+    if not isinstance(p1, int) or not isinstance(p2, int):
+        return False                # the theorems take a finite precision
+    if p1 == 1 and _flx(e1) and rm1 is RoundingMode.RNE:
+        return False                # `IsUndefined`: the degenerate format
+
+    match op:
+        case DoubleRoundOp.ADD:
+            return p2 >= 2 * p1 + 1 and e2 <= e1
+        case DoubleRoundOp.DIV:
+            if _flx(e1) or _flx(e2):
+                return p2 >= 2 * p1 and _flx(e1) and _flx(e2)
+            return p2 >= 2 * p1 and e2 <= e1 - p1 - 2
+        case DoubleRoundOp.SQRT:
+            if _flx(e1) or _flx(e2):
+                return p2 >= 2 * p1 + 2 and _flx(e1) and _flx(e2)
+            return (
+                p2 >= 2 * p1 + 2 and e1 <= 0
+                and (e2 <= e1 - p1 - 2 or 2 * e2 <= e1 - 4 * p1 - 2)
+            )
 
 
 def derive_intermediate(target: Context) -> Context:

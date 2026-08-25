@@ -251,7 +251,9 @@ REFUSES = [
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),
     ('comp_to_loop/refuses', comp_to_loop, _dependent_comprehension, {}),
-    ('split_round/refuses', split_round, _two_rounded, _FP64),
+    # an intermediate no wider than the target: no rule admits it, generic or
+    # operation-specific
+    ('split_round/refuses', split_round, _two_rounded, {'ctx': fp.FP32}),
 ]
 
 # `unroll_while` has no row: it refuses nothing at all.

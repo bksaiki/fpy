@@ -39,10 +39,13 @@ from ..analysis import SyntaxCheck
 from ..analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
+    DoubleRoundOp,
     SetFormat,
     double_round_ok,
+    double_round_op_ok,
     exact_binop,
     exact_unop,
+    to_abstract,
 )
 from ..ast.fpyast import (
     Abs,
@@ -52,6 +55,7 @@ from ..ast.fpyast import (
     ConstInf,
     ConstNan,
     Dim,
+    Div,
     Expr,
     Fst,
     FuncDef,
@@ -68,6 +72,7 @@ from ..ast.fpyast import (
     RoundInt,
     Size,
     Snd,
+    Sqrt,
     Sub,
     TernaryOp,
     UnaryOp,
@@ -108,6 +113,14 @@ _EXACT_UNOP: dict[type, Callable[[Any], Any]] = {
     Abs: operator.abs, Neg: operator.neg,
 }
 """The operators `FormatInfer` computes each unrounded result with."""
+
+_OP_RULE: dict[type, DoubleRoundOp] = {
+    Add: DoubleRoundOp.ADD, Sub: DoubleRoundOp.ADD,
+    Div: DoubleRoundOp.DIV, Sqrt: DoubleRoundOp.SQRT,
+}
+"""Operations with a double-rounding rule of their own.  `Mul` is absent because
+its rule *is* the exact-intermediate one, which `_exact_result` already checks
+against the real operand formats rather than the target's."""
 
 
 class _SplitRoundInstance(RoundingRewriter):
@@ -152,7 +165,7 @@ class _SplitRoundInstance(RoundingRewriter):
                 'one of the formats has no abstract form, so the premise '
                 'cannot be checked'
             )
-        f2a = AbstractFormat.from_format(f2)
+        f1a, f2a = AbstractFormat.from_format(f1), AbstractFormat.from_format(f2)
 
         # `rndExact`: where the intermediate represents this operation's exact
         # result, rounding to it is the identity, so the composition *is* the
@@ -164,11 +177,20 @@ class _SplitRoundInstance(RoundingRewriter):
         rm1, rm2 = target.rounding_mode(), self.ctx.rounding_mode()
         if rm1 is None or rm2 is None:
             return Declined('a context without a rounding mode has no rule')
-        if not double_round_ok(AbstractFormat.from_format(f1), rm1, f2a, rm2):
-            return Declined(
-                f'rounding to {rm2.name} and then {rm1.name} is not the same '
-                f'as rounding to {rm1.name} for these formats'
-            )
+        if not double_round_ok(f1a, rm1, f2a, rm2):
+            # Figure 8 holds for every real; where it fails, the operation's own
+            # rule may still hold for the values *this* operation produces.
+            rule = _OP_RULE.get(type(e))
+            if rule is None or not double_round_op_ok(rule, f1a, rm1, f2a, rm2):
+                return Declined(
+                    f'rounding to {rm2.name} and then {rm1.name} is not the same '
+                    f'as rounding to {rm1.name} for these formats'
+                )
+            if not self._operands_representable(e, f1a):
+                return Declined(
+                    f'the {rule.value} rule holds for operands of the target '
+                    'format, and one of these is finer'
+                )
 
         # Figure 8 covers finite values inside the intermediate's range.  A
         # bounded intermediate can also be handed a special or a value past its
@@ -233,9 +255,21 @@ class _SplitRoundInstance(RoundingRewriter):
         else:
             return None
 
-        if isinstance(out, AbstractableFormat):
-            out = AbstractFormat.from_format(out)
-        return out if isinstance(out, AbstractFormat) else None
+        return to_abstract(out)
+
+    def _operands_representable(self, e: Expr, f1: AbstractFormat) -> bool:
+        """Whether every operand of *e* is representable in the target format.
+
+        Roux's premises assume it, and it is load-bearing: an operand on a finer
+        grid lets the exact result land within half an intermediate ulp of a
+        target midpoint, which the proofs' separation argument rules out.  FPy's
+        signature is ``op: Fx -> Fy -> F1``, so it has to be checked.
+        """
+        for a in operands(e):
+            fmt = to_abstract(self.scopes.format_info.by_expr.get(a))
+            if fmt is None or not fmt.contained_in(f1):
+                return False
+        return True
 
     @staticmethod
     def _within(exact: AbstractFormat | None, f2: AbstractFormat) -> bool:
