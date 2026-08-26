@@ -290,8 +290,7 @@ class _IndentedWriter:
         self._depth -= 1
 
     def __len__(self) -> int:
-        """Lines written so far -- what :meth:`CppEmitter._emit_inline`
-        compares to catch a statement escaping the construct it belongs to."""
+        """Lines written so far; see :meth:`CppEmitter._emit_inline`."""
         return len(self._lines)
 
     def render(self) -> str:
@@ -469,23 +468,16 @@ class CppEmitter(Visitor):
     def _emit_inline(self, emit: Callable[[], str], what: str, at: Ast) -> str:
         """*emit*'s result, refusing if producing it wrote a statement.
 
-        Three positions are evaluated conditionally or repeatedly while the line
-        they sit on is neither: a ``while`` condition, a ternary arm and a
-        short-circuited operand.  A statement emitted for one of them lands
-        *before* the construct, so it runs when the operand does not -- a loop
-        that tests a value computed once, or an assertion firing on a path FPy
-        never takes.  All three were live miscompiles; see
-        ``docs/todos/backend-cpp.md``.
+        A ``while`` condition, a ternary arm and a short-circuited operand run
+        conditionally or repeatedly while the line they sit on does not, so a
+        statement emitted for one lands *before* the construct and runs where the
+        operand does not.  :class:`~fpy2.transform.ANF` lowers all three, so
+        arriving here is a violated invariant rather than an inexpressible
+        program -- hence :class:`CppInternalError`.
 
-        :class:`~fpy2.transform.ANF` lowers each of these before codegen, so
-        reaching here means the program was not in statement form -- a violated
-        invariant rather than a program this backend cannot express, hence
-        :class:`CppInternalError`.
-
-        Measured exactly rather than approximated from the syntax, unlike
-        :meth:`_is_pure_cond`: that one may be conservative because being wrong
-        costs it only a nested ``else``, where being wrong here costs a refused
-        program.  Nothing needs rewinding -- the compile is over.
+        Measured rather than approximated from the syntax, unlike
+        :meth:`_is_pure_cond`: a false refusal costs a program, and nothing here
+        needs rewinding.
         """
         before = len(self.writer)
         out = emit()
@@ -2160,11 +2152,6 @@ class CppEmitter(Visitor):
             # the context rounds this product; `ldexp` would not
             return None
         for scale, value in ((e.first, e.second), (e.second, e.first)):
-            # Through a name too: statement form binds the power before the
-            # product, and the shape is the same either way.  The binding is
-            # left behind as dead code for the C++ compiler to drop -- deleting
-            # it needs this peephole to move upstream, which is its own work.
-            scale = self.def_use.defining_expr(scale)
             if not isinstance(scale, Pow):
                 continue
             base, exp = scale.first, scale.second

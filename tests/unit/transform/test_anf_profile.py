@@ -27,7 +27,7 @@ EXPECTED_FUNCTIONS = 230
 
 EXPECTED_RESIDUE = {
     "a comprehension's iterable may read an earlier target": 18,
-    "a comprehension's element runs once per iteration": 7,
+    "a comprehension's element runs once per iteration": 8,
 }
 """Sealed positions left holding something that needs a place, by reason.
 

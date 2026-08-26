@@ -2,113 +2,54 @@
 Administrative normal form: bind every non-atomic subexpression to a name.
 
 FPy expressions nest, so a backend emitting a construct that needs a *place* for
-an operand has to invent one.  This pass removes the need rather than predicting
-it: afterwards every proper subexpression of a statement is an atom, so an
-operand a backend meets is already a name.
+an operand has to invent one.  This pass removes the need: afterwards every
+proper subexpression of a statement is an atom.
 
 .. code-block:: python
 
-    # before
-    y = (a * b) + (c * d)
-
-    # after
-    t = a * b
-    t1 = c * d
-    y = t + t1
+    # before                # after
+    y = (a * b) + (c * d)   t = a * b
+                            t1 = c * d
+                            y = t + t1
 
 **Where a temporary goes.**  In a statement slot executed *exactly as often, and
 under exactly the same condition, as the expression it names* -- not merely the
 nearest enclosing statement, which is wrong for a ``while`` condition (evaluated
 once per iteration where the slot before the loop runs once) and for a ternary
 arm (conditional where the slot is not).  A statement's own operands qualify, and
-so does anything inside a body, which is the same case one level down.
+so does anything inside a body.
 
-The positions FPy evaluates conditionally or repeatedly do not, and this pass
-*seals* them: an ``and``/``or`` tail and a comprehension's element keep their
-subexpressions inline, because hoisting one out would evaluate it on a path FPy
-never takes.
+Positions FPy evaluates conditionally or repeatedly do not, and are *sealed*:
+their subexpressions stay inline, since hoisting one would evaluate it on a path
+FPy never takes.  Two of them have a lowering that creates the slot they lack:
 
-Two of those positions have a lowering that *creates* the slot they lack, and it
-is applied where the position holds something that needs one
-(:func:`needs_slot`).  A ``while`` loop is **rotated**, so the condition is
-evaluated once before the loop and once at the end of the body -- exactly FPy's
-own order -- and each copy has a slot of its own.  An ``IfExpr`` becomes an
-``IfStmt`` whose branches assign one name, which is the same trade: each arm's
-block runs exactly when the arm did.
+- a ``while`` loop is **rotated**, so the condition is evaluated once before the
+  loop and once at the end of the body -- FPy's own order.  Rotation *duplicates*
+  the condition, so it is gated on :func:`needs_slot`.
+- an ``IfExpr`` becomes an ``IfStmt`` assigning one name.  That restructures
+  rather than duplicating, so every ternary but ``x1 if c else x2`` over atoms is
+  lowered.
 
-.. code-block:: python
+An ``and``/``or`` tail is lowered only where an operand needs a place
+(:meth:`_ANFInstance._lowers_chain`), and a comprehension's element and
+iterables not at all; :meth:`ANF.refusals` reports what is left.  The lowerings
+compose: a rotated condition is a slot, so a ternary inside it lowers too.
 
-    # before
-    y = (a * b) if c else d
-
-    # after
-    if c:
-        y = a * b
-    else:
-        y = d
-
-A ternary is left alone only where it is already in normal form -- ``x1 if c
-else x2`` over atoms.  Not for the backend's sake:
-the cpp emitter spells either inline and needs no place for one.  It is that a
-sealed position is unreachable to every pass that needs a preamble.
-:class:`~fpy2.transform.RoundElim` and :class:`~fpy2.transform.RoundInsert`
-suppress hoisting inside an ``IfExpr`` branch for exactly the reason this pass
-seals it, so no rounding can be eliminated or inserted there --
-:mod:`fpy2.transform.comp_to_loop`'s own reason for existing, applied to
-ternaries and bool tails.  Flattening them makes them schedulable.
-
-A rotation is the exception, because it *duplicates* its condition rather than
-restructuring it.  That cost is real, so it is gated on :func:`needs_slot`
-instead: a condition needing no place stays an expression.
-
-The two compose, and that is why they are worth having together: the condition a
-rotation lifts sits in a slot, so an ``IfExpr`` inside it can then be lowered
-too, and a lowered arm is a block, so an ``IfExpr`` nested in one can be as
-well.
+**Scalars only, by type.**  An expression is named where
+:class:`~fpy2.analysis.TypeInfer` gives it a scalar type; a list, tuple, context
+or unresolved type variable is left inline.  A scalar has no identity, so naming
+one loses nothing, where a name holding a list is a second *place* -- and the cpp
+backend's sharing analysis counts places.  So a chain is named at its outermost
+scalar and the aggregate spine stays inline:
 
 .. code-block:: python
 
-    # before
-    while max(xs) > 0.0:
-        <body>
-
-    # after
-    t = max(xs)
-    c = t > 0.0
-    while c:
-        <body>
-        t1 = max(xs)
-        c = t1 > 0.0
-
-So the invariant is not "no ternary survives", nor textbook ANF: it is that no
-expression needing a place sits where there is none, and that every position a
-lowering reaches for free is flattened.
-
-**Scalars only, decided by type.**  An expression is named where
-:class:`~fpy2.analysis.TypeInfer` gives it a scalar type; anything else -- a
-list, a tuple, a context, an unresolved type variable -- is left inline.  A
-scalar has no identity, so naming one loses nothing, while a name holding a list
-is a second *place*, and the sharing analysis counts places: a second one boxes
-the list, which under the cpp backend's strictest mode is a refusal rather than a
-slower program.  Widening this to aggregates is its own piece of work.
-
-The type is the whole criterion, so nesting is flattened right down to the
-aggregate boundary and no further -- a chain is named at its outermost scalar,
-which never introduces an aggregate name:
-
-.. code-block:: python
-
-    # before
-    return g(g(x)) + xss[i + 1][0]
-
-    # after
-    t = g(x)
-    t1 = g(t)
-    t2 = i + 1
-    t3 = xss[t2][0]        # the spine `xss[t2]` is a list, so it stays inline
-    return t1 + t3
+    # `g(g(x)) + xss[i + 1][0]` becomes
+    t = g(x); t1 = g(t); t2 = i + 1; t3 = xss[t2][0]; return t1 + t3
 
 Idempotent: a second pass finds only atoms in the positions it names.
+
+The design notes are in ``docs/todos/backend-independence.md``.
 """
 
 import dataclasses
@@ -159,6 +100,7 @@ from ..ast.fpyast import (
     Not,
     NullaryOp,
     Or,
+    Pow,
     Range1,
     Range2,
     Range3,
@@ -185,57 +127,50 @@ from ..utils import Gensym
 from .path import sub_exprs
 
 _ATOMIC = (Var, ValueExpr, NullaryOp)
-"""Expressions that are already a place, or need none.
-
-A ``NullaryOp`` is a constant the active context fixes, so it has no children to
-name and naming it would buy nothing."""
+"""Expressions that are already a place, or need none."""
 
 _NAMEABLE_TYPES = (RealType, BoolType)
-"""Types whose values this pass binds to a name.
-
-Everything else -- ``ListType``, ``TupleType``, ``ContextType``,
-``FunctionType``, and an unresolved ``VarType`` -- is left inline.  A whitelist,
-so an unresolved type is not named: naming one wrongly is the case with a
-consequence.
-"""
+"""Types whose values this pass binds to a name.  A whitelist, so an unresolved
+``VarType`` is left inline: naming an aggregate wrongly is the costly direction."""
 
 
-_SLOT_FREE = (
-    Var, ValueExpr, NullaryOp,
-    Compare, Not, And, Or, IfExpr,
-    UnaryOp, BinaryOp, TernaryOp,
-)
-"""Node kinds whose own lowering needs no statement of its own.
-
-A whitelist, so a kind nobody thought about needs a slot: a false *positive*
-lowers a position that did not need it, which costs output size, while a false
-negative leaves an operand in a position with nowhere to put its statement --
-the shape ``docs/todos/backend-cpp.md`` records as a miscompile.
-"""
+_SLOT_FREE = _ATOMIC + (Compare, Not, And, Or, IfExpr,
+                        UnaryOp, BinaryOp, TernaryOp)
+"""Node kinds whose own lowering needs no statement.  A whitelist: an unfamiliar
+kind needs a slot, since a false negative leaves an operand where its statement
+cannot go."""
 
 _NEEDS_SLOT = (
     Round, RoundAt, Cast,
     Sum, AMin, AMax, AnyOf, AllOf,
     Range1, Range2, Range3, Enumerate,
-    Fst, Snd,
+    Fst, Snd, Pow,
 )
-"""The exceptions among :data:`_SLOT_FREE`'s base classes.
+"""The exceptions among :data:`_SLOT_FREE`'s base classes: a rounding may
+assert, a fold needs a loop, a range allocates, a projection is read through a
+bound name, and a power's exponent is bound when it lowers to ``ldexp``."""
 
-A rounding may assert; a fold over a list needs a loop and an accumulator; a
-range allocates; and a projection is read through a bound name, since the cpp
-emitter folds an ``Fst``/``Snd`` chain into one ``std::get``.  Everything not
-matched by either tuple -- a call, a container, a comprehension, ``Min``/``Max``
--- needs a slot by default.
-"""
+
+def _reads(name: NamedId, exprs: 'list[Expr] | tuple[Expr, ...]') -> bool:
+    """Whether any of *exprs* mentions *name*."""
+    found = False
+
+    class _Reads(DefaultVisitor):
+        def _visit_var(self, e: Var, ctx):
+            nonlocal found
+            if e.name == name:
+                found = True
+
+    for e in exprs:
+        _Reads()._visit_expr(e, None)
+    return found
 
 
 def needs_slot(e: Expr) -> bool:
     """Does emitting *e* plausibly require a statement of its own?
 
-    Asked of a position FPy evaluates conditionally or repeatedly, to decide
-    whether it is worth lowering: a condition or an arm holding only names,
-    literals and arithmetic can stay an expression, since no backend needs
-    anywhere to put a statement.  Conservative in the safe direction -- see
+    Asked of a conditionally- or repeatedly-evaluated position, to decide
+    whether lowering it is worth the cost.  Conservative -- see
     :data:`_SLOT_FREE`.
     """
     if not isinstance(e, _SLOT_FREE) or isinstance(e, _NEEDS_SLOT):
@@ -340,8 +275,8 @@ class _ANFInstance(DefaultTransformVisitor):
     def _visit_expr(self, e: Expr, ctx: _Ctx) -> Expr:
         """*e* rebuilt, and bound to a fresh name where that is allowed."""
         rebuilt = super()._visit_expr(e, ctx)
-        # `rebuilt`, not `e`: a lowered ternary or bool chain comes back as the
-        # name it accumulated into, and naming that again is a pure copy.
+        # `rebuilt`, not `e`: a lowered ternary or chain comes back as the name
+        # it accumulated into, and naming that again is a pure copy.
         if (
             not ctx.hoistable
             or isinstance(rebuilt, _ATOMIC)
@@ -353,11 +288,14 @@ class _ANFInstance(DefaultTransformVisitor):
         return Var(t, e.loc)
 
     def _nameable(self, e: Expr) -> bool:
-        """Whether *e*'s value may be bound to a name -- see
-        :data:`_NAMEABLE_TYPES`.
-
-        Asked of the original node, which is what the type analysis is keyed by.
-        """
+        """Whether *e*'s value may be bound to a name
+        (:data:`_NAMEABLE_TYPES`).  Asked of the original node, which is what
+        the type analysis is keyed by."""
+        if isinstance(e, Pow):
+            # `2 ** n * x` is strength-reduced to a scaling by whoever emits it,
+            # and the match is syntactic: naming the power hides it, exactly as
+            # naming a `zip` would hide it from `ZipElim`.
+            return False
         return isinstance(self.types.by_expr.get(e), _NAMEABLE_TYPES)
 
     def _in_place(self, e: Expr, ctx: _Ctx) -> Expr:
@@ -374,8 +312,8 @@ class _ANFInstance(DefaultTransformVisitor):
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
         if self._lowers(e, ctx):
             t = self.gensym.fresh(self.prefix)
-            # Two steps, not one expression: `_branch_on` appends the
-            # condition's own temporaries, and those belong *before* the `if`.
+            # two steps: `_branch_on` appends the condition's temporaries, which
+            # belong *before* the `if`
             stmt = self._branch_on(e, t, ctx)
             ctx.stmts.append(stmt)
             return Var(t, e.loc)
@@ -391,14 +329,11 @@ class _ANFInstance(DefaultTransformVisitor):
         )
 
     def _lowers(self, e: Expr, ctx: _Ctx) -> bool:
-        """Whether *e* is a ternary this pass turns into an ``IfStmt``.
+        """Whether *e* is a ternary this pass turns into an ``IfStmt``: every
+        one but ``x1 if c else x2`` over atoms.
 
-        Every ternary but ``x1 if c else x2`` over atoms, which is already in
-        normal form.  Not :func:`needs_slot`, which asks the weaker question of
-        whether a *backend* needs a place -- an arm holding ``x * x`` needs no
-        statement to emit.  What an unflattened arm costs is reach: no pass with
-        a preamble can rewrite inside one.  See the module docstring.
-
+        Not :func:`needs_slot` -- an ``IfStmt`` restructures rather than
+        duplicating, so there is nothing to weigh against flattening the arms.
         Only in a hoistable position: the statement has to go somewhere.
         """
         return (
@@ -412,9 +347,7 @@ class _ANFInstance(DefaultTransformVisitor):
     def _branch_on(self, e: IfExpr, target: NamedId, ctx: _Ctx) -> IfStmt:
         """*e* as an ``IfStmt`` assigning *target* in each branch.
 
-        The merge is a phi introducing *target*, which is what a backend already
-        handles for a name first assigned in both arms of an ``if``.  Appends the
-        condition's temporaries to *ctx* on the way, since the condition is
+        Appends the condition's temporaries to *ctx*, since the condition is
         evaluated where the ternary was.
         """
         cond = self._in_place(e.cond, ctx)
@@ -429,23 +362,28 @@ class _ANFInstance(DefaultTransformVisitor):
         """The statement binding *target* to *e*, appending *e*'s own
         temporaries to *ctx* first.
 
-        A lowered ternary or bool chain accumulates into *target* directly
-        rather than through a temporary, so nesting them gives one ladder rather
-        than a chain of copies -- and nothing runs after this pass to remove one.
+        A lowered ternary or chain accumulates into *target* directly, so
+        nesting them gives one ladder rather than a chain of copies.  Nothing
+        runs after this pass to remove one.
         """
         if self._lowers(e, ctx):
             assert isinstance(e, IfExpr)
             return self._branch_on(e, target, ctx)
         if isinstance(e, (And, Or)) and self._lowers_chain(e, ctx):
-            return self._short_circuit(e, ctx, target)
+            if not _reads(target, e.args[1:]):
+                return self._short_circuit(e, ctx, target)
+            # A chain accumulates into its target *before* the later operands
+            # run, so one that reads the target would see the accumulator.  Only
+            # a chain: a ternary arm and an ordinary right-hand side are both
+            # evaluated before anything is assigned.
+            acc = self.gensym.fresh(self.prefix)
+            ctx.stmts.append(self._short_circuit(e, ctx, acc))
+            return Assign(target, None, Var(acc, loc), loc)
         return Assign(target, None, self._in_place(e, ctx), loc)
 
     def _arm(self, target: NamedId, e: Expr, loc) -> StmtBlock:
-        """A block binding *target* to *e*, with *e*'s temporaries inside it.
-
-        The block runs exactly when the arm did, which is the whole point: this
-        is the slot the arm lacked.
-        """
+        """A block binding *target* to *e*, with *e*'s temporaries inside it --
+        the slot the arm lacked, running exactly when the arm did."""
         inner = _Ctx(stmts=[])
         inner.stmts.append(self._bind(target, e, inner, loc))
         return StmtBlock(inner.stmts)
@@ -469,19 +407,11 @@ class _ANFInstance(DefaultTransformVisitor):
     def _lowers_chain(self, e: 'And | Or', ctx: _Ctx) -> bool:
         """Whether *e* becomes a chain of guarded statements.
 
-        **Not** the same rule as :meth:`_lowers`, and the asymmetry is measured
-        rather than tidy.  Lowering a ternary buys reach that nothing else
-        provides, so it happens whenever an arm is not an atom.  Lowering a
-        *pure* chain buys nothing anyone uses and costs something real: a guard
-        like ``not isnan(a) and not isnan(b)`` is what
-        :class:`~fpy2.analysis.ValueClassInfer` reads to drop a runtime check,
-        and it reads the ``And`` -- once the conjuncts are separate statements
-        joined by a phi, the conjunction is gone and the check comes back.
-
-        So a chain lowers only where an operand after the first needs a place of
-        its own, which is the case the lowering exists for: an operand whose
-        emission is not pure must not run when the chain short-circuits past it.
-        A degenerate one-operand chain has nothing to short-circuit.
+        Only where an operand after the first needs a place -- the case the
+        lowering exists for.  Not :meth:`_lowers`'s rule: lowering a *pure*
+        chain would break the guard :class:`~fpy2.analysis.ValueClassInfer`
+        reads to drop a runtime check, since it matches the ``And`` and a
+        lowered one is statements joined by a phi.
         """
         return (
             ctx.hoistable
@@ -494,22 +424,18 @@ class _ANFInstance(DefaultTransformVisitor):
     ) -> Stmt:
         """*e* accumulated into *target*, one guard per operand after the first.
 
-        The guards are *flat*, not nested, and short-circuit all the same: once
-        an ``or``'s accumulator is true every later ``if not t`` fails, so no
-        further operand is evaluated -- and dually for ``and``.  A nested form
-        would indent one level per operand for no gain.
+        The guards are *flat* and short-circuit all the same: once an ``or``'s
+        accumulator is true every later ``if not t`` fails, and dually for
+        ``and``.
 
         .. code-block:: python
 
             t = a
-            if not t:
-                t = b       # only where `a` was false
-            if not t:
-                t = c
+            if not t: t = b     # only where `a` was false
+            if not t: t = c
 
-        Everything but the last statement is appended to *ctx*, and the last is
-        returned, so a caller with one statement slot -- an assignment whose
-        whole right-hand side this is -- has one to give back.
+        All but the last statement are appended to *ctx* and the last returned,
+        so a caller with one statement slot has one to give back.
         """
         stmts: list[Stmt] = [self._bind(target, e.args[0], ctx, e.loc)]
         for arg in e.args[1:]:
@@ -539,9 +465,9 @@ class _ANFInstance(DefaultTransformVisitor):
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
         if isinstance(stmt.target, NamedId) and stmt.type is None:
             # A lowered right-hand side assigns this name directly rather than a
-            # temporary this statement then copies.  Skipped where the
-            # assignment carries a type annotation, which has one place to sit
-            # and several branches to sit in; the generic path keeps it.
+            # temporary this statement copies.  Not where the assignment carries
+            # a type annotation, which has one place to sit and several branches
+            # to sit in.
             return self._bind(stmt.target, stmt.expr, ctx, stmt.loc), ctx
         expr = self._in_place(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
@@ -567,8 +493,8 @@ class _ANFInstance(DefaultTransformVisitor):
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         if not needs_slot(stmt.cond):
-            # Nothing in it needs a place, so it stays an expression -- and
-            # stays sealed, since no slot runs once per iteration.
+            # nothing in it needs a place, so it stays an expression -- and
+            # sealed, since no slot runs once per iteration
             cond = self._in_place(stmt.cond, ctx.sealed())
             body, _ = self._visit_block(stmt.body, ctx)
             return WhileStmt(cond, body, stmt.loc), ctx
@@ -576,16 +502,13 @@ class _ANFInstance(DefaultTransformVisitor):
 
     def _rotate(self, stmt: WhileStmt, ctx: _Ctx) -> WhileStmt:
         """*stmt* with its condition evaluated through a name, once before the
-        loop and once at the end of the body.
+        loop and once at the end of the body -- FPy's own order, so each copy
+        sits in a slot running as often as the condition does.
 
-        That is FPy's own order -- condition, body, condition -- so each copy
-        sits in a slot that runs exactly as often as the condition does, and the
-        temporaries it needs go there.  The two copies share no nodes:
-        :meth:`_in_place` rebuilds every one, so neither needs cloning.
-
-        A body that always returns gets no second copy: the loop runs at most
-        one iteration, so the condition is evaluated exactly once, and code after
-        the ``return`` is unreachable -- which the syntax checker rejects.
+        The copies share no nodes: :meth:`_in_place` rebuilds every one, so
+        neither needs cloning.  A body that always returns gets no second copy --
+        the loop runs at most one iteration, and a statement after the ``return``
+        is unreachable, which the syntax checker rejects.
         """
         c = self.gensym.fresh('c')
         ctx.stmts.append(
@@ -607,30 +530,21 @@ class _ANFInstance(DefaultTransformVisitor):
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         """A ``with`` statement, whose two halves round differently.
 
-        **E-Context** evaluates the context expression under ``REAL`` rather
-        than the active context -- a constructor's arguments are precisions and
-        bitwidths, which rounding would corrupt.  So its temporaries cannot go
-        in the enclosing block, which rounds under something else; they go in a
-        ``with fp.REAL:`` block of their own, immediately before.  FPy scopes the
-        context but not the store, so the names are visible where the original
-        expression reads them.
+        **E-Context** evaluates the context expression under ``REAL``, not the
+        active context, so its temporaries go in a ``with fp.REAL:`` block of
+        their own rather than the enclosing one.  FPy scopes the context but not
+        the store, so the names stay visible.
 
         .. code-block:: python
 
-            # before
-            with fp.IEEEContext(ES + 2, NB + 2):
-                <body>
-
-            # after
-            with fp.REAL:
+            with fp.REAL:               # `with fp.IEEEContext(ES + 2, NB + 2):`
                 t = ES + 2
                 t1 = NB + 2
             with fp.IEEEContext(t, t1):
                 <body>
 
         The body needs no such care: :meth:`_visit_block` gives it its own
-        buffer, which is what keeps a hoisted operand under the rounding it was
-        written under.
+        buffer.
         """
         under_real = _Ctx(stmts=[])
         context = self._in_place(stmt.ctx, under_real)
@@ -658,25 +572,19 @@ class ANF:
     Transformation pass rewriting a function into administrative normal form.
 
     Every proper subexpression of a statement becomes an atom -- a name, a
-    literal or a nullary constant -- bound by a fresh assignment in a statement
-    slot that runs exactly when the expression did.  See the module docstring for
-    the positions it seals and the aggregates it leaves alone.
+    literal or a nullary constant -- bound in a statement slot that runs exactly
+    when the expression did.  See the module docstring.
     """
 
     @staticmethod
     def refusals(func: FuncDef) -> list[tuple[Expr, str]]:
         """Every sealed position of `func` holding something that needs a place.
 
-        The residue of this pass: a position it could not give a statement slot
-        to, holding an expression :func:`needs_slot` admits.  Reported rather
-        than refused, because whether it matters is the *backend's* question and
-        the answer differs by position -- the cpp emitter gives a
-        comprehension's element the loop body it generates, and gives a
-        ``while`` condition nothing at all.
-
-        An empty list is the strong form of the invariant: no expression needing
-        a place sits where there is none.  One entry per sealed position, not one
-        per offending node, since :func:`needs_slot` already recurses.
+        Reported rather than refused: whether it matters is the backend's
+        question, and the answer differs by position -- the cpp emitter gives a
+        comprehension's element the loop body it generates, and a ``while``
+        condition nothing.  One entry per position, since :func:`needs_slot`
+        already recurses.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')

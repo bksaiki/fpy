@@ -575,7 +575,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         if c is not None:
             return (None, c)
 
-        # through a name too, so `t = i + 32; xs[i:t]` sizes like `xs[i:i+32]`
+        # through a name: `t = i + 32; xs[i:t]` sizes like `xs[i:i+32]`
         e = self.def_use.defining_expr(e)
         match e:
             case Add() if self._is_exact(e):
@@ -602,16 +602,22 @@ class _ArraySizeInferInstance(DefaultVisitor):
     ) -> int | None:
         """``hi - lo`` as a compile-time constant, or ``None``.
 
-        Constant exactly when the two affine forms share a base — both
-        pure constants, or the same symbolic base (so it cancels).
+        Constant exactly when the two affine forms share a base — both pure
+        constants, or one variable with one *definition*.  Definitions, not
+        names: :meth:`_affine` follows a name to what it was assigned, so the two
+        bases may come from different program points, where a structural
+        comparison would match ``a + b`` against a later ``a + b`` that reads a
+        reassigned ``a``.
         """
         (lbase, loff), (hbase, hoff) = lo, hi
-        same_base = (
-            (lbase is None and hbase is None)
-            or (lbase is not None and hbase is not None
-                and lbase.is_equiv(hbase))
-        )
-        return hoff - loff if same_base else None
+        if lbase is None and hbase is None:
+            return hoff - loff
+        if not (isinstance(lbase, Var) and isinstance(hbase, Var)):
+            return None
+        ldef = self.def_use.find_def_from_use(lbase)
+        if ldef is not self.def_use.find_def_from_use(hbase):
+            return None
+        return hoff - loff
 
     def _const_int(self, e: Expr) -> int | None:
         """The integer value *e* statically evaluates to, or ``None``.
@@ -623,8 +629,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         val = self._get_eval(e)
         if isinstance(val, Float | Fraction):
             return int(INTEGER.round(val))
-        # A size query bound to a name is still that query; see
-        # `DefineUseAnalysis.defining_expr`.
+        # through a name: a size query bound to one is still that query
         e = self.def_use.defining_expr(e)
         match e:
             case Len():
@@ -854,7 +859,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _len_size(self, e: Expr) -> ArraySize:
         """The size ``e`` constrains: the list's size for ``len(xs)``, the
         constant for an integer expression, else ``None`` (not relatable)."""
-        # through a name as well, so `n = len(xs); assert n == 4` pins what
+        # through a name: `n = len(xs); assert n == 4` pins what
         # `assert len(xs) == 4` does
         src = self.def_use.defining_expr(e)
         if isinstance(src, Len):

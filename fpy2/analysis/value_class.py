@@ -374,8 +374,7 @@ class _ValueClassInstance(DefaultVisitor):
             case Compare():
                 return self._implied_compare(cond, truth)
             case Var():
-                # A test bound to a name says what the test says; see
-                # `DefineUseAnalysis.defining_expr`.
+                # through a name: a test bound to one still says what it tests
                 src = self.def_use.defining_expr(cond)
                 return [] if src is cond else self._implied(src, truth)
             case _:

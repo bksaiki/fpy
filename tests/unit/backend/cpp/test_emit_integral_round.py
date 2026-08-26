@@ -20,7 +20,7 @@ import fpy2 as fp
 from fpy2.backend.cpp import CppCompiler
 from fpy2.backend.cpp.compiler import CppCompileError
 from fpy2.number import MPBFixedContext
-from fpy2.types import RealType
+from fpy2.types import BoolType, RealType
 
 RM = fp.RoundingMode
 ASSERT = fp.OverflowMode.ASSERT
@@ -382,12 +382,45 @@ class TestScaleByPowerOfTwo:
         assert 'std::ldexp' in out
         assert 'std::pow' not in out
 
-    def test_both_operand_orders(self):
-        """Multiplication commutes, so the scale may sit on either side.
+    def test_the_exponent_is_not_re_read_at_the_product(self):
+        """The scale must not reach its exponent through a name: a backend gives
+        two definitions of one source name a single C++ variable, so reading it
+        at the product reads whatever a later branch put there."""
 
-        Two ``ldexp`` calls, not one: the product reaches its power through the
-        name statement form bound it to, so that binding is left computed and
-        unused -- see :meth:`test_a_product_of_two_powers`."""
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real, m: fp.Real, c: bool) -> fp.Real:
+            with fp.FP64:
+                k = n
+                p = 2 ** k
+                if c:
+                    k = m
+                return x * p
+
+        out = CppCompiler().compile(f, arg_types=[
+            RealType(fp.FP64), RealType(fp.SINT8), RealType(fp.SINT8),
+            BoolType(),
+        ])
+        assert 'std::ldexp(x' not in out, out
+
+    def test_a_compound_exponent_in_a_while_condition(self):
+        """`_ldexp_call` binds a compound exponent, so the condition needs a
+        statement -- which the emitter has nowhere to put.  Statement form has
+        to rotate the loop, and refuses at codegen if it did not."""
+
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while (2 ** (n + 1)) > 1.0:
+                    y = y - 1.0
+                return y
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])
+        assert 'while' in out
+
+    def test_both_operand_orders(self):
+        """Multiplication commutes, so the scale may sit on either side."""
         @fp.fpy
         def left(x: fp.Real, n: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -401,17 +434,12 @@ class TestScaleByPowerOfTwo:
         tys = [RealType(fp.FP64), RealType(fp.SINT8)]
         for f in (left, right):
             out = CppCompiler().compile(f, arg_types=tys)
-            assert out.count('std::ldexp') == 2, f.name
+            assert out.count('std::ldexp') == 1, f.name
             assert 'std::pow' not in out, f.name
 
     def test_a_product_of_two_powers(self):
         """Both halves are exact: the multiply peephole takes the outer scale
-        and the bare-power rule takes the inner one.
-
-        Three ``ldexp`` calls, not two: the outer scale reaches its power
-        through the name the inner one was bound to, so that binding is left
-        computed and unused for the C++ compiler to drop.  Removing it needs the
-        peephole to move upstream, where it could rewrite the binding too."""
+        and the bare-power rule takes the inner one."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -419,11 +447,7 @@ class TestScaleByPowerOfTwo:
 
         out = CppCompiler().compile(
             f, arg_types=[RealType(fp.SINT8), RealType(fp.SINT8)])
-        scales = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
-        assert len(scales) == 3
-        # the multiply peephole fired: one scale takes the inner power as its
-        # value rather than the two being multiplied
-        assert any('std::ldexp(1,' not in ln for ln in scales), scales
+        assert out.count('std::ldexp') == 2
         assert 'std::pow' not in out
 
     def test_declines_when_the_power_itself_is_rounded(self):

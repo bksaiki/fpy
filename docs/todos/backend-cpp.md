@@ -26,6 +26,10 @@ Everything C++-specific lives here. Analyses this backend depends on but does
 not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
+The emitter's input is in **statement form**: `fpy2.transform.ANF` runs last in
+`specialize()`, so every operand is a name, a literal or a nullary constant, and
+the emitter never invents a place for one.  Only aggregates are left nested.
+
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
 compile and must behave as the FPy interpreter does wherever FPy's semantics are
 defined.* A refusal is always acceptable — the compiler may be limited — so a
@@ -34,8 +38,7 @@ shape it cannot handle should raise, never miscompile.
 The qualifier is load-bearing. FPy has undefined behavior, and the interpreter's
 checks are not the contract: it raises on an out-of-range subscript and on a
 mismatched-length `zip`, but neither is promised, so the backend owes nothing
-there. One shape does violate the criterion — an operand whose emission is not
-pure escapes the construct guarding it; see [Open issues](#open-issues).
+there. Nothing currently violates the criterion as stated.
 
 **Storage *contains* a format; it does not equal it.** `choose_storage` picks the
 smallest ladder type holding a format, which is right for storing a value and
@@ -171,6 +174,7 @@ top.
 ```
 Module
   → Specialize                 # one FuncDef per (callee, ctx, arg formats)
+  → ANF                        # statement form; every operand is an atom
   → DefineUse
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
@@ -198,65 +202,33 @@ code. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
-### An operand emitting statements escapes its guard
+### Settled: an operand emitting statements escapes its guard
 
-**A defect, not a limitation — the only one in this list.** `_emit_guarded_block`
-and `_visit_if_expr` interpolate an expression visitor into an f-string, so
-Python evaluates the visitor first and whatever it wrote through
-`writer.add_line` lands *before* the construct being guarded. Any operand whose
-emission is not pure — `_bind_operand`, a rounding assertion, a reduction's loop
-— therefore leaves the scope it belongs to. Three shapes, each verified by
-compiling and running the output:
+**Was a defect; now impossible by construction.** `_emit_guarded_block` and
+`_visit_if_expr` interpolate an expression visitor into an f-string, so anything
+it wrote through `writer.add_line` landed *before* the construct being guarded.
+Three shapes, each verified by compiling and running the output:
 
-**A `while` condition is evaluated once.** The loop then tests a stale name.
+- **a `while` condition evaluated once**, so the loop tested a stale name —
+  `while max([y, 0.0]) > 0.0` did not terminate where the interpreter returned;
+- **a ternary arm's assertion on the untaken path** —
+  `0.0 if x > 1e30 else fp.cast(x)` aborted where the interpreter returned;
+- **an `and` / `or` tail past the short circuit** — same assertion, same abort.
 
-```python
-y = x
-while max([y, 0.0]) > 0.0:
-    y = y - 1.0
-return y
-```
-```c++
-double y = x;
-auto&& _tmp1 = std::array<double, 2>{{y, static_cast<double>(0)}};
-double _tmp2 = _tmp1[0];
-for (size_t _tmp3 = 1; _tmp3 < _tmp1.size(); ++_tmp3) { /* … max … */ }
-while ((_tmp2 > static_cast<double>(0))) { y = (y - static_cast<double>(1)); }
-```
+All three are in territory where FPy's semantics *are* defined, unlike the
+subscript case below.
 
-`f(3.0)` returns `+0.0` in the interpreter; the binary does not terminate.
+Closed two ways. `fpy2.transform.ANF` lowers each position before codegen, so
+none reaches the emitter — and `_emit_inline` refuses if one ever does, comparing
+the writer's line count around the emission rather than approximating from the
+syntax. Unreachable *and* impossible: the lowering fixes real programs, the
+tripwire survives a future change to the pass.
+`tests/unit/backend/cpp/test_statement_form.py` runs all three witnesses and
+checks the refusal with `ANF.apply` monkeypatched to the identity.
 
-**A ternary arm's assertion runs on the untaken path.** With
-`y = 0.0 if x > 1e30 else fp.cast(x)` under `FP32`, the cast's
-losslessness assertion is hoisted out of the conditional:
-
-```c++
-float _tmp1 = static_cast<float>(x);
-assert(x == _tmp1 || (std::isnan(x) && std::isnan(_tmp1)));
-float y = ((x > 1e+30) ? static_cast<float>(0) : _tmp1);
-```
-
-`f(1e300)` returns `+0.0` in the interpreter; the binary aborts.
-
-**An `and` / `or` tail is evaluated past the short circuit.**
-`x > 1e30 or fp.cast(x) > 0.0` hoists the same assertion ahead of the `||`.
-`f(1e300)` is `True` in the interpreter; the binary aborts.
-
-All three are in territory where FPy's semantics *are* defined — loop
-termination, a branch not taken, a short circuit — so unlike the subscript case
-below, the criterion at the top of this document is violated.
-
-**The fix is a refusal, and the predicate already exists.** `_is_pure_cond` is
-exactly "does this expression emit statements", but it is wired only to
-`_flattenable`'s `else if` decision. Gating `while` conditions, `IfExpr` arms and
-boolean tails on it turns three miscompiles into refusals. Worth sizing first:
-the refusal rejects programs that compile today, so measure how many corpus
-functions it newly turns away.
-
-Lowering these positions would also make the shapes unreachable — see
-[backend-independence.md](backend-independence.md) §1, where they are class 3 —
-but unreachable is not impossible: the emitter would still hold the shape,
-guarded only by an upstream pass having run.
+An `if` / `if1` condition is deliberately not gated: it runs once, just before
+the branch, so its statements belong in the enclosing block. That is why
+`_emit_guarded_block` now takes its condition already emitted.
 
 ### Unchecked subscripts are not a bug
 

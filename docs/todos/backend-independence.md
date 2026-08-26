@@ -40,173 +40,54 @@ methods by what they *do* (line counts by method, at `be09670`, 3815 lines):
 About 1900 lines are decisions and about 775 are printing. That gap is this
 roadmap.
 
-## 1. Statement form — the enabling change
+## 1. Statement form — **done**
 
-The emitter calls `_bind_operand` 23 times because FPy expressions nest and C++
-needs a *place*. A pass that binds every non-atomic subexpression to a fresh name
-in a statement slot — ANF / three-address form — removes the need for it.
+`fpy2/transform/anf.py`, exposed as `fpy2.strategies.to_anf`, and run
+unconditionally as the last step of `CppCompiler.specialize()`.
 
-**Why this is backend-independent.** The pass is total and syntactic: no target
-fact reaches it, and none has to. It does not predict where C++ will want a
-temporary; it makes the situation unreachable, because every operand the emitter
-sees is already a `Var`. That is the shape of every normalization here —
-`ZipElim` does not know how a backend materializes a zip, it removes the zip;
-`FreeVarElim` does not know how one represents a closure, it removes the free
-variables. The pass shrinks the input language the backend must handle.
+**Why it is backend-independent.** The pass takes no target fact and needs none.
+It does not predict where C++ will want a temporary; it makes the situation
+unreachable, because every operand the emitter sees is already a `Var`. That is
+the shape of every normalization here — `ZipElim` removes the zip rather than
+knowing how a backend materializes one. Backend-*independent* is not
+backend-*neutral*, though: FPCore is an expression language where this would emit
+a `let*` chain for nothing, so it is a normalization the C++ backend opts into.
 
-Backend-*independent* is not backend-*neutral*: FPCore is an expression language,
-where this would emit a `let*` chain for nothing. Like `ZipElim` and `RoundElim`,
-it is a normalization the C++ backend opts into.
+**Where a temporary goes.** In a statement slot executed *exactly as often, and
+under exactly the same condition, as the expression it names* — not the nearest
+enclosing statement, which is wrong for a `while` condition and a ternary arm.
+Positions that fail that test are sealed; two of them get a lowering that
+*creates* the slot (rotation for `while`, `IfStmt` for a ternary), and
+`ANF.refusals` reports what is left. Over the 230-function corpus the residue is
+entirely comprehensions, and **zero** in the three positions the emitter cannot
+slot.
 
-### Where a temporary goes
+### What it settled
 
-Not "the nearest enclosing statement" — that is wrong for a `while` condition
-(evaluated *n* times where the slot before the loop runs once) and for a ternary
-arm (conditional where the slot is not). The rule is that a temporary for `e`
-goes in a statement slot executed **exactly as often, and under exactly the same
-condition, as `e` itself**. That partitions the expression positions:
+- **Naming materializes.** A pass that would have *deleted* an expression can
+  only reach inside the name once it has one — `RoundElim` collapsing
+  `fp.round(0.0)` to a literal must run first, or it leaves a `uint8_t` binding
+  behind. So ANF goes after everything that removes or folds, and nothing that
+  removes or folds runs after it. Measured: earlier placement is a strict
+  superset of failures.
+- **A normalization turns every downstream syntactic match into a def-use walk.**
+  `DefineUseAnalysis.defining_expr` is that walk; five matchers needed it
+  (`ValueClassInfer._implied`, `ArraySizeInfer._const_int` / `_len_size` /
+  `_affine`, the emitter's pow2 peephole). None was an ANF regression — each
+  already failed on hand-written code like `n = len(xs); fp.empty(n)`, so the
+  fix is an improvement independent of the pass.
+- **Lower where it pays, not for uniformity.** A ternary lowers whenever an arm
+  is not an atom, because an `IfStmt` restructures for free and buys reach no
+  other pass provides. A bool chain lowers only where an operand needs a place:
+  lowering a pure one loses the `And` that `ValueClassInfer` reads to drop a
+  runtime guard. A `while` rotation duplicates its condition, so it too is gated.
+- **Scalars only, by type.** A name holding a list is a second *place*, which
+  decides whether a list keeps its shared handle. Chains are named at their
+  outermost scalar, so no aggregate name is ever created. Widening this is the
+  remaining follow-on, and §9's measurement shows the emitter deletions below
+  wait on it.
 
-| class | positions | placement |
-|---|---|---|
-| 1. the slot is the statement | `Assign.expr`, `ReturnStmt.expr`, `AssertStmt.test`, `IndexedAssign` index and value, `ForStmt.iterable`, `ContextStmt`, `EffectStmt`, `IfStmt.cond`, `If1Stmt.cond` | before that statement |
-| 2. the slot is a body | anything inside an `if` / `else` / `while` / `for` body | class 1 against its own statement — recursion, no special case |
-| 3. no correct slot exists | `WhileStmt.cond`, `IfExpr.ift` / `.iff`, `And` / `Or` non-first operands, `ListComp.elt` and dependent clause iterables | — |
-
-Total on 1 and 2, refusing on 3 for v1 — the shape `CompToLoop.refusals()` and
-`iter_elim`'s statement-path / expression-path split already have. The emitter has
-met this too: `_is_pure_cond` *is* "does this expression need statements before
-it", and `_flattenable` uses it to decline `else if` when the answer is yes. That
-predicate is the one to lift.
-
-### Lowering class 3, and why the refusal comes first
-
-Class 3 is lowerable — the lowering *creates* the slot that was missing, so the
-positions cease to exist rather than needing a residue:
-
-| position | lowering |
-|---|---|
-| `WhileStmt.cond` | `c = <cond>; while c: <body>; c = <cond>` |
-| `IfExpr.ift` / `.iff` | `IfStmt` plus a phi |
-| `And` / `Or` tails | the same, one `IfStmt` per short circuit |
-| `ListComp.elt`, dependent clause iterables | `CompToLoop` |
-
-The `while` form is the direct reading of the loop: evaluate the condition, run
-the body, evaluate it again. `c` is then an ordinary loop-carried variable the phi
-machinery already handles, and the temporaries for `<cond>` sit in a slot that runs
-exactly as often as FPy evaluates it — once before the loop, once per iteration.
-(FPy has no `break`, so the `while True: … if not c: break` shape is unavailable
-anyway; it would not be preferable if it were.) The cost is that the condition's
-emitted code appears twice, so a `max(xs)` in a `while` condition emits its
-reduction loop twice.
-
-The lowerings compose: taking `IfExpr` first *gives* a comprehension in a ternary
-arm the statement slot `CompToLoop` says it lacks.
-
-**But lowering is not the fix.** Three positions in class 3 are live miscompiles
-today, because `_emit_guarded_block` and `_visit_if_expr` interpolate a
-statement-emitting visitor into an f-string, so whatever it emitted lands *before*
-the construct. Verified by running the binaries: a `while` condition needing a
-temporary hangs where the interpreter returns (the loop tests a value computed
-once); a ternary arm and an `and` / `or` tail each run the untaken path's
-assertion and abort where the interpreter returns. All three are in *defined* FPy
-semantics — loop termination, an untaken branch — so they violate the criterion in
-[backend-cpp.md](backend-cpp.md). They belong in that document's open issues;
-noted here because they decide the order of this work.
-
-Lowering makes them *unreachable*, not impossible: the emitter still contains the
-shape, guarded only by the fact that an earlier pass ran. So a future change
-emitting a statement from a new expression path reopens all three with no test
-failing, and `optimize=False` keeps them regardless.
-
-Hence: **refuse first, lower second.** Extending `_is_pure_cond` to gate `while`
-conditions, ternary arms and boolean tails is small, testable today, and makes the
-defect impossible rather than unreachable — the net that keeps the emitter honest
-once ANF is upstream of it. Then the lowering makes the refusal unreachable for
-real programs.
-
-One cost to size before the refusal lands: it rejects programs that compile today,
-including ones that appear to work. Measure how many corpus functions it newly
-rejects — that is the visible price of trading a miscompile for an error.
-
-### What it actually buys
-
-The 47 temporary sites split by *what they name*, and only one half is this
-pass's:
-
-- **`_bind_operand`, 23 sites, names an FPy operand** — a C++ spelling mentions it
-  twice, or it must be evaluated once (`_emit_ieee_min_max`, `_emit_sum`,
-  `_ldexp_call`, `_convert_storage`, `_adapt_arg`, the round guards). ANF removes
-  essentially all of them, along with most of `_emit_at`'s build-at-`want`
-  machinery and `_storage_or_none`.
-- **`_fresh_temp`, 24 sites, names C++ scaffolding no FPy expression corresponds
-  to** — loop indices (`_emit_range` ×3, `_rebuild_list`, `_open_fill_loop` ×2,
-  `_open_comp_loop` ×2), output buffers, accumulators (`_emit_amin_amax` ×2,
-  `_emit_any_all`), the saved `fenv` mode, a rounded value held for its
-  assertion. ANF removes **none** of them.
-
-So **§1 retires `_bind_operand`; §4 and §7 retire `_fresh_temp`**, because those
-temporaries become ordinary `Assign` statements once the lowering that invented
-them moves upstream. Complementary, and neither substitutes for the other.
-
-Two further payoffs: storage inference gets a def for every value rather than only
-for declared names, which is what §2's `store(e)` rule is stated over; and this is
-the statement slot `comp_to_loop.py` and `round_insert.py` say they lack, named in
-both module docstrings as the reason a comprehension is unschedulable.
-
-### Blocking question
-
-**Scalars only, or aggregates too?** Naming a list-valued expression creates a def
-that `same_object_defs` unions with nothing — a plain rebind is not a coalescing
-edge — so `t = xs` gets its own class, possibly narrower than `xs`'s, and a
-narrower class for a shared list is `_refuse_unsharing`. Worse, `_shares_storage`
-counts that temporary as another place holding the region unless
-`binds_by_reference` discounts it, so more temporaries mean more apparent sharing,
-more boxing, and under `STRICT` more *compile failures* rather than slower code.
-Scalars only for v1 is the safe scope, and it still captures every
-`_bind_operand` in the round guards and op dispatch.
-
-**~~What is `optimize=False` for?~~ Settled: ANF runs unconditionally.** Doing as
-much as possible in the middle end is the standard division of labour, and gating
-was worse on both counts — the emitter would keep both paths, so none of the
-deletions above could happen, and the class-3 miscompiles would stay live under
-`optimize=False`. The cost is that the flag no longer means "compiles the surface
-AST verbatim", only that the optimizing transforms are skipped.
-
-### Design questions, with a leaning
-
-- **Proper subexpressions only.** Naming a statement's top-level expression as
-  well turns every `elif` ladder into nested `if`s, since `_flattenable` declines
-  whenever a condition needs statements and `_PURE_COND_OPS` is exactly
-  `Var` / literals / `Compare` / `Not` / `And` / `Or` / the FP predicates. Naming
-  only proper subexpressions leaves `if x < y:` alone; the residual regression is
-  then just an `elif` whose condition contains a call or arithmetic.
-- **Literals stay atomic** for v1 — but this is the one place where *more* naming
-  buys correctness rather than costing it. `_call_arg` and `_literal_cpp_type`
-  exist because a literal's token type differs from its storage, and a declared
-  temporary would retire that class by construction. Revisit after v1.
-- **Never hoist across a `ContextStmt`.** Crossing a `with` changes the active
-  context and so the rounding. `round_insert.py` met this and binds under the
-  *original* scope; treating it as class 3 makes it structurally impossible for
-  the pass to change a value.
-- **Runs last, inside `specialize()`.** ANF destroys the shapes `ReduceFusion`,
-  `ZipElim` and `EnumerateElim` match on: `any([...])` becomes `t = [...]; any(t)`
-  and can never fuse. And it belongs in `specialize()` rather than `_emit`, or
-  `signature()` and `compile_module()` analyze different ASTs — which
-  `_analyze_all`'s docstring records as having been a real ABI bug once.
-- **An access path over a `Var` is atomic.** The emitter folds an `Fst` / `Snd`
-  chain into one `std::get`; naming each level breaks the fold.
-  `iter_elim.is_access_path` is already the predicate.
-
-Settled, so not to relitigate: names come from `Gensym(reserved=def_use.names())`,
-the idiom in nine transforms. And validation is this pass's one luxury — the
-interpreter runs both forms, so it is checkable without the backend at all.
-Nothing else in this roadmap is.
-
-Sequencing note: §2's line counts are taken against today's def set, which this
-pass changes. Design §2's lattice interface before ANF lands, or expect to
-re-measure.
-
-The phased implementation plan is [anf.md](anf.md).
+The three miscompiles this closed are in [backend-cpp.md](backend-cpp.md).
 
 ## 2. Storage inference
 

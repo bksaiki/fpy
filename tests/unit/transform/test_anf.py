@@ -903,6 +903,19 @@ class TestBoolChainLowering:
         assert _count(out, If1Stmt) == 2       # one before the loop, one inside
         assert repr(f(3.0)) == repr(_anf(f)(3.0))
 
+    def test_the_accumulator_never_clobbers_an_operand(self):
+        """A chain assigns its target before the later operands run, so one
+        that *reads* the target must not accumulate into it."""
+
+        @fp.fpy
+        def f(b: fp.Real, c: bool, d: bool) -> bool:
+            x = c
+            x = (b > 0.0) or all([x, d])
+            return x
+
+        for args in ((-1.0, True, True), (1.0, False, False), (-1.0, False, True)):
+            assert repr(f(*args)) == repr(_anf(f)(*args)), args
+
     def test_idempotent(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:

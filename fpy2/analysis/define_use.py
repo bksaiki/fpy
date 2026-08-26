@@ -95,23 +95,18 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
         """The expression *e*'s value is computed by, following a name back to
         what it was assigned.  *e* itself where there is no such expression.
 
-        A syntactic pattern says the same thing when it is bound to a name
-        first, but a matcher that dispatches on node kind sees only the ``Var``:
-        ``len(xs)`` stops folding to a static size, ``not isnan(v)`` stops
-        refining a value class, ``2 ** n`` stops becoming an ``ldexp``.  This
-        lets such a matcher ask its question once and get the same answer
-        either way.
-
-        Stops at anything that is not a plain assignment to a name: a phi has no
+        For a matcher that dispatches on node kind: ``len(xs)`` bound to a name
+        first says the same thing, but reaches the matcher as a ``Var``.  Stops
+        at anything that is not a plain assignment to a name -- a phi has no
         single defining expression, and a parameter, a loop target and an
-        ``xs[i] = e`` are not expressions at all.
+        ``xs[i] = e`` are not expressions.
 
-        Sound because a *definition*, not a name, is what identifies a value.
-        The ``Var`` nodes in the returned expression sit at the assignment, so
-        resolving one of them gives the definition reaching *there* -- which is
-        why ``t = isnan(v); v = 3.0; ... t`` still speaks about the first ``v``.
-        A consumer that resolves a variable by name rather than through this
-        analysis does not get that, and must not use this.
+        The result belongs to the *assignment*, not the use site.  Read it: its
+        ``Var`` nodes resolve to the definitions reaching the assignment, which
+        is what makes a fact derived from it correct.  Do **not** re-emit it or
+        compare it structurally against a node from elsewhere -- a backend may
+        give two definitions one variable, so the same syntax can name different
+        values at two program points.
         """
         seen: set[int] = set()
         while isinstance(e, Var) and id(e) not in seen:

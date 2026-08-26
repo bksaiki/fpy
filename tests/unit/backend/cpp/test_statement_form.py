@@ -1,19 +1,14 @@
 """The three positions a statement must never escape from, and the net.
 
-A ``while`` condition, a ternary arm and a short-circuited operand are each
-evaluated conditionally or repeatedly while the line they sit on is not, so an
-operand needing a statement of its own would have it run where the operand does
-not.  All three were live miscompiles -- a loop testing a value computed once,
-and two assertions firing on a path FPy never takes -- recorded in
-``docs/todos/backend-cpp.md``.
+A ``while`` condition, a ternary arm and a short-circuited operand run
+conditionally or repeatedly while the line they sit on does not, so an operand
+needing a statement of its own would have it run where the operand does not.
+Each was a miscompile -- a loop testing a value computed once, and two
+assertions firing on a path FPy never takes.
 
-:class:`fpy2.transform.ANF` lowers all three before codegen, so these programs
-now compile and *run*.  The runs are the point: each witness is one the emitter
-got wrong by hanging or aborting, which no string comparison would have caught.
-
-:class:`TestTheNet` checks the emitter refuses rather than miscompiles if a
-program ever reaches it un-normalized -- the guarantee that survives a future
-change to the pass.
+The programs are **run**, not just compared: a hang and an abort are what these
+were, and no string comparison catches either.  :class:`TestTheNet` covers the
+other direction -- an un-normalized program is refused rather than miscompiled.
 """
 
 import shutil
@@ -73,8 +68,8 @@ class TestTheWitnesses:
     """Each ran wrong before statement form; each runs right now."""
 
     def test_a_while_condition_is_re_evaluated(self):
-        """The reduction used to be hoisted out, so the loop tested a value
-        computed once and never terminated."""
+        """Hoisting the reduction out leaves the loop testing a value computed
+        once, which never terminates."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -88,8 +83,8 @@ class TestTheWitnesses:
         assert repr(f(3.0)) == repr(fp.Function(f.ast, runtime=f.runtime)(3.0))
 
     def test_an_untaken_ternary_arm_does_not_assert(self):
-        """`fp.cast`'s losslessness assertion used to be hoisted out of the
-        conditional and abort for a value the taken arm never casts."""
+        """Hoisting `fp.cast`'s losslessness assertion out of the conditional
+        aborts for a value the taken arm never casts."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
