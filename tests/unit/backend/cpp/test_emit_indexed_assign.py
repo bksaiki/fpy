@@ -36,9 +36,11 @@ class TestIndexedAssign:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64))],
         )
+        # statement form reads the element into a name first; the store is
+        # still through the handle, in place
         assert (
             '(*xs)[static_cast<size_t>(i)] = '
-            '((*xs)[static_cast<size_t>(i)] * static_cast<double>(2));'
+            '(t3 * static_cast<double>(2));'
         ) in out
         # No copy temp inside the loop body.
         assert '_tmp' not in out

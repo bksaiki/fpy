@@ -435,8 +435,9 @@ class TestSealedPositions:
         assert after.iff.is_equiv(before.iff)
         assert isinstance(after.cond, Var)
 
-    def test_a_bool_chain_over_atoms_is_untouched(self):
-        """`p and q` is already in normal form."""
+    def test_a_pure_bool_chain_is_untouched(self):
+        """Nothing in it needs a place, so it stays one expression -- which is
+        what a value-class analysis reads to drop a guard."""
 
         @fp.fpy
         def f(p: bool, q: bool) -> bool:
@@ -790,13 +791,33 @@ class TestTernaryLowering:
 
 
 class TestBoolChainLowering:
-    """An operand that is not an atom makes the chain a guarded sequence."""
+    """A chain lowers where an operand after the first needs a place.
+
+    Not where every operand is an atom-or-arithmetic: a pure chain is what
+    `ValueClassInfer` reads to drop a runtime guard, and lowering it into
+    separate statements joined by a phi loses the conjunction.  See
+    `_lowers_chain`.
+    """
+
+    def test_a_pure_chain_is_left_alone(self):
+        """`not isnan(a) and not isnan(b)` must stay one expression -- it is a
+        guard a value-class analysis reads."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 or b > 0.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, If1Stmt) == 0
+        assert isinstance(_first(out, Or), Or)
 
     def test_or_guards_on_the_negated_accumulator(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> bool:
             with fp.FP64:
-                y = a > 0.0 or b > 0.0
+                y = a > 0.0 or max([b, 1.0]) > 0.0
                 return y
 
         out = ANF.apply(f.ast)
@@ -809,7 +830,7 @@ class TestBoolChainLowering:
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> bool:
             with fp.FP64:
-                y = a > 0.0 and b > 0.0
+                y = a > 0.0 and max([b, 1.0]) > 0.0
                 return y
 
         out = ANF.apply(f.ast)
@@ -824,7 +845,11 @@ class TestBoolChainLowering:
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
             with fp.FP64:
-                y = a > 0.0 and b > 0.0 and c > 0.0
+                y = (
+                    a > 0.0
+                    and max([b, 1.0]) > 0.0
+                    and max([c, 1.0]) > 0.0
+                )
                 return y
 
         out = ANF.apply(f.ast)
@@ -840,31 +865,15 @@ class TestBoolChainLowering:
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> bool:
             with fp.FP64:
-                y = a > 0.0 or b > 0.0
+                y = a > 0.0 or max([b, 1.0]) > 0.0
                 return y
 
         out = ANF.apply(f.ast)
-        targets = {
-            str(stmt.target)
-            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
-        }
-        assert targets == {'y'}
-
-    def test_a_nested_chain_shares_one_accumulator(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
-            with fp.FP64:
-                y = (a > 0.0 and b > 0.0) or c > 0.0
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, If1Stmt) == 2
-        targets = {
-            str(stmt.target)
-            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
-        }
-        assert targets == {'y'}
-        assert repr(f(1.0, -1.0, 1.0)) == repr(_anf(f)(1.0, -1.0, 1.0))
+        copies = [
+            stmt for _p, stmt in walk_stmts(out)
+            if isinstance(stmt, Assign) and isinstance(stmt.expr, Var)
+        ]
+        assert copies == []
 
     def test_short_circuit_is_preserved(self):
         """`fp.cast` raises where the value is not representable, so an eagerly
@@ -898,7 +907,7 @@ class TestBoolChainLowering:
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
             with fp.FP64:
-                y = a > 0.0 and (b > 0.0 or c > 0.0)
+                y = a > 0.0 and (max([b, 1.0]) > 0.0 or c > 0.0)
                 return y
 
         once = ANF.apply(f.ast)

@@ -383,7 +383,11 @@ class TestScaleByPowerOfTwo:
         assert 'std::pow' not in out
 
     def test_both_operand_orders(self):
-        """Multiplication commutes, so the scale may sit on either side."""
+        """Multiplication commutes, so the scale may sit on either side.
+
+        Two ``ldexp`` calls, not one: the product reaches its power through the
+        name statement form bound it to, so that binding is left computed and
+        unused -- see :meth:`test_a_product_of_two_powers`."""
         @fp.fpy
         def left(x: fp.Real, n: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -397,12 +401,17 @@ class TestScaleByPowerOfTwo:
         tys = [RealType(fp.FP64), RealType(fp.SINT8)]
         for f in (left, right):
             out = CppCompiler().compile(f, arg_types=tys)
-            assert out.count('std::ldexp') == 1, f.name
+            assert out.count('std::ldexp') == 2, f.name
             assert 'std::pow' not in out, f.name
 
     def test_a_product_of_two_powers(self):
         """Both halves are exact: the multiply peephole takes the outer scale
-        and the bare-power rule takes the inner one."""
+        and the bare-power rule takes the inner one.
+
+        Three ``ldexp`` calls, not two: the outer scale reaches its power
+        through the name the inner one was bound to, so that binding is left
+        computed and unused for the C++ compiler to drop.  Removing it needs the
+        peephole to move upstream, where it could rewrite the binding too."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -410,7 +419,11 @@ class TestScaleByPowerOfTwo:
 
         out = CppCompiler().compile(
             f, arg_types=[RealType(fp.SINT8), RealType(fp.SINT8)])
-        assert out.count('std::ldexp') == 2
+        scales = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
+        assert len(scales) == 3
+        # the multiply peephole fired: one scale takes the inner power as its
+        # value rather than the two being multiplied
+        assert any('std::ldexp(1,' not in ln for ln in scales), scales
         assert 'std::pow' not in out
 
     def test_declines_when_the_power_itself_is_rounded(self):

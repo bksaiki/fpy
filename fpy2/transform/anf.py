@@ -48,7 +48,7 @@ block runs exactly when the arm did.
         y = d
 
 A ternary is left alone only where it is already in normal form -- ``x1 if c
-else x2`` over atoms -- and a bool chain likewise.  Not for the backend's sake:
+else x2`` over atoms.  Not for the backend's sake:
 the cpp emitter spells either inline and needs no place for one.  It is that a
 sealed position is unreachable to every pass that needs a preamble.
 :class:`~fpy2.transform.RoundElim` and :class:`~fpy2.transform.RoundInsert`
@@ -469,14 +469,24 @@ class _ANFInstance(DefaultTransformVisitor):
     def _lowers_chain(self, e: 'And | Or', ctx: _Ctx) -> bool:
         """Whether *e* becomes a chain of guarded statements.
 
-        The same rule as :meth:`_lowers`: every chain but one already in normal
-        form, which for a bool chain is every operand an atom.  A degenerate
-        one-operand chain has nothing to short-circuit.
+        **Not** the same rule as :meth:`_lowers`, and the asymmetry is measured
+        rather than tidy.  Lowering a ternary buys reach that nothing else
+        provides, so it happens whenever an arm is not an atom.  Lowering a
+        *pure* chain buys nothing anyone uses and costs something real: a guard
+        like ``not isnan(a) and not isnan(b)`` is what
+        :class:`~fpy2.analysis.ValueClassInfer` reads to drop a runtime check,
+        and it reads the ``And`` -- once the conjuncts are separate statements
+        joined by a phi, the conjunction is gone and the check comes back.
+
+        So a chain lowers only where an operand after the first needs a place of
+        its own, which is the case the lowering exists for: an operand whose
+        emission is not pure must not run when the chain short-circuits past it.
+        A degenerate one-operand chain has nothing to short-circuit.
         """
         return (
             ctx.hoistable
             and len(e.args) > 1
-            and not all(isinstance(a, _ATOMIC) for a in e.args)
+            and any(needs_slot(a) for a in e.args[1:])
         )
 
     def _short_circuit(

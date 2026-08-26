@@ -102,18 +102,22 @@ Tests: equivalence, plus the `0.0 if x > 1e30 else fp.cast(x)` witness.
 
 ### 4. `And` / `Or` → a short-circuit `If1Stmt` chain
 
-The same atom rule, for the same schedulability reason — `_emit_bool_chain`
-joins with `&&` / `||` and never needs a place, so this buys the backend only
-witness 3. FPy's `and` / `or` compile to Python's `BoolOp`, so they
-short-circuit and the lowering must preserve that order.
+**Not** the atom rule, unlike a ternary — the asymmetry is measured. Lowering a
+ternary buys reach nothing else provides (phase 7 shows 0 → 2 `REAL` blocks).
+Lowering a *pure* chain buys nothing anyone uses and costs something real:
+`not isnan(a) and not isnan(b)` is what `ValueClassInfer._implied` reads to drop
+a runtime guard, and it reads the `And`. Once the conjuncts are separate
+statements joined by a phi the conjunction is gone and the guard comes back —
+three `test_class_guards` cases, measured both ways.
+
+So a chain lowers only where an operand *after the first* needs a place, which is
+the case the lowering exists for: an operand whose emission is not pure must not
+run when the chain short-circuits past it. FPy's `and` / `or` compile to Python's
+`BoolOp`, so they short-circuit and the lowering must preserve that.
 
 The guards are **flat**, not nested: once an `or`'s accumulator is true every
 later `if not t` fails, so no further operand runs, and dually for `and`. A
 nested form would indent one level per operand for nothing.
-
-Tests: equivalence, plus the `x > 1e30 or fp.cast(x) > 0.0` witness, and a
-program whose tail would assert if evaluated — which pins the order rather than
-merely the value.
 
 ### 5. Type-directed atomicity
 
@@ -248,18 +252,50 @@ from phases 3–4, measured rather than asserted.
 
 ### 8. Wire into the C++ pipeline
 
-In `CppCompiler.specialize()`, after `RoundElim` — ANF destroys the shapes
-`ReduceFusion`, `ZipElim` and `EnumerateElim` match on, so it runs last. It
-belongs in `specialize()` and not in `_emit`, or `signature()` and
-`compile_module()` analyze different ASTs, which `_analyze_all`'s docstring
-records as having been a real ABI bug once.
+**Done**, and it needed a companion change that turned out to be the larger half.
 
-The risky phase: new defs mean new storage classes, so expected-output strings
-churn and some storage choices may genuinely shift.
+The wiring is one line at the end of `CppCompiler.specialize()`, unconditional.
+Last for two reasons, and the second is the stronger: naming an expression
+**materializes** it, so a pass that would have *deleted* one can only reach
+inside the name afterwards. `RoundElim` collapses `fp.round(0.0)` to a literal;
+run ANF first and it collapses only the initializer, leaving `t0 = 0` declared as
+`uint8_t`. Measured — `ANF` before `Specialize` is a strict superset of failures
+(16 to 15). The rule: **ANF goes after everything that removes or folds, and
+nothing that removes or folds runs after it.**
 
-```
-pytest tests/unit/backend/cpp -q -n 8
-```
+`optimize=False` no longer means "the surface AST verbatim"; `CppCompiler`'s
+docstring says so.
+
+#### The companion: `DefineUseAnalysis.defining_expr`
+
+Wiring produced 15 failures, and 8 shared one cause — a syntactic
+pattern-matcher now sees a `Var`:
+
+| matcher | lost |
+|---|---|
+| `ValueClassInfer._implied` | `not isnan(v)` → no refinement |
+| `ArraySizeInfer._const_int` | `fp.empty(len(xs))` → no `std::array` |
+| `ArraySizeInfer._len_size` | `assert len(xs) == 4` → parameter not pinned |
+| `ArraySizeInfer._affine` | `xs[i:i+32]` → slice length lost |
+| emitter `_emit_scale_by_pow2` | `2 ** n * x` → no `ldexp` |
+
+**None of these was an ANF regression.** Compiled against the *unwired*
+pipeline, `n = len(xs); fp.empty(n)` already gave `std::vector` and
+`t = fp.isnan(v); if not t:` already emitted the full guard. ANF makes an
+existing fragility universal, because every program is now in the "via temp"
+form.
+
+So the fix is one helper — follow a `Var` through its reaching def to the
+expression that computes it, stopping at a phi, a parameter, a loop target or an
+`xs[i] = e`. Sound because a *definition*, not a name, identifies a value: the
+`Var` nodes in the returned expression sit at the assignment, so
+`t = isnan(v); v = 3.0; ... t` still speaks about the first `v`. Each of the five
+matchers gained one call.
+
+One wart: the emitter case leaves the named power computed and unused, because
+the peephole reads through the name but the binding is still a statement.
+Harmless (`-Werror` is only `=return-type`) and removed by moving the peephole
+upstream — §6 of the roadmap.
 
 ### 9. Delete what ANF made dead
 

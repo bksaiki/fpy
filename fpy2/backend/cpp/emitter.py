@@ -2119,6 +2119,11 @@ class CppEmitter(Visitor):
             # the context rounds this product; `ldexp` would not
             return None
         for scale, value in ((e.first, e.second), (e.second, e.first)):
+            # Through a name too: statement form binds the power before the
+            # product, and the shape is the same either way.  The binding is
+            # left behind as dead code for the C++ compiler to drop -- deleting
+            # it needs this peephole to move upstream, which is its own work.
+            scale = self.def_use.defining_expr(scale)
             if not isinstance(scale, Pow):
                 continue
             base, exp = scale.first, scale.second

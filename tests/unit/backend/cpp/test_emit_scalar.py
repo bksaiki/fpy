@@ -145,10 +145,11 @@ class TestIfExpr:
             with fp.FP64:
                 return x if x > 0 else -x
 
+        # `-x` is not an atom, so the ternary lowers to an if/else over one
+        # name rather than staying a `?:`
         out = _compile(cc, f)
-        assert (
-            'return ((x > static_cast<double>(0)) ? x : (-x));'
-        ) in out
+        assert 'if ((x > static_cast<double>(0))) {' in out
+        assert 'return t;' in out
 
     def test_branches_widen_to_unified(self, cc):
         """One branch is ``F32`` (arg), the other is ``F64`` (arg) —

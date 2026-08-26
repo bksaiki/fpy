@@ -91,6 +91,40 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
             return self.use_to_def[site]
         raise KeyError(f'no definition found for site {site}')
 
+    def defining_expr(self, e: Expr) -> Expr:
+        """The expression *e*'s value is computed by, following a name back to
+        what it was assigned.  *e* itself where there is no such expression.
+
+        A syntactic pattern says the same thing when it is bound to a name
+        first, but a matcher that dispatches on node kind sees only the ``Var``:
+        ``len(xs)`` stops folding to a static size, ``not isnan(v)`` stops
+        refining a value class, ``2 ** n`` stops becoming an ``ldexp``.  This
+        lets such a matcher ask its question once and get the same answer
+        either way.
+
+        Stops at anything that is not a plain assignment to a name: a phi has no
+        single defining expression, and a parameter, a loop target and an
+        ``xs[i] = e`` are not expressions at all.
+
+        Sound because a *definition*, not a name, is what identifies a value.
+        The ``Var`` nodes in the returned expression sit at the assignment, so
+        resolving one of them gives the definition reaching *there* -- which is
+        why ``t = isnan(v); v = 3.0; ... t`` still speaks about the first ``v``.
+        A consumer that resolves a variable by name rather than through this
+        analysis does not get that, and must not use this.
+        """
+        seen: set[int] = set()
+        while isinstance(e, Var) and id(e) not in seen:
+            seen.add(id(e))
+            d = self.use_to_def.get(e)
+            if not isinstance(d, AssignDef):
+                break
+            site = d.site
+            if not isinstance(site, Assign) or not isinstance(site.target, NamedId):
+                break
+            e = site.expr
+        return e
+
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""

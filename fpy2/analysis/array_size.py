@@ -575,6 +575,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
         if c is not None:
             return (None, c)
 
+        # through a name too, so `t = i + 32; xs[i:t]` sizes like `xs[i:i+32]`
+        e = self.def_use.defining_expr(e)
         match e:
             case Add() if self._is_exact(e):
                 c = self._const_int(e.second)
@@ -621,6 +623,9 @@ class _ArraySizeInferInstance(DefaultVisitor):
         val = self._get_eval(e)
         if isinstance(val, Float | Fraction):
             return int(INTEGER.round(val))
+        # A size query bound to a name is still that query; see
+        # `DefineUseAnalysis.defining_expr`.
+        e = self.def_use.defining_expr(e)
         match e:
             case Len():
                 bound = self.by_expr.get(e.arg)
@@ -849,8 +854,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _len_size(self, e: Expr) -> ArraySize:
         """The size ``e`` constrains: the list's size for ``len(xs)``, the
         constant for an integer expression, else ``None`` (not relatable)."""
-        if isinstance(e, Len):
-            bound = self.by_expr.get(e.arg)
+        # through a name as well, so `n = len(xs); assert n == 4` pins what
+        # `assert len(xs) == 4` does
+        src = self.def_use.defining_expr(e)
+        if isinstance(src, Len):
+            bound = self.by_expr.get(src.arg)
             return bound.size if isinstance(bound, ListSize) else None
         return self._const_int(e)
 
