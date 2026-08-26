@@ -176,7 +176,7 @@ from ..ast.fpyast import (
     WhileStmt,
     Zip,
 )
-from ..ast.visitor import DefaultTransformVisitor
+from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..types import BoolType, RealType
 from ..utils import Gensym
 from .path import sub_exprs
@@ -238,6 +238,56 @@ def needs_slot(e: Expr) -> bool:
     if not isinstance(e, _SLOT_FREE) or isinstance(e, _NEEDS_SLOT):
         return True
     return any(needs_slot(sub) for _field, _i, sub in sub_exprs(e))
+
+
+# ----------------------------------------------------------------------
+# The residue
+
+
+_SEALED_REASON = {
+    'ternary': 'a ternary arm is evaluated conditionally',
+    'chain': 'a short-circuited operand may not be evaluated',
+    'element': "a comprehension's element runs once per iteration",
+    'iterable': "a comprehension's iterable may read an earlier target",
+    'condition': 'a `while` condition is re-evaluated every iteration',
+}
+
+
+def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
+    """The sealed positions of *func* holding something that needs a place.
+
+    See :meth:`ANF.refusals`, the public entry point.
+    """
+    out: list[tuple[Expr, str]] = []
+
+    def check(e: Expr, why: str) -> None:
+        if needs_slot(e):
+            out.append((e, _SEALED_REASON[why]))
+
+    class _Residue(DefaultVisitor):
+        def _visit_if_expr(self, e: IfExpr, ctx):
+            check(e.ift, 'ternary')
+            check(e.iff, 'ternary')
+            super()._visit_if_expr(e, ctx)
+
+        def _visit_naryop(self, e: NaryOp, ctx):
+            if isinstance(e, (And, Or)):
+                for arg in e.args[1:]:
+                    check(arg, 'chain')
+            super()._visit_naryop(e, ctx)
+
+        def _visit_list_comp(self, e: ListComp, ctx):
+            check(e.elt, 'element')
+            for iterable in e.iterables:
+                check(iterable, 'iterable')
+            super()._visit_list_comp(e, ctx)
+
+        def _visit_while(self, stmt: WhileStmt, ctx):
+            check(stmt.cond, 'condition')
+            super()._visit_while(stmt, ctx)
+
+    _Residue()._visit_function(func, None)
+    return out
 
 
 @dataclasses.dataclass
@@ -568,6 +618,25 @@ class ANF:
     slot that runs exactly when the expression did.  See the module docstring for
     the positions it seals and the aggregates it leaves alone.
     """
+
+    @staticmethod
+    def refusals(func: FuncDef) -> list[tuple[Expr, str]]:
+        """Every sealed position of `func` holding something that needs a place.
+
+        The residue of this pass: a position it could not give a statement slot
+        to, holding an expression :func:`needs_slot` admits.  Reported rather
+        than refused, because whether it matters is the *backend's* question and
+        the answer differs by position -- the cpp emitter gives a
+        comprehension's element the loop body it generates, and gives a
+        ``while`` condition nothing at all.
+
+        An empty list is the strong form of the invariant: no expression needing
+        a place sits where there is none.  One entry per sealed position, not one
+        per offending node, since :func:`needs_slot` already recurses.
+        """
+        if not isinstance(func, FuncDef):
+            raise TypeError(f'expected a \'FuncDef\', got `{func}`')
+        return _list_refusals(func)
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:

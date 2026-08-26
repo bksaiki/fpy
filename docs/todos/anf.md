@@ -156,28 +156,56 @@ rule wants an explicit `static_cast`. The differential harness is what finds it.
 
 ### 6. Totality
 
-Phases 2–4 create the slots, so a class-3 subexpression can be named like any
-other. What remains is to state the invariant and check it.
+**Done.** The invariant is reported rather than enforced: `anf.refusals(func)`
+lists every sealed position holding an expression `needs_slot` admits, one entry
+per position with the reason. An empty list is the strong form — no expression
+needing a place sits where there is none. Whether a given refusal *matters* is
+the backend's question and the answer differs by position, so the pass reports
+and does not refuse.
 
-**It is not "an ANF program has no `IfExpr`".** A ternary with slot-free arms is
-left alone on purpose — no backend needs a place for it, and an `IfStmt` is
-bulkier for nothing. The invariant is uniform across all three sealed positions
-instead:
+Measured over the 230-function corpus (`tests/unit/transform/test_anf_profile.py`,
+modelled on `test_unbox_profile.py`):
 
-> No expression needing a slot sits in a position that has none, and every
-> position a lowering reaches for free is flattened.
+| | |
+|---|---|
+| functions ANF applies to | 230 / 230, no errors |
+| refusals in a ternary arm, a bool tail, or a `while` condition | **0** |
+| a comprehension's iterable | 18 |
+| a comprehension's element | 7 |
 
-The first half is what phase 10 checks from the emitter side: every `IfExpr`,
-`And` / `Or` and unrotated `while` condition is slot-free by `needs_slot`. The
-second half is why a surviving ternary or chain is over atoms and nothing looser
-— an unflattened one is a position no pass with a preamble can enter. A `while`
-condition is the exception, and deliberately: rotation duplicates it.
+The zero is the load-bearing number. Those three are exactly the positions the
+cpp emitter cannot slot — the three miscompiles in
+[backend-cpp.md](backend-cpp.md) — and phases 2–4 empty them across the whole
+corpus.
 
-Assert it over the `examples/` corpus. Expect a residue: `CompToLoop` is partial
-— it refuses a dependent-clause list — so a comprehension element can still hold
-something needing a slot. Either ANF refuses such a program or the invariant is
-stated modulo comprehensions; measure how many corpus functions are affected
-before choosing.
+The residue is entirely comprehensions, and neither half is over-conservatism:
+
+- **An iterable is a list by definition**, so hoisting it would create the
+  aggregate name phase 5 is built to avoid. Not fixable under scalars-only at
+  any price.
+- **An element runs once per iteration**, and only `CompToLoop` can give it a
+  slot.
+
+Neither is a defect. The cpp emitter gives an element the loop body it generates
+and an iterable the `for` header, so `needs_slot` is simply conservative there —
+checked: a dependent nested comprehension (`[[1.0 for _ in range(i)] for i in
+range(n)]`) compiles correctly today, with the inner bound inline in the header.
+
+**Generated programs too**, since the corpus is shallow — its residue is nothing
+nested deeper than two levels, so a lowering meeting another lowering is only
+reachable by generating it. `test_anf_property.py` draws from `ANF_PROFILE` (in
+`tests/unit/generators/profiles.py`) and checks four properties per draw: the
+pass applies, no dangerous refusal survives, it is idempotent, and the
+interpreter agrees before and after *including on which exception it raises* —
+which is what witnesses 2 and 3 actually are.
+
+The profile is deliberately skewed. On `DEFAULT_GRAMMAR` a 120-draw sample hit
+**zero** bool chains and 2 ternaries, so the first clean fuzz run proved almost
+nothing; cutting the compound productions to three per type takes that to ~42
+bool chains and ~10 ternaries. One gap remains and is not closable from here:
+the generator's loop template is `c = 0; while c < N`, whose condition is pure by
+construction, so **no draw can reach rotation**. That path rests on the corpus
+profile and the unit tests.
 
 ### 7. A scheduling operator
 

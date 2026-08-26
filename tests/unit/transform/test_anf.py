@@ -15,6 +15,9 @@ A ``while`` condition is the one sealed position with a lowering — the loop is
 rotated — so it has parts of its own: :class:`TestNeedsSlot` for the predicate
 that decides whether to rotate, and :class:`TestRotation` for the rewrite.  A
 ternary is the other, becoming an ``IfStmt``: :class:`TestTernaryLowering`.
+
+:class:`TestRefusals` covers the residue report, and
+``test_anf_profile.py`` pins how large that residue is across the corpus.
 """
 
 import fpy2 as fp
@@ -948,3 +951,78 @@ class TestSemantics:
         once = ANF.apply(f.ast)
         twice = ANF.apply(once)
         assert twice.format() == once.format()
+
+
+# ----------------------------------------------------------------------
+# 4. The residue
+
+
+class TestRefusals:
+    """What the pass reports it could not normalize."""
+
+    def test_empty_for_a_flattened_program(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = (a * b) + (a - b)
+                return y
+
+        assert ANF.refusals(ANF.apply(f.ast)) == []
+
+    def test_the_three_dangerous_positions_are_emptied(self):
+        """Each is one of the miscompiles in ``docs/todos/backend-cpp.md``, and
+        each has a lowering; after the pass none is left holding anything."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                with fp.FP32:
+                    y = x
+                    while max([y, 0.0]) > 0.0:
+                        y = y - 1.0
+                    a = 0.0 if x > 1e30 else fp.cast(x)
+                    b = 1.0 if (x > 1e30 or fp.cast(x) > 0.0) else 2.0
+                return y + a + b
+
+        assert ANF.refusals(ANF.apply(f.ast)) == []
+
+    def test_the_check_is_not_vacuous(self):
+        """The same three positions, un-normalized, are all reported."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                with fp.FP32:
+                    y = x
+                    while max([y, 0.0]) > 0.0:
+                        y = y - 1.0
+                    a = 0.0 if x > 1e30 else fp.cast(x)
+                    b = 1.0 if (x > 1e30 or fp.cast(x) > 0.0) else 2.0
+                return y + a + b
+
+        why = {reason for _e, reason in ANF.refusals(f.ast)}
+        assert why == {
+            'a `while` condition is re-evaluated every iteration',
+            'a ternary arm is evaluated conditionally',
+            'a short-circuited operand may not be evaluated',
+        }
+
+    def test_a_comprehension_element_is_reported(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [fp.round(v) for v in xs]
+
+        why = [reason for _e, reason in ANF.refusals(ANF.apply(f.ast))]
+        assert "a comprehension's element runs once per iteration" in why
+
+    def test_a_slot_free_comprehension_is_not_reported(self):
+        """Arithmetic over the target needs no place, so the element is clean
+        even though the pass does not flatten inside it."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [(v * v) + 1.0 for v in ys]
+
+        assert ANF.refusals(ANF.apply(f.ast)) == []

@@ -108,6 +108,35 @@ literal-handling paths.  Pays the ~3× draw-time overhead from
 :data:`_SLOW_REAL` in exchange for that coverage."""
 
 
+ANF_PROFILE: Grammar = DEFAULT_GRAMMAR.narrow(
+    real_prods=(
+        RealProd.INTEGER | RealProd.VAR
+        | RealProd.ADD | RealProd.IF_EXPR | RealProd.ROUND
+    ),
+    bool_prods=(
+        BoolProd.LEAVES | BoolProd.COMPARE | BoolProd.NOT | BoolProd.AND_OR
+    ),
+    list_prods=ListProd.LITERAL | ListProd.VAR,
+    tuple_prods=TupleProd.LITERAL | TupleProd.VAR,
+    stmt_prods=StmtProd.ASSIGN | StmtProd.WITH | StmtProd.IF | StmtProd.WHILE,
+    contexts=(fp.FP32, fp.FP64),
+)
+"""Exercises :class:`fpy2.transform.ANF`.
+
+Deliberately skewed, not representative: the compound productions are cut to
+three per type so that ``IF_EXPR`` and ``AND``/``OR`` -- the two this pass has a
+lowering for -- are each about a third of the draws rather than one choice in
+twenty-odd.  ``ROUND`` is the cheap source of an operand needing a statement of
+its own, which is what decides whether a position is lowered at all.  The corpus
+profile is what covers a realistic mix.
+
+Does **not** reach ``while``-condition rotation: the generator emits a
+counter-driven ``c = 0; while c < N`` template, whose condition is pure by
+construction, so no draw can produce one needing a place.  That path is covered
+by the corpus profile and the unit tests.
+"""
+
+
 __all__ = [
     'MINIMAL_PROFILE',
     'ROUND_ELIM_PROFILE',
@@ -115,4 +144,5 @@ __all__ = [
     'LOOP_HEAVY_PROFILE',
     'CONTROL_FLOW_PROFILE',
     'FRACTIONAL_PROFILE',
+    'ANF_PROFILE',
 ]
