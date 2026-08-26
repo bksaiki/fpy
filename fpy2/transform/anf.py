@@ -84,11 +84,29 @@ So the invariant is not "no ternary survives", nor textbook ANF: it is that no
 expression needing a place sits where there is none, and that every position a
 lowering reaches for free is flattened.
 
-**Scalars only.**  An expression that is, or may hold, a list or a tuple is left
-unnamed (:data:`_AGGREGATE`): naming it would give it a storage place of its own,
-and the C++ backend's storage and sharing analyses answer differently about a
-second place.  Their children are still named, so ``f(a * b)`` becomes
-``t = a * b; f(t)``.
+**Scalars only, decided by type.**  An expression is named where
+:class:`~fpy2.analysis.TypeInfer` gives it a scalar type; anything else -- a
+list, a tuple, a context, an unresolved type variable -- is left inline.  A
+scalar has no identity, so naming one loses nothing, while a name holding a list
+is a second *place*, and the sharing analysis counts places: a second one boxes
+the list, which under the cpp backend's strictest mode is a refusal rather than a
+slower program.  Widening this to aggregates is its own piece of work.
+
+The type is the whole criterion, so nesting is flattened right down to the
+aggregate boundary and no further -- a chain is named at its outermost scalar,
+which never introduces an aggregate name:
+
+.. code-block:: python
+
+    # before
+    return g(g(x)) + xss[i + 1][0]
+
+    # after
+    t = g(x)
+    t1 = g(t)
+    t2 = i + 1
+    t3 = xss[t2][0]        # the spine `xss[t2]` is a list, so it stays inline
+    return t1 + t3
 
 Idempotent: a second pass finds only atoms in the positions it names.
 """
@@ -96,7 +114,14 @@ Idempotent: a second pass finds only atoms in the positions it names.
 import dataclasses
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, Reachability, SyntaxCheck
+from ..analysis import (
+    DefineUse,
+    DefineUseAnalysis,
+    Reachability,
+    SyntaxCheck,
+    TypeInfer,
+)
+from ..analysis.type_infer import TypeAnalysis
 from ..ast.fpyast import (
     AllOf,
     AMax,
@@ -152,6 +177,7 @@ from ..ast.fpyast import (
     Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor
+from ..types import BoolType, RealType
 from ..utils import Gensym
 from .path import sub_exprs
 
@@ -161,17 +187,13 @@ _ATOMIC = (Var, ValueExpr, NullaryOp)
 A ``NullaryOp`` is a constant the active context fixes, so it has no children to
 name and naming it would buy nothing."""
 
-_AGGREGATE = (
-    ListExpr, TupleExpr, ListComp, ListSlice, Empty, Zip, Enumerate,
-    Range1, Range2, Range3, Call, Fst, Snd, ListRef, IfExpr, Attribute,
-)
-"""Expressions this pass does not name, because each is or may hold an aggregate.
+_NAMEABLE_TYPES = (RealType, BoolType)
+"""Types whose values this pass binds to a name.
 
-A ``Call`` and an ``Attribute`` because their result type is not syntactic; the
-container forms because they are one; ``Fst``/``Snd``/``ListRef`` because a
-projection can select one -- and because the cpp emitter folds an ``Fst``/``Snd``
-chain into a single ``std::get``, which naming each level would break; ``IfExpr``
-because its arms decide, and they are sealed here anyway.
+Everything else -- ``ListType``, ``TupleType``, ``ContextType``,
+``FunctionType``, and an unresolved ``VarType`` -- is left inline.  A whitelist,
+so an unresolved type is not named: naming one wrongly is the case with a
+consequence.
 """
 
 
@@ -240,14 +262,20 @@ class _ANFInstance(DefaultTransformVisitor):
 
     func: FuncDef
     gensym: Gensym
+    types: TypeAnalysis
     prefix: str
     """Base name for the temporaries this instance mints."""
 
     def __init__(
-        self, func: FuncDef, def_use: DefineUseAnalysis, prefix: str = 't',
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        types: TypeAnalysis,
+        prefix: str = 't',
     ):
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
+        self.types = types
         self.prefix = prefix
 
     def apply(self) -> FuncDef:
@@ -259,11 +287,25 @@ class _ANFInstance(DefaultTransformVisitor):
     def _visit_expr(self, e: Expr, ctx: _Ctx) -> Expr:
         """*e* rebuilt, and bound to a fresh name where that is allowed."""
         rebuilt = super()._visit_expr(e, ctx)
-        if not ctx.hoistable or isinstance(e, _ATOMIC + _AGGREGATE):
+        # `rebuilt`, not `e`: a lowered ternary or bool chain comes back as the
+        # name it accumulated into, and naming that again is a pure copy.
+        if (
+            not ctx.hoistable
+            or isinstance(rebuilt, _ATOMIC)
+            or not self._nameable(e)
+        ):
             return rebuilt
         t = self.gensym.fresh(self.prefix)
         ctx.stmts.append(Assign(t, None, rebuilt, e.loc))
         return Var(t, e.loc)
+
+    def _nameable(self, e: Expr) -> bool:
+        """Whether *e*'s value may be bound to a name -- see
+        :data:`_NAMEABLE_TYPES`.
+
+        Asked of the original node, which is what the type analysis is keyed by.
+        """
+        return isinstance(self.types.by_expr.get(e), _NAMEABLE_TYPES)
 
     def _in_place(self, e: Expr, ctx: _Ctx) -> Expr:
         """*e* rebuilt with its children named, but not named itself.
@@ -533,6 +575,7 @@ class ANF:
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
         def_use = DefineUse.analyze(func)
-        out = _ANFInstance(func, def_use).apply()
+        types = TypeInfer.check(func, def_use=def_use)
+        out = _ANFInstance(func, def_use, types).apply()
         SyntaxCheck.check(out, ignore_unknown=True)
         return out

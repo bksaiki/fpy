@@ -27,7 +27,7 @@ slot-free only when both arms are.
 
 This is `emitter._PURE_COND_OPS` lifted to the language and complemented. It is
 deliberately an *over*-approximation of "some backend may need a statement here",
-so no backend is forced into an impossible position, and phase 9's tripwire is
+so no backend is forced into an impossible position, and phase 10's tripwire is
 what verifies it was conservative enough. `while x > 0:` and `y = a if c else b`
 keep their natural shape; only the impure cases lower.
 
@@ -115,7 +115,46 @@ Tests: equivalence, plus the `x > 1e30 or fp.cast(x) > 0.0` witness, and a
 program whose tail would assert if evaluated — which pins the order rather than
 merely the value.
 
-### 5. Totality
+### 5. Type-directed atomicity
+
+Replace the syntactic exclusion list with a type test. `_AGGREGATE` was a
+hand-written 16-entry blacklist standing in for a question `TypeInfer` answers:
+it excluded `g(g(x))` even when `g` returns a `Real`, and `xss[i][0]` even though
+its result is one. `TypeAnalysis.by_expr` gives the real answer, queried on the
+original node before it is rebuilt.
+
+The rule: name an expression iff its type is `RealType` or `BoolType`. A
+whitelist, so `ListType`, `TupleType`, `ContextType` and an unresolved `VarType`
+all stay inline — naming one wrongly is the case with a consequence.
+
+That flattens down to the aggregate boundary and no further, which is the point:
+a chain is named at its outermost *scalar*, so the spine stays inline and **no
+name ever holds a list**.
+
+```python
+t  = x * 2.0
+t1 = g(t)
+t2 = g(t1)          # nested calls fully unfold
+t3 = i + 1
+t4 = xss[t3][0]     # named at the scalar; `xss[t3]` is a list, so it stays
+```
+
+The `_shares_storage` → boxing → `STRICT`-refusal exposure only appears when a
+name holds a list region, so this phase never touches it. The aggregate scope in
+*Assumptions* narrows accordingly: from "calls, projections, containers, ranges,
+slices, zip/enumerate" to just "expressions whose type is aggregate".
+
+Also fixes a copy this exposed: `_visit_expr` tested the *original* node's kind,
+so a lowered ternary or chain — which comes back as the name it accumulated into
+— was bound a second time (`t4 = t`). It tests the rebuilt result now.
+
+One thing to watch at phase 7, and it is the plan's existing warning rather than
+a new one: a named projection gets its storage from *its own* format bound, which
+`backend-cpp.md` records can be narrower than the container's declared element
+type. Value-preserving, but it would emit an implicit narrowing where the house
+rule wants an explicit `static_cast`. The differential harness is what finds it.
+
+### 6. Totality
 
 Phases 2–4 create the slots, so a class-3 subexpression can be named like any
 other. What remains is to state the invariant and check it.
@@ -128,7 +167,7 @@ instead:
 > No expression needing a slot sits in a position that has none, and every
 > position a lowering reaches for free is flattened.
 
-The first half is what phase 9 checks from the emitter side: every `IfExpr`,
+The first half is what phase 10 checks from the emitter side: every `IfExpr`,
 `And` / `Or` and unrotated `while` condition is slot-free by `needs_slot`. The
 second half is why a surviving ternary or chain is over atoms and nothing looser
 — an unflattened one is a position no pass with a preamble can enter. A `while`
@@ -140,7 +179,7 @@ something needing a slot. Either ANF refuses such a program or the invariant is
 stated modulo comprehensions; measure how many corpus functions are affected
 before choosing.
 
-### 6. A scheduling operator
+### 7. A scheduling operator
 
 `fpy2/strategies/anf.py`, exporting `to_anf(func)` — the whole-program operator,
 following `close` and `simplify`: a `Function` in, a `Function` out, no `where`.
@@ -157,7 +196,7 @@ Tests: `tests/unit/strategies/`, matching whatever the sibling operators assert
 — that it is the transform under a `Function` and that the docstring example
 holds.
 
-### 7. Wire into the C++ pipeline
+### 8. Wire into the C++ pipeline
 
 In `CppCompiler.specialize()`, after `RoundElim` — ANF destroys the shapes
 `ReduceFusion`, `ZipElim` and `EnumerateElim` match on, so it runs last. It
@@ -172,11 +211,23 @@ churn and some storage choices may genuinely shift.
 pytest tests/unit/backend/cpp -q -n 8
 ```
 
-### 8. Delete what ANF made dead
+### 9. Delete what ANF made dead
 
 The `_bind_operand` call sites, and the `_emit_at` build-at-`want` machinery that
-no longer meets a nested constructor. Success metric: `_bind_operand` reaches
-zero call sites.
+no longer meets a nested constructor.
+
+**Not zero call sites** — that was the original metric and it is wrong under
+scalars-only. The sites that survive are exactly the aggregate ones:
+`_adapt_arg`, `_emit_tuple_accessor`, `_visit_list_slice`, `_list_range`,
+`_convert_storage`, `_rebuild_list`. A nested call (`g(g(t))`) and a projection
+chain (`xss[t][0]`) are still nested after this pass, by design.
+
+Most of them go *quiet* rather than away: `_bind_operand` returns its argument
+untouched when it is already an identifier, so `sum(xs)` and
+`_emit_ieee_min_max`'s twice-named operands stop minting a temporary while the
+call remains. So the metric is **how many calls actually mint a temporary across
+the corpus**, measured before and after. Deleting a site needs its operand
+proven an atom, which for the aggregate forms waits on the follow-on.
 
 The `_fresh_temp` sites are *not* in scope and will not move — they name C++
 scaffolding no FPy expression corresponds to (loop indices, output buffers,
@@ -187,7 +238,7 @@ when the lowerings that invented them move upstream.
 pytest tests/unit/backend/cpp -q -n 8
 ```
 
-### 9. The emitter tripwire
+### 10. The emitter tripwire
 
 Gate `while` conditions, `IfExpr` arms and boolean tails on `_is_pure_cond`,
 raising `CppEmitError`. With phases 2–4 landed this rejects nothing under the
@@ -209,20 +260,20 @@ python -m tests.infra.backend.cpp
 
 ## Assumptions and scope
 
-**Scalars only.** Naming an aggregate creates a def `same_object_defs` unions
-with nothing, so its class can be narrower than the value's and a shared list
-then hits `_refuse_unsharing`; the extra apparent place also pushes
-`_shares_storage` toward boxing, which under `UnboxMode.STRICT` is a compile
-failure rather than a slowdown. Aggregates are a follow-on with a measurement of
-their own.
+**Scalars only**, and after phase 5 that means exactly "expressions whose type is
+aggregate". Naming one creates a def `same_object_defs` unions with nothing, so
+its class can be narrower than the value's and a shared list then hits
+`_refuse_unsharing`; the extra apparent place also pushes `_shares_storage`
+toward boxing, which under `UnboxMode.STRICT` is a compile failure rather than a
+slowdown. A follow-on with a measurement of its own.
 
 **ANF runs unconditionally**, not under `optimize`. Standard practice — do as
 much in the middle end as possible, so the backend has less to handle — and the
 alternative was worse: a gated pass leaves both emitter paths alive, so none of
-phase 8's deletions could happen, and the class-3 miscompiles would stay live
+phase 9's deletions could happen, and the class-3 miscompiles would stay live
 under `optimize=False`.
 
 The cost is that `optimize=False` no longer means "compiles the surface AST
 verbatim": it now means the surface AST in statement form, with the
-optimizing transforms still skipped. Phase 7 updates `CppCompiler`'s docstring
+optimizing transforms still skipped. Phase 8 updates `CppCompiler`'s docstring
 to say so.

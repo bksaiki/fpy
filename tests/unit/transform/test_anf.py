@@ -19,6 +19,7 @@ ternary is the other, becoming an ``IfStmt``: :class:`TestTernaryLowering`.
 
 import fpy2 as fp
 from fpy2 import Function
+from fpy2.analysis import DefineUse, TypeInfer
 from fpy2.ast.fpyast import (
     And,
     Assign,
@@ -54,6 +55,7 @@ from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import ANF
 from fpy2.transform.anf import needs_slot
 from fpy2.transform.path import sub_exprs, walk_stmts
+from fpy2.types import BoolType, RealType
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -61,11 +63,8 @@ from fpy2.transform.path import sub_exprs, walk_stmts
 # Restated here rather than imported, so the test states the property
 # independently of how the pass computes it.
 _ATOM = (Var, ValueExpr, NullaryOp)
-_OPAQUE = (
-    ListExpr, TupleExpr, ListComp, ListSlice, Empty, Zip, Enumerate,
-    Range1, Range2, Range3, Call, Fst, Snd, ListRef, IfExpr, Attribute,
-)
-"""Forms the pass does not name because each is or may hold an aggregate."""
+_SCALAR = (RealType, BoolType)
+"""Types whose values the pass binds to a name; anything else stays inline."""
 
 _SEALS = (IfExpr, And, Or, ListComp)
 """Forms holding a conditionally- or repeatedly-evaluated subexpression."""
@@ -76,19 +75,24 @@ def _anf(f) -> Function:
 
 
 def _unnamed(func: FuncDef) -> list[Expr]:
-    """Non-atomic subexpressions the pass left in a position it names.
+    """Scalar-typed subexpressions the pass left in a position it names.
 
     Descends only where the pass hoists: not into a sealed form, and not into a
-    ``while`` condition.  An opaque form is not itself a violation — the pass
-    declines to name one — but its children are still visited.
+    ``while`` condition.  An aggregate-valued subexpression is not a violation —
+    naming one would create a place — but its children are still visited, so a
+    scalar inside an inline spine still counts.
     """
+    du = DefineUse.analyze(func)
+    types = TypeInfer.check(func, def_use=du)
     bad: list[Expr] = []
 
     def descend(e: Expr) -> None:
         if isinstance(e, _SEALS):
             return
         for _field, _i, sub in sub_exprs(e):
-            if not isinstance(sub, _ATOM + _OPAQUE):
+            if not isinstance(sub, _ATOM) and isinstance(
+                types.by_expr.get(sub), _SCALAR,
+            ):
                 bad.append(sub)
             descend(sub)
 
@@ -250,6 +254,97 @@ class TestContextBoundary:
         assert len(outer.body.stmts) == 3          # y = ..., with ..., return z
         inner = outer.body.stmts[1]
         assert len(inner.body.stmts) == 3          # two temps, then z = ...
+
+
+# ----------------------------------------------------------------------
+# 1b. Type-directed atomicity
+
+
+class TestTypeDirectedAtomicity:
+    """What is named is decided by type, not by node kind."""
+
+    def test_nested_calls_unfold(self):
+        @fp.fpy
+        def g(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x * x
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return g(g(x * 2.0)) + 1.0
+
+        out = ANF.apply(f.ast)
+        assert _unnamed(out) == []
+        # each call now stands alone
+        for _p, stmt in walk_stmts(out):
+            if isinstance(stmt, Assign):
+                assert not isinstance(stmt.expr, Call) or all(
+                    isinstance(a, Var) for a in stmt.expr.args
+                )
+
+    def test_a_projection_chain_is_named_at_its_scalar(self):
+        """The spine stays inline, so no name ever holds a list."""
+
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], i: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return xss[i + 1][0] * 2.0
+
+        out = ANF.apply(f.ast)
+        assert _unnamed(out) == []
+        named = [
+            stmt.expr for _p, stmt in walk_stmts(out)
+            if isinstance(stmt, Assign) and isinstance(stmt.expr, ListRef)
+        ]
+        assert len(named) == 1
+        # bound at the outer subscript; the inner one is still nested in it
+        assert isinstance(named[0].value, ListRef)
+
+    def test_an_aggregate_valued_expression_is_not_named(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], i: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return sum(xss[i + 1])
+
+        out = ANF.apply(f.ast)
+        # the list-typed subscript stays inline inside the fold
+        assert not [
+            stmt for _p, stmt in walk_stmts(out)
+            if isinstance(stmt, Assign) and isinstance(stmt.expr, ListRef)
+        ]
+        assert isinstance(_first(out, ListRef), ListRef)
+
+    def test_a_context_expression_is_not_named(self):
+        """`fp.FP64` types as a context, not a scalar."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x * x
+
+        out = ANF.apply(f.ast)
+        assert isinstance(out.body.stmts[0].ctx, Attribute)
+
+    def test_a_lowered_chain_is_not_re_bound(self):
+        """The chain comes back as the name it accumulated into, and naming
+        that again would be a pure copy."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> list[bool]:
+            with fp.FP64:
+                y = [a > 0.0 or b > 0.0, True]
+                return y
+
+        out = ANF.apply(f.ast)
+        elts = _first(out, ListExpr).elts
+        assert all(isinstance(e, (Var, ValueExpr)) for e in elts)
+        # no assignment is a bare copy of another name
+        copies = [
+            stmt for _p, stmt in walk_stmts(out)
+            if isinstance(stmt, Assign) and isinstance(stmt.expr, Var)
+        ]
+        assert copies == []
 
 
 # ----------------------------------------------------------------------
