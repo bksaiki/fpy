@@ -299,42 +299,75 @@ upstream — §6 of the roadmap.
 
 ### 9. Delete what ANF made dead
 
-The `_bind_operand` call sites, and the `_emit_at` build-at-`want` machinery that
-no longer meets a nested constructor.
+**Measured: nothing is.** Not the outcome the phase assumed, and the measurement
+is the deliverable.
 
-**Not zero call sites** — that was the original metric and it is wrong under
-scalars-only. The sites that survive are exactly the aggregate ones:
-`_adapt_arg`, `_emit_tuple_accessor`, `_visit_list_slice`, `_list_range`,
-`_convert_storage`, `_rebuild_list`. A nested call (`g(g(t))`) and a projection
-chain (`xss[t][0]`) are still nested after this pass, by design.
+Across the 201 corpus functions that compile, `_bind_operand` still mints a
+temporary at five sites:
 
-Most of them go *quiet* rather than away: `_bind_operand` returns its argument
-untouched when it is already an identifier, so `sum(xs)` and
-`_emit_ieee_min_max`'s twice-named operands stop minting a temporary while the
-call remains. So the metric is **how many calls actually mint a temporary across
-the corpus**, measured before and after. Deleting a site needs its operand
-proven an atom, which for the aggregate forms waits on the follow-on.
+| site | calls | mints |
+|---|---|---|
+| `_emit_empty` | 25 | 0 |
+| `_emit_enumerate` | 3 | 0 |
+| `_visit_list_slice` | 11 | 1 |
+| `_emit_ieee_min_max` | 28 | 3 |
+| `_emit_sum` | 13 | 3 |
+| `_emit_zip` | 12 | 4 |
+| `_list_range` | 21 | 5 |
 
-The `_fresh_temp` sites are *not* in scope and will not move — they name C++
-scaffolding no FPy expression corresponds to (loop indices, output buffers,
-accumulators, the saved `fenv` mode). Those retire with §4 and §7 of the roadmap,
-when the lowerings that invented them move upstream.
+Every one is an **aggregate** operand — a list, a slice, a `zip` — or a *cast*
+result: `_emit_ieee_min_max` binds `static_cast<double>(a)`, which is not an
+identifier however atomic `a` is. Neither is something this pass addresses.
 
-```
-pytest tests/unit/backend/cpp -q -n 8
-```
+The two zero-mint sites are **unexercised, not dead**: `fp.empty` and
+`enumerate` accept a compound operand, no corpus program gives them one, and
+deleting a site on that evidence would be wrong.
+
+`_emit_at`'s build-at-`want` machinery is likewise alive, and not marginally —
+62 `ListExpr`, 43 `TupleExpr`, 23 `ListComp`, 13 `Empty`. Its premise was that
+ANF stops nested constructors reaching it; under scalars-only it does not,
+because a constructor is an aggregate.
+
+So the deletions this phase was for are **blocked on the aggregate follow-on**,
+and on nothing else. What lands instead is
+`tests/unit/backend/cpp/test_bind_profile.py`, pinning the counts and the corpus
+size in the style of `test_unbox_profile.py`: no correctness test can see a mint,
+so when aggregate naming arrives the drop should be a decision rather than a
+surprise. It also fails if a *new* site starts minting, which is the tripwire for
+something scalar reaching the emitter nested.
 
 ### 10. The emitter tripwire
 
-Gate `while` conditions, `IfExpr` arms and boolean tails on `_is_pure_cond`,
-raising `CppEmitError`. With phases 2–4 landed this rejects nothing under the
-default pipeline; it protects `optimize=False`, and it catches a future emitter
-change that emits a statement from a new expression path. That closes the three
-defects in [backend-cpp.md](backend-cpp.md)'s open issues by construction rather
-than by pipeline history — and it is the check on `needs_slot` being
-conservative enough.
+**Done**, but not on `_is_pure_cond` as planned. That predicate is a whitelist
+built for `else if` cosmetics — it excludes arithmetic, so it would refuse
+`while (x * x) > 0.0`, which compiles correctly today. A tripwire that rejects
+working programs is worse than none.
 
-Tests: the three witnesses as compile-and-run cases — exit zero, correct value.
+Measured exactly instead: `_emit_inline(emit, what, at)` records the writer's
+line count, runs the emission, and raises if it grew. `_is_pure_cond`'s docstring
+rejects that approach because *rewinding* is impossible — but a tripwire does not
+rewind, it aborts, so the objection does not apply. Exact means no false
+refusals: over the 201 compiling corpus functions, 44 of these positions are
+emitted and **none** writes a statement.
+
+Wired into the three positions and nowhere else: a `while` condition, both
+ternary arms (scalar path and the aggregate `_emit_at` path), and every
+short-circuited operand after the first. An `if` / `if1` condition is *not*
+gated — it runs once, just before the branch, so its statements belong in the
+enclosing block. That distinction moved into `_emit_guarded_block`, which now
+takes the condition already emitted, since where its statements may go is the
+caller's question.
+
+It raises `CppInternalError`: ANF lowers all three before codegen, so arriving
+here is a violated invariant rather than a program the backend cannot express.
+
+`tests/unit/backend/cpp/test_statement_form.py` has both halves. The three
+witnesses now **compile and run** — `f(3.0) == 0` for the loop that used to hang,
+and no abort for the two assertions that used to fire on an untaken path. The
+runs are the point; no string comparison catches a hang. And `TestTheNet`
+monkeypatches `ANF.apply` to the identity, which is exactly the state a future
+change to the pass could leave a program in, and checks all three are refused
+rather than miscompiled.
 
 ### Then the full suites
 
