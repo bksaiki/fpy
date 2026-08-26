@@ -26,11 +26,10 @@ class TestTupleExpr:
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
         assert out.startswith('std::tuple<double, double> f(double x, double y)')
-        assert (
-            'return std::make_tuple('
-            '(x + static_cast<double>(1)), '
-            '(y - static_cast<double>(1)));'
-        ) in out
+        # statement form names each element before the tuple is built
+        assert 'double t = (x + static_cast<double>(1));' in out
+        assert 'double t3 = (y - static_cast<double>(1));' in out
+        assert 'return std::make_tuple(t, t3);' in out
 
     def test_tuple_passed_through_arg(self):
         @fp.fpy
@@ -140,7 +139,8 @@ class TestTupleDestructure:
         assert 'for (const auto& _tmp1 : xs) {' in out
         assert '        double a = std::get<0>(_tmp1);' in out
         assert '        double b = std::get<1>(_tmp1);' in out
-        assert 'acc = (acc + (a * b));' in out
+        assert 'double t = (a * b);' in out
+        assert 'acc = (acc + t);' in out
 
     def test_comp_tuple_target(self):
         @fp.fpy

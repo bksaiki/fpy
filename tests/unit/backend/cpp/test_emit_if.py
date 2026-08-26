@@ -310,7 +310,8 @@ class TestElseIfChain:
         hoisted = [i for i, ln in enumerate(lines)
                    if len(p := ln.split()) >= 2 and p[1].startswith('_t')]
         assert hoisted, 'expected the condition to hoist a temporary'
-        last = lines[hoisted[-1]].split()[1].rstrip(';')
+        # the inner `if` is the one after the `else`; its condition reads a
+        # name the setup bound, whichever name statement form gave it
         i_if = next(i for i, ln in enumerate(lines)
-                    if ln.startswith('if (') and last in ln)
+                    if i > i_else and ln.startswith('if ('))
         assert all(i_else < i < i_if for i in hoisted), 'setup escaped the else block'

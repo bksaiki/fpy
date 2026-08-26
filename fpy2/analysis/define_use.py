@@ -91,6 +91,35 @@ class DefineUseAnalysis(ReachingDefsAnalysis):
             return self.use_to_def[site]
         raise KeyError(f'no definition found for site {site}')
 
+    def defining_expr(self, e: Expr) -> Expr:
+        """The expression *e*'s value is computed by, following a name back to
+        what it was assigned.  *e* itself where there is no such expression.
+
+        For a matcher that dispatches on node kind: ``len(xs)`` bound to a name
+        first says the same thing, but reaches the matcher as a ``Var``.  Stops
+        at anything that is not a plain assignment to a name -- a phi has no
+        single defining expression, and a parameter, a loop target and an
+        ``xs[i] = e`` are not expressions.
+
+        The result belongs to the *assignment*, not the use site.  Read it: its
+        ``Var`` nodes resolve to the definitions reaching the assignment, which
+        is what makes a fact derived from it correct.  Do **not** re-emit it or
+        compare it structurally against a node from elsewhere -- a backend may
+        give two definitions one variable, so the same syntax can name different
+        values at two program points.
+        """
+        seen: set[int] = set()
+        while isinstance(e, Var) and id(e) not in seen:
+            seen.add(id(e))
+            d = self.use_to_def.get(e)
+            if not isinstance(d, AssignDef):
+                break
+            site = d.site
+            if not isinstance(site, Assign) or not isinstance(site.target, NamedId):
+                break
+            e = site.expr
+        return e
+
 
 class _DefineUseInstance(DefaultVisitor):
     """Per-IR instance of definition-use analysis"""

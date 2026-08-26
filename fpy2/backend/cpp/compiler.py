@@ -33,6 +33,7 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import (
+    ANF,
     EnumerateElim,
     FreeVarElim,
     ReduceFusion,
@@ -211,8 +212,10 @@ class CppCompiler(Backend):
             casting to ``int64_t`` and assuming no overflow.  ``False`` rejects
             such programs instead.  Default ``True``.
         optimize:
-            Run the transforms listed in :meth:`_run_pipeline`.  Sound either
-            way; ``False`` compiles the surface AST verbatim.  Default ``True``.
+            Run the optimizing transforms listed in :meth:`specialize`.  Sound
+            either way; ``False`` skips them.  It does *not* mean the surface AST
+            reaches the emitter untouched: ``FreeVarElim`` and ``ANF`` run
+            regardless.  Default ``True``.
         unbox:
             An :class:`~fpy2.backend.cpp.unbox.UnboxMode` (also reachable as
             ``CppCompiler.UnboxMode``).  ``ALLOW`` drops the handle where
@@ -368,6 +371,12 @@ class CppCompiler(Backend):
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
+
+        # Statement form, last and unconditionally.  Last because naming an
+        # expression *materializes* it, so anything that deletes or folds must
+        # run first -- and because it removes the shapes `ReduceFusion`,
+        # `ZipElim` and `EnumerateElim` match on.
+        specialized = specialized.map(lambda _m, fd: ANF.apply(fd))
 
         return list(specialized.call_graph().order)
 

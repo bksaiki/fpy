@@ -373,6 +373,10 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._at(cond.arg, _FINITE)   # normal implies non-zero
             case Compare():
                 return self._implied_compare(cond, truth)
+            case Var():
+                # through a name: a test bound to one still says what it tests
+                src = self.def_use.defining_expr(cond)
+                return [] if src is cond else self._implied(src, truth)
             case _:
                 return []
 

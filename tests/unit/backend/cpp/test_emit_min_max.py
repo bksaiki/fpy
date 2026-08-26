@@ -234,7 +234,10 @@ class TestNoSupportLibrary:
 class TestTheNaryFold:
     def test_three_operands_nest_two_steps(self):
         """Each step's result becomes the next step's first operand, which the
-        predicate names twice -- so the intermediate has to be bound."""
+        predicate names twice -- so the intermediate has to be bound.
+
+        Statement form binds it, so the emitter mints nothing of its own: the
+        name is already there when `_bind_operand` asks for one."""
         @fp.fpy
         def q(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -242,8 +245,10 @@ class TestTheNaryFold:
 
         out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 3)
         assert out.count('std::signbit(') == 2
-        # the inner result is named, not re-evaluated
-        assert out.count('auto&&') >= 1
+        # the inner result is named, not re-evaluated -- and by the pass, so no
+        # `auto&&` temporary is minted here at all
+        assert 'double t = ' in out
+        assert 'auto&&' not in out
 
 
 class TestIntegerPathUnchanged:

@@ -14,6 +14,8 @@ from fpy2.analysis import (
     TupleSize,
 )
 from fpy2.analysis.array_size import concrete_size, is_size_eq
+from fpy2.ast.fpyast import ListSlice
+from fpy2.transform.path import walk_exprs
 from fpy2.utils import NamedId
 
 
@@ -1774,6 +1776,50 @@ class TestArraySizeDifferential:
     @given(i=st.integers(min_value=-8, max_value=32))
     def test_fuzz_range_sym_offset(self, i):
         self._assert_sound(_d_range_sym_offset, [(i,)])
+
+
+class TestAffineAcrossProgramPoints:
+    """A slice's bounds may be named, and two names may hold structurally
+    identical expressions whose leaves read different definitions."""
+
+    def test_a_rebound_leaf_does_not_cancel(self):
+        """`i2` and `t` both trace back to `a + b`, but through different
+        definitions of `a` -- so nothing cancels and the length is unknown."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(
+            xs: list[fp.Real], a: fp.Real, b: fp.Real, c: fp.Real,
+        ) -> list[fp.Real]:
+            n = a + b
+            i = n
+            t = i + 32
+            a = c
+            n2 = a + b
+            i2 = n2
+            return xs[i2:t]
+
+        info = ArraySizeInfer.analyze(f.ast)
+        sizes = [
+            info.by_expr.get(e)
+            for _p, e in walk_exprs(f.ast) if isinstance(e, ListSlice)
+        ]
+        assert len(sizes) == 1
+        assert sizes[0].size is None, sizes[0]
+
+    def test_one_definition_still_cancels(self):
+        """The precision the name-following exists for is kept."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            t = i + 32
+            return xs[i:t]
+
+        info = ArraySizeInfer.analyze(f.ast)
+        sizes = [
+            info.by_expr.get(e)
+            for _p, e in walk_exprs(f.ast) if isinstance(e, ListSlice)
+        ]
+        assert sizes[0].size == 32
 
 
 class TestTupleAccessorSizes:

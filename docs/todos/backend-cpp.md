@@ -26,6 +26,10 @@ Everything C++-specific lives here. Analyses this backend depends on but does
 not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
+The emitter's input is in **statement form**: `fpy2.transform.ANF` runs last in
+`specialize()`, so every operand is a name, a literal or a nullary constant, and
+the emitter never invents a place for one.  Only aggregates are left nested.
+
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
 compile and must behave as the FPy interpreter does wherever FPy's semantics are
 defined.* A refusal is always acceptable — the compiler may be limited — so a
@@ -170,6 +174,7 @@ top.
 ```
 Module
   → Specialize                 # one FuncDef per (callee, ctx, arg formats)
+  → ANF                        # statement form; every operand is an atom
   → DefineUse
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
@@ -196,6 +201,68 @@ method so callers need not care whether the backend currently emits any support
 code. Headers track exactly what the emitted code uses.
 
 ## Open issues
+
+### Settled: an operand emitting statements escapes its guard
+
+**Was a defect; now impossible by construction.** `_emit_guarded_block` and
+`_visit_if_expr` interpolate an expression visitor into an f-string, so anything
+it wrote through `writer.add_line` landed *before* the construct being guarded.
+Three shapes, each verified by compiling and running the output:
+
+- **a `while` condition evaluated once**, so the loop tested a stale name —
+  `while max([y, 0.0]) > 0.0` did not terminate where the interpreter returned;
+- **a ternary arm's assertion on the untaken path** —
+  `0.0 if x > 1e30 else fp.cast(x)` aborted where the interpreter returned;
+- **an `and` / `or` tail past the short circuit** — same assertion, same abort.
+
+All three are in territory where FPy's semantics *are* defined, unlike the
+subscript case below.
+
+Closed two ways. `fpy2.transform.ANF` lowers each position before codegen, so
+none reaches the emitter — and `_emit_inline` refuses if one ever does, comparing
+the writer's line count around the emission rather than approximating from the
+syntax. Unreachable *and* impossible: the lowering fixes real programs, the
+tripwire survives a future change to the pass.
+`tests/unit/backend/cpp/test_statement_form.py` runs all three witnesses and
+checks the refusal with `ANF.apply` monkeypatched to the identity.
+
+An `if` / `if1` condition is deliberately not gated: it runs once, just before
+the branch, so its statements belong in the enclosing block. That is why
+`_emit_guarded_block` now takes its condition already emitted.
+
+### Statement form defeats the `2 ** n * x` fusion
+
+`_emit_scale_by_pow2` matches a *syntactic* `Pow` as an operand of a `Mul`, and
+`ANF` names the power first, so the fusion no longer fires:
+
+```c++
+float t14 = std::ldexp(1, static_cast<int>(t13));   // was: std::ldexp(x, t13)
+float _t8 = (t14 * x);
+```
+
+**Not an accuracy regression.** The peephole only fires where `_pow2_is_exact`
+and `_result_fits_ctx` both hold — that is, where the power *and* the product
+are exact — so the two forms agree bit-for-bit. `test_lowered_roundtrip.py`
+confirms it across fourteen formats. The cost is one multiply and one extra
+`float`, and the scale still runs in `float` with no widening.
+
+Two fixes were tried and rejected:
+
+- **Resolving the power through its name** in the emitter
+  (`defining_expr(scale)`) is *unsound*: `StorageInfer` gives two definitions of
+  one source name a single C++ variable, so re-emitting the exponent at the
+  product reads whatever a later branch put there. `k = n; p = 2 ** k; if c: k =
+  m; return x * p` computed `x * 2**m`. Pinned by
+  `test_the_exponent_is_not_re_read_at_the_product`.
+- **Teaching `ANF` not to name a `Pow`** works, but lets one backend's peephole
+  restrict a backend-independent pass — and only the shape that happened to have
+  a test, since `_fold_rounded_literal`, `_concrete_int_of` and
+  `_range_counter_scalar` match syntax the same way.
+
+The real fix is to strength-reduce before codegen, which needs a language-level
+scale operation: FPy has no `ldexp`/`scalb`, so there is nothing for an FPy-level
+transform to rewrite *into*. See
+[backend-independence.md](backend-independence.md) §6.
 
 ### Unchecked subscripts are not a bug
 

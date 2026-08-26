@@ -20,7 +20,7 @@ import fpy2 as fp
 from fpy2.backend.cpp import CppCompiler
 from fpy2.backend.cpp.compiler import CppCompileError
 from fpy2.number import MPBFixedContext
-from fpy2.types import RealType
+from fpy2.types import BoolType, RealType
 
 RM = fp.RoundingMode
 ASSERT = fp.OverflowMode.ASSERT
@@ -296,13 +296,23 @@ class TestScaleByPowerOfTwo:
         guards and reports ``prec=24, exp=-53, bound ~ 2 ** 40``, which ``float``
         does hold -- so the cast is gone and the scale still lands exactly, which
         ``test_lowered_roundtrip.py`` checks bit-for-bit across fourteen
-        formats."""
+        formats.
+
+        The power and the product it feeds are separate operations: statement
+        form binds the power, so the multiply peephole no longer sees a
+        syntactic ``2 ** n * x``.  Both are exact where the peephole would have
+        fired -- it requires that -- so this costs a multiply and not a rounding.
+        See ``docs/todos/backend-cpp.md``."""
         out = self._lowered()
         scale = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
         assert scale
-        # the scale-in takes the source straight, with no widening cast; the
-        # subnormal branch's multiply still widens, which is a different site
-        assert any('std::ldexp(x,' in ln for ln in scale), scale
+        # every scale is computed in `float`; the widening this test exists for
+        # would show as a `double` declaration here
+        assert all(ln.strip().startswith('float ') for ln in scale), scale
+        # and applied without widening the value it scales
+        products = [ln for ln in out.splitlines() if '* x)' in ln]
+        assert products, out
+        assert all('static_cast<double>' not in ln for ln in products), products
 
     def test_a_possibly_nonfinite_exponent_falls_back_to_a_product(self):
         """``ldexp`` takes an ``int``, and converting a NaN or an infinity to
@@ -381,6 +391,43 @@ class TestScaleByPowerOfTwo:
         out = CppCompiler().compile(f, arg_types=[RealType(fp.SINT8)])
         assert 'std::ldexp' in out
         assert 'std::pow' not in out
+
+    def test_the_exponent_is_not_re_read_at_the_product(self):
+        """The scale must not reach its exponent through a name: a backend gives
+        two definitions of one source name a single C++ variable, so reading it
+        at the product reads whatever a later branch put there."""
+
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real, m: fp.Real, c: bool) -> fp.Real:
+            with fp.FP64:
+                k = n
+                p = 2 ** k
+                if c:
+                    k = m
+                return x * p
+
+        out = CppCompiler().compile(f, arg_types=[
+            RealType(fp.FP64), RealType(fp.SINT8), RealType(fp.SINT8),
+            BoolType(),
+        ])
+        assert 'std::ldexp(x' not in out, out
+
+    def test_a_compound_exponent_in_a_while_condition(self):
+        """`_ldexp_call` binds a compound exponent, so the condition needs a
+        statement -- which the emitter has nowhere to put.  Statement form has
+        to rotate the loop, and refuses at codegen if it did not."""
+
+        @fp.fpy
+        def f(x: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while (2 ** (n + 1)) > 1.0:
+                    y = y - 1.0
+                return y
+
+        out = CppCompiler().compile(
+            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])
+        assert 'while' in out
 
     def test_both_operand_orders(self):
         """Multiplication commutes, so the scale may sit on either side."""

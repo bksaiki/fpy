@@ -289,6 +289,10 @@ class _IndentedWriter:
     def dedent(self):
         self._depth -= 1
 
+    def __len__(self) -> int:
+        """Lines written so far; see :meth:`CppEmitter._emit_inline`."""
+        return len(self._lines)
+
     def render(self) -> str:
         return '\n'.join(self._lines)
 
@@ -460,6 +464,31 @@ class CppEmitter(Visitor):
         """``xs[i]`` where *idx* is already a ``size_t`` — an emitter-internal
         loop counter rather than an FPy index, so no cast is needed."""
         return f'{self._list_seq(ty, base)}[{idx}]'
+
+    def _emit_inline(self, emit: Callable[[], str], what: str, at: Ast) -> str:
+        """*emit*'s result, refusing if producing it wrote a statement.
+
+        A ``while`` condition, a ternary arm and a short-circuited operand run
+        conditionally or repeatedly while the line they sit on does not, so a
+        statement emitted for one lands *before* the construct and runs where the
+        operand does not.  :class:`~fpy2.transform.ANF` lowers all three, so
+        arriving here is a violated invariant rather than an inexpressible
+        program -- hence :class:`CppInternalError`.
+
+        Measured rather than approximated from the syntax, unlike
+        :meth:`_is_pure_cond`: a false refusal costs a program, and nothing here
+        needs rewinding.
+        """
+        before = len(self.writer)
+        out = emit()
+        if len(self.writer) != before:
+            raise CppInternalError(
+                f'{what} needed a statement of its own, which would run even '
+                'where the operand is not evaluated.  The program reached the '
+                'emitter without being put in statement form.',
+                at=at,
+            )
+        return out
 
     def _emit_assert(self, test: str, why: str) -> None:
         """``assert(test && "fpy: why");`` -- every FPy assertion, so each one
@@ -1053,8 +1082,12 @@ class CppEmitter(Visitor):
                 return self._emit_empty(e, want, ctx)
             case IfExpr():
                 cond = self._visit_expr(e.cond, ctx)
-                ift = self._emit_at(e.ift, want, ctx)
-                iff = self._emit_at(e.iff, want, ctx)
+                ift = self._emit_inline(
+                    lambda: self._emit_at(e.ift, want, ctx),
+                    'a ternary arm', e.ift)
+                iff = self._emit_inline(
+                    lambda: self._emit_at(e.iff, want, ctx),
+                    'a ternary arm', e.iff)
                 return f'({cond} ? {ift} : {iff})'
         emitted = self._visit_expr(e, ctx)
         src = self._storage_or_none(e)
@@ -2475,7 +2508,16 @@ class CppEmitter(Visitor):
         """
         if not e.args:
             return 'true' if isinstance(e, And) else 'false'
-        args = [self._visit_expr(a, ctx) for a in e.args]
+        def tail(a: Expr) -> str:
+            return self._emit_inline(
+                lambda: self._visit_expr(a, ctx),
+                'a short-circuited operand', a,
+            )
+
+        # the first operand always runs, so its statements may precede the
+        # chain; every later one is short-circuited past
+        args = [self._visit_expr(e.args[0], ctx)]
+        args += [tail(a) for a in e.args[1:]]
         if len(args) == 1:
             return args[0]
         op = '&&' if isinstance(e, And) else '||'
@@ -3496,8 +3538,10 @@ class CppEmitter(Visitor):
             # converted into it — see :meth:`_emit_at`.
             return self._emit_at(e, out_ty, ctx)
         cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, ctx)
-        iff = self._visit_expr(e.iff, ctx)
+        ift = self._emit_inline(
+            lambda: self._visit_expr(e.ift, ctx), 'a ternary arm', e.ift)
+        iff = self._emit_inline(
+            lambda: self._visit_expr(e.iff, ctx), 'a ternary arm', e.iff)
         ift_ty = self._scalar_storage_for_expr(e.ift)
         iff_ty = self._scalar_storage_for_expr(e.iff)
         ift = self._maybe_cast(ift, ift_ty, out_ty, at=e, src=e.ift)
@@ -3532,16 +3576,24 @@ class CppEmitter(Visitor):
         rhs = self._emit_at(stmt.expr, level, ctx)
         self.writer.add_line(f'{chain} = {rhs};')
 
-    def _emit_guarded_block(self, keyword: str, cond, body, ctx) -> None:
-        """``<keyword> (<cond>) { <body> }``."""
-        self.writer.add_line(f'{keyword} ({self._visit_expr(cond, ctx)}) {{')
+    def _emit_guarded_block(self, keyword: str, cond: str, body, ctx) -> None:
+        """``<keyword> (<cond>) { <body> }``, *cond* already emitted.
+
+        The caller emits it, because where its statements may go differs: an
+        ``if`` runs its condition once, just before the branch, so they belong
+        in the enclosing block; a ``while`` runs it once per iteration, so there
+        is nowhere for them at all (:meth:`_emit_inline`).
+        """
+        self.writer.add_line(f'{keyword} ({cond}) {{')
         self.writer.indent()
         self._visit_block(body, ctx)
         self.writer.dedent()
         self.writer.add_line('}')
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
-        self._emit_guarded_block('if', stmt.cond, stmt.body, ctx)
+        # evaluated once, before the branch: statements may precede the `if`
+        cond = self._visit_expr(stmt.cond, ctx)
+        self._emit_guarded_block('if', cond, stmt.body, ctx)
 
     #: Expression kinds that emit no statement of their own, so a condition
     #: built only from these can move onto an ``else if`` line.  Deliberately a
@@ -3612,7 +3664,11 @@ class CppEmitter(Visitor):
         self.writer.add_line('}')
 
     def _visit_while(self, stmt: WhileStmt, ctx):
-        self._emit_guarded_block('while', stmt.cond, stmt.body, ctx)
+        cond = self._emit_inline(
+            lambda: self._visit_expr(stmt.cond, ctx),
+            'a `while` condition', stmt.cond,
+        )
+        self._emit_guarded_block('while', cond, stmt.body, ctx)
 
     def _concrete_int_of(self, e: Expr) -> int | None:
         """Concrete integer value of *e* per format inference, or ``None``."""
