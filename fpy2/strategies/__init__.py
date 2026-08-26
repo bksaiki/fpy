@@ -22,6 +22,7 @@ from ..transform import (
     TransformError,
     TransformReferenceError,
 )
+from .anf import to_anf
 from .comp_lower import comp_to_loop
 from .context_lift import lift_context
 from .fixed_rescale import rescale_fixed
@@ -71,6 +72,7 @@ __all__ = [
     'sites',
     'split',
     'split_round',
+    'to_anf',
     'unfold_neg_zero',
     'unfold_overflow',
     'unfold_special',

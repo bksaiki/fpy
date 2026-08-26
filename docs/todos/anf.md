@@ -209,20 +209,42 @@ profile and the unit tests.
 
 ### 7. A scheduling operator
 
-`fpy2/strategies/anf.py`, exporting `to_anf(func)` — the whole-program operator,
-following `close` and `simplify`: a `Function` in, a `Function` out, no `where`.
-ANF has no *sites* to aim at; rewriting one nest and not another leaves the
-program in a state no consumer wants, so this operator takes the whole function
-by construction.
+**Done.** `fpy2/strategies/anf.py` exports `to_anf(func)` — a `Function` in, a
+`Function` out, no `where`, following `close` and `simplify`. It takes a
+`Function`, not a `Module`: `simplify` and `close` do the same, and `Module.map`
+already lifts a per-function rewrite.
 
-The one design question is whether it should also accept a `Module`. `simplify`
-and `close` take a `Function`, and `Module.map` already lifts a per-function
-rewrite, so `Function` is the consistent choice unless a caller turns up that
-needs the module form.
+No `where`, and the docstring says why: every other strategy aims at one site and
+leaves the rest alone, which is what makes a schedule a sequence of decisions.
+Normal form is not a decision of that kind — a program flattened in one nest and
+not another is in no state a consumer wants.
 
-Tests: `tests/unit/strategies/`, matching whatever the sibling operators assert
-— that it is the transform under a `Function` and that the docstring example
-holds.
+It is deliberately **not** in `sites.py`'s `_REFUSALS` table. That table answers
+"why was each candidate not a site", which is a site-based notion; ANF has no
+sites, and its refusals are residue rather than declined candidates. They are
+reached through `ANF.refusals` directly, and the shapes differ too — `Expr`
+rather than `Cursor`, and no `within`.
+
+Tests (`tests/unit/strategies/test_to_anf.py`) cover the wrapper — the docstring
+example verbatim, identity with the transform, runtime and parent preserved,
+`TypeError` on a `FuncDef`, `TypeError` on a positional `where` — and then the
+thing that justifies the operator existing at all:
+
+```python
+# before: elim_round cannot enter either arm
+return (1.0 + 2.0) if cond else (3.0 + 4.0)
+
+# after to_anf, elim_round hoists both
+if cond:
+    with fp.REAL: _t4 = (_t + _t3)
+    t = _t4
+else:
+    with fp.REAL: _t7 = (_t5 + _t6)
+    t = _t7
+```
+
+Zero `with fp.REAL:` blocks before, two after. That is the schedulability claim
+from phases 3–4, measured rather than asserted.
 
 ### 8. Wire into the C++ pipeline
 
