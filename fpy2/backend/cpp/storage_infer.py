@@ -117,6 +117,12 @@ def binds_by_reference(
 
     *allow_projection* enables ``row = xss[i]``, valid only where nothing
     replaces that slot -- the caller supplies that fact from the alias analysis.
+
+    A binding to another *definition* additionally requires the two storages to
+    agree.  A reference and a shared storage class are the same claim: if they
+    disagree the name has the type C++ deduced from the initializer rather than
+    the one chosen for it, and every consumer of ``storage_of`` has to remember
+    to compensate.  Requiring agreement makes the divergence impossible instead.
     """
     if not isinstance(storage.storage_of(d), (CppList, CppTuple)):
         return False
@@ -128,9 +134,11 @@ def binds_by_reference(
         case Argument() | ForStmt() | ListComp():
             return True
         case Assign(expr=Var() as src):
+            src_def = def_use.find_def_from_use(src)
             return (
                 d in storage.declare_at_assign
-                and not is_rebound(storage, def_use.find_def_from_use(src))
+                and not is_rebound(storage, src_def)
+                and storage.storage_of(d) == storage.storage_of(src_def)
             )
         case Assign(expr=ListRef() as ref) if allow_projection:
             root = _root_var(ref)

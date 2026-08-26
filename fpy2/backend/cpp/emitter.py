@@ -797,6 +797,10 @@ class CppEmitter(Visitor):
         if src is not None:
             ty = self._storage_or_none(src)
             if ty is not None:
+                assert ty == self.storage.storage_of(d), (
+                    f'`{d.name}` binds a reference to storage of a different '
+                    f'type: {ty.format()} vs {self.storage.storage_of(d).format()}'
+                )
                 return ty
         return self.storage.storage_of(d)
 

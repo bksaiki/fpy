@@ -9,13 +9,16 @@ from enum import Enum
 
 def _get_slots(cls):
     """
-    Get all slots from the class and its base classes.
+    Get all slots from the class and its base classes, most-derived first.
+
+    Ordered and deduplicated: a set here makes ``repr`` depend on string hash
+    randomization, so the same object prints differently between runs.
     """
-    slots = set()
+    slots: dict[str, None] = {}
     for c in cls.__mro__:
-        if hasattr(c, '__slots__'):
-            slots.update(c.__slots__)
-    return slots
+        for slot in getattr(c, '__slots__', ()):
+            slots.setdefault(slot, None)
+    return list(slots)
 
 def __default_repr__(x: object):
     # get attributes from __dict__ if available
