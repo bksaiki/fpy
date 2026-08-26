@@ -140,6 +140,7 @@ from ..ast.fpyast import (
     Empty,
     Enumerate,
     Expr,
+    ForeignVal,
     ForStmt,
     Fst,
     FuncDef,
@@ -171,12 +172,14 @@ from ..ast.fpyast import (
     TernaryOp,
     TupleExpr,
     UnaryOp,
+    UnderscoreId,
     ValueExpr,
     Var,
     WhileStmt,
     Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
+from ..number import REAL
 from ..types import BoolType, RealType
 from ..utils import Gensym
 from .path import sub_exprs
@@ -592,11 +595,42 @@ class _ANFInstance(DefaultTransformVisitor):
         return ForStmt(stmt.target, iterable, body, stmt.loc), ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
-        # The context expression is evaluated outside its own block, so its
-        # temporaries belong to this one.  Nothing inside the block is hoisted
-        # out of it: `_visit_block` gives the body its own buffer, which is what
-        # keeps a hoisted operand under the rounding it was written under.
-        context = self._in_place(stmt.ctx, ctx)
+        """A ``with`` statement, whose two halves round differently.
+
+        **E-Context** evaluates the context expression under ``REAL`` rather
+        than the active context -- a constructor's arguments are precisions and
+        bitwidths, which rounding would corrupt.  So its temporaries cannot go
+        in the enclosing block, which rounds under something else; they go in a
+        ``with fp.REAL:`` block of their own, immediately before.  FPy scopes the
+        context but not the store, so the names are visible where the original
+        expression reads them.
+
+        .. code-block:: python
+
+            # before
+            with fp.IEEEContext(ES + 2, NB + 2):
+                <body>
+
+            # after
+            with fp.REAL:
+                t = ES + 2
+                t1 = NB + 2
+            with fp.IEEEContext(t, t1):
+                <body>
+
+        The body needs no such care: :meth:`_visit_block` gives it its own
+        buffer, which is what keeps a hoisted operand under the rounding it was
+        written under.
+        """
+        under_real = _Ctx(stmts=[])
+        context = self._in_place(stmt.ctx, under_real)
+        if under_real.stmts:
+            ctx.stmts.append(ContextStmt(
+                UnderscoreId(),
+                ForeignVal(REAL, stmt.loc),
+                StmtBlock(under_real.stmts),
+                stmt.loc,
+            ))
         body, _ = self._visit_block(stmt.body, ctx)
         return ContextStmt(stmt.target, context, body, stmt.loc), ctx
 

@@ -29,9 +29,11 @@ from fpy2.ast.fpyast import (
     Attribute,
     Call,
     Compare,
+    ContextStmt,
     Empty,
     Enumerate,
     Expr,
+    ForeignVal,
     Fst,
     FuncDef,
     If1Stmt,
@@ -55,6 +57,7 @@ from fpy2.ast.fpyast import (
     Zip,
 )
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.number import REAL
 from fpy2.transform import ANF
 from fpy2.transform.anf import needs_slot
 from fpy2.transform.path import sub_exprs, walk_stmts
@@ -352,6 +355,45 @@ class TestTypeDirectedAtomicity:
 
 # ----------------------------------------------------------------------
 # 2. Sealed positions
+
+
+class TestContextExpression:
+    """**E-Context** evaluates a `with`'s context expression under `REAL`."""
+
+    def test_temporaries_go_in_a_real_block(self):
+        """Not the enclosing block, which rounds under something else: a
+        constructor's arguments are precisions and bitwidths, and rounding them
+        would corrupt the context being built."""
+
+        @fp.fpy
+        def f() -> fp.Real:
+            es = 2
+            nb = 8
+            with fp.IEEEContext(es + 2, nb + 2):
+                return fp.round(1.0)
+
+        out = ANF.apply(f.ast)
+        block = out.body.stmts
+        hoist, use = block[2], block[3]
+        assert isinstance(hoist, ContextStmt)
+        assert isinstance(hoist.ctx, ForeignVal) and hoist.ctx.val is REAL
+        assert len(hoist.body.stmts) == 2
+        # the `with` that follows now reads the names the REAL block bound
+        assert isinstance(use, ContextStmt)
+        assert all(isinstance(a, Var) for a in use.ctx.args)
+        assert repr(f()) == repr(_anf(f)())
+
+    def test_no_block_where_nothing_is_hoisted(self):
+        """A context expression already in normal form gets no preamble."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return x * x
+
+        out = ANF.apply(f.ast)
+        assert len(out.body.stmts) == 1
+        assert isinstance(out.body.stmts[0], ContextStmt)
 
 
 class TestSealedPositions:
