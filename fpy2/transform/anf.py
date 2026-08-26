@@ -24,13 +24,39 @@ arm (conditional where the slot is not).  A statement's own operands qualify, an
 so does anything inside a body, which is the same case one level down.
 
 The positions FPy evaluates conditionally or repeatedly do not, and this pass
-*seals* them: an ``IfExpr`` arm, an ``and``/``or`` tail and a comprehension's
-element keep their subexpressions inline, because hoisting one out would evaluate
-it on a path FPy never takes.
+*seals* them: an ``and``/``or`` tail and a comprehension's element keep their
+subexpressions inline, because hoisting one out would evaluate it on a path FPy
+never takes.
 
-A ``while`` condition is the one such position with a lowering: the loop is
-*rotated*, so the condition is evaluated once before the loop and once at the end
-of the body -- exactly FPy's own order -- and each copy has a slot of its own.
+Two of those positions have a lowering that *creates* the slot they lack, and it
+is applied where the position holds something that needs one
+(:func:`needs_slot`).  A ``while`` loop is **rotated**, so the condition is
+evaluated once before the loop and once at the end of the body -- exactly FPy's
+own order -- and each copy has a slot of its own.  An ``IfExpr`` becomes an
+``IfStmt`` whose branches assign one name, which is the same trade: each arm's
+block runs exactly when the arm did.
+
+.. code-block:: python
+
+    # before
+    y = (a * b) if c else d
+
+    # after
+    if c:
+        y = a * b
+    else:
+        y = d
+
+An ``IfStmt`` is bulkier to read but costs nothing to run, so a ternary is left
+alone only where it is already in normal form -- ``x1 if c else x2`` over atoms.
+A rotation *duplicates* its condition, which is a real cost, so that one is
+gated on :func:`needs_slot` instead: a condition needing no place stays an
+expression.
+
+The two compose, and that is why they are worth having together: the condition a
+rotation lifts sits in a slot, so an ``IfExpr`` inside it can then be lowered
+too, and a lowered arm is a block, so an ``IfExpr`` nested in one can be as
+well.
 
 .. code-block:: python
 
@@ -46,9 +72,9 @@ of the body -- exactly FPy's own order -- and each copy has a slot of its own.
         t1 = max(xs)
         c = t1 > 0.0
 
-Rotation costs a second copy of the condition, so it is applied only where the
-condition holds something that needs a place at all -- :func:`needs_slot`.  A
-condition built from names, literals and arithmetic is left as it is.
+So the invariant is not "no ternary survives", nor textbook ANF: it is that no
+expression needing a place sits where there is none, and that every position a
+lowering reaches for free is flattened.
 
 **Scalars only.**  An expression that is, or may hold, a list or a tuple is left
 unnamed (:data:`_AGGREGATE`): naming it would give it a storage place of its own,
@@ -94,6 +120,7 @@ from ..ast.fpyast import (
     ListSlice,
     Max,
     Min,
+    NamedId,
     NaryOp,
     Not,
     NullaryOp,
@@ -242,6 +269,13 @@ class _ANFInstance(DefaultTransformVisitor):
     # Sealed expression positions
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
+        if self._lowers(e, ctx):
+            t = self.gensym.fresh(self.prefix)
+            # Two steps, not one expression: `_branch_on` appends the
+            # condition's own temporaries, and those belong *before* the `if`.
+            stmt = self._branch_on(e, t, ctx)
+            ctx.stmts.append(stmt)
+            return Var(t, e.loc)
         # The condition is evaluated whenever the ternary is, so it takes the
         # ternary's own slot; the arms are conditional and are sealed.
         cond = self._visit_expr(e.cond, ctx)
@@ -252,6 +286,61 @@ class _ANFInstance(DefaultTransformVisitor):
             self._in_place(e.iff, sealed),
             e.loc,
         )
+
+    def _lowers(self, e: Expr, ctx: _Ctx) -> bool:
+        """Whether *e* is a ternary this pass turns into an ``IfStmt``.
+
+        Every ternary but ``x1 if c else x2`` over atoms, which is already in
+        normal form.  Not :func:`needs_slot`, which is the weaker question of
+        whether a *backend* would need a place: an arm holding ``x * x`` needs no
+        statement to emit, but leaving it there leaves the program un-flattened,
+        and the arms are what an ``IfStmt`` flattens for free -- it restructures
+        where a rotation duplicates, so there is nothing to weigh against it.
+
+        Only in a hoistable position: the statement has to go somewhere.
+        """
+        return (
+            ctx.hoistable
+            and isinstance(e, IfExpr)
+            and not (
+                isinstance(e.ift, _ATOMIC) and isinstance(e.iff, _ATOMIC)
+            )
+        )
+
+    def _branch_on(self, e: IfExpr, target: NamedId, ctx: _Ctx) -> IfStmt:
+        """*e* as an ``IfStmt`` assigning *target* in each branch.
+
+        The merge is a phi introducing *target*, which is what a backend already
+        handles for a name first assigned in both arms of an ``if``.  Appends the
+        condition's temporaries to *ctx* on the way, since the condition is
+        evaluated where the ternary was.
+        """
+        cond = self._in_place(e.cond, ctx)
+        return IfStmt(
+            cond,
+            self._arm(target, e.ift, e.loc),
+            self._arm(target, e.iff, e.loc),
+            e.loc,
+        )
+
+    def _arm(self, target: NamedId, e: Expr, loc) -> StmtBlock:
+        """A block binding *target* to *e*, with *e*'s temporaries inside it.
+
+        The block runs exactly when the arm did, which is the whole point: this
+        is the slot the arm lacked.
+
+        An arm that is itself a lowered ternary branches on the same name, as in
+        :meth:`_visit_assign`: a chain of ternaries is then a chain of
+        ``if``/``else`` rather than one per copy.
+        """
+        inner = _Ctx(stmts=[])
+        if self._lowers(e, inner):
+            assert isinstance(e, IfExpr)
+            inner.stmts.append(self._branch_on(e, target, inner))
+            return StmtBlock(inner.stmts)
+        expr = self._in_place(e, inner)
+        inner.stmts.append(Assign(target, None, expr, loc))
+        return StmtBlock(inner.stmts)
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         if not isinstance(e, (And, Or)):
@@ -283,6 +372,12 @@ class _ANFInstance(DefaultTransformVisitor):
         return StmtBlock(inner.stmts), ctx
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
+        if isinstance(stmt.target, NamedId) and self._lowers(stmt.expr, ctx):
+            # The whole right-hand side is a lowered ternary, so its branches
+            # assign this name directly.  Going through a temporary would leave
+            # a copy behind, and nothing runs after this pass to remove one.
+            assert isinstance(stmt.expr, IfExpr)
+            return self._branch_on(stmt.expr, stmt.target, ctx), ctx
         expr = self._in_place(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
 

@@ -78,8 +78,18 @@ miscompile witnesses in [backend-cpp.md](backend-cpp.md) — now rotating.
 
 ### 3. `IfExpr` → `IfStmt` plus a phi
 
-Where `needs_slot` holds of either arm. The merge phi is `is_intro`, so the
-emitter hoists the declaration before the `if`, which already works.
+For every ternary but `x1 if c else x2` over atoms, which is already in normal
+form. **Not** gated on `needs_slot`: an `IfStmt` restructures where a rotation
+duplicates, so it costs nothing to run and there is nothing to weigh against
+flattening the arms. Leaving `(x * x) if c else (x + x)` alone would leave the
+program un-flattened for no gain.
+
+The merge phi is `is_intro`, so the emitter hoists the declaration before the
+`if`, which already works. Where the ternary is a statement's whole right-hand
+side the branches assign that name directly, and an arm that is itself a lowered
+ternary branches on the same name — so a chain becomes one `if`/`elif` ladder
+rather than a chain of copies. Nothing runs after this pass to remove a copy, so
+that matters.
 
 Tests: equivalence, plus the `0.0 if x > 1e30 else fp.cast(x)` witness.
 
@@ -95,10 +105,29 @@ merely the value.
 
 ### 5. Totality
 
-Phases 2–4 create the slots, and ANF runs after them, so a class-3
-subexpression now gets named like any other. Add the check: no non-atomic
-subexpression survives outside an atomic position. Assert it over the `examples/`
-corpus.
+Phases 2–4 create the slots, so a class-3 subexpression can be named like any
+other. What remains is to state the invariant and check it.
+
+**It is not "an ANF program has no `IfExpr`".** A ternary with slot-free arms is
+left alone on purpose — no backend needs a place for it, and an `IfStmt` is
+bulkier for nothing. The invariant is uniform across all three sealed positions
+instead:
+
+> No expression needing a slot sits in a position that has none, and every
+> position a lowering reaches for free is flattened.
+
+The first half is what phase 9 checks from the emitter side: every `IfExpr`,
+`And` / `Or` and unrotated `while` condition is slot-free by `needs_slot`. The
+second half is why a surviving ternary is `x1 if c else x2` over atoms and
+nothing looser — lowering one costs nothing, so the only ones left are the ones
+already in normal form. A `while` condition is the exception, and deliberately:
+rotation duplicates it.
+
+Assert it over the `examples/` corpus. Expect a residue: `CompToLoop` is partial
+— it refuses a dependent-clause list — so a comprehension element can still hold
+something needing a slot. Either ANF refuses such a program or the invariant is
+stated modulo comprehensions; measure how many corpus functions are affected
+before choosing.
 
 ### 6. A scheduling operator
 

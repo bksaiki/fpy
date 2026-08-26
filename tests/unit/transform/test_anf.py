@@ -13,7 +13,8 @@ tests assert, as ``test_comp_to_loop.py`` does:
 
 A ``while`` condition is the one sealed position with a lowering — the loop is
 rotated — so it has parts of its own: :class:`TestNeedsSlot` for the predicate
-that decides whether to rotate, and :class:`TestRotation` for the rewrite.
+that decides whether to rotate, and :class:`TestRotation` for the rewrite.  A
+ternary is the other, becoming an ``IfStmt``: :class:`TestTernaryLowering`.
 """
 
 import fpy2 as fp
@@ -29,6 +30,7 @@ from fpy2.ast.fpyast import (
     Fst,
     FuncDef,
     IfExpr,
+    IfStmt,
     ListComp,
     ListExpr,
     ListRef,
@@ -264,18 +266,20 @@ class TestSealedPositions:
         block = out.body.stmts[0].body
         assert isinstance(block.stmts[1], WhileStmt)
 
-    def test_ternary_arms_are_untouched_but_the_condition_is_named(self):
+    def test_a_ternary_over_atoms_is_untouched(self):
+        """`x1 if c else x2` is already in normal form; only the condition,
+        which runs whenever the ternary does, takes a slot."""
+
         @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
+        def f(a: fp.Real, b: fp.Real, x: fp.Real) -> fp.Real:
             with fp.FP64:
-                y = (x * x) if (x + 1.0) > 0.0 else (x - x)
+                y = a if (x + 1.0) > 0.0 else b
                 return y
 
         before = _first(f.ast, IfExpr)
         after = _first(ANF.apply(f.ast), IfExpr)
         assert after.ift.is_equiv(before.ift)
         assert after.iff.is_equiv(before.iff)
-        # the condition runs whenever the ternary does, so it takes its slot
         assert isinstance(after.cond, Var)
 
     def test_bool_tail_is_untouched_but_the_head_is_named(self):
@@ -469,6 +473,143 @@ class TestRotation:
                 y = x
                 while max([y, 0.0]) > 0.0:
                     y = y - 1.0
+                return y
+
+        once = ANF.apply(f.ast)
+        assert ANF.apply(once).format() == once.format()
+
+
+# ----------------------------------------------------------------------
+# 2c. Ternary lowering
+
+
+class TestTernaryLowering:
+    """An arm that needs a place makes the ternary an ``IfStmt``."""
+
+    def test_lowered_when_an_arm_is_not_an_atom(self):
+        """Even pure arithmetic: an `IfStmt` flattens the arms for free, so
+        there is nothing to weigh against doing it."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = (x * x) if x > 0.0 else (x + x)
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, IfStmt) == 1
+        arms = [_first(out, IfStmt).ift, _first(out, IfStmt).iff]
+        for arm in arms:
+            assign = arm.stmts[-1]
+            assert isinstance(assign, Assign) and str(assign.target) == 'y'
+        assert repr(f(2.0)) == repr(_anf(f)(2.0))
+
+    def test_lowered_when_an_arm_needs_a_slot(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = max([x, 0.0]) if x > 0.0 else x
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, IfStmt) == 1
+        assert _unnamed(out) == []
+        # the ternary is gone entirely
+        class _NoTernary(DefaultVisitor):
+            def _visit_if_expr(self, e, ctx):
+                raise AssertionError('a ternary survived')
+
+        _NoTernary()._visit_function(out, None)
+
+    def test_the_whole_right_hand_side_assigns_the_target_directly(self):
+        """No temporary, and so no copy: nothing runs after this pass to remove
+        one."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = max([x, 0.0]) if x > 0.0 else x
+                return y
+
+        out = ANF.apply(f.ast)
+        branch = _first(out, IfStmt)
+        for arm in (branch.ift, branch.iff):
+            assign = arm.stmts[-1]
+            assert isinstance(assign, Assign)
+            assert str(assign.target) == 'y'
+
+    def test_lowered_mid_expression(self):
+        """The statement goes before the one that reads it."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = 1.0 + (max([x, 0.0]) if x > 0.0 else x)
+                return y
+
+        out = ANF.apply(f.ast)
+        block = out.body.stmts[0].body
+        assert isinstance(block.stmts[0], IfStmt)
+        assert isinstance(block.stmts[1], Assign)
+        assert _unnamed(out) == []
+
+    def test_a_chain_becomes_one_ladder(self):
+        """Each arm branches on the same name rather than through a copy."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = (
+                    max([x, 1.0]) if x > 0.0
+                    else (max([x, 2.0]) if x > -5.0 else 3.0)
+                )
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, IfStmt) == 2
+        # one binding per arm, all of `y`: no intermediate copy anywhere
+        targets = {
+            str(stmt.target)
+            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
+        }
+        assert targets == {'y'}
+
+    def test_composes_with_rotation(self):
+        """A rotated condition is in a slot, so a ternary inside it lowers —
+        once before the loop and once in the body."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while (max([y, 0.0]) if y > 0.0 else 0.0) > 0.5:
+                    y = y - 1.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, IfStmt) == 2
+        assert isinstance(_first(out, WhileStmt).cond, Var)
+        assert repr(f(3.0)) == repr(_anf(f)(3.0))
+
+    def test_not_lowered_in_a_position_with_no_slot(self):
+        """Inside an `or` tail there is nowhere to put the statement, so the
+        ternary stays one."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> bool:
+            with fp.FP64:
+                y = x > 100.0 or (max([x, 0.0]) if x > 0.0 else x) > 1.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, IfStmt) == 0
+        assert isinstance(_first(out, IfExpr), IfExpr)
+
+    def test_idempotent(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = max([x, 0.0]) if x > 0.0 else x
                 return y
 
         once = ANF.apply(f.ast)
