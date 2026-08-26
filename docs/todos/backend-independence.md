@@ -213,6 +213,13 @@ at one.
 
 ## 6. Pow2 and literal peepholes
 
+**Now load-bearing, not just tidy.** Statement form names the power, so
+`_emit_scale_by_pow2` no longer matches `2 ** n * x` — see
+[backend-cpp.md](backend-cpp.md). Moving the strength reduction here is what
+restores it, and it needs a language-level scale operation first: FPy has no
+`ldexp`/`scalb`, so an FPy-level transform has nothing to rewrite into.
+
+
 `_emit_scale_by_pow2`, `_emit_pow2`, `_fold_rounded_literal`, `_mode_independent`
 (191 lines) are algebraic rewrites gated on exactness proofs — `exact_exp2`,
 `round_is_identity` — that are already generic. Only `std::ldexp` is C++.

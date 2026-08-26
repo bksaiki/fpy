@@ -296,13 +296,23 @@ class TestScaleByPowerOfTwo:
         guards and reports ``prec=24, exp=-53, bound ~ 2 ** 40``, which ``float``
         does hold -- so the cast is gone and the scale still lands exactly, which
         ``test_lowered_roundtrip.py`` checks bit-for-bit across fourteen
-        formats."""
+        formats.
+
+        The power and the product it feeds are separate operations: statement
+        form binds the power, so the multiply peephole no longer sees a
+        syntactic ``2 ** n * x``.  Both are exact where the peephole would have
+        fired -- it requires that -- so this costs a multiply and not a rounding.
+        See ``docs/todos/backend-cpp.md``."""
         out = self._lowered()
         scale = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
         assert scale
-        # the scale-in takes the source straight, with no widening cast; the
-        # subnormal branch's multiply still widens, which is a different site
-        assert any('std::ldexp(x,' in ln for ln in scale), scale
+        # every scale is computed in `float`; the widening this test exists for
+        # would show as a `double` declaration here
+        assert all(ln.strip().startswith('float ') for ln in scale), scale
+        # and applied without widening the value it scales
+        products = [ln for ln in out.splitlines() if '* x)' in ln]
+        assert products, out
+        assert all('static_cast<double>' not in ln for ln in products), products
 
     def test_a_possibly_nonfinite_exponent_falls_back_to_a_product(self):
         """``ldexp`` takes an ``int``, and converting a NaN or an infinity to

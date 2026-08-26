@@ -291,11 +291,6 @@ class _ANFInstance(DefaultTransformVisitor):
         """Whether *e*'s value may be bound to a name
         (:data:`_NAMEABLE_TYPES`).  Asked of the original node, which is what
         the type analysis is keyed by."""
-        if isinstance(e, Pow):
-            # `2 ** n * x` is strength-reduced to a scaling by whoever emits it,
-            # and the match is syntactic: naming the power hides it, exactly as
-            # naming a `zip` would hide it from `ZipElim`.
-            return False
         return isinstance(self.types.by_expr.get(e), _NAMEABLE_TYPES)
 
     def _in_place(self, e: Expr, ctx: _Ctx) -> Expr:

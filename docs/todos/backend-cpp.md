@@ -230,6 +230,40 @@ An `if` / `if1` condition is deliberately not gated: it runs once, just before
 the branch, so its statements belong in the enclosing block. That is why
 `_emit_guarded_block` now takes its condition already emitted.
 
+### Statement form defeats the `2 ** n * x` fusion
+
+`_emit_scale_by_pow2` matches a *syntactic* `Pow` as an operand of a `Mul`, and
+`ANF` names the power first, so the fusion no longer fires:
+
+```c++
+float t14 = std::ldexp(1, static_cast<int>(t13));   // was: std::ldexp(x, t13)
+float _t8 = (t14 * x);
+```
+
+**Not an accuracy regression.** The peephole only fires where `_pow2_is_exact`
+and `_result_fits_ctx` both hold — that is, where the power *and* the product
+are exact — so the two forms agree bit-for-bit. `test_lowered_roundtrip.py`
+confirms it across fourteen formats. The cost is one multiply and one extra
+`float`, and the scale still runs in `float` with no widening.
+
+Two fixes were tried and rejected:
+
+- **Resolving the power through its name** in the emitter
+  (`defining_expr(scale)`) is *unsound*: `StorageInfer` gives two definitions of
+  one source name a single C++ variable, so re-emitting the exponent at the
+  product reads whatever a later branch put there. `k = n; p = 2 ** k; if c: k =
+  m; return x * p` computed `x * 2**m`. Pinned by
+  `test_the_exponent_is_not_re_read_at_the_product`.
+- **Teaching `ANF` not to name a `Pow`** works, but lets one backend's peephole
+  restrict a backend-independent pass — and only the shape that happened to have
+  a test, since `_fold_rounded_literal`, `_concrete_int_of` and
+  `_range_counter_scalar` match syntax the same way.
+
+The real fix is to strength-reduce before codegen, which needs a language-level
+scale operation: FPy has no `ldexp`/`scalb`, so there is nothing for an FPy-level
+transform to rewrite *into*. See
+[backend-independence.md](backend-independence.md) §6.
+
 ### Unchecked subscripts are not a bug
 
 **Settled: an out-of-range subscript is undefined in FPy.** `_visit_list_ref`,
