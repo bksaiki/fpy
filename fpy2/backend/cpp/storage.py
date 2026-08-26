@@ -27,6 +27,7 @@ from ...analysis.format_infer import (
     ListFormat,
     SetFormat,
     TupleFormat,
+    VarFormat,
     is_bottom,
 )
 from ...analysis.format_infer.analysis import _to_abstract
@@ -122,8 +123,13 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
 
     ``None`` -- a non-numeric bound, e.g. a comparison -- is ``BOOL``;
     ``REAL_FORMAT`` raises, since no finite ladder entry covers all reals.
+
+    :class:`VarFormat` is ``BOOL`` as well, for a different reason: an
+    unresolved kind has no observable storage, so any choice compiles.  Where it
+    *is* observable -- in the signature -- ``_check_signature_monomorphic``
+    refuses the spec before this runs.
     """
-    if bound is None:
+    if bound is None or isinstance(bound, VarFormat):
         return CppScalar.BOOL
     if bound == REAL_FORMAT:
         raise StorageSelectionError(

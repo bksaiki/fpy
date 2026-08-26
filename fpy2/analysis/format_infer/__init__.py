@@ -1,6 +1,7 @@
 """Format analysis for FPy programs."""
 
 from .analysis import (
+    VAR_FORMAT,
     FormatAnalysis,
     FormatBound,
     FormatInfer,
@@ -10,6 +11,7 @@ from .analysis import (
     PreAnalysisCache,
     SetFormat,
     TupleFormat,
+    VarFormat,
     exact_binop,
     exact_exp2,
     exact_logb,
@@ -28,6 +30,7 @@ from .double_round import (
 from .format import AbstractableFormat, AbstractFormat
 
 __all__ = [
+    'VAR_FORMAT',
     'AbstractFormat',
     'AbstractableFormat',
     'DoubleRoundOp',
@@ -40,6 +43,7 @@ __all__ = [
     'PreAnalysisCache',
     'SetFormat',
     'TupleFormat',
+    'VarFormat',
     'derive_intermediate',
     'double_round_ok',
     'double_round_op_ok',
