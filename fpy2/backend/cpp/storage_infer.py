@@ -223,8 +223,14 @@ class StorageInfer:
         # ---- 2. storage per class ----
         class_storage: dict[Definition, CppType] = {}
         for c, members in class_members.items():
-            bounds = [def_to_bound[d] for d in members if d in def_to_bound]
-            assert bounds, f'no format bounds for class {c} members={members}'
+            # every member, not those that happen to have a bound: one
+            # without contributes no constraint, so skipping it can leave the
+            # class too narrow to hold its own values
+            missing = [d for d in members if d not in def_to_bound]
+            assert not missing, (
+                f'class {c} has members with no format bound: {missing}'
+            )
+            bounds = [def_to_bound[d] for d in members]
             try:
                 class_storage[c] = aggregate_storage(bounds)
             except StorageSelectionError as e:

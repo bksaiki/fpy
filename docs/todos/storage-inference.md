@@ -679,36 +679,34 @@ if unsure; phase 3 removes it properly.
 pytest tests/unit/backend/cpp -q -n 8
 ```
 
-### 1. The storage domain becomes `FormatBound`
+### 1. The storage domain becomes formats
 
-In place, still in the backend — no files move, so the diff is the domain change
-alone.
+**Narrowed in execution.** The domain and its operations move to formats; the
+`CppType` *boundary* does not. Retyping `class_storage` touches 145 `CppType`
+uses in the emitter, nearly all of them spelling, so it belongs with phase 4's
+interface rather than in a commit whose point is the domain.
 
-- `Sigma` becomes an ordered **sequence** of `Format`s (`SINT64.format()`,
-  `FP64.format()`, …) rather than a `CppScalar` enum [4].
-- `ceil(F)` is the first member containing `F`; `JOIN` is **n-ary** over a
-  collection, never a folded binary — folding is both less precise and less
-  total (`JOIN{s8, u16, f32}` is `float`; folded it is `double`, and
-  `JOIN{s8, u32, f32}` folded fails outright).
-- `scalar_fits_in`, `scalar_sup`, `_LADDER_LOOKUP`, `exact_integer_bits` and
-  `bound_fits_in_scalar` collapse into format operations or vanish.
-- `choose_storage`'s unbounded-integer fallback stays, marked as the policy hook
-  it is.
-- Assert that every class member has a bound rather than skipping [12].
-- `CppList` / `CppTuple` do **not** vanish: they carry the representation axis
-  (`boxed`, `size`), which is not a format. What changes is that the analysis no
-  longer speaks in them; the backend builds one from (storage format,
-  representation).
+Done:
 
-The `class_storage` mutation `unbox.py` performs
-(`storage.class_storage.update(...)`) is the seam here. It stays for now, but the
-types on either side change.
+- `_SIGMA` is an ordered sequence of **formats** (`SINT64.format()`, …) paired
+  with the C++ type that spells each, replacing a ladder of pre-lifted
+  `AbstractFormat`s. `_LADDER_LOOKUP` becomes `_ABSTRACT`, derived.
+- The docstring states why it is a *sequence*: containment is not a
+  join-semilattice, so the order is the tie-break and a different one changes
+  which programs compile.
+- `scalar_sup` is rewritten as a single n-ary search — first rung containing
+  every input — with the non-foldability documented. Verified against the old
+  algorithm on all 385 subsets up to size four.
+- `aggregate_storage` asserts every class member has a bound instead of skipping
+  those without [12].
 
-Risk: this is where emitted output could shift. Byte-identical is the bar.
+Left for phase 4: `class_storage` typed as a format rather than a `CppType`, and
+`CppList` / `CppTuple` reduced to the representation axis they actually carry.
 
-```
-pytest tests/unit/backend/cpp -q -n 8    +    the 0a harness diff
-```
+Tests: `tests/unit/backend/cpp/test_storage_ladder.py` pins the two properties a
+refactor could silently undo — the ladder is a linear extension of containment,
+and the join is n-ary (folding overshoots on `{s8, u16, f32}` and fails outright
+on `{s8, u32, f32}`).
 
 ### 2. Split assignment from materialization
 

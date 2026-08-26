@@ -11,9 +11,9 @@ The module also exposes:
 - :func:`scalar_fits_in` — ladder-level containment between two
   :class:`CppScalar`s.  Used by the cast helper to reject lossy
   implicit conversions.
-- :func:`scalar_sup` — smallest ladder scalar subsuming every
-  input.  Used by :meth:`_visit_compare` to pick the common type
-  for a chained comparison.
+- :func:`scalar_sup` — the first rung subsuming every input.  N-ary: see its
+  docstring for why it must not be folded.  Used by :meth:`_visit_compare` to
+  pick the common type for a chained comparison.
 - :func:`bound_fits_in_scalar` — value-level containment, for a
   conversion the type-level test refuses.
 - :func:`exact_integer_bits` — a float rung's exact-integer width, for
@@ -61,23 +61,37 @@ def _af(fmt: AbstractableFormat) -> AbstractFormat:
     return af
 
 
-_LADDER: tuple[tuple[CppScalar, AbstractFormat], ...] = (
-    (CppScalar.U8, _af(UINT8.format())),
-    (CppScalar.S8, _af(SINT8.format())),
-    (CppScalar.U16, _af(UINT16.format())),
-    (CppScalar.S16, _af(SINT16.format())),
-    (CppScalar.U32, _af(UINT32.format())),
-    (CppScalar.S32, _af(SINT32.format())),
-    (CppScalar.F32, _af(FP32.format())),
-    (CppScalar.U64, _af(UINT64.format())),
-    (CppScalar.S64, _af(SINT64.format())),
-    (CppScalar.F64, _af(FP64.format())),
+_SIGMA: tuple[tuple[CppScalar, AbstractableFormat], ...] = (
+    (CppScalar.U8, UINT8.format()),
+    (CppScalar.S8, SINT8.format()),
+    (CppScalar.U16, UINT16.format()),
+    (CppScalar.S16, SINT16.format()),
+    (CppScalar.U32, UINT32.format()),
+    (CppScalar.S32, SINT32.format()),
+    (CppScalar.F32, FP32.format()),
+    (CppScalar.U64, UINT64.format()),
+    (CppScalar.S64, SINT64.format()),
+    (CppScalar.F64, FP64.format()),
 )
-"""Storage ladder, smallest first.  Searched linearly for the first
-covering type."""
+"""The storage domain: an ordered sequence of *formats*, smallest first, each
+paired with the C++ type that spells it.
+
+A storage type is a format the target can spell -- ``CppScalar.S64`` names
+exactly ``SINT64.format()`` -- so containment, widening and losslessness are all
+format questions and need no separate vocabulary.
+
+**Ordered, not a set.**  Containment over these formats is not a
+join-semilattice: ``{s8, u16}`` has two incomparable minimal upper bounds,
+``s32`` and ``f32``, and no least one.  The sequence is therefore the tie-break,
+and a different order changes which programs compile -- preferring the integer
+rung for ``{s8, u16}`` is what makes a later join with ``float`` fail.
+"""
 
 
-_LADDER_LOOKUP = {ty: af for ty, af in _LADDER}
+_ABSTRACT: dict[CppScalar, AbstractFormat] = {
+    ty: _af(fmt) for ty, fmt in _SIGMA
+}
+"""Each rung lifted for comparison.  ``AbstractFormat`` is what carries ``<=``."""
 
 
 def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
@@ -89,14 +103,14 @@ def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
     """
     if a is CppScalar.BOOL or b is CppScalar.BOOL:
         return a is b
-    return _LADDER_LOOKUP[a] <= _LADDER_LOOKUP[b]
+    return _ABSTRACT[a] <= _ABSTRACT[b]
 
 
 def exact_integer_bits(ty: CppScalar) -> int | None:
     """How wide an integer float *ty* holds exactly -- its significand -- or
     ``None`` for a non-float rung, which has no such limit.  Used to explain a
     refused integer-to-float conversion."""
-    return int(_LADDER_LOOKUP[ty].prec) if ty.is_float() else None
+    return int(_ABSTRACT[ty].prec) if ty.is_float() else None
 
 
 def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:
@@ -111,7 +125,7 @@ def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:
     if not isinstance(bound, AbstractableFormat | SetFormat):
         return False
     af = _to_abstract(bound)
-    return af is not None and af <= _LADDER_LOOKUP[ty]
+    return af is not None and af <= _ABSTRACT[ty]
 
 
 class StorageSelectionError(Exception):
@@ -146,7 +160,7 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
         # rung contains it vacuously, so the smallest wins.  `_to_abstract`
         # cannot serve this: every format represents a `+0.0`, so none *is* the
         # empty set.
-        return _LADDER[0][0]
+        return _SIGMA[0][0]
 
     af = _to_abstract(bound)
     if af is None:
@@ -154,11 +168,11 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
             f'cannot lift {bound!r} to AbstractFormat; '
             'storage selection requires a dyadic format'
         )
-    for cpp_ty, ladder_af in _LADDER:
-        if af <= ladder_af:
+    for cpp_ty, _ in _SIGMA:
+        if af <= _ABSTRACT[cpp_ty]:
             return cpp_ty
     if (isinstance(bound, MPFixedFormat) and bound.expmin >= 0
-            and af.specials_contained_in(_LADDER_LOOKUP[CppScalar.S64])):
+            and af.specials_contained_in(_ABSTRACT[CppScalar.S64])):
         # Deliberately ignores the *magnitude* bound -- an unbounded integer has
         # none, and overflow is the user's problem (see the docstring above).  It
         # must not ignore the membership flags too: `int64_t` holds no NaN, no
@@ -234,38 +248,31 @@ def _supremum(storages: list[CppType]) -> CppType:
 
 
 def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
-    """Smallest scalar on the ladder that subsumes every input."""
-    # Filter out BOOL specifically — mixing bool with numeric storage is
-    # a typing bug, not a widening situation.
+    """The first rung of :data:`_SIGMA` containing every input.
+
+    **N-ary, and it must not be folded.**  Containment is not a
+    join-semilattice, so a pairwise fold is both less precise and less total
+    than one search over the whole set: ``sup([s8, u16, f32])`` is ``float``,
+    where folding gives ``double`` -- ``sup([s8, u16])`` picks ``s32``, which no
+    ``float`` holds -- and ``sup([s8, u32, f32])`` is ``double`` where folding
+    fails outright.
+    """
     if any(s is CppScalar.BOOL for s in scalars):
+        # Mixing bool with numeric storage is a typing bug, not a widening.
         if all(s is CppScalar.BOOL for s in scalars):
             return CppScalar.BOOL
         raise StorageSelectionError(
             f'cannot widen across BOOL and numeric storage: {scalars!r}'
         )
-    # For each ladder entry, accept it iff every input is <= it.
-    ladder_index = {ty: i for i, (ty, _) in enumerate(_LADDER)}
-    # Gather indices and pick the max — but only if all are on the same
-    # ladder.  (BOOL was excluded above; everything else is on the ladder.)
     try:
-        max_idx = max(ladder_index[s] for s in scalars)
+        afs = [_ABSTRACT[s] for s in scalars]
     except KeyError as e:
         raise StorageSelectionError(
             f'storage scalar not on the ladder: {e.args[0]!r}'
         ) from None
-    # The max isn't necessarily a covering type for all of them — e.g.,
-    # S32 ⊔ U32 needs S64 (signed must absorb unsigned of equal width).
-    # Walk the ladder from max_idx upward until we find a type that
-    # covers all the ladder ABs.
-    afs = []
-    for s in scalars:
-        for ty, af in _LADDER:
-            if ty is s:
-                afs.append(af)
-                break
-    for i in range(max_idx, len(_LADDER)):
-        ty, af = _LADDER[i]
-        if all(other <= af for other in afs):
+    for ty, _ in _SIGMA:
+        rung = _ABSTRACT[ty]
+        if all(af <= rung for af in afs):
             return ty
     raise StorageSelectionError(
         f'no storage type on the ladder subsumes {scalars!r}'
