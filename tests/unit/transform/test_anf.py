@@ -24,17 +24,20 @@ from fpy2.ast.fpyast import (
     Assign,
     Attribute,
     Call,
+    Compare,
     Empty,
     Enumerate,
     Expr,
     Fst,
     FuncDef,
+    If1Stmt,
     IfExpr,
     IfStmt,
     ListComp,
     ListExpr,
     ListRef,
     ListSlice,
+    Not,
     NullaryOp,
     Or,
     Range1,
@@ -121,11 +124,21 @@ def _first(node, kind):
     return found[0]
 
 
-def _count(func: FuncDef, kind) -> int:
+def _count(node, kind) -> int:
+    """How many *kind* statements are in *node* (a `FuncDef` or a `StmtBlock`)."""
     n = 0
-    for _path, stmt in walk_stmts(func):
-        if isinstance(stmt, kind):
-            n += 1
+
+    class _C(DefaultVisitor):
+        def _visit_statement(self, stmt, ctx):
+            nonlocal n
+            if isinstance(stmt, kind):
+                n += 1
+            super()._visit_statement(stmt, ctx)
+
+    if isinstance(node, FuncDef):
+        _C()._visit_function(node, None)
+    else:
+        _C()._visit_block(node, None)
     return n
 
 
@@ -282,17 +295,18 @@ class TestSealedPositions:
         assert after.iff.is_equiv(before.iff)
         assert isinstance(after.cond, Var)
 
-    def test_bool_tail_is_untouched_but_the_head_is_named(self):
-        @fp.fpy
-        def f(x: fp.Real) -> bool:
-            with fp.FP64:
-                y = (x * x) > 1.0 or (x + x) < 0.0
-                return y
+    def test_a_bool_chain_over_atoms_is_untouched(self):
+        """`p and q` is already in normal form."""
 
-        before = _first(f.ast, Or)
-        after = _first(ANF.apply(f.ast), Or)
-        assert isinstance(after.args[0], Var)
-        assert after.args[1].is_equiv(before.args[1])
+        @fp.fpy
+        def f(p: bool, q: bool) -> bool:
+            y = p and q
+            return y
+
+        before = _first(f.ast, And)
+        after = _first(ANF.apply(f.ast), And)
+        assert len(after.args) == len(before.args)
+        assert all(a.is_equiv(b) for a, b in zip(after.args, before.args))
 
     def test_comprehension_is_untouched(self):
         @fp.fpy
@@ -591,25 +605,160 @@ class TestTernaryLowering:
         assert isinstance(_first(out, WhileStmt).cond, Var)
         assert repr(f(3.0)) == repr(_anf(f)(3.0))
 
-    def test_not_lowered_in_a_position_with_no_slot(self):
-        """Inside an `or` tail there is nowhere to put the statement, so the
-        ternary stays one."""
+    def test_not_lowered_inside_a_comprehension(self):
+        """A comprehension element has no slot, so the ternary stays one."""
 
         @fp.fpy
-        def f(x: fp.Real) -> bool:
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
             with fp.FP64:
-                y = x > 100.0 or (max([x, 0.0]) if x > 0.0 else x) > 1.0
+                y = [((v * v) if v > 0.0 else (v + v)) for v in xs]
                 return y
 
         out = ANF.apply(f.ast)
         assert _count(out, IfStmt) == 0
         assert isinstance(_first(out, IfExpr), IfExpr)
 
+    def test_not_lowered_inside_an_unrotated_while_condition(self):
+        """The asymmetry rotation buys: a condition needing no place is left an
+        expression, so a ternary inside it has no slot either."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while ((x * x) if x > 0.0 else (x + x)) > y:
+                    y = y + 1.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, IfStmt) == 0
+        assert isinstance(_first(out, WhileStmt).cond, Compare)
+
     def test_idempotent(self):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
                 y = max([x, 0.0]) if x > 0.0 else x
+                return y
+
+        once = ANF.apply(f.ast)
+        assert ANF.apply(once).format() == once.format()
+
+
+# ----------------------------------------------------------------------
+# 2d. Bool-chain lowering
+
+
+class TestBoolChainLowering:
+    """An operand that is not an atom makes the chain a guarded sequence."""
+
+    def test_or_guards_on_the_negated_accumulator(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 or b > 0.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, If1Stmt) == 1
+        guard = _first(out, If1Stmt)
+        assert isinstance(guard.cond, Not)
+        assert repr(f(-1.0, 2.0)) == repr(_anf(f)(-1.0, 2.0))
+
+    def test_and_guards_on_the_accumulator(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 and b > 0.0
+                return y
+
+        out = ANF.apply(f.ast)
+        guard = _first(out, If1Stmt)
+        assert isinstance(guard.cond, Var)
+        assert repr(f(1.0, -1.0)) == repr(_anf(f)(1.0, -1.0))
+
+    def test_the_guards_are_flat(self):
+        """One guard per operand after the first, none nested inside another:
+        an `or` whose accumulator is already true fails every later guard."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 and b > 0.0 and c > 0.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, If1Stmt) == 2
+        for _p, stmt in walk_stmts(out):
+            if isinstance(stmt, If1Stmt):
+                assert _count(stmt.body, If1Stmt) == 0
+
+    def test_the_accumulator_is_the_target(self):
+        """No temporary and no copy where the chain is the whole right-hand
+        side."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 or b > 0.0
+                return y
+
+        out = ANF.apply(f.ast)
+        targets = {
+            str(stmt.target)
+            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
+        }
+        assert targets == {'y'}
+
+    def test_a_nested_chain_shares_one_accumulator(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
+            with fp.FP64:
+                y = (a > 0.0 and b > 0.0) or c > 0.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert _count(out, If1Stmt) == 2
+        targets = {
+            str(stmt.target)
+            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
+        }
+        assert targets == {'y'}
+        assert repr(f(1.0, -1.0, 1.0)) == repr(_anf(f)(1.0, -1.0, 1.0))
+
+    def test_short_circuit_is_preserved(self):
+        """`fp.cast` raises where the value is not representable, so an eagerly
+        evaluated tail would raise where FPy returns."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> bool:
+            with fp.FP64:
+                with fp.FP32:
+                    y = x > 1e30 or fp.cast(x) > 0.0
+                return y
+
+        assert _count(ANF.apply(f.ast), If1Stmt) == 1
+        assert _anf(f)(1e300) is True
+
+    def test_composes_with_rotation(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while y > 0.0 and max([y, 1.0]) > 0.5:
+                    y = y - 1.0
+                return y
+
+        out = ANF.apply(f.ast)
+        assert isinstance(_first(out, WhileStmt).cond, Var)
+        assert _count(out, If1Stmt) == 2       # one before the loop, one inside
+        assert repr(f(3.0)) == repr(_anf(f)(3.0))
+
+    def test_idempotent(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 and (b > 0.0 or c > 0.0)
                 return y
 
         once = ANF.apply(f.ast)

@@ -47,11 +47,19 @@ block runs exactly when the arm did.
     else:
         y = d
 
-An ``IfStmt`` is bulkier to read but costs nothing to run, so a ternary is left
-alone only where it is already in normal form -- ``x1 if c else x2`` over atoms.
-A rotation *duplicates* its condition, which is a real cost, so that one is
-gated on :func:`needs_slot` instead: a condition needing no place stays an
-expression.
+A ternary is left alone only where it is already in normal form -- ``x1 if c
+else x2`` over atoms -- and a bool chain likewise.  Not for the backend's sake:
+the cpp emitter spells either inline and needs no place for one.  It is that a
+sealed position is unreachable to every pass that needs a preamble.
+:class:`~fpy2.transform.RoundElim` and :class:`~fpy2.transform.RoundInsert`
+suppress hoisting inside an ``IfExpr`` branch for exactly the reason this pass
+seals it, so no rounding can be eliminated or inserted there --
+:mod:`fpy2.transform.comp_to_loop`'s own reason for existing, applied to
+ternaries and bool tails.  Flattening them makes them schedulable.
+
+A rotation is the exception, because it *duplicates* its condition rather than
+restructuring it.  That cost is real, so it is gated on :func:`needs_slot`
+instead: a condition needing no place stays an expression.
 
 The two compose, and that is why they are worth having together: the condition a
 rotation lifts sits in a slot, so an ``IfExpr`` inside it can then be lowered
@@ -291,11 +299,10 @@ class _ANFInstance(DefaultTransformVisitor):
         """Whether *e* is a ternary this pass turns into an ``IfStmt``.
 
         Every ternary but ``x1 if c else x2`` over atoms, which is already in
-        normal form.  Not :func:`needs_slot`, which is the weaker question of
-        whether a *backend* would need a place: an arm holding ``x * x`` needs no
-        statement to emit, but leaving it there leaves the program un-flattened,
-        and the arms are what an ``IfStmt`` flattens for free -- it restructures
-        where a rotation duplicates, so there is nothing to weigh against it.
+        normal form.  Not :func:`needs_slot`, which asks the weaker question of
+        whether a *backend* needs a place -- an arm holding ``x * x`` needs no
+        statement to emit.  What an unflattened arm costs is reach: no pass with
+        a preamble can rewrite inside one.  See the module docstring.
 
         Only in a hoistable position: the statement has to go somewhere.
         """
@@ -323,28 +330,38 @@ class _ANFInstance(DefaultTransformVisitor):
             e.loc,
         )
 
+    def _bind(self, target: NamedId, e: Expr, ctx: _Ctx, loc) -> Stmt:
+        """The statement binding *target* to *e*, appending *e*'s own
+        temporaries to *ctx* first.
+
+        A lowered ternary or bool chain accumulates into *target* directly
+        rather than through a temporary, so nesting them gives one ladder rather
+        than a chain of copies -- and nothing runs after this pass to remove one.
+        """
+        if self._lowers(e, ctx):
+            assert isinstance(e, IfExpr)
+            return self._branch_on(e, target, ctx)
+        if isinstance(e, (And, Or)) and self._lowers_chain(e, ctx):
+            return self._short_circuit(e, ctx, target)
+        return Assign(target, None, self._in_place(e, ctx), loc)
+
     def _arm(self, target: NamedId, e: Expr, loc) -> StmtBlock:
         """A block binding *target* to *e*, with *e*'s temporaries inside it.
 
         The block runs exactly when the arm did, which is the whole point: this
         is the slot the arm lacked.
-
-        An arm that is itself a lowered ternary branches on the same name, as in
-        :meth:`_visit_assign`: a chain of ternaries is then a chain of
-        ``if``/``else`` rather than one per copy.
         """
         inner = _Ctx(stmts=[])
-        if self._lowers(e, inner):
-            assert isinstance(e, IfExpr)
-            inner.stmts.append(self._branch_on(e, target, inner))
-            return StmtBlock(inner.stmts)
-        expr = self._in_place(e, inner)
-        inner.stmts.append(Assign(target, None, expr, loc))
+        inner.stmts.append(self._bind(target, e, inner, loc))
         return StmtBlock(inner.stmts)
 
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         if not isinstance(e, (And, Or)):
             return super()._visit_naryop(e, ctx)
+        if self._lowers_chain(e, ctx):
+            t = self.gensym.fresh(self.prefix)
+            ctx.stmts.append(self._short_circuit(e, ctx, t))
+            return Var(t, e.loc)
         # Short-circuit: the first operand always runs, the rest do not.
         sealed = ctx.sealed()
         args = [
@@ -353,6 +370,49 @@ class _ANFInstance(DefaultTransformVisitor):
             for i, a in enumerate(e.args)
         ]
         return type(e)(args, e.loc)
+
+    def _lowers_chain(self, e: 'And | Or', ctx: _Ctx) -> bool:
+        """Whether *e* becomes a chain of guarded statements.
+
+        The same rule as :meth:`_lowers`: every chain but one already in normal
+        form, which for a bool chain is every operand an atom.  A degenerate
+        one-operand chain has nothing to short-circuit.
+        """
+        return (
+            ctx.hoistable
+            and len(e.args) > 1
+            and not all(isinstance(a, _ATOMIC) for a in e.args)
+        )
+
+    def _short_circuit(
+        self, e: 'And | Or', ctx: _Ctx, target: NamedId,
+    ) -> Stmt:
+        """*e* accumulated into *target*, one guard per operand after the first.
+
+        The guards are *flat*, not nested, and short-circuit all the same: once
+        an ``or``'s accumulator is true every later ``if not t`` fails, so no
+        further operand is evaluated -- and dually for ``and``.  A nested form
+        would indent one level per operand for no gain.
+
+        .. code-block:: python
+
+            t = a
+            if not t:
+                t = b       # only where `a` was false
+            if not t:
+                t = c
+
+        Everything but the last statement is appended to *ctx*, and the last is
+        returned, so a caller with one statement slot -- an assignment whose
+        whole right-hand side this is -- has one to give back.
+        """
+        stmts: list[Stmt] = [self._bind(target, e.args[0], ctx, e.loc)]
+        for arg in e.args[1:]:
+            read = Var(target, e.loc)
+            guard = read if isinstance(e, And) else Not(read, e.loc)
+            stmts.append(If1Stmt(guard, self._arm(target, arg, e.loc), e.loc))
+        ctx.stmts.extend(stmts[:-1])
+        return stmts[-1]
 
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         # The element runs once per iteration, and a later clause's iterable may
@@ -372,12 +432,12 @@ class _ANFInstance(DefaultTransformVisitor):
         return StmtBlock(inner.stmts), ctx
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
-        if isinstance(stmt.target, NamedId) and self._lowers(stmt.expr, ctx):
-            # The whole right-hand side is a lowered ternary, so its branches
-            # assign this name directly.  Going through a temporary would leave
-            # a copy behind, and nothing runs after this pass to remove one.
-            assert isinstance(stmt.expr, IfExpr)
-            return self._branch_on(stmt.expr, stmt.target, ctx), ctx
+        if isinstance(stmt.target, NamedId) and stmt.type is None:
+            # A lowered right-hand side assigns this name directly rather than a
+            # temporary this statement then copies.  Skipped where the
+            # assignment carries a type annotation, which has one place to sit
+            # and several branches to sit in; the generic path keeps it.
+            return self._bind(stmt.target, stmt.expr, ctx, stmt.loc), ctx
         expr = self._in_place(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
 

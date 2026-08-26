@@ -79,10 +79,17 @@ miscompile witnesses in [backend-cpp.md](backend-cpp.md) — now rotating.
 ### 3. `IfExpr` → `IfStmt` plus a phi
 
 For every ternary but `x1 if c else x2` over atoms, which is already in normal
-form. **Not** gated on `needs_slot`: an `IfStmt` restructures where a rotation
-duplicates, so it costs nothing to run and there is nothing to weigh against
-flattening the arms. Leaving `(x * x) if c else (x + x)` alone would leave the
-program un-flattened for no gain.
+form. **Not** gated on `needs_slot` — and the reason is not the backend.
+`_visit_if_expr` spells a ternary inline and needs no place for one, so lowering
+deletes no emitter code; `needs_slot` would be the right gate if C++ were the
+only consumer.
+
+What an unflattened arm costs is *reach*. `transform/utils.py`'s `SiteRewriter`
+suppresses its preamble inside an `IfExpr` branch, and `round_elim.py` says so
+outright — hoisting needs a statement slot, so it is disabled inside a ternary
+arm. `RoundElim` and `RoundInsert` therefore cannot rewrite there at all, which
+is `comp_to_loop.py`'s own stated reason for existing, applied to ternaries.
+Flattening makes those positions schedulable.
 
 The merge phi is `is_intro`, so the emitter hoists the declaration before the
 `if`, which already works. Where the ternary is a statement's whole right-hand
@@ -93,11 +100,16 @@ that matters.
 
 Tests: equivalence, plus the `0.0 if x > 1e30 else fp.cast(x)` witness.
 
-### 4. `And` / `Or` → a short-circuit `IfStmt` chain
+### 4. `And` / `Or` → a short-circuit `If1Stmt` chain
 
-Where `needs_slot` holds of a non-first operand. FPy's `and` / `or` compile to
-Python's `BoolOp`, so they short-circuit and the lowering must preserve that
-order.
+The same atom rule, for the same schedulability reason — `_emit_bool_chain`
+joins with `&&` / `||` and never needs a place, so this buys the backend only
+witness 3. FPy's `and` / `or` compile to Python's `BoolOp`, so they
+short-circuit and the lowering must preserve that order.
+
+The guards are **flat**, not nested: once an `or`'s accumulator is true every
+later `if not t` fails, so no further operand runs, and dually for `and`. A
+nested form would indent one level per operand for nothing.
 
 Tests: equivalence, plus the `x > 1e30 or fp.cast(x) > 0.0` witness, and a
 program whose tail would assert if evaluated — which pins the order rather than
@@ -118,10 +130,9 @@ instead:
 
 The first half is what phase 9 checks from the emitter side: every `IfExpr`,
 `And` / `Or` and unrotated `while` condition is slot-free by `needs_slot`. The
-second half is why a surviving ternary is `x1 if c else x2` over atoms and
-nothing looser — lowering one costs nothing, so the only ones left are the ones
-already in normal form. A `while` condition is the exception, and deliberately:
-rotation duplicates it.
+second half is why a surviving ternary or chain is over atoms and nothing looser
+— an unflattened one is a position no pass with a preamble can enter. A `while`
+condition is the exception, and deliberately: rotation duplicates it.
 
 Assert it over the `examples/` corpus. Expect a residue: `CompToLoop` is partial
 — it refuses a dependent-clause list — so a comprehension element can still hold
