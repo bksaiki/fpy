@@ -27,7 +27,7 @@ slot-free only when both arms are.
 
 This is `emitter._PURE_COND_OPS` lifted to the language and complemented. It is
 deliberately an *over*-approximation of "some backend may need a statement here",
-so no backend is forced into an impossible position, and phase 8's tripwire is
+so no backend is forced into an impossible position, and phase 9's tripwire is
 what verifies it was conservative enough. `while x > 0:` and `y = a if c else b`
 keep their natural shape; only the impure cases lower.
 
@@ -100,7 +100,24 @@ subexpression now gets named like any other. Add the check: no non-atomic
 subexpression survives outside an atomic position. Assert it over the `examples/`
 corpus.
 
-### 6. Wire into the C++ pipeline
+### 6. A scheduling operator
+
+`fpy2/strategies/anf.py`, exporting `to_anf(func)` — the whole-program operator,
+following `close` and `simplify`: a `Function` in, a `Function` out, no `where`.
+ANF has no *sites* to aim at; rewriting one nest and not another leaves the
+program in a state no consumer wants, so this operator takes the whole function
+by construction.
+
+The one design question is whether it should also accept a `Module`. `simplify`
+and `close` take a `Function`, and `Module.map` already lifts a per-function
+rewrite, so `Function` is the consistent choice unless a caller turns up that
+needs the module form.
+
+Tests: `tests/unit/strategies/`, matching whatever the sibling operators assert
+— that it is the transform under a `Function` and that the docstring example
+holds.
+
+### 7. Wire into the C++ pipeline
 
 In `CppCompiler.specialize()`, after `RoundElim` — ANF destroys the shapes
 `ReduceFusion`, `ZipElim` and `EnumerateElim` match on, so it runs last. It
@@ -115,7 +132,7 @@ churn and some storage choices may genuinely shift.
 pytest tests/unit/backend/cpp -q -n 8
 ```
 
-### 7. Delete what ANF made dead
+### 8. Delete what ANF made dead
 
 The `_bind_operand` call sites, and the `_emit_at` build-at-`want` machinery that
 no longer meets a nested constructor. Success metric: `_bind_operand` reaches
@@ -130,7 +147,7 @@ when the lowerings that invented them move upstream.
 pytest tests/unit/backend/cpp -q -n 8
 ```
 
-### 8. The emitter tripwire
+### 9. The emitter tripwire
 
 Gate `while` conditions, `IfExpr` arms and boolean tails on `_is_pure_cond`,
 raising `CppEmitError`. With phases 2–4 landed this rejects nothing under the
@@ -159,6 +176,13 @@ then hits `_refuse_unsharing`; the extra apparent place also pushes
 failure rather than a slowdown. Aggregates are a follow-on with a measurement of
 their own.
 
-**`optimize=False` is unresolved** — §1's second blocking question. It bites only
-phase 6's wiring. If ANF ends up gated on the flag, phase 8 stops being
-belt-and-braces and becomes the only fix on that path.
+**ANF runs unconditionally**, not under `optimize`. Standard practice — do as
+much in the middle end as possible, so the backend has less to handle — and the
+alternative was worse: a gated pass leaves both emitter paths alive, so none of
+phase 8's deletions could happen, and the class-3 miscompiles would stay live
+under `optimize=False`.
+
+The cost is that `optimize=False` no longer means "compiles the surface AST
+verbatim": it now means the surface AST in statement form, with the
+optimizing transforms still skipped. Phase 7 updates `CppCompiler`'s docstring
+to say so.

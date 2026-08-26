@@ -153,7 +153,7 @@ for declared names, which is what §2's `store(e)` rule is stated over; and this
 the statement slot `comp_to_loop.py` and `round_insert.py` say they lack, named in
 both module docstrings as the reason a comprehension is unschedulable.
 
-### Blocking questions
+### Blocking question
 
 **Scalars only, or aggregates too?** Naming a list-valued expression creates a def
 that `same_object_defs` unions with nothing — a plain rebind is not a coalescing
@@ -165,13 +165,12 @@ more boxing, and under `STRICT` more *compile failures* rather than slower code.
 Scalars only for v1 is the safe scope, and it still captures every
 `_bind_operand` in the round guards and op dispatch.
 
-**What is `optimize=False` for?** Running unconditionally breaks its documented
-"compiles the surface AST verbatim"; running only under `optimize=True` means the
-emitter keeps both paths and none of the deletions above happen. If the flag is a
-debugging aid a third mode is cheap; if something relies on it as a guarantee,
-this pass cannot be unconditional. The answer decides the shape of the work — and
-note it has a correctness edge, since a gated pass leaves the class-3 miscompiles
-above live under `optimize=False`.
+**~~What is `optimize=False` for?~~ Settled: ANF runs unconditionally.** Doing as
+much as possible in the middle end is the standard division of labour, and gating
+was worse on both counts — the emitter would keep both paths, so none of the
+deletions above could happen, and the class-3 miscompiles would stay live under
+`optimize=False`. The cost is that the flag no longer means "compiles the surface
+AST verbatim", only that the optimizing transforms are skipped.
 
 ### Design questions, with a leaning
 

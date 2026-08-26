@@ -24,10 +24,31 @@ arm (conditional where the slot is not).  A statement's own operands qualify, an
 so does anything inside a body, which is the same case one level down.
 
 The positions FPy evaluates conditionally or repeatedly do not, and this pass
-*seals* them: a ``while`` condition, an ``IfExpr`` arm, an ``and``/``or`` tail
-and a comprehension's element keep their subexpressions inline, because hoisting
-one out would evaluate it on a path FPy never takes.  Lowering those into
-positions that do have a slot is separate work -- see ``docs/todos/anf.md``.
+*seals* them: an ``IfExpr`` arm, an ``and``/``or`` tail and a comprehension's
+element keep their subexpressions inline, because hoisting one out would evaluate
+it on a path FPy never takes.
+
+A ``while`` condition is the one such position with a lowering: the loop is
+*rotated*, so the condition is evaluated once before the loop and once at the end
+of the body -- exactly FPy's own order -- and each copy has a slot of its own.
+
+.. code-block:: python
+
+    # before
+    while max(xs) > 0.0:
+        <body>
+
+    # after
+    t = max(xs)
+    c = t > 0.0
+    while c:
+        <body>
+        t1 = max(xs)
+        c = t1 > 0.0
+
+Rotation costs a second copy of the condition, so it is applied only where the
+condition holds something that needs a place at all -- :func:`needs_slot`.  A
+condition built from names, literals and arithmetic is left as it is.
 
 **Scalars only.**  An expression that is, or may hold, a list or a tuple is left
 unnamed (:data:`_AGGREGATE`): naming it would give it a storage place of its own,
@@ -41,13 +62,20 @@ Idempotent: a second pass finds only atoms in the positions it names.
 import dataclasses
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..analysis import DefineUse, DefineUseAnalysis, Reachability, SyntaxCheck
 from ..ast.fpyast import (
+    AllOf,
+    AMax,
+    AMin,
     And,
+    AnyOf,
     AssertStmt,
     Assign,
     Attribute,
+    BinaryOp,
     Call,
+    Cast,
+    Compare,
     ContextStmt,
     EffectStmt,
     Empty,
@@ -64,17 +92,25 @@ from ..ast.fpyast import (
     ListExpr,
     ListRef,
     ListSlice,
+    Max,
+    Min,
     NaryOp,
+    Not,
     NullaryOp,
     Or,
     Range1,
     Range2,
     Range3,
     ReturnStmt,
+    Round,
+    RoundAt,
     Snd,
     Stmt,
     StmtBlock,
+    Sum,
+    TernaryOp,
     TupleExpr,
+    UnaryOp,
     ValueExpr,
     Var,
     WhileStmt,
@@ -82,6 +118,7 @@ from ..ast.fpyast import (
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
+from .path import sub_exprs
 
 _ATOMIC = (Var, ValueExpr, NullaryOp)
 """Expressions that are already a place, or need none.
@@ -101,6 +138,49 @@ projection can select one -- and because the cpp emitter folds an ``Fst``/``Snd`
 chain into a single ``std::get``, which naming each level would break; ``IfExpr``
 because its arms decide, and they are sealed here anyway.
 """
+
+
+_SLOT_FREE = (
+    Var, ValueExpr, NullaryOp,
+    Compare, Not, And, Or, IfExpr,
+    UnaryOp, BinaryOp, TernaryOp,
+)
+"""Node kinds whose own lowering needs no statement of its own.
+
+A whitelist, so a kind nobody thought about needs a slot: a false *positive*
+lowers a position that did not need it, which costs output size, while a false
+negative leaves an operand in a position with nowhere to put its statement --
+the shape ``docs/todos/backend-cpp.md`` records as a miscompile.
+"""
+
+_NEEDS_SLOT = (
+    Round, RoundAt, Cast,
+    Sum, AMin, AMax, AnyOf, AllOf,
+    Range1, Range2, Range3, Enumerate,
+    Fst, Snd,
+)
+"""The exceptions among :data:`_SLOT_FREE`'s base classes.
+
+A rounding may assert; a fold over a list needs a loop and an accumulator; a
+range allocates; and a projection is read through a bound name, since the cpp
+emitter folds an ``Fst``/``Snd`` chain into one ``std::get``.  Everything not
+matched by either tuple -- a call, a container, a comprehension, ``Min``/``Max``
+-- needs a slot by default.
+"""
+
+
+def needs_slot(e: Expr) -> bool:
+    """Does emitting *e* plausibly require a statement of its own?
+
+    Asked of a position FPy evaluates conditionally or repeatedly, to decide
+    whether it is worth lowering: a condition or an arm holding only names,
+    literals and arithmetic can stay an expression, since no backend needs
+    anywhere to put a statement.  Conservative in the safe direction -- see
+    :data:`_SLOT_FREE`.
+    """
+    if not isinstance(e, _SLOT_FREE) or isinstance(e, _NEEDS_SLOT):
+        return True
+    return any(needs_slot(sub) for _field, _i, sub in sub_exprs(e))
 
 
 @dataclasses.dataclass
@@ -226,10 +306,38 @@ class _ANFInstance(DefaultTransformVisitor):
         return IfStmt(cond, ift, iff, stmt.loc), ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
-        # Re-evaluated per iteration, and no slot runs that often: sealed.
-        cond = self._in_place(stmt.cond, ctx.sealed())
+        if not needs_slot(stmt.cond):
+            # Nothing in it needs a place, so it stays an expression -- and
+            # stays sealed, since no slot runs once per iteration.
+            cond = self._in_place(stmt.cond, ctx.sealed())
+            body, _ = self._visit_block(stmt.body, ctx)
+            return WhileStmt(cond, body, stmt.loc), ctx
+        return self._rotate(stmt, ctx), ctx
+
+    def _rotate(self, stmt: WhileStmt, ctx: _Ctx) -> WhileStmt:
+        """*stmt* with its condition evaluated through a name, once before the
+        loop and once at the end of the body.
+
+        That is FPy's own order -- condition, body, condition -- so each copy
+        sits in a slot that runs exactly as often as the condition does, and the
+        temporaries it needs go there.  The two copies share no nodes:
+        :meth:`_in_place` rebuilds every one, so neither needs cloning.
+
+        A body that always returns gets no second copy: the loop runs at most
+        one iteration, so the condition is evaluated exactly once, and code after
+        the ``return`` is unreachable -- which the syntax checker rejects.
+        """
+        c = self.gensym.fresh('c')
+        ctx.stmts.append(
+            Assign(c, None, self._in_place(stmt.cond, ctx), stmt.loc),
+        )
         body, _ = self._visit_block(stmt.body, ctx)
-        return WhileStmt(cond, body, stmt.loc), ctx
+        if Reachability.analyze(body).has_fallthrough:
+            # The body's own block is the per-iteration slot.
+            tail = _Ctx(stmts=body.stmts)
+            again = self._in_place(stmt.cond, tail)
+            body.stmts.append(Assign(c, None, again, stmt.loc))
+        return WhileStmt(Var(c, stmt.loc), body, stmt.loc)
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         iterable = self._in_place(stmt.iterable, ctx)

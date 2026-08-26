@@ -10,6 +10,10 @@ tests assert, as ``test_comp_to_loop.py`` does:
    ``and`` / ``or`` tail and a comprehension keep their nesting, since hoisting
    one out would evaluate it on a path FPy does not take.
 3. **Semantic equivalence** through the interpreter, and idempotence.
+
+A ``while`` condition is the one sealed position with a lowering — the loop is
+rotated — so it has parts of its own: :class:`TestNeedsSlot` for the predicate
+that decides whether to rotate, and :class:`TestRotation` for the rewrite.
 """
 
 import fpy2 as fp
@@ -43,6 +47,7 @@ from fpy2.ast.fpyast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import ANF
+from fpy2.transform.anf import needs_slot
 from fpy2.transform.path import sub_exprs, walk_stmts
 
 # ----------------------------------------------------------------------
@@ -90,8 +95,9 @@ def _unnamed(func: FuncDef) -> list[Expr]:
     return bad
 
 
-def _first(func: FuncDef, kind):
-    """The first *kind* node in *func*, in visit order."""
+def _first(node, kind):
+    """The first *kind* node in *node* (a `FuncDef` or a `StmtBlock`), in visit
+    order."""
     found: list = []
 
     class _F(DefaultVisitor):
@@ -105,7 +111,10 @@ def _first(func: FuncDef, kind):
                 found.append(stmt)
             super()._visit_statement(stmt, ctx)
 
-    _F()._visit_function(func, None)
+    if isinstance(node, FuncDef):
+        _F()._visit_function(node, None)
+    else:
+        _F()._visit_block(node, None)
     assert found, f'no {kind.__name__} in the function'
     return found[0]
 
@@ -235,12 +244,15 @@ class TestContextBoundary:
 class TestSealedPositions:
     """A conditionally- or repeatedly-evaluated position keeps its nesting."""
 
-    def test_while_condition_is_untouched(self):
+    def test_a_pure_while_condition_is_untouched(self):
+        """Nothing in it needs a place, so it stays an expression and the loop
+        is not rotated."""
+
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
                 y = x
-                while max([y, 0.0]) > 0.0:
+                while (y * y) > 1.0:
                     y = y - 1.0
                 return y
 
@@ -248,7 +260,7 @@ class TestSealedPositions:
         out = ANF.apply(f.ast)
         after = _first(out, WhileStmt)
         assert after.cond.is_equiv(before.cond)
-        # and nothing was hoisted in front of the loop
+        # nothing was hoisted in front of the loop either
         block = out.body.stmts[0].body
         assert isinstance(block.stmts[1], WhileStmt)
 
@@ -304,6 +316,163 @@ class TestSealedPositions:
         before = _first(f.ast, WhileStmt)
         after = _first(ANF.apply(f.ast), WhileStmt)
         assert after.cond.is_equiv(before.cond)
+
+
+# ----------------------------------------------------------------------
+# 2b. `while` rotation
+
+
+def _while_cond(f) -> Expr:
+    return _first(f.ast, WhileStmt).cond
+
+
+class TestNeedsSlot:
+    """What the predicate deciding a rotation admits."""
+
+    def test_arithmetic_and_comparison_are_slot_free(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while ((y * y) + 1.0) > 1.0:
+                    y = y - 1.0
+                return y
+
+        assert not needs_slot(_while_cond(f))
+
+    def test_a_bool_chain_is_slot_free(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while y > 0.0 and (y * y) > 1.0:
+                    y = y - 1.0
+                return y
+
+        assert not needs_slot(_while_cond(f))
+
+    def test_len_is_slot_free(self):
+        """A boundary case: `len` reads a size and allocates nothing."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                y = 0.0
+                while len(xs) > y:
+                    y = y + 1.0
+                return y
+
+        assert not needs_slot(_while_cond(f))
+
+    def test_a_fold_needs_a_slot(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while max([y, 0.0]) > 0.0:
+                    y = y - 1.0
+                return y
+
+        assert needs_slot(_while_cond(f))
+
+    def test_a_rounding_needs_a_slot(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while fp.round(y) > 0.0:
+                    y = y - 1.0
+                return y
+
+        assert needs_slot(_while_cond(f))
+
+    def test_a_subscript_needs_a_slot(self):
+        """Not in the slot-free whitelist, so it needs one by default."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                y = 0.0
+                while xs[0] > y:
+                    y = y + 1.0
+                return y
+
+        assert needs_slot(_while_cond(f))
+
+
+class TestRotation:
+    """`c = cond; while c: body; c = cond` -- FPy's own evaluation order."""
+
+    def test_the_condition_becomes_a_name(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while max([y, 0.0]) > 0.0:
+                    y = y - 1.0
+                return y
+
+        out = ANF.apply(f.ast)
+        loop = _first(out, WhileStmt)
+        assert isinstance(loop.cond, Var)
+        # bound in the statement just before the loop, and again at the end of
+        # the body -- the two slots the condition's own evaluations sit in
+        block = out.body.stmts[0].body
+        i = block.stmts.index(loop)
+        pre, tail = block.stmts[i - 1], loop.body.stmts[-1]
+        assert isinstance(pre, Assign) and isinstance(tail, Assign)
+        assert pre.target == tail.target == loop.cond.name
+
+    def test_a_body_that_always_returns_gets_no_second_copy(self):
+        """The loop runs at most one iteration, so the condition is evaluated
+        exactly once -- and a statement after the `return` is unreachable."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while max([y, 0.0]) > 0.0:
+                    return y - 1.0
+                return y
+
+        out = ANF.apply(f.ast)
+        loop = _first(out, WhileStmt)
+        assert len(loop.body.stmts) == 1
+        assert repr(f(3.0)) == repr(_anf(f)(3.0))
+
+    def test_nested_loops_each_rotate(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                i = 0.0
+                while max(xs) > acc:
+                    while min(xs) < i:
+                        i = i - 1.0
+                    acc = acc + 1.0
+                return acc
+
+        out = ANF.apply(f.ast)
+        outer = _first(out, WhileStmt)
+        assert isinstance(outer.cond, Var)
+        inner = _first(outer.body, WhileStmt)
+        assert isinstance(inner.cond, Var)
+        assert inner.cond.name != outer.cond.name
+        assert repr(f([1.0, 2.0])) == repr(_anf(f)([1.0, 2.0]))
+
+    def test_rotation_is_idempotent(self):
+        """After rotating, the condition is a name, which needs no slot."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while max([y, 0.0]) > 0.0:
+                    y = y - 1.0
+                return y
+
+        once = ANF.apply(f.ast)
+        assert ANF.apply(once).format() == once.format()
 
 
 # ----------------------------------------------------------------------
