@@ -47,14 +47,8 @@ import enum
 from dataclasses import dataclass, field
 
 from ...analysis import Definition
-from ...analysis.alias import AliasAnalysis, Region
-from ...analysis.array_size import (
-    ArraySizeAnalysis,
-    ArraySizeBound,
-    ListSize,
-    TupleSize,
-    concrete_size,
-)
+from ...analysis.alias import AliasAnalysis, Region, region_sizes
+from ...analysis.array_size import ArraySizeAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatBound
@@ -62,20 +56,11 @@ from ...analysis.reaching_defs import AssignDef
 from ...ast.fpyast import (
     Argument,
     Call,
-    Empty,
-    Enumerate,
     Expr,
     FuncDef,
     IndexedAssign,
-    ListComp,
-    ListExpr,
-    ListSlice,
     NamedId,
-    Range1,
-    Range2,
-    Range3,
     Var,
-    Zip,
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -300,7 +285,7 @@ class Unbox:
         """
         out = UnboxAnalysis(alias)
         if array_size is not None:
-            out.sizes = _region_sizes(alias, array_size)
+            out.sizes = region_sizes(alias, array_size)
         scan = _Scan(alias, callees or {})
         scan._visit_function(ast, None)
         out.slot_replaced = alias.slot_replaced
@@ -396,61 +381,6 @@ def _regions(
             break
         ty, depth = ty.elt, depth + 1
     return per_depth
-
-
-_ALLOC_EXPRS = (
-    ListExpr, ListComp, Empty, ListSlice, Range1, Range2, Range3, Zip,
-    Enumerate, Call,
-)
-"""Expression forms that produce a list of their own.
-
-These seed :func:`_region_sizes` in addition to the defs: a returned literal has
-a region but no def, and only its ``by_expr`` bound can size it.  Plain reads
-(``Var``, ``ListRef``) are left out -- they only mirror what a def contributed,
-and a lossy read-side bound must not poison a region a definition proved.
-"""
-
-
-def _region_sizes(
-    alias: AliasAnalysis, array_size: ArraySizeAnalysis,
-) -> dict[Region, int | None]:
-    """One proven length per region, by meeting every contribution.
-
-    A region's storage must hold every value it is ever bound to, so the meet
-    poisons on any doubt: a def with no bound, a level the size analysis
-    answered ``None`` for, a symbolic size (a per-run variable, never a length
-    ``std::array`` can spell), or two differing lengths all force ``None``.
-    Contributions walk each bound structurally against the region graph,
-    mirroring :meth:`UnboxAnalysis._stamp`, so the table is keyed exactly where
-    ``_stamp`` reads it.
-    """
-    sizes: dict[Region, int | None] = {}
-
-    def contribute(region: Region, k: int | None) -> None:
-        if region in sizes and sizes[region] != k:
-            sizes[region] = None
-        else:
-            sizes[region] = k
-
-    def seed(bound: ArraySizeBound, region: Region | None) -> None:
-        if region is None:
-            return
-        match bound:
-            case ListSize():
-                contribute(region, concrete_size(bound.size))
-                seed(bound.elt, alias.region_at(region))
-            case TupleSize():
-                for i, b in enumerate(bound.elts):
-                    seed(b, alias.region_field(region, i))
-            case None:
-                contribute(region, None)
-
-    for d in alias.all_defs():
-        seed(array_size.by_def.get(d), alias.region_of(d))
-    for e, bound in array_size.by_expr.items():
-        if isinstance(e, _ALLOC_EXPRS):
-            seed(bound, alias.region_of_expr(e))
-    return sizes
 
 
 def _fields(alias: AliasAnalysis, regions: set[Region], i: int) -> set[Region]:

@@ -205,22 +205,26 @@ then does the policy cost anything measurable.
 
 ## 3. Representation inference
 
-`unbox.py` (722 lines) decides, per alias region, whether a list is a shared
-handle, a plain value, or a fixed-length value. It splits three ways.
+`unbox.py` decides, per alias region, whether a list is a shared handle, a plain
+value, or a fixed-length value. It splits three ways.
 
-**Backend-independent (about 130 lines).** `_region_sizes` meets
-`ArraySizeInfer`'s bounds over the region graph — 40 lines, no `CppType` outside a
-docstring, useful to anyone wanting one proven length per region. Three of
-`_Scan`'s four facts are the same: a region is stored into, a slot is replaced, a
-region is returned at depth *d*. `Alias` already owns the region graph
-(`referrers`, `escapes`, `transfers_ownership`, `defs_in`, `region_at`,
-`region_field`), so they belong there.
+**Backend-independent — done.** 99 lines left `unbox.py` (720 → 621) for
+`fpy2/analysis/alias.py`:
 
-The fourth does not move as written: *a region crosses a call boundary* is decided
-by `_unboxed(param.ty)` on the callee's ABI, so it asks whether the callee
-declared a handle — a representation question, not a language-level one. It
-extracts only with the representation predicate as a parameter, like
-`_shares_storage` below.
+- `region_sizes(alias, array_size)` — one proven length per region, by meeting
+  every contribution. A free function, not a method: `Alias.analyze` must not
+  require an `ArraySizeAnalysis`, since `escape` and `format_infer` both build an
+  `AliasAnalysis` without one.
+- `AliasAnalysis.written_regions` / `.slot_replaced` / `.returned_levels` —
+  syntactic facts keyed by region, collected by a second walk over the finished
+  graph. Second rather than folded into `_Builder`: each asks `region_of` for
+  where a place ends up, which is settled only once every merge has run. A bare
+  traversal is 1.4% of the builder, measured.
+
+`_Scan`'s fourth fact did **not** move. *A region crosses a call boundary* is
+decided by `_unboxed(param.ty)` on the callee's ABI, and the callee-written half
+of `written` by `param.written` — both questions about a representation this
+target chose. What is left in the backend is one `_visit_call`.
 
 **Generic algorithm, backend-supplied predicate (about 70 lines).**
 `_shares_storage` asks how many *places* hold a region separately, which is
@@ -228,7 +232,8 @@ language-level, but its precision is calibrated to this emitter: it does not use
 `alias.is_shared`, it counts only names that get their own storage, and that set
 is `binds_by_reference`, shared with the emitter so the two cannot drift.
 Discounting a name the emitter then copies is a miscompilation, so the extracted
-form takes the binding rule as a parameter.
+form takes the binding rule as a parameter — which would have exactly one
+implementation until there is a second backend to check it against.
 
 **Backend-specific (about 300 lines).** The output alphabet: C++ wants
 handle / value / fixed array, Rust wants `Rc<RefCell<Vec<T>>>` / `Vec` /
@@ -239,13 +244,17 @@ reaches through a handle or a value and whether a reference re-reads a slot wher
 **E-Deref** read it once. Then the verdict-to-type mapping (`_stamp`, `_regions`,
 `annotate`), `UnboxMode` and its diagnostics, and `ParamAbi` / `CalleeAbi`.
 
-A third moves, and the payoff is not a smaller emitter — it consults an oracle
-either way. It is that `Alias` gains facts other consumers want and the sharing
-verdict becomes testable without a C++ string.
+The emitter did not shrink and was never going to: it consults an oracle either
+way. What the move bought is that `Alias` now answers three questions any
+consumer of the region graph would ask, that one proven length per region is
+available to more than the C++ boxing decision, and that all four are tested
+directly rather than through an emitted C++ string.
 
-The first part is independent of everything else here and is planned in
-[region-facts.md](region-facts.md). The second waits for a second backend to
-check the interface against.
+Still available here: `_regions` / `_at_depth` / `_fields` / `_stamp` (about 90
+lines) walk a storage class's structure, which since §2 is a `FormatBound` rather
+than a `CppType` — so a generic version is now expressible where it was not. But
+`_stamp` writes the representation, which is the backend-specific output
+alphabet, so the traversal and the verdict have to be split first.
 
 ## 4. Round and cast lowering
 
@@ -342,11 +351,9 @@ circularity recorded earlier — the boxing fix waiting on a widening policy —
 resolves in this direction: the fix does not need a policy to be *correct*, only
 to be fast, and until it lands there is nothing for a policy to govern.
 
-**§3's first part** — region sizes into `Alias`, plus three of `_Scan`'s four
-facts — is the low-risk alternative: independent, about 130 lines, no premise
-left to check. Its second part waits for a second backend. **§4** is independent,
-but is a new transform whose lines mostly move rather than disappear. **§6**
-needs a language-level scale operation. **§7** waits for the FPy-level lowerings
+**§3's first part** is done; its second waits for a second backend. **§4** is
+independent, but is a new transform whose lines mostly move rather than
+disappear. **§6** needs a language-level scale operation. **§7** waits for the FPy-level lowerings
 to become total, and owns the 113 `_bind_operand` mints.
 
 Aggregate naming in ANF is not a numbered section, and it owns less than it was

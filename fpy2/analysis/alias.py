@@ -120,6 +120,13 @@ from ..ast import (
 from ..function import Function
 from ..types import ListType, TupleType, Type
 from ..utils import Unionfind
+from .array_size import (
+    ArraySizeAnalysis,
+    ArraySizeBound,
+    ListSize,
+    TupleSize,
+    concrete_size,
+)
 from .define_use import DefineUse, DefineUseAnalysis
 from .reaching_defs import AssignDef, Definition, same_object_defs
 from .type_infer import TypeAnalysis, TypeInfer
@@ -899,6 +906,64 @@ class _RegionFacts(DefaultVisitor):
             self.returned_levels[depth].add(r)
             depth += 1
         super()._visit_return(stmt, ctx)
+
+
+_ALLOC_EXPRS = (
+    ListExpr, ListComp, Empty, ListSlice, Range1, Range2, Range3, Zip,
+    Enumerate, Call,
+)
+"""Expression forms that produce a list of their own.
+
+These seed :func:`region_sizes` in addition to the defs: a returned literal has
+a region but no def, and only its ``by_expr`` bound can size it.  Plain reads
+(``Var``, ``ListRef``) are left out -- they only mirror what a def contributed,
+and a lossy read-side bound must not poison a region a definition proved.
+"""
+
+
+def region_sizes(
+    alias: AliasAnalysis, array_size: ArraySizeAnalysis,
+) -> dict[Region, int | None]:
+    """One proven length per region, by meeting every contribution.
+
+    A region's storage must hold every value it is ever bound to, so the meet
+    poisons on any doubt: a def with no bound, a level the size analysis
+    answered ``None`` for, a symbolic size (a per-run variable, never a length
+    a fixed-length representation can spell), or two differing lengths all force ``None``.
+    Contributions walk each bound structurally against the region graph, so the
+    table is keyed by region exactly where a consumer reads it.
+
+    Not a method on :class:`AliasAnalysis`: that analysis must not require an
+    :class:`~fpy2.analysis.array_size.ArraySizeAnalysis` -- ``escape`` and
+    ``format_infer`` both build one without.
+    """
+    sizes: dict[Region, int | None] = {}
+
+    def contribute(region: Region, k: int | None) -> None:
+        if region in sizes and sizes[region] != k:
+            sizes[region] = None
+        else:
+            sizes[region] = k
+
+    def seed(bound: ArraySizeBound, region: Region | None) -> None:
+        if region is None:
+            return
+        match bound:
+            case ListSize():
+                contribute(region, concrete_size(bound.size))
+                seed(bound.elt, alias.region_at(region))
+            case TupleSize():
+                for i, b in enumerate(bound.elts):
+                    seed(b, alias.region_field(region, i))
+            case None:
+                contribute(region, None)
+
+    for d in alias.all_defs():
+        seed(array_size.by_def.get(d), alias.region_of(d))
+    for e, bound in array_size.by_expr.items():
+        if isinstance(e, _ALLOC_EXPRS):
+            seed(bound, alias.region_of_expr(e))
+    return sizes
 
 
 class Alias:

@@ -15,7 +15,10 @@ Module layout:
   format-to-`CppType` translation.
 - `variables.py` — names, declaration sites, and `binds_by_reference`, keyed by
   the classes `StorageInfer` found.
-- `unbox.py` — which lists may drop the `std::shared_ptr` handle.
+- `unbox.py` — which lists may drop the `std::shared_ptr` handle.  The
+  region-level facts it used to gather are now
+  `AliasAnalysis.written_regions` / `.slot_replaced` / `.returned_levels`
+  and `analysis.region_sizes`.
 - `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
 - `target.py`, `utils.py` — target description and header preamble.  There is no
   runtime: `CPP_HELPERS` is empty, and every spelling the emitter produces is
