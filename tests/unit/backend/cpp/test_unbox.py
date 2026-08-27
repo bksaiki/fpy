@@ -34,12 +34,12 @@ def _decide(f: fp.Function, arg_types):
     m.add(f, ctx=fp.FP64, arg_types=list(arg_types))
     a = cc.analyze(cc.specialize(m)[-1])
     alias = Alias.analyze(a.ast, def_use=a.def_use)
-    ub = Unbox.decide(a.ast, a.storage, alias, a.def_use)
+    ub = Unbox.decide(a.ast, a.storage, a.variables, alias, a.def_use)
     by_name = {
-        a.storage.def_to_name[cls]: ty for cls, ty in ub.storage.items()
+        a.variables.def_to_name[cls]: ty for cls, ty in ub.storage.items()
     }
     reasons = {
-        (a.storage.def_to_name[cls], depth): why
+        (a.variables.def_to_name[cls], depth): why
         for (cls, depth), why in ub.boxed_because.items()
     }
     return by_name, reasons
@@ -620,7 +620,7 @@ class TestListsInsideTuples:
         the copy still shares — but the moment tuples unbox it is a copy of a
         value, and the write below would be lost.
         """
-        from fpy2.backend.cpp.storage_infer import binds_by_reference
+        from fpy2.backend.cpp.variables import binds_by_reference
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -638,7 +638,8 @@ class TestListsInsideTuples:
             d for d in a.def_use.defs
             if str(d.name) == 'a' and type(d.site).__name__ == 'Assign'
         )
-        assert not binds_by_reference(a.storage, a.def_use, component)
+        assert not binds_by_reference(
+            a.storage, a.variables, a.def_use, component)
         assert f([1.0, 2.0], ctx=fp.FP64) == 99
 
     def test_a_fresh_list_in_a_returned_tuple_unboxes(self):

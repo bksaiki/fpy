@@ -2,7 +2,7 @@
 cpp backend: emitter.
 
 Walks the post-pipeline :class:`FuncDef` and produces a C++ source string.
-Storage types and per-def identifiers come from :class:`StorageAnalysis`;
+Storage types and per-def identifiers come from :class:`CppStorage`;
 per-expression bounds from :class:`FormatAnalysis`.  Primitive ops dispatch
 through the :class:`ScalarOpTable` in :mod:`.ops`, which is where operand
 formats meet the active rounding context.
@@ -22,7 +22,6 @@ from typing import ClassVar, NoReturn
 
 from ... import ops as fpy_ops
 from ...analysis import (
-    AssignDef,
     ContextScope,
     ContextScopeSite,
     ContextUseAnalysis,
@@ -141,17 +140,13 @@ from ...number import (
 from ...number.context.context import Context
 from .ops import CppOp, ScalarOpTable
 from .storage import (
+    CppStorage,
     StorageSelectionError,
     bound_fits_in_scalar,
     choose_storage,
     exact_integer_bits,
     scalar_fits_in,
     scalar_sup,
-)
-from .storage_infer import (
-    StorageAnalysis,
-    binds_by_reference,
-    is_rebound,
 )
 from .target import is_native_ctx, make_op_table
 from .types import (
@@ -162,6 +157,7 @@ from .types import (
     CppType,
 )
 from .unbox import ParamAbi, UnboxAnalysis, contains_boxed, return_storage
+from .variables import VariableAnalysis, binds_by_reference
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -331,7 +327,8 @@ class CppEmitter(Visitor):
     """Single-use visitor that produces a C++ source string."""
 
     ast: FuncDef
-    storage: StorageAnalysis
+    storage: CppStorage
+    variables: VariableAnalysis
     def_use: DefineUseAnalysis
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
@@ -341,7 +338,8 @@ class CppEmitter(Visitor):
     def __init__(
         self,
         ast: FuncDef,
-        storage: StorageAnalysis,
+        storage: CppStorage,
+        variables: VariableAnalysis,
         def_use: DefineUseAnalysis,
         format_info: FormatAnalysis,
         class_info: ValueClassAnalysis,
@@ -355,6 +353,7 @@ class CppEmitter(Visitor):
     ):
         self.ast = ast
         self.storage = storage
+        self.variables = variables
         self.def_use = def_use
         self.format_info = format_info
         self.class_info = class_info
@@ -700,28 +699,16 @@ class CppEmitter(Visitor):
 
     def _name_for_var_use(self, var: Var) -> str:
         d = self.def_use.find_def_from_use(var)
-        return self.storage.def_to_name[d]
+        return self.variables.def_to_name[d]
 
     def _name_for_def_at_site(self, name: NamedId, site) -> str:
         d = self.def_use.find_def_from_site(name, site)
-        return self.storage.def_to_name[d]
+        return self.variables.def_to_name[d]
 
     def _storage_for_arg(self, arg: Argument) -> CppType:
         assert isinstance(arg.name, NamedId)
         d = self.def_use.find_def_from_site(arg.name, arg)
         return self.storage.storage_of(d)
-
-    @staticmethod
-    def _is_aggregate(storage: CppType) -> bool:
-        """A list or a tuple — worth binding by reference rather than copying.
-
-        For a tuple because a copy is O(size); for a list because a copy of the
-        handle touches the refcount.  A scalar copy is free.
-        """
-        return isinstance(storage, (CppList, CppTuple))
-
-    def _is_rebound(self, d: Definition) -> bool:
-        return is_rebound(self.storage, d)
 
     def _arg_decl(self, arg: Argument, storage: CppType) -> str:
         """Parameter declaration; see :meth:`_binding_decl` for the rule."""
@@ -738,7 +725,7 @@ class CppEmitter(Visitor):
         write ``xs[i] = e`` and the caller sees it.  A rebind must stay local, so it
         takes its own copy.
         """
-        if not binds_by_reference(self.storage, self.def_use, d):
+        if not binds_by_reference(self.storage, self.variables, self.def_use, d):
             return f'{storage.format()} {name}'
         if self._writes_through(d, storage):
             return f'{storage.format()}& {name}'
@@ -774,17 +761,6 @@ class CppEmitter(Visitor):
             self._require_bridgeable(elt, storage, at)
         return self._binding_decl(target_def, storage, name)
 
-    def _is_readonly_alias(
-        self, stmt: Assign, target_def, target_storage: CppType,
-    ) -> bool:
-        """Whether ``x = y`` can bind a ``const`` reference instead of copying.
-
-        Copying a handle is O(1) and shares the elements, so this is only a
-        saved refcount bump -- but a tuple copy is O(size).  Same condition as
-        :meth:`_binding_decl`: a ``const`` reference cannot be rebound.
-        """
-        return self._binds_reference(target_def)
-
     def _emitted_storage_of(self, d) -> CppType:
         """The type *d*'s C++ name actually has.
 
@@ -797,8 +773,33 @@ class CppEmitter(Visitor):
         if src is not None:
             ty = self._storage_or_none(src)
             if ty is not None:
+                self._require_reference_agrees(d, ty, src)
                 return ty
         return self.storage.storage_of(d)
+
+    def _require_reference_agrees(
+        self, d, deduced: CppType, src: 'Expr',
+    ) -> None:
+        """Refuse a reference binding whose deduced type is not the one chosen.
+
+        A reference and a shared storage class are the same claim: the name
+        denotes an object something else owns.  When the two storages disagree,
+        one runtime object has been given two, which no conversion can bridge --
+        rebuilding at the wider one would break the aliasing that made it a
+        reference.  A projection reaches this where ``ys = xs`` cannot, since a
+        container's element storage is fixed by the container's class.
+        """
+        chosen = self.storage.storage_of(d)
+        if deduced == chosen:
+            return
+        raise CppEmitError(
+            f'unsupported: `{d.name}` aliases storage of type '
+            f'`{deduced.format()}`, but its own uses need `{chosen.format()}`.  '
+            f'The two name one object, so neither can be converted.  Build the '
+            f'container at the wider format, or copy the element instead of '
+            f'aliasing it.',
+            at=src,
+        )
 
     def _reference_source(self, d) -> 'Expr | None':
         """The initializer *d*'s C++ name deduces its type from, if any.
@@ -822,7 +823,7 @@ class CppEmitter(Visitor):
         places means the guard compares against a type the code does not have.
         """
         return binds_by_reference(
-            self.storage, self.def_use, d,
+            self.storage, self.variables, self.def_use, d,
             allow_projection=(
                 self.unbox is not None
                 and self.unbox.may_reference_projection(d)
@@ -830,11 +831,11 @@ class CppEmitter(Visitor):
         )
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
-        """``T name = rhs;`` or ``name = rhs;``, per :class:`StorageAnalysis`.
+        """``T name = rhs;`` or ``name = rhs;``, per :class:`CppStorage`.
         """
         target_def = self.def_use.find_def_from_site(name, site)
-        target_name = self.storage.def_to_name[target_def]
-        if target_def in self.storage.declare_at_assign:
+        target_name = self.variables.def_to_name[target_def]
+        if target_def in self.variables.declare_at_assign:
             storage = self.storage.storage_of(target_def)
             self.writer.add_line(f'{storage.format()} {target_name} = {rhs};')
         else:
@@ -917,7 +918,7 @@ class CppEmitter(Visitor):
         self._return_storage = ret_ty
 
         # Emit arg list.  Each argument's class is anchored to the bare
-        # source name in ``StorageInfer``, so it's safe to use ``arg.name``
+        # source name in ``VariableAlloc``, so it's safe to use ``arg.name``
         # directly here (and any body-side reassignment that flows
         # through the arg's phi-class will write to the same variable).
         arg_strs: list[str] = []
@@ -965,7 +966,7 @@ class CppEmitter(Visitor):
         storage class (used to anchor declarations just before the
         ``IfStmt`` that introduces a fresh-in-both-branches name).
         """
-        name = self.storage.def_to_name[self.storage.class_members[c][0]]
+        name = self.variables.def_to_name[self.storage.class_members[c][0]]
         storage = self.storage.class_storage[c]
         # Zero-initialise via ``T name{};`` so reads-before-writes
         # are well-defined (FPy analyses ensure this can't happen,
@@ -999,24 +1000,25 @@ class CppEmitter(Visitor):
             # Storage classes anchored to this stmt (currently only
             # ``IfStmt``s with is_intro phi merges) declare just before
             # the stmt, narrowing the variable's scope.
-            for c in self.storage.hoists_before.get(stmt, ()):
+            for c in self.variables.hoists_before.get(stmt, ()):
                 self._emit_hoist_for_class(c)
             self._visit_statement(stmt, ctx)
 
     def _visit_assign(self, stmt: Assign, ctx):
         match stmt.target:
             case NamedId():
-                # ``StorageInfer`` maps this Assign's SSA def to a
-                # C++ variable and tells us whether to declare (a
-                # single-writer class) or just reassign into a
-                # hoisted decl (multi-writer class).
+                # ``VariableAlloc`` names this Assign's SSA def and says
+                # whether to declare (a single-writer class) or reassign
+                # into a hoisted decl (multi-writer class).
                 target_def = self.def_use.find_def_from_site(stmt.target, stmt)
                 target_storage = self.storage.storage_of(target_def)
-                if self._is_readonly_alias(stmt, target_def, target_storage):
+                # ``x = y`` binds a reference rather than copying: a tuple
+                # copy is O(size), a handle copy a refcount bump.
+                if self._binds_reference(target_def):
                     # ``x = y`` where both are read-only aggregates: bind a
                     # const reference instead of copying the whole value.
                     src = self._visit_expr(stmt.expr, ctx)
-                    target_name = self.storage.def_to_name[target_def]
+                    target_name = self.variables.def_to_name[target_def]
                     # `auto&` when the alias must stay writable
                     ref = (
                         'auto&'
@@ -1309,35 +1311,13 @@ class CppEmitter(Visitor):
     def _storage_or_none(self, e: Expr) -> CppType | None:
         """The storage *e* actually emits as, or ``None`` where unknown.
 
-        A format with no ladder entry is not a disagreement to repair, so callers
-        that only *adjust* a representation skip it rather than failing.
-
-        A variable reads as its **declaration**: ``storage_infer`` aggregates a whole
-        class, so asking ``by_expr`` would compare against a type the emitted name
-        does not have.
+        :meth:`CppStorage.of_expr` chooses the type; the representation is
+        stamped here, since it is decided per alias region (see :mod:`.unbox`).
         """
-        if isinstance(e, Var):
-            d = self.def_use.find_def_from_use(e)
-            # A name the emitter binds as `const auto&` has the type C++
-            # *deduced* from its initializer, not the one `storage_of` chose --
-            # so follow the alias.  Missing this is how `[L3, L3]` came to hold
-            # a boxed `uint8_t` list in a vector of boxed `float` lists.
-            src = self._reference_source(d)
-            if src is not None:
-                return self._storage_or_none(src)
-            ty = self.storage.storage_of(d)
-            return ty if self.unbox is None else self.unbox.annotate(e, ty)
-        if isinstance(e, ListRef):
-            # ``xss[i]`` reads a *declared* element, so peel the container's
-            # declaration rather than asking ``by_expr`` -- which answers from
-            # the format, and can name a type the container does not hold.
-            base = self._storage_or_none(e.value)
-            if isinstance(base, CppList):
-                return base.elt
-        try:
-            return self._storage_for_expr(e)
-        except CppEmitError:
+        ty = self.storage.of_expr(e)
+        if ty is None:
             return None
+        return ty if self.unbox is None else self.unbox.annotate(e, ty)
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         # A function has one return type, so every `return` produces it: built
@@ -1594,8 +1574,8 @@ class CppEmitter(Visitor):
     # Expression visitors — return a C++ source fragment
 
     def _visit_var(self, e: Var, ctx) -> str:
-        # Resolve the use to its SSA def, then look up the C++
-        # identifier ``StorageInfer`` assigned to that def's class.
+        # Resolve the use to its SSA def, then look up the C++ identifier
+        # ``VariableAlloc`` gave that def's class.
         return self._name_for_var_use(e)
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
@@ -1693,7 +1673,7 @@ class CppEmitter(Visitor):
         """The C++ type of the token *e* prints as, or ``None`` for no literal.
 
         Not the same question as its *storage*, which
-        :class:`StorageAnalysis` picks from the literal's value.  A token has
+        :class:`CppStorage` picks from the literal's value.  A token has
         whatever type C++ gives it, which is what
         :func:`_value_cpp_type` answers.
         """
@@ -3448,7 +3428,7 @@ class CppEmitter(Visitor):
         match target:
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
-                target_name = self.storage.def_to_name[target_def]
+                target_name = self.variables.def_to_name[target_def]
                 # A range counter is sized to the exit-test overshoot; the
                 # element storage would be too narrow.
                 counter = self._range_counter_scalar(iterable)
@@ -3555,7 +3535,7 @@ class CppEmitter(Visitor):
         # ``reaching_defs``), so the C++ name is the same on both
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
-        target_name = self.storage.def_to_name[target_def]
+        target_name = self.variables.def_to_name[target_def]
         idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
         chain = target_name
         level = self._emitted_storage_of(target_def)
@@ -3636,7 +3616,7 @@ class CppEmitter(Visitor):
         only = block.stmts[0]
         if not isinstance(only, IfStmt):
             return None
-        if self.storage.hoists_before.get(only):
+        if self.variables.hoists_before.get(only):
             return None
         return only if self._is_pure_cond(only.cond) else None
 
@@ -3810,11 +3790,11 @@ class CppEmitter(Visitor):
     def _emit_for_named_target(self, stmt: ForStmt, ctx):
         assert isinstance(stmt.target, NamedId)
         target_def = self.def_use.find_def_from_site(stmt.target, stmt)
-        target = self.storage.def_to_name[target_def]
+        target = self.variables.def_to_name[target_def]
         # Fold the type into the for header iff the counter is a
         # single-writer class (the common case).  Otherwise the counter
         # was hoisted at the function top and we just reassign here.
-        if target_def in self.storage.declare_at_assign:
+        if target_def in self.variables.declare_at_assign:
             # A range counter transiently reaches the exit-test overshoot,
             # which the loop variable's element storage may be too narrow to
             # hold; size it from the counter's real trajectory instead.

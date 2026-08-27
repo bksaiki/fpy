@@ -45,6 +45,7 @@ def _emitter() -> CppEmitter:
     return CppEmitter(
         ast=a.ast,
         storage=a.storage,
+        variables=a.variables,
         def_use=a.def_use,
         format_info=a.format_info,
         class_info=a.class_info,

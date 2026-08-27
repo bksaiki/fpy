@@ -8,9 +8,11 @@ with its ``prev``: they share a storage class and a C++ name, so
 the emitter produces a direct subscript-store.
 """
 
+import pytest
+
 import fpy2 as fp
 
-from fpy2.backend.cpp import CppCompiler
+from fpy2.backend.cpp import CppCompiler, CppCompileError
 from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.types import ListType, RealType
 
@@ -122,3 +124,21 @@ class TestIndexedAssign:
         # No SSA-suffix variable, no copy temp.
         assert 'xs_1' not in out
         assert '_tmp' not in out
+
+    def test_projection_widened_by_its_own_writes_is_refused(self):
+        """``row = xss[i]`` binds a reference, so ``row`` and ``xss``'s element
+        are one object -- but ``row``'s class widens on its own writes while the
+        container's does not.  Two storages for one object bridge by no
+        conversion, so the emitter refuses rather than aliasing at the wrong
+        type."""
+
+        @fp.fpy
+        def f() -> list[list[fp.Real]]:
+            with fp.INTEGER:
+                xss = [[1, 2], [3, 4]]
+                row = xss[0]
+                row[0] = 1000
+                return xss
+
+        with pytest.raises(CppCompileError, match='aliases storage of type'):
+            CppCompiler(unbox=UnboxMode.ALLOW).compile(f, ctx=fp.INTEGER)

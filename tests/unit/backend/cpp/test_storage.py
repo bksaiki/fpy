@@ -2,21 +2,29 @@
 Tests for cpp storage-type selection (Phase 1 of the backend-cpp plan).
 """
 
-import fpy2 as fp
+from fractions import Fraction
+
 import pytest
 
-from fractions import Fraction
+import fpy2 as fp
 from fpy2.analysis.format_infer import ListFormat, SetFormat, TupleFormat
 from fpy2.backend.cpp.storage import (
+    CppStorageDomain,
     StorageSelectionError,
-    aggregate_storage,
     bound_fits_in_scalar,
     choose_storage,
     choose_storage_scalar,
     scalar_fits_in,
+    to_cpp,
 )
+from fpy2.analysis.storage_infer import _aggregate
 from fpy2.backend.cpp.types import CppList, CppScalar, CppTuple
 from fpy2.number.context.real import REAL_FORMAT
+
+
+def _agg(bounds):
+    """The class-level join over the cpp domain, spelled as a type."""
+    return to_cpp(_aggregate(CppStorageDomain(), list(bounds)))
 
 
 class TestStorageScalar:
@@ -196,38 +204,38 @@ class TestStorageStructural:
 
 
 class TestStorageAggregate:
-    """``aggregate_storage`` widens across multiple SSA defs."""
+    """The class-level join widens across multiple SSA defs."""
 
     def test_single_def(self):
         assert (
-            aggregate_storage([fp.FP32.format()]) == CppScalar.F32
+            _agg([fp.FP32.format()]) == CppScalar.F32
         )
 
     def test_widen_fp32_and_fp64(self):
-        result = aggregate_storage([fp.FP32.format(), fp.FP64.format()])
+        result = _agg([fp.FP32.format(), fp.FP64.format()])
         assert result == CppScalar.F64
 
     def test_widen_int_and_float(self):
         # Mixing FP32 and S32: F32's 24-bit mantissa is strictly less
         # than S32's 32-bit precision, so the ladder picks F64 (53-bit
         # mantissa, covers both).
-        result = aggregate_storage([fp.FP32.format(), fp.SINT32.format()])
+        result = _agg([fp.FP32.format(), fp.SINT32.format()])
         assert result == CppScalar.F64
 
     def test_widen_unrepresentable_pair_rejects(self):
         """``[F32, S64]`` has no covering type — F64 doesn't have enough
         mantissa bits to hold a full S64.  Storage selection rejects
         rather than silently picking a lossy widening."""
-        with pytest.raises(StorageSelectionError, match='no storage type'):
-            aggregate_storage([fp.FP32.format(), fp.SINT64.format()])
+        with pytest.raises(StorageSelectionError, match='no storage format'):
+            _agg([fp.FP32.format(), fp.SINT64.format()])
 
     def test_widen_setformat_with_float(self):
         s = SetFormat(frozenset((Fraction(0),)))
-        result = aggregate_storage([s, fp.FP32.format()])
+        result = _agg([s, fp.FP32.format()])
         assert result == CppScalar.F32
 
     def test_aggregate_lists(self):
-        result = aggregate_storage([
+        result = _agg([
             ListFormat(fp.FP32.format()),
             ListFormat(fp.FP64.format()),
         ])
@@ -235,7 +243,7 @@ class TestStorageAggregate:
 
     def test_aggregate_real_format_rejected(self):
         with pytest.raises(StorageSelectionError):
-            aggregate_storage([REAL_FORMAT])
+            _agg([REAL_FORMAT])
 
 
 class TestStorageBottom:
@@ -257,18 +265,18 @@ class TestStorageBottom:
         for nothing, since its own storage is ``u8`` and ``u8 ⊔ s8`` is
         ``s16``."""
         s8 = SetFormat.from_value(Fraction(-1))
-        assert aggregate_storage([SetFormat.bottom(), s8]) == CppScalar.S8
+        assert _agg([SetFormat.bottom(), s8]) == CppScalar.S8
 
     def test_an_all_bottom_aggregate_still_picks_a_type(self):
         """Nothing is ever read from it, so any type is correct — but there
         must be one."""
         bottom = ListFormat(SetFormat.bottom())
-        assert aggregate_storage([bottom, bottom]) == CppList(CppScalar.U8)
+        assert _agg([bottom, bottom]) == CppList(CppScalar.U8)
 
     def test_none_is_not_bottom(self):
         """``None`` is a boolean's bound, and a boolean has storage of its own
         — dropping it from an aggregate would lose that."""
-        assert aggregate_storage([None, None]) == CppScalar.BOOL
+        assert _agg([None, None]) == CppScalar.BOOL
 
 
 class TestBoundFitsInScalar:

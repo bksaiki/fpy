@@ -447,7 +447,7 @@ class _ReachingDefs(DefaultVisitor):
         # branch that returns is not a predecessor, so the name is live after
         # the `if` even though the intersection above misses it.  The phi has
         # one real operand but is still needed: `is_intro` is what tells
-        # `cpp/storage_infer` to declare the name outside the branch.
+        # `cpp/variables` to declare the name outside the branch.
         ift_end = self._terminates(stmt.ift)
         iff_end = self._terminates(stmt.iff)
         if ift_end != iff_end:

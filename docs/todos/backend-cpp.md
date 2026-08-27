@@ -11,8 +11,10 @@ Module layout:
 - `compiler.py` — public `CppCompiler`, pipeline orchestration.
 - `emitter.py` — AST walker that produces C++ source.
 - `ops.py` — per-op tables of supported C++ signatures.
-- `storage.py` — storage-type ladder, format-containment helpers.
-- `storage_infer.py` — per-SSA-def storage assignment via union-find.
+- `storage.py` — the C++ format ladder, `CppStorageDomain`, and the
+  format-to-`CppType` translation.
+- `variables.py` — names, declaration sites, and `binds_by_reference`, keyed by
+  the classes `StorageInfer` found.
 - `unbox.py` — which lists may drop the `std::shared_ptr` handle.
 - `types.py` — `CppScalar` / `CppList` / `CppTuple` and source formatting.
 - `target.py`, `utils.py` — target description and header preamble.  There is no
@@ -86,7 +88,7 @@ several expressions reach one place they must agree on one C++ type
 
 The emitter is free to give every SSA def its own C++ variable. The one
 constraint is that defs denoting the same runtime object share storage —
-`reaching_defs.same_object_defs` is that rule, and `storage_infer.py` unions
+`reaching_defs.same_object_defs` is that rule, and `StorageInfer` unions
 over it. Argument and free-variable defs anchor a class to the bare source name;
 other classes for the same name take `_1`, `_2`, … suffixes.
 
@@ -179,7 +181,9 @@ Module
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
   → FormatInfer                # rounding format per def/expr
-  → StorageInfer               # storage per SSA def
+  → ValueClassInfer            # what a value cannot be (NaN, zero, negative)
+  → StorageInfer               # one storage format per runtime object
+  → VariableAlloc              # names and declaration sites for its classes
   → Alias / Escape             # what may refer to what; what a callee retains
   → Unbox                      # handle or value, per alias region
   → emit C++

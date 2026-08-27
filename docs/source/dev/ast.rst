@@ -83,6 +83,10 @@ Analyses
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.analysis.StorageInfer
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.analysis.SyntaxCheck
    :members:
    :show-inheritance:
