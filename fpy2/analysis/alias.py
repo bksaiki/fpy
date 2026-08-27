@@ -112,6 +112,8 @@ from ..ast import (
     Range3,
     ReturnStmt,
     Snd,
+    Stmt,
+    StmtBlock,
     TupleBinding,
     TupleExpr,
     Var,
@@ -399,6 +401,8 @@ class AliasAnalysis:
         written_regions:  regions an ``xs[i] = e`` here stores into.
         slot_replaced:    element regions an ``xss[i] = <list>`` replaces.
         returned_levels:  regions the ``return``s hand back, by depth.
+        consumed_names:   per region, names whose value *moves* into a
+                          container rather than coexisting with it.
     """
 
     sites: list[AllocSite]
@@ -409,6 +413,7 @@ class AliasAnalysis:
     written_regions: set[Region] = field(default_factory=set)
     slot_replaced: set[Region] = field(default_factory=set)
     returned_levels: list[set[Region]] = field(default_factory=list)
+    consumed_names: dict[Region, set[NamedId]] = field(default_factory=dict)
 
     def region_of(self, d: Definition, depth: int = 0) -> Region | None:
         """What may be the same list as *d*, *depth* levels in.
@@ -881,10 +886,57 @@ class _RegionFacts(DefaultVisitor):
         self.written: set[Region] = set()
         self.slot_replaced: set[Region] = set()
         self.returned_levels: list[set[Region]] = []
+        self.consumed: dict[Region, set[NamedId]] = {}
+        self._block_of: dict[Stmt, StmtBlock] = {}
+        self._block: StmtBlock | None = None
         for d in alias.all_defs():
             if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
                 if (r := alias.region_of(d)) is not None:
                     self.written.add(r)
+
+    def _visit_block(self, block: StmtBlock, ctx):
+        outer, self._block = self._block, block
+        for stmt in block.stmts:
+            self._block_of[stmt] = block
+            self._visit_statement(stmt, ctx)
+        self._block = outer
+
+    def _visit_tuple_expr(self, e: TupleExpr, ctx):
+        self._note_consumed(e.elts)
+        super()._visit_tuple_expr(e, ctx)
+
+    def _visit_list_expr(self, e: ListExpr, ctx):
+        self._note_consumed(e.elts)
+        super()._visit_list_expr(e, ctx)
+
+    def _note_consumed(self, elts: 'tuple[Expr, ...]') -> None:
+        """Record each operand of a construction whose value *moves* into it.
+
+        A name handed to a container and never read again is not a place that
+        coexists with the container's slot -- the value goes in and the name is
+        finished.  Two conditions, both necessary:
+
+        - the construction is the name's *only* use, so nothing reads it after;
+        - the definition sits in the same statement block, which is what rules
+          out a loop between them.  A block *is* the loop boundary, so a use one
+          level in gets a different block and is refused -- ``xs = [n, n]`` with
+          the construction inside a ``for`` would otherwise be moved from on the
+          first iteration and empty on the second.
+        """
+        for e in elts:
+            if not isinstance(e, Var):
+                continue
+            d = self.def_use.use_to_def.get(e)
+            # a phi has several definitions, a parameter is the caller's
+            # storage: neither is a value this function may move out of
+            if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+                continue
+            if self.def_use.uses.get(d) != {e}:
+                continue
+            if self._block_of.get(d.site) is not self._block:
+                continue
+            if (r := self.alias.region_of(d)) is not None:
+                self.consumed.setdefault(r, set()).add(d.name)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # Only a store of a *list* replaces a slot: a scalar write goes through
@@ -999,4 +1051,5 @@ class Alias:
         alias.written_regions = facts.written
         alias.slot_replaced = facts.slot_replaced
         alias.returned_levels = facts.returned_levels
+        alias.consumed_names = facts.consumed
         return alias

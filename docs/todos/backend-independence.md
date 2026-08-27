@@ -339,17 +339,19 @@ dependent-clause list stops compiling — so the FPy-level lowerings have to bec
 **The boxing gap in [backend-cpp.md](backend-cpp.md) is the next thing worth
 doing**, and it is not one of these sections. `xs = [n, n]; return (xs, 1.0)`
 keeps its handle because the name and the tuple field are two places, though the
-name is dead after the return; inlined, it unboxes. Closing it needs `LiveVars`
-— which exists — plus the emitter learning to *move* into a container, since
-`std::make_tuple(xs, 1)` copies a value where it only bumps a refcount for a
-handle. Both halves have to land together or the change is a slowdown.
+name is read exactly once; inlined, it unboxes. It surfaces through
+`transfers_ownership`, which requires `referrers <= 1`, and *not* through
+`_shares_storage` — the `escapes or …` short-circuit means that function is
+never asked. Closing it needs the emitter to *move* into the container in the
+same commit, since `std::make_tuple(xs, 1)` copies a value where it only bumps a
+refcount for a handle.
 
-It is the item three separate threads wait on: §5 has nothing to convert until
-the rebuild path is reachable, the widening policy has no measurable cost until
-the same moment, and it is the one open entry under *What stays boxed*. The
-circularity recorded earlier — the boxing fix waiting on a widening policy —
-resolves in this direction: the fix does not need a policy to be *correct*, only
-to be fast, and until it lands there is nothing for a policy to govern.
+What it actually unblocks is **aggregate naming**: `xs = [n, n]` is the ANF form
+of an inlined literal, so naming aggregates would turn every unboxed
+literal-into-container into today's boxed case. It is a prerequisite for the
+highest-risk item here, which is a better reason than the one recorded before —
+§5 is *not* gated on it, since none of the corpus's 18 refusals is
+aliasing-related. Planned in [consumed-names.md](consumed-names.md).
 
 **§3's first part** is done; its second waits for a second backend. **§4** is
 independent, but is a new transform whose lines mostly move rather than

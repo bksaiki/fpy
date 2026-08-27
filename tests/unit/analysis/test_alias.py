@@ -553,3 +553,97 @@ class TestRegionFacts:
         du = DefineUse.analyze(f.ast)
         a = Alias.analyze(f.ast, def_use=du)
         assert a.returned_levels == []
+
+
+class TestConsumedNames:
+    """A name handed to a container and never read again is not a place that
+    coexists with the container's slot -- the value moves in.
+
+    The fact only; nothing here asks what a backend does with it.
+    """
+
+    @staticmethod
+    def _consumed(func: fp.Function) -> set[str]:
+        du = DefineUse.analyze(func.ast)
+        a = Alias.analyze(func.ast, def_use=du)
+        return {str(n) for names in a.consumed_names.values() for n in names}
+
+    def test_sole_use_in_a_tuple_is_consumed(self):
+        @fp.fpy
+        def f(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = [n, n]
+                return (xs, 1.0)
+
+        assert self._consumed(f) == {'xs'}
+
+    def test_sole_use_in_a_list_is_consumed(self):
+        @fp.fpy
+        def f(n: fp.Real) -> list[list[fp.Real]]:
+            with fp.FP64:
+                xs = [n, n]
+                return [xs]
+
+        assert self._consumed(f) == {'xs'}
+
+    def test_a_second_use_disqualifies(self):
+        @fp.fpy
+        def f(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = [n, n]
+                y = xs[0]
+                return (xs, y)
+
+        assert self._consumed(f) == set()
+
+    def test_a_use_one_loop_level_in_is_refused(self):
+        """The sole *syntactic* use runs once per iteration, so the value must
+        survive the first -- a block is the loop boundary, and the definition is
+        outside it."""
+
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                xs = [n, n]
+                acc = 0.0
+                for i in range(3):
+                    yss = [xs]
+                    acc = acc + yss[0][0]
+                return acc
+
+        assert self._consumed(f) == set()
+
+    def test_a_definition_inside_the_loop_is_consumed(self):
+        """Same construction, but redefined each iteration, so there is nothing
+        to preserve across one."""
+
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                for i in range(3):
+                    xs = [n, n]
+                    yss = [xs]
+                    acc = acc + yss[0][0]
+                return acc
+
+        assert self._consumed(f) == {'xs'}
+
+    def test_a_parameter_is_never_consumed(self):
+        """It names the caller's storage, which this function does not own."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                return (xs, 1.0)
+
+        assert self._consumed(f) == set()
+
+    def test_a_use_that_is_not_a_construction_is_not_a_move(self):
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                xs = [n, n]
+                return xs[0]
+
+        assert self._consumed(f) == set()
