@@ -4,7 +4,6 @@ Important links:
  - PyPI package: [fpy2](https://pypi.org/project/fpy2/)
  - Documentation: [fpy.readthedocs.io](https://fpy.readthedocs.io/)
  - GitHub: [fpy](https://github.com/bksaiki/fpy)
- - Guide: [USAGE.md](docs/USAGE.md)
 
 FPy is an embedded Python domain-specific language (DSL) for specifying and simulating numerical algorithms.
 It consists of two main components:

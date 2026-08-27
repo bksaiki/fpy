@@ -330,6 +330,49 @@ real in a finite C++ type* accounts for 233 of 543 refusals, and the next two ar
 downstream of the same storage question. That is the only lever that would move
 the *number* of compilable programs, and it is out of scope above.
 
+### Recovering from an unsupported rounding instead of refusing
+
+*Open.* Every refusal in this area already names the operator that fixes it —
+`_require_cast_is_round` says "lower it first with `monomorphize ->
+unfold_overflow -> float_to_fixed -> rescale_fixed`", and
+`_emit_integral_round` names `rescale_fixed` and `unfold_overflow` by hand. The
+proposal is to run them rather than print them, as a ladder keyed to what is
+unsupported:
+
+| unsupported | recovery |
+|---|---|
+| a rounding under a non-native *float* context | `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed → simplify` |
+| a rounding under a fixed-point context the backend cannot lower | `unfold_overflow → rescale_fixed → simplify` — the two the refusals name |
+| *arithmetic* under either | `split_round` first: compute at an intermediate the op table has, re-round to the target, then the residual rounding is one of the rows above |
+
+The third row is a deliberate double rounding, and it is safe for a specific
+reason: `split_round` is gated on the correct-double-rounding table, so it
+applies only where the two roundings compose to what the single one gave, and
+declines otherwise. That is the difference between this and simply computing
+wide and truncating.
+
+**What it buys is coverage, not a smaller backend.** Measured on the
+`test_lowered_roundtrip` programs: after the full sequence
+`_emit_integral_round`, `_emit_integral_value` and `_bound_test` all still fire
+— the libm call and the bound assertion are the emitter's work either way. The
+gain is that programs which today refuse would compile.
+
+What it needs:
+
+- **Detection before analysis.** The refusals fire during emission, after every
+  analysis has run, which is too late to rewrite. The condition has to be found
+  on the specialized AST first — `st.sites` plus a cursor per site, since
+  `simplify` does not take cursors and a whole-program run would rewrite
+  roundings that did not need it.
+- **A place in the order.** After `RoundElim` and before `ANF`, for the reason
+  in [backend-independence.md](backend-independence.md) §1: naming materializes,
+  so a pass that folds or deletes has to precede one that names.
+- **An opt-out.** This turns the compiler from a checker into a rewriter, and
+  `float_to_fixed` states a value-class branch per site — on a program with many
+  roundings that is a large amount of emitted code, so far unmeasured. A flag
+  alongside `unsafe_cast_int` and `UnboxMode` keeps the refusal available for
+  callers who would rather see it.
+
 ### A narrower value meeting a wider place
 
 Where several values reach one place — a `return`, a ternary arm, a list's
