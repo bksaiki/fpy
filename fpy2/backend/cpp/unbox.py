@@ -84,12 +84,9 @@ from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...utils import enum_repr
 from .storage import choose_storage
-from .storage_infer import (
-    StorageAnalysis,
-    binds_by_reference,
-    is_rebound,
-)
+from .storage_infer import StorageAnalysis, is_rebound
 from .types import CppList, CppTuple, CppType
+from .variables import VariableAnalysis, binds_by_reference
 
 
 @enum_repr
@@ -284,6 +281,7 @@ class Unbox:
     def decide(
         ast: FuncDef,
         storage: StorageAnalysis,
+        variables: VariableAnalysis,
         alias: AliasAnalysis,
         def_use: DefineUseAnalysis,
         *,
@@ -321,7 +319,7 @@ class Unbox:
                 continue
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
             shared = escapes or _shares_storage(
-                region, alias, storage, def_use, scan.slot_replaced,
+                region, alias, storage, variables, def_use, scan.slot_replaced,
             )
             out.boxed[region] = out.boxed.get(region, False) or shared
 
@@ -569,6 +567,7 @@ def _shares_storage(
     region: Region,
     alias: AliasAnalysis,
     storage: StorageAnalysis,
+    variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     slot_replaced: set[Region],
 ) -> bool:
@@ -602,7 +601,7 @@ def _shares_storage(
     owned_separately = 0
     for ds in by_name.values():
         if not all(
-            _binds_by_reference(d, storage, def_use, alias, slot_replaced)
+            _binds_by_reference(d, storage, variables, def_use, alias, slot_replaced)
             for d in ds
         ):
             owned_separately += 1
@@ -612,6 +611,7 @@ def _shares_storage(
 def _binds_by_reference(
     d: AssignDef,
     storage: StorageAnalysis,
+    variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     alias: AliasAnalysis,
     slot_replaced: set[Region],
@@ -626,7 +626,7 @@ def _binds_by_reference(
     region = alias.region_of(d)
     return (
         binds_by_reference(
-            storage, def_use, d,
+            storage, variables, def_use, d,
             allow_projection=region is not None and region not in slot_replaced,
         )
         and not isinstance(d.site, Argument)
@@ -653,6 +653,7 @@ class StrictUnboxError(Exception):
 def check_strict(
     unbox: UnboxAnalysis,
     storage: StorageAnalysis,
+    variables: VariableAnalysis,
     ret_ty: CppType,
 ) -> None:
     """Refuse every list that kept its handle.
@@ -673,7 +674,7 @@ def check_strict(
     offenders: list[str] = []
     covered: set[Region] = set()
     for cls, ty in unbox.storage.items():
-        name = storage.def_to_name[cls]
+        name = variables.def_to_name[cls]
         per_depth = _regions(cls, storage, unbox.alias)
         for depth, on_spine in _boxed_levels(ty):
             reason = (

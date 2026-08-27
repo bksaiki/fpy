@@ -59,6 +59,7 @@ from .unbox import (
     return_storage,
 )
 from .utils import CPP_HEADERS, CPP_HELPERS
+from .variables import VariableAlloc, VariableAnalysis
 
 _UnboxMode: TypeAlias = UnboxMode
 """Annotation-only alias: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
@@ -85,6 +86,7 @@ class SpecAnalyses:
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
     storage: StorageAnalysis
+    variables: VariableAnalysis
     alias: AliasAnalysis
     summary: EscapeSummary
     unbox: UnboxAnalysis | None
@@ -412,6 +414,7 @@ class CppCompiler(Backend):
         try:
             du = format_info.type_info.def_use
             storage = StorageInfer.infer(du, format_info.by_def)
+            variables = VariableAlloc.assign(du, storage)
         except StorageSelectionError as e:
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: {e}'
@@ -436,7 +439,7 @@ class CppCompiler(Backend):
         unbox = None
         if self._unbox is not UnboxMode.NEVER:
             unbox = Unbox.decide(
-                ast, storage, alias, def_use,
+                ast, storage, variables, alias, def_use,
                 is_called=is_called,
                 summary=summary,
                 callees=callee_abis,
@@ -460,7 +463,7 @@ class CppCompiler(Backend):
 
         if unbox is not None and unbox.strict:
             try:
-                check_strict(unbox, storage, ret_ty)
+                check_strict(unbox, storage, variables, ret_ty)
             except StrictUnboxError as e:
                 raise CppCompileError(
                     f'strict unboxing failed for `{func.name}`: {e}'
@@ -473,6 +476,7 @@ class CppCompiler(Backend):
             format_info=format_info,
             class_info=class_info,
             storage=storage,
+            variables=variables,
             alias=alias,
             summary=summary,
             unbox=unbox,
@@ -535,6 +539,7 @@ class CppCompiler(Backend):
         emitter = CppEmitter(
             ast=ast,
             storage=a.storage,
+            variables=a.variables,
             def_use=a.def_use,
             format_info=a.format_info,
             class_info=a.class_info,

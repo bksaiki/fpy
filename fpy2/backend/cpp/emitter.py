@@ -148,11 +148,7 @@ from .storage import (
     scalar_fits_in,
     scalar_sup,
 )
-from .storage_infer import (
-    StorageAnalysis,
-    binds_by_reference,
-    is_rebound,
-)
+from .storage_infer import StorageAnalysis, is_rebound
 from .target import is_native_ctx, make_op_table
 from .types import (
     UNSIGNED_INT_TYPES,
@@ -162,6 +158,7 @@ from .types import (
     CppType,
 )
 from .unbox import ParamAbi, UnboxAnalysis, contains_boxed, return_storage
+from .variables import VariableAnalysis, binds_by_reference
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
 # in this table can be set via ``fesetround``.
@@ -332,6 +329,7 @@ class CppEmitter(Visitor):
 
     ast: FuncDef
     storage: StorageAnalysis
+    variables: VariableAnalysis
     def_use: DefineUseAnalysis
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
@@ -342,6 +340,7 @@ class CppEmitter(Visitor):
         self,
         ast: FuncDef,
         storage: StorageAnalysis,
+        variables: VariableAnalysis,
         def_use: DefineUseAnalysis,
         format_info: FormatAnalysis,
         class_info: ValueClassAnalysis,
@@ -355,6 +354,7 @@ class CppEmitter(Visitor):
     ):
         self.ast = ast
         self.storage = storage
+        self.variables = variables
         self.def_use = def_use
         self.format_info = format_info
         self.class_info = class_info
@@ -700,11 +700,11 @@ class CppEmitter(Visitor):
 
     def _name_for_var_use(self, var: Var) -> str:
         d = self.def_use.find_def_from_use(var)
-        return self.storage.def_to_name[d]
+        return self.variables.def_to_name[d]
 
     def _name_for_def_at_site(self, name: NamedId, site) -> str:
         d = self.def_use.find_def_from_site(name, site)
-        return self.storage.def_to_name[d]
+        return self.variables.def_to_name[d]
 
     def _storage_for_arg(self, arg: Argument) -> CppType:
         assert isinstance(arg.name, NamedId)
@@ -738,7 +738,7 @@ class CppEmitter(Visitor):
         write ``xs[i] = e`` and the caller sees it.  A rebind must stay local, so it
         takes its own copy.
         """
-        if not binds_by_reference(self.storage, self.def_use, d):
+        if not binds_by_reference(self.storage, self.variables, self.def_use, d):
             return f'{storage.format()} {name}'
         if self._writes_through(d, storage):
             return f'{storage.format()}& {name}'
@@ -826,7 +826,7 @@ class CppEmitter(Visitor):
         places means the guard compares against a type the code does not have.
         """
         return binds_by_reference(
-            self.storage, self.def_use, d,
+            self.storage, self.variables, self.def_use, d,
             allow_projection=(
                 self.unbox is not None
                 and self.unbox.may_reference_projection(d)
@@ -837,8 +837,8 @@ class CppEmitter(Visitor):
         """``T name = rhs;`` or ``name = rhs;``, per :class:`StorageAnalysis`.
         """
         target_def = self.def_use.find_def_from_site(name, site)
-        target_name = self.storage.def_to_name[target_def]
-        if target_def in self.storage.declare_at_assign:
+        target_name = self.variables.def_to_name[target_def]
+        if target_def in self.variables.declare_at_assign:
             storage = self.storage.storage_of(target_def)
             self.writer.add_line(f'{storage.format()} {target_name} = {rhs};')
         else:
@@ -969,7 +969,7 @@ class CppEmitter(Visitor):
         storage class (used to anchor declarations just before the
         ``IfStmt`` that introduces a fresh-in-both-branches name).
         """
-        name = self.storage.def_to_name[self.storage.class_members[c][0]]
+        name = self.variables.def_to_name[self.storage.class_members[c][0]]
         storage = self.storage.class_storage[c]
         # Zero-initialise via ``T name{};`` so reads-before-writes
         # are well-defined (FPy analyses ensure this can't happen,
@@ -1003,7 +1003,7 @@ class CppEmitter(Visitor):
             # Storage classes anchored to this stmt (currently only
             # ``IfStmt``s with is_intro phi merges) declare just before
             # the stmt, narrowing the variable's scope.
-            for c in self.storage.hoists_before.get(stmt, ()):
+            for c in self.variables.hoists_before.get(stmt, ()):
                 self._emit_hoist_for_class(c)
             self._visit_statement(stmt, ctx)
 
@@ -1020,7 +1020,7 @@ class CppEmitter(Visitor):
                     # ``x = y`` where both are read-only aggregates: bind a
                     # const reference instead of copying the whole value.
                     src = self._visit_expr(stmt.expr, ctx)
-                    target_name = self.storage.def_to_name[target_def]
+                    target_name = self.variables.def_to_name[target_def]
                     # `auto&` when the alias must stay writable
                     ref = (
                         'auto&'
@@ -3452,7 +3452,7 @@ class CppEmitter(Visitor):
         match target:
             case NamedId():
                 target_def = self.def_use.find_def_from_site(target, comp_site)
-                target_name = self.storage.def_to_name[target_def]
+                target_name = self.variables.def_to_name[target_def]
                 # A range counter is sized to the exit-test overshoot; the
                 # element storage would be too narrow.
                 counter = self._range_counter_scalar(iterable)
@@ -3559,7 +3559,7 @@ class CppEmitter(Visitor):
         # ``reaching_defs``), so the C++ name is the same on both
         # sides — emit a direct subscript-store.
         target_def = self.def_use.find_def_from_site(stmt.var, stmt)
-        target_name = self.storage.def_to_name[target_def]
+        target_name = self.variables.def_to_name[target_def]
         idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
         chain = target_name
         level = self._emitted_storage_of(target_def)
@@ -3640,7 +3640,7 @@ class CppEmitter(Visitor):
         only = block.stmts[0]
         if not isinstance(only, IfStmt):
             return None
-        if self.storage.hoists_before.get(only):
+        if self.variables.hoists_before.get(only):
             return None
         return only if self._is_pure_cond(only.cond) else None
 
@@ -3814,11 +3814,11 @@ class CppEmitter(Visitor):
     def _emit_for_named_target(self, stmt: ForStmt, ctx):
         assert isinstance(stmt.target, NamedId)
         target_def = self.def_use.find_def_from_site(stmt.target, stmt)
-        target = self.storage.def_to_name[target_def]
+        target = self.variables.def_to_name[target_def]
         # Fold the type into the for header iff the counter is a
         # single-writer class (the common case).  Otherwise the counter
         # was hoisted at the function top and we just reassign here.
-        if target_def in self.storage.declare_at_assign:
+        if target_def in self.variables.declare_at_assign:
             # A range counter transiently reaches the exit-test overshoot,
             # which the loop variable's element storage may be too narrow to
             # hold; size it from the counter's real trajectory instead.
