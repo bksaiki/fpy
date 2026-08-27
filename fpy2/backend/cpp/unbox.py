@@ -487,14 +487,22 @@ def _shares_storage(
             # it copies the sequence and they do not.
             return True
 
+    # A consumed name hands its value to a container and is never read again,
+    # so it is not a place beside that container's slot -- dropped from both
+    # halves of the count, or `slots` would absorb it right back.
+    consumed = alias.consumed(region)
     by_name: dict[NamedId, list[AssignDef]] = {}
     for d in alias.defs_in(region):
         # Only definitions that *bind* a name count.  A phi and an
         # `xs[i] = e` are redefinitions of one already there: SSA gives them
         # their own def, but neither introduces a place.
-        if isinstance(d, AssignDef) and not isinstance(d.site, IndexedAssign):
+        if (
+            isinstance(d, AssignDef)
+            and not isinstance(d.site, IndexedAssign)
+            and d.name not in consumed
+        ):
             by_name.setdefault(d.name, []).append(d)
-    slots = alias.referrers(region) - len(by_name)
+    slots = alias.referrers_after_moves(region) - len(by_name)
     owned_separately = 0
     for ds in by_name.values():
         if not all(

@@ -184,6 +184,49 @@ def c_slice_is_a_copy(xs: list[fp.Real]) -> fp.Real:
         return ys[0] + xs[0]
 
 
+@fp.fpy
+def c_consumed_into_container(xs: list[fp.Real]) -> fp.Real:
+    """`ys` is read exactly once, by the construction that takes it, so the
+    sharing verdict discounts it and the emitter must *move* rather than copy.
+    Reading it back checks the move went to the right place."""
+    with fp.FP64:
+        ys = [xs[0], xs[1]]
+        zss = [ys]
+        return zss[0][0] + zss[0][1]
+
+
+@fp.fpy
+def c_consumed_use_in_a_loop(xs: list[fp.Real]) -> fp.Real:
+    """The sole *syntactic* use runs once per iteration, so `ys` must survive
+    the first.  If the discount reached here the emitter would move out of it
+    and iteration two would read an empty vector."""
+    with fp.FP64:
+        ys = [xs[0], xs[1]]
+        acc = 0.0
+        for i in range(3):
+            zss = [ys]
+            acc = acc + zss[0][0]
+        return acc
+
+
+@fp.fpy
+def c_consumed_unsized_in_a_loop(xs: list[fp.Real]) -> fp.Real:
+    """The loop case where a wrong discount is *observable*.
+
+    ``std::array<double, K>`` moves element-wise, so moving out of one leaves it
+    readable and a bad discount stays latent.  An unsized list is a
+    ``std::vector``, whose move empties the source -- so iteration two reads
+    nothing and the boxed oracle disagrees.
+    """
+    with fp.FP64:
+        ys = [x * 2 for x in xs]
+        acc = 0.0
+        for i in range(3):
+            zss = [ys]
+            acc = acc + zss[0][0]
+        return acc
+
+
 _L = ListType(R)
 CASES = [
     ('scale_in_place', c_scale_in_place, [_L, R], [[1.0, 2.0, 3.0], 3.0]),
@@ -196,6 +239,9 @@ CASES = [
     ('write_after_rebind_untaken', c_write_after_rebind, [_L, R], [[1.0, 2.0], -1.0]),
     ('two_params_written', c_two_params_written, [_L, _L], [[1.0, 2.0], [3.0, 4.0]]),
     ('slice_is_a_copy', c_slice_is_a_copy, [_L], [[1.0, 2.0, 3.0]]),
+    ('consumed_into_container', c_consumed_into_container, [_L], [[1.0, 2.0]]),
+    ('consumed_use_in_a_loop', c_consumed_use_in_a_loop, [_L], [[1.0, 2.0]]),
+    ('consumed_unsized_in_a_loop', c_consumed_unsized_in_a_loop, [_L], [[1.0, 2.0]]),
 ]
 
 

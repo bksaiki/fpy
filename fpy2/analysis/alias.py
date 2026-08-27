@@ -465,6 +465,25 @@ class AliasAnalysis:
         names plus container slots."""
         return self._regions.referrers(region)
 
+    def consumed(self, region: Region) -> frozenset[NamedId]:
+        """*region*'s names that hand their value to a container and are never
+        read again — see :attr:`consumed_names`."""
+        return frozenset(self.consumed_names.get(self._regions.find(region), ()))
+
+    def referrers_after_moves(self, region: Region) -> int:
+        """:meth:`referrers`, less the names the value *moves* out of.
+
+        A name read once, into a container, does not hold the value alongside
+        that container's slot: it hands the value over and is finished.  Counting
+        it makes ``xs = [n, n]; return (xs, 1.0)`` look shared where the same
+        program written inline does not.
+
+        A consumer of this owes the move: whoever discounts the name has to
+        arrange that the value really is transferred and not copied, or the two
+        disagree about what the program does.
+        """
+        return self.referrers(region) - len(self.consumed(region))
+
     def region_of_site(self, site: AllocSite) -> Region | None:
         """Which region *site*'s allocation lives in."""
         region = self._site_region.get(site)
@@ -516,7 +535,9 @@ class AliasAnalysis:
             self._regions.is_returned(region)
             and not self._regions.has_param_site(region)
             and not self._regions.is_shared_out(region)
-            and not self.is_shared(site)
+            # after moves: a name the returned container consumed is not a
+            # second holder, so `xs = [n, n]; return (xs, 1.0)` transfers
+            and self.referrers_after_moves(region) <= 1
         )
 
     def is_uniquely_owned(self, site: AllocSite) -> bool:

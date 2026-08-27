@@ -690,3 +690,83 @@ class TestListsInsideTuples:
         )
         assert 'const std::tuple<std::vector<double>, double>&' in out, out
         assert 'std::shared_ptr' not in out, out
+
+
+class TestConsumedNameIsNotAPlace:
+    """A name read once, by the construction that takes its value, does not hold
+    the value alongside the container's slot -- so it must not stop the list
+    dropping its handle.  See ``AliasAnalysis.referrers_after_moves``.
+
+    The discount and the ``std::move`` are one claim, so each test asserts both:
+    a discount without the move would copy where the verdict assumed a transfer.
+    """
+
+    def test_named_matches_inlined(self):
+        """The pair that motivated this: the same program with and without a
+        name for the list must reach the same representation.  It is also what
+        naming aggregates in ANF would produce everywhere."""
+
+        @fp.fpy
+        def named(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = [n, n]
+                return (xs, 1.0)
+
+        @fp.fpy
+        def inlined(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                return ([n, n], 1.0)
+
+        a = ALLOW.compile(named, ctx=fp.FP64, arg_types=[R])
+        b = ALLOW.compile(inlined, ctx=fp.FP64, arg_types=[R])
+        assert 'shared_ptr' not in a
+        assert 'shared_ptr' not in b
+        assert 'std::array<double, 2>' in a
+        assert 'std::move(xs)' in a
+
+    def test_an_unsized_list_is_moved_not_copied(self):
+        """Where the unboxed form is a ``std::vector``, the move is what keeps
+        the discount from turning a refcount bump into an O(n) copy."""
+
+        @fp.fpy
+        def f(ys: list[fp.Real]) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = [y * 2 for y in ys]
+                return (xs, 1.0)
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        assert 'shared_ptr' not in out
+        assert 'std::make_tuple(std::move(xs), 1)' in out
+
+    def test_a_second_read_keeps_the_handle(self):
+        """Two uses, so the name really is a second place."""
+
+        @fp.fpy
+        def f(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = [n, n]
+                y = xs[0]
+                return (xs, y)
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[R])
+        assert 'std::move' not in out
+
+    def test_a_use_one_loop_level_in_keeps_the_handle(self):
+        """The sole syntactic use runs once per iteration, so moving out of it
+        would leave the second iteration reading an empty vector.  The handle
+        *and* the absent move are both required -- either alone would be a
+        silent wrong answer."""
+
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                xs = [n, n]
+                acc = 0.0
+                for i in range(3):
+                    yss = [xs]
+                    acc = acc + yss[0][0]
+                return acc
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[R])
+        assert 'shared_ptr' in out
+        assert 'std::move' not in out
