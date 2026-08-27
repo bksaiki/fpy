@@ -74,7 +74,6 @@ from ...ast.fpyast import (
     Range1,
     Range2,
     Range3,
-    ReturnStmt,
     Var,
     Zip,
 )
@@ -302,10 +301,10 @@ class Unbox:
         out = UnboxAnalysis(alias)
         if array_size is not None:
             out.sizes = _region_sizes(alias, array_size)
-        scan = _Scan(alias, def_use, callees or {})
+        scan = _Scan(alias, callees or {})
         scan._visit_function(ast, None)
-        out.slot_replaced = scan.slot_replaced
-        out.ret_regions = scan.returned
+        out.slot_replaced = alias.slot_replaced
+        out.ret_regions = alias.returned_levels
         out.written = scan.written
         out.at_boundary = scan.at_boundary
 
@@ -316,7 +315,7 @@ class Unbox:
                 continue
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
             shared = escapes or _shares_storage(
-                region, alias, storage, variables, def_use, scan.slot_replaced,
+                region, alias, storage, variables, def_use,
             )
             out.boxed[region] = out.boxed.get(region, False) or shared
 
@@ -488,33 +487,24 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
 
 
 class _Scan(DefaultVisitor):
-    """One walk collecting the four facts ``decide`` reads off the syntax.
+    """The two facts ``decide`` cannot get from :class:`AliasAnalysis`.
 
-    ``slot_replaced`` element regions some ``xss[i] = <list>`` replaces -- a C++
-    reference re-reads the slot where **E-Deref** read it once.  ``written``
-    regions stored into here or in a callee, which a ``const`` reference would
-    reject.  ``at_boundary`` regions crossing a call that declared a handle; an
-    unknown callee counts as declaring one everywhere.  ``returned`` what each
-    ``return`` hands back, by depth.
+    Both read a callee's ABI, so both are about a representation this target
+    chose: ``at_boundary`` is the regions crossing a call that declared a
+    handle -- an unknown callee counts as declaring one everywhere -- and
+    ``written`` adds the arguments a callee stores through to the ones
+    ``alias.written_regions`` already found here.
     """
 
     def __init__(
         self,
         alias: AliasAnalysis,
-        def_use: DefineUseAnalysis,
         callees: 'dict[FuncDef, CalleeAbi]',
     ):
         self.alias = alias
-        self.def_use = def_use
         self.callees = callees
-        self.slot_replaced: set[Region] = set()
-        self.written: set[Region] = set()
         self.at_boundary: set[Region] = set()
-        self.returned: list[set[Region]] = []
-        for d in alias.all_defs():
-            if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
-                if (r := alias.region_of(d)) is not None:
-                    self.written.add(r)
+        self.written: set[Region] = set(alias.written_regions)
 
     def _levels(self, e: Expr) -> set[Region]:
         out, depth = set(), 0
@@ -522,16 +512,6 @@ class _Scan(DefaultVisitor):
             out.add(r)
             depth += 1
         return out
-
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-        if (
-            isinstance(stmt.var, NamedId)
-            and self.alias.region_of_expr(stmt.expr) is not None
-        ):
-            d = self.def_use.find_def_from_site(stmt.var, stmt)
-            if (r := self.alias.region_of(d, len(stmt.indices))) is not None:
-                self.slot_replaced.add(r)
-        super()._visit_indexed_assign(stmt, ctx)
 
     def _visit_call(self, e: Call, ctx):
         abi = self.callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
@@ -546,15 +526,6 @@ class _Scan(DefaultVisitor):
             self.at_boundary |= self._levels(e)
         super()._visit_call(e, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
-        depth = 0
-        while (r := self.alias.region_of_expr(stmt.expr, depth)) is not None:
-            while len(self.returned) <= depth:
-                self.returned.append(set())
-            self.returned[depth].add(r)
-            depth += 1
-        super()._visit_return(stmt, ctx)
-
 
 def _unboxed(ty: CppType | None) -> bool:
     return isinstance(ty, CppList) and not ty.boxed
@@ -566,7 +537,6 @@ def _shares_storage(
     storage: CppStorage,
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
-    slot_replaced: set[Region],
 ) -> bool:
     """Whether more than one place holds *region* separately.
 
@@ -598,7 +568,7 @@ def _shares_storage(
     owned_separately = 0
     for ds in by_name.values():
         if not all(
-            _binds_by_reference(d, storage, variables, def_use, alias, slot_replaced)
+            _binds_by_reference(d, storage, variables, def_use, alias)
             for d in ds
         ):
             owned_separately += 1
@@ -611,7 +581,6 @@ def _binds_by_reference(
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     alias: AliasAnalysis,
-    slot_replaced: set[Region],
 ) -> bool:
     """Whether *d* references storage that already exists *inside this function*.
 
@@ -624,7 +593,9 @@ def _binds_by_reference(
     return (
         binds_by_reference(
             storage, variables, def_use, d,
-            allow_projection=region is not None and region not in slot_replaced,
+            allow_projection=(
+                region is not None and region not in alias.slot_replaced
+            ),
         )
         and not isinstance(d.site, Argument)
     )

@@ -7,7 +7,7 @@ distinguished from a shared one.
 
 import fpy2 as fp
 
-from fpy2.analysis import Alias
+from fpy2.analysis import Alias, DefineUse
 
 
 def _sites(func: fp.Function):
@@ -454,3 +454,102 @@ class TestConservativeRoutes:
         d = {str(x.name): x for x in du.defs}
         assert al.may_alias(d['p'], d['a'])
         assert not al.may_alias(d['q'], d['a'])
+
+
+class TestRegionFacts:
+    """The syntactic facts a representation decision reads off the region graph.
+
+    Each is stated against the region a *name* denotes, which is the form a
+    consumer asks in.
+    """
+
+    def test_element_store_marks_the_region_written(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], v: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                xs[0] = v
+                return xs
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        region = a.region_of(next(d for d in du.defs if str(d.name) == 'xs'))
+        assert region in a.written_regions
+
+    def test_a_read_only_list_is_not_written(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return xs[0]
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        region = a.region_of(next(d for d in du.defs if str(d.name) == 'xs'))
+        assert region not in a.written_regions
+
+    def test_replacing_a_slot_marks_the_element_region(self):
+        """``xss[i] = <list>`` puts a different list in the cell, so a reference
+        bound from that slot would re-read it."""
+
+        @fp.fpy
+        def f(xss: list[list[fp.Real]], row: list[fp.Real]) -> list[list[fp.Real]]:
+            with fp.FP64:
+                xss[0] = row
+                return xss
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        d = next(d for d in du.defs if str(d.name) == 'xss')
+        assert a.region_of(d, 1) in a.slot_replaced
+        # the outer spine is written, not replaced
+        assert a.region_of(d, 0) not in a.slot_replaced
+
+    def test_a_scalar_store_replaces_no_slot(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], v: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                xs[0] = v
+                return xs
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        assert not a.slot_replaced
+
+    def test_two_returns_put_their_regions_in_one_level(self):
+        """A function has one return type but several ``return``s, and nothing
+        unifies their regions -- so the grouping is the fact."""
+
+        @fp.fpy
+        def f(c: bool, xs: list[fp.Real], y: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                if c:
+                    return xs
+                else:
+                    return [y, y]
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        assert len(a.returned_levels) == 1
+        assert len(a.returned_levels[0]) == 2
+
+    def test_returned_levels_are_indexed_by_depth(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> list[list[fp.Real]]:
+            with fp.FP64:
+                return xss
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        d = next(d for d in du.defs if str(d.name) == 'xss')
+        assert len(a.returned_levels) == 2
+        assert a.returned_levels[0] == {a.region_of(d, 0)}
+        assert a.returned_levels[1] == {a.region_of(d, 1)}
+
+    def test_a_function_returning_a_scalar_has_no_returned_levels(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                return xs[0]
+
+        du = DefineUse.analyze(f.ast)
+        a = Alias.analyze(f.ast, def_use=du)
+        assert a.returned_levels == []

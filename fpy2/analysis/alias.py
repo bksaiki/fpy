@@ -85,7 +85,7 @@ shared outward, without asking whether the callee retains it.  Index-insensitive
 ``xs[0]`` and ``xs[1]`` are one part.  All three cost precision, not soundness.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, overload
 
 from ..ast import (
@@ -121,7 +121,7 @@ from ..function import Function
 from ..types import ListType, TupleType, Type
 from ..utils import Unionfind
 from .define_use import DefineUse, DefineUseAnalysis
-from .reaching_defs import AssignDef, Definition, PhiDef, same_object_defs
+from .reaching_defs import AssignDef, Definition, same_object_defs
 from .type_infer import TypeAnalysis, TypeInfer
 
 if TYPE_CHECKING:
@@ -382,8 +382,16 @@ class _Regions:
 class AliasAnalysis:
     """Result of :class:`Alias`.
 
-    ``sites`` lists every list allocation the function performs, plus one per
-    list nested in each parameter's type.
+    ``written_regions``, ``slot_replaced`` and ``returned_levels`` are syntactic
+    facts keyed by region, for a consumer deciding how a list is held: whether a
+    reference may be ``const``, whether it may be a reference at all, and what
+    the ``return``s hand back together.
+
+    Attributes:
+        sites:            every list allocation, plus one per nested parameter list.
+        written_regions:  regions an ``xs[i] = e`` here stores into.
+        slot_replaced:    element regions an ``xss[i] = <list>`` replaces.
+        returned_levels:  regions the ``return``s hand back, by depth.
     """
 
     sites: list[AllocSite]
@@ -391,6 +399,9 @@ class AliasAnalysis:
     _by_def: dict[Definition, Region]
     _by_expr: dict[Expr, Region]
     _site_region: dict[AllocSite, Region]
+    written_regions: set[Region] = field(default_factory=set)
+    slot_replaced: set[Region] = field(default_factory=set)
+    returned_levels: list[set[Region]] = field(default_factory=list)
 
     def region_of(self, d: Definition, depth: int = 0) -> Region | None:
         """What may be the same list as *d*, *depth* levels in.
@@ -849,6 +860,47 @@ class _Builder(DefaultVisitor):
         super()._visit_return(stmt, ctx)
 
 
+class _RegionFacts(DefaultVisitor):
+    """Syntactic facts about regions, read off a *finished* region graph.
+
+    A second walk rather than part of :class:`_Builder`: each fact asks
+    ``region_of`` for the region a place ends up in, which is only settled once
+    every merge has run.  A bare traversal is under 2% of the builder's cost.
+    """
+
+    def __init__(self, alias: 'AliasAnalysis', def_use: DefineUseAnalysis):
+        self.alias = alias
+        self.def_use = def_use
+        self.written: set[Region] = set()
+        self.slot_replaced: set[Region] = set()
+        self.returned_levels: list[set[Region]] = []
+        for d in alias.all_defs():
+            if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
+                if (r := alias.region_of(d)) is not None:
+                    self.written.add(r)
+
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+        # Only a store of a *list* replaces a slot: a scalar write goes through
+        # the cell, leaving whatever region the element held intact.
+        if (
+            isinstance(stmt.var, NamedId)
+            and self.alias.region_of_expr(stmt.expr) is not None
+        ):
+            d = self.def_use.find_def_from_site(stmt.var, stmt)
+            if (r := self.alias.region_of(d, len(stmt.indices))) is not None:
+                self.slot_replaced.add(r)
+        super()._visit_indexed_assign(stmt, ctx)
+
+    def _visit_return(self, stmt: ReturnStmt, ctx):
+        depth = 0
+        while (r := self.alias.region_of_expr(stmt.expr, depth)) is not None:
+            while len(self.returned_levels) <= depth:
+                self.returned_levels.append(set())
+            self.returned_levels[depth].add(r)
+            depth += 1
+        super()._visit_return(stmt, ctx)
+
+
 class Alias:
     """Alias analysis for FPy programs."""
 
@@ -876,4 +928,10 @@ class Alias:
             def_use = DefineUse.analyze(func)
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=def_use)
-        return _Builder(func, def_use, type_info, summaries or {}).run()
+        alias = _Builder(func, def_use, type_info, summaries or {}).run()
+        facts = _RegionFacts(alias, def_use)
+        facts._visit_function(func, None)
+        alias.written_regions = facts.written
+        alias.slot_replaced = facts.slot_replaced
+        alias.returned_levels = facts.returned_levels
+        return alias
