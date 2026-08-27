@@ -24,11 +24,11 @@ In the formal syntax, :math:`n` ranges over the reals together with
 :math:`\mathit{Var}`, and :math:`f` over a separate set of function names
 :math:`\mathit{FuncName}`.
 
-Operators come from two given sets. :math:`\mathit{op}` ranges over the
-*rounded operators* :math:`\mathit{Op}`, each denoting a function on numbers,
-and :math:`\mathit{pred}` over the *exact predicates* :math:`\mathit{Pred}`,
-each denoting a boolean-valued function on values. Neither set is fixed here, so
-an operation of either shape may be added without changing a rule.
+Operators :math:`\mathit{op}` fall into one of two sets. An
+:math:`\mathit{op} \in \mathit{Arith}` takes numbers to a number, rounded under
+:math:`C` (**E-Arith**); an :math:`\mathit{op} \in \mathit{Exact}` takes values
+to a value, with :math:`C` playing no part (**E-Exact**). Neither set is fixed,
+so a new operator needs no new rule.
 
 There are two forms of context constant. :math:`\R` is the *real rounding
 context*, whose rounding operation is the identity.
@@ -56,9 +56,7 @@ parameters give distinct constants, so a program may use several at once.
      & \mid & \texttt{!}\, e
        & \text{dereference} \\
      & \mid & \mathit{op}(e_1, \ldots, e_k)
-       & \text{rounded operator} \\
-     & \mid & \mathit{pred}(e_1, \ldots, e_k)
-       & \text{exact predicate} \\[1ex]
+       & \text{operator application} \\[1ex]
    s & ::= & p = e
        & \text{assignment} \\
      & \mid & x = \texttt{ref}\ e
@@ -86,20 +84,19 @@ parameters give distinct constants, so a program may use several at once.
      & \mid & (\, p_1, \ldots, p_m \,)
        & \text{tuple pattern} \\[1ex]
    \mathit{op} & ::= & + \mid - \mid \times \mid \div \mid \ldots
-       & \text{rounded operators} \\
-   \mathit{pred} & ::= & < \mid \le \mid = \mid \ne \mid \ldots
-       & \text{exact predicates}
+       & \mathit{Arith} \text{ operators} \\
+     & \mid & < \mid \le \mid = \mid \mathit{len} \mid \mathit{max}
+       \mid \ldots
+       & \mathit{Exact} \text{ operators}
    \end{array}
 
 An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position, the only way to take a tuple apart.
 
-Both are written in prefix form even where FPy spells them infix, so
-:math:`x < y` is :math:`\mathit{pred}(x, y)`. The
-:doc:`derived semantics <derived-semantics>` gives FPy's members of each set,
-along with the operators that fit neither—selection, exact integer counts,
-casts.
+Operators are written in prefix form even where FPy spells them infix, so
+:math:`x < y` is :math:`\mathit{op}(x, y)`. The
+:doc:`derived semantics <derived-semantics>` gives FPy's members of each set.
 
 Values
 ------
@@ -206,8 +203,9 @@ from the heap; allocating the cell is a statement, since it writes one (see
         {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
-An operator is where rounding happens. Its operands evaluate to numbers, and the
-rounding context :math:`C` rounds the exact result of applying it. The brackets
+An :math:`\mathit{Arith}` operator is where rounding happens. Its operands
+evaluate to numbers, and the rounding context :math:`C` rounds the exact result
+of applying it. The brackets
 :math:`\exact{\cdot}` mark a value computed exactly, with no intermediate
 rounding, so :math:`\exact{\mathit{op}(n_1, \ldots, n_k)}` is the true result
 and :math:`C` rounds it once. Under :math:`\R`, rounding is the identity, so the
@@ -215,22 +213,28 @@ exact result is returned unchanged.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow n_i
+   \frac{\mathit{op} \in \mathit{Arith}
+         \quad
+         \langle \sigma, \mu, C, e_i \rangle \Downarrow n_i
          \quad (1 \le i \le k)}
         {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
          \Downarrow C(\exact{\mathit{op}(n_1, \ldots, n_k)})}
-   \tag{E-Op}
+   \tag{E-Arith}
 
-A predicate evaluates its operands and tests them, producing a boolean; nothing
-rounds. NaN is unordered: an ordering test with a NaN operand is false.
+An :math:`\mathit{Exact}` operator applies to its operands as they are; nothing
+rounds, and the result may be of any kind—a boolean from a comparison, an
+integer from a length, an operand itself from a selection. NaN is unordered: an
+ordering test with a NaN operand is false.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
+   \frac{\mathit{op} \in \mathit{Exact}
+         \quad
+         \langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
          \quad (1 \le i \le k)}
-        {\langle \sigma, \mu, C, \mathit{pred}(e_1, \ldots, e_k) \rangle
-         \Downarrow \mathit{pred}(v_1, \ldots, v_k)}
-   \tag{E-Pred}
+        {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
+         \Downarrow \mathit{op}(v_1, \ldots, v_k)}
+   \tag{E-Exact}
 
 Statements
 ----------

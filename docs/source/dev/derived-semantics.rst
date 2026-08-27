@@ -4,14 +4,14 @@ Derived Semantics
 The :doc:`core semantics <semantics>` covers only a minimal fragment of
 FPy—constants, arithmetic, function calls, and the basic statements. This page
 explains every other *evaluable* node in :mod:`fpy2.ast.fpyast`, each either
-**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Op**),
+**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Arith**),
 **(ii)** desugaring to a small FPy program, or **(iii)** elaborating to core
 syntax that has no FPy spelling of its own, as lists do (see *Lists*).
 
 The core leaves its two operator sets open. Most entries below name a member of
-one of them: :math:`\mathit{Op}`, whose members round their exact result
-(**E-Op**), or :math:`\mathit{Pred}`, whose members yield a boolean exactly
-(**E-Pred**).
+one of them: :math:`\mathit{Arith}`, whose members take numbers to a number and
+round it (**E-Arith**), or :math:`\mathit{Exact}`, whose members take values to
+a value and round nothing (**E-Exact**).
 
 A node shown with an ``@fp.fpy`` program stands for that program, which is
 ordinary FPy and elaborates in turn by the entries here: an expression node
@@ -41,13 +41,14 @@ Classification and inspection
 -----------------------------
 
 * ``IsFinite``, ``IsInf``, ``IsNan``, ``IsNormal``, ``Signbit`` — members of
-  :math:`\mathit{Pred}`, each testing its operand.
-* ``Logb`` — a member of :math:`\mathit{Op}`, the normalized (integer) exponent.
+  :math:`\mathit{Exact}`, each testing its operand.
+* ``Logb`` — a member of :math:`\mathit{Arith}`, the normalized (integer)
+  exponent.
 
 Arithmetic
 ----------
 
-These are members of :math:`\mathit{Op}`, differing only in the operation:
+These are members of :math:`\mathit{Arith}`, differing only in the operation:
 ``Sub`` (``-``), ``Mul`` (``*``), ``Div`` (``/``), ``Neg``, ``Abs``, ``Sqrt``,
 ``Cbrt``, ``Pow`` (``**``), ``Copysign``, ``Atan2``, ``Mod`` (``%``), ``Fmod``,
 ``Remainder``, and the elementary functions ``Sin``, ``Cos``, ``Tan``,
@@ -65,7 +66,7 @@ Rounding operators
 ------------------
 
 * ``Round`` — ``fp.round(e)`` rounds ``e`` to the rounding context, :math:`C(v)`
-  (**E-Op** with the identity operation); idempotent.
+  (**E-Arith** with the identity operation); idempotent.
 * ``RoundAt`` — ``fp.round_at(e, n)`` rounds ``e`` at digit position ``n``, then
   under :math:`C`.
 * ``Cast`` — ``fp.cast(e)`` rounds ``e`` but is stuck unless the result is
@@ -123,7 +124,7 @@ The nodes that build and read them:
   writes the heap, so it lifts like a call. No equivalent form exists:
   the core's list constructor is fixed-width and the sizes are run-time values.
 * ``Len`` / ``Size`` / ``Dim`` — ``len(xs)``, ``fp.size(xs, k)``, ``fp.dim(xs)``:
-  exact integer counts, no rounding.
+  members of :math:`\mathit{Exact}` returning integer counts.
 * ``Range1`` / ``Range2`` / ``Range3`` — ``range(…)`` materialized to a list of
   integers, as in Python.
 
@@ -147,8 +148,8 @@ Miscellaneous
 Logical operators
 -----------------
 
-* ``Not`` — a member of :math:`\mathit{Pred}`, boolean negation. Its operand is
-  a boolean, which **E-Pred** allows: it takes values, not just numbers.
+* ``Not`` — a member of :math:`\mathit{Exact}`, boolean negation. Its operand is
+  a boolean, which **E-Exact** allows: it takes values, not just numbers.
 * ``And`` / ``Or`` — ``a and b`` :math:`\equiv` ``b if a else False``, and
   ``a or b`` :math:`\equiv` ``True if a else b``.
 
@@ -159,7 +160,7 @@ Comparisons
   tests, all six of ``<``, ``<=``, ``>``, ``>=``, ``==``, ``!=`` chaining:
   ``a < b <= c`` :math:`\equiv` ``(a < b) and (b <= c)``. Since ``and``
   short-circuits, each operand is evaluated at most once. All six are members of
-  :math:`\mathit{Pred}`; the four ordering tests take numbers, while ``==`` and
+  :math:`\mathit{Exact}`; the four ordering tests take numbers, while ``==`` and
   ``!=`` compare lists and tuples element-wise and reject operands of unequal
   type.
 
@@ -248,8 +249,9 @@ List comprehensions
 Composite and selection
 -----------------------
 
-**Selection** returns one operand exactly (no rounding). ``Max`` / ``Min``
-propagate NaN and break ``±0`` ties by sign, independent of argument order::
+**Selection** returns one operand exactly. ``Max`` / ``Min`` are members of
+:math:`\mathit{Exact}`: they propagate NaN and break ``±0`` ties by sign,
+independent of argument order::
 
     @fp.fpy
     def maximum(x: fp.Real, y: fp.Real) -> fp.Real:
