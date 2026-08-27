@@ -28,8 +28,9 @@ from ...ast.fpyast import (
     Stmt,
     Var,
 )
-from .storage_infer import StorageAnalysis, is_rebound
-from .types import CppList, CppTuple
+from .storage import CppStorage
+from .storage_infer import is_rebound
+from .types import CppType
 
 
 @dataclass
@@ -65,7 +66,7 @@ class VariableAlloc:
 
     @staticmethod
     def assign(
-        def_use: DefineUseAnalysis, storage: StorageAnalysis,
+        def_use: DefineUseAnalysis, storage: CppStorage,
     ) -> VariableAnalysis:
         """Name and place every class of *storage*."""
         def_class = storage.def_class
@@ -163,7 +164,7 @@ def _is_external(members: list[Definition]) -> bool:
 
 
 def binds_by_reference(
-    storage: StorageAnalysis,
+    storage: CppStorage,
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     d: Definition,
@@ -187,9 +188,9 @@ def binds_by_reference(
     the one chosen for it, and every consumer of ``storage_of`` has to remember
     to compensate.  Requiring agreement makes the divergence impossible instead.
     """
-    if not isinstance(storage.storage_of(d), (CppList, CppTuple)):
+    if not storage.is_aggregate(storage.storage_of(d)):
         return False
-    if is_rebound(storage, d):
+    if is_rebound(storage.analysis, d):
         return False
     if not _binds_the_whole_value(d):
         return False
@@ -200,7 +201,7 @@ def binds_by_reference(
             src_def = def_use.find_def_from_use(src)
             return (
                 d in variables.declare_at_assign
-                and not is_rebound(storage, src_def)
+                and not is_rebound(storage.analysis, src_def)
                 and storage.storage_of(d) == storage.storage_of(src_def)
             )
         case Assign(expr=ListRef() as ref) if allow_projection:
@@ -208,7 +209,7 @@ def binds_by_reference(
             return (
                 root is not None
                 and d in variables.declare_at_assign
-                and not is_rebound(storage, def_use.find_def_from_use(root))
+                and not is_rebound(storage.analysis, def_use.find_def_from_use(root))
             )
         case _:
             return False

@@ -18,11 +18,23 @@ Naming and declaration placement are :mod:`.variables`.
 """
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
 from ...analysis import Definition
 from ...analysis.define_use import DefineUseAnalysis
-from ...analysis.format_infer import FormatBound
+from ...analysis.format_infer import (
+    AbstractableFormat,
+    AbstractFormat,
+    FormatBound,
+    ListFormat,
+    SetFormat,
+    TupleFormat,
+    VarFormat,
+    is_bottom,
+)
+from ...analysis.format_infer.analysis import _to_abstract
 from ...analysis.reaching_defs import AssignDef, PhiDef, same_object_defs
 from ...ast.fpyast import (
     Argument,
@@ -35,9 +47,43 @@ from ...ast.fpyast import (
     Stmt,
     Var,
 )
+from ...number.context.real import REAL_FORMAT
 from ...utils import Unionfind
-from .storage import StorageSelectionError, aggregate_storage, choose_storage
-from .types import CppList, CppTuple, CppType
+from .storage import StorageSelectionError
+
+
+class StorageDomain(Protocol):
+    """What a backend contributes to storage assignment: its formats.
+
+    Deliberately one input and one hook.  A storage *is* a format the target can
+    spell, so containment over formats answers everything else -- ``of_bound`` is
+    the first member containing a bound, ``join`` the first containing several,
+    and losslessness *is* containment, so no conversion relation is needed.
+    Structure needs no map either: ``ListFormat`` and ``TupleFormat`` are already
+    bounds, and the analysis recurses through them itself.
+    """
+
+    @property
+    def sigma(self) -> Sequence[AbstractableFormat]:
+        """The storage formats, smallest first.
+
+        A **sequence**, not a set: containment over formats is not a
+        join-semilattice -- ``{s8, u16}`` has two incomparable minimal upper
+        bounds and no least one -- so the order is the tie-break, and a
+        different order changes which programs are storable.
+        """
+        ...
+
+    def fallback(self, bound: FormatBound) -> AbstractableFormat | None:
+        """A storage for a bound no member of :attr:`sigma` contains, or
+        ``None`` to refuse.
+
+        The one thing the sequence cannot supply: a target may accept a bound on
+        terms of its own -- the cpp backend stores an unbounded integer in
+        ``int64_t`` and treats overflow as the user's problem, which no
+        containment test would allow.
+        """
+        ...
 
 
 @dataclass
@@ -58,11 +104,12 @@ class StorageAnalysis:
     """
     def_class: dict[Definition, Definition]
     class_members: dict[Definition, list[Definition]]
-    class_storage: dict[Definition, CppType]
+    class_storage: dict[Definition, FormatBound]
     expr_bound: dict[Expr, FormatBound]
     def_use: DefineUseAnalysis
+    domain: StorageDomain
 
-    def of_expr(self, e: Expr) -> CppType | None:
+    def of_expr(self, e: Expr) -> FormatBound:
         """The storage *e*'s value is held in, or ``None`` where no member of
         the domain covers it.
 
@@ -81,14 +128,14 @@ class StorageAnalysis:
             return self.storage_of(self.def_use.find_def_from_use(e))
         if isinstance(e, ListRef):
             base = self.of_expr(e.value)
-            if isinstance(base, CppList):
+            if isinstance(base, ListFormat):
                 return base.elt
         try:
-            return choose_storage(self.expr_bound.get(e))
+            return of_bound(self.domain, self.expr_bound.get(e))
         except StorageSelectionError:
             return None
 
-    def storage_of(self, d: Definition) -> CppType:
+    def storage_of(self, d: Definition) -> FormatBound:
         """Convenience: the C++ storage type chosen for *d*'s class."""
         return self.class_storage[self.def_class[d]]
 
@@ -115,6 +162,119 @@ def is_rebound(storage: 'StorageAnalysis', d: Definition) -> bool:
     )
 
 
+def _lift(bound: FormatBound) -> AbstractFormat | None:
+    """*bound* as an :class:`AbstractFormat`, which is what carries ``<=``."""
+    if isinstance(bound, SetFormat):
+        return _to_abstract(bound)
+    if isinstance(bound, AbstractableFormat):
+        return AbstractFormat.from_format(bound)
+    return None
+
+
+def of_bound(domain: StorageDomain, bound: FormatBound) -> FormatBound:
+    """The smallest storage in *domain* containing *bound*.
+
+    Structural: a list's storage is a list of its element's storage, a tuple's
+    is field-wise.  ``None`` -- a non-numeric bound, or a kind nothing resolved
+    -- has no numeric storage and stays ``None``; the backend spells it however
+    it spells a boolean.
+
+    A bottom bound holds no value, so every member contains it vacuously and the
+    first wins.  Where no member contains the bound the domain gets one chance to
+    accept it anyway (:meth:`StorageDomain.fallback`) before this refuses.
+    """
+    if bound is None or isinstance(bound, VarFormat):
+        return None
+    if isinstance(bound, TupleFormat):
+        return TupleFormat(tuple(of_bound(domain, b) for b in bound.elts))
+    if isinstance(bound, ListFormat):
+        return ListFormat(of_bound(domain, bound.elt))
+    if is_bottom(bound):
+        return domain.sigma[0]
+    if bound == REAL_FORMAT:
+        raise StorageSelectionError(
+            'cannot store an unconstrained real value in any storage format; '
+            'is the active rounding context symbolic?  Try monomorphizing the '
+            'function with a concrete context.'
+        )
+    af = _lift(bound)
+    if af is None:
+        raise StorageSelectionError(
+            f'cannot compare {bound!r} against the storage formats; '
+            'storage selection requires a dyadic format'
+        )
+    for sigma in domain.sigma:
+        if af <= AbstractFormat.from_format(sigma):
+            return sigma
+    chosen = domain.fallback(bound)
+    if chosen is not None:
+        return chosen
+    raise StorageSelectionError(f'no storage format contains {bound!r}')
+
+
+def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
+    """The smallest storage in *domain* containing every input.
+
+    **N-ary, and it must not be folded.**  Containment is not a
+    join-semilattice, so a pairwise fold is both less precise and less total
+    than one search over the whole collection: over the cpp ladder,
+    ``join{s8, u16, f32}`` is ``float`` where folding gives ``double``, and
+    ``join{s8, u32, f32}`` succeeds where folding fails outright.
+
+    Inputs share a structural shape -- the type checker upstream guarantees it --
+    so a mismatch is an analysis bug rather than a program this cannot store.
+    """
+    head, *rest = storages
+    if not rest:
+        return head
+    if head is None:
+        assert all(s is None for s in rest), (
+            f'cannot join a non-numeric storage with a numeric one: {storages!r}'
+        )
+        return None
+    if isinstance(head, ListFormat):
+        assert all(isinstance(s, ListFormat) for s in rest), storages
+        elts = [s.elt for s in storages if isinstance(s, ListFormat)]
+        return ListFormat(join(domain, elts))
+    if isinstance(head, TupleFormat):
+        assert all(
+            isinstance(s, TupleFormat) and len(s.elts) == len(head.elts)
+            for s in rest
+        ), storages
+        tuples = [s for s in storages if isinstance(s, TupleFormat)]
+        return TupleFormat(tuple(
+            join(domain, [t.elts[i] for t in tuples])
+            for i in range(len(head.elts))
+        ))
+    afs = []
+    for s in storages:
+        af = _lift(s)
+        assert af is not None, f'not a storage format: {s!r}'
+        afs.append(af)
+    for sigma in domain.sigma:
+        rung = AbstractFormat.from_format(sigma)
+        if all(af <= rung for af in afs):
+            return sigma
+    raise StorageSelectionError(f'no storage format subsumes {storages!r}')
+
+
+def _aggregate(domain: StorageDomain, bounds: list[FormatBound]) -> FormatBound:
+    """One storage containing every bound in *bounds*.
+
+    A bottom bound -- a fresh ``empty(...)`` -- holds no value, so it constrains
+    nothing and is dropped whenever another member does constrain: keeping it
+    would widen for nothing, since its storage is the domain's first member and
+    joining that with a signed one costs a rung.
+
+    The join is over *storages*, not bounds, which is where the residual
+    imprecision lives: a bound that is only *partly* bottom still contributes the
+    first member at its empty slots.
+    """
+    assert bounds, 'a class has at least one member'
+    constraining = [b for b in bounds if not is_bottom(b)]
+    return join(domain, [of_bound(domain, b) for b in (constraining or bounds)])
+
+
 class StorageInfer:
     """
     Storage-type inference for the cpp emitter.
@@ -129,6 +289,7 @@ class StorageInfer:
         def_use: DefineUseAnalysis,
         def_to_bound: dict[Definition, FormatBound],
         expr_to_bound: dict[Expr, FormatBound],
+        domain: StorageDomain,
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 
@@ -149,7 +310,7 @@ class StorageInfer:
             class_members[c].append(d)
 
         # ---- 2. storage per class ----
-        class_storage: dict[Definition, CppType] = {}
+        class_storage: dict[Definition, FormatBound] = {}
         for c, members in class_members.items():
             # every member, not those that happen to have a bound: one
             # without contributes no constraint, so skipping it can leave the
@@ -160,7 +321,7 @@ class StorageInfer:
             )
             bounds = [def_to_bound[d] for d in members]
             try:
-                class_storage[c] = aggregate_storage(bounds)
+                class_storage[c] = _aggregate(domain, bounds)
             except StorageSelectionError as e:
                 name = members[0].name
                 raise StorageSelectionError(
@@ -173,4 +334,5 @@ class StorageInfer:
             class_storage=class_storage,
             expr_bound=expr_to_bound,
             def_use=def_use,
+            domain=domain,
         )

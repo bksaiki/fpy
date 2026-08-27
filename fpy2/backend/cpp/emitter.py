@@ -2,7 +2,7 @@
 cpp backend: emitter.
 
 Walks the post-pipeline :class:`FuncDef` and produces a C++ source string.
-Storage types and per-def identifiers come from :class:`StorageAnalysis`;
+Storage types and per-def identifiers come from :class:`CppStorage`;
 per-expression bounds from :class:`FormatAnalysis`.  Primitive ops dispatch
 through the :class:`ScalarOpTable` in :mod:`.ops`, which is where operand
 formats meet the active rounding context.
@@ -141,6 +141,7 @@ from ...number import (
 from ...number.context.context import Context
 from .ops import CppOp, ScalarOpTable
 from .storage import (
+    CppStorage,
     StorageSelectionError,
     bound_fits_in_scalar,
     choose_storage,
@@ -148,7 +149,7 @@ from .storage import (
     scalar_fits_in,
     scalar_sup,
 )
-from .storage_infer import StorageAnalysis, is_rebound
+from .storage_infer import is_rebound
 from .target import is_native_ctx, make_op_table
 from .types import (
     UNSIGNED_INT_TYPES,
@@ -328,7 +329,7 @@ class CppEmitter(Visitor):
     """Single-use visitor that produces a C++ source string."""
 
     ast: FuncDef
-    storage: StorageAnalysis
+    storage: CppStorage
     variables: VariableAnalysis
     def_use: DefineUseAnalysis
     format_info: FormatAnalysis
@@ -339,7 +340,7 @@ class CppEmitter(Visitor):
     def __init__(
         self,
         ast: FuncDef,
-        storage: StorageAnalysis,
+        storage: CppStorage,
         variables: VariableAnalysis,
         def_use: DefineUseAnalysis,
         format_info: FormatAnalysis,
@@ -721,7 +722,7 @@ class CppEmitter(Visitor):
         return isinstance(storage, (CppList, CppTuple))
 
     def _is_rebound(self, d: Definition) -> bool:
-        return is_rebound(self.storage, d)
+        return is_rebound(self.storage.analysis, d)
 
     def _arg_decl(self, arg: Argument, storage: CppType) -> str:
         """Parameter declaration; see :meth:`_binding_decl` for the rule."""
@@ -834,7 +835,7 @@ class CppEmitter(Visitor):
         )
 
     def _emit_bind(self, name: NamedId, site, rhs: str) -> None:
-        """``T name = rhs;`` or ``name = rhs;``, per :class:`StorageAnalysis`.
+        """``T name = rhs;`` or ``name = rhs;``, per :class:`CppStorage`.
         """
         target_def = self.def_use.find_def_from_site(name, site)
         target_name = self.variables.def_to_name[target_def]
@@ -1313,7 +1314,7 @@ class CppEmitter(Visitor):
     def _storage_or_none(self, e: Expr) -> CppType | None:
         """The storage *e* actually emits as, or ``None`` where unknown.
 
-        :meth:`StorageAnalysis.of_expr` chooses the type; the representation is
+        :meth:`CppStorage.of_expr` chooses the type; the representation is
         stamped here, since it is decided per alias region (see :mod:`.unbox`).
         """
         ty = self.storage.of_expr(e)
@@ -1675,7 +1676,7 @@ class CppEmitter(Visitor):
         """The C++ type of the token *e* prints as, or ``None`` for no literal.
 
         Not the same question as its *storage*, which
-        :class:`StorageAnalysis` picks from the literal's value.  A token has
+        :class:`CppStorage` picks from the literal's value.  A token has
         whatever type C++ gives it, which is what
         :func:`_value_cpp_type` answers.
         """

@@ -83,8 +83,8 @@ from ...ast.fpyast import (
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...utils import enum_repr
-from .storage import choose_storage
-from .storage_infer import StorageAnalysis, is_rebound
+from .storage import CppStorage, choose_storage
+from .storage_infer import is_rebound
 from .types import CppList, CppTuple, CppType
 from .variables import VariableAnalysis, binds_by_reference
 
@@ -280,7 +280,7 @@ class Unbox:
     @staticmethod
     def decide(
         ast: FuncDef,
-        storage: StorageAnalysis,
+        storage: CppStorage,
         variables: VariableAnalysis,
         alias: AliasAnalysis,
         def_use: DefineUseAnalysis,
@@ -370,7 +370,7 @@ class Unbox:
 
 
 def _regions(
-    cls: Definition, storage: StorageAnalysis, alias: AliasAnalysis,
+    cls: Definition, storage: CppStorage, alias: AliasAnalysis,
 ) -> list[Region | None]:
     """The alias region each level of *cls*'s storage holds, by depth.
 
@@ -566,7 +566,7 @@ def _unboxed(ty: CppType | None) -> bool:
 def _shares_storage(
     region: Region,
     alias: AliasAnalysis,
-    storage: StorageAnalysis,
+    storage: CppStorage,
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     slot_replaced: set[Region],
@@ -583,7 +583,7 @@ def _shares_storage(
         if (
             isinstance(d, AssignDef)
             and isinstance(d.site, Argument)
-            and is_rebound(storage, d)
+            and is_rebound(storage.analysis, d)
         ):
             # `_arg_decl` passes a *rebound* parameter by value.  Boxed, the
             # copy is of the handle and writes still reach the caller; unboxed
@@ -610,7 +610,7 @@ def _shares_storage(
 
 def _binds_by_reference(
     d: AssignDef,
-    storage: StorageAnalysis,
+    storage: CppStorage,
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     alias: AliasAnalysis,
@@ -652,7 +652,7 @@ class StrictUnboxError(Exception):
 
 def check_strict(
     unbox: UnboxAnalysis,
-    storage: StorageAnalysis,
+    storage: CppStorage,
     variables: VariableAnalysis,
     ret_ty: CppType,
 ) -> None:

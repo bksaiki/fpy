@@ -20,6 +20,10 @@ The module also exposes:
   diagnosing a refused conversion.
 """
 
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+from ...analysis import Definition
 from ...analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
@@ -31,6 +35,7 @@ from ...analysis.format_infer import (
     is_bottom,
 )
 from ...analysis.format_infer.analysis import _to_abstract
+from ...ast.fpyast import Var
 from ...number import (
     FP32,
     FP64,
@@ -46,6 +51,9 @@ from ...number import (
 from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
 from .types import CppList, CppScalar, CppTuple, CppType
+
+if TYPE_CHECKING:
+    from .storage_infer import StorageAnalysis
 
 # ----------------------------------------------------------------------
 # The storage ladder.
@@ -196,25 +204,6 @@ def choose_storage(bound: FormatBound) -> CppType:
     return choose_storage_scalar(bound)
 
 
-def aggregate_storage(bounds: list[FormatBound]) -> CppType:
-    """A single storage type containing every bound in *bounds*.
-
-    For a name with several SSA defs, whose declaration must hold every value
-    assigned into it.  Storage per bound, then the ladder supremum; structured
-    types recurse.
-
-    A bottom bound (a fresh ``empty(...)``) holds no value, so it constrains
-    nothing and is dropped when any other def does -- keeping it would widen
-    for nothing, since its storage is the first rung and ``u8 ⊔ s8`` is
-    ``s16``.  A *partly* bottom bound still contributes its empty slots; fixing
-    that needs a supremum over bounds rather than over storages.
-    """
-    assert bounds, 'aggregate_storage requires at least one bound'
-    constraining = [b for b in bounds if not is_bottom(b)]
-    storages = [choose_storage(b) for b in (constraining or bounds)]
-    return _supremum(storages)
-
-
 def _supremum(storages: list[CppType]) -> CppType:
     """
     Smallest storage that contains every storage in *storages*.
@@ -277,3 +266,105 @@ def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
     raise StorageSelectionError(
         f'no storage type on the ladder subsumes {scalars!r}'
     )
+
+
+class CppStorageDomain:
+    """The cpp backend's :class:`~.storage_infer.StorageDomain`: the ladder.
+
+    Holds no state -- the domain *is* :data:`_SIGMA`.
+    """
+
+    @property
+    def sigma(self) -> Sequence[AbstractableFormat]:
+        return [fmt for _ty, fmt in _SIGMA]
+
+    def fallback(self, bound: FormatBound) -> AbstractableFormat | None:
+        """``int64_t`` for an unbounded integer format.
+
+        Deliberately ignores the *magnitude* bound -- an unbounded integer has
+        none, and overflow is the user's problem.  It must not ignore the
+        membership flags too: ``int64_t`` holds no NaN, no infinity and no signed
+        zero, so a bound carrying one has no business here even though the
+        containment search already rejected it.
+        """
+        if not (isinstance(bound, MPFixedFormat) and bound.expmin >= 0):
+            return None
+        af = _to_abstract(bound)
+        if af is None or not af.specials_contained_in(_ABSTRACT[CppScalar.S64]):
+            return None
+        return SINT64.format()
+
+
+_SPELLING: dict[AbstractableFormat, CppScalar] = {fmt: ty for ty, fmt in _SIGMA}
+
+
+def to_cpp(storage: FormatBound) -> CppType:
+    """A storage the analysis chose, as the C++ type that spells it.
+
+    The translation the backend owes: the analysis answers in formats, which say
+    what a value *is*; a ``CppType`` says how this target holds one, and carries
+    a representation axis (a handle, a value, a fixed length) that no format has.
+    :mod:`.unbox` decides that axis and stamps it afterwards.
+    """
+    if storage is None:
+        return CppScalar.BOOL
+    if isinstance(storage, TupleFormat):
+        return CppTuple(tuple(to_cpp(e) for e in storage.elts))
+    if isinstance(storage, ListFormat):
+        return CppList(to_cpp(storage.elt))
+    spelled = (
+        _SPELLING.get(storage)
+        if isinstance(storage, AbstractableFormat) else None
+    )
+    if spelled is None:
+        raise StorageSelectionError(
+            f'no C++ type spells the storage {storage!r}'
+        )
+    return spelled
+
+
+class CppStorage:
+    """The analysis's answer, spelled in C++ types.
+
+    A thin view: the analysis chose formats, this maps them once so the emitter
+    reads types.  ``class_storage`` is the mutable one -- :mod:`.unbox` rewrites
+    an entry to record a representation, which is a fact about how the target
+    holds a value and not one the analysis has any business carrying.
+    """
+
+    def __init__(self, analysis: 'StorageAnalysis'):
+        self.analysis = analysis
+        self.class_storage: dict[Definition, CppType] = {
+            c: to_cpp(fmt) for c, fmt in analysis.class_storage.items()
+        }
+
+    @property
+    def def_class(self):
+        return self.analysis.def_class
+
+    @property
+    def class_members(self):
+        return self.analysis.class_members
+
+    def storage_of(self, d: Definition) -> CppType:
+        return self.class_storage[self.analysis.def_class[d]]
+
+    def of_expr(self, e) -> CppType | None:
+        """:meth:`StorageAnalysis.of_expr`, spelled.
+
+        A ``Var`` resolves through :attr:`class_storage`, so it sees whatever
+        representation :mod:`.unbox` stamped there; anything else is translated
+        fresh.
+        """
+        if isinstance(e, Var):
+            return self.storage_of(self.analysis.def_use.find_def_from_use(e))
+        chosen = self.analysis.of_expr(e)
+        if chosen is None and self.analysis.expr_bound.get(e) is not None:
+            return None
+        try:
+            return to_cpp(chosen)
+        except StorageSelectionError:
+            return None
+
+    def is_aggregate(self, storage: CppType) -> bool:
+        return isinstance(storage, (CppList, CppTuple))

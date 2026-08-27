@@ -744,24 +744,44 @@ two hand-built programs that actually exercise it (`ys = xs; ys[0] = n`, and
 answer different questions on purpose: an operand's own bound versus the type its
 name is held in. Unifying them is a behaviour change, not a relocation.
 
-### 4. The backend interface
+### 4. The backend interface — done
 
-A protocol the backend implements:
+The analysis operates on `FormatBound` directly. A storage *is* a format the
+target can spell, so `FormatBound`'s own cases — a `Format` from the sequence,
+`ListFormat`, `TupleFormat`, `None` for a boolean — are exactly the storage
+domain, and no separate vocabulary is needed.
 
-- the ordered sequence of storage formats;
-- the non-numeric answer (`bool`) and the rule that joining it with a numeric
-  member is an error [10];
-- the fallback policy for an unbounded integer format.
+`StorageDomain` is therefore **one input and one hook**:
 
-No conversion relation — containment is losslessness [9]. No structure map —
-`ListFormat` and `TupleFormat` are already `FormatBound`s. `join` takes a
-collection.
-
-Parameterize the assignment on it, with the C++ ladder as the one instance.
-
+```python
+sigma            -> Sequence[AbstractableFormat]   # ordered; the tie-break
+fallback(bound)  -> AbstractableFormat | None      # accept on the target's terms
 ```
-pytest tests/unit/backend/cpp -q -n 8    +    harness diff
-```
+
+`of_bound` and `join` are the *analysis*: first member containing a bound, first
+containing several, recursing structurally through lists and tuples. They belong
+there because the ladder search has a subtlety a second backend should not have
+to rediscover — the join is n-ary, and folding it is both less precise and less
+total. `element_of` and `is_aggregate` are gone: with `ListFormat` in the domain
+the analysis simply knows.
+
+`fallback` is the one thing the sequence cannot supply: the cpp backend stores an
+unbounded integer in `int64_t` and treats overflow as the user's problem, which
+no containment test would allow.
+
+**The backend translates.** `to_cpp(storage)` maps a chosen format to the C++
+type that spells it, and `CppStorage` is the view the emitter reads. That kills
+the `class_storage.update(unbox.storage)` seam: `unbox` now stamps
+representation onto the *backend's view*, not the analysis's output, which is
+right — a handle-versus-value axis is not a property of a format.
+
+`storage_infer.py` mentions no `Cpp` name and imports nothing from the backend.
+
+Behaviour: 213 of 219 corpus entries byte-identical; the other six are refusal
+*messages*, reworded from "no storage type on the ladder contains X" to "no
+storage format contains X". Same functions, same refusals, and the message no
+longer names a C++ ladder. The two informative refusals — an unconstrained real,
+and a non-dyadic bound — keep their explanations.
 
 ### 5. Relocate
 

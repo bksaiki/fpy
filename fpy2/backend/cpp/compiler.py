@@ -45,8 +45,8 @@ from ...transform.free_var_elim import unclosed_data_free_vars
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
-from .storage import StorageSelectionError
-from .storage_infer import StorageAnalysis, StorageInfer
+from .storage import CppStorage, CppStorageDomain, StorageSelectionError
+from .storage_infer import StorageInfer
 from .types import CppType
 from .unbox import (
     CalleeAbi,
@@ -85,7 +85,7 @@ class SpecAnalyses:
     ctx_use: ContextUseAnalysis
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
-    storage: StorageAnalysis
+    storage: CppStorage
     variables: VariableAnalysis
     alias: AliasAnalysis
     summary: EscapeSummary
@@ -413,7 +413,12 @@ class CppCompiler(Backend):
 
         try:
             du = format_info.type_info.def_use
-            storage = StorageInfer.infer(du, format_info.by_def, format_info.by_expr)
+            chosen = StorageInfer.infer(
+                du, format_info.by_def, format_info.by_expr,
+                CppStorageDomain(),
+            )
+            # the analysis answers in formats; this is the target's spelling
+            storage = CppStorage(chosen)
             variables = VariableAlloc.assign(du, storage)
         except StorageSelectionError as e:
             raise CppCompileError(
