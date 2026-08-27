@@ -1,185 +1,273 @@
 Derived Semantics
 =================
 
-The :doc:`core semantics <semantics>` covers only a minimal fragment of
-FPy—constants, arithmetic, function calls, and the basic statements. This page
-explains every other *evaluable* node in :mod:`fpy2.ast.fpyast`, each either
-**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Arith**),
-**(ii)** desugaring to a small FPy program, or **(iii)** elaborating to core
-syntax that has no FPy spelling of its own, as lists do (see *Lists*).
+The :doc:`core semantics <semantics>` covers a minimal fragment of FPy. This
+page gives the rest, as *rewrites* that end in core syntax. Elaboration is their
+fixpoint: rewrite until nothing but core syntax is left.
 
-The core leaves its two operator sets open. Most entries below name a member of
-one of them: :math:`\mathit{Arith}`, whose members take numbers to a number and
-round it (**E-Arith**), or :math:`\mathit{Exact}`, whose members take values to
-a value and round nothing (**E-Exact**).
+Two kinds of rewrite do the work. A *core* rewrite maps an FPy form onto core
+syntax; a *surface* rewrite replaces it with other FPy forms, which are then
+rewritten in turn. FPy is written ``like this`` and core syntax
+:math:`\mathsf{like}\ \mathsf{this}`.
 
-A node shown with an ``@fp.fpy`` program stands for that program, which is
-ordinary FPy and elaborates in turn by the entries here: an expression node
-elaborates to a call to it (**E-App**), a statement node to its body. A free name
-in such a program, like ``g`` or ``Any``, is a schema variable.
+The sections build up in layers: pure expressions, then the expressions that
+carry effects, then statements, then the forms that rewrite to other FPy, and
+last those standing for whole programs.
 
-Core expressions are pure, so any node whose elaboration below is a statement is
-*lifted* out of expression position, leaving a fresh temporary in its place
-(**E-App**, **E-Ref**). Lifting preserves order: a subexpression that reads the
-heap is bound before a later lifted call, so ``z = xs[0] + f(xs)`` binds
-``xs[0]`` before calling ``f``, which may write ``xs``.
-
-Literals and values
--------------------
-
-* ``Decnum``, ``Hexnum``, ``Integer``, ``Rational``, ``Digits`` — numeric
-  literals; each evaluates to the *exact* real it denotes, **E-Val**. Nothing
-  rounds until arithmetic uses the value, so ``0.1`` is exactly :math:`1/10`.
-* ``BoolVal`` — ``True`` / ``False``, **E-Val**.
-* ``Var`` — a variable reference, **E-Var**.
-* ``ForeignVal`` — a native Python value; evaluates to an opaque *foreign*
-  value, **E-Val** — a seventh kind of value beyond the core's six. No
-  operation applies to one: a program may only pass it along, hand it to a
-  context constructor, or read an attribute of it.
-
-Classification and inspection
+Translating to core semantics
 -----------------------------
 
-* ``IsFinite``, ``IsInf``, ``IsNan``, ``IsNormal``, ``Signbit`` — members of
-  :math:`\mathit{Exact}`, each testing its operand.
-* ``Logb`` — a member of :math:`\mathit{Arith}`, the normalized (integer)
-  exponent.
+Pure expressions
+~~~~~~~~~~~~~~~~
 
-Arithmetic
-----------
+A pure expression translates directly to a core form.
+In the surface syntax, ``n`` is any integer or decimal literal, and
+:math:`\text{to\_rational}(s)` converts a hexadecimal float string to a
+rational number.
 
-These are members of :math:`\mathit{Arith}`, differing only in the operation:
-``Sub`` (``-``), ``Mul`` (``*``), ``Div`` (``/``), ``Neg``, ``Abs``, ``Sqrt``,
-``Cbrt``, ``Pow`` (``**``), ``Copysign``, ``Atan2``, ``Mod`` (``%``), ``Fmod``,
-``Remainder``, and the elementary functions ``Sin``, ``Cos``, ``Tan``,
-``Asin``, ``Acos``, ``Atan``, ``Sinh``, ``Cosh``, ``Tanh``, ``Asinh``,
-``Acosh``, ``Atanh``, ``Exp``, ``Exp2``, ``Expm1``, ``Log``, ``Log10``,
-``Log1p``, ``Log2``, ``Erf``, ``Erfc``, ``Lgamma``, ``Tgamma``.
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
 
-* ``Fma`` — ``a*b + c`` with a *single* rounding, :math:`C(\exact{a \cdot b + c})`.
-* ``Mod`` / ``Fmod`` / ``Remainder`` — same shape, differing in the exact value:
-  the sign of the divisor, the sign of the dividend, and nearest-zero.
-* ``Ceil``, ``Floor``, ``Trunc``, ``RoundInt``, ``NearbyInt`` — round the exact
-  integer-valued result, differing in which integer is chosen.
+   * - FPy form
+     - Core form
+   * - ``False`` / ``True``
+     - :math:`\mathsf{false}` / :math:`\mathsf{true}`
+   * - ``n``
+     - :math:`n`
+   * - ``fp.hexfloat(s)``
+     - :math:`\exact{\text{to\_rational}(s)}`
+   * - ``fp.rational(p, q)``
+     - :math:`\exact{p/q}`
+   * - ``fp.digits(m, e, b)``
+     - :math:`\exact{m \cdot b^{e}}`
+   * - ``fp.REAL``
+     - :math:`\R`
+   * - ``fp.IEEEContext(8, 32)``
+     - :math:`\mathsf{ctx}\ \{ \ldots \}`
+   * - ``x``
+     - :math:`x`
+   * - ``(e1, ..., em)``
+     - :math:`(\, e_1, \ldots, e_m \,)`
+   * - ``op(e1, ..., ek)``
+     - :math:`\mathit{op}(e_1, \ldots, e_k)`
+   * - ``xs[i]``
+     - :math:`\mathsf{!}\,(xs[i])`
 
-Rounding operators
-------------------
+.. note::
 
-* ``Round`` — ``fp.round(e)`` rounds ``e`` to the rounding context, :math:`C(v)`
-  (**E-Arith** with the identity operation); idempotent.
-* ``RoundAt`` — ``fp.round_at(e, n)`` rounds ``e`` at digit position ``n``, then
-  under :math:`C`.
-* ``Cast`` — ``fp.cast(e)`` rounds ``e`` but is stuck unless the result is
-  exact (a guarded **E-Assert**).
+  Literals are **exact**; they do not round. 
+  For example, ``0.1`` is exactly :math:`1/10`.
 
-Tuples
-------
+Rounded arithmetic
+^^^^^^^^^^^^^^^^^^
 
-A tuple holds its fields' values directly and is immutable—no node writes to one.
-Tuples cannot be indexed.
+The full language supports many rounded operations;
+these operations are elements of :math:`\mathit{Arith}`.
 
-* ``TupleExpr`` — **E-Tuple**; ``TupleBinding`` — the tuple pattern of
-  **M-Tuple**.
-* ``Fst`` / ``Snd`` — pair accessors: ``fp.fst(t)`` :math:`\equiv` ``a`` and
-  ``fp.snd(t)`` :math:`\equiv` ``b``, where ``a, b = t`` (**M-Tuple**). Both
-  require a tuple of exactly two elements; a longer one is an error, not a
-  shorter tuple.
+.. list-table::
+   :widths: 26 74
+   :header-rows: 1
 
-Lists
------
+   * - Kind
+     - Operators
+   * - Arithmetic
+     - ``e1 + e2``, ``e1 - e2``, ``e1 * e2``, ``e1 / e2``, ``-e``, ``fp.fabs(e)``
+   * - Fused
+     - ``fp.fma(a, b, c)``
+   * - Algebraic
+     - ``fp.sqrt(e)``, ``fp.cbrt(e)``, ``e1 ** e2``
+   * - Trigonometric
+     - ``fp.sin(e)``, ``fp.cos(e)``, ``fp.tan(e)``, ``fp.asin(e)``,
+       ``fp.acos(e)``, ``fp.atan(e)``, ``fp.atan2(y, x)``
+   * - Hyperbolic
+     - ``fp.sinh(e)``, ``fp.cosh(e)``, ``fp.tanh(e)``, ``fp.asinh(e)``,
+       ``fp.acosh(e)``, ``fp.atanh(e)``
+   * - Exponential
+     - ``fp.exp(e)``, ``fp.exp2(e)``, ``fp.expm1(e)``, ``fp.log(e)``,
+       ``fp.log2(e)``, ``fp.log10(e)``, ``fp.log1p(e)``
+   * - Special
+     - ``fp.erf(e)``, ``fp.erfc(e)``, ``fp.lgamma(e)``, ``fp.tgamma(e)``
+   * - Remainder
+     - ``e1 % e2``, ``fp.fmod(x, y)``, ``fp.remainder(x, y)``
+   * - Integer-valued
+     - ``fp.ceil(e)``, ``fp.floor(e)``, ``fp.trunc(e)``, ``fp.roundint(e)``,
+       ``fp.nearbyint(e)``
+   * - Rounding
+     - ``fp.round(e)``, ``fp.round_at(e, n)``
+   * - Sign and exponent
+     - ``fp.copysign(x, y)``, ``fp.logb(e)``
 
-Every FPy list is a list of *references* in the core semantics. Allocation is a
-statement, so ``z = [e_1, ..., e_m]`` lifts to one allocation per element and a
-list of the temporaries:
+``fp.fma`` computes ``a * b + c`` with a *single* rounding,
+:math:`C(\exact{a \cdot b + c})`. The three remainders share a shape and differ
+in the exact value they take: the sign of the divisor, the sign of the dividend,
+and nearest-zero. The integer-valued operators differ in which integer they
+choose. ``fp.round`` is idempotent, and ``fp.round_at`` rounds at digit position
+``n`` first.
 
-.. math::
+Exact operations
+^^^^^^^^^^^^^^^^
 
-   t_1 = \texttt{ref}\ e_1 \,\texttt{;}\, \ldots \,\texttt{;}\,
-   t_m = \texttt{ref}\ e_m \,\texttt{;}\, z = [\, t_1, \ldots, t_m \,]
+The full language supports many exact operations;
+these operations are elements of :math:`\mathit{Exact}`.
 
-binding :math:`z` to a list of locations
-:math:`[\, \ell_1, \ldots, \ell_m \,]`—one cell per element. Three
-consequences:
+.. list-table::
+   :widths: 26 74
+   :header-rows: 1
 
-* **Elements are mutable, the length is not.**  **E-Update** replaces a cell's
-  contents, and no rule changes a list's length once built. So FPy
-  has no ``append``.
-* **Binding shares cells.**  **E-Assign** copies nothing, so ``ys = xs``—and a
-  tuple field holding ``xs``—sees writes to its elements.
-* **Ownership stops at the cell.**  Construction gives every element a fresh
-  cell, but that cell holds the element's *value*: ``[xs]`` does not copy
-  ``xs``'s cells, and ``xss[i]`` dereferences to a row shared with the original.
+   * - Kind
+     - Operators
+   * - Comparison
+     - ``e1 < e2``, ``e1 <= e2``, ``e1 > e2``, ``e1 >= e2``, ``e1 == e2``,
+       ``e1 != e2``
+   * - Classification
+     - ``fp.isfinite(e)``, ``fp.isinf(e)``, ``fp.isnan(e)``,
+       ``fp.isnormal(e)``, ``fp.signbit(e)``
+   * - Logical
+     - ``not e``
+   * - Size
+     - ``len(xs)``, ``fp.size(xs, k)``, ``fp.dim(xs)``
 
-The nodes that build and read them:
+A chained comparison is the conjunction of adjacent pairwise tests, and all six
+chain. The four ordering tests take numbers, while ``==`` and ``!=`` compare
+lists and tuples element-wise and reject operands of unequal type.
 
-* ``ListExpr`` — an **E-Ref** per element, then **E-List** over the temporaries:
-  ``z = [x, y]`` :math:`\equiv`
-  :math:`t_1 = \texttt{ref}\ x \,\texttt{;}\, t_2 = \texttt{ref}\ y
-  \,\texttt{;}\, z = [\, t_1, t_2 \,]`.
-* ``ListRef`` — ``xs[i]`` in value position, **E-Index** to the cell then
-  **E-Deref** through it: ``z = xs[i]`` :math:`\equiv`
-  :math:`z = \texttt{!}\, xs[i]`.
+Effectful expressions
+~~~~~~~~~~~~~~~~~~~~~
 
-* ``Empty`` — ``fp.empty(d1, …, dn)`` allocates an uninitialized ``n``-d list; it
-  writes the heap, so it lifts like a call. No equivalent form exists:
-  the core's list constructor is fixed-width and the sizes are run-time values.
-* ``Len`` / ``Size`` / ``Dim`` — ``len(xs)``, ``fp.size(xs, k)``, ``fp.dim(xs)``:
-  members of :math:`\mathit{Exact}` returning integer counts.
-* ``Range1`` / ``Range2`` / ``Range3`` — ``range(…)`` materialized to a list of
-  integers, as in Python.
+The full FPy language has *effectful* expressions; the core does not, since it
+makes calls and allocation statements. Such an expression hoists into a
+preceding statement, leaving a fresh temporary behind; a variable written
+:math:`t`, :math:`t_1`, :math:`t_2`, and so on is fresh.
 
-Miscellaneous
--------------
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
 
-* ``IfExpr`` — ``r = a if c else b`` :math:`\equiv`
-  :math:`\texttt{if}\ c\ \texttt{then}\ r = a\ \texttt{else}\ r = b`, the
-  expression form of the conditional. Only the selected branch runs, so a call
-  under it cannot lift out; lifting applies inside each branch.
-* ``Attribute`` — ``e.name`` reads an attribute of a foreign value and
-  classifies the result: a native number becomes a numerical value; anything
-  opaque stays foreign. No rounding.
-* ``Call`` — **E-App**, generalized to many arguments and foreign callables, so
-  the function map :math:`\Phi` takes a name to a parameter *list* and a body.
-  Being a statement, a call outside assignment position lifts:
-  ``z = f(x) + 1`` :math:`\equiv`
-  :math:`t = f\ x \,\texttt{;}\, z = t + 1`. The body runs under the callee's
-  declared context if it has one, else the caller's :math:`C`.
+   * - FPy form
+     - Equivalent FPy form
+   * - ``... f(e) ...``
+     - ``t = f(e) ; ... t ...``
+   * - ``... [e1, ..., em] ...``
+     - ``t = [e1, ..., em] ; ... t ...``
 
-Logical operators
------------------
+``fp.empty(d1, ..., dn)`` allocates too, and is the one form with no core
+equivalent: the core's list constructor is fixed-width, while these sizes are
+run-time values. Its cells start unspecified, so a program that reads one before
+writing it is undefined.
 
-* ``Not`` — a member of :math:`\mathit{Exact}`, boolean negation. Its operand is
-  a boolean, which **E-Exact** allows: it takes values, not just numbers.
-* ``And`` / ``Or`` — ``a and b`` :math:`\equiv` ``b if a else False``, and
-  ``a or b`` :math:`\equiv` ``True if a else b``.
+.. note::
 
-Comparisons
------------
+   Hoisting runs left to right, so a read stays ahead of a call that may
+   overwrite it: ``z = xs[0] + f(xs)`` becomes
+   ``t1 = xs[0] ; t2 = f(xs) ; z = t1 + t2``.
 
-* ``Compare`` — a chained comparison is the conjunction of adjacent pairwise
-  tests, all six of ``<``, ``<=``, ``>``, ``>=``, ``==``, ``!=`` chaining:
-  ``a < b <= c`` :math:`\equiv` ``(a < b) and (b <= c)``. Since ``and``
-  short-circuits, each operand is evaluated at most once. All six are members of
-  :math:`\mathit{Exact}`; the four ordering tests take numbers, while ``==`` and
-  ``!=`` compare lists and tuples element-wise and reject operands of unequal
-  type.
+Once in statement position, each translates to core syntax.
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Core form
+   * - ``z = f(e)``
+     - :math:`z = f\ e`
+   * - ``z = [e1, ..., em]``
+     - :math:`t_1 = \mathsf{ref}\ e_1 \,\mathsf{;}\, \cdots \,\mathsf{;}\,
+       t_m = \mathsf{ref}\ e_m \,\mathsf{;}\, z = [\, t_1, \ldots, t_m \,]`
+
+.. note::
+
+   A list is a list of *references*: construction allocates one cell per
+   element, so ``z`` binds to a list of locations. **E-Update** replaces a
+   cell's contents and no rule changes a list's length, so FPy has no
+   ``append``.
 
 Statements
-----------
+~~~~~~~~~~
 
-* ``StmtBlock`` — a statement sequence, **E-Seq-Normal** / **E-Seq-Return**;
-  empty is **E-Skip**.
-* ``Assign`` — **E-Assign** (pattern via **M-Var** / **M-Tuple**).
-* ``IndexedAssign`` — **E-Index** to the cell, then **E-Update** through it:
-  ``xs[i] = e`` :math:`\equiv`
-  :math:`y = xs[i] \,\texttt{;}\, y := e`. The temporary is undereferenced,
-  unlike ``ListRef``, since ``y`` has to hold the cell.
-* ``If1Stmt`` — ``if c: s`` :math:`\equiv`
-  :math:`\texttt{if}\ c\ \texttt{then}\ s\ \texttt{else}\ \texttt{skip}`.
-* ``IfStmt`` — **E-If-True** / **E-If-False**.
-* ``WhileStmt`` — **E-While-True** / **E-While-False**. The test runs each
-  iteration, so anything lifted from the condition repeats at the end of the body.
-* ``ForStmt`` — ``for x in xs: s`` is an index loop over a ``WhileStmt``::
+These follow the core's statement grammar. Only the indexed assignment inserts
+a statement of its own, binding the cell before writing through it.
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Core form
+   * - ``p = e``
+     - :math:`p = e`
+   * - ``x1, ..., xm = e``
+     - :math:`(\, x_1, \ldots, x_m \,) = e`
+   * - ``xs[i] = e``
+     - :math:`t = xs[i] \,\mathsf{;}\, t := e`
+   * - ``_ = e``
+     - :math:`t = e`, unused
+   * - ``s1 ; s2``
+     - :math:`s_1 \,\mathsf{;}\, s_2`
+   * - ``if c: s``
+     - :math:`\mathsf{if}\ c\ \mathsf{then}\ s\ \mathsf{else}\ \mathsf{skip}`
+   * - ``if c: s1 else: s2``
+     - :math:`\mathsf{if}\ c\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2`
+   * - ``while c: s``
+     - :math:`\mathsf{while}\ c\ \mathsf{do}\ s`
+   * - ``return e``
+     - :math:`\mathsf{ret}\ e`
+   * - ``with e as x: s``
+     - :math:`\mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s`
+   * - ``assert e``
+     - :math:`\mathsf{assert}\ e`
+   * - ``pass``
+     - :math:`\mathsf{skip}`
+
+A ``while`` re-tests each iteration, so anything hoisted from its condition
+repeats at the end of the body. A ``with``'s context expression translates like
+any other, and a constructor with literal arguments such as
+``fp.IEEEContext(8, 32)`` is a :math:`\mathsf{ctx}\ \{ \ldots \}` constant; what
+differs is the context it runs under. **E-Context** evaluates it under
+:math:`\R`, so a constructor whose arguments are computed at run time is
+evaluated exactly too, and anything hoisted out of it runs under :math:`\R` as
+well, not before the ``with``. An ``assert``'s optional message is used only on
+failure. A call is **E-App** generalized to many arguments and foreign
+callables, so the function map :math:`\Phi` takes a name to a parameter *list*
+and a body; the body runs under the callee's declared context if it has one,
+else the caller's :math:`C`.
+
+Surface rewrites
+----------------
+
+These forms become other FPy, which is then rewritten in turn. They come after
+hoisting because a call under a short-circuit form must be inside a branch
+before anything moves.
+
+.. list-table::
+   :widths: 42 58
+   :header-rows: 1
+
+   * - FPy form
+     - Equivalent FPy form
+   * - ``a and b``
+     - ``b if a else False``
+   * - ``a or b``
+     - ``True if a else b``
+   * - ``a < b <= c``
+     - ``(a < b) and (b <= c)``
+   * - ``z = a if c else b``
+     - ``if c: z = a else: z = b``
+   * - ``z = fp.fst(e)``
+     - ``(z, t) = e``
+   * - ``z = fp.snd(e)``
+     - ``(t, z) = e``
+
+Since ``and`` short-circuits, each operand of a chained comparison is evaluated
+at most once. ``fp.fst`` and ``fp.snd`` require a tuple of exactly two elements;
+a longer one is an error, not a shorter tuple.
+
+Derived programs
+----------------
+
+The remaining forms stand for whole FPy programs, which elaborate by everything
+above. ``for x in xs: s`` is an index loop over a ``while``::
 
     @fp.fpy
     def for_loop(xs: list[fp.Real]) -> fp.Real:
@@ -191,25 +279,12 @@ Statements
             i = i + 1
         return acc
 
-* ``ContextStmt`` — **E-Context**. The context expression elaborates like any
-  other expression, and a constructor with literal arguments such as
-  ``fp.IEEEContext(8, 32)`` is a :math:`\texttt{ctx}\ \{ \ldots \}` constant.
-  The only difference is the context it runs under: **E-Context** evaluates it
-  under :math:`\R`, so a constructor whose arguments are computed at run time is
-  evaluated exactly too—and anything lifted out of it runs under :math:`\R` as
-  well, not before the ``with``.
-* ``AssertStmt`` — **E-Assert** (the optional message is used only on failure).
-* ``EffectStmt`` — evaluate an expression and discard the result (``_ = e``).
-* ``ReturnStmt`` — **E-Ret**; ``PassStmt`` — **E-Skip**.
+Comprehensions and slices
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-List comprehensions
--------------------
-
-* ``ListComp`` — a list-building loop; a target may be a tuple binding
-  (**M-Tuple**), and several generators nest as in Python: *k* of them give *k*
-  nested loops, and the result's length is the product of their sizes. The
-  single-generator case, for an element expression ``g``,
-  ``[g(x, y) for x, y in ps]``::
+``[g(x, y) for x, y in ps]`` is a list-building loop; a target may be a tuple
+binding, and several generators nest as in Python, *k* of them giving *k* nested
+loops whose result is the product of their sizes. The single-generator case::
 
     @fp.fpy
     def comp(ps: list[tuple[Any, Any]]) -> list[Any]:
@@ -220,38 +295,90 @@ List comprehensions
             j = j + 1
         return acc
 
-* ``ListSlice`` — ``xs[start:stop]`` extracts exactly ``stop - start`` elements.
-  An omitted bound defaults to ``0`` or ``len(xs)``, as in ``xs[1:]``; bounds are
-  not clamped::
+``xs[start:stop]`` extracts exactly ``stop - start`` elements. An omitted bound
+defaults to ``0`` or ``len(xs)``, as in ``xs[1:]``; bounds are not clamped::
 
     @fp.fpy
     def slice(xs: list[Any], start: int, stop: int) -> list[Any]:
         return [xs[i] for i in range(start, stop)]
 
-  Reading each element and rebuilding allocates a fresh cell per element, so a
-  slice copies the cells rather than sharing them: for ``ys = xs[i:j]``, a write to
-  ``ys[k]`` does not reach ``xs``. Those cells hold the same rows, though, so
-  ``ys[k][l] = e`` does.
+Reading each element and rebuilding allocates a fresh cell per element, so a
+slice copies the cells rather than sharing them: for ``ys = xs[i:j]``, a write to
+``ys[k]`` does not reach ``xs``. Those cells hold the same rows, though, so
+``ys[k][l] = e`` does.
 
-* ``Zip`` — corresponding elements as tuples. ``zip`` takes any number of lists;
-  the two-list case is shown, and unequal lengths are undefined::
+``zip`` takes any number of lists; the two-list case is shown, and unequal
+lengths are undefined::
 
     @fp.fpy
     def zip2(xs: list[Any], ys: list[Any]) -> list[tuple[Any, Any]]:
         return [(xs[i], ys[i]) for i in range(len(xs))]
 
-* ``Enumerate`` — pairs each element with its integer index::
+``enumerate(xs)`` pairs each element with its integer index::
 
     @fp.fpy
     def enumerate(xs: list[Any]) -> list[tuple[fp.Real, Any]]:
         return [(i, xs[i]) for i in range(len(xs))]
 
-Composite and selection
------------------------
+The one- and two-argument ``range`` are the three-argument form with defaults::
 
-**Selection** returns one operand exactly. ``Max`` / ``Min`` are members of
-:math:`\mathit{Exact}`: they propagate NaN and break ``±0`` ties by sign,
-independent of argument order::
+    @fp.fpy
+    def range1(stop: int) -> list[fp.Real]:
+        return range(0, stop)
+
+    @fp.fpy
+    def range2(start: int, stop: int) -> list[fp.Real]:
+        return range(start, stop, 1)
+
+The three-argument form counts the iterations before filling, rather than
+dividing to get the length: ``step`` may be negative, and a rounded division
+must not fix a list's length::
+
+    @fp.fpy
+    def range3(start: int, stop: int, step: int) -> list[fp.Real]:
+        n = 0
+        i = start
+        while (i < stop and step > 0) or (i > stop and step < 0):
+            n = n + 1
+            i = i + step
+        acc = fp.empty(n)
+        i = start
+        j = 0
+        while j < n:
+            acc[j] = i
+            i = i + step
+            j = j + 1
+        return acc
+
+``fp.cast(e)`` rounds ``e`` under the rounding context but is stuck unless the
+result is exact::
+
+    @fp.fpy
+    def cast(e: fp.Real) -> fp.Real:
+        t = fp.round(e)
+        assert t == e
+        return t
+
+Composite and selection
+~~~~~~~~~~~~~~~~~~~~~~~
+
+A *composite* operator computes its defining expression exactly and rounds
+**once**—a naive expression that rounded each step would differ::
+
+    @fp.fpy
+    def fdim(x: fp.Real, y: fp.Real) -> fp.Real:
+        with fp.REAL:
+            t = max(x - y, 0)
+        return fp.round(t)
+
+    @fp.fpy
+    def hypot(x: fp.Real, y: fp.Real) -> fp.Real:
+        with fp.REAL:
+            t = x * x + y * y
+        return fp.sqrt(t)
+
+Selection returns one operand exactly. ``max`` and ``min`` propagate NaN and
+break ``±0`` ties by sign, independent of argument order::
 
     @fp.fpy
     def maximum(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -265,33 +392,14 @@ independent of argument order::
             return x if fp.isnan(x) else y
         return x if x < y or (x == y and fp.signbit(x)) else y      # tie: -0
 
-The variadic ``max`` / ``min`` and the single-list reduce forms ``AMax`` /
-``AMin`` fold this binary operation left-to-right.
-
-**Composite** operators compute their defining expression exactly and round
-**once** (a naive expression that rounded each step would differ):
-
-* ``Fdim`` — ``fp.fdim(x, y)``::
-
-    @fp.fpy
-    def fdim(x: fp.Real, y: fp.Real) -> fp.Real:
-        with fp.REAL:
-            t = max(x - y, 0)
-        return fp.round(t)
-
-* ``Hypot`` — ``fp.hypot(x, y)``::
-
-    @fp.fpy
-    def hypot(x: fp.Real, y: fp.Real) -> fp.Real:
-        with fp.REAL:
-            t = x * x + y * y
-        return fp.sqrt(t)
+The variadic ``max`` / ``min`` and the single-list reduce forms fold this binary
+operation left-to-right.
 
 Reductions
-----------
+~~~~~~~~~~
 
-* ``Sum`` — ``sum(xs)`` is a left fold with ``+`` (rounding each step; the empty
-  sum is exact ``0``)::
+``sum(xs)`` is a left fold with ``+``, rounding each step; the empty sum is
+exact ``0``::
 
     @fp.fpy
     def sum(xs: list[fp.Real]) -> fp.Real:
@@ -302,12 +410,10 @@ Reductions
             acc = acc + x
         return acc
 
-The *boolean* reductions fold a ``list[bool]`` with the logical operators, so
-nothing rounds and the context is irrelevant. Each seeds with its operator's
-identity, which is also the empty case's value; unlike ``min``/``max``, both are
-total on the empty list.
-
-* ``AnyOf`` — ``any(bs)`` is a left fold with ``or``; ``any([])`` is ``False``::
+The *boolean* reductions fold a ``list[bool]`` with the logical operators, so nothing
+rounds and the rounding context is irrelevant. Each seeds with its operator's
+identity, which is also the empty case's value; unlike ``min`` / ``max``, both
+are total on the empty list::
 
     @fp.fpy
     def any_(bs: list[bool]) -> bool:
@@ -315,8 +421,6 @@ total on the empty list.
         for b in bs:
             acc = acc or b
         return acc
-
-* ``AllOf`` — ``all(bs)`` is a left fold with ``and``; ``all([])`` is ``True``::
 
     @fp.fpy
     def all_(bs: list[bool]) -> bool:
@@ -329,7 +433,7 @@ The element type is exactly ``bool``: FPy has no truthiness, so
 ``any([1.0, 0.0])`` is a type error rather than a zero test.
 
 Constants
----------
+~~~~~~~~~
 
 Only ``ConstPi`` (π) is primitive: a transcendental with no finite expression,
 a single correctly-rounded value,
@@ -369,3 +473,19 @@ constants directly::
 
 ``ConstNan`` / ``ConstInf`` — the IEEE 754 special values NaN and
 :math:`+\infty`.
+
+Foreign values
+--------------
+
+.. TODO: explain foreign values; nothing below lowers to core syntax yet.
+
+.. note::
+
+   These forms are out of scope. A foreign value cannot be embedded in the core
+   syntax, so nothing here lowers.
+
+A *foreign value* is a native Python value, opaque to FPy. No operation applies
+to one: a program may only pass it along, hand it to a context constructor, or
+read an attribute of it. ``e.name`` reads that attribute and classifies the
+result—a native number becomes a numerical value, anything opaque stays
+foreign—and rounds nothing.

@@ -32,18 +32,18 @@ so a new operator needs no new rule.
 
 There are two forms of context constant. :math:`\R` is the *real rounding
 context*, whose rounding operation is the identity.
-:math:`\texttt{ctx}\ \{ \ldots \}` is a schema standing for every other context,
+:math:`\mathsf{ctx}\ \{ \ldots \}` is a schema standing for every other context,
 its :math:`\{ \ldots \}` the parameters that fix a rounding operation; distinct
 parameters give distinct constants, so a program may use several at once.
 
 .. math::
 
    \begin{array}{rcll}
-   e & ::= & \texttt{true} \mid \texttt{false}
+   e & ::= & \mathsf{true} \mid \mathsf{false}
        & \text{boolean constants} \\
      & \mid & n
        & \text{numerical constants} \\
-     & \mid & \R \mid \texttt{ctx}\ \{ \ldots \}
+     & \mid & \R \mid \mathsf{ctx}\ \{ \ldots \}
        & \text{context constants} \\
      & \mid & x
        & \text{variable} \\
@@ -53,31 +53,31 @@ parameters give distinct constants, so a program may use several at once.
        & \text{list indexing} \\
      & \mid & (\, e_1, \ldots, e_m \,)
        & \text{tuple} \\
-     & \mid & \texttt{!}\, e
+     & \mid & \mathsf{!}\, e
        & \text{dereference} \\
      & \mid & \mathit{op}(e_1, \ldots, e_k)
        & \text{operator application} \\[1ex]
    s & ::= & p = e
        & \text{assignment} \\
-     & \mid & x = \texttt{ref}\ e
+     & \mid & x = \mathsf{ref}\ e
        & \text{allocation} \\
      & \mid & x := e
        & \text{update} \\
      & \mid & x = f\ e
        & \text{function application} \\
-     & \mid & s_1\, \texttt{;}\, s_2
+     & \mid & s_1\, \mathsf{;}\, s_2
        & \text{sequencing} \\
-     & \mid & \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2
+     & \mid & \mathsf{if}\ e\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2
        & \text{conditional} \\
-     & \mid & \texttt{while}\ e\ \texttt{do}\ s
+     & \mid & \mathsf{while}\ e\ \mathsf{do}\ s
        & \text{loop} \\
-     & \mid & \texttt{ret}\ e
+     & \mid & \mathsf{ret}\ e
        & \text{return} \\
-     & \mid & \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s
+     & \mid & \mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s
        & \text{context statement} \\
-     & \mid & \texttt{assert}\ e
+     & \mid & \mathsf{assert}\ e
        & \text{assertion} \\
-     & \mid & \texttt{skip}
+     & \mid & \mathsf{skip}
        & \text{no-op} \\[1ex]
    p & ::= & x
        & \text{variable pattern} \\
@@ -108,21 +108,21 @@ values, or a *location* :math:`\ell`.
 .. math::
 
    \begin{array}{rcl}
-   v & ::= & \texttt{true} \mid \texttt{false} \mid n \mid C
+   v & ::= & \mathsf{true} \mid \mathsf{false} \mid n \mid C
        \mid [\, v_1, \ldots, v_m \,] \mid (\, v_1, \ldots, v_m \,) \mid \ell \\
-   C & ::= & \R \mid \texttt{ctx}\ \{ \ldots \}
+   C & ::= & \R \mid \mathsf{ctx}\ \{ \ldots \}
    \end{array}
 
 A rounding context :math:`C` is a context constant—:math:`\R`, or one of the
-family :math:`\texttt{ctx}\ \{ \ldots \}` schematizes—and is a value in its own
+family :math:`\mathsf{ctx}\ \{ \ldots \}` schematizes—and is a value in its own
 right (**E-Val**). A context is opaque: the semantics uses only its rounding
 operation, written :math:`C(\cdot)`, whose result need not be finite.
 Full FPy provides constructors for the common rounding contexts, all of which
-the core abstracts as :math:`\texttt{ctx}\ \{ \ldots \}`.
+the core abstracts as :math:`\mathsf{ctx}\ \{ \ldots \}`.
 
 A *location* :math:`\ell` is the value of a reference. Locations are drawn from
 a countable set
-:math:`\mathit{Loc}` and are used only by :math:`\texttt{!}` and :math:`:=`.
+:math:`\mathit{Loc}` and are used only by :math:`\mathsf{!}` and :math:`:=`.
 
 Expressions
 -----------
@@ -138,7 +138,7 @@ evaluates under all three:
    \langle \sigma, \mu, C, e \rangle \Downarrow v
 
 read ":math:`e` evaluates to value :math:`v`". Expressions are pure;
-:math:`\mu` remains an input because :math:`\texttt{!}` reads it.
+:math:`\mu` remains an input because :math:`\mathsf{!}` reads it.
 
 Where a premise cannot be met—an undefined lookup, a false side condition—no
 rule applies and evaluation is stuck.
@@ -200,7 +200,7 @@ from the heap; allocating the cell is a statement, since it writes one (see
    \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \ell
          \quad
          \ell \in \mathrm{dom}(\mu)}
-        {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu(\ell)}
+        {\langle \sigma, \mu, C, \mathsf{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
 An :math:`\mathit{Arith}` operator is where rounding happens. Its operands
@@ -259,7 +259,7 @@ statement; a :math:`\mathsf{return}` outcome carries a function's result and
 short-circuits the rest of the body.
 
 Assignment, allocation, update, application, skip, and a passing assertion
-complete normally; :math:`\texttt{ret}` returns. Sequencing, conditionals, loops,
+complete normally; :math:`\mathsf{ret}` returns. Sequencing, conditionals, loops,
 and the context statement pass along the outcome of the sub-statement they run,
 so a :math:`\mathsf{return}` propagates out to the enclosing function.
 
@@ -317,7 +317,7 @@ itself, not to the value.
    \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v
          \quad
          \ell \notin \mathrm{dom}(\mu)}
-        {\langle \sigma, \mu, C, x = \texttt{ref}\ e \rangle \Downarrow_S
+        {\langle \sigma, \mu, C, x = \mathsf{ref}\ e \rangle \Downarrow_S
          \mathsf{normal}\ \sigma[x \mapsto \ell] \,;\, \mu[\ell \mapsto v]}
    \tag{E-Ref}
 
@@ -361,19 +361,19 @@ the call, which is how a callee mutates a reference its caller holds.
          \mathsf{normal}\ \sigma[x \mapsto v'] \,;\, \mu'}
    \tag{E-App}
 
-The skip statement does nothing; :math:`\texttt{ret}` evaluates its operand and
+The skip statement does nothing; :math:`\mathsf{ret}` evaluates its operand and
 returns it.
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, \texttt{skip} \rangle \Downarrow_S
+   \frac{}{\langle \sigma, \mu, C, \mathsf{skip} \rangle \Downarrow_S
            \mathsf{normal}\ \sigma \,;\, \mu}
    \tag{E-Skip}
 
 .. math::
 
    \frac{\langle \sigma, \mu, C, e \rangle \Downarrow v}
-        {\langle \sigma, \mu, C, \texttt{ret}\ e \rangle \Downarrow_S
+        {\langle \sigma, \mu, C, \mathsf{ret}\ e \rangle \Downarrow_S
          \mathsf{return}\ v \,;\, \mu}
    \tag{E-Ret}
 
@@ -383,8 +383,8 @@ rule and evaluation is stuck.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true}}
-        {\langle \sigma, \mu, C, \texttt{assert}\ e \rangle \Downarrow_S
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \mathsf{true}}
+        {\langle \sigma, \mu, C, \mathsf{assert}\ e \rangle \Downarrow_S
          \mathsf{normal}\ \sigma \,;\, \mu}
    \tag{E-Assert}
 
@@ -398,13 +398,13 @@ the sequence's outcome.
          \mathsf{normal}\ \sigma' \,;\, \mu'
          \quad
          \langle \sigma', \mu', C, s_2 \rangle \Downarrow_S o \,;\, \mu''}
-        {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S o \,;\, \mu''}
+        {\langle \sigma, \mu, C, s_1\, \mathsf{;}\, s_2 \rangle \Downarrow_S o \,;\, \mu''}
    \tag{E-Seq-Normal}
 
 .. math::
 
    \frac{\langle \sigma, \mu, C, s_1 \rangle \Downarrow_S \mathsf{return}\ v \,;\, \mu'}
-        {\langle \sigma, \mu, C, s_1\, \texttt{;}\, s_2 \rangle \Downarrow_S
+        {\langle \sigma, \mu, C, s_1\, \mathsf{;}\, s_2 \rangle \Downarrow_S
          \mathsf{return}\ v \,;\, \mu'}
    \tag{E-Seq-Return}
 
@@ -414,19 +414,19 @@ touches the heap.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \mathsf{true}
          \quad
          \langle \sigma, \mu, C, s_1 \rangle \Downarrow_S o \,;\, \mu'}
-        {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
+        {\langle \sigma, \mu, C, \mathsf{if}\ e\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2 \rangle
          \Downarrow_S o \,;\, \mu'}
    \tag{E-If-True}
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{false}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \mathsf{false}
          \quad
          \langle \sigma, \mu, C, s_2 \rangle \Downarrow_S o \,;\, \mu'}
-        {\langle \sigma, \mu, C, \texttt{if}\ e\ \texttt{then}\ s_1\ \texttt{else}\ s_2 \rangle
+        {\langle \sigma, \mu, C, \mathsf{if}\ e\ \mathsf{then}\ s_1\ \mathsf{else}\ s_2 \rangle
          \Downarrow_S o \,;\, \mu'}
    \tag{E-If-False}
 
@@ -434,23 +434,23 @@ A loop tests its condition before each iteration. If the condition is false, the
 loop completes with the store unchanged; if it holds, the loop runs its
 body followed by the loop again. **E-Seq-Normal** then threads the body's
 store and heap into the next iteration and **E-Seq-Return** carries a
-:math:`\texttt{ret}` in the body straight out of the enclosing function.
+:math:`\mathsf{ret}` in the body straight out of the enclosing function.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{false}}
-        {\langle \sigma, \mu, C, \texttt{while}\ e\ \texttt{do}\ s \rangle
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \mathsf{false}}
+        {\langle \sigma, \mu, C, \mathsf{while}\ e\ \mathsf{do}\ s \rangle
          \Downarrow_S \mathsf{normal}\ \sigma \,;\, \mu}
    \tag{E-While-False}
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \texttt{true}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \mathsf{true}
          \quad
          \langle \sigma, \mu, C,
-           s\, \texttt{;}\, \texttt{while}\ e\ \texttt{do}\ s \rangle
+           s\, \mathsf{;}\, \mathsf{while}\ e\ \mathsf{do}\ s \rangle
          \Downarrow_S o \,;\, \mu'}
-        {\langle \sigma, \mu, C, \texttt{while}\ e\ \texttt{do}\ s \rangle
+        {\langle \sigma, \mu, C, \mathsf{while}\ e\ \mathsf{do}\ s \rangle
          \Downarrow_S o \,;\, \mu'}
    \tag{E-While-True}
 
@@ -472,7 +472,7 @@ The rounding context is scoped; the store and heap are not.
    \frac{\langle \sigma, \mu, \R, e \rangle \Downarrow C'
          \quad
          \langle \sigma[x \mapsto C'], \mu, C', s \rangle \Downarrow_S o \,;\, \mu'}
-        {\langle \sigma, \mu, C, \texttt{with}\ e\ \texttt{as}\ x\ \texttt{in}\ s \rangle
+        {\langle \sigma, \mu, C, \mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s \rangle
          \Downarrow_S o \,;\, \mu'}
    \tag{E-Context}
 
