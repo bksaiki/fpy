@@ -1,6 +1,6 @@
 """Program analyses for FPy programs"""
 
-from .alias import Alias, AliasAnalysis, AllocSite
+from .alias import Alias, AliasAnalysis, AllocSite, Region, region_sizes
 from .array_size import (
     ArraySize,
     ArraySizeAnalysis,

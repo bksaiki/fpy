@@ -28,7 +28,7 @@ The leak is the emitter. Grouping `emitter.py`'s methods by what they *do*:
 | library-op lowering (`sum`/`amin`/`min`/`any`/`zip`/`range`/`size`/compare chains) | 515 | no — loop construction |
 | round/cast lowering (`_emit_integral_round`, `_bound_test`, `_undefined_guard`, …) | 482 | no — soft-float lowering |
 | control-flow printing | 394 | yes |
-| storage reconciliation (`_emit_at`, `_convert_storage`, `_rebuild_list`, `_adapt_*`) | 388 | no — conversion insertion |
+| storage reconciliation (`_emit_at`, `_convert_storage`, `_rebuild_list`, `_adapt_*`) | 388 | no — but mostly construct-at-want, not conversion (§5) |
 | fenv / context boundaries | 247 | mostly |
 | declarations and bindings | 221 | yes |
 | peepholes (`ldexp`, pow2, literal folding) | 191 | no — algebraic rewrites |
@@ -205,16 +205,26 @@ then does the policy cost anything measurable.
 
 ## 3. Representation inference
 
-`unbox.py` (722 lines) decides, per alias region, whether a list is a shared
-handle, a plain value, or a fixed-length value. It splits three ways.
+`unbox.py` decides, per alias region, whether a list is a shared handle, a plain
+value, or a fixed-length value. It splits three ways.
 
-**Backend-independent (about 190 lines).** `_region_sizes` meets
-`ArraySizeInfer`'s bounds over the region graph — 42 lines with no `CppType`,
-useful to anyone wanting one proven length per region. `_Scan`'s four facts are
-the same: a region is stored into, a slot is replaced, a region crosses a call
-boundary, a region is returned at depth *d*. `Alias` already owns the region
-graph (`referrers`, `escapes`, `transfers_ownership`, `defs_in`, `region_at`,
-`region_field`), so they belong there.
+**Backend-independent — done.** 99 lines left `unbox.py` (720 → 621) for
+`fpy2/analysis/alias.py`:
+
+- `region_sizes(alias, array_size)` — one proven length per region, by meeting
+  every contribution. A free function, not a method: `Alias.analyze` must not
+  require an `ArraySizeAnalysis`, since `escape` and `format_infer` both build an
+  `AliasAnalysis` without one.
+- `AliasAnalysis.written_regions` / `.slot_replaced` / `.returned_levels` —
+  syntactic facts keyed by region, collected by a second walk over the finished
+  graph. Second rather than folded into `_Builder`: each asks `region_of` for
+  where a place ends up, which is settled only once every merge has run. A bare
+  traversal is 1.4% of the builder, measured.
+
+`_Scan`'s fourth fact did **not** move. *A region crosses a call boundary* is
+decided by `_unboxed(param.ty)` on the callee's ABI, and the callee-written half
+of `written` by `param.written` — both questions about a representation this
+target chose. What is left in the backend is one `_visit_call`.
 
 **Generic algorithm, backend-supplied predicate (about 70 lines).**
 `_shares_storage` asks how many *places* hold a region separately, which is
@@ -222,7 +232,8 @@ language-level, but its precision is calibrated to this emitter: it does not use
 `alias.is_shared`, it counts only names that get their own storage, and that set
 is `binds_by_reference`, shared with the emitter so the two cannot drift.
 Discounting a name the emitter then copies is a miscompilation, so the extracted
-form takes the binding rule as a parameter.
+form takes the binding rule as a parameter — which would have exactly one
+implementation until there is a second backend to check it against.
 
 **Backend-specific (about 300 lines).** The output alphabet: C++ wants
 handle / value / fixed array, Rust wants `Rc<RefCell<Vec<T>>>` / `Vec` /
@@ -233,12 +244,17 @@ reaches through a handle or a value and whether a reference re-reads a slot wher
 **E-Deref** read it once. Then the verdict-to-type mapping (`_stamp`, `_regions`,
 `annotate`), `UnboxMode` and its diagnostics, and `ParamAbi` / `CalleeAbi`.
 
-A third moves, and the payoff is not a smaller emitter — it consults an oracle
-either way. It is that `Alias` gains facts other consumers want and the sharing
-verdict becomes testable without a C++ string.
+The emitter did not shrink and was never going to: it consults an oracle either
+way. What the move bought is that `Alias` now answers three questions any
+consumer of the region graph would ask, that one proven length per region is
+available to more than the C++ boxing decision, and that all four are tested
+directly rather than through an emitted C++ string.
 
-The first part is independent of everything else here. The second waits for a
-second backend to check the interface against.
+Still available here: `_regions` / `_at_depth` / `_fields` / `_stamp` (about 90
+lines) walk a storage class's structure, which since §2 is a `FormatBound` rather
+than a `CppType` — so a generic version is now expressible where it was not. But
+`_stamp` writes the representation, which is the backend-specific output
+alphabet, so the traversal and the verdict have to be split first.
 
 ## 4. Round and cast lowering
 
@@ -271,18 +287,27 @@ Two things to weigh:
   flags *and* from `value_class.py`, and the two-sided bound where the format is
   asymmetric. Most of the 482 lines move rather than disappear.
 
-## 5. Conversion insertion
+## 5. Conversion insertion — blocked, and smaller than it looks
 
-`backend-cpp.md`'s *One question answered in four places* scopes this as one
-predicate per place kind. As a pass it is better: after storage inference, insert
-an explicit conversion node wherever an operand's storage differs from its
-place's, and refuse where nothing bridges. The emitter then prints `static_cast`
-and rebuild loops without deciding anything, and that document's four-column
-table retires.
+The idea: after storage inference, insert an explicit conversion node wherever an
+operand's storage differs from its place's, and refuse where nothing bridges. The
+emitter then prints `static_cast` and rebuild loops without deciding anything, and
+`backend-cpp.md`'s four-column table retires.
 
-§1 supplied the program points and §2 the storage at each; what remains is the
-`~>` relation above, which for a list needs a sharing verdict the pass has to be
-handed.
+**Measured, there is nothing to insert.** Over the 201 compiling corpus functions
+`_convert_storage` is reached 37 times and *every call has `src == want`*;
+`_rebuild_list` never runs. The 114 scalar casts that do fire come from op
+dispatch, where C++ converts at the point of use and no slot is needed at all. So
+the pass would today rewrite nothing.
+
+The 388 lines grouped as *storage reconciliation* are therefore not conversion
+insertion. They are `_emit_at`'s **construct-at-want** path — 178 aggregate sites,
+building a `ListExpr` or `TupleExpr` directly at the wanted type. That is the
+emitter picking a constructor's type argument, not a node a pass could hoist out.
+
+What is left is the refusal path, which is correctness-bearing even at zero
+firings. It goes live together with `_rebuild_list`, i.e. once the boxing gap
+below closes — the same trigger the widening policy waits on.
 
 ## 6. Pow2 and literal peepholes
 
@@ -311,18 +336,29 @@ dependent-clause list stops compiling — so the FPy-level lowerings have to bec
 
 ## Order of work
 
-**§5** is next: it is what §2's interface buys, and §1 already gave it the
-program points to put a conversion node at.
+**Aggregate naming in ANF is next**, and its blocker is gone. Naming an
+aggregate turns `return ([n, n], 1.0)` into `xs = [n, n]; return (xs, 1.0)`, and
+until recently the second form kept a handle the first did not — so the pass
+would have boxed every literal-into-container in the corpus. `consumed_defs`
+and the matching `std::move` closed that; see *What stays boxed* in
+[backend-cpp.md](backend-cpp.md).
 
-**§3's first part** — region sizes and `_Scan`'s facts into `Alias` — is
-independent and can go at any point; its second part waits for a second backend.
-**§4** is independent, but is a new transform whose lines mostly move rather than
+It remains the highest-risk item on its own terms: a name holding a list is a
+second *place*, and `UnboxMode.STRICT` turns that into a refusal. What closed
+covers the name handed straight to a container; a name read more than once is
+genuinely shared, and that is what the pass has to be measured against.
+
+It also owns less than it was once credited with. All 113 `_bind_operand` mints
+on the corpus come from library-op lowering — `_emit_ieee_min_max` (28),
+`_emit_empty` (25), `_list_range` (21), `_emit_sum` (13), `_emit_zip` (12),
+`_visit_list_slice` (11), `_emit_enumerate` (3) — which build a loop or emit an
+operand twice. Those are §7's, and they die when that lowering moves to FPy
+level, where ANF names the loop's temporaries itself.
+
+**§3's first part** is done; its second waits for a second backend. **§4** is
+independent, but is a new transform whose lines mostly move rather than
 disappear. **§6** needs a language-level scale operation. **§7** waits for the
-FPy-level lowerings to become total.
-
-Aggregate naming in ANF is not a numbered section. It blocks §5 and every
-`_bind_operand` deletion, and it is the highest-risk item: a name holding a list
-is a second place, and `UnboxMode.STRICT` turns that into a refusal.
+FPy-level lowerings to become total, and owns the 113 `_bind_operand` mints.
 
 ## Staying in the backend
 

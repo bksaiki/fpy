@@ -184,6 +184,81 @@ def c_slice_is_a_copy(xs: list[fp.Real]) -> fp.Real:
         return ys[0] + xs[0]
 
 
+@fp.fpy
+def c_consumed_into_container(xs: list[fp.Real]) -> fp.Real:
+    """`ys` is read once, by the construction that takes it, so the verdict
+    discounts it and the emitter moves.  Reading it back checks where it went."""
+    with fp.FP64:
+        ys = [xs[0], xs[1]]
+        zss = [ys]
+        return zss[0][0] + zss[0][1]
+
+
+@fp.fpy
+def c_consumed_use_in_a_loop(xs: list[fp.Real]) -> fp.Real:
+    """The sole *syntactic* use runs once per iteration, so `ys` must survive
+    the first."""
+    with fp.FP64:
+        ys = [xs[0], xs[1]]
+        acc = 0.0
+        for i in range(3):
+            zss = [ys]
+            acc = acc + zss[0][0]
+        return acc
+
+
+@fp.fpy
+def c_consumed_unsized_in_a_loop(xs: list[fp.Real]) -> fp.Real:
+    """The loop case where a wrong discount is *observable*.
+
+    ``std::array`` moves element-wise, so a bad discount stays latent there.  An
+    unsized list is a ``std::vector``, whose move empties the source, so
+    iteration two reads nothing and the boxed oracle disagrees.
+    """
+    with fp.FP64:
+        ys = [x * 2 for x in xs]
+        acc = 0.0
+        for i in range(3):
+            zss = [ys]
+            acc = acc + zss[0][0]
+        return acc
+
+
+@fp.fpy
+def c_consumed_in_a_comprehension(xs: list[fp.Real]) -> fp.Real:
+    """A comprehension body re-runs per item but is an *expression*, so the
+    block guard alone does not see the repetition."""
+    with fp.FP64:
+        ys = [x * 2.0 for x in xs]
+        zss = [[ys] for i in range(3)]
+        return zss[0][0][0] + zss[1][0][0] + zss[2][0][0]
+
+
+@fp.fpy
+def c_consumed_then_read_past_a_phi(xs: list[fp.Real], c: fp.Real) -> fp.Real:
+    """A phi is not a use site, so a sole syntactic use inside a branch says
+    nothing about the read after the merge."""
+    with fp.FP64:
+        ys = [x * 1.0 for x in xs]
+        acc = 0.0
+        if c > 0:
+            ys = [x * 2.0 for x in xs]
+            zss = [ys]
+            acc = zss[0][0]
+        return acc + ys[0]
+
+
+@fp.fpy
+def c_consumed_in_a_while_cond(xs: list[fp.Real]) -> fp.Real:
+    """A ``while`` condition re-runs in the *enclosing* block."""
+    with fp.FP64:
+        ys = [x * 2.0 for x in xs]
+        i = 0
+        while [ys][0][0] > 0.0 and i < 2:
+            i = i + 1
+        return i
+
+
 _L = ListType(R)
 CASES = [
     ('scale_in_place', c_scale_in_place, [_L, R], [[1.0, 2.0, 3.0], 3.0]),
@@ -196,6 +271,12 @@ CASES = [
     ('write_after_rebind_untaken', c_write_after_rebind, [_L, R], [[1.0, 2.0], -1.0]),
     ('two_params_written', c_two_params_written, [_L, _L], [[1.0, 2.0], [3.0, 4.0]]),
     ('slice_is_a_copy', c_slice_is_a_copy, [_L], [[1.0, 2.0, 3.0]]),
+    ('consumed_into_container', c_consumed_into_container, [_L], [[1.0, 2.0]]),
+    ('consumed_use_in_a_loop', c_consumed_use_in_a_loop, [_L], [[1.0, 2.0]]),
+    ('consumed_unsized_in_a_loop', c_consumed_unsized_in_a_loop, [_L], [[1.0, 2.0]]),
+    ('consumed_in_a_comprehension', c_consumed_in_a_comprehension, [_L], [[1.0, 2.0]]),
+    ('consumed_past_a_phi', c_consumed_then_read_past_a_phi, [_L, R], [[3.0, 4.0], 1.0]),
+    ('consumed_in_a_while_cond', c_consumed_in_a_while_cond, [_L], [[1.0, 2.0]]),
 ]
 
 

@@ -18,7 +18,7 @@ taking a conjunction that would silently paper over a violation.
 A dropped handle can go one step further: where
 :class:`~fpy2.analysis.array_size.ArraySizeInfer` proves every value a region
 ever holds has one length, the value becomes ``std::array<T, K>``
-(:func:`_region_sizes` builds the table, poisoning on any doubt).  Sizes are
+(:func:`~fpy2.analysis.alias.region_sizes` builds the table).  Sizes are
 region-keyed and stamped in the same traversal as boxedness, so the two axes
 cannot disagree.  They cross call edges by *specialization*
 (:class:`~fpy2.transform.specialize.Specialize` keys specs on argument
@@ -36,25 +36,18 @@ the compiler then turns each retained handle into an error --
 :meth:`UnboxAnalysis.annotate` for expression temporaries -- rather than let a
 ``std::shared_ptr`` into the output.
 
-:func:`_stamp` is the *only* place any of this is decided -- for an expression,
-a return type, and a storage class's declaration alike.  A second traversal for
-the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
-a boxed tuple field where the return said ``std::tuple<std::vector<T>,
-...>``, which does not compile.  Keep it one traversal.
+:func:`_stamp` is the *only* place any of this is decided -- an expression, a
+return type and a storage class's declaration all go through it.  Keep it that
+way: a second traversal that disagrees about a tuple field emits a declaration
+the return type rejects.
 """
 
 import enum
 from dataclasses import dataclass, field
 
 from ...analysis import Definition
-from ...analysis.alias import AliasAnalysis, Region
-from ...analysis.array_size import (
-    ArraySizeAnalysis,
-    ArraySizeBound,
-    ListSize,
-    TupleSize,
-    concrete_size,
-)
+from ...analysis.alias import AliasAnalysis, Region, region_sizes
+from ...analysis.array_size import ArraySizeAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatBound
@@ -62,21 +55,10 @@ from ...analysis.reaching_defs import AssignDef
 from ...ast.fpyast import (
     Argument,
     Call,
-    Empty,
-    Enumerate,
     Expr,
     FuncDef,
     IndexedAssign,
-    ListComp,
-    ListExpr,
-    ListSlice,
     NamedId,
-    Range1,
-    Range2,
-    Range3,
-    ReturnStmt,
-    Var,
-    Zip,
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -135,16 +117,7 @@ class UnboxAnalysis:
     alias: AliasAnalysis
     boxed: dict[Region, bool] = field(default_factory=dict)
     storage: dict[Definition, CppType] = field(default_factory=dict)
-    ret_regions: list[set[Region]] = field(default_factory=list)
     written: set[Region] = field(default_factory=set)
-    slot_replaced: set[Region] = field(default_factory=set)
-    """Element regions some ``xss[i] = <list>`` puts a *different* list into.
-
-    ``row = xss[i]`` is **E-Index** then **E-Deref**: it reads through the cell
-    *once* and binds what was in it.  A C++ reference re-reads the slot on every
-    use, so the two diverge exactly where an **E-Update** replaces the cell's
-    contents.  ``_regression_replaced_slot`` is that program.
-    """
     at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
@@ -154,7 +127,8 @@ class UnboxAnalysis:
     then refuses a boxed level instead of returning it, catching the
     expression temporaries :func:`check_strict` has no storage class for."""
     sizes: dict[Region, int | None] = field(default_factory=dict)
-    """One proven length per region, from :func:`_region_sizes`.
+    """One proven length per region, from
+    :func:`~fpy2.analysis.alias.region_sizes`.
 
     ``int`` means every value the region ever holds has that length, so its
     unboxed storage may be ``std::array``; ``None`` or absent means unknown.
@@ -170,7 +144,7 @@ class UnboxAnalysis:
         **E-Deref** read it once at the binding.
         """
         region = self.alias.region_of(d)
-        return region is not None and region not in self.slot_replaced
+        return region is not None and region not in self.alias.slot_replaced
 
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
         """Whether a ``const`` reference here would reject a write FPy allows.
@@ -216,8 +190,9 @@ class UnboxAnalysis:
         """*ty* with the representation every ``return`` in the function agrees
         on — the return type is one more place that admits a single answer."""
         def at(depth: int) -> set[Region]:
-            if depth < len(self.ret_regions):
-                return self.ret_regions[depth]
+            levels = self.alias.returned_levels
+            if depth < len(levels):
+                return levels[depth]
             return set()
 
         return self._stamp(ty, at, 0)
@@ -301,11 +276,9 @@ class Unbox:
         """
         out = UnboxAnalysis(alias)
         if array_size is not None:
-            out.sizes = _region_sizes(alias, array_size)
-        scan = _Scan(alias, def_use, callees or {})
+            out.sizes = region_sizes(alias, array_size)
+        scan = _Scan(alias, callees or {})
         scan._visit_function(ast, None)
-        out.slot_replaced = scan.slot_replaced
-        out.ret_regions = scan.returned
         out.written = scan.written
         out.at_boundary = scan.at_boundary
 
@@ -316,7 +289,7 @@ class Unbox:
                 continue
             escapes = alias.escapes(site) and not alias.transfers_ownership(site)
             shared = escapes or _shares_storage(
-                region, alias, storage, variables, def_use, scan.slot_replaced,
+                region, alias, storage, variables, def_use,
             )
             out.boxed[region] = out.boxed.get(region, False) or shared
 
@@ -348,7 +321,7 @@ class Unbox:
         changed = True
         while changed:
             changed = False
-            for regions in out.ret_regions:
+            for regions in alias.returned_levels:
                 if len(regions) < 2:
                     continue
                 if any(out.boxed.get(r, True) for r in regions):
@@ -399,61 +372,6 @@ def _regions(
     return per_depth
 
 
-_ALLOC_EXPRS = (
-    ListExpr, ListComp, Empty, ListSlice, Range1, Range2, Range3, Zip,
-    Enumerate, Call,
-)
-"""Expression forms that produce a list of their own.
-
-These seed :func:`_region_sizes` in addition to the defs: a returned literal has
-a region but no def, and only its ``by_expr`` bound can size it.  Plain reads
-(``Var``, ``ListRef``) are left out -- they only mirror what a def contributed,
-and a lossy read-side bound must not poison a region a definition proved.
-"""
-
-
-def _region_sizes(
-    alias: AliasAnalysis, array_size: ArraySizeAnalysis,
-) -> dict[Region, int | None]:
-    """One proven length per region, by meeting every contribution.
-
-    A region's storage must hold every value it is ever bound to, so the meet
-    poisons on any doubt: a def with no bound, a level the size analysis
-    answered ``None`` for, a symbolic size (a per-run variable, never a length
-    ``std::array`` can spell), or two differing lengths all force ``None``.
-    Contributions walk each bound structurally against the region graph,
-    mirroring :meth:`UnboxAnalysis._stamp`, so the table is keyed exactly where
-    ``_stamp`` reads it.
-    """
-    sizes: dict[Region, int | None] = {}
-
-    def contribute(region: Region, k: int | None) -> None:
-        if region in sizes and sizes[region] != k:
-            sizes[region] = None
-        else:
-            sizes[region] = k
-
-    def seed(bound: ArraySizeBound, region: Region | None) -> None:
-        if region is None:
-            return
-        match bound:
-            case ListSize():
-                contribute(region, concrete_size(bound.size))
-                seed(bound.elt, alias.region_at(region))
-            case TupleSize():
-                for i, b in enumerate(bound.elts):
-                    seed(b, alias.region_field(region, i))
-            case None:
-                contribute(region, None)
-
-    for d in alias.all_defs():
-        seed(array_size.by_def.get(d), alias.region_of(d))
-    for e, bound in array_size.by_expr.items():
-        if isinstance(e, _ALLOC_EXPRS):
-            seed(bound, alias.region_of_expr(e))
-    return sizes
-
-
 def _fields(alias: AliasAnalysis, regions: set[Region], i: int) -> set[Region]:
     """Field *i* of each of *regions*."""
     return {
@@ -488,33 +406,24 @@ def _parameter_index(ast: FuncDef, members: list[Definition]) -> int | None:
 
 
 class _Scan(DefaultVisitor):
-    """One walk collecting the four facts ``decide`` reads off the syntax.
+    """The two facts ``decide`` cannot get from :class:`AliasAnalysis`.
 
-    ``slot_replaced`` element regions some ``xss[i] = <list>`` replaces -- a C++
-    reference re-reads the slot where **E-Deref** read it once.  ``written``
-    regions stored into here or in a callee, which a ``const`` reference would
-    reject.  ``at_boundary`` regions crossing a call that declared a handle; an
-    unknown callee counts as declaring one everywhere.  ``returned`` what each
-    ``return`` hands back, by depth.
+    Both read a callee's ABI, so both are about a representation this target
+    chose: ``at_boundary`` is the regions crossing a call that declared a
+    handle -- an unknown callee counts as declaring one everywhere -- and
+    ``written`` adds the arguments a callee stores through to the ones
+    ``alias.written_regions`` already found here.
     """
 
     def __init__(
         self,
         alias: AliasAnalysis,
-        def_use: DefineUseAnalysis,
         callees: 'dict[FuncDef, CalleeAbi]',
     ):
         self.alias = alias
-        self.def_use = def_use
         self.callees = callees
-        self.slot_replaced: set[Region] = set()
-        self.written: set[Region] = set()
         self.at_boundary: set[Region] = set()
-        self.returned: list[set[Region]] = []
-        for d in alias.all_defs():
-            if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
-                if (r := alias.region_of(d)) is not None:
-                    self.written.add(r)
+        self.written: set[Region] = set(alias.written_regions)
 
     def _levels(self, e: Expr) -> set[Region]:
         out, depth = set(), 0
@@ -522,16 +431,6 @@ class _Scan(DefaultVisitor):
             out.add(r)
             depth += 1
         return out
-
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-        if (
-            isinstance(stmt.var, NamedId)
-            and self.alias.region_of_expr(stmt.expr) is not None
-        ):
-            d = self.def_use.find_def_from_site(stmt.var, stmt)
-            if (r := self.alias.region_of(d, len(stmt.indices))) is not None:
-                self.slot_replaced.add(r)
-        super()._visit_indexed_assign(stmt, ctx)
 
     def _visit_call(self, e: Call, ctx):
         abi = self.callees.get(e.fn.ast) if isinstance(e.fn, Function) else None
@@ -546,15 +445,6 @@ class _Scan(DefaultVisitor):
             self.at_boundary |= self._levels(e)
         super()._visit_call(e, ctx)
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
-        depth = 0
-        while (r := self.alias.region_of_expr(stmt.expr, depth)) is not None:
-            while len(self.returned) <= depth:
-                self.returned.append(set())
-            self.returned[depth].add(r)
-            depth += 1
-        super()._visit_return(stmt, ctx)
-
 
 def _unboxed(ty: CppType | None) -> bool:
     return isinstance(ty, CppList) and not ty.boxed
@@ -566,7 +456,6 @@ def _shares_storage(
     storage: CppStorage,
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
-    slot_replaced: set[Region],
 ) -> bool:
     """Whether more than one place holds *region* separately.
 
@@ -575,6 +464,9 @@ def _shares_storage(
     ``ZipElim``'s ``_src = xs`` do not, and are common enough that counting them
     would box most idiomatic programs.  Mirrors the binding rules exactly --
     discounting a name the emitter then copies would be a miscompilation.
+
+    A name the container *consumed* is discounted too, and the emitter owes a
+    ``std::move`` for it: see :meth:`AliasAnalysis.referrers_after_moves`.
     """
     for d in alias.defs_in(region):
         if (
@@ -587,18 +479,26 @@ def _shares_storage(
             # it copies the sequence and they do not.
             return True
 
+    # A consumed name hands its value to a container and is never read again,
+    # so it is not a place beside that container's slot -- dropped from both
+    # halves of the count, or `slots` would absorb it right back.
+    consumed = alias.consumed(region)
     by_name: dict[NamedId, list[AssignDef]] = {}
     for d in alias.defs_in(region):
         # Only definitions that *bind* a name count.  A phi and an
         # `xs[i] = e` are redefinitions of one already there: SSA gives them
         # their own def, but neither introduces a place.
-        if isinstance(d, AssignDef) and not isinstance(d.site, IndexedAssign):
+        if (
+            isinstance(d, AssignDef)
+            and not isinstance(d.site, IndexedAssign)
+            and d not in consumed
+        ):
             by_name.setdefault(d.name, []).append(d)
-    slots = alias.referrers(region) - len(by_name)
+    slots = alias.referrers_after_moves(region) - len(by_name)
     owned_separately = 0
     for ds in by_name.values():
         if not all(
-            _binds_by_reference(d, storage, variables, def_use, alias, slot_replaced)
+            _binds_by_reference(d, storage, variables, def_use, alias)
             for d in ds
         ):
             owned_separately += 1
@@ -611,7 +511,6 @@ def _binds_by_reference(
     variables: VariableAnalysis,
     def_use: DefineUseAnalysis,
     alias: AliasAnalysis,
-    slot_replaced: set[Region],
 ) -> bool:
     """Whether *d* references storage that already exists *inside this function*.
 
@@ -624,7 +523,9 @@ def _binds_by_reference(
     return (
         binds_by_reference(
             storage, variables, def_use, d,
-            allow_projection=region is not None and region not in slot_replaced,
+            allow_projection=(
+                region is not None and region not in alias.slot_replaced
+            ),
         )
         and not isinstance(d.site, Argument)
     )
@@ -684,8 +585,8 @@ def check_strict(
                     covered.add(r)
     for depth, on_spine in _boxed_levels(ret_ty):
         regions = (
-            unbox.ret_regions[depth]
-            if depth < len(unbox.ret_regions) else set()
+            unbox.alias.returned_levels[depth]
+            if depth < len(unbox.alias.returned_levels) else set()
         )
         if on_spine and regions and regions <= covered:
             continue
