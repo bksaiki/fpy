@@ -17,7 +17,7 @@ from fpy2.backend.cpp.storage import (
     scalar_fits_in,
     to_cpp,
 )
-from fpy2.backend.cpp.storage_infer import _aggregate
+from fpy2.analysis.storage_infer import _aggregate
 from fpy2.backend.cpp.types import CppList, CppScalar, CppTuple
 from fpy2.number.context.real import REAL_FORMAT
 

@@ -1,20 +1,39 @@
 """
-cpp backend: storage-type inference.
+Storage inference: one storage type per runtime object.
 
-Partitions the SSA definitions into classes -- the defs denoting one runtime
-object -- and gives each class one storage type.
+Format inference bounds each expression by the smallest format its value can
+take.  Storage inference answers the neighbouring question a backend asks: which
+*single* format, drawn from a distinguished set the target can spell, holds every
+value a given runtime object takes.
 
-The partition is a union-find over ``reaching_defs.same_object_defs`` -- the
-defs that denote one runtime object must be one C++ variable.  Anything not
-connected that way is free to rename, so a sequential rebind without a phi
-merge gets its own variable with its own, possibly narrower, storage.
+    e : real   fmt(e) = F   F <= S
+    ------------------------------
+              store(e) = S
 
-Storage per class is chosen by aggregating every member's
-:class:`FormatBound` through :func:`aggregate_storage`.  Only members
-of the same class need to fit in a common type; cross-class storage
-is independent.
+The definitions denoting one runtime object are one class -- a union-find over
+``reaching_defs.same_object_defs``, which unions on phi edges and in-place
+updates and on nothing else.  A plain rebind therefore starts a *new* class with
+its own, possibly narrower, storage: ``store`` is per object, not per name.  Each
+class takes the join of its members' bounds.
 
-Naming and declaration placement are :mod:`.variables`.
+The domain is :class:`FormatBound` itself -- a storage *is* a format the target
+can spell -- so a backend contributes an ordered sequence of formats and nothing
+else but a fallback hook (:class:`StorageDomain`).  Translating a chosen format
+into the target's own type vocabulary is the backend's, as is any notion of
+*representation*: whether a list is a handle or a value is not a property of a
+format.
+
+What this guarantees, and what it does not: every member of a class fits its
+class's storage, by construction of the join (*containment*).  Whether a value
+can be *got* into a place whose storage was fixed elsewhere -- a parameter, a
+callee's result -- is *realizability*, and this says nothing about it.  For a
+scalar it is a fact about formats; for an aggregate it is a fact about the heap,
+since changing a list's element type means a new buffer and so a different
+object.  Every refusal a consumer raises comes from there.
+
+Termination rests on ``FormatBound`` being finite-depth, which holds because FPy
+has no recursive list types: a cycle would need ``xs[0] = xs``, which fails to
+unify.
 """
 
 from collections import defaultdict
@@ -22,21 +41,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from ...analysis import Definition
-from ...analysis.define_use import DefineUseAnalysis
-from ...analysis.format_infer import (
-    AbstractableFormat,
-    AbstractFormat,
-    FormatBound,
-    ListFormat,
-    SetFormat,
-    TupleFormat,
-    VarFormat,
-    is_bottom,
-)
-from ...analysis.format_infer.analysis import _to_abstract
-from ...analysis.reaching_defs import AssignDef, PhiDef, same_object_defs
-from ...ast.fpyast import (
+from ..ast.fpyast import (
     Argument,
     Assign,
     Expr,
@@ -47,9 +52,25 @@ from ...ast.fpyast import (
     Stmt,
     Var,
 )
-from ...number.context.real import REAL_FORMAT
-from ...utils import Unionfind
-from .storage import StorageSelectionError
+from ..number.context.real import REAL_FORMAT
+from ..utils import Unionfind
+from .define_use import DefineUseAnalysis
+from .format_infer import (
+    AbstractableFormat,
+    AbstractFormat,
+    FormatBound,
+    ListFormat,
+    SetFormat,
+    TupleFormat,
+    VarFormat,
+    is_bottom,
+)
+from .format_infer.analysis import _to_abstract
+from .reaching_defs import AssignDef, Definition, PhiDef, same_object_defs
+
+
+class StorageSelectionError(Exception):
+    """Raised when no storage in the domain contains an inferred format."""
 
 
 class StorageDomain(Protocol):
@@ -135,6 +156,20 @@ class StorageAnalysis:
         except StorageSelectionError:
             return None
 
+    def is_rebound(self, d: Definition) -> bool:
+        """Is the name *d* introduces ever bound to a different value?
+
+        ``xs[i] = e`` is not a rebind -- it writes *through* an element cell, so
+        the name still denotes the same list and that def stays in the same
+        class.  Only an ``Assign`` to the same name is, and *d*'s own defining
+        assignment does not count.
+        """
+        cls = self.def_class[d]
+        return any(
+            m is not d and isinstance(m, AssignDef) and isinstance(m.site, Assign)
+            for m in self.class_members[cls]
+        )
+
     def storage_of(self, d: Definition) -> FormatBound:
         """Convenience: the C++ storage type chosen for *d*'s class."""
         return self.class_storage[self.def_class[d]]
@@ -145,21 +180,6 @@ class StorageAnalysis:
         nor mutated in place).  Such a binding can be a ``const`` reference
         to its initializer instead of an owning copy."""
         return len(self.class_members[self.def_class[d]]) == 1
-
-
-def is_rebound(storage: 'StorageAnalysis', d: Definition) -> bool:
-    """Is the name *d* introduces ever bound to a different value?
-
-    ``xs[i] = e`` is not a rebind — **E-Update** writes *through* an element
-    cell, so the name still denotes the same list and that def stays in the same
-    class.  Only an ``Assign`` to the same name is, and *d*'s own defining
-    assignment does not count.
-    """
-    cls = storage.def_class[d]
-    return any(
-        m is not d and isinstance(m, AssignDef) and isinstance(m.site, Assign)
-        for m in storage.class_members[cls]
-    )
 
 
 def _lift(bound: FormatBound) -> AbstractFormat | None:

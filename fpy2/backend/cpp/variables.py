@@ -29,7 +29,6 @@ from ...ast.fpyast import (
     Var,
 )
 from .storage import CppStorage
-from .storage_infer import is_rebound
 from .types import CppType
 
 
@@ -190,7 +189,7 @@ def binds_by_reference(
     """
     if not storage.is_aggregate(storage.storage_of(d)):
         return False
-    if is_rebound(storage.analysis, d):
+    if storage.analysis.is_rebound(d):
         return False
     if not _binds_the_whole_value(d):
         return False
@@ -201,15 +200,15 @@ def binds_by_reference(
             src_def = def_use.find_def_from_use(src)
             return (
                 d in variables.declare_at_assign
-                and not is_rebound(storage.analysis, src_def)
+                and not storage.analysis.is_rebound(src_def)
                 and storage.storage_of(d) == storage.storage_of(src_def)
             )
         case Assign(expr=ListRef() as ref) if allow_projection:
             root = _root_var(ref)
-            return (
-                root is not None
-                and d in variables.declare_at_assign
-                and not is_rebound(storage.analysis, def_use.find_def_from_use(root))
+            if root is None or d not in variables.declare_at_assign:
+                return False
+            return not storage.analysis.is_rebound(
+                def_use.find_def_from_use(root)
             )
         case _:
             return False

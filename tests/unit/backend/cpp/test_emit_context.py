@@ -540,7 +540,7 @@ class TestRealScopeLosslessWidening:
 
         with pytest.raises(
             CppCompileError,
-            match='no storage type on the ladder contains',
+            match='no storage format contains',
         ):
             CppCompiler(optimize=False).compile(
                 f, ctx=fp.FP64,

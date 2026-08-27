@@ -1,10 +1,10 @@
 """
 cpp backend: storage-type selection.
 
-For each :class:`FormatBound`, pick the smallest C++ type from the
-storage ladder whose representable set contains the bound.  Sibling
-:mod:`.storage_infer` consumes the ladder to assign a single storage
-type per phi-web equivalence class.
+The backend's half of storage inference: the ordered set of formats C++ can
+spell (:data:`_SIGMA`), the :class:`StorageDomain` presenting it to
+:mod:`fpy2.analysis.storage_infer`, and the translation from a chosen format
+into a :class:`CppType`.
 
 The module also exposes:
 
@@ -21,7 +21,6 @@ The module also exposes:
 """
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
 
 from ...analysis import Definition
 from ...analysis.format_infer import (
@@ -35,6 +34,7 @@ from ...analysis.format_infer import (
     is_bottom,
 )
 from ...analysis.format_infer.analysis import _to_abstract
+from ...analysis.storage_infer import StorageAnalysis, StorageSelectionError, of_bound
 from ...ast.fpyast import Var
 from ...number import (
     FP32,
@@ -51,9 +51,6 @@ from ...number import (
 from ...number.context.mp_fixed import MPFixedFormat
 from ...number.context.real import REAL_FORMAT
 from .types import CppList, CppScalar, CppTuple, CppType
-
-if TYPE_CHECKING:
-    from .storage_infer import StorageAnalysis
 
 # ----------------------------------------------------------------------
 # The storage ladder.
@@ -136,72 +133,27 @@ def bound_fits_in_scalar(bound: FormatBound, ty: CppScalar) -> bool:
     return af is not None and af <= _ABSTRACT[ty]
 
 
-class StorageSelectionError(Exception):
-    """Raised when no storage type contains the inferred format."""
-
-
 def choose_storage_scalar(bound: FormatBound) -> CppScalar:
-    """The smallest scalar storage containing *bound*.
+    """The scalar storage containing *bound*, spelled.
 
-    ``None`` -- a non-numeric bound, e.g. a comparison -- is ``BOOL``;
-    ``REAL_FORMAT`` raises, since no finite ladder entry covers all reals.
-
-    :class:`VarFormat` is ``BOOL`` as well, for a different reason: an
-    unresolved kind has no observable storage, so any choice compiles.  Where it
-    *is* observable -- in the signature -- ``_check_signature_monomorphic``
-    refuses the spec before this runs.
+    A convenience for the op tables, which reason about a context's format
+    rather than about a definition's class.
     """
-    if bound is None or isinstance(bound, VarFormat):
-        return CppScalar.BOOL
-    if bound == REAL_FORMAT:
-        raise StorageSelectionError(
-            'cannot store an unconstrained real value in a finite C++ type; '
-            'is the active rounding context symbolic? '
-            'Try monomorphizing the function with a concrete context.'
-        )
-    if not isinstance(bound, AbstractableFormat | SetFormat):
-        raise StorageSelectionError(
-            f'cannot reason about format: {bound!r}'
-        )
-    if is_bottom(bound):
-        # A slot holding no value -- an element of a fresh `empty(...)`.  Every
-        # rung contains it vacuously, so the smallest wins.  `_to_abstract`
-        # cannot serve this: every format represents a `+0.0`, so none *is* the
-        # empty set.
-        return _SIGMA[0][0]
-
-    af = _to_abstract(bound)
-    if af is None:
-        raise StorageSelectionError(
-            f'cannot lift {bound!r} to AbstractFormat; '
-            'storage selection requires a dyadic format'
-        )
-    for cpp_ty, _ in _SIGMA:
-        if af <= _ABSTRACT[cpp_ty]:
-            return cpp_ty
-    if (isinstance(bound, MPFixedFormat) and bound.expmin >= 0
-            and af.specials_contained_in(_ABSTRACT[CppScalar.S64])):
-        # Deliberately ignores the *magnitude* bound -- an unbounded integer has
-        # none, and overflow is the user's problem (see the docstring above).  It
-        # must not ignore the membership flags too: `int64_t` holds no NaN, no
-        # infinity and no signed zero, so a bound carrying one of those has no
-        # business here even though the ladder search already rejected it.
-        return CppScalar.S64
-    raise StorageSelectionError(
-        f'no storage type on the ladder contains {bound!r}'
-    )
+    ty = choose_storage(bound)
+    if not isinstance(ty, CppScalar):
+        raise StorageSelectionError(f'expected a scalar storage, got {ty!r}')
+    return ty
 
 
 def choose_storage(bound: FormatBound) -> CppType:
-    """The storage for a possibly structured :class:`FormatBound`: scalars via
-    :func:`choose_storage_scalar`, tuples to ``std::tuple``, lists to
-    ``std::vector``.
+    """The storage containing *bound*, spelled.
+
+    One implementation, in the analysis: :func:`of_bound` searches the domain and
+    :func:`to_cpp` spells the result.  The search has a subtlety worth not
+    repeating -- the sequence is a tie-break, not a presentation order -- so the
+    backend asks rather than walking the ladder itself.
     """
-    if isinstance(bound, TupleFormat):
-        return CppTuple(tuple(choose_storage(b) for b in bound.elts))
-    if isinstance(bound, ListFormat):
-        return CppList(choose_storage(bound.elt))
-    return choose_storage_scalar(bound)
+    return to_cpp(of_bound(CppStorageDomain(), bound))
 
 
 def _supremum(storages: list[CppType]) -> CppType:
@@ -332,7 +284,7 @@ class CppStorage:
     holds a value and not one the analysis has any business carrying.
     """
 
-    def __init__(self, analysis: 'StorageAnalysis'):
+    def __init__(self, analysis: StorageAnalysis):
         self.analysis = analysis
         self.class_storage: dict[Definition, CppType] = {
             c: to_cpp(fmt) for c, fmt in analysis.class_storage.items()

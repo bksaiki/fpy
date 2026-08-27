@@ -84,7 +84,6 @@ from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...utils import enum_repr
 from .storage import CppStorage, choose_storage
-from .storage_infer import is_rebound
 from .types import CppList, CppTuple, CppType
 from .variables import VariableAnalysis, binds_by_reference
 
@@ -583,7 +582,7 @@ def _shares_storage(
         if (
             isinstance(d, AssignDef)
             and isinstance(d.site, Argument)
-            and is_rebound(storage.analysis, d)
+            and storage.analysis.is_rebound(d)
         ):
             # `_arg_decl` passes a *rebound* parameter by value.  Boxed, the
             # copy is of the handle and writes still reach the caller; unboxed

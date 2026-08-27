@@ -149,7 +149,6 @@ from .storage import (
     scalar_fits_in,
     scalar_sup,
 )
-from .storage_infer import is_rebound
 from .target import is_native_ctx, make_op_table
 from .types import (
     UNSIGNED_INT_TYPES,
@@ -722,7 +721,7 @@ class CppEmitter(Visitor):
         return isinstance(storage, (CppList, CppTuple))
 
     def _is_rebound(self, d: Definition) -> bool:
-        return is_rebound(self.storage.analysis, d)
+        return self.storage.analysis.is_rebound(d)
 
     def _arg_decl(self, arg: Argument, storage: CppType) -> str:
         """Parameter declaration; see :meth:`_binding_decl` for the rule."""

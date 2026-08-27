@@ -783,20 +783,34 @@ storage format contains X". Same functions, same refusals, and the message no
 longer names a C++ ladder. The two informative refusals — an unconstrained real,
 and a non-dyadic bound — keep their explanations.
 
-### 5. Relocate
+### 5. Relocate — done
 
-`fpy2/analysis/storage_infer.py`, exported from `fpy2.analysis`. Pure motion;
-the C++ ladder and the spelling function stay in `fpy2/backend/cpp/storage.py`.
+`fpy2/analysis/storage_infer.py`. `StorageSelectionError` moved with it (it is
+the analysis's refusal, not the backend's), which was the last backend import.
 
-Add tests that exercise the analysis without a backend — the point of the move.
-State the termination premise (`FormatBound` is finite-depth because FPy has no
-recursive list types) in the module docstring.
+**Exports are the contract, not the surface**: `StorageInfer` (entry point),
+`StorageAnalysis` (result type), `StorageDomain` (what a backend implements),
+`StorageSelectionError` (what a caller catches), and `of_bound` (the backend
+needs it — see below). `join` is not exported: nothing outside the analysis
+joins storages, and the test that does imports it from the module directly.
+`is_rebound` became a *method* on `StorageAnalysis`, beside `storage_of`,
+`of_expr` and `is_single_def`, since it is a query on the result rather than a
+free function.
 
-```
-pytest tests/unit -q -n 8
-python -m tests.infra
-python -m tests.infra.backend.cpp
-```
+Auditing those exports turned up a duplication phase 4 had left:
+`choose_storage` / `choose_storage_scalar` still walked `_SIGMA` themselves, in
+seven call sites across the emitter, `unbox`, `ops` and `target` — a second
+implementation of exactly the search the move was meant to centralize. Both are
+now one line over `of_bound` and `to_cpp`.
+
+Tests: `tests/unit/analysis/test_storage_infer.py`, 13 cases driven by a
+three-format domain of the test's own and a one-format domain that cannot hold an
+integer — the same program gets a different, wider answer, which is the point. It
+imports nothing from `fpy2.backend`.
+
+Behaviour: 211 of 219 corpus entries byte-identical; the other eight are refusal
+messages, target-neutral now and carrying the same information. Same functions,
+same refusals: 201 emitted, 18 refused, unchanged throughout.
 
 ### 6. Documentation
 

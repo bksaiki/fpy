@@ -35,6 +35,13 @@ from .reaching_defs import (
     ReachingDefs,
     ReachingDefsAnalysis,
 )
+from .storage_infer import (
+    StorageAnalysis,
+    StorageDomain,
+    StorageInfer,
+    StorageSelectionError,
+    of_bound,
+)
 from .syntax_check import FPySyntaxError, SyntaxCheck
 from .type_infer import TypeAnalysis, TypeInfer, TypeInferError
 from .value_class import (

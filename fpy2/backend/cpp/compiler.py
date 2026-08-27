@@ -26,6 +26,7 @@ from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
+from ...analysis.storage_infer import StorageInfer
 from ...analysis.value_class import ValueClassAnalysis
 from ...ast.fpyast import Call, FuncDef, NamedId
 from ...ast.visitor import DefaultVisitor
@@ -46,7 +47,6 @@ from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import CppEmitError, CppEmitter
 from .storage import CppStorage, CppStorageDomain, StorageSelectionError
-from .storage_infer import StorageInfer
 from .types import CppType
 from .unbox import (
     CalleeAbi,
