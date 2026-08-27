@@ -184,7 +184,7 @@ class TestTerminatedBranchJoin:
         assert f(False) == 1
 
     def test_intro_gets_an_is_intro_phi(self):
-        # `cpp/storage_infer` hoists a declaration only for an `is_intro` phi,
+        # `cpp/variables` hoists a declaration only for an `is_intro` phi,
         # so the join must carry one or the name is declared inside the branch
         @fp.fpy
         def f(c: bool):

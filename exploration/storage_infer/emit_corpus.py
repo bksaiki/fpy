@@ -1,8 +1,7 @@
-"""Emit C++ for every compiling corpus function, for before/after comparison.
+"""Emit C++ for every corpus function, for before/after comparison.
 
-Storage inference is being replaced by a backend-independent analysis
-(``docs/todos/storage-inference.md``).  The obligation is behavioural
-equivalence, and the cheapest check is that the emitted code does not move:
+The cheapest check that a change to the lowering pipeline is behaviour-preserving
+is that the emitted code does not move:
 
     python -m exploration.storage_infer.emit_corpus /tmp/base
     ... change something ...

@@ -6,18 +6,9 @@ spell (:data:`_SIGMA`), the :class:`StorageDomain` presenting it to
 :mod:`fpy2.analysis.storage_infer`, and the translation from a chosen format
 into a :class:`CppType`.
 
-The module also exposes:
-
-- :func:`scalar_fits_in` — ladder-level containment between two
-  :class:`CppScalar`s.  Used by the cast helper to reject lossy
-  implicit conversions.
-- :func:`scalar_sup` — the first rung subsuming every input.  N-ary: see its
-  docstring for why it must not be folded.  Used by :meth:`_visit_compare` to
-  pick the common type for a chained comparison.
-- :func:`bound_fits_in_scalar` — value-level containment, for a
-  conversion the type-level test refuses.
-- :func:`exact_integer_bits` — a float rung's exact-integer width, for
-  diagnosing a refused conversion.
+Also the containment predicates the emitter asks in C++ terms rather than in
+formats: :func:`scalar_fits_in`, :func:`scalar_sup`, :func:`bound_fits_in_scalar`
+and :func:`exact_integer_bits`.
 """
 
 from collections.abc import Sequence
@@ -30,11 +21,14 @@ from ...analysis.format_infer import (
     ListFormat,
     SetFormat,
     TupleFormat,
-    VarFormat,
-    is_bottom,
 )
 from ...analysis.format_infer.analysis import _to_abstract
-from ...analysis.storage_infer import StorageAnalysis, StorageSelectionError, of_bound
+from ...analysis.storage_infer import (
+    StorageAnalysis,
+    StorageSelectionError,
+    join,
+    of_bound,
+)
 from ...ast.fpyast import Var
 from ...number import (
     FP32,
@@ -49,16 +43,8 @@ from ...number import (
     UINT64,
 )
 from ...number.context.mp_fixed import MPFixedFormat
-from ...number.context.real import REAL_FORMAT
 from .types import CppList, CppScalar, CppTuple, CppType
 
-# ----------------------------------------------------------------------
-# The storage ladder.
-#
-# Each entry pairs a CppScalar with the AbstractFormat of the smallest
-# context that fits in that scalar.  ``choose_storage_scalar`` walks the
-# ladder in order and picks the first entry whose AbstractFormat
-# contains the inferred bound.  Order matters: smaller types first.
 
 def _af(fmt: AbstractableFormat) -> AbstractFormat:
     af = AbstractFormat.from_format(fmt)
@@ -156,47 +142,11 @@ def choose_storage(bound: FormatBound) -> CppType:
     return to_cpp(of_bound(CppStorageDomain(), bound))
 
 
-def _supremum(storages: list[CppType]) -> CppType:
-    """
-    Smallest storage that contains every storage in *storages*.
-
-    Assumes all entries have the same structural shape (scalar / list /
-    tuple).  This is enforced by the type checker upstream, so a
-    mismatch indicates an analysis bug rather than user error.
-    """
-    head, *rest = storages
-    if not rest:
-        return head
-    if isinstance(head, CppScalar):
-        # All must be scalars.
-        assert all(isinstance(s, CppScalar) for s in rest), (
-            f'inconsistent storage shapes: {storages!r}'
-        )
-        return scalar_sup([head] + [s for s in rest if isinstance(s, CppScalar)])
-    if isinstance(head, CppList):
-        assert all(isinstance(s, CppList) for s in rest)
-        elts = [head.elt] + [s.elt for s in rest if isinstance(s, CppList)]
-        return CppList(_supremum(elts))
-    if isinstance(head, CppTuple):
-        assert all(isinstance(s, CppTuple) and len(s.elts) == len(head.elts) for s in rest)
-        n = len(head.elts)
-        merged = []
-        tuples = [head] + [s for s in rest if isinstance(s, CppTuple)]
-        for i in range(n):
-            merged.append(_supremum([t.elts[i] for t in tuples]))
-        return CppTuple(tuple(merged))
-    raise TypeError(f'unexpected CppType: {head!r}')
-
-
 def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
-    """The first rung of :data:`_SIGMA` containing every input.
+    """:func:`~.storage_infer.join` over scalars, spelled in C++ terms.
 
-    **N-ary, and it must not be folded.**  Containment is not a
-    join-semilattice, so a pairwise fold is both less precise and less total
-    than one search over the whole set: ``sup([s8, u16, f32])`` is ``float``,
-    where folding gives ``double`` -- ``sup([s8, u16])`` picks ``s32``, which no
-    ``float`` holds -- and ``sup([s8, u32, f32])`` is ``double`` where folding
-    fails outright.
+    ``BOOL`` is not on the ladder and joins only with itself; the rest defer, so
+    the n-ary search lives in exactly one place.
     """
     if any(s is CppScalar.BOOL for s in scalars):
         # Mixing bool with numeric storage is a typing bug, not a widening.
@@ -205,19 +155,16 @@ def scalar_sup(scalars: list[CppScalar]) -> CppScalar:
         raise StorageSelectionError(
             f'cannot widen across BOOL and numeric storage: {scalars!r}'
         )
-    try:
-        afs = [_ABSTRACT[s] for s in scalars]
-    except KeyError as e:
+    formats = dict(_SIGMA)
+    missing = [s for s in scalars if s not in formats]
+    if missing:
         raise StorageSelectionError(
-            f'storage scalar not on the ladder: {e.args[0]!r}'
-        ) from None
-    for ty, _ in _SIGMA:
-        rung = _ABSTRACT[ty]
-        if all(af <= rung for af in afs):
-            return ty
-    raise StorageSelectionError(
-        f'no storage type on the ladder subsumes {scalars!r}'
-    )
+            f'storage scalar not on the ladder: {missing[0]!r}'
+        )
+    sup = join(CppStorageDomain(), [formats[s] for s in scalars])
+    spelled = to_cpp(sup)
+    assert isinstance(spelled, CppScalar), spelled
+    return spelled
 
 
 class CppStorageDomain:

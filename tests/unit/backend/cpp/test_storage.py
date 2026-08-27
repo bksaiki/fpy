@@ -23,15 +23,8 @@ from fpy2.number.context.real import REAL_FORMAT
 
 
 def _agg(bounds):
-    """The class-level join, against the cpp storage domain.
-
-    Was ``storage.aggregate_storage``.  The bottom-dropping and the join are now
-    analysis logic over *formats* (``storage_infer._aggregate``), the ladder is
-    the domain, and ``to_cpp`` is the backend's translation back to a type --
-    which is what these tests assert against.
-    """
+    """The class-level join over the cpp domain, spelled as a type."""
     return to_cpp(_aggregate(CppStorageDomain(), list(bounds)))
-
 
 
 class TestStorageScalar:

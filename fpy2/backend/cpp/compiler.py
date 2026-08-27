@@ -417,21 +417,22 @@ class CppCompiler(Backend):
                 du, format_info.by_def, format_info.by_expr,
                 CppStorageDomain(),
             )
-            # the analysis answers in formats; this is the target's spelling
-            storage = CppStorage(chosen)
-            variables = VariableAlloc.assign(du, storage)
         except StorageSelectionError as e:
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: {e}'
             ) from e
-        except Exception as e:
-            # An internal invariant failure in `storage.py` (e.g. an `assert`
-            # in `_supremum`) would otherwise reach the caller as a bare
-            # AssertionError naming neither the function nor the backend.
+        except AssertionError as e:
+            # An invariant the analysis expects an earlier phase to hold.
+            # Named, so it does not reach the caller as a bare AssertionError
+            # mentioning neither the function nor the backend.
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: '
                 f'internal error: {e!r}'
             ) from e
+
+        # the analysis answers in formats; this is the target's spelling
+        storage = CppStorage(chosen)
+        variables = VariableAlloc.assign(du, storage)
 
         alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
         # This function's own summary, from the alias analysis it already has.

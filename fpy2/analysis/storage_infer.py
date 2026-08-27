@@ -1,39 +1,35 @@
 """
-Storage inference: one storage type per runtime object.
+Storage inference: one storage format per runtime object.
 
-Format inference bounds each expression by the smallest format its value can
-take.  Storage inference answers the neighbouring question a backend asks: which
-*single* format, drawn from a distinguished set the target can spell, holds every
-value a given runtime object takes.
+Format inference bounds an expression by the smallest format its value can take;
+storage inference picks, from a distinguished set the target can spell, one
+format that *contains* that bound:
 
     e : real   fmt(e) = F   F <= S
     ------------------------------
               store(e) = S
 
-The definitions denoting one runtime object are one class -- a union-find over
+The definitions denoting one runtime object form a class -- a union-find over
 ``reaching_defs.same_object_defs``, which unions on phi edges and in-place
-updates and on nothing else.  A plain rebind therefore starts a *new* class with
-its own, possibly narrower, storage: ``store`` is per object, not per name.  Each
-class takes the join of its members' bounds.
+updates and nothing else -- and each class stores at the join of its members'
+bounds.  A plain rebind starts a *new* class with its own, possibly narrower,
+storage: ``store`` is per object, not per name.
 
-The domain is :class:`FormatBound` itself -- a storage *is* a format the target
-can spell -- so a backend contributes an ordered sequence of formats and nothing
-else but a fallback hook (:class:`StorageDomain`).  Translating a chosen format
-into the target's own type vocabulary is the backend's, as is any notion of
-*representation*: whether a list is a handle or a value is not a property of a
+The domain is :class:`FormatBound` itself, so a backend supplies an ordered
+sequence of formats and a fallback hook (:class:`StorageDomain`), nothing more.
+Spelling a format in the target's own types is the backend's, as is
+*representation* -- whether a list is a handle or a value is no property of a
 format.
 
-What this guarantees, and what it does not: every member of a class fits its
-class's storage, by construction of the join (*containment*).  Whether a value
-can be *got* into a place whose storage was fixed elsewhere -- a parameter, a
-callee's result -- is *realizability*, and this says nothing about it.  For a
-scalar it is a fact about formats; for an aggregate it is a fact about the heap,
-since changing a list's element type means a new buffer and so a different
-object.  Every refusal a consumer raises comes from there.
+The join gives *containment*: every member of a class fits its class's storage.
+It says nothing about *realizability* -- whether a value can be got into a place
+whose storage was fixed elsewhere, such as a parameter or a callee's result --
+which is where every refusal a consumer raises comes from.  For a scalar that is
+a question about formats; for a list it is one about the heap, since changing an
+element type means a new buffer and so a new object.
 
-Termination rests on ``FormatBound`` being finite-depth, which holds because FPy
-has no recursive list types: a cycle would need ``xs[0] = xs``, which fails to
-unify.
+Termination rests on ``FormatBound`` being finite-depth: a cycle would need
+``xs[0] = xs``, which fails to unify.
 """
 
 from collections import defaultdict
@@ -41,17 +37,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from ..ast.fpyast import (
-    Argument,
-    Assign,
-    Expr,
-    ForStmt,
-    ListComp,
-    ListRef,
-    NamedId,
-    Stmt,
-    Var,
-)
+from ..ast.fpyast import Assign, Expr, ListRef, Var
 from ..number.context.real import REAL_FORMAT
 from ..utils import Unionfind
 from .define_use import DefineUseAnalysis
@@ -66,7 +52,7 @@ from .format_infer import (
     is_bottom,
 )
 from .format_infer.analysis import _to_abstract
-from .reaching_defs import AssignDef, Definition, PhiDef, same_object_defs
+from .reaching_defs import AssignDef, Definition, same_object_defs
 
 
 class StorageSelectionError(Exception):
@@ -76,12 +62,11 @@ class StorageSelectionError(Exception):
 class StorageDomain(Protocol):
     """What a backend contributes to storage assignment: its formats.
 
-    Deliberately one input and one hook.  A storage *is* a format the target can
-    spell, so containment over formats answers everything else -- ``of_bound`` is
-    the first member containing a bound, ``join`` the first containing several,
-    and losslessness *is* containment, so no conversion relation is needed.
-    Structure needs no map either: ``ListFormat`` and ``TupleFormat`` are already
-    bounds, and the analysis recurses through them itself.
+    One input and one hook is enough.  A storage *is* a format the target can
+    spell, so containment over formats answers the rest: ``of_bound`` is the
+    first member containing a bound, ``join`` the first containing several, and
+    losslessness *is* containment, so no conversion relation is needed.  Nor a
+    map over structure -- ``ListFormat`` and ``TupleFormat`` are already bounds.
     """
 
     @property
@@ -112,16 +97,13 @@ class StorageAnalysis:
     """Result of :class:`StorageInfer`.
 
     Each SSA def belongs to a *class* -- the defs denoting one runtime object,
-    per ``same_object_defs`` -- and each class gets one identifier and storage.
-
-    Naming and declaration placement are :mod:`.variables`, not this: they are
-    what a target with variables does with the classes, and this analysis is
-    what a backend-independent one would compute.
+    per ``same_object_defs``.  What a target with variables then does with a
+    class -- name it, place its declaration -- is the backend's.
 
     Attributes:
         def_class:      each def's class id (the canonical member).
         class_members:  each class id's member defs.
-        class_storage:  the C++ storage chosen per class.
+        class_storage:  the storage format chosen per class.
     """
     def_class: dict[Definition, Definition]
     class_members: dict[Definition, list[Definition]]
@@ -171,23 +153,15 @@ class StorageAnalysis:
         )
 
     def storage_of(self, d: Definition) -> FormatBound:
-        """Convenience: the C++ storage type chosen for *d*'s class."""
+        """The storage chosen for *d*'s class."""
         return self.class_storage[self.def_class[d]]
-
-    def is_single_def(self, d: Definition) -> bool:
-        """True iff *d*'s class has exactly one member — i.e. the C++
-        variable is written exactly once (never reassigned via a phi edge
-        nor mutated in place).  Such a binding can be a ``const`` reference
-        to its initializer instead of an owning copy."""
-        return len(self.class_members[self.def_class[d]]) == 1
 
 
 def _lift(bound: FormatBound) -> AbstractFormat | None:
-    """*bound* as an :class:`AbstractFormat`, which is what carries ``<=``."""
-    if isinstance(bound, SetFormat):
+    """*bound* as an :class:`AbstractFormat`, which is what carries ``<=``, or
+    ``None`` for a bound with no scalar reading."""
+    if isinstance(bound, AbstractableFormat | SetFormat):
         return _to_abstract(bound)
-    if isinstance(bound, AbstractableFormat):
-        return AbstractFormat.from_format(bound)
     return None
 
 
@@ -253,15 +227,17 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
         )
         return None
     if isinstance(head, ListFormat):
-        assert all(isinstance(s, ListFormat) for s in rest), storages
-        elts = [s.elt for s in storages if isinstance(s, ListFormat)]
+        elts = []
+        for s in storages:
+            assert isinstance(s, ListFormat), storages
+            elts.append(s.elt)
         return ListFormat(join(domain, elts))
     if isinstance(head, TupleFormat):
-        assert all(
-            isinstance(s, TupleFormat) and len(s.elts) == len(head.elts)
-            for s in rest
-        ), storages
-        tuples = [s for s in storages if isinstance(s, TupleFormat)]
+        tuples = []
+        for s in storages:
+            assert isinstance(s, TupleFormat), storages
+            assert len(s.elts) == len(head.elts), storages
+            tuples.append(s)
         return TupleFormat(tuple(
             join(domain, [t.elts[i] for t in tuples])
             for i in range(len(head.elts))
@@ -269,7 +245,9 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
     afs = []
     for s in storages:
         af = _lift(s)
-        assert af is not None, f'not a storage format: {s!r}'
+        assert af is not None, (
+            f'cannot join a non-numeric storage with a numeric one: {storages!r}'
+        )
         afs.append(af)
     for sigma in domain.sigma:
         rung = AbstractFormat.from_format(sigma)
@@ -287,8 +265,10 @@ def _aggregate(domain: StorageDomain, bounds: list[FormatBound]) -> FormatBound:
     joining that with a signed one costs a rung.
 
     The join is over *storages*, not bounds, which is where the residual
-    imprecision lives: a bound that is only *partly* bottom still contributes the
-    first member at its empty slots.
+    imprecision lives: each member is rounded up to its own smallest containing
+    format first, so a class of ``{0}`` and ``s8`` joins at ``s16``, and a bound
+    only *partly* bottom still contributes the first member at its empty slots.
+    Joining the bounds and choosing storage once would be strictly tighter.
     """
     assert bounds, 'a class has at least one member'
     constraining = [b for b in bounds if not is_bottom(b)]
@@ -296,13 +276,7 @@ def _aggregate(domain: StorageDomain, bounds: list[FormatBound]) -> FormatBound:
 
 
 class StorageInfer:
-    """
-    Storage-type inference for the cpp emitter.
-
-    Assigns one C++ variable (identifier + storage type) per SSA def,
-    coalescing only across phi edges.  See module docstring for the
-    full contract.
-    """
+    """Storage assignment; see the module docstring for the contract."""
 
     @staticmethod
     def infer(
@@ -313,12 +287,12 @@ class StorageInfer:
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 
-        Raises :class:`StorageSelectionError` when no ladder entry covers some
-        class's aggregated bound.
+        Raises :class:`StorageSelectionError` when no member of *domain* covers
+        some class's joined bound.
         """
         defs = def_use.defs
 
-        # ---- 1. union-find over coalescing edges ----
+        # classes: union-find over coalescing edges
         uf: Unionfind[Definition] = Unionfind(defs)
         for d in defs:
             for i in same_object_defs(d):
@@ -329,7 +303,7 @@ class StorageInfer:
         for d, c in def_class.items():
             class_members[c].append(d)
 
-        # ---- 2. storage per class ----
+        # one storage per class
         class_storage: dict[Definition, FormatBound] = {}
         for c, members in class_members.items():
             # every member, not those that happen to have a bound: one

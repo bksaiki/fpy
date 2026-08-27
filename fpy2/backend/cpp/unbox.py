@@ -10,10 +10,10 @@ observe the cells, the indirection buys nothing and the list becomes a plain
 already holds.
 
 Decided per **alias region**, the only unit at which one answer satisfies every
-reader.  That works because :mod:`.storage_infer` coalesces on exactly the edges
-:func:`~fpy2.analysis.alias.Alias` unions on, so a storage class maps to one
-region per level -- :func:`_regions` asserts this rather than taking a
-conjunction that would silently paper over a violation.
+reader.  That works because :class:`~fpy2.analysis.StorageInfer` coalesces on
+exactly the edges :func:`~fpy2.analysis.alias.Alias` unions on, so a storage
+class maps to one region per level -- :func:`_regions` asserts this rather than
+taking a conjunction that would silently paper over a violation.
 
 A dropped handle can go one step further: where
 :class:`~fpy2.analysis.array_size.ArraySizeInfer` proves every value a region
@@ -61,12 +61,10 @@ from ...analysis.format_infer import FormatBound
 from ...analysis.reaching_defs import AssignDef
 from ...ast.fpyast import (
     Argument,
-    Assign,
     Call,
     Empty,
     Enumerate,
     Expr,
-    ForStmt,
     FuncDef,
     IndexedAssign,
     ListComp,

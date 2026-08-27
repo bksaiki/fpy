@@ -1,14 +1,13 @@
 """
 cpp backend: variable materialization.
 
-Storage inference says which definitions share one runtime object and what type
-holds it (:mod:`.storage_infer`).  This module answers the questions that follow
-for a target with *variables*: what each class is called, where it is declared,
-and whether a name binds a reference to storage that already exists.
+:mod:`fpy2.analysis.storage_infer` says which definitions share one runtime
+object and what format holds it.  This module answers what follows for a target
+with *variables*: what each class is called, where it is declared, and whether a
+name binds a reference to storage that already exists.
 
-None of it is storage.  It is here because it is keyed by the same classes, and
-it stays in the backend when the assignment itself becomes a generic analysis: a
-target without declarations or block scope has no use for any of it.
+None of it is storage.  It is keyed by the same classes, but a target without
+declarations or block scope has no use for any of it.
 """
 
 from collections import defaultdict
@@ -29,7 +28,6 @@ from ...ast.fpyast import (
     Var,
 )
 from .storage import CppStorage
-from .types import CppType
 
 
 @dataclass
@@ -70,20 +68,14 @@ class VariableAlloc:
         """Name and place every class of *storage*."""
         def_class = storage.def_class
         class_members = storage.class_members
-        # ---- 3. naming per class ----
-        # External classes (those containing an arg or free-variable
-        # def) are tied to the bare source name and cannot be renamed.
-        # Other classes for the same source name pick up a numeric
-        # suffix.
         all_source_names = {str(d.name) for d in def_class}
         class_to_name: dict[Definition, str] = {}
         claimed: set[str] = set()
         external_classes: set[Definition] = set()
 
-        # Pass 1: external classes claim the bare source name.  By
-        # construction, args and free variables introduce one def each
-        # per name, so every external class for a given source name is
-        # unique.
+        # External classes claim the bare source name.  Args and free
+        # variables introduce one def each per name, so at most one external
+        # class exists per source name.
         for c, members in class_members.items():
             if _is_external(members):
                 src = str(members[0].name)
@@ -91,8 +83,7 @@ class VariableAlloc:
                 claimed.add(src)
                 external_classes.add(c)
 
-        # Pass 2: non-external classes.  Process in deterministic
-        # min-def-index order so generated names are stable across runs.
+        # The rest, in min-def-index order so names are stable across runs.
         remaining = [c for c in class_members if c not in class_to_name]
         remaining.sort(
             key=lambda c: min(def_use.def_to_idx[d] for d in class_members[c])
@@ -103,8 +94,7 @@ class VariableAlloc:
                 class_to_name[c] = src
                 claimed.add(src)
                 continue
-            # Pick the first ``src_N`` that's not already claimed and
-            # that isn't itself an existing source name in this function.
+            # First `src_N` neither claimed nor an existing source name.
             i = 1
             while True:
                 cand = f'{src}_{i}'

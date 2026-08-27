@@ -18,8 +18,8 @@ the most delicate code it has.
 
 The pipeline in `compiler.py` is already backend-independent — `DefineUse`,
 `ContextUse`, `ArraySizeInfer`, `FormatInfer`, `ValueClassInfer`, `Alias`,
-`Escape` all live in `fpy2/analysis/`. Four modules do not: `types.py`,
-`ops.py`/`target.py`, `storage.py`/`storage_infer.py`, `unbox.py`.
+`Escape`, `StorageInfer` all live in `fpy2/analysis/`. Four modules do not:
+`types.py`, `ops.py`/`target.py`, `storage.py`/`variables.py`, `unbox.py`.
 
 The leak is the emitter. Grouping `emitter.py`'s methods by what they *do*:
 
@@ -39,10 +39,10 @@ The leak is the emitter. Grouping `emitter.py`'s methods by what they *do*:
 About 1900 lines are decisions and about 790 are printing. That gap is this
 roadmap.
 
-Which sections close it: **§4** and **§7** shrink the emitter. **§2** and **§3**
-move code out of the backend without shrinking it. **§1** shrank it by nothing —
-every `_bind_operand` and `_emit_at` path that survives statement form is on an
-*aggregate* operand, so the deletions wait on naming aggregates.
+Which sections close it: **§4** and **§7** shrink the emitter. **§3** moves code
+out of the backend without shrinking it, as **§2** did. **§1** shrank it by
+nothing — every `_bind_operand` and `_emit_at` path that survives statement form
+is on an *aggregate* operand, so the deletions wait on naming aggregates.
 
 ## 1. Statement form — done
 
@@ -88,11 +88,16 @@ What it settled:
 
 The three miscompiles this closed are in [backend-cpp.md](backend-cpp.md).
 
-## 2. Storage inference
+## 2. Storage inference — done
 
-Storage inference is not format inference. Format inference maps a real-valued
-expression to the smallest format bounding its value; storage inference maps it
-to a member of a distinguished, finite set of formats that *contains* that bound:
+`fpy2/analysis/storage_infer.py`. The C++ ladder is one instance of its domain
+(`CppStorageDomain`), and variable materialization — naming, declaration
+placement, `binds_by_reference` — split off into `backend/cpp/variables.py`.
+
+Storage inference is not format inference. Format inference bounds an expression
+by the smallest format its value can take; storage inference picks, from a
+distinguished finite set the target can spell, one format that *contains* that
+bound:
 
 ```
 e : real   fmt(e) = F   F <= S
@@ -100,39 +105,103 @@ e : real   fmt(e) = F   F <= S
           store(e) = S
 ```
 
-Several `S` satisfy this, so the content is which one is chosen and what
-constrains the choice beyond containment.
+Several `S` satisfy this, so the content is which one is chosen.
 
-`storage_infer.py` is 312 lines of union-find, class naming and declaration-site
-placement, touching C++ in five places, all through `CppType` and
-`aggregate_storage`. Parameterize it on a lattice — `of_bound(FormatBound) -> S`,
-`join([S]) -> S`, `is_aggregate(S)` — move it to `fpy2/analysis/`, and leave
-`_LADDER` in the backend as one instance.
+### The rules
 
-The assignment and phi rules:
+`Sigma` is the backend's ordered sequence of formats; `F <= S` is the format
+ordering lifted structurally through lists and tuples.
 
-- **Assignment is not a promotion site.** A class is a union-find over
-  `reaching_defs.same_object_defs`, which unions on phi edges and
-  `IndexedAssign` only. A plain rebind `x = e` gets a *fresh* variable with its
-  own, possibly narrower, storage. `store` is per runtime object, not per name,
-  so sequential redefinition never promotes.
-- **A phi is the only promotion site, and the rule is structural.**
-  `aggregate_storage` takes the supremum element-wise through lists and tuples,
-  dropping bottom bounds (a fresh `empty(...)` holds no value and constrains
-  nothing).
-- **Promoting compound data is constrained by aliasing.** A container's promotion
-  is a *rebuild* — a new buffer, hence a different object — so it is legal only
-  where nothing can observe the identity. `_convert_storage` performs it for a
-  value; `_refuse_unsharing` rejects it for a shared list.
+```
+ceil(F)      = first sigma in Sigma with F <= sigma    -- else fallback, else refuse
+ceil(bot)    = head Sigma        -- a fresh `empty` holds no value, so any rung does
+ceil(none)   = none              -- non-numeric; the backend spells it as it likes
+JOIN{S1..Sn} = first sigma in Sigma containing every Si          -- n-ary
+```
 
-So `F <= S` is necessary and not sufficient: among the `S` satisfying it, the
-admissible ones are constrained by aliasing. A shared aggregate admits no
-promotion at all, and the containment rule alone would license a silent
-miscompile.
+A class is a union-find over `reaching_defs.same_object_defs`, which unions on
+phi edges and `IndexedAssign` and nothing else — so a plain rebind `x = e`
+starts a *new* class with its own, possibly narrower, storage. `store` is per
+runtime object, not per name, and sequential redefinition never promotes. Each
+class stores at `JOIN { ceil(F) | F a member's bound, F /= bot }`, or over the
+bottom bounds when every member is bottom.
 
-Open: a *partly* bottom bound contributes its empty slots, because the supremum
-is taken over storages rather than over bounds. Fixing it means joining in the
-format lattice first and choosing storage once.
+An expression's storage follows its *definition* where it has one — a `Var`
+reads its class's storage, a `ListRef` peels the container's element — and its
+own `ceil` otherwise. Definitions win because a class is a join over its
+members, so a member's own bound names a format the value is not held in.
+
+**The join is n-ary and must never be folded.** Containment over `Sigma` is not
+a join-semilattice: `{s8, u16}` has two incomparable minimal upper bounds, `s32`
+and `f32`, and no least one. Over the C++ ladder, folding *overshoots* in 4 of
+the 3-element combinations — `JOIN{s8, u16, f32}` is `float`, folding gives
+`double` — and *fails outright* in 12 where the n-ary join succeeds. The
+sequence order is therefore a tie-break with downstream consequences, not a
+presentation detail, and an interface offering a binary `join(a, b)` would
+reintroduce the bug.
+
+**Containment is guaranteed; realizability is not.** For a place `p` and a value
+`v` flowing into it:
+
+```
+containment    fmt(v) <= store(p)      -- the value fits
+realizability  store(v) ~> store(p)    -- the backend can get it there
+
+sigma ~> sigma'      iff sigma <= sigma'
+list S ~> list S'    iff S = S'                     (free)
+                      or (S ~> S' and v unshared)   (rebuild)
+```
+
+The class join gives the first by construction. The second is where every
+refusal a consumer raises comes from: a list may change element type only by
+becoming a different object, so it needs a sharing verdict. A scalar's
+realizability is a fact about formats; a list's is a fact about the heap.
+
+### The interface
+
+`StorageDomain` is one input and one hook:
+
+- **`sigma`** — the storage formats as `Format`s, smallest first. Ordered, not a
+  set, for the reason above.
+- **`fallback(bound)`** — a storage for a bound no member contains, or `None` to
+  refuse. The one thing the sequence cannot supply: C++ stores an unbounded
+  integer in `int64_t` and treats overflow as the user's problem, which no
+  containment test would allow.
+
+Nothing else. Structure needs no map, since `ListFormat` and `TupleFormat` are
+already bounds. Losslessness *is* containment, so no conversion relation is
+needed — a target supporting *fewer* conversions than containment allows would
+need one, and would have to make `join` require reachability too.
+
+Spelling a format in the target's own types stays in the backend, as does
+*representation* — handle, value, fixed array — which no format has.
+
+### Two behaviours inherited deliberately
+
+**The class join stays monotone.** A partly-`bot` bound still contributes
+`head Sigma` at its empty slots, because the join is over storages rather than
+bounds: `JOIN{ceil(bot), ceil(s8)}` is `s16` where `ceil(bot |_| s8)` is `s8`.
+Joining in the format lattice first and choosing storage once is strictly more
+precise, and changes emitted output.
+
+**Widening stays minimal containment**, which is right for a scalar and wrong
+for a list element. C++ converts a scalar at the point of use, so a rung too
+narrow costs one upcast; `std::vector<float>` and `std::vector<double>` are
+unrelated types, so the same mistake costs a new buffer and a new object
+identity.
+
+| | too wide | too narrow |
+|---|---|---|
+| scalar | a few bytes | a free upcast |
+| list | *n* × a few bytes | O(n) copy + allocation, or a refusal |
+
+Headroom would not pay *inside* a class — the join is already wide up front and
+every construction site builds at it. It pays where a member's storage is fixed
+outside the class: a parameter, a callee's return. Expressing that needs a
+policy per structural position rather than one rule applied structurally. Today
+it has no consequence, because `_rebuild_list` is unreachable — the boxing
+verdict refuses first. Closing that gap makes the rebuild path live, and only
+then does the policy cost anything measurable.
 
 ## 3. Representation inference
 
@@ -151,7 +220,7 @@ graph (`referrers`, `escapes`, `transfers_ownership`, `defs_in`, `region_at`,
 `_shares_storage` asks how many *places* hold a region separately, which is
 language-level, but its precision is calibrated to this emitter: it does not use
 `alias.is_shared`, it counts only names that get their own storage, and that set
-is `binds_by_reference`, shared with `storage_infer` so the two cannot drift.
+is `binds_by_reference`, shared with the emitter so the two cannot drift.
 Discounting a name the emitter then copies is a miscompilation, so the extracted
 form takes the binding rule as a parameter.
 
@@ -211,8 +280,9 @@ place's, and refuse where nothing bridges. The emitter then prints `static_cast`
 and rebuild loops without deciding anything, and that document's four-column
 table retires.
 
-Needs §1: the places must exist as program points before a pass can put a node at
-one.
+§1 supplied the program points and §2 the storage at each; what remains is the
+`~>` relation above, which for a list needs a sharing verdict the pass has to be
+handed.
 
 ## 6. Pow2 and literal peepholes
 
@@ -241,9 +311,8 @@ dependent-clause list stops compiling — so the FPy-level lowerings have to bec
 
 ## Order of work
 
-1. **Storage inference** (§2) — smallest change, and the lattice interface §3 and
-   §5 reuse.
-2. **Conversion insertion** (§5).
+**§5** is next: it is what §2's interface buys, and §1 already gave it the
+program points to put a conversion node at.
 
 **§3's first part** — region sizes and `_Scan`'s facts into `Alias` — is
 independent and can go at any point; its second part waits for a second backend.
