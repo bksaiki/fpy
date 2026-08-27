@@ -413,7 +413,7 @@ class CppCompiler(Backend):
 
         try:
             du = format_info.type_info.def_use
-            storage = StorageInfer.infer(du, format_info.by_def)
+            storage = StorageInfer.infer(du, format_info.by_def, format_info.by_expr)
             variables = VariableAlloc.assign(du, storage)
         except StorageSelectionError as e:
             raise CppCompileError(

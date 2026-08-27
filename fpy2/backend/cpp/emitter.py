@@ -1313,35 +1313,13 @@ class CppEmitter(Visitor):
     def _storage_or_none(self, e: Expr) -> CppType | None:
         """The storage *e* actually emits as, or ``None`` where unknown.
 
-        A format with no ladder entry is not a disagreement to repair, so callers
-        that only *adjust* a representation skip it rather than failing.
-
-        A variable reads as its **declaration**: ``storage_infer`` aggregates a whole
-        class, so asking ``by_expr`` would compare against a type the emitted name
-        does not have.
+        :meth:`StorageAnalysis.of_expr` chooses the type; the representation is
+        stamped here, since it is decided per alias region (see :mod:`.unbox`).
         """
-        if isinstance(e, Var):
-            d = self.def_use.find_def_from_use(e)
-            # A name the emitter binds as `const auto&` has the type C++
-            # *deduced* from its initializer, not the one `storage_of` chose --
-            # so follow the alias.  Missing this is how `[L3, L3]` came to hold
-            # a boxed `uint8_t` list in a vector of boxed `float` lists.
-            src = self._reference_source(d)
-            if src is not None:
-                return self._storage_or_none(src)
-            ty = self.storage.storage_of(d)
-            return ty if self.unbox is None else self.unbox.annotate(e, ty)
-        if isinstance(e, ListRef):
-            # ``xss[i]`` reads a *declared* element, so peel the container's
-            # declaration rather than asking ``by_expr`` -- which answers from
-            # the format, and can name a type the container does not hold.
-            base = self._storage_or_none(e.value)
-            if isinstance(base, CppList):
-                return base.elt
-        try:
-            return self._storage_for_expr(e)
-        except CppEmitError:
+        ty = self.storage.of_expr(e)
+        if ty is None:
             return None
+        return ty if self.unbox is None else self.unbox.annotate(e, ty)
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         # A function has one return type, so every `return` produces it: built

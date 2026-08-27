@@ -721,23 +721,28 @@ Nothing changes semantically; this is the cut line for phase 5.
 pytest tests/unit/backend/cpp -q -n 8    +    harness diff
 ```
 
-### 3. Extend `store` to expressions [1]
+### 3. Extend `store` to expressions [1] — done
 
-`_storage_or_none`'s 34 lines become the analysis's `store(e)`: a `Var` reads its
-def's storage, a `ListRef` peels the container's element type, everything else is
-`ceil(by_expr[e])`. Phase 0 removed the reference chase, so the `Var` case is
-direct.
+`StorageAnalysis.of_expr(e)` answers for every expression: a `Var` reads its
+class's storage, a `ListRef` peels the container's declared element, everything
+else is `ceil(by_expr[e])`, and `None` where no member of the domain covers it.
+`StorageInfer.infer` takes `by_expr` as well as `by_def`, and `StorageAnalysis`
+carries `def_use` (as `ArraySizeAnalysis` already does).
 
-This makes `store` total over expressions and turns the `S-Expr` / `S-Var`
-overlap into a defined function. State the precedence in the docstring.
+The precedence is now stated where it is implemented: **definitions take
+precedence over bounds**, because a class is the join over its members, so the
+bound names a type the value is not held in. That closes the `S-Expr` / `S-Var`
+ambiguity — `store` on expressions is a function.
 
-Note this widens the change beyond a like-for-like replacement, so the harness no
-longer covers all of it — the new expression answers were previously computed by
-the emitter. Expect the diff to be empty anyway; investigate if not.
+`_storage_or_none` shrinks to a choice plus a representation stamp. Its
+reference-source chase is **gone**: phase 0 makes the storages agree, so the
+chase was a no-op. Verified two ways — the corpus is identical, and so are the
+two hand-built programs that actually exercise it (`ys = xs; ys[0] = n`, and
+`row = xss[i]`), which the corpus does not.
 
-```
-pytest tests/unit/backend/cpp -q -n 8    +    harness diff
-```
+`_storage_for_expr` stays as the bound-only answer that raises. It and `of_expr`
+answer different questions on purpose: an operand's own bound versus the type its
+name is held in. Unifying them is a behaviour change, not a relocation.
 
 ### 4. The backend interface
 

@@ -36,7 +36,7 @@ from ...ast.fpyast import (
     Var,
 )
 from ...utils import Unionfind
-from .storage import StorageSelectionError, aggregate_storage
+from .storage import StorageSelectionError, aggregate_storage, choose_storage
 from .types import CppList, CppTuple, CppType
 
 
@@ -59,6 +59,34 @@ class StorageAnalysis:
     def_class: dict[Definition, Definition]
     class_members: dict[Definition, list[Definition]]
     class_storage: dict[Definition, CppType]
+    expr_bound: dict[Expr, FormatBound]
+    def_use: DefineUseAnalysis
+
+    def of_expr(self, e: Expr) -> CppType | None:
+        """The storage *e*'s value is held in, or ``None`` where no member of
+        the domain covers it.
+
+        Definitions take precedence over bounds.  A ``Var`` reads as its
+        *class's* storage rather than its own bound: a class is the join over
+        its members, so the bound names a type the value is not actually held
+        in.  A ``ListRef`` peels the container's element for the same reason --
+        its bound can be narrower than what the container declares.  Everything
+        else is its own bound.
+
+        ``None`` rather than an error: a caller adjusting a representation has
+        nothing to repair when the format has no member, and one that must have
+        an answer asks for the bound directly.
+        """
+        if isinstance(e, Var):
+            return self.storage_of(self.def_use.find_def_from_use(e))
+        if isinstance(e, ListRef):
+            base = self.of_expr(e.value)
+            if isinstance(base, CppList):
+                return base.elt
+        try:
+            return choose_storage(self.expr_bound.get(e))
+        except StorageSelectionError:
+            return None
 
     def storage_of(self, d: Definition) -> CppType:
         """Convenience: the C++ storage type chosen for *d*'s class."""
@@ -100,6 +128,7 @@ class StorageInfer:
     def infer(
         def_use: DefineUseAnalysis,
         def_to_bound: dict[Definition, FormatBound],
+        expr_to_bound: dict[Expr, FormatBound],
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 
@@ -142,4 +171,6 @@ class StorageInfer:
             def_class=def_class,
             class_members=dict(class_members),
             class_storage=class_storage,
+            expr_bound=expr_to_bound,
+            def_use=def_use,
         )
