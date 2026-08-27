@@ -5,8 +5,8 @@ This page documents the semantics of FPy. To stay tractable, it covers only
 the *core* of the language. The :doc:`derived semantics <derived-semantics>`
 page covers the full language.
 
-It describes how FPy programs *evaluate*, and in particular how the *active
-rounding context* governs every arithmetic operation.
+It describes how FPy programs *evaluate*, and in particular how the *rounding
+context* governs every arithmetic operation.
 The rules follow the grammar: expressions, then statements, then programs.
 
 Syntax
@@ -16,7 +16,7 @@ FPy's expressions are constants, arithmetic, comparisons, lists, tuples, and
 dereference. Its statements are the usual imperative ones—assignment,
 sequencing, conditionals, loops, return, assertion, and skip—together with
 reference allocation, update, and function application. One is unique to FPy: the
-*context statement*, which sets the active rounding context for the expressions
+*context statement*, which sets the rounding context for the expressions
 it evaluates.
 
 In the formal syntax, :math:`n` ranges over the reals together with
@@ -118,9 +118,10 @@ a countable set
 Expressions
 -----------
 
-Evaluation requires an environment :math:`\sigma`, a finite map from identifiers
-to values, a *store* :math:`\mu`, a finite map from locations to the values they
-currently contain, and an *active rounding context* :math:`C`. An expression
+Evaluation requires a *store* :math:`\sigma`, a finite map from identifiers to
+values, a *heap* :math:`\mu`, a finite map from locations to the values they
+currently contain, and a *rounding context* :math:`C`. Both maps are partial;
+the rules state the memberships they need. An expression
 evaluates under all three:
 
 .. math::
@@ -130,8 +131,8 @@ evaluates under all three:
 read ":math:`e` evaluates to value :math:`v`". Expressions are pure;
 :math:`\mu` remains an input because :math:`\texttt{!}` reads it.
 
-A rule that writes a lookup, such as :math:`\sigma(x)` or :math:`\mu(\ell)`,
-requires it to be defined; otherwise no rule applies and evaluation is stuck.
+Where a premise cannot be met—an undefined lookup, a false side condition—no
+rule applies and evaluation is stuck.
 
 
 Values evaluate to themselves. A location is not an expression, so **E-Val**
@@ -147,7 +148,8 @@ Variables evaluate to their bound value.
 
 .. math::
 
-   \frac{}{\langle \sigma, \mu, C, x \rangle \Downarrow \sigma(x)}
+   \frac{x \in \mathrm{dom}(\sigma)}
+        {\langle \sigma, \mu, C, x \rangle \Downarrow \sigma(x)}
    \tag{E-Var}
 
 A list evaluates its elements; indexing selects one.
@@ -181,17 +183,19 @@ Tuples evaluate like lists.
    \tag{E-Tuple}
 
 A reference is a mutable cell. Dereferencing reads the location's current value
-from the store; allocating the cell is a statement, since it writes one (see
+from the heap; allocating the cell is a statement, since it writes one (see
 **E-Ref**).
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \ell}
+   \frac{\langle \sigma, \mu, C, e \rangle \Downarrow \ell
+         \quad
+         \ell \in \mathrm{dom}(\mu)}
         {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
 Arithmetic is where rounding happens. The operands evaluate to numbers, and the
-active context :math:`C` rounds their sum. The brackets :math:`\exact{\cdot}`
+rounding context :math:`C` rounds their sum. The brackets :math:`\exact{\cdot}`
 mark a value computed exactly, with no intermediate rounding, so
 :math:`\exact{n_1 + n_2}` is the true sum and :math:`C` rounds it once. Under
 :math:`\R`, rounding is the identity, so the exact result is returned unchanged.
@@ -221,21 +225,21 @@ Statements
 ----------
 
 A statement evaluates in the same state as an expression, but it may write the
-store, so its judgement yields a store as well as a result:
+heap, so its judgement yields a heap as well as a result:
 
 .. math::
 
    \langle \sigma, \mu, C, s \rangle \Downarrow_S o \,;\, \mu'
 
-read ":math:`s` evaluates to an *outcome* :math:`o`, leaving the store
-:math:`\mu'`". A statement either completes normally with an updated environment
+read ":math:`s` evaluates to an *outcome* :math:`o`, leaving the heap
+:math:`\mu'`". A statement either completes normally with an updated store
 or returns a value, so an outcome is one of:
 
 .. math::
 
    o ::= \mathsf{normal}\ \sigma \mid \mathsf{return}\ v
 
-A :math:`\mathsf{normal}` outcome carries the environment threaded to the next
+A :math:`\mathsf{normal}` outcome carries the store threaded to the next
 statement; a :math:`\mathsf{return}` outcome carries a function's result and
 short-circuits the rest of the body.
 
@@ -244,8 +248,8 @@ complete normally; :math:`\texttt{ret}` returns. Sequencing, conditionals, loops
 and the context statement pass along the outcome of the sub-statement they run,
 so a :math:`\mathsf{return}` propagates out to the enclosing function.
 
-Only statements write the store, and only allocation and update do. A rule with
-two statement premises threads it from the first into the second. The store is the
+Only statements write the heap, and only allocation and update do. A rule with
+two statement premises threads it from the first into the second. The heap is the
 only thing that mutates, and its domain only grows: :math:`\sigma` changes only by
 binding, while :math:`\mu` is global, shared by caller and callee, and never
 deallocates.
@@ -253,7 +257,7 @@ deallocates.
 Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
 Bindings combine by disjoint union :math:`\uplus`. Matching inspects a value
-without allocating, so it needs no store.
+without allocating, so it needs no heap.
 
 .. math::
 
@@ -275,7 +279,7 @@ without allocating, so it needs no store.
    a program with a pattern such as :math:`(x, x)` has no interpretation.
 
 Assignment evaluates its right-hand side, matches the value against the
-pattern, and extends the environment with the bindings (:math:`\sigma[\theta]`
+pattern, and extends the store with the bindings (:math:`\sigma[\theta]`
 is :math:`\sigma` updated with every binding in :math:`\theta`). It copies
 nothing: if :math:`v` is a location, the pattern's variable becomes a second
 name for the same cell.
@@ -302,8 +306,8 @@ itself, not to the value.
          \mathsf{normal}\ \sigma[x \mapsto \ell] \,;\, \mu[\ell \mapsto v]}
    \tag{E-Ref}
 
-An update statement replaces a reference's value. The environment is unchanged:
-an update mutates only the store, so every other name for that location observes
+An update statement replaces a reference's value. The store is unchanged:
+an update mutates only the heap, so every other name for that location observes
 the write.
 
 .. math::
@@ -317,17 +321,17 @@ the write.
          \mathsf{normal}\ \sigma \,;\, \mu[\ell \mapsto v]}
    \tag{E-Update}
 
-Functions live in a *top-level environment* :math:`\Phi`, a finite map from
-function names to pairs :math:`(y, s)` of a parameter and a body. It is fixed
+Functions live in a finite *function map* :math:`\Phi` from function names to
+pairs :math:`(y, s)` of a parameter and a body. It is fixed
 throughout evaluation: every judgement takes it implicitly, so the rules elide
 it. Only **E-App** reads it, along with program entry below.
 
 A function application looks its callee up in :math:`\Phi`, evaluates the
 argument, and runs the body to the value it returns, binding that value to
-:math:`x`. The body runs in a fresh environment binding only the parameter, but
+:math:`x`. The body runs in a fresh store binding only the parameter, but
 under the caller's context :math:`C`. Its outcome must be
 :math:`\mathsf{return}\ v'`, so a body that completes normally is stuck. The
-store is *not* fresh: the body runs in the caller's store and its writes outlive
+heap is *not* fresh: the body runs in the caller's heap and its writes outlive
 the call, which is how a callee mutates a reference its caller holds.
 
 .. math::
@@ -359,7 +363,7 @@ returns it.
    \tag{E-Ret}
 
 An assertion evaluates its test; if it holds, evaluation continues with the
-environment unchanged. FPy has no error handling, so a failing assertion has no
+store unchanged. FPy has no error handling, so a failing assertion has no
 rule and evaluation is stuck.
 
 .. math::
@@ -370,7 +374,7 @@ rule and evaluation is stuck.
    \tag{E-Assert}
 
 Sequencing runs :math:`s_1` first. If it returns, the sequence returns at once;
-otherwise :math:`s_2` runs under the updated environment and store to produce
+otherwise :math:`s_2` runs under the updated store and heap to produce
 the sequence's outcome.
 
 .. math::
@@ -391,7 +395,7 @@ the sequence's outcome.
 
 A conditional evaluates its condition to a boolean and runs the matching
 branch; the branch's outcome becomes the conditional's. Only the taken branch
-touches the store.
+touches the heap.
 
 .. math::
 
@@ -412,9 +416,9 @@ touches the store.
    \tag{E-If-False}
 
 A loop tests its condition before each iteration. If the condition is false, the
-loop completes with the environment unchanged; if it holds, the loop runs its
+loop completes with the store unchanged; if it holds, the loop runs its
 body followed by the loop again. **E-Seq-Normal** then threads the body's
-environment and store into the next iteration and **E-Seq-Return** carries a
+store and heap into the next iteration and **E-Seq-Return** carries a
 :math:`\texttt{ret}` in the body straight out of the enclosing function.
 
 .. math::
@@ -446,7 +450,7 @@ runs under :math:`C'` with :math:`x` bound to :math:`C'`, so it can refer to its
 governing context as a value. :math:`C'` governs only the body—the
 surrounding context :math:`C` is unchanged and still applies after the
 ``with``. The body's outcome becomes the statement's outcome.
-The context is scoped; the store and environment are not.
+The rounding context is scoped; the store and heap are not.
 
 .. math::
 
@@ -459,7 +463,7 @@ The context is scoped; the store and environment are not.
 
 .. note::
 
-   The context expression is evaluated under :math:`\R` rather than the active
+   The context expression is evaluated under :math:`\R` rather than the rounding
    context :math:`C` because a constructor's arguments in the full FPy language
    are usually precisions, bitwidths, maximum values, etc. Rounding under :math:`C`
    may inadvertently change the desired result.
@@ -467,8 +471,8 @@ The context is scoped; the store and environment are not.
 Programs
 --------
 
-A program is a pair :math:`(\Phi, f_{\mathit{main}})` of a top-level environment
-and an entry point, run on an argument :math:`v` supplied by the host. Where
+A program is a pair :math:`(\Phi, f_{\mathit{main}})` of a function map and an
+entry point, run on an argument :math:`v` supplied by the host. Where
 :math:`\Phi(f_{\mathit{main}}) = (y, s)`, the program runs its body from the
 initial state:
 
@@ -477,4 +481,4 @@ initial state:
    \langle [\, y \mapsto v \,], \emptyset, \R, s \rangle
    \Downarrow_S \mathsf{return}\ v' \,;\, \mu'
 
-The program's result is :math:`v'`; the final store :math:`\mu'` is discarded.
+The program's result is :math:`v'`; the final heap :math:`\mu'` is discarded.

@@ -38,7 +38,7 @@ in such a program, like ``g`` or ``Any``, is a schema variable.
 Core expressions are pure, so any node whose elaboration below is a statement is
 *lifted* out of expression position, leaving a fresh temporary in its place
 (**E-App**, **E-Ref**). Lifting preserves order: a subexpression that reads the
-store is bound before a later lifted call, so ``z = xs[0] + f(xs)`` binds
+heap is bound before a later lifted call, so ``z = xs[0] + f(xs)`` binds
 ``xs[0]`` before calling ``f``, which may write ``xs``.
 
 Literals and values
@@ -81,7 +81,7 @@ These are **E-Op**, differing only in the operation:
 Rounding operators
 ------------------
 
-* ``Round`` — ``fp.round(e)`` rounds ``e`` to the active context, :math:`C(v)`
+* ``Round`` — ``fp.round(e)`` rounds ``e`` to the rounding context, :math:`C(v)`
   (**E-Op** with the identity operation); idempotent.
 * ``RoundAt`` — ``fp.round_at(e, n)`` rounds ``e`` at digit position ``n``, then
   under :math:`C`.
@@ -137,7 +137,7 @@ The nodes that build and read them:
   :math:`z = \texttt{!}\, xs[i]`.
 
 * ``Empty`` — ``fp.empty(d1, …, dn)`` allocates an uninitialized ``n``-d list; it
-  writes the store, so it lifts like a call. No equivalent form exists:
+  writes the heap, so it lifts like a call. No equivalent form exists:
   the core's list constructor is fixed-width and the sizes are run-time values.
 * ``Len`` / ``Size`` / ``Dim`` — ``len(xs)``, ``fp.size(xs, k)``, ``fp.dim(xs)``:
   exact integer counts, no rounding.
@@ -155,8 +155,9 @@ Miscellaneous
   classifies the result: a native number becomes a numerical value; anything
   opaque stays foreign. No rounding.
 * ``Call`` — **E-App**, generalized to many arguments and foreign callables, so
-  :math:`\Phi` maps a name to a parameter *list* and a body. Being a statement, a
-  call outside assignment position lifts: ``z = f(x) + 1`` :math:`\equiv`
+  the function map :math:`\Phi` takes a name to a parameter *list* and a body.
+  Being a statement, a call outside assignment position lifts:
+  ``z = f(x) + 1`` :math:`\equiv`
   :math:`t = f\ x \,\texttt{;}\, z = t + 1`. The body runs under the callee's
   declared context if it has one, else the caller's :math:`C`.
 
