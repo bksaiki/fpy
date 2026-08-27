@@ -693,18 +693,15 @@ class TestListsInsideTuples:
 
 
 class TestConsumedNameIsNotAPlace:
-    """A name read once, by the construction that takes its value, does not hold
-    the value alongside the container's slot -- so it must not stop the list
-    dropping its handle.  See ``AliasAnalysis.referrers_after_moves``.
+    """A name read once, by the construction that takes its value, must not stop
+    the list dropping its handle -- ``AliasAnalysis.referrers_after_moves``.
 
-    The discount and the ``std::move`` are one claim, so each test asserts both:
-    a discount without the move would copy where the verdict assumed a transfer.
+    The discount and the ``std::move`` are one claim, so each test asserts both.
     """
 
     def test_named_matches_inlined(self):
-        """The pair that motivated this: the same program with and without a
-        name for the list must reach the same representation.  It is also what
-        naming aggregates in ANF would produce everywhere."""
+        """The same program with and without a name for the list must reach the
+        same representation -- which is what naming aggregates in ANF produces."""
 
         @fp.fpy
         def named(n: fp.Real) -> tuple[list[fp.Real], fp.Real]:
@@ -725,8 +722,8 @@ class TestConsumedNameIsNotAPlace:
         assert 'std::move(xs)' in a
 
     def test_an_unsized_list_is_moved_not_copied(self):
-        """Where the unboxed form is a ``std::vector``, the move is what keeps
-        the discount from turning a refcount bump into an O(n) copy."""
+        """For a ``std::vector`` the move is what keeps the discount from
+        turning a refcount bump into an O(n) copy."""
 
         @fp.fpy
         def f(ys: list[fp.Real]) -> tuple[list[fp.Real], fp.Real]:
@@ -752,10 +749,8 @@ class TestConsumedNameIsNotAPlace:
         assert 'std::move' not in out
 
     def test_a_use_one_loop_level_in_keeps_the_handle(self):
-        """The sole syntactic use runs once per iteration, so moving out of it
-        would leave the second iteration reading an empty vector.  The handle
-        *and* the absent move are both required -- either alone would be a
-        silent wrong answer."""
+        """The sole syntactic use runs once per iteration.  Both the handle and
+        the absent move are required; either alone is a silent wrong answer."""
 
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:

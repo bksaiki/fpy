@@ -391,19 +391,42 @@ are ones the corpus does not contain — which is why they are written down.
 `test_unbox_profile.py` pins the count *and* the corpus size: an empty result
 only means something while the corpus is as large as when it was measured.
 
-**A list a local name and a container both hold.** *Open.* `xs = [n, n]; return
-(xs, 1.0)` keeps its handle — the name and the tuple's field are two places, even
-though the name is dead after the return. Inline as `return ([n, n], 1.0)` it
-unboxes. Closing it needs liveness, not just a sharing verdict, *and* the emitter
-must learn to **move** into the container: `std::make_tuple(xs, 1)` copies a value
-where it merely bumps a refcount for a handle. The two have to land together or
-the change makes things slower.
+**A list a local name and a container both hold.** *Settled.* A name read
+exactly once, by the construction that takes its value, hands the value over
+rather than holding it alongside: `AliasAnalysis.consumed_defs`, discounted by
+`referrers_after_moves`. Both disjuncts of the boxing decision take the
+discount, and `_shares_storage` needs it on both halves of
+`slots = referrers - len(by_name)` or `slots` absorbs the name back.
+
+The discount asserts a *transfer*, so `_emit_deduced` emits `std::move` under
+the same condition. C++ will not: implicit move covers `return xs;`, not `xs`
+inside the returned expression. Whether it matters depends on the
+representation — for `std::vector` it is O(1) against an O(n) copy; for
+`std::array<T, K>` it is element-wise and the gain is only the lost allocation.
+
+Soundness needs the construction to provably run once for that value, and a
+sibling-statement check alone does not give that. Three guards: the use must not
+re-execute (a comprehension body and a `while` condition are expressions, so
+they repeat *within* a block), its definition must be a sibling statement, and
+the value must not leave its branch through a phi — a phi is not a use site, so
+sole-use says nothing about the read after the merge. `std::array` hides all
+three, since moving from one leaves it readable, so every runtime test uses an
+unsized list whose `vector` move empties the source.
 
 **A projection whose slot is replaced.** *Deliberate.* `row = xss[i]` binds a
 reference, which is what lets `for a, b in zip(...)` over nested lists unbox at
 all. A C++ reference follows the *slot* while FPy keeps referring to the list that
 was in it, so any `xss[i] = <list>` anywhere in the function rules it out.
 Function-wide by choice: nothing else in the analysis is flow-sensitive.
+
+**An aggregate bound from an emitter temp is copied.** *Open.*
+`std::vector<std::vector<double>> result = _tmp1;` — a comprehension
+materializes into a temp, then the real name copies it. Two instances in the
+corpus today. Free while every list was a handle, O(n) since they became values,
+and `binds_by_reference` does not reach it: the FPy `Assign`'s expression is a
+`ListComp`, not a `Var`, so the temp is invisible to the binding rule. Either
+build the comprehension into the target, or move from a temp that is dead by
+construction.
 
 **Not planned:** interprocedural precision beyond retention — a caller-driven
 representation choice with the callee specialized per argument representation. It

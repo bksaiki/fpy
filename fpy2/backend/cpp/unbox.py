@@ -18,7 +18,7 @@ taking a conjunction that would silently paper over a violation.
 A dropped handle can go one step further: where
 :class:`~fpy2.analysis.array_size.ArraySizeInfer` proves every value a region
 ever holds has one length, the value becomes ``std::array<T, K>``
-(:func:`_region_sizes` builds the table, poisoning on any doubt).  Sizes are
+(:func:`~fpy2.analysis.alias.region_sizes` builds the table).  Sizes are
 region-keyed and stamped in the same traversal as boxedness, so the two axes
 cannot disagree.  They cross call edges by *specialization*
 (:class:`~fpy2.transform.specialize.Specialize` keys specs on argument
@@ -36,11 +36,10 @@ the compiler then turns each retained handle into an error --
 :meth:`UnboxAnalysis.annotate` for expression temporaries -- rather than let a
 ``std::shared_ptr`` into the output.
 
-:func:`_stamp` is the *only* place any of this is decided -- for an expression,
-a return type, and a storage class's declaration alike.  A second traversal for
-the declaration once skipped tuples, so ``t = [y, y], 1.0; return t`` declared
-a boxed tuple field where the return said ``std::tuple<std::vector<T>,
-...>``, which does not compile.  Keep it one traversal.
+:func:`_stamp` is the *only* place any of this is decided -- an expression, a
+return type and a storage class's declaration all go through it.  Keep it that
+way: a second traversal that disagrees about a tuple field emits a declaration
+the return type rejects.
 """
 
 import enum
@@ -60,7 +59,6 @@ from ...ast.fpyast import (
     FuncDef,
     IndexedAssign,
     NamedId,
-    Var,
 )
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
@@ -119,16 +117,7 @@ class UnboxAnalysis:
     alias: AliasAnalysis
     boxed: dict[Region, bool] = field(default_factory=dict)
     storage: dict[Definition, CppType] = field(default_factory=dict)
-    ret_regions: list[set[Region]] = field(default_factory=list)
     written: set[Region] = field(default_factory=set)
-    slot_replaced: set[Region] = field(default_factory=set)
-    """Element regions some ``xss[i] = <list>`` puts a *different* list into.
-
-    ``row = xss[i]`` is **E-Index** then **E-Deref**: it reads through the cell
-    *once* and binds what was in it.  A C++ reference re-reads the slot on every
-    use, so the two diverge exactly where an **E-Update** replaces the cell's
-    contents.  ``_regression_replaced_slot`` is that program.
-    """
     at_boundary: set[Region] = field(default_factory=set)
     boxed_because: dict[tuple[Definition, int], str] = field(
         default_factory=dict,
@@ -138,7 +127,8 @@ class UnboxAnalysis:
     then refuses a boxed level instead of returning it, catching the
     expression temporaries :func:`check_strict` has no storage class for."""
     sizes: dict[Region, int | None] = field(default_factory=dict)
-    """One proven length per region, from :func:`_region_sizes`.
+    """One proven length per region, from
+    :func:`~fpy2.analysis.alias.region_sizes`.
 
     ``int`` means every value the region ever holds has that length, so its
     unboxed storage may be ``std::array``; ``None`` or absent means unknown.
@@ -154,7 +144,7 @@ class UnboxAnalysis:
         **E-Deref** read it once at the binding.
         """
         region = self.alias.region_of(d)
-        return region is not None and region not in self.slot_replaced
+        return region is not None and region not in self.alias.slot_replaced
 
     def writes_through(self, region: Region | None, ty: CppType) -> bool:
         """Whether a ``const`` reference here would reject a write FPy allows.
@@ -200,8 +190,9 @@ class UnboxAnalysis:
         """*ty* with the representation every ``return`` in the function agrees
         on — the return type is one more place that admits a single answer."""
         def at(depth: int) -> set[Region]:
-            if depth < len(self.ret_regions):
-                return self.ret_regions[depth]
+            levels = self.alias.returned_levels
+            if depth < len(levels):
+                return levels[depth]
             return set()
 
         return self._stamp(ty, at, 0)
@@ -288,8 +279,6 @@ class Unbox:
             out.sizes = region_sizes(alias, array_size)
         scan = _Scan(alias, callees or {})
         scan._visit_function(ast, None)
-        out.slot_replaced = alias.slot_replaced
-        out.ret_regions = alias.returned_levels
         out.written = scan.written
         out.at_boundary = scan.at_boundary
 
@@ -332,7 +321,7 @@ class Unbox:
         changed = True
         while changed:
             changed = False
-            for regions in out.ret_regions:
+            for regions in alias.returned_levels:
                 if len(regions) < 2:
                     continue
                 if any(out.boxed.get(r, True) for r in regions):
@@ -475,6 +464,9 @@ def _shares_storage(
     ``ZipElim``'s ``_src = xs`` do not, and are common enough that counting them
     would box most idiomatic programs.  Mirrors the binding rules exactly --
     discounting a name the emitter then copies would be a miscompilation.
+
+    A name the container *consumed* is discounted too, and the emitter owes a
+    ``std::move`` for it: see :meth:`AliasAnalysis.referrers_after_moves`.
     """
     for d in alias.defs_in(region):
         if (
@@ -499,7 +491,7 @@ def _shares_storage(
         if (
             isinstance(d, AssignDef)
             and not isinstance(d.site, IndexedAssign)
-            and d.name not in consumed
+            and d not in consumed
         ):
             by_name.setdefault(d.name, []).append(d)
     slots = alias.referrers_after_moves(region) - len(by_name)
@@ -593,8 +585,8 @@ def check_strict(
                     covered.add(r)
     for depth, on_spine in _boxed_levels(ret_ty):
         regions = (
-            unbox.ret_regions[depth]
-            if depth < len(unbox.ret_regions) else set()
+            unbox.alias.returned_levels[depth]
+            if depth < len(unbox.alias.returned_levels) else set()
         )
         if on_spine and regions and regions <= covered:
             continue

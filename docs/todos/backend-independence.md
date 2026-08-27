@@ -336,37 +336,29 @@ dependent-clause list stops compiling — so the FPy-level lowerings have to bec
 
 ## Order of work
 
-**The boxing gap in [backend-cpp.md](backend-cpp.md) is the next thing worth
-doing**, and it is not one of these sections. `xs = [n, n]; return (xs, 1.0)`
-keeps its handle because the name and the tuple field are two places, though the
-name is read exactly once; inlined, it unboxes. It surfaces through
-`transfers_ownership`, which requires `referrers <= 1`, and *not* through
-`_shares_storage` — the `escapes or …` short-circuit means that function is
-never asked. Closing it needs the emitter to *move* into the container in the
-same commit, since `std::make_tuple(xs, 1)` copies a value where it only bumps a
-refcount for a handle.
+**Aggregate naming in ANF is next**, and its blocker is gone. Naming an
+aggregate turns `return ([n, n], 1.0)` into `xs = [n, n]; return (xs, 1.0)`, and
+until recently the second form kept a handle the first did not — so the pass
+would have boxed every literal-into-container in the corpus. `consumed_defs`
+and the matching `std::move` closed that; see *What stays boxed* in
+[backend-cpp.md](backend-cpp.md).
 
-What it actually unblocks is **aggregate naming**: `xs = [n, n]` is the ANF form
-of an inlined literal, so naming aggregates would turn every unboxed
-literal-into-container into today's boxed case. It is a prerequisite for the
-highest-risk item here, which is a better reason than the one recorded before —
-§5 is *not* gated on it, since none of the corpus's 18 refusals is
-aliasing-related. Planned in [consumed-names.md](consumed-names.md).
+It remains the highest-risk item on its own terms: a name holding a list is a
+second *place*, and `UnboxMode.STRICT` turns that into a refusal. What closed
+covers the name handed straight to a container; a name read more than once is
+genuinely shared, and that is what the pass has to be measured against.
+
+It also owns less than it was once credited with. All 113 `_bind_operand` mints
+on the corpus come from library-op lowering — `_emit_ieee_min_max` (28),
+`_emit_empty` (25), `_list_range` (21), `_emit_sum` (13), `_emit_zip` (12),
+`_visit_list_slice` (11), `_emit_enumerate` (3) — which build a loop or emit an
+operand twice. Those are §7's, and they die when that lowering moves to FPy
+level, where ANF names the loop's temporaries itself.
 
 **§3's first part** is done; its second waits for a second backend. **§4** is
 independent, but is a new transform whose lines mostly move rather than
-disappear. **§6** needs a language-level scale operation. **§7** waits for the FPy-level lowerings
-to become total, and owns the 113 `_bind_operand` mints.
-
-Aggregate naming in ANF is not a numbered section, and it owns less than it was
-credited with. All 113 `_bind_operand` mints on the corpus come from library-op
-lowering — `_emit_ieee_min_max` (28), `_emit_empty` (25), `_list_range` (21),
-`_emit_sum` (13), `_emit_zip` (12), `_visit_list_slice` (11), `_emit_enumerate`
-(3) — which build a loop or emit an operand twice. They are §7's, and they die
-when that lowering moves to FPy level, where ANF names the loop's temporaries
-itself. Aggregate naming remains the highest-risk item on its own terms: a name
-holding a list is a second place, and `UnboxMode.STRICT` turns that into a
-refusal.
+disappear. **§6** needs a language-level scale operation. **§7** waits for the
+FPy-level lowerings to become total, and owns the 113 `_bind_operand` mints.
 
 ## Staying in the backend
 

@@ -80,9 +80,12 @@ Limitations
 One *summary* store for the whole function, not one per program point, so it is
 flow-insensitive: ``ys = xs`` marks ``xs`` shared even if ``ys`` is dead
 immediately afterwards, and a container part counts as a referrer even if the
-container itself is never read.  Intraprocedural: a list handed to a call is
-shared outward, without asking whether the callee retains it.  Index-insensitive:
-``xs[0]`` and ``xs[1]`` are one part.  All three cost precision, not soundness.
+container itself is never read — except :attr:`AliasAnalysis.consumed_defs`,
+which buys back one flow-sensitive fact under narrow guards.  Intraprocedural:
+a list handed to a
+call is shared outward, without asking whether the callee retains it.
+Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three cost
+precision, not soundness.
 """
 
 from dataclasses import dataclass, field
@@ -117,6 +120,7 @@ from ..ast import (
     TupleBinding,
     TupleExpr,
     Var,
+    WhileStmt,
     Zip,
 )
 from ..function import Function
@@ -401,7 +405,7 @@ class AliasAnalysis:
         written_regions:  regions an ``xs[i] = e`` here stores into.
         slot_replaced:    element regions an ``xss[i] = <list>`` replaces.
         returned_levels:  regions the ``return``s hand back, by depth.
-        consumed_names:   per region, names whose value *moves* into a
+        consumed_defs:    per region, definitions whose value *moves* into a
                           container rather than coexisting with it.
     """
 
@@ -413,7 +417,7 @@ class AliasAnalysis:
     written_regions: set[Region] = field(default_factory=set)
     slot_replaced: set[Region] = field(default_factory=set)
     returned_levels: list[set[Region]] = field(default_factory=list)
-    consumed_names: dict[Region, set[NamedId]] = field(default_factory=dict)
+    consumed_defs: dict[Region, set[Definition]] = field(default_factory=dict)
 
     def region_of(self, d: Definition, depth: int = 0) -> Region | None:
         """What may be the same list as *d*, *depth* levels in.
@@ -465,24 +469,35 @@ class AliasAnalysis:
         names plus container slots."""
         return self._regions.referrers(region)
 
-    def consumed(self, region: Region) -> frozenset[NamedId]:
-        """*region*'s names that hand their value to a container and are never
-        read again — see :attr:`consumed_names`."""
-        return frozenset(self.consumed_names.get(self._regions.find(region), ()))
+    def consumed(self, region: Region) -> frozenset[Definition]:
+        """*region*'s definitions that hand their value to a container and are
+        never read again — see :attr:`consumed_defs`."""
+        return frozenset(self.consumed_defs.get(self._regions.find(region), ()))
 
     def referrers_after_moves(self, region: Region) -> int:
         """:meth:`referrers`, less the names the value *moves* out of.
 
-        A name read once, into a container, does not hold the value alongside
-        that container's slot: it hands the value over and is finished.  Counting
-        it makes ``xs = [n, n]; return (xs, 1.0)`` look shared where the same
-        program written inline does not.
+        Counting a consumed name makes ``xs = [n, n]; return (xs, 1.0)`` look
+        shared where the same program written inline does not.
 
-        A consumer of this owes the move: whoever discounts the name has to
-        arrange that the value really is transferred and not copied, or the two
-        disagree about what the program does.
+        A name is discounted only when *every* definition of it here is
+        consumed: :meth:`referrers` counts names, so one definition read twice
+        keeps the name a place however its siblings are used.
+
+        **A caller of this owes the move**, and only for a definition
+        :meth:`consumed` names.  Moving one it does not is a use-after-move.
         """
-        return self.referrers(region) - len(self.consumed(region))
+        root = self._regions.find(region)
+        consumed = self.consumed(root)
+        if not consumed:
+            return self.referrers(root)
+        by_name: dict[NamedId, list[Definition]] = {}
+        for d in self.defs_in(root):
+            by_name.setdefault(d.name, []).append(d)
+        gone = sum(
+            1 for ds in by_name.values() if all(d in consumed for d in ds)
+        )
+        return self.referrers(root) - gone
 
     def region_of_site(self, site: AllocSite) -> Region | None:
         """Which region *site*'s allocation lives in."""
@@ -535,8 +550,7 @@ class AliasAnalysis:
             self._regions.is_returned(region)
             and not self._regions.has_param_site(region)
             and not self._regions.is_shared_out(region)
-            # after moves: a name the returned container consumed is not a
-            # second holder, so `xs = [n, n]; return (xs, 1.0)` transfers
+            # a name the returned container consumed is not a second holder
             and self.referrers_after_moves(region) <= 1
         )
 
@@ -609,10 +623,21 @@ class _Builder(DefaultVisitor):
         self._merge_redefinitions()
         self._seed_params()
         self._visit_function(self.func, None)
-        return AliasAnalysis(
+        alias = AliasAnalysis(
             self.sites, self.regions, self.by_def, self._by_expr,
             self.site_region,
         )
+        # A second walk, because every fact asks `region_of` for where a place
+        # ends up and that is settled only once every merge has run.  Inside
+        # `run` rather than beside it: `transfers_ownership` reads them, so a
+        # result without them would answer a different question.
+        facts = _RegionFacts(alias, self.def_use)
+        facts._visit_function(self.func, None)
+        alias.written_regions = facts.written
+        alias.slot_replaced = facts.slot_replaced
+        alias.returned_levels = facts.returned_levels
+        alias.consumed_defs = facts.consumed
+        return alias
 
     # -- regions --------------------------------------------------------------
 
@@ -898,7 +923,7 @@ class _RegionFacts(DefaultVisitor):
 
     A second walk rather than part of :class:`_Builder`: each fact asks
     ``region_of`` for the region a place ends up in, which is only settled once
-    every merge has run.  A bare traversal is under 2% of the builder's cost.
+    every merge has run.
     """
 
     def __init__(self, alias: 'AliasAnalysis', def_use: DefineUseAnalysis):
@@ -907,20 +932,43 @@ class _RegionFacts(DefaultVisitor):
         self.written: set[Region] = set()
         self.slot_replaced: set[Region] = set()
         self.returned_levels: list[set[Region]] = []
-        self.consumed: dict[Region, set[NamedId]] = {}
-        self._block_of: dict[Stmt, StmtBlock] = {}
-        self._block: StmtBlock | None = None
+        self.consumed: dict[Region, set[Definition]] = {}
+        self._siblings: set[Stmt] = set()
+        self._repeats = 0
+        # A phi operand is read after the merge, but a phi is not a use site --
+        # `uses` records only Var/IndexedAssign/Call -- so sole-use would
+        # otherwise hold for a name whose value flows out of its branch.
+        self._phi_operands = {
+            def_use.defs[i]
+            for ps in def_use.phis.values() for p in ps
+            for i in (p.lhs, p.rhs)
+        }
         for d in alias.all_defs():
             if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
                 if (r := alias.region_of(d)) is not None:
                     self.written.add(r)
 
     def _visit_block(self, block: StmtBlock, ctx):
-        outer, self._block = self._block, block
+        outer, self._siblings = self._siblings, set(block.stmts)
         for stmt in block.stmts:
-            self._block_of[stmt] = block
             self._visit_statement(stmt, ctx)
-        self._block = outer
+        self._siblings = outer
+
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        # the condition re-runs every iteration, in the enclosing block
+        self._repeats += 1
+        self._visit_expr(stmt.cond, ctx)
+        self._repeats -= 1
+        self._visit_block(stmt.body, ctx)
+
+    def _visit_list_comp(self, e: ListComp, ctx):
+        for iterable in e.iterables:
+            self._visit_expr(iterable, ctx)
+        # the element runs once per item, and is an expression rather than a
+        # block, so the block guard alone does not see the repetition
+        self._repeats += 1
+        self._visit_expr(e.elt, ctx)
+        self._repeats -= 1
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx):
         self._note_consumed(e.elts)
@@ -933,17 +981,13 @@ class _RegionFacts(DefaultVisitor):
     def _note_consumed(self, elts: 'tuple[Expr, ...]') -> None:
         """Record each operand of a construction whose value *moves* into it.
 
-        A name handed to a container and never read again is not a place that
-        coexists with the container's slot -- the value goes in and the name is
-        finished.  Two conditions, both necessary:
-
-        - the construction is the name's *only* use, so nothing reads it after;
-        - the definition sits in the same statement block, which is what rules
-          out a loop between them.  A block *is* the loop boundary, so a use one
-          level in gets a different block and is refused -- ``xs = [n, n]`` with
-          the construction inside a ``for`` would otherwise be moved from on the
-          first iteration and empty on the second.
+        Sound only where the construction provably runs once for that value, so
+        every way it could run again is refused: a use that re-executes
+        (``_repeats``), one whose definition is not a sibling statement, and one
+        whose value leaves its branch through a phi.
         """
+        if self._repeats:
+            return
         for e in elts:
             if not isinstance(e, Var):
                 continue
@@ -954,10 +998,12 @@ class _RegionFacts(DefaultVisitor):
                 continue
             if self.def_use.uses.get(d) != {e}:
                 continue
-            if self._block_of.get(d.site) is not self._block:
+            if d in self._phi_operands:
+                continue
+            if d.site not in self._siblings:
                 continue
             if (r := self.alias.region_of(d)) is not None:
-                self.consumed.setdefault(r, set()).add(d.name)
+                self.consumed.setdefault(r, set()).add(d)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # Only a store of a *list* replaces a slot: a scalar write goes through
@@ -1006,9 +1052,9 @@ def region_sizes(
     Contributions walk each bound structurally against the region graph, so the
     table is keyed by region exactly where a consumer reads it.
 
-    Not a method on :class:`AliasAnalysis`: that analysis must not require an
-    :class:`~fpy2.analysis.array_size.ArraySizeAnalysis` -- ``escape`` and
-    ``format_infer`` both build one without.
+    A free function because an :class:`AliasAnalysis` is usable without an
+    :class:`~fpy2.analysis.array_size.ArraySizeAnalysis`; only a caller wanting
+    lengths needs one.
     """
     sizes: dict[Region, int | None] = {}
 
@@ -1066,11 +1112,4 @@ class Alias:
             def_use = DefineUse.analyze(func)
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=def_use)
-        alias = _Builder(func, def_use, type_info, summaries or {}).run()
-        facts = _RegionFacts(alias, def_use)
-        facts._visit_function(func, None)
-        alias.written_regions = facts.written
-        alias.slot_replaced = facts.slot_replaced
-        alias.returned_levels = facts.returned_levels
-        alias.consumed_names = facts.consumed
-        return alias
+        return _Builder(func, def_use, type_info, summaries or {}).run()

@@ -1115,22 +1115,20 @@ class CppEmitter(Visitor):
     def _move_if_consumed(self, code: str, e: Expr) -> str:
         """``std::move(code)`` where the sharing verdict discounted this name.
 
-        A name the container consumes stopped counting as a place
-        (``alias.consumed``), which is what let the list drop its handle.  The
-        discount claims the value is *transferred*, so the emitted code has to
-        transfer it: an lvalue copy-constructs, and for a ``std::vector`` that is
-        the O(n) the handle used to avoid.  Same condition on both sides, or the
-        two disagree about what the program does.
+        ``alias.consumed`` stopped counting the definition as a place, which is
+        what let the list drop its handle; without the move an lvalue
+        copy-constructs, which for a ``std::vector`` is the O(n) the handle
+        avoided.  C++ does not do it here: implicit move covers ``return xs;``,
+        not ``xs`` inside the returned expression.
 
-        C++ will not do this itself here.  Its implicit move covers a local
-        returned *whole* (``return xs;``), not one appearing as a subexpression
-        of the returned value, and the target is ``-std=c++11`` besides.
+        Keyed by *definition*, not name: two definitions can share a name and a
+        region, and moving one that is read again is a use-after-move.
         """
         if self.unbox is None or not isinstance(e, Var):
             return code
         d = self.def_use.find_def_from_use(e)
         region = self.unbox.alias.region_of(d)
-        if region is None or d.name not in self.unbox.alias.consumed(region):
+        if region is None or d not in self.unbox.alias.consumed(region):
             return code
         return f'std::move({code})'
 

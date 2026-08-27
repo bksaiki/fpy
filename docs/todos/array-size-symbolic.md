@@ -7,7 +7,7 @@ len(xs)`, and the old lattice recorded `None`. It now tracks those equalities.
 
 Consumer integration has begun: the C++ backend reads *concrete* sizes — a
 proven-length unboxed list compiles to `std::array<T, K>` (`backend/cpp/unbox.py`
-`_region_sizes`), and `Specialize` keys specs on argument lengths so sizes cross
+`analysis.region_sizes`), and `Specialize` keys specs on argument lengths so sizes cross
 call edges. The *equalities* (symbolic `NamedId` sizes) still have no consumer.
 
 ## The API a consumer needs

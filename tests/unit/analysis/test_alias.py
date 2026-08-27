@@ -556,17 +556,14 @@ class TestRegionFacts:
 
 
 class TestConsumedNames:
-    """A name handed to a container and never read again is not a place that
-    coexists with the container's slot -- the value moves in.
-
-    The fact only; nothing here asks what a backend does with it.
-    """
+    """A name handed to a container and never read again is not a place beside
+    the container's slot -- the value moves in.  The fact only."""
 
     @staticmethod
     def _consumed(func: fp.Function) -> set[str]:
         du = DefineUse.analyze(func.ast)
         a = Alias.analyze(func.ast, def_use=du)
-        return {str(n) for names in a.consumed_names.values() for n in names}
+        return {str(d.name) for ds in a.consumed_defs.values() for d in ds}
 
     def test_sole_use_in_a_tuple_is_consumed(self):
         @fp.fpy
@@ -598,8 +595,7 @@ class TestConsumedNames:
 
     def test_a_use_one_loop_level_in_is_refused(self):
         """The sole *syntactic* use runs once per iteration, so the value must
-        survive the first -- a block is the loop boundary, and the definition is
-        outside it."""
+        survive the first; a block is the loop boundary."""
 
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:
@@ -614,8 +610,7 @@ class TestConsumedNames:
         assert self._consumed(f) == set()
 
     def test_a_definition_inside_the_loop_is_consumed(self):
-        """Same construction, but redefined each iteration, so there is nothing
-        to preserve across one."""
+        """Redefined each iteration, so there is nothing to preserve."""
 
         @fp.fpy
         def f(n: fp.Real) -> fp.Real:
@@ -630,7 +625,7 @@ class TestConsumedNames:
         assert self._consumed(f) == {'xs'}
 
     def test_a_parameter_is_never_consumed(self):
-        """It names the caller's storage, which this function does not own."""
+        """It names the caller's storage."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> tuple[list[fp.Real], fp.Real]:
@@ -647,3 +642,66 @@ class TestConsumedNames:
                 return xs[0]
 
         assert self._consumed(f) == set()
+
+    def test_a_construction_in_a_comprehension_is_refused(self):
+        """The body re-runs per item, but it is an expression rather than a
+        block, so block identity alone does not see the repetition."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                ys = [x * 2.0 for x in xs]
+                zss = [[ys] for i in range(3)]
+                return zss[0][0][0]
+
+        assert self._consumed(f) == set()
+
+    def test_a_construction_in_a_while_cond_is_refused(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                ys = [x * 2.0 for x in xs]
+                i = 0
+                # the cond is `ys`'s only use, so nothing but the repetition
+                # guard refuses it
+                while [ys][0][0] > 0.0 and i < 2:
+                    i = i + 1
+                return i
+
+        assert self._consumed(f) == set()
+
+    def test_a_value_leaving_a_branch_through_a_phi_is_refused(self):
+        """A phi is not a use site, so sole-use holds inside the branch while
+        the merged value is still read after it."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], c: fp.Real) -> fp.Real:
+            with fp.FP64:
+                ys = [x * 1.0 for x in xs]
+                acc = 0.0
+                if c > 0:
+                    ys = [x * 2.0 for x in xs]
+                    zss = [ys]
+                    acc = zss[0][0]
+                return acc + ys[0]
+
+        assert self._consumed(f) == set()
+
+    def test_a_sibling_definition_of_the_same_name_is_not_discounted(self):
+        """``referrers`` counts names, and the move is per definition: one
+        definition read twice must not inherit a sibling's discount."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP64:
+                xs = [a, b]
+                ys = [xs]
+                xs = ys[0]
+                zs = [xs]
+                return zs[0][0] + xs[1]
+
+        du = DefineUse.analyze(f.ast)
+        al = Alias.analyze(f.ast, def_use=du)
+        consumed = {d for ds in al.consumed_defs.values() for d in ds}
+        assert consumed, 'the single-use definition should be consumed'
+        assert all(len(du.uses.get(d, ())) == 1 for d in consumed)
