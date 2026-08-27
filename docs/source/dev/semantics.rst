@@ -24,6 +24,12 @@ In the formal syntax, :math:`n` ranges over the reals together with
 :math:`\mathit{Var}`, and :math:`f` over a separate set of function names
 :math:`\mathit{FuncName}`.
 
+Operators come from two given sets. :math:`\mathit{op}` ranges over the
+*rounded operators* :math:`\mathit{Op}`, each denoting a function on numbers,
+and :math:`\mathit{pred}` over the *exact predicates* :math:`\mathit{Pred}`,
+each denoting a boolean-valued function on values. Neither set is fixed here, so
+an operation of either shape may be added without changing a rule.
+
 There are two forms of context constant. :math:`\R` is the *real rounding
 context*, whose rounding operation is the identity.
 :math:`\texttt{ctx}\ \{ \ldots \}` is a schema standing for every other context,
@@ -49,10 +55,10 @@ parameters give distinct constants, so a program may use several at once.
        & \text{tuple} \\
      & \mid & \texttt{!}\, e
        & \text{dereference} \\
-     & \mid & e_1 + e_2
-       & \text{arithmetic} \\
-     & \mid & e_1 < e_2
-       & \text{comparison} \\[1ex]
+     & \mid & \mathit{op}(e_1, \ldots, e_k)
+       & \text{rounded operator} \\
+     & \mid & \mathit{pred}(e_1, \ldots, e_k)
+       & \text{exact predicate} \\[1ex]
    s & ::= & p = e
        & \text{assignment} \\
      & \mid & x = \texttt{ref}\ e
@@ -78,16 +84,22 @@ parameters give distinct constants, so a program may use several at once.
    p & ::= & x
        & \text{variable pattern} \\
      & \mid & (\, p_1, \ldots, p_m \,)
-       & \text{tuple pattern}
+       & \text{tuple pattern} \\[1ex]
+   \mathit{op} & ::= & + \mid - \mid \times \mid \div \mid \ldots
+       & \text{rounded operators} \\
+   \mathit{pred} & ::= & < \mid \le \mid = \mid \ne \mid \ldots
+       & \text{exact predicates}
    \end{array}
 
 An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position, the only way to take a tuple apart.
 
-``+`` and ``<`` stand in for arithmetic and comparison in general: every rounded
-operator rounds its exact result as ``+`` does, and every predicate yields a
-boolean as ``<`` does.
+Both are written in prefix form even where FPy spells them infix, so
+:math:`x < y` is :math:`\mathit{pred}(x, y)`. The
+:doc:`derived semantics <derived-semantics>` gives FPy's members of each set,
+along with the operators that fit neither—selection, exact integer counts,
+casts.
 
 Values
 ------
@@ -194,32 +206,31 @@ from the heap; allocating the cell is a statement, since it writes one (see
         {\langle \sigma, \mu, C, \texttt{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
-Arithmetic is where rounding happens. The operands evaluate to numbers, and the
-rounding context :math:`C` rounds their sum. The brackets :math:`\exact{\cdot}`
-mark a value computed exactly, with no intermediate rounding, so
-:math:`\exact{n_1 + n_2}` is the true sum and :math:`C` rounds it once. Under
-:math:`\R`, rounding is the identity, so the exact result is returned unchanged.
+An operator is where rounding happens. Its operands evaluate to numbers, and the
+rounding context :math:`C` rounds the exact result of applying it. The brackets
+:math:`\exact{\cdot}` mark a value computed exactly, with no intermediate
+rounding, so :math:`\exact{\mathit{op}(n_1, \ldots, n_k)}` is the true result
+and :math:`C` rounds it once. Under :math:`\R`, rounding is the identity, so the
+exact result is returned unchanged.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1
-         \quad
-         \langle \sigma, \mu, C, e_2 \rangle \Downarrow n_2}
-        {\langle \sigma, \mu, C, e_1 + e_2 \rangle \Downarrow
-         C(\exact{n_1 + n_2})}
-   \tag{E-Add}
+   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow n_i
+         \quad (1 \le i \le k)}
+        {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
+         \Downarrow C(\exact{\mathit{op}(n_1, \ldots, n_k)})}
+   \tag{E-Op}
 
-A comparison evaluates its operands and tests them, producing a boolean;
-nothing rounds. NaN is unordered: an ordering test with a NaN operand is
-false.
+A predicate evaluates its operands and tests them, producing a boolean; nothing
+rounds. NaN is unordered: an ordering test with a NaN operand is false.
 
 .. math::
 
-   \frac{\langle \sigma, \mu, C, e_1 \rangle \Downarrow n_1
-         \quad
-         \langle \sigma, \mu, C, e_2 \rangle \Downarrow n_2}
-        {\langle \sigma, \mu, C, e_1 < e_2 \rangle \Downarrow (n_1 < n_2)}
-   \tag{E-Lt}
+   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
+         \quad (1 \le i \le k)}
+        {\langle \sigma, \mu, C, \mathit{pred}(e_1, \ldots, e_k) \rangle
+         \Downarrow \mathit{pred}(v_1, \ldots, v_k)}
+   \tag{E-Pred}
 
 Statements
 ----------

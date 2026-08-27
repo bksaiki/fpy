@@ -4,31 +4,14 @@ Derived Semantics
 The :doc:`core semantics <semantics>` covers only a minimal fragment of
 FPy—constants, arithmetic, function calls, and the basic statements. This page
 explains every other *evaluable* node in :mod:`fpy2.ast.fpyast`, each either
-**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Add**),
+**(i)** evaluating like a core rule (referenced by tag, e.g. **E-Op**),
 **(ii)** desugaring to a small FPy program, or **(iii)** elaborating to core
 syntax that has no FPy spelling of its own, as lists do (see *Lists*).
 
-Most entries instantiate one of two schemas, generalizing the core's
-representatives **E-Add** and **E-Lt** to any arity. A *rounded operator*
-:math:`\mathit{op}` rounds the exact result of applying it:
-
-.. math::
-
-   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow n_i
-         \quad (1 \le i \le k)}
-        {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
-         \Downarrow C(\exact{\mathit{op}(n_1, \ldots, n_k)})}
-   \tag{E-Op}
-
-An *exact predicate* :math:`\mathit{op}` yields a boolean, and nothing rounds:
-
-.. math::
-
-   \frac{\langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
-         \quad (1 \le i \le k)}
-        {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
-         \Downarrow \mathit{op}(v_1, \ldots, v_k)}
-   \tag{E-Pred}
+The core leaves its two operator sets open. Most entries below name a member of
+one of them: :math:`\mathit{Op}`, whose members round their exact result
+(**E-Op**), or :math:`\mathit{Pred}`, whose members yield a boolean exactly
+(**E-Pred**).
 
 A node shown with an ``@fp.fpy`` program stands for that program, which is
 ordinary FPy and elaborates in turn by the entries here: an expression node
@@ -57,14 +40,14 @@ Literals and values
 Classification and inspection
 -----------------------------
 
-* ``IsFinite``, ``IsInf``, ``IsNan``, ``IsNormal``, ``Signbit`` — **E-Pred**,
-  each testing its operand.
-* ``Logb`` — **E-Op** for the normalized (integer) exponent.
+* ``IsFinite``, ``IsInf``, ``IsNan``, ``IsNormal``, ``Signbit`` — members of
+  :math:`\mathit{Pred}`, each testing its operand.
+* ``Logb`` — a member of :math:`\mathit{Op}`, the normalized (integer) exponent.
 
 Arithmetic
 ----------
 
-These are **E-Op**, differing only in the operation:
+These are members of :math:`\mathit{Op}`, differing only in the operation:
 ``Sub`` (``-``), ``Mul`` (``*``), ``Div`` (``/``), ``Neg``, ``Abs``, ``Sqrt``,
 ``Cbrt``, ``Pow`` (``**``), ``Copysign``, ``Atan2``, ``Mod`` (``%``), ``Fmod``,
 ``Remainder``, and the elementary functions ``Sin``, ``Cos``, ``Tan``,
@@ -164,7 +147,8 @@ Miscellaneous
 Logical operators
 -----------------
 
-* ``Not`` — **E-Pred** for boolean negation.
+* ``Not`` — a member of :math:`\mathit{Pred}`, boolean negation. Its operand is
+  a boolean, which **E-Pred** allows: it takes values, not just numbers.
 * ``And`` / ``Or`` — ``a and b`` :math:`\equiv` ``b if a else False``, and
   ``a or b`` :math:`\equiv` ``True if a else b``.
 
@@ -174,9 +158,9 @@ Comparisons
 * ``Compare`` — a chained comparison is the conjunction of adjacent pairwise
   tests, all six of ``<``, ``<=``, ``>``, ``>=``, ``==``, ``!=`` chaining:
   ``a < b <= c`` :math:`\equiv` ``(a < b) and (b <= c)``. Since ``and``
-  short-circuits, each operand is evaluated at most once. The four ordering tests
-  are **E-Pred** on reals; ``==`` and ``!=`` are **E-Pred** on any values,
-  comparing lists and tuples element-wise and rejecting operands of unequal
+  short-circuits, each operand is evaluated at most once. All six are members of
+  :math:`\mathit{Pred}`; the four ordering tests take numbers, while ``==`` and
+  ``!=`` compare lists and tuples element-wise and reject operands of unequal
   type.
 
 Statements
