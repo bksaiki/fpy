@@ -35,7 +35,8 @@ The emitter's input is in **statement form**: `fpy2.transform.ANF` runs last in
 `specialize()`, so every operand is a name, a literal or a nullary constant, and
 the emitter never invents a place for one.  Only aggregates are left nested.
 ANF does not create the statement slots it needs — `fpy2.transform.Hoistable`
-does, earlier in `specialize()`, and ANF raises on a program it has not run on.
+does, earlier in `specialize()` — and ANF raises where a sealed position holds
+something it would itself have to name.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
 compile and must behave as the FPy interpreter does wherever FPy's semantics are

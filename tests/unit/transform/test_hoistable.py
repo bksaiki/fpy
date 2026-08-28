@@ -8,7 +8,7 @@ tests assert:
    hoisted out of anywhere.  A comprehension is the exception, until
    :class:`~fpy2.transform.CompToLoop` has run.
 2. **Weakness** — a program with no non-strict position comes back unchanged.
-   Nothing else checks this: flattening *more* would still be correct.
+   ``test_hoistable_profile.py`` measures the same direction over the corpus.
 3. **Order of evaluation** — a lowering hoists above the operands to its left,
    so those must be named.  Getting it wrong changes which exception a program
    raises, which :class:`TestOrdering` witnesses directly.
@@ -56,7 +56,9 @@ def _run(f: Function, args):
     try:
         return repr(f(*args)), None
     except Exception as e:                       # noqa: BLE001
-        return None, type(e).__name__
+        # the message too: two operands that both raise `AssertionError` would
+        # otherwise compare equal, which is exactly the swap being tested for
+        return None, f'{type(e).__name__}: {e}'
 
 
 def _count(node, kind) -> int:
@@ -297,6 +299,45 @@ class TestOrdering:
         assert 'g' in str(before.value)
         assert str(after.value) == str(before.value)
 
+    def test_a_chained_comparison_short_circuits(self):
+        """``a < b < c`` is the conjunction of the adjacent pairs, so `c` runs
+        only where `a < b` held.  Hoisting a lowering out of it made `c`
+        unconditional."""
+
+        @fp.fpy
+        def f(n: fp.Real, c: bool) -> bool:
+            return 0.0 < n < (_needs_positive_g(n) if c else 0.0)
+
+        args = [-1.0, True]
+        assert _run(_apply(f), args) == _run(f, args)
+        assert _run(f, args)[1] is None          # the third operand never runs
+
+    def test_an_assert_message_is_not_evaluated_eagerly(self):
+        """A message runs only where the test fails, and no slot runs then -- so
+        it is sealed rather than lowered.  Hoisting a ternary out of one made it
+        unconditional and raised where the program returned."""
+
+        @fp.fpy
+        def f(x: fp.Real, c: bool) -> fp.Real:
+            assert x > 0.0, (_needs_positive_g(-1.0) if c else 0.0)
+            return x
+
+        args = [1.0, True]
+        assert _run(_apply(f), args) == _run(f, args)
+        assert _run(f, args)[1] is None                    # it never runs
+        assert _count(Hoistable.apply(f.ast), IfStmt) == 0  # nothing lowered
+
+    @pytest.mark.xfail(
+        strict=True,
+        reason='the byte interpreter is wrong here, not the pass.  The derived '
+               'semantics elaborates `xs[i] = e` to `t = xs[i] ; t := e` and '
+               'says so in prose -- "binding the cell before writing through '
+               'it" -- so the indices are evaluated first.  `byte.py` emits a '
+               'Python `Assign`, whose value-before-target order inverts that.  '
+               'The core semantics cannot settle it: its expressions are pure, '
+               'so E-Index\'s premises are unordered on purpose.  Un-xfail when '
+               'the interpreter is fixed.',
+    )
     def test_an_index_is_not_overtaken(self):
         @fp.fpy
         def f(xs: list[fp.Real], i: fp.Real, b: fp.Real, c: bool) -> list[fp.Real]:

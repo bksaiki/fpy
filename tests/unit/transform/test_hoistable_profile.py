@@ -25,30 +25,35 @@ EXPECTED_FUNCTIONS = 230
 
 _ELEMENT = "a comprehension's element runs once per iteration"
 _ITERABLE = "a comprehension's iterable may read an earlier target"
+_MESSAGE = "an assert message is evaluated only on failure"
+_COMPARE = "a chained comparison short-circuits after the first pair"
 
-EXPECTED_RESIDUE = {_ELEMENT: 20, _ITERABLE: 16}
+EXPECTED_RESIDUE = {_ELEMENT: 20, _ITERABLE: 16, _MESSAGE: 1, _COMPARE: 4}
 """Sealed positions left holding a non-atom, by reason.
 
-Every one is a comprehension, which is the whole claim: the other three sealed
-positions -- a ternary arm, a short-circuited operand, a `while` condition --
-are emptied outright, and each is a miscompile recorded in
-``docs/todos/backend-cpp.md`` when a backend meets one.
+Only the three the pass has no lowering for.  The other three -- a ternary arm,
+a short-circuited operand, a `while` condition -- are emptied outright, and each
+is a miscompile recorded in ``docs/todos/backend-cpp.md`` when a backend meets
+one.
 """
 
-EXPECTED_RESIDUE_AFTER_COMP_TO_LOOP = {_ITERABLE: 3, _ELEMENT: 2}
+EXPECTED_RESIDUE_AFTER_COMP_TO_LOOP = {
+    _ITERABLE: 3, _ELEMENT: 2, _MESSAGE: 1, _COMPARE: 4,
+}
 """What is left once `CompToLoop` has run first, as a caller is told to.
 
-Only the comprehensions that pass declines: a dependent clause list, whose
-length is a sum rather than a product, so `fp.empty` has nowhere to get it.
+The comprehensions that pass declines -- a dependent clause list, whose length is
+a sum rather than a product, so `fp.empty` has nowhere to get it -- plus the
+positions nothing lowers at all.
 """
 
 EXPECTED_STATEMENTS = 831
 EXPECTED_GROWTH = 66
-"""Statements this pass adds over the whole corpus -- one per lowering, plus the
-second copy of each rotated condition.  The whole cost of being able to hoist
-anywhere."""
+"""Statements this pass adds over the whole corpus: each lowering's expansion,
+the second copy of each rotated condition, and the prefix rule's temporaries.
+The whole cost of being able to hoist anywhere."""
 
-EXPECTED_ATOMIZATION_GROWTH = 295
+EXPECTED_ATOMIZATION_GROWTH = 291
 """What `ANF` adds on top of hoistable form.  Context for
 :data:`EXPECTED_GROWTH`, pinned so the comparison cannot quietly stop holding."""
 
@@ -97,7 +102,7 @@ def test_the_pass_applies_to_the_whole_corpus():
     assert n == EXPECTED_FUNCTIONS
 
 
-def test_only_a_comprehension_is_left_unhoistable():
+def test_only_the_positions_with_no_lowering_are_left():
     _n, residue, _after, _sizes = _PROFILE
     assert residue == EXPECTED_RESIDUE
 
@@ -109,7 +114,7 @@ def test_comp_to_loop_first_leaves_only_what_it_declined():
 
 def test_the_pass_stays_weak():
     """Being able to hoist anywhere costs 66 statements; the atomization on top
-    of it costs four times that, and a rewrite needs only the first."""
+    of it costs several times that, and a rewrite needs only the first."""
     _n, _residue, _after, (before, grown, atomized) = _PROFILE
     assert before == EXPECTED_STATEMENTS
     assert grown - before == EXPECTED_GROWTH

@@ -1,9 +1,8 @@
 """Property tests for :class:`fpy2.transform.Hoistable` over generated programs.
 
 ``test_hoistable.py`` pins shapes on hand-written programs and
-``test_hoistable_profile.py`` measures the corpus; neither goes deep.  The cases
-where one lowering meets another -- a ternary inside a rotated condition, a chain
-inside a ternary arm -- are only reachable by generating them.
+``test_hoistable_profile.py`` measures the corpus; neither goes deep.  Generation
+reaches the nestings those two only sample.
 
 Four properties, all on the same draw:
 
@@ -18,8 +17,8 @@ Four properties, all on the same draw:
    exception it raises* -- the property that catches an ordering regression,
    where a lowering hoisted above a left operand runs the operands out of turn.
 
-``max_depth`` is 3--5, not lower: at depth 2 a ternary's arms are almost always
-leaves, so it is already in normal form and barely one draw in 150 lowers one.
+``max_depth`` is 3--5, not lower: at depth 2 a ternary's arms are usually
+leaves, so it is already in normal form and few draws lower one.
 
 Generation cannot reach a lowering inside a rotated condition -- the generator's
 loop template has a pure condition by construction -- so that composition is
@@ -62,7 +61,7 @@ def _run(ast, args):
     try:
         return repr(fp.Function(ast)(*args)), None
     except Exception as e:                       # noqa: BLE001
-        return None, type(e).__name__
+        return None, f'{type(e).__name__}: {e}'
 
 
 @settings(

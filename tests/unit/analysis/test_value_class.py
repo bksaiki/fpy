@@ -399,16 +399,9 @@ class TestALoweredChain:
     analysis runs.
 
     :class:`~fpy2.transform.Hoistable` rewrites it into a flat ladder of guarded
-    assignments, so the conjunction the refinement reads reaches it as a phi:
-
-    .. code-block:: python
-
-        t = not isnan(a)        # `not isnan(a) and not isnan(b)`
-        if t: t = not isnan(b)
-        if t: ...               # `t` here is a phi of the two
-
-    The fact is moved, not lost: `t` takes the incoming value where the guard
-    failed and the body's where it held, and the guard *is* the incoming value.
+    assignments, so the conjunction the refinement reads reaches it as a phi.
+    :meth:`~fpy2.analysis.value_class._ValueClassInstance._implied_ladder` is
+    where that is unpicked; these check it end to end.
     """
 
     def test_a_lowered_and_still_refines_both_operands(self):

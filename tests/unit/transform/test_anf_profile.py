@@ -28,8 +28,8 @@ EXPECTED_FUNCTIONS = 230
 """Corpus size.  An empty result only means something while this holds."""
 
 EXPECTED_RESIDUE = {
-    "a comprehension's iterable may read an earlier target": 18,
-    "a comprehension's element runs once per iteration": 8,
+    "a comprehension's iterable may read an earlier target": 16,
+    "a comprehension's element runs once per iteration": 6,
 }
 """Sealed positions left holding something that needs a place, by reason.
 

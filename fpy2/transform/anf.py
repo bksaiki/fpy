@@ -69,14 +69,11 @@ from ..ast.fpyast import (
     AnyOf,
     AssertStmt,
     Assign,
-    Attribute,
     BinaryOp,
-    Call,
     Cast,
     Compare,
     ContextStmt,
     EffectStmt,
-    Empty,
     Enumerate,
     Expr,
     ForeignVal,
@@ -88,15 +85,8 @@ from ..ast.fpyast import (
     IfStmt,
     IndexedAssign,
     ListComp,
-    ListExpr,
-    ListRef,
-    ListSlice,
-    Max,
-    Min,
-    NamedId,
     NaryOp,
     Not,
-    NullaryOp,
     Or,
     Pow,
     Range1,
@@ -110,13 +100,10 @@ from ..ast.fpyast import (
     StmtBlock,
     Sum,
     TernaryOp,
-    TupleExpr,
     UnaryOp,
     UnderscoreId,
-    ValueExpr,
     Var,
     WhileStmt,
-    Zip,
 )
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..number import REAL
@@ -216,14 +203,30 @@ def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
             super()._visit_naryop(e, ctx)
 
         def _visit_list_comp(self, e: ListComp, ctx):
+            # not descended into: the comprehension is why nothing inside it can
+            # be hoisted, so it is the one entry.  Descending reported a ternary
+            # in its element as a `_CANNOT_SLOT` refusal and refused a program
+            # this pass seals and normalizes correctly.
             check(e.elt, 'element')
             for iterable in e.iterables:
                 check(iterable, 'iterable')
-            super()._visit_list_comp(e, ctx)
 
         def _visit_while(self, stmt: WhileStmt, ctx):
             check(stmt.cond, 'condition')
             super()._visit_while(stmt, ctx)
+
+        def _visit_assert(self, stmt: AssertStmt, ctx):
+            # the test is strict, the message is not; not descended into, as
+            # with a comprehension
+            self._visit_expr(stmt.test, ctx)
+            if stmt.msg is not None:
+                check(stmt.msg, 'message')
+
+        def _visit_compare(self, e: Compare, ctx):
+            for arg in e.args[2:]:
+                check(arg, 'comparison')
+            for arg in e.args[:2]:
+                self._visit_expr(arg, ctx)
 
     _Residue()._visit_function(func, None)
     return out
@@ -334,6 +337,16 @@ class _ANFInstance(DefaultTransformVisitor):
         ]
         return type(e)(args, e.loc)
 
+    def _visit_compare(self, e: Compare, ctx: _Ctx):
+        """``a < b < c`` is the conjunction of the adjacent pairs, so every
+        operand after the second is sealed."""
+        sealed = ctx.sealed()
+        args = [
+            self._visit_expr(a, ctx if i < 2 else sealed)
+            for i, a in enumerate(e.args)
+        ]
+        return Compare(e.ops, args, e.loc)
+
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         # The element runs once per iteration, and a later clause's iterable may
         # read an earlier clause's target, so the whole comprehension is sealed.
@@ -418,8 +431,10 @@ class _ANFInstance(DefaultTransformVisitor):
         return ContextStmt(stmt.target, context, body, stmt.loc), ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
+        # the message is sealed: it is evaluated only where the test fails, and
+        # no slot runs then
         test = self._in_place(stmt.test, ctx)
-        msg = None if stmt.msg is None else self._in_place(stmt.msg, ctx)
+        msg = None if stmt.msg is None else self._in_place(stmt.msg, ctx.sealed())
         return AssertStmt(test, msg, stmt.loc), ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):

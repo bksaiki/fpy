@@ -13,8 +13,9 @@ often, and under exactly the same condition, as any expression in that
 statement, so it is always a legal place for a hoisted temporary.  A pass mints
 one on demand and never reasons about conditional evaluation again.
 
-**The non-strict positions.**  Four, and the list is closed -- every other
-expression position is a statement operand or an operand of a strict operator:
+**The non-strict positions.**  Being a statement operand does not imply
+strictness -- an ``assert``'s message is one and is evaluated only on failure --
+so the list is by enumeration:
 
 - an ``IfExpr`` arm, which becomes an ``IfStmt`` assigning one name;
 - an ``and``/``or`` tail, which becomes a flat chain of guarded statements;
@@ -23,7 +24,13 @@ expression position is a statement operand or an operand of a strict operator:
 - a comprehension's element and iterables, which
   :class:`~fpy2.transform.CompToLoop` turns into an allocation and a loop.
   That pass is a caller's job and must run *first*: it creates the loop body
-  that is the element's slot.
+  that is the element's slot;
+- an ``assert``'s message, which has no lowering at all;
+- a chained comparison's third operand and beyond: ``a < b < c`` is the
+  conjunction of the adjacent pairs, so ``c`` runs only where ``a < b`` held.
+
+The last two are left sealed and reported by :meth:`Hoistable.refusals`, so the
+invariant holds of everything that report is silent about.
 
 **Why the gates are syntactic.**  A ternary lowers when an arm is not an atom, a
 chain when an operand after the first is not one, and a loop rotates when its
@@ -62,6 +69,7 @@ from ..ast.fpyast import (
     And,
     AssertStmt,
     Assign,
+    Compare,
     ContextStmt,
     EffectStmt,
     Expr,
@@ -100,6 +108,8 @@ _SEALED_REASON = {
     'element': "a comprehension's element runs once per iteration",
     'iterable': "a comprehension's iterable may read an earlier target",
     'condition': 'a `while` condition is re-evaluated every iteration',
+    'message': 'an assert message is evaluated only on failure',
+    'comparison': 'a chained comparison short-circuits after the first pair',
 }
 
 def _reads(name: NamedId, exprs: 'list[Expr] | tuple[Expr, ...]') -> bool:
@@ -181,6 +191,10 @@ def _collect(node: 'Stmt | Expr', out: set[Expr]) -> None:
     if isinstance(node, ListComp):
         return
     kids = [sub for _field, _i, sub in sub_exprs(node)]
+    if isinstance(node, AssertStmt):
+        kids = kids[:1]        # the message is sealed; only the test is strict
+    elif isinstance(node, Compare):
+        kids = kids[:2]        # a chain short-circuits after the first pair
     if not isinstance(node, (IfExpr, And, Or)):
         lowering = [i for i, kid in enumerate(kids) if lowers_inside(kid)]
         if lowering:
@@ -229,6 +243,19 @@ def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
         def _visit_while(self, stmt: WhileStmt, ctx):
             check(stmt.cond, 'condition')
             super()._visit_while(stmt, ctx)
+
+        def _visit_assert(self, stmt: AssertStmt, ctx):
+            # the test is strict, the message is not; not descended into, as
+            # with a comprehension
+            self._visit_expr(stmt.test, ctx)
+            if stmt.msg is not None:
+                check(stmt.msg, 'message')
+
+        def _visit_compare(self, e: Compare, ctx):
+            for arg in e.args[2:]:
+                check(arg, 'comparison')
+            for arg in e.args[:2]:
+                self._visit_expr(arg, ctx)
 
     _Residue()._visit_function(func, None)
     return out
@@ -400,6 +427,16 @@ class _HoistableInstance(DefaultTransformVisitor):
         ctx.stmts.extend(stmts[:-1])
         return stmts[-1]
 
+    def _visit_compare(self, e: Compare, ctx: _Ctx):
+        """``a < b < c`` is the conjunction of the adjacent pairs, so every
+        operand after the second runs only where the earlier tests held."""
+        sealed = ctx.sealed()
+        args = [
+            self._visit_expr(a, ctx if i < 2 else sealed)
+            for i, a in enumerate(e.args)
+        ]
+        return Compare(e.ops, args, e.loc)
+
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         # The element runs once per iteration, and a later clause's iterable may
         # read an earlier clause's target, so the whole comprehension is sealed.
@@ -486,10 +523,10 @@ class _HoistableInstance(DefaultTransformVisitor):
     def _visit_context(self, stmt: ContextStmt, ctx: _Ctx):
         """A ``with`` statement, whose two halves round differently.
 
-        **E-Context** evaluates the context expression under ``REAL``, not the
-        active context, so anything hoisted out of it goes in a ``with fp.REAL:``
-        block of its own rather than the enclosing one.  FPy scopes the context
-        but not the store, so the names stay visible.
+        As in :meth:`fpy2.transform.anf._ANFInstance._visit_context`:
+        **E-Context** evaluates the context expression under ``REAL``, so
+        anything hoisted out of it goes in a ``with fp.REAL:`` block of its own
+        rather than the enclosing one.
         """
         under_real = ctx.buffer()
         context = self._visit_expr(stmt.ctx, under_real)
@@ -504,8 +541,11 @@ class _HoistableInstance(DefaultTransformVisitor):
         return ContextStmt(stmt.target, context, body, stmt.loc), ctx
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _Ctx):
+        # the message is evaluated only where the test fails, and there is no
+        # slot that runs then -- so it is sealed, like a comprehension
         test = self._visit_expr(stmt.test, ctx)
-        msg = None if stmt.msg is None else self._visit_expr(stmt.msg, ctx)
+        sealed = ctx.sealed()
+        msg = None if stmt.msg is None else self._visit_expr(stmt.msg, sealed)
         return AssertStmt(test, msg, stmt.loc), ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _Ctx):
@@ -526,8 +566,8 @@ class Hoistable:
         """Every sealed position of `func` still holding a non-atom.
 
         Empty is the invariant: a temporary may be hoisted out of anywhere in
-        `func`.  After this pass only a comprehension can appear, and only one
-        :class:`~fpy2.transform.CompToLoop` declined.
+        `func`.  Afterwards only the two positions with no lowering can appear --
+        a comprehension, and an ``assert`` message.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')

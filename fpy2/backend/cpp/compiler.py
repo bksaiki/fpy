@@ -373,9 +373,9 @@ class CppCompiler(Backend):
             raise CppCompileError(f'specialization failed: {e}') from e
 
         # Unconditionally: `ANF` requires hoistable form and raises without it.
-        # Before `RoundElim`, whose hoist is suppressed in exactly the positions
+        # Before `RoundElim`, whose hoist is suppressed in two of the positions
         # this gives a statement slot.  Every pass in between must preserve the
-        # form, which `ANF` checks.
+        # form -- `ANF` catches only the subset it would itself have to name.
         specialized = specialized.map(lambda _m, fd: Hoistable.apply(fd))
 
         if self._optimize:

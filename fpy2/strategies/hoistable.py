@@ -34,8 +34,9 @@ def to_hoistable(func: Function) -> Function:
     evaluation.
 
     **What it leaves.**  A comprehension, which nothing raises about;
-    :meth:`fpy2.transform.Hoistable.refusals` reports each one, and is empty
-    exactly when the whole function is hoistable.
+    An ``assert``'s message is the same -- evaluated only on failure, with no
+    slot that runs then.  :meth:`fpy2.transform.Hoistable.refusals` reports both,
+    and is empty exactly when the whole function is hoistable.
 
     One thing to know: a rotated condition exists in *two* places, so a later
     rewrite aimed at one copy must be aimed at the other too.
@@ -74,8 +75,8 @@ def to_hoistable(func: Function) -> Function:
                     t = fp.sqrt(y)
                 return t
 
-    The ternary is lowered because its second arm had nowhere to put a
-    statement; ``y``'s right-hand side is left exactly as written, where
+    The ternary is lowered because its second arm is not an atom; ``y``'s
+    right-hand side is left exactly as written, where
     :func:`fpy2.strategies.to_anf` would name both products.
     """
     if not isinstance(func, Function):

@@ -33,31 +33,18 @@ from fpy2.ast.fpyast import (
     Call,
     Compare,
     ContextStmt,
-    Empty,
-    Enumerate,
     Expr,
     ForeignVal,
-    Fst,
     FuncDef,
-    If1Stmt,
     IfExpr,
-    IfStmt,
     ListComp,
     ListExpr,
     ListRef,
-    ListSlice,
-    Not,
     NullaryOp,
     Or,
-    Range1,
-    Range2,
-    Range3,
-    Snd,
-    TupleExpr,
     ValueExpr,
     Var,
     WhileStmt,
-    Zip,
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL
@@ -481,6 +468,88 @@ class TestSealedPositions:
         assert after.cond.is_equiv(before.cond)
 
 
+# The precondition's predicate
+
+
+def _while_cond(f) -> Expr:
+    return _first(f.ast, WhileStmt).cond
+
+
+class TestNeedsSlot:
+    """What the predicate admits.  It decides the precondition: a sealed position
+    holding something `needs_slot` is what :meth:`ANF.apply` refuses."""
+
+    def test_arithmetic_and_comparison_are_slot_free(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while ((y * y) + 1.0) > 1.0:
+                    y = y - 1.0
+                return y
+
+        assert not needs_slot(_while_cond(f))
+
+    def test_a_bool_chain_is_slot_free(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while y > 0.0 and (y * y) > 1.0:
+                    y = y - 1.0
+                return y
+
+        assert not needs_slot(_while_cond(f))
+
+    def test_len_is_slot_free(self):
+        """A boundary case: `len` reads a size and allocates nothing."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                y = 0.0
+                while len(xs) > y:
+                    y = y + 1.0
+                return y
+
+        assert not needs_slot(_while_cond(f))
+
+    def test_a_fold_needs_a_slot(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while max([y, 0.0]) > 0.0:
+                    y = y - 1.0
+                return y
+
+        assert needs_slot(_while_cond(f))
+
+    def test_a_rounding_needs_a_slot(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while fp.round(y) > 0.0:
+                    y = y - 1.0
+                return y
+
+        assert needs_slot(_while_cond(f))
+
+    def test_a_subscript_needs_a_slot(self):
+        """Not in the slot-free whitelist, so it needs one by default."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                y = 0.0
+                while xs[0] > y:
+                    y = y + 1.0
+                return y
+
+        assert needs_slot(_while_cond(f))
+
+
 # ----------------------------------------------------------------------
 # 3. Semantics
 
@@ -548,6 +617,61 @@ class TestSemantics:
 
 # ----------------------------------------------------------------------
 # 4. The residue
+
+
+class TestSealedAssertMessage:
+    """A message runs only where the test fails, so naming anything inside it
+    would evaluate it on the passing path too."""
+
+    def test_nothing_is_hoisted_out_of_a_message(self):
+        @fp.fpy
+        def boom(x: fp.Real) -> fp.Real:
+            assert x > 0.0, 'boom'
+            return x
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            assert x > 0.0, boom(fp.round(x) - 1.0)
+            return x
+
+        out = ANF.apply(f.ast)
+        assert repr(f(1.0)) == repr(Function(out, runtime=f.runtime)(1.0))
+
+    def test_nothing_is_hoisted_out_of_a_chained_comparison(self):
+        """``a < b < c`` short-circuits, so `c` runs only where `a < b` held."""
+
+        @fp.fpy
+        def boom(x: fp.Real) -> fp.Real:
+            assert x > 0.0, 'boom'
+            return x
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            return a < b < boom(a - b)
+
+        out = ANF.apply(f.ast)
+        assert repr(f(2.0, 1.0)) == repr(Function(out, runtime=f.runtime)(2.0, 1.0))
+
+    def test_a_ternary_inside_a_comprehension_is_not_refused(self):
+        """The comprehension seals it, so this pass never tries to name the arm
+        and must not refuse the program for holding one."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real], c: bool) -> list[fp.Real]:
+            with fp.FP64:
+                return [(fp.round(y) if c else 0.0) for y in xs]
+
+        why = [reason for _e, reason in ANF.refusals(ANF.apply(f.ast))]
+        assert why == ["a comprehension's element runs once per iteration"]
+
+    def test_a_compound_message_is_reported(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            assert x > 0.0, fp.round(x)
+            return x
+
+        why = [reason for _e, reason in ANF.refusals(ANF.apply(f.ast))]
+        assert why == ['an assert message is evaluated only on failure']
 
 
 class TestRefusals:

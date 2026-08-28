@@ -186,12 +186,15 @@ class TestForceNames:
             return xs
         assert _forced(_stmt(f)) == set()
 
-    def test_an_assertion_test_runs_before_its_message(self):
+    def test_an_assert_message_is_sealed(self):
+        """A message runs only where the test fails, so nothing is hoisted out
+        of it and the test it follows needs no name to keep its place."""
+
         @fp.fpy
         def f(x: fp.Real, c: bool) -> fp.Real:
             assert fp.sqrt(x) > 0.0, (fp.sqrt(x) if c else 0.0)
             return x
-        assert _forced(_stmt(f)) == {'fp.sqrt(x) > 0'}
+        assert _forced(_stmt(f)) == set()
 
     def test_a_lowering_in_a_ternary_arm_forces_nothing_outside_it(self):
         """The arm becomes a block of its own, so a lowering inside it lands

@@ -20,7 +20,7 @@ tests assert three kinds of properties:
 import fpy2 as fp
 
 from fpy2.ast.fpyast import (
-    Abs, Add, Assign, BinaryOp, Cast, ContextStmt, ForeignVal, Mul, Neg, Round,
+    Abs, Add, BinaryOp, Cast, ContextStmt, ForeignVal, Mul, Neg, Round,
     Sub, UnaryOp,
 )
 from fpy2.ast.visitor import DefaultVisitor
@@ -420,11 +420,10 @@ class TestVarSkip:
 class TestPreservesHoistableForm:
     """The contract the cpp pipeline relies on.
 
-    `Hoistable` runs before this pass and `ANF` after it, and `ANF` raises on a
-    program that is no longer in hoistable form -- so a rewrite here that
+    `Hoistable` runs before this pass and `ANF` after it, so a rewrite here that
     introduced a ternary, an ``and``/``or`` or a compound ``while`` condition
-    would break the compile.  Nothing does, and these say so rather than leaving
-    it an observed fact.
+    would leave the emitter a position it cannot slot.  `ANF` catches only part
+    of that, so these check the form directly.
     """
 
     @staticmethod
@@ -439,8 +438,8 @@ class TestPreservesHoistableForm:
                 return (1.0 + 2.0) if c else fp.round(x)
 
         out = self._through(f)
-        assert Hoistable.refusals(out) == []
-        ANF.apply(out)                      # the real check: it does not raise
+        assert Hoistable.refusals(out) == []     # the real check
+        ANF.apply(out)                           # and its weaker consequence
 
     def test_the_form_survives_a_chain_and_a_loop(self):
         @fp.fpy

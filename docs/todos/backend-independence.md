@@ -83,11 +83,12 @@ What it settled:
   code such as `n = len(xs); fp.empty(n)`, so the walk is an improvement
   independent of the pass. Its result belongs to the *assignment*: read it, but
   do not re-emit it or compare it structurally against a node from elsewhere.
-- **Lower where it pays.** A ternary lowers whenever an arm is not an atom — an
-  `IfStmt` restructures for free and buys reach no other pass provides. A bool
-  chain lowers only where an operand needs a place: lowering a pure one loses the
-  `And` that `ValueClassInfer` reads to drop a runtime guard. A `while` rotation
-  duplicates its condition, so it is gated too.
+- **Lower on a syntactic gate.** Every lowering fires when an operand is not an
+  atom — never on `needs_slot`, which predicts what an emitter wants rather than
+  describing the program, and would leave `Hoistable` unable to state its own
+  postcondition. Lowering a *pure* chain costs the `And` that
+  `ValueClassInfer._implied` read to drop a runtime guard; the fix was to teach
+  it the lowered ladder, not to weaken the gate.
 - **Scalars only, by type.** A name holding a list is a second *place*, which
   decides whether a list keeps its shared handle. Chains are named at their
   outermost scalar, so no aggregate name is created. Widening this to aggregates
