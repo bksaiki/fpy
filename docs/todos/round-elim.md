@@ -32,6 +32,13 @@ reference loop-scoped variables or are conditionally evaluated,
 neither of which is sound for unconditional statement-level
 preambles.
 
+The `IfExpr` half of that is unreachable on the cpp path:
+`fpy2.transform.Hoistable` runs before this pass in `specialize()` and has
+already made an `IfStmt` of every ternary whose arms are not atoms, so the arms
+arrive as branches with statement slots of their own and the hoist fires in
+them.  A schedule gets the same by running `fpy2.strategies.to_hoistable` first.
+The suppression stays for the programs that reach this pass without it.
+
 The unconditional-bind scheme intentionally produces redundant
 copies (`_t = literal`, per-op REAL blocks for nested
 eliminations).  Idempotence falls out: a second RoundElim pass

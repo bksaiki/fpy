@@ -575,10 +575,11 @@ class TestPortedChain:
 
     def test_a_pure_chain_is_lowered_too(self):
         """The gate that changed.  `ANF` left a chain of pure comparisons alone,
-        because `ValueClassInfer._implied` matches the `And` to drop a runtime
-        check.  A total guarantee cannot make that exception: an operand after
-        the first has nowhere to put a statement whether or not it wants one
-        today.  See consequence 1 in ``docs/todos/hoistable-form.md``.
+        so that `ValueClassInfer._implied` could match the `And` and drop a
+        runtime check.  A total guarantee cannot make that exception: an operand
+        after the first has nowhere to put a statement whether or not it wants
+        one today.  The check is still dropped -- `_implied` reads the lowered
+        ladder now, see `test_value_class.py::TestALoweredChain`.
         """
 
         @fp.fpy

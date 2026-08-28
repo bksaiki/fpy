@@ -47,7 +47,8 @@ is on an *aggregate* operand, so the deletions wait on naming aggregates.
 ## 1. Statement form — done
 
 `fpy2/transform/anf.py`, exposed as `fpy2.strategies.to_anf`, run unconditionally
-as the last step of `CppCompiler.specialize()`.
+as the last step of `CppCompiler.specialize()`, over a program
+`fpy2/transform/hoistable.py` has already put in *hoistable form*.
 
 The pass takes no target fact. It does not predict where C++ will want a
 temporary; it makes the situation unreachable, because every operand the emitter
@@ -57,10 +58,16 @@ removes the zip rather than knowing how a backend materializes one.
 A temporary goes in a statement slot executed *exactly as often, and under
 exactly the same condition, as the expression it names* — not the nearest
 enclosing statement, which is wrong for a `while` condition and a ternary arm.
-Positions failing that test are sealed; two get a lowering that *creates* the
-slot (rotation for `while`, `IfStmt` for a ternary), and `ANF.refusals` reports
-the rest. Over the 230-function corpus the residue is entirely comprehensions,
-with zero in the three positions the emitter cannot slot.
+Positions failing that test are sealed. Creating the slot is a second, weaker
+normalization — `Hoistable`, run just before `RoundElim` — which rotates a
+`while`, makes an `IfStmt` of a ternary and a guarded ladder of an `and`/`or`
+tail. ANF does not do this itself: it *requires* it, and raises where a sealed
+position holds something `needs_slot`, so a program that cannot be normalized
+says so instead of looking normalized. Splitting the two matters because a
+rewrite wanting a statement slot needs only the first: over the 230-function
+corpus hoistable form costs 66 statements where the atomization on top costs a
+further 295. `ANF.refusals` reports what is left, entirely comprehensions, with
+zero in the three positions the emitter cannot slot.
 
 What it settled:
 

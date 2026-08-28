@@ -47,8 +47,9 @@ scalar and the aggregate spine stays inline:
 
 Idempotent: a second pass finds only atoms in the positions it names.
 
-The design notes are in ``docs/todos/backend-independence.md``, and the
-precondition in ``docs/todos/hoistable-form.md``.
+The design notes are in ``docs/todos/backend-independence.md``; the precondition
+is :class:`~fpy2.transform.Hoistable`, whose module docstring says what it
+guarantees and why.
 """
 
 import dataclasses

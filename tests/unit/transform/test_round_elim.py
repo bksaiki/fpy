@@ -25,7 +25,7 @@ from fpy2.ast.fpyast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL
-from fpy2.transform import Monomorphize, RoundElim
+from fpy2.transform import ANF, Hoistable, Monomorphize, RoundElim
 from fpy2.types import RealType
 
 
@@ -415,6 +415,56 @@ class TestVarSkip:
 
 # ----------------------------------------------------------------------
 # Idempotence + post-transform SyntaxCheck
+
+
+class TestPreservesHoistableForm:
+    """The contract the cpp pipeline relies on.
+
+    `Hoistable` runs before this pass and `ANF` after it, and `ANF` raises on a
+    program that is no longer in hoistable form -- so a rewrite here that
+    introduced a ternary, an ``and``/``or`` or a compound ``while`` condition
+    would break the compile.  Nothing does, and these say so rather than leaving
+    it an observed fact.
+    """
+
+    @staticmethod
+    def _through(func):
+        """The pipeline's order: hoistable form in, this pass, then check."""
+        return RoundElim.apply(Hoistable.apply(func.ast))
+
+    def test_the_form_survives_a_ternary_arm(self):
+        @fp.fpy
+        def f(x: fp.Real, c: bool) -> fp.Real:
+            with fp.FP64:
+                return (1.0 + 2.0) if c else fp.round(x)
+
+        out = self._through(f)
+        assert Hoistable.refusals(out) == []
+        ANF.apply(out)                      # the real check: it does not raise
+
+    def test_the_form_survives_a_chain_and_a_loop(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.FP64:
+                while x < y and fp.round(y) > 0.0:
+                    x = x + (1.0 + 2.0)
+                return x
+
+        out = self._through(f)
+        assert Hoistable.refusals(out) == []
+        ANF.apply(out)
+
+    def test_it_reaches_a_ternary_arm_it_would_have_suppressed(self):
+        """Not just preserved -- *gained*.  The hoist is suppressed inside an
+        ``IfExpr`` branch, and after `Hoistable` there is no ``IfExpr`` left for
+        it to be suppressed in."""
+        @fp.fpy
+        def f(c: bool) -> fp.Real:
+            with fp.FP64:
+                return (1.0 + 2.0) if c else (3.0 + 4.0)
+
+        assert _count_real_blocks(RoundElim.apply(f.ast)) == 0
+        assert _count_real_blocks(self._through(f)) == 2
 
 
 class TestProperties:

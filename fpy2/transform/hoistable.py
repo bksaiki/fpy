@@ -31,6 +31,23 @@ subexpression to a name -- which the cpp emitter needs and a rewrite does not.
 Over ``examples/`` ANF names up to 5096 subexpressions where only 71 positions
 need a lowering.  This pass does the lowering half and leaves ``anf.py`` alone.
 
+**Why the gates are syntactic.**  A ternary lowers when an arm is not an atom, a
+chain when an operand after the first is not one, and a loop rotates when its
+condition is not one.  Deliberately *not*
+:func:`~fpy2.transform.anf.needs_slot`, which ``ANF`` used for two of the three:
+that is not a property of the program at all but a whitelist predicting what an
+emitter will want a statement for, and a normalization takes no target fact (§1
+of ``docs/todos/backend-independence.md``).  Gated on it, this pass would leave
+``while x*y > 0`` un-rotated -- so its own output would not be in hoistable form,
+and :meth:`Hoistable.refusals` would report a position the pass itself declined
+to fix.  A gate that cannot state its own postcondition is not a normal form.
+
+The syntactic gate costs more than ANF's did, and both costs are paid for: a
+rotated loop compiles to the same machine code at ``-O2``
+(``tests/unit/backend/cpp/test_emit_while.py``), and a lowered ``and``/``or`` is
+read by :class:`~fpy2.analysis.ValueClassInfer` exactly as the ``And`` was
+(``tests/unit/analysis/test_value_class.py::TestALoweredChain``).
+
 **The ordering hazard.**  Lowering alone is *not* semantics-preserving.  Hoisting
 a lowered construct out of an operand moves it above the operands to its left,
 which are then evaluated later than they were:
@@ -47,7 +64,8 @@ ANF avoids this only because atomization names ``g(a)`` too, left to right.  So
 this pass keeps *part* of the naming, and only that part: see
 :func:`force_names`.
 
-The design notes are in ``docs/todos/hoistable-form.md``.
+Where this sits in the cpp pipeline, and why, is §1 of
+``docs/todos/backend-independence.md``.
 """
 
 import dataclasses
