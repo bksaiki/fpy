@@ -1,9 +1,9 @@
 Core Semantics
 ======================
 
-This page documents the semantics of FPy. To stay tractable, it covers only
-the *core* of the language. The :doc:`derived semantics <derived-semantics>`
-page covers the full language.
+This page documents the semantics of FPy for a *core* subset of the language.
+The :doc:`derived semantics <derived-semantics>` page covers semantics for
+the full language.
 
 It describes how FPy programs *evaluate*, and in particular how the *rounding
 context* governs every arithmetic operation.
@@ -23,18 +23,6 @@ In the formal syntax, :math:`n` ranges over the reals together with
 :math:`\pm\infty` and NaN, :math:`x` over a countable set of identifiers
 :math:`\mathit{Var}`, and :math:`f` over a separate set of function names
 :math:`\mathit{FuncName}`.
-
-Operators :math:`\mathit{op}` fall into one of two sets. An
-:math:`\mathit{op} \in \mathit{Arith}` takes numbers to a number, rounded under
-:math:`C` (**E-Arith**); an :math:`\mathit{op} \in \mathit{Exact}` takes values
-to a value, with :math:`C` playing no part (**E-Exact**). Neither set is fixed,
-so a new operator needs no new rule.
-
-There are two forms of context constant. :math:`\R` is the *real rounding
-context*, whose rounding operation is the identity.
-:math:`\mathsf{ctx}\ \{ \ldots \}` is a schema standing for every other context,
-its :math:`\{ \ldots \}` the parameters that fix a rounding operation; distinct
-parameters give distinct constants, so a program may use several at once.
 
 .. math::
 
@@ -90,13 +78,25 @@ parameters give distinct constants, so a program may use several at once.
        & \mathit{Exact} \text{ operators}
    \end{array}
 
+There are two rounding context literals.
+:math:`\R` is the *real rounding context*, whose rounding operation is the
+identity. :math:`\mathsf{ctx}\ \{ \ldots \}` is a schema standing for every
+other context, where the :math:`\{ \ldots \}` are the parameters that fix a
+rounding operation. Distinct parameters give distinct constants, so a program
+may use several at once.
+
 An assignment's left-hand side is a *pattern* :math:`p`—a variable or a
 tuple of (possibly nested) patterns. A tuple pattern deconstructs a tuple
 position by position, the only way to take a tuple apart.
 
+Operators :math:`\mathit{op}` fall into one of two sets, according to what the
+rounding context does to the result. An :math:`\mathit{op} \in \mathit{Arith}`
+returns a number that is then rounded under a rounding context :math:`C`
+(**E-Arith**); an :math:`\mathit{op} \in \mathit{Exact}` returns its result
+without rounding (**E-Exact**).
 Operators are written in prefix form even where FPy spells them infix, so
 :math:`x < y` is :math:`\mathit{op}(x, y)`. The
-:doc:`derived semantics <derived-semantics>` gives FPy's members of each set.
+:doc:`derived semantics <derived-semantics>` page enumerates FPy's operators.
 
 Values
 ------
@@ -201,11 +201,9 @@ from the heap; allocating the cell is a statement, since it writes one (see
         {\langle \sigma, \mu, C, \mathsf{!}\, e \rangle \Downarrow \mu(\ell)}
    \tag{E-Deref}
 
-An :math:`\mathit{Arith}` operator is where rounding happens. Its operands
-evaluate to numbers, and the rounding context :math:`C` rounds the exact result
-of applying it. The brackets
+An :math:`\mathit{Arith}` operator is where rounding happens. The brackets
 :math:`\exact{\cdot}` mark a value computed exactly, with no intermediate
-rounding, so :math:`\exact{\mathit{op}(n_1, \ldots, n_k)}` is the true result
+rounding, so :math:`\exact{\mathit{op}(v_1, \ldots, v_k)}` is the true result
 and :math:`C` rounds it once. Under :math:`\R`, rounding is the identity, so the
 exact result is returned unchanged.
 
@@ -213,10 +211,10 @@ exact result is returned unchanged.
 
    \frac{\mathit{op} \in \mathit{Arith}
          \quad
-         \langle \sigma, \mu, C, e_i \rangle \Downarrow n_i
+         \langle \sigma, \mu, C, e_i \rangle \Downarrow v_i
          \quad (1 \le i \le k)}
         {\langle \sigma, \mu, C, \mathit{op}(e_1, \ldots, e_k) \rangle
-         \Downarrow C(\exact{\mathit{op}(n_1, \ldots, n_k)})}
+         \Downarrow C(\exact{\mathit{op}(v_1, \ldots, v_k)})}
    \tag{E-Arith}
 
 An :math:`\mathit{Exact}` operator applies to its operands as they are; nothing
@@ -260,12 +258,6 @@ Assignment, allocation, update, application, skip, and a passing assertion
 complete normally; :math:`\mathsf{ret}` returns. Sequencing, conditionals, loops,
 and the context statement pass along the outcome of the sub-statement they run,
 so a :math:`\mathsf{return}` propagates out to the enclosing function.
-
-Only statements write the heap, and only allocation and update do. A rule with
-two statement premises threads it from the first into the second. The heap is the
-only thing that mutates, and its domain only grows: :math:`\sigma` changes only by
-binding, while :math:`\mu` is global, shared by caller and callee, and never
-deallocates.
 
 Matching uses an auxiliary judgement :math:`p \triangleright v \Rightarrow \theta`,
 read "pattern :math:`p` against value :math:`v` yields bindings :math:`\theta`".
@@ -494,4 +486,4 @@ initial state:
    \langle [\, y \mapsto v \,], \emptyset, \R, s \rangle
    \Downarrow_S \mathsf{return}\ v' \,;\, \mu'
 
-The program's result is :math:`v'`; the final heap :math:`\mu'` is discarded.
+The program's result is :math:`v'`.
