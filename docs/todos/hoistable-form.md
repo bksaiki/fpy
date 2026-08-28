@@ -117,20 +117,33 @@ rare — that is what keeps the pass weak.
 ## Checklist
 
 - [x] 1. This document.
-- [ ] 2. The two analyses — `lowers`, `_lowers_inside`, `force_names` — as pure
+- [x] 2. The analyses — `lowers`, `lowers_inside`, `force_names` — as pure
       functions, with tests on the sets they compute.
-- [ ] 3. The transform: `_HoistableInstance`, `Hoistable.apply`,
+- [x] 3. The transform: `_HoistableInstance`, `Hoistable.apply`,
       `Hoistable.refusals`, exported from `fpy2/transform/__init__.py`.
-- [ ] 4. Property tests over `ANF_PROFILE` draws (the interpreter must agree
+- [x] 4. Property tests over `ANF_PROFILE` draws (the interpreter must agree
       *including on which exception it raises* — that is what catches an ordering
-      regression) and a corpus profile pinning how few names the pass introduces.
-- [ ] 5. The scheduling operator `fpy2.strategies.to_hoistable`.
+      regression) and a corpus profile pinning how little the pass does.
+- [x] 5. The scheduling operator `fpy2.strategies.to_hoistable`.
+
+## What it cost, measured
+
+Over the 230-function corpus, both passes establishing the same invariant:
+
+| | statements added | residue |
+|---|---|---|
+| `Hoistable` | +66 | 36, every one a comprehension |
+| `ANF` | +324 | — |
+
+`CompToLoop` then `Hoistable` leaves 5, all comprehensions that pass declines.
+`test_hoistable_profile.py` pins each of these; the growth figure is the only
+test that can see the pass becoming less weak.
 
 ### Follow-up
 
 **Unify the lowerings with `anf.py`.** The two passes now hold separate copies of
-the ternary, chain and rotation rewrites; only `needs_slot` and `_ATOMIC` are
-shared by import. A lowering bug has to be fixed twice. Once both passes are
+the ternary, chain and rotation rewrites; only `_ATOMIC`, `_SEALED_REASON` and
+`_reads` are shared by import. A lowering bug has to be fixed twice. Once both passes are
 settled, `ANF` should be `Hoistable` plus atomization — one implementation of the
 lowerings, with the naming predicate and the rotation gate as the only
 differences.
