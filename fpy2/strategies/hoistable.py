@@ -27,23 +27,18 @@ def to_hoistable(func: Function) -> Function:
     and must run *first*: the loop body it generates is the slot a
     comprehension's element lacked.
 
-    **Weaker than** :func:`fpy2.strategies.to_anf`, which establishes the same
-    property by *also* binding every nameable subexpression to a name -- what a
-    backend needs and a rewrite does not.  Over the example corpus ANF adds five
-    times the statements for the same reach.  This pass names an expression only
-    where a lowering to its right would otherwise be hoisted above it and change
-    the order of evaluation.
+    **Weaker than** :func:`fpy2.strategies.to_anf`, which requires this and
+    additionally binds every nameable subexpression to a name -- what a backend
+    needs and a rewrite does not.  This names an expression only where a lowering
+    to its right would otherwise be hoisted above it and change the order of
+    evaluation.
 
     **What it leaves.**  A comprehension, which nothing raises about;
     :meth:`fpy2.transform.Hoistable.refusals` reports each one, and is empty
     exactly when the whole function is hoistable.
 
-    Two consequences to know about.  An ``and``/``or`` that lowers is no longer
-    an ``and``/``or``, so a guard that :class:`~fpy2.analysis.ValueClassInfer`
-    would have read to drop a runtime check is gone -- prefer
-    :func:`fpy2.strategies.to_anf` on a path that ends in a backend.  And a
-    rotated condition exists in *two* places, so a later rewrite aimed at one
-    copy must be aimed at the other too.
+    One thing to know: a rotated condition exists in *two* places, so a later
+    rewrite aimed at one copy must be aimed at the other too.
 
     Cursors do not forward across this pass.
 

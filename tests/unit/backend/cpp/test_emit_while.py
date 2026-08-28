@@ -3,11 +3,10 @@ Phase 3d tests for the cpp emitter — ``while`` loops.
 
 Every loop reaches the emitter *rotated*: `Hoistable` runs in
 `CppCompiler.specialize()` and evaluates a non-atomic condition through a name,
-once before the loop and once at the end of the body.  So the shape pinned here
-is `bool c = cond; while (c) { body; c = cond; }` rather than `while (cond)`.
-That is FPy's own evaluation order made explicit, and it costs nothing: the two
-forms compile to identical machine code at ``-O2``, since loop rotation is a
-transformation the C++ compiler performs itself.
+once before the loop and once at the end of the body, so the shape pinned here is
+`bool c = cond; while (c) { body; c = cond; }`.  That is FPy's own evaluation
+order made explicit, and it costs nothing: the two forms compile to identical
+machine code at ``-O2``.
 """
 
 import fpy2 as fp

@@ -3,17 +3,14 @@
 Two directions no correctness test can see:
 
 **Too little.**  The pass never raises: a position it cannot give a statement
-slot is left as it is, and `refusals` reports it.  So a regression that stopped
+slot is left as it is, and `refusals` reports it, so a regression that stopped
 lowering something would still be a correct program -- just no longer hoistable.
 :data:`EXPECTED_RESIDUE` is that direction.
 
-**Too much.**  The pass is the *weak* half of normalizing a program:
-:class:`~fpy2.transform.ANF` is the strong half, and requires this one to have
-run.  A regression that started atomizing here would pass every other test in
-this directory.  :data:`EXPECTED_GROWTH` is that direction -- and set beside
-:data:`EXPECTED_ATOMIZATION_GROWTH`, it is the number that says splitting the two
-was worth it: a rewrite that needs a statement slot pays the first and not the
-second.
+**Too much.**  A regression that started atomizing would pass every other test in
+this directory.  :data:`EXPECTED_GROWTH` is that direction, and set beside
+:data:`EXPECTED_ATOMIZATION_GROWTH` it says what splitting the two passes buys: a
+rewrite that needs a statement slot pays the first and not the second.
 """
 
 import importlib
@@ -48,20 +45,12 @@ length is a sum rather than a product, so `fp.empty` has nowhere to get it.
 EXPECTED_STATEMENTS = 831
 EXPECTED_GROWTH = 66
 """Statements this pass adds over the whole corpus -- one per lowering, plus the
-second copy of each rotated condition.
-
-The whole cost of being able to hoist anywhere.  Compare
-:data:`EXPECTED_ATOMIZATION_GROWTH`, which is what `ANF` adds *on top* for its
-much stronger invariant.  There is no measuring `ANF` alone any more: it requires
-hoistable form and raises without it, which is the point of the split.
-"""
+second copy of each rotated condition.  The whole cost of being able to hoist
+anywhere."""
 
 EXPECTED_ATOMIZATION_GROWTH = 295
-"""What `ANF` adds on top of hoistable form.
-
-Context for :data:`EXPECTED_GROWTH`, not a claim about `ANF`.  Pinned so the
-comparison cannot quietly stop holding.
-"""
+"""What `ANF` adds on top of hoistable form.  Context for
+:data:`EXPECTED_GROWTH`, pinned so the comparison cannot quietly stop holding."""
 
 
 def _corpus():
@@ -98,7 +87,7 @@ def _profile():
 
 
 _PROFILE = _profile()
-"""Measured once: the corpus is 230 functions and four passes over each."""
+"""Measured once: 230 functions, four passes over each."""
 
 
 def test_the_pass_applies_to_the_whole_corpus():
@@ -119,9 +108,8 @@ def test_comp_to_loop_first_leaves_only_what_it_declined():
 
 
 def test_the_pass_stays_weak():
-    """The load-bearing measurement.  Being able to hoist anywhere costs 66
-    statements; the atomization stacked on top of it costs four times that, and a
-    rewrite needs only the first."""
+    """Being able to hoist anywhere costs 66 statements; the atomization on top
+    of it costs four times that, and a rewrite needs only the first."""
     _n, _residue, _after, (before, grown, atomized) = _PROFILE
     assert before == EXPECTED_STATEMENTS
     assert grown - before == EXPECTED_GROWTH

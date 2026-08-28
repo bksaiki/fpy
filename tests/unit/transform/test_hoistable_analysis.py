@@ -6,8 +6,7 @@ Unit tests for the two analyses behind :mod:`fpy2.transform.hoistable`.
 statement; :func:`~fpy2.transform.hoistable.force_names` is the *prefix rule*,
 which says what must be named so a lowering does not overtake the operands to
 its left.  The rule is the subtle part of the pass -- getting it wrong changes
-which exception a program raises -- so it is tested here on its own, ahead of
-any rewriting.
+which exception a program raises -- so it is tested here on its own.
 """
 
 import fpy2 as fp
@@ -139,8 +138,8 @@ class TestLowersInside:
 
 class TestForceNames:
     def test_a_left_operand_is_named(self):
-        """The regression the rule exists for: the ternary hoists above the
-        statement, so `fp.sqrt(a)` must be named to keep its place."""
+        """The ternary hoists above the statement, so `fp.sqrt(a)` must be named
+        to keep its place."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: bool) -> fp.Real:
             return fp.sqrt(a) + (fp.sqrt(b) if c else 0.0)
@@ -203,8 +202,7 @@ class TestForceNames:
         assert _forced(_stmt(f)) == {'fp.sqrt(a)'}
 
     def test_a_lowered_ternary_never_names_its_own_arm(self):
-        """Naming an arm would evaluate it unconditionally -- the bug the whole
-        rule exists to prevent."""
+        """Naming an arm would evaluate it unconditionally."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: bool, d: bool) -> fp.Real:
             return fp.sqrt(a) if c else (fp.sqrt(b) if d else 0.0)
@@ -223,7 +221,7 @@ class TestForceNames:
         assert _forced(_stmt(f)) == set()
 
     def test_a_program_with_no_lowering_forces_no_name(self):
-        """What keeps the pass weak: ANF would name both products here."""
+        """ANF would name both products here."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: fp.Real, d: fp.Real) -> fp.Real:
             return (a * b) + (c * d)

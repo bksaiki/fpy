@@ -399,8 +399,8 @@ class _ValueClassInstance(DefaultVisitor):
         """What a *lowered* ``and``/``or`` being *truth* says.
 
         :class:`~fpy2.transform.Hoistable` rewrites a chain whose tail needs a
-        statement into a flat ladder of guarded assignments, so the ``And`` the
-        cases above read is no longer in the AST by the time this runs:
+        statement into a flat ladder of guarded assignments, which the ``And``
+        case above cannot match:
 
         .. code-block:: python
 
@@ -408,9 +408,9 @@ class _ValueClassInstance(DefaultVisitor):
             if t: t = not isnan(b)
             if t: ...               # `t` here is a phi of the two
 
-        The conjunction is not lost, only moved.  ``t`` takes the incoming value
-        where the guard failed and the body's where it held, and the guard *is*
-        the incoming value -- so ``t`` true forces the guard true, hence both
+        The conjunction is only moved.  ``t`` takes the incoming value where the
+        guard failed and the body's where it held, and the guard *is* the
+        incoming value -- so ``t`` true forces the guard true, hence both
         operands true.  Dually for an ``or``, which guards on the negation and
         says something only when the whole is false.
 

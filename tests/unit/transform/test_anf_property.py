@@ -11,10 +11,10 @@ Four properties, all on the same draw:
    asserts the output is a well-formed program.
 2. **No dangerous refusal.**  A ternary arm, a short-circuited operand and a
    ``while`` condition are the three positions the cpp emitter hoists out of
-   (three miscompiles in ``docs/todos/backend-cpp.md``).  ``ANF`` no longer
-   empties them -- :class:`~fpy2.transform.Hoistable` does, and ``ANF`` raises
-   without it -- so the draw goes through that pass first and this asserts the
-   pairing holds however deeply the lowerings nested.
+   (three miscompiles in ``docs/todos/backend-cpp.md``).
+   :class:`~fpy2.transform.Hoistable` empties them and ``ANF`` raises without
+   it, so the draw goes through that pass first and this asserts the pairing
+   holds however deeply the lowerings nested.
 3. **Idempotence.**  A second application changes nothing.
 4. **Semantics.**  The interpreter agrees before and after, including on which
    exception it raises -- an eagerly evaluated ternary arm or short-circuited

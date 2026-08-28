@@ -399,8 +399,7 @@ class TestALoweredChain:
     analysis runs.
 
     :class:`~fpy2.transform.Hoistable` rewrites it into a flat ladder of guarded
-    assignments -- and the cpp pipeline runs that pass -- so the conjunction the
-    refinement reads reaches it as a phi:
+    assignments, so the conjunction the refinement reads reaches it as a phi:
 
     .. code-block:: python
 
@@ -465,11 +464,9 @@ class TestALoweredChain:
         assert not NAN & _cls(f, 'abs(b)')
 
     def test_an_unrelated_guard_refines_nothing(self):
-        """The soundness edge.  ``if p: t = q`` is the same *shape* but says
-        nothing about ``t``: reaching the guard with ``t`` true only means the
-        guard held or ``q`` did, and here the guard tests something else
-        entirely.  A matcher that skipped this check would drop a NaN test that
-        is load-bearing."""
+        """``if p: t = q`` is the same *shape* but says nothing about ``t``:
+        reaching the guard with ``t`` true only means the guard held or ``q``
+        did, and here the guard tests something else entirely."""
 
         @fp.fpy(ctx=fp.REAL)
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
@@ -486,7 +483,7 @@ class TestALoweredChain:
 
     def test_a_loop_phi_is_not_a_ladder(self):
         """A rotated `while` binds its condition to a name too, and its phi has
-        the same two operands -- but the value carried round a loop says nothing
+        the same two operands -- but a value carried round a loop says nothing
         about the arm below it."""
 
         @fp.fpy(ctx=fp.REAL)

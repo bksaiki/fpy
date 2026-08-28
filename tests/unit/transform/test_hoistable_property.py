@@ -15,21 +15,14 @@ Four properties, all on the same draw:
    :data:`~tests.unit.generators.profiles.ANF_PROFILE` draws no comprehension.
 3. **Idempotence.**  A second application changes nothing.
 4. **Semantics.**  The interpreter agrees before and after, *including on which
-   exception it raises*.  This is the property that catches an ordering
-   regression: a lowering hoisted above a left operand runs the operands out of
-   turn, and the two raise from different places.
+   exception it raises* -- the property that catches an ordering regression,
+   where a lowering hoisted above a left operand runs the operands out of turn.
 
-**What the draws reach.**  ``max_depth`` is 3--5 rather than
-``test_anf_property.py``'s 2--4: at depth 2 a ternary's arms are almost always
-leaves, so it is already in normal form and only one draw in 150 lowers one.  At
-3--5 a 150-example run reaches ~120 lowerings, a third of them ternaries, with
-~16 nesting one lowering inside another's arm.
+``max_depth`` is 3--5, not lower: at depth 2 a ternary's arms are almost always
+leaves, so it is already in normal form and barely one draw in 150 lowers one.
 
-Rotation is reached too, which ``test_anf_property.py`` says it does not: the
-generator's loop template ``c = 0; while c < N`` has a *pure* condition, which
-ANF declines to rotate, but ``c < N`` is not an atom and that is this pass's
-gate.  What generation *cannot* reach is a lowering inside a rotated condition,
-since that template's condition is pure by construction; the composition is
+Generation cannot reach a lowering inside a rotated condition -- the generator's
+loop template has a pure condition by construction -- so that composition is
 covered by hand in ``test_hoistable.py::TestRotation``.
 """
 

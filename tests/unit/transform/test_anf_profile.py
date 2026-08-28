@@ -10,13 +10,12 @@ today, and a change that flattens more without anyone deciding to.
 The load-bearing assertion is :data:`EXPECTED_DANGEROUS`.  A ternary arm, a
 short-circuited operand and a ``while`` condition are the three positions the cpp
 emitter cannot slot -- each is a miscompile recorded in
-``docs/todos/backend-cpp.md``.  ``ANF`` no longer empties them itself: it
-*requires* them empty and raises otherwise, so the corpus goes through
-:class:`~fpy2.transform.Hoistable` first, exactly as the cpp pipeline does.  That
-the pass then accepts all 230 functions is the claim.  A comprehension is
-different: the emitter gives its element the loop body it generates and its
-iterable the ``for`` header, so a refusal there is a shape this pass declines to
-normalize rather than a shape anything gets wrong.
+``docs/todos/backend-cpp.md``.  ``ANF`` requires them empty and raises
+otherwise, so the corpus goes through :class:`~fpy2.transform.Hoistable` first,
+exactly as the cpp pipeline does; that it then accepts all 230 functions is the
+claim.  A comprehension is different: the emitter gives its element the loop body
+it generates and its iterable the ``for`` header, so a refusal there is a shape
+this pass declines to normalize rather than one anything gets wrong.
 """
 
 import importlib
@@ -73,8 +72,8 @@ def _profile():
 
 def test_anf_applies_to_the_whole_corpus():
     """Paired with `Hoistable`, the precondition holds for every function in the
-    corpus -- and the pass then declines to normalize a position, never to
-    accept a program."""
+    corpus, and the pass then declines to normalize a position, never a
+    program."""
     n, _ = _profile()
     assert n == EXPECTED_FUNCTIONS
 

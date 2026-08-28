@@ -12,11 +12,10 @@ tests assert, as ``test_comp_to_loop.py`` does:
 3. **Semantic equivalence** through the interpreter, and idempotence.
 
 The pass does not *create* the slots it needs; it requires them, and
-:class:`TestPrecondition` covers the refusal.  The lowerings that create them
-belong to :class:`~fpy2.transform.Hoistable` and are tested in
-``test_hoistable.py``, so a sealed position here only ever holds something that
-needed no slot in the first place — which is why :class:`TestNeedsSlot` covers
-that predicate directly.
+:class:`TestPrecondition` covers the refusal.  The lowerings belong to
+:class:`~fpy2.transform.Hoistable`, so a sealed position here only ever holds
+something that needed no slot in the first place — the predicate
+:class:`TestNeedsSlot` covers directly.
 
 :class:`TestRefusals` covers the residue report, and
 ``test_anf_profile.py`` pins how large that residue is across the corpus.
@@ -338,8 +337,8 @@ class TestTypeDirectedAtomicity:
         assert isinstance(out.body.stmts[0].ctx, Attribute)
 
     def test_a_chain_is_named_once(self):
-        """A chain is one scalar-typed expression, so it takes one name -- and
-        no assignment anywhere is a bare copy of another."""
+        """A chain is one scalar-typed expression, so it takes one name, and no
+        assignment anywhere is a bare copy of another."""
 
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> list[bool]:
@@ -498,8 +497,7 @@ class TestSemantics:
         assert repr(f(2.0, 3.0)) == repr(_anf(f)(2.0, 3.0))
 
     def test_while_loop(self):
-        """A *pure* condition: one needing a place is a precondition failure,
-        and its semantics are `Hoistable`'s to preserve."""
+        """A *pure* condition: one needing a place is a precondition failure."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -613,12 +611,10 @@ class TestRefusals:
 class TestPrecondition:
     """The pass raises rather than normalize what it cannot.
 
-    Its invariant is that every proper subexpression of a statement is an atom.
     Where a sealed position holds something needing a place, the pass would have
-    to emit a statement it has nowhere to put -- so it cannot honour the
-    invariant, and says so instead of returning a program that looks normalized
-    and is not.  :class:`~fpy2.transform.Hoistable` is what a caller runs to make
-    it able to.
+    to emit a statement it has nowhere to put -- so it says so instead of
+    returning a program that looks normalized and is not.
+    :class:`~fpy2.transform.Hoistable` is what a caller runs first.
     """
 
     @staticmethod
@@ -667,10 +663,9 @@ class TestPrecondition:
         assert 'Hoistable' in str(e.value)
 
     def test_a_pure_while_condition_is_accepted(self):
-        """The gate is narrow on purpose: it asks what this pass would have to
-        name, not whether the program is in hoistable form.  Nothing in `i < n`
-        needs a place, so there is nothing to refuse -- even though `Hoistable`
-        would rotate the loop."""
+        """The gate asks what this pass would have to name, not whether the
+        program is in hoistable form.  Nothing in `i < n` needs a place, so there
+        is nothing to refuse -- even though `Hoistable` would rotate the loop."""
 
         @fp.fpy
         def f(i: fp.Real, n: fp.Real) -> fp.Real:
@@ -692,9 +687,8 @@ class TestPrecondition:
         assert isinstance(_first(out, IfExpr), IfExpr)
 
     def test_a_comprehension_is_not_a_precondition_failure(self):
-        """It is reported, not refused: the cpp emitter gives the element the
-        loop body it generates, so declining to normalize inside one is a shape
-        nothing gets wrong."""
+        """Reported, not refused: the cpp emitter gives the element the loop
+        body it generates."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:

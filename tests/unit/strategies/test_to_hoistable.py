@@ -82,8 +82,8 @@ class TestOperator:
         assert to_hoistable(f).ast.format() == Hoistable.apply(f.ast).format()
 
     def test_it_is_weaker_than_to_anf(self):
-        """The reason both exist.  ANF names the two products; this names
-        nothing, because nothing is hoisted above them."""
+        """ANF names the two products; this names nothing, because nothing is
+        hoisted above them."""
 
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
@@ -159,8 +159,8 @@ class TestWhatItUnblocks:
             assert f(cond) == lowered(cond)
 
     def test_comp_to_loop_first_makes_the_whole_function_hoistable(self):
-        """The documented order.  A comprehension's element has no slot until
-        `comp_to_loop` has given it the loop body it generates."""
+        """A comprehension's element has no slot until `comp_to_loop` has given
+        it the loop body it generates."""
 
         @fp.fpy
         def f(xs: list[fp.Real], c: bool) -> list[fp.Real]:

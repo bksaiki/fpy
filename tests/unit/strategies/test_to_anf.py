@@ -95,12 +95,8 @@ class TestOperator:
 
 
 class TestPrecondition:
-    """The operator inherits `ANF`'s precondition rather than composing.
-
-    Each strategy stays one rewrite, so a schedule spells the order it wants --
-    the same reason `comp_to_loop` is the caller's job before `to_hoistable`.
-    What `to_hoistable` unblocks is tested in ``test_to_hoistable.py``.
-    """
+    """The operator inherits `ANF`'s precondition rather than composing, so each
+    strategy stays one rewrite and a schedule spells the order it wants."""
 
     @staticmethod
     def _needy():
@@ -130,10 +126,9 @@ class TestPrecondition:
             assert repr(f(x)) == repr(flat(x))
 
     def test_a_ternary_whose_arms_need_no_slot_is_accepted(self):
-        """The gate is narrow on purpose: it asks what `ANF` would have to
-        *name*, not whether the program is in hoistable form.  Pure arithmetic
-        in an arm needs no statement, so the ternary is accepted and left
-        nested -- `to_hoistable` is what flattens it."""
+        """The gate asks what `ANF` would have to *name*, not whether the
+        program is in hoistable form.  Pure arithmetic in an arm needs no
+        statement, so the ternary is accepted and left nested."""
 
         @fp.fpy
         def f(cond: bool) -> fp.Real:

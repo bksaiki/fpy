@@ -23,15 +23,14 @@ Positions FPy evaluates conditionally or repeatedly do not, and are *sealed*:
 their subexpressions stay inline, since hoisting one would evaluate it on a path
 FPy never takes.
 
-**This pass does not create the slots it needs.**  It *requires* them:
+**This pass does not create the slots it needs**, it *requires* them:
 :class:`~fpy2.transform.Hoistable` restructures a ternary, an ``and``/``or`` tail
-and a ``while`` condition so each has one, and this pass raises rather than
-proceed without.  The precondition is exactly the positions it would have to name
-and could not -- a sealed position holding something :func:`needs_slot` -- so a
+and a ``while`` condition so each has one, and this raises rather than proceed
+without.  The precondition is exactly the positions it would have to name and
+could not -- a sealed position holding something :func:`needs_slot` -- so a
 program it can already normalize is accepted unchanged.  A comprehension is not
 one: the cpp emitter gives the element the loop body it generates and the
-iterable the ``for`` header, so declining to normalize inside one is a shape
-nothing gets wrong.  :meth:`ANF.refusals` reports those.
+iterable the ``for`` header.  :meth:`ANF.refusals` reports those.
 
 **Scalars only, by type.**  An expression is named where
 :class:`~fpy2.analysis.TypeInfer` gives it a scalar type; a list, tuple, context
@@ -170,23 +169,17 @@ def needs_slot(e: Expr) -> bool:
 _CANNOT_SLOT = frozenset(
     _SEALED_REASON[k] for k in ('ternary', 'chain', 'condition')
 )
-"""The sealed positions with no lowering of their own.
-
-A comprehension is absent on purpose: the cpp emitter gives the element the loop
-body it generates and the iterable the ``for`` header, so this pass declining to
-normalize inside one is a shape nothing gets wrong.  These three are shapes
-something does -- each is a miscompile in ``docs/todos/backend-cpp.md``.
-"""
+"""The sealed positions no consumer can give a slot -- each a miscompile in
+``docs/todos/backend-cpp.md``.  A comprehension is absent on purpose: the cpp
+emitter gives the element the loop body it generates."""
 
 
 def _check_precondition(func: FuncDef) -> None:
     """Raise unless every position this pass must name has a slot to name it in.
 
-    The check is a filter on :func:`_list_refusals`, not a second analysis:
-    a refusal in one of :data:`_CANNOT_SLOT` *is* a position the pass would have
-    to emit a statement into and cannot.  So a program it could already
-    normalize passes unchanged, and only one it would have had to lower is
-    rejected.
+    A filter on :func:`_list_refusals` rather than a second analysis: a refusal
+    in one of :data:`_CANNOT_SLOT` *is* a position the pass would have to emit a
+    statement into and cannot.
     """
     bad = [(e, why) for e, why in _list_refusals(func) if why in _CANNOT_SLOT]
     if not bad:
@@ -317,8 +310,7 @@ class _ANFInstance(DefaultTransformVisitor):
         ternary's own slot; the arms are conditional and are sealed.
 
         The precondition means an arm holds nothing needing a place, so nothing
-        is lost by leaving it inline -- :class:`~fpy2.transform.Hoistable` has
-        already made an ``IfStmt`` of any ternary where that was not true.
+        is lost by leaving it inline.
         """
         cond = self._visit_expr(e.cond, ctx)
         sealed = ctx.sealed()
@@ -332,8 +324,8 @@ class _ANFInstance(DefaultTransformVisitor):
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         if not isinstance(e, (And, Or)):
             return super()._visit_naryop(e, ctx)
-        # Short-circuit: the first operand always runs, the rest do not.  The
-        # precondition means the tail holds nothing needing a place.
+        # short-circuit: the first operand always runs, the rest do not; the
+        # precondition means the tail holds nothing needing a place
         sealed = ctx.sealed()
         args = [
             self._visit_expr(a, ctx) if i == 0
@@ -383,9 +375,8 @@ class _ANFInstance(DefaultTransformVisitor):
         return IfStmt(cond, ift, iff, stmt.loc), ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
-        # Sealed: no slot runs once per iteration.  The precondition means the
-        # condition holds nothing needing one -- a loop where that was not true
-        # has already been rotated by `Hoistable`.
+        # sealed: no slot runs once per iteration, and the precondition means
+        # the condition holds nothing needing one
         cond = self._in_place(stmt.cond, ctx.sealed())
         body, _ = self._visit_block(stmt.body, ctx)
         return WhileStmt(cond, body, stmt.loc), ctx
@@ -443,10 +434,9 @@ class ANF:
     literal or a nullary constant -- bound in a statement slot that runs exactly
     when the expression did.
 
-    Requires that such a slot exists wherever one is needed:
-    :meth:`apply` raises where a sealed position holds something
-    :func:`needs_slot`, and :class:`~fpy2.transform.Hoistable` is the pass that
-    makes sure none does.  See the module docstring.
+    Requires that such a slot exists wherever one is needed: :meth:`apply` raises
+    where a sealed position holds something :func:`needs_slot`, and
+    :class:`~fpy2.transform.Hoistable` is what makes sure none does.
     """
 
     @staticmethod

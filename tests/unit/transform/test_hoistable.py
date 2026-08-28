@@ -2,16 +2,15 @@
 Unit tests for the :class:`fpy2.transform.Hoistable` transform.
 
 Fresh names come from ``Gensym``, so a hand-written golden AST is brittle.  These
-tests assert, as ``test_anf.py`` does:
+tests assert:
 
-1. **The invariant** — after the pass, `Hoistable.refusals` is empty, so a
-   temporary may be hoisted out of anywhere.  A comprehension is the exception,
-   and only until :class:`~fpy2.transform.CompToLoop` has run.
+1. **The invariant** — `Hoistable.refusals` is empty, so a temporary may be
+   hoisted out of anywhere.  A comprehension is the exception, until
+   :class:`~fpy2.transform.CompToLoop` has run.
 2. **Weakness** — a program with no non-strict position comes back unchanged.
-   This is the whole point of the pass existing beside `ANF`, and nothing else
-   checks it: a regression that started flattening more would still be correct.
+   Nothing else checks this: flattening *more* would still be correct.
 3. **Order of evaluation** — a lowering hoists above the operands to its left,
-   so those must be named.  Getting this wrong changes which exception a program
+   so those must be named.  Getting it wrong changes which exception a program
    raises, which :class:`TestOrdering` witnesses directly.
 4. **Semantic equivalence** through the interpreter, and idempotence.
 
@@ -239,8 +238,8 @@ class TestWeakness:
         assert Hoistable.apply(_straight_line.ast).format() == before
 
     def test_anf_would_have_flattened_it(self):
-        """States the difference the pass exists for, so a regression that
-        started atomizing would fail here rather than pass everything."""
+        """The difference between the two passes, stated where a regression
+        towards atomizing would fail rather than pass everything."""
         anf = ANF.apply(_straight_line.ast)
         assert anf.format() != _straight_line.ast.format()
         assert _assigns_to(anf, 't') == 2
@@ -284,8 +283,8 @@ def _needs_positive_h(x: fp.Real) -> fp.Real:
 
 class TestOrdering:
     def test_a_left_operand_is_not_overtaken_by_a_lowering(self):
-        """The regression the prefix rule exists for.  Lowering the ternary
-        without naming `g(a)` would run `h(b)` first, and both raise."""
+        """Lowering the ternary without naming `g(a)` would run `h(b)` first,
+        and both raise."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: bool) -> fp.Real:
             return _needs_positive_g(a) + (_needs_positive_h(b) if c else 0.0)
@@ -313,21 +312,7 @@ class TestOrdering:
 # The lowerings
 
 
-class TestLowering:
-    def test_a_ternary_becomes_an_if_statement(self):
-        out = Hoistable.apply(_ternary.ast)
-        assert _count(out, IfExpr) == 0
-        assert _count(out, IfStmt) == 1
-
-    def test_nested_ternaries_become_one_ladder_not_a_chain_of_copies(self):
-        out = Hoistable.apply(_nested_ternary.ast)
-        assert _count(out, IfStmt) == 2
-        assert _assigns_to(out, 't') == 4        # one per arm, none a copy
-
-    def test_a_chain_becomes_flat_guarded_statements(self):
-        out = Hoistable.apply(_chain.ast)
-        assert _count(out, If1Stmt) == 2         # one guard per operand after the first
-
+class TestContextExpression:
     def test_a_context_expression_is_lowered_under_real(self):
         """**E-Context** evaluates it under ``REAL``, so what is hoisted out of
         it goes in a ``with fp.REAL:`` block of its own."""
@@ -359,9 +344,29 @@ class TestRotation:
         out = Hoistable.apply(f.ast)
         assert _assigns_to(out, 'c') == 1
 
+    def test_nested_loops_each_rotate(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                i = 0.0
+                while max(xs) > acc:
+                    while min(xs) < i:
+                        i = i - 1.0
+                    acc = acc + 1.0
+                return acc
+
+        out = Hoistable.apply(f.ast)
+        outer = _first(out, WhileStmt)
+        assert isinstance(outer.cond, Var)
+        inner = _first(outer.body, WhileStmt)
+        assert isinstance(inner.cond, Var)
+        assert inner.cond.name != outer.cond.name
+        assert repr(f([1.0, 2.0])) == repr(_apply(f)([1.0, 2.0]))
+
     def test_rotation_creates_the_slot_a_ternary_in_the_condition_needs(self):
-        """The lowerings compose: a rotated condition is a slot, so the ternary
-        in it lowers -- in both copies."""
+        """The lowerings compose: a rotated condition is a slot, so a ternary in
+        it lowers -- in both copies."""
         out = Hoistable.apply(_loop_with_a_ternary_condition.ast)
         assert _count(out, IfExpr) == 0
         assert _count(out, IfStmt) == 2
@@ -385,33 +390,15 @@ class TestSemantics:
 
 
 # ----------------------------------------------------------------------
-# Ported from `test_anf.py`, which performed these lowerings until `ANF` was
-# made to require them instead.  Each covers something the tests above do not.
+# The lowerings in detail
 
 
-class TestPortedRotation:
-    def test_nested_loops_each_rotate(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                acc = 0.0
-                i = 0.0
-                while max(xs) > acc:
-                    while min(xs) < i:
-                        i = i - 1.0
-                    acc = acc + 1.0
-                return acc
+class TestTernary:
+    def test_a_ternary_becomes_an_if_statement(self):
+        out = Hoistable.apply(_ternary.ast)
+        assert _count(out, IfExpr) == 0
+        assert _count(out, IfStmt) == 1
 
-        out = Hoistable.apply(f.ast)
-        outer = _first(out, WhileStmt)
-        assert isinstance(outer.cond, Var)
-        inner = _first(outer.body, WhileStmt)
-        assert isinstance(inner.cond, Var)
-        assert inner.cond.name != outer.cond.name
-        assert repr(f([1.0, 2.0])) == repr(_apply(f)([1.0, 2.0]))
-
-
-class TestPortedTernary:
     def test_the_whole_right_hand_side_assigns_the_target_directly(self):
         """No temporary, and so no copy: nothing runs after this pass to remove
         one."""
@@ -475,7 +462,7 @@ class TestPortedTernary:
         assert repr(f(1e300)) == repr(_apply(f)(1e300))
 
 
-class TestPortedChain:
+class TestChain:
     def test_or_guards_on_the_negated_accumulator(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> bool:
@@ -574,12 +561,10 @@ class TestPortedChain:
             assert repr(f(*args)) == repr(_apply(f)(*args)), args
 
     def test_a_pure_chain_is_lowered_too(self):
-        """The gate that changed.  `ANF` left a chain of pure comparisons alone,
-        so that `ValueClassInfer._implied` could match the `And` and drop a
-        runtime check.  A total guarantee cannot make that exception: an operand
-        after the first has nowhere to put a statement whether or not it wants
-        one today.  The check is still dropped -- `_implied` reads the lowered
-        ladder now, see `test_value_class.py::TestALoweredChain`.
+        """An operand after the first has nowhere to put a statement whether or
+        not it wants one today, so the gate cannot spare a pure chain.  The
+        runtime check a pure chain used to guard is still dropped: `_implied`
+        reads the lowered ladder, see `test_value_class.py::TestALoweredChain`.
         """
 
         @fp.fpy
