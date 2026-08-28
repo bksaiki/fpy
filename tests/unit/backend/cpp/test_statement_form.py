@@ -112,8 +112,13 @@ class TestTheWitnesses:
 def anf_disabled(monkeypatch):
     """The pipeline with statement form turned off.
 
-    Exactly the state a future change to the pass could leave a program in --
-    and the state every one of these programs was compiled in before it existed.
+    Exactly the state a future change to the passes could leave a program in --
+    and the state every one of these programs was compiled in before they
+    existed.
+
+    Both passes, not just `ANF`: the lowerings that empty these three positions
+    belong to `Hoistable`, so patching out `ANF` alone would leave the net up and
+    every test here would pass without witnessing anything.
     """
     class _Identity:
         @staticmethod
@@ -121,6 +126,7 @@ def anf_disabled(monkeypatch):
             return func
 
     monkeypatch.setattr(_compiler, 'ANF', _Identity)
+    monkeypatch.setattr(_compiler, 'Hoistable', _Identity)
 
 
 class TestTheNet:
