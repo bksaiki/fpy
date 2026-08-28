@@ -73,20 +73,45 @@ from ..ast.fpyast import (
     NamedId,
     NaryOp,
     Not,
+    NullaryOp,
     Or,
     ReturnStmt,
     Stmt,
     StmtBlock,
     UnderscoreId,
+    ValueExpr,
     Var,
     WhileStmt,
 )
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..number import REAL
 from ..utils import Gensym
-from .anf import _ATOMIC, _SEALED_REASON, _reads
 from .path import sub_exprs
 
+_ATOMIC = (Var, ValueExpr, NullaryOp)
+"""Expressions that are already a place, or need none."""
+
+_SEALED_REASON = {
+    'ternary': 'a ternary arm is evaluated conditionally',
+    'chain': 'a short-circuited operand may not be evaluated',
+    'element': "a comprehension's element runs once per iteration",
+    'iterable': "a comprehension's iterable may read an earlier target",
+    'condition': 'a `while` condition is re-evaluated every iteration',
+}
+
+def _reads(name: NamedId, exprs: 'list[Expr] | tuple[Expr, ...]') -> bool:
+    """Whether any of *exprs* mentions *name*."""
+    found = False
+
+    class _Reads(DefaultVisitor):
+        def _visit_var(self, e: Var, ctx):
+            nonlocal found
+            if e.name == name:
+                found = True
+
+    for e in exprs:
+        _Reads()._visit_expr(e, None)
+    return found
 
 def lowers(e: Expr) -> bool:
     """Whether this pass emits a statement *at* `e`.

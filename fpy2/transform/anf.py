@@ -124,10 +124,8 @@ from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..number import REAL
 from ..types import BoolType, RealType
 from ..utils import Gensym
+from .hoistable import _ATOMIC, _SEALED_REASON, _reads
 from .path import sub_exprs
-
-_ATOMIC = (Var, ValueExpr, NullaryOp)
-"""Expressions that are already a place, or need none."""
 
 _NAMEABLE_TYPES = (RealType, BoolType)
 """Types whose values this pass binds to a name.  A whitelist, so an unresolved
@@ -151,20 +149,6 @@ assert, a fold needs a loop, a range allocates, a projection is read through a
 bound name, and a power's exponent is bound when it lowers to ``ldexp``."""
 
 
-def _reads(name: NamedId, exprs: 'list[Expr] | tuple[Expr, ...]') -> bool:
-    """Whether any of *exprs* mentions *name*."""
-    found = False
-
-    class _Reads(DefaultVisitor):
-        def _visit_var(self, e: Var, ctx):
-            nonlocal found
-            if e.name == name:
-                found = True
-
-    for e in exprs:
-        _Reads()._visit_expr(e, None)
-    return found
-
 
 def needs_slot(e: Expr) -> bool:
     """Does emitting *e* plausibly require a statement of its own?
@@ -181,14 +165,6 @@ def needs_slot(e: Expr) -> bool:
 # ----------------------------------------------------------------------
 # The residue
 
-
-_SEALED_REASON = {
-    'ternary': 'a ternary arm is evaluated conditionally',
-    'chain': 'a short-circuited operand may not be evaluated',
-    'element': "a comprehension's element runs once per iteration",
-    'iterable': "a comprehension's iterable may read an earlier target",
-    'condition': 'a `while` condition is re-evaluated every iteration',
-}
 
 
 def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:

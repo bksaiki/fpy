@@ -139,11 +139,82 @@ Over the 230-function corpus, both passes establishing the same invariant:
 `test_hoistable_profile.py` pins each of these; the growth figure is the only
 test that can see the pass becoming less weak.
 
-### Follow-up
+## Where this leaves the rest of the codebase
 
-**Unify the lowerings with `anf.py`.** The two passes now hold separate copies of
-the ternary, chain and rotation rewrites; only `_ATOMIC`, `_SEALED_REASON` and
-`_reads` are shared by import. A lowering bug has to be fixed twice. Once both passes are
-settled, `ANF` should be `Hoistable` plus atomization — one implementation of the
-lowerings, with the naming predicate and the rotation gate as the only
-differences.
+The pass currently sits beside `ANF` with no relationship to it, which is why the
+ternary, chain and rotation rewrites exist twice. The fix is not to share them:
+it is to make `ANF` *require* the guarantee rather than establish it.
+
+> `ANF` does not lower. It throws when it cannot guarantee its own invariant, and
+> `Hoistable` is what a caller runs to make sure it can.
+
+That deletes the duplication rather than managing it, and it puts the dependency
+the right way round — the strong normalization requires the weak one.
+
+### What ANF's precondition is
+
+Exactly the positions ANF itself would have to emit a statement into and cannot:
+a sealed position holding something `needs_slot`. This is already what
+`ANF.refusals` reports, so the guard is a filter on it, not a new analysis:
+
+| in the input | ANF |
+|---|---|
+| `while i < n:` | accepts — nothing in the condition needs naming |
+| `while fp.round(x) < n:` | throws |
+| `y if c else fp.round(x)` | throws |
+| `a and fp.round(b) > 0` | throws |
+| `[f(x) for x in xs]` | accepts, and reports it, as today |
+
+A comprehension is *not* a precondition failure: the cpp emitter gives the
+element the loop body it generates and the iterable the `for` header, so ANF
+declining to normalize one is a shape nothing gets wrong.
+
+`fpy2.strategies.to_anf` inherits this — it raises rather than composing, so each
+operator stays one rewrite and a schedule spells the order it wants.
+
+### Measured before committing to it
+
+Over the 230-function corpus:
+
+| | |
+|---|---|
+| `ANF(f)` and `ANF(Hoistable(f))` byte-identical | 209 / 230 |
+| dangerous positions in the raw corpus, which ANF would now throw on | 27 |
+| ... after `Hoistable` | **0** — the precondition is satisfiable by construction |
+| ANF's own residue, both ways | unchanged: 18 iterable, 8 element |
+| statements: `ANF` vs `Hoistable` then `ANF` | +324 vs +361 |
+
+The 21 functions that differ, and the +37 statements, are the loop conditions
+`Hoistable` rotates and ANF's `needs_slot` gate did not. That cost is now paid in
+generated C++ rather than in an intermediate form — the price of a total
+guarantee, and the reason the two gates were allowed to differ in the first place.
+
+### Phases
+
+- [ ] 6. This section.
+- [ ] 7. Move `_ATOMIC`, `_SEALED_REASON` and `_reads` from `anf.py` into
+      `hoistable.py` and flip the import direction. `needs_slot` stays in
+      `anf.py`, which is now its only user. A pure move: no behavior change, so
+      every existing test must pass untouched.
+- [ ] 8. `ANF` drops the lowerings and gains the precondition. Deletes
+      `_lowers`, `_lowers_chain`, `_branch_on`, `_bind`, `_arm`,
+      `_short_circuit`, `_rotate` and the lowering branches of
+      `_visit_if_expr` / `_visit_naryop` / `_visit_while` / `_visit_assign`
+      (~250 lines, and `Reachability` stops being an ANF dependency). The
+      ~22 tests in `test_anf.py`'s `TestRotation`, `TestTernaryLowering` and
+      `TestBoolChainLowering` move to `test_hoistable.py`, minus what its 46
+      tests already cover — audit rather than assume, several are not
+      duplicated (`test_nested_loops_each_rotate`,
+      `test_the_accumulator_never_clobbers_an_operand`,
+      `test_the_guards_are_flat`, `test_short_circuit_is_preserved`).
+      `test_anf_property.py` and `test_anf_profile.py` run `Hoistable` first;
+      the profile's `EXPECTED_RESIDUE` is unchanged, and `EXPECTED_DANGEROUS`
+      becomes the precondition assertion.
+- [ ] 9. `CppCompiler.specialize()` runs `Hoistable` then `ANF`. Also:
+      `test_statement_form.py`'s `anf_disabled` fixture must patch out
+      `Hoistable`, not `ANF`, or the net it tests is no longer down; the
+      `ANF lowers all three` comment at `emitter.py:473`; `to_anf`'s docstring
+      and `test_to_anf.py`'s `TestWhatItUnblocks`, which is now
+      `to_hoistable`'s story and already covered in `test_to_hoistable.py`; and
+      §1 of `backend-independence.md`, which describes ANF as the pass that
+      creates the slots.
