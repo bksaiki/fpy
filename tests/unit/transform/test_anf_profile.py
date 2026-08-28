@@ -10,16 +10,19 @@ today, and a change that flattens more without anyone deciding to.
 The load-bearing assertion is :data:`EXPECTED_DANGEROUS`.  A ternary arm, a
 short-circuited operand and a ``while`` condition are the three positions the cpp
 emitter cannot slot -- each is a miscompile recorded in
-``docs/todos/backend-cpp.md`` -- and the lowerings exist to empty them.  A
-comprehension is different: the emitter gives its element the loop body it
-generates and its iterable the ``for`` header, so a refusal there is a shape
-this pass declines to normalize rather than a shape anything gets wrong.
+``docs/todos/backend-cpp.md``.  ``ANF`` no longer empties them itself: it
+*requires* them empty and raises otherwise, so the corpus goes through
+:class:`~fpy2.transform.Hoistable` first, exactly as the cpp pipeline does.  That
+the pass then accepts all 230 functions is the claim.  A comprehension is
+different: the emitter gives its element the loop body it generates and its
+iterable the ``for`` header, so a refusal there is a shape this pass declines to
+normalize rather than a shape anything gets wrong.
 """
 
 import importlib
 
 import fpy2 as fp
-from fpy2.transform import ANF
+from fpy2.transform import ANF, Hoistable
 from tests.infra.examples import all_example_tests, all_unit_tests
 
 EXPECTED_FUNCTIONS = 230
@@ -61,15 +64,17 @@ def _profile():
     n = 0
     for f in _corpus():
         n += 1
-        out = ANF.apply(f.ast)          # never raises; that is the claim
+        # `Hoistable` first, as the cpp pipeline does; `ANF` raises without it
+        out = ANF.apply(Hoistable.apply(f.ast))
         for _e, why in ANF.refusals(out):
             residue[why] = residue.get(why, 0) + 1
     return n, residue
 
 
 def test_anf_applies_to_the_whole_corpus():
-    """The pass is total in the sense that matters: it declines to normalize a
-    position, never to accept a program."""
+    """Paired with `Hoistable`, the precondition holds for every function in the
+    corpus -- and the pass then declines to normalize a position, never to
+    accept a program."""
     n, _ = _profile()
     assert n == EXPECTED_FUNCTIONS
 

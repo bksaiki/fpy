@@ -191,12 +191,12 @@ guarantee, and the reason the two gates were allowed to differ in the first plac
 
 ### Phases
 
-- [ ] 6. This section.
-- [ ] 7. Move `_ATOMIC`, `_SEALED_REASON` and `_reads` from `anf.py` into
+- [x] 6. This section.
+- [x] 7. Move `_ATOMIC`, `_SEALED_REASON` and `_reads` from `anf.py` into
       `hoistable.py` and flip the import direction. `needs_slot` stays in
       `anf.py`, which is now its only user. A pure move: no behavior change, so
       every existing test must pass untouched.
-- [ ] 8. `ANF` drops the lowerings and gains the precondition. Deletes
+- [x] 8. `ANF` drops the lowerings and gains the precondition. Deletes
       `_lowers`, `_lowers_chain`, `_branch_on`, `_bind`, `_arm`,
       `_short_circuit`, `_rotate` and the lowering branches of
       `_visit_if_expr` / `_visit_naryop` / `_visit_while` / `_visit_assign`
@@ -210,7 +210,24 @@ guarantee, and the reason the two gates were allowed to differ in the first plac
       `test_anf_property.py` and `test_anf_profile.py` run `Hoistable` first;
       the profile's `EXPECTED_RESIDUE` is unchanged, and `EXPECTED_DANGEROUS`
       becomes the precondition assertion.
-- [ ] 9. `CppCompiler.specialize()` runs `Hoistable` then `ANF`. Also:
+      The pipeline change came with it rather than after: a precondition and its
+      only caller cannot land in separate commits. `CppCompiler.specialize()`
+      runs `Hoistable` **unconditionally, just before the `if optimize:` block
+      holding `RoundElim`** — see *Where it goes in the cpp pipeline* below.
+- [ ] 9. **`ValueClassInfer._implied` reads a lowered guard.** Routing cpp
+      through `Hoistable` lowers `not isnan(a) and not isnan(b)` into guarded
+      statements, so `_implied` stops matching the `And` and `fp.fmin` emits a
+      `quiet_NaN` check it used to prove away. The fact is *moved*, not lost:
+      inside `if t:` where `t`'s reaching definitions are `not isnan(a)` and
+      `not isnan(b)`, both hold. `_implied` already reads through a name via
+      `DefineUseAnalysis.defining_expr`; what it cannot do is join two reaching
+      definitions, and `ReachingDefs` in `fpy2/analysis/` is the missing piece.
+      Three tests in `test_class_guards.py` carry a **strict** `xfail` naming
+      this phase — remove the markers with the fix, and the suite will tell you
+      if you forget.
+- [ ] 10. The remaining paperwork:
+      a line in `RoundElim`'s docstring and a test case saying it preserves
+      hoistable form, which the pipeline slot relies on;
       `test_statement_form.py`'s `anf_disabled` fixture must patch out
       `Hoistable`, not `ANF`, or the net it tests is no longer down; the
       `ANF lowers all three` comment at `emitter.py:473`; `to_anf`'s docstring
@@ -218,3 +235,74 @@ guarantee, and the reason the two gates were allowed to differ in the first plac
       `to_hoistable`'s story and already covered in `test_to_hoistable.py`; and
       §1 of `backend-independence.md`, which describes ANF as the pass that
       creates the slots.
+
+### Where it goes in the cpp pipeline
+
+```
+FreeVarElim
+if optimize:  EnumerateElim -> ZipElim -> ReduceFusion
+Specialize
+Hoistable                       <- here, unconditional
+if optimize:  RoundElim
+ANF
+```
+
+**Before `RoundElim`, not after.** After it, the pass only satisfies ANF's
+precondition and the lowering is pure overhead. Before it, `RoundElim` stops
+refusing a ternary arm and a short-circuited operand — the reach the pass exists
+to provide. On an eliminable rounding inside a ternary arm it is 2 eliminations
+against 0.
+
+The hazard that argues the other way does not materialize. Naming a left sibling
+was expected to hide a rounding from `RoundElim`, but naming moves the expression
+*into a statement*, which is if anything easier to reach: `fp.round(0.0)` as a
+left sibling is folded either way.
+
+**Unconditional**, since ANF requires it and ANF runs whatever `optimize` says.
+With `optimize=False` the order degenerates to `Hoistable` then `ANF` adjacent.
+
+**Not before `Specialize`.** `EnumerateElim`, `ZipElim` and `ReduceFusion` match
+shapes in iterable position and need no statement slot, so the pass could only
+break their matches.
+
+**What the slot costs.** Every pass between `Hoistable` and `ANF` must preserve
+hoistable form, and `RoundElim` is the only one. Over the corpus it breaks
+neither the full guarantee nor ANF's precondition — but that is an observed fact,
+not a stated contract, which is why phase 10 writes it down. A regression is loud
+rather than silent: ANF's precondition turns it into a `TransformError` at
+compile time instead of an un-normalized program reaching the emitter.
+
+### What the stronger gates cost the backend
+
+`Hoistable` rotates whenever a condition is not an atom, and lowers a chain
+whenever a tail operand is not one. `ANF` gated both on `needs_slot`. Routing cpp
+through `Hoistable` therefore changes emitted code in two ways, and they are not
+the same kind of thing.
+
+**Rotation is cosmetic.** Every loop is emitted as
+`bool c = cond; while (c) { body; c = cond; }`. Measured on the countdown loop
+from `test_emit_while.py`:
+
+| | plain | rotated |
+|---|---|---|
+| `-O0` | 18 instructions | 26 |
+| `-O2` | 9 instructions | 9 — *identical machine code* |
+
+Loop rotation is a transformation the C++ compiler performs itself, so the cost
+is readability of the emitted source and `-O0` only. The three tests that pinned
+the old shape now pin the new one.
+
+**The guard loss is real** — an `isnan` branch the C++ compiler cannot prove
+away — and is phase 9.
+
+A narrower gate for the cpp path was considered and rejected. It would have to be
+`needs_slot`, which is not a property of the program but a *whitelist predicting
+what an emitter will want a statement for* — its own docstring says
+"plausibly", and §1 of `backend-independence.md` is explicit that a
+normalization takes no target fact. A `Hoistable` mode gated on it would have no
+statable invariant: `while x*y > 0` comes back un-rotated, so the output is not
+in hoistable form, `refusals` reports a position the pass itself declined to fix,
+and "run `Hoistable` first" stops being sound advice. Not lowering chains at all
+was also considered and is impossible: the corpus has 13 chain positions holding
+something `needs_slot`, ANF must name inside them, and the emitter has a recorded
+miscompile there.

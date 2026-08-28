@@ -25,16 +25,20 @@ import fpy2 as fp
 from fpy2 import Function
 from fpy2.ast.fpyast import (
     Assign,
+    FuncDef,
     ContextStmt,
     If1Stmt,
     IfExpr,
     IfStmt,
+    Not,
+    StmtBlock,
     Var,
     WhileStmt,
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import ANF, CompToLoop
 from fpy2.transform.hoistable import Hoistable
+from fpy2.transform.path import walk_stmts
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -56,8 +60,9 @@ def _run(f: Function, args):
         return None, type(e).__name__
 
 
-def _count(func, kind) -> int:
-    """How many *kind* nodes are in `func`."""
+def _count(node, kind) -> int:
+    """How many *kind* nodes are in *node* (a `FuncDef`, `StmtBlock` or
+    `Stmt`)."""
     n = 0
 
     class _C(DefaultVisitor):
@@ -73,8 +78,37 @@ def _count(func, kind) -> int:
                 n += 1
             super()._visit_expr(e, ctx)
 
-    _C()._visit_function(func, None)
+    if isinstance(node, FuncDef):
+        _C()._visit_function(node, None)
+    elif isinstance(node, StmtBlock):
+        _C()._visit_block(node, None)
+    else:
+        _C()._visit_statement(node, None)
     return n
+
+
+def _first(node, kind):
+    """The first *kind* node in *node* (a `FuncDef` or a `StmtBlock`), in visit
+    order."""
+    found: list = []
+
+    class _F(DefaultVisitor):
+        def _visit_expr(self, e, ctx):
+            if isinstance(e, kind):
+                found.append(e)
+            super()._visit_expr(e, ctx)
+
+        def _visit_statement(self, stmt, ctx):
+            if isinstance(stmt, kind):
+                found.append(stmt)
+            super()._visit_statement(stmt, ctx)
+
+    if isinstance(node, FuncDef):
+        _F()._visit_function(node, None)
+    else:
+        _F()._visit_block(node, None)
+    assert found, f'no {kind.__name__} in the function'
+    return found[0]
 
 
 def _loop_of(func) -> WhileStmt:
@@ -348,3 +382,211 @@ class TestSemantics:
     def test_idempotence(self, f):
         once = Hoistable.apply(f.ast)
         assert Hoistable.apply(once).format() == once.format()
+
+
+# ----------------------------------------------------------------------
+# Ported from `test_anf.py`, which performed these lowerings until `ANF` was
+# made to require them instead.  Each covers something the tests above do not.
+
+
+class TestPortedRotation:
+    def test_nested_loops_each_rotate(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.FP64:
+                acc = 0.0
+                i = 0.0
+                while max(xs) > acc:
+                    while min(xs) < i:
+                        i = i - 1.0
+                    acc = acc + 1.0
+                return acc
+
+        out = Hoistable.apply(f.ast)
+        outer = _first(out, WhileStmt)
+        assert isinstance(outer.cond, Var)
+        inner = _first(outer.body, WhileStmt)
+        assert isinstance(inner.cond, Var)
+        assert inner.cond.name != outer.cond.name
+        assert repr(f([1.0, 2.0])) == repr(_apply(f)([1.0, 2.0]))
+
+
+class TestPortedTernary:
+    def test_the_whole_right_hand_side_assigns_the_target_directly(self):
+        """No temporary, and so no copy: nothing runs after this pass to remove
+        one."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = max([x, 0.0]) if x > 0.0 else x
+                return y
+
+        branch = _first(Hoistable.apply(f.ast), IfStmt)
+        for arm in (branch.ift, branch.iff):
+            assign = arm.stmts[-1]
+            assert isinstance(assign, Assign)
+            assert str(assign.target) == 'y'
+
+    def test_lowered_mid_expression(self):
+        """The statement goes before the one that reads it."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = 1.0 + (max([x, 0.0]) if x > 0.0 else x)
+                return y
+
+        block = Hoistable.apply(f.ast).body.stmts[0].body
+        assert isinstance(block.stmts[0], IfStmt)
+        assert isinstance(block.stmts[1], Assign)
+
+    def test_a_ladder_of_ternaries_makes_no_intermediate_copy(self):
+        """Each arm branches on the same name rather than through a copy."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = (
+                    max([x, 1.0]) if x > 0.0
+                    else (max([x, 2.0]) if x > -5.0 else 3.0)
+                )
+                return y
+
+        out = Hoistable.apply(f.ast)
+        assert _count(out, IfStmt) == 2
+        targets = {
+            str(stmt.target)
+            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
+        }
+        assert targets == {'y'}
+
+    def test_only_one_arm_is_evaluated(self):
+        """`fp.cast` raises where the value is not representable, so an eagerly
+        evaluated arm would raise where FPy returns."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                with fp.FP32:
+                    y = 0.0 if x > 1e30 else fp.cast(x)
+                return y
+
+        assert repr(f(1e300)) == repr(_apply(f)(1e300))
+
+
+class TestPortedChain:
+    def test_or_guards_on_the_negated_accumulator(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 or max([b, 1.0]) > 0.0
+                return y
+
+        out = Hoistable.apply(f.ast)
+        assert _count(out, If1Stmt) == 1
+        assert isinstance(_first(out, If1Stmt).cond, Not)
+        assert repr(f(-1.0, 2.0)) == repr(_apply(f)(-1.0, 2.0))
+
+    def test_and_guards_on_the_accumulator(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 and max([b, 1.0]) > 0.0
+                return y
+
+        out = Hoistable.apply(f.ast)
+        assert isinstance(_first(out, If1Stmt).cond, Var)
+        assert repr(f(1.0, -1.0)) == repr(_apply(f)(1.0, -1.0))
+
+    def test_the_guards_are_flat(self):
+        """One guard per operand after the first, none nested inside another:
+        an `or` whose accumulator is already true fails every later guard."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 and max([b, 1.0]) > 0.0 and max([c, 1.0]) > 0.0
+                return y
+
+        out = Hoistable.apply(f.ast)
+        assert _count(out, If1Stmt) == 2
+        for _p, stmt in walk_stmts(out):
+            if isinstance(stmt, If1Stmt):
+                assert _count(stmt.body, If1Stmt) == 0
+
+    def test_the_accumulator_is_the_target(self):
+        """No temporary and no copy where the chain is the whole right-hand
+        side."""
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 or max([b, 1.0]) > 0.0
+                return y
+
+        out = Hoistable.apply(f.ast)
+        copies = [
+            stmt for _p, stmt in walk_stmts(out)
+            if isinstance(stmt, Assign) and isinstance(stmt.expr, Var)
+        ]
+        assert copies == []
+
+    def test_short_circuit_is_preserved(self):
+        """`fp.cast` raises where the value is not representable, so an eagerly
+        evaluated tail would raise where FPy returns."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> bool:
+            with fp.FP64:
+                with fp.FP32:
+                    y = x > 1e30 or fp.cast(x) > 0.0
+                return y
+
+        assert _count(Hoistable.apply(f.ast), If1Stmt) == 1
+        assert _apply(f)(1e300) is True
+
+    def test_composes_with_rotation(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while y > 0.0 and max([y, 1.0]) > 0.5:
+                    y = y - 1.0
+                return y
+
+        out = Hoistable.apply(f.ast)
+        assert isinstance(_first(out, WhileStmt).cond, Var)
+        assert _count(out, If1Stmt) == 2      # one before the loop, one inside
+        assert repr(f(3.0)) == repr(_apply(f)(3.0))
+
+    def test_the_accumulator_never_clobbers_an_operand(self):
+        """A chain assigns its target before the later operands run, so one that
+        *reads* the target must not accumulate into it."""
+
+        @fp.fpy
+        def f(b: fp.Real, c: bool, d: bool) -> bool:
+            x = c
+            x = (b > 0.0) or all([x, d])
+            return x
+
+        for args in ((-1.0, True, True), (1.0, False, False), (-1.0, False, True)):
+            assert repr(f(*args)) == repr(_apply(f)(*args)), args
+
+    def test_a_pure_chain_is_lowered_too(self):
+        """The gate that changed.  `ANF` left a chain of pure comparisons alone,
+        because `ValueClassInfer._implied` matches the `And` to drop a runtime
+        check.  A total guarantee cannot make that exception: an operand after
+        the first has nowhere to put a statement whether or not it wants one
+        today.  See consequence 1 in ``docs/todos/hoistable-form.md``.
+        """
+
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> bool:
+            with fp.FP64:
+                y = a > 0.0 or b > 0.0
+                return y
+
+        out = Hoistable.apply(f.ast)
+        assert _count(out, If1Stmt) == 1
+        assert repr(f(-1.0, 2.0)) == repr(_apply(f)(-1.0, 2.0))

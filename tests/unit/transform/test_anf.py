@@ -11,14 +11,18 @@ tests assert, as ``test_comp_to_loop.py`` does:
    one out would evaluate it on a path FPy does not take.
 3. **Semantic equivalence** through the interpreter, and idempotence.
 
-A ``while`` condition is the one sealed position with a lowering — the loop is
-rotated — so it has parts of its own: :class:`TestNeedsSlot` for the predicate
-that decides whether to rotate, and :class:`TestRotation` for the rewrite.  A
-ternary is the other, becoming an ``IfStmt``: :class:`TestTernaryLowering`.
+The pass does not *create* the slots it needs; it requires them, and
+:class:`TestPrecondition` covers the refusal.  The lowerings that create them
+belong to :class:`~fpy2.transform.Hoistable` and are tested in
+``test_hoistable.py``, so a sealed position here only ever holds something that
+needed no slot in the first place — which is why :class:`TestNeedsSlot` covers
+that predicate directly.
 
 :class:`TestRefusals` covers the residue report, and
 ``test_anf_profile.py`` pins how large that residue is across the corpus.
 """
+
+import pytest
 
 import fpy2 as fp
 from fpy2 import Function
@@ -58,7 +62,8 @@ from fpy2.ast.fpyast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL
-from fpy2.transform import ANF
+from fpy2.transform import ANF, Hoistable
+from fpy2.transform.error import TransformError
 from fpy2.transform.anf import needs_slot
 from fpy2.transform.path import sub_exprs, walk_stmts
 from fpy2.types import BoolType, RealType
@@ -332,9 +337,9 @@ class TestTypeDirectedAtomicity:
         out = ANF.apply(f.ast)
         assert isinstance(out.body.stmts[0].ctx, Attribute)
 
-    def test_a_lowered_chain_is_not_re_bound(self):
-        """The chain comes back as the name it accumulated into, and naming
-        that again would be a pure copy."""
+    def test_a_chain_is_named_once(self):
+        """A chain is one scalar-typed expression, so it takes one name -- and
+        no assignment anywhere is a bare copy of another."""
 
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> list[bool]:
@@ -478,456 +483,6 @@ class TestSealedPositions:
 
 
 # ----------------------------------------------------------------------
-# 2b. `while` rotation
-
-
-def _while_cond(f) -> Expr:
-    return _first(f.ast, WhileStmt).cond
-
-
-class TestNeedsSlot:
-    """What the predicate deciding a rotation admits."""
-
-    def test_arithmetic_and_comparison_are_slot_free(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while ((y * y) + 1.0) > 1.0:
-                    y = y - 1.0
-                return y
-
-        assert not needs_slot(_while_cond(f))
-
-    def test_a_bool_chain_is_slot_free(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while y > 0.0 and (y * y) > 1.0:
-                    y = y - 1.0
-                return y
-
-        assert not needs_slot(_while_cond(f))
-
-    def test_len_is_slot_free(self):
-        """A boundary case: `len` reads a size and allocates nothing."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                y = 0.0
-                while len(xs) > y:
-                    y = y + 1.0
-                return y
-
-        assert not needs_slot(_while_cond(f))
-
-    def test_a_fold_needs_a_slot(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while max([y, 0.0]) > 0.0:
-                    y = y - 1.0
-                return y
-
-        assert needs_slot(_while_cond(f))
-
-    def test_a_rounding_needs_a_slot(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while fp.round(y) > 0.0:
-                    y = y - 1.0
-                return y
-
-        assert needs_slot(_while_cond(f))
-
-    def test_a_subscript_needs_a_slot(self):
-        """Not in the slot-free whitelist, so it needs one by default."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                y = 0.0
-                while xs[0] > y:
-                    y = y + 1.0
-                return y
-
-        assert needs_slot(_while_cond(f))
-
-
-class TestRotation:
-    """`c = cond; while c: body; c = cond` -- FPy's own evaluation order."""
-
-    def test_the_condition_becomes_a_name(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while max([y, 0.0]) > 0.0:
-                    y = y - 1.0
-                return y
-
-        out = ANF.apply(f.ast)
-        loop = _first(out, WhileStmt)
-        assert isinstance(loop.cond, Var)
-        # bound in the statement just before the loop, and again at the end of
-        # the body -- the two slots the condition's own evaluations sit in
-        block = out.body.stmts[0].body
-        i = block.stmts.index(loop)
-        pre, tail = block.stmts[i - 1], loop.body.stmts[-1]
-        assert isinstance(pre, Assign) and isinstance(tail, Assign)
-        assert pre.target == tail.target == loop.cond.name
-
-    def test_a_body_that_always_returns_gets_no_second_copy(self):
-        """The loop runs at most one iteration, so the condition is evaluated
-        exactly once -- and a statement after the `return` is unreachable."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while max([y, 0.0]) > 0.0:
-                    return y - 1.0
-                return y
-
-        out = ANF.apply(f.ast)
-        loop = _first(out, WhileStmt)
-        assert len(loop.body.stmts) == 1
-        assert repr(f(3.0)) == repr(_anf(f)(3.0))
-
-    def test_nested_loops_each_rotate(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                acc = 0.0
-                i = 0.0
-                while max(xs) > acc:
-                    while min(xs) < i:
-                        i = i - 1.0
-                    acc = acc + 1.0
-                return acc
-
-        out = ANF.apply(f.ast)
-        outer = _first(out, WhileStmt)
-        assert isinstance(outer.cond, Var)
-        inner = _first(outer.body, WhileStmt)
-        assert isinstance(inner.cond, Var)
-        assert inner.cond.name != outer.cond.name
-        assert repr(f([1.0, 2.0])) == repr(_anf(f)([1.0, 2.0]))
-
-    def test_rotation_is_idempotent(self):
-        """After rotating, the condition is a name, which needs no slot."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while max([y, 0.0]) > 0.0:
-                    y = y - 1.0
-                return y
-
-        once = ANF.apply(f.ast)
-        assert ANF.apply(once).format() == once.format()
-
-
-# ----------------------------------------------------------------------
-# 2c. Ternary lowering
-
-
-class TestTernaryLowering:
-    """An arm that needs a place makes the ternary an ``IfStmt``."""
-
-    def test_lowered_when_an_arm_is_not_an_atom(self):
-        """Even pure arithmetic: an `IfStmt` flattens the arms for free, so
-        there is nothing to weigh against doing it."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = (x * x) if x > 0.0 else (x + x)
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, IfStmt) == 1
-        arms = [_first(out, IfStmt).ift, _first(out, IfStmt).iff]
-        for arm in arms:
-            assign = arm.stmts[-1]
-            assert isinstance(assign, Assign) and str(assign.target) == 'y'
-        assert repr(f(2.0)) == repr(_anf(f)(2.0))
-
-    def test_lowered_when_an_arm_needs_a_slot(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = max([x, 0.0]) if x > 0.0 else x
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, IfStmt) == 1
-        assert _unnamed(out) == []
-        # the ternary is gone entirely
-        class _NoTernary(DefaultVisitor):
-            def _visit_if_expr(self, e, ctx):
-                raise AssertionError('a ternary survived')
-
-        _NoTernary()._visit_function(out, None)
-
-    def test_the_whole_right_hand_side_assigns_the_target_directly(self):
-        """No temporary, and so no copy: nothing runs after this pass to remove
-        one."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = max([x, 0.0]) if x > 0.0 else x
-                return y
-
-        out = ANF.apply(f.ast)
-        branch = _first(out, IfStmt)
-        for arm in (branch.ift, branch.iff):
-            assign = arm.stmts[-1]
-            assert isinstance(assign, Assign)
-            assert str(assign.target) == 'y'
-
-    def test_lowered_mid_expression(self):
-        """The statement goes before the one that reads it."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = 1.0 + (max([x, 0.0]) if x > 0.0 else x)
-                return y
-
-        out = ANF.apply(f.ast)
-        block = out.body.stmts[0].body
-        assert isinstance(block.stmts[0], IfStmt)
-        assert isinstance(block.stmts[1], Assign)
-        assert _unnamed(out) == []
-
-    def test_a_chain_becomes_one_ladder(self):
-        """Each arm branches on the same name rather than through a copy."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = (
-                    max([x, 1.0]) if x > 0.0
-                    else (max([x, 2.0]) if x > -5.0 else 3.0)
-                )
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, IfStmt) == 2
-        # one binding per arm, all of `y`: no intermediate copy anywhere
-        targets = {
-            str(stmt.target)
-            for _p, stmt in walk_stmts(out) if isinstance(stmt, Assign)
-        }
-        assert targets == {'y'}
-
-    def test_composes_with_rotation(self):
-        """A rotated condition is in a slot, so a ternary inside it lowers —
-        once before the loop and once in the body."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while (max([y, 0.0]) if y > 0.0 else 0.0) > 0.5:
-                    y = y - 1.0
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, IfStmt) == 2
-        assert isinstance(_first(out, WhileStmt).cond, Var)
-        assert repr(f(3.0)) == repr(_anf(f)(3.0))
-
-    def test_not_lowered_inside_a_comprehension(self):
-        """A comprehension element has no slot, so the ternary stays one."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            with fp.FP64:
-                y = [((v * v) if v > 0.0 else (v + v)) for v in xs]
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, IfStmt) == 0
-        assert isinstance(_first(out, IfExpr), IfExpr)
-
-    def test_not_lowered_inside_an_unrotated_while_condition(self):
-        """The asymmetry rotation buys: a condition needing no place is left an
-        expression, so a ternary inside it has no slot either."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while ((x * x) if x > 0.0 else (x + x)) > y:
-                    y = y + 1.0
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, IfStmt) == 0
-        assert isinstance(_first(out, WhileStmt).cond, Compare)
-
-    def test_idempotent(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = max([x, 0.0]) if x > 0.0 else x
-                return y
-
-        once = ANF.apply(f.ast)
-        assert ANF.apply(once).format() == once.format()
-
-
-# ----------------------------------------------------------------------
-# 2d. Bool-chain lowering
-
-
-class TestBoolChainLowering:
-    """A chain lowers where an operand after the first needs a place.
-
-    Not where every operand is an atom-or-arithmetic: a pure chain is what
-    `ValueClassInfer` reads to drop a runtime guard, and lowering it into
-    separate statements joined by a phi loses the conjunction.  See
-    `_lowers_chain`.
-    """
-
-    def test_a_pure_chain_is_left_alone(self):
-        """`not isnan(a) and not isnan(b)` must stay one expression -- it is a
-        guard a value-class analysis reads."""
-
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> bool:
-            with fp.FP64:
-                y = a > 0.0 or b > 0.0
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, If1Stmt) == 0
-        assert isinstance(_first(out, Or), Or)
-
-    def test_or_guards_on_the_negated_accumulator(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> bool:
-            with fp.FP64:
-                y = a > 0.0 or max([b, 1.0]) > 0.0
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, If1Stmt) == 1
-        guard = _first(out, If1Stmt)
-        assert isinstance(guard.cond, Not)
-        assert repr(f(-1.0, 2.0)) == repr(_anf(f)(-1.0, 2.0))
-
-    def test_and_guards_on_the_accumulator(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> bool:
-            with fp.FP64:
-                y = a > 0.0 and max([b, 1.0]) > 0.0
-                return y
-
-        out = ANF.apply(f.ast)
-        guard = _first(out, If1Stmt)
-        assert isinstance(guard.cond, Var)
-        assert repr(f(1.0, -1.0)) == repr(_anf(f)(1.0, -1.0))
-
-    def test_the_guards_are_flat(self):
-        """One guard per operand after the first, none nested inside another:
-        an `or` whose accumulator is already true fails every later guard."""
-
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
-            with fp.FP64:
-                y = (
-                    a > 0.0
-                    and max([b, 1.0]) > 0.0
-                    and max([c, 1.0]) > 0.0
-                )
-                return y
-
-        out = ANF.apply(f.ast)
-        assert _count(out, If1Stmt) == 2
-        for _p, stmt in walk_stmts(out):
-            if isinstance(stmt, If1Stmt):
-                assert _count(stmt.body, If1Stmt) == 0
-
-    def test_the_accumulator_is_the_target(self):
-        """No temporary and no copy where the chain is the whole right-hand
-        side."""
-
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> bool:
-            with fp.FP64:
-                y = a > 0.0 or max([b, 1.0]) > 0.0
-                return y
-
-        out = ANF.apply(f.ast)
-        copies = [
-            stmt for _p, stmt in walk_stmts(out)
-            if isinstance(stmt, Assign) and isinstance(stmt.expr, Var)
-        ]
-        assert copies == []
-
-    def test_short_circuit_is_preserved(self):
-        """`fp.cast` raises where the value is not representable, so an eagerly
-        evaluated tail would raise where FPy returns."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> bool:
-            with fp.FP64:
-                with fp.FP32:
-                    y = x > 1e30 or fp.cast(x) > 0.0
-                return y
-
-        assert _count(ANF.apply(f.ast), If1Stmt) == 1
-        assert _anf(f)(1e300) is True
-
-    def test_composes_with_rotation(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while y > 0.0 and max([y, 1.0]) > 0.5:
-                    y = y - 1.0
-                return y
-
-        out = ANF.apply(f.ast)
-        assert isinstance(_first(out, WhileStmt).cond, Var)
-        assert _count(out, If1Stmt) == 2       # one before the loop, one inside
-        assert repr(f(3.0)) == repr(_anf(f)(3.0))
-
-    def test_the_accumulator_never_clobbers_an_operand(self):
-        """A chain assigns its target before the later operands run, so one
-        that *reads* the target must not accumulate into it."""
-
-        @fp.fpy
-        def f(b: fp.Real, c: bool, d: bool) -> bool:
-            x = c
-            x = (b > 0.0) or all([x, d])
-            return x
-
-        for args in ((-1.0, True, True), (1.0, False, False), (-1.0, False, True)):
-            assert repr(f(*args)) == repr(_anf(f)(*args)), args
-
-    def test_idempotent(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> bool:
-            with fp.FP64:
-                y = a > 0.0 and (max([b, 1.0]) > 0.0 or c > 0.0)
-                return y
-
-        once = ANF.apply(f.ast)
-        assert ANF.apply(once).format() == once.format()
-
-
-# ----------------------------------------------------------------------
 # 3. Semantics
 
 
@@ -943,42 +498,18 @@ class TestSemantics:
         assert repr(f(2.0, 3.0)) == repr(_anf(f)(2.0, 3.0))
 
     def test_while_loop(self):
+        """A *pure* condition: one needing a place is a precondition failure,
+        and its semantics are `Hoistable`'s to preserve."""
+
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
                 y = x
-                while max([y, 0.0]) > 0.0:
+                while y > 0.0:
                     y = y - 1.0
                 return y
 
         assert repr(f(3.0)) == repr(_anf(f)(3.0))
-
-    def test_short_circuit_order_is_preserved(self):
-        """The tail must not be evaluated when the head decides it.
-
-        ``fp.cast`` raises where the value is not representable, so an
-        eagerly-evaluated tail would raise where FPy returns.
-        """
-
-        @fp.fpy
-        def f(x: fp.Real) -> bool:
-            with fp.FP64:
-                with fp.FP32:
-                    y = x > 1e30 or fp.cast(x) > 0.0
-                return y
-
-        assert f(1e300) is True
-        assert _anf(f)(1e300) is True
-
-    def test_ternary_takes_only_one_arm(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                with fp.FP32:
-                    y = 0.0 if x > 1e30 else fp.cast(x)
-                return y
-
-        assert repr(f(1e300)) == repr(_anf(f)(1e300))
 
     def test_loop_and_comprehension(self):
         @fp.fpy
@@ -1033,23 +564,6 @@ class TestRefusals:
 
         assert ANF.refusals(ANF.apply(f.ast)) == []
 
-    def test_the_three_dangerous_positions_are_emptied(self):
-        """Each is one of the miscompiles in ``docs/todos/backend-cpp.md``, and
-        each has a lowering; after the pass none is left holding anything."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                with fp.FP32:
-                    y = x
-                    while max([y, 0.0]) > 0.0:
-                        y = y - 1.0
-                    a = 0.0 if x > 1e30 else fp.cast(x)
-                    b = 1.0 if (x > 1e30 or fp.cast(x) > 0.0) else 2.0
-                return y + a + b
-
-        assert ANF.refusals(ANF.apply(f.ast)) == []
-
     def test_the_check_is_not_vacuous(self):
         """The same three positions, un-normalized, are all reported."""
 
@@ -1090,3 +604,121 @@ class TestRefusals:
                 return [(v * v) + 1.0 for v in ys]
 
         assert ANF.refusals(ANF.apply(f.ast)) == []
+
+
+# ----------------------------------------------------------------------
+# 5. The precondition
+
+
+class TestPrecondition:
+    """The pass raises rather than normalize what it cannot.
+
+    Its invariant is that every proper subexpression of a statement is an atom.
+    Where a sealed position holds something needing a place, the pass would have
+    to emit a statement it has nowhere to put -- so it cannot honour the
+    invariant, and says so instead of returning a program that looks normalized
+    and is not.  :class:`~fpy2.transform.Hoistable` is what a caller runs to make
+    it able to.
+    """
+
+    @staticmethod
+    def _needs_a_slot_in_a_ternary_arm():
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                with fp.FP32:
+                    y = 0.0 if x > 1e30 else fp.cast(x)
+                return y
+        return f
+
+    def test_a_ternary_arm_is_refused(self):
+        f = self._needs_a_slot_in_a_ternary_arm()
+        with pytest.raises(TransformError, match='ternary arm'):
+            ANF.apply(f.ast)
+
+    def test_a_short_circuited_operand_is_refused(self):
+        @fp.fpy
+        def f(x: fp.Real) -> bool:
+            with fp.FP64:
+                with fp.FP32:
+                    y = x > 1e30 or fp.cast(x) > 0.0
+                return y
+
+        with pytest.raises(TransformError, match='short-circuited'):
+            ANF.apply(f.ast)
+
+    def test_a_while_condition_is_refused(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                y = x
+                while max([y, 0.0]) > 0.0:
+                    y = y - 1.0
+                return y
+
+        with pytest.raises(TransformError, match='while'):
+            ANF.apply(f.ast)
+
+    def test_the_message_names_the_position_and_the_remedy(self):
+        f = self._needs_a_slot_in_a_ternary_arm()
+        with pytest.raises(TransformError) as e:
+            ANF.apply(f.ast)
+        assert 'fp.cast(x)' in str(e.value)
+        assert 'Hoistable' in str(e.value)
+
+    def test_a_pure_while_condition_is_accepted(self):
+        """The gate is narrow on purpose: it asks what this pass would have to
+        name, not whether the program is in hoistable form.  Nothing in `i < n`
+        needs a place, so there is nothing to refuse -- even though `Hoistable`
+        would rotate the loop."""
+
+        @fp.fpy
+        def f(i: fp.Real, n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                while i < n:
+                    i = i + 1.0
+                return i
+
+        out = ANF.apply(f.ast)
+        assert isinstance(_first(out, WhileStmt).cond, Compare)
+
+    def test_a_ternary_over_atoms_is_accepted(self):
+        @fp.fpy
+        def f(x: fp.Real, y: fp.Real, c: bool) -> fp.Real:
+            with fp.FP64:
+                return (x * y) + (x if c else y)
+
+        out = ANF.apply(f.ast)
+        assert isinstance(_first(out, IfExpr), IfExpr)
+
+    def test_a_comprehension_is_not_a_precondition_failure(self):
+        """It is reported, not refused: the cpp emitter gives the element the
+        loop body it generates, so declining to normalize inside one is a shape
+        nothing gets wrong."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            with fp.FP64:
+                return [fp.round(v) for v in xs]
+
+        out = ANF.apply(f.ast)              # does not raise
+        why = [reason for _e, reason in ANF.refusals(out)]
+        assert why == ["a comprehension's element runs once per iteration"]
+
+    def test_hoistable_first_always_satisfies_it(self):
+        """The pairing the cpp pipeline relies on."""
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP64:
+                with fp.FP32:
+                    y = x
+                    while max([y, 0.0]) > 0.0:
+                        y = y - 1.0
+                    a = 0.0 if x > 1e30 else fp.cast(x)
+                    b = 1.0 if (x > 1e30 or fp.cast(x) > 0.0) else 2.0
+                return y + a + b
+
+        out = ANF.apply(Hoistable.apply(f.ast))     # does not raise
+        assert ANF.refusals(out) == []
+        assert repr(f(2.0)) == repr(Function(out, runtime=f.runtime)(2.0))

@@ -21,19 +21,17 @@ so does anything inside a body.
 
 Positions FPy evaluates conditionally or repeatedly do not, and are *sealed*:
 their subexpressions stay inline, since hoisting one would evaluate it on a path
-FPy never takes.  Two of them have a lowering that creates the slot they lack:
+FPy never takes.
 
-- a ``while`` loop is **rotated**, so the condition is evaluated once before the
-  loop and once at the end of the body -- FPy's own order.  Rotation *duplicates*
-  the condition, so it is gated on :func:`needs_slot`.
-- an ``IfExpr`` becomes an ``IfStmt`` assigning one name.  That restructures
-  rather than duplicating, so every ternary but ``x1 if c else x2`` over atoms is
-  lowered.
-
-An ``and``/``or`` tail is lowered only where an operand needs a place
-(:meth:`_ANFInstance._lowers_chain`), and a comprehension's element and
-iterables not at all; :meth:`ANF.refusals` reports what is left.  The lowerings
-compose: a rotated condition is a slot, so a ternary inside it lowers too.
+**This pass does not create the slots it needs.**  It *requires* them:
+:class:`~fpy2.transform.Hoistable` restructures a ternary, an ``and``/``or`` tail
+and a ``while`` condition so each has one, and this pass raises rather than
+proceed without.  The precondition is exactly the positions it would have to name
+and could not -- a sealed position holding something :func:`needs_slot` -- so a
+program it can already normalize is accepted unchanged.  A comprehension is not
+one: the cpp emitter gives the element the loop body it generates and the
+iterable the ``for`` header, so declining to normalize inside one is a shape
+nothing gets wrong.  :meth:`ANF.refusals` reports those.
 
 **Scalars only, by type.**  An expression is named where
 :class:`~fpy2.analysis.TypeInfer` gives it a scalar type; a list, tuple, context
@@ -49,7 +47,8 @@ scalar and the aggregate spine stays inline:
 
 Idempotent: a second pass finds only atoms in the positions it names.
 
-The design notes are in ``docs/todos/backend-independence.md``.
+The design notes are in ``docs/todos/backend-independence.md``, and the
+precondition in ``docs/todos/hoistable-form.md``.
 """
 
 import dataclasses
@@ -58,7 +57,6 @@ from typing import Any
 from ..analysis import (
     DefineUse,
     DefineUseAnalysis,
-    Reachability,
     SyntaxCheck,
     TypeInfer,
 )
@@ -124,7 +122,8 @@ from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..number import REAL
 from ..types import BoolType, RealType
 from ..utils import Gensym
-from .hoistable import _ATOMIC, _SEALED_REASON, _reads
+from .error import TransformError
+from .hoistable import _ATOMIC, _SEALED_REASON
 from .path import sub_exprs
 
 _NAMEABLE_TYPES = (RealType, BoolType)
@@ -165,6 +164,38 @@ def needs_slot(e: Expr) -> bool:
 # ----------------------------------------------------------------------
 # The residue
 
+
+
+_CANNOT_SLOT = frozenset(
+    _SEALED_REASON[k] for k in ('ternary', 'chain', 'condition')
+)
+"""The sealed positions with no lowering of their own.
+
+A comprehension is absent on purpose: the cpp emitter gives the element the loop
+body it generates and the iterable the ``for`` header, so this pass declining to
+normalize inside one is a shape nothing gets wrong.  These three are shapes
+something does -- each is a miscompile in ``docs/todos/backend-cpp.md``.
+"""
+
+
+def _check_precondition(func: FuncDef) -> None:
+    """Raise unless every position this pass must name has a slot to name it in.
+
+    The check is a filter on :func:`_list_refusals`, not a second analysis:
+    a refusal in one of :data:`_CANNOT_SLOT` *is* a position the pass would have
+    to emit a statement into and cannot.  So a program it could already
+    normalize passes unchanged, and only one it would have had to lower is
+    rejected.
+    """
+    bad = [(e, why) for e, why in _list_refusals(func) if why in _CANNOT_SLOT]
+    if not bad:
+        return
+    e, why = bad[0]
+    rest = '' if len(bad) == 1 else f' (and {len(bad) - 1} more)'
+    raise TransformError(
+        f'cannot normalize `{func.name}`: {why}, so `{e.format()}` has nowhere '
+        f'to put a statement{rest}.  Run `Hoistable` first.'
+    )
 
 
 def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
@@ -281,15 +312,13 @@ class _ANFInstance(DefaultTransformVisitor):
     # Sealed expression positions
 
     def _visit_if_expr(self, e: IfExpr, ctx: _Ctx):
-        if self._lowers(e, ctx):
-            t = self.gensym.fresh(self.prefix)
-            # two steps: `_branch_on` appends the condition's temporaries, which
-            # belong *before* the `if`
-            stmt = self._branch_on(e, t, ctx)
-            ctx.stmts.append(stmt)
-            return Var(t, e.loc)
-        # The condition is evaluated whenever the ternary is, so it takes the
-        # ternary's own slot; the arms are conditional and are sealed.
+        """The condition is evaluated whenever the ternary is, so it takes the
+        ternary's own slot; the arms are conditional and are sealed.
+
+        The precondition means an arm holds nothing needing a place, so nothing
+        is lost by leaving it inline -- :class:`~fpy2.transform.Hoistable` has
+        already made an ``IfStmt`` of any ternary where that was not true.
+        """
         cond = self._visit_expr(e.cond, ctx)
         sealed = ctx.sealed()
         return IfExpr(
@@ -299,74 +328,11 @@ class _ANFInstance(DefaultTransformVisitor):
             e.loc,
         )
 
-    def _lowers(self, e: Expr, ctx: _Ctx) -> bool:
-        """Whether *e* is a ternary this pass turns into an ``IfStmt``: every
-        one but ``x1 if c else x2`` over atoms.
-
-        Not :func:`needs_slot` -- an ``IfStmt`` restructures rather than
-        duplicating, so there is nothing to weigh against flattening the arms.
-        Only in a hoistable position: the statement has to go somewhere.
-        """
-        return (
-            ctx.hoistable
-            and isinstance(e, IfExpr)
-            and not (
-                isinstance(e.ift, _ATOMIC) and isinstance(e.iff, _ATOMIC)
-            )
-        )
-
-    def _branch_on(self, e: IfExpr, target: NamedId, ctx: _Ctx) -> IfStmt:
-        """*e* as an ``IfStmt`` assigning *target* in each branch.
-
-        Appends the condition's temporaries to *ctx*, since the condition is
-        evaluated where the ternary was.
-        """
-        cond = self._in_place(e.cond, ctx)
-        return IfStmt(
-            cond,
-            self._arm(target, e.ift, e.loc),
-            self._arm(target, e.iff, e.loc),
-            e.loc,
-        )
-
-    def _bind(self, target: NamedId, e: Expr, ctx: _Ctx, loc) -> Stmt:
-        """The statement binding *target* to *e*, appending *e*'s own
-        temporaries to *ctx* first.
-
-        A lowered ternary or chain accumulates into *target* directly, so
-        nesting them gives one ladder rather than a chain of copies.  Nothing
-        runs after this pass to remove one.
-        """
-        if self._lowers(e, ctx):
-            assert isinstance(e, IfExpr)
-            return self._branch_on(e, target, ctx)
-        if isinstance(e, (And, Or)) and self._lowers_chain(e, ctx):
-            if not _reads(target, e.args[1:]):
-                return self._short_circuit(e, ctx, target)
-            # A chain accumulates into its target *before* the later operands
-            # run, so one that reads the target would see the accumulator.  Only
-            # a chain: a ternary arm and an ordinary right-hand side are both
-            # evaluated before anything is assigned.
-            acc = self.gensym.fresh(self.prefix)
-            ctx.stmts.append(self._short_circuit(e, ctx, acc))
-            return Assign(target, None, Var(acc, loc), loc)
-        return Assign(target, None, self._in_place(e, ctx), loc)
-
-    def _arm(self, target: NamedId, e: Expr, loc) -> StmtBlock:
-        """A block binding *target* to *e*, with *e*'s temporaries inside it --
-        the slot the arm lacked, running exactly when the arm did."""
-        inner = _Ctx(stmts=[])
-        inner.stmts.append(self._bind(target, e, inner, loc))
-        return StmtBlock(inner.stmts)
-
     def _visit_naryop(self, e: NaryOp, ctx: _Ctx):
         if not isinstance(e, (And, Or)):
             return super()._visit_naryop(e, ctx)
-        if self._lowers_chain(e, ctx):
-            t = self.gensym.fresh(self.prefix)
-            ctx.stmts.append(self._short_circuit(e, ctx, t))
-            return Var(t, e.loc)
-        # Short-circuit: the first operand always runs, the rest do not.
+        # Short-circuit: the first operand always runs, the rest do not.  The
+        # precondition means the tail holds nothing needing a place.
         sealed = ctx.sealed()
         args = [
             self._visit_expr(a, ctx) if i == 0
@@ -374,47 +340,6 @@ class _ANFInstance(DefaultTransformVisitor):
             for i, a in enumerate(e.args)
         ]
         return type(e)(args, e.loc)
-
-    def _lowers_chain(self, e: 'And | Or', ctx: _Ctx) -> bool:
-        """Whether *e* becomes a chain of guarded statements.
-
-        Only where an operand after the first needs a place -- the case the
-        lowering exists for.  Not :meth:`_lowers`'s rule: lowering a *pure*
-        chain would break the guard :class:`~fpy2.analysis.ValueClassInfer`
-        reads to drop a runtime check, since it matches the ``And`` and a
-        lowered one is statements joined by a phi.
-        """
-        return (
-            ctx.hoistable
-            and len(e.args) > 1
-            and any(needs_slot(a) for a in e.args[1:])
-        )
-
-    def _short_circuit(
-        self, e: 'And | Or', ctx: _Ctx, target: NamedId,
-    ) -> Stmt:
-        """*e* accumulated into *target*, one guard per operand after the first.
-
-        The guards are *flat* and short-circuit all the same: once an ``or``'s
-        accumulator is true every later ``if not t`` fails, and dually for
-        ``and``.
-
-        .. code-block:: python
-
-            t = a
-            if not t: t = b     # only where `a` was false
-            if not t: t = c
-
-        All but the last statement are appended to *ctx* and the last returned,
-        so a caller with one statement slot has one to give back.
-        """
-        stmts: list[Stmt] = [self._bind(target, e.args[0], ctx, e.loc)]
-        for arg in e.args[1:]:
-            read = Var(target, e.loc)
-            guard = read if isinstance(e, And) else Not(read, e.loc)
-            stmts.append(If1Stmt(guard, self._arm(target, arg, e.loc), e.loc))
-        ctx.stmts.extend(stmts[:-1])
-        return stmts[-1]
 
     def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
         # The element runs once per iteration, and a later clause's iterable may
@@ -434,12 +359,6 @@ class _ANFInstance(DefaultTransformVisitor):
         return StmtBlock(inner.stmts), ctx
 
     def _visit_assign(self, stmt: Assign, ctx: _Ctx):
-        if isinstance(stmt.target, NamedId) and stmt.type is None:
-            # A lowered right-hand side assigns this name directly rather than a
-            # temporary this statement copies.  Not where the assignment carries
-            # a type annotation, which has one place to sit and several branches
-            # to sit in.
-            return self._bind(stmt.target, stmt.expr, ctx, stmt.loc), ctx
         expr = self._in_place(stmt.expr, ctx)
         return Assign(stmt.target, stmt.type, expr, stmt.loc), ctx
 
@@ -463,35 +382,12 @@ class _ANFInstance(DefaultTransformVisitor):
         return IfStmt(cond, ift, iff, stmt.loc), ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
-        if not needs_slot(stmt.cond):
-            # nothing in it needs a place, so it stays an expression -- and
-            # sealed, since no slot runs once per iteration
-            cond = self._in_place(stmt.cond, ctx.sealed())
-            body, _ = self._visit_block(stmt.body, ctx)
-            return WhileStmt(cond, body, stmt.loc), ctx
-        return self._rotate(stmt, ctx), ctx
-
-    def _rotate(self, stmt: WhileStmt, ctx: _Ctx) -> WhileStmt:
-        """*stmt* with its condition evaluated through a name, once before the
-        loop and once at the end of the body -- FPy's own order, so each copy
-        sits in a slot running as often as the condition does.
-
-        The copies share no nodes: :meth:`_in_place` rebuilds every one, so
-        neither needs cloning.  A body that always returns gets no second copy --
-        the loop runs at most one iteration, and a statement after the ``return``
-        is unreachable, which the syntax checker rejects.
-        """
-        c = self.gensym.fresh('c')
-        ctx.stmts.append(
-            Assign(c, None, self._in_place(stmt.cond, ctx), stmt.loc),
-        )
+        # Sealed: no slot runs once per iteration.  The precondition means the
+        # condition holds nothing needing one -- a loop where that was not true
+        # has already been rotated by `Hoistable`.
+        cond = self._in_place(stmt.cond, ctx.sealed())
         body, _ = self._visit_block(stmt.body, ctx)
-        if Reachability.analyze(body).has_fallthrough:
-            # The body's own block is the per-iteration slot.
-            tail = _Ctx(stmts=body.stmts)
-            again = self._in_place(stmt.cond, tail)
-            body.stmts.append(Assign(c, None, again, stmt.loc))
-        return WhileStmt(Var(c, stmt.loc), body, stmt.loc)
+        return WhileStmt(cond, body, stmt.loc), ctx
 
     def _visit_for(self, stmt: ForStmt, ctx: _Ctx):
         iterable = self._in_place(stmt.iterable, ctx)
@@ -544,7 +440,12 @@ class ANF:
 
     Every proper subexpression of a statement becomes an atom -- a name, a
     literal or a nullary constant -- bound in a statement slot that runs exactly
-    when the expression did.  See the module docstring.
+    when the expression did.
+
+    Requires that such a slot exists wherever one is needed:
+    :meth:`apply` raises where a sealed position holds something
+    :func:`needs_slot`, and :class:`~fpy2.transform.Hoistable` is the pass that
+    makes sure none does.  See the module docstring.
     """
 
     @staticmethod
@@ -566,6 +467,7 @@ class ANF:
         """Rewrites `func` into administrative normal form."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
+        _check_precondition(func)
         def_use = DefineUse.analyze(func)
         types = TypeInfer.check(func, def_use=def_use)
         out = _ANFInstance(func, def_use, types).apply()
