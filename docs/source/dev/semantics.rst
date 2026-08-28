@@ -1,4 +1,4 @@
-Language Semantics
+Core Semantics
 ======================
 
 This page documents the semantics of FPy. To stay tractable, it covers only

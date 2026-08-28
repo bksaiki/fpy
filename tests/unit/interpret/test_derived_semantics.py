@@ -207,16 +207,21 @@ class TestConstants:
 class TestArithmetic:
 
     def test_algebraic_exact_under_real(self):
-        # under REAL the rounding is the identity, so the exact result is kept
-        # (division is excluded: REAL cannot represent non-terminating ratios)
+        # under REAL the rounding is the identity, so the exact result is kept.
+        # REAL is exact rational arithmetic, so a ratio with no finite decimal
+        # expansion is held exactly rather than approximated.
         @fp.fpy(ctx=REAL)
         def mul_() -> fp.Real:
             return 0.1 * 0.1  # exact 1/100 under REAL
         @fp.fpy(ctx=REAL)
         def sub_() -> fp.Real:
             return 0.3 - 0.1  # exact 1/5 under REAL
+        @fp.fpy(ctx=REAL)
+        def div_() -> fp.Real:
+            return 1 / 3      # exact 1/3 under REAL
         assert mul_() == Fraction(1, 100)
         assert sub_() == Fraction(1, 5)
+        assert div_() == Fraction(1, 3)
 
     def test_algebraic_rounds_under_finite_context(self):
         # the same operations are rounded to representable values under FP64
