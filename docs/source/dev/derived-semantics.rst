@@ -52,8 +52,8 @@ rational number.
 
 .. note::
 
-  Literals are **exact**; they do not round. 
-  For example, ``0.1`` is exactly :math:`1/10`.
+   Literals are **exact**; they do not round.
+   For example, ``0.1`` is exactly :math:`1/10`.
 
 Rounded arithmetic
 ^^^^^^^^^^^^^^^^^^
@@ -138,9 +138,7 @@ Effectful expressions
 The full FPy language has *effectful* expressions, but the core language does
 not: there, calls and allocations are statements. The translation inserts those
 statements, binding each result to a fresh temporary. Below, a variable written
-:math:`t`, :math:`t_1`, :math:`t_2`, and so on is fresh. This is also what makes
-macro substitution safe: an effectful operand is already a variable by the time
-a macro duplicates it.
+:math:`t`, :math:`t_1`, :math:`t_2`, and so on is fresh.
 
 .. list-table::
    :widths: 42 58
@@ -155,10 +153,9 @@ a macro duplicates it.
 
 ``fp.empty(d1, ..., dn)`` allocates too. The core's list constructor is
 fixed-width, so nothing there allocates a run-time number of cells; one surface
-form has to be primitive, and this is it. The comprehensions and ``range`` calls
-below
-build on it. Its cells start unspecified, so a program that reads one before
-writing it is undefined.
+form has to be primitive, and this is it. The comprehensions and ``range``
+calls below build on it. Its cells start unspecified, so a program that reads
+one before writing it is undefined.
 
 .. note::
 
@@ -229,6 +226,8 @@ a statement of its own, binding the cell before writing through it.
      - :math:`p = e`
    * - ``xs[i] = e``
      - :math:`t = xs[i] \,\mathsf{;}\, t := e`
+   * - ``e``
+     - :math:`t = e`
    * - ``s1 ; s2``
      - :math:`s_1 \,\mathsf{;}\, s_2`
    * - ``if c: s``
@@ -246,6 +245,8 @@ a statement of its own, binding the cell before writing through it.
    * - ``pass``
      - :math:`\mathsf{skip}`
 
+A bare expression statement discards its value, so it binds a fresh variable
+that nothing reads; it is worth writing only for the effects inside ``e``.
 A ``while`` re-tests each iteration, so anything hoisted from its condition
 repeats at the end of the body. **E-Context** evaluates a ``with``'s context
 expression under :math:`\R`, so anything hoisted out of it runs there too, not
@@ -466,8 +467,9 @@ The element type is exactly ``bool``: FPy has no truthiness, so
 Constants
 ~~~~~~~~~
 
-Every constant expands to an expression whose final operation rounds, built on
-the primitive ``fp.const_pi()``.
+Every constant expands to an expression that rounds exactly once.
+``fp.const_pi()`` is the primitive. The simple cases round in their outermost
+operation.
 
 .. list-table::
    :widths: 42 58
@@ -483,47 +485,56 @@ the primitive ``fp.const_pi()``.
      - ``fp.sqrt(2)``
    * - ``fp.const_sqrt1_2()``
      - ``fp.sqrt(0.5)``
-   * - ``fp.const_pi_2()``
-     - ``fp.const_pi() / 2``
-   * - ``fp.const_pi_4()``
-     - ``fp.const_pi() / 4``
 
-The last two round twice, since their operand is itself a rounded result.
-
-A *composed* constant keeps its inner value exact under ``fp.REAL`` and rounds
-only at the end::
+A *composed* constant also rounds exactly once, with every other operation
+exact under ``fp.REAL``. Scaling by a power of two is exact, so
+``fp.const_pi_2()`` and ``fp.const_pi_4()`` round first and scale after; the
+rest must compute first and round last::
 
     @fp.fpy
-    def const_log2e() -> fp.Real:
+    def const_pi_2() -> fp.Real:
+        t = fp.const_pi()
         with fp.REAL:
-            t = fp.exp(1)
-        return fp.log2(t)
+          return fp.round(t) / 2
 
     @fp.fpy
-    def const_log10e() -> fp.Real:
+    def const_pi_4() -> fp.Real:
+        t = fp.const_pi()
         with fp.REAL:
-            t = fp.exp(1)
-        return fp.log10(t)
+          return fp.round(t) / 4
 
     @fp.fpy
     def const_1_pi() -> fp.Real:
         with fp.REAL:
-            t = fp.const_pi()
-        return 1 / t
+            t = 1 / fp.const_pi()
+        return fp.round(t)
 
     @fp.fpy
     def const_2_pi() -> fp.Real:
         with fp.REAL:
-            t = fp.const_pi()
-        return 2 / t
+            t = 2 / fp.const_pi()
+        return fp.round(t)
 
     @fp.fpy
     def const_2_sqrt_pi() -> fp.Real:
         with fp.REAL:
-            t = fp.sqrt(fp.const_pi())
-        return 2 / t
+            t = 2 / fp.sqrt(fp.const_pi())
+        return fp.round(t)
+
+    @fp.fpy
+    def const_log2e() -> fp.Real:
+        with fp.REAL:
+            t = fp.log2(fp.exp(1))
+        return fp.round(t)
+
+    @fp.fpy
+    def const_log10e() -> fp.Real:
+        with fp.REAL:
+            t = fp.log10(fp.exp(1))
+        return fp.round(t)
 
 .. note::
 
-  These constants are for specification purposes and cannot be
-  evaluated without runtime support. They are intended for FPCore compatability.
+   The constants that round last have no evaluation as written: they need an
+   exact transcendental intermediate, which ``fp.REAL`` cannot represent. They
+   stand as specifications.

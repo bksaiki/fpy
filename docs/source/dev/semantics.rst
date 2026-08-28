@@ -85,7 +85,7 @@ parameters give distinct constants, so a program may use several at once.
        & \text{tuple pattern} \\[1ex]
    \mathit{op} & ::= & + \mid - \mid \times \mid \div \mid \ldots
        & \mathit{Arith} \text{ operators} \\
-     & \mid & < \mid \le \mid = \mid \mathit{len} \mid \mathit{max}
+     & \mid & < \mid \le \mid = \mid \mathit{len} \mid \mathit{isnan}
        \mid \ldots
        & \mathit{Exact} \text{ operators}
    \end{array}
@@ -113,25 +113,24 @@ values, or a *location* :math:`\ell`.
    C & ::= & \R \mid \mathsf{ctx}\ \{ \ldots \}
    \end{array}
 
-A rounding context :math:`C` is a context constant—:math:`\R`, or one of the
-family :math:`\mathsf{ctx}\ \{ \ldots \}` schematizes—and is a value in its own
+A rounding context :math:`C` is a context constant, and is a value in its own
 right (**E-Val**). A context is opaque: the semantics uses only its rounding
 operation, written :math:`C(\cdot)`, whose result need not be finite.
 Full FPy provides constructors for the common rounding contexts, all of which
 the core abstracts as :math:`\mathsf{ctx}\ \{ \ldots \}`.
 
 A *location* :math:`\ell` is the value of a reference. Locations are drawn from
-a countable set
-:math:`\mathit{Loc}` and are used only by :math:`\mathsf{!}` and :math:`:=`.
+a countable set :math:`\mathit{Loc}` and are used only by :math:`\mathsf{!}`
+and :math:`:=`.
 
 Expressions
 -----------
 
-Evaluation requires a *store* :math:`\sigma`, a finite map from identifiers to
-values, a *heap* :math:`\mu`, a finite map from locations to the values they
-currently contain, and a *rounding context* :math:`C`. Both maps are partial;
-the rules state the memberships they need. An expression
-evaluates under all three:
+Evaluation requires three things: a *store* :math:`\sigma` mapping identifiers
+to values, a *heap* :math:`\mu` mapping locations to the values they currently
+contain, and a *rounding context* :math:`C`. Both maps are finite and partial;
+the rules state the memberships they need. An expression evaluates under all
+three:
 
 .. math::
 
@@ -142,7 +141,6 @@ read ":math:`e` evaluates to value :math:`v`". Expressions are pure;
 
 Where a premise cannot be met—an undefined lookup, a false side condition—no
 rule applies and evaluation is stuck.
-
 
 Values evaluate to themselves. A location is not an expression, so **E-Val**
 applies only where a value can be written in a program: the boolean, numerical,
@@ -223,8 +221,8 @@ exact result is returned unchanged.
 
 An :math:`\mathit{Exact}` operator applies to its operands as they are; nothing
 rounds, and the result may be of any kind—a boolean from a comparison, an
-integer from a length, an operand itself from a selection. NaN is unordered: an
-ordering test with a NaN operand is false.
+integer from a length. NaN is unordered: an ordering test with a NaN operand is
+false.
 
 .. math::
 
