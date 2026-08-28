@@ -1,24 +1,24 @@
 Derived Semantics
 =================
 
-The :doc:`core semantics <semantics>` page covers semantics for
-a minimal fragment of FPy; this page presents the semantics for
-the full language by elaborating the surface syntax to the core syntax.
+The :doc:`core semantics <semantics>` page covers a minimal fragment of FPy;
+this page covers the full language by elaborating its surface syntax into the
+core.
 
 Elaboration is given as *rewrite rules* of two kinds: a syntactic form rewrites
 either directly to core syntax, or to another FPy form. Rewriting to fixpoint
 leaves only core syntax.
 
-Every rewrite is a *macro*: elaboration substitutes operands in place, binding
-each to a fresh variable so that it is evaluated once however often the body
-mentions it. A syntactic form shown as an ``@fp.fpy`` program expands to that
-body, under the rounding context where it expands, its parameters bound to the
-operands.
+Every rewrite is a *macro*: elaboration substitutes operands in place. A rewrite
+that repeats an operand binds it to a fresh variable first, so it is evaluated
+once. A syntactic form shown as an ``@fp.fpy`` program expands to that body,
+under the rounding context where it expands; its parameters are those bindings.
 
 Translating to core semantics
 -----------------------------
 
-Each syntactic form below rewrites directly to core syntax.
+Each syntactic form below has a counterpart in the core. The effectful ones
+reach it by hoisting to statement position first.
 
 Pure expressions
 ~~~~~~~~~~~~~~~~
@@ -55,15 +55,15 @@ rational number.
    * - ``xs[i]``
      - :math:`\mathsf{!}\,(xs[i])`
 
-.. note::
-
-   Literals are **exact**; they do not round.
-   For example, ``0.1`` is exactly :math:`1/10`.
-
 Every other context is a :math:`\mathsf{ctx}\ \{ \ldots \}`. The full language
 provides them as *values*—``fp.FP64`` and the other named contexts—and as
 *context constructors*, functions such as ``fp.IEEEContext`` that build one from
 its parameters.
+
+.. note::
+
+   Literals are **exact**; they do not round.
+   For example, ``0.1`` is exactly :math:`1/10`.
 
 Rounded arithmetic
 ^^^^^^^^^^^^^^^^^^
@@ -107,11 +107,10 @@ these operations are elements of :math:`\mathit{Arith}`.
      - ``fp.const_pi()``
 
 ``fp.fma(e1, e2, e3)`` computes ``e1 * e2 + e3`` with a *single* rounding,
-:math:`C(\exact{e_1 \cdot e_2 + e_3})`. The three remainders share a shape and
-differ in the exact value they take: the sign of the divisor, the sign of the
-dividend, and nearest-zero. The integer-valued operators differ in which integer
-they choose. ``fp.round(e)`` is idempotent, and ``fp.round_at(e, n)`` rounds at
-digit position ``n`` first.
+:math:`C(\exact{e_1 \cdot e_2 + e_3})`. The three remainders differ in sign
+convention: the divisor's, the dividend's, and nearest-zero. The integer-valued
+operators differ in which integer they choose. ``fp.round(e)`` is idempotent,
+and ``fp.round_at(e, n)`` rounds at digit position ``n`` first.
 
 Exact operations
 ^^^^^^^^^^^^^^^^
@@ -256,17 +255,28 @@ a statement of its own, binding the cell before writing through it.
      - :math:`\mathsf{ret}\ e`
    * - ``with e as x: s``
      - :math:`\mathsf{with}\ e\ \mathsf{as}\ x\ \mathsf{in}\ s`
-   * - ``assert e``
+   * - ``assert e`` / ``assert e, msg``
      - :math:`\mathsf{assert}\ e`
    * - ``pass``
      - :math:`\mathsf{skip}`
 
 A bare expression statement discards its value, so it binds a fresh variable
 that nothing reads; it is worth writing only for the effects inside ``e``.
-A ``while`` re-tests each iteration, so anything hoisted from its condition
-repeats at the end of the body. **E-Context** evaluates a ``with``'s context
-expression under :math:`\R`, so anything hoisted out of it runs there too, not
-before the ``with``. An ``assert``'s optional message is used only on failure.
+**E-Context** evaluates a ``with``'s context expression under :math:`\R`, so
+anything hoisted out of it runs there too, not before the ``with``. A failing
+``assert`` is stuck, so its optional message is dropped.
+
+.. note::
+
+   The rewrite for ``while`` statements assumes ``c`` is already a core expression.
+   A condition that hoists is re-tested each iteration, so its statements run before
+   the loop and again at the end of the body. Writing ``H`` for those statements
+   and ``c'`` for what remains of ``c``::
+
+       H
+       while c':
+           s
+           H
 
 Derived forms
 -------------
@@ -283,9 +293,8 @@ Each syntactic form below rewrites to another term in the full FPy language.
 Conditional expressions
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The core has no conditional expression, only the statement, so one nested in a
-larger expression hoists to assignment position and the statement form then
-applies. Unlike a call, it carries no effect.
+The core has no conditional expression, only the statement, so a conditional in
+expression position hoists even though it has no effect.
 
 .. list-table::
    :widths: 42 58
@@ -301,8 +310,10 @@ applies. Unlike a call, it carries no effect.
      - ``b if a else False``
    * - ``a or b``
      - ``True if a else b``
-   * - ``a < b <= c``
-     - ``t1 = a ; t2 = b ; (t1 < t2) and (t2 <= c)``
+   * - ``... (a < b <= c) ...``
+     - ``t = a < b <= c ; ... t ...``
+   * - ``z = a < b <= c``
+     - ``t1 = a ; t2 = b ; z = (t1 < t2) and (t2 <= c)``
 
 ``and`` and ``or`` short-circuit through the conditional. A chain binds every
 operand but the last, so a middle one is evaluated once rather than once per
@@ -403,15 +414,16 @@ rows with the rewrite above, then flatten; *k* generators nest the same way::
             with fp.REAL:
                 t4 = t4 + 1
 
-``xs[start:stop]`` takes exactly ``stop - start`` elements; an omitted bound
-defaults to ``0`` or ``len(xs)``, and bounds are not clamped::
+``xs[start:stop]`` takes exactly ``stop - start`` elements, and bounds are not
+clamped. ``xs[start:]`` is ``xs[start:len(xs)]``, and ``xs[:stop]`` is
+``xs[0:stop]``::
 
     @fp.fpy
     def slice(xs: list[Any], start: int, stop: int) -> list[Any]:
         return [xs[i] for i in range(start, stop)]
 
-``zip(xs, ys, ...)`` takes any number of lists; the two-list case is shown, and
-unequal lengths are undefined. ``enumerate(xs)`` pairs each element with its
+``zip(xs1, ..., xsk)`` is ``[(xs1[i], ..., xsk[i]) for i in range(len(xs1))]``,
+and unequal lengths are undefined. ``enumerate(xs)`` pairs each element with its
 index::
 
     @fp.fpy
@@ -447,11 +459,13 @@ independent of argument order::
             return e1 if fp.isnan(e1) else e2
         return e1 if e1 < e2 or (e1 == e2 and fp.signbit(e1)) else e2  # tie: -0
 
-Their variadic and single-list forms fold this binary operation left-to-right.
+Their variadic form folds left-to-right, so ``max(e1, e2, e3)`` is
+``max(max(e1, e2), e3)``; the single-list ``max(xs)`` folds over ``xs`` and has
+no empty case.
 
 ``fp.fdim(e1, e2)`` and ``fp.hypot(e1, e2)`` are *composite*: each computes its
-defining expression exactly and rounds **once**, where rounding each step would
-differ::
+defining expression exactly and rounds **once**; rounding each step would give a
+different result::
 
     @fp.fpy
     def fdim(e1: fp.Real, e2: fp.Real) -> fp.Real:
@@ -574,7 +588,8 @@ and round in the root operation::
 
 .. note::
 
-   These constants have no evaluation as written: they need an
-   exact transcendental intermediate, which ``fp.REAL`` cannot represent.
-   They exist as specifications for compatibility with
+   Unlike ``fp.const_pi_2()`` and ``fp.const_pi_4()``, these five have no
+   evaluation as written: they need an exact transcendental intermediate, which
+   ``fp.REAL`` cannot represent. They exist as specifications for compatibility
+   with
    `FPCore <https://fptalks.org/spec/index.html>`_.
