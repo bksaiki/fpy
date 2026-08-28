@@ -54,7 +54,7 @@ The simplest language constructs are constants.
 There are boolean constants `True` and `False`, and numeric constants like `1` and `3.14`.
 Crucially, **numerical constants are interpreted as-is**, that is, they are interpreted as rational numbers.
 
-```
+```python
 @fp.fpy
 def example_consts():
     t1 = True
@@ -63,6 +63,19 @@ def example_consts():
     t4 = 3.14
     t5 = fp.rational(1, 3) # 1/3 as a rational number
     t6 = fp.digits(1, 3, 2) # 1 * 2^3 as a rational number
+    t7 = fp.hexfloat('0x1.8p1') # 3 as a hexadecimal float
+    ...
+```
+
+Special values and mathematical constants are *nullary calls*, since their value
+depends on the current rounding context.
+
+```python
+@fp.fpy
+def example_nullary():
+    n = fp.nan()
+    i = fp.inf()
+    pi = fp.const_pi()   # also fp.const_e(), fp.const_ln2(), fp.const_sqrt2(), ...
     ...
 ```
 
@@ -74,8 +87,8 @@ They are created via specific classes.
 ```python
 @fp.fpy
 def example_contexts():
-    FP64 = fp.IEEE754Context(11, 64) # IEEE 754 double precision (also `fp.FP64`)
-    FP32 = fp.IEEE754Context(8, 32) # IEEE 754 single precision (also `fp.FP32`)
+    FP64 = fp.IEEEContext(11, 64) # IEEE 754 double precision (also `fp.FP64`)
+    FP32 = fp.IEEEContext(8, 32) # IEEE 754 single precision (also `fp.FP32`)
     S8 = fp.FixedContext(True, 0, 8) # 8-bit signed integer (also `fp.SINT8`)
     ...
 ```
@@ -86,8 +99,8 @@ The current rounding context may be changed by using the `with` statement.
 ```python
 @fp.fpy
 def example_with():
-    FP64 = fp.IEEE754Context(11, 64)
-    FP32 = fp.IEEE754Context(8, 32)
+    FP64 = fp.IEEEContext(11, 64)
+    FP32 = fp.IEEEContext(8, 32)
     with FP64:
         # operations here are rounded according to FP64
         x = 1 / 3 # x is rounded to the nearest representable FP64 number
@@ -107,6 +120,23 @@ which is an IEEE 754 double-precision floating-point context**.
 This means that if you call an FPy function from Python without setting a rounding context, it will use
 similar semantics to Python's built-in floating-point arithmetic.
 
+A `with` statement may bind its context to a name, and a context may be passed
+around as an ordinary value — as a function parameter of type `fp.Context`, or
+as the `ctx` argument of the decorator, which sets the context the function
+body starts in.
+
+```python
+@fp.fpy(ctx=fp.FP32)
+def example_ctx_decorator():
+    return 1 / 3 # rounded to FP32, whatever the caller's context
+
+@fp.fpy
+def example_ctx_arg(x, ctx: fp.Context):
+    with ctx as c:
+        y = x / 3
+    return y
+```
+
 ### Operations
 
 FPy supports a variety of operations, including arithmetic, algebraic, and transcendental functions.
@@ -120,6 +150,9 @@ def example_ops():
     a2 = x - y
     a3 = x * y
     a4 = x / y
+    a5 = x % y   # Python's modulus: x - floor(x / y) * y
+    a6 = x ** y  # same as fp.pow(x, y)
+    a7 = -x
     # algebraic
     b1 = fp.sqrt(x)
     b2 = fp.cbrt(x)
@@ -129,6 +162,34 @@ def example_ops():
     c2 = fp.log(x)
     c3 = fp.sin(x)
     c4 = fp.cos(x)
+    ...
+```
+
+Comparisons `<`, `<=`, `>`, `>=`, `==`, `!=` produce booleans and may be
+chained as in Python.  Booleans combine with `and`, `or`, and `not`, and
+`c if x else y` is an if-expression.
+
+```python
+@fp.fpy
+def example_predicates(x: fp.Real) -> fp.Real:
+    ok = 0 < x <= 1 and not fp.isnan(x)
+    return fp.sqrt(x) if ok else 0
+```
+
+Rounding to the current context can also be requested explicitly with
+`fp.round(x)`.  `fp.cast(x)` (also `fp.round_exact`) is the same rounding but
+raises if `x` is not exactly representable, which is useful for asserting that
+a value fits the current format.
+
+```python
+@fp.fpy
+def example_rounding():
+    with fp.FP64:
+        x = 1 / 3         # 1/3 rounded to nearest in FP64
+    with fp.FP32:
+        a = fp.round(x)   # that FP64 value rounded to nearest in FP32
+        b = fp.cast(0.5)  # 0.5, which is exact in FP32
+        # c = fp.cast(x)  # error: x is not representable in FP32
     ...
 ```
 
@@ -147,20 +208,36 @@ def example_tuples():
     ...
 ```
 
-Viewing a tuple as a binary pair, `fst` returns the head and `snd` returns
-the tail. `fst` works on any non-empty tuple; `snd` requires at least two
-elements and, for a pair, returns the bare second element (so
-`snd((a, b)) == b`, while for a longer tuple the tail is the tuple of the
-remaining elements). Element `k` is reached by chaining, e.g. `fst(snd(t))`.
+`fst` and `snd` are the two projections of a **pair**: `fst((x, y)) == x` and
+`snd((x, y)) == y`. Both reject any tuple whose arity is not 2, so an element of
+a longer tuple must be reached by destructuring. They do chain over *nested*
+pairs, e.g. `fst(snd(p))`.
 
 ```python
 @fp.fpy
 def example_accessors():
-    t = (x, y, z)
-    a = fp.fst(t)       # x
-    rest = fp.snd(t)    # (y, z)
-    b = fp.fst(rest)    # y == fp.fst(fp.snd(t))
+    p = (x, y)
+    a = fp.fst(p)               # x
+    b = fp.snd(p)               # y
+    q = (x, (y, z))
+    c = fp.fst(fp.snd(q))       # y
+    # fp.fst((x, y, z))         # error: not a pair
     ...
+```
+
+The identifier `_` discards a value rather than binding it.
+It is allowed wherever a name is bound — an assignment, a destructuring
+target, a loop or comprehension target, or a function argument — and cannot
+be read back.
+
+```python
+@fp.fpy
+def example_discard(xs, _):
+    _, b = (1, 2)          # keep only the second element
+    n = 0
+    for _ in xs:           # iterate without naming the element
+        n += 1
+    return b, n
 ```
 
 ### Lists
@@ -186,6 +263,37 @@ def example_comprehensions():
     lst = [1, 2, 3, 4, 5]
     lst2 = [x * x for x in lst] # creates [1, 4, 9, 16, 25]
     ...
+```
+
+A comprehension may draw from several iterables, and nesting one inside another
+builds a multi-dimensional list, which is indexed one dimension at a time.
+`fp.dim` gives the number of dimensions and `fp.size(m, k)` the length along
+dimension `k`.
+
+```python
+@fp.fpy
+def example_nested_comprehensions():
+    flat = [x * y for x in [1, 2] for y in [10, 20]]  # [10, 20, 20, 40]
+    m = [[x * y for y in [1, 2, 3]] for x in [10, 20]] # [[10, 20, 30], [20, 40, 60]]
+    e = m[1][2]         # 60
+    d = fp.dim(m)       # 2
+    n = fp.size(m, 1)   # 3, the length of each row
+    ...
+```
+
+Comprehensions do not support `if` filters, since a filter would make the
+resulting size depend on the values.
+
+A list of a given size may also be created uninitialized with `fp.empty`,
+then filled in.
+
+```python
+@fp.fpy
+def example_empty(n):
+    xs = fp.empty(n)
+    for i in range(n):
+        xs[i] = i * i
+    return xs
 ```
 
 FPy supports built-in functions like `len` and `range` that operate on lists.
@@ -292,6 +400,18 @@ def example_for_loop(lst):
         acc += x
     # x is not accessible here
     ...
+```
+
+### Assertions
+
+FPy supports `assert` statements, with an optional message.
+They are checked when the function runs.
+
+```python
+@fp.fpy
+def example_assert(x):
+    assert x > 0, 'x must be positive'
+    return fp.sqrt(x)
 ```
 
 ### While Loops
