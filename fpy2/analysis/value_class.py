@@ -66,7 +66,14 @@ from ..ast.visitor import DefaultVisitor
 from ..number import REAL, Context, Float
 from ..types import RealType, Type
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
-from .define_use import DefineUse, DefineUseAnalysis, Definition, DefSite
+from .define_use import (
+    AssignDef,
+    DefineUse,
+    DefineUseAnalysis,
+    Definition,
+    DefSite,
+    PhiDef,
+)
 from .type_infer import TypeAnalysis, TypeInfer
 
 __all__ = [
@@ -376,9 +383,75 @@ class _ValueClassInstance(DefaultVisitor):
             case Var():
                 # through a name: a test bound to one still says what it tests
                 src = self.def_use.defining_expr(cond)
-                return [] if src is cond else self._implied(src, truth)
+                if src is not cond:
+                    return self._implied(src, truth)
+                # no single defining expression -- but a lowered chain is a
+                # phi, and still a conjunction
+                return self._implied_ladder(
+                    self.def_use.use_to_def.get(cond), truth,
+                )
             case _:
                 return []
+
+    def _implied_ladder(
+        self, d: 'Definition | None', truth: bool
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What a *lowered* ``and``/``or`` being *truth* says.
+
+        :class:`~fpy2.transform.Hoistable` rewrites a chain whose tail needs a
+        statement into a flat ladder of guarded assignments, so the ``And`` the
+        cases above read is no longer in the AST by the time this runs:
+
+        .. code-block:: python
+
+            t = not isnan(a)        # `not isnan(a) and not isnan(b)`
+            if t: t = not isnan(b)
+            if t: ...               # `t` here is a phi of the two
+
+        The conjunction is not lost, only moved.  ``t`` takes the incoming value
+        where the guard failed and the body's where it held, and the guard *is*
+        the incoming value -- so ``t`` true forces the guard true, hence both
+        operands true.  Dually for an ``or``, which guards on the negation and
+        says something only when the whole is false.
+
+        Recursion terminates: a phi's operands are defined before it, so each
+        step moves strictly earlier in :attr:`DefineUseAnalysis.defs`.  A loop's
+        phi never matches, its site being a ``while`` rather than an ``if``.
+        """
+        if not isinstance(d, PhiDef) or not isinstance(d.site, If1Stmt):
+            return []
+        # `or` guards on the accumulator's negation, `and` on the accumulator
+        guard = d.site.cond
+        if isinstance(guard, Not):
+            negated, test = True, guard.arg
+        else:
+            negated, test = False, guard
+        if not isinstance(test, Var):
+            return []
+        # the guard must test exactly the value the phi joins, or this is some
+        # other `if p: t = q` that says nothing about `t`
+        guard_def = self.def_use.use_to_def.get(test)
+        if guard_def is None or self.def_use.def_to_idx.get(guard_def) != d.lhs:
+            return []
+        if truth is negated:      # `and` speaks when true, `or` when false
+            return []
+        return [
+            i for idx in (d.lhs, d.rhs)
+            for i in self._implied_at(self.def_use.defs[idx], truth)
+        ]
+
+    def _implied_at(
+        self, d: Definition, truth: bool
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What the definition *d* holding *truth* says, one rung of a ladder.
+
+        The expression belongs to its own assignment, so its variables resolve
+        to the definitions reaching *there* -- which is what makes the fact
+        correct, and why a later redefinition simply goes unrefined.
+        """
+        if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+            return self._implied(d.site.expr, truth)
+        return self._implied_ladder(d, truth)     # a longer ladder
 
     def _implied_compare(
         self, cond: Compare, truth: bool

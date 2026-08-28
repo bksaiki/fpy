@@ -214,17 +214,15 @@ guarantee, and the reason the two gates were allowed to differ in the first plac
       only caller cannot land in separate commits. `CppCompiler.specialize()`
       runs `Hoistable` **unconditionally, just before the `if optimize:` block
       holding `RoundElim`** — see *Where it goes in the cpp pipeline* below.
-- [ ] 9. **`ValueClassInfer._implied` reads a lowered guard.** Routing cpp
-      through `Hoistable` lowers `not isnan(a) and not isnan(b)` into guarded
-      statements, so `_implied` stops matching the `And` and `fp.fmin` emits a
-      `quiet_NaN` check it used to prove away. The fact is *moved*, not lost:
-      inside `if t:` where `t`'s reaching definitions are `not isnan(a)` and
-      `not isnan(b)`, both hold. `_implied` already reads through a name via
-      `DefineUseAnalysis.defining_expr`; what it cannot do is join two reaching
-      definitions, and `ReachingDefs` in `fpy2/analysis/` is the missing piece.
-      Three tests in `test_class_guards.py` carry a **strict** `xfail` naming
-      this phase — remove the markers with the fix, and the suite will tell you
-      if you forget.
+- [x] 9. **`ValueClassInfer._implied` reads a lowered guard.** Done:
+      `_implied_ladder` matches the phi a lowered chain leaves behind and
+      recurses into both operands, so `not isnan(a) and not isnan(b)` refines
+      exactly as the `And` did and the `fp.fmin` NaN check is dropped again.
+      The three strict `xfail`s in `test_class_guards.py` are gone; five tests
+      in `test_value_class.py::TestALoweredChain` cover the analysis directly,
+      including the two edges that keep it sound — an `if p: t = q` whose guard
+      tests something *other* than the phi's incoming value refines nothing, and
+      a rotated loop's phi is not a ladder.
 - [ ] 10. The remaining paperwork:
       a line in `RoundElim`'s docstring and a test case saying it preserves
       hoistable form, which the pipeline slot relies on;
@@ -292,8 +290,9 @@ Loop rotation is a transformation the C++ compiler performs itself, so the cost
 is readability of the emitted source and `-O0` only. The three tests that pinned
 the old shape now pin the new one.
 
-**The guard loss is real** — an `isnan` branch the C++ compiler cannot prove
-away — and is phase 9.
+**The guard loss was real** — an `isnan` branch the C++ compiler cannot prove
+away — and phase 9 removed it by teaching the analysis the lowered shape rather
+than by weakening the pass.
 
 A narrower gate for the cpp path was considered and rejected. It would have to be
 `needs_slot`, which is not a property of the program but a *whitelist predicting
