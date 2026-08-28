@@ -39,8 +39,6 @@ rational number.
      - :math:`\exact{m \cdot b^{e}}`
    * - ``fp.REAL``
      - :math:`\R`
-   * - ``fp.IEEEContext(8, 32)``
-     - :math:`\mathsf{ctx}\ \{ \ldots \}`
    * - ``x``
      - :math:`x`
    * - ``(e1, ..., em)``
@@ -54,6 +52,11 @@ rational number.
 
    Literals are **exact**; they do not round.
    For example, ``0.1`` is exactly :math:`1/10`.
+
+Every other context is a :math:`\mathsf{ctx}\ \{ \ldots \}`. The full language
+provides them as *values*—``fp.FP64`` and the other named contexts—and as
+*context constructors*, functions such as ``fp.IEEEContext`` that build one from
+its parameters; a constructor's arguments are the :math:`\{ \ldots \}`.
 
 Rounded arithmetic
 ^^^^^^^^^^^^^^^^^^
