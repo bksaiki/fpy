@@ -301,6 +301,19 @@ asking for `len(range(rows))`, which failed the same way — measured, all three
 and needs one up front, where `_open_list_build` never does. Phase 3b supplies
 it.
 
+*And an inlined iterable must not be indexed.* Leaving the `range` inline is
+only half of it: `_lower`'s single-clause branch reads `<iterable>[i]`, which
+materialises the very list the inlining avoids. Where the iterable is inlined
+*and* the target is named, the loop iterates it directly and carries a write
+index, as the multi-clause branch does.
+
+Only where the target is named. A discarded target reads no element, so the
+indexed form materialises nothing — and it is the better shape, because its
+index is the `range` loop's own variable, which `format_infer` bounds. A carried
+counter widens instead, without bound where the trip count is not static:
+switching `zeros` to it cost storage selection for `acc` and lost five corpus
+programs before the condition was narrowed.
+
 *Tests.* `tests/unit/transform/test_comp_to_loop.py`: a `range` iterable is left
 inline, a non-`range` one still binds.
 
@@ -327,6 +340,10 @@ subscript.
 > `len(range(2.5)) == 3`. The interpreter's integer requirement is the intended
 > rule, so the *page* is what is loose here, not `_eval_range`. Worth a separate
 > fix; nothing in this plan depends on it.
+
+`Range3` keeps the materialising path: its count divides by the step and the
+step's sign picks the comparison, so a symbolic one needs a branch, and its
+integer bounds make materialising available anyway.
 
 *Tests.* `tests/unit/backend/cpp/test_emit_for.py`: a length builds no range,
 and a real bound converts rather than refusing.
@@ -403,18 +420,52 @@ moves — `test_unbox_profile.py`, `tests/unit/transform/test_anf_profile.py`,
 `tests/unit/transform/test_hoistable_profile.py`. Expect shape assertions to
 need updating; a *count* moving the wrong way is a finding, not a test to fix.
 
-*Acceptance.*
+*Acceptance.* **Met.** The corpus stays at 202 with nothing lost or gained, 19
+emit differently, and the `prod` witness keeps `std::array<double, 12>` — the
+standing gate from *Precision is the acceptance test for an unfold* in
+[backend-independence.md](backend-independence.md), which the corpus alone does
+not discharge. `CompToLoop.refusals` names only dependent clauses, which the
+emitter still handles until phase 6.
 
-- corpus stays at 202, with no program lost;
-- `CompToLoop.refusals` over the corpus names only dependent clauses, which the
-  emitter still handles;
-- the parameter-length witness set from phase 4 proves the same lengths as
-  before the wiring, and no function's `fn_fmt` moves to `REAL_FORMAT`.
+## Phase 5b — a filled list still moves out
 
-The last one is the standing gate from
-*Precision is the acceptance test for an unfold* in
-[backend-independence.md](backend-independence.md), and it is the one the corpus
-alone does not discharge.
+*Why.* Wiring the fixpoint made `xs = [f(y) for y in ys]; return (xs, 1.0)`
+**fail** under the default `UnboxMode.STRICT`, where it compiled before. The
+corpus could not see it: 202 either way, because it holds no
+comprehension-assigned-then-consumed shape.
+
+*What the def graph said.* For `xs = fp.empty(n); xs[i] = ...; return (xs, 1.0)`:
+
+```
+#3 AssignDef  site=Assign          same_object=()      uses=[]
+#4 PhiDef     site=phi             same_object=(3, 7)  uses=[IndexedAssign, Var]
+#7 AssignDef  site=IndexedAssign   same_object=(4,)    uses=[]
+```
+
+Two independent refusals in `_note_consumed`, and the fix for both is that the
+unit is the **object**, not one definition of it:
+
+- the reaching definition is a *phi*, which the guard refused outright ("a phi
+  has several definitions"). This one's operands are all `same_object` with it —
+  one list threaded through its own fills, not a merge of two lists. The guard
+  is now "no phi *outside* the class", which still refuses a value leaving
+  through an unrelated merge.
+- the phi has *two* uses, the loop's write-through and the read after it. An
+  `xs[i] = v` is a use of the name but not a second *place*: it makes a
+  definition `same_object` with what it wrote through. `_moves_out` discounts
+  exactly those.
+
+Recording the whole class matters downstream: `referrers_after_moves` drops a
+name only when *every* definition of it is consumed, so recording the phi alone
+would have changed nothing.
+
+*Tests.* `tests/unit/backend/cpp/test_unbox.py` — a loop-filled list moves out,
+and a loop-filled list *read again* keeps its handle. The negative one carries
+the weight: an over-eager discount is a use-after-move, not a missed
+optimization.
+
+*Acceptance.* The program above compiles unboxed and moved under `STRICT`; the
+corpus boxing profile is unmoved. **Met.**
 
 ## Phase 6 — make `CompToLoop` capable of the dependent clause
 

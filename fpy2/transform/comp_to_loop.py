@@ -295,9 +295,18 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(bind(Empty(None, [Var(n, loc)], loc)))
 
         elt = self._visit_expr(e.elt, None)
-        if len(e.targets) == 1:
-            # One clause over a bound temporary: index it, so nothing is
-            # loop-carried and the store index is the loop variable itself.
+        # Index the iterable where the loop reads no element from it, or where
+        # it is a name: nothing is then loop-carried and the store index is the
+        # loop variable itself, which `format_infer` bounds by the range.  A
+        # carried counter widens instead, without bound where the trip count is
+        # not static.  The exception is an *inlined* iterable with a target to
+        # bind: subscripting a `range` would materialise the very list that
+        # leaving it inline avoids.
+        indexed = (
+            not self._inlinable(iters[0])
+            or isinstance(e.targets[0], UnderscoreId)
+        )
+        if len(e.targets) == 1 and indexed:
             idx = self.gensym.fresh('i')
             src = iters[0]
             stmts: list[Stmt] = []
@@ -315,8 +324,9 @@ class _CompToLoopInstance(SiteRewriter):
             ))
             return Var(acc, loc)
 
-        # Several clauses: nest the loops over the original targets and carry a
-        # write index, rather than linearizing it.
+        # Several clauses, or one over an iterable that is not indexed: nest the
+        # loops over the original targets and carry a write index, rather than
+        # linearizing it.
         j_id = self.gensym.fresh('j')
         out.append(Assign(j_id, None, Integer(0, loc), loc))
         inner: list[Stmt] = [

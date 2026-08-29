@@ -108,8 +108,12 @@ class TestListComp:
                 return ys[0]
 
         out = _compile_list_arg(f)
-        assert 'for (double x : xs) {' in out
-        assert '.push_back((x + static_cast<double>(1)));' in out
+        # the source is bound by reference, then indexed; the result is
+        # allocated at its length and filled by index, never grown
+        assert 'const auto& t = xs;' in out
+        assert 'double x = t[static_cast<size_t>(i)];' in out
+        assert 'ys[static_cast<size_t>(i)] = (x + static_cast<double>(1));' in out
+        assert 'push_back' not in out
 
     def test_range_iterable(self):
         """``range(...)`` in a comprehension expands to a counter loop.
@@ -131,8 +135,10 @@ class TestListComp:
         assert 'for (int8_t i = 0; i < 5; ++i) {' in out
         # `range(5)` has a proven length, so the comprehension fills a
         # std::array through a running index rather than push_back
-        assert '] = (static_cast<int64_t>(i) * static_cast<int64_t>(i));' in out
+        assert 'uint8_t _t = (i * i);' in out
+        assert 'sq[static_cast<size_t>(j)] = _t;' in out
         assert 'std::array<uint8_t, 5>' in out  # {0,1,4,9,16} fits u8
+        assert 'push_back' not in out
 
     def test_range2_iterable(self):
         @fp.fpy
@@ -160,12 +166,14 @@ class TestListComp:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64)), ListType(RealType(fp.FP64))],
         )
-        # Inner loop nested directly inside outer loop's body.
+        # Inner loop nested directly inside outer loop's body, filling one
+        # result allocated at the product of the two lengths.
         assert (
-            'for (double x : xs) {\n'
-            '        for (double y : ys) {'
+            'for (double x : t) {\n'
+            '        for (double y : t6) {'
         ) in out
-        assert '.push_back((x * y));' in out
+        assert 'zs[static_cast<size_t>(j)] = (x * y);' in out
+        assert 'push_back' not in out
 
     def test_tuple_binding_target(self):
         """Tuple-binding targets in the for-clause destructure each
@@ -188,7 +196,7 @@ class TestListComp:
         )
         assert 'std::get<0>' in out
         assert 'std::get<1>' in out
-        assert '.push_back((a + b));' in out
+        assert 'ys[static_cast<size_t>(i)] = (a + b);' in out
 
 
 class TestListSlice:

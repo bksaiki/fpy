@@ -154,12 +154,12 @@ class TestTupleDestructure:
             f, ctx=fp.FP64,
             arg_types=[ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))],
         )
-        # Comprehension iterates a tuple-typed temp, destructures, then
-        # ``push_back``s the element expression.
-        assert 'for (const auto& _tmp2 : xs) {' in out
-        assert '        double a = std::get<0>(_tmp2);' in out
-        assert '        double b = std::get<1>(_tmp2);' in out
-        assert '.push_back((a + b));' in out
+        # Comprehension indexes a tuple-typed temp, destructures, then stores
+        # the element expression into the slot it is filling.
+        assert 'auto&& _tmp1 = t[static_cast<size_t>(i)];' in out
+        assert '        double a = std::get<0>(_tmp1);' in out
+        assert '        double b = std::get<1>(_tmp1);' in out
+        assert 'ys[static_cast<size_t>(i)] = (a + b);' in out
 
 
 

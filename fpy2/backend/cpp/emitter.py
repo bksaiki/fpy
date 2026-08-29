@@ -1927,7 +1927,7 @@ class CppEmitter(Visitor):
             # single ``std::get``, so they bypass the eager operand visit
             # below — see ``_emit_tuple_accessor``.
             return self._emit_tuple_accessor(e, ctx)
-        if isinstance(e, Len) and isinstance(e.arg, Range1):
+        if isinstance(e, Len) and isinstance(e.arg, (Range1, Range2)):
             # Counted without materialising, so it bypasses the operand visit
             # below — which would build the range and refuse a real bound.
             return self._emit_range_len(e, e.arg, ctx)
@@ -2270,13 +2270,22 @@ class CppEmitter(Visitor):
                     f'unsupported FP predicate: {type(e).__name__}', at=e,
                 )
 
-    def _emit_range_len(self, e: Len, rng: Range1, ctx) -> str:
-        """``len(range(stop))`` as a count, without building the range.
+    def _readable_twice(self, code: str) -> str:
+        """*code*, in a form the caller may emit more than once.  A literal is
+        already one; anything else goes through :meth:`_bind_operand`."""
+        return code if code.isdigit() else self._bind_operand(code)
+
+    def _emit_range_len(self, e: Len, rng: 'Range1 | Range2', ctx) -> str:
+        """``len(range(...))`` as a count, without building the range.
 
         A range's *elements* need an integer type, and a real bound has none --
         which is why `_emit_range` refuses one.  Its *length* needs no such
-        thing: ``range(stop)`` holds the integers in ``[0, stop)``, so the count
-        is ``stop`` clamped at zero.
+        thing: a unit-step range holds the integers in ``[start, stop)``, so the
+        count is ``stop - start`` clamped at zero.
+
+        `Range3` is not here.  Its count divides by the step and the sign of the
+        step decides the comparison, so a symbolic one needs a branch; it keeps
+        the materialising path, which its integer bounds make available.
 
         The conversion is unconditional where `_maybe_cast` would refuse it as
         lossy, and a range bound is the one place that is justified: the
@@ -2285,12 +2294,18 @@ class CppEmitter(Visitor):
         the backend owing nothing -- the same reasoning as an out-of-range
         subscript.
 
-        The clamp settles NaN too: ``NaN > 0`` is false, so the count is zero.
+        The clamp settles NaN too: a comparison against it is false, so the
+        count is zero.
         """
         result_ty = self._storage_for_expr(e)
-        # read twice, by the test and by the count
-        stop = self._bind_operand(self._visit_expr(rng.arg, ctx))
-        return f'static_cast<{result_ty.format()}>({stop} > 0 ? {stop} : 0)'
+        if isinstance(rng, Range1):
+            stop = self._readable_twice(self._visit_expr(rng.arg, ctx))
+            count = f'{stop} > 0 ? {stop} : 0'
+        else:
+            start = self._readable_twice(self._visit_expr(rng.first, ctx))
+            stop = self._readable_twice(self._visit_expr(rng.second, ctx))
+            count = f'{stop} > {start} ? {stop} - {start} : 0'
+        return f'static_cast<{result_ty.format()}>({count})'
 
     def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx) -> str:
         """A ``range`` bound, cast into the element type.

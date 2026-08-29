@@ -166,9 +166,13 @@ class TestBooleanReduce:
         assert '&&' in out          # folded with `and` in the loop body
 
     def test_comprehension_operand_unfused_without_optimize(self):
-        """With ``optimize=False`` the surface AST compiles verbatim: the
+        """With ``optimize=False`` the reduction is not fused: the
         comprehension materializes a ``std::vector<bool>`` that
-        ``std::all_of`` then scans."""
+        ``std::all_of`` then scans.
+
+        The comprehension is still *lowered* -- ``CompToLoop`` is a
+        normalization and runs either way -- so the vector is filled by index
+        rather than grown."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             with fp.FP64:
@@ -176,5 +180,5 @@ class TestBooleanReduce:
 
         out = self._compile(f, RealType(fp.FP64), optimize=False)
         assert 'std::vector<bool>' in out
-        assert 'push_back(' in out
+        assert 'acc[static_cast<size_t>(i)] = (x < static_cast<double>(0));' in out
         assert 'std::all_of(' in out
