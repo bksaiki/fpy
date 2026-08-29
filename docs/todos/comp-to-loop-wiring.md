@@ -495,12 +495,46 @@ storage selection failed for `ragged_lowered`: cannot pick storage for `t4`
 rewrite compiles, `UnboxMode.STRICT` included. `CompToLoop`, `for_unroll` and
 `split_loop` already take this precaution for the same reason.
 
-*Tests.* `tests/unit/transform/test_comp_to_loop.py`,
-`tests/unit/strategies/test_comp_to_loop.py`. Backend tests should not move.
+*The switch is `dependent=False`, threaded through `sites` / `refusals` /
+`apply`.* `_verify` returning `None` makes a comprehension a *site*, and
+`apply` with no `where` takes every site — so without a flag the pipeline would
+start applying this the moment it became possible, which is phase 7's decision
+and not this one's.
 
-*Acceptance.* `CompToLoop.refusals` is empty on every corpus function, and the
-corpus still compiles 202 — unchanged, because the pipeline is not applying the
-new case yet.
+*Every name the pass mints takes `temp_id`.* The dependent lowering needs
+several temporaries of its own, and adding a third vocabulary of hard-coded
+prefixes beside `acc` / `n` / `i` / `j` made the inconsistency plain: `temp_id`
+was documented as naming "the iterable binding" while four other names ignored
+it. All of them now go through `Gensym.refresh(temp_id)`, so a caller owns the
+whole namespace the rewrite introduces — which is also what lets a test pin a
+shape by passing a distinctive prefix instead of matching on gensym numbering.
+
+The first clause's iterable is bound here exactly as `_lower` binds one; the
+rest of the iterables and the element go into the nested comprehension and are
+bound when *it* is lowered. `_descend` follows the same split, or the listing
+would count a site the rewrite does not take.
+
+*Tests.* `tests/unit/transform/test_comp_to_loop.py` — `_ragged` and `_ragged3`
+lower to nothing under `dependent=True` and agree with the interpreter, the flag
+is off by default, and the iterable binding takes `temp_id`.
+
+*Acceptance.* `CompToLoop.refusals(..., dependent=True)` is empty on every
+witness, three ragged shapes agree with the interpreter, and the corpus still
+compiles 202 — unchanged, because the pipeline is not applying the new case.
+**Met.**
+
+**One finding for phase 7.** The fully-lowered `ragged` does not compile today:
+
+```
+unsupported: this value is `std::vector<uint8_t>` where `std::vector<double>` is
+needed, and C++ has no conversion between them.
+```
+
+That is *A narrower value meeting a wider place* in
+[backend-cpp.md](backend-cpp.md) — `fp.empty(n)` starts at the lattice bottom and
+the place is the declared return. So "apply it" costs more than the rows
+materialisation: it needs that refusal closed as well, or the programs it makes
+total stop compiling.
 
 ## Phase 7 — decide whether the pipeline applies it
 

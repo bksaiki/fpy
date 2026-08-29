@@ -2,6 +2,8 @@
 Phase 4a tests for the cpp emitter — list literals, indexing, ``len``.
 """
 
+import re
+
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
@@ -110,9 +112,12 @@ class TestListComp:
         out = _compile_list_arg(f)
         # the source is bound by reference, then indexed; the result is
         # allocated at its length and filled by index, never grown
-        assert 'const auto& t = xs;' in out
-        assert 'double x = t[static_cast<size_t>(i)];' in out
-        assert 'ys[static_cast<size_t>(i)] = (x + static_cast<double>(1));' in out
+        assert re.search(r'const auto& \w+ = xs;', out)
+        assert re.search(r'double x = \w+\[static_cast<size_t>\(\w+\)\];', out)
+        assert re.search(
+            r'ys\[static_cast<size_t>\(\w+\)\] = '
+            r'\(x \+ static_cast<double>\(1\)\);', out,
+        )
         assert 'push_back' not in out
 
     def test_range_iterable(self):
@@ -136,7 +141,7 @@ class TestListComp:
         # `range(5)` has a proven length, so the comprehension fills a
         # std::array through a running index rather than push_back
         assert 'uint8_t _t = (i * i);' in out
-        assert 'sq[static_cast<size_t>(j)] = _t;' in out
+        assert re.search(r'sq\[static_cast<size_t>\(\w+\)\] = _t;', out)
         assert 'std::array<uint8_t, 5>' in out  # {0,1,4,9,16} fits u8
         assert 'push_back' not in out
 
@@ -168,11 +173,13 @@ class TestListComp:
         )
         # Inner loop nested directly inside outer loop's body, filling one
         # result allocated at the product of the two lengths.
-        assert (
-            'for (double x : t) {\n'
-            '        for (double y : t6) {'
-        ) in out
-        assert 'zs[static_cast<size_t>(j)] = (x * y);' in out
+        assert re.search(
+            r'for \(double x : \w+\) \{\n'
+            r'        for \(double y : \w+\) \{', out,
+        )
+        assert re.search(
+            r'zs\[static_cast<size_t>\(\w+\)\] = \(x \* y\);', out,
+        )
         assert 'push_back' not in out
 
     def test_tuple_binding_target(self):
@@ -196,7 +203,9 @@ class TestListComp:
         )
         assert 'std::get<0>' in out
         assert 'std::get<1>' in out
-        assert 'ys[static_cast<size_t>(i)] = (a + b);' in out
+        assert re.search(
+            r'ys\[static_cast<size_t>\(\w+\)\] = \(a \+ b\);', out,
+        )
 
 
 class TestListSlice:

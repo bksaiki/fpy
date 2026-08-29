@@ -180,5 +180,8 @@ class TestBooleanReduce:
 
         out = self._compile(f, RealType(fp.FP64), optimize=False)
         assert 'std::vector<bool>' in out
-        assert 'acc[static_cast<size_t>(i)] = (x < static_cast<double>(0));' in out
+        assert re.search(
+            r'\w+\[static_cast<size_t>\(\w+\)\] = '
+            r'\(x < static_cast<double>\(0\)\);', out,
+        )
         assert 'std::all_of(' in out

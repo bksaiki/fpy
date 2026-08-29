@@ -6,6 +6,8 @@ later phase together with ``IndexedAssign``), not via ``t[i]``
 subscripting — so this phase only covers tuple *construction*.
 """
 
+import re
+
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
@@ -156,10 +158,14 @@ class TestTupleDestructure:
         )
         # Comprehension indexes a tuple-typed temp, destructures, then stores
         # the element expression into the slot it is filling.
-        assert 'auto&& _tmp1 = t[static_cast<size_t>(i)];' in out
+        assert re.search(
+            r'auto&& _tmp1 = \w+\[static_cast<size_t>\(\w+\)\];', out,
+        )
         assert '        double a = std::get<0>(_tmp1);' in out
         assert '        double b = std::get<1>(_tmp1);' in out
-        assert 'ys[static_cast<size_t>(i)] = (a + b);' in out
+        assert re.search(
+            r'ys\[static_cast<size_t>\(\w+\)\] = \(a \+ b\);', out,
+        )
 
 
 

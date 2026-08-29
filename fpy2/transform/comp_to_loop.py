@@ -13,11 +13,15 @@ comprehension.  Lowering it is what makes that code schedulable.
 
     # after
     t = xs
-    acc = fp.empty(len(t))
-    for i in range(len(t)):
-        x = t[i]
-        acc[i] = f(x)
-    ys = acc
+    ys = fp.empty(len(t))
+    for t1 in range(len(t)):
+        x = t[t1]
+        ys[t1] = f(x)
+
+An assignment target is filled directly; only a comprehension with no name to
+fill -- in a ``return``, or an argument -- allocates a temporary of its own.
+Every name minted here takes its prefix from ``temp_id``, so a caller owns the
+whole namespace the rewrite introduces.
 
 Several clauses are a cartesian product -- CPython's nesting, outermost clause
 first and the last index varying fastest -- so they become nested loops over the
@@ -144,6 +148,9 @@ class _CompToLoopInstance(SiteRewriter):
     temp_id: NamedId
     gensym: Gensym
     where: int | Cursor | None
+    dependent: bool
+    """whether to lower a dependent clause list, which costs a materialised
+    row per outer element -- see :meth:`_lower_dependent`"""
     _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
@@ -155,12 +162,14 @@ class _CompToLoopInstance(SiteRewriter):
         def_use: DefineUseAnalysis,
         where: int | Cursor | None = None,
         temp_id: NamedId | None = None,
+        dependent: bool = False,
     ):
         self.func = func
         self.def_use = def_use
         self.temp_id = NamedId('t') if temp_id is None else temp_id
         self.gensym = Gensym(reserved=def_use.names())
         self.where = where
+        self.dependent = dependent
         self._fill = None
 
     # ------------------------------------------------------------------
@@ -168,7 +177,7 @@ class _CompToLoopInstance(SiteRewriter):
 
     def _verify(self, e: ListComp) -> None | Declined:
         """`None` where *e* may be lowered, else why not."""
-        if dependent_clauses(e):
+        if dependent_clauses(e) and not self.dependent:
             # `fp.empty` needs its length first and there is no `append`, so a
             # length that is not a product of the clause lengths has nowhere to
             # come from.
@@ -218,9 +227,15 @@ class _CompToLoopInstance(SiteRewriter):
         The listing has to reach exactly what the rewrite reaches, or it counts a
         site the rewrite will not take: the iterables end up outside the loops
         and keep their statement slot, the element does not.
+
+        A dependent clause list keeps only its *first* iterable out here.  The
+        rest, and the element, go into the nested comprehension
+        :meth:`_lower_dependent` builds, so they get a slot when that one is
+        lowered and not before.
         """
-        for iterable in e.iterables:
-            self._visit_expr(iterable, out)
+        keep = 1 if dependent_clauses(e) else len(e.iterables)
+        for i, iterable in enumerate(e.iterables):
+            self._visit_expr(iterable, out if i < keep else None)
         self._visit_expr(e.elt, None)
 
     def _fillable(self, e: ListComp, target: NamedId) -> bool:
@@ -256,10 +271,87 @@ class _CompToLoopInstance(SiteRewriter):
         self._fill = None
         return taken
 
+    def _lower_dependent(self, e: ListComp, out: list, fill) -> Expr:
+        """A clause list whose length is a sum rather than a product.
+
+        Where a clause's iterable reads an earlier clause's target, the rows
+        have different lengths and `fp.empty` has nowhere to get the total:
+        there is no ``append``, and evaluating that iterable a second time to
+        count first is not the same program.  So build the rows, add up their
+        lengths, then flatten -- which is what
+        ``derived-semantics.rst`` prescribes.
+
+        Split at the *first* clause only.  Its iterable can read no target, so
+        the outer comprehension is always independent, and the rest become one
+        nested comprehension per row -- which a later pass lowers in turn, since
+        it now sits in the loop body that is its statement slot.  `k` clauses
+        peel one at a time and each flatten is one level deep.
+
+        The rows are read twice, to count and to copy, so unlike a plain fill
+        the temporary really is a second place.  That is the cost, and it is why
+        this fires only on the dependent case.
+
+        Every name here is a temporary the caller never wrote, so like the
+        iterable bindings they all take `temp_id`.
+        """
+        loc = e.loc
+        # the first clause's iterable, bound here like any other -- evaluated
+        # once, and under the caller's `temp_id`
+        src = self.gensym.refresh(self.temp_id)
+        out.append(Assign(
+            src, None, self._visit_expr(e.iterables[0], out), loc,
+        ))
+
+        rows = self.gensym.refresh(self.temp_id)
+        inner = ListComp(
+            list(e.targets[1:]), list(e.iterables[1:]), e.elt, loc,
+        )
+        out.append(Assign(rows, None, ListComp(
+            [copy_target(e.targets[0])], [Var(src, loc)], inner, loc,
+        ), loc))
+
+        # the total length: one pass over the rows, adding each length
+        n = self.gensym.refresh(self.temp_id)
+        row = self.gensym.refresh(self.temp_id)
+        out.append(integer_ctx([Assign(n, None, Integer(0, loc), loc)], loc))
+        out.append(ForStmt(row, Var(rows, loc), StmtBlock([
+            integer_ctx([Assign(n, None, Add(
+                Var(n, loc), Len(None, Var(row, loc), loc), loc,
+            ), loc)], loc),
+        ]), loc))
+
+        acc, at = (self.gensym.refresh(self.temp_id), ()) if fill is None else fill
+
+        def place(*more: Expr) -> list[Expr]:
+            return [clone(ix) for ix in at] + list(more)
+
+        alloc = Empty(None, [Var(n, loc)], loc)
+        out.append(
+            IndexedAssign(acc, place(), alloc, loc) if at
+            else Assign(acc, None, alloc, loc)
+        )
+
+        # ... then copy every element across, carrying one write index
+        j = self.gensym.refresh(self.temp_id)
+        elt = self.gensym.refresh(self.temp_id)
+        row2 = self.gensym.refresh(self.temp_id)
+        out.append(integer_ctx([Assign(j, None, Integer(0, loc), loc)], loc))
+        out.append(ForStmt(row2, Var(rows, loc), StmtBlock([
+            ForStmt(elt, Var(row2, loc), StmtBlock([
+                IndexedAssign(acc, place(Var(j, loc)), Var(elt, loc), loc),
+                integer_ctx([Assign(j, None, Add(
+                    Var(j, loc), Integer(1, loc), loc,
+                ), loc)], loc),
+            ]), loc),
+        ]), loc))
+        return Var(acc, loc)
+
     def _lower(self, e: ListComp, out: list) -> Expr:
         """Emit the allocation and loops into *out*; return the result `Var`."""
         loc = e.loc
         fill = self._take_fill(e)
+        if dependent_clauses(e):
+            return self._lower_dependent(e, out, fill)
 
         # Every clause is independent, so each iterable is evaluated once, here.
         iters: list[Expr] = []
@@ -272,7 +364,7 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(Assign(t, None, src, loc))
             iters.append(Var(t, loc))
 
-        acc, at = (self.gensym.fresh('acc'), ()) if fill is None else fill
+        acc, at = (self.gensym.refresh(self.temp_id), ()) if fill is None else fill
 
         def place(*more: Expr) -> list[Expr]:
             """The accumulator's own indices, then *more*.  Empty where the
@@ -290,7 +382,7 @@ class _CompToLoopInstance(SiteRewriter):
             # a bare length needs no arithmetic, so no exact-integer block
             out.append(bind(Empty(None, [size], loc)))
         else:
-            n = self.gensym.fresh('n')
+            n = self.gensym.refresh(self.temp_id)
             out.append(integer_ctx([Assign(n, None, size, loc)], loc))
             out.append(bind(Empty(None, [Var(n, loc)], loc)))
 
@@ -307,7 +399,7 @@ class _CompToLoopInstance(SiteRewriter):
             or isinstance(e.targets[0], UnderscoreId)
         )
         if len(e.targets) == 1 and indexed:
-            idx = self.gensym.fresh('i')
+            idx = self.gensym.refresh(self.temp_id)
             src = iters[0]
             stmts: list[Stmt] = []
             if not isinstance(e.targets[0], UnderscoreId):
@@ -327,7 +419,7 @@ class _CompToLoopInstance(SiteRewriter):
         # Several clauses, or one over an iterable that is not indexed: nest the
         # loops over the original targets and carry a write index, rather than
         # linearizing it.
-        j_id = self.gensym.fresh('j')
+        j_id = self.gensym.refresh(self.temp_id)
         out.append(Assign(j_id, None, Integer(0, loc), loc))
         inner: list[Stmt] = [
             IndexedAssign(acc, place(Var(j_id, loc)), elt, loc),
@@ -438,9 +530,11 @@ class _CompToLoopInstance(SiteRewriter):
         return self._visit_function(self.func, None)
 
 
-def _lister(func: FuncDef) -> _CompToLoopInstance:
+def _lister(func: FuncDef, dependent: bool = False) -> _CompToLoopInstance:
     """The pass instance a listing walks `func` with."""
-    return _CompToLoopInstance(func, DefineUse.analyze(func))
+    return _CompToLoopInstance(
+        func, DefineUse.analyze(func), dependent=dependent,
+    )
 
 
 class CompToLoop:
@@ -450,26 +544,30 @@ class CompToLoop:
     """
 
     @staticmethod
-    def sites(func: FuncDef, within: Cursor | None = None) -> list[Cursor]:
+    def sites(
+        func: FuncDef, within: Cursor | None = None, *,
+        dependent: bool = False,
+    ) -> list[Cursor]:
         """The comprehensions of `func` this rewrite would lower, in visit
         order -- what a `where` index counts, and what `within` narrows.
 
         A comprehension this pass cannot lower is not a site: it neither appears
         here nor takes an index.  :meth:`refusals` says why each was left.
         """
-        return _lister(func).list_sites(within)
+        return _lister(func, dependent).list_sites(within)
 
     @staticmethod
     def refusals(
-        func: FuncDef, within: Cursor | None = None
+        func: FuncDef, within: Cursor | None = None, *,
+        dependent: bool = False,
     ) -> list[tuple[Cursor, str]]:
         """Why each comprehension of `func` that is not a site was left alone."""
-        return _lister(func).list_refusals(within)
+        return _lister(func, dependent).list_refusals(within)
 
     @staticmethod
     def apply(
         func: FuncDef, *, where: int | Cursor | None = None,
-        temp_id: NamedId | None = None
+        temp_id: NamedId | None = None, dependent: bool = False,
     ) -> FuncDef:
         """
         Lowers every comprehension of `func` it can into an allocation plus a
@@ -477,15 +575,20 @@ class CompToLoop:
 
         `where` selects one comprehension by index in visit order; `None` takes
         every one it can lower.
+
+        `dependent` also lowers a clause list whose length is a sum rather than
+        a product.  Off by default: it materialises a row per outer element,
+        where every other shape allocates once and fills, so it is worth it only
+        to a caller that needs the program comprehension-free.
         """
         return CompToLoop.apply_with_edits(
-            func, where=where, temp_id=temp_id,
+            func, where=where, temp_id=temp_id, dependent=dependent,
         ).result
 
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *, where: int | Cursor | None = None,
-        temp_id: NamedId | None = None
+        temp_id: NamedId | None = None, dependent: bool = False,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced.
 
@@ -500,7 +603,9 @@ class CompToLoop:
         check_where(where)
 
         def_use = DefineUse.analyze(func)
-        vtor = _CompToLoopInstance(func, def_use, where, temp_id)
+        vtor = _CompToLoopInstance(
+            func, def_use, where, temp_id, dependent=dependent,
+        )
         out = vtor.apply()
         vtor.check_site('a comprehension')
         SyntaxCheck.check(out, ignore_unknown=True)
