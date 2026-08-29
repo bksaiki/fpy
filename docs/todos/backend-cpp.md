@@ -567,19 +567,39 @@ static size — see
 [array-size-integer-exactness.md](array-size-integer-exactness.md). The
 single-clause form also leaves a dead `auto&& _tmp1 = xs.size();`.
 
+The witness needs *parameters*, which is why the corpus does not show it — its
+multi-clause comprehensions iterate literal ranges, and `_const_int`'s
+partial-eval path folds those whole. Over proven-length parameters the signature
+itself changes:
+
+```cpp
+// [x + y for x in xs for y in ys], xs and ys proven 3 and 4
+std::array<double, 12> prod(const std::array<double, 3>&, const std::array<double, 4>&);
+std::vector<double>    prod(const std::array<double, 3>&, const std::array<double, 4>&);  // lowered
+```
+
 **Deleting the emitter's support** — so that only statements introduce
 identifiers, one less case for storage selection — buys ~90 lines
 (`_visit_list_comp`, `_emit_list_comp_at`, `_open_comp_loop`, the `_emit_at`
-case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry) and costs two
-program classes that compile today: a dependent clause list, and a comprehension
-in an `IfExpr` branch. It would also leave the invariant local — 22 files outside
-this backend still handle `ListComp`. The invariant is a language property, so
-the route to it is making `CompToLoop` total rather than lowering per-backend;
-what that needs is the last gap in
+case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry) and costs one
+program class that compiles today: a dependent clause list. The other class this
+used to name — a comprehension in an `IfExpr` branch — is no longer a cost:
+`Hoistable` and `CompToLoop` run to a fixpoint clear it, along with a
+comprehension in a `while` condition and a nested one, since each pass creates
+the slot the other lacks. Deleting the emitter's support would still leave the
+invariant local — 22 files outside this backend still handle `ListComp`. The
+invariant is a language property, so the route to it is making `CompToLoop` total
+rather than lowering per-backend; what that needs is the last gap in
 [rounding-axes.md](rounding-axes.md).
 
 Were it ever wired in, the slot is after `ReduceFusion` — which pattern-matches a
-syntactic `ListComp` — and before `Specialize`, inside `optimize=True`.
+syntactic `ListComp` — and before `Specialize`, inside `optimize=True`. Measured
+there over the 219-function corpus it costs five `matrix` programs, and not for
+either reason above: `CompToLoop` emits `acc = fp.empty(n); ...; ys = acc`, so
+the result is held by two names and `UnboxMode.STRICT` refuses the second place.
+That is the blocker *Aggregate naming in ANF* has, from the other end; see
+*A total unfold for every surface form* in
+[backend-independence.md](backend-independence.md).
 
 ## Out of scope
 
