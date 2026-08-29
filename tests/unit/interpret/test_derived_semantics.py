@@ -787,6 +787,44 @@ class TestLists:
         with pytest.raises(IndexError):
             write([1.0, 2.0], 2, ctx=FP64)       # IndexedAssign, not just reads
 
+    def test_an_indexed_assignment_binds_the_cell_before_the_value(self):
+        """``xs[i] = e`` elaborates to ``t = xs[i] ; t := e``, which the doc
+        glosses as "binding the cell before writing through it" -- so an index
+        is evaluated before the value.
+
+        A Python ``Assign`` evaluates its value before its target's subscripts,
+        so emitting one directly got this backwards.  The core semantics cannot
+        arbitrate: its expressions are pure, and **E-Index**'s premises are
+        unordered.
+        """
+        @fp.fpy
+        def which(x: fp.Real, tag: fp.Real) -> fp.Real:
+            assert x > 0, 'ran'
+            return tag
+
+        @fp.fpy
+        def one(xs: list[fp.Real], i: fp.Real, v: fp.Real) -> list[fp.Real]:
+            xs[which(i, 0)] = which(v, 1)
+            return xs
+
+        @fp.fpy
+        def nested(
+            xss: list[list[fp.Real]], a: fp.Real, b: fp.Real, v: fp.Real,
+        ) -> list[list[fp.Real]]:
+            xss[which(a, 0)][which(b, 0)] = which(v, 1)
+            return xss
+
+        # the index raises, so the value never runs
+        with pytest.raises(AssertionError):
+            one([1.0, 2.0], -1.0, -1.0, ctx=FP64)
+        # left to right across a nested target, then the value
+        with pytest.raises(AssertionError):
+            nested([[1.0]], -1.0, 1.0, 1.0, ctx=FP64)
+        with pytest.raises(AssertionError):
+            nested([[1.0]], 1.0, -1.0, 1.0, ctx=FP64)
+        # and the assignment still mutates in place
+        assert one([1.0, 2.0], 1.0, 1.0, ctx=FP64)[0] == 1
+
     def test_a_negative_index_does_not_wrap(self):
         """``-1`` is outside ``{0, ..., m-1}`` just as ``m`` is, so it is stuck
         rather than Python's index-from-the-end.  Inheriting the wrap-around

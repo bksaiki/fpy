@@ -327,17 +327,6 @@ class TestOrdering:
         assert _run(f, args)[1] is None                    # it never runs
         assert _count(Hoistable.apply(f.ast), IfStmt) == 0  # nothing lowered
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason='the byte interpreter is wrong here, not the pass.  The derived '
-               'semantics elaborates `xs[i] = e` to `t = xs[i] ; t := e` and '
-               'says so in prose -- "binding the cell before writing through '
-               'it" -- so the indices are evaluated first.  `byte.py` emits a '
-               'Python `Assign`, whose value-before-target order inverts that.  '
-               'The core semantics cannot settle it: its expressions are pure, '
-               'so E-Index\'s premises are unordered on purpose.  Un-xfail when '
-               'the interpreter is fixed.',
-    )
     def test_an_index_is_not_overtaken(self):
         @fp.fpy
         def f(xs: list[fp.Real], i: fp.Real, b: fp.Real, c: bool) -> list[fp.Real]:
