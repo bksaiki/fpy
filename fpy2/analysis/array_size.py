@@ -23,7 +23,7 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..function import Function
-from ..number import INTEGER, REAL, Float
+from ..number import INTEGER, REAL, Context, Float
 from ..types import ListType, TupleType, Type
 from ..utils import Gensym, NamedId, Unionfind
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
@@ -622,9 +622,13 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _const_int(self, e: Expr) -> int | None:
         """The integer value *e* statically evaluates to, or ``None``.
 
-        Covers partial-eval constants and the integer-valued list queries
-        ``len(xs)`` / ``size(xs, d)`` / ``dim(xs)`` when the queried size
-        is statically known (``dim`` always is — it's the nesting depth).
+        Covers partial-eval constants, the integer-valued list queries
+        ``len(xs)`` / ``size(xs, d)`` / ``dim(xs)`` when the queried size is
+        statically known (``dim`` always is — it's the nesting depth), and
+        ``+`` / ``-`` / ``*`` over those.  The arithmetic is what a lowered
+        multi-clause comprehension allocates with: ``fp.empty(len(xs) *
+        len(ys))``, whose size is otherwise unknown and whose list is then a
+        ``std::vector`` where the sizes are right there in the types.
         """
         val = self._get_eval(e)
         if isinstance(val, Float | Fraction):
@@ -651,7 +655,34 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     bound = bound.elt
                 if isinstance(bound, ListSize) and isinstance(bound.size, int):
                     return bound.size
+            case Add() | Sub() | Mul():
+                lhs = self._const_int(e.first)
+                rhs = self._const_int(e.second)
+                if lhs is None or rhs is None:
+                    return None
+                match e:
+                    case Add():
+                        val = lhs + rhs
+                    case Sub():
+                        val = lhs - rhs
+                    case _:
+                        val = lhs * rhs
+                return val if self._holds_int(e, val) else None
         return None
+
+    def _holds_int(self, e: ContextUseSite, value: int) -> bool:
+        """Whether *e*'s rounding leaves the integer *value* alone.
+
+        :meth:`_is_exact` asks whether the operation rounds *at all*, which
+        takes a ``REAL`` scope.  An integer result needs less: the active
+        context has only to represent it.  That is what carries a length
+        through ``integer_ctx``, which the loop rewrites wrap their index
+        arithmetic in and which is not ``REAL``.
+        """
+        scope = self._ctx_use.use_to_scope.get(e)
+        if scope is None or not isinstance(scope.ctx, Context):
+            return False
+        return scope.ctx.representable_under(Float.from_int(value, ctx=INTEGER))
 
     @staticmethod
     def _list_depth(bound: ArraySizeBound) -> int:

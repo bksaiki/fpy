@@ -1866,3 +1866,61 @@ class TestTupleAccessorSizes:
         u = self._bound(self._run(f), 'u')
         assert isinstance(u, ListSize)
         assert concrete_size(u.size) == 8
+
+
+class TestArithmeticOverLengths:
+    """``_const_int`` folds ``+`` / ``-`` / ``*`` over lengths it knows, so a
+    ``fp.empty(len(xs) * len(ys))`` keeps a static size.  That is what a
+    lowered multi-clause comprehension allocates with."""
+
+    @staticmethod
+    def _pin(func: fp.Function, lengths: dict[str, int]) -> None:
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+        for arg in func.ast.args:
+            n = lengths.get(arg.name.base)
+            if n is not None:
+                arg.type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+
+    def test_a_product_of_lengths_is_a_size(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.INTEGER:
+                n = len(xs) * len(ys)
+            return fp.empty(n)
+
+        self._pin(f, {'xs': 3, 'ys': 4})
+        info = ArraySizeInfer.analyze(f.ast)
+        assert concrete_size(info.ret_size.size) == 12
+
+    def test_a_sum_and_a_difference_too(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.INTEGER:
+                n = (len(xs) + len(ys)) - 1
+            return fp.empty(n)
+
+        self._pin(f, {'xs': 3, 'ys': 4})
+        info = ArraySizeInfer.analyze(f.ast)
+        assert concrete_size(info.ret_size.size) == 6
+
+    def test_a_symbolic_context_folds_nothing(self):
+        """Without a resolved context there is no showing the arithmetic left
+        the value alone, so the size stays unknown -- sound, less precise."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            n = len(xs) * len(ys)
+            return fp.empty(n)
+
+        self._pin(f, {'xs': 3, 'ys': 4})
+        info = ArraySizeInfer.analyze(f.ast)
+        assert concrete_size(info.ret_size.size) is None
+
+    def test_an_unknown_length_folds_nothing(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            with fp.INTEGER:
+                n = len(xs) * len(ys)
+            return fp.empty(n)
+
+        info = ArraySizeInfer.analyze(f.ast)   # no lengths pinned
+        assert concrete_size(info.ret_size.size) is None

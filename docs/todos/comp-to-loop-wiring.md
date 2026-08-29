@@ -349,15 +349,19 @@ std::array<double, 12> prod(const std::array<double, 3>&, const std::array<doubl
 std::vector<double>    prod(const std::array<double, 3>&, const std::array<double, 4>&);  // lowered
 ```
 
-Add `Mul` / `Add` / `Sub` cases over operands `_const_int` already answers,
-gated on the node being exact.
+Add `Mul` / `Add` / `Sub` cases over operands `_const_int` already answers.
 
-*The exactness gate is already satisfied here.* `CompToLoop` wraps the size
-computation in `integer_ctx`, so the arithmetic is under a context that rounds
-integers exactly. That is the narrow slice of
+*The gate is not `_is_exact`.* That asks whether the operation rounds **at
+all**, which takes a `REAL` scope — and `CompToLoop` wraps its size arithmetic
+in `integer_ctx`, which is not `REAL`. An integer result needs less: the active
+context has only to *represent* it. `_holds_int` asks exactly that
+(`representable_under`), which carries a length through `integer_ctx` and still
+declines under a symbolic context, where nothing is known.
+
+That is the narrow slice of
 [array-size-integer-exactness.md](array-size-integer-exactness.md) this needs —
 not `_affine`'s harder question of proving a *symbolic* index exact under an
-inherited context. Do not widen the gate beyond what the enclosing scope states.
+inherited context.
 
 *Why this phase cannot be skipped.* **The corpus cannot see this regression.**
 Its multi-clause comprehensions iterate literal `range`s, which `_const_int`
@@ -368,7 +372,8 @@ so this phase brings its own.
 with parameter lengths, asserting the size is derived; add a negative case where
 the arithmetic is not exact and the size stays unknown.
 
-*Acceptance.* `prod` keeps `std::array<double, 12>` under the fixpoint.
+*Acceptance.* `prod` keeps `std::array<double, 12>` under the fixpoint. **Met**
+— and the corpus holds at 202 with the fixpoint wired, 19 emitting differently.
 
 ## Phase 5 — wire the fixpoint
 
