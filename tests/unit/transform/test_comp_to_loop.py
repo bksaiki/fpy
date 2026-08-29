@@ -16,6 +16,8 @@ comparing against a hand-written golden AST is brittle.  These tests assert
    rewrites.
 """
 
+import re
+
 import pytest
 
 import fpy2 as fp
@@ -179,6 +181,44 @@ class TestCompToLoop:
 
         out = CompToLoop.apply(f.ast)
         assert 'acc = fp.empty' in out.format()
+        assert _agree(f, [1.0, 2.0])
+
+    def test_a_nested_comprehension_allocates_into_its_slot(self):
+        """``[[...] for ...]`` lowers in two passes: the outer one turns the
+        inner into ``acc[i] = [...]``, and that slot is the place the inner's
+        loops write into.  An accumulator here would be a second name on the
+        list ``acc[i]`` holds."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(rows: list[fp.Real], cols: list[fp.Real]) -> list[list[fp.Real]]:
+            return [[c for c in cols] for _ in rows]
+
+        out = f.ast
+        for _ in range(3):
+            if not CompToLoop.sites(out):
+                break
+            out = CompToLoop.apply(out)
+        assert _count(out, ListComp) == 0
+        src = out.format()
+        # one accumulator only -- the outer, which is in a `return`; the inner
+        # allocates into the slot the outer's loop stores to
+        assert len(re.findall(r'\bacc\w* = fp\.empty', src)) == 1
+        assert re.search(r'\bacc\[\w+\] = fp\.empty', src)
+        assert _agree(f, [1.0, 2.0], [3.0, 4.0])
+
+    def test_an_element_reading_the_slots_base_keeps_its_accumulator(self):
+        """The inner loops overwrite ``out[i]`` before the element runs, so an
+        element reading ``out`` must read a list the fill would have
+        destroyed."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[list[fp.Real]]:
+            out = fp.empty(len(xs), 1)
+            out[0][0] = 5.0
+            for i in range(len(xs)):
+                out[i] = [out[0][0] + x for x in xs]
+            return out
+
+        lowered = CompToLoop.apply(f.ast)
+        assert 'acc = fp.empty' in lowered.format()
         assert _agree(f, [1.0, 2.0])
 
     def test_a_comprehension_in_an_iterable_does_not_claim_the_target(self):

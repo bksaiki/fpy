@@ -135,9 +135,10 @@ class _CompToLoopInstance(SiteRewriter):
     temp_id: NamedId
     gensym: Gensym
     where: int | Cursor | None
-    _fill: tuple[ListComp, NamedId] | None
-    """an assignment's right-hand comprehension and the target its loops may
-    write into, instead of minting an `acc` and copying it in"""
+    _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
+    """an assignment's right-hand comprehension, and the place its loops may
+    write into -- a name, plus the indices of a slot -- instead of minting an
+    `acc` and copying it in"""
 
     def __init__(
         self,
@@ -194,18 +195,38 @@ class _CompToLoopInstance(SiteRewriter):
             self._visit_expr(iterable, out)
         self._visit_expr(e.elt, None)
 
-    def _take_fill(self, e: ListComp) -> NamedId | None:
-        """The assignment target the loops of *e* may write into, taken once.
+    def _fillable(self, e: ListComp, target: NamedId) -> bool:
+        """Whether the loops of *e* may write into a place based on *target*.
+
+        The element must not read *target*: the loops overwrite the place before
+        it runs.  An iterable may -- it is bound to a temp first, so it still
+        sees what the place held.
+
+        A slot's indices need no check of their own.  They would go stale if
+        *e*'s targets rebound a name one of them reads, but FPy rejects a
+        comprehension target that shadows an existing definition, and an index
+        cannot read a name that has none.
+        """
+        return not _mentions(e.elt, {target})
+
+    def _take_fill(self, e: ListComp) -> 'tuple[NamedId, tuple[Expr, ...]] | None':
+        """The place the loops of *e* may write into, taken once.
 
         Keyed on the comprehension itself, and taken before the iterables are
-        visited: a comprehension nested in one of them is not the assignment's
-        right-hand side and must not claim its target.
+        visited: a comprehension nested in one of them is not the statement's
+        right-hand side and must not claim its place.
         """
         if self._fill is None or self._fill[0] is not e:
             return None
-        target = self._fill[1]
+        _, target, indices = self._fill
         self._fill = None
-        return target
+        return target, indices
+
+    def _took_fill(self, offered: bool) -> bool:
+        """Whether :meth:`_lower` took the place this statement offered."""
+        taken = offered and self._fill is None
+        self._fill = None
+        return taken
 
     def _lower(self, e: ListComp, out: list) -> Expr:
         """Emit the allocation and loops into *out*; return the result `Var`."""
@@ -219,15 +240,27 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(Assign(t, None, self._visit_expr(iterable, out), loc))
             iters.append(t)
 
-        acc = self.gensym.fresh('acc') if fill is None else fill
+        acc, at = (self.gensym.fresh('acc'), ()) if fill is None else fill
+
+        def place(*more: Expr) -> list[Expr]:
+            """The accumulator's own indices, then *more*.  Empty where the
+            accumulator is a name rather than a slot."""
+            return [clone(ix) for ix in at] + list(more)
+
+        def bind(value: Expr) -> Stmt:
+            """Put *value* in the accumulator."""
+            if at:
+                return IndexedAssign(acc, place(), value, loc)
+            return Assign(acc, None, value, loc)
+
         size = self._size(iters, e)
         if isinstance(size, Len):
             # a bare length needs no arithmetic, so no exact-integer block
-            out.append(Assign(acc, None, Empty(None, [size], loc), loc))
+            out.append(bind(Empty(None, [size], loc)))
         else:
             n = self.gensym.fresh('n')
             out.append(integer_ctx([Assign(n, None, size, loc)], loc))
-            out.append(Assign(acc, None, Empty(None, [Var(n, loc)], loc), loc))
+            out.append(bind(Empty(None, [Var(n, loc)], loc)))
 
         elt = self._visit_expr(e.elt, None)
         if len(e.targets) == 1:
@@ -238,7 +271,7 @@ class _CompToLoopInstance(SiteRewriter):
             body = StmtBlock([
                 Assign(copy_target(e.targets[0]), None,
                        ListRef(clone(src), Var(idx, loc), loc), loc),
-                IndexedAssign(acc, [Var(idx, loc)], elt, loc),
+                IndexedAssign(acc, place(Var(idx, loc)), elt, loc),
             ])
             out.append(ForStmt(
                 idx, Range1(None, Len(None, clone(src), loc), loc), body, loc,
@@ -250,7 +283,7 @@ class _CompToLoopInstance(SiteRewriter):
         j_id = self.gensym.fresh('j')
         out.append(Assign(j_id, None, Integer(0, loc), loc))
         inner: list[Stmt] = [
-            IndexedAssign(acc, [Var(j_id, loc)], elt, loc),
+            IndexedAssign(acc, place(Var(j_id, loc)), elt, loc),
             integer_ctx([
                 Assign(j_id, None,
                        Add(Var(j_id, loc), Integer(1, loc), loc), loc)
@@ -312,15 +345,30 @@ class _CompToLoopInstance(SiteRewriter):
         offered = (
             isinstance(stmt.expr, ListComp)
             and isinstance(stmt.target, NamedId)
-            and not _mentions(stmt.expr.elt, {stmt.target})
+            and self._fillable(stmt.expr, stmt.target)
         )
-        self._fill = (stmt.expr, stmt.target) if offered else None
+        self._fill = (stmt.expr, stmt.target, ()) if offered else None
         s, _ = super()._visit_assign(stmt, ctx)
-        taken = offered and self._fill is None
-        self._fill = None
-        if taken:
+        if self._took_fill(offered):
             # `_lower` took the target, so the loops already write into it and
             # the assignment left over is `z = z`.  The loop stands in its place.
+            return ctx.pop(), ctx
+        return s, ctx
+
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
+        # `zs[i] = [<elt> for <t> in <it>]` allocates straight into the slot.
+        # The nested comprehension of `[[...] for ...]` arrives in exactly this
+        # shape once the outer one is lowered, and it is the last place an
+        # accumulator would be left over.
+        offered = (
+            isinstance(stmt.expr, ListComp)
+            and self._fillable(stmt.expr, stmt.var)
+        )
+        self._fill = (
+            (stmt.expr, stmt.var, tuple(stmt.indices)) if offered else None
+        )
+        s, _ = super()._visit_indexed_assign(stmt, ctx)
+        if self._took_fill(offered):
             return ctx.pop(), ctx
         return s, ctx
 
