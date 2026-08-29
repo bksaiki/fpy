@@ -295,6 +295,27 @@ class TestEndToEnd:
         assert '{};' in out
         assert 'std::vector' not in out
 
+    def test_empty_may_give_fewer_dims_than_the_type_has(self):
+        """``fp.empty(n)`` for a ``list[list[T]]`` allocates the outer layer
+        only; each cell is ``UNINIT`` until a store replaces it, which is what
+        every lowered comprehension over a nested list does."""
+        @fp.fpy
+        def f(A: list[list[fp.Real]]) -> list[list[fp.Real]]:
+            with fp.FP64:
+                out = fp.empty(len(A))
+                for i in range(len(A)):
+                    out[i] = A[i][:]
+                return out
+
+        s = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(ListType(RealType(fp.FP64)))],
+        )
+        assert (
+            'std::vector<std::vector<double>>('
+            'static_cast<uint64_t>(t), std::vector<double>{})'
+        ) in s
+
     def test_slice_of_whole_keeps_the_size(self):
         @fp.fpy
         def f() -> fp.Real:

@@ -2757,7 +2757,7 @@ class CppEmitter(Visitor):
             self._explicit_cast(d, CppScalar.U64) if s != CppScalar.U64 else d
             for d, s in zip(dims, dim_storages)
         ]
-        if _list_depth(result_ty) != len(dim_strs):
+        if _list_depth(result_ty) < len(dim_strs):
             raise CppEmitError(
                 f'empty(...) shape mismatch: result type `{result_ty!r}` '
                 f'has depth {_list_depth(result_ty)}, but {len(dim_strs)} '
@@ -2771,13 +2771,18 @@ class CppEmitter(Visitor):
         # Build from the inside out: innermost is ``T()``-default,
         # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
         ty: CppType = result_ty
-        # Peel down to the innermost element type so we know what
-        # default value to use at the leaf.
+        # Peel one layer per dimension given.  Fewer dimensions than the type's
+        # depth allocates only the outer layers, and the cells they hold are
+        # ``UNINIT`` until a store replaces them -- reading one before it is
+        # written is undefined in FPy, so a default-constructed inner list is as
+        # good an answer as any.
         peeled: list[CppType] = []
-        while isinstance(ty, CppList):
+        for _ in dim_strs:
+            assert isinstance(ty, CppList)
             peeled.append(ty)
             ty = ty.elt
-        # ``ty`` is now the scalar / tuple leaf.
+        # ``ty`` is what the innermost dimension holds: a scalar, a tuple, or a
+        # list the allocation does not reach.
         inner = f'{ty.format()}{{}}'
         for layer, d in zip(reversed(peeled), reversed(dim_strs)):
             inner = self._list_new_filled(layer, d, inner)
