@@ -11,8 +11,10 @@ Four properties, all on the same draw:
    asserts the output is a well-formed program.
 2. **No dangerous refusal.**  A ternary arm, a short-circuited operand and a
    ``while`` condition are the three positions the cpp emitter hoists out of
-   (three miscompiles in ``docs/todos/backend-cpp.md``); the lowerings exist to
-   empty them, and here they must stay empty however deeply nested.
+   (three miscompiles in ``docs/todos/backend-cpp.md``).
+   :class:`~fpy2.transform.Hoistable` empties them and ``ANF`` raises without
+   it, so the draw goes through that pass first and this asserts the pairing
+   holds however deeply the lowerings nested.
 3. **Idempotence.**  A second application changes nothing.
 4. **Semantics.**  The interpreter agrees before and after, including on which
    exception it raises -- an eagerly evaluated ternary arm or short-circuited
@@ -28,7 +30,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import fpy2 as fp
-from fpy2.transform import ANF
+from fpy2.transform import ANF, Hoistable
 from fpy2.types import BoolType, RealType
 
 from ..generators.fpy_program import fpy_funcdef, value_for_type
@@ -77,7 +79,7 @@ def _run(ast, args):
 @given(_program())
 def test_anf_preserves_generated_programs(program) -> None:
     ast, args = program
-    out = ANF.apply(ast)
+    out = ANF.apply(Hoistable.apply(ast))
 
     dangerous = [w for _e, w in ANF.refusals(out) if w in _DANGEROUS]
     assert not dangerous, f'{dangerous[0]}\n{out.format()}'

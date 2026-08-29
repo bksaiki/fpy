@@ -470,9 +470,10 @@ class CppEmitter(Visitor):
         A ``while`` condition, a ternary arm and a short-circuited operand run
         conditionally or repeatedly while the line they sit on does not, so a
         statement emitted for one lands *before* the construct and runs where the
-        operand does not.  :class:`~fpy2.transform.ANF` lowers all three, so
-        arriving here is a violated invariant rather than an inexpressible
-        program -- hence :class:`CppInternalError`.
+        operand does not.  :class:`~fpy2.transform.Hoistable` lowers all three
+        and :class:`~fpy2.transform.ANF` requires it to have, so arriving here is
+        a violated invariant rather than an inexpressible program -- hence
+        :class:`CppInternalError`.
 
         Measured rather than approximated from the syntax, unlike
         :meth:`_is_pure_cond`: a false refusal costs a program, and nothing here

@@ -37,6 +37,7 @@ from ...transform import (
     ANF,
     EnumerateElim,
     FreeVarElim,
+    Hoistable,
     ReduceFusion,
     RoundElim,
     Specialize,
@@ -370,6 +371,12 @@ class CppCompiler(Backend):
             specialized = Specialize.apply(module, size_key=self._arrays)
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
+
+        # Unconditionally: `ANF` requires hoistable form and raises without it.
+        # Before `RoundElim`, whose hoist is suppressed in two of the positions
+        # this gives a statement slot.  Every pass in between must preserve the
+        # form -- `ANF` catches only the subset it would itself have to name.
+        specialized = specialized.map(lambda _m, fd: Hoistable.apply(fd))
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))

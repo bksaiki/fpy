@@ -29,6 +29,7 @@ from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
 from .free_var import close
 from .func_inline import inline
+from .hoistable import to_hoistable
 from .iter_elim import elim_iter
 from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
@@ -73,6 +74,7 @@ __all__ = [
     'split',
     'split_round',
     'to_anf',
+    'to_hoistable',
     'unfold_neg_zero',
     'unfold_overflow',
     'unfold_special',

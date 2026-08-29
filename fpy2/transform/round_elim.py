@@ -71,6 +71,17 @@ Run after :class:`fpy2.transform.Monomorphize` (so format inference
 resolves to concrete contexts) and before any pass that depends on
 storage selection — those see strictly tighter formats for the
 hoisted operations.
+
+**Preserves hoistable form**, which the cpp pipeline relies on: it runs between
+:class:`fpy2.transform.Hoistable` and :class:`fpy2.transform.ANF`.  Nothing here
+can break it — every rewrite
+either collapses a node in place or appends statements to a preamble slot, and
+neither introduces a ternary, an ``and``/``or`` or a ``while`` condition.  The
+dependency runs the other way too: the suppression list below names only
+``ListComp`` and ``IfExpr``, so this pass is safe in an ``and``/``or`` tail and a
+``while`` condition *because* hoistable form leaves atoms in both.  Given
+the form, this pass also *gains* by it: a ternary arm is an ``IfStmt`` branch by
+the time it arrives, so the hoist suppressed above is no longer suppressed there.
 """
 
 import dataclasses

@@ -394,6 +394,102 @@ class TestRefinement:
         assert _cls(f, 'abs(x)') == NAN | ZERO | FINITE
 
 
+class TestALoweredChain:
+    """A chain whose tail needs a statement is not an ``And`` by the time this
+    analysis runs.
+
+    :class:`~fpy2.transform.Hoistable` rewrites it into a flat ladder of guarded
+    assignments, so the conjunction the refinement reads reaches it as a phi.
+    :meth:`~fpy2.analysis.value_class._ValueClassInstance._implied_ladder` is
+    where that is unpicked; these check it end to end.
+    """
+
+    def test_a_lowered_and_still_refines_both_operands(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            t = not fp.isnan(a)
+            if t:
+                t = not fp.isnan(b)
+            if t:
+                y = fp.fabs(a) + fp.fabs(b)
+            else:
+                y = 0
+            return y
+
+        assert not NAN & _cls(f, 'abs(a)')
+        assert not NAN & _cls(f, 'abs(b)')
+
+    def test_the_ladder_recurses(self):
+        """A third operand joins a phi whose own operand is a phi."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            t = not fp.isnan(a)
+            if t:
+                t = not fp.isnan(b)
+            if t:
+                t = a > 0
+            if t:
+                y = fp.fabs(a) + fp.fabs(b)
+            else:
+                y = 0
+            return y
+
+        assert not NAN & _cls(f, 'abs(a)')
+        assert not NAN & _cls(f, 'abs(b)')
+
+    def test_a_lowered_or_refines_only_when_it_fails(self):
+        """An ``or`` guards on the negated accumulator, and says something about
+        both operands exactly where the whole chain is false."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            t = fp.isnan(a)
+            if not t:
+                t = fp.isnan(b)
+            if t:
+                y = 0
+            else:
+                y = fp.fabs(a) + fp.fabs(b)
+            return y
+
+        assert not NAN & _cls(f, 'abs(a)')
+        assert not NAN & _cls(f, 'abs(b)')
+
+    def test_an_unrelated_guard_refines_nothing(self):
+        """``if p: t = q`` is the same *shape* but says nothing about ``t``:
+        reaching the guard with ``t`` true only means the guard held or ``q``
+        did, and here the guard tests something else entirely."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            t = not fp.isnan(a)
+            if b > 0:
+                t = True
+            if t:
+                y = fp.fabs(a)
+            else:
+                y = 0
+            return y
+
+        assert NAN & _cls(f, 'abs(a)')
+
+    def test_a_loop_phi_is_not_a_ladder(self):
+        """A rotated `while` binds its condition to a name too, and its phi has
+        the same two operands -- but a value carried round a loop says nothing
+        about the arm below it."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real) -> fp.Real:
+            c = not fp.isnan(a)
+            while c:
+                a = a - 1
+                c = not fp.isnan(a)
+            return fp.fabs(a)
+
+        assert NAN & _cls(f, 'abs(a)')
+
+
 class TestLoops:
     def test_a_refinement_inside_a_body_does_not_escape_it(self):
         @fp.fpy(ctx=fp.REAL)

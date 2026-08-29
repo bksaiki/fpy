@@ -1001,18 +1001,41 @@ class BytecodeCompiler(Visitor):
         return pyast.Assign(targets=[targets], value=expr, type_comment=None, **attrs)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+        """``xs[i] = e``, with each index bound to a name first.
+
+        The derived semantics elaborates this to ``t = xs[i] ; t := e`` --
+        "binding the cell before writing through it" -- so the indices are
+        evaluated before the value.  A Python ``Assign`` evaluates its value
+        before its target's subscripts, the other way round, so emitting one
+        directly ran an effectful index after an effectful value.
+        """
         attrs = self._location_to_attributes(stmt.loc)
-        arr: pyast.Name | pyast.Subscript = pyast.Name(id=str(stmt.var), ctx=pyast.Load(), **attrs)
-        idxs = [self._visit_expr(idx, ctx) for idx in stmt.indices]
+
+        pre: list[pyast.stmt] = []
+        idx_names: list[str] = []
+        for idx in stmt.indices:
+            func = pyast.Name(id='__fpy_index', ctx=pyast.Load(), **attrs)
+            cvt = pyast.Call(
+                func=func, args=[self._visit_expr(idx, ctx)], keywords=[], **attrs)
+            name = str(self.gensym.fresh('__fpy_idx'))
+            pre.append(pyast.Assign(
+                targets=[pyast.Name(id=name, ctx=pyast.Store(), **attrs)],
+                value=cvt, type_comment=None, **attrs))
+            idx_names.append(name)
+
         expr = self._visit_expr(stmt.expr, ctx)
 
-        for i, idx in enumerate(idxs):
-            func = pyast.Name(id='__fpy_index', ctx=pyast.Load(), **attrs)
-            idx = pyast.Call(func=func, args=[idx], keywords=[], **attrs)
-            e_ctx = pyast.Load() if i < len(idxs) - 1 else pyast.Store()
-            arr = pyast.Subscript(value=arr, slice=idx, ctx=e_ctx, **attrs)
+        arr: pyast.Name | pyast.Subscript = pyast.Name(
+            id=str(stmt.var), ctx=pyast.Load(), **attrs)
+        for i, name in enumerate(idx_names):
+            e_ctx = pyast.Load() if i < len(idx_names) - 1 else pyast.Store()
+            arr = pyast.Subscript(
+                value=arr,
+                slice=pyast.Name(id=name, ctx=pyast.Load(), **attrs),
+                ctx=e_ctx, **attrs)
 
-        return pyast.Assign(targets=[arr], value=expr, type_comment=None, **attrs)
+        return [*pre, pyast.Assign(
+            targets=[arr], value=expr, type_comment=None, **attrs)]
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         cond = self._visit_expr(stmt.cond, ctx)
@@ -1122,7 +1145,12 @@ class BytecodeCompiler(Visitor):
         return pyast.Pass(**attrs)
 
     def _visit_block(self, block: StmtBlock, ctx: None) -> list[pyast.stmt]:
-        return [self._visit_statement(stmt, ctx) for stmt in block.stmts]
+        out: list[pyast.stmt] = []
+        for stmt in block.stmts:
+            # a statement may emit a preamble, as an indexed assignment does
+            emitted = self._visit_statement(stmt, ctx)
+            out.extend(emitted) if isinstance(emitted, list) else out.append(emitted)
+        return out
 
     def _visit_function(self, func: FuncDef, ctx: None):
         posonlyargs: list[pyast.arg] = []

@@ -128,9 +128,9 @@ three per type so ``IF_EXPR`` and ``AND``/``OR`` -- the two the pass lowers --
 are each about a third of the draws rather than one choice in twenty-odd.
 ``ROUND`` is the cheap source of an operand needing a statement of its own.
 
-Does **not** reach ``while``-condition rotation: the generator's loop template
-``c = 0; while c < N`` has a pure condition by construction, so no draw can
-produce one needing a place.
+The loop template ``c = 0; while c < N`` has a pure condition by construction, so
+no draw produces one *needing* a place -- ANF never rotates one, though
+:class:`~fpy2.transform.Hoistable` rotates every one of them.
 """
 
 
