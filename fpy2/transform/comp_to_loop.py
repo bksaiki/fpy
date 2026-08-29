@@ -135,6 +135,9 @@ class _CompToLoopInstance(SiteRewriter):
     temp_id: NamedId
     gensym: Gensym
     where: int | Cursor | None
+    _fill: tuple[ListComp, NamedId] | None
+    """an assignment's right-hand comprehension and the target its loops may
+    write into, instead of minting an `acc` and copying it in"""
 
     def __init__(
         self,
@@ -148,6 +151,7 @@ class _CompToLoopInstance(SiteRewriter):
         self.temp_id = NamedId('t') if temp_id is None else temp_id
         self.gensym = Gensym(reserved=def_use.names())
         self.where = where
+        self._fill = None
 
     # ------------------------------------------------------------------
     # Verification
@@ -190,9 +194,23 @@ class _CompToLoopInstance(SiteRewriter):
             self._visit_expr(iterable, out)
         self._visit_expr(e.elt, None)
 
+    def _take_fill(self, e: ListComp) -> NamedId | None:
+        """The assignment target the loops of *e* may write into, taken once.
+
+        Keyed on the comprehension itself, and taken before the iterables are
+        visited: a comprehension nested in one of them is not the assignment's
+        right-hand side and must not claim its target.
+        """
+        if self._fill is None or self._fill[0] is not e:
+            return None
+        target = self._fill[1]
+        self._fill = None
+        return target
+
     def _lower(self, e: ListComp, out: list) -> Expr:
         """Emit the allocation and loops into *out*; return the result `Var`."""
         loc = e.loc
+        fill = self._take_fill(e)
 
         # Every clause is independent, so each iterable is evaluated once, here.
         iters: list[NamedId] = []
@@ -201,7 +219,7 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(Assign(t, None, self._visit_expr(iterable, out), loc))
             iters.append(t)
 
-        acc = self.gensym.fresh('acc')
+        acc = self.gensym.fresh('acc') if fill is None else fill
         size = self._size(iters, e)
         if isinstance(size, Len):
             # a bare length needs no arithmetic, so no exact-integer block
@@ -282,6 +300,29 @@ class _CompToLoopInstance(SiteRewriter):
         lowered = self._lower(e, ctx)
         self._replaced = True
         return lowered
+
+    def _visit_assign(self, stmt: Assign, ctx: Any):
+        # `z = [<elt> for <t> in <it>]` fills `z` itself.  Minting an `acc` and
+        # copying it in leaves two names on one list, and a second name is a
+        # second *place*: the cpp backend's `UnboxMode.STRICT` refuses it.
+        #
+        # Only where the element cannot read `z`, which the loops overwrite
+        # before it runs.  An iterable may -- it is bound to a temp first, so it
+        # still sees the list `z` held.
+        offered = (
+            isinstance(stmt.expr, ListComp)
+            and isinstance(stmt.target, NamedId)
+            and not _mentions(stmt.expr.elt, {stmt.target})
+        )
+        self._fill = (stmt.expr, stmt.target) if offered else None
+        s, _ = super()._visit_assign(stmt, ctx)
+        taken = offered and self._fill is None
+        self._fill = None
+        if taken:
+            # `_lower` took the target, so the loops already write into it and
+            # the assignment left over is `z = z`.  The loop stands in its place.
+            return ctx.pop(), ctx
+        return s, ctx
 
     def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
         # A branch is conditional, so a loop hoisted out of it would run either

@@ -176,12 +176,83 @@ same blocker as *Aggregate naming in ANF* in
 [backend-independence.md](backend-independence.md). That is worth doing and it is
 not this. Not minting the name is strictly smaller and removes the question.
 
+Only where the element cannot read the target: the loops overwrite it before the
+element runs. An *iterable* may — it is bound to a temp first, so it still sees
+the list the name held.
+
 *Tests.* `tests/unit/transform/test_comp_to_loop.py`,
 `tests/unit/strategies/test_comp_to_loop.py`. Pin that `ys = [f(x) for x in xs]`
-lowers with no intermediate name.
+lowers with no intermediate name, that a `return` still mints one, that an
+element reading the target keeps its accumulator, and that a comprehension in an
+*iterable* does not claim the outer target.
 
 *Acceptance.* Wiring the fixpoint (locally, not committed) costs **0** corpus
 programs, down from 5.
+
+**Landed, and the acceptance criterion is not met: still 5.** The rewrite does
+what it says — measured, no `acc` survives an assignment — but none of the five
+`matrix` failures is an assignment-target case, and they split two ways.
+
+## Phase 2b — `_emit_empty` allows a partially-dimensioned allocation
+
+*What.* `_emit_empty` refuses unless `_list_depth(result_ty) == len(dims)`, so
+`fp.empty(n)` for a `list[list[T]]` is rejected — even though FPy's semantics
+allow it, since cells start `UNINIT` and a later `xs[i] = <list>` fills them.
+Every lowered comprehension producing a nested list allocates exactly that way,
+so this blocks `zeros`, `ones`, `identity`, `set_row` and `set_column` alike.
+
+*Pre-existing, and not caused by phase 2.* Verified with a hand-written program
+and no `CompToLoop` anywhere:
+
+```python
+out = fp.empty(len(A))          # out : list[list[fp.Real]]
+for i in range(len(A)):
+    out[i] = A[i][:]
+```
+
+```
+empty(...) shape mismatch: result type `CppList(elt=CppList(...))` has depth 2,
+but 1 dimensions were given
+```
+
+`set_row` and `set_column` reached it only because phase 2 stopped them failing
+earlier, at strict unboxing. What phase 2 changed is which error they report.
+
+*Tests.* `tests/unit/backend/cpp/test_emit_list.py`, and the witness above.
+
+## Phase 2c — a comprehension in element position fills its slot
+
+*What.* `zeros` is `[[fp.round(0) for _ in range(cols)] for _ in range(rows)]`.
+The outer comprehension is in a `return`, so it keeps its `acc` — correctly,
+there is no name to fill. The inner one is the outer's *element*, so lowering
+gives
+
+```python
+acc6 = fp.empty(len(t5))
+for i7 in range(len(t5)):
+    acc6[i7] = fp.round(0)
+acc[i] = acc6
+```
+
+and `acc6` is a second name on the list `acc[i]` holds. Phase 2 cannot reach it:
+an element position has no assignment target.
+
+*Two ways to fix it.*
+
+- **Fill the slot.** Generalize phase 2's target from a *name* to a *place*:
+  `acc[i] = fp.empty(len(t5))`, then `acc[i][j] = <elt>`. Local to `CompToLoop`
+  and exactly the same idea; it needs 2b, since `acc` itself is a
+  partially-dimensioned allocation.
+- **Discount it in the analysis.** `AliasAnalysis.consumed_defs` already
+  discounts a name read exactly once by the construction that takes its value.
+  It refuses here because one of its three guards is *the use must not
+  re-execute*, and `acc[i] = acc6` is inside a loop. The guard is right for a def
+  that does not repeat and over-conservative for one that repeats in lockstep
+  with its use — each iteration allocates a fresh `acc6` and transfers it once.
+  This is the general fix, and it is the same one *Aggregate naming in ANF* in
+  [backend-independence.md](backend-independence.md) waits on.
+
+Prefer the first to unblock, the second to close the class.
 
 ## Phase 3 — `CompToLoop` skips the iterable temp where it is pure
 

@@ -149,6 +149,51 @@ class TestCompToLoop:
         out = _lower(_rows)(rows)
         assert _vals(out[0]) == [1.0, 2.0]
 
+    def test_an_assignment_target_is_filled_directly(self):
+        """``ys = [...]`` writes into ``ys``.  An ``acc`` copied into ``ys``
+        would leave two names on one list, and a second name is a second
+        *place*: the cpp backend's ``UnboxMode.STRICT`` refuses it."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [x * 2.0 for x in xs]
+            return ys
+
+        out = CompToLoop.apply(f.ast)
+        assert 'acc' not in out.format()
+        assert 'ys = fp.empty' in out.format()
+        assert _agree(f, [1.0, 2.0])
+
+    def test_a_comprehension_with_no_target_still_mints_one(self):
+        """A ``return`` has no name to fill, so the accumulator stays."""
+        out = CompToLoop.apply(_one.ast)
+        assert 'acc = fp.empty' in out.format()
+
+    def test_an_element_reading_the_target_keeps_its_accumulator(self):
+        """The loops overwrite ``ys`` before the element runs, so an element
+        that reads ``ys`` must read a list the fill would have destroyed."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [1.0, 2.0]
+            ys = [ys[0] + x for x in xs]
+            return ys
+
+        out = CompToLoop.apply(f.ast)
+        assert 'acc = fp.empty' in out.format()
+        assert _agree(f, [1.0, 2.0])
+
+    def test_a_comprehension_in_an_iterable_does_not_claim_the_target(self):
+        """Only the assignment's own right-hand side may fill ``zs``; the
+        comprehension inside its iterable is a different list."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
+            zs = [r[0] for r in [q for q in xss]]
+            return zs
+
+        out = CompToLoop.apply(f.ast)
+        assert _count(out, ListComp) == 0
+        assert _count(out, Empty) == 2      # one fills `zs`, one the inner list
+        assert _agree(f, [[1.0, 2.0], [3.0]])
+
     def test_does_not_mutate_the_input(self):
         CompToLoop.apply(_one.ast)
         assert _count(_one.ast, ListComp) == 1
