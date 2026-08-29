@@ -35,6 +35,7 @@ from ...module import Module
 from ...number import Context
 from ...transform import (
     ANF,
+    CompToLoop,
     EnumerateElim,
     FreeVarElim,
     Hoistable,
@@ -96,6 +97,34 @@ class SpecAnalyses:
 
 # ---------------------------------------------------------------------
 # Compiler
+
+
+def _to_statement_form(fd: FuncDef) -> FuncDef:
+    """Hoistable form, with every comprehension the pair can reach lowered.
+
+    Neither pass is a fixpoint alone, and each supplies what the other lacks.
+    ``Hoistable`` seals a comprehension's element -- it runs once per iteration,
+    so the slot before the enclosing statement is not a place for its
+    temporaries -- and ``CompToLoop`` makes the loop that *is* that slot.
+    ``CompToLoop`` declines a comprehension in a ternary arm or a ``while``
+    condition for want of a statement slot, and ``Hoistable`` gives it one.
+
+    Iterating terminates, and not by a cap: ``CompToLoop`` reports an edit only
+    where it lowered a comprehension, neither pass builds one, so the number of
+    comprehensions strictly decreases on every iteration but the last.
+    ``Hoistable`` is idempotent -- its gates are its own postcondition -- so a
+    run over its own output reports nothing to do.
+
+    What is left is what ``CompToLoop.refusals`` names: a clause whose iterable
+    reads an earlier clause's target, whose length is a sum rather than a
+    product.  The emitter lowers those itself.
+    """
+    while True:
+        fd = Hoistable.apply(fd)
+        log = CompToLoop.apply_with_edits(fd)
+        if not log.edits:
+            return fd
+        fd = log.result
 
 
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
@@ -376,7 +405,7 @@ class CppCompiler(Backend):
         # Before `RoundElim`, whose hoist is suppressed in two of the positions
         # this gives a statement slot.  Every pass in between must preserve the
         # form -- `ANF` catches only the subset it would itself have to name.
-        specialized = specialized.map(lambda _m, fd: Hoistable.apply(fd))
+        specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
