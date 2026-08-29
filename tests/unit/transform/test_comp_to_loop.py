@@ -234,6 +234,26 @@ class TestCompToLoop:
         assert _count(out, Empty) == 2      # one fills `zs`, one the inner list
         assert _agree(f, [[1.0, 2.0], [3.0]])
 
+    def test_a_range_iterable_is_not_bound_to_a_temp(self):
+        """A name holds a *value*, so a `range` bound to one has to be
+        materialised -- and over a real bound there is no list to materialise,
+        only a counted loop.  Left inline, it stays fused."""
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> list[fp.Real]:
+            return [x + 1.0 for x in range(5)]
+
+        out = CompToLoop.apply(f.ast)
+        src = out.format()
+        assert not re.search(r'\bt\w* = range', src)
+        assert 'range(5)' in src
+        assert _agree(f)
+
+    def test_a_non_range_iterable_still_binds(self):
+        """The temp evaluates an iterable once and keeps the loop bound out of
+        reach of the source name; only a `range` over atoms needs neither."""
+        out = CompToLoop.apply(_one.ast)
+        assert re.search(r'\bt\w* = xs', out.format())
+
     def test_does_not_mutate_the_input(self):
         CompToLoop.apply(_one.ast)
         assert _count(_one.ast, ListComp) == 1

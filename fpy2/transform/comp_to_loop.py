@@ -68,9 +68,13 @@ from ..ast.fpyast import (
     Mul,
     NamedId,
     Range1,
+    Range2,
+    Range3,
     Stmt,
     StmtBlock,
     TupleBinding,
+    UnderscoreId,
+    ValueExpr,
     Var,
     WhileStmt,
 )
@@ -85,7 +89,12 @@ from .utils import (
     clone,
     copy_target,
     integer_ctx,
+    operands,
 )
+
+
+_ATOMIC = (Var, ValueExpr)
+"""Expressions with no effects and no subexpressions to re-evaluate."""
 
 
 def _bound_names(target: Id | TupleBinding) -> set[NamedId]:
@@ -172,17 +181,36 @@ class _CompToLoopInstance(SiteRewriter):
     # ------------------------------------------------------------------
     # The rewrite
 
-    def _size(self, iters: list[NamedId], e: ListComp) -> Expr:
+    def _size(self, iters: list[Expr], e: ListComp) -> Expr:
         """The comprehension's length: the product of the clause lengths.
 
         Every clause is independent -- a dependent one is left alone -- so each
         length is available here, before the loops.
         """
         loc = e.loc
-        size: Expr = Len(None, Var(iters[0], loc), loc)
+        size: Expr = Len(None, clone(iters[0]), loc)
         for t in iters[1:]:
-            size = Mul(size, Len(None, Var(t, loc), loc), loc)
+            size = Mul(size, Len(None, clone(t), loc), loc)
         return size
+
+    @staticmethod
+    def _inlinable(iterable: Expr) -> bool:
+        """Whether *iterable* may stand in for a temp bound to it.
+
+        The temp buys two things: the iterable is evaluated exactly once, and
+        the loop bound is out of reach of a body that rebinds the source name.
+        A `range` over atoms needs neither -- it has no effects, and nothing a
+        lowered loop binds can shadow an atom of it, since a comprehension
+        target may not shadow an existing definition.
+
+        What the temp *costs* is fusion.  A name holds a value, so `range(n)`
+        bound to one must be materialized as a list -- and over a real bound
+        there is no such list, only a counted loop.
+        """
+        return (
+            isinstance(iterable, (Range1, Range2, Range3))
+            and all(isinstance(a, _ATOMIC) for a in operands(iterable))
+        )
 
     def _descend(self, e: ListComp, out: list) -> None:
         """Visit *e*'s children the way :meth:`_lower` would.
@@ -234,11 +262,15 @@ class _CompToLoopInstance(SiteRewriter):
         fill = self._take_fill(e)
 
         # Every clause is independent, so each iterable is evaluated once, here.
-        iters: list[NamedId] = []
+        iters: list[Expr] = []
         for iterable in e.iterables:
+            src = self._visit_expr(iterable, out)
+            if self._inlinable(src):
+                iters.append(src)
+                continue
             t = self.gensym.refresh(self.temp_id)
-            out.append(Assign(t, None, self._visit_expr(iterable, out), loc))
-            iters.append(t)
+            out.append(Assign(t, None, src, loc))
+            iters.append(Var(t, loc))
 
         acc, at = (self.gensym.fresh('acc'), ()) if fill is None else fill
 
@@ -267,12 +299,17 @@ class _CompToLoopInstance(SiteRewriter):
             # One clause over a bound temporary: index it, so nothing is
             # loop-carried and the store index is the loop variable itself.
             idx = self.gensym.fresh('i')
-            src = Var(iters[0], loc)
-            body = StmtBlock([
-                Assign(copy_target(e.targets[0]), None,
-                       ListRef(clone(src), Var(idx, loc), loc), loc),
-                IndexedAssign(acc, place(Var(idx, loc)), elt, loc),
-            ])
+            src = iters[0]
+            stmts: list[Stmt] = []
+            if not isinstance(e.targets[0], UnderscoreId):
+                # a discarded target binds nothing: the element cannot read it,
+                # and a subscript has no effect to keep
+                stmts.append(Assign(
+                    copy_target(e.targets[0]), None,
+                    ListRef(clone(src), Var(idx, loc), loc), loc,
+                ))
+            stmts.append(IndexedAssign(acc, place(Var(idx, loc)), elt, loc))
+            body = StmtBlock(stmts)
             out.append(ForStmt(
                 idx, Range1(None, Len(None, clone(src), loc), loc), body, loc,
             ))
@@ -291,7 +328,7 @@ class _CompToLoopInstance(SiteRewriter):
         ]
         for j in reversed(range(len(e.targets))):
             inner = [ForStmt(
-                copy_target(e.targets[j]), Var(iters[j], loc), StmtBlock(inner), loc,
+                copy_target(e.targets[j]), clone(iters[j]), StmtBlock(inner), loc,
             )]
         out.extend(inner)
         return Var(acc, loc)

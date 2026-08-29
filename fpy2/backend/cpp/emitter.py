@@ -1927,6 +1927,10 @@ class CppEmitter(Visitor):
             # single ``std::get``, so they bypass the eager operand visit
             # below — see ``_emit_tuple_accessor``.
             return self._emit_tuple_accessor(e, ctx)
+        if isinstance(e, Len) and isinstance(e.arg, Range1):
+            # Counted without materialising, so it bypasses the operand visit
+            # below — which would build the range and refuse a real bound.
+            return self._emit_range_len(e, e.arg, ctx)
         arg = self._visit_expr(e.arg, ctx)
         match e:
             case Cast():
@@ -2266,11 +2270,41 @@ class CppEmitter(Visitor):
                     f'unsupported FP predicate: {type(e).__name__}', at=e,
                 )
 
+    def _emit_range_len(self, e: Len, rng: Range1, ctx) -> str:
+        """``len(range(stop))`` as a count, without building the range.
+
+        A range's *elements* need an integer type, and a real bound has none --
+        which is why `_emit_range` refuses one.  Its *length* needs no such
+        thing: ``range(stop)`` holds the integers in ``[0, stop)``, so the count
+        is ``stop`` clamped at zero.
+
+        The conversion is unconditional where `_maybe_cast` would refuse it as
+        lossy, and a range bound is the one place that is justified: the
+        language requires an integral bound, so every value it admits converts
+        exactly.  A non-integral one is stuck in the interpreter, which leaves
+        the backend owing nothing -- the same reasoning as an out-of-range
+        subscript.
+
+        The clamp settles NaN too: ``NaN > 0`` is false, so the count is zero.
+        """
+        result_ty = self._storage_for_expr(e)
+        # read twice, by the test and by the count
+        stop = self._bind_operand(self._visit_expr(rng.arg, ctx))
+        return f'static_cast<{result_ty.format()}>({stop} > 0 ? {stop} : 0)'
+
     def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx) -> str:
-        """A ``range`` bound, cast into the element type."""
-        return self._maybe_cast(
-            self._visit_expr(e, ctx), self._scalar_storage_for_expr(e), elt_ty,
-        )
+        """A ``range`` bound, cast into the element type.
+
+        Unconditional, where `_maybe_cast` would refuse a real bound as lossy.
+        A range bound is one of the conversions the *language* requires rather
+        than the emitter: every argument of ``range`` must be an integer, so
+        each value it admits converts exactly.  A non-integral one is stuck in
+        the interpreter, which leaves the backend owing nothing.
+        """
+        arg = self._visit_expr(e, ctx)
+        if self._scalar_storage_for_expr(e) == elt_ty:
+            return arg
+        return self._explicit_cast(arg, elt_ty)
 
     def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
         """``range(...)`` as an expression — materialise a vector via

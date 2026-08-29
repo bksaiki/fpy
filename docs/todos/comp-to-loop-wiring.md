@@ -254,12 +254,33 @@ an element position has no assignment target.
 
 Prefer the first to unblock, the second to close the class.
 
+## Phase 3a — a discarded target binds nothing
+
+*What.* `_lower`'s single-clause branch always emits
+`Assign(copy_target(e.targets[0]), ..., ListRef(src, i))`. Where the target is
+`_` that is `_ = t[i]`, which the emitter refuses:
+
+```
+compilation failed for `zeros`: unsupported assignment target UnderscoreId()
+```
+
+Skip the binding. A discarded target cannot be read by the element, and a
+subscript has no effect to preserve — `ZipElim` and `EnumerateElim` already take
+this position for their own discarded slots.
+
+*Acceptance.* `zeros` compiles under the fixpoint when its arguments are typed
+the way the source annotates them (`int`). **Met.**
+
 ## Phase 3 — `CompToLoop` skips the iterable temp where it is pure
+
+**Not quality-only, and not sufficient on its own.** The plan had this as a
+performance item; it is the direct cause of the last three corpus failures, and
+fixing it needs a companion change in the emitter.
 
 *What.* `_lower` binds every iterable to a temp so it is evaluated once. That is
 right in general and wrong for a `range`: it moves the `range` out of the
-iterated position, where the emitter fuses it into a counted loop, into a value
-position, where it must be materialized.
+iterated position, where the emitter fuses it, into a value position, where it
+must be materialized.
 
 ```c++
 // before                                  // after
@@ -269,20 +290,50 @@ for (int8_t x = 0; x < 5; ++x)             std::array<uint8_t, 5> _tmp1{};
 ```
 
 Skip the temp where the iterable is pure and read once — a `Range1`/`2`/`3` over
-atoms always is. The temp exists to give "evaluate each iterable exactly once"
-and to keep the loop bound out of reach of a body that rebinds the source name;
-neither applies to an expression with no effects and no name to rebind.
+atoms always is. The temp gives "evaluate each iterable exactly once" and keeps
+the loop bound out of reach of a body that rebinds the source name; neither
+applies to an expression with no effects and no name to rebind.
 
-*Quality only.* No program's outcome changes either way. It is here because the
-fixpoint would otherwise regress every `for x in range(...)` comprehension in the
-corpus.
+*Why it is not sufficient on its own.* Removing the temp leaves the lowering
+asking for `len(range(rows))`, which failed the same way — measured, all three of
+`len(range(n))`, `range(n)[0]` and `[x for x in range(n)]` refused for a real
+`n`. The length is the blocker, not the temp; `fp.empty` is FPy's only allocator
+and needs one up front, where `_open_list_build` never does. Phase 3b supplies
+it.
 
-*Tests.* `tests/unit/transform/test_comp_to_loop.py`. Pin that
-`[x + 1 for x in range(5)]` lowers to a loop over `range(5)` directly, with no
-binding for the range.
+*Tests.* `tests/unit/transform/test_comp_to_loop.py`: a `range` iterable is left
+inline, a non-`range` one still binds.
 
-*Acceptance.* `test_list_comp1` emits the counted loop again — no `std::iota`,
-no materialized range.
+## Phase 3b — `len` of a range does not materialize the range
+
+*What.* `len(range(stop))` is a count, and a count needs no integer *element*
+type. Give `Len` a fused case for a `Range1` argument, taken before the operand
+visit that would build the range — the same shape `Fst`/`Snd` already use. It is
+the sort of fusion [backend-independence.md](backend-independence.md) says stays
+in the emitter: FPy has no counted loop that is not a list, so there is nothing
+to rewrite into.
+
+*And the conversion is the language's, not the emitter's.* Every argument of
+`range` must be an integer — the interpreter enforces it — so converting a real
+bound is exact for every value the language admits, and `_range_bound`'s
+`_maybe_cast` refusal of `double` → `int64_t` was over-strict. It now casts
+explicitly, the category `_explicit_cast` already documents as "casts the
+language requires". A non-integral bound is stuck in the interpreter, which
+leaves the backend owing nothing — the same reasoning as an out-of-range
+subscript.
+
+> Settled while doing this: `derived-semantics.rst` defines `range` by a
+> counting loop, which is total over the reals — run as an FPy program it gives
+> `len(range(2.5)) == 3`. The interpreter's integer requirement is the intended
+> rule, so the *page* is what is loose here, not `_eval_range`. Worth a separate
+> fix; nothing in this plan depends on it.
+
+*Tests.* `tests/unit/backend/cpp/test_emit_for.py`: a length builds no range,
+and a real bound converts rather than refusing.
+
+*Acceptance.* The fixpoint costs **0** corpus programs — 202 either way, no
+program lost or gained, 19 emit differently. Phase 2's original criterion,
+reached here. **Met.**
 
 ## Phase 4 — `_const_int` folds arithmetic over known lengths
 
