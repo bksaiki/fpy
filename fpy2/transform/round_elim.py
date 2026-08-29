@@ -131,7 +131,7 @@ from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..number.context.context import Context
 from ..utils import Gensym
-from .utils import clone, operands, rebuild
+from .utils import operands, rebuild
 
 
 @dataclasses.dataclass
@@ -436,19 +436,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
         # terminating loop into one that never advances.  The conditions of
         # `if` / `for` are each evaluated once, so they need no such guard.
         return super()._visit_while(stmt, None)[0], ctx
-
-    def _visit_context(self, stmt: ContextStmt, ctx: Any):
-        # **E-Context** evaluates the context expression under `REAL`, and a
-        # preamble hoisted out of it lands in the *enclosing* block -- so an
-        # operand bind, which fires its rounds at the current scope, would fire
-        # them under the enclosing context rather than `REAL`.  `Hoistable` and
-        # `ANF` open a `with fp.REAL:` block of their own for this; nothing here
-        # is eliminable under `REAL`, so this pass has nothing to put in one and
-        # does not descend.  `ContextUse` records no use site there either, so
-        # descending would ask `_resolved_ctx` a question it cannot answer.
-        body, _ = self._visit_block(stmt.body, ctx)
-        s = ContextStmt(stmt.target, clone(stmt.ctx), body, stmt.loc)
-        return s, ctx
 
     def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
         # ``[elt for t in iter]``: the elt sees the loop targets,

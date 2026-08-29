@@ -362,11 +362,9 @@ class TestSuppressionPositions:
         assert list(_eval(out, f)) == list(f())
 
     def test_a_context_constructor_argument_is_left_alone(self):
-        """`with fp.IEEEContext(ES + 2, NB + 2):` — **E-Context** evaluates the
-        context expression under `REAL`, so a preamble hoisted out of it would
-        fire its operand binds under the *enclosing* context.  Nothing there is
-        eliminable, so the pass stays out; before it did, and asking
-        `ContextUse` for a scope it never records raised `KeyError`."""
+        """**E-Context** evaluates a `with`'s context expression under `REAL`,
+        where nothing is eliminable — so the expression comes through
+        untouched."""
 
         @fp.fpy
         def f() -> fp.Real:

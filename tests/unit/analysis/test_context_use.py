@@ -13,7 +13,7 @@ import fpy2 as fp
 from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis.context_use import ContextUse
-from fpy2.ast.fpyast import Ast, ContextStmt, ForeignVal, FuncDef
+from fpy2.ast.fpyast import Ast, Call, ContextStmt, ForeignVal, FuncDef
 from fpy2.number import Context
 from fpy2.utils import NamedId
 
@@ -188,6 +188,32 @@ class TestContextUse:
             assert result.find_scope_from_use(u) is func_scope
         for u in result.uses[with_scope]:
             assert result.find_scope_from_use(u) is with_scope
+
+    def test_a_context_expression_uses_real(self):
+        """**E-Context** evaluates a ``with``'s context expression under
+        ``REAL``, so the arithmetic inside it is used under ``REAL`` -- not
+        under the enclosing context, and not under nothing at all."""
+        @fp.fpy
+        def f():
+            ES = 2
+            NB = 8
+            with fp.IEEEContext(ES + 2, NB + 2):
+                return fp.round(1)
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        stmt = f.ast.body.stmts[2]
+        assert isinstance(stmt, ContextStmt)
+
+        assert isinstance(stmt.ctx, Call)
+        adds = stmt.ctx.args           # `ES + 2` and `NB + 2`
+        assert len(adds) == 2
+        for a in adds:
+            assert result.find_scope_from_use(a).ctx is fp.REAL
+
+        # The `REAL` scope introduces no `with`, so it stays out of `scopes` --
+        # consumers keying scopes by site would collapse it against the body's.
+        assert [s.site for s in result.scopes] == [f.ast, stmt]
+        assert all(s.ctx is not fp.REAL for s in result.scopes)
 
     # ------------------------------------------------------------------
     # Accepting a pre-computed def_use

@@ -2,6 +2,8 @@
 
 Four fixes, then the wiring, then totality. Each phase is one commit.
 
+Phase 1 has landed; 1b came out of reviewing it.
+
 ## Why
 
 `CompToLoop` lowers a comprehension into an `fp.empty` allocation plus a `for`
@@ -78,11 +80,77 @@ is simply not one of those — it is a node `ContextUse` deliberately skips, so 
 fix is to not ask.
 
 *Tests.* `tests/unit/transform/test_round_elim.py`,
-`tests/unit/strategies/test_elim_round.py`. Add the program above as a
-regression.
+`tests/unit/strategies/test_elim_round.py`, and
+**`tests/unit/backend/cpp/test_bind_profile.py`** — `EXPECTED_COMPILED` pins the
+corpus count this phase moves, so the acceptance criterion *is* a test. Add the
+program above as a regression.
 
 *Acceptance.* The corpus goes 201 → **202**, and `optimize=True` and
 `optimize=False` compile the same set.
+
+**Landed** as `09e6027`, with `EXPECTED_COMPILED` 201 → 202 following it. Phase
+1b then removed the override again — see below.
+
+## Phase 1b — `ContextUse` records the context expression's `REAL` scope
+
+*Why.* Phase 1 fixed the one consumer that crashed; it did not fix the gap.
+`ContextUse` records no use site inside a `with`'s context expression, and the
+convention that nobody may look there is not enforced — three walkers descend
+anyway:
+
+| | descends into `stmt.ctx`? |
+|---|---|
+| `ContextUse`, `FormatInfer`, the cpp emitter | no |
+| `ValueClassInfer`, `ArraySizeInfer`, `DefineUse` (default visitor) | **yes** |
+
+`DefineUse` *must* — `ES` and `NB` are genuinely read there. The other two ask
+`use_to_scope.get(e)`, get `None`, and take the conservative branch of a question
+**E-Context** answers plainly. Measured on `fp.IEEEContext(ES + 2, NB + 2)`:
+`ValueClassInfer` said `TOP` for `ES + 2`, which under `REAL` is `ZERO|FINITE`;
+`array_size._is_exact` is `scope is not None and scope.ctx == REAL`, so it says
+`False` where the arithmetic is exact and a size that would cancel is lost.
+Neither is unsound. Both are wrong.
+
+*What.* Visit `stmt.ctx` under a `ContextScope(stmt, REAL)`, built *after* the
+body's scope so a `with` whose context is itself `REAL` — where the two compare
+equal — merges into it rather than clearing it.
+
+*Keep that scope out of `scopes`.* `emitter.py` and `dead_code.py` both build
+`{scope.site: scope}`, and two scopes sharing a `ContextStmt` would silently
+collapse one. It goes in `uses`, hence `use_to_scope`, and nowhere else — so
+`find_scope_from_use` answers what the semantics give while scope *iteration* is
+untouched.
+
+*Tests.* `tests/unit/analysis/test_context_use.py`,
+`tests/unit/analysis/test_value_class.py`,
+`tests/unit/analysis/test_array_size.py`, `tests/unit/backend/cpp/`.
+
+*Acceptance.* `use_to_scope` answers `REAL` for every use inside a context
+expression; the corpus stays at 202; `scopes` is unchanged.
+
+*Phase 1's guard comes out with it.* Revisited once 1b was in, and measured:
+dropping `RoundElim._visit_context` leaves the corpus at 202 with **zero** emit
+differences and all 35 round-elim tests passing. `_resolved_ctx` now answers
+`REAL` and `_is_eliminable` declines on its own, so the override prevented
+nothing reachable. Three reasons it went rather than staying as belt-and-braces:
+
+- the invariant "nothing under `REAL` is eliminable" belongs in `_is_eliminable`,
+  stated once, not restated as a special case in one visitor;
+- the analogy to `Hoistable._visit_context` / `ANF._visit_context` does not hold —
+  those two *actively hoist* into the context expression and need somewhere to
+  put the result; `RoundElim` never hoists there;
+- it was the wrong shape for a tripwire anyway. It silently *skipped*, where
+  `_emit_inline` **raises**. A guard that hides an invariant breaking is worse
+  than none.
+
+The regression test stays: it asserts the outcome (`is_equiv` on the context
+expression plus interpreter agreement), not the mechanism, so it passes either
+way and now pins 1b's guarantee.
+
+*One coupling to keep in view.* `_is_eliminable`'s check is `ctx is REAL` —
+identity against the singleton. It holds only while 1b records that same object;
+a fresh `RealContext()` there would fall through and make the hoisting hazard
+reachable with nothing watching for it.
 
 ## Phase 2 — `CompToLoop` fills the assignment target
 
