@@ -523,18 +523,70 @@ witness, three ragged shapes agree with the interpreter, and the corpus still
 compiles 202 — unchanged, because the pipeline is not applying the new case.
 **Met.**
 
-**One finding for phase 7.** The fully-lowered `ragged` does not compile today:
+## Phase 6b — a slot store checks the value it is actually emitting
+
+*Found while measuring phase 6, and not caused by it.* The fully-lowered
+`ragged` refused with
 
 ```
-unsupported: this value is `std::vector<uint8_t>` where `std::vector<double>` is
-needed, and C++ has no conversion between them.
+unsupported: this value is `std::vector<uint8_t>` where `std::vector<double>`
+is needed, and C++ has no conversion between them.
 ```
 
-That is *A narrower value meeting a wider place* in
-[backend-cpp.md](backend-cpp.md) — `fp.empty(n)` starts at the lattice bottom and
-the place is the declared return. So "apply it" costs more than the rows
-materialisation: it needs that refusal closed as well, or the programs it makes
-total stop compiling.
+*What.* `_visit_indexed_assign` checked the right-hand side's own storage
+against the slot and *then* called the thing that made the check moot:
+
+```python
+src = self._storage_or_none(stmt.expr)
+self._require_bridgeable(src, level, stmt.expr)    # refuses
+self._require_no_narrowing(src, level, stmt.expr)
+rhs = self._emit_at(stmt.expr, level, ctx)         # builds at `level`
+```
+
+For `out[i] = fp.empty(n)` the allocation's own bound is the lattice bottom, so
+its own storage is the ladder's first rung — `std::vector<uint8_t>` — while the
+slot is `std::vector<double>`. `_emit_at`'s `Empty` arm builds at the target and
+its comment says so; the guard never let it.
+
+*Pre-existing, with no `CompToLoop` anywhere:*
+
+```python
+out = fp.empty(len(xss))
+for i in range(len(xss)):
+    row = xss[i]
+    out[i] = fp.empty(len(row))     # refused
+    for j in range(len(row)):
+        out[i][j] = row[j]
+```
+
+The same program storing `0` compiles — its stores are `uint8_t`, so the
+bottom-typed allocation happens to agree. That coincidence is also why `zeros`
+compiled and `ragged` did not.
+
+*The fix goes in `_emit_at`, not at the call site.* A first version gave the
+emitter a `_builds_at` predicate listing the forms `_emit_at` constructs — which
+is a *second copy* of its `match`, and would go stale the moment an arm was
+added. Instead `_emit_at` takes `cannot_convert`, and applies the two checks on
+its own converting fall-through. One dispatch decides, so a constructing arm is
+exempt by construction. `_visit_indexed_assign` is the only caller: the other
+three `_require_bridgeable` sites guard a value arriving from elsewhere — a
+range-for's element, a `std::get<i>` field, a callee's result — and construct
+nothing.
+
+*Tests.* `tests/unit/backend/cpp/test_emit_indexed_assign.py`: the witness
+above, compiling as `std::vector<std::vector<double>>` with no `uint8_t`.
+
+**The refusing half has no coverage, and did not before either.** Disabling
+`cannot_convert` outright leaves all 612 backend tests passing, and three
+attempts at a witness that reaches it all compiled instead: the alias replay
+widens a slot's element to take the store, so the value fits by the time the
+guard runs. The same story as `_convert_storage`, which
+[backend-cpp.md](backend-cpp.md) measures as reached 37 times with `src == want`
+every time. Recorded rather than papered over with a test that passes for the
+wrong reason.
+
+**For phase 7.** With this in, the fully-lowered `ragged` compiles, so "apply
+it" is unblocked apart from the rows materialisation.
 
 ## Phase 7 — decide whether the pipeline applies it
 

@@ -1049,7 +1049,10 @@ class CppEmitter(Visitor):
                     at=stmt,
                 )
 
-    def _emit_at(self, e: Expr, want: CppType | None, ctx) -> str:
+    def _emit_at(
+        self, e: Expr, want: CppType | None, ctx, *,
+        cannot_convert: bool = False,
+    ) -> str:
         """Emit *e* as a value of storage *want*.
 
         One place admits one C++ type, while ``format_infer`` bounds each expression
@@ -1057,6 +1060,15 @@ class CppEmitter(Visitor):
         Reconciling them is a storage question, so it lives here: an expression that
         *constructs* its value is built at *want*, and anything with storage of its
         own goes to :meth:`_convert_storage`, where a shared list is refused.
+
+        *cannot_convert* is for a place that takes its type from something else --
+        a slot store -- where there is nowhere to put a conversion, so the value
+        must already fit.  The check belongs here rather than at the call site
+        because only this dispatch knows which arm ran: a *constructed* value is
+        built at *want* and has nothing to reconcile, and asking whether its own
+        storage fits would refuse a store that was never going to convert.
+        ``fp.empty`` is the case that bites -- its bound is the lattice bottom,
+        so its own storage is the ladder's first rung whatever the slot holds.
         """
         if want is None:
             return self._visit_expr(e, ctx)
@@ -1096,6 +1108,9 @@ class CppEmitter(Visitor):
         src = self._storage_or_none(e)
         if src is None:
             return emitted
+        if cannot_convert:
+            self._require_bridgeable(src, want, e)
+            self._require_no_narrowing(src, want, e)
         return self._convert_storage(emitted, src, want, at=e)
 
     def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
@@ -3624,11 +3639,8 @@ class CppEmitter(Visitor):
             chain = self._list_at(level, chain, idx)
             level = level.elt
         # The slot's type comes from the container, so there is nowhere to put
-        # a conversion: the value has to already fit.
-        src = self._storage_or_none(stmt.expr)
-        self._require_bridgeable(src, level, stmt.expr)
-        self._require_no_narrowing(src, level, stmt.expr)
-        rhs = self._emit_at(stmt.expr, level, ctx)
+        # a conversion.
+        rhs = self._emit_at(stmt.expr, level, ctx, cannot_convert=True)
         self.writer.add_line(f'{chain} = {rhs};')
 
     def _emit_guarded_block(self, keyword: str, cond: str, body, ctx) -> None:
