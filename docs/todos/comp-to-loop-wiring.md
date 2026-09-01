@@ -588,68 +588,64 @@ wrong reason.
 **For phase 7.** With this in, the fully-lowered `ragged` compiles, so "apply
 it" is unblocked apart from the rows materialisation.
 
-## Phase 7 — decide whether the pipeline applies it
+## Phase 7 — the pipeline applies it
 
-**Declined. No code change: `dependent` stays `False` in the pipeline and the
-emitter keeps lowering a dependent clause list itself.**
+**Applied, and `CompToLoop` lowers a dependent clause list by default.** A
+consumer that wants one kept opts out with `dependent=False`; the pipeline never
+does. A rewrite that leaves one comprehension behind leaves its caller the whole
+comprehension problem, so declining is the thing that has to be asked for.
 
-The two outcomes were always mutually exclusive — a total `CompToLoop` leaves
-nothing for the emitter to fuse — so this is the whole of the choice, and the
-measurement settles it.
+Getting here needed a format-inference fix, because the first measurement said
+the opposite.
 
-| | |
-|---|---|
-| corpus comprehensions | 25 |
-| ...with a dependent clause | **1** (`test_list_comp5`) |
-| applying it | **−1 program**, 0 other emissions change |
-
-The one program is
-`[x for xs in [[1, 2], [3, 4]] for x in xs]`. The emitter compiles it to a fused
-flatten with no intermediate at all:
-
-```c++
-std::array<uint8_t, 4> _tmp1{};  size_t _tmp2 = 0;
-for (const std::array<uint8_t, 2>& xs : _tmp3)
-    for (uint8_t x : xs)
-        _tmp1[_tmp2++] = x;
-```
-
-Lowered, it does not compile: the flatten's accumulator widens to
-`REAL_FORMAT` under the loop fixpoint —
+*What was in the way.* Applying it lost `test_list_comp5` —
+`[x for xs in [[1, 2], [3, 4]] for x in xs]`, the corpus's one dependent
+comprehension — with
 
 ```
 cannot store an unconstrained real value in any storage format
 ```
 
-— which is *Precision is the acceptance test for an unfold* in
-[backend-independence.md](backend-independence.md) failing on the pass's own
-output. So applying it costs a program, changes nothing else, and does not even
-reach the ~90-line deletion it was for, since a lowering that loses a program
-cannot be the one the emitter defers to.
+The flatten's accumulator held `SetFormat({1, 2, 3, 4})` and every store put the
+same set back, yet the loop phi widened it to `REAL_FORMAT`. `_join_bounds` had
+two scalar cases and only one of them checked for a fixed point:
 
-**Beyond the measurement, the rule points the same way.** *What legitimately
-stays in the emitter is what FPy has no syntax for.* The fused flatten needs a
-**growable** list, and derived-semantics is explicit that no rule changes a
-list's length — there is no `append` to rewrite into. That is the same reason
-`_emit_scale_by_pow2` and `_for_header` stay.
+```python
+case SetFormat(values=a), SetFormat(values=b):
+    if widen:
+        return REAL_FORMAT        # unconditional, even when a == b
+case Format(), Format():
+    if s1 == s2:
+        return s1                 # equal inputs short-circuit *before* widen
+```
 
-*What phase 6 bought anyway.* `CompToLoop` is now *capable* of the dependent
-case, which is what a consumer other than this backend needs — the scheduling
-language can ask for a comprehension-free program and get one. The cpp pipeline
-simply declines to, which is what the `dependent` flag is for.
+Widening exists to cut infinite ascending chains, and a join with itself does
+not ascend. Measured: the equal-sets case fires 8 times when applying the
+dependent lowering and **0** times otherwise, so the bug was invisible until
+something asked for it.
 
-*What would flip this.* Two things, in order:
+*And one the fix made visible.* `SetFormat ⊔ Format` bailed to `REAL_FORMAT`
+whenever a value did not fit the format, though the two have a bound short of
+the top — the same `AbstractFormat` union `Format ⊔ Format` uses.
+`_setformat_to_abstract` was written for exactly this bridge and only the
+*arithmetic* path had ever used it, so a set met a format one way and not the
+other. Both are in the format-inference commit, separate from this one.
 
-1. `FormatInfer` giving a loop-carried integer accumulator a bound without
-   needing the trip count. Under `integer_ctx` the value is an unbounded
-   integer, which has a storage (`int64_t`) — the widen-mode fallback reaches
-   `REAL_FORMAT` before that is considered. This looks like a gap rather than a
-   necessity, and closing it would make the lowered form compile.
-2. Then the rows materialisation is the remaining cost, and only a growable
-   list or a deforestation pass removes it.
+*Checked for siblings.* `format_infer` is the only analysis with a widen mode —
+`array_size`'s lattice is flat, `value_class` is height-4. Within it,
+`_list_set_widen` delegates to `_join_bounds` and inherits the fix. The one
+structural analogue, `_bound_if_fits`' unconditional bail under widening, is
+**load-bearing**: disabling it does not terminate. Not the same bug.
 
-Until (1), there is nothing to weigh: the option that would delete emitter code
-also deletes a working program.
+*Result.* 202 corpus programs either way, nothing lost or gained, one emission
+differs. `CompToLoop.refusals` is empty on every corpus function.
+
+*Still not done: deleting the emitter's comprehension support.* Nothing routes
+to `_visit_list_comp` / `_emit_list_comp_at` / `_open_comp_loop` now, so the
+~90 lines are dead — but dead is not the same as unreachable, and they should go
+behind a tripwire (a `ListComp` reaching the emitter raises a `CppEmitError`
+naming a backend bug, the way `_emit_inline` does) rather than by removal. Its
+own commit.
 
 ## Not in scope
 

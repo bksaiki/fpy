@@ -33,21 +33,25 @@ rather than zero, so every slot must be written.  Both hold where the clause
 lengths multiply: FPy rejects ``if`` filters in a comprehension, so the length is
 exactly that product, and every slot is written.
 
+A **dependent clause list** -- some clause's iterable mentions an earlier
+clause's target, as in ``[b for a in xs for b in a]`` -- has a length that is a
+sum rather than a product, so `fp.empty` has nowhere to get it up front.  That
+one is built a row at a time and flattened
+(:meth:`~._CompToLoopInstance._lower_dependent`), which costs a materialised row
+per outer element.  A consumer with something better to do with the shape opts
+out by passing ``dependent=False``; the default lowers it, because a pass that
+leaves one comprehension behind leaves its caller the whole comprehension
+problem.
+
 **This pass lowers what it can and leaves the rest alone.**  It never errors on a
 comprehension it cannot lower; :meth:`CompToLoop.refusals` names each one and
 why, and a caller that needs a comprehension-free program checks for itself.
 
-What it leaves:
-
-- **A dependent clause list** -- some clause's iterable mentions an earlier
-  clause's target, as in ``[b for a in xs for b in a]``.  The length is then a
-  sum rather than a product, and `fp.empty` has nowhere to get it: there is no
-  ``append``, and computing it up front would mean evaluating that iterable a
-  second time.
-- **A comprehension with no statement slot** -- a ``while`` condition, which is
-  re-evaluated every iteration; an ``IfExpr`` branch, which is conditional; and
-  one nested in another comprehension, which gets a slot once the outer one is
-  lowered, so a further pass takes it.
+What it leaves is a **comprehension with no statement slot** -- a ``while``
+condition, which is re-evaluated every iteration; an ``IfExpr`` branch, which is
+conditional; and one nested in another comprehension, which gets a slot once the
+one around it is lowered.  Each is cleared by running the pass again after
+:class:`~fpy2.transform.Hoistable`, which is what makes the two a fixpoint.
 """
 
 from typing import Any
@@ -149,8 +153,10 @@ class _CompToLoopInstance(SiteRewriter):
     gensym: Gensym
     where: int | Cursor | None
     dependent: bool
-    """whether to lower a dependent clause list, which costs a materialised
-    row per outer element -- see :meth:`_lower_dependent`"""
+    """whether to lower a dependent clause list.  On unless a consumer opts
+    out: it costs a materialised row per outer element, which is worth
+    declining only where something downstream lowers the shape better --
+    see :meth:`_lower_dependent`"""
     _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
@@ -162,7 +168,7 @@ class _CompToLoopInstance(SiteRewriter):
         def_use: DefineUseAnalysis,
         where: int | Cursor | None = None,
         temp_id: NamedId | None = None,
-        dependent: bool = False,
+        dependent: bool = True,
     ):
         self.func = func
         self.def_use = def_use
@@ -177,7 +183,7 @@ class _CompToLoopInstance(SiteRewriter):
 
     def _verify(self, e: ListComp) -> None | Declined:
         """`None` where *e* may be lowered, else why not."""
-        if dependent_clauses(e) and not self.dependent:
+        if not self.dependent and dependent_clauses(e):
             # `fp.empty` needs its length first and there is no `append`, so a
             # length that is not a product of the clause lengths has nowhere to
             # come from.
@@ -530,7 +536,7 @@ class _CompToLoopInstance(SiteRewriter):
         return self._visit_function(self.func, None)
 
 
-def _lister(func: FuncDef, dependent: bool = False) -> _CompToLoopInstance:
+def _lister(func: FuncDef, dependent: bool = True) -> _CompToLoopInstance:
     """The pass instance a listing walks `func` with."""
     return _CompToLoopInstance(
         func, DefineUse.analyze(func), dependent=dependent,
@@ -546,7 +552,7 @@ class CompToLoop:
     @staticmethod
     def sites(
         func: FuncDef, within: Cursor | None = None, *,
-        dependent: bool = False,
+        dependent: bool = True,
     ) -> list[Cursor]:
         """The comprehensions of `func` this rewrite would lower, in visit
         order -- what a `where` index counts, and what `within` narrows.
@@ -559,7 +565,7 @@ class CompToLoop:
     @staticmethod
     def refusals(
         func: FuncDef, within: Cursor | None = None, *,
-        dependent: bool = False,
+        dependent: bool = True,
     ) -> list[tuple[Cursor, str]]:
         """Why each comprehension of `func` that is not a site was left alone."""
         return _lister(func, dependent).list_refusals(within)
@@ -567,7 +573,7 @@ class CompToLoop:
     @staticmethod
     def apply(
         func: FuncDef, *, where: int | Cursor | None = None,
-        temp_id: NamedId | None = None, dependent: bool = False,
+        temp_id: NamedId | None = None, dependent: bool = True,
     ) -> FuncDef:
         """
         Lowers every comprehension of `func` it can into an allocation plus a
@@ -576,10 +582,12 @@ class CompToLoop:
         `where` selects one comprehension by index in visit order; `None` takes
         every one it can lower.
 
-        `dependent` also lowers a clause list whose length is a sum rather than
-        a product.  Off by default: it materialises a row per outer element,
-        where every other shape allocates once and fills, so it is worth it only
-        to a caller that needs the program comprehension-free.
+        `dependent=False` opts out of lowering a clause list whose length is a
+        sum rather than a product.  That shape costs a materialised row per
+        outer element, where every other allocates once and fills, so a consumer
+        with something better to do with it can decline -- but the default is to
+        lower it, because a pass that leaves one comprehension behind leaves its
+        caller with the whole comprehension problem.
         """
         return CompToLoop.apply_with_edits(
             func, where=where, temp_id=temp_id, dependent=dependent,
@@ -588,7 +596,7 @@ class CompToLoop:
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *, where: int | Cursor | None = None,
-        temp_id: NamedId | None = None, dependent: bool = False,
+        temp_id: NamedId | None = None, dependent: bool = True,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced.
 

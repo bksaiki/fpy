@@ -88,18 +88,22 @@ class TestCompToLoop:
 
 class TestLeftAlone:
     def test_a_dependent_clause_list_is_left_alone_without_error(self):
-        """The pass returns its input rather than raising -- a leftover
-        comprehension is still a valid program."""
-        assert sites(comp_to_loop, _ragged) == []
-        out = comp_to_loop(_ragged)              # no exception
+        """Declined, the pass returns its input rather than raising -- a
+        leftover comprehension is still a valid program."""
+        assert sites(comp_to_loop, _ragged, dependent=False) == []
+        out = comp_to_loop(_ragged, dependent=False)      # no exception
         assert out.ast.is_equiv(_ragged.ast)
-        why = refusals(comp_to_loop, _ragged)
+        why = refusals(comp_to_loop, _ragged, dependent=False)
         assert len(why) == 1 and 'mentions an earlier' in why[0][1]
 
     def test_naming_one_by_cursor_says_why(self):
-        cursor, _ = refusals(comp_to_loop, _ragged)[0]
+        cursor, _ = refusals(comp_to_loop, _ragged, dependent=False)[0]
         with pytest.raises(TransformDeclined, match='mentions an earlier'):
-            comp_to_loop(_ragged, cursor)
+            comp_to_loop(_ragged, cursor, dependent=False)
+
+    def test_it_lowers_by_default(self):
+        """A consumer opts *out* of unfolding, not in."""
+        assert sites(comp_to_loop, _ragged) != []
 
 
 class TestWhere:

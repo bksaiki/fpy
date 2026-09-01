@@ -270,54 +270,53 @@ class TestCompToLoop:
 
 class TestDependentClauses:
     @pytest.mark.parametrize('f', ['_ragged', '_ragged3'])
-    def test_a_dependent_clause_list_is_left_alone(self, f):
+    def test_opting_out_leaves_a_dependent_clause_list_alone(self, f):
         """`[b for a in xss for b in a]` has length `sum(len(a) for a in xss)`,
-        not a product -- and `fp.empty` needs its length up front with no
-        `append` to fall back on.  So the pass leaves it exactly as it was."""
+        not a product, so lowering it costs a materialised row per outer
+        element.  A consumer that would rather have the comprehension says so,
+        and the pass leaves it exactly as it was."""
         func = {'_ragged': _ragged, '_ragged3': _ragged3}[f]
-        assert CompToLoop.sites(func.ast) == []
-        why = CompToLoop.refusals(func.ast)
+        assert CompToLoop.sites(func.ast, dependent=False) == []
+        why = CompToLoop.refusals(func.ast, dependent=False)
         assert len(why) == 1 and 'mentions an earlier' in why[0][1]
-        assert CompToLoop.apply(func.ast).is_equiv(func.ast)
+        assert CompToLoop.apply(func.ast, dependent=False).is_equiv(func.ast)
 
     @pytest.mark.parametrize('f,args', [
         ('_ragged', ([[1.0, 2.0], [], [3.0]],)),
         ('_ragged3', ([[[1.0], [2.0, 3.0]], [], [[4.0]]],)),
     ])
-    def test_dependent_lowers_it(self, f, args):
-        """``dependent=True`` builds the rows, adds up their lengths, then
-        flattens -- the rewrite ``derived-semantics.rst`` prescribes.  Only the
-        *first* clause is peeled per pass, so the rest become one nested
-        comprehension that a later pass takes."""
+    def test_a_dependent_clause_list_lowers_by_default(self, f, args):
+        """Builds the rows, adds up their lengths, then flattens -- the rewrite
+        ``derived-semantics.rst`` prescribes.  Only the *first* clause is peeled
+        per pass, so the rest become one nested comprehension that a later pass
+        takes."""
         func = {'_ragged': _ragged, '_ragged3': _ragged3}[f]
         ast = func.ast
         for _ in range(8):
-            if not CompToLoop.sites(ast, dependent=True):
+            if not CompToLoop.sites(ast):
                 break
-            ast = CompToLoop.apply(ast, dependent=True)
+            ast = CompToLoop.apply(ast)
         assert _count(ast, ListComp) == 0
-        assert CompToLoop.refusals(ast, dependent=True) == []
+        assert CompToLoop.refusals(ast) == []
         got = _vals(Function(ast, runtime=func.runtime)(*args))
         assert got == _vals(func(*args))
 
-    def test_dependent_is_off_by_default(self):
-        """It materialises a row per outer element, where every other shape
-        allocates once and fills, so a caller asks for it."""
-        assert CompToLoop.sites(_ragged.ast) == []
-        assert CompToLoop.sites(_ragged.ast, dependent=True) != []
+    def test_opting_out_is_the_only_way_to_keep_one(self):
+        """A pass that leaves one comprehension behind leaves its caller the
+        whole comprehension problem, so declining has to be asked for."""
+        assert CompToLoop.sites(_ragged.ast) != []
+        assert CompToLoop.sites(_ragged.ast, dependent=False) == []
 
     def test_dependent_binds_its_iterable_under_temp_id(self):
         """The first clause's iterable is bound here like any other -- the rest
         go into the nested comprehension and are bound when it is lowered."""
-        out = CompToLoop.apply(
-            _ragged.ast, temp_id=NamedId('src'), dependent=True,
-        )
+        out = CompToLoop.apply(_ragged.ast, temp_id=NamedId('src'))
         assert 'src = xss' in out.format()
 
     def test_left_alone_is_not_an_error(self):
-        """The pass never raises over a comprehension it cannot lower; a caller
-        that needs none left checks `refusals` itself."""
-        out = CompToLoop.apply(_ragged.ast)     # no exception
+        """The pass never raises over a comprehension it does not lower; a
+        caller that needs none left checks `refusals` itself."""
+        out = CompToLoop.apply(_ragged.ast, dependent=False)   # no exception
         assert _count(out, ListComp) == 1
 
     def test_dependence_is_a_free_variable_check_not_a_syntactic_one(self):
@@ -328,7 +327,7 @@ class TestDependentClauses:
         def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
             return [a[i] for a in xss for i in range(len(a))]
 
-        assert CompToLoop.sites(f.ast) == []
+        assert CompToLoop.sites(f.ast, dependent=False) == []
 
     def test_an_independent_clause_that_merely_looks_dependent_lowers(self):
         """`range(k)` reads an outer name, not an earlier target."""

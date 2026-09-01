@@ -12,6 +12,7 @@ def comp_to_loop(
     where: int | Cursor | None = None,
     *,
     temp_id: str = 't',
+    dependent: bool = True,
 ) -> Function:
     """
     Lower a list comprehension in `func` into an allocation and a loop.
@@ -25,10 +26,11 @@ def comp_to_loop(
 
     Several clauses are a cartesian product, so they become nested loops over
     the original targets with a running write index.  The allocation's length is
-    the product of the clause lengths, which is why a *dependent* clause list --
+    the product of the clause lengths -- except for a *dependent* clause list,
     one whose later iterable mentions an earlier target, as in
-    ``[b for a in xs for b in a]`` -- is left alone: its length is a sum, and
-    ``fp.empty`` needs a length up front with no ``append`` to fall back on.
+    ``[b for a in xs for b in a]``.  Its length is a sum, so that one is built a
+    row at a time and flattened, which costs a materialised row per outer
+    element.  Pass ``dependent=False`` to leave it alone instead.
 
     This lowers what it can and leaves the rest as it was; it never raises over a
     comprehension it cannot lower.  :func:`fpy2.strategies.refusals` names each
@@ -52,8 +54,13 @@ def comp_to_loop(
         leaves alone is not one of them and takes no index; naming it with a
         cursor says why it was left.
     temp_id : str
-        The name to bind each iterable to, `t` by default. Freshened against the
-        program, so it never shadows.
+        The prefix for every name the rewrite mints, `t` by default. Freshened
+        against the program, so it never shadows.
+    dependent : bool
+        Whether to lower a dependent clause list, whose length is a sum rather
+        than a product. `True` by default: a rewrite that leaves one
+        comprehension behind leaves its caller the whole comprehension problem.
+        `False` declines it, for a consumer with a better lowering of its own.
 
     Returns
     -------
@@ -99,4 +106,5 @@ def comp_to_loop(
 
     return func.with_edits(CompToLoop.apply_with_edits(
         func.ast, where=func.rebase(where), temp_id=NamedId(temp_id),
+        dependent=dependent,
     ))

@@ -34,7 +34,7 @@ EXPECTED_MINTS = {
     '_emit_ieee_min_max': 3,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_emit_zip': 4,            # the lists being zipped
-    '_list_range': 5,          # the list being iterated
+    '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced
 }
 """Emitter sites that still invent a name, and how often, over the corpus.

@@ -543,56 +543,44 @@ docstring for the transform side.
 A short package README pointing at this file and listing the public surface
 (`CppCompiler.compile` / `headers` / `helpers` / `prelude`, exception types).
 
-## Comprehension lowering: in the pipeline, except the ragged case
+## Comprehension lowering: in the pipeline
 
 `CppCompiler.specialize()` runs `fpy2.transform.Hoistable` and
 `fpy2.transform.CompToLoop` to a **fixpoint** (`_to_statement_form`), so every
-comprehension but one shape is an `fp.empty` allocation plus a `for` loop before
-the emitter sees it. Neither pass is a fixpoint alone: `Hoistable` seals a
-comprehension's element for want of a statement slot and `CompToLoop` makes the
-loop that *is* that slot; `CompToLoop` declines a comprehension in a ternary arm
-or a `while` condition for want of one, and `Hoistable` creates it. It
-terminates because `CompToLoop` reports an edit only where it lowered a
-comprehension and neither pass builds one.
+comprehension is an `fp.empty` allocation plus a `for` loop before the emitter
+sees one. Neither pass is a fixpoint alone: `Hoistable` seals a comprehension's
+element for want of a statement slot and `CompToLoop` makes the loop that *is*
+that slot; `CompToLoop` declines a comprehension in a ternary arm or a `while`
+condition for want of one, and `Hoistable` creates it. It terminates because
+`CompToLoop` reports an edit only where it lowered a comprehension and neither
+pass builds one.
 
-Wiring it cost nothing: 202 corpus programs either way, 19 emitting differently.
-Getting there needed four fixes, in
+Wiring it cost nothing: 202 corpus programs either way. Getting there needed
+four fixes plus one in format inference, all in
 [comp-to-loop-wiring.md](comp-to-loop-wiring.md) — the lowering fills its
 assignment target rather than copying an `acc` into it, `_emit_empty` allows an
 allocation with fewer dimensions than the type's depth, a `range` iterable stays
-inline so it is not forced into a value position, and `_const_int` folds
-arithmetic over lengths it knows.
+inline so it is not forced into a value position, `_const_int` folds arithmetic
+over lengths it knows, and `_join_bounds` stops collapsing a widened join of a
+`SetFormat` with itself.
 
-**The dependent clause list stays with the emitter.** Where a clause's iterable
-reads an earlier clause's target the length is a sum rather than a product, and
-`fp.empty` has nowhere to get it. `_emit_list_comp_at` needs no length up front —
-`_open_list_build` picks `std::array` filled through a running index where the
-length was proven, `std::vector` with `push_back` otherwise — so the ragged
-flatten compiles here and nowhere else:
+**Including the dependent clause list**, where a clause's iterable reads an
+earlier clause's target and the length is a sum rather than a product.
+`CompToLoop` builds the rows, adds up their lengths and flattens — the rewrite
+`derived-semantics.rst` prescribes. It costs a materialised row per outer
+element, which the emitter's own flatten does not, and that was the argument for
+keeping the emitter's: `_open_list_build` needs no length up front, picking
+`std::array` filled through a running index where the length was proven and
+`std::vector` with `push_back` otherwise. What settles it the other way is that
+the two cannot coexist — a total `CompToLoop` leaves nothing for the emitter to
+fuse — and a language whose backends each carry their own comprehension lowering
+is the thing this was for.
 
-```cpp
-// [x for xs in xss for x in xs]
-std::array<uint8_t, 4> _tmp1{};  size_t _tmp2 = 0;
-for (const std::array<uint8_t, 2>& xs : _tmp3)
-    for (uint8_t x : xs)
-        _tmp1[_tmp2++] = x;
-```
-
-`CompToLoop` *can* lower it — `apply(..., dependent=True)` builds the rows, sums
-their lengths and flattens, which is what derived-semantics prescribes — and this
-pipeline declines to ask. Measured, applying it loses `test_list_comp5`, the
-corpus's one dependent comprehension, and changes no other emission: the
-flatten's accumulator widens to `REAL_FORMAT` under the loop fixpoint. The
-reasoning behind the refusal outlives that defect, though. A one-pass flatten
-needs a **growable** list, and derived-semantics is explicit that no rule changes
-a list's length — so there is no `append` to rewrite into, and this is a fuse for
-a form FPy cannot state, like `_emit_scale_by_pow2` and `_for_header`.
-
-Deleting the emitter's support therefore stays out of reach: it is ~90 lines
-(`_visit_list_comp`, `_emit_list_comp_at`, `_open_comp_loop`, the `_emit_at`
-case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry), and the only
-route to it is a lowering that does not lose a program. See *Phase 7* in
-[comp-to-loop-wiring.md](comp-to-loop-wiring.md) for what would flip that.
+So `_visit_list_comp`, `_emit_list_comp_at` and `_open_comp_loop` are now dead,
+along with the `_emit_at` case, two `storage_infer` match arms and one
+`_ALLOC_EXPRS` entry — about 90 lines. They should come out behind a tripwire, a
+`ListComp` reaching the emitter raising a `CppEmitError` that names a backend
+bug, rather than by removal.
 
 ## Out of scope
 
