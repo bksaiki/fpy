@@ -216,35 +216,25 @@ code. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
-### Settled: an operand emitting statements escapes its guard
+### An operand emitting statements must not escape its guard
 
-**Was a defect; now impossible by construction.** `_emit_guarded_block` and
-`_visit_if_expr` interpolate an expression visitor into an f-string, so anything
-it wrote through `writer.add_line` landed *before* the construct being guarded.
-Three shapes, each verified by compiling and running the output:
+`_emit_guarded_block` and `_visit_if_expr` interpolate an expression visitor into
+an f-string, so anything it writes through `writer.add_line` lands *before* the
+construct being guarded. Three shapes miscompiled that way — a `while` condition
+evaluated once, a ternary arm's assertion firing on the untaken path, an
+`and`/`or` tail past the short circuit — all in territory where FPy's semantics
+*are* defined, unlike the subscript case below.
 
-- **a `while` condition evaluated once**, so the loop tested a stale name —
-  `while max([y, 0.0]) > 0.0` did not terminate where the interpreter returned;
-- **a ternary arm's assertion on the untaken path** —
-  `0.0 if x > 1e30 else fp.cast(x)` aborted where the interpreter returned;
-- **an `and` / `or` tail past the short circuit** — same assertion, same abort.
+Closed twice over. `Hoistable` lowers each position before codegen, so none
+reaches the emitter; `_emit_inline` refuses if one ever does, comparing the
+writer's line count around the emission rather than guessing from the syntax.
+`test_statement_form.py` runs the three witnesses with both passes monkeypatched
+to the identity — both, because `Hoistable` alone empties the positions and every
+witness would pass without witnessing anything.
 
-All three are in territory where FPy's semantics *are* defined, unlike the
-subscript case below.
-
-Closed two ways. `fpy2.transform.Hoistable` lowers each position before codegen,
-so none reaches the emitter — and `_emit_inline` refuses if one ever does,
-comparing the writer's line count around the emission rather than approximating
-from the syntax. Unreachable *and* impossible: the lowering fixes real programs,
-the tripwire survives a future change to the pass.
-`tests/unit/backend/cpp/test_statement_form.py` runs all three witnesses and
-checks the refusal with both passes monkeypatched to the identity — both,
-because patching out `ANF` alone leaves `Hoistable` to empty the positions and
-every witness would pass without witnessing anything.
-
-An `if` / `if1` condition is deliberately not gated: it runs once, just before
-the branch, so its statements belong in the enclosing block. That is why
-`_emit_guarded_block` now takes its condition already emitted.
+An `if` / `if1` condition is deliberately not gated: it runs once, just before the
+branch, so its statements belong in the enclosing block — which is why
+`_emit_guarded_block` takes its condition already emitted.
 
 ### Statement form defeats the `2 ** n * x` fusion
 
@@ -282,23 +272,20 @@ transform to rewrite *into*. See
 
 ### Unchecked subscripts are not a bug
 
-**Settled: an out-of-range subscript is undefined in FPy.** `_visit_list_ref`,
-`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]`, and that is the
-intended lowering. The interpreter happens to raise on `xs[10]` over a shorter
-list, but that is an artifact of how it is written, not a promise the language
-makes — so a backend is free to do anything, and a raw subscript is the normal
-C/C++ idiom.
+An out-of-range subscript is undefined in FPy. `_visit_list_ref`,
+`_visit_list_slice` and `_visit_indexed_assign` emit raw `xs[i]`, and that is the
+intended lowering. The interpreter raises on `xs[10]` over a shorter list, but
+that is an artifact of how it is written, not a promise the language makes.
 
-Recorded because the shape invites the opposite conclusion: it looks like the
-emitted code disagrees with the interpreter, so it reads as the criterion above
-being violated. It is not. Do not add a checked-subscript helper on this
-reasoning; the criterion applies where FPy's semantics are *defined*, and here
-they are not.
+Recorded because the shape invites the opposite conclusion: the emitted code
+looks like it disagrees with the interpreter, so it reads as violating the
+criterion above. It does not — that applies where FPy's semantics are *defined*.
+Do not add a checked-subscript helper on this reasoning.
 
-(Should bounds checking ever be wanted, it would be a debug-build feature like the
-rounding assertions, and it would want the array-size work first — the checks
+Were bounds checking ever wanted, it would be a debug-build feature like the
+rounding assertions, and it would want the array-size work first: the checks
 worth keeping are the ones `array-size-symbolic.md`'s size equalities cannot
-discharge statically.)
+discharge statically.
 
 ### One question answered in four places
 
@@ -450,6 +437,12 @@ rather than holding it alongside: `AliasAnalysis.consumed_defs`, discounted by
 discount, and `_shares_storage` needs it on both halves of
 `slots = referrers - len(by_name)` or `slots` absorbs the name back.
 
+The unit is the *object*, not one definition. A list a loop fills reaches its
+consumer through a phi over the allocation and the stores, all one runtime
+object per `same_object_defs`, so the whole class is recorded — a write-through
+is a use of the name but not a second *read*, and `referrers_after_moves` drops
+a name only when every definition of it is consumed.
+
 The discount asserts a *transfer*, so `_emit_deduced` emits `std::move` under
 the same condition. C++ will not: implicit move covers `return xs;`, not `xs`
 inside the returned expression. Whether it matters depends on the
@@ -458,12 +451,12 @@ representation — for `std::vector` it is O(1) against an O(n) copy; for
 
 Soundness needs the construction to provably run once for that value, and a
 sibling-statement check alone does not give that. Three guards: the use must not
-re-execute (a comprehension body and a `while` condition are expressions, so
-they repeat *within* a block), its definition must be a sibling statement, and
-the value must not leave its branch through a phi — a phi is not a use site, so
-sole-use says nothing about the read after the merge. `std::array` hides all
-three, since moving from one leaves it readable, so every runtime test uses an
-unsized list whose `vector` move empties the source.
+re-execute (a `while` condition is an expression, so it repeats *within* a
+block), its definition must be a sibling statement, and the value must not leave
+through a phi *outside* its own object — a phi is not a use site, so sole-use
+says nothing about the read after a merge that carries the value elsewhere.
+`std::array` hides all three, since moving from one leaves it readable, so every
+runtime test uses an unsized list whose `vector` move empties the source.
 
 **A projection whose slot is replaced.** *Deliberate.* `row = xss[i]` binds a
 reference, which is what lets `for a, b in zip(...)` over nested lists unbox at
@@ -471,14 +464,12 @@ all. A C++ reference follows the *slot* while FPy keeps referring to the list th
 was in it, so any `xss[i] = <list>` anywhere in the function rules it out.
 Function-wide by choice: nothing else in the analysis is flow-sensitive.
 
-**An aggregate bound from an emitter temp is copied.** *Open.*
-`std::vector<std::vector<double>> result = _tmp1;` — a comprehension
-materializes into a temp, then the real name copies it. Two instances in the
-corpus today. Free while every list was a handle, O(n) since they became values,
-and `binds_by_reference` does not reach it: the FPy `Assign`'s expression is a
-`ListComp`, not a `Var`, so the temp is invisible to the binding rule. Either
-build the comprehension into the target, or move from a temp that is dead by
-construction.
+**A materialized `range` is copied into the name bound to it.** *Open.*
+`std::vector<int64_t> t = _tmp1;` — seven instances, all
+`[... for ... in range(len(xs))]` after `ZipElim`. `CompToLoop._inlinable` keeps
+a `range` out of a name so it stays fused, but only where its operands are
+atoms, and `len(xs)` is not one. It is pure, though, so the gate is stricter
+than the property it is testing for; widening it to pure operands fuses these.
 
 **Not planned:** interprocedural precision beyond retention — a caller-driven
 representation choice with the callee specialized per argument representation. It
@@ -538,6 +529,19 @@ return std::accumulate(_tmp1.begin(), _tmp1.end(), static_cast<double>(0));
 The emitter side is the blocker; see `fpy2/transform/reduce_fusion.py`'s module
 docstring for the transform side.
 
+### A slot store's refusal is untested
+
+`_emit_at(..., cannot_convert=True)` refuses a value whose own storage cannot
+reach the slot's. Nothing exercises the refusal: disabling it leaves all 612
+backend tests passing, and three attempts at a witness compiled instead, because
+`format_infer`'s alias replay widens a slot's element to take the store before
+the check runs. The same shape as `_convert_storage`, reached 37 times with
+`src == want` every time.
+
+Not evidence the check is wrong — evidence the storages agree by the time
+anything asks. A witness needs a slot whose element storage is fixed by
+something outside the store: a parameter's ABI, or a callee's return.
+
 ### `fpy2/backend/cpp/README.md`
 
 A short package README pointing at this file and listing the public surface
@@ -555,14 +559,7 @@ condition for want of one, and `Hoistable` creates it. It terminates because
 `CompToLoop` reports an edit only where it lowered a comprehension and neither
 pass builds one.
 
-Wiring it cost nothing: 202 corpus programs either way. Getting there needed
-four fixes plus one in format inference, all in
-[comp-to-loop-wiring.md](comp-to-loop-wiring.md) — the lowering fills its
-assignment target rather than copying an `acc` into it, `_emit_empty` allows an
-allocation with fewer dimensions than the type's depth, a `range` iterable stays
-inline so it is not forced into a value position, `_const_int` folds arithmetic
-over lengths it knows, and `_join_bounds` stops collapsing a widened join of a
-`SetFormat` with itself.
+Wiring it cost nothing: 202 corpus programs either way.
 
 **Including the dependent clause list**, where a clause's iterable reads an
 earlier clause's target and the length is a sum rather than a product.

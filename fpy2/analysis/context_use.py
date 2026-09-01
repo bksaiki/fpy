@@ -169,9 +169,9 @@ class _ContextUseInstance(DefaultVisitor):
         # Create a fresh context scope for the body.
         new_scope = self._make_scope(stmt, ctx)
         # **E-Context** evaluates the context expression under `REAL`, not the
-        # enclosing context, so its uses belong to a scope of their own.  Built
-        # after the body's, so that a `with` whose context *is* `REAL` -- where
-        # the two scopes are equal -- merges into it rather than clearing it.
+        # enclosing context, so its uses get a scope of their own.  Built after
+        # the body's, so a `with` whose context *is* `REAL` -- where the two
+        # compare equal -- merges into it rather than clearing it.
         real_scope = ContextScope(stmt, REAL)
         self.uses.setdefault(real_scope, set())
         self._visit_expr(stmt.ctx, real_scope)

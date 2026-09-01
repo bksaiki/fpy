@@ -1055,26 +1055,28 @@ class CppEmitter(Visitor):
     ) -> str:
         """Emit *e* as a value of storage *want*.
 
-        One place admits one C++ type, while ``format_infer`` bounds each expression
-        by its own values -- correctly, since that is the question it answers.
-        Reconciling them is a storage question, so it lives here: an expression that
-        *constructs* its value is built at *want*, and anything with storage of its
-        own goes to :meth:`_convert_storage`, where a shared list is refused.
+        One place admits one C++ type, while ``format_infer`` bounds each
+        expression by its own values.  Reconciling them is a storage question,
+        so it lives here: an expression that *constructs* its value is built at
+        *want*, and anything with storage of its own goes to
+        :meth:`_convert_storage`, where a shared list is refused.
 
-        *cannot_convert* is for a place that takes its type from something else --
-        a slot store -- where there is nowhere to put a conversion, so the value
-        must already fit.  The check belongs here rather than at the call site
-        because only this dispatch knows which arm ran: a *constructed* value is
-        built at *want* and has nothing to reconcile, and asking whether its own
-        storage fits would refuse a store that was never going to convert.
-        ``fp.empty`` is the case that bites -- its bound is the lattice bottom,
-        so its own storage is the ladder's first rung whatever the slot holds.
+        *cannot_convert* is for a place taking its type from something else -- a
+        slot store -- where the value must already fit.  The check belongs here
+        because only this dispatch knows which arm ran: a constructed value is
+        built *at* ``want`` and has nothing to reconcile.  ``fp.empty`` is why it
+        matters -- its bound is the lattice bottom, so its own storage is the
+        ladder's first rung whatever the slot holds.
         """
         if want is None:
             return self._visit_expr(e, ctx)
         if isinstance(want, CppScalar):
             # A scalar has no identity, so there is nothing to build at a
-            # storage: C++ converts it at the point of use.
+            # storage: C++ converts it at the point of use -- silently, and a
+            # narrowing conversion into a slot is a wrong answer rather than a
+            # compile error, so it is refused before that.
+            if cannot_convert:
+                self._require_no_narrowing(self._storage_or_none(e), want, e)
             return self._visit_expr(e, ctx)
         match e:
             case ListExpr() if isinstance(want, CppList):
@@ -1088,8 +1090,6 @@ class CppEmitter(Visitor):
                     for elt, w in zip(e.elts, want.elts)
                 ]
                 return f'std::make_tuple({", ".join(parts)})'
-            case ListComp() if isinstance(want, CppList):
-                return self._emit_list_comp_at(e, want, ctx)
             case Empty() if isinstance(want, CppList):
                 # Its own bound is the lattice bottom, so its own storage is
                 # the ladder's first rung; building at the target saves
@@ -1110,7 +1110,6 @@ class CppEmitter(Visitor):
             return emitted
         if cannot_convert:
             self._require_bridgeable(src, want, e)
-            self._require_no_narrowing(src, want, e)
         return self._convert_storage(emitted, src, want, at=e)
 
     def _emit_deduced(self, e: Expr, want: CppType, ctx) -> str:
@@ -1679,11 +1678,11 @@ class CppEmitter(Visitor):
     ) -> str:
         """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
-        For conversions implicit from the user's perspective, where format inference
-        and storage selection decided to rebind the operand.  A lossy one is refused
-        rather than silently emitted: the user should narrow the active context or
-        write ``fp.round(...)``.  Casts the user *did* write go through
-        :meth:`_explicit_cast`, which never refuses.
+        For conversions implicit from the user's perspective, where format
+        inference and storage selection decided to rebind the operand.  A lossy
+        one is refused rather than silently emitted: the user should narrow the
+        active context or write ``fp.round(...)``.  A cast the user *did* write
+        goes through :meth:`_explicit_cast`, which never refuses.
 
         Pass *src* to fall back on :func:`bound_fits_in_scalar` when the
         type-level test refuses.
@@ -2286,31 +2285,20 @@ class CppEmitter(Visitor):
                 )
 
     def _readable_twice(self, code: str) -> str:
-        """*code*, in a form the caller may emit more than once.  A literal is
-        already one; anything else goes through :meth:`_bind_operand`."""
+        """*code*, in a form the caller may emit more than once."""
         return code if code.isdigit() else self._bind_operand(code)
 
     def _emit_range_len(self, e: Len, rng: 'Range1 | Range2', ctx) -> str:
         """``len(range(...))`` as a count, without building the range.
 
-        A range's *elements* need an integer type, and a real bound has none --
-        which is why `_emit_range` refuses one.  Its *length* needs no such
-        thing: a unit-step range holds the integers in ``[start, stop)``, so the
-        count is ``stop - start`` clamped at zero.
+        A range's *elements* need an integer type and a real bound has none,
+        which is why :meth:`_emit_range` refuses one; its *length* needs no such
+        thing.  A unit-step range holds the integers in ``[start, stop)``, so
+        the count is ``stop - start`` clamped at zero -- and the clamp settles
+        NaN, since a comparison against it is false.
 
-        `Range3` is not here.  Its count divides by the step and the sign of the
-        step decides the comparison, so a symbolic one needs a branch; it keeps
-        the materialising path, which its integer bounds make available.
-
-        The conversion is unconditional where `_maybe_cast` would refuse it as
-        lossy, and a range bound is the one place that is justified: the
-        language requires an integral bound, so every value it admits converts
-        exactly.  A non-integral one is stuck in the interpreter, which leaves
-        the backend owing nothing -- the same reasoning as an out-of-range
-        subscript.
-
-        The clamp settles NaN too: a comparison against it is false, so the
-        count is zero.
+        `Range3` keeps the materialising path: its count divides by the step and
+        the step's sign picks the comparison, so a symbolic one needs a branch.
         """
         result_ty = self._storage_for_expr(e)
         if isinstance(rng, Range1):
@@ -2325,11 +2313,10 @@ class CppEmitter(Visitor):
     def _range_bound(self, e: Expr, elt_ty: CppScalar, ctx) -> str:
         """A ``range`` bound, cast into the element type.
 
-        Unconditional, where `_maybe_cast` would refuse a real bound as lossy.
-        A range bound is one of the conversions the *language* requires rather
-        than the emitter: every argument of ``range`` must be an integer, so
-        each value it admits converts exactly.  A non-integral one is stuck in
-        the interpreter, which leaves the backend owing nothing.
+        Unconditional, where :meth:`_maybe_cast` would refuse a real bound as
+        lossy: every argument of ``range`` must be an integer, so each value the
+        language admits converts exactly.  A non-integral one is stuck in the
+        interpreter, which leaves the backend owing nothing.
         """
         arg = self._visit_expr(e, ctx)
         if self._scalar_storage_for_expr(e) == elt_ty:
@@ -2337,11 +2324,12 @@ class CppEmitter(Visitor):
         return self._explicit_cast(arg, elt_ty)
 
     def _emit_range(self, e: 'Range1 | Range2 | Range3', ctx) -> str:
-        """``range(...)`` as an expression — materialise a vector via
-        ``std::iota`` for unit-step ranges, or a manual fill loop for
-        ``Range3``'s explicit step.  Used outside for-loop iterables,
-        where the loop visitor handles the same shapes without
-        materialising the vector."""
+        """``range(...)`` as an expression — a vector via ``std::iota`` for a
+        unit step, a fill loop for ``Range3``'s explicit one.
+
+        Only where the range is a *value*: a for-loop iterable and
+        :meth:`_emit_range_len` handle the same shapes without materialising.
+        """
         result_ty = self._storage_for_expr(e)
         if not (isinstance(result_ty, CppList)
                 and isinstance(result_ty.elt, CppScalar)
@@ -2796,16 +2784,13 @@ class CppEmitter(Visitor):
         return acc
 
     def _emit_empty(self, e: Empty, result_ty: CppType, ctx) -> str:
-        """``empty(d1, ..., dN)``: an N-dimensional zero-initialised list of
-        storage *result_ty*.
+        """``empty(d1, ..., dN)``: a zero-initialised list of storage
+        *result_ty*, allocated over the dimensions given.
 
-        Sizes are read off the call site and emitted as nested constructor calls
-        right-to-left, so the innermost element type bubbles out.  ``empty()`` is a
-        scalar ``T()``, which format inference resolves at the call site.
-
-        Each non-constant dimension is bound to a name first, so that a
-        fixed-size layer repeating its fill ``K`` times does not evaluate a
-        dimension more than once.
+        Sizes come from the call site as nested constructor calls, innermost
+        first; ``empty()`` is a scalar ``T()``.  A non-constant dimension is
+        bound to a name so a fixed-size layer repeating its fill ``K`` times
+        does not re-evaluate it.
         """
         dims = []
         for a in e.args:
@@ -2814,9 +2799,8 @@ class CppEmitter(Visitor):
         dim_storages = [
             self._scalar_storage_for_expr(a) for a in e.args
         ]
-        # Each dimension index goes through size_t in the vector
-        # constructor — cast explicitly so we don't rely on implicit
-        # narrowing.
+        # a dimension goes through size_t in the vector constructor: cast
+        # explicitly rather than rely on implicit narrowing
         dim_strs = [
             self._explicit_cast(d, CppScalar.U64) if s != CppScalar.U64 else d
             for d, s in zip(dims, dim_storages)
@@ -2835,18 +2819,16 @@ class CppEmitter(Visitor):
         # Build from the inside out: innermost is ``T()``-default,
         # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
         ty: CppType = result_ty
-        # Peel one layer per dimension given.  Fewer dimensions than the type's
-        # depth allocates only the outer layers, and the cells they hold are
-        # ``UNINIT`` until a store replaces them -- reading one before it is
-        # written is undefined in FPy, so a default-constructed inner list is as
-        # good an answer as any.
+        # One layer per dimension given.  Fewer than the type's depth allocates
+        # only the outer layers, whose cells default-construct: an empty vector,
+        # or a *null* handle where the element is boxed.  Reading one before a
+        # store is undefined in FPy, so both are permitted -- the boxed case
+        # faults rather than reading garbage.
         peeled: list[CppType] = []
         for _ in dim_strs:
             assert isinstance(ty, CppList)
             peeled.append(ty)
             ty = ty.elt
-        # ``ty`` is what the innermost dimension holds: a scalar, a tuple, or a
-        # list the allocation does not reach.
         inner = f'{ty.format()}{{}}'
         for layer, d in zip(reversed(peeled), reversed(dim_strs)):
             inner = self._list_new_filled(layer, d, inner)
@@ -3478,88 +3460,11 @@ class CppEmitter(Visitor):
         return self._emit_at(e, self._storage_for_expr(e), ctx)
 
     def _visit_list_comp(self, e: ListComp, ctx) -> str:
-        return self._emit_list_comp_at(e, self._storage_for_expr(e), ctx)
-
-    def _emit_list_comp_at(self, e: ListComp, result_ty: CppType, ctx) -> str:
-        # A temp plus nested loops that append the element expression.
-        # *result_ty* is supplied because a comprehension builds its list
-        # element by element, making it a contributor to whatever place it
-        # reaches -- see :meth:`_emit_at`.
-        tmp, append = self._open_list_build(result_ty)
-
-        for target, iterable in zip(e.targets, e.iterables):
-            self._open_comp_loop(target, iterable, e, ctx)
-
-        elt_want = result_ty.elt if isinstance(result_ty, CppList) else None
-        elt = self._emit_at(e.elt, elt_want, ctx)
-        self.writer.add_line(f'{append(elt)};')
-
-        for _ in e.targets:
-            self.writer.dedent()
-            self.writer.add_line('}')
-
-        return tmp
-
-    def _open_comp_loop(
-        self,
-        target,
-        iterable: Expr,
-        comp_site: ListComp,
-        ctx,
-    ) -> None:
-        """Emit one ``for`` line for a comprehension stage, leaving the writer
-        indented inside the body.
-
-        Always declare-on-assign: the target lives only in the loop scope.  Its
-        SSA site is the ``ListComp`` node, not the target id.
-        """
-        # `loop_def` drives the element binding; None means discarded.
-        loop_def = None
-        match target:
-            case NamedId():
-                target_def = self.def_use.find_def_from_site(target, comp_site)
-                target_name = self.variables.def_to_name[target_def]
-                # A range counter is sized to the exit-test overshoot; the
-                # element storage would be too narrow.
-                counter = self._range_counter_scalar(iterable)
-                storage = counter or self.storage.storage_of(target_def)
-                decl = f'{storage.format()} {target_name}'
-                loop_def = target_def
-            case UnderscoreId():
-                target_name = self._fresh_temp()
-                decl = f'{self._underscore_counter_ty(iterable)} {target_name}'
-            case TupleBinding():
-                # A tuple binding cannot pair with a range.
-                if isinstance(iterable, (Range1, Range2, Range3)):
-                    raise CppEmitError(
-                        'tuple-binding comprehension target requires a '
-                        'non-range iterable',
-                        at=comp_site,
-                    )
-                tmp = self._fresh_temp()
-                iter_str = self._visit_expr(iterable, ctx)
-                iter_ty = self._storage_for_expr(iterable)
-                # read-only (only destructured) -> bind by const&
-                self.writer.add_line(
-                    f'for (const auto& {tmp} : '
-                    f'{self._list_range(iter_ty, iter_str)}) {{'
-                )
-                self.writer.indent()
-                self._destructure(
-                    target, tmp, comp_site,
-                    iter_ty.elt if isinstance(iter_ty, CppList) else None,
-                    iterable,
-                )
-                return
-            case _:
-                raise CppEmitError(
-                    f'unsupported comprehension target {target!r}',
-                    at=comp_site,
-                )
-
-        header = self._for_header(iterable, target_name, decl, loop_def, ctx)
-        self.writer.add_line(f'{header} {{')
-        self.writer.indent()
+        raise CppInternalError(
+            'a comprehension reached the emitter; `CompToLoop` lowers every '
+            'one before codegen',
+            at=e,
+        )
 
     def _visit_list_ref(self, e: ListRef, ctx) -> str:
         # ``xs[i]`` — C++ ``operator[]`` takes ``size_t``, so we route
@@ -3638,8 +3543,7 @@ class CppEmitter(Visitor):
                 )
             chain = self._list_at(level, chain, idx)
             level = level.elt
-        # The slot's type comes from the container, so there is nowhere to put
-        # a conversion.
+        # the slot takes its type from the container: nowhere for a conversion
         rhs = self._emit_at(stmt.expr, level, ctx, cannot_convert=True)
         self.writer.add_line(f'{chain} = {rhs};')
 

@@ -674,10 +674,13 @@ class _ArraySizeInferInstance(DefaultVisitor):
         """Whether *e*'s rounding leaves the integer *value* alone.
 
         :meth:`_is_exact` asks whether the operation rounds *at all*, which
-        takes a ``REAL`` scope.  An integer result needs less: the active
-        context has only to represent it.  That is what carries a length
-        through ``integer_ctx``, which the loop rewrites wrap their index
-        arithmetic in and which is not ``REAL``.
+        takes a ``REAL`` scope; an integer result needs only that the active
+        context represent it.  That is what carries a length through
+        ``integer_ctx``, which the loop rewrites wrap their index arithmetic in.
+
+        Checking the result alone is enough because the operands are
+        compile-time constants -- a static length, or a partial-eval value --
+        so nothing below *e* rounds.
         """
         scope = self._ctx_use.use_to_scope.get(e)
         if scope is None or not isinstance(scope.ctx, Context):

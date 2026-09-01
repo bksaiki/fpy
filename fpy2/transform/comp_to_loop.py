@@ -1,62 +1,43 @@
 """
 Lower a list comprehension into an allocation plus a loop.
 
-A comprehension is the only *expression* in FPy that binds names, and that costs
-the scheduling language reach: every pass needing a statement slot for a preamble
-refuses to enter one, so no rounding can be eliminated or inserted inside a
-comprehension.  Lowering it is what makes that code schedulable.
+A comprehension is the only *expression* in FPy that binds names, and a pass
+needing a statement slot cannot enter one -- so no rounding can be eliminated or
+inserted inside a comprehension until it is a loop.
 
 .. code-block:: python
 
-    # before
-    ys = [f(x) for x in xs]
+    # before                    # after
+    ys = [f(x) for x in xs]     t = xs
+                                ys = fp.empty(len(t))
+                                for t1 in range(len(t)):
+                                    x = t[t1]
+                                    ys[t1] = f(x)
 
-    # after
-    t = xs
-    ys = fp.empty(len(t))
-    for t1 in range(len(t)):
-        x = t[t1]
-        ys[t1] = f(x)
+An assignment target is filled directly; a comprehension with no name to fill
+allocates a temporary of its own.  Every name minted takes its prefix from
+``temp_id``.
 
-An assignment target is filled directly; only a comprehension with no name to
-fill -- in a ``return``, or an argument -- allocates a temporary of its own.
-Every name minted here takes its prefix from ``temp_id``, so a caller owns the
-whole namespace the rewrite introduces.
+Several clauses are a cartesian product, so they become nested loops over the
+original targets with a running write index.  The allocation needs its length up
+front and `fp.empty` fills with ``UNINIT``, so every slot must be written --
+both hold where the clause lengths multiply, since FPy rejects ``if`` filters.
 
-Several clauses are a cartesian product -- CPython's nesting, outermost clause
-first and the last index varying fastest -- so they become nested loops over the
-original targets with a running write index.  Nested loops need no linearized
-``i0 * n1 + i1``, and so cannot get its stride wrong.
+A **dependent clause list** -- a clause's iterable mentions an earlier clause's
+target, as in ``[b for a in xs for b in a]`` -- has a length that is a sum
+rather than a product.  That one is built a row at a time and flattened
+(:meth:`~._CompToLoopInstance._lower_dependent`), at the cost of a materialised
+row per outer element; ``dependent=False`` declines it.
 
-The allocation needs its length up front, and `fp.empty` fills with ``UNINIT``
-rather than zero, so every slot must be written.  Both hold where the clause
-lengths multiply: FPy rejects ``if`` filters in a comprehension, so the length is
-exactly that product, and every slot is written.
-
-A **dependent clause list** -- some clause's iterable mentions an earlier
-clause's target, as in ``[b for a in xs for b in a]`` -- has a length that is a
-sum rather than a product, so `fp.empty` has nowhere to get it up front.  That
-one is built a row at a time and flattened
-(:meth:`~._CompToLoopInstance._lower_dependent`), which costs a materialised row
-per outer element.  A consumer with something better to do with the shape opts
-out by passing ``dependent=False``; the default lowers it, because a pass that
-leaves one comprehension behind leaves its caller the whole comprehension
-problem.
-
-**This pass lowers what it can and leaves the rest alone.**  It never errors on a
-comprehension it cannot lower; :meth:`CompToLoop.refusals` names each one and
-why, and a caller that needs a comprehension-free program checks for itself.
-
-What it leaves is a **comprehension with no statement slot** -- a ``while``
-condition, which is re-evaluated every iteration; an ``IfExpr`` branch, which is
-conditional; and one nested in another comprehension, which gets a slot once the
-one around it is lowered.  Each is cleared by running the pass again after
-:class:`~fpy2.transform.Hoistable`, which is what makes the two a fixpoint.
+What the pass leaves, without erroring, is a comprehension with no statement
+slot: a ``while`` condition, an ``IfExpr`` branch, or one nested in another.
+Running it again after :class:`~fpy2.transform.Hoistable` clears each, which is
+what makes the two a fixpoint.
 """
 
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..analysis import DefineUse, DefineUseAnalysis, LiveVars, SyntaxCheck
 from ..ast.fpyast import (
     Add,
     Assign,
@@ -65,9 +46,7 @@ from ..ast.fpyast import (
     ForStmt,
     FuncDef,
     Id,
-    If1Stmt,
     IfExpr,
-    IfStmt,
     IndexedAssign,
     Integer,
     Len,
@@ -86,8 +65,6 @@ from ..ast.fpyast import (
     Var,
     WhileStmt,
 )
-from ..ast.visitor import DefaultVisitor
-from ..number import Context
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
 from .utils import (
@@ -112,22 +89,6 @@ def _bound_names(target: Id | TupleBinding) -> set[NamedId]:
     return {target} if isinstance(target, NamedId) else set()
 
 
-def _mentions(e: Expr, names: set[NamedId]) -> bool:
-    """Whether *e* reads any of *names*."""
-    if not names:
-        return False
-    found = False
-
-    class _C(DefaultVisitor):
-        def _visit_var(self, var: Var, ctx: None):
-            nonlocal found
-            if var.name in names:
-                found = True
-
-    _C()._visit_expr(e, None)
-    return found
-
-
 def dependent_clauses(e: ListComp) -> list[int]:
     """The clauses whose iterable reads a target bound by an earlier clause.
 
@@ -136,7 +97,7 @@ def dependent_clauses(e: ListComp) -> list[int]:
     out: list[int] = []
     bound: set[NamedId] = set()
     for j, (target, iterable) in enumerate(zip(e.targets, e.iterables)):
-        if j > 0 and _mentions(iterable, bound):
+        if j > 0 and LiveVars.analyze(iterable) & bound:
             out.append(j)
         bound |= _bound_names(target)
     return out
@@ -153,10 +114,9 @@ class _CompToLoopInstance(SiteRewriter):
     gensym: Gensym
     where: int | Cursor | None
     dependent: bool
-    """whether to lower a dependent clause list.  On unless a consumer opts
-    out: it costs a materialised row per outer element, which is worth
-    declining only where something downstream lowers the shape better --
-    see :meth:`_lower_dependent`"""
+    """whether to lower a dependent clause list (:meth:`_lower_dependent`).  On
+    unless a consumer opts out, since it costs a materialised row per outer
+    element"""
     _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
@@ -184,9 +144,8 @@ class _CompToLoopInstance(SiteRewriter):
     def _verify(self, e: ListComp) -> None | Declined:
         """`None` where *e* may be lowered, else why not."""
         if not self.dependent and dependent_clauses(e):
-            # `fp.empty` needs its length first and there is no `append`, so a
-            # length that is not a product of the clause lengths has nowhere to
-            # come from.
+            # `fp.empty` needs a length first, and a sum of clause lengths has
+            # nowhere to come from with no `append`
             return Declined(
                 'a later clause\'s iterable mentions an earlier clause\'s '
                 'target, so the length is not a product of the clause lengths'
@@ -199,8 +158,8 @@ class _CompToLoopInstance(SiteRewriter):
     def _size(self, iters: list[Expr], e: ListComp) -> Expr:
         """The comprehension's length: the product of the clause lengths.
 
-        Every clause is independent -- a dependent one is left alone -- so each
-        length is available here, before the loops.
+        Only reached for an independent clause list, so every length is
+        available here, before the loops.
         """
         loc = e.loc
         size: Expr = Len(None, clone(iters[0]), loc)
@@ -212,15 +171,10 @@ class _CompToLoopInstance(SiteRewriter):
     def _inlinable(iterable: Expr) -> bool:
         """Whether *iterable* may stand in for a temp bound to it.
 
-        The temp buys two things: the iterable is evaluated exactly once, and
-        the loop bound is out of reach of a body that rebinds the source name.
-        A `range` over atoms needs neither -- it has no effects, and nothing a
-        lowered loop binds can shadow an atom of it, since a comprehension
-        target may not shadow an existing definition.
-
-        What the temp *costs* is fusion.  A name holds a value, so `range(n)`
-        bound to one must be materialized as a list -- and over a real bound
-        there is no such list, only a counted loop.
+        The temp buys evaluation-once and immunity to a rebinding of the source
+        name; a `range` over atoms needs neither, and it costs one.  A name
+        holds a value, so a bound `range(n)` must be materialized -- and over a
+        real bound there is no such list, only a counted loop.
         """
         return (
             isinstance(iterable, (Range1, Range2, Range3))
@@ -230,40 +184,46 @@ class _CompToLoopInstance(SiteRewriter):
     def _descend(self, e: ListComp, out: list) -> None:
         """Visit *e*'s children the way :meth:`_lower` would.
 
-        The listing has to reach exactly what the rewrite reaches, or it counts a
+        The listing must reach exactly what the rewrite reaches, or it counts a
         site the rewrite will not take: the iterables end up outside the loops
-        and keep their statement slot, the element does not.
-
-        A dependent clause list keeps only its *first* iterable out here.  The
-        rest, and the element, go into the nested comprehension
-        :meth:`_lower_dependent` builds, so they get a slot when that one is
-        lowered and not before.
+        and keep their statement slot, the element does not.  A dependent clause
+        list keeps only its *first* iterable out here; the rest and the element
+        go into the nested comprehension :meth:`_lower_dependent` builds.
         """
         keep = 1 if dependent_clauses(e) else len(e.iterables)
         for i, iterable in enumerate(e.iterables):
             self._visit_expr(iterable, out if i < keep else None)
         self._visit_expr(e.elt, None)
 
-    def _fillable(self, e: ListComp, target: NamedId) -> bool:
+    def _fillable(self, e: ListComp, target: NamedId, slot: bool) -> bool:
         """Whether the loops of *e* may write into a place based on *target*.
 
         The element must not read *target*: the loops overwrite the place before
-        it runs.  An iterable may -- it is bound to a temp first, so it still
-        sees what the place held.
+        it runs.  An iterable may -- bound to a temp first, it still sees what
+        the place held.  A slot's indices need no check, since going stale would
+        take a target shadowing an existing definition, which FPy rejects.
 
-        A slot's indices need no check of their own.  They would go stale if
-        *e*'s targets rebound a name one of them reads, but FPy rejects a
-        comprehension target that shadows an existing definition, and an index
-        cannot read a name that has none.
+        A *slot* fill needs more.  ``zs[i] = fp.empty(n)`` mutates the list
+        already there, so every alias of that slot sees the uninitialised cells,
+        and an alias need not name ``zs``.  Nothing here can rule one out, so
+        the element must read nothing the comprehension did not bind.  A plain
+        ``z = fp.empty(n)`` *rebinds*, leaving an alias on the old list.
         """
-        return not _mentions(e.elt, {target})
+        if target in LiveVars.analyze(e.elt):
+            return False
+        if not slot:
+            return True
+        bound: set[NamedId] = set()
+        for t in e.targets:
+            bound |= _bound_names(t)
+        return not (LiveVars.analyze(e.elt) - bound)
 
     def _take_fill(self, e: ListComp) -> 'tuple[NamedId, tuple[Expr, ...]] | None':
         """The place the loops of *e* may write into, taken once.
 
-        Keyed on the comprehension itself, and taken before the iterables are
-        visited: a comprehension nested in one of them is not the statement's
-        right-hand side and must not claim its place.
+        Keyed on the comprehension itself and taken before the iterables are
+        visited, so a comprehension nested in one cannot claim the statement's
+        place.
         """
         if self._fill is None or self._fill[0] is not e:
             return None
@@ -280,29 +240,18 @@ class _CompToLoopInstance(SiteRewriter):
     def _lower_dependent(self, e: ListComp, out: list, fill) -> Expr:
         """A clause list whose length is a sum rather than a product.
 
-        Where a clause's iterable reads an earlier clause's target, the rows
-        have different lengths and `fp.empty` has nowhere to get the total:
-        there is no ``append``, and evaluating that iterable a second time to
-        count first is not the same program.  So build the rows, add up their
-        lengths, then flatten -- which is what
-        ``derived-semantics.rst`` prescribes.
+        `fp.empty` needs the total up front, with no ``append`` and no counting
+        an iterable twice.  So build the rows, add up their lengths, then
+        flatten -- ``derived-semantics.rst``'s rewrite.
 
-        Split at the *first* clause only.  Its iterable can read no target, so
-        the outer comprehension is always independent, and the rest become one
-        nested comprehension per row -- which a later pass lowers in turn, since
-        it now sits in the loop body that is its statement slot.  `k` clauses
-        peel one at a time and each flatten is one level deep.
-
-        The rows are read twice, to count and to copy, so unlike a plain fill
-        the temporary really is a second place.  That is the cost, and it is why
-        this fires only on the dependent case.
-
-        Every name here is a temporary the caller never wrote, so like the
-        iterable bindings they all take `temp_id`.
+        Split at the *first* clause only: its iterable can read no target, so
+        the outer comprehension is independent and the rest become one nested
+        comprehension for a later pass.  `k` clauses peel one at a time and each
+        flatten is one level deep.  The rows are read twice, to count and to
+        copy, so unlike a plain fill the temporary is a second place.
         """
         loc = e.loc
-        # the first clause's iterable, bound here like any other -- evaluated
-        # once, and under the caller's `temp_id`
+        # the first clause's iterable, bound like any other: evaluated once
         src = self.gensym.refresh(self.temp_id)
         out.append(Assign(
             src, None, self._visit_expr(e.iterables[0], out), loc,
@@ -359,7 +308,7 @@ class _CompToLoopInstance(SiteRewriter):
         if dependent_clauses(e):
             return self._lower_dependent(e, out, fill)
 
-        # Every clause is independent, so each iterable is evaluated once, here.
+        # every clause is independent, so each iterable is evaluated once here
         iters: list[Expr] = []
         for iterable in e.iterables:
             src = self._visit_expr(iterable, out)
@@ -393,13 +342,11 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(bind(Empty(None, [Var(n, loc)], loc)))
 
         elt = self._visit_expr(e.elt, None)
-        # Index the iterable where the loop reads no element from it, or where
-        # it is a name: nothing is then loop-carried and the store index is the
-        # loop variable itself, which `format_infer` bounds by the range.  A
-        # carried counter widens instead, without bound where the trip count is
-        # not static.  The exception is an *inlined* iterable with a target to
-        # bind: subscripting a `range` would materialise the very list that
-        # leaving it inline avoids.
+        # Index the iterable unless it is inlined *and* binds a target:
+        # subscripting a `range` materialises what leaving it inline avoids.
+        # Indexing is otherwise the better shape, since the store index is the
+        # loop variable and `format_infer` bounds it by the range, where a
+        # carried counter widens on an unknown trip count.
         indexed = (
             not self._inlinable(iters[0])
             or isinstance(e.targets[0], UnderscoreId)
@@ -409,8 +356,8 @@ class _CompToLoopInstance(SiteRewriter):
             src = iters[0]
             stmts: list[Stmt] = []
             if not isinstance(e.targets[0], UnderscoreId):
-                # a discarded target binds nothing: the element cannot read it,
-                # and a subscript has no effect to keep
+                # a discarded target binds nothing the element can read, and a
+                # subscript has no effect to keep
                 stmts.append(Assign(
                     copy_target(e.targets[0]), None,
                     ListRef(clone(src), Var(idx, loc), loc), loc,
@@ -422,9 +369,8 @@ class _CompToLoopInstance(SiteRewriter):
             ))
             return Var(acc, loc)
 
-        # Several clauses, or one over an iterable that is not indexed: nest the
-        # loops over the original targets and carry a write index, rather than
-        # linearizing it.
+        # Several clauses, or one whose iterable is not indexed: nest loops
+        # over the original targets and carry a write index.
         j_id = self.gensym.refresh(self.temp_id)
         out.append(Assign(j_id, None, Integer(0, loc), loc))
         inner: list[Stmt] = [
@@ -480,34 +426,27 @@ class _CompToLoopInstance(SiteRewriter):
         return lowered
 
     def _visit_assign(self, stmt: Assign, ctx: Any):
-        # `z = [<elt> for <t> in <it>]` fills `z` itself.  Minting an `acc` and
-        # copying it in leaves two names on one list, and a second name is a
-        # second *place*: the cpp backend's `UnboxMode.STRICT` refuses it.
-        #
-        # Only where the element cannot read `z`, which the loops overwrite
-        # before it runs.  An iterable may -- it is bound to a temp first, so it
-        # still sees the list `z` held.
+        # `z = [...]` fills `z` itself: an `acc` copied into it leaves two
+        # names on one list, and a second name is a second *place*.
         offered = (
             isinstance(stmt.expr, ListComp)
             and isinstance(stmt.target, NamedId)
-            and self._fillable(stmt.expr, stmt.target)
+            and self._fillable(stmt.expr, stmt.target, slot=False)
         )
         self._fill = (stmt.expr, stmt.target, ()) if offered else None
         s, _ = super()._visit_assign(stmt, ctx)
         if self._took_fill(offered):
-            # `_lower` took the target, so the loops already write into it and
-            # the assignment left over is `z = z`.  The loop stands in its place.
+            # the loops write into the target, so the assignment left over is
+            # `z = z`; the loop stands in its place
             return ctx.pop(), ctx
         return s, ctx
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
-        # `zs[i] = [<elt> for <t> in <it>]` allocates straight into the slot.
-        # The nested comprehension of `[[...] for ...]` arrives in exactly this
-        # shape once the outer one is lowered, and it is the last place an
-        # accumulator would be left over.
+        # `zs[i] = [...]` allocates straight into the slot.  The inner half of
+        # `[[...] for ...]` arrives in this shape once the outer is lowered.
         offered = (
             isinstance(stmt.expr, ListComp)
-            and self._fillable(stmt.expr, stmt.var)
+            and self._fillable(stmt.expr, stmt.var, slot=True)
         )
         self._fill = (
             (stmt.expr, stmt.var, tuple(stmt.indices)) if offered else None
@@ -518,17 +457,16 @@ class _CompToLoopInstance(SiteRewriter):
         return s, ctx
 
     def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # A branch is conditional, so a loop hoisted out of it would run either
-        # way.  The condition is unconditional and keeps its slot.
+        # a branch is conditional, so a loop hoisted out of one runs either
+        # way; the condition is unconditional and keeps its slot
         cond = self._visit_expr(e.cond, ctx)
         ift = self._visit_expr(e.ift, None)
         iff = self._visit_expr(e.iff, None)
         return IfExpr(cond, ift, iff, e.loc)
 
     def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        # The condition is re-evaluated every iteration and a loop hoisted before
-        # the `while` runs once, freezing the comprehension at its first value --
-        # which turns a terminating loop into an out-of-bounds slice.
+        # the condition re-runs every iteration where a loop hoisted before the
+        # `while` runs once, freezing the comprehension at its first value
         stmt, _ = super()._visit_while(stmt, None)
         return stmt, ctx
 
@@ -583,11 +521,8 @@ class CompToLoop:
         every one it can lower.
 
         `dependent=False` opts out of lowering a clause list whose length is a
-        sum rather than a product.  That shape costs a materialised row per
-        outer element, where every other allocates once and fills, so a consumer
-        with something better to do with it can decline -- but the default is to
-        lower it, because a pass that leaves one comprehension behind leaves its
-        caller with the whole comprehension problem.
+        sum rather than a product, which costs a materialised row per outer
+        element where every other shape allocates once and fills.
         """
         return CompToLoop.apply_with_edits(
             func, where=where, temp_id=temp_id, dependent=dependent,

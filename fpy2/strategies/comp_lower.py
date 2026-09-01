@@ -29,15 +29,14 @@ def comp_to_loop(
     the product of the clause lengths -- except for a *dependent* clause list,
     one whose later iterable mentions an earlier target, as in
     ``[b for a in xs for b in a]``.  Its length is a sum, so that one is built a
-    row at a time and flattened, which costs a materialised row per outer
-    element.  Pass ``dependent=False`` to leave it alone instead.
+    row at a time and flattened, at the cost of a materialised row per outer
+    element; ``dependent=False`` leaves it alone instead.
 
     This lowers what it can and leaves the rest as it was; it never raises over a
-    comprehension it cannot lower.  :func:`fpy2.strategies.refusals` names each
-    one and why.  Nothing guarantees the result is comprehension-free, and a
-    caller who needs that checks: a comprehension nested in another gets its
-    statement slot once the outer one is lowered, so applying this to a fixpoint
-    clears those.
+    comprehension it cannot lower, and :func:`fpy2.strategies.refusals` names
+    each one.  The result is not guaranteed comprehension-free: one nested in
+    another gets its statement slot only once the outer is lowered, so applying
+    this to a fixpoint clears those.
 
     Run :func:`fpy2.strategies.simplify` afterwards to fold away the temporaries
     the rewrite introduces.
@@ -58,9 +57,8 @@ def comp_to_loop(
         against the program, so it never shadows.
     dependent : bool
         Whether to lower a dependent clause list, whose length is a sum rather
-        than a product. `True` by default: a rewrite that leaves one
-        comprehension behind leaves its caller the whole comprehension problem.
-        `False` declines it, for a consumer with a better lowering of its own.
+        than a product. `True` by default; `False` declines it, for a consumer
+        with a better lowering of its own.
 
     Returns
     -------
@@ -93,11 +91,11 @@ def comp_to_loop(
         )
         def scale(xs, k):
             t = xs
-            acc = fp.empty(len(t))
-            for i in range(len(t)):
-                x = t[i]
-                acc[i] = (k * x)
-            return acc
+            t3 = fp.empty(len(t))
+            for t4 in range(len(t)):
+                x = t[t4]
+                t3[t4] = (k * x)
+            return t3
 
     The element is now an ordinary statement, so a rounding rewrite can reach it.
     """
