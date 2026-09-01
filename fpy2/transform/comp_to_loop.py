@@ -77,7 +77,6 @@ from .utils import (
     operands,
 )
 
-
 _ATOMIC = (Var, ValueExpr)
 """Expressions with no effects and no subexpressions to re-evaluate."""
 
@@ -428,12 +427,14 @@ class _CompToLoopInstance(SiteRewriter):
     def _visit_assign(self, stmt: Assign, ctx: Any):
         # `z = [...]` fills `z` itself: an `acc` copied into it leaves two
         # names on one list, and a second name is a second *place*.
-        offered = (
+        self._fill = None
+        if (
             isinstance(stmt.expr, ListComp)
             and isinstance(stmt.target, NamedId)
             and self._fillable(stmt.expr, stmt.target, slot=False)
-        )
-        self._fill = (stmt.expr, stmt.target, ()) if offered else None
+        ):
+            self._fill = (stmt.expr, stmt.target, ())
+        offered = self._fill is not None
         s, _ = super()._visit_assign(stmt, ctx)
         if self._took_fill(offered):
             # the loops write into the target, so the assignment left over is
@@ -444,13 +445,14 @@ class _CompToLoopInstance(SiteRewriter):
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: Any):
         # `zs[i] = [...]` allocates straight into the slot.  The inner half of
         # `[[...] for ...]` arrives in this shape once the outer is lowered.
-        offered = (
+        self._fill = None
+        if (
             isinstance(stmt.expr, ListComp)
+            and isinstance(stmt.var, NamedId)
             and self._fillable(stmt.expr, stmt.var, slot=True)
-        )
-        self._fill = (
-            (stmt.expr, stmt.var, tuple(stmt.indices)) if offered else None
-        )
+        ):
+            self._fill = (stmt.expr, stmt.var, tuple(stmt.indices))
+        offered = self._fill is not None
         s, _ = super()._visit_indexed_assign(stmt, ctx)
         if self._took_fill(offered):
             return ctx.pop(), ctx

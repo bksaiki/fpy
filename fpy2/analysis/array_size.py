@@ -662,12 +662,12 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     return None
                 match e:
                     case Add():
-                        val = lhs + rhs
+                        folded = lhs + rhs
                     case Sub():
-                        val = lhs - rhs
+                        folded = lhs - rhs
                     case _:
-                        val = lhs * rhs
-                return val if self._holds_int(e, val) else None
+                        folded = lhs * rhs
+                return folded if self._holds_int(e, folded) else None
         return None
 
     def _holds_int(self, e: ContextUseSite, value: int) -> bool:
