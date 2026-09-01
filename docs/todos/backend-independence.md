@@ -2,58 +2,227 @@
 
 ## Goal
 
-Make `CppCompiler` a wrapper: run passes and analyses, then emit C++ 1:1 — every
-emitter method spells a construct rather than deciding one. Each decision it
-gives up becomes a pass or analysis some other backend could reuse.
+Move decisions out of `emitter.py` into passes and analyses, so that each one
+becomes something a consumer other than this emitter can see, test and reuse.
+`round_elim`, the FPCore backend and the scheduling language all lose the work
+otherwise, and the C++ backend pays for it in the most delicate code it has.
 
 *Backend-independent* means expressible without target knowledge, not run by
 every backend: §1 is a normalization FPCore would decline.
 
-The point is not line count. A decision made in the emitter is a decision no
-other consumer can see, test, or reuse: `round_elim`, the FPCore backend and the
-scheduling language all lose the same work, and the C++ backend pays for it in
-the most delicate code it has.
+**Not a line-count goal.** That framing was tried and it misled every estimate
+made under it. Across §1–§3: `emitter.py` 3815 → 3871 (**+56**),
+`fpy2/backend/cpp/` −108, `fpy2/analysis/` **+621** — of which about 358 is
+`storage_infer.py` relocating, so roughly 260 lines are genuinely new. The
+backend shed a tenth of what the pipeline gained. What the work actually bought,
+in order of how much it was worth:
 
-## Where we are
+1. **Whole classes of reasoning removed.** After §1 every operand the emitter
+   sees is a name, a literal or a nullary constant, so a family of "where does
+   the temporary go" bugs is unreachable rather than fixed. Three live
+   miscompiles died with it.
+2. **Decisions became testable without a C++ string.** `StorageInfer` runs
+   against a synthetic three-format domain; the region facts are asserted on the
+   graph directly. Both found real defects that emitted-output diffing could not
+   see.
+3. **Reuse by a second backend** — genuine, but contingent on a second backend
+   existing. Do not let it justify work on its own.
 
-The pipeline in `compiler.py` is already backend-independent — `DefineUse`,
-`ContextUse`, `ArraySizeInfer`, `FormatInfer`, `ValueClassInfer`, `Alias`,
-`Escape`, `StorageInfer` all live in `fpy2/analysis/`. Four modules do not:
-`types.py`, `ops.py`/`target.py`, `storage.py`/`variables.py`, `unbox.py`.
+Judge a candidate section by (1) and (2). A section that only promises (3) can
+wait.
 
-The leak is the emitter. Grouping `emitter.py`'s methods by what they *do*:
+## The pass audit
 
-| group | lines | spelling? |
+Every pass `CppCompiler.specialize()` runs, classified by what happens when it is
+removed — each measured by monkeypatching it to the identity over the corpus:
+the 219 functions of `tests/infra/examples` plus the `core`, `eft`, `vector` and
+`matrix` libraries, compiled at FP64 through `CppCompiler.compile`, of which 202
+compile.
+
+| pass | kind | corpus without it |
 |---|---|---|
-| library-op lowering (`sum`/`amin`/`min`/`any`/`zip`/`range`/`size`/compare chains) | 515 | no — loop construction |
-| round/cast lowering (`_emit_integral_round`, `_bound_test`, `_undefined_guard`, …) | 482 | no — soft-float lowering |
-| control-flow printing | 394 | yes |
-| storage reconciliation (`_emit_at`, `_convert_storage`, `_rebuild_list`, `_adapt_*`) | 388 | no — but mostly construct-at-want, not conversion (§5) |
-| fenv / context boundaries | 247 | mostly |
-| declarations and bindings | 221 | yes |
-| peepholes (`ldexp`, pow2, literal folding) | 191 | no — algebraic rewrites |
-| op dispatch (`_dispatch`, `_try_widen`, `_maybe_cast`) | 174 | table-driven already |
-| list / array spelling | 172 | yes |
-| comprehension lowering | 125 | no |
+| `FreeVarElim` | **required** | −2 |
+| `Specialize` | **required** | not ablatable — the emitter has no template |
+| `Hoistable` | normalization | **195 (−7)**, all 7 `ANF` refusals |
+| `ANF` | normalization | 202 (0), 66 emit differently |
+| `Hoistable` *and* `ANF` | — | **202 (0)**, 74 emit differently |
+| `RoundElim` | optimization | 202 (0), 53 emit differently |
+| `ZipElim` | optimization | 202 (0), 6 emit differently |
+| `EnumerateElim` | optimization | 202 (0), **0** emit differently |
+| `ReduceFusion` | optimization | 202 (0), **0** emit differently |
 
-About 1900 lines are decisions and about 790 are printing. That gap is this
-roadmap.
+**Only two passes are required, and neither is a normal form.** `FreeVarElim`
+because codegen has no closure environment, `Specialize` because the emitter is
+monomorphic. Everything else is a policy choice, so everything else has to earn
+its place.
 
-Which sections close it: **§4** and **§7** shrink the emitter. **§3** moves code
-out of the backend without shrinking it, as **§2** did. **§1** shrank it by
-nothing — every `_bind_operand` and `_emit_at` path that survives statement form
-is on an *aggregate* operand, so the deletions wait on naming aggregates.
+**The iterable optimizations are nearly inert, and not for want of programs.**
+The corpus has three `enumerate` uses and thirteen `zip` uses. All three
+enumerates are in *value* position — `xs = [...]; return enumerate(xs)` — which
+`EnumerateElim` does not match, so `_emit_enumerate` handles all three and
+removing the pass changes no output at all. `_emit_zip` still fires six times
+with `ZipElim` on. `ReduceFusion` never fires. The emitter's fallbacks are not
+the rare path here; they are most of the traffic.
 
-## 1. Statement form — done
+### The pair buys nothing the corpus can see
+
+Read the three rows together. Dropping `ANF` alone loses no program. Dropping
+`Hoistable` alone loses **seven** — and every one is `ANF` refusing its input,
+all the same shape:
+
+```
+cannot normalize `determinant_2x2`: a short-circuited operand may not be
+evaluated, so `len(A[0]) == 2` has nowhere to put a statement.  Run `Hoistable`
+first.
+```
+
+Dropping **both** loses nothing. So `Hoistable`'s entire measured contribution is
+keeping `ANF` from refusing, and `ANF`'s is nothing: the pair is self-justifying,
+and the emitter compiles the same 202 programs without either.
+
+This agrees with §1's own conclusion ("its value is capability, not
+normalization") but locates the capability differently. The `while (2 ** (n + 1))
+> 1.0` program that motivated statement form is rescued by `Hoistable`'s loop
+rotation, not by atomization — and that program is in the unit suite, not the
+corpus. What the corpus says is that the *normalization* has no measurable
+payoff yet. Against it:
+`ANF` costs the `2 ** n * x` fusion (§6), it turned five syntactic matchers into
+def-use walks, and it names redundantly. `[x + 1 for x in range(5)]`, lowered,
+comes out of `ANF` as
+
+```python
+t = range(5)
+t4 = len(t)
+acc = fp.empty(t4)
+t5 = len(t)          # the same expression, named twice
+for i in range(t5):
+    x = t[i]
+    acc[i] = x + 1
+```
+
+and nothing downstream removes the duplicate, because this pipeline runs no copy
+propagation, no CSE and no dead-code pass.
+
+**The verdict is not "delete `ANF`" but "stop running it unconditionally."** Its
+guarantee — no operand's emission ever needs a statement — is worth having, and
+`Hoistable`'s slot is what every rewrite below needs. The way to get the
+guarantee is to make the set of statement-needing operands *empty*, which is
+[A total unfold for every surface form](#a-total-unfold-for-every-surface-form),
+not to name every operand in the program. Until that lands, `ANF` is an emitter
+convenience with a measured cost and belongs behind a flag; `Hoistable` stays,
+because the unfolds need the slot even though today only `ANF` asks for it.
+
+### The rule the boundary follows
+
+Every derived form in [derived-semantics](../source/dev/derived-semantics.rst)
+admits two rewrites:
+
+- the **unfold** — the derived-semantics equation read left to right. Total,
+  unconditional, target-independent, and it *deletes* the emitter's case for that
+  form.
+- the **fuse** — a rewrite recognizing a shape the unfold would pessimize, and
+  producing something better. May decline; declining costs speed, never
+  compilability.
+
+The pipeline has this the wrong way round. `EnumerateElim`, `ZipElim` and
+`ReduceFusion` are fuses and they sit behind `optimize=True`, while the *total*
+fallback is the emitter: `_emit_zip`, `_emit_enumerate`, `_emit_list_comp_at`,
+`_emit_sum`, `_emit_any_all`, `_emit_amin_amax`, `_emit_min_max`,
+`_visit_list_slice`. That is why those methods exist, and why the invariant is
+local to this backend rather than a language property — 22 files outside it still
+handle `ListComp`.
+
+Right way round: fuse first (each matches surface syntax, so it must precede
+anything that rewrites that syntax), then unfold what the fuses left, then the
+emitter sees core forms only.
+
+**What legitimately stays in the emitter is what FPy has no syntax for.** That is
+the general form of §6's finding. `2 ** n * x` cannot be strength-reduced at FPy
+level because FPy has no `ldexp`; `for i in range(a, b)` cannot be fused at FPy
+level because FPy has no counted loop that is not a list. Everything else in the
+table has an FPy-level target.
+
+| emitter group | lines | corpus calls | FPy-level target |
+|---|---|---|---|
+| `zip` / `enumerate` | 64 | 9 | the derived comprehension |
+| reductions — `sum`, `any`/`all`, `amin`/`amax` | 120 | 13 | the derived fold |
+| `min` / `max` | 82 | 27 | derived `maximum` / `minimum` |
+| slice | 25 | 11 | `[xs[i] for i in range(a, b)]` |
+| chained comparison | 48 | 94¹ | `t1 = a; t2 = b; (t1 < t2) and (t2 <= c)` |
+| `range` | 137 | 11 | **none** for the iterated position |
+| pow2 peephole | 146 | 78² | **none** — FPy has no `ldexp` (§6) |
+
+The comprehension group is gone: §8 moved it to `CompToLoop`.
+
+¹ all comparisons; chains are a subset.
+² calls, not fires — statement form defeats the match (§6).
+
+### Precision is the acceptance test for an unfold
+
+An unfold that deletes an emitter case and costs an analysis its precision has
+not moved work into the pipeline; it has moved it into `REAL_FORMAT`, which has
+no storage and so is a refusal. So every unfold owes a precision argument before
+it owes a line count. There is already one instance on the record: §1 notes that
+lowering a *pure* `and`/`or` chain cost `ValueClassInfer._implied` the `And` it
+read to drop a runtime guard, and the fix was to teach the analysis the lowered
+ladder rather than to weaken the gate. That is the pattern, and it generalizes.
+
+Both analyses that decide storage read surface nodes directly.
+`FormatInfer` special-cases `Sum` (`n − 1` exact pairwise adds through
+`AbstractFormat` rather than widening), `Min` / `Max` / `AMin` / `AMax` (the
+result is exactly one operand, so the join of the operand formats, with no
+widening to the active scope), and every integer-producing op including
+`Range1`/`2`/`3` and `Enumerate`'s index projection. `ArraySizeInfer` has a
+`ListComp` case, a `Range` case and a `ListSlice` case.
+
+Worked through, most of those survive the unfold, and for one reason: the
+lowered form recomputes the same join.
+
+| unfold | what the analysis loses |
+|---|---|
+| comprehension → `fp.empty` + loop | nothing in `FormatInfer` — `Empty` is bottom and the stores join back to the element format. **`ArraySizeInfer` loses a multi-clause length**: it must read `_const_int` on `fp.empty`'s argument, which does not fold `len(xs) * len(ys)` |
+| slice → comprehension | nothing — both give `ListFormat(elt)` |
+| `enumerate` → comprehension over `range` | nothing — `range`'s element is `INTEGER`, which is what the index projection said |
+| `min` / `max` → the derived branches | nothing *if* the phi over the arms joins the same operands; the arms are `e1` and `e2` themselves, so it should |
+| `sum` → an accumulator loop | nothing **conditional on the length staying statically known** — a `for` whose iterable has a proven length is driven exactly that many times, which is the same simulation the `Sum` rule performs |
+
+**The risk is concentrated in one place: `ArraySizeAnalysis`.** `FormatInfer`
+falls back to a fixpoint with widen-mode joins — and so to `REAL_FORMAT` — for
+exactly the loops whose length it cannot prove, so every row above that says
+"nothing" is really saying "nothing, while the length survives the rewrite".
+§8 is the worked instance, and the instructive part is that the corpus hid it.
+Lowering a multi-clause comprehension allocates `fp.empty(len(xs) * len(ys))`,
+which `_const_int` could not fold — so `std::array<double, 12>` became
+`std::vector<double>`, changing the signature, not just the loop. The corpus
+never showed it: its multi-clause comprehensions iterate literal ranges, which
+`_const_int` folds through partial eval, exercising a path the analysis does not
+actually have to carry.
+
+So the acceptance test for each unfold is not the emitted C++: it is that
+`ArraySizeInfer` proves the same lengths after the rewrite as before, and that no
+function's `fn_fmt` moves to `REAL_FORMAT`. Neither can be asserted over the
+corpus alone. The test needs a witness set whose lengths come from
+*proven-length parameters*, one per size shape the unfolds construct.
+The remaining precision gaps `ArraySizeInfer` has are
+[array-size-integer-exactness.md](array-size-integer-exactness.md) and
+[array-size-symbolic.md](array-size-symbolic.md); this makes them a prerequisite
+rather than an adjacent nicety.
+
+## Done
+
+### 1. Statement form
 
 `fpy2/transform/anf.py`, exposed as `fpy2.strategies.to_anf`, run unconditionally
 as the last step of `CppCompiler.specialize()`, over a program
 `fpy2/transform/hoistable.py` has already put in *hoistable form*.
 
 The pass takes no target fact. It does not predict where C++ will want a
-temporary; it makes the situation unreachable, because every operand the emitter
-sees is already a `Var` — the shape of every normalization here, as `ZipElim`
-removes the zip rather than knowing how a backend materializes one.
+temporary; it makes the situation unreachable. A temporary goes in a statement
+slot executed *exactly as often, and under exactly the same condition, as the
+expression it names* — not the nearest enclosing statement, which is wrong for a
+`while` condition and a ternary arm. Positions failing that test are sealed; two
+get a lowering that *creates* the slot (rotation for `while`, `IfStmt` for a
+ternary), and `ANF.refusals` reports the rest.
 
 A temporary goes in a statement slot executed *exactly as often, and under
 exactly the same condition, as the expression it names* — not the nearest
@@ -96,286 +265,282 @@ What it settled:
 
 The three miscompiles this closed are in [backend-cpp.md](backend-cpp.md).
 
-## 2. Storage inference — done
+**What it is worth today, measured by disabling it.** Over the corpus: no
+program's outcome changes, 56 emit differently. Over `tests/unit/backend/cpp`:
+eight tests fail, of which seven are shape assertions and **one is a capability
+loss** — `while (2 ** (n + 1)) > 1.0` compiles with statement form and raises
+`CppInternalError` without it, because the condition needs a statement and the
+emitter has nowhere to put one. That class of program is the whole current
+payoff. Against it: the `2 ** n * x` fusion, which fires with ANF off and does
+not with it on.
 
-`fpy2/analysis/storage_infer.py`. The C++ ladder is one instance of its domain
-(`CppStorageDomain`), and variable materialization — naming, declaration
-placement, `binds_by_reference` — split off into `backend/cpp/variables.py`.
+So its value is capability, not normalization. No pass got simpler — five
+matchers became def-use walks instead of syntactic matches — and the emitter did
+not shrink, because its generality is driven by aggregates, which this pass
+deliberately leaves nested. The normalization payoff arrives with aggregate
+naming or not at all.
 
-Storage inference is not format inference. Format inference bounds an expression
-by the smallest format its value can take; storage inference picks, from a
-distinguished finite set the target can spell, one format that *contains* that
-bound:
+`ANF` should come out of the unconditional prefix and `Hoistable` should stay —
+see [The pair buys nothing the corpus can see](#the-pair-buys-nothing-the-corpus-can-see).
 
-```
-e : real   fmt(e) = F   F <= S
-------------------------------
-          store(e) = S
-```
+### 2. Storage inference
 
-Several `S` satisfy this, so the content is which one is chosen.
+`fpy2/analysis/storage_infer.py`, whose module docstring is the contract: the
+judgement, the class relation, the domain, and the containment-versus-
+realizability split that every consumer refusal comes from. The C++ ladder is one
+instance of `StorageDomain` (`backend/cpp/storage.py`); variable materialization
+— naming, declaration placement, `binds_by_reference` — is
+`backend/cpp/variables.py`.
 
-### The rules
+One rule is worth repeating outside the code because an interface change would
+silently break it: **the join is n-ary and must never be folded.** Containment
+over the domain is not a join-semilattice, so a binary `join(a, b)` folded over a
+class is both less precise and less total than one search over the whole class.
 
-`Sigma` is the backend's ordered sequence of formats; `F <= S` is the format
-ordering lifted structurally through lists and tuples.
+Two behaviours were inherited deliberately, and both are future work:
 
-```
-ceil(F)      = first sigma in Sigma with F <= sigma    -- else fallback, else refuse
-ceil(bot)    = head Sigma        -- a fresh `empty` holds no value, so any rung does
-ceil(none)   = none              -- non-numeric; the backend spells it as it likes
-JOIN{S1..Sn} = first sigma in Sigma containing every Si          -- n-ary
-```
+- **The class join stays monotone.** A partly-bottom bound still contributes the
+  domain's first member at its empty slots, because the join is over storages
+  rather than bounds. Joining bounds first and choosing storage once is strictly
+  more precise, and changes emitted output.
+- **Widening stays minimal containment**, which is right for a scalar (a rung too
+  narrow costs one upcast) and wrong for a list element (`std::vector<float>` and
+  `std::vector<double>` are unrelated types, so it costs a new buffer and a new
+  object identity). Expressing the difference needs a policy per structural
+  position rather than one rule applied structurally. It has no consequence until
+  `_rebuild_list` becomes reachable.
 
-A class is a union-find over `reaching_defs.same_object_defs`, which unions on
-phi edges and `IndexedAssign` and nothing else — so a plain rebind `x = e`
-starts a *new* class with its own, possibly narrower, storage. `store` is per
-runtime object, not per name, and sequential redefinition never promotes. Each
-class stores at `JOIN { ceil(F) | F a member's bound, F /= bot }`, or over the
-bottom bounds when every member is bottom.
+### 3. Representation inference — the backend-independent part
 
-An expression's storage follows its *definition* where it has one — a `Var`
-reads its class's storage, a `ListRef` peels the container's element — and its
-own `ceil` otherwise. Definitions win because a class is a join over its
-members, so a member's own bound names a format the value is not held in.
-
-**The join is n-ary and must never be folded.** Containment over `Sigma` is not
-a join-semilattice: `{s8, u16}` has two incomparable minimal upper bounds, `s32`
-and `f32`, and no least one. Over the C++ ladder, folding *overshoots* in 4 of
-the 3-element combinations — `JOIN{s8, u16, f32}` is `float`, folding gives
-`double` — and *fails outright* in 12 where the n-ary join succeeds. The
-sequence order is therefore a tie-break with downstream consequences, not a
-presentation detail, and an interface offering a binary `join(a, b)` would
-reintroduce the bug.
-
-**Containment is guaranteed; realizability is not.** For a place `p` and a value
-`v` flowing into it:
-
-```
-containment    fmt(v) <= store(p)      -- the value fits
-realizability  store(v) ~> store(p)    -- the backend can get it there
-
-sigma ~> sigma'      iff sigma <= sigma'
-list S ~> list S'    iff S = S'                     (free)
-                      or (S ~> S' and v unshared)   (rebuild)
-```
-
-The class join gives the first by construction. The second is where every
-refusal a consumer raises comes from: a list may change element type only by
-becoming a different object, so it needs a sharing verdict. A scalar's
-realizability is a fact about formats; a list's is a fact about the heap.
-
-### The interface
-
-`StorageDomain` is one input and one hook:
-
-- **`sigma`** — the storage formats as `Format`s, smallest first. Ordered, not a
-  set, for the reason above.
-- **`fallback(bound)`** — a storage for a bound no member contains, or `None` to
-  refuse. The one thing the sequence cannot supply: C++ stores an unbounded
-  integer in `int64_t` and treats overflow as the user's problem, which no
-  containment test would allow.
-
-Nothing else. Structure needs no map, since `ListFormat` and `TupleFormat` are
-already bounds. Losslessness *is* containment, so no conversion relation is
-needed — a target supporting *fewer* conversions than containment allows would
-need one, and would have to make `join` require reachability too.
-
-Spelling a format in the target's own types stays in the backend, as does
-*representation* — handle, value, fixed array — which no format has.
-
-### Two behaviours inherited deliberately
-
-**The class join stays monotone.** A partly-`bot` bound still contributes
-`head Sigma` at its empty slots, because the join is over storages rather than
-bounds: `JOIN{ceil(bot), ceil(s8)}` is `s16` where `ceil(bot |_| s8)` is `s8`.
-Joining in the format lattice first and choosing storage once is strictly more
-precise, and changes emitted output.
-
-**Widening stays minimal containment**, which is right for a scalar and wrong
-for a list element. C++ converts a scalar at the point of use, so a rung too
-narrow costs one upcast; `std::vector<float>` and `std::vector<double>` are
-unrelated types, so the same mistake costs a new buffer and a new object
-identity.
-
-| | too wide | too narrow |
-|---|---|---|
-| scalar | a few bytes | a free upcast |
-| list | *n* × a few bytes | O(n) copy + allocation, or a refusal |
-
-Headroom would not pay *inside* a class — the join is already wide up front and
-every construction site builds at it. It pays where a member's storage is fixed
-outside the class: a parameter, a callee's return. Expressing that needs a
-policy per structural position rather than one rule applied structurally. Today
-it has no consequence, because `_rebuild_list` is unreachable — the boxing
-verdict refuses first. Closing that gap makes the rebuild path live, and only
-then does the policy cost anything measurable.
-
-## 3. Representation inference
-
-`unbox.py` decides, per alias region, whether a list is a shared handle, a plain
-value, or a fixed-length value. It splits three ways.
-
-**Backend-independent — done.** 99 lines left `unbox.py` (720 → 621) for
-`fpy2/analysis/alias.py`:
+99 lines left `unbox.py` for `fpy2/analysis/alias.py`:
 
 - `region_sizes(alias, array_size)` — one proven length per region, by meeting
-  every contribution. A free function, not a method: `Alias.analyze` must not
-  require an `ArraySizeAnalysis`, since `escape` and `format_infer` both build an
-  `AliasAnalysis` without one.
-- `AliasAnalysis.written_regions` / `.slot_replaced` / `.returned_levels` —
-  syntactic facts keyed by region, collected by a second walk over the finished
-  graph. Second rather than folded into `_Builder`: each asks `region_of` for
-  where a place ends up, which is settled only once every merge has run. A bare
-  traversal is 1.4% of the builder, measured.
+  every contribution. A free function, because an `AliasAnalysis` is usable
+  without an `ArraySizeAnalysis` and `escape` and `format_infer` both build one
+  that way.
+- `AliasAnalysis.written_regions` / `.slot_replaced` / `.returned_levels` /
+  `.consumed_defs` — syntactic facts keyed by region, collected by a second walk
+  over the finished graph, since each asks `region_of` for where a place ends up
+  and that is settled only once every merge has run.
 
-`_Scan`'s fourth fact did **not** move. *A region crosses a call boundary* is
-decided by `_unboxed(param.ty)` on the callee's ABI, and the callee-written half
-of `written` by `param.written` — both questions about a representation this
-target chose. What is left in the backend is one `_visit_call`.
+`_Scan`'s fourth fact did **not** move: *a region crosses a call boundary* is
+decided by the callee's declared representation, as is the callee half of
+`written`. One `_visit_call` stays.
 
-**Generic algorithm, backend-supplied predicate (about 70 lines).**
-`_shares_storage` asks how many *places* hold a region separately, which is
-language-level, but its precision is calibrated to this emitter: it does not use
-`alias.is_shared`, it counts only names that get their own storage, and that set
-is `binds_by_reference`, shared with the emitter so the two cannot drift.
-Discounting a name the emitter then copies is a miscompilation, so the extracted
-form takes the binding rule as a parameter — which would have exactly one
-implementation until there is a second backend to check it against.
+The emitter did not shrink and was never going to — it consults an oracle either
+way. What the move bought is that four questions about the region graph are now
+asked and tested directly rather than through an emitted C++ string, which is how
+the boxing bugs below were found.
 
-**Backend-specific (about 300 lines).** The output alphabet: C++ wants
-handle / value / fixed array, Rust wants `Rc<RefCell<Vec<T>>>` / `Vec` /
-`&mut [T]` / `[T; K]` and a borrow checker that changes what a second place
-costs, and a garbage-collected target has nothing to decide. Then
-`writes_through` and `may_reference_projection`, which ask whether `const`
-reaches through a handle or a value and whether a reference re-reads a slot where
-**E-Deref** read it once. Then the verdict-to-type mapping (`_stamp`, `_regions`,
-`annotate`), `UnboxMode` and its diagnostics, and `ParamAbi` / `CalleeAbi`.
+### 8. Comprehension lowering
 
-The emitter did not shrink and was never going to: it consults an oracle either
-way. What the move bought is that `Alias` now answers three questions any
-consumer of the region graph would ask, that one proven length per region is
-available to more than the C++ boxing decision, and that all four are tested
-directly rather than through an emitted C++ string.
+`CppCompiler.specialize()` runs `Hoistable` and `CompToLoop` to a fixpoint, so
+no comprehension reaches the emitter and `_visit_list_comp` is a tripwire. The
+pass is total: a dependent clause list, whose length is a sum rather than a
+product, is built a row at a time and flattened.
 
-Still available here: `_regions` / `_at_depth` / `_fields` / `_stamp` (about 90
-lines) walk a storage class's structure, which since §2 is a `FormatBound` rather
-than a `CppType` — so a generic version is now expressible where it was not. But
-`_stamp` writes the representation, which is the backend-specific output
-alphabet, so the traversal and the verdict have to be split first.
+Cost-free on the corpus — 202 either way — but only after five fixes, four of
+which were pre-existing defects the lowering merely exposed:
 
-## 4. Round and cast lowering
+- `CompToLoop` fills its assignment target, and a nested one fills the slot it
+  is stored into, rather than minting an accumulator a second name then holds;
+- `_emit_empty` allows an allocation with fewer dimensions than the type's
+  depth, which every lowered nested comprehension needs;
+- a `range` iterable stays inline, since a name holds a value and a `range` in
+  a value position must be materialized — and over a real bound cannot be;
+- `_const_int` folds arithmetic over lengths it knows, so
+  `fp.empty(len(xs) * len(ys))` keeps a static size;
+- `_join_bounds` stops collapsing a widened join of a `SetFormat` with itself.
 
-482 lines lowering a rounding under a *fixed-point* context: a libm call for the
-mode, an assertion for the operand's undefined cases, an assertion for the
-format's bound. Its refusals name what it assumes upstream — digits at position
-zero (`rescale_fixed`), overflow `ASSERT` (`unfold_overflow`), no random bits.
+The last is the one worth remembering. Widening exists to cut infinite ascending
+chains, and the `Format ⊔ Format` case had always short-circuited an equal join
+before reaching it; the `SetFormat` case had not. It fires 8 times under the
+dependent lowering and 0 times otherwise, so the asymmetry was invisible until
+something asked for it.
 
-Running `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed →
-simplify` does not replace it: after the full sequence `_emit_integral_round`
-still fires, and the `std::nearbyint` and `assert(std::fabs(...) <= 1024)` in
-[native-lowering-roadmap.md](native-lowering-roadmap.md)'s output are its work.
-Those passes normalize a rounding *down to* a position-zero fixed round; nothing
-upstream turns that into a libm call and a bound check.
+What did *not* move is the emitter: it kept `_open_list_build`, which needs no
+length up front, until the lowering became total. Nothing routes there now.
 
-So this section is a new transform: an FPy-level pass rewriting a position-zero
-fixed round into `nearbyint` / `trunc` / `floor` / `ceil` plus an `AssertStmt` on
-the bound. Every piece is already an FPy op. Only then does
-`_emit_integral_round` die, leaving a `static_cast` for native contexts and the
-refusals as tripwires.
+## Open
 
-Two things to weigh:
+### A total unfold for every surface form
 
-- Across the 201 compiling corpus functions the non-native lowering never fires
-  (only `_fold_rounded_literal`, three times). The programs exercising it are
-  built by hand in `tests/unit/backend/cpp/test_lowered_roundtrip.py`, so this is
-  a maintenance win rather than a behaviour one.
-- The new pass owes what the emitter owes: the mode table (five modes are one
-  libm call, three are composed), the operand guard derived from the context's
-  flags *and* from `value_class.py`, and the two-sided bound where the format is
-  asymmetric. Most of the 482 lines move rather than disappear.
+Steps 1 and 2 are done — see §8. What is left, each gated on
+[the precision test](#precision-is-the-acceptance-test-for-an-unfold):
 
-## 5. Conversion insertion — blocked, and smaller than it looks
+**Unfold the rest**, each straight from derived-semantics, each placed after its
+fuse: `zip`, `enumerate`, slice, the chained comparison, `sum` / `any` / `all` /
+`amin` / `amax`, and `min` / `max`. Three pay for more than the deletion:
 
-The idea: after storage inference, insert an explicit conversion node wherever an
-operand's storage differs from its place's, and refuse where nothing bridges. The
-emitter then prints `static_cast` and rebuild loops without deciding anything, and
-`backend-cpp.md`'s four-column table retires.
+- the **chained comparison** is one of the two positions `Hoistable` leaves
+  sealed, so unfolding it makes hoistable form total over everything but an
+  `assert` message — which is never evaluated, so nothing needs a slot there.
+- **`min` / `max`** lowered to the derived definition puts the NaN and
+  signed-zero branches where `ValueClassInfer` can discharge them per site, the
+  way `unfold_special` already prunes a branch for a class its operand cannot
+  hold. `_emit_ieee_min_max` open-codes all of them unconditionally.
+- **`sum`** dissolves *Narrowing inside `std::accumulate`, so `Sum` can fuse* in
+  [backend-cpp.md](backend-cpp.md): an FPy-level accumulator is an ordinary
+  variable `StorageInfer` gives a class like any other, so there is no implicit
+  narrowing to refuse. Unfold it only where the length is proven, or
+  `FormatInfer` widens the accumulator instead of simulating the adds.
 
-**Measured, there is nothing to insert.** Over the 201 compiling corpus functions
-`_convert_storage` is reached 37 times and *every call has `src == want`*;
-`_rebuild_list` never runs. The 114 scalar casts that do fire come from op
-dispatch, where C++ converts at the point of use and no slot is needed at all. So
-the pass would today rewrite nothing.
+**Then a cleanup.** Every lowering leaves debris this pipeline has no pass to
+remove: a dead `auto&& _tmp1 = xs.size();`, a `uint8_t n = _t8;` copy, `ANF`'s
+two names for one `len(t)`. `fpy2/transform/dead_code.py` and
+`copy_propagate.py` exist and neither is wired in; a lowering-heavy pipeline
+needs both, plus CSE for the repeated `len`. This decides whether the unfolds
+are free or merely correct.
 
-The 388 lines grouped as *storage reconciliation* are therefore not conversion
-insertion. They are `_emit_at`'s **construct-at-want** path — 178 aggregate sites,
-building a `ListExpr` or `TupleExpr` directly at the wanted type. That is the
-emitter picking a constructor's type argument, not a node a pass could hoist out.
+**Then demote `ANF`.** With every statement-needing form already a statement, an
+operand is a C++ expression by construction and the guarantee holds without the
+pass. `_emit_inline`'s tripwire stays as the check.
 
-What is left is the refusal path, which is correctness-bearing even at zero
-firings. It goes live together with `_rebuild_list`, i.e. once the boxing gap
-below closes — the same trigger the widening policy waits on.
+### `Hoistable` at the front
 
-## 6. Pow2 and literal peepholes
+`Hoistable` runs *after* `Specialize`, so it normalizes each spec rather than
+each source function, and every pass before it works without a statement slot.
+Moving it to the front is the right shape — it is what lets `CompToLoop`,
+`RoundElim` and the unfolds mint a temporary without reasoning about conditional
+evaluation — but it converts "establishes the invariant" into "every later pass
+preserves the invariant", which nothing states or checks.
 
-`_emit_scale_by_pow2`, `_emit_pow2`, `_fold_rounded_literal`,
-`_mode_independent` (191 lines) are algebraic rewrites gated on exactness proofs
-— `exact_exp2`, `round_is_identity` — that are already generic. Only
-`std::ldexp` is C++.
+Hoistable form is a fixpoint, so re-running it is idempotent: put it at the
+front *and* keep it where it is, and the second run is a no-op wherever the
+invariant survived. It costs 66 statements over the corpus (§1), so that run is
+close to free, and a difference between the two is a bug report about the pass
+in between.
 
-Statement form names the power, so `_emit_scale_by_pow2` no longer matches
-`2 ** n * x` (see [backend-cpp.md](backend-cpp.md)). Moving the strength
-reduction here restores it, and needs a language-level scale operation first:
-FPy has no `ldexp`/`scalb`, so an FPy-level transform has nothing to rewrite
-into. That makes this a language change, not only a pass move.
+### Recovering from an unsupported rounding
 
-## 7. Library-op lowering
+The strongest remaining item, and the only one a user would notice: today an
+unsupported rounding is a refusal whose message names the operator that fixes it;
+the proposal is to run it. Fully scoped in *Recovering from an unsupported
+rounding instead of refusing* in [backend-cpp.md](backend-cpp.md), including the
+`split_round` route for arithmetic and why the correct-double-rounding table is
+what makes it exact.
 
-515 lines, and it splits. Reducing `sum` / `amin` / `amax` / `any` / `all` to a
-loop is generic, with `ZipElim`, `EnumerateElim`, `ReduceFusion` and `CompToLoop`
-as precedent. `_emit_ieee_min_max`'s NaN-propagating, signed-zero-aware predicate
-is target-specific and stays.
+It moves no line out of the backend, and it turns programs that refuse into
+programs that compile. Under the goal above that is a better trade than any
+section below.
 
-`backend-cpp.md` measures capability regressions from lowering comprehensions
-ahead of the emitter — a multi-clause comprehension loses its `std::array`, a
-dependent-clause list stops compiling — so the FPy-level lowerings have to become
-*more* capable first, not merely get scheduled earlier.
+### Aggregate naming in ANF
 
-## Order of work
+Naming an aggregate turns `return ([n, n], 1.0)` into
+`xs = [n, n]; return (xs, 1.0)`. Until recently the second form kept a handle the
+first did not, which would have boxed every literal-into-container in the corpus;
+`AliasAnalysis.consumed_defs` and the matching `std::move` closed that (see *What
+stays boxed* in [backend-cpp.md](backend-cpp.md)).
 
-**Aggregate naming in ANF is next**, and its blocker is gone. Naming an
-aggregate turns `return ([n, n], 1.0)` into `xs = [n, n]; return (xs, 1.0)`, and
-until recently the second form kept a handle the first did not — so the pass
-would have boxed every literal-into-container in the corpus. `consumed_defs`
-and the matching `std::move` closed that; see *What stays boxed* in
-[backend-cpp.md](backend-cpp.md).
+§8 widened the discount from a definition to an *object*: a list a loop fills
+reaches its consumer through a phi over the allocation and the stores, all one
+runtime object, and a write-through is not a second read. So a filled name moves
+out too.
 
-It remains the highest-risk item on its own terms: a name holding a list is a
-second *place*, and `UnboxMode.STRICT` turns that into a refusal. What closed
-covers the name handed straight to a container; a name read more than once is
-genuinely shared, and that is what the pass has to be measured against.
+What is left is a name genuinely read more than once, which is a second place by
+any reading — that is what aggregate naming must be measured against, and
+`UnboxMode.STRICT` turns it into a refusal rather than a slower program.
 
-It also owns less than it was once credited with. All 113 `_bind_operand` mints
-on the corpus come from library-op lowering — `_emit_ieee_min_max` (28),
-`_emit_empty` (25), `_list_range` (21), `_emit_sum` (13), `_emit_zip` (12),
-`_visit_list_slice` (11), `_emit_enumerate` (3) — which build a loop or emit an
-operand twice. Those are §7's, and they die when that lowering moves to FPy
-level, where ANF names the loop's temporaries itself.
+## Parked, with reasons
 
-**§3's first part** is done; its second waits for a second backend. **§4** is
-independent, but is a new transform whose lines mostly move rather than
-disappear. **§6** needs a language-level scale operation. **§7** waits for the
-FPy-level lowerings to become total, and owns the 113 `_bind_operand` mints.
+### 4. Round and cast lowering
+
+An FPy-level pass rewriting a position-zero fixed round into a libm-shaped op
+plus an `AssertStmt` on the bound. Measured on `test_lowered_roundtrip`'s
+programs, the extractable content is **two** items, not the three originally
+claimed: the mode table (five modes are one libm call, three are composed) and
+the two-sided bound. `_undefined_guard` returns `None` on the
+`test_lowered_roundtrip` path specifically, because the value-class branches the
+earlier operators state rule out NaN and infinity there — it is *not* dead in
+general, and emits a guard 46 times across the unit suite.
+
+Parked because the lowering never fires on the corpus, so this is a maintenance
+win rather than a behaviour one.
+
+**It is also not under-tested**, which was briefly offered as a reason to build a
+property-based harness instead. Measured over `tests/unit/backend/cpp`: all eight
+rounding modes reach `_emit_integral_value` (RNE 45, RTZ 18, RAZ 7, RTE 7, RNA 6,
+RTN 6, RTO 6, RTP 6), all three `_emit_integral_round` outcomes fire (113 lowered,
+49 declined, 9 refused), `_emit_cast_round` fires 12 times and `_undefined_guard`
+emits a guard 46 times. Six test files cover it, not one. A harness would add
+generated formats and generated input values over hand-picked boundary values —
+worth having, not worth prioritising.
+
+It also has a prerequisite that is not worth doing on its own. `FormatInfer`
+bounds `nearbyint`, `trunc`, `floor`, `ceil` and `roundint` at the active
+*scope's* format — `_visit_unaryop` has an exactness rule for `Abs`, `Neg`,
+`Logb` and `Exp2` and no case for these — so under `REAL` the result is
+`REAL_FORMAT` and has no storage. A pass inserting those ops would need the rule.
+Nothing reaches it today: no transformation constructs any of those nodes, and
+under a concrete context the loose bound is already the right answer, since an
+FP64-precision integer reaches 2^1024 and no integer rung holds it. So the gap is
+real, has no consumer, and waits on this section rather than the reverse.
+
+### 5. Conversion insertion
+
+**Measured, there is nothing to insert.** `_convert_storage` is reached 37 times
+over the corpus and *every call has `src == want`*; `_rebuild_list` never runs.
+The 114 scalar casts that do fire come from op dispatch, where C++ converts at
+the point of use and no slot is needed.
+
+The 388 lines grouped as *storage reconciliation* are not conversion insertion:
+they are `_emit_at`'s **construct-at-want** path, 178 aggregate sites building a
+`ListExpr` or `TupleExpr` directly at the wanted type. That is the emitter
+picking a constructor's type argument, not a node a pass could hoist out. What
+remains is the refusal path, which goes live with `_rebuild_list`.
+
+### 6. Pow2 and literal peepholes
+
+Algebraic rewrites gated on exactness proofs that are already generic; only
+`std::ldexp` is C++. Statement form names the power, so `_emit_scale_by_pow2` no
+longer matches `2 ** n * x` (see [backend-cpp.md](backend-cpp.md)). Restoring it
+needs a language-level scale operation — FPy has no `ldexp`/`scalb`, so an
+FPy-level transform has nothing to rewrite into. A language change, not a pass
+move.  Demoting `ANF` restores the fusion for free, which is one more entry on
+that side of the ledger.
+
+### 7. Library-op lowering
+
+515 lines, the largest single group, and it splits: reducing `sum` / `amin` /
+`amax` / `any` / `all` to a loop is generic, with `ZipElim`, `EnumerateElim`,
+`ReduceFusion` and `CompToLoop` as precedent, while `_emit_ieee_min_max`'s
+NaN-propagating, signed-zero-aware predicate stays.
+
+It also owns all 113 `_bind_operand` mints on the corpus —
+`_emit_ieee_min_max` (28), `_emit_empty` (25), `_list_range` (21), `_emit_sum`
+(13), `_emit_zip` (12), `_visit_list_slice` (11), `_emit_enumerate` (3) — which
+build a loop or emit an operand twice, and which die when the lowering moves to
+FPy level where ANF names the temporaries itself.
+
+**Unparked by the audit.** The capability blocker is smaller than recorded: with
+`Hoistable` and `CompToLoop` run to a fixpoint, wiring comprehension lowering
+into `specialize()` loses no corpus program and changes four emissions, the
+`std::array` regression is stale, and the dependent-clause refusal has a
+derived-semantics rewrite. `_emit_ieee_min_max` moves too, since the branches it
+open-codes are what `ValueClassInfer` is for. The work is step 3 of
+[A total unfold for every surface form](#a-total-unfold-for-every-surface-form).
+
+### 3's second part — `_shares_storage`
+
+Generic in shape but calibrated to this emitter: it counts only names that get
+their own storage, and that set is `binds_by_reference`. The extracted form takes
+the binding rule as a parameter, which would have exactly one implementation
+until a second backend exists to check it against.
+
+Likewise `_regions` / `_at_depth` / `_fields` / `_stamp`: §2 made a storage class
+a `FormatBound`, so a generic traversal is now expressible, but `_stamp`'s
+decision logic is already target-neutral and what is backend-specific is only the
+type it reads and the type it builds. Splitting means a higher-order traversal
+with one consumer — the same objection, with more added abstraction.
 
 ## Staying in the backend
 
 - `types.py`, `ops.py`, `target.py` — what C++ can spell, and how.
-- Declaration and binding shape, list and array spelling, control-flow printing
-  (about 790 lines). This is the 1:1 emitter the roadmap aims at.
-- `fenv` boundaries (247 lines). Generic in principle — any target with a global
+- Declaration and binding shape, list and array spelling, control-flow printing.
+  This is the 1:1 emitter the roadmap aims at.
+- `fenv` boundaries. Generic in principle — any target with a global
   rounding-mode register — but there is one such target, so extracting it would
   abstract over a single instance.
 - The representation alphabet in `unbox.py` — handle, value, fixed array — and
-  the C++ questions asked of it (§3).
+  the C++ questions asked of it.
 - `_emit_ieee_min_max`, and `UnboxMode` as a policy knob.

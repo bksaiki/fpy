@@ -81,11 +81,10 @@ One *summary* store for the whole function, not one per program point, so it is
 flow-insensitive: ``ys = xs`` marks ``xs`` shared even if ``ys`` is dead
 immediately afterwards, and a container part counts as a referrer even if the
 container itself is never read — except :attr:`AliasAnalysis.consumed_defs`,
-which buys back one flow-sensitive fact under narrow guards.  Intraprocedural:
-a list handed to a
-call is shared outward, without asking whether the callee retains it.
-Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three cost
-precision, not soundness.
+which buys back one flow-sensitive fact under narrow guards.  Intraprocedural: a
+list handed to a call is shared outward, without asking whether the callee
+retains it.  Index-insensitive: ``xs[0]`` and ``xs[1]`` are one part.  All three
+cost precision, not soundness.
 """
 
 from dataclasses import dataclass, field
@@ -935,14 +934,15 @@ class _RegionFacts(DefaultVisitor):
         self.consumed: dict[Region, set[Definition]] = {}
         self._siblings: set[Stmt] = set()
         self._repeats = 0
-        # A phi operand is read after the merge, but a phi is not a use site --
-        # `uses` records only Var/IndexedAssign/Call -- so sole-use would
-        # otherwise hold for a name whose value flows out of its branch.
-        self._phi_operands = {
-            def_use.defs[i]
-            for ps in def_use.phis.values() for p in ps
-            for i in (p.lhs, p.rhs)
-        }
+        # Which phi consumed each operand.  A phi is not a use site, so
+        # sole-use would otherwise hold for a name whose value flows out of its
+        # branch -- and a merge inside one object's own class, a loop head
+        # threading a list through its fills, is not such a flow.
+        self._phi_of: dict[Definition, set[Definition]] = {}
+        for ps in def_use.phis.values():
+            for p in ps:
+                for i in (p.lhs, p.rhs):
+                    self._phi_of.setdefault(def_use.defs[i], set()).add(p)
         for d in alias.all_defs():
             if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
                 if (r := alias.region_of(d)) is not None:
@@ -978,13 +978,54 @@ class _RegionFacts(DefaultVisitor):
         self._note_consumed(e.elts)
         super()._visit_list_expr(e, ctx)
 
+    def _same_object(self, d: Definition) -> set[Definition]:
+        """*d* and every definition denoting the same runtime object.
+
+        ``same_object_defs`` points from a phi to its operands and from an
+        ``xs[i] = e`` to what it mutated, so the closure reaches the whole chain
+        that filled one list.
+        """
+        seen: set[Definition] = set()
+        stack = [d]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            stack.extend(self.def_use.defs[i] for i in same_object_defs(cur))
+        return seen
+
+    def _moves_out(self, cls: set[Definition], e: Var) -> bool:
+        """Whether the object *cls* denotes is read only at *e*.
+
+        A write-through is not a second read: ``xs[i] = v`` uses the name, but
+        makes a definition ``same_object`` with the one it wrote through, so it
+        is already in *cls*.  The fill happens before the move.
+        """
+        for m in cls:
+            for u in self.def_use.uses.get(m, ()):
+                if u is e:
+                    continue
+                if isinstance(u, IndexedAssign) and isinstance(u.var, NamedId):
+                    fresh = self.def_use.find_def_from_site(u.var, u)
+                    if fresh in cls:
+                        continue
+                return False
+        return True
+
     def _note_consumed(self, elts: 'tuple[Expr, ...]') -> None:
         """Record each operand of a construction whose value *moves* into it.
 
         Sound only where the construction provably runs once for that value, so
         every way it could run again is refused: a use that re-executes
         (``_repeats``), one whose definition is not a sibling statement, and one
-        whose value leaves its branch through a phi.
+        whose value leaves through a phi outside the same object.
+
+        The unit is the *object*, not one definition of it: a list filled by a
+        loop reaches its consumer through a phi over the allocation and the
+        stores, and all three are recorded, since
+        :meth:`referrers_after_moves` drops a name only when every definition of
+        it is consumed.
         """
         if self._repeats:
             return
@@ -992,18 +1033,27 @@ class _RegionFacts(DefaultVisitor):
             if not isinstance(e, Var):
                 continue
             d = self.def_use.use_to_def.get(e)
-            # a phi has several definitions, a parameter is the caller's
-            # storage: neither is a value this function may move out of
-            if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+            if d is None:
                 continue
-            if self.def_use.uses.get(d) != {e}:
+            cls = self._same_object(d)
+            # the value has to be one this function made: a parameter is the
+            # caller's storage, and a class with no `Assign` allocated nothing
+            sites = [m.site for m in cls if isinstance(m, AssignDef)]
+            allocs = [s for s in sites if isinstance(s, Assign)]
+            if not allocs or any(not isinstance(s, (Assign, IndexedAssign))
+                                 for s in sites):
                 continue
-            if d in self._phi_operands:
+            if not self._moves_out(cls, e):
                 continue
-            if d.site not in self._siblings:
+            # a phi outside the class carries the value somewhere else; one
+            # inside it is the loop head threading this same list
+            if any(p not in cls
+                   for m in cls for p in self._phi_of.get(m, ())):
+                continue
+            if any(s not in self._siblings for s in allocs):
                 continue
             if (r := self.alias.region_of(d)) is not None:
-                self.consumed.setdefault(r, set()).add(d)
+                self.consumed.setdefault(r, set()).update(cls)
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
         # Only a store of a *list* replaces a slot: a scalar write goes through

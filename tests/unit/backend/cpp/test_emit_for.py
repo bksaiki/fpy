@@ -121,3 +121,35 @@ class TestForRange:
         )
         assert 'for (double x : xs) {' in out
         assert 'acc = (acc + x);' in out
+
+
+class TestRangeLength:
+    """``len(range(...))`` is a count, not a materialised range."""
+
+    def test_length_does_not_build_the_range(self):
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                return len(range(n))
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        assert 'iota' not in out and 'vector' not in out
+        assert '> 0 ?' in out          # the clamp, and nothing else
+
+    def test_a_real_bound_converts_rather_than_refusing(self):
+        """Every argument of ``range`` is an integer by the language's own
+        rule, so converting one is exact -- where an ordinary narrowing of the
+        same two types is refused as lossy."""
+
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            with fp.FP64:
+                xs = range(n)
+                return xs[0]
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        assert 'static_cast<int64_t>(n)' in out

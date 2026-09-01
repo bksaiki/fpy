@@ -735,6 +735,39 @@ class TestConsumedNameIsNotAPlace:
         assert 'shared_ptr' not in out
         assert 'std::make_tuple(std::move(xs), 1)' in out
 
+    def test_a_filled_list_moves_out(self):
+        """A list a loop fills reaches its consumer through a phi over the
+        allocation and the stores, all one runtime object -- so the name is
+        still not a second place beside the container's slot."""
+
+        @fp.fpy
+        def f(ys: list[fp.Real]) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = fp.empty(len(ys))
+                for i in range(len(ys)):
+                    xs[i] = ys[i] * 2
+                return (xs, 1.0)
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        assert 'shared_ptr' not in out
+        assert 'std::move(xs)' in out
+
+    def test_a_filled_list_read_again_keeps_the_handle(self):
+        """The write-throughs are discounted; a genuine second *read* is not.
+        Moving here would be a use-after-move."""
+
+        @fp.fpy
+        def f(ys: list[fp.Real]) -> tuple[list[fp.Real], fp.Real]:
+            with fp.FP64:
+                xs = fp.empty(len(ys))
+                for i in range(len(ys)):
+                    xs[i] = ys[i] * 2
+                y = xs[0]
+                return (xs, y)
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[ListType(R)])
+        assert 'std::move' not in out
+
     def test_a_second_read_keeps_the_handle(self):
         """Two uses, so the name really is a second place."""
 

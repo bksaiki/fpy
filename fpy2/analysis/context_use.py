@@ -16,7 +16,7 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..fpc_context import FPCoreContext
-from ..number import Context
+from ..number import REAL, Context
 from ..types import ContextParam
 from ..utils import Gensym, NamedId, default_repr
 from .define_use import DefineUse, DefineUseAnalysis
@@ -56,7 +56,15 @@ class ContextUseAnalysis:
     """all context scopes, ordered by introduction"""
 
     uses: dict[ContextScope, set[ContextUseSite]]
-    """mapping from context scope to use sites"""
+    """mapping from context scope to use sites.
+
+    A key here need not be in :attr:`scopes`: **E-Context** evaluates a
+    ``with``'s context expression under ``REAL``, so its uses get a ``REAL``
+    scope that introduces no ``with`` in the program.  Consumers keying scopes
+    by ``site`` (the cpp emitter, ``dead_code``) iterate :attr:`scopes` and so
+    never see it; consumers asking :meth:`find_scope_from_use` get the answer
+    the semantics give.
+    """
 
     use_to_scope: dict[ContextUseSite, ContextScope]
     """mapping from use site to context scope"""
@@ -155,15 +163,18 @@ class _ContextUseInstance(DefaultVisitor):
     # Statement visitors
 
     def _visit_context(self, stmt: ContextStmt, scope: ContextScope):
-        # The context expression is evaluated under real arithmetic (not the
-        # enclosing floating-point context), so we do not visit it as a use
-        # of the enclosing context.  This is consistent with how
-        # partial_eval evaluates context expressions under REAL.
         # Resolve the context expression, falling back to a symbolic
         # variable when partial evaluation cannot determine the value.
         ctx = self._resolve_ctx_expr(stmt.ctx)
         # Create a fresh context scope for the body.
         new_scope = self._make_scope(stmt, ctx)
+        # **E-Context** evaluates the context expression under `REAL`, not the
+        # enclosing context, so its uses get a scope of their own.  Built after
+        # the body's, so a `with` whose context *is* `REAL` -- where the two
+        # compare equal -- merges into it rather than clearing it.
+        real_scope = ContextScope(stmt, REAL)
+        self.uses.setdefault(real_scope, set())
+        self._visit_expr(stmt.ctx, real_scope)
         self._visit_block(stmt.body, new_scope)
 
     # ------------------------------------------------------------------

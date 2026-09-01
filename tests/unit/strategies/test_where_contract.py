@@ -250,7 +250,8 @@ REFUSES = [
     ('split/refuses', split, _odd_trip, _STRICT_SPLIT),
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),
-    ('comp_to_loop/refuses', comp_to_loop, _dependent_comprehension, {}),
+    ('comp_to_loop/refuses', comp_to_loop, _dependent_comprehension,
+     {'dependent': False}),
     # an intermediate no wider than the target: no rule admits it, generic or
     # operation-specific
     ('split_round/refuses', split_round, _two_rounded, {'ctx': fp.FP32}),
@@ -279,7 +280,7 @@ def _apply(strategy, func, where, kw):
         return strategy(func, 2, where=where, **_no_factor(kw))
     if strategy is unroll_for and 'strategy' in kw:
         return strategy(func, where, kw['times'], strategy=kw['strategy'])
-    return strategy(func, where=where)
+    return strategy(func, where=where, **kw)
 
 
 def _no_factor(kw):

@@ -35,6 +35,7 @@ from ...module import Module
 from ...number import Context
 from ...transform import (
     ANF,
+    CompToLoop,
     EnumerateElim,
     FreeVarElim,
     Hoistable,
@@ -96,6 +97,31 @@ class SpecAnalyses:
 
 # ---------------------------------------------------------------------
 # Compiler
+
+
+def _to_statement_form(fd: FuncDef) -> FuncDef:
+    """Hoistable form, with every comprehension lowered.
+
+    Neither pass is a fixpoint alone and each supplies what the other lacks.
+    ``Hoistable`` seals a comprehension's element -- it runs once per iteration,
+    so the slot before the enclosing statement is no place for its temporaries --
+    and ``CompToLoop`` makes the loop that *is* that slot; ``CompToLoop``
+    declines a comprehension in a ternary arm or a ``while`` condition for want
+    of a slot, and ``Hoistable`` gives it one.
+
+    Iterating terminates without a cap, though not because the comprehension
+    count falls -- lowering a dependent clause list *raises* it, peeling one
+    comprehension into a row comprehension plus a nested one.  What falls is the
+    clause count of the dependent one, by one per peel, and a single-clause
+    comprehension cannot be dependent.  Everything else lowers outright, and
+    ``Hoistable`` is idempotent over its own output.
+    """
+    while True:
+        fd = Hoistable.apply(fd)
+        log = CompToLoop.apply_with_edits(fd)
+        if not log.edits:
+            return fd
+        fd = log.result
 
 
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
@@ -349,8 +375,7 @@ class CppCompiler(Backend):
         if not isinstance(module, Module):
             raise TypeError(f'Expected `Module`, got {type(module)} for {module}')
 
-        # Close each function over its captured data free variables (a
-        # correctness pass — codegen has no closure environment).
+        # required: codegen has no closure environment
         module = module.map(lambda _m, fd: FreeVarElim.apply(fd))
 
         if self._optimize:
@@ -361,30 +386,27 @@ class CppCompiler(Backend):
             # after both, so a `zip`/`enumerate` comp is already an indexed comp
             module = module.map(lambda _m, fd: ReduceFusion.apply(fd))
 
-        # Translate ``Monomorphize``'s bare ``RuntimeError`` (e.g. arg-type
-        # mismatches) into ``CppCompileError`` so callers iterating over
-        # candidate functions can catch a uniform error type.
+        # `size_key`: a spec per distinct argument-length vector, so a proven
+        # length crosses the call edge as the callee's annotation and both ends
+        # agree on `std::array` (see `.unbox`).  `Monomorphize` raises a bare
+        # `RuntimeError`, which callers iterating over candidates cannot catch
+        # uniformly.
         try:
-            # `size_key`: a spec per distinct argument-length vector, so a proven
-            # length crosses the call edge as the callee's annotation and both
-            # ends agree on `std::array` (see `.unbox`).
             specialized = Specialize.apply(module, size_key=self._arrays)
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 
         # Unconditionally: `ANF` requires hoistable form and raises without it.
         # Before `RoundElim`, whose hoist is suppressed in two of the positions
-        # this gives a statement slot.  Every pass in between must preserve the
-        # form -- `ANF` catches only the subset it would itself have to name.
-        specialized = specialized.map(lambda _m, fd: Hoistable.apply(fd))
+        # this gives a slot; every pass in between must preserve the form.
+        specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
 
-        # Statement form, last and unconditionally.  Last because naming an
-        # expression *materializes* it, so anything that deletes or folds must
-        # run first -- and because it removes the shapes `ReduceFusion`,
-        # `ZipElim` and `EnumerateElim` match on.
+        # Last: naming an expression *materializes* it, so anything that
+        # deletes or folds runs first -- and it removes the shapes
+        # `ReduceFusion`, `ZipElim` and `EnumerateElim` match on.
         specialized = specialized.map(lambda _m, fd: ANF.apply(fd))
 
         return list(specialized.call_graph().order)

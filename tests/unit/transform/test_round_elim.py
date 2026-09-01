@@ -361,6 +361,25 @@ class TestSuppressionPositions:
         assert not _has_node(out, Round)
         assert list(_eval(out, f)) == list(f())
 
+    def test_a_context_constructor_argument_is_left_alone(self):
+        """**E-Context** evaluates a `with`'s context expression under `REAL`,
+        where nothing is eliminable — so the expression comes through
+        untouched."""
+
+        @fp.fpy
+        def f() -> fp.Real:
+            ES = 2
+            NB = 8
+            with fp.IEEEContext(ES + 2, NB + 2):
+                return fp.round(1)
+
+        out = RoundElim.apply(f.ast)
+        # the context expression survives exactly as written
+        before, after = f.ast.body.stmts[2], out.body.stmts[2]
+        assert isinstance(before, ContextStmt) and isinstance(after, ContextStmt)
+        assert after.ctx.is_equiv(before.ctx)
+        assert _eval(out, f) == f()
+
     def test_no_hoist_inside_if_expr_branches(self):
         """``(x + y) if cond else 0.0`` — the Add inside the ift
         branch would evaluate conditionally; hoisting it

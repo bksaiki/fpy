@@ -86,8 +86,7 @@ and aims a whole sequence at it. `sites(strategy, func, within=)` lists what a
 bad-reference error) — including across the passes that rewrite at sites they do
 not report, which say so rather than guessing.
 
-The plan, the design decisions and what was deliberately not taken from Exo are in
-[cursor-forwarding-plan.md](cursor-forwarding-plan.md).
+The implementation is `fpy2/transform/cursor.py` and `Function.forward`.
 
 Not delivered, and the claim this item used to make: **forwarding does not carry an
 analysis result.** `fpy2/analysis/value_class.py` keys results by expression

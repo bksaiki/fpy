@@ -101,7 +101,6 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
   `tests/unit/backend/cpp/test_lowered_roundtrip.py` runs
   `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed` at one
   rounding of a two-rounding program and leaves the other untouched. See
-  [scheduling-language.md](scheduling-language.md) item 3 and
-  [cursor-forwarding-plan.md](cursor-forwarding-plan.md); what remains for a
+  [scheduling-language.md](scheduling-language.md) item 3; what remains for a
   composed *operator* is the recipe itself, gap 2 of
   [native-lowering-roadmap.md](native-lowering-roadmap.md).

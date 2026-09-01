@@ -182,7 +182,9 @@ top.
 ```
 Module
   → Specialize                 # one FuncDef per (callee, ctx, arg formats)
-  → Hoistable                  # a statement slot wherever one is needed
+  → fix(Hoistable ; CompToLoop)  # a statement slot wherever one is needed,
+                                 # and every comprehension but the ragged one
+                                 # lowered into the loop that is that slot
   → RoundElim                  # (optimize only)
   → ANF                        # statement form; every operand is an atom
   → DefineUse
@@ -214,35 +216,25 @@ code. Headers track exactly what the emitted code uses.
 
 ## Open issues
 
-### Settled: an operand emitting statements escapes its guard
+### An operand emitting statements must not escape its guard
 
-**Was a defect; now impossible by construction.** `_emit_guarded_block` and
-`_visit_if_expr` interpolate an expression visitor into an f-string, so anything
-it wrote through `writer.add_line` landed *before* the construct being guarded.
-Three shapes, each verified by compiling and running the output:
+`_emit_guarded_block` and `_visit_if_expr` interpolate an expression visitor into
+an f-string, so anything it writes through `writer.add_line` lands *before* the
+construct being guarded. Three shapes miscompiled that way — a `while` condition
+evaluated once, a ternary arm's assertion firing on the untaken path, an
+`and`/`or` tail past the short circuit — all in territory where FPy's semantics
+*are* defined, unlike the subscript case below.
 
-- **a `while` condition evaluated once**, so the loop tested a stale name —
-  `while max([y, 0.0]) > 0.0` did not terminate where the interpreter returned;
-- **a ternary arm's assertion on the untaken path** —
-  `0.0 if x > 1e30 else fp.cast(x)` aborted where the interpreter returned;
-- **an `and` / `or` tail past the short circuit** — same assertion, same abort.
+Closed twice over. `Hoistable` lowers each position before codegen, so none
+reaches the emitter; `_emit_inline` refuses if one ever does, comparing the
+writer's line count around the emission rather than guessing from the syntax.
+`test_statement_form.py` runs the three witnesses with both passes monkeypatched
+to the identity — both, because `Hoistable` alone empties the positions and every
+witness would pass without witnessing anything.
 
-All three are in territory where FPy's semantics *are* defined, unlike the
-subscript case below.
-
-Closed two ways. `fpy2.transform.Hoistable` lowers each position before codegen,
-so none reaches the emitter — and `_emit_inline` refuses if one ever does,
-comparing the writer's line count around the emission rather than approximating
-from the syntax. Unreachable *and* impossible: the lowering fixes real programs,
-the tripwire survives a future change to the pass.
-`tests/unit/backend/cpp/test_statement_form.py` runs all three witnesses and
-checks the refusal with both passes monkeypatched to the identity — both,
-because patching out `ANF` alone leaves `Hoistable` to empty the positions and
-every witness would pass without witnessing anything.
-
-An `if` / `if1` condition is deliberately not gated: it runs once, just before
-the branch, so its statements belong in the enclosing block. That is why
-`_emit_guarded_block` now takes its condition already emitted.
+An `if` / `if1` condition is deliberately not gated: it runs once, just before the
+branch, so its statements belong in the enclosing block — which is why
+`_emit_guarded_block` takes its condition already emitted.
 
 ### Statement form defeats the `2 ** n * x` fusion
 
@@ -280,23 +272,20 @@ transform to rewrite *into*. See
 
 ### Unchecked subscripts are not a bug
 
-**Settled: an out-of-range subscript is undefined in FPy.** `_visit_list_ref`,
-`_visit_list_slice`, and `_visit_indexed_assign` emit raw `xs[i]`, and that is the
-intended lowering. The interpreter happens to raise on `xs[10]` over a shorter
-list, but that is an artifact of how it is written, not a promise the language
-makes — so a backend is free to do anything, and a raw subscript is the normal
-C/C++ idiom.
+An out-of-range subscript is undefined in FPy. `_visit_list_ref`,
+`_visit_list_slice` and `_visit_indexed_assign` emit raw `xs[i]`, and that is the
+intended lowering. The interpreter raises on `xs[10]` over a shorter list, but
+that is an artifact of how it is written, not a promise the language makes.
 
-Recorded because the shape invites the opposite conclusion: it looks like the
-emitted code disagrees with the interpreter, so it reads as the criterion above
-being violated. It is not. Do not add a checked-subscript helper on this
-reasoning; the criterion applies where FPy's semantics are *defined*, and here
-they are not.
+Recorded because the shape invites the opposite conclusion: the emitted code
+looks like it disagrees with the interpreter, so it reads as violating the
+criterion above. It does not — that applies where FPy's semantics are *defined*.
+Do not add a checked-subscript helper on this reasoning.
 
-(Should bounds checking ever be wanted, it would be a debug-build feature like the
-rounding assertions, and it would want the array-size work first — the checks
+Were bounds checking ever wanted, it would be a debug-build feature like the
+rounding assertions, and it would want the array-size work first: the checks
 worth keeping are the ones `array-size-symbolic.md`'s size equalities cannot
-discharge statically.)
+discharge statically.
 
 ### One question answered in four places
 
@@ -329,6 +318,49 @@ Those 8 also say where the compilable set is actually bounded: *unconstrained
 real in a finite C++ type* accounts for 233 of 543 refusals, and the next two are
 downstream of the same storage question. That is the only lever that would move
 the *number* of compilable programs, and it is out of scope above.
+
+### Recovering from an unsupported rounding instead of refusing
+
+*Open.* Every refusal in this area already names the operator that fixes it —
+`_require_cast_is_round` says "lower it first with `monomorphize ->
+unfold_overflow -> float_to_fixed -> rescale_fixed`", and
+`_emit_integral_round` names `rescale_fixed` and `unfold_overflow` by hand. The
+proposal is to run them rather than print them, as a ladder keyed to what is
+unsupported:
+
+| unsupported | recovery |
+|---|---|
+| a rounding under a non-native *float* context | `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed → simplify` |
+| a rounding under a fixed-point context the backend cannot lower | `unfold_overflow → rescale_fixed → simplify` — the two the refusals name |
+| *arithmetic* under either | `split_round` first: compute at an intermediate the op table has, re-round to the target, then the residual rounding is one of the rows above |
+
+The third row is a deliberate double rounding, and it is safe for a specific
+reason: `split_round` is gated on the correct-double-rounding table, so it
+applies only where the two roundings compose to what the single one gave, and
+declines otherwise. That is the difference between this and simply computing
+wide and truncating.
+
+**What it buys is coverage, not a smaller backend.** Measured on the
+`test_lowered_roundtrip` programs: after the full sequence
+`_emit_integral_round`, `_emit_integral_value` and `_bound_test` all still fire
+— the libm call and the bound assertion are the emitter's work either way. The
+gain is that programs which today refuse would compile.
+
+What it needs:
+
+- **Detection before analysis.** The refusals fire during emission, after every
+  analysis has run, which is too late to rewrite. The condition has to be found
+  on the specialized AST first — `st.sites` plus a cursor per site, since
+  `simplify` does not take cursors and a whole-program run would rewrite
+  roundings that did not need it.
+- **A place in the order.** After `RoundElim` and before `ANF`, for the reason
+  in [backend-independence.md](backend-independence.md) §1: naming materializes,
+  so a pass that folds or deletes has to precede one that names.
+- **An opt-out.** This turns the compiler from a checker into a rewriter, and
+  `float_to_fixed` states a value-class branch per site — on a program with many
+  roundings that is a large amount of emitted code, so far unmeasured. A flag
+  alongside `unsafe_cast_int` and `UnboxMode` keeps the refusal available for
+  callers who would rather see it.
 
 ### A narrower value meeting a wider place
 
@@ -405,6 +437,12 @@ rather than holding it alongside: `AliasAnalysis.consumed_defs`, discounted by
 discount, and `_shares_storage` needs it on both halves of
 `slots = referrers - len(by_name)` or `slots` absorbs the name back.
 
+The unit is the *object*, not one definition. A list a loop fills reaches its
+consumer through a phi over the allocation and the stores, all one runtime
+object per `same_object_defs`, so the whole class is recorded — a write-through
+is a use of the name but not a second *read*, and `referrers_after_moves` drops
+a name only when every definition of it is consumed.
+
 The discount asserts a *transfer*, so `_emit_deduced` emits `std::move` under
 the same condition. C++ will not: implicit move covers `return xs;`, not `xs`
 inside the returned expression. Whether it matters depends on the
@@ -413,12 +451,12 @@ representation — for `std::vector` it is O(1) against an O(n) copy; for
 
 Soundness needs the construction to provably run once for that value, and a
 sibling-statement check alone does not give that. Three guards: the use must not
-re-execute (a comprehension body and a `while` condition are expressions, so
-they repeat *within* a block), its definition must be a sibling statement, and
-the value must not leave its branch through a phi — a phi is not a use site, so
-sole-use says nothing about the read after the merge. `std::array` hides all
-three, since moving from one leaves it readable, so every runtime test uses an
-unsized list whose `vector` move empties the source.
+re-execute (a `while` condition is an expression, so it repeats *within* a
+block), its definition must be a sibling statement, and the value must not leave
+through a phi *outside* its own object — a phi is not a use site, so sole-use
+says nothing about the read after a merge that carries the value elsewhere.
+`std::array` hides all three, since moving from one leaves it readable, so every
+runtime test uses an unsized list whose `vector` move empties the source.
 
 **A projection whose slot is replaced.** *Deliberate.* `row = xss[i]` binds a
 reference, which is what lets `for a, b in zip(...)` over nested lists unbox at
@@ -426,14 +464,12 @@ all. A C++ reference follows the *slot* while FPy keeps referring to the list th
 was in it, so any `xss[i] = <list>` anywhere in the function rules it out.
 Function-wide by choice: nothing else in the analysis is flow-sensitive.
 
-**An aggregate bound from an emitter temp is copied.** *Open.*
-`std::vector<std::vector<double>> result = _tmp1;` — a comprehension
-materializes into a temp, then the real name copies it. Two instances in the
-corpus today. Free while every list was a handle, O(n) since they became values,
-and `binds_by_reference` does not reach it: the FPy `Assign`'s expression is a
-`ListComp`, not a `Var`, so the temp is invisible to the binding rule. Either
-build the comprehension into the target, or move from a temp that is dead by
-construction.
+**A materialized `range` is copied into the name bound to it.** *Open.*
+`std::vector<int64_t> t = _tmp1;` — seven instances, all
+`[... for ... in range(len(xs))]` after `ZipElim`. `CompToLoop._inlinable` keeps
+a `range` out of a name so it stays fused, but only where its operands are
+atoms, and `len(xs)` is not one. It is pure, though, so the gate is stricter
+than the property it is testing for; widening it to pure operands fuses these.
 
 **Not planned:** interprocedural precision beyond retention — a caller-driven
 representation choice with the callee specialized per argument representation. It
@@ -493,50 +529,55 @@ return std::accumulate(_tmp1.begin(), _tmp1.end(), static_cast<double>(0));
 The emitter side is the blocker; see `fpy2/transform/reduce_fusion.py`'s module
 docstring for the transform side.
 
+### A slot store's refusal is untested
+
+`_emit_at(..., cannot_convert=True)` refuses a value whose own storage cannot
+reach the slot's. Nothing exercises the refusal: disabling it leaves all 612
+backend tests passing, and three attempts at a witness compiled instead, because
+`format_infer`'s alias replay widens a slot's element to take the store before
+the check runs. The same shape as `_convert_storage`, reached 37 times with
+`src == want` every time.
+
+Not evidence the check is wrong — evidence the storages agree by the time
+anything asks. A witness needs a slot whose element storage is fixed by
+something outside the store: a parameter's ABI, or a callee's return.
+
 ### `fpy2/backend/cpp/README.md`
 
 A short package README pointing at this file and listing the public surface
 (`CppCompiler.compile` / `headers` / `helpers` / `prelude`, exception types).
 
-## Considered: lowering comprehensions in the pipeline
+## Comprehension lowering: in the pipeline
 
-`CompToLoop` (`fpy2/transform/comp_to_loop.py`) rewrites a comprehension into an
-`fp.empty` allocation plus a `for` loop. **Not wired into this pipeline, and the
-emitter keeps its own support**, measured both ways.
+`CppCompiler.specialize()` runs `fpy2.transform.Hoistable` and
+`fpy2.transform.CompToLoop` to a **fixpoint** (`_to_statement_form`), so every
+comprehension is an `fp.empty` allocation plus a `for` loop before the emitter
+sees one. Neither pass is a fixpoint alone: `Hoistable` seals a comprehension's
+element for want of a statement slot and `CompToLoop` makes the loop that *is*
+that slot; `CompToLoop` declines a comprehension in a ternary arm or a `while`
+condition for want of one, and `Hoistable` creates it. It terminates because
+`CompToLoop` reports an edit only where it lowered a comprehension and neither
+pass builds one.
 
-The emitter already performs the same lowering, and better: `_emit_list_comp_at`
-opens a list build, emits one `for` per clause, and appends, so it never needs a
-length up front — `_open_list_build` picks `std::array` filled through a running
-index where the length was proven, `std::vector` with `push_back` otherwise.
-That is why every clause shape compiles here, including the ragged flatten the
-FPy-level lowering leaves alone.
+Wiring it cost nothing: 202 corpus programs either way.
 
-```cpp
-// [x * 2 for x in xs], xs proven length 3
-std::array<double, 3> _tmp1{};  size_t _tmp2 = 0;
-for (double x : xs) { _tmp1[_tmp2++] = (x * 2); }
-```
+**Including the dependent clause list**, where a clause's iterable reads an
+earlier clause's target and the length is a sum rather than a product.
+`CompToLoop` builds the rows, adds up their lengths and flattens — the rewrite
+`derived-semantics.rst` prescribes. It costs a materialised row per outer
+element, which the emitter's own flatten does not, and that was the argument for
+keeping the emitter's: `_open_list_build` needs no length up front, picking
+`std::array` filled through a running index where the length was proven and
+`std::vector` with `push_back` otherwise. What settles it the other way is that
+the two cannot coexist — a total `CompToLoop` leaves nothing for the emitter to
+fuse — and a language whose backends each carry their own comprehension lowering
+is the thing this was for.
 
-Lowering first is a regression today: a multi-clause comprehension loses its
-`std::array` for a `std::vector`, because `ArraySizeInfer._const_int` folds
-`len(xs)` but not arithmetic over it, so `fp.empty(len(xs) * len(ys))` has no
-static size — see
-[array-size-integer-exactness.md](array-size-integer-exactness.md). The
-single-clause form also leaves a dead `auto&& _tmp1 = xs.size();`.
-
-**Deleting the emitter's support** — so that only statements introduce
-identifiers, one less case for storage selection — buys ~90 lines
-(`_visit_list_comp`, `_emit_list_comp_at`, `_open_comp_loop`, the `_emit_at`
-case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry) and costs two
-program classes that compile today: a dependent clause list, and a comprehension
-in an `IfExpr` branch. It would also leave the invariant local — 22 files outside
-this backend still handle `ListComp`. The invariant is a language property, so
-the route to it is making `CompToLoop` total rather than lowering per-backend;
-what that needs is the last gap in
-[rounding-axes.md](rounding-axes.md).
-
-Were it ever wired in, the slot is after `ReduceFusion` — which pattern-matches a
-syntactic `ListComp` — and before `Specialize`, inside `optimize=True`.
+So `_visit_list_comp`, `_emit_list_comp_at` and `_open_comp_loop` are now dead,
+along with the `_emit_at` case, two `storage_infer` match arms and one
+`_ALLOC_EXPRS` entry — about 90 lines. They should come out behind a tripwire, a
+`ListComp` reaching the emitter raising a `CppEmitError` that names a backend
+bug, rather than by removal.
 
 ## Out of scope
 

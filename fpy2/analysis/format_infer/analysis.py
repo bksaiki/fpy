@@ -1193,6 +1193,30 @@ def round_is_identity(
     return unrounded <= AbstractFormat.from_format(ctx_fmt)
 
 
+def _join_set_and_format(
+    s: SetFormat, fmt: Format, widen: bool = False,
+) -> FormatBound:
+    """``SetFormat ⊔ Format``.
+
+    Every value fitting *fmt* makes *fmt* the join outright.  Otherwise the two
+    still have a common bound short of the top: abstract the set and union it
+    with *fmt*'s abstraction, as ``Format ⊔ Format`` does with its operands.
+
+    ``REAL_FORMAT`` is left for what has no abstraction -- a non-dyadic value,
+    which no :class:`AbstractFormat` can pin, or a format that is not
+    abstractable -- and for *widen*, since the union is the path with the
+    infinite ascending chains.
+    """
+    if _all_representable_in(s.values, fmt):
+        return fmt
+    if widen:
+        return REAL_FORMAT
+    af_s = _setformat_to_abstract(s)
+    if af_s is None or not isinstance(fmt, AbstractableFormat):
+        return REAL_FORMAT
+    return (af_s | AbstractFormat.from_format(fmt)).format()
+
+
 def _join_bounds(
     s1: FormatBound,
     s2: FormatBound,
@@ -1205,12 +1229,11 @@ def _join_bounds(
     Joins are structural and only defined for formats of matching kind — the
     type checker guarantees this for well-typed programs.
 
-    When ``widen`` is true, the scalar ``Format ⊔ Format`` case for distinct
-    inputs falls back to ``REAL_FORMAT`` instead of going through
-    :class:`AbstractFormat`-mediated union.  This is used inside loop
-    fixpoints once an iteration cap is reached, to force convergence on
-    AbstractFormat lattices that have infinite ascending chains under
-    arithmetic.
+    When ``widen`` is true, a scalar join of *distinct* inputs falls back to
+    ``REAL_FORMAT`` instead of the :class:`AbstractFormat` union.  Used inside a
+    loop fixpoint once the iteration cap is reached, to force convergence on
+    lattices with infinite ascending chains under arithmetic.  Equal inputs are
+    already a fixed point and pass through.
     """
     match s1, s2:
         case VarFormat(), other:
@@ -1220,19 +1243,20 @@ def _join_bounds(
         case None, None:
             return None
         case SetFormat(values=a), SetFormat(values=b):
-            # Widening: SetFormat unions form a lattice of unbounded
-            # height (each loop iteration can add a fresh value), so a
-            # naive phi-join over them never converges.  When the
-            # caller signals it's running a saturated loop fixpoint,
-            # collapse to ``REAL_FORMAT`` so the next iteration falls
-            # back to the abstract path and reaches a fixed point.
+            # SetFormat unions have unbounded height -- each iteration can
+            # add a value -- so a naive phi-join never converges.  Under a
+            # saturated fixpoint, collapse so the next iteration takes the
+            # abstract path.  Equal sets are already the fixed point, as the
+            # `Format(), Format()` case below also short-circuits.
+            if a == b:
+                return s1
             if widen:
                 return REAL_FORMAT
             return SetFormat(a | b)
-        case SetFormat(values=vals), Format() as fmt:
-            return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
-        case Format() as fmt, SetFormat(values=vals):
-            return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
+        case SetFormat() as s, Format() as fmt:
+            return _join_set_and_format(s, fmt, widen)
+        case Format() as fmt, SetFormat() as s:
+            return _join_set_and_format(s, fmt, widen)
         case Format(), Format():
             if s1 == s2:
                 return s1

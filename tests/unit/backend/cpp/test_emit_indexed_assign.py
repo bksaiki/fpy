@@ -142,3 +142,31 @@ class TestIndexedAssign:
 
         with pytest.raises(CppCompileError, match='aliases storage of type'):
             CppCompiler(unbox=UnboxMode.ALLOW).compile(f, ctx=fp.INTEGER)
+
+
+class TestSlotStoreTypes:
+    """A slot takes its type from the container, so the value must already fit
+    -- unless the emitter is *constructing* it, in which case it is built at the
+    slot's type and its own storage is not the question."""
+
+    def test_an_allocation_into_a_slot_is_built_at_the_slot(self):
+        """``fp.empty``'s bound is the lattice bottom, so its own storage is the
+        ladder's first rung -- ``std::vector<uint8_t>`` -- whatever the row it is
+        allocating actually holds."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss: list[list[fp.Real]]) -> list[list[fp.Real]]:
+            out = fp.empty(len(xss))
+            for i in range(len(xss)):
+                row = xss[i]
+                out[i] = fp.empty(len(row))
+                for j in range(len(row)):
+                    out[i][j] = row[j]
+            return out
+
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64,
+            arg_types=[ListType(ListType(RealType(fp.FP64)))],
+        )
+        assert 'std::vector<std::vector<double>> f(' in out
+        assert 'uint8_t' not in out

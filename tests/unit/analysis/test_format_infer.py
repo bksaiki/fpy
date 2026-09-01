@@ -360,6 +360,39 @@ class TestFormatInfer:
             sample = fmt.maxval()._real
             assert joined.representable_in(sample)
 
+    def test_widening_keeps_a_set_that_is_already_a_fixed_point(self):
+        """Widening exists to cut infinite ascending chains, and a join with
+        itself does not ascend.  Collapsing it discarded the bound for nothing
+        -- and the ``Format`` case beside it already short-circuits this way."""
+        s = SetFormat(frozenset({Fraction(1), Fraction(2)}))
+        assert _join_bounds(s, s, widen=True) == s
+        # a set that really does grow still collapses, or the chain is infinite
+        t = SetFormat(frozenset({Fraction(3)}))
+        assert _join_bounds(s, t, widen=True) == REAL_FORMAT
+
+    def test_a_set_meets_a_format_through_its_abstraction(self):
+        """``SetFormat ⊔ Format`` where a value does not fit *fmt* still has a
+        bound short of the top: the same ``AbstractFormat`` union that
+        ``Format ⊔ Format`` uses.  The arithmetic path has bridged a set into
+        ``AbstractFormat`` all along; the join had not."""
+        fp32 = fp.FP32.format()
+        # a value FP32 cannot hold exactly -- the join must not be the top
+        big = SetFormat(frozenset({Fraction(2) ** 200}))
+        joined = _join_bounds(big, fp32)
+        assert joined != REAL_FORMAT
+        assert joined.representable_in(fp32.maxval()._real)
+        assert _join_bounds(fp32, big) == joined      # symmetric
+
+    def test_a_set_that_fits_joins_to_the_format(self):
+        fp32 = fp.FP32.format()
+        assert _join_bounds(SetFormat(frozenset({Fraction(1)})), fp32) == fp32
+
+    def test_a_non_dyadic_set_still_reaches_the_top(self):
+        """No ``AbstractFormat`` can pin a non-dyadic value, so there is no
+        bound below ``REAL_FORMAT`` to give."""
+        third = SetFormat(frozenset({Fraction(1, 3)}))
+        assert _join_bounds(third, fp.FP32.format()) == REAL_FORMAT
+
     def test_join_real_is_top(self):
         """
         ``join(REAL_FORMAT, f) == REAL_FORMAT``:

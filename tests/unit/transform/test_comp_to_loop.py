@@ -1,7 +1,7 @@
 """
 Unit tests for the :class:`fpy2.transform.CompToLoop` transform.
 
-The rewrite mints fresh ``t`` / ``acc`` / ``i`` / ``j`` names via ``Gensym``, so
+The rewrite mints fresh names via ``Gensym``, all under ``temp_id``, so
 comparing against a hand-written golden AST is brittle.  These tests assert
 
 1. **Structural shape** — the comprehension is gone, replaced by an `fp.empty`
@@ -15,6 +15,8 @@ comparing against a hand-written golden AST is brittle.  These tests assert
 4. **The `where` contract** — a listing reports exactly what `where=None`
    rewrites.
 """
+
+import re
 
 import pytest
 
@@ -149,6 +151,110 @@ class TestCompToLoop:
         out = _lower(_rows)(rows)
         assert _vals(out[0]) == [1.0, 2.0]
 
+    def test_an_assignment_target_is_filled_directly(self):
+        """``ys = [...]`` writes into ``ys``.  An ``acc`` copied into ``ys``
+        would leave two names on one list, and a second name is a second
+        *place*: the cpp backend's ``UnboxMode.STRICT`` refuses it."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [x * 2.0 for x in xs]
+            return ys
+
+        out = CompToLoop.apply(f.ast)
+        assert 'ys = fp.empty' in out.format()
+        assert _count(out, Empty) == 1        # no second list to copy from
+        assert _agree(f, [1.0, 2.0])
+
+    def test_a_comprehension_with_no_target_still_mints_one(self):
+        """A ``return`` has no name to fill, so the accumulator stays."""
+        out = CompToLoop.apply(_one.ast, temp_id=NamedId('acc'))
+        assert re.search(r'\bacc\w* = fp\.empty', out.format())
+
+    def test_an_element_reading_the_target_keeps_its_accumulator(self):
+        """The loops overwrite ``ys`` before the element runs, so an element
+        that reads ``ys`` must read a list the fill would have destroyed."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = [1.0, 2.0]
+            ys = [ys[0] + x for x in xs]
+            return ys
+
+        out = CompToLoop.apply(f.ast, temp_id=NamedId('acc'))
+        assert re.search(r'\bacc\w* = fp\.empty', out.format())
+        assert _agree(f, [1.0, 2.0])
+
+    def test_a_nested_comprehension_allocates_into_its_slot(self):
+        """``[[...] for ...]`` lowers in two passes: the outer one turns the
+        inner into ``acc[i] = [...]``, and that slot is the place the inner's
+        loops write into.  An accumulator here would be a second name on the
+        list ``acc[i]`` holds."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(rows: list[fp.Real], cols: list[fp.Real]) -> list[list[fp.Real]]:
+            return [[c for c in cols] for _ in rows]
+
+        out = f.ast
+        for _ in range(3):
+            if not CompToLoop.sites(out):
+                break
+            out = CompToLoop.apply(out, temp_id=NamedId('acc'))
+        assert _count(out, ListComp) == 0
+        src = out.format()
+        # one accumulator only -- the outer, which is in a `return`; the inner
+        # allocates into the slot the outer's loop stores to
+        assert len(re.findall(r'\bacc\w* = fp\.empty', src)) == 1
+        assert re.search(r'\bacc\w*\[\w+\] = fp\.empty', src)
+        assert _agree(f, [1.0, 2.0], [3.0, 4.0])
+
+    def test_an_element_reading_the_slots_base_keeps_its_accumulator(self):
+        """The inner loops overwrite ``out[i]`` before the element runs, so an
+        element reading ``out`` must read a list the fill would have
+        destroyed."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[list[fp.Real]]:
+            out = fp.empty(len(xs), 1)
+            out[0][0] = 5.0
+            for i in range(len(xs)):
+                out[i] = [out[0][0] + x for x in xs]
+            return out
+
+        lowered = CompToLoop.apply(f.ast, temp_id=NamedId('acc'))
+        # a temporary of its own, not a fill of `out[i]`
+        assert re.search(r'\bacc\w* = fp\.empty', lowered.format())
+        assert _agree(f, [1.0, 2.0])
+
+    def test_a_comprehension_in_an_iterable_does_not_claim_the_target(self):
+        """Only the assignment's own right-hand side may fill ``zs``; the
+        comprehension inside its iterable is a different list."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
+            zs = [r[0] for r in [q for q in xss]]
+            return zs
+
+        out = CompToLoop.apply(f.ast)
+        assert _count(out, ListComp) == 0
+        assert _count(out, Empty) == 2      # one fills `zs`, one the inner list
+        assert _agree(f, [[1.0, 2.0], [3.0]])
+
+    def test_a_range_iterable_is_not_bound_to_a_temp(self):
+        """A name holds a *value*, so a `range` bound to one has to be
+        materialised -- and over a real bound there is no list to materialise,
+        only a counted loop.  Left inline, it stays fused."""
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> list[fp.Real]:
+            return [x + 1.0 for x in range(5)]
+
+        out = CompToLoop.apply(f.ast)
+        src = out.format()
+        assert not re.search(r'\bt\w* = range', src)
+        assert 'range(5)' in src
+        assert _agree(f)
+
+    def test_a_non_range_iterable_still_binds(self):
+        """The temp evaluates an iterable once and keeps the loop bound out of
+        reach of the source name; only a `range` over atoms needs neither."""
+        out = CompToLoop.apply(_one.ast)
+        assert re.search(r'\bt\w* = xs', out.format())
+
     def test_does_not_mutate_the_input(self):
         CompToLoop.apply(_one.ast)
         assert _count(_one.ast, ListComp) == 1
@@ -164,20 +270,53 @@ class TestCompToLoop:
 
 class TestDependentClauses:
     @pytest.mark.parametrize('f', ['_ragged', '_ragged3'])
-    def test_a_dependent_clause_list_is_left_alone(self, f):
+    def test_opting_out_leaves_a_dependent_clause_list_alone(self, f):
         """`[b for a in xss for b in a]` has length `sum(len(a) for a in xss)`,
-        not a product -- and `fp.empty` needs its length up front with no
-        `append` to fall back on.  So the pass leaves it exactly as it was."""
+        not a product, so lowering it costs a materialised row per outer
+        element.  A consumer that would rather have the comprehension says so,
+        and the pass leaves it exactly as it was."""
         func = {'_ragged': _ragged, '_ragged3': _ragged3}[f]
-        assert CompToLoop.sites(func.ast) == []
-        why = CompToLoop.refusals(func.ast)
+        assert CompToLoop.sites(func.ast, dependent=False) == []
+        why = CompToLoop.refusals(func.ast, dependent=False)
         assert len(why) == 1 and 'mentions an earlier' in why[0][1]
-        assert CompToLoop.apply(func.ast).is_equiv(func.ast)
+        assert CompToLoop.apply(func.ast, dependent=False).is_equiv(func.ast)
+
+    @pytest.mark.parametrize('f,args', [
+        ('_ragged', ([[1.0, 2.0], [], [3.0]],)),
+        ('_ragged3', ([[[1.0], [2.0, 3.0]], [], [[4.0]]],)),
+    ])
+    def test_a_dependent_clause_list_lowers_by_default(self, f, args):
+        """Builds the rows, adds up their lengths, then flattens -- the rewrite
+        ``derived-semantics.rst`` prescribes.  Only the *first* clause is peeled
+        per pass, so the rest become one nested comprehension that a later pass
+        takes."""
+        func = {'_ragged': _ragged, '_ragged3': _ragged3}[f]
+        ast = func.ast
+        for _ in range(8):
+            if not CompToLoop.sites(ast):
+                break
+            ast = CompToLoop.apply(ast)
+        assert _count(ast, ListComp) == 0
+        assert CompToLoop.refusals(ast) == []
+        got = _vals(Function(ast, runtime=func.runtime)(*args))
+        assert got == _vals(func(*args))
+
+    def test_opting_out_is_the_only_way_to_keep_one(self):
+        """A pass that leaves one comprehension behind leaves its caller the
+        whole comprehension problem, so declining has to be asked for."""
+        assert CompToLoop.sites(_ragged.ast) != []
+        assert CompToLoop.sites(_ragged.ast, dependent=False) == []
+
+    def test_dependent_binds_its_iterable_under_temp_id(self):
+        """The first clause's iterable is bound here like any other -- the rest
+        go into the nested comprehension and are bound when it is lowered."""
+        out = CompToLoop.apply(_ragged.ast, temp_id=NamedId('src'))
+        assert 'src = xss' in out.format()
 
     def test_left_alone_is_not_an_error(self):
-        """The pass never raises over a comprehension it cannot lower; a caller
-        that needs none left checks `refusals` itself."""
-        out = CompToLoop.apply(_ragged.ast)     # no exception
+        """The pass never raises over a comprehension it does not lower; a
+        caller that needs none left checks `refusals` itself."""
+        out = CompToLoop.apply(_ragged.ast, dependent=False)   # no exception
         assert _count(out, ListComp) == 1
 
     def test_dependence_is_a_free_variable_check_not_a_syntactic_one(self):
@@ -188,7 +327,7 @@ class TestDependentClauses:
         def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
             return [a[i] for a in xss for i in range(len(a))]
 
-        assert CompToLoop.sites(f.ast) == []
+        assert CompToLoop.sites(f.ast, dependent=False) == []
 
     def test_an_independent_clause_that_merely_looks_dependent_lowers(self):
         """`range(k)` reads an outer name, not an earlier target."""

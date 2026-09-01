@@ -2,6 +2,8 @@
 Phase 4a tests for the cpp emitter — list literals, indexing, ``len``.
 """
 
+import re
+
 import fpy2 as fp
 
 from fpy2.backend.cpp import CppCompiler
@@ -108,8 +110,15 @@ class TestListComp:
                 return ys[0]
 
         out = _compile_list_arg(f)
-        assert 'for (double x : xs) {' in out
-        assert '.push_back((x + static_cast<double>(1)));' in out
+        # the source is bound by reference, then indexed; the result is
+        # allocated at its length and filled by index, never grown
+        assert re.search(r'const auto& \w+ = xs;', out)
+        assert re.search(r'double x = \w+\[static_cast<size_t>\(\w+\)\];', out)
+        assert re.search(
+            r'ys\[static_cast<size_t>\(\w+\)\] = '
+            r'\(x \+ static_cast<double>\(1\)\);', out,
+        )
+        assert 'push_back' not in out
 
     def test_range_iterable(self):
         """``range(...)`` in a comprehension expands to a counter loop.
@@ -131,8 +140,10 @@ class TestListComp:
         assert 'for (int8_t i = 0; i < 5; ++i) {' in out
         # `range(5)` has a proven length, so the comprehension fills a
         # std::array through a running index rather than push_back
-        assert '] = (static_cast<int64_t>(i) * static_cast<int64_t>(i));' in out
+        assert 'uint8_t _t = (i * i);' in out
+        assert re.search(r'sq\[static_cast<size_t>\(\w+\)\] = _t;', out)
         assert 'std::array<uint8_t, 5>' in out  # {0,1,4,9,16} fits u8
+        assert 'push_back' not in out
 
     def test_range2_iterable(self):
         @fp.fpy
@@ -160,12 +171,16 @@ class TestListComp:
             f, ctx=fp.FP64,
             arg_types=[ListType(RealType(fp.FP64)), ListType(RealType(fp.FP64))],
         )
-        # Inner loop nested directly inside outer loop's body.
-        assert (
-            'for (double x : xs) {\n'
-            '        for (double y : ys) {'
-        ) in out
-        assert '.push_back((x * y));' in out
+        # Inner loop nested directly inside outer loop's body, filling one
+        # result allocated at the product of the two lengths.
+        assert re.search(
+            r'for \(double x : \w+\) \{\n'
+            r'        for \(double y : \w+\) \{', out,
+        )
+        assert re.search(
+            r'zs\[static_cast<size_t>\(\w+\)\] = \(x \* y\);', out,
+        )
+        assert 'push_back' not in out
 
     def test_tuple_binding_target(self):
         """Tuple-binding targets in the for-clause destructure each
@@ -188,7 +203,9 @@ class TestListComp:
         )
         assert 'std::get<0>' in out
         assert 'std::get<1>' in out
-        assert '.push_back((a + b));' in out
+        assert re.search(
+            r'ys\[static_cast<size_t>\(\w+\)\] = \(a \+ b\);', out,
+        )
 
 
 class TestListSlice:

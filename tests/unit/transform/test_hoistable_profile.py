@@ -38,13 +38,18 @@ one.
 """
 
 EXPECTED_RESIDUE_AFTER_COMP_TO_LOOP = {
-    _ITERABLE: 3, _ELEMENT: 2, _MESSAGE: 1, _COMPARE: 4,
+    _ELEMENT: 3, _ITERABLE: 2, _MESSAGE: 1, _COMPARE: 4,
 }
 """What is left once `CompToLoop` has run first, as a caller is told to.
 
-The comprehensions that pass declines -- a dependent clause list, whose length is
-a sum rather than a product, so `fp.empty` has nowhere to get it -- plus the
-positions nothing lowers at all.
+The comprehension positions here are not ones the pass declined -- it declines
+none.  They belong to the nested comprehension its dependent-clause rewrite
+*creates*: a clause list whose length is a sum is built a row at a time, and
+each row is a comprehension that gets its own statement slot only once the loop
+around it exists.  Running the pair again clears them, which is why the two are
+a fixpoint rather than a sequence.
+
+The other two are the positions nothing lowers at all.
 """
 
 EXPECTED_STATEMENTS = 831
