@@ -1193,6 +1193,36 @@ def round_is_identity(
     return unrounded <= AbstractFormat.from_format(ctx_fmt)
 
 
+def _join_set_and_format(
+    s: SetFormat, fmt: Format, widen: bool = False,
+) -> FormatBound:
+    """``SetFormat ⊔ Format``.
+
+    Every value fitting *fmt* makes *fmt* the join outright.  Where one does
+    not, the two still have a common bound short of the top: abstract the set
+    and union it with *fmt*'s abstraction, which is what ``Format ⊔ Format``
+    already does with its two operands.  Bailing straight to ``REAL_FORMAT``
+    threw that away, and threw it away asymmetrically -- the *arithmetic* path
+    has bridged a set into :class:`AbstractFormat` since
+    :func:`_setformat_to_abstract` was written for it, so a set met a format
+    one way and not the other.
+
+    ``REAL_FORMAT`` is left for what genuinely has no abstraction: a non-dyadic
+    value, which no :class:`AbstractFormat` can pin, and a format that is not
+    abstractable.  Under *widen* it is the answer regardless -- the union is the
+    path with the infinite ascending chains, which is what widening exists to
+    cut.
+    """
+    if _all_representable_in(s.values, fmt):
+        return fmt
+    if widen:
+        return REAL_FORMAT
+    af_s = _setformat_to_abstract(s)
+    if af_s is None or not isinstance(fmt, AbstractableFormat):
+        return REAL_FORMAT
+    return (af_s | AbstractFormat.from_format(fmt)).format()
+
+
 def _join_bounds(
     s1: FormatBound,
     s2: FormatBound,
@@ -1226,13 +1256,20 @@ def _join_bounds(
             # caller signals it's running a saturated loop fixpoint,
             # collapse to ``REAL_FORMAT`` so the next iteration falls
             # back to the abstract path and reaches a fixed point.
+            #
+            # Equal sets are already that fixed point: a join that does not
+            # ascend is no part of the chain widening exists to cut, and
+            # collapsing it discards a bound for nothing.  The
+            # ``Format(), Format()`` case below short-circuits identically.
+            if a == b:
+                return s1
             if widen:
                 return REAL_FORMAT
             return SetFormat(a | b)
-        case SetFormat(values=vals), Format() as fmt:
-            return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
-        case Format() as fmt, SetFormat(values=vals):
-            return fmt if _all_representable_in(vals, fmt) else REAL_FORMAT
+        case SetFormat() as s, Format() as fmt:
+            return _join_set_and_format(s, fmt, widen)
+        case Format() as fmt, SetFormat() as s:
+            return _join_set_and_format(s, fmt, widen)
         case Format(), Format():
             if s1 == s2:
                 return s1

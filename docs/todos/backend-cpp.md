@@ -182,7 +182,9 @@ top.
 ```
 Module
   → Specialize                 # one FuncDef per (callee, ctx, arg formats)
-  → Hoistable                  # a statement slot wherever one is needed
+  → fix(Hoistable ; CompToLoop)  # a statement slot wherever one is needed,
+                                 # and every comprehension but the ragged one
+                                 # lowered into the loop that is that slot
   → RoundElim                  # (optimize only)
   → ANF                        # statement form; every operand is an atom
   → DefineUse
@@ -541,65 +543,56 @@ docstring for the transform side.
 A short package README pointing at this file and listing the public surface
 (`CppCompiler.compile` / `headers` / `helpers` / `prelude`, exception types).
 
-## Considered: lowering comprehensions in the pipeline
+## Comprehension lowering: in the pipeline, except the ragged case
 
-`CompToLoop` (`fpy2/transform/comp_to_loop.py`) rewrites a comprehension into an
-`fp.empty` allocation plus a `for` loop. **Not wired into this pipeline, and the
-emitter keeps its own support**, measured both ways.
+`CppCompiler.specialize()` runs `fpy2.transform.Hoistable` and
+`fpy2.transform.CompToLoop` to a **fixpoint** (`_to_statement_form`), so every
+comprehension but one shape is an `fp.empty` allocation plus a `for` loop before
+the emitter sees it. Neither pass is a fixpoint alone: `Hoistable` seals a
+comprehension's element for want of a statement slot and `CompToLoop` makes the
+loop that *is* that slot; `CompToLoop` declines a comprehension in a ternary arm
+or a `while` condition for want of one, and `Hoistable` creates it. It
+terminates because `CompToLoop` reports an edit only where it lowered a
+comprehension and neither pass builds one.
 
-The emitter already performs the same lowering, and better: `_emit_list_comp_at`
-opens a list build, emits one `for` per clause, and appends, so it never needs a
-length up front — `_open_list_build` picks `std::array` filled through a running
-index where the length was proven, `std::vector` with `push_back` otherwise.
-That is why every clause shape compiles here, including the ragged flatten the
-FPy-level lowering leaves alone.
+Wiring it cost nothing: 202 corpus programs either way, 19 emitting differently.
+Getting there needed four fixes, in
+[comp-to-loop-wiring.md](comp-to-loop-wiring.md) — the lowering fills its
+assignment target rather than copying an `acc` into it, `_emit_empty` allows an
+allocation with fewer dimensions than the type's depth, a `range` iterable stays
+inline so it is not forced into a value position, and `_const_int` folds
+arithmetic over lengths it knows.
 
-```cpp
-// [x * 2 for x in xs], xs proven length 3
-std::array<double, 3> _tmp1{};  size_t _tmp2 = 0;
-for (double x : xs) { _tmp1[_tmp2++] = (x * 2); }
-```
-
-Lowering first is a regression today: a multi-clause comprehension loses its
-`std::array` for a `std::vector`, because `ArraySizeInfer._const_int` folds
-`len(xs)` but not arithmetic over it, so `fp.empty(len(xs) * len(ys))` has no
-static size — see
-[array-size-integer-exactness.md](array-size-integer-exactness.md). The
-single-clause form also leaves a dead `auto&& _tmp1 = xs.size();`.
-
-The witness needs *parameters*, which is why the corpus does not show it — its
-multi-clause comprehensions iterate literal ranges, and `_const_int`'s
-partial-eval path folds those whole. Over proven-length parameters the signature
-itself changes:
+**The dependent clause list stays with the emitter.** Where a clause's iterable
+reads an earlier clause's target the length is a sum rather than a product, and
+`fp.empty` has nowhere to get it. `_emit_list_comp_at` needs no length up front —
+`_open_list_build` picks `std::array` filled through a running index where the
+length was proven, `std::vector` with `push_back` otherwise — so the ragged
+flatten compiles here and nowhere else:
 
 ```cpp
-// [x + y for x in xs for y in ys], xs and ys proven 3 and 4
-std::array<double, 12> prod(const std::array<double, 3>&, const std::array<double, 4>&);
-std::vector<double>    prod(const std::array<double, 3>&, const std::array<double, 4>&);  // lowered
+// [x for xs in xss for x in xs]
+std::array<uint8_t, 4> _tmp1{};  size_t _tmp2 = 0;
+for (const std::array<uint8_t, 2>& xs : _tmp3)
+    for (uint8_t x : xs)
+        _tmp1[_tmp2++] = x;
 ```
 
-**Deleting the emitter's support** — so that only statements introduce
-identifiers, one less case for storage selection — buys ~90 lines
+`CompToLoop` *can* lower it — `apply(..., dependent=True)` builds the rows, sums
+their lengths and flattens, which is what derived-semantics prescribes — and this
+pipeline declines to ask. Measured, applying it loses `test_list_comp5`, the
+corpus's one dependent comprehension, and changes no other emission: the
+flatten's accumulator widens to `REAL_FORMAT` under the loop fixpoint. The
+reasoning behind the refusal outlives that defect, though. A one-pass flatten
+needs a **growable** list, and derived-semantics is explicit that no rule changes
+a list's length — so there is no `append` to rewrite into, and this is a fuse for
+a form FPy cannot state, like `_emit_scale_by_pow2` and `_for_header`.
+
+Deleting the emitter's support therefore stays out of reach: it is ~90 lines
 (`_visit_list_comp`, `_emit_list_comp_at`, `_open_comp_loop`, the `_emit_at`
-case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry) and costs one
-program class that compiles today: a dependent clause list. The other class this
-used to name — a comprehension in an `IfExpr` branch — is no longer a cost:
-`Hoistable` and `CompToLoop` run to a fixpoint clear it, along with a
-comprehension in a `while` condition and a nested one, since each pass creates
-the slot the other lacks. Deleting the emitter's support would still leave the
-invariant local — 22 files outside this backend still handle `ListComp`. The
-invariant is a language property, so the route to it is making `CompToLoop` total
-rather than lowering per-backend; what that needs is the last gap in
-[rounding-axes.md](rounding-axes.md).
-
-Were it ever wired in, the slot is after `ReduceFusion` — which pattern-matches a
-syntactic `ListComp` — and before `Specialize`, inside `optimize=True`. Measured
-there over the 219-function corpus it costs five `matrix` programs, and not for
-either reason above: `CompToLoop` emits `acc = fp.empty(n); ...; ys = acc`, so
-the result is held by two names and `UnboxMode.STRICT` refuses the second place.
-That is the blocker *Aggregate naming in ANF* has, from the other end; see
-*A total unfold for every surface form* in
-[backend-independence.md](backend-independence.md).
+case, two `storage_infer` match arms, one `_ALLOC_EXPRS` entry), and the only
+route to it is a lowering that does not lose a program. See *Phase 7* in
+[comp-to-loop-wiring.md](comp-to-loop-wiring.md) for what would flip that.
 
 ## Out of scope
 

@@ -590,51 +590,66 @@ it" is unblocked apart from the rows materialisation.
 
 ## Phase 7 — decide whether the pipeline applies it
 
-The two outcomes are mutually exclusive, and this is the whole of the choice:
-**a total `CompToLoop` leaves nothing for the emitter to fuse.** Applying the
-dependent rewrite means `_emit_list_comp_at` never runs, so keeping it would
-preserve dead code rather than the fast path.
+**Declined. No code change: `dependent` stays `False` in the pipeline and the
+emitter keeps lowering a dependent clause list itself.**
 
-*Apply it.* Every comprehension lowers, so `_visit_list_comp`,
-`_emit_list_comp_at`, `_open_comp_loop`, the `_emit_at` case, two `storage_infer`
-match arms and one `_ALLOC_EXPRS` entry — about 90 lines — come out. Only
-statements introduce identifiers, one less case for storage selection, and
-comprehension-freedom becomes a language property rather than one backend's
-invariant; 22 files outside this backend still handle `ListComp`.
+The two outcomes were always mutually exclusive — a total `CompToLoop` leaves
+nothing for the emitter to fuse — so this is the whole of the choice, and the
+measurement settles it.
 
-*Decline it.* The fixpoint skips dependent sites by policy and the emitter keeps
-handling them. `ANF.refusals` then still names those comprehensions, which is
-what it does today and is already tolerated — §1 records its refusals as
-"entirely comprehensions, with zero in the three positions the emitter cannot
-slot".
+| | |
+|---|---|
+| corpus comprehensions | 25 |
+| ...with a dependent clause | **1** (`test_list_comp5`) |
+| applying it | **−1 program**, 0 other emissions change |
 
-*What it costs to apply, measured.* The rows are real.
-`[x for xs in xss for x in xs]` today, against the same program hand-written in
-the lowered form:
+The one program is
+`[x for xs in [[1, 2], [3, 4]] for x in xs]`. The emitter compiles it to a fused
+flatten with no intermediate at all:
 
 ```c++
-// emitter                                  // lowered
-std::vector<double> _tmp1(0);               std::vector<std::vector<double>> _tmp1(0);
-for (const auto& xs : xss)                  for (const auto& xs : xss) { /* copy each row */ }
-    for (double x : xs)                     for (const auto& t3 : t1) t2 += t3.size();
-        _tmp1.push_back(x);                 std::vector<double> z(t2);
-                                            for (const auto& t3 : t1)
-                                                for (double t5 : t3) z[t4++] = t5;
+std::array<uint8_t, 4> _tmp1{};  size_t _tmp2 = 0;
+for (const std::array<uint8_t, 2>& xs : _tmp3)
+    for (uint8_t x : xs)
+        _tmp1[_tmp2++] = x;
 ```
 
-One pass and one allocation become a full copy of every row plus two more passes.
-**Recovering the fused form after lowering is a language change, not a pass.**
-The emitter's flatten needs a *growable* list, and derived-semantics is explicit
-that no rule changes a list's length, so there is no `append` to rewrite into —
-the same reason `_emit_scale_by_pow2` and `_for_header` stay
-([backend-independence.md](backend-independence.md)). So this is a real trade
-between ~90 lines and every ragged flatten, not a cleanup.
+Lowered, it does not compile: the flatten's accumulator widens to
+`REAL_FORMAT` under the loop fixpoint —
 
-*If it is applied*, delete behind a tripwire rather than by removal: a `ListComp`
-reaching the emitter should raise a `CppEmitError` naming a backend bug, the way
-`_emit_inline` does. Unreachable *and* impossible.
+```
+cannot store an unconstrained real value in any storage format
+```
 
-*Tests.* `tests/unit/backend/cpp/`, `tests/unit/analysis/test_storage_infer.py`.
+— which is *Precision is the acceptance test for an unfold* in
+[backend-independence.md](backend-independence.md) failing on the pass's own
+output. So applying it costs a program, changes nothing else, and does not even
+reach the ~90-line deletion it was for, since a lowering that loses a program
+cannot be the one the emitter defers to.
+
+**Beyond the measurement, the rule points the same way.** *What legitimately
+stays in the emitter is what FPy has no syntax for.* The fused flatten needs a
+**growable** list, and derived-semantics is explicit that no rule changes a
+list's length — there is no `append` to rewrite into. That is the same reason
+`_emit_scale_by_pow2` and `_for_header` stay.
+
+*What phase 6 bought anyway.* `CompToLoop` is now *capable* of the dependent
+case, which is what a consumer other than this backend needs — the scheduling
+language can ask for a comprehension-free program and get one. The cpp pipeline
+simply declines to, which is what the `dependent` flag is for.
+
+*What would flip this.* Two things, in order:
+
+1. `FormatInfer` giving a loop-carried integer accumulator a bound without
+   needing the trip count. Under `integer_ctx` the value is an unbounded
+   integer, which has a storage (`int64_t`) — the widen-mode fallback reaches
+   `REAL_FORMAT` before that is considered. This looks like a gap rather than a
+   necessity, and closing it would make the lowered form compile.
+2. Then the rows materialisation is the remaining cost, and only a growable
+   list or a deforestation pass removes it.
+
+Until (1), there is nothing to weigh: the option that would delete emitter code
+also deletes a working program.
 
 ## Not in scope
 

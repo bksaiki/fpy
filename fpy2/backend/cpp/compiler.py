@@ -115,13 +115,16 @@ def _to_statement_form(fd: FuncDef) -> FuncDef:
     ``Hoistable`` is idempotent -- its gates are its own postcondition -- so a
     run over its own output reports nothing to do.
 
-    What is left is what ``CompToLoop.refusals`` names: a clause whose iterable
-    reads an earlier clause's target, whose length is a sum rather than a
-    product.  The emitter lowers those itself.
+    ``dependent=True``, so a clause list whose length is a sum rather than a
+    product is lowered too and nothing is left: `CompToLoop.refusals` is empty
+    on the way out.  It costs a materialised row per outer element, which the
+    emitter's own flatten does not -- but the emitter's needs a growable list,
+    and FPy has no `append` to write one with, so keeping it means keeping a
+    comprehension in the language the backend sees.
     """
     while True:
         fd = Hoistable.apply(fd)
-        log = CompToLoop.apply_with_edits(fd)
+        log = CompToLoop.apply_with_edits(fd, dependent=True)
         if not log.edits:
             return fd
         fd = log.result
