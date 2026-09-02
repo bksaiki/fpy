@@ -13,7 +13,7 @@ import fpy2 as fp
 import fpy2.strategies as st
 from fpy2 import Module
 from fpy2.backend.cpp import CppCompileError, CppCompiler
-from fpy2.backend.cpp.unfold_round import UnfoldKind, sites
+from fpy2.backend.cpp.unfold_round import UnfoldKind, sites, unfold
 from fpy2.types import RealType
 
 
@@ -175,3 +175,105 @@ class TestWithin:
         assert [s.cursor for s in sites(f.ast, first.cursor.stmt())] == [
             first.cursor,
         ]
+
+
+class TestUnfoldArith:
+    """`unfold` on the arithmetic row: compute at a native intermediate and
+    re-round to the target."""
+
+    def _mono(self, func, ctx, arity=2):
+        return st.monomorphize(func, args=[RealType(ctx)] * arity)
+
+    def test_an_add_lands_under_a_native_context(self):
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        mono = self._mono(f, fp.FP16)
+        out = mono.with_ast(unfold(mono.ast))
+        # the arithmetic is gone from the sites; what is left is the rounding
+        # back to the target, which is the next row's work
+        assert _kinds(out) == [UnfoldKind.FLOAT_ROUND]
+        assert 'with fp.FP32:' in out.format()
+
+    def test_the_narrowest_admissible_intermediate_wins(self):
+        """`FP32` satisfies the add rule for a nearest `FP16` target, so `FP64`
+        is never reached: the intermediate's width is the arithmetic's
+        storage."""
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        mono = self._mono(f, fp.FP16)
+        assert 'fp.FP64' not in mono.with_ast(unfold(mono.ast)).format()
+
+    def test_a_directed_target_goes_through_exactness(self):
+        """The intermediate is always nearest, so a directed target reaches no
+        mode rule -- but the exactness rule takes any mode, and the exact sum of
+        two `FP16` values wants more than `FP32`'s 24 bits.  So it splits, at
+        `FP64`.
+        """
+        target = fp.IEEEContext(5, 16, fp.RoundingMode.RTZ)
+
+        @fp.fpy(ctx=target)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        mono = self._mono(f, target)
+        assert 'with fp.FP64:' in mono.with_ast(unfold(mono.ast)).format()
+
+    def test_a_directed_target_without_an_exact_rule_refuses(self):
+        """`div` has no exact result to hold and no rule under a directed
+        target, so it keeps its refusal."""
+        target = fp.IEEEContext(5, 16, fp.RoundingMode.RTZ)
+
+        @fp.fpy(ctx=target)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x / y
+
+        mono = self._mono(f, target)
+        assert unfold(mono.ast) is mono.ast
+
+    def test_every_site_is_taken(self):
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return (x + y) * (x - y) + x / y
+
+        mono = self._mono(f, fp.FP16)
+        assert _kinds(mono) == [UnfoldKind.ARITH] * 5
+        assert _kinds(mono.with_ast(unfold(mono.ast))) == [
+            UnfoldKind.FLOAT_ROUND,
+        ] * 5
+
+    def test_native_arithmetic_is_untouched(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        mono = self._mono(f, fp.FP64)
+        assert unfold(mono.ast) is mono.ast
+
+    def test_a_transcendental_keeps_its_refusal(self):
+        """The rules cover ``+ - * /`` and ``sqrt``, plus anything whose exact
+        result the intermediate holds.  `exp` under a nearest target is none of
+        those, so its refusal stands while the add beside it is taken."""
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return fp.exp(x) + y
+
+        mono = self._mono(f, fp.FP16)
+        assert _kinds(mono) == [UnfoldKind.ARITH] * 2
+        assert _kinds(mono.with_ast(unfold(mono.ast))) == [
+            UnfoldKind.ARITH, UnfoldKind.FLOAT_ROUND,
+        ]
+
+    def test_an_unpinned_operand_refuses_every_candidate(self):
+        """The per-operation rules hold for operands the *target* represents,
+        and an argument with no context of its own is finer than any format.
+        `Specialize` pins them in the compiler; a direct caller monomorphizes.
+        """
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        assert unfold(f.ast) is f.ast
