@@ -36,18 +36,21 @@ wait.
 Every pass `CppCompiler.specialize()` runs, classified by what happens when it is
 removed — each measured by monkeypatching it to the identity over the corpus:
 the 219 functions of `tests/infra/examples` plus the `core`, `eft`, `vector` and
-`matrix` libraries, compiled at FP64 through `CppCompiler.compile`, of which 202
-compile.
+`matrix` libraries, compiled at FP64 through `CppCompiler.compile`. 207 compile
+today; the ablations below were taken against the 202 that compiled when the
+audit was written.
 
 | pass | kind | corpus without it |
 |---|---|---|
 | `FreeVarElim` | **required** | −2 |
 | `Specialize` | **required** | not ablatable — the emitter has no template |
 | `Hoistable` | normalization | 202 (0), 20 emit differently |
+| `CompToLoop` | normalization | 202 (0) — §8 |
 | `RoundElim` | optimization | 202 (0), 53 emit differently |
 | `ZipElim` | optimization | 202 (0), 6 emit differently |
 | `EnumerateElim` | optimization | 202 (0), **0** emit differently |
 | `ReduceFusion` | optimization | 202 (0), **0** emit differently |
+| `Simplify` | optimization | −5, and +195 emitted lines — §9 |
 
 **Only two passes are required, and neither is a normal form.** `FreeVarElim`
 because codegen has no closure environment, `Specialize` because the emitter is
@@ -373,19 +376,6 @@ front *and* keep it where it is, and the second run is a no-op wherever the
 invariant survived. It costs 66 statements over the corpus (§1), so that run is
 close to free, and a difference between the two is a bug report about the pass
 in between.
-
-### Recovering from an unsupported rounding
-
-The strongest remaining item, and the only one a user would notice: today an
-unsupported rounding is a refusal whose message names the operator that fixes it;
-the proposal is to run it. Fully scoped in *Recovering from an unsupported
-rounding instead of refusing* in [backend-cpp.md](backend-cpp.md), including the
-`split_round` route for arithmetic and why the correct-double-rounding table is
-what makes it exact.
-
-It moves no line out of the backend, and it turns programs that refuse into
-programs that compile. Under the goal above that is a better trade than any
-section below.
 
 ### A name holding a list is a second place
 

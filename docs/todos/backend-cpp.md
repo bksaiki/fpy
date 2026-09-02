@@ -220,22 +220,15 @@ code. Headers track exactly what the emitted code uses.
 
 ### An operand emitting statements must not escape its guard
 
-`_emit_guarded_block` and `_visit_if_expr` interpolate an expression visitor into
-an f-string, so anything it writes through `writer.add_line` lands *before* the
-construct being guarded. Three shapes miscompiled that way — a `while` condition
-evaluated once, a ternary arm's assertion firing on the untaken path, an
-`and`/`or` tail past the short circuit — all in territory where FPy's semantics
-*are* defined, unlike the subscript case below.
+Closed twice over: `Hoistable` empties the positions where it could happen — a
+`while` condition, a ternary arm, an `and` / `or` tail — and `_emit_inline`
+refuses if one ever reaches the emitter anyway, comparing the writer's line count
+around the emission rather than guessing from the syntax. `test_statement_form.py`
+runs the three witnesses with both passes monkeypatched to the identity, since
+`Hoistable` alone would let every witness pass without witnessing anything.
 
-Closed twice over. `Hoistable` lowers each position before codegen, so none
-reaches the emitter; `_emit_inline` refuses if one ever does, comparing the
-writer's line count around the emission rather than guessing from the syntax.
-`test_statement_form.py` runs the three witnesses with both passes monkeypatched
-to the identity — both, because `Hoistable` alone empties the positions and every
-witness would pass without witnessing anything.
-
-An `if` / `if1` condition is deliberately not gated: it runs once, just before the
-branch, so its statements belong in the enclosing block — which is why
+An `if` / `if1` condition is deliberately *not* gated: it runs once, just before
+the branch, so its statements belong in the enclosing block — which is why
 `_emit_guarded_block` takes its condition already emitted.
 
 ### `Simplify` evaporates a static witness
@@ -355,8 +348,37 @@ It never costs a diagnosis: where the rewrite leaves a program that still
 fails, it fails further along than the original would have, so
 `compile_module` asks the unrewritten one and reports that.
 
-Full plan and what is left in
-[rounding-recovery.md](rounding-recovery.md).
+**No round-to-odd level**, though it is the mode `derive_intermediate` returns
+and the one Figure 8 covers for arbitrary reals — so it is accepted exactly
+where every native candidate is refused (`exp` anywhere, `div` / `sqrt` under a
+directed or saturating target). It gives `MPFloatContext(pmax=13, rm=RTO)`, and
+no native mode is RTO, so the split moves the site rather than removing it;
+splitting *that* one needs RTO over RTO, which widens by a bit each time, or
+exactness, which those three operations have not got. It becomes reachable if an
+unbounded RTO operation becomes emittable — the bit-reinterpreting soft-float
+direction in [native-lowering-roadmap.md](native-lowering-roadmap.md).
+
+What is left:
+
+- **What `DOUBLE_ROUND` costs** is unmeasured: `FloatToFixed` states a
+  value-class branch per site, so an `FP16` add is 47 emitted lines and a
+  two-operation polynomial 135. The corpus does not exercise it, the flag being
+  off there.
+- **A user-written fixed-point target never benefits.** The row is reachable
+  only from inside the flow, where `FloatToFixed` produces a bounded context at
+  a known position over an operand `UnfoldSpecial` has classified. A
+  hand-written one fails for two reasons outside this work: `UnfoldOverflow`
+  states no rule for `WRAP` or for an unbounded format, and `RescaleFixed`'s
+  shift lands under a context the storage ladder has no entry for — the same gap
+  that makes `MPFixedContext(-1)` refuse with no site at all.
+- **Arithmetic needs its operands in the target format.** The per-operation
+  rules hold for operands the target represents, so `x + y` under `FP16` wants
+  `FP16` arguments; a program holding `FP32` values and rounding to `FP16` per
+  operation is the natural shape and reaches no rule. What it needs is a rule
+  quantified over the operand format.
+- **A transcendental has no rule at all.** `exp` keeps its refusal under a
+  nearest target; the only remaining route is exactness, which needs a
+  correctly-rounded implementation to compare against.
 
 ### A narrower value meeting a wider place
 
@@ -545,35 +567,11 @@ A short package README pointing at this file and listing the public surface
 
 ## Comprehension lowering: in the pipeline
 
-`CppCompiler.specialize()` runs `fpy2.transform.Hoistable` and
-`fpy2.transform.CompToLoop` to a **fixpoint** (`_to_statement_form`), so every
+`_to_statement_form` runs `Hoistable` and `CompToLoop` to a fixpoint, so every
 comprehension is an `fp.empty` allocation plus a `for` loop before the emitter
-sees one. Neither pass is a fixpoint alone: `Hoistable` seals a comprehension's
-element for want of a statement slot and `CompToLoop` makes the loop that *is*
-that slot; `CompToLoop` declines a comprehension in a ternary arm or a `while`
-condition for want of one, and `Hoistable` creates it. It terminates because
-`CompToLoop` reports an edit only where it lowered a comprehension and neither
-pass builds one.
-
-Wiring it cost nothing: 202 corpus programs either way.
-
-**Including the dependent clause list**, where a clause's iterable reads an
-earlier clause's target and the length is a sum rather than a product.
-`CompToLoop` builds the rows, adds up their lengths and flattens — the rewrite
-`derived-semantics.rst` prescribes. It costs a materialised row per outer
-element, which the emitter's own flatten does not, and that was the argument for
-keeping the emitter's: `_open_list_build` needs no length up front, picking
-`std::array` filled through a running index where the length was proven and
-`std::vector` with `push_back` otherwise. What settles it the other way is that
-the two cannot coexist — a total `CompToLoop` leaves nothing for the emitter to
-fuse — and a language whose backends each carry their own comprehension lowering
-is the thing this was for.
-
-So `_visit_list_comp`, `_emit_list_comp_at` and `_open_comp_loop` are now dead,
-along with the `_emit_at` case, two `storage_infer` match arms and one
-`_ALLOC_EXPRS` entry — about 90 lines. They should come out behind a tripwire, a
-`ListComp` reaching the emitter raising a `CppEmitError` that names a backend
-bug, rather than by removal.
+sees one, and `_visit_list_comp` is a tripwire that names a backend bug. Why the
+lowering is total, and what it cost, is §8 of
+[backend-independence.md](backend-independence.md).
 
 ## Out of scope
 

@@ -73,34 +73,11 @@ appears, or if `float_to_fixed`'s bounded path starts costing maintenance.
 
 ## Smaller questions in the same area
 
-- **Resolved: the edge rules are standalone operators, not knobs.**
-  `unfold_special` states NaN, the infinities, and the operand's zero as
-  branches — for a float source as well as a fixed-point one, since stating a
-  special needs only a known context while *shedding* its rule from the format
-  needs a format that states it as a parameter; `unfold_neg_zero` states the sign of a zero *result*; and
-  `rescale_fixed`'s `fold_specials` is gone — a format with a finite
-  `nan_value`/`inf_value` is declined until `unfold_special` has taken the
-  rule out of the context. The asymmetry that kept them separate: NaN and
-  the infinities are *operand*-driven (test `x` before the rounding), while
-  the sign of zero is *result*-driven (any tiny negative rounds to zero, so
-  the rounding has to happen before the sign can be restored). The full
-  fixed-point lowering is now a composition of one-idea operators:
-  `unfold_special → unfold_neg_zero → unfold_overflow → rescale_fixed`.
-
-- **Resolved: composition carries a location.** `where` counted candidate blocks,
-  and these operators change how many there are — unfolding overflow turns one
-  rounding into several statements — so a later pass selecting "the *n*th
-  candidate" saw a different structure than the one the index was chosen against.
-  Once the first operator had rewritten at a program point, every later operator
-  should have been aimed at *that* point, and instead each re-scanned the whole
-  program with an index that no longer meant what it did. A composed operator was
-  therefore honest only for the whole program at once.
-
-  `where` now also takes a cursor, which the strategies forward across each step,
-  so one location aims a whole sequence: `_lower_at` in
-  `tests/unit/backend/cpp/test_lowered_roundtrip.py` runs
-  `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed` at one
-  rounding of a two-rounding program and leaves the other untouched. See
-  [scheduling-language.md](scheduling-language.md) item 3; what remains for a
-  composed *operator* is the recipe itself, gap 2 of
-  [native-lowering-roadmap.md](native-lowering-roadmap.md).
+Two are resolved and their reasons live elsewhere. **The edge rules are
+standalone operators, not knobs** — the asymmetry that keeps them separate is
+that NaN and the infinities are *operand*-driven while the sign of a zero is
+*result*-driven, so `unfold_special` tests `x` before the rounding and
+`unfold_neg_zero` restores the sign after it. And **composition carries a
+location**: `where` takes a cursor the strategies forward, so one point aims a
+whole sequence (item 3 of
+[scheduling-language.md](scheduling-language.md)).

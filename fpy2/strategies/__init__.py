@@ -31,6 +31,7 @@ from .free_var import close
 from .func_inline import inline
 from .hoistable import to_hoistable
 from .iter_elim import elim_iter
+from .iter_unfold import unfold_enumerate, unfold_zip
 from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
 from .mono import monomorphize
@@ -75,9 +76,11 @@ __all__ = [
     'split_round',
     'to_anf',
     'to_hoistable',
+    'unfold_enumerate',
     'unfold_neg_zero',
     'unfold_overflow',
     'unfold_special',
+    'unfold_zip',
     'unroll_for',
     'unroll_while',
 ]

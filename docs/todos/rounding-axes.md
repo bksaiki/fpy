@@ -16,8 +16,7 @@ is Correct*: format containment is §5.1, the correct-double-rounding table is
 
 ## Where we are
 
-The paper's analysis half is **already built**, as
-`fpy2/analysis/format_infer`:
+The paper's analysis half is **already built**, as `fpy2/analysis/format_infer`:
 
 | Paper | FPy |
 |---|---|
@@ -26,13 +25,13 @@ The paper's analysis half is **already built**, as
 | 𝒜-Contains-Prec and 𝒜-Contains-Sub (Fig. 7) | `AbstractFormat._is_contained_in` — condition 3's fallback (`pos_bound <= 2^(exp + other.prec)`) *is* 𝒜-Contains-Sub |
 | Format inference (§6.1) | `FormatInfer` / `FormatAnalysis` (`format_infer/analysis.py`), including loop fixpoints, call edges, and branch refinement |
 | Canonicalization (§6.2, left to right) | `RoundElim` / `elim_round` — see [round-elim.md](round-elim.md) |
-| Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` — **done**, see gap 1 below |
-| Correct double rounding (§5.2, Fig. 8) | `double_round_ok` (`format_infer/double_round.py`) — **done** |
-| Splitting one rounding into two (§5) | `SplitRound` / `split_round` — **done**, see gap 3 below |
-| *Beyond the paper:* per-operation double rounding (Roux 2014) | `double_round_op_ok` — **done**, see [Operation-specific rules](#operation-specific-rules-roux-2014--done) |
+| Finitization (§6.2, right to left) | `RoundInsert` / `insert_round` |
+| Correct double rounding (§5.2, Fig. 8) | `double_round_ok` (`format_infer/double_round.py`) |
+| Splitting one rounding into two (§5) | `SplitRound` / `split_round` |
+| *Beyond the paper:* per-operation double rounding (Roux 2014) | `double_round_op_ok` |
 
-So two of the paper's four rewrites are implemented, and the analysis the other
-two need is in place and in use.
+Three of the paper's four rewrites are implemented; `merge_round` is the one
+left.
 
 Two places where FPy is *ahead* of the paper, and which every new operator has
 to respect:
@@ -123,257 +122,36 @@ boundary. Above it, the work is already done.
 
 ## The gaps, and what closed them
 
-### 1. `insert_round` — **done**
+### What closed, and where it lives
 
-**Done: the result half.** `insert_round(func, ctx, where=None)` gives an exact
-operation a format, verified by `round_is_identity` — the same helper `RoundElim`
-decides with, so nothing in the number tower changed.
+Five gaps, all done; the source of truth for each is the code and the Lean
+development, not this page.
 
-Its candidates are **operations**, not blocks, and the rewrite mirrors
-`RoundElim._hoist`. A context applies to every operation in its block, so an
-operation is given a format of its own by being lifted into a block alone: each
-operand that is not already a `Var` is bound under the original scope first, and
-because contexts nest the new block goes *inside* the one it found rather than
-splitting it.
+| gap | where |
+|---|---|
+| `insert_round` — give an exact operation a format | `transform/round_insert.py`, `strategies/round_insert.py` |
+| Rounding-mode plumbing — `Context.rounding_mode()`, `AbstractFormat.next_bound()` | `number/context/`, `analysis/format_infer/` |
+| `split_round` — expand one rounding into two | `transform/split_round.py`, `strategies/round_split.py` |
+| Figure 8's eight rules over nine mode pairs | `format_infer/double_round.py`; [Mpfx/DoubleRounding.lean](https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean) |
+| Bounded intermediates, and Roux 2014's per-operation rules | `SplitRound._within`, `double_round_op_ok` |
 
-```python
-with fp.REAL:                     with fp.REAL:
-    t = (x * x) + (y * y)   ->        with fp.FP64:
-                                          _t = (x * x)
-                                      t = _t + (y * y)
-```
+Together the last two mean all five basic operations split **FP32 → FP64** and
+**FP16 → FP32** under plain RNE, which Figure 8 alone admits at no width. The
+three conditions that are load-bearing rather than cautious — nearest-only,
+every operand representable in the *target*, and no mixed exponent family for
+`/` and `sqrt` — are recorded with the measured consequence of dropping each in
+the `fpy2/transform/split_round.py` module docstring.
 
-Per-operation granularity is what makes this usable, and it is sound for a
-reason worth stating plainly: **the inserted rounding is verified to be an
-identity, so it changes no value.** An operation reading the result sees what it
-would have seen, so operations can be given formats one at a time and in any
-order — including one whose result a later exact operation consumes. There is no
-dependence hazard, and no all-or-nothing per block.
+Two follow-ons left behind:
 
-It declines a stochastic target, an unbounded operand, and an operation too wide
-for the target. An operation that already has a format is not a candidate at
-all, so the listing no longer carries sites that always refuse.
-
-**Nothing remains.** An operand-sites mode was planned — wrapping each operand
-in a cast to the target, giving `mul_R(E5M2, E5M2) -> mul_FP32(rnd_FP32(a),
-rnd_FP32(b))` for §8 — and dropped: see the widening note above. The rewrite is
-a no-op in FPy's semantics.
-
-**The search variant.** `finitize(func, where, available=[...])` picks the
-smallest format from a list of environment-supported formats that contains the
-inferred format. That is §6.3's search, and it is what a user actually reaches
-for; `insert_round` with an explicit context is its primitive. Inferring the
-context instead is not worth it: reading the enclosing scope only reproduces
-`elim_round`'s own choice, and deriving a format from the inferred bound (via
-`AbstractFormat.format()`) yields formats no hardware has. It belongs with the
-recipes, not the operators — gap 2 of
-[native-lowering-roadmap.md](native-lowering-roadmap.md) and item 7 of
-[scheduling-language.md](scheduling-language.md) are the same shape of
-question.
-
-### 2. Rounding-mode plumbing — **done**
-
-- **`Context.rounding_mode() -> RoundingMode | None`**, abstract, implemented
-  across every concrete context; `RealContext` answers `None`. Note it has no
-  `rm` attribute at all, so a base implementation reading `self.rm` would have
-  raised.
-- **`AbstractFormat.next_bound()`**, Figure 8's `next(b)`, taking **no**
-  precision argument: the proofs call `boundAfterNext` on a format and read the
-  grid off the receiver, so a caller extends first and asks second. A `prec=`
-  parameter would also have been inert — `next_up` normalizes to *at most* `p`
-  bits, so raising `p` without lowering `n` cannot refine the grid, and the
-  RTO-to-nearest premise would have silently used the target's own grid.
-- Found on the way: `with_prec_offset`, `with_exp_offset` and
-  `with_bounds_scale` all dropped `has_neg_zero` when rebuilding, and the
-  constructor defaults it to `False`. None of the three had a caller, so nothing
-  had noticed. Fixed and pinned.
-
-What it was blocking, for the record:
-
-- **No rounding mode on the base `Context`.** `Context` exposes `format()`,
-  `round_params()`, `is_stochastic()`, `with_params()`, `round()`, and
-  `round_at()`. Concrete contexts carry `.rm: RoundingMode`, but nothing is
-  lifted. Figure 8 dispatches on the *pair* of modes, so this needs either an
-  abstract `rm` accessor alongside `format()`, or a probe that returns `None`
-  for a context with no single mode. `RoundingMode` in `fpy2/number/round.py`
-  already includes `RTO`, so no new modes are needed.
-- **No `next(b)` on `AbstractFormat`.** Every Figure 8 premise bumps the bound
-  to the next representable value. `RealFloat.next_up` exists
-  (`fpy2/number/number/reals.py`), so this is a wrapper — but note that
-  RND-RTO-RNE takes `next` at precision `p1+1, exp1-1` rather than at the
-  target's own precision, so the wrapper has to take the precision as a
-  parameter.
-
-`with_prec_offset` and `with_exp_offset` already exist on `AbstractFormat`, and
-they are exactly the `p+k, exp-k` knobs the table needs.
-
-### 3. `split_round` — **done**
-
-Expand one correctly-rounded operation into two roundings. This is the operator
-§5 exists to justify, and §5.3's modular-library recipe as a single schedule
-step: compute in high precision under RTO, re-round to the target under
-whatever mode the target wants.
-
-`SplitRound` in `fpy2/transform/split_round.py`, `split_round(func, ctx, where)`
-in `fpy2/strategies/`. `ctx` is the **intermediate**; the target is read from
-the program. Sites are the operations that already round — the complement of
-`insert_round`'s. `derive_intermediate` computes a suitable intermediate, and
-fixed-point ones work, so the concern below about `float_to_fixed` overlap did
-not materialize. Explicit `Round` / `Cast` nodes are deliberately not sites:
-splitting a rounding is `merge_round`'s inverse.
-
-**Any real-valued operation, not just arithmetic.** The rules quantify over an
-arbitrary real, so what produced it does not matter: `sqrt`, `fma`, `pow`,
-`atan2`, the transcendentals and even `pi` split exactly as a multiply does.
-Measured: of the 33 real-valued operations probed, every one that rounds its
-result to the active context splits with no disagreement. The exceptions are
-`min` / `max`, which *select* an argument and hand it back with its own format
-rather than rounding — so there is no rounding there to split, and admitting
-them was wrong on 146 of 154 inputs. `operands` / `rebuild` in
-`transform/utils.py` are generic over arity for this reason.
-
-`insert_round` still has the narrow arithmetic-only candidate set, and the same
-argument applies to it: a rounding is an identity for any real-valued `f`.
-Widening it is the obvious follow-on.
-
-Two things worth knowing. The rewrite emits an explicit `round` in the
-*enclosing* block, because an assignment rounds nothing in FPy — that is what
-applies `rm1`, and it is asserted structurally rather than assumed. And it is
-**not idempotent**: the operation lands under an RTO intermediate and RTO over
-RTO is itself admissible, so a second application splits again. One pass
-terminates; a schedule wanting a fixpoint has to bound it.
-
-**The source of truth is the Lean development**, not this table:
-[Mpfx/DoubleRounding.lean](https://github.com/bksaiki/mpfx-lean/blob/main/Mpfx/DoubleRounding.lean).
-An earlier revision of this page transcribed Figure 8 four ways that the proofs
-do not support; the rows below follow the theorems, each named.
-
-Following the paper's naming, `rm2` is the intermediate and `rm1` the final;
-`F1 = 𝒜(p1, exp1, b1)` is the target and `F2` the intermediate. `extend k` is
-precision `+k` with exponent `-k`, and `next_F(b)` is the successor of `b` *in
-`F`'s own grid* — which grid is the part worth reading twice, since the two
-RTO-to-nearest premises differ only in that.
-
-| final `rm1` | intermediate `rm2` | premise | theorem |
-|---|---|---|---|
-| RTZ | RTZ | `F1` ⊆ `F2` | `rndRTZ_RTZ` |
-| RAZ | RAZ | `F1` ⊆ `F2` | `rndRAZ_RAZ` |
-| RTP | RTP | `F1` ⊆ `F2` | `rndRTP_RTP` |
-| RTN | RTN | `F1` ⊆ `F2` | `rndRTN_RTN` |
-| RTO | RTO | `F1` ⊆ `F2` **and** `p2 >= 2` | `rndRTO_RTO` |
-| RTZ | RTO | `𝒜(p1+1, exp1-1, next_{F1}(b1))` ⊆ `F2` | `rndRTO_RTZ` |
-| RAZ | RTO | `𝒜(p1+1, exp1-1, next_{F1}(b1))` ⊆ `F2` | `rndRTO_RAZ` |
-| RNE **or** RNA | RTO | `𝒜(p1+2, exp1-2, next_{extend(F1,1)}(b1))` ⊆ `F2` | `rndRTO_RN` |
-
-Eight rules over nine mode pairs. Where this page used to differ:
-
-- **No `next(b)` bump on the same-mode rules.** `rndRTZ_RTZ` and `rndRTO_RTO`
-  take plain containment, exactly as RAZ-RAZ does. The RTZ/RAZ asymmetry this
-  page called "a detail that looks like a typo and is not" is not in the proofs.
-- **RTP-RTP and RTN-RTN are admitted** on plain containment. The sign branching
-  is *internal* to the proofs — `rndRTP_RTP` splits into RAZ for `x > 0` and RTZ
-  for `x <= 0` — so the pair is sound unconditionally and needs no `value_class`
-  refinement.
-- **RNA is admitted as a final mode.** `rndRTO_RN` is parametric in
-  `tb : TieBreak`, covering `.toEven` and `.awayZero`; RNA declines only as an
-  *intermediate*.
-- **`p2 >= 2` is explicit only for RTO-RTO.** For the RTO-to-directed and
-  RTO-to-nearest rules the proofs *derive* it from the bound-aware containment,
-  so an implementation should not re-check it there.
-
-Still unsound, and the ones to pin negatively: **RNE-RNE** — no rule exists, it
-is the last row of the paper's Table 2, and it is the pairing every `fp.FP*`
-context falls into by default — plus **RNA or RTE as an intermediate**, and
-**stochastic** on either side.
-
-The interesting call is `via=None`, which *derives* the tightest sound RTO
-intermediate rather than asking the user for one:
-
-```python
-k = 2 if rm1 is RoundingMode.RNE else 1
-target.with_prec_offset(k).with_exp_offset(-k)   # plus the next(b1) bump
-```
-
-With an explicit `via`, the operator instead checks the user's chosen
-intermediate against the table. Fixed-point intermediates should be admissible
-— §8's MPFX accumulator is `𝒜(inf, -32, 2^96)`, and the premises are
-containment checks on 𝒜 that do not care which family the format comes from —
-but that overlaps `float_to_fixed` and `rescale_fixed`, so it needs thought
-rather than an assumption.
-
-### 4. Bounded intermediates for `split_round` — **done**
-
-The premises are containment checks on `A`, which says what is representable and
-nothing about what happens beyond it — so a bounded intermediate has an overflow
-of its own that they cannot see. Measured on an FP32 target, products straddling
-its maxval:
-
-| target | intermediate bound | overflow mode | wrong |
-|---|---|---|---|
-| RNE / RNA / RAZ | `next(b1)` | either | 0 |
-| RTZ | `next(b1)` | saturating | 0 |
-| RTZ | `next(b1)` | overflowing | **175** |
-| RTO | `b1` (the premise *passes*) | saturating | **176** |
-| RTO | `b1` | overflowing | **1** |
-| any | FP64-wide | either | 0 |
-
-Two things to read off this. The failure is the *boundary*, not the width: a
-bounded intermediate goes wrong only where its bound sits close to the target's.
-And no single overflow mode is right — a target that clamps (RTZ) needs the
-intermediate not to overflow, one that overflows (RTO) needs it to.
-
-**The fix is a proof, not a mode.** `derive_intermediate` returns an *unbounded*
-intermediate, which cannot overflow at all, so the only rounding that can is the
-target's. A *bounded* one is admitted where format inference proves the
-operation cannot reach its range: `SplitRound._within` recomputes the operation's
-**unrounded** result with `exact_binop` / `exact_unop` over the operand bounds
-and requires it to fit. The unrounded part is load-bearing — `by_expr` holds the
-result *after* the target's rounding, which lies inside the target's format by
-construction and would prove nothing.
-
-That admits the useful case (an FP64-RTO intermediate for an FP32 target with
-FP32 arguments — the exact product cannot leave FP64) and declines the tight
-bounds that were wrong. Verified across five target modes × two bounds × two
-overflow modes: **no unsound admission**, and every admitted pair exact on
-overflowing, subnormal and normal inputs.
-
-Deliberately conservative in one place: a tight bounded intermediate that
-saturates *is* exact for an RTZ target, and is declined anyway. Admitting it
-needs the overflow boundary per mode pair, which Figure 8 does not cover — its
-theorems are `RoundsFinite`.
-
-### Operation-specific rules (Roux 2014) — **done**
-
-Figure 8 quantifies over every real, and pays for it: nine of sixty-four mode
-pairs, with round-to-nearest over round-to-nearest in none of them at any width.
-Every `fp.FP*` context is RNE, so before this no format the machine actually has
-could serve as an intermediate — only a synthetic round-to-odd one from
-`derive_intermediate`.
-
-Roux 2014, *Innocuous Double Rounding of Basic Arithmetic Operations*
-(`Mpfx/DoubleRounding{Add,Mul,Div,Sqrt}.lean`), holds only for the *results of
-one operation* but admits nearest over nearest. Two rules:
-
-- **The exact intermediate** (`rndExact`, and all of Roux's multiplication
-  theorem): if the intermediate represents the exact result, rounding to it is
-  the identity, so any mode pair works and the bounds do not enter. FPy's format
-  inference makes this stronger than the paper's closed form, reading the
-  operands' real formats — an FP16 product needs 22 digits, not 48.
-- **The operation's own rule** in `double_round_op_ok`: `+`/`-` at
-  p₂ ≥ 2p₁+1, `/` at 2p₁ (tight — Remark 30), `sqrt` at 2p₁+2, nearest to
-  nearest with independent tie-breaks.
-
-Result: all five basic operations split **FP32 → FP64** and **FP16 → FP32** under
-plain RNE. `derive_intermediate(target, op)` sizes one.
-
-Three conditions are load-bearing rather than cautious, and the
-`fpy2/transform/split_round.py` module docstring records why with the measured
-consequence of dropping each: nearest-only; every operand representable in the
-target (FPy's signature is `op: Fx → Fy → F1`, so unlike the paper this needs
-checking, and against F₁ rather than F₂); and no mixed exponent family for `/`
-and `sqrt`. A bounded *target* needs no gate — a bounded rounding is the
-unbounded one plus a bound test reading only its result — while a bounded
-*intermediate* still does, its test sitting between the two roundings.
+- **`insert_round` still has the arithmetic-only candidate set.** `split_round`
+  widened to any real-valued operation, since the rules quantify over an
+  arbitrary real and what produced it does not matter; the same argument applies
+  here. `min` / `max` stay out — they *select* an argument and hand it back with
+  its own format, so there is no rounding to give or split.
+- **A tight bounded intermediate that saturates is declined though it is
+  exact** for an RTZ target. Admitting it needs the overflow boundary per mode
+  pair, which Figure 8 does not cover: its theorems are `RoundsFinite`.
 
 ### 5. `merge_round`
 
@@ -441,78 +219,24 @@ Three positions, in the order they were closed:
 
 ## Order of work
 
-1. ~~**`insert_round`**~~ — **done.** `RoundInsert` in `fpy2/transform/`,
-   `insert_round` in `fpy2/strategies/`, registered in `sites.py`'s `_SITES`,
-   tested in `tests/unit/transform/test_round_insert.py` and
-   `tests/unit/strategies/test_insert_round.py`.
-2. ~~**Widening mode**~~ — **dropped**, not deferred: a widening cast is a
-   verified identity, so it says nothing in FPy. See the widening note under
-   [The two axes](#the-two-axes).
-3. ~~**Plumbing** (gap 2)~~ — **done.** `Context.rounding_mode()` and
-   `AbstractFormat.next_bound()`, tested in `tests/unit/number/test_context.py`
-   and `tests/unit/analysis/test_format.py`.
-4. ~~**`double_round_ok` and `split_round`**~~ — **done.** The predicate and
-   `derive_intermediate` in `format_infer/double_round.py`, tested against the
-   Lean theorems in `tests/unit/analysis/test_double_round.py`; the operator in
-   `fpy2/transform/split_round.py` and `fpy2/strategies/round_split.py`.
-5. ~~**Bounded intermediates for `split_round`**~~ — **done.** A no-overflow
-   proof from `format_info` in `SplitRound._within`.
-6. ~~**Operation-specific double rounding**~~ — **done.** Roux 2014, from
-   `Mpfx/DoubleRounding{Add,Mul,Div,Sqrt}.lean`. Figure 8 refuses
-   round-to-nearest over round-to-nearest at every width, and every `fp.FP*`
-   context is round-to-nearest, so before this no *hardware* format could serve
-   as an intermediate — only a synthetic round-to-odd one. Two rules now do it:
+Items 1-6 are done — see *What closed, and where it lives*. Widening mode was
+**dropped** rather than deferred: a widening cast is a verified identity, so it
+says nothing in FPy (see the widening note under [The two
+axes](#the-two-axes)). What is left:
 
-   - **The exact intermediate** (`rndExact`, which is also all of Roux's
-     multiplication theorem): if the intermediate represents the operation's
-     exact result, rounding to it is the identity, so any mode pair works and
-     the bounds do not enter. FPy's format inference makes this stronger than the
-     paper's closed form, since it reads the operands' real formats — an FP16
-     product needs 22 digits, not 48.
-   - **The operation's own rule** for `+`/`-` (p₂ ≥ 2p₁+1), `/` (2p₁) and `sqrt`
-     (2p₁+2), nearest-to-nearest, in `double_round_op_ok`.
-
-   Together: all five ops split **FP32 → FP64** and **FP16 → FP32** under plain
-   RNE. `derive_intermediate(target, op)` sizes one.
-
-   The firing conditions and, more importantly, *why each one is load-bearing*
-   are documented in the `fpy2/transform/split_round.py` module docstring — the
-   three that are not conservatism are nearest-only, operands representable in
-   the target (FPy's signature is `op: Fx → Fy → F1`, so this needs checking),
-   and no mixed exponent family for `/` and `sqrt`.
-7. **`merge_round`** — reuses *all three* of the predicates above, since merging
+1. **`merge_round`** — reuses *all three* of the predicates above, since merging
    is splitting read right-to-left: the shape `split_round` emits is exactly what
    it should collapse, so the Roux rules let the two undo each other. Survey how
    a double rounding is spelled first (nested `with`, explicit `Round`, `Cast`,
    an assignment across a scope boundary) — the predicate is the easy half. The
    only operator left on the page.
-8. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
+2. **The §6.3 recipe** — canonicalize (`elim_round` to fixpoint, then
    `merge_round`), then finitize (`insert_round`, `split_round` against an
    environment's format list). A documented composition and a worked example,
    not a new operator; the MX dot product of §2 and §8 is the example.
 
 ## Open questions
 
-- **Resolved: alternating `insert_round` and `elim_round` diverges, and the
-  step-6 recipe needs explicit fuel.** Neither guard bounds the composition, and
-  it does not cycle either — each round trip wraps the operation in one more
-  block, because *both* operators hoist into a nested block rather than
-  replacing the scope they found. Pinned by
-  `test_alternating_the_two_does_not_converge`.
-
-  **Fixed, in `DeadCodeEliminate`.** It now drops a `with` block that installs
-  the context already in force, and one that no operation under it reads at all
-  — the tower is all of the latter but its innermost block, which then matches
-  the function's own context. Measured on the four-round trip: 8 blocks to 0,
-  same values. So `simplify` does now converge the composition, and a recipe
-  that alternates freely wants it in between. The operators themselves are
-  unchanged: each still hoists into a fresh block, which is what
-  `test_alternating_the_two_does_not_converge` pins.
-
-  Where `elim_round` *declines* to hoist — an unbounded scope, refused by the
-  strictly-tighter guard — `insert_round` has no site at all, so the pair is a
-  no-op rather than an inverse. Pinned by
-  `test_an_unbounded_scope_leaves_nothing_to_insert`.
 - **`split_round` is not idempotent, by construction.** The operation lands
   under an RTO intermediate, and RTO over RTO is admissible, so each pass splits
   again -- one more block every time, values unchanged. That is the same shape as

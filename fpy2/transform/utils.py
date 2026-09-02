@@ -585,7 +585,55 @@ class SiteRewriter(DefaultTransformVisitor):
         self.dirty_exprs.append(StmtPath(self._paths[id(block)], pos))
 
 
-class RoundingRewriter(SiteRewriter):
+class PreambleScoped(SiteRewriter):
+    """A rewrite that emits statements before the one it is visiting.
+
+    `_visit_block` hands each statement visitor the list to emit into, and
+    `DefaultTransformVisitor` threads it down to every sub-expression -- but
+    only some of those positions are evaluated where that list will run.  This
+    passes `None` for the rest, which is how a subclass knows there is no
+    statement slot to use.
+    """
+
+    # A compound statement's own sub-expression carries no preamble.  For a
+    # `while` condition that is soundness: the condition is re-evaluated every
+    # iteration, and a preamble before the loop computes it once, which does not
+    # terminate.  The rest is scope -- those positions are evaluated exactly
+    # once, so lifting the suppression is a capability question (`CompToLoop`
+    # does hoist out of them).
+    def _visit_if1(self, stmt: If1Stmt, ctx):
+        return super()._visit_if1(stmt, None)[0], ctx
+
+    def _visit_if(self, stmt: IfStmt, ctx):
+        return super()._visit_if(stmt, None)[0], ctx
+
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        return super()._visit_while(stmt, None)[0], ctx
+
+    def _visit_for(self, stmt: ForStmt, ctx):
+        return super()._visit_for(stmt, None)[0], ctx
+
+    def _visit_context(self, stmt: ContextStmt, ctx):
+        return super()._visit_context(stmt, None)[0], ctx
+
+    def _visit_list_comp(self, e: ListComp, ctx) -> ListComp:
+        # the element sees the loop targets and later iterables see earlier
+        # ones, so no statement-level preamble reaches inside a comprehension
+        targets = [self._visit_binding(t, ctx) for t in e.targets]
+        iterables = [self._visit_expr(i, None) for i in e.iterables]
+        elt = self._visit_expr(e.elt, None)
+        return ListComp(targets, iterables, elt, e.loc)
+
+    def _visit_if_expr(self, e: IfExpr, ctx) -> IfExpr:
+        # the condition is evaluated unconditionally; the branches are not, so
+        # hoisting one of them out would evaluate it either way
+        cond = self._visit_expr(e.cond, ctx)
+        ift = self._visit_expr(e.ift, None)
+        iff = self._visit_expr(e.iff, None)
+        return IfExpr(cond, ift, iff, e.loc)
+
+
+class RoundingRewriter(PreambleScoped):
     """Shared machinery for the rounding rewrites that lift one operation into
     a block of its own.
 
@@ -697,44 +745,6 @@ class RoundingRewriter(SiteRewriter):
         emitted = self._emit(e, ctx)
         self._replaced = True
         return emitted
-
-    # A compound statement's own sub-expression carries no preamble.  For a
-    # `while` condition that is soundness: the condition is re-evaluated every
-    # iteration, and a preamble before the loop computes it once, which does not
-    # terminate.  The rest is scope -- those positions are evaluated exactly
-    # once, so lifting the suppression is a capability question (`CompToLoop`
-    # does hoist out of them).
-    def _visit_if1(self, stmt: If1Stmt, ctx):
-        return super()._visit_if1(stmt, None)[0], ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx):
-        return super()._visit_if(stmt, None)[0], ctx
-
-    def _visit_while(self, stmt: WhileStmt, ctx):
-        return super()._visit_while(stmt, None)[0], ctx
-
-    def _visit_for(self, stmt: ForStmt, ctx):
-        return super()._visit_for(stmt, None)[0], ctx
-
-    def _visit_context(self, stmt: ContextStmt, ctx):
-        return super()._visit_context(stmt, None)[0], ctx
-
-    def _visit_list_comp(self, e: ListComp, ctx) -> ListComp:
-        # the element sees the loop targets and later iterables see earlier
-        # ones, so no statement-level preamble reaches inside a comprehension
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, None) for i in e.iterables]
-        elt = self._visit_expr(e.elt, None)
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_if_expr(self, e: IfExpr, ctx) -> IfExpr:
-        # the condition is evaluated unconditionally; the branches are not, so
-        # hoisting one of them out would evaluate it either way
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
-
 
 class BlockRewriter(SiteRewriter):
     """

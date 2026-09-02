@@ -369,21 +369,14 @@ An `FP64` source additionally needed `x` itself constrained, from both
 directions — see *Path sensitivity alone* above, which the clamp turned from a
 dead end into the route.
 
-### The class half was separable, and is done
+### Only the magnitude half is left
 
-Refining special-value membership at branches turned out to be worth separating:
-it is a four-atom lattice rather than a numeric domain, it needs none of the
-machinery below, and it closed a correctness gap as well as tightening bounds.
-That is `fpy2/analysis/value_class.py`.  What follows concerns only the
-*magnitude* half, which it cannot help with.
-
-### A second payoff for the `isnan`/`isinf` refinement
-
-**Done**, by the class half rather than by anything here: the `ldexp` lowering
-asked whether its exponent could be non-finite and answered from the exponent's
-*format*, which for an exponent out of `logb` admits both specials and so cost a
-runtime branch.  Reading the upstream tests instead drops it, in
-`fpy2/analysis/value_class.py`.
+Refining special-value membership at branches was worth separating: it is a
+four-atom lattice rather than a numeric domain, needs none of the machinery
+above, and closed a correctness gap as well as tightening bounds. That is
+`fpy2/analysis/value_class.py`, and it also answered the `isnan` / `isinf`
+question this page used to carry. Everything here concerns the *magnitude* half,
+which it cannot help with.
 
 ## Open questions
 

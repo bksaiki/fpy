@@ -70,31 +70,22 @@ is the right shape, and item 1 makes the conditions column honest.
 
 ## 3. Locations that survive rewrites
 
-**Done**, and it retires the blocker recorded in
-[rounding-operator-basis.md](rounding-operator-basis.md): `where` counted
-candidate blocks, transforms change how many there are, so composition could not
-carry a location.
+**Done.** Cursors with forwarding, Exo 2's answer, with the scope FPy's
+transforms allow since each already knows which statements it replaced: a cursor
+is a parent-linked path (`StmtCursor` / `BlockCursor` / `ExprCursor`, united as
+`Cursor`), a rewriting pass reports a structural edit log, `Function.forward`
+replays it along the chain of programs, and the strategies rebase a stale cursor
+on arrival. `sites(strategy, func, within=)` lists what a `where` may name; an
+un-forwardable cursor invalidates loudly. Implementation in
+`fpy2/transform/cursor.py` and `Function.forward`.
 
-Exo 2's answer is cursors with *forwarding*, and that is what was built — with the
-scope FPy's transforms allow, since each already knows which statements it
-replaced. A cursor is a parent-linked path (`StmtCursor` / `BlockCursor` /
-`ExprCursor`, united as `Cursor`); a rewriting pass reports a purely structural
-edit log, which `Function.forward` replays back along the chain of programs; and
-the strategies rebase a stale cursor on arrival, so a schedule pins a point once
-and aims a whole sequence at it. `sites(strategy, func, within=)` lists what a
-`where` may name. An un-forwardable cursor invalidates loudly (item 1's
-bad-reference error) — including across the passes that rewrite at sites they do
-not report, which say so rather than guessing.
-
-The implementation is `fpy2/transform/cursor.py` and `Function.forward`.
-
-Not delivered, and the claim this item used to make: **forwarding does not carry an
-analysis result.** `fpy2/analysis/value_class.py` keys results by expression
-identity, and every visitor rebuilds every expression, so carrying one needs the
-old-node → new-node correspondence threaded through `DefaultTransformVisitor`
-itself — a different mechanism from a path, which resolves in the rebuilt tree for
-free. Item 6 can re-run the analysis on the rewritten program, which is what the
-transforms already do; the carry-over is its own item if a use appears.
+**Forwarding does not carry an analysis result**, which is what is left.
+`fpy2/analysis/value_class.py` keys results by expression identity and every
+visitor rebuilds every expression, so carrying one needs the old-node → new-node
+correspondence threaded through `DefaultTransformVisitor` itself — a different
+mechanism from a path, which resolves in the rebuilt tree for free. Item 6 can
+re-run the analysis instead, which is what the transforms already do; the
+carry-over is its own item if a use appears.
 
 ## 4. Patterns produce references
 
