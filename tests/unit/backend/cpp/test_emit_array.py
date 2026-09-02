@@ -8,6 +8,8 @@ conditionally-proven sizes) and the two off switches (``arrays=False``,
 ``UnboxMode.NEVER``).
 """
 
+import re
+
 import pytest
 
 import fpy2 as fp
@@ -267,15 +269,18 @@ class TestEndToEnd:
 
     def test_literal_and_comprehension(self):
         @fp.fpy
-        def f() -> fp.Real:
+        def f(a: fp.Real) -> fp.Real:
             with fp.FP64:
-                xs = [1.5, 2.5, 3.5]
+                xs = [a, 2.5, 3.5]
                 ys = [x * 2 for x in xs]
                 return ys[0]
 
-        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        # the element scalar is the ladder's business (it is value-precise
-        # enough to fit {3, 5, 7} in uint8_t); what this pins is the shape
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        # the element scalar is the ladder's business; what this pins is the
+        # shape.  An element comes from a parameter so `Simplify` cannot fold
+        # the lists away, which is what a wholly literal witness invites.
         assert out.count('std::array<') >= 2
         assert 'std::vector' not in out
         assert 'push_back' not in out
@@ -311,21 +316,23 @@ class TestEndToEnd:
             f, ctx=fp.FP64,
             arg_types=[ListType(ListType(RealType(fp.FP64)))],
         )
-        assert (
-            'std::vector<std::vector<double>>('
-            'static_cast<uint64_t>(t), std::vector<double>{})'
-        ) in s
+        assert re.search(
+            r'std::vector<std::vector<double>>\('
+            r'static_cast<uint64_t>\(\w+\), std::vector<double>\{\}\)', s,
+        )
 
     def test_slice_of_whole_keeps_the_size(self):
         @fp.fpy
-        def f() -> fp.Real:
+        def f(a: fp.Real) -> fp.Real:
             with fp.FP64:
-                xs = [1.5, 2.5, 3.5]
+                xs = [a, 2.5, 3.5]
                 ys = xs[:]
                 ys[0] = 9.0
                 return xs[0]
 
-        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
         assert out.count('std::array<') >= 2
         assert 'std::vector' not in out
         assert 'std::copy(' in out
@@ -498,15 +505,15 @@ class TestEndToEnd:
         """STRICT gates handles, not sizes: a fully-unboxable program keeps
         its arrays under the default mode."""
         @fp.fpy
-        def f() -> fp.Real:
+        def f(a: fp.Real) -> fp.Real:
             with fp.FP64:
-                xs = [1.5, 2.5, 3.5]
+                xs = [a, 2.5, 3.5]
                 return xs[0]
 
         out = CppCompiler(unbox=UnboxMode.STRICT).compile(
-            f, ctx=fp.FP64, arg_types=[],
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
         )
-        assert 'std::array<float, 3>' in out
+        assert 'std::array<double, 3>' in out
 
     def test_assert_len_pins_a_parameter(self):
         """The route the `arrays` docstring advertises: a trusted top-level
@@ -537,25 +544,29 @@ class TestEndToEnd:
 
     def test_flag_off_is_a_clean_bypass(self):
         @fp.fpy
-        def f() -> fp.Real:
+        def f(a: fp.Real) -> fp.Real:
             with fp.FP64:
-                xs = [1.5, 2.5, 3.5]
+                xs = [a, 2.5, 3.5]
                 return xs[0]
 
-        on = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        off = CppCompiler(arrays=False).compile(f, ctx=fp.FP64, arg_types=[])
-        assert 'std::array<float, 3>' in on
+        at = [RealType(fp.FP64)]
+        on = CppCompiler().compile(f, ctx=fp.FP64, arg_types=at)
+        off = CppCompiler(arrays=False).compile(f, ctx=fp.FP64, arg_types=at)
+        assert 'std::array<double, 3>' in on
         assert 'std::array' not in off
-        assert 'std::vector<float>' in off
+        assert 'std::vector<double>' in off
 
     def test_never_mode_has_no_arrays(self):
         @fp.fpy
-        def f() -> fp.Real:
+        def f(a: fp.Real) -> fp.Real:
             with fp.FP64:
-                xs = [1.0, 2.0, 3.0]
+                xs = [a, 2.0, 3.0]
                 return xs[0]
 
         out = CppCompiler(unbox=UnboxMode.NEVER).compile(
-            f, ctx=fp.FP64, arg_types=[],
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
         )
+        # the list must actually be there for its absence of an array to mean
+        # anything -- a wholly literal witness folds away and passes vacuously
+        assert 'std::shared_ptr<std::vector<double>>' in out
         assert 'std::array' not in out

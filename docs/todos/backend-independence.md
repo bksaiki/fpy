@@ -17,10 +17,10 @@ made under it. Across §1–§3: `emitter.py` 3815 → 3871 (**+56**),
 backend shed a tenth of what the pipeline gained. What the work actually bought,
 in order of how much it was worth:
 
-1. **Whole classes of reasoning removed.** After §1 every operand the emitter
-   sees is a name, a literal or a nullary constant, so a family of "where does
-   the temporary go" bugs is unreachable rather than fixed. Three live
-   miscompiles died with it.
+1. **Whole classes of reasoning removed.** After §1 every expression sits where
+   a statement may be inserted above it, so a family of "where does the
+   temporary go" bugs is unreachable rather than fixed. Three live miscompiles
+   died with it.
 2. **Decisions became testable without a C++ string.** `StorageInfer` runs
    against a synthetic three-format domain; the region facts are asserted on the
    graph directly. Both found real defects that emitted-output diffing could not
@@ -36,20 +36,21 @@ wait.
 Every pass `CppCompiler.specialize()` runs, classified by what happens when it is
 removed — each measured by monkeypatching it to the identity over the corpus:
 the 219 functions of `tests/infra/examples` plus the `core`, `eft`, `vector` and
-`matrix` libraries, compiled at FP64 through `CppCompiler.compile`, of which 202
-compile.
+`matrix` libraries, compiled at FP64 through `CppCompiler.compile`. 207 compile
+today; the ablations below were taken against the 202 that compiled when the
+audit was written.
 
 | pass | kind | corpus without it |
 |---|---|---|
 | `FreeVarElim` | **required** | −2 |
 | `Specialize` | **required** | not ablatable — the emitter has no template |
-| `Hoistable` | normalization | **195 (−7)**, all 7 `ANF` refusals |
-| `ANF` | normalization | 202 (0), 66 emit differently |
-| `Hoistable` *and* `ANF` | — | **202 (0)**, 74 emit differently |
+| `Hoistable` | normalization | 202 (0), 20 emit differently |
+| `CompToLoop` | normalization | 202 (0) — §8 |
 | `RoundElim` | optimization | 202 (0), 53 emit differently |
 | `ZipElim` | optimization | 202 (0), 6 emit differently |
 | `EnumerateElim` | optimization | 202 (0), **0** emit differently |
 | `ReduceFusion` | optimization | 202 (0), **0** emit differently |
+| `Simplify` | optimization | −5, and +195 emitted lines — §9 |
 
 **Only two passes are required, and neither is a normal form.** `FreeVarElim`
 because codegen has no closure environment, `Specialize` because the emitter is
@@ -64,53 +65,27 @@ removing the pass changes no output at all. `_emit_zip` still fires six times
 with `ZipElim` on. `ReduceFusion` never fires. The emitter's fallbacks are not
 the rare path here; they are most of the traffic.
 
-### The pair buys nothing the corpus can see
+### Neither normalization pays for itself on the corpus
 
-Read the three rows together. Dropping `ANF` alone loses no program. Dropping
-`Hoistable` alone loses **seven** — and every one is `ANF` refusing its input,
-all the same shape:
+`ANF` lost no corpus program and is gone (§1). `Hoistable` loses none either —
+202 either way, 20 emissions differ — because what it lowers, the emitter's
+`_emit_inline` refuses rather than miscompiles, and no corpus program reaches
+those positions.
 
-```
-cannot normalize `determinant_2x2`: a short-circuited operand may not be
-evaluated, so `len(A[0]) == 2` has nowhere to put a statement.  Run `Hoistable`
-first.
-```
+It stays regardless, for three reasons the corpus cannot show:
 
-Dropping **both** loses nothing. So `Hoistable`'s entire measured contribution is
-keeping `ANF` from refusing, and `ANF`'s is nothing: the pair is self-justifying,
-and the emitter compiles the same 202 programs without either.
+- **`_emit_inline` refuses.** The three positions a statement must never escape
+  were live miscompiles, and `test_statement_form.py` runs them with the pass
+  patched out. Without `Hoistable` those programs do not compile; with it they
+  do. The capability is real, just not in the corpus.
+- **`CompToLoop` needs the slot it creates.** The two are a fixpoint (§8): a
+  comprehension in a ternary arm or a `while` condition has nowhere for the loop
+  until `Hoistable` gives it one.
+- **`RoundElim` mints temporaries** and reasons about none of this, because the
+  form guarantees the slot is legal.
 
-This agrees with §1's own conclusion ("its value is capability, not
-normalization") but locates the capability differently. The `while (2 ** (n + 1))
-> 1.0` program that motivated statement form is rescued by `Hoistable`'s loop
-rotation, not by atomization — and that program is in the unit suite, not the
-corpus. What the corpus says is that the *normalization* has no measurable
-payoff yet. Against it:
-`ANF` costs the `2 ** n * x` fusion (§6), it turned five syntactic matchers into
-def-use walks, and it names redundantly. `[x + 1 for x in range(5)]`, lowered,
-comes out of `ANF` as
-
-```python
-t = range(5)
-t4 = len(t)
-acc = fp.empty(t4)
-t5 = len(t)          # the same expression, named twice
-for i in range(t5):
-    x = t[i]
-    acc[i] = x + 1
-```
-
-and nothing downstream removes the duplicate, because this pipeline runs no copy
-propagation, no CSE and no dead-code pass.
-
-**The verdict is not "delete `ANF`" but "stop running it unconditionally."** Its
-guarantee — no operand's emission ever needs a statement — is worth having, and
-`Hoistable`'s slot is what every rewrite below needs. The way to get the
-guarantee is to make the set of statement-needing operands *empty*, which is
-[A total unfold for every surface form](#a-total-unfold-for-every-surface-form),
-not to name every operand in the program. Until that lands, `ANF` is an emitter
-convenience with a measured cost and belongs behind a flag; `Hoistable` stays,
-because the unfolds need the slot even though today only `ANF` asks for it.
+So the honest summary is that hoistable form buys capability, not normalization
+— and the atomization on top of it bought neither, which is why it went.
 
 ### The rule the boundary follows
 
@@ -155,7 +130,7 @@ table has an FPy-level target.
 The comprehension group is gone: §8 moved it to `CompToLoop`.
 
 ¹ all comparisons; chains are a subset.
-² calls, not fires — statement form defeats the match (§6).
+² calls, not fires — most operands are not a syntactic `2 ** n` (§6).
 
 ### Precision is the acceptance test for an unfold
 
@@ -210,78 +185,52 @@ rather than an adjacent nicety.
 
 ## Done
 
-### 1. Statement form
+### 1. Hoistable form (and `ANF`, removed)
 
-`fpy2/transform/anf.py`, exposed as `fpy2.strategies.to_anf`, run unconditionally
-as the last step of `CppCompiler.specialize()`, over a program
-`fpy2/transform/hoistable.py` has already put in *hoistable form*.
+`fpy2/transform/hoistable.py`, exposed as `fpy2.strategies.to_hoistable`, run in
+`CppCompiler.specialize()` as the first half of `_to_statement_form`.
 
-The pass takes no target fact. It does not predict where C++ will want a
-temporary; it makes the situation unreachable. A temporary goes in a statement
-slot executed *exactly as often, and under exactly the same condition, as the
-expression it names* — not the nearest enclosing statement, which is wrong for a
-`while` condition and a ternary arm. Positions failing that test are sealed; two
-get a lowering that *creates* the slot (rotation for `while`, `IfStmt` for a
-ternary), and `ANF.refusals` reports the rest.
+Its invariant: every expression sits where a statement may be inserted above it.
+A temporary goes in a slot executed *exactly as often, and under exactly the same
+condition, as the expression it names* — not the nearest enclosing statement,
+which is wrong for a `while` condition and a ternary arm. Positions failing that
+test are sealed; the pass lowers each one it can, rotating a `while`, making an
+`IfStmt` of a ternary and a guarded ladder of an `and`/`or` tail.
+`Hoistable.refusals` reports what is left: an `assert` message, which is never
+evaluated, and a chained comparison's third operand.
 
-A temporary goes in a statement slot executed *exactly as often, and under
-exactly the same condition, as the expression it names* — not the nearest
-enclosing statement, which is wrong for a `while` condition and a ternary arm.
-Positions failing that test are sealed. Creating the slot is a second, weaker
-normalization — `Hoistable`, run just before `RoundElim` — which rotates a
-`while`, makes an `IfStmt` of a ternary and a guarded ladder of an `and`/`or`
-tail. ANF does not do this itself: it *requires* it, and raises where a sealed
-position holds something `needs_slot`, so a program that cannot be normalized
-says so instead of looking normalized. Splitting the two matters because a
-rewrite wanting a statement slot needs only the first: over the 230-function
-corpus hoistable form costs 66 statements where the atomization on top costs a
-further 295. `ANF.refusals` reports what is left, entirely comprehensions, with
-zero in the three positions the emitter cannot slot.
+**`fpy2/transform/anf.py` was the strong normalization above it, and is no
+longer in this pipeline.** It flattened every operand to a name, and over the
+corpus that lost no program while costing 258 emitted lines, 448 temporary
+mentions, and the `2 ** n * x` fusion. `determinant_3x3` alone went from thirty
+`tN` assignments to three expressions. It remains available as
+`fpy2.strategies.to_anf`.
 
-What it settled:
+What the two settled, and what still holds without `ANF`:
 
-- **Naming materializes.** A pass that would have *deleted* an expression can
-  only reach inside the name once it has one: `RoundElim` collapsing
-  `fp.round(0.0)` to a literal must run first, or it leaves a `uint8_t` binding
-  behind. ANF goes after everything that removes or folds, and nothing that
-  removes or folds runs after it.
-- **A normalization turns every downstream syntactic match into a def-use walk.**
-  `DefineUseAnalysis.defining_expr` is that walk. Five matchers need it:
-  `ValueClassInfer._implied`, `ArraySizeInfer._const_int` / `_len_size` /
-  `_affine`, and the emitter's pow2 peephole. Each already failed on hand-written
-  code such as `n = len(xs); fp.empty(n)`, so the walk is an improvement
-  independent of the pass. Its result belongs to the *assignment*: read it, but
-  do not re-emit it or compare it structurally against a node from elsewhere.
 - **Lower on a syntactic gate.** Every lowering fires when an operand is not an
   atom — never on `needs_slot`, which predicts what an emitter wants rather than
   describing the program, and would leave `Hoistable` unable to state its own
   postcondition. Lowering a *pure* chain costs the `And` that
   `ValueClassInfer._implied` read to drop a runtime guard; the fix was to teach
   it the lowered ladder, not to weaken the gate.
-- **Scalars only, by type.** A name holding a list is a second *place*, which
-  decides whether a list keeps its shared handle. Chains are named at their
-  outermost scalar, so no aggregate name is created. Widening this to aggregates
-  is the follow-on the emitter deletions wait on.
+- **A normalization turns every downstream syntactic match into a def-use walk.**
+  `DefineUseAnalysis.defining_expr` is that walk, and five matchers need it:
+  `ValueClassInfer._implied`, `ArraySizeInfer._const_int` / `_len_size` /
+  `_affine`, and the emitter's pow2 peephole. Each already failed on
+  hand-written code such as `n = len(xs); fp.empty(n)`, so the walk is an
+  improvement independent of either pass. Its result belongs to the
+  *assignment*: read it, but do not re-emit it or compare it structurally
+  against a node from elsewhere.
+- **Naming materializes**, which is why nothing that deletes or folds may run
+  after a pass that names. `RoundElim` collapsing `fp.round(0.0)` to a literal
+  had to precede `ANF`, or it left a `uint8_t` binding behind. With `ANF` gone
+  the constraint binds only `CompToLoop`, whose allocations are named.
 
-The three miscompiles this closed are in [backend-cpp.md](backend-cpp.md).
-
-**What it is worth today, measured by disabling it.** Over the corpus: no
-program's outcome changes, 56 emit differently. Over `tests/unit/backend/cpp`:
-eight tests fail, of which seven are shape assertions and **one is a capability
-loss** — `while (2 ** (n + 1)) > 1.0` compiles with statement form and raises
-`CppInternalError` without it, because the condition needs a statement and the
-emitter has nowhere to put one. That class of program is the whole current
-payoff. Against it: the `2 ** n * x` fusion, which fires with ANF off and does
-not with it on.
-
-So its value is capability, not normalization. No pass got simpler — five
-matchers became def-use walks instead of syntactic matches — and the emitter did
-not shrink, because its generality is driven by aggregates, which this pass
-deliberately leaves nested. The normalization payoff arrives with aggregate
-naming or not at all.
-
-`ANF` should come out of the unconditional prefix and `Hoistable` should stay —
-see [The pair buys nothing the corpus can see](#the-pair-buys-nothing-the-corpus-can-see).
+The three miscompiles hoistable form closed are in
+[backend-cpp.md](backend-cpp.md). Its own cost is 66 statements over the corpus,
+where the atomization on top of it cost a further 295 — which is the measurement
+the removal rests on.
 
 ### 2. Storage inference
 
@@ -361,6 +310,69 @@ something asked for it.
 What did *not* move is the emitter: it kept `_open_list_build`, which needs no
 length up front, until the lowering became total. Nothing routes there now.
 
+### 9. Simplify
+
+`fpy2/transform/simplify.py` runs `ConstFold`, `CopyPropagate` and
+`DeadCodeEliminate` to a fixpoint — each exposes what the others need, so one
+pass in any order leaves work behind. The `simplify` strategy is a wrapper over
+it, and `CppCompiler` runs it last under `optimize=True`: the lowerings above
+leave debris only a later pass can see, a length read into a name nothing uses
+or a copy of an accumulator, and the pass that emitted it is not the one that
+can tell.
+
+Worth +5 programs and -195 emitted lines on the corpus. Two knobs are off by
+default and matter here: context folding, whose result no longer re-parses, and
+aggregate substitution — an aggregate literal is an *allocation*, so
+substituting one replaces a compact producer with a materialized list, once per
+use site, each a distinct object where the name was one.
+
+Three pre-existing defects surfaced. `CopyPropagate` reported `changed` whenever
+it had a candidate, even when `SubstVar` rewrote nothing — a definition can have
+uses that are not occurrences, since an `xs[i] = e` names `xs` as an `Id`, not a
+`Var` — which made the fixpoint diverge. `DeadCodeEliminate` treated an unused
+phi's arguments as unused, deleting a definition its own branch still read. And
+a fully static program now evaporates, which is what most of the test fallout
+was: several emitter witnesses were asserting on arithmetic that no longer
+survives, and one was passing vacuously.
+
+### 10. Derived-iterable unfolding
+
+`UnfoldZip` and `UnfoldEnumerate` state each as the comprehension
+derived-semantics defines it to be, inside `_to_statement_form`'s fixpoint, and
+`_emit_zip` / `_emit_enumerate` are gone behind tripwires. Measured over the
+corpus: nothing lost, nothing gained, **zero signature changes** at either
+optimize setting, and the two fired 6 and 3 times before (15 and 3
+unoptimized) against 0 after.
+
+**The fixpoint is required, not a convenience.** Unfolding *once* leaves 2
+zips, and 9 unoptimized: a `zip` inside a comprehension only gets the statement
+slot its bindings need after `CompToLoop` has opened the comprehension around
+it. Same reason `Hoistable` and `CompToLoop` were already a fixpoint.
+
+**`zip` owes an assert, and that is the whole precision story.**
+`ArraySizeInfer` treats an unconditional `zip` as strict and pins its
+iterables' lengths through union-find, which reaches the ABI: with `len(xs)`
+proven and `len(ys)` unknown, `ys` compiles to `std::array<double, N>`.
+Unfolding to derived-semantics' bare comprehension loses that. `assert len(ys)
+== len(xs)` carries it — the analysis reads an assert as an equality — and in
+one case reads *better* than the surface form, since `ZipElim` under
+`optimize=True` removes the zip before the analysis sees it at all.
+`derived-semantics.rst` now states the assert: unequal lengths are undefined,
+so it is a claim about a well-defined program rather than a check with a
+defined failure. `enumerate` needs no such carrier — the index is `INTEGER`
+either way and the length comes from the same list.
+
+**The fuse still runs first.** `ZipElim` / `EnumerateElim` are the opposite
+trade — an indexed loop with no list at all — and the unfold destroys their
+pattern. They sit ahead of `Specialize`, so the ordering is free, but the two
+only coexist in that order.
+
+Cost: +32 emitted lines optimized, +76 unoptimized. `std::make_tuple` is
+unchanged at 49, so this deletes backend *cases* rather than work: the tuple
+list moves from `_emit_zip`'s fill loop to `CompToLoop`'s. The analyses keep
+their `Zip` / `Enumerate` cases, since the unfolds are optional operators and
+nothing outside the cpp pipeline guarantees they ran.
+
 ## Open
 
 ### A total unfold for every surface form
@@ -368,9 +380,10 @@ length up front, until the lowering became total. Nothing routes there now.
 Steps 1 and 2 are done — see §8. What is left, each gated on
 [the precision test](#precision-is-the-acceptance-test-for-an-unfold):
 
-**Unfold the rest**, each straight from derived-semantics, each placed after its
-fuse: `zip`, `enumerate`, slice, the chained comparison, `sum` / `any` / `all` /
-`amin` / `amax`, and `min` / `max`. Three pay for more than the deletion:
+`zip` and `enumerate` are done — see §10. **Unfold the rest**, each straight
+from derived-semantics, each placed after its fuse: slice, the chained
+comparison, `sum` / `any` / `all` / `amin` / `amax`, and `min` / `max`. Three
+pay for more than the deletion:
 
 - the **chained comparison** is one of the two positions `Hoistable` leaves
   sealed, so unfolding it makes hoistable form total over everything but an
@@ -385,16 +398,18 @@ fuse: `zip`, `enumerate`, slice, the chained comparison, `sum` / `any` / `all` /
   narrowing to refuse. Unfold it only where the length is proven, or
   `FormatInfer` widens the accumulator instead of simulating the adds.
 
-**Then a cleanup.** Every lowering leaves debris this pipeline has no pass to
-remove: a dead `auto&& _tmp1 = xs.size();`, a `uint8_t n = _t8;` copy, `ANF`'s
-two names for one `len(t)`. `fpy2/transform/dead_code.py` and
-`copy_propagate.py` exist and neither is wired in; a lowering-heavy pipeline
-needs both, plus CSE for the repeated `len`. This decides whether the unfolds
-are free or merely correct.
+The cleanup those need is done — see §9. What is still missing is CSE, for the
+two names one `len(t)` gets, and one `CompToLoop` fix the unfolds made
+conspicuous:
 
-**Then demote `ANF`.** With every statement-needing form already a statement, an
-operand is a C++ expression by construction and the guarantee holds without the
-pass. `_emit_inline`'s tripwire stays as the check.
+**`_inlinable` materializes `range(len(xs))`.** It requires every operand of the
+`range` to be *atomic*, which a `Len` is not — so the range becomes a
+`std::vector<int64_t>` filled by `std::iota` and then iterated, where `range(4)`
+stays inline and gets a counted loop. Pre-existing: a hand-written
+`[xs[i] * 2 for i in range(len(xs))]` pays it today. Accepting a `Len` / `Size`
+/ `Dim` of an atom — a pure read, and no fill can change a length — takes the
+corpus from 15 `std::iota` to 2 and recovers 13 of §10's 32 added lines, with
+nothing lost and no signature changes. Measured, not yet done.
 
 ### `Hoistable` at the front
 
@@ -411,35 +426,21 @@ invariant survived. It costs 66 statements over the corpus (§1), so that run is
 close to free, and a difference between the two is a bug report about the pass
 in between.
 
-### Recovering from an unsupported rounding
+### A name holding a list is a second place
 
-The strongest remaining item, and the only one a user would notice: today an
-unsupported rounding is a refusal whose message names the operator that fixes it;
-the proposal is to run it. Fully scoped in *Recovering from an unsupported
-rounding instead of refusing* in [backend-cpp.md](backend-cpp.md), including the
-`split_round` route for arithmetic and why the correct-double-rounding table is
-what makes it exact.
-
-It moves no line out of the backend, and it turns programs that refuse into
-programs that compile. Under the goal above that is a better trade than any
-section below.
-
-### Aggregate naming in ANF
-
-Naming an aggregate turns `return ([n, n], 1.0)` into
-`xs = [n, n]; return (xs, 1.0)`. Until recently the second form kept a handle the
-first did not, which would have boxed every literal-into-container in the corpus;
-`AliasAnalysis.consumed_defs` and the matching `std::move` closed that (see *What
-stays boxed* in [backend-cpp.md](backend-cpp.md)).
-
-§8 widened the discount from a definition to an *object*: a list a loop fills
-reaches its consumer through a phi over the allocation and the stores, all one
-runtime object, and a write-through is not a second read. So a filled name moves
-out too.
+Any pass that names an aggregate turns `return ([n, n], 1.0)` into
+`xs = [n, n]; return (xs, 1.0)`, and the second form used to keep a handle the
+first did not — which would have boxed every literal-into-container in the
+corpus. `AliasAnalysis.consumed_defs` and the matching `std::move` closed that
+(see *What stays boxed* in [backend-cpp.md](backend-cpp.md)), and §8 widened the
+discount from a definition to an *object*: a list a loop fills reaches its
+consumer through a phi over the allocation and the stores, all one runtime
+object, so a write-through is not a second read.
 
 What is left is a name genuinely read more than once, which is a second place by
-any reading — that is what aggregate naming must be measured against, and
-`UnboxMode.STRICT` turns it into a refusal rather than a slower program.
+any reading. `UnboxMode.STRICT` turns it into a refusal rather than a slower
+program, so it is what any future naming pass must be measured against —
+`CompToLoop`'s allocations already are.
 
 ## Parked, with reasons
 
@@ -496,8 +497,9 @@ Algebraic rewrites gated on exactness proofs that are already generic; only
 longer matches `2 ** n * x` (see [backend-cpp.md](backend-cpp.md)). Restoring it
 needs a language-level scale operation — FPy has no `ldexp`/`scalb`, so an
 FPy-level transform has nothing to rewrite into. A language change, not a pass
-move.  Demoting `ANF` restores the fusion for free, which is one more entry on
-that side of the ledger.
+move.  Removing `ANF` restored the fusion, so the peephole fires again — but
+only on a syntactic `2 ** n`, which is why the count above is calls and not
+fires.
 
 ### 7. Library-op lowering
 
@@ -510,7 +512,7 @@ It also owns all 113 `_bind_operand` mints on the corpus —
 `_emit_ieee_min_max` (28), `_emit_empty` (25), `_list_range` (21), `_emit_sum`
 (13), `_emit_zip` (12), `_visit_list_slice` (11), `_emit_enumerate` (3) — which
 build a loop or emit an operand twice, and which die when the lowering moves to
-FPy level where ANF names the temporaries itself.
+FPy level, where a loop names its own temporaries.
 
 **Unparked by the audit.** The capability blocker is smaller than recorded: with
 `Hoistable` and `CompToLoop` run to a fixpoint, wiring comprehension lowering

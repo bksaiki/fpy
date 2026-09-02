@@ -241,17 +241,23 @@ class TestElseIfChain:
         Regression: flattening emitted `} else if (...) { z = 2; ... }` with no
         declaration of `z` anywhere, which does not compile.  A line-order
         assertion cannot catch this -- only building the output can.
+
+        ``z`` is branch-local, so its class is anchored to the *nested* ``if``
+        and its declaration goes just inside the outer ``else`` -- which is the
+        position flattening removes.  It holds a call and is read twice, or
+        `Simplify` collapses it: a local that only aliases a temporary does not
+        survive, and then there is nothing to nest for.
         """
         @fp.fpy(ctx=fp.FP64)
         def f(x: fp.Real) -> fp.Real:
             if x > 0:
                 y = 1.0
             elif x > -1:
-                z = 2.0
-                y = z * 2
+                z = fp.sqrt(x)
+                y = z + z
             else:
-                z = 3.0
-                y = z * 3
+                z = fp.cbrt(x)
+                y = z + z
             return y
 
         out = CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])

@@ -174,6 +174,12 @@ Post-fix behavior:
    - end-to-end: the `foo`/`MX_E4M3` reproducer derives size 32 for
      `slc` with the explicit `with fp.REAL:` removed.
 
+**Already there for `_const_int`.** It folds `Add` / `Sub` / `Mul` over lengths
+it knows, gated on `_holds_int` — whether the rounding leaves the integer alone,
+which is the weaker question than `_is_exact`'s "does it round at all" and the
+right one for a static length. That is the same exactness witness this page
+proposes, at one call site; `_affine` still asks the stronger question.
+
 ## Risks / open questions
 
 1. **`Var` assignment-chain recursion + phis.** A `Var` bound to
@@ -190,13 +196,6 @@ Post-fix behavior:
    in doubt, restrict the first cut to `+`/`-`/`Neg`.
 
 ## Out of scope / possible follow-up
-
-- **`_const_int` folds `len(xs)` but not arithmetic over it**, so
-  `fp.empty(len(xs) * len(ys))` has no static size while `fp.empty(len(xs))`
-  does. The product of two lengths is integer-valued, so this is the same
-  exactness witness as above rather than a new one. It is what makes a lowered
-  multi-clause comprehension compile to `std::vector` instead of `std::array`
-  (see [backend-cpp.md](backend-cpp.md)).
 
 - **Shared integer-valued analysis.** The cleaner long-term shape is a
   small standalone "is this expression integer-valued?" analysis that

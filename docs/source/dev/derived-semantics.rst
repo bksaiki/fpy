@@ -422,12 +422,14 @@ clamped. ``xs[start:]`` is ``xs[start:len(xs)]``, and ``xs[:stop]`` is
     def slice(xs: list[Any], start: int, stop: int) -> list[Any]:
         return [xs[i] for i in range(start, stop)]
 
-``zip(xs1, ..., xsk)`` is ``[(xs1[i], ..., xsk[i]) for i in range(len(xs1))]``,
-and unequal lengths are undefined. ``enumerate(xs)`` pairs each element with its
-index::
+``zip(xs1, ..., xsk)`` takes ``len(xs1)`` elements and asserts that every other
+iterable is that long; unequal lengths are undefined, so the assertion is a
+claim rather than a check with a defined failure. ``enumerate(xs)`` pairs each
+element with its index::
 
     @fp.fpy
     def zip2(xs: list[Any], ys: list[Any]) -> list[tuple[Any, Any]]:
+        assert len(ys) == len(xs)
         return [(xs[i], ys[i]) for i in range(len(xs))]
 
     @fp.fpy

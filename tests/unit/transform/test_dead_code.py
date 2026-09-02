@@ -866,3 +866,32 @@ class TestDeadContext:
             return y + x
 
         assert _with_count(fp.transform.DeadCodeEliminate.apply(f.ast)) == 1
+
+
+class TestUnusedPhiArguments:
+    """An unused phi does not make its arguments unused."""
+
+    def test_an_argument_read_in_its_own_branch_survives(self):
+        """``z``'s phi at the merge has no uses, but the ``else`` branch's
+        definition is read by ``y = z * 3`` -- and a phi is not a use site, so
+        the merge cannot see that.  Removing it left a read with no definition,
+        which the pass then crashed re-analyzing."""
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real) -> fp.Real:
+            if x > 0:
+                y = 1.0
+            elif x > -1:
+                t = x * 2.0
+                z = t
+                y = t * 2.0
+            else:
+                z = x * 3.0
+                y = z * 3.0
+            return y
+
+        out = fp.transform.DeadCodeEliminate.apply(f.ast)
+        fp.analysis.DefineUse.analyze(out)      # well-formed
+        src = out.format()
+        assert 'z = (x * 3)' in src             # read in its branch: kept
+        assert 'z = t' not in src               # read only by the phi: dropped

@@ -31,12 +31,13 @@ Everything C++-specific lives here. Analyses this backend depends on but does
 not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
-The emitter's input is in **statement form**: `fpy2.transform.ANF` runs last in
-`specialize()`, so every operand is a name, a literal or a nullary constant, and
-the emitter never invents a place for one.  Only aggregates are left nested.
-ANF does not create the statement slots it needs — `fpy2.transform.Hoistable`
-does, earlier in `specialize()` — and ANF raises where a sealed position holds
-something it would itself have to name.
+The emitter's input is in **hoistable form**: `fpy2.transform.Hoistable` runs in
+`specialize()`, so every expression sits where a statement may be inserted above
+it, and the three positions a statement must never escape — a `while` condition,
+a ternary arm, a short-circuited operand — hold atoms.  Operands are *not*
+flattened; the emitter mints its own name where it reads one twice
+(`_bind_operand`), and `_emit_inline` refuses if a statement would ever escape
+its guard.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
 compile and must behave as the FPy interpreter does wherever FPy's semantics are
@@ -183,10 +184,11 @@ top.
 Module
   → Specialize                 # one FuncDef per (callee, ctx, arg formats)
   → fix(Hoistable ; CompToLoop)  # a statement slot wherever one is needed,
-                                 # and every comprehension but the ragged one
-                                 # lowered into the loop that is that slot
+                                 # and every comprehension lowered into the
+                                 # loop that is that slot
   → RoundElim                  # (optimize only)
-  → ANF                        # statement form; every operand is an atom
+  → Simplify                   # (optimize only) fold, copy-propagate and
+                               # delete the debris the lowerings above leave
   → DefineUse
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
@@ -218,41 +220,40 @@ code. Headers track exactly what the emitted code uses.
 
 ### An operand emitting statements must not escape its guard
 
-`_emit_guarded_block` and `_visit_if_expr` interpolate an expression visitor into
-an f-string, so anything it writes through `writer.add_line` lands *before* the
-construct being guarded. Three shapes miscompiled that way — a `while` condition
-evaluated once, a ternary arm's assertion firing on the untaken path, an
-`and`/`or` tail past the short circuit — all in territory where FPy's semantics
-*are* defined, unlike the subscript case below.
+Closed twice over: `Hoistable` empties the positions where it could happen — a
+`while` condition, a ternary arm, an `and` / `or` tail — and `_emit_inline`
+refuses if one ever reaches the emitter anyway, comparing the writer's line count
+around the emission rather than guessing from the syntax. `test_statement_form.py`
+runs the three witnesses with both passes monkeypatched to the identity, since
+`Hoistable` alone would let every witness pass without witnessing anything.
 
-Closed twice over. `Hoistable` lowers each position before codegen, so none
-reaches the emitter; `_emit_inline` refuses if one ever does, comparing the
-writer's line count around the emission rather than guessing from the syntax.
-`test_statement_form.py` runs the three witnesses with both passes monkeypatched
-to the identity — both, because `Hoistable` alone empties the positions and every
-witness would pass without witnessing anything.
-
-An `if` / `if1` condition is deliberately not gated: it runs once, just before the
-branch, so its statements belong in the enclosing block — which is why
+An `if` / `if1` condition is deliberately *not* gated: it runs once, just before
+the branch, so its statements belong in the enclosing block — which is why
 `_emit_guarded_block` takes its condition already emitted.
 
-### Statement form defeats the `2 ** n * x` fusion
+### `Simplify` evaporates a static witness
 
-`_emit_scale_by_pow2` matches a *syntactic* `Pow` as an operand of a `Mul`, and
-`ANF` names the power first, so the fusion no longer fires:
+`Simplify` runs under the default `optimize=True`, so a test program whose
+result is fully determined compiles to `return <constant>;`. An emitter witness
+has to take a parameter, or read its own result more than once, or it pins
+nothing. See §9 in [backend-independence.md](backend-independence.md).
 
-```c++
-float t14 = std::ldexp(1, static_cast<int>(t13));   // was: std::ldexp(x, t13)
-float _t8 = (t14 * x);
-```
+### `ANF` is not in this pipeline
 
-**Not an accuracy regression.** The peephole only fires where `_pow2_is_exact`
-and `_result_fits_ctx` both hold — that is, where the power *and* the product
-are exact — so the two forms agree bit-for-bit. `test_lowered_roundtrip.py`
-confirms it across fourteen formats. The cost is one multiply and one extra
-`float`, and the scale still runs in `float` with no widening.
+`fpy2.transform.ANF` flattens every operand to a name.  It ran last in
+`specialize()` and was removed: measured over the corpus it lost no program,
+and it cost 258 emitted lines and 448 temporary mentions — `determinant_3x3`
+alone went from thirty `tN` assignments to three expressions.
 
-Two fixes were tried and rejected:
+It also cost the `2 ** n * x` fusion. `_emit_scale_by_pow2` matches a
+*syntactic* `Pow` as an operand of a `Mul`, and naming the power first stopped
+it firing; with the pass gone, `std::ldexp(x, n)` is emitted again rather than a
+separate power and product.
+
+What replaced it is nothing: the emitter mints a name where it needs one, which
+is 50 sites over the corpus (`test_bind_profile.py` pins them), against the
+1236 mentions the pass was producing. Two routes were considered and rejected
+while it was still in place, and both stay rejected:
 
 - **Resolving the power through its name** in the emitter
   (`defining_expr(scale)`) is *unsound*: `StorageInfer` gives two definitions of
@@ -260,15 +261,12 @@ Two fixes were tried and rejected:
   product reads whatever a later branch put there. `k = n; p = 2 ** k; if c: k =
   m; return x * p` computed `x * 2**m`. Pinned by
   `test_the_exponent_is_not_re_read_at_the_product`.
-- **Teaching `ANF` not to name a `Pow`** works, but lets one backend's peephole
-  restrict a backend-independent pass — and only the shape that happened to have
-  a test, since `_fold_rounded_literal`, `_concrete_int_of` and
+- **Teaching `ANF` not to name a `Pow`** would let one backend's peephole
+  restrict a backend-independent pass, and only for the shape that happened to
+  have a test — `_fold_rounded_literal`, `_concrete_int_of` and
   `_range_counter_scalar` match syntax the same way.
 
-The real fix is to strength-reduce before codegen, which needs a language-level
-scale operation: FPy has no `ldexp`/`scalb`, so there is nothing for an FPy-level
-transform to rewrite *into*. See
-[backend-independence.md](backend-independence.md) §6.
+The pass remains available as `fpy2.strategies.to_anf`.
 
 ### Unchecked subscripts are not a bug
 
@@ -321,46 +319,66 @@ the *number* of compilable programs, and it is out of scope above.
 
 ### Recovering from an unsupported rounding instead of refusing
 
-*Open.* Every refusal in this area already names the operator that fixes it —
-`_require_cast_is_round` says "lower it first with `monomorphize ->
-unfold_overflow -> float_to_fixed -> rescale_fixed`", and
-`_emit_integral_round` names `rescale_fixed` and `unfold_overflow` by hand. The
-proposal is to run them rather than print them, as a ladder keyed to what is
-unsupported:
+*Done, behind `CppCompiler(unfold=UnfoldMode....)`* — `ROUNDINGS` for
+the second row alone, `DOUBLE_ROUND` for both. Every refusal in this area
+named the operator that fixes it; the flag runs them instead. Detection is
+`fpy2/backend/cpp/unfold_round.py`, which asks `is_native_ctx` on the
+specialized AST — before the analyses the emitter needs, and before the format
+inference the rewrite exists to make succeed. Two rows:
 
 | unsupported | recovery |
 |---|---|
-| a rounding under a non-native *float* context | `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed → simplify` |
-| a rounding under a fixed-point context the backend cannot lower | `unfold_overflow → rescale_fixed → simplify` — the two the refusals name |
-| *arithmetic* under either | `split_round` first: compute at an intermediate the op table has, re-round to the target, then the residual rounding is one of the rows above |
+| *arithmetic* under a non-native context | `SplitRound` through a native intermediate: compute wide, re-round to the target |
+| the rounding that leaves, and any other | `UnfoldSpecial → UnfoldOverflow → FloatToFixed → RescaleFixed` |
 
-The third row is a deliberate double rounding, and it is safe for a specific
-reason: `split_round` is gated on the correct-double-rounding table, so it
-applies only where the two roundings compose to what the single one gave, and
-declines otherwise. That is the difference between this and simply computing
-wide and truncating.
+The first row is a deliberate double rounding, safe for a specific reason:
+`SplitRound` is gated on the correct-double-rounding rules, so it applies only
+where the two roundings compose to what the single one gave, and declines
+otherwise. That is the difference between this and computing wide and
+truncating.
 
-**What it buys is coverage, not a smaller backend.** Measured on the
-`test_lowered_roundtrip` programs: after the full sequence
-`_emit_integral_round`, `_emit_integral_value` and `_bound_test` all still fire
-— the libm call and the bound assertion are the emitter's work either way. The
-gain is that programs which today refuse would compile.
+**What it buys is coverage, not a smaller backend.** `_emit_integral_round`,
+`_emit_integral_value` and `_bound_test` all still fire after the sequence — the
+libm call and the bound assertion are the emitter's work either way. The gain is
+that programs which refused now compile, bit-exactly:
+`test_lowered_roundtrip` drives all fourteen targets through the flag, and
+`TestArithRoundtrip` covers `sqrt`, `/` and `+` under three of them.
 
-What it needs:
+It never costs a diagnosis: where the rewrite leaves a program that still
+fails, it fails further along than the original would have, so
+`compile_module` asks the unrewritten one and reports that.
 
-- **Detection before analysis.** The refusals fire during emission, after every
-  analysis has run, which is too late to rewrite. The condition has to be found
-  on the specialized AST first — `st.sites` plus a cursor per site, since
-  `simplify` does not take cursors and a whole-program run would rewrite
-  roundings that did not need it.
-- **A place in the order.** After `RoundElim` and before `ANF`, for the reason
-  in [backend-independence.md](backend-independence.md) §1: naming materializes,
-  so a pass that folds or deletes has to precede one that names.
-- **An opt-out.** This turns the compiler from a checker into a rewriter, and
-  `float_to_fixed` states a value-class branch per site — on a program with many
-  roundings that is a large amount of emitted code, so far unmeasured. A flag
-  alongside `unsafe_cast_int` and `UnboxMode` keeps the refusal available for
-  callers who would rather see it.
+**No round-to-odd level**, though it is the mode `derive_intermediate` returns
+and the one Figure 8 covers for arbitrary reals — so it is accepted exactly
+where every native candidate is refused (`exp` anywhere, `div` / `sqrt` under a
+directed or saturating target). It gives `MPFloatContext(pmax=13, rm=RTO)`, and
+no native mode is RTO, so the split moves the site rather than removing it;
+splitting *that* one needs RTO over RTO, which widens by a bit each time, or
+exactness, which those three operations have not got. It becomes reachable if an
+unbounded RTO operation becomes emittable — the bit-reinterpreting soft-float
+direction in [native-lowering-roadmap.md](native-lowering-roadmap.md).
+
+What is left:
+
+- **What `DOUBLE_ROUND` costs** is unmeasured: `FloatToFixed` states a
+  value-class branch per site, so an `FP16` add is 47 emitted lines and a
+  two-operation polynomial 135. The corpus does not exercise it, the flag being
+  off there.
+- **A user-written fixed-point target never benefits.** The row is reachable
+  only from inside the flow, where `FloatToFixed` produces a bounded context at
+  a known position over an operand `UnfoldSpecial` has classified. A
+  hand-written one fails for two reasons outside this work: `UnfoldOverflow`
+  states no rule for `WRAP` or for an unbounded format, and `RescaleFixed`'s
+  shift lands under a context the storage ladder has no entry for — the same gap
+  that makes `MPFixedContext(-1)` refuse with no site at all.
+- **Arithmetic needs its operands in the target format.** The per-operation
+  rules hold for operands the target represents, so `x + y` under `FP16` wants
+  `FP16` arguments; a program holding `FP32` values and rounding to `FP16` per
+  operation is the natural shape and reaches no rule. What it needs is a rule
+  quantified over the operand format.
+- **A transcendental has no rule at all.** `exp` keeps its refusal under a
+  nearest target; the only remaining route is exactness, which needs a
+  correctly-rounded implementation to compare against.
 
 ### A narrower value meeting a wider place
 
@@ -549,35 +567,12 @@ A short package README pointing at this file and listing the public surface
 
 ## Comprehension lowering: in the pipeline
 
-`CppCompiler.specialize()` runs `fpy2.transform.Hoistable` and
-`fpy2.transform.CompToLoop` to a **fixpoint** (`_to_statement_form`), so every
-comprehension is an `fp.empty` allocation plus a `for` loop before the emitter
-sees one. Neither pass is a fixpoint alone: `Hoistable` seals a comprehension's
-element for want of a statement slot and `CompToLoop` makes the loop that *is*
-that slot; `CompToLoop` declines a comprehension in a ternary arm or a `while`
-condition for want of one, and `Hoistable` creates it. It terminates because
-`CompToLoop` reports an edit only where it lowered a comprehension and neither
-pass builds one.
-
-Wiring it cost nothing: 202 corpus programs either way.
-
-**Including the dependent clause list**, where a clause's iterable reads an
-earlier clause's target and the length is a sum rather than a product.
-`CompToLoop` builds the rows, adds up their lengths and flattens — the rewrite
-`derived-semantics.rst` prescribes. It costs a materialised row per outer
-element, which the emitter's own flatten does not, and that was the argument for
-keeping the emitter's: `_open_list_build` needs no length up front, picking
-`std::array` filled through a running index where the length was proven and
-`std::vector` with `push_back` otherwise. What settles it the other way is that
-the two cannot coexist — a total `CompToLoop` leaves nothing for the emitter to
-fuse — and a language whose backends each carry their own comprehension lowering
-is the thing this was for.
-
-So `_visit_list_comp`, `_emit_list_comp_at` and `_open_comp_loop` are now dead,
-along with the `_emit_at` case, two `storage_infer` match arms and one
-`_ALLOC_EXPRS` entry — about 90 lines. They should come out behind a tripwire, a
-`ListComp` reaching the emitter raising a `CppEmitError` that names a backend
-bug, rather than by removal.
+`_to_statement_form` runs `Hoistable`, the derived-iterable unfolds and
+`CompToLoop` to a fixpoint, so no comprehension, `zip` or `enumerate` reaches
+the emitter: each of `_visit_list_comp`, the `Zip` case and the `Enumerate`
+case is a tripwire that names a backend bug. Why each lowering is total, and
+what it cost, is §8 and §10 of
+[backend-independence.md](backend-independence.md).
 
 ## Out of scope
 

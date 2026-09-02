@@ -370,14 +370,20 @@ class _DeadCodeEliminate:
                     case _:
                         raise RuntimeError(f'unexpected def: {d}')
 
-            # if a phi variable is unused, then its arguments are also unused
+            # An unused phi does not make its arguments unused: a phi is not a
+            # use site, so an argument read inside its own branch has uses the
+            # merge knows nothing about.  Removing one of those deletes a
+            # definition its branch still reads.
             for phi in unused_phi:
-                lhs = self.def_use.defs[phi.lhs]
-                rhs = self.def_use.defs[phi.rhs]
-                if isinstance(lhs, AssignDef) and isinstance(lhs.site, Assign) and isinstance(lhs.site.target, Id):
-                    unused_assign.add(lhs.site)
-                if isinstance(rhs, AssignDef) and isinstance(rhs.site, Assign) and isinstance(rhs.site.target, Id):
-                    unused_assign.add(rhs.site)
+                for i in (phi.lhs, phi.rhs):
+                    d = self.def_use.defs[i]
+                    if (
+                        isinstance(d, AssignDef)
+                        and isinstance(d.site, Assign)
+                        and isinstance(d.site.target, Id)
+                        and not self.def_use.uses[d]
+                    ):
+                        unused_assign.add(d.site)
 
             # run code eliminator
             self.func, eliminated = _Eliminator(

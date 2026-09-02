@@ -50,6 +50,6 @@ class CopyPropagate:
         if not prop:
             return func, False
 
-        func = SubstVar.apply(func, def_use, prop)
+        func, changed = SubstVar.apply_with_status(func, def_use, prop)
         SyntaxCheck.check(func, ignore_unknown=True)
-        return func, True
+        return func, changed

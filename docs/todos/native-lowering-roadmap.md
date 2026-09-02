@@ -106,25 +106,21 @@ Three ideas, each recorded where it was learned:
 
 ## The gaps that remain
 
-### 1. Backend cleanups
+Neither blocks anything, so the open questions below are the interesting work.
 
-- `(2 ** n) * x` still fails for an `n` typed `SINT64` or `INTEGER` --- correctly,
-  since no float holds every `int64_t` --- but the refusal now names the limit
-  (`double` holds integers exactly only up to 53 bits) and points at the operand's
-  own context rather than the active one, which widening cannot fix. Both
-  suggestions are pinned as compiling tests. `SINT8`/`SINT16`/`SINT32` convert
-  exactly and need no advice.
-- Cosmetic: redundant `static_cast<double>` on integer literals, and a doubled
-  `static_cast<double>(static_cast<double>(2))`.
+### 1. Cosmetics
+
+Redundant `static_cast<double>` on integer literals, and a doubled
+`static_cast<double>(static_cast<double>(2))`.
 
 ### 2. A recipe
 
 `monomorphize → unfold_special → unfold_overflow → float_to_fixed →
-rescale_fixed → simplify` is the sequence, and all six are now verified together,
-bit-for-bit against the interpreter, from both an `FP32` and an `FP64` source
-across fourteen targets — `_lower` in
-`tests/unit/backend/cpp/test_lowered_roundtrip.py`. Each of `unfold_special` and
-`simplify` changes the result there, so the coverage is real and not nominal.
+rescale_fixed → simplify` is the sequence, verified composed and bit-for-bit
+against the interpreter from both an `FP32` and an `FP64` source across fourteen
+targets — `_lower` in `tests/unit/backend/cpp/test_lowered_roundtrip.py`. Each of
+`unfold_special` and `simplify` changes the result there, so the coverage is real
+and not nominal.
 
 `unfold_special` belongs in front of `unfold_overflow`: it states the specials
 once at the outside, so `float_to_fixed` emits no ladder of its own (value classes
@@ -132,45 +128,18 @@ read the branches) and `logb` is computed once. `unfold_neg_zero` is *not* in th
 sequence — nothing reaches it, since the zero branch has already said what each
 zero rounds to.
 
-**Still not exposed as one entry point, but the reason has changed.** Composition
-used to have no way to carry a *location*: once the first operator rewrote at a
-program point, the later ones re-scanned the whole program with a `where` index
-that no longer counted the same candidates. That is fixed — `where` takes a cursor
-the strategies forward across each step, so one location aims the whole sequence
-(`_lower_at` in `tests/unit/backend/cpp/test_lowered_roundtrip.py` lowers one
-rounding of a two-rounding program and leaves the other alone). What remains is
-just the entry point itself: the parameterized recipe below, taking a function, a
-location and a target descriptor. See
+**The cpp backend has an entry point**, `CppCompiler(unfold=...)`: it finds its
+own sites and runs the sequence, with a `split_round` step in front for
+arithmetic the op table cannot spell. See *Recovering from an unsupported
+rounding* in [backend-cpp.md](backend-cpp.md).
+
+What is still missing is a **parameterized** recipe for a caller lowering by
+hand — a function, a location and a target descriptor. Composition used to have
+no way to carry a location, and that is fixed: `where` takes a cursor the
+strategies forward across each step, so one location aims the whole sequence
+(`_lower_at` in the same file lowers one rounding of a two-rounding program and
+leaves the other alone). Only the entry point itself is left. See
 [scheduling-language.md](scheduling-language.md) items 3 and 7.
-
-Unrelated to lowering, but found along this path — each reproduces well before
-the change that turned it up, so none is a regression:
-
-- `fp.round_at(x, n)` raises `IndexError: tuple index out of range` from
-  `fpy2/analysis/type_infer.py:440` — a crash in type inference where a
-  diagnostic belongs.
-- **`unfold_overflow` emits an unconstructible context.** A source with a
-  `nan_value` / `inf_value` substitute has it written into the rewritten program
-  as a *numeric literal*, and `MPFixedContext` requires a `Float` — so
-  `MPFixedContext(-4, inf_value=7)` raises and the rewritten program cannot be
-  evaluated at all.
-- **An integer-typed source cannot be compiled.** `with fp.FP16: round(x)` over a
-  `SINT32` argument lowers cleanly but crashes format inference on the way to
-  C++: `AbstractFormat.format()` builds an `MPBFixedFormat` whose `pos_maxval` of
-  `1024` is unrepresentable at the chosen `nmin`.
-
-## Order of work
-
-The mode table, the `Round`/`Cast` context checks, the value-class analysis and
-the `FP64` source are done and their sections retired; what they settled is
-recorded under *What the path rests on*. Both remaining gaps are small, and
-neither blocks anything:
-
-1. **Backend cleanups** — gap 1, a diagnostic and some redundant casts.
-2. **A recipe** — gap 2, the thing that makes the path usable by someone who did
-   not write it.
-
-With the goal reached, the open questions below are now the interesting work.
 
 ## Open questions
 

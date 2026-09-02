@@ -49,39 +49,15 @@ expected to do the rest.
 
 ## Open items
 
-### The inverse operator — **built**
+### `insert_round` is not this pass read backwards
 
-`insert_round` — turn an op under `with fp.REAL:` back into a rounded
-one whose rounding is an identity — is this pass read backwards. It is
-gap 1 of [rounding-axes.md](rounding-axes.md), now closed, as is
-`split_round` on the same axis; only `merge_round` is left. Note that
-the two are *not* inverses as written. `_is_eliminable` hoists only when the
-unrounded format is *strictly tighter* than the scope's, since an
-unbounded scope makes `round_is_identity` vacuously true while giving
-downstream consumers nothing to narrow with — and the cpp backend's
-storage selection cannot pick a type for a saturated format. Those are
-exactly the cases `insert_round` exists to undo, so composing the two
-is not obviously terminating.
-
-### Pair RoundElim with a const-prop + copy-prop + DCE cleanup invocation
-
-The per-op unconditional-bind scheme leaves redundant `_t = literal`
-and `_t = v` chains.  The full cleanup chain is `ConstPropagate`
-then `CopyPropagate` then `DeadCodeEliminate`: const-prop inlines
-literal-bound temps so they become dead, copy-prop collapses
-Var→Var aliases, DCE removes the unused assigns.  None of these
-are invoked from inside `RoundElim` today.  Either:
-
-- Make `RoundElim.apply` optionally chain them (e.g.,
-  `RoundElim.apply(func, cleanup=True)`), so callers get a tight
-  AST in one step.
-- Or document the recommended chain in the module docstring (done)
-  and expect pipeline callers to wire it themselves.
-
-The latter is simpler; the former is friendlier.  The cpp
-backend's `optimize=True` pipeline currently does neither —
-adding the chain after `RoundElim` in `_run_pipeline` is the
-natural integration point.
+`_is_eliminable` hoists only where the unrounded format is *strictly tighter*
+than the scope's: an unbounded scope makes `round_is_identity` vacuously true
+while giving downstream consumers nothing to narrow with, and the cpp backend's
+storage selection cannot pick a type for a saturated format. Those are exactly
+the cases `insert_round` exists to undo, so composing the two is not obviously
+terminating — see the open questions in
+[rounding-axes.md](rounding-axes.md).
 
 ### Widen the candidate set past the arithmetic ops
 

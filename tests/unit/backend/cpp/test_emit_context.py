@@ -464,10 +464,10 @@ class TestRealScopeLosslessWidening:
     def test_mixed_storage_widens_through_wider_ctx(self):
         """``with fp.REAL:`` over mixed-storage operands.
 
-        ``round(0.01)`` infers to an ``FP32`` bound (storage ``float``);
-        ``round(0.0)`` infers to ``SetFormat({0})`` (storage ``uint8_t``).  The
-        multiplication cannot run at ``uint8_t`` width, so the widening picks
-        the ``(float, float) → float under FP32`` sig and upcasts the zero
+        ``x`` infers to an ``FP32`` bound (storage ``float``); ``round(0.0)``
+        infers to ``SetFormat({0})`` (storage ``uint8_t``).  The multiplication
+        cannot run at ``uint8_t`` width, so the widening picks the
+        ``(float, float) → float under FP32`` sig and upcasts the zero
         operand.
 
         The *result* is ``float``, not ``uint8_t``: ``F * {0}`` no longer infers
@@ -478,11 +478,11 @@ class TestRealScopeLosslessWidening:
         ``static_cast<uint8_t>(NaN)``.
         """
         @fp.fpy(ctx=fp.FP32)
-        def f() -> fp.Real:
-            return fp.round(0.01) * fp.round(0.0) + fp.round(0.0)
+        def f(x: fp.Real) -> fp.Real:
+            return x * fp.round(0.0) + fp.round(0.0)
 
-        out = CppCompiler().compile(f, ctx=fp.FP32)
-        assert 'float f(' in out
+        out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
+        assert 'float f(float x)' in out
         assert 'uint8_t' not in out, out
         # The widening still upcasts the narrow zero operand for the product.
         assert 'static_cast<float>(' in out
@@ -592,6 +592,5 @@ class TestRoundIntoAFixedScope:
         )
         assert out.startswith('int64_t g(const std::array<float, 32>& xs)'), out
         assert 'int64_t acc = 0;' in out, out
-        # statement form names the rounded element; the accumulator stays int
-        assert 'int64_t t = static_cast<int64_t>(x);' in out, out
-        assert 'acc = (acc + t);' in out, out
+        # the accumulator stays int, with the element rounded in place
+        assert 'acc = (acc + static_cast<int64_t>(x));' in out, out

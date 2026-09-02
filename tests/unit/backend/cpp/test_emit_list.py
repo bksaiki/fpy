@@ -22,15 +22,18 @@ class TestListLiteral:
 
     def test_list_of_ints(self):
         @fp.fpy
-        def f() -> fp.Real:
+        def f(a: fp.Real) -> fp.Real:
             with fp.FP64:
-                xs = [1, 2, 3]
-                return xs[0]
+                xs = [a, 2, 3]
+                return xs[1]
 
-        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        # three literal elements: the length is proven, so a std::array
-        assert 'std::array<uint8_t, 3>' in out
-        assert '{{1, 2, 3}}' in out
+        out = CppCompiler().compile(
+            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
+        )
+        # three elements, so the length is proven and the storage is an array.
+        # One comes from a parameter: a wholly literal list folds away.
+        assert 'std::array<double, 3>' in out
+        assert ('{{a, static_cast<double>(2), static_cast<double>(3)}}') in out
 
     def test_list_passed_through_args(self):
         """A list-typed argument keeps its ``std::vector<T>`` storage
@@ -110,10 +113,10 @@ class TestListComp:
                 return ys[0]
 
         out = _compile_list_arg(f)
-        # the source is bound by reference, then indexed; the result is
-        # allocated at its length and filled by index, never grown
-        assert re.search(r'const auto& \w+ = xs;', out)
-        assert re.search(r'double x = \w+\[static_cast<size_t>\(\w+\)\];', out)
+        # the source is indexed directly -- copy propagation reaches the alias
+        # the lowering binds -- and the result is allocated at its length and
+        # filled by index, never grown
+        assert re.search(r'double x = xs\[static_cast<size_t>\(\w+\)\];', out)
         assert re.search(
             r'ys\[static_cast<size_t>\(\w+\)\] = '
             r'\(x \+ static_cast<double>\(1\)\);', out,

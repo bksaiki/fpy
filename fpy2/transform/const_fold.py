@@ -97,6 +97,12 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         # No-op: the literal we'd substitute is already at this site.
         if type(e) is type(lit) and e.is_equiv(lit):
             return None
+        if isinstance(lit, ListExpr | TupleExpr):
+            # An aggregate literal is an *allocation*, so substituting one is
+            # not the shrink a scalar fold is: it replaces a compact producer
+            # (a name, a `range(n)`) with a materialized list, once per use
+            # site, and each is a distinct object where the name was one.
+            return None
         is_ctx_fold = isinstance(lit, ForeignVal) and isinstance(lit.val, Context)
         if is_ctx_fold:
             if not self.enable_context:
@@ -123,10 +129,14 @@ class ConstFold:
 
     Substitutes any expression whose value is statically known with
     a literal AST node — operators, ``Var`` and ``Attribute`` lookups,
-    ``Compare`` chains, context-constructor :class:`Call` s, tuple /
-    list literals, list indexing and slicing.  Static values come
-    from :class:`PartialEval`; pass an existing analysis via
+    ``Compare`` chains, context-constructor :class:`Call` s, list
+    indexing and slicing.  Static values come from
+    :class:`PartialEval`; pass an existing analysis via
     ``partial_eval=`` to avoid re-running it.
+
+    A list or tuple *literal* is never substituted, however statically
+    known: it allocates, so putting one at a use site is not the shrink
+    a scalar fold is.
 
     Excluded: values that don't have an FPy literal form (Python
     types, functions, modules, containers whose elements aren't

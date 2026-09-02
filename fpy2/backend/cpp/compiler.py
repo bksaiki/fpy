@@ -10,7 +10,6 @@ surface as :class:`CppCompileError`.
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ...analysis import (
     Alias,
@@ -34,14 +33,16 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import (
-    ANF,
     CompToLoop,
     EnumerateElim,
     FreeVarElim,
     Hoistable,
     ReduceFusion,
     RoundElim,
+    Simplify,
     Specialize,
+    UnfoldEnumerate,
+    UnfoldZip,
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
@@ -60,14 +61,17 @@ from .unbox import (
     check_strict,
     return_storage,
 )
+from .unfold_round import UnfoldMode
+from .unfold_round import unfold as unfold_round
 from .utils import CPP_HEADERS, CPP_HELPERS
 from .variables import VariableAlloc, VariableAnalysis
 
-_UnboxMode: TypeAlias = UnboxMode
-"""Annotation-only alias: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
-enum inside the class body.  Runtime resolves the shadow to the same object;
-type checkers reject an attribute used as a type, so annotations there need
-this name instead."""
+_UnboxMode = UnboxMode
+_UnfoldMode = UnfoldMode
+"""Aliases the class attributes below are assigned from.  ``UnboxMode =
+UnboxMode`` in a class body resolves at runtime but reads as a self-reference,
+which a type checker cannot follow -- so completion on
+``CppCompiler.UnboxMode.`` gives nothing."""
 
 
 class CppCompileError(CompileError):
@@ -100,24 +104,31 @@ class SpecAnalyses:
 
 
 def _to_statement_form(fd: FuncDef) -> FuncDef:
-    """Hoistable form, with every comprehension lowered.
+    """Hoistable form, with every comprehension and derived iterable lowered.
 
-    Neither pass is a fixpoint alone and each supplies what the other lacks.
+    No pass here is a fixpoint alone and each supplies what the others lack.
     ``Hoistable`` seals a comprehension's element -- it runs once per iteration,
     so the slot before the enclosing statement is no place for its temporaries --
     and ``CompToLoop`` makes the loop that *is* that slot; ``CompToLoop``
     declines a comprehension in a ternary arm or a ``while`` condition for want
-    of a slot, and ``Hoistable`` gives it one.
+    of a slot, and ``Hoistable`` gives it one.  The unfolds need a slot too, and
+    a ``zip`` inside a comprehension only gets one once ``CompToLoop`` has
+    opened it.
 
     Iterating terminates without a cap, though not because the comprehension
     count falls -- lowering a dependent clause list *raises* it, peeling one
     comprehension into a row comprehension plus a nested one.  What falls is the
     clause count of the dependent one, by one per peel, and a single-clause
-    comprehension cannot be dependent.  Everything else lowers outright, and
-    ``Hoistable`` is idempotent over its own output.
+    comprehension cannot be dependent.  The unfolds lower the count of `Zip` and
+    `Enumerate` nodes, which nothing here creates.  Everything else lowers
+    outright, and ``Hoistable`` is idempotent over its own output.
     """
     while True:
         fd = Hoistable.apply(fd)
+        # after `Hoistable`, which gives each a slot for the binding it needs,
+        # and before `CompToLoop`, which lowers the comprehension it leaves
+        fd = UnfoldEnumerate.apply(fd)
+        fd = UnfoldZip.apply(fd)
         log = CompToLoop.apply_with_edits(fd)
         if not log.edits:
             return fd
@@ -243,8 +254,8 @@ class CppCompiler(Backend):
         optimize:
             Run the optimizing transforms listed in :meth:`specialize`.  Sound
             either way; ``False`` skips them.  It does *not* mean the surface AST
-            reaches the emitter untouched: ``FreeVarElim`` and ``ANF`` run
-            regardless.  Default ``True``.
+            reaches the emitter untouched: ``FreeVarElim`` and
+            :func:`_to_statement_form` run regardless.  Default ``True``.
         unbox:
             An :class:`~fpy2.backend.cpp.unbox.UnboxMode` (also reachable as
             ``CppCompiler.UnboxMode``).  ``ALLOW`` drops the handle where
@@ -262,30 +273,49 @@ class CppCompiler(Backend):
             ``ListType`` *length* gets an array parameter, and a trusted
             ``assert len(xs) == K`` becomes a type-level commitment.  No effect
             under ``unbox=NEVER``, where nothing is a value.  Default ``True``.
+        unfold:
+            An :class:`~fpy2.backend.cpp.unfold_round.UnfoldMode` (also
+            reachable as ``CppCompiler.UnfoldMode``).  ``ROUNDINGS`` lowers a
+            rounding the op table cannot spell into integer arithmetic instead
+            of refusing it; ``DOUBLE_ROUND`` also computes arithmetic under
+            such a context at a native intermediate and re-rounds, where the
+            correct-double-rounding rules say the two compose to what the one
+            gave.  Default ``NONE``: the refusal is a checker's answer, and
+            turning the compiler into a rewriter has to be asked for.
     """
 
-    UnboxMode = UnboxMode
-    """The mode enum for ``unbox``, re-exported so callers holding the
-    compiler need not import :mod:`fpy2.backend.cpp.unbox`."""
+    UnboxMode = _UnboxMode
+    UnfoldMode = _UnfoldMode
+    """The mode enums for ``unbox`` and ``unfold``, re-exported so callers
+    holding the compiler need not import the modules defining them."""
 
     _unsafe_cast_int: bool
     _optimize: bool
     _unbox: _UnboxMode
+    _unfold: _UnfoldMode
     _arrays: bool
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
         unbox: _UnboxMode = UnboxMode.STRICT, arrays: bool = True,
+        unfold: _UnfoldMode = UnfoldMode.NONE,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
                 f'`unbox` must be an UnboxMode, got {unbox!r}; '
                 'use UnboxMode.ALLOW / UnboxMode.NEVER instead of a bool'
             )
+        if not isinstance(unfold, UnfoldMode):
+            raise TypeError(
+                f'`unfold` must be an UnfoldMode, got {unfold!r}; '
+                'use UnfoldMode.ROUNDINGS / UnfoldMode.DOUBLE_ROUND '
+                'instead of a bool'
+            )
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
         self._arrays = arrays
+        self._unfold = unfold
 
     # ------------------------------------------------------------------
     # Translation-unit preamble.  ``compile`` returns a function definition
@@ -332,6 +362,26 @@ class CppCompiler(Backend):
         optimizations now that format inference is monomorphic, then codegen
         leaves-first.
         """
+        try:
+            return self._compile_module(module)
+        except CppCompileError:
+            if self._unfold is UnfoldMode.NONE:
+                raise
+            # The rewrite left a program that still does not compile, and it
+            # fails further along: a rounding the emitter could name became a
+            # temporary storage selection cannot place.  Report what the
+            # unrewritten program says, so the flag never costs a diagnosis.
+            self._without_unfold()._compile_module(module)
+            raise   # it compiled unrewritten, so the rewrite's own error stands
+
+    def _without_unfold(self) -> 'CppCompiler':
+        """This compiler with the rewrite off, for a second opinion."""
+        return CppCompiler(
+            unsafe_cast_int=self._unsafe_cast_int, optimize=self._optimize,
+            unbox=self._unbox, arrays=self._arrays, unfold=UnfoldMode.NONE,
+        )
+
+    def _compile_module(self, module: Module) -> str:
         specs = self.specialize(module)
         params: dict[FuncDef, CalleeAbi] = {}
         return '\n\n'.join(
@@ -396,18 +446,26 @@ class CppCompiler(Backend):
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 
-        # Unconditionally: `ANF` requires hoistable form and raises without it.
         # Before `RoundElim`, whose hoist is suppressed in two of the positions
-        # this gives a slot; every pass in between must preserve the form.
+        # this gives a slot.
         specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
 
-        # Last: naming an expression *materializes* it, so anything that
-        # deletes or folds runs first -- and it removes the shapes
-        # `ReduceFusion`, `ZipElim` and `EnumerateElim` match on.
-        specialized = specialized.map(lambda _m, fd: ANF.apply(fd))
+        if self._unfold is not UnfoldMode.NONE:
+            # after `RoundElim`, which removes roundings this would otherwise
+            # lower, and re-normalized after: the lowering emits `with` blocks
+            # and branches of its own.
+            mode = self._unfold
+            specialized = specialized.map(lambda _m, fd: unfold_round(fd, mode))
+            specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
+
+        if self._optimize:
+            # Last, and after everything that names: the lowerings above leave
+            # debris only a later pass can see -- a length read into a name
+            # nothing goes on to use, a copy of an accumulator.
+            specialized = specialized.map(lambda _m, fd: Simplify.apply(fd))
 
         return list(specialized.call_graph().order)
 

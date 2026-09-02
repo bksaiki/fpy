@@ -99,14 +99,20 @@ class TestInexactLiterals:
 
     def test_a_narrower_target_still_gets_its_cast(self):
         """Rounded at FP32, printed as the double that holds it exactly, then
-        cast — a conversion no mode can change."""
+        cast — a conversion no mode can change.
+
+        Optimized, the fold reaches the literal itself and the token stands
+        alone: the value is a ``float`` exactly, so nothing narrows.
+        """
         @fp.fpy
         def f() -> fp.Real:
             with fp.FP32:
                 return fp.round(0.1)
 
+        no_opt = CppCompiler(optimize=False).compile(f, ctx=fp.FP32, arg_types=[])
+        assert 'static_cast<float>(0.10000000149011612)' in no_opt
         out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[])
-        assert 'static_cast<float>(0.10000000149011612)' in out
+        assert 'return 0.10000000149011612;' in out
 
 
 class TestRoundExact:
@@ -251,10 +257,10 @@ class TestRoundElimIntegration:
 
     def test_arith_fits_scope_hoisted_to_real(self):
         """``(1.0 + 2.0) * 3.0`` under FP64: the unrounded result
-        ``SetFormat({9.0})`` fits FP64 exactly.  RoundElim should
-        hoist the chain into ``with fp.REAL:`` blocks; the emitter
-        then renders the body without ``fesetround`` boundaries
-        on the hoisted ops."""
+        ``SetFormat({9.0})`` fits FP64 exactly.  RoundElim hoists the chain
+        into ``with fp.REAL:`` blocks, and `Simplify` then folds what no
+        rounding stands between: the exact answer, no arithmetic, and no
+        ``fesetround`` boundary."""
 
         @fp.fpy
         def f():
@@ -264,8 +270,5 @@ class TestRoundElimIntegration:
         with_opt = CppCompiler(optimize=True).compile(
             f, ctx=fp.FP64, arg_types=[],
         )
-        # Hoisted: the per-op binds RoundElim emits surface as
-        # ``_t...`` temporaries.  At least one shows up.
-        assert '_t' in with_opt
-        # The final return value is the last hoisted result.
-        assert 'return _t' in with_opt
+        assert 'return 9;' in with_opt
+        assert 'fesetround' not in with_opt

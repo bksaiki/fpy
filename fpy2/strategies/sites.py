@@ -15,15 +15,18 @@ from ..transform import (
     RoundInsert,
     SplitLoop,
     SplitRound,
+    UnfoldEnumerate,
     UnfoldNegZero,
     UnfoldOverflow,
     UnfoldSpecial,
+    UnfoldZip,
     WhileUnroll,
 )
 from .comp_lower import comp_to_loop
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
 from .func_inline import inline
+from .iter_unfold import unfold_enumerate, unfold_zip
 from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
 from .neg_zero_unfold import unfold_neg_zero
@@ -41,6 +44,8 @@ _REFUSALS: dict[Callable, Callable] = {
     insert_round: RoundInsert.refusals,
     split_round: SplitRound.refusals,
     comp_to_loop: CompToLoop.refusals,
+    unfold_zip: UnfoldZip.refusals,
+    unfold_enumerate: UnfoldEnumerate.refusals,
     inline: FuncInline.refusals,
     split: SplitLoop.refusals,
     unroll_for: ForUnroll.refusals,
@@ -61,6 +66,8 @@ _SITES: dict[Callable, Callable] = {
     insert_round: RoundInsert.sites,
     split_round: SplitRound.sites,
     comp_to_loop: CompToLoop.sites,
+    unfold_zip: UnfoldZip.sites,
+    unfold_enumerate: UnfoldEnumerate.sites,
     split: SplitLoop.sites,
     unroll_for: ForUnroll.sites,
     unroll_while: WhileUnroll.sites,

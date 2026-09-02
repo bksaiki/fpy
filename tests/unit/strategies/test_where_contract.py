@@ -28,9 +28,11 @@ from fpy2.strategies import (
     sites,
     split,
     split_round,
+    unfold_enumerate,
     unfold_neg_zero,
     unfold_overflow,
     unfold_special,
+    unfold_zip,
     unroll_for,
     unroll_while,
 )
@@ -194,6 +196,32 @@ def _dependent_comprehension(xss: list[list[fp.Real]]) -> list[fp.Real]:
 
 
 @fp.fpy(ctx=fp.FP64)
+def _two_zips(xs: list[fp.Real], ys: list[fp.Real]):
+    a = zip(xs, ys)
+    b = zip(ys, xs)
+    return (a, b)
+
+
+@fp.fpy(ctx=fp.FP64)
+def _two_enumerates(xs: list[fp.Real], ys: list[fp.Real]):
+    a = enumerate(xs)
+    b = enumerate(ys)
+    return (a, b)
+
+
+@fp.fpy(ctx=fp.FP64)
+def _sealed_zip(xs: list[fp.Real], rs: list[list[fp.Real]]):
+    """A `zip` in a comprehension element: no statement slot for the bindings
+    the unfolding emits, so every candidate refuses."""
+    return [zip(xs, r) for r in rs]
+
+
+@fp.fpy(ctx=fp.FP64)
+def _sealed_enumerate(rs: list[list[fp.Real]]):
+    return [enumerate(r) for r in rs]
+
+
+@fp.fpy(ctx=fp.FP64)
 def _nested_ops(x: fp.Real) -> fp.Real:
     with fp.REAL:
         t = abs(x * x)
@@ -235,6 +263,8 @@ ACTS = [
     ('insert_round/nested', insert_round, _pin(_nested_ops, 1), _FP64),
     ('comp_to_loop', comp_to_loop, _comprehension, {}),
     ('split_round', split_round, _two_rounded, _VIA32),
+    ('unfold_zip', unfold_zip, _two_zips, {}),
+    ('unfold_enumerate', unfold_enumerate, _two_enumerates, {}),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the
@@ -255,6 +285,8 @@ REFUSES = [
     # an intermediate no wider than the target: no rule admits it, generic or
     # operation-specific
     ('split_round/refuses', split_round, _two_rounded, {'ctx': fp.FP32}),
+    ('unfold_zip/refuses', unfold_zip, _sealed_zip, {}),
+    ('unfold_enumerate/refuses', unfold_enumerate, _sealed_enumerate, {}),
 ]
 
 # `unroll_while` has no row: it refuses nothing at all.
