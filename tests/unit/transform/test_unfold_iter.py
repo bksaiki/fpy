@@ -52,6 +52,41 @@ class TestZip:
         xs, ys = [1.5, 2.0, 3.25], [0.5, 4.0, 1.0]
         assert f(xs, ys) == f.with_ast(UnfoldZip.apply(f.ast))(xs, ys)
 
+    def test_no_arguments_is_the_empty_list(self):
+        """``zip()`` is legal and evaluates to ``[]``.  Reading the first
+        iterable's length is no answer for it, so the unfolding says ``[]``
+        outright -- and the backend then refuses it for having no element type,
+        which is a diagnostic rather than a crash."""
+        @fp.fpy(ctx=fp.FP64)
+        def f():
+            return zip()
+
+        out = f.with_ast(UnfoldZip.apply(f.ast))
+        assert 'return []' in _text(f, out.ast)
+        assert out() == f()
+
+    def test_a_single_iterable_needs_no_assert(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]):
+            return zip(xs)
+
+        out = _text(f, UnfoldZip.apply(f.ast))
+        assert 'assert' not in out
+        assert f.with_ast(UnfoldZip.apply(f.ast))([1.0, 2.0]) == f([1.0, 2.0])
+
+    def test_mismatched_lengths_fail_rather_than_truncate(self):
+        """Undefined either way, and the unfolding does not quietly pick the
+        shorter one: the surface form raises from the interpreter's own strict
+        `zip`, the unfolded one from the assertion it claims."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]):
+            return zip(xs, ys)
+
+        with pytest.raises(ValueError):
+            f([1.0, 2.0], [3.0])
+        with pytest.raises(AssertionError):
+            f.with_ast(UnfoldZip.apply(f.ast))([1.0, 2.0], [3.0])
+
 
 class TestEnumerate:
     def test_the_shape_it_states(self):

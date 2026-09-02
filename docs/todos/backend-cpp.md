@@ -567,10 +567,11 @@ A short package README pointing at this file and listing the public surface
 
 ## Comprehension lowering: in the pipeline
 
-`_to_statement_form` runs `Hoistable` and `CompToLoop` to a fixpoint, so every
-comprehension is an `fp.empty` allocation plus a `for` loop before the emitter
-sees one, and `_visit_list_comp` is a tripwire that names a backend bug. Why the
-lowering is total, and what it cost, is §8 of
+`_to_statement_form` runs `Hoistable`, the derived-iterable unfolds and
+`CompToLoop` to a fixpoint, so no comprehension, `zip` or `enumerate` reaches
+the emitter: each of `_visit_list_comp`, the `Zip` case and the `Enumerate`
+case is a tripwire that names a backend bug. Why each lowering is total, and
+what it cost, is §8 and §10 of
 [backend-independence.md](backend-independence.md).
 
 ## Out of scope

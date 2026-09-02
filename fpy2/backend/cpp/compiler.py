@@ -114,8 +114,7 @@ def _to_statement_form(fd: FuncDef) -> FuncDef:
     declines a comprehension in a ternary arm or a ``while`` condition for want
     of a slot, and ``Hoistable`` gives it one.  The unfolds need a slot too, and
     a ``zip`` inside a comprehension only gets one once ``CompToLoop`` has
-    opened it -- measured: a single pass leaves 2 of them on the corpus, and 9
-    unoptimized, while iterating leaves none.
+    opened it.
 
     Iterating terminates without a cap, though not because the comprehension
     count falls -- lowering a dependent clause list *raises* it, peeling one

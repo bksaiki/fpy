@@ -7,7 +7,7 @@ from ..function import Function
 from ..transform import Cursor, UnfoldEnumerate, UnfoldZip
 
 
-def _unfold(cls, name: str, func: Function, where, temp_id) -> Function:
+def _unfold(cls, func: Function, where, temp_id) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f'Expected a \'Function\', got {func}')
     return func.with_ast(cls.apply(
@@ -28,24 +28,19 @@ def unfold_zip(
     other iterable is that long, so the unfolding is that assertion followed by
     ``[(xs1[i], ..., xsk[i]) for i in range(len(xs1))]``.  The assertion is a
     *claim*: unequal lengths are undefined in FPy, so it says what a
-    well-defined program already guarantees rather than adding a check.
-
-    It also carries what the surface node knew.
-    :class:`fpy2.analysis.ArraySizeInfer` treats an unconditional ``zip`` as
-    strict and pins its iterables' lengths together, and it reads an assert the
-    same way — so without the assertion a proven length on one iterable would
-    stop reaching the others, and the unfolding would cost precision it does
-    not have to.
+    well-defined program already guarantees rather than adding a check.  It is
+    also what carries the node's strictness —
+    :class:`fpy2.analysis.ArraySizeInfer` pins an unconditional ``zip``'s
+    iterables to one length and reads an assert the same way, so without it a
+    proven length on one iterable stops reaching the others.
 
     :func:`fpy2.strategies.elim_iter` is the opposite trade: it fuses the
     ``zip`` into an indexed loop so no list of tuples is built at all. Unfold
     where you want one form to reason about; fuse where you want the loop.
 
     An argument that is not already a name is bound above the comprehension
-    first: the rewrite reads it twice, in ``xs[i]`` and in ``len(xs)``, and
-    rebuilding it would make two lists where the program had one. That needs a
-    statement slot, so a ``zip`` in a comprehension element or a ``while``
-    condition is refused —
+    first, since the rewrite reads it twice. That needs a statement slot, so a
+    ``zip`` in a comprehension element or a ``while`` condition is refused;
     :func:`fpy2.strategies.to_hoistable` gives every position one.
 
     Parameters
@@ -95,7 +90,7 @@ def unfold_zip(
                 acc = (acc + (x * y))
             return acc
     """
-    return _unfold(UnfoldZip, 'zip', func, where, temp_id)
+    return _unfold(UnfoldZip, func, where, temp_id)
 
 
 def unfold_enumerate(
@@ -108,15 +103,14 @@ def unfold_enumerate(
     State an ``enumerate`` in `func` as the comprehension it stands for.
 
     ``enumerate(xs)`` is ``[(i, xs[i]) for i in range(len(xs))]``. Unlike
-    :func:`fpy2.strategies.unfold_zip` this needs nothing to carry: the index's
-    format is ``INTEGER`` either way, and the result's length comes from the
-    same list.
+    :func:`fpy2.strategies.unfold_zip` this has nothing to carry: the index's
+    format is ``INTEGER`` either way and the length comes from the same list.
 
-    The argument is bound above the comprehension first where it is not already
-    a name, so it is built once; that needs a statement slot, which
+    The argument is bound above the comprehension where it is not already a
+    name, so it is built once; that needs a statement slot, which
     :func:`fpy2.strategies.to_hoistable` gives every position.
-    ``enumerate(zip(...))`` therefore unfolds cleanly in either order — the
-    inner form ends up on an assignment of its own.
+    ``enumerate(zip(...))`` therefore unfolds in either order — the inner form
+    ends up on an assignment of its own.
 
     Parameters
     ----------
@@ -164,4 +158,4 @@ def unfold_enumerate(
                 acc = (acc + x)
             return acc
     """
-    return _unfold(UnfoldEnumerate, 'enumerate', func, where, temp_id)
+    return _unfold(UnfoldEnumerate, func, where, temp_id)

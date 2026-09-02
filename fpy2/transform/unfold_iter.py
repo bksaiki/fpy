@@ -2,16 +2,14 @@
 Unfolding ``zip`` and ``enumerate`` into comprehensions.
 
 Both are derived forms, and `derived-semantics.rst` gives each as a
-comprehension over ``range(len(...))``.  Stating that in the program deletes a
-case from every consumer that special-cases the node -- format inference, size
-inference, and a backend's codegen -- in exchange for one the pipeline already
-handles totally, since `CompToLoop` lowers every comprehension.
+comprehension over ``range(len(...))``.  Stating that trades a node a consumer
+must special-case for one `CompToLoop` already lowers totally.
 
-Both rewrites mention their argument twice, in ``xs[i]`` and in ``len(xs)``, so
-an argument that is not already a name is bound above first: recomputing it
-would build a second list where the program had one.  That needs a statement
-slot, which is what hoistable form guarantees and what a comprehension element
-or a ``while`` condition does not have.
+Both rewrites read their argument twice, in ``xs[i]`` and in ``len(xs)``, so an
+argument that is not already a name is bound above first: rebuilding it would
+make two lists where the program had one.  That needs a statement slot, which
+hoistable form guarantees and a comprehension element or a ``while`` condition
+does not have.
 """
 
 from ..analysis import DefineUse
@@ -20,27 +18,29 @@ from ..ast.fpyast import (
     Assign,
     Compare,
     CompareOp,
-    ContextStmt,
     Enumerate,
     Expr,
-    ForStmt,
     FuncDef,
-    If1Stmt,
-    IfStmt,
     Len,
     ListComp,
+    ListExpr,
     ListRef,
     NamedId,
     Range1,
     Stmt,
-    TupleBinding,
     TupleExpr,
     Var,
     Zip,
 )
+from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
-from .utils import Declined, PreambleScoped, check_where
+from .utils import PreambleScoped, check_where
+
+_NO_SLOT = (
+    'the iterable has no statement-level position for the bindings the '
+    'rewrite emits'
+)
 
 
 class _UnfoldIterInstance(PreambleScoped):
@@ -51,7 +51,7 @@ class _UnfoldIterInstance(PreambleScoped):
     minting the index, refusing where no statement reaches -- is shared.
     """
 
-    _expr_sited = True   # the sites are expressions, not statements
+    _expr_sited = True
 
     _node: type
     """the surface node this pass unfolds"""
@@ -83,12 +83,14 @@ class _UnfoldIterInstance(PreambleScoped):
 
     # ------------------------------------------------------------------
 
-    def _fresh(self) -> NamedId:
-        return self.gensym.refresh(self.temp_id)
-
     def _emit(self, e: Expr, out: list[Stmt]) -> Expr:
         """The comprehension *e* stands for, with its arguments named."""
         loc = e.loc
+        if not e.args:   # type: ignore[attr-defined]
+            # `zip()` is the empty list.  The backend refuses one for having no
+            # element type, which is a diagnostic where reading `args[0]` would
+            # be a crash.
+            return ListExpr([], loc)
         args: list[Expr] = []
         for arg in e.args:   # type: ignore[attr-defined]
             new = self._visit_expr(arg, out)
@@ -97,63 +99,38 @@ class _UnfoldIterInstance(PreambleScoped):
                 # twice, and the two lists would be distinct objects
                 args.append(new)
                 continue
-            t = self._fresh()
+            t = self.gensym.refresh(self.temp_id)
             out.append(Assign(t, None, new, loc))
             args.append(Var(t, loc))
 
         out.extend(self._pre(args, loc))
-        i = self._fresh()
+        i = self.gensym.refresh(self.temp_id)
         return ListComp(
             [i], [Range1(None, Len(None, args[0], loc), loc)],
             self._elt(args, i, loc), loc,
         )
 
-    # `PreambleScoped` seals every compound statement's own sub-expression,
-    # which is right for a `while` condition -- re-evaluated each iteration, so
-    # a preamble before the loop computes it once -- but too strong for the
-    # three below.  Each is evaluated exactly once, at the point the preamble
-    # runs, and the `for` iterable is where a derived iterable actually appears.
-    # A comprehension's positions stay sealed: `PreambleScoped` has them.
-
-    def _visit_for(self, stmt: ForStmt, ctx):
-        target = self._visit_binding(stmt.target, ctx)
-        iterable = self._visit_expr(stmt.iterable, ctx)
-        body, _ = self._visit_block(stmt.body, None)
-        return ForStmt(target, iterable, body, stmt.loc), ctx
-
-    def _visit_if1(self, stmt: If1Stmt, ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        body, _ = self._visit_block(stmt.body, None)
-        return If1Stmt(cond, body, stmt.loc), ctx
-
-    def _visit_if(self, stmt: IfStmt, ctx):
-        cond = self._visit_expr(stmt.cond, ctx)
-        ift, _ = self._visit_block(stmt.ift, None)
-        iff, _ = self._visit_block(stmt.iff, None)
-        return IfStmt(cond, ift, iff, stmt.loc), ctx
-
-    def _visit_context(self, stmt: ContextStmt, ctx):
-        c = self._visit_expr(stmt.ctx, ctx)
-        body, _ = self._visit_block(stmt.body, None)
-        return ContextStmt(stmt.target, c, body, stmt.loc), ctx
+    # `PreambleScoped` seals every compound statement's sub-expression, which a
+    # `while` condition needs and these three do not: each is evaluated exactly
+    # once, where the preamble runs, and the `for` iterable is where a derived
+    # iterable appears -- sealing it would refuse the site that matters.  A
+    # nested block builds its own preamble in `_visit_block` either way, so
+    # un-sealing is the base implementation back.  A comprehension's own
+    # positions stay sealed.
+    _visit_for = DefaultTransformVisitor._visit_for
+    _visit_if1 = DefaultTransformVisitor._visit_if1
+    _visit_if = DefaultTransformVisitor._visit_if
+    _visit_context = DefaultTransformVisitor._visit_context
 
     def _visit_expr(self, e: Expr, ctx):
         if not isinstance(e, self._node):
             return super()._visit_expr(e, ctx)
 
         # a refusal is not a site, so it is decided before an index is spent
-        declined = (
-            Declined(
-                'the iterable has no statement-level position for the '
-                'bindings the rewrite emits'
-            )
-            if ctx is None
-            else None
-        )
-        if declined is not None:
-            self.refused.append((e, declined.reason))
+        if ctx is None:
+            self.refused.append((e, _NO_SLOT))
             if self._target_expr is e:
-                self.declined.append(declined.reason)
+                self.declined.append(_NO_SLOT)
             return super()._visit_expr(e, ctx)
 
         idx = self.site_idx
@@ -177,11 +154,11 @@ class _UnfoldZipInstance(_UnfoldIterInstance):
     def _pre(self, args: list[Expr], loc) -> list[Stmt]:
         """``len(xsk) == len(xs1)`` for each argument past the first.
 
-        The length the surface node takes is the first iterable's, and unequal
-        lengths are undefined -- so this is a claim about a well-defined
-        program, not a check with a defined failure.  It is also what keeps the
-        rewrite from *losing* information: `ArraySizeInfer` reads an assert as
-        an equality, which is where the node's own strictness went.
+        The length is the first iterable's and unequal lengths are undefined,
+        so this is a claim about a well-defined program rather than a check
+        with a defined failure.  It is also what carries the node's own
+        strictness: `ArraySizeInfer` reads an assert as an equality, and
+        without it a proven length on one iterable stops reaching the others.
         """
         head = Len(None, args[0], loc)
         return [

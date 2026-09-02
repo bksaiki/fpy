@@ -588,19 +588,19 @@ class SiteRewriter(DefaultTransformVisitor):
 class PreambleScoped(SiteRewriter):
     """A rewrite that emits statements before the one it is visiting.
 
-    `_visit_block` hands each statement visitor the list to emit into, and
-    `DefaultTransformVisitor` threads it down to every sub-expression -- but
-    only some of those positions are evaluated where that list will run.  This
-    passes `None` for the rest, which is how a subclass knows there is no
-    statement slot to use.
+    `_visit_block` hands each statement visitor the list to emit into and
+    `DefaultTransformVisitor` threads it down to every sub-expression, but only
+    some of those positions are evaluated where that list runs.  This passes
+    `None` for a compound statement's own sub-expression, which is how a
+    subclass knows there is no slot to use.
+
+    For a `while` condition that is soundness: the condition is re-evaluated
+    every iteration and a preamble before the loop computes it once, which does
+    not terminate.  The rest is scope -- those positions are evaluated exactly
+    once, so a subclass may lift the seal where it can use one (`CompToLoop`
+    and the derived-iterable unfolds do).
     """
 
-    # A compound statement's own sub-expression carries no preamble.  For a
-    # `while` condition that is soundness: the condition is re-evaluated every
-    # iteration, and a preamble before the loop computes it once, which does not
-    # terminate.  The rest is scope -- those positions are evaluated exactly
-    # once, so lifting the suppression is a capability question (`CompToLoop`
-    # does hoist out of them).
     def _visit_if1(self, stmt: If1Stmt, ctx):
         return super()._visit_if1(stmt, None)[0], ctx
 

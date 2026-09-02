@@ -335,6 +335,44 @@ a fully static program now evaporates, which is what most of the test fallout
 was: several emitter witnesses were asserting on arithmetic that no longer
 survives, and one was passing vacuously.
 
+### 10. Derived-iterable unfolding
+
+`UnfoldZip` and `UnfoldEnumerate` state each as the comprehension
+derived-semantics defines it to be, inside `_to_statement_form`'s fixpoint, and
+`_emit_zip` / `_emit_enumerate` are gone behind tripwires. Measured over the
+corpus: nothing lost, nothing gained, **zero signature changes** at either
+optimize setting, and the two fired 6 and 3 times before (15 and 3
+unoptimized) against 0 after.
+
+**The fixpoint is required, not a convenience.** Unfolding *once* leaves 2
+zips, and 9 unoptimized: a `zip` inside a comprehension only gets the statement
+slot its bindings need after `CompToLoop` has opened the comprehension around
+it. Same reason `Hoistable` and `CompToLoop` were already a fixpoint.
+
+**`zip` owes an assert, and that is the whole precision story.**
+`ArraySizeInfer` treats an unconditional `zip` as strict and pins its
+iterables' lengths through union-find, which reaches the ABI: with `len(xs)`
+proven and `len(ys)` unknown, `ys` compiles to `std::array<double, N>`.
+Unfolding to derived-semantics' bare comprehension loses that. `assert len(ys)
+== len(xs)` carries it — the analysis reads an assert as an equality — and in
+one case reads *better* than the surface form, since `ZipElim` under
+`optimize=True` removes the zip before the analysis sees it at all.
+`derived-semantics.rst` now states the assert: unequal lengths are undefined,
+so it is a claim about a well-defined program rather than a check with a
+defined failure. `enumerate` needs no such carrier — the index is `INTEGER`
+either way and the length comes from the same list.
+
+**The fuse still runs first.** `ZipElim` / `EnumerateElim` are the opposite
+trade — an indexed loop with no list at all — and the unfold destroys their
+pattern. They sit ahead of `Specialize`, so the ordering is free, but the two
+only coexist in that order.
+
+Cost: +32 emitted lines optimized, +76 unoptimized. `std::make_tuple` is
+unchanged at 49, so this deletes backend *cases* rather than work: the tuple
+list moves from `_emit_zip`'s fill loop to `CompToLoop`'s. The analyses keep
+their `Zip` / `Enumerate` cases, since the unfolds are optional operators and
+nothing outside the cpp pipeline guarantees they ran.
+
 ## Open
 
 ### A total unfold for every surface form
@@ -342,9 +380,10 @@ survives, and one was passing vacuously.
 Steps 1 and 2 are done — see §8. What is left, each gated on
 [the precision test](#precision-is-the-acceptance-test-for-an-unfold):
 
-**Unfold the rest**, each straight from derived-semantics, each placed after its
-fuse: `zip`, `enumerate`, slice, the chained comparison, `sum` / `any` / `all` /
-`amin` / `amax`, and `min` / `max`. Three pay for more than the deletion:
+`zip` and `enumerate` are done — see §10. **Unfold the rest**, each straight
+from derived-semantics, each placed after its fuse: slice, the chained
+comparison, `sum` / `any` / `all` / `amin` / `amax`, and `min` / `max`. Three
+pay for more than the deletion:
 
 - the **chained comparison** is one of the two positions `Hoistable` leaves
   sealed, so unfolding it makes hoistable form total over everything but an
@@ -360,7 +399,17 @@ fuse: `zip`, `enumerate`, slice, the chained comparison, `sum` / `any` / `all` /
   `FormatInfer` widens the accumulator instead of simulating the adds.
 
 The cleanup those need is done — see §9. What is still missing is CSE, for the
-two names one `len(t)` gets.
+two names one `len(t)` gets, and one `CompToLoop` fix the unfolds made
+conspicuous:
+
+**`_inlinable` materializes `range(len(xs))`.** It requires every operand of the
+`range` to be *atomic*, which a `Len` is not — so the range becomes a
+`std::vector<int64_t>` filled by `std::iota` and then iterated, where `range(4)`
+stays inline and gets a counted loop. Pre-existing: a hand-written
+`[xs[i] * 2 for i in range(len(xs))]` pays it today. Accepting a `Len` / `Size`
+/ `Dim` of an atom — a pure read, and no fill can change a length — takes the
+corpus from 15 `std::iota` to 2 and recovers 13 of §10's 32 added lines, with
+nothing lost and no signature changes. Measured, not yet done.
 
 ### `Hoistable` at the front
 
