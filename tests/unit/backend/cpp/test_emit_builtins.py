@@ -98,9 +98,9 @@ class TestEnumerate:
         # No tuple machinery at all.
         assert 'std::tuple' not in out
         assert 'std::make_tuple' not in out
-        # The source is bound to a read-only ``_src`` alias (a const
-        # reference — no copy) and indexed directly.
-        assert 'const auto& _src' in out
+        # the source is indexed directly -- copy propagation reaches the
+        # `_src` alias `EnumerateElim` binds, so not even a reference is left
+        assert 'xs[static_cast<size_t>(i)]' in out
         # ``i`` is the loop counter itself.
         assert 'for (int64_t i = 0;' in out
 
@@ -134,7 +134,8 @@ class TestEnumerate:
         assert 'std::tuple' not in out
         assert 'std::make_tuple' not in out
         assert 'for (int64_t i = 0;' in out
-        assert out.count('const auto& _src') == 2
+        assert 'xs[static_cast<size_t>(i)]' in out
+        assert 'ys[static_cast<size_t>(i)]' in out
 
     def test_enumerate_of_zip_whole_tuple_slot(self):
         """An element slot bound to the whole zipped tuple still avoids both
@@ -232,6 +233,6 @@ class TestZip:
         # No tuple-vector machinery at all.
         assert 'std::tuple' not in out
         assert 'std::make_tuple' not in out
-        # The two sources are bound to read-only ``_src`` aliases (const
-        # references — no copy) and indexed directly.
-        assert 'const auto& _src' in out
+        # both sources are indexed directly
+        assert 'xs[static_cast<size_t>(' in out
+        assert 'ys[static_cast<size_t>(' in out

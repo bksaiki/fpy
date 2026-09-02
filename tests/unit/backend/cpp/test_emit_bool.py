@@ -53,7 +53,8 @@ class TestBoolAndCompare:
                 d = x >= y
                 e = x == y
                 g = x != y
-                return a
+                # every result is read, or `Simplify` deletes the unused ones
+                return a and b and c and d and e and g
 
         cc = CppCompiler()
         out = cc.compile(

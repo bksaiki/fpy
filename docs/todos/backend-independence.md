@@ -307,6 +307,31 @@ something asked for it.
 What did *not* move is the emitter: it kept `_open_list_build`, which needs no
 length up front, until the lowering became total. Nothing routes there now.
 
+### 9. Simplify
+
+`fpy2/transform/simplify.py` runs `ConstFold`, `CopyPropagate` and
+`DeadCodeEliminate` to a fixpoint — each exposes what the others need, so one
+pass in any order leaves work behind. The `simplify` strategy is a wrapper over
+it, and `CppCompiler` runs it last under `optimize=True`: the lowerings above
+leave debris only a later pass can see, a length read into a name nothing uses
+or a copy of an accumulator, and the pass that emitted it is not the one that
+can tell.
+
+Worth +5 programs and -195 emitted lines on the corpus. Two knobs are off by
+default and matter here: context folding, whose result no longer re-parses, and
+aggregate substitution — an aggregate literal is an *allocation*, so
+substituting one replaces a compact producer with a materialized list, once per
+use site, each a distinct object where the name was one.
+
+Three pre-existing defects surfaced. `CopyPropagate` reported `changed` whenever
+it had a candidate, even when `SubstVar` rewrote nothing — a definition can have
+uses that are not occurrences, since an `xs[i] = e` names `xs` as an `Id`, not a
+`Var` — which made the fixpoint diverge. `DeadCodeEliminate` treated an unused
+phi's arguments as unused, deleting a definition its own branch still read. And
+a fully static program now evaporates, which is what most of the test fallout
+was: several emitter witnesses were asserting on arithmetic that no longer
+survives, and one was passing vacuously.
+
 ## Open
 
 ### A total unfold for every surface form
@@ -331,12 +356,8 @@ fuse: `zip`, `enumerate`, slice, the chained comparison, `sum` / `any` / `all` /
   narrowing to refuse. Unfold it only where the length is proven, or
   `FormatInfer` widens the accumulator instead of simulating the adds.
 
-**Then a cleanup.** Every lowering leaves debris this pipeline has no pass to
-remove: a dead `auto&& _tmp1 = xs.size();`, a `uint8_t n = _t8;` copy, two
-names for one `len(t)`. `fpy2/transform/dead_code.py` and
-`copy_propagate.py` exist and neither is wired in; a lowering-heavy pipeline
-needs both, plus CSE for the repeated `len`. This decides whether the unfolds
-are free or merely correct.
+The cleanup those need is done — see §9. What is still missing is CSE, for the
+two names one `len(t)` gets.
 
 ### `Hoistable` at the front
 

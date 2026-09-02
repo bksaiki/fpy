@@ -271,3 +271,21 @@ class TestSimplifyOpFold:
         simplified = simplify(_just_const_fold, enable_const_fold_op=False).ast
         # Some BinaryOp must remain (the un-folded ``a + 2.0`` etc.).
         assert _has_node(simplified, lambda n: isinstance(n, BinaryOp))
+
+
+class TestFixpointTerminates:
+    """A pass reporting a change it did not make never converges."""
+
+    def test_an_alias_that_is_only_written_through(self):
+        """``ys = xs`` is a copy-propagation candidate with a use, but the use
+        is ``ys[0] = 99`` -- which names ``ys`` as an ``Id``, not a ``Var``, so
+        no substitution rewrites it.  Reporting a change there looped forever.
+        """
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            ys = xs
+            ys[0] = 99
+            return ys
+
+        # the interesting assertion is that this returns at all
+        assert simplify(f).ast.is_equiv(f.ast)

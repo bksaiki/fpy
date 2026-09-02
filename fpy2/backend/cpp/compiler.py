@@ -40,6 +40,7 @@ from ...transform import (
     Hoistable,
     ReduceFusion,
     RoundElim,
+    Simplify,
     Specialize,
     ZipElim,
 )
@@ -401,6 +402,10 @@ class CppCompiler(Backend):
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
+            # Last, and after everything that names: the lowerings above leave
+            # debris only a later pass can see -- a length read into a name
+            # nothing goes on to use, a copy of an accumulator.
+            specialized = specialized.map(lambda _m, fd: Simplify.apply(fd))
 
         return list(specialized.call_graph().order)
 

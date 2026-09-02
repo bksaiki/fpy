@@ -184,9 +184,11 @@ top.
 Module
   → Specialize                 # one FuncDef per (callee, ctx, arg formats)
   → fix(Hoistable ; CompToLoop)  # a statement slot wherever one is needed,
-                                 # and every comprehension but the ragged one
-                                 # lowered into the loop that is that slot
+                                 # and every comprehension lowered into the
+                                 # loop that is that slot
   → RoundElim                  # (optimize only)
+  → Simplify                   # (optimize only) fold, copy-propagate and
+                               # delete the debris the lowerings above leave
   → DefineUse
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
@@ -235,6 +237,13 @@ witness would pass without witnessing anything.
 An `if` / `if1` condition is deliberately not gated: it runs once, just before the
 branch, so its statements belong in the enclosing block — which is why
 `_emit_guarded_block` takes its condition already emitted.
+
+### `Simplify` evaporates a static witness
+
+`Simplify` runs under the default `optimize=True`, so a test program whose
+result is fully determined compiles to `return <constant>;`. An emitter witness
+has to take a parameter, or read its own result more than once, or it pins
+nothing. See §9 in [backend-independence.md](backend-independence.md).
 
 ### `ANF` is not in this pipeline
 
@@ -349,8 +358,8 @@ What it needs:
   on the specialized AST first — `st.sites` plus a cursor per site, since
   `simplify` does not take cursors and a whole-program run would rewrite
   roundings that did not need it.
-- **A place in the order.** After `RoundElim`, which is the last pass before
-  codegen.
+- **A place in the order.** After `RoundElim` and before `Simplify`, which is
+  the last pass before codegen.
 - **An opt-out.** This turns the compiler from a checker into a rewriter, and
   `float_to_fixed` states a value-class branch per site — on a program with many
   roundings that is a large amount of emitted code, so far unmeasured. A flag

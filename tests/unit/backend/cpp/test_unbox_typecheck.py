@@ -218,10 +218,13 @@ def j_two_returned_literals(c: fp.Real) -> list[fp.Real]:
 
 
 @fp.fpy
-def j_nested_literal() -> fp.Real:
-    """No returns involved -- a nested literal's own rows disagree."""
+def j_nested_literal(a: fp.Real) -> fp.Real:
+    """No returns involved -- a nested literal's own rows disagree.
+
+    A row comes from a parameter, or `Simplify` folds the whole program to its
+    result and there is no place left to have a type."""
     with fp.FP64:
-        xss = [[1.5], [3.0, 4.0]]
+        xss = [[a], [3.0, 4.0]]
         return xss[0][0]
 
 
@@ -257,7 +260,7 @@ def j_comprehension_against_a_literal(c: fp.Real) -> list[fp.Real]:
 
 JOIN_CASES = [
     (j_two_returned_literals, [R]),
-    (j_nested_literal, []),
+    (j_nested_literal, [R]),
     (j_ternary_over_lists, [R]),
     (j_list_inside_a_returned_tuple, [R]),
     (j_comprehension_against_a_literal, [R]),
@@ -361,13 +364,16 @@ def s_local_in_a_tuple(c: fp.Real, y: fp.Real):
 @fp.fpy
 def s_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
     """The format the program asked for, not a narrowing accident: `lo`'s
-    elements are FP32-rounded *values*, and `zss` holds the same buffer."""
+    elements are FP32-rounded *values*, and `zss` holds the same buffer.
+
+    `zss` is read, or dead-code elimination removes it and with it the sharing
+    the refusal is about."""
     with fp.FP32:
         lo = [fp.round(y), fp.round(y)]
     with fp.FP64:
         zss = [lo]
         if c > 0:
-            return lo
+            return zss[0]
         else:
             return [y]
 

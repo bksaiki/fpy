@@ -24,9 +24,13 @@ class TestWhileStmt:
     """Phase 3d — ``while`` loops with phi-style accumulators."""
 
     def test_simple_countdown(self):
-        """The pre-loop assign declares ``y``; the body reassigns
-        across iterations.  The loop's phi is not is_intro because
-        ``y`` already existed when the loop started."""
+        """The pre-loop assign declares ``y``; the body reassigns across
+        iterations.  The loop's phi is not is_intro because ``y`` already
+        existed when the loop started.
+
+        The rotated condition is tested twice, and copy propagation reaches the
+        pre-loop copy but not the loop-carried one -- so the first test reads
+        ``x`` and the one at the end of the body reads ``y``."""
 
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -40,7 +44,7 @@ class TestWhileStmt:
         assert out == (
             'double f(double x) {\n'
             '    double y = x;\n'
-            '    bool c = (y > static_cast<double>(0));\n'
+            '    bool c = (x > static_cast<double>(0));\n'
             '    while (c) {\n'
             '        y = (y - static_cast<double>(1));\n'
             '        c = (y > static_cast<double>(0));\n'
@@ -66,7 +70,7 @@ class TestWhileStmt:
         out = _compile(CppCompiler(), f)
         assert 'double acc = 0;' in out
         assert 'double i = x;' in out
-        assert 'bool c = (i > static_cast<double>(0));' in out
+        assert 'bool c = (x > static_cast<double>(0));' in out
         assert 'while (c) {' in out
         assert 'acc = (acc + i);' in out
         assert 'i = (i - static_cast<double>(1));' in out

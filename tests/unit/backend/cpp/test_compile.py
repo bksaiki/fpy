@@ -225,4 +225,5 @@ class TestFreeVarClosing:
         f = make_f(1)
         out = CppCompiler().compile(f, ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         assert 'float f(float y)' in out
-        assert 'x = 1' in out          # `x` bound locally, not undeclared
+        # bound, not undeclared: `Simplify` folds the binding into its one use
+        assert 'static_cast<float>(1) + y' in out
