@@ -2980,14 +2980,30 @@ class TestZeroOnlyIntersection:
 
     def test_format_itself_states_the_zero(self):
         """`format()` clamps a bound short of the finest digit to zero, which is
-        exact -- it used to raise.  A bound merely *off* the grid still raises;
-        that is a different shape, and it holds values."""
+        exact."""
         af = AbstractFormat(float('inf'), 24, fp.RealFloat(exp=0, c=1024),
                             neg_bound=fp.RealFloat(s=True, exp=0, c=1024))
         fmt = af.format()
         assert fmt.representable_in(fp.Float(0))
         assert not fmt.representable_in(
             fp.Float(x=fp.RealFloat(exp=24, c=1), ctx=fp.FP64))
-        with pytest.raises(ValueError):
-            AbstractFormat(float('inf'), 4, fp.RealFloat(exp=0, c=127),
-                           neg_bound=fp.RealFloat(s=True, exp=0, c=128)).format()
+
+    def test_a_bound_off_the_grid_reduces_to_its_own_maximum(self):
+        """A different shape: the bound is above the finest digit but not one of
+        the values, so clamping to zero would drop everything it holds.
+
+        `exp` and the bounds are independent, and a meet takes the coarser grid
+        with the tighter bound -- `A(inf, 4, +127, -128)` is a multiple of 16
+        bounded by 127.  The bound reduces to the largest such multiple, 112,
+        which is exact: it used to raise instead.  See
+        `test_format_roundtrip.py`.
+        """
+        af = AbstractFormat(float('inf'), 4, fp.RealFloat(exp=0, c=127),
+                            neg_bound=fp.RealFloat(s=True, exp=0, c=128))
+        fmt = af.format()
+        holds = lambda v: fmt.representable_in(
+            fp.Float(0) if v == 0
+            else fp.Float(x=fp.RealFloat.from_int(v), ctx=fp.FP64))
+        assert holds(0) and holds(112) and holds(-128)
+        assert not holds(127)    # not a multiple of 16
+        assert not holds(128)    # a multiple of 16, but past the bound
