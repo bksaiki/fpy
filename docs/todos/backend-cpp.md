@@ -351,6 +351,10 @@ that programs which refused now compile, bit-exactly:
 `test_lowered_roundtrip` drives all fourteen targets through the flag, and
 `TestArithRoundtrip` covers `sqrt`, `/` and `+` under three of them.
 
+It never costs a diagnosis: where the rewrite leaves a program that still
+fails, it fails further along than the original would have, so
+`compile_module` asks the unrewritten one and reports that.
+
 Full plan and what is left in
 [rounding-recovery.md](rounding-recovery.md).
 

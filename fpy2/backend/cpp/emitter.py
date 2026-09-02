@@ -2897,6 +2897,14 @@ class CppEmitter(Visitor):
         # resolved first: a context with no storage at all -- ``REAL``, or a
         # format wider than the ladder -- has a more specific complaint than this
         storage = self._scalar_for_ctx(active, at=e)
+        if active.is_stochastic():
+            # said before the advice below, which would name a rewrite that
+            # cannot help: no step of it draws random bits
+            raise CppEmitError(
+                f'stochastic rounding under `{active}` has no C++ analogue: '
+                'no libm function draws random bits',
+                at=e,
+            )
         if not is_native_ctx(active):
             raise CppEmitError(
                 f'rounding under `{active}` has no C++ analogue: its storage '

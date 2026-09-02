@@ -354,6 +354,26 @@ class CppCompiler(Backend):
         optimizations now that format inference is monomorphic, then codegen
         leaves-first.
         """
+        try:
+            return self._compile_module(module)
+        except CppCompileError:
+            if self._unfold is UnfoldMode.NONE:
+                raise
+            # The rewrite left a program that still does not compile, and it
+            # fails further along: a rounding the emitter could name became a
+            # temporary storage selection cannot place.  Report what the
+            # unrewritten program says, so the flag never costs a diagnosis.
+            self._without_unfold()._compile_module(module)
+            raise   # it compiled unrewritten, so the rewrite's own error stands
+
+    def _without_unfold(self) -> 'CppCompiler':
+        """This compiler with the rewrite off, for a second opinion."""
+        return CppCompiler(
+            unsafe_cast_int=self._unsafe_cast_int, optimize=self._optimize,
+            unbox=self._unbox, arrays=self._arrays, unfold=UnfoldMode.NONE,
+        )
+
+    def _compile_module(self, module: Module) -> str:
         specs = self.specialize(module)
         params: dict[FuncDef, CalleeAbi] = {}
         return '\n\n'.join(

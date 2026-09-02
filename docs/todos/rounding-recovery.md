@@ -207,21 +207,56 @@ writes a `nan_value` / `inf_value` substitute as a numeric literal, so
 inference; `fp.round_at(x, n)` crashes type inference. None is reachable from the
 tested targets.
 
-## Phase 4 — iterating
+## Phase 4 — the limits *(done)*
 
-Not needed for the tested targets: one pass of each row clears every site, and
-the fixed-point contexts `FloatToFixed` installs are ones the emitter spells
-after `RescaleFixed`. Left open in case a target is found where the lowering's
-own arithmetic is not native — the termination argument would then be per site,
-each moving strictly further along one fixed sequence, not a whole-program
-fixpoint.
+**Iterating is not what was needed.** Swept over thirteen targets — the IEEE
+formats, `bfloat16`, the MX family, a `NEG_ZERO` substitute, saturating,
+stochastic, bounded and unbounded fixed-point, and a format wider than the
+storage ladder — one pass clears every site that is clearable at all. Nothing
+found a second round to make, so an outer loop would be untested code.
+
+What the sweep did find is that the rewrite could make a *diagnosis* worse.
+Where the ladder rewrites a site and the result still fails, it fails further
+along: a rounding the emitter could name becomes a temporary storage selection
+cannot place, and `cannot pick storage for _t1` replaces `needs its digits at
+position zero`. So `compile_module` asks the unrewritten program for a second
+opinion and reports that instead. **The flag never costs a diagnosis** — the
+property worth having, and cheap, since the retry only runs on failure.
+
+A stochastic context is no longer a site: no step of the ladder draws random
+bits, and the emitter now says exactly that rather than falling through to
+advice naming the flag the caller already passed.
+
+### What the flag reaches
+
+| target | `ROUNDINGS` | `DOUBLE_ROUND` |
+|---|---|---|
+| `FP16`, `bfloat16`, `IEEEContext(4, 8)`, saturating, MX, substitute specials | rounding ✓ | arithmetic ✓ |
+| wider than the storage ladder | ✓ (nothing to do) | ✓ |
+| stochastic | — no lowering draws random bits | — |
+| fixed-point, unbounded | — no bound to state, so `UnfoldOverflow` declines | — |
+| fixed-point, bounded, away from position zero | — `RescaleFixed`'s shift needs storage the context has not got | — |
+| fixed-point, bounded, `WRAP` | — `UnfoldOverflow` declines the rule | — |
+
+The float row is the one that works, and it works everywhere. **The
+fixed-point row does not help a user-written fixed target**, which the plan did
+not anticipate: it is reachable only from inside the flow, where
+`FloatToFixed` produces a bounded context at a known position over an operand
+`UnfoldSpecial` has already classified, and there it is already handled. A
+hand-written one fails the storage question instead, which is a separate gap.
 
 ## Open
 
-**What `DOUBLE_ROUND` costs.** Unmeasured. `FloatToFixed` states a value-class branch
-per site, so a program with many roundings gets a lot of emitted code — an
-`FP16` add is 47 lines and a two-operation polynomial 135. Nothing on the corpus
-exercises it, the flag being off there.
+**What `DOUBLE_ROUND` costs.** Unmeasured. `FloatToFixed` states a value-class
+branch per site, so a program with many roundings gets a lot of emitted code —
+an `FP16` add is 47 lines and a two-operation polynomial 135. Nothing on the
+corpus exercises it, the flag being off there.
+
+**A user-written fixed-point target.** Both reasons it fails are outside this
+plan: `UnfoldOverflow` states no rule for `WRAP` or for an unbounded format, and
+`RescaleFixed`'s shift lands under a context the storage ladder has no entry
+for. The second is the same gap as `MPFixedContext(-1)` refusing with no site at
+all.
 
 **A wider source for arithmetic.** The per-operation rules hold for operands the
 *target* represents, so `x + y` under `FP16` needs `FP16` arguments. A program

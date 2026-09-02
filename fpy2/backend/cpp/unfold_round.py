@@ -168,6 +168,10 @@ def _classify(e: Expr, active_of: _Scopes) -> tuple[UnfoldKind, Context] | None:
         active = active_of(e)
         if active is None or is_native_ctx(active):
             return None
+        if active.is_stochastic():
+            # no step of the ladder draws random bits, so this is not a site --
+            # the emitter's own refusal says so, and better
+            return None
         if isinstance(active, _FIXED):
             if _fixed_is_lowerable(active):
                 return None

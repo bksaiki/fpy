@@ -20,6 +20,12 @@ from fpy2.backend.cpp.unfold_round import (
     unfold,
     unfold_arith,
 )
+from fpy2.number import (
+    EFloatContext,
+    EFloatNanKind,
+    MPBFixedContext,
+    RealFloat,
+)
 from fpy2.types import RealType
 
 
@@ -340,6 +346,66 @@ class TestTheFlag:
     def test_a_bool_is_refused(self):
         with pytest.raises(TypeError, match='must be an UnfoldMode'):
             CppCompiler(unfold=True)   # type: ignore[arg-type]
+
+    def test_a_context_the_ladder_cannot_clear_keeps_its_message(self):
+        """The flag must never cost a diagnosis.
+
+        A user-written bounded-fixed target away from position zero is one
+        `RescaleFixed` rewrites and storage selection then refuses anyway --
+        the shift it emits needs a storage the context has not got.  The
+        rewritten program fails *further along*, so the compiler asks the
+        unrewritten one and reports that instead.
+        """
+        target = MPBFixedContext(
+            -4, RealFloat(exp=0, c=1024), overflow=fp.OverflowMode.ASSERT,
+        )
+
+        @fp.fpy(ctx=target)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round(x)
+
+        msgs = []
+        for mode in (UnfoldMode.NONE, UnfoldMode.ROUNDINGS):
+            with pytest.raises(CppCompileError) as exc:
+                CppCompiler(unfold=mode).compile(
+                    f, ctx=target, arg_types=[RealType(fp.FP64)],
+                )
+            msgs.append(str(exc.value))
+        assert 'position zero' in msgs[0]
+        assert msgs[0] == msgs[1]
+
+    def test_a_stochastic_target_keeps_its_message(self):
+        """No step of the ladder draws random bits, so a stochastic context is
+        not a site and its refusal says why -- rather than advising the flag
+        that is already on."""
+        target = fp.IEEEContext(
+            5, 16, fp.RoundingMode.RNE, fp.OverflowMode.OVERFLOW, 3,
+        )
+
+        @fp.fpy(ctx=target)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round(x)
+
+        with pytest.raises(CppCompileError, match='stochastic'):
+            CppCompiler(unfold=UnfoldMode.DOUBLE_ROUND).compile(
+                f, ctx=target, arg_types=[RealType(target)],
+            )
+
+    def test_a_substitute_special_compiles(self):
+        """A format whose infinity is a finite substitute — one of the shapes
+        the native-lowering roadmap lists as crashing `unfold_overflow`.  It
+        does not crash here."""
+        target = EFloatContext(
+            4, 8, True, EFloatNanKind.IEEE_754, 0, inf_value=fp.Float(c=7),
+        )
+
+        @fp.fpy(ctx=target)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round(x)
+
+        assert 'std::logb' in CppCompiler(unfold=UnfoldMode.ROUNDINGS).compile(
+            f, ctx=target, arg_types=[RealType(fp.FP64)],
+        )
 
     def test_a_native_program_is_unchanged(self):
         """The flag is opt-in and costs nothing where nothing is unsupported —
