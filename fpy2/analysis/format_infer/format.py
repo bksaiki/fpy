@@ -415,10 +415,14 @@ class AbstractFormat:
         integer rungs of the C++ storage ladder by containment — correctly, as no
         C++ integer type has one.
 
-        No float format has that knob, so ``has_neg_zero=False`` does *not*
-        survive a round trip through one: :meth:`format` widens, soundly, and the
-        fact is lost.  It costs nothing today, since a float-shaped bound was
-        never bound for integer storage.
+        Every float format carries the flag too, but :meth:`format` does not
+        set it there, so ``has_neg_zero=False`` does *not* survive a round trip
+        through a float shape: it widens, soundly, and the fact is lost.
+        Passing it makes `A(24, 0, +2**63)` -- the meet of ``FP32`` and
+        ``SINT64`` -- describable as a float, which is *tighter* and yet worse
+        storage: `F32` where the context's own `S64` is what the rounding
+        emits.  A rounding's storage has to contain its context, and nothing
+        states that; until it does, the widening is the safer answer.
         """
         if not isinstance(fmt, Format):
             raise TypeError(f'Expected \'Format\', got {fmt}')

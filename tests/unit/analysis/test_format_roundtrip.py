@@ -112,10 +112,17 @@ class TestKnownWidenings:
     """Where `format()` cannot say what the abstraction knows.  Each is a sound
     superset, and each is a missing knob rather than a bug in the mapping."""
 
-    def test_a_float_shape_cannot_refuse_a_negative_zero(self):
-        """`enable_neg_zero` exists on `MPFixedFormat` and `MPBFixedFormat` and
-        on none of the float formats, so ``has_neg_zero=False`` survives a
-        fixed-point round trip and not a floating-point one.
+    def test_format_does_not_refuse_a_negative_zero_on_a_float_shape(self):
+        """Every float format *can* refuse one -- they all carry
+        `enable_neg_zero` -- but `format()` does not set it there, so
+        ``has_neg_zero=False`` survives a fixed-point round trip and not a
+        floating-point one.
+
+        Deliberate: passing it makes the meet of `FP32` and `SINT64`
+        describable as a float, which is tighter and yet worse storage --
+        `F32` where the context's own `S64` is what the rounding emits.  A
+        rounding's storage has to contain its context and nothing states that,
+        so the widening is the safer answer for now.
 
         The witness is a format whose NaN *is* the negative-zero encoding, so
         `-0.0` is not one of its values.
@@ -127,7 +134,7 @@ class TestKnownWidenings:
 
         af = AbstractFormat.from_format(f0)   # type: ignore[arg-type]
         assert not af.has_neg_zero            # the abstraction knows
-        assert af.format().representable_in(neg_zero)   # the format cannot say
+        assert af.format().representable_in(neg_zero)   # and does not say so
 
     def test_a_fixed_shape_can(self):
         af = AbstractFormat(float('inf'), 0, _R(127), neg_bound=-_R(128))
