@@ -60,11 +60,14 @@ from .unbox import (
     check_strict,
     return_storage,
 )
+from .unfold_round import UnfoldMode
+from .unfold_round import unfold as unfold_round
 from .utils import CPP_HEADERS, CPP_HELPERS
 from .variables import VariableAlloc, VariableAnalysis
 
 _UnboxMode: TypeAlias = UnboxMode
-"""Annotation-only alias: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
+_UnfoldMode: TypeAlias = UnfoldMode
+"""Annotation-only aliases: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
 enum inside the class body.  Runtime resolves the shadow to the same object;
 type checkers reject an attribute used as a type, so annotations there need
 this name instead."""
@@ -262,30 +265,49 @@ class CppCompiler(Backend):
             ``ListType`` *length* gets an array parameter, and a trusted
             ``assert len(xs) == K`` becomes a type-level commitment.  No effect
             under ``unbox=NEVER``, where nothing is a value.  Default ``True``.
+        unfold:
+            An :class:`~fpy2.backend.cpp.unfold_round.UnfoldMode` (also
+            reachable as ``CppCompiler.UnfoldMode``).  ``ROUNDINGS`` lowers a
+            rounding the op table cannot spell into integer arithmetic instead
+            of refusing it; ``DOUBLE_ROUND`` also computes arithmetic under
+            such a context at a native intermediate and re-rounds, where the
+            correct-double-rounding rules say the two compose to what the one
+            gave.  Default ``NONE``: the refusal is a checker's answer, and
+            turning the compiler into a rewriter has to be asked for.
     """
 
     UnboxMode = UnboxMode
-    """The mode enum for ``unbox``, re-exported so callers holding the
-    compiler need not import :mod:`fpy2.backend.cpp.unbox`."""
+    UnfoldMode = UnfoldMode
+    """The mode enums for ``unbox`` and ``unfold``, re-exported so callers
+    holding the compiler need not import the modules defining them."""
 
     _unsafe_cast_int: bool
     _optimize: bool
     _unbox: _UnboxMode
+    _unfold: _UnfoldMode
     _arrays: bool
 
     def __init__(
         self, *, unsafe_cast_int: bool = True, optimize: bool = True,
         unbox: _UnboxMode = UnboxMode.STRICT, arrays: bool = True,
+        unfold: _UnfoldMode = UnfoldMode.NONE,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
                 f'`unbox` must be an UnboxMode, got {unbox!r}; '
                 'use UnboxMode.ALLOW / UnboxMode.NEVER instead of a bool'
             )
+        if not isinstance(unfold, UnfoldMode):
+            raise TypeError(
+                f'`unfold` must be an UnfoldMode, got {unfold!r}; '
+                'use UnfoldMode.ROUNDINGS / UnfoldMode.DOUBLE_ROUND '
+                'instead of a bool'
+            )
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
         self._arrays = arrays
+        self._unfold = unfold
 
     # ------------------------------------------------------------------
     # Translation-unit preamble.  ``compile`` returns a function definition
@@ -402,6 +424,16 @@ class CppCompiler(Backend):
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
+
+        if self._unfold is not UnfoldMode.NONE:
+            # after `RoundElim`, which removes roundings this would otherwise
+            # lower, and re-normalized after: the lowering emits `with` blocks
+            # and branches of its own.
+            mode = self._unfold
+            specialized = specialized.map(lambda _m, fd: unfold_round(fd, mode))
+            specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
+
+        if self._optimize:
             # Last, and after everything that names: the lowerings above leave
             # debris only a later pass can see -- a length read into a name
             # nothing goes on to use, a copy of an accumulator.

@@ -13,7 +13,13 @@ import fpy2 as fp
 import fpy2.strategies as st
 from fpy2 import Module
 from fpy2.backend.cpp import CppCompileError, CppCompiler
-from fpy2.backend.cpp.unfold_round import UnfoldKind, sites, unfold
+from fpy2.backend.cpp.unfold_round import (
+    UnfoldKind,
+    UnfoldMode,
+    sites,
+    unfold,
+    unfold_arith,
+)
 from fpy2.types import RealType
 
 
@@ -178,8 +184,9 @@ class TestWithin:
 
 
 class TestUnfoldArith:
-    """`unfold` on the arithmetic row: compute at a native intermediate and
-    re-round to the target."""
+    """The arithmetic row alone: compute at a native intermediate and re-round
+    to the target.  `unfold` goes on to lower the rounding that leaves, which
+    is what the ladder tests cover."""
 
     def _mono(self, func, ctx, arity=2):
         return st.monomorphize(func, args=[RealType(ctx)] * arity)
@@ -190,7 +197,7 @@ class TestUnfoldArith:
             return x + y
 
         mono = self._mono(f, fp.FP16)
-        out = mono.with_ast(unfold(mono.ast))
+        out = mono.with_ast(unfold_arith(mono.ast))
         # the arithmetic is gone from the sites; what is left is the rounding
         # back to the target, which is the next row's work
         assert _kinds(out) == [UnfoldKind.FLOAT_ROUND]
@@ -205,7 +212,7 @@ class TestUnfoldArith:
             return x + y
 
         mono = self._mono(f, fp.FP16)
-        assert 'fp.FP64' not in mono.with_ast(unfold(mono.ast)).format()
+        assert 'fp.FP64' not in mono.with_ast(unfold_arith(mono.ast)).format()
 
     def test_a_directed_target_goes_through_exactness(self):
         """The intermediate is always nearest, so a directed target reaches no
@@ -220,7 +227,7 @@ class TestUnfoldArith:
             return x + y
 
         mono = self._mono(f, target)
-        assert 'with fp.FP64:' in mono.with_ast(unfold(mono.ast)).format()
+        assert 'with fp.FP64:' in mono.with_ast(unfold_arith(mono.ast)).format()
 
     def test_a_directed_target_without_an_exact_rule_refuses(self):
         """`div` has no exact result to hold and no rule under a directed
@@ -232,7 +239,7 @@ class TestUnfoldArith:
             return x / y
 
         mono = self._mono(f, target)
-        assert unfold(mono.ast) is mono.ast
+        assert unfold_arith(mono.ast) is mono.ast
 
     def test_every_site_is_taken(self):
         @fp.fpy(ctx=fp.FP16)
@@ -241,7 +248,7 @@ class TestUnfoldArith:
 
         mono = self._mono(f, fp.FP16)
         assert _kinds(mono) == [UnfoldKind.ARITH] * 5
-        assert _kinds(mono.with_ast(unfold(mono.ast))) == [
+        assert _kinds(mono.with_ast(unfold_arith(mono.ast))) == [
             UnfoldKind.FLOAT_ROUND,
         ] * 5
 
@@ -251,7 +258,7 @@ class TestUnfoldArith:
             return x + y
 
         mono = self._mono(f, fp.FP64)
-        assert unfold(mono.ast) is mono.ast
+        assert unfold_arith(mono.ast) is mono.ast
 
     def test_a_transcendental_keeps_its_refusal(self):
         """The rules cover ``+ - * /`` and ``sqrt``, plus anything whose exact
@@ -263,7 +270,7 @@ class TestUnfoldArith:
 
         mono = self._mono(f, fp.FP16)
         assert _kinds(mono) == [UnfoldKind.ARITH] * 2
-        assert _kinds(mono.with_ast(unfold(mono.ast))) == [
+        assert _kinds(mono.with_ast(unfold_arith(mono.ast))) == [
             UnfoldKind.ARITH, UnfoldKind.FLOAT_ROUND,
         ]
 
@@ -276,4 +283,71 @@ class TestUnfoldArith:
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
 
-        assert unfold(f.ast) is f.ast
+        assert unfold_arith(f.ast) is f.ast
+
+
+class TestTheFlag:
+    """`CppCompiler(unfold=...)`, which is the whole point."""
+
+    def _compile(self, func, ctx, arity, **kw):
+        return CppCompiler(**kw).compile(
+            func, ctx=ctx, arg_types=[RealType(ctx)] * arity,
+        )
+
+    def test_a_rounding_compiles(self):
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round(x)
+
+        with pytest.raises(CppCompileError, match='no C.. analogue'):
+            self._compile(f, fp.FP16, 1)
+        assert 'std::logb' in self._compile(
+            f, fp.FP16, 1, unfold=UnfoldMode.DOUBLE_ROUND,
+        )
+
+    def test_arithmetic_compiles(self):
+        """Both rows in one program: the add becomes native, and the rounding
+        it gains becomes integer code."""
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        with pytest.raises(CppCompileError, match='no matching signature'):
+            self._compile(f, fp.FP16, 2)
+        out = self._compile(f, fp.FP16, 2, unfold=UnfoldMode.DOUBLE_ROUND)
+        assert 'float f(float x, float y)' in out
+        assert 'std::logb' in out
+
+    def test_roundings_alone_leaves_the_arithmetic(self):
+        """The middle level is a smaller claim: lowering a rounding is a
+        rewrite of one operation, while rewriting arithmetic rounds twice."""
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x + y
+
+        with pytest.raises(CppCompileError, match='no matching signature'):
+            self._compile(f, fp.FP16, 2, unfold=UnfoldMode.ROUNDINGS)
+
+    def test_roundings_alone_still_lowers_a_rounding(self):
+        @fp.fpy(ctx=fp.FP16)
+        def f(x: fp.Real) -> fp.Real:
+            return fp.round(x)
+
+        assert 'std::logb' in self._compile(
+            f, fp.FP16, 1, unfold=UnfoldMode.ROUNDINGS,
+        )
+
+    def test_a_bool_is_refused(self):
+        with pytest.raises(TypeError, match='must be an UnfoldMode'):
+            CppCompiler(unfold=True)   # type: ignore[arg-type]
+
+    def test_a_native_program_is_unchanged(self):
+        """The flag is opt-in and costs nothing where nothing is unsupported —
+        which is what keeps it off the corpus."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            return x * y + x
+
+        assert self._compile(f, fp.FP64, 2) == self._compile(
+            f, fp.FP64, 2, unfold=UnfoldMode.DOUBLE_ROUND,
+        )

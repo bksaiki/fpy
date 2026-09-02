@@ -326,45 +326,33 @@ the *number* of compilable programs, and it is out of scope above.
 
 ### Recovering from an unsupported rounding instead of refusing
 
-*Open.* Planned in [rounding-recovery.md](rounding-recovery.md). Every refusal in this area already names the operator that fixes it —
-`_require_cast_is_round` says "lower it first with `monomorphize ->
-unfold_overflow -> float_to_fixed -> rescale_fixed`", and
-`_emit_integral_round` names `rescale_fixed` and `unfold_overflow` by hand. The
-proposal is to run them rather than print them, as a ladder keyed to what is
-unsupported:
+*Done, behind `CppCompiler(unfold=UnfoldMode....)`* — `ROUNDINGS` for
+the second row alone, `DOUBLE_ROUND` for both. Every refusal in this area
+named the operator that fixes it; the flag runs them instead. Detection is
+`fpy2/backend/cpp/unfold_round.py`, which asks `is_native_ctx` on the
+specialized AST — before the analyses the emitter needs, and before the format
+inference the rewrite exists to make succeed. Two rows:
 
 | unsupported | recovery |
 |---|---|
-| a rounding under a non-native *float* context | `unfold_special → unfold_overflow → float_to_fixed → rescale_fixed → simplify` |
-| a rounding under a fixed-point context the backend cannot lower | `unfold_overflow → rescale_fixed → simplify` — the two the refusals name |
-| *arithmetic* under either | `split_round` first: compute at an intermediate the op table has, re-round to the target, then the residual rounding is one of the rows above |
+| *arithmetic* under a non-native context | `SplitRound` through a native intermediate: compute wide, re-round to the target |
+| the rounding that leaves, and any other | `UnfoldSpecial → UnfoldOverflow → FloatToFixed → RescaleFixed` |
 
-The third row is a deliberate double rounding, and it is safe for a specific
-reason: `split_round` is gated on the correct-double-rounding table, so it
-applies only where the two roundings compose to what the single one gave, and
-declines otherwise. That is the difference between this and simply computing
-wide and truncating.
+The first row is a deliberate double rounding, safe for a specific reason:
+`SplitRound` is gated on the correct-double-rounding rules, so it applies only
+where the two roundings compose to what the single one gave, and declines
+otherwise. That is the difference between this and computing wide and
+truncating.
 
-**What it buys is coverage, not a smaller backend.** Measured on the
-`test_lowered_roundtrip` programs: after the full sequence
-`_emit_integral_round`, `_emit_integral_value` and `_bound_test` all still fire
-— the libm call and the bound assertion are the emitter's work either way. The
-gain is that programs which today refuse would compile.
+**What it buys is coverage, not a smaller backend.** `_emit_integral_round`,
+`_emit_integral_value` and `_bound_test` all still fire after the sequence — the
+libm call and the bound assertion are the emitter's work either way. The gain is
+that programs which refused now compile, bit-exactly:
+`test_lowered_roundtrip` drives all fourteen targets through the flag, and
+`TestArithRoundtrip` covers `sqrt`, `/` and `+` under three of them.
 
-What it needs:
-
-- **Detection before analysis.** The refusals fire during emission, after every
-  analysis has run, which is too late to rewrite. The condition has to be found
-  on the specialized AST first — `st.sites` plus a cursor per site, since
-  `simplify` does not take cursors and a whole-program run would rewrite
-  roundings that did not need it.
-- **A place in the order.** After `RoundElim` and before `Simplify`, which is
-  the last pass before codegen.
-- **An opt-out.** This turns the compiler from a checker into a rewriter, and
-  `float_to_fixed` states a value-class branch per site — on a program with many
-  roundings that is a large amount of emitted code, so far unmeasured. A flag
-  alongside `unsafe_cast_int` and `UnboxMode` keeps the refusal available for
-  callers who would rather see it.
+Full plan and what is left in
+[rounding-recovery.md](rounding-recovery.md).
 
 ### A narrower value meeting a wider place
 

@@ -30,6 +30,7 @@ import pytest
 import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.backend.cpp.compiler import CppCompiler
+from fpy2.backend.cpp.unfold_round import UnfoldMode
 from fpy2.module import Module
 from fpy2.number import EFloatContext, EFloatNanKind, RealFloat
 from fpy2.types import RealType
@@ -128,8 +129,12 @@ def _lower(func, src):
         early_check=True))))
 
 
-def _run(target, src=fp.FP32) -> None:
-    """Lower ``round`` into *target* from a *src* source, compile, and diff."""
+def _run(target, src=fp.FP32, *, via_flag=False) -> None:
+    """Lower ``round`` into *target* from a *src* source, compile, and diff.
+
+    With *via_flag* the compiler does the lowering itself, from the same
+    monomorphized program the reference evaluates.
+    """
     if _CXX is None:
         pytest.skip('no C++ compiler')
 
@@ -140,16 +145,22 @@ def _run(target, src=fp.FP32) -> None:
         return y
 
     ref = st.monomorphize(q, args=[RealType(src)])
-    low = _lower(q, src)
+    _diff(ref, ref if via_flag else _lower(q, src), src, src.nbits,
+          via_flag=via_flag)
 
-    cc = CppCompiler()
+
+def _diff(ref, low, in_fmt, width: int, *, via_flag=False) -> None:
+    """Compile *low*, feed it every input of *in_fmt*, and diff against *ref*
+    evaluated by the interpreter."""
+    cc = CppCompiler(
+        unfold=UnfoldMode.DOUBLE_ROUND if via_flag else UnfoldMode.NONE,
+    )
     mod = Module()
     mod.add(low)
-    width = src.nbits
     driver = _DRIVER.replace('SRCTY', _CTYPE[width])
     text = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(mod), driver])
 
-    xs = _inputs(src)
+    xs = _inputs(in_fmt)
     stdin = '\n'.join(f'{_in_bits(x, width):016x}' for x in xs)
     want = [f'{_bits(ref(x)):016x}' for x in xs]
 
@@ -291,3 +302,74 @@ def test_a_cursor_aims_the_whole_sequence(which):
 
     # and the site the sequence was aimed at still names something
     assert out.rebase(chosen).func is out.ast
+
+
+class TestUnfoldRoundingsFlag:
+    """The same property, with `CppCompiler(unfold=DOUBLE_ROUND)` running the
+    sequence instead of the test.  See `docs/todos/rounding-recovery.md`."""
+
+    @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
+    def test_matches_the_interpreter(self, target):
+        _run(target, via_flag=True)
+
+    @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
+    def test_matches_the_interpreter_from_fp64(self, target):
+        _run(target, fp.FP64, via_flag=True)
+
+
+def _run_arith(target, prog) -> None:
+    """One *arithmetic* operation under *target*, lowered by the flag.
+
+    The source format is the target's own.  The per-operation double-rounding
+    rules hold for operands the target represents, so a wider argument refuses
+    the split -- which is why this cannot be driven from `FP32` the way the
+    rounding cases are.  The argument's *storage* is still `float`, so the same
+    driver serves.
+    """
+    if _CXX is None:
+        pytest.skip('no C++ compiler')
+    ref = st.monomorphize(prog, args=[RealType(target)])
+    _diff(ref, ref, target, 32, via_flag=True)
+
+
+class TestArithRoundtrip:
+    """Arithmetic under a context the op table has no signature for: computed
+    at a native intermediate and re-rounded.  This is the composition the
+    double-rounding rules are for, and the only bit-exact check it gets."""
+
+    @pytest.mark.parametrize('target', [
+        fp.FP16, fp.IEEEContext(5, 16, fp.RoundingMode.RNA), fp.MX_E4M3,
+    ], ids=['fp16', 'fp16_rna', 'e4m3'])
+    def test_sqrt(self, target):
+        """`sqrt`'s rule wants ``p2 >= 2 * p1 + 2``, which `FP32` meets for an
+        11-bit target exactly."""
+        @fp.fpy(ctx=target)
+        def q(x: fp.Real) -> fp.Real:
+            return fp.sqrt(x)
+
+        _run_arith(target, q)
+
+    @pytest.mark.parametrize('target', [
+        fp.FP16, fp.IEEEContext(5, 16, fp.RoundingMode.RNA), fp.MX_E4M3,
+    ], ids=['fp16', 'fp16_rna', 'e4m3'])
+    def test_div(self, target):
+        """A division by a value the target holds exactly, so the only
+        rounding is the quotient's."""
+        @fp.fpy(ctx=target)
+        def q(x: fp.Real) -> fp.Real:
+            return x / 3.0
+
+        _run_arith(target, q)
+
+    @pytest.mark.parametrize('target', [
+        fp.FP16, fp.IEEEContext(5, 16, fp.RoundingMode.RTZ),
+    ], ids=['fp16', 'fp16_rtz'])
+    def test_add(self, target):
+        """`+`'s rule wants ``p2 >= 2 * p1 + 1``; a directed target reaches no
+        mode rule and goes through exactness at `FP64` instead.  The addend is
+        exact in the target, so the only rounding is the sum's."""
+        @fp.fpy(ctx=target)
+        def q(x: fp.Real) -> fp.Real:
+            return x + 1.5
+
+        _run_arith(target, q)

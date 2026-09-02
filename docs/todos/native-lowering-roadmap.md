@@ -132,7 +132,14 @@ read the branches) and `logb` is computed once. `unfold_neg_zero` is *not* in th
 sequence — nothing reaches it, since the zero branch has already said what each
 zero rounds to.
 
-**Still not exposed as one entry point, but the reason has changed.** Composition
+**Exposed as one entry point for the cpp backend**, which is
+`CppCompiler(unfold=UnfoldMode.DOUBLE_ROUND)`: it finds its own sites and runs the
+sequence, including a `split_round` step in front for arithmetic the op table
+cannot spell. See [rounding-recovery.md](rounding-recovery.md). What that does
+not give is a *parameterized* recipe -- a function, a location and a target
+descriptor -- for a caller lowering by hand.
+
+**Still not exposed as one such entry point, but the reason has changed.** Composition
 used to have no way to carry a *location*: once the first operator rewrote at a
 program point, the later ones re-scanned the whole program with a `where` index
 that no longer counted the same candidates. That is fixed — `where` takes a cursor
