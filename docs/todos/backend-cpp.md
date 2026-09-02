@@ -326,7 +326,7 @@ the *number* of compilable programs, and it is out of scope above.
 
 ### Recovering from an unsupported rounding instead of refusing
 
-*Open.* Every refusal in this area already names the operator that fixes it —
+*Open.* Planned in [rounding-recovery.md](rounding-recovery.md). Every refusal in this area already names the operator that fixes it —
 `_require_cast_is_round` says "lower it first with `monomorphize ->
 unfold_overflow -> float_to_fixed -> rescale_fixed`", and
 `_emit_integral_round` names `rescale_fixed` and `unfold_overflow` by hand. The
