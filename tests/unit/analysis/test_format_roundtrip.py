@@ -112,17 +112,9 @@ class TestKnownWidenings:
     """Where `format()` cannot say what the abstraction knows.  Each is a sound
     superset, and each is a missing knob rather than a bug in the mapping."""
 
-    def test_format_does_not_refuse_a_negative_zero_on_a_float_shape(self):
-        """Every float format *can* refuse one -- they all carry
-        `enable_neg_zero` -- but `format()` does not set it there, so
-        ``has_neg_zero=False`` survives a fixed-point round trip and not a
-        floating-point one.
-
-        Deliberate: passing it makes the meet of `FP32` and `SINT64`
-        describable as a float, which is tighter and yet worse storage --
-        `F32` where the context's own `S64` is what the rounding emits.  A
-        rounding's storage has to contain its context and nothing states that,
-        so the widening is the safer answer for now.
+    def test_a_float_shape_refuses_one_too(self):
+        """Every float format carries `enable_neg_zero`, so the round trip holds
+        whichever shape `format()` picks.
 
         The witness is a format whose NaN *is* the negative-zero encoding, so
         `-0.0` is not one of its values.
@@ -133,13 +125,28 @@ class TestKnownWidenings:
         assert not f0.representable_in(neg_zero)
 
         af = AbstractFormat.from_format(f0)   # type: ignore[arg-type]
-        assert not af.has_neg_zero            # the abstraction knows
-        assert af.format().representable_in(neg_zero)   # and does not say so
+        assert not af.has_neg_zero
+        assert not af.format().representable_in(neg_zero)
 
     def test_a_fixed_shape_can(self):
         af = AbstractFormat(float('inf'), 0, _R(127), neg_bound=-_R(128))
         assert not af.has_neg_zero
         assert not af.format().representable_in(Float(s=True, exp=0, c=0))
+
+    def test_a_non_negative_float_shape_widens_symmetrically(self):
+        """`MPBFloatFormat` requires a strictly-negative `neg_maxval`, so a
+        format bounded at zero below cannot be named and widens to a symmetric
+        one.  `abs` produces exactly that shape.
+
+        Costs no storage -- the widened bound picks the same rung -- but a
+        consumer reading `neg_bound` off the materialized format loses the
+        `>= 0`.  Closing it means admitting a non-negative maxval in the number
+        tower.
+        """
+        af = abs(AbstractFormat.from_format(fp.FP32.format()))   # type: ignore[arg-type]
+        assert isinstance(af.neg_bound, RealFloat) and af.neg_bound.is_zero()
+        negative = Float(x=RealFloat(s=True, exp=0, c=1), ctx=fp.FP64)
+        assert af.format().representable_in(negative)
 
     def test_one_flag_covers_both_infinities(self):
         """`enable_inf` is a single flag, so an asymmetric infinity gains the

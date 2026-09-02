@@ -232,38 +232,44 @@ class TestAbstractFormat():
         assert (-f64).has_neg_zero
         assert not (-i8).has_neg_zero
 
-    def test_mul_derives_neg_zero_as_a_disjunction(self):
-        """A zero product takes the XOR of the operand signs, so a `-0.0` needs a
-        sign disagreement — and one is always available once *either* system has
-        a signed zero, since every format represents a `+0.0` and negative times
-        that zero is `-0.0`.
+    def test_mul_derives_neg_zero_from_either_sign(self):
+        """A zero product takes the XOR of the operand signs, so a `-0.0` needs
+        a sign disagreement over a zero product — and every format represents a
+        `+0.0`, so one side supplying *any* negative value is enough.
 
-        Checked against the interpreter: `(-1)*(+0)`, `(+0)*(-1)` and `(-0)*(+2)`
-        are all `-0.0` under FP64, while `(-2)*0` under `SINT8` is `+0.0`.
+        Ground truth, from the interpreter: `0 * -1` under `FP64` is `-0.0`
+        **even for `SINT8`-valued operands**, so the operands' own systems
+        having no signed zero is no argument.  What decides is the destination:
+        the same product under `SINT16` is `+0.0`, which the intersection with
+        its format says.
 
-        Note this is a *disjunction* where addition takes a conjunction — the
-        asymmetry is real, and assuming one rule for both is what makes
-        `no -0 * no -0 = no -0` look plausible while `(-1) * 0 = -0.0`.
+        Note this is a *disjunction* where addition takes a conjunction. The
+        asymmetry is real: a sum is `-0.0` only when both addends are, and
+        `5 + (-5)` is `+0.0` in every mode FPy implements.
         """
         f64 = AbstractFormat.from_format(fp.FP64.format())
         i8 = AbstractFormat.from_format(fp.SINT8.format())
+        nonneg = AbstractFormat(8, 0, fp.RealFloat.from_int(255),
+                                neg_bound=fp.RealFloat.from_int(0))
         assert (f64 * f64).has_neg_zero
         assert (f64 * i8).has_neg_zero
-        assert (i8 * f64).has_neg_zero
-        assert not (i8 * i8).has_neg_zero
+        assert (i8 * i8).has_neg_zero      # `0 * -1` is one
+        # neither side can supply a negative sign, so no product is `-0.0`
+        assert not (nonneg * nonneg).has_neg_zero
 
     def test_integer_ops_keep_an_integer_storage(self):
         """The payoff: deriving the flag must not cost integer code its storage.
 
-        Both rules answer "does this number system have a signed zero", and an
-        integer one does not — so negation and multiplication of integer-bounded
-        values stay integers rather than widening to `float`.
+        Negation of an integer-bounded value never yields a `-0.0`, and a
+        product rounded to an integer *destination* has none either — the
+        intersection with its format removes what the unrounded product admits.
         """
         from fpy2.backend.cpp.storage import choose_storage_scalar
         from fpy2.backend.cpp.types import CppScalar
         i8 = AbstractFormat.from_format(fp.SINT8.format())
+        i16 = AbstractFormat.from_format(fp.SINT16.format())
         assert choose_storage_scalar((-i8).format()) != CppScalar.F32
-        assert choose_storage_scalar((i8 * i8).format()) != CppScalar.F32
+        assert choose_storage_scalar(((i8 * i8) & i16).format()) != CppScalar.F32
 
     def test_abs_never_has_a_negative_zero(self):
         """`abs` cannot produce one, so `False` here is the derived answer."""

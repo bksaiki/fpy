@@ -323,13 +323,14 @@ class AbstractFormat:
         inf_out = self_inf or other_inf
         has_nan = self.has_nan or other.has_nan or inf_out
         # A zero product takes the XOR of the operand signs (IEEE-754 §6.3, in
-        # every rounding mode), so a `-0.0` needs a sign disagreement -- and one
-        # is always available once *either* number system has a signed zero:
-        # every format represents a `+0.0`, and a negative times that zero is
-        # `-0.0`.  When neither system has one, no product can be one:
-        # two's-complement has a single zero, and `(-2) * 0` under `SINT8` is
-        # `+0.0`.
-        has_neg_zero = self.has_neg_zero or other.has_neg_zero
+        # every rounding mode), so a `-0.0` needs a sign disagreement over a
+        # zero product.  Every format represents a `+0.0`, so one side
+        # supplying *any* negative value is enough: `+0 * -0.25` is `-0.0`.
+        # Two's-complement's single zero is no counterexample -- `(-2) * 0`
+        # under `SINT8` is `+0.0` because the *destination* has no signed zero,
+        # which the intersection with its format says and this product does
+        # not.
+        has_neg_zero = self._signable() or other._signable()
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
             has_pos_inf=inf_out, has_neg_inf=inf_out, has_nan=has_nan,
@@ -404,8 +405,8 @@ class AbstractFormat:
         -inf).  This round-trips with :meth:`format`, which sets the
         ``enable_*`` flags.
 
-        ``has_neg_zero`` round-trips through a *fixed-point* shape, via
-        ``MPFixedFormat`` / ``MPBFixedFormat``'s ``enable_neg_zero``.  That flag
+        ``has_neg_zero`` round-trips via each format's ``enable_neg_zero``.
+        That flag
         exists for this: without it :meth:`format` could not express "no
         negative zero", so every integer-valued bound materialized on the way to
         storage selection would acquire one and lose its integer storage —
@@ -415,14 +416,8 @@ class AbstractFormat:
         integer rungs of the C++ storage ladder by containment — correctly, as no
         C++ integer type has one.
 
-        Every float format carries the flag too, but :meth:`format` does not
-        set it there, so ``has_neg_zero=False`` does *not* survive a round trip
-        through a float shape: it widens, soundly, and the fact is lost.
-        Passing it makes `A(24, 0, +2**63)` -- the meet of ``FP32`` and
-        ``SINT64`` -- describable as a float, which is *tighter* and yet worse
-        storage: `F32` where the context's own `S64` is what the rounding
-        emits.  A rounding's storage has to contain its context, and nothing
-        states that; until it does, the widening is the safer answer.
+        Every float format carries the flag too, so the round trip holds
+        whichever shape :meth:`format` picks.
         """
         if not isinstance(fmt, Format):
             raise TypeError(f'Expected \'Format\', got {fmt}')
@@ -490,9 +485,9 @@ class AbstractFormat:
         subclasses, ``REAL_FORMAT`` is returned as a sound fall-back.
 
         Special values: each non-``REAL_FORMAT`` branch is constructed with
-        ``enable_nan``/``enable_inf`` matching ``self`` so the flags round-trip
-        through :meth:`from_format` (``REAL_FORMAT`` already represents them
-        all).  ``enable_inf`` is a single flag for both signs, so ``has_pos_inf
+        ``enable_nan`` / ``enable_inf`` / ``enable_neg_zero`` matching ``self``
+        so the flags round-trip through :meth:`from_format` (``REAL_FORMAT``
+        already represents them all).  ``enable_inf`` is a single flag for both signs, so ``has_pos_inf
         or has_neg_inf`` may add the opposite-signed infinity — a sound
         over-approximation.
         """
@@ -535,15 +530,21 @@ class AbstractFormat:
                 return MPBFloatFormat(
                     self.prec, emin, pos_bound, neg_maxval,
                     enable_nan=enable_nan, enable_inf=enable_inf,
+                    enable_neg_zero=self.has_neg_zero,
                 )
             if bounds_unbounded:
                 return MPSFloatFormat(
-                    self.prec, emin, enable_nan=enable_nan, enable_inf=enable_inf,
+                    self.prec, emin, enable_nan=enable_nan,
+                    enable_inf=enable_inf,
+                    enable_neg_zero=self.has_neg_zero,
                 )
 
         if not prec_inf and exp_inf and bounds_unbounded:
             assert isinstance(self.prec, int)
-            return MPFloatFormat(self.prec, enable_nan=enable_nan, enable_inf=enable_inf)
+            return MPFloatFormat(
+                self.prec, enable_nan=enable_nan, enable_inf=enable_inf,
+                enable_neg_zero=self.has_neg_zero,
+            )
 
         if prec_inf and not exp_inf:
             assert isinstance(self.exp, int)
@@ -587,6 +588,19 @@ class AbstractFormat:
             max_p=max_p, min_n=min_n, rm=RoundingMode.RTZ,
         )
         return RealFloat(s=b.s, x=mag)
+
+    def _signable(self) -> bool:
+        """Whether this format has a value whose sign bit is set.
+
+        What a multiplication needs: the operand that is *not* the zero has to
+        supply the disagreeing sign, and any negative value does, not only a
+        negative zero.
+        """
+        if self.has_neg_zero or self.has_neg_inf:
+            return True
+        return not (
+            isinstance(self.neg_bound, RealFloat) and self.neg_bound.is_zero()
+        )
 
     def _prec_constrains(
         self,
