@@ -42,6 +42,8 @@ from ...transform import (
     RoundElim,
     Simplify,
     Specialize,
+    UnfoldEnumerate,
+    UnfoldZip,
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
@@ -103,24 +105,32 @@ class SpecAnalyses:
 
 
 def _to_statement_form(fd: FuncDef) -> FuncDef:
-    """Hoistable form, with every comprehension lowered.
+    """Hoistable form, with every comprehension and derived iterable lowered.
 
-    Neither pass is a fixpoint alone and each supplies what the other lacks.
+    No pass here is a fixpoint alone and each supplies what the others lack.
     ``Hoistable`` seals a comprehension's element -- it runs once per iteration,
     so the slot before the enclosing statement is no place for its temporaries --
     and ``CompToLoop`` makes the loop that *is* that slot; ``CompToLoop``
     declines a comprehension in a ternary arm or a ``while`` condition for want
-    of a slot, and ``Hoistable`` gives it one.
+    of a slot, and ``Hoistable`` gives it one.  The unfolds need a slot too, and
+    a ``zip`` inside a comprehension only gets one once ``CompToLoop`` has
+    opened it -- measured: a single pass leaves 2 of them on the corpus, and 9
+    unoptimized, while iterating leaves none.
 
     Iterating terminates without a cap, though not because the comprehension
     count falls -- lowering a dependent clause list *raises* it, peeling one
     comprehension into a row comprehension plus a nested one.  What falls is the
     clause count of the dependent one, by one per peel, and a single-clause
-    comprehension cannot be dependent.  Everything else lowers outright, and
-    ``Hoistable`` is idempotent over its own output.
+    comprehension cannot be dependent.  The unfolds lower the count of `Zip` and
+    `Enumerate` nodes, which nothing here creates.  Everything else lowers
+    outright, and ``Hoistable`` is idempotent over its own output.
     """
     while True:
         fd = Hoistable.apply(fd)
+        # after `Hoistable`, which gives each a slot for the binding it needs,
+        # and before `CompToLoop`, which lowers the comprehension it leaves
+        fd = UnfoldEnumerate.apply(fd)
+        fd = UnfoldZip.apply(fd)
         log = CompToLoop.apply_with_edits(fd)
         if not log.edits:
             return fd

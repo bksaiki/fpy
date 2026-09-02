@@ -637,31 +637,6 @@ class CppEmitter(Visitor):
             return out
         return self._list_new(ty, f'{first}, {last}')
 
-    def _open_fill_loop(self, ty: CppType, src_len: str) -> tuple[str, str]:
-        """A fresh list of *ty* with a ``for`` opened over its indices:
-        ``(name, index)``.  The caller writes the element stores and closes the
-        loop.
-
-        The count is *src_len* -- except for a fixed-size result, which counts
-        by its own ``K``: the analysis proved the two agree on defined
-        executions, and on one FPy leaves undefined (a mismatched ``zip`` that
-        runs) ``K`` truncates where the runtime length would write out of
-        bounds.
-        """
-        if self._is_sized(ty):
-            assert isinstance(ty, CppList)
-            n = str(ty.size)
-        else:
-            n = src_len
-        out = self._fresh_temp()
-        self.writer.add_line(
-            f'{ty.format()} {out} = {self._list_new_sized(ty, n)};'
-        )
-        i = self._fresh_temp()
-        self.writer.add_line(f'for (size_t {i} = 0; {i} < {n}; ++{i}) {{')
-        self.writer.indent()
-        return out, i
-
     def _open_list_build(self, ty: CppType) -> tuple[str, Callable[[str], str]]:
         """A named list under element-at-a-time construction: ``(name,
         append)``, where ``append(elt)`` is the statement text adding one
@@ -1996,7 +1971,11 @@ class CppEmitter(Visitor):
             case AnyOf() | AllOf():
                 return self._emit_any_all(e, arg)
             case Enumerate():
-                return self._emit_enumerate(e, arg)
+                raise CppInternalError(
+                    'an `enumerate` reached the emitter; `UnfoldEnumerate` '
+                    'states every one as a comprehension before codegen',
+                    at=e,
+                )
             case UnaryOp() if type(e) in self.op_table.unary:
                 # Op-table-dispatched unary (Neg, Abs, all <cmath>).
                 return self._dispatch_unary(e, arg)
@@ -2053,36 +2032,6 @@ class CppEmitter(Visitor):
                 f'tuple accessor expects a tuple, got {acc.ty.format()}', at=e,
             )
         return acc.s, acc.ty
-
-    def _emit_enumerate(self, e: Enumerate, src_str: str) -> str:
-        """``enumerate(xs)`` builds a list of ``std::tuple<I, T>``
-        where ``I`` is the index integer type and ``T`` is the source
-        element type — both come from format inference on the
-        Enumerate node itself.
-        """
-        result_ty = self._storage_for_expr(e)
-        if not (isinstance(result_ty, CppList)
-                and isinstance(result_ty.elt, CppTuple)
-                and len(result_ty.elt.elts) == 2):
-            raise CppInternalError(
-                'expected list[(int, T)] for enumerate result, '
-                f'got {result_ty!r}', at=e,
-            )
-        idx_ty = result_ty.elt.elts[0]
-
-        src_ty = self._storage_for_expr(e.args[0])
-        src = self._bind_operand(src_str)
-        result, i = self._open_fill_loop(
-            result_ty, self._list_len(src_ty, src),
-        )
-        self.writer.add_line(
-            f'{self._list_at_raw(result_ty, result, i)} = std::make_tuple('
-            f'static_cast<{idx_ty.format()}>({i}), '
-            f'{self._list_at_raw(src_ty, src, i)});'
-        )
-        self.writer.dedent()
-        self.writer.add_line('}')
-        return result
 
     def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
         match e:
@@ -2548,7 +2497,11 @@ class CppEmitter(Visitor):
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         match e:
             case Zip():
-                return self._emit_zip(e, ctx)
+                raise CppInternalError(
+                    'a `zip` reached the emitter; `UnfoldZip` states every one '
+                    'as a comprehension before codegen',
+                    at=e,
+                )
             case And() | Or():
                 return self._emit_bool_chain(e, ctx)
             case Min() | Max():
@@ -2841,42 +2794,6 @@ class CppEmitter(Visitor):
         for layer, d in zip(reversed(peeled), reversed(dim_strs)):
             inner = self._list_new_filled(layer, d, inner)
         return inner
-
-    def _emit_zip(self, e: Zip, ctx) -> str:
-        """``zip(xs1, …, xsN)`` builds a
-        list of ``std::tuple<T1, …, TN>`` whose length matches the
-        first iterable.  Each iterable is bound to a temp once to
-        evaluate side-effects in source order; the tuple type comes
-        from format inference on the Zip node."""
-        result_ty = self._storage_for_expr(e)
-        if not (isinstance(result_ty, CppList)
-                and isinstance(result_ty.elt, CppTuple)):
-            raise CppInternalError(
-                f'expected list[tuple[...]] for zip result, got {result_ty!r}',
-                at=e,
-            )
-
-        srcs: list[tuple[CppType, str]] = []
-        for arg in e.args:
-            arg_str = self._visit_expr(arg, ctx)
-            srcs.append(
-                (self._storage_for_expr(arg), self._bind_operand(arg_str)),
-            )
-
-        head_ty, head = srcs[0]
-        result, i = self._open_fill_loop(
-            result_ty, self._list_len(head_ty, head),
-        )
-        elts = ', '.join(
-            self._list_at_raw(ty, src, i) for ty, src in srcs
-        )
-        self.writer.add_line(
-            f'{self._list_at_raw(result_ty, result, i)} = '
-            f'std::make_tuple({elts});'
-        )
-        self.writer.dedent()
-        self.writer.add_line('}')
-        return result
 
     def _require_cast_is_round(self, e: NamedUnaryOp) -> None:
         """Refuse a `Round`/`Cast` whose context a ``static_cast`` cannot perform.

@@ -10,7 +10,7 @@ Each site mints for a reason of its own: a *cast* result
 (``_emit_ieee_min_max`` binds ``static_cast<double>(a)``, not an identifier
 however atomic ``a`` is), a dimension read once per fixed-size layer
 (``_emit_empty``), or an **aggregate** the site traverses twice (a list, a
-slice, a ``zip``).
+slice, a tuple).
 """
 
 import importlib
@@ -30,18 +30,20 @@ EXPECTED_COMPILED = 207
 holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
-    '_emit_empty': 28,         # a dimension, read once per fixed-size layer
+    '_convert_storage': 1,     # a tuple read field by field
+    '_emit_empty': 30,         # a dimension, read once per fixed-size layer
     '_emit_ieee_min_max': 6,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
-    '_emit_zip': 4,            # the lists being zipped
     '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced
 }
 """Emitter sites that invent a name, and how often, over the corpus.
 
-Absent from this table means never: ``_emit_enumerate`` calls ``_bind_operand``
-but no corpus program gives it a compound operand.  That is *unexercised*, not
-dead -- it may not be deleted on this evidence.
+``_emit_zip`` used to mint 4 and ``_emit_empty`` 28.  Both moved when the
+`zip` / `enumerate` unfolds joined `_to_statement_form`: the lists a `zip`
+traversed twice are now a comprehension's, so the allocation is where the mint
+happens, and one tuple conversion reaches `_convert_storage` that the zip's own
+path did not.
 """
 
 

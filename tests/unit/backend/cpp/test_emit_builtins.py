@@ -1,23 +1,48 @@
 """
 Phase 4g tests for the cpp emitter — list built-ins.
 
-``sum``, ``enumerate``, and ``zip`` are FPy-side functions over
-lists that lower to standard C++ idioms:
+``sum(xs)`` lowers to ``std::accumulate``, with the result type inferred by
+format inference.
 
-- ``sum(xs)`` → ``std::accumulate`` with the result type inferred
-  by format inference.
-- ``enumerate(xs)`` → a ``std::vector<std::tuple<I, T>>`` populated
-  by an indexed for-loop.
-- ``zip(xs, ys, ...)`` → a ``std::vector<std::tuple<T1, T2, ...>>``
-  populated similarly.
+``enumerate`` and ``zip`` no longer reach the emitter at all: `UnfoldEnumerate`
+and `UnfoldZip` state each as the comprehension `derived-semantics.rst` defines
+it to be, inside `_to_statement_form`'s fixpoint, and `CompToLoop` lowers that.
+So the tuple list they used to build is now built by the comprehension's own
+fill loop — same object, one fewer emitter case.
 
 The temporaries the emitter allocates use ``_tmpN`` names.
 """
 
-import fpy2 as fp
+import contextlib
 
-from fpy2.backend.cpp import CppCompiler
+import pytest
+
+import fpy2 as fp
+import fpy2.backend.cpp.compiler as _compiler
+from fpy2.backend.cpp import CppCompileError, CppCompiler
+from fpy2.backend.cpp.emitter import CppEmitter
+from fpy2.transform import CompToLoop, Hoistable
 from fpy2.types import ListType, RealType
+
+
+@contextlib.contextmanager
+def _no_unfold():
+    """`_to_statement_form` without the unfolds, which is how a `zip` reaches
+    the emitter at all."""
+    def plain(fd):
+        while True:
+            fd = Hoistable.apply(fd)
+            log = CompToLoop.apply_with_edits(fd)
+            if not log.edits:
+                return fd
+            fd = log.result
+
+    original = _compiler._to_statement_form
+    _compiler._to_statement_form = plain
+    try:
+        yield
+    finally:
+        _compiler._to_statement_form = original
 
 
 class TestSum:
@@ -45,9 +70,10 @@ class TestSum:
 
 
 class TestEnumerate:
-    """``enumerate(xs)`` lowers to a ``std::vector<std::tuple<I, T>>`` when
-    optimizations are disabled.  With the default ``optimize=True``,
-    :class:`EnumerateElim` rewrites it to a plain indexed loop instead.
+    """Unoptimized, the unfolded comprehension materializes a list of tuples.
+    With the default ``optimize=True``, :class:`EnumerateElim` fuses it into a
+    plain indexed loop before the unfold ever sees it — which is why the fuse
+    has to run first.
     """
 
     def test_enumerate_in_for_loop_unoptimized(self):
@@ -68,11 +94,8 @@ class TestEnumerate:
         )
         # Result-vector type and per-element tuple shape.
         assert 'std::vector<std::tuple<int64_t, double>>' in out
-        # Loop populates the result with (size_t-cast index, source elt).
-        assert (
-            'std::make_tuple(static_cast<int64_t>(_tmp2), '
-            'xs[_tmp2]);'
-        ) in out
+        # The fill loop pairs the index with the source element.
+        assert 'std::make_tuple(' in out
         # Then the outer for-loop destructures into ``i``/``x``.
         assert 'int64_t i = std::get<0>' in out
         assert 'double x = std::get<1>' in out
@@ -161,10 +184,11 @@ class TestEnumerate:
 
 
 class TestZip:
-    """``zip(xs, ys, ...)`` lowers to a ``std::vector<std::tuple<...>>``
-    by default when optimizations are disabled.  With the default
-    ``optimize=True``, :class:`ZipElim` rewrites the pattern to a
-    plain indexed loop instead — see :meth:`test_zip_optimized_skips_tuple_vector`.
+    """Unoptimized, the unfolded comprehension materializes the tuple list —
+    plus the length assertion the unfolding claims, which is where the surface
+    node's strictness went.  With the default ``optimize=True``,
+    :class:`ZipElim` fuses the pattern first: see
+    :meth:`test_zip_optimized_skips_tuple_vector`.
     """
 
     def test_zip_two_args_unoptimized(self):
@@ -183,10 +207,11 @@ class TestZip:
                 ListType(RealType(fp.FP64)),
             ],
         )
-        # Both iterables are names, so neither needs a temp; the per-element
-        # tuple indexes them directly.
-        assert 'auto&&' not in out
-        assert 'std::make_tuple(xs[_tmp2], ys[_tmp2]);' in out
+        # the length the unfolding claims, one per iterable past the first
+        assert out.count('assert(') == 1
+        assert 'ys.size()) == static_cast<int64_t>(xs.size())' in out
+        # the fill loop indexes both sources into the tuple
+        assert 'std::make_tuple(xs[' in out and 'ys[' in out
         # Loop body destructures back to ``x``/``y``.
         assert 'double x = std::get<0>' in out
         assert 'double y = std::get<1>' in out
@@ -207,8 +232,9 @@ class TestZip:
             arg_types=[ListType(RealType(fp.FP64))] * 3,
         )
         assert 'std::vector<std::tuple<double, double, double>>' in out
-        # Three named iterables, so three direct subscript reads in make_tuple.
-        assert 'auto&&' not in out
+        # two extra iterables, so two length claims
+        assert out.count('assert(') == 2
+        # three direct subscript reads in make_tuple
         assert 'std::make_tuple(xs[' in out
         assert 'ys[' in out and 'zs[' in out
 
@@ -236,3 +262,42 @@ class TestZip:
         # both sources are indexed directly
         assert 'xs[static_cast<size_t>(' in out
         assert 'ys[static_cast<size_t>(' in out
+
+
+class TestTheEmitterNoLongerHasThem:
+    """`_emit_zip` and `_emit_enumerate` are gone: `_to_statement_form` unfolds
+    both, so a node reaching the emitter is a backend bug.
+
+    Measured over the corpus: the two fired 6 and 3 times before the unfolds
+    joined the fixpoint, and 15 and 3 unoptimized.  Running the unfolds *once*
+    instead of to a fixpoint leaves 2 and 9 -- a `zip` only gets its statement
+    slot after `CompToLoop` opens the comprehension around it.
+    """
+
+    def test_the_methods_are_gone(self):
+        for name in ('_emit_zip', '_emit_enumerate'):
+            assert not hasattr(CppEmitter, name)
+
+    def test_a_zip_reaching_the_emitter_is_a_tripwire(self):
+        """Reached by taking the unfold out, which is the only way in."""
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]):
+            with fp.FP64:
+                return zip(xs, ys)
+
+        arg_types = [ListType(RealType(fp.FP64))] * 2
+        with _no_unfold(), pytest.raises(CppCompileError, match='`zip` reach'):
+            CppCompiler().compile(f, ctx=fp.FP64, arg_types=arg_types)
+
+    def test_an_enumerate_reaching_the_emitter_is_a_tripwire(self):
+        @fp.fpy
+        def f(xs: list[fp.Real]):
+            with fp.FP64:
+                return enumerate(xs)
+
+        with _no_unfold(), pytest.raises(
+            CppCompileError, match='`enumerate` reach',
+        ):
+            CppCompiler().compile(
+                f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
+            )
