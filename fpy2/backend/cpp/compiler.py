@@ -34,7 +34,6 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import (
-    ANF,
     CompToLoop,
     EnumerateElim,
     FreeVarElim,
@@ -243,8 +242,8 @@ class CppCompiler(Backend):
         optimize:
             Run the optimizing transforms listed in :meth:`specialize`.  Sound
             either way; ``False`` skips them.  It does *not* mean the surface AST
-            reaches the emitter untouched: ``FreeVarElim`` and ``ANF`` run
-            regardless.  Default ``True``.
+            reaches the emitter untouched: ``FreeVarElim`` and
+            :func:`_to_statement_form` run regardless.  Default ``True``.
         unbox:
             An :class:`~fpy2.backend.cpp.unbox.UnboxMode` (also reachable as
             ``CppCompiler.UnboxMode``).  ``ALLOW`` drops the handle where
@@ -396,18 +395,12 @@ class CppCompiler(Backend):
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 
-        # Unconditionally: `ANF` requires hoistable form and raises without it.
         # Before `RoundElim`, whose hoist is suppressed in two of the positions
-        # this gives a slot; every pass in between must preserve the form.
+        # this gives a slot.
         specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
-
-        # Last: naming an expression *materializes* it, so anything that
-        # deletes or folds runs first -- and it removes the shapes
-        # `ReduceFusion`, `ZipElim` and `EnumerateElim` match on.
-        specialized = specialized.map(lambda _m, fd: ANF.apply(fd))
 
         return list(specialized.call_graph().order)
 

@@ -8,6 +8,8 @@ conditionally-proven sizes) and the two off switches (``arrays=False``,
 ``UnboxMode.NEVER``).
 """
 
+import re
+
 import pytest
 
 import fpy2 as fp
@@ -311,10 +313,10 @@ class TestEndToEnd:
             f, ctx=fp.FP64,
             arg_types=[ListType(ListType(RealType(fp.FP64)))],
         )
-        assert (
-            'std::vector<std::vector<double>>('
-            'static_cast<uint64_t>(t), std::vector<double>{})'
-        ) in s
+        assert re.search(
+            r'std::vector<std::vector<double>>\('
+            r'static_cast<uint64_t>\(\w+\), std::vector<double>\{\}\)', s,
+        )
 
     def test_slice_of_whole_keeps_the_size(self):
         @fp.fpy

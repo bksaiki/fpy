@@ -592,6 +592,5 @@ class TestRoundIntoAFixedScope:
         )
         assert out.startswith('int64_t g(const std::array<float, 32>& xs)'), out
         assert 'int64_t acc = 0;' in out, out
-        # statement form names the rounded element; the accumulator stays int
-        assert 'int64_t t = static_cast<int64_t>(x);' in out, out
-        assert 'acc = (acc + t);' in out, out
+        # the accumulator stays int, with the element rounded in place
+        assert 'acc = (acc + static_cast<int64_t>(x));' in out, out

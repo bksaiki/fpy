@@ -31,12 +31,13 @@ Everything C++-specific lives here. Analyses this backend depends on but does
 not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
 `array-size-integer-exactness.md`.
 
-The emitter's input is in **statement form**: `fpy2.transform.ANF` runs last in
-`specialize()`, so every operand is a name, a literal or a nullary constant, and
-the emitter never invents a place for one.  Only aggregates are left nested.
-ANF does not create the statement slots it needs — `fpy2.transform.Hoistable`
-does, earlier in `specialize()` — and ANF raises where a sealed position holds
-something it would itself have to name.
+The emitter's input is in **hoistable form**: `fpy2.transform.Hoistable` runs in
+`specialize()`, so every expression sits where a statement may be inserted above
+it, and the three positions a statement must never escape — a `while` condition,
+a ternary arm, a short-circuited operand — hold atoms.  Operands are *not*
+flattened; the emitter mints its own name where it reads one twice
+(`_bind_operand`), and `_emit_inline` refuses if a statement would ever escape
+its guard.
 
 The correctness criterion: *if the compiler succeeds, the emitted C++ must
 compile and must behave as the FPy interpreter does wherever FPy's semantics are
@@ -186,7 +187,6 @@ Module
                                  # and every comprehension but the ragged one
                                  # lowered into the loop that is that slot
   → RoundElim                  # (optimize only)
-  → ANF                        # statement form; every operand is an atom
   → DefineUse
   → ContextUse                 # resolves with-block contexts
   → ArraySizeInfer             # FormatInfer needs it for bounded iteration
@@ -236,23 +236,22 @@ An `if` / `if1` condition is deliberately not gated: it runs once, just before t
 branch, so its statements belong in the enclosing block — which is why
 `_emit_guarded_block` takes its condition already emitted.
 
-### Statement form defeats the `2 ** n * x` fusion
+### `ANF` is not in this pipeline
 
-`_emit_scale_by_pow2` matches a *syntactic* `Pow` as an operand of a `Mul`, and
-`ANF` names the power first, so the fusion no longer fires:
+`fpy2.transform.ANF` flattens every operand to a name.  It ran last in
+`specialize()` and was removed: measured over the corpus it lost no program,
+and it cost 258 emitted lines and 448 temporary mentions — `determinant_3x3`
+alone went from thirty `tN` assignments to three expressions.
 
-```c++
-float t14 = std::ldexp(1, static_cast<int>(t13));   // was: std::ldexp(x, t13)
-float _t8 = (t14 * x);
-```
+It also cost the `2 ** n * x` fusion. `_emit_scale_by_pow2` matches a
+*syntactic* `Pow` as an operand of a `Mul`, and naming the power first stopped
+it firing; with the pass gone, `std::ldexp(x, n)` is emitted again rather than a
+separate power and product.
 
-**Not an accuracy regression.** The peephole only fires where `_pow2_is_exact`
-and `_result_fits_ctx` both hold — that is, where the power *and* the product
-are exact — so the two forms agree bit-for-bit. `test_lowered_roundtrip.py`
-confirms it across fourteen formats. The cost is one multiply and one extra
-`float`, and the scale still runs in `float` with no widening.
-
-Two fixes were tried and rejected:
+What replaced it is nothing: the emitter mints a name where it needs one, which
+is 50 sites over the corpus (`test_bind_profile.py` pins them), against the
+1236 mentions the pass was producing. Two routes were considered and rejected
+while it was still in place, and both stay rejected:
 
 - **Resolving the power through its name** in the emitter
   (`defining_expr(scale)`) is *unsound*: `StorageInfer` gives two definitions of
@@ -260,15 +259,12 @@ Two fixes were tried and rejected:
   product reads whatever a later branch put there. `k = n; p = 2 ** k; if c: k =
   m; return x * p` computed `x * 2**m`. Pinned by
   `test_the_exponent_is_not_re_read_at_the_product`.
-- **Teaching `ANF` not to name a `Pow`** works, but lets one backend's peephole
-  restrict a backend-independent pass — and only the shape that happened to have
-  a test, since `_fold_rounded_literal`, `_concrete_int_of` and
+- **Teaching `ANF` not to name a `Pow`** would let one backend's peephole
+  restrict a backend-independent pass, and only for the shape that happened to
+  have a test — `_fold_rounded_literal`, `_concrete_int_of` and
   `_range_counter_scalar` match syntax the same way.
 
-The real fix is to strength-reduce before codegen, which needs a language-level
-scale operation: FPy has no `ldexp`/`scalb`, so there is nothing for an FPy-level
-transform to rewrite *into*. See
-[backend-independence.md](backend-independence.md) §6.
+The pass remains available as `fpy2.strategies.to_anf`.
 
 ### Unchecked subscripts are not a bug
 
@@ -353,9 +349,8 @@ What it needs:
   on the specialized AST first — `st.sites` plus a cursor per site, since
   `simplify` does not take cursors and a whole-program run would rewrite
   roundings that did not need it.
-- **A place in the order.** After `RoundElim` and before `ANF`, for the reason
-  in [backend-independence.md](backend-independence.md) §1: naming materializes,
-  so a pass that folds or deletes has to precede one that names.
+- **A place in the order.** After `RoundElim`, which is the last pass before
+  codegen.
 - **An opt-out.** This turns the compiler from a checker into a rewriter, and
   `float_to_fixed` states a value-class branch per site — on a program with many
   roundings that is a large amount of emitted code, so far unmeasured. A flag

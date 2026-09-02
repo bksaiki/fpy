@@ -1,17 +1,16 @@
-"""Where the emitter still has to invent a name, pinned.
+"""Where the emitter has to invent a name, pinned.
 
-:class:`fpy2.transform.ANF` exists so the emitter never needs a place for an
-operand: after it, every operand *it names* is already a name, and
-``_bind_operand`` hands its argument straight back.  Where it still mints a
-temporary, something reached the emitter un-flattened -- so this number is the
-one that says how much of that job is left, and no correctness test can see it.
+``_bind_operand`` mints a temporary where the emitter reads an operand more than
+once and the operand is not already a name.  No correctness test can see the
+count, and it is the thing that moves when a pass stops flattening the program
+ahead of codegen -- so it is pinned, and a change to it should be a decision
+rather than a surprise.
 
-Every mint left is an **aggregate** operand (a list, a slice, a ``zip``) or a
-*cast* result: ``_emit_ieee_min_max`` binds ``static_cast<double>(a)``, which is
-not an identifier however atomic ``a`` is.  Aggregates are the follow-on --
-naming one gives it a storage place, and a second place is what decides whether
-a list keeps its shared handle.  When that lands, these counts drop, and the
-drop should be a decision rather than a surprise.
+Each site mints for a reason of its own: a *cast* result
+(``_emit_ieee_min_max`` binds ``static_cast<double>(a)``, not an identifier
+however atomic ``a`` is), a dimension read once per fixed-size layer
+(``_emit_empty``), or an **aggregate** the site traverses twice (a list, a
+slice, a ``zip``).
 """
 
 import importlib
@@ -31,17 +30,18 @@ EXPECTED_COMPILED = 202
 holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
-    '_emit_ieee_min_max': 3,   # a cast result, not a nested operand
+    '_emit_empty': 32,         # a dimension, read once per fixed-size layer
+    '_emit_ieee_min_max': 6,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_emit_zip': 4,            # the lists being zipped
     '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced
 }
-"""Emitter sites that still invent a name, and how often, over the corpus.
+"""Emitter sites that invent a name, and how often, over the corpus.
 
-Absent from this table means never: ``_emit_empty`` and ``_emit_enumerate`` call
-``_bind_operand`` but no corpus program gives either a compound operand.  That
-is *unexercised*, not dead -- neither may be deleted on this evidence.
+Absent from this table means never: ``_emit_enumerate`` calls ``_bind_operand``
+but no corpus program gives it a compound operand.  That is *unexercised*, not
+dead -- it may not be deleted on this evidence.
 """
 
 
@@ -93,13 +93,9 @@ def test_the_corpus_still_compiles(profile):
     assert compiled == EXPECTED_COMPILED
 
 
-def test_no_scalar_operand_needs_a_name(profile):
-    """The claim ANF is wired in for: an operand it names arrives as a name.
-
-    Every site left mints for a reason this pass does not address -- an
-    aggregate operand, or a cast -- so a *new* site here means something scalar
-    reached the emitter nested.
-    """
+def test_no_new_site_mints(profile):
+    """Every site above mints for a reason of its own, so a *new* one is the
+    emitter inventing a place it did not need to."""
     _compiled, mints = profile
     assert set(mints) <= set(EXPECTED_MINTS), (
         f'new site(s) minting a temporary: {set(mints) - set(EXPECTED_MINTS)}'

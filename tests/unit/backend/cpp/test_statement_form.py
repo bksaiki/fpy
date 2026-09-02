@@ -109,23 +109,16 @@ class TestTheWitnesses:
 
 
 @pytest.fixture
-def anf_disabled(monkeypatch):
-    """The pipeline with statement form turned off.
-
-    Exactly the state a future change to the passes could leave a program in --
-    and the state every one of these programs was compiled in before they
-    existed.
-
-    Both passes, not just `ANF`: the lowerings that empty these three positions
-    belong to `Hoistable`, so patching out `ANF` alone would leave the net up and
-    every test here would pass without witnessing anything.
-    """
+def hoistable_disabled(monkeypatch):
+    """The pipeline with the lowerings that empty these three positions turned
+    off -- exactly the state a future change to `Hoistable` could leave a
+    program in, and the state every one of these programs was compiled in
+    before it existed."""
     class _Identity:
         @staticmethod
         def apply(func):
             return func
 
-    monkeypatch.setattr(_compiler, 'ANF', _Identity)
     monkeypatch.setattr(_compiler, 'Hoistable', _Identity)
 
 
@@ -138,7 +131,7 @@ class TestTheNet:
             func, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
         )
 
-    def test_a_while_condition_is_refused(self, anf_disabled):
+    def test_a_while_condition_is_refused(self, hoistable_disabled):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -150,7 +143,7 @@ class TestTheNet:
         with pytest.raises(CppCompileError, match='while.*condition'):
             self._emit_unnormalized(f)
 
-    def test_a_ternary_arm_is_refused(self, anf_disabled):
+    def test_a_ternary_arm_is_refused(self, hoistable_disabled):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -161,7 +154,7 @@ class TestTheNet:
         with pytest.raises(CppCompileError, match='ternary arm'):
             self._emit_unnormalized(f)
 
-    def test_a_short_circuited_operand_is_refused(self, anf_disabled):
+    def test_a_short_circuited_operand_is_refused(self, hoistable_disabled):
         @fp.fpy
         def f(x: fp.Real) -> bool:
             with fp.FP64:
