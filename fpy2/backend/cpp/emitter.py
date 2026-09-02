@@ -1820,8 +1820,7 @@ class CppEmitter(Visitor):
             if is_native_ctx(active)
             # the op table has no signature under this context at all, which
             # `unfold=DOUBLE_ROUND` answers by computing at one it does have
-            else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND` to compute '
-                 'it at a native intermediate and round to this context'
+            else '.  Compile with `unfold=UnfoldMode.DOUBLE_ROUND`'
         )
         raise CppEmitError(
             f'no matching signature for {type(e).__name__} under context '
@@ -2826,9 +2825,7 @@ class CppEmitter(Visitor):
             raise CppEmitError(
                 f'rounding under `{active}` has no C++ analogue: its storage '
                 f'`{storage.format()}` rounds to that type\'s own format, not '
-                'to this one.  Compile with `unfold=UnfoldMode.ROUNDINGS` to '
-                'lower it, or do it by hand with `monomorphize -> '
-                'unfold_overflow -> float_to_fixed -> rescale_fixed`.',
+                'to this one.  Compile with `unfold=UnfoldMode.ROUNDINGS`.',
                 at=e,
             )
 
@@ -3158,8 +3155,7 @@ class CppEmitter(Visitor):
         if active.nmin != -1:
             raise CppEmitError(
                 f'rounding under `{active}` needs its digits at position zero; '
-                'compile with `unfold=UnfoldMode.ROUNDINGS`, or run '
-                '`fpy2.strategies.rescale_fixed` first',
+                'run `fpy2.strategies.rescale_fixed` first',
                 at=e,
             )
         if active.num_randbits != 0:
@@ -3180,9 +3176,8 @@ class CppEmitter(Visitor):
                 f'overflow mode {active.overflow} under `{active}` has no C++ '
                 f'analogue: `{target_ty.format()}` is wider than the format, so '
                 'neither its range nor its wrapping reproduces the rule.  '
-                'Compile with `unfold=UnfoldMode.ROUNDINGS`, or run '
-                '`fpy2.strategies.unfold_overflow` to state the rule as '
-                'program text.',
+                'Run `fpy2.strategies.unfold_overflow` to state the rule '
+                'as program text.',
                 at=e,
             )
         if target_ty.is_integer():

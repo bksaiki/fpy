@@ -10,7 +10,6 @@ surface as :class:`CppCompileError`.
 
 from collections.abc import Collection
 from dataclasses import dataclass
-from typing import TypeAlias
 
 from ...analysis import (
     Alias,
@@ -67,12 +66,12 @@ from .unfold_round import unfold as unfold_round
 from .utils import CPP_HEADERS, CPP_HELPERS
 from .variables import VariableAlloc, VariableAnalysis
 
-_UnboxMode: TypeAlias = UnboxMode
-_UnfoldMode: TypeAlias = UnfoldMode
-"""Annotation-only aliases: ``CppCompiler.UnboxMode = UnboxMode`` shadows the
-enum inside the class body.  Runtime resolves the shadow to the same object;
-type checkers reject an attribute used as a type, so annotations there need
-this name instead."""
+_UnboxMode = UnboxMode
+_UnfoldMode = UnfoldMode
+"""Aliases the class attributes below are assigned from.  ``UnboxMode =
+UnboxMode`` in a class body resolves at runtime but reads as a self-reference,
+which a type checker cannot follow -- so completion on
+``CppCompiler.UnboxMode.`` gives nothing."""
 
 
 class CppCompileError(CompileError):
@@ -285,8 +284,8 @@ class CppCompiler(Backend):
             turning the compiler into a rewriter has to be asked for.
     """
 
-    UnboxMode = UnboxMode
-    UnfoldMode = UnfoldMode
+    UnboxMode = _UnboxMode
+    UnfoldMode = _UnfoldMode
     """The mode enums for ``unbox`` and ``unfold``, re-exported so callers
     holding the compiler need not import the modules defining them."""
 
