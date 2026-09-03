@@ -1,16 +1,39 @@
 # Version History
 
-## [NEXT] - ???
+## 0.2.3 - 2026-09-02
 ### Features:
- - Strategies:
-   - cursors: a location that survives the rewrites around it, so one site aims a
-     whole sequence of strategies; `where` takes a statement, region or expression
-     cursor as well as an index
-   - sites: lists the sites a strategy can be aimed at
+ - Analysis:
+   - extract storage inference algorithm to be backend-independent
+ - Frontend:
+   - do not allow duplicate identifiers in the same assignment
+   - identifiers in a for loop target must be fresh
+   - identifiers in a comprehension target must be fresh
+ - Interpreter:
+   - wrap foreign values in `Foreign` wrapper
+ - Number:
+   - `MPFloatContext`/`MPSFloatContext`/`MPBFloatContext`:
+     - add `enable_inf` flag to control whether inf is representable
+     - add `enable_nan` flag to control whether NaN is representable
+     - add `enable_neg_zero` flag to control whether -0 is representable
  - Rewriter:
    - a pattern match carries a cursor
    - `find` / `find_all` return cursors to pattern matches
    - `Rewrite` uses the cursor abstraction
+ - Strategies:
+   - cursors: an abstraction program location to guide rewrites
+   - sites: lists the sites a strategy can be aimed at
+   - add rounding insertion strategy
+   - add list comprehension to loop strategy
+   - add rounding splitting strategy
+   - add ANF strategy
+   - add normalization for safe hoisting strategy
+ - Transforms:
+   - add rounding insertion transformation
+   - add list comprehension to loop transformation
+   - dead code elimination: remove unused contexts
+   - add rounding splitting transformation
+   - add ANF transformation 
+   - add normalization for safe hoisting
 
 ### Fixes:
  - Rewriter:
