@@ -1,8 +1,6 @@
 """
-`enable_neg_zero` across the floating-point formats and contexts.
+`enable_neg_zero` across every format and context that carries it.
 
-The fixed-point formats have carried it for a while; the float ones now do too,
-so a number system without a signed zero is expressible whatever its shape.
 The invariant it exists for: a context's `round` may never produce a value its
 own `format()` rejects.
 """
@@ -46,8 +44,7 @@ class TestRoundingStaysInsideTheFormat:
     @pytest.mark.parametrize('_name,ctx', _contexts(False), ids=_IDS)
     def test_a_negative_value_that_lands_on_zero(self, _name, ctx):
         """`MPFloatContext` is unbounded below, so its result is the operand
-        itself -- signed, and representable.  Everywhere the value *does* round
-        to zero the sign has to go."""
+        itself -- signed, and representable."""
         r = ctx.round(_TINY)
         assert ctx.format().representable_in(r)
         if r.is_zero():
@@ -76,8 +73,7 @@ class TestThePlumbing:
 
     @pytest.mark.parametrize('_name,ctx', _contexts(False), ids=_IDS)
     def test_it_separates_formats(self, _name, ctx):
-        """A format that refuses `-0` is not the one that admits it, so it
-        cannot be substituted for it in a cache or a containment test."""
+        """A format that refuses `-0` is not the one that admits it."""
         other = ctx.with_params(enable_neg_zero=True)
         assert ctx.format() != other.format()
         assert hash(ctx.format()) != hash(other.format())
@@ -90,8 +86,7 @@ class TestThePlumbing:
 
 
 class TestZeroRefuses:
-    """`zero(s=True)` has no value to return, so it raises rather than
-    quietly handing back `+0.0`."""
+    """`zero(s=True)` has no value to return, so it raises."""
 
     @pytest.mark.parametrize('_name,ctx', [
         c for c in _contexts(False) if c[0] in ('MPSFloat', 'MPBFloat')

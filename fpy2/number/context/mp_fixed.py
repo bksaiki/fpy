@@ -9,7 +9,7 @@ from fractions import Fraction
 from ...utils import DEFAULT, DefaultOr, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import RoundingMode
-from .context import OrdinalContext
+from .context import OrdinalContext, zero_sign
 from .format import OrdinalFormat
 
 
@@ -464,18 +464,13 @@ class MPFixedContext(OrdinalContext):
         # step 2. shortcut for exact zero values
         # the sign is preserved when this context has a negative zero
         if xr.is_zero():
-            s = xr.s and self.enable_neg_zero
-            return Float(s=s, ctx=self)
+            return Float(s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
         # step 3. round value based on rounding parameters
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)
 
         # step 4. wrap the value in a Float
-        if xr.is_zero() and xr.s and not self.enable_neg_zero:
-            # if -0 is not enabled, then return +0 instead of -0
-            return Float(x=xr, s=False, ctx=self)
-        else:
-            return Float(x=xr, ctx=self)
+        return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
     def round(self, x, *, exact: bool = False) -> Float:
         x = self._round_prepare(x)

@@ -39,10 +39,8 @@ def _maxval_precision(bound: RealFloat, exp: int) -> int:
     with the exponent `exp`, i.e., the number of bits
     required to represent `c` where `bound = c * 2**exp`.
 
-    `exp` and the bounds are independent, so `bound` need not sit on the grid
-    `exp` defines -- a meet takes the coarser grid and the tighter bound.  It is
-    rounded away from zero onto that grid first, which is the direction every
-    caller wants: a wider bound needs no fewer bits, so the answer stays an
+    `bound` need not sit on the grid `exp` defines, so it is rounded away from
+    zero onto it first: a wider bound needs no fewer bits, keeping the answer an
     upper estimate of what naming it costs.
     """
     n = exp - 1
@@ -323,13 +321,10 @@ class AbstractFormat:
         inf_out = self_inf or other_inf
         has_nan = self.has_nan or other.has_nan or inf_out
         # A zero product takes the XOR of the operand signs (IEEE-754 §6.3, in
-        # every rounding mode), so a `-0.0` needs a sign disagreement over a
-        # zero product.  Every format represents a `+0.0`, so one side
-        # supplying *any* negative value is enough: `+0 * -0.25` is `-0.0`.
-        # Two's-complement's single zero is no counterexample -- `(-2) * 0`
-        # under `SINT8` is `+0.0` because the *destination* has no signed zero,
-        # which the intersection with its format says and this product does
-        # not.
+        # every rounding mode), and every format represents a `+0.0` -- so one
+        # side supplying *any* negative value is enough: `+0 * -0.25` is
+        # `-0.0`.  A destination without a signed zero drops it, which the
+        # intersection with its format says and this product does not.
         has_neg_zero = self._signable() or other._signable()
         return AbstractFormat(
             prec, exp, pos_bound, neg_bound=neg_bound,
@@ -356,10 +351,25 @@ class AbstractFormat:
         )
 
     def __or__(self, other: 'AbstractFormat') -> 'AbstractFormat':
-        """Union of two formats."""
+        """Union of two formats.
+
+        Joining a *fixed* shape with a *float* one takes the **effective**
+        precision of each: a bounded fixed-point format carries ``prec = inf``
+        and needs only as many digits as its bound, so ``SINT32 | FP32`` is
+        ``A(32, -149, +3.4e38)`` and fits a ``double``, where the nominal `inf`
+        describes 278 digits that no storage holds.  Sound because
+        `effective_prec` bounds the digits any value of a format needs.
+
+        Two formats of the *same* shape keep the nominal precision, so
+        ``x | x == x`` -- which is what a loop fixpoint detects convergence
+        with, and `effective_prec` is finite for a bounded fixed-point format.
+        """
         if not isinstance(other, AbstractFormat):
             return NotImplemented
-        prec = max(self.prec, other.prec)
+        if isinstance(self.prec, float) == isinstance(other.prec, float):
+            prec = max(self.prec, other.prec)
+        else:
+            prec = max(self.effective_prec(), other.effective_prec())
         exp = min(self.exp, other.exp)
         pos_bound = max(self.pos_bound, other.pos_bound)
         neg_bound = min(self.neg_bound, other.neg_bound)
@@ -405,19 +415,12 @@ class AbstractFormat:
         -inf).  This round-trips with :meth:`format`, which sets the
         ``enable_*`` flags.
 
-        ``has_neg_zero`` round-trips via each format's ``enable_neg_zero``.
-        That flag
-        exists for this: without it :meth:`format` could not express "no
-        negative zero", so every integer-valued bound materialized on the way to
-        storage selection would acquire one and lose its integer storage —
-        ``int8 + int8`` lands on a *float*-shaped ``MPBFloatFormat``, whose value
-        set legitimately includes a ``-0.0`` unless told otherwise.  Every probe
-        is believed, so a format that does claim a negative zero is kept off the
-        integer rungs of the C++ storage ladder by containment — correctly, as no
-        C++ integer type has one.
-
-        Every float format carries the flag too, so the round trip holds
-        whichever shape :meth:`format` picks.
+        ``has_neg_zero`` round-trips via ``enable_neg_zero``, which every fixed
+        *and* float format carries.  It has to: an integer-valued bound
+        materializes as a float-shaped ``MPBFloatFormat``, whose value set
+        includes a ``-0.0`` unless told otherwise, and a bound claiming one is
+        kept off the integer rungs of the C++ storage ladder by containment --
+        correctly, as no C++ integer type has one.
         """
         if not isinstance(fmt, Format):
             raise TypeError(f'Expected \'Format\', got {fmt}')
@@ -567,36 +570,33 @@ class AbstractFormat:
     def _max_representable(self, b: RealFloat) -> RealFloat:
         """The largest value this format represents of magnitude at most *b*.
 
-        ``prec``, ``exp`` and the bounds are independent, so *b* need not be one
-        of the values: a meet takes the coarser grid, the smaller precision and
-        the tighter bound at once, and ``FP16 & MPFixedContext(5)`` bounds
-        multiples of ``2 ** 6`` by ``65504``, which is not a multiple of 64.  A
-        concrete format's bound has to be one of its own values, so it has to be
-        reduced to one.
+        A concrete format's bound has to be one of its own values, and *b* need
+        not be: a meet takes the coarser grid, the smaller precision and the
+        tighter bound at once, so ``FP16 & MPFixedContext(5)`` bounds multiples
+        of ``2 ** 6`` by ``65504``.
 
-        Rounding the magnitude toward zero under *both* constraints names the
-        largest value that is actually in the set -- 65472 here, not 65536.  So
-        the bound stays **exact**: nothing between it and *b* was representable.
-        A bound short of the quantum reduces to zero, which is the whole set
-        there.
+        Rounding toward zero under *both* constraints keeps the bound exact --
+        65472 here, and nothing between it and *b* was representable.  A bound
+        short of the quantum reduces to zero, the whole set there.
         """
         max_p = None if isinstance(self.prec, float) else self.prec
         min_n = None if isinstance(self.exp, float) else self.exp - 1
         if max_p is None and min_n is None:
-            return b
+            return b        # unbounded both ways: every real is a value
         mag = RealFloat(s=False, x=b).round(
             max_p=max_p, min_n=min_n, rm=RoundingMode.RTZ,
         )
         return RealFloat(s=b.s, x=mag)
 
     def _signable(self) -> bool:
-        """Whether this format has a value whose sign bit is set.
+        """Whether this format has a *finite* value whose sign bit is set.
 
-        What a multiplication needs: the operand that is *not* the zero has to
+        What a multiplication needs: the operand that is not the zero has to
         supply the disagreeing sign, and any negative value does, not only a
-        negative zero.
+        negative zero.  An infinity cannot -- times a zero it is NaN, and times
+        anything else an infinity.
         """
-        if self.has_neg_zero or self.has_neg_inf:
+        if self.has_neg_zero:
             return True
         return not (
             isinstance(self.neg_bound, RealFloat) and self.neg_bound.is_zero()

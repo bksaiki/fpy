@@ -2629,8 +2629,13 @@ class TestSelectTightens:
             assert int(af.pos_bound) == hi, f'{name} upper bound'
 
     def test_selection_still_covers_both_operands(self):
-        """The result is one of the operands, so precision and quantum still
-        come from the join -- only the bounds tighten."""
+        """The result is one of the operands, so it has to represent every
+        value either could take -- only the *bounds* tighten.
+
+        Checked as containment rather than as ``prec >= max(prec)``: the join
+        reads a fixed-point shape's effective precision, so it can cover both
+        operands with fewer digits than either nominally has.
+        """
         from fpy2.analysis.format_infer.analysis import exact_select
         a = AbstractFormat(4, -2, fp.RealFloat.from_int(8),
                            neg_bound=fp.RealFloat.from_int(-8))
@@ -2639,8 +2644,13 @@ class TestSelectTightens:
         for is_min in (True, False):
             got = exact_select([a.format(), b.format()], is_min=is_min)
             assert got is not None
-            assert got.prec >= max(a.prec, b.prec)
             assert got.exp <= min(a.exp, b.exp)
+            # every value of either operand, inside the tightened bounds
+            for operand in (a, b):
+                clipped = operand & AbstractFormat(
+                    got.prec, got.exp, got.pos_bound, neg_bound=got.neg_bound,
+                )
+                assert clipped.contained_in(got), (operand, got)
         assert exact_select([a.format(), b.format()], is_min=True).pos_bound \
             == fp.RealFloat.from_int(3)
         assert exact_select([a.format(), b.format()], is_min=False).neg_bound \

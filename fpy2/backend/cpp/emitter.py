@@ -1642,14 +1642,13 @@ class CppEmitter(Visitor):
     def _round_storage(self, e: Expr) -> CppScalar | None:
         """A rounding's storage: its *context's*, not its value bound's.
 
-        `Round` and `Cast` emit a ``static_cast`` into the context's storage,
-        so that is what holds the result.  The value bound can be tighter --
-        ``round_SINT64(x: FP32)`` is 24 bits of integer, which fits a ``float``
-        -- and taking it would report a type the emission never produces, so a
-        consumer would cast from the wrong one.
+        `Round` and `Cast` emit a ``static_cast`` into the context's storage.
+        The value bound can be tighter -- ``round_SINT64(x: FP32)`` is 24 bits
+        of integer, which fits a ``float`` -- and taking it would report a type
+        the emission never produces.
 
         `None` where the context has no storage of its own (``REAL``, or a
-        format past the ladder); the bound is all there is to go on there.
+        format past the ladder).
         """
         if not isinstance(e, Round | Cast):
             return None

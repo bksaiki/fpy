@@ -9,7 +9,7 @@ from fractions import Fraction
 from ...utils import DEFAULT, DefaultOr, bitmask, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import RoundingMode
-from .context import OrdinalContext
+from .context import OrdinalContext, zero_sign
 from .format import OrdinalFormat
 
 
@@ -22,9 +22,7 @@ class MPSFloatFormat(OrdinalFormat):
     minimum normalized exponent `emin`.
     It describes the set of representable values for `MPSFloatContext`.
 
-    `enable_neg_zero` says whether `-0.0` is one of them.  A format that refuses
-    it has no signed zero at all, which is what an abstract format materializes
-    when it has ruled one out -- see `AbstractFormat.format`.
+    `enable_neg_zero` says whether `-0.0` is one of them.
     """
 
     pmax: int
@@ -227,8 +225,8 @@ class MPSFloatFormat(OrdinalFormat):
         """Returns a signed 0 under this format.
 
         Raises a `ValueError` for `s=True` where the format has no negative
-        zero: there is no such value to return, and dropping the sign would
-        answer a different question than the one asked.
+        zero: there is no such value, and dropping the sign would answer a
+        different question than the one asked.
         """
         if not isinstance(s, bool):
             raise TypeError(f'Expected \'bool\' for s={s}, got {type(s)}')
@@ -306,8 +304,8 @@ class MPSFloatContext(OrdinalContext):
     """is infinity representable?"""
 
     enable_neg_zero: bool
-    """is `-0.0` representable?  When `False`, rounding a negative value that
-    lands on zero gives `+0.0`, so a result is always in `format()`."""
+    """is `-0.0` representable?  When `False`, a negative value that rounds to
+    zero gives `+0.0`, so a result is always in `format()`."""
 
     nan_value: Float | None
     """
@@ -507,18 +505,6 @@ class MPSFloatContext(OrdinalContext):
             nmin = self.nmin - self.num_randbits
             return pmax, nmin
 
-    def _zero_sign(self, xr: RealFloat) -> bool:
-        """The sign a rounded *xr* keeps.
-
-        A negative value can round *down* to zero, and the format may have no
-        negative zero to land on -- so the sign is dropped there, and the
-        result is always one of `format()`'s values.  Only a zero is affected:
-        every other magnitude keeps its sign.
-        """
-        if xr.is_zero() and not self.enable_neg_zero:
-            return False
-        return xr.s
-
     def _round_at(self, x: RealFloat | Float, n: int | None, exact: bool) -> Float:
         """
         Like `self.round()` but for only `RealFloat` and `Float` inputs.
@@ -547,7 +533,7 @@ class MPSFloatContext(OrdinalContext):
 
         # step 2. shortcut for exact zero values (preserve signed zero)
         if x.is_zero():
-            return Float(s=x.s and self.enable_neg_zero, ctx=self)
+            return Float(s=zero_sign(x, self.enable_neg_zero), ctx=self)
 
         # step 3. select rounding parameter `n`
         if n is None or n < self.nmin:
@@ -557,7 +543,7 @@ class MPSFloatContext(OrdinalContext):
         xr = x.round(self.pmax, n, self.rm, self.num_randbits, rng=self.rng, exact=exact)
 
         # step 5. wrap the result in a Float
-        return Float(x=xr, s=self._zero_sign(xr), ctx=self)
+        return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
     def round(self, x, *, exact: bool = False) -> Float:
         x = self._round_prepare(x)

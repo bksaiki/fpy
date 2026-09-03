@@ -88,8 +88,7 @@ class TestFromAConcreteFormat:
 
     @pytest.mark.parametrize('_name,ctx', CONTEXTS, ids=CONTEXT_IDS)
     def test_the_abstraction_is_a_fixpoint(self, _name, ctx):
-        """A second trip changes nothing, so whatever `format()` widened it
-        widened once."""
+        """A second trip changes nothing."""
         af = AbstractFormat.from_format(ctx.format())   # type: ignore[arg-type]
         f1 = af.format()
         assert isinstance(f1, AbstractableFormat)
@@ -113,12 +112,9 @@ class TestKnownWidenings:
     superset, and each is a missing knob rather than a bug in the mapping."""
 
     def test_a_float_shape_refuses_one_too(self):
-        """Every float format carries `enable_neg_zero`, so the round trip holds
-        whichever shape `format()` picks.
-
-        The witness is a format whose NaN *is* the negative-zero encoding, so
-        `-0.0` is not one of its values.
-        """
+        """The witness is a format whose NaN *is* the negative-zero encoding,
+        so `-0.0` is not one of its values -- and the float shape it
+        materializes as can say so."""
         ctx = EFloatContext(4, 8, False, EFloatNanKind.NEG_ZERO, 0)
         f0 = ctx.format()
         neg_zero = Float(s=True, exp=0, c=0)
@@ -135,13 +131,10 @@ class TestKnownWidenings:
 
     def test_a_non_negative_float_shape_widens_symmetrically(self):
         """`MPBFloatFormat` requires a strictly-negative `neg_maxval`, so a
-        format bounded at zero below cannot be named and widens to a symmetric
-        one.  `abs` produces exactly that shape.
-
-        Costs no storage -- the widened bound picks the same rung -- but a
-        consumer reading `neg_bound` off the materialized format loses the
-        `>= 0`.  Closing it means admitting a non-negative maxval in the number
-        tower.
+        format bounded at zero below widens to a symmetric one.  `abs`
+        produces exactly that shape.  Costs no storage -- the widened bound
+        picks the same rung -- but a consumer reading `neg_bound` off the
+        materialized format loses the `>= 0`.
         """
         af = abs(AbstractFormat.from_format(fp.FP32.format()))   # type: ignore[arg-type]
         assert isinstance(af.neg_bound, RealFloat) and af.neg_bound.is_zero()
@@ -158,8 +151,7 @@ class TestKnownWidenings:
 
 class TestFormatIsTotal:
     """`format()` returns a `Format` for every `AbstractFormat` that can be
-    built.  It used to raise for a bound off the grid `exp` defines, which an
-    ordinary meet produces."""
+    built, including a bound off the grid `exp` defines."""
 
     EXPS = (-1074, -149, -24, -1, 0, 5, float('-inf'))
     BOUNDS = (_R(0), _R(1), _R(254), _R(1024), RealFloat(exp=-4, c=3),

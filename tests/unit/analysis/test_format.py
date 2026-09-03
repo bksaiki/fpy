@@ -854,3 +854,35 @@ class TestUnboundedContainment:
         coarse = AbstractFormat(2, -20, RealFloat(c=1, exp=20))
         assert small.prec > coarse.prec
         assert small.contained_in(coarse)
+
+
+class TestJoinReadsTheEffectivePrecision:
+    """A bounded fixed-point format carries ``prec = inf`` and needs only as
+    many digits as its bound, so joining one with a float shape must read the
+    effective precision or the result describes far more values than either
+    operand holds."""
+
+    def test_an_integer_joined_with_a_float(self):
+        i32 = AbstractFormat.from_format(fp.SINT32.format())
+        f32 = AbstractFormat.from_format(fp.FP32.format())
+        j = i32 | f32
+        assert j.prec == 32
+        assert i32.contained_in(j) and f32.contained_in(j)
+
+    def test_it_is_the_difference_between_double_and_nothing(self):
+        """The nominal `inf` describes every multiple of ``2 ** -149`` up to
+        ``3.4e38`` -- 278 digits, which no storage rung holds."""
+        from fpy2.backend.cpp.storage import choose_storage_scalar
+        from fpy2.backend.cpp.types import CppScalar
+        j = (AbstractFormat.from_format(fp.SINT32.format())
+             | AbstractFormat.from_format(fp.FP32.format()))
+        assert choose_storage_scalar(j.format()) is CppScalar.F64
+
+    def test_the_same_shape_keeps_its_nominal_precision(self):
+        """`x | x == x` is what a loop fixpoint detects convergence with, and
+        `effective_prec` is finite for a bounded fixed-point format -- so
+        reading it on both sides would make ``SINT8 | SINT8`` a different
+        format with the same values."""
+        for ctx in (fp.SINT8, fp.SINT32, fp.FP32, fp.FP64, fp.INTEGER):
+            af = AbstractFormat.from_format(ctx.format())
+            assert (af | af) == af, ctx
