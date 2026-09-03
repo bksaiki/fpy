@@ -487,9 +487,14 @@ class TestRealScopeLosslessWidening:
         # The widening still upcasts the narrow zero operand for the product.
         assert 'static_cast<float>(' in out
 
-    def test_sint8_mul_widens_to_int16(self):
-        """Exact product of two ``SINT8`` operands fits in
-        ``int16_t``; the REAL scope lowers to a widened ``*``."""
+    def test_sint8_mul_widens_to_float(self):
+        """The exact product of two ``SINT8`` operands fits ``int16_t``'s
+        *values*, and still cannot be stored in one: under ``fp.REAL``
+        ``0 * -1`` is ``-0.0``, which no C++ integer type has.  Checked against
+        the interpreter.  ``float`` holds every ``int16_t`` value exactly, so
+        nothing numeric is lost -- see
+        `test_format.py::test_mul_derives_neg_zero_from_either_sign`.
+        """
 
         @fp.fpy
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -503,9 +508,9 @@ class TestRealScopeLosslessWidening:
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP32), RealType(fp.FP32)],
         )
-        assert 'int16_t f(float x, float y)' in out
+        assert 'float f(float x, float y)' in out
         assert (
-            'return (static_cast<int16_t>(xq) * static_cast<int16_t>(yq));'
+            'return (static_cast<float>(xq) * static_cast<float>(yq));'
         ) in out
         # No fesetround for the REAL scope.
         assert 'fesetround' not in out

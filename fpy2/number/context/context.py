@@ -16,8 +16,19 @@ __all__ = [
     'Context',
     'EncodableContext',
     'OrdinalContext',
-    'SizedContext'
+    'SizedContext',
+    'zero_sign',
 ]
+
+
+def zero_sign(x: RealFloat | Float, enable_neg_zero: bool) -> bool:
+    """The sign *x* keeps under a context with `enable_neg_zero`.
+
+    Dropped for a zero the context has no negative of, so a rounding's result
+    is always one of `format()`'s own values.  A negative value can round
+    *down* to zero, so this is asked after rounding as well as before it.
+    """
+    return x.s and (enable_neg_zero or not x.is_zero())
 
 
 class Context(ABC):

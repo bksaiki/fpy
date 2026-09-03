@@ -868,13 +868,17 @@ class CppEmitter(Visitor):
         nothing storable (e.g., a symbolic ``REAL_FORMAT``).
         """
         fmt = self.format_info.by_expr.get(e)
-        try:
-            ty = choose_storage(fmt)
-        except StorageSelectionError as err:
-            raise CppEmitError(
-                f'cannot pick storage for {type(e).__name__}: {err}',
-                at=e,
-            ) from err
+        rounded = self._round_storage(e)
+        if rounded is not None:
+            ty: CppType = rounded
+        else:
+            try:
+                ty = choose_storage(fmt)
+            except StorageSelectionError as err:
+                raise CppEmitError(
+                    f'cannot pick storage for {type(e).__name__}: {err}',
+                    at=e,
+                ) from err
         # `choose_storage` knows a list's *shape*, not its representation:
         # that is decided per alias region (see `.unbox`).
         return ty if self.unbox is None else self.unbox.annotate(e, ty)
@@ -1634,6 +1638,24 @@ class CppEmitter(Visitor):
             f'a format that is.',
             at=at,
         )
+
+    def _round_storage(self, e: Expr) -> CppScalar | None:
+        """A rounding's storage: its *context's*, not its value bound's.
+
+        `Round` and `Cast` emit a ``static_cast`` into the context's storage.
+        The value bound can be tighter -- ``round_SINT64(x: FP32)`` is 24 bits
+        of integer, which fits a ``float`` -- and taking it would report a type
+        the emission never produces.
+
+        `None` where the context has no storage of its own (``REAL``, or a
+        format past the ladder).
+        """
+        if not isinstance(e, Round | Cast):
+            return None
+        try:
+            return self._scalar_for_ctx(self._active_ctx_for(e), at=e)
+        except CppEmitError:
+            return None
 
     def _scalar_storage_for_expr(self, e: Expr) -> CppScalar:
         """Like :meth:`_storage_for_expr` but asserts the result is a

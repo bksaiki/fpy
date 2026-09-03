@@ -7,7 +7,7 @@ and bounded. Hence, "MP-B."
 from ...utils import DEFAULT, DefaultOr, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
-from .context import SizedContext
+from .context import SizedContext, zero_sign
 from .format import SizedFormat
 from .mps_float import MPSFloatFormat
 
@@ -20,6 +20,8 @@ class MPBFloatFormat(SizedFormat):
     This format is parameterized by a fixed precision `pmax`, minimum
     normalized exponent `emin`, and positive maximum value `pos_maxval`.
     It describes the set of representable values for `MPBFloatContext`.
+
+    `enable_neg_zero` says whether `-0.0` is one of them.
     """
 
     pmax: int
@@ -49,6 +51,9 @@ class MPBFloatFormat(SizedFormat):
     enable_inf: bool
     """whether (signed) infinity is representable"""
 
+    enable_neg_zero: bool
+    """whether `-0.0` is representable"""
+
     def __init__(
         self,
         pmax: int,
@@ -57,6 +62,7 @@ class MPBFloatFormat(SizedFormat):
         neg_maxval: RealFloat | None = None,
         enable_nan: bool = True,
         enable_inf: bool = True,
+        enable_neg_zero: bool = True,
     ):
         if not isinstance(pmax, int):
             raise TypeError(f'Expected \'int\' for pmax={pmax}, got {type(pmax)}')
@@ -75,6 +81,8 @@ class MPBFloatFormat(SizedFormat):
             raise TypeError(f'Expected \'RealFloat\' for neg_maxval={neg_maxval}, got {type(neg_maxval)}')
         elif not neg_maxval.s:
             raise ValueError(f'Expected negative neg_maxval={neg_maxval}')
+        if not isinstance(enable_neg_zero, bool):
+            raise TypeError(f'Expected \'bool\' for enable_neg_zero={enable_neg_zero}, got {type(enable_neg_zero)}')
 
         self.pmax = pmax
         self.emin = emin
@@ -82,8 +90,13 @@ class MPBFloatFormat(SizedFormat):
         self.neg_maxval = neg_maxval
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
+        self.enable_neg_zero = enable_neg_zero
 
-        self._mps_fmt = MPSFloatFormat(pmax, emin, enable_nan, enable_inf)
+        # `representable_in` and `zero` both go through the unbounded format, so
+        # carrying the flag there is what makes them honour it
+        self._mps_fmt = MPSFloatFormat(
+            pmax, emin, enable_nan, enable_inf, enable_neg_zero,
+        )
         self._pos_maxval_ord = self._mps_fmt._to_ordinal(pos_maxval)
         self._neg_maxval_ord = self._mps_fmt._to_ordinal(neg_maxval)
 
@@ -96,12 +109,13 @@ class MPBFloatFormat(SizedFormat):
             and self.neg_maxval == other.neg_maxval
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
+            and self.enable_neg_zero == other.enable_neg_zero
         )
 
     def __hash__(self):
         return hash((
             self.__class__, self.pmax, self.emin, self.pos_maxval, self.neg_maxval,
-            self.enable_nan, self.enable_inf,
+            self.enable_nan, self.enable_inf, self.enable_neg_zero,
         ))
 
     @property
@@ -196,7 +210,8 @@ class MPBFloatFormat(SizedFormat):
             return self._mps_fmt.from_ordinal(x)
 
     def zero(self, s: bool = False) -> Float:
-        """Returns a signed 0 under this format."""
+        """Returns a signed 0 under this format, raising for `s=True` where it
+        has no negative zero."""
         return self._mps_fmt.zero(s)
 
     def minval(self, s: bool = False) -> Float:
@@ -258,6 +273,7 @@ class MPBFloatContext(SizedContext):
 
     - `enable_nan`: if `True`, then NaN is representable [default: `True`]
     - `enable_inf`: if `True`, then infinity is representable [default: `True`]
+    - `enable_neg_zero`: if `True`, then `-0.0` is representable [default: `True`]
     - `nan_value`: if NaN is not enabled, what value should NaN round to? [default: `None`];
       if not set, then `round()` will raise a `ValueError` on NaN.
     - `inf_value`: if Inf is not enabled, what value should Inf round to? [default: `None`];
@@ -295,6 +311,10 @@ class MPBFloatContext(SizedContext):
     enable_inf: bool
     """is infinity representable?"""
 
+    enable_neg_zero: bool
+    """is `-0.0` representable?  When `False`, a negative value that rounds to
+    zero gives `+0.0`, so a result is always in `format()`."""
+
     nan_value: Float | None
     """
     if NaN is not enabled, what value should NaN round to?
@@ -323,6 +343,7 @@ class MPBFloatContext(SizedContext):
         rng: RNG | None = None,
         enable_nan: bool = True,
         enable_inf: bool = True,
+        enable_neg_zero: bool = True,
         nan_value: Float | None = None,
         inf_value: Float | None = None
     ):
@@ -338,8 +359,13 @@ class MPBFloatContext(SizedContext):
             raise TypeError(f'Expected \'bool\' for enable_nan={enable_nan}, got {type(enable_nan)}')
         if not isinstance(enable_inf, bool):
             raise TypeError(f'Expected \'bool\' for enable_inf={enable_inf}, got {type(enable_inf)}')
+        if not isinstance(enable_neg_zero, bool):
+            raise TypeError(f'Expected \'bool\' for enable_neg_zero={enable_neg_zero}, got {type(enable_neg_zero)}')
 
-        self._fmt = MPBFloatFormat(pmax, emin, maxval, neg_maxval, enable_nan, enable_inf)
+        self._fmt = MPBFloatFormat(
+            pmax, emin, maxval, neg_maxval, enable_nan, enable_inf,
+            enable_neg_zero,
+        )
 
         if nan_value is not None:
             if not isinstance(nan_value, Float):
@@ -365,6 +391,7 @@ class MPBFloatContext(SizedContext):
         self.rng = rng
         self.enable_nan = enable_nan
         self.enable_inf = enable_inf
+        self.enable_neg_zero = enable_neg_zero
         self.nan_value = nan_value
         self.inf_value = inf_value
 
@@ -380,6 +407,7 @@ class MPBFloatContext(SizedContext):
             and self.num_randbits == other.num_randbits
             and self.enable_nan == other.enable_nan
             and self.enable_inf == other.enable_inf
+            and self.enable_neg_zero == other.enable_neg_zero
             and same_value(self.nan_value, other.nan_value)
             and same_value(self.inf_value, other.inf_value)
         )
@@ -431,6 +459,7 @@ class MPBFloatContext(SizedContext):
         rng: DefaultOr[RNG | None] = DEFAULT,
         enable_nan: DefaultOr[bool] = DEFAULT,
         enable_inf: DefaultOr[bool] = DEFAULT,
+        enable_neg_zero: DefaultOr[bool] = DEFAULT,
         nan_value: DefaultOr[Float | None] = DEFAULT,
         inf_value: DefaultOr[Float | None] = DEFAULT,
         **kwargs
@@ -455,6 +484,8 @@ class MPBFloatContext(SizedContext):
             enable_nan = self.enable_nan
         if enable_inf is DEFAULT:
             enable_inf = self.enable_inf
+        if enable_neg_zero is DEFAULT:
+            enable_neg_zero = self.enable_neg_zero
         if nan_value is DEFAULT:
             nan_value = self.nan_value
         if inf_value is DEFAULT:
@@ -467,6 +498,7 @@ class MPBFloatContext(SizedContext):
             rng=rng,
             enable_nan=enable_nan,
             enable_inf=enable_inf,
+            enable_neg_zero=enable_neg_zero,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -500,6 +532,7 @@ class MPBFloatContext(SizedContext):
             rng=rng,
             enable_nan=fmt.enable_nan,
             enable_inf=fmt.enable_inf,
+            enable_neg_zero=fmt.enable_neg_zero,
             nan_value=nan_value,
             inf_value=inf_value
         )
@@ -561,7 +594,7 @@ class MPBFloatContext(SizedContext):
 
         # step 2. shortcut for exact zero values (preserve signed zero)
         if x.is_zero():
-            return Float(s=x.s, ctx=self)
+            return Float(s=zero_sign(x, self.enable_neg_zero), ctx=self)
 
         # step 3. select rounding parameter `n`
         if n is None or n < self.nmin:
@@ -602,7 +635,7 @@ class MPBFloatContext(SizedContext):
             return result
 
         # step 6. return rounded result
-        return Float(x=rounded, ctx=self)
+        return Float(x=rounded, s=zero_sign(rounded, self.enable_neg_zero), ctx=self)
 
     def round(self, x, *, exact: bool = False) -> Float:
         x = self._round_prepare(x)

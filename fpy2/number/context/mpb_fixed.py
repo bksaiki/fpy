@@ -6,7 +6,7 @@ that is, multiprecision and bounded. Hence "MP-B".
 from ...utils import DEFAULT, DefaultOr, default_repr
 from ..number import RNG, Float, RealFloat, same_value
 from ..round import OverflowMode, RoundingDirection, RoundingMode
-from .context import SizedContext
+from .context import SizedContext, zero_sign
 from .format import SizedFormat
 from .mp_fixed import MPFixedFormat
 
@@ -544,7 +544,7 @@ class MPBFixedContext(SizedContext):
         # `FixedContext` is one that does not, since two's complement has a
         # single encoding of zero
         if xr.is_zero():
-            return Float(s=xr.s and self.enable_neg_zero, ctx=self)
+            return Float(s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
         # step 3. round value based on rounding parameters
         xr = xr.round(min_n=n, rm=self.rm, num_randbits=self.num_randbits, rng=self.rng, exact=exact)
@@ -584,11 +584,7 @@ class MPBFixedContext(SizedContext):
             return result
 
         # step 5. return the rounded value.
-        if xr.is_zero() and xr.s and not self.enable_neg_zero:
-            # if -0 is not enabled, then return +0 instead of -0
-            return Float(x=xr, s=False, ctx=self)
-        else:
-            return Float(x=xr, ctx=self)
+        return Float(x=xr, s=zero_sign(xr, self.enable_neg_zero), ctx=self)
 
     def round(self, x, *, exact: bool = False):
         x = self._round_prepare(x)

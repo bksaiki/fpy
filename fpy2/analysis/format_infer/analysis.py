@@ -853,8 +853,8 @@ def _set_mul(a: SetValue, b: SetValue) -> SetValue:
 
     A NaN propagates; ``inf * 0`` is the one undefined product.  Other infinite
     products keep the XOR sign.  This is exact where
-    :meth:`AbstractFormat.__mul__` must be conservative: that one only knows an
-    operand *may* be zero.
+    :meth:`AbstractFormat.__mul__` can only say a `-0.0` is *possible*: that one
+    knows an operand may be zero and may be negative, not which pairing occurs.
     """
     if a is Special.NAN or b is Special.NAN:
         return Special.NAN
@@ -1656,9 +1656,10 @@ class _FormatInferInstance(Visitor):
         af = AbstractFormat.from_format(fmt)
         met = af & cons
         if met == af:
-            # `format()` picks a canonical shape rather than inverting
-            # `from_format`, so the round trip loses something for every format;
-            # pay it only where the constraint bought something.
+            # The round trip preserves the *values* but not the class: `FP32`
+            # comes back an `MPBFloatFormat`, losing the encoding an
+            # `IEEEFormat` carries.  So keep the original where the constraint
+            # bought nothing.
             return fmt
         try:
             return met.format()
