@@ -18,26 +18,15 @@ import importlib
 import pytest
 
 import fpy2 as fp
-
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.types import CppList, CppTuple
-from tests.infra.backend.cpp import _inst_type, _library_ignore
+from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
 # Every list level of every emitted signature in the corpus, and how many keep
 # a handle.  Update deliberately, with the reason in the commit message.
 EXPECTED_LEVELS = 170
 EXPECTED_BOXED = 0
-
-
-def _corpus():
-    yield from all_unit_tests()
-    yield from all_example_tests()
-    for name in ('core', 'eft', 'vector', 'matrix'):
-        mod = importlib.import_module(f'fpy2.libraries.{name}')
-        for f in mod.__dict__.values():
-            if isinstance(f, fp.Function) and f.name not in _library_ignore:
-                yield f
 
 
 def _levels(ty, path=''):
@@ -54,7 +43,7 @@ def _levels(ty, path=''):
 def _profile():
     """``(total levels, [names that keep a handle])`` over the corpus."""
     total, boxed = 0, []
-    for f in _corpus():
+    for f in corpus():
         try:
             ty = fp.analysis.TypeInfer.check(f.ast)
             args = [_inst_type(t) for t in ty.arg_types]

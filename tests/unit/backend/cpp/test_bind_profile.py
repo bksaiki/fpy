@@ -19,10 +19,9 @@ import inspect
 import pytest
 
 import fpy2 as fp
-
 from fpy2.backend.cpp import emitter as _emitter
 from fpy2.backend.cpp.compiler import CppCompiler
-from tests.infra.backend.cpp import _inst_type, _library_ignore
+from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
 EXPECTED_COMPILED = 207
@@ -47,16 +46,6 @@ path did not.
 """
 
 
-def _corpus():
-    yield from all_unit_tests()
-    yield from all_example_tests()
-    for name in ('core', 'eft', 'vector', 'matrix'):
-        mod = importlib.import_module(f'fpy2.libraries.{name}')
-        for f in mod.__dict__.values():
-            if isinstance(f, fp.Function) and f.name not in _library_ignore:
-                yield f
-
-
 def _profile():
     """``(compiled, {site: mints})`` over the corpus."""
     mints: dict[str, int] = {}
@@ -72,7 +61,7 @@ def _profile():
     _emitter.CppEmitter._bind_operand = counting
     compiled = 0
     try:
-        for f in _corpus():
+        for f in corpus():
             try:
                 ty = fp.analysis.TypeInfer.check(f.ast)
                 args = [_inst_type(t) for t in ty.arg_types]
