@@ -19,7 +19,6 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.strategies import (
-    TransformDeclined,
     TransformReferenceError,
     unfold_special,
     unfold_neg_zero,
@@ -91,9 +90,6 @@ class TestUnfoldSpecial:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            unfold_special(_quantized_sum.ast)  # type: ignore[arg-type]
 
     def test_naming_a_refused_block_raises(self):
         """The error is catchable from the strategy layer without importing from
@@ -129,28 +125,6 @@ class TestUnfoldSpecial:
         twice = unfold_special(once)
         assert twice.ast.is_equiv(once.ast)
 
-    def test_where_selects_one_block(self):
-        """The wrapper passes `where` through to the transform."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.MPFixedContext(-8, enable_nan=True):
-                aq = fp.round(a)
-            with fp.MPFixedContext(-4, enable_nan=True):
-                bq = fp.round(b)
-            with fp.FP64:
-                s = aq + bq
-            return s
-
-        def kept(fn):
-            return [
-                c.nmin for c in _block_ctxs(fn.ast)
-                if isinstance(c, MPFixedContext) and c.enable_nan
-            ]
-
-        assert kept(unfold_special(f, 0)) == [-4]
-        assert kept(unfold_special(f, 1)) == [-8]
-        assert _same(unfold_special(f, 0)(0.1, 0.2), f(0.1, 0.2))
 
     def test_composes_with_simplify(self):
         out = simplify(

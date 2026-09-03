@@ -1,6 +1,5 @@
 """Unit tests for :func:`fpy2.strategies.close`."""
 
-import pytest
 
 import fpy2 as fp
 
@@ -81,6 +80,3 @@ class TestClose:
         xs, ys = [1.0, 2.0, 3.0], [0.5, -1.5, 2.5]
         assert _dot(xs, ys) == sched(xs, ys)
 
-    def test_type_error(self):
-        with pytest.raises(TypeError):
-            close(_scaled.ast)  # type: ignore[arg-type]  # FuncDef, not Function

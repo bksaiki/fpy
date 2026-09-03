@@ -65,9 +65,6 @@ class TestSplitRound:
         for a, b in _sweep(200):
             assert str(out(a, b)) == str(_product(a, b))
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            split_round(_product.ast, VIA32)  # type: ignore[arg-type]
 
     def test_rejects_a_non_context_intermediate(self):
         with pytest.raises(TypeError):

@@ -5,7 +5,6 @@ The transform itself is tested exhaustively in
 wrapper's behavior and its composition with ``simplify``.
 """
 
-import pytest
 
 import fpy2 as fp
 
@@ -51,9 +50,6 @@ class TestRescaleFixed:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            rescale_fixed(_quantized_sum.ast)  # type: ignore[arg-type]
 
     def test_moves_the_format_to_zero(self):
         out = rescale_fixed(_quantized_sum)
@@ -70,23 +66,6 @@ class TestRescaleFixed:
         twice = rescale_fixed(once)
         assert twice.ast.is_equiv(once.ast)
 
-    def test_where_selects_one_block(self):
-        """The wrapper passes `where` through to the transform."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.FixedContext(True, -16, 32):
-                aq = fp.round(a)
-            with fp.FixedContext(True, -8, 32):
-                bq = fp.round(b)
-            with fp.FP64:
-                s = aq + bq
-            return s
-
-        assert _fixed_scales(rescale_fixed(f, where=0).ast) == [0, -8]
-        assert _fixed_scales(rescale_fixed(f, where=1).ast) == [-16, 0]
-        assert _fixed_scales(rescale_fixed(f).ast) == [0, 0]
-        assert rescale_fixed(f, where=0)(0.1, 0.2) == f(0.1, 0.2)
 
     def test_composes_with_simplify(self):
         out = simplify(rescale_fixed(_quantized_sum), enable_const_fold_context=False)

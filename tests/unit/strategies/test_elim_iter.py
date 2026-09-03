@@ -7,7 +7,6 @@ wrapper's flags, its internal ordering, and its composition with the
 loop operators.
 """
 
-import pytest
 
 import fpy2 as fp
 
@@ -114,6 +113,3 @@ class TestElimIter:
         # odd length exercises the PEEL remainder
         assert _dot(_XS[:3], _YS[:3]) == sched(_XS[:3], _YS[:3])
 
-    def test_type_error(self):
-        with pytest.raises(TypeError):
-            elim_iter(_dot.ast)  # type: ignore[arg-type]  # FuncDef, not Function

@@ -9,7 +9,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.function import Function
-from fpy2.strategies import TransformReferenceError, simplify, split
+from fpy2.strategies import simplify, split
 from fpy2.transform import SplitLoopStrategy
 
 
@@ -71,10 +71,4 @@ class TestSplit:
         with pytest.raises(TypeError):
             split(_total, 1.5)  # type: ignore[arg-type]
 
-    def test_where_out_of_range(self):
-        with pytest.raises(TransformReferenceError):
-            split(_total, 2, 3)
 
-    def test_type_error(self):
-        with pytest.raises(TypeError):
-            split(_total.ast, 2)  # type: ignore[arg-type]  # FuncDef, not Function

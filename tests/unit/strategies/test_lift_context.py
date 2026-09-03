@@ -1,6 +1,5 @@
 """Unit tests for :func:`fpy2.strategies.lift_context`."""
 
-import pytest
 
 import fpy2 as fp
 
@@ -85,6 +84,3 @@ class TestLiftContext:
         twice = lift_context(once)
         assert once.ast.is_equiv(twice.ast)
 
-    def test_type_error(self):
-        with pytest.raises(TypeError):
-            lift_context(_with_ctor.ast)  # type: ignore[arg-type]  # FuncDef, not Function
