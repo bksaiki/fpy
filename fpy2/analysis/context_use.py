@@ -28,6 +28,8 @@ __all__ = [
     'ContextUse',
     'ContextUseAnalysis',
     'ContextUseSite',
+    'PartialContext',
+    'ScopeContext',
 ]
 
 ContextScopeSite: TypeAlias = FuncDef | ContextStmt
@@ -42,14 +44,46 @@ these needs no resolvable one."""
 
 
 @dataclass(frozen=True)
+class PartialContext:
+    """A context expression that partial evaluation could not reduce to a
+    :class:`Context`, but whose *constructor* is known.
+
+    ``MPFixedContext(e - 12, rm)`` is the motivating shape: the class and the
+    rounding mode are static while the digit position is not, so collapsing it
+    to a bare symbolic variable throws away everything an analysis could use.
+
+    Each entry of :attr:`args` / :attr:`kwargs` is the argument's partially
+    evaluated *value* when it reduced, and the :class:`Expr` itself otherwise.
+    """
+
+    cls: type[Context]
+    """the context constructor"""
+
+    args: tuple[object, ...]
+    """positional arguments: a value where it reduced, else the ``Expr``"""
+
+    kwargs: tuple[tuple[str, object], ...]
+    """keyword arguments, under the same convention as :attr:`args`"""
+
+
+ScopeContext: TypeAlias = ContextParam | PartialContext
+"""The context of a scope: concrete, partially applied, or a symbolic variable.
+
+Consumers that need a concrete :class:`Context` test for one and fall back;
+:class:`PartialContext` is *not* a ``Context`` and must not be treated as one.
+"""
+
+
+@dataclass(frozen=True)
 class ContextScope:
     """A rounding context scope."""
 
     site: ContextScopeSite
     """the AST node that introduces the scope"""
 
-    ctx: ContextParam
-    """the resolved context: a concrete Context or a symbolic NamedId"""
+    ctx: ScopeContext
+    """the resolved context: a concrete Context, a :class:`PartialContext`, or
+    a symbolic NamedId"""
 
 
 @default_repr
@@ -119,19 +153,33 @@ class _ContextUseInstance(DefaultVisitor):
     def _fresh_sym_ctx(self) -> NamedId:
         return self.gensym.fresh('ctx')
 
-    def _resolve_ctx_expr(self, expr: Expr) -> ContextParam:
+    def _resolve_ctx_expr(self, expr: Expr) -> ScopeContext:
         """
         Attempts to resolve an expression to a concrete Context via partial
-        evaluation.  Returns the concrete Context if successful; otherwise
-        returns a fresh symbolic NamedId.
+        evaluation.  Returns the concrete Context if successful, a
+        :class:`PartialContext` when only the constructor is known, and a fresh
+        symbolic NamedId otherwise.
         """
         if expr in self.eval_info.by_expr:
             val = self.eval_info.by_expr[expr]
             if isinstance(val, Context):
                 return val
+        if (
+            isinstance(expr, Call)
+            and isinstance(expr.fn, type)
+            and issubclass(expr.fn, Context)
+        ):
+            # `PartialEval` records a value only when *every* argument reduced,
+            # so a context whose position is a runtime value lands here with its
+            # shape intact.
+            return PartialContext(
+                expr.fn,
+                tuple(self.eval_info.by_expr.get(a, a) for a in expr.args),
+                tuple((k, self.eval_info.by_expr.get(v, v)) for k, v in expr.kwargs),
+            )
         return self._fresh_sym_ctx()
 
-    def _make_scope(self, site: ContextScopeSite, ctx: ContextParam) -> ContextScope:
+    def _make_scope(self, site: ContextScopeSite, ctx: ScopeContext) -> ContextScope:
         s = ContextScope(site, ctx)
         self.scopes.append(s)
         self.uses[s] = set()
@@ -198,7 +246,7 @@ class _ContextUseInstance(DefaultVisitor):
         match func.ctx:
             case None:
                 # No overriding context: generate a fresh symbolic variable.
-                body_ctx: ContextParam = self._fresh_sym_ctx()
+                body_ctx: ScopeContext = self._fresh_sym_ctx()
             case FPCoreContext():
                 body_ctx = func.ctx.to_context()
             case Context():

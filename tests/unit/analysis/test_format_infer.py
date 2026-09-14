@@ -2310,6 +2310,47 @@ class TestRoundOntoACoarseGrid:
         assert fmt is not REAL_FORMAT, fmt
 
 
+class TestInnerSymbolicScope:
+    """A ``with`` whose context does not reduce is not the caller's context.
+
+    ``_resolve_active_ctx`` substituted the caller's active context for *every*
+    unresolved scope, not just the callee's function-level one.  An inner
+    ``with fp.MPFixedContext(n):`` then read as the caller's ``REAL``, the
+    rounding looked like the identity, and the callee's result inherited the
+    argument's format -- a bound that excludes the value the program computes.
+    """
+
+    @staticmethod
+    def _call_bound(info):
+        from fpy2.ast.fpyast import Call
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Call))
+
+    def test_bound_admits_the_actual_result(self):
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x, n):
+            with fp.MPFixedContext(n):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            return g(x, 127)      # quantum 2^128, coarser than any FP32 value
+
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32)])
+        bound = self._call_bound(FormatInfer.analyze(mono))
+        actual = fp.MPFixedContext(127).round(fp.FP32.round(3.4028234663852886e38))
+        assert bound.representable_in(actual), bound
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: rounding FP32's largest value at ``2^128`` really
+        does leave the source format, so the bound above is a fact about the
+        program rather than about the analysis."""
+        actual = fp.MPFixedContext(127).round(fp.FP32.round(3.4028234663852886e38))
+        assert int(fp.logb(actual)) == 128
+        assert not fp.FP32.representable_under(actual)
+
+
 class TestSpecialSentinels:
     """The ``Special`` members of ``SetValue``.  Nothing produces them yet --
     these pin the value domain itself."""

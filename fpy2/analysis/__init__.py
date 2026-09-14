@@ -17,6 +17,8 @@ from .context_use import (
     ContextUse,
     ContextUseAnalysis,
     ContextUseSite,
+    PartialContext,
+    ScopeContext,
 )
 from .define_use import DefCtx, DefineUse, DefineUseAnalysis, UseSite
 from .defs import DefAnalysis

@@ -1813,14 +1813,24 @@ class _FormatInferInstance(Visitor):
         unresolvable.
 
         Looks up *e*'s active scope and returns the scope's context
-        when it's a concrete :class:`Context`.  Symbolic scopes are
-        substituted with :attr:`_outer_ctx` when the caller provided
-        one — this is how the recursive call-site instantiation flows
-        the caller's active context into the callee's outer scope."""
+        when it's a concrete :class:`Context`.
+
+        An unresolved *function-level* scope is substituted with
+        :attr:`_outer_ctx` when the caller provided one: a callee with no
+        context annotation runs under its caller's active context, and this is
+        how call-site instantiation flows that in.  A scope introduced by a
+        ``with`` gets no such substitution — its context is whatever the
+        ``with`` expression evaluates to, which has nothing to do with the
+        caller.  Substituting there reported an inner
+        ``with fp.MPFixedContext(n):`` as the caller's context, making the
+        rounding look like the identity and yielding a format that *excludes*
+        the real result."""
         scope = self.ctx_use.find_scope_from_use(e)
         if isinstance(scope.ctx, Context):
             return scope.ctx
-        return self._outer_ctx
+        if isinstance(scope.site, FuncDef):
+            return self._outer_ctx
+        return None
 
     def _scope_format(self, e: ContextUseSite) -> Format:
         """Returns the format of the rounding context scope for *e*.
