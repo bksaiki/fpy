@@ -18,6 +18,8 @@ targets can swap in a different table without changing the emitter.
 
 from __future__ import annotations
 
+from functools import cache
+
 from ...ast.fpyast import (
     Abs,
     Acos,
@@ -286,8 +288,15 @@ def _make_ternary_table() -> TernaryOpTable:
 # ---------------------------------------------------------------------
 # Public entry point.
 
+@cache
 def make_op_table() -> ScalarOpTable:
-    """Build the cpp backend's default :class:`ScalarOpTable`."""
+    """The cpp backend's default :class:`ScalarOpTable`.
+
+    Cached: it takes no arguments and every entry is derived from the module
+    constants above, so building it per emitter recomputed the same thing --
+    and it is not cheap, since each signature's storage goes through
+    `AbstractFormat.from_format`.  Callers only read it.
+    """
     return ScalarOpTable(
         unary=_make_unary_table(),
         binary=_make_binary_table(),

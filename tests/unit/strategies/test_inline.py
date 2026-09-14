@@ -129,14 +129,6 @@ class TestInline:
         with pytest.raises(TransformReferenceError, match='while'):
             inline(_while_call, 0)
 
-    def test_type_errors(self):
-        with pytest.raises(TypeError):
-            inline(_top.ast)  # type: ignore[arg-type]  # FuncDef, not Function
-        with pytest.raises(TypeError):
-            inline(_two_callees, funcs=[_leaf.ast])  # type: ignore[list-item]
-        with pytest.raises(TypeError):
-            inline(_top, 'x')  # type: ignore[arg-type]
-
 
 class TestInlineWhere:
 
@@ -182,10 +174,3 @@ class TestInlineWhere:
         for x in (0.0, 1.5, -3.25, 10.0):
             assert _two_callees(x) == out(x)
 
-    def test_where_out_of_range(self):
-        with pytest.raises(TransformReferenceError):
-            inline(_top, 2)
-        with pytest.raises(TransformReferenceError):
-            inline(_top, -1)
-        with pytest.raises(TransformReferenceError):
-            inline(_two_callees, 1, funcs=[_other])

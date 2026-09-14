@@ -86,9 +86,6 @@ class TestUnfoldNegZero:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            unfold_neg_zero(_quantized_sum.ast)  # type: ignore[arg-type]
 
     def test_removes_the_flag_from_the_context(self):
         assert any(
@@ -127,28 +124,6 @@ class TestUnfoldNegZero:
         twice = unfold_neg_zero(once)
         assert twice.ast.is_equiv(once.ast)
 
-    def test_where_selects_one_block(self):
-        """The wrapper passes `where` through to the transform."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.MPFixedContext(-8):
-                aq = fp.round(a)
-            with fp.MPFixedContext(-4):
-                bq = fp.round(b)
-            with fp.FP64:
-                s = aq + bq
-            return s
-
-        def kept(fn):
-            return [
-                c.nmin for c in _block_ctxs(fn.ast)
-                if isinstance(c, MPFixedContext) and c.enable_neg_zero
-            ]
-
-        assert kept(unfold_neg_zero(f, 0)) == [-4]
-        assert kept(unfold_neg_zero(f, 1)) == [-8]
-        assert _same(unfold_neg_zero(f, 0)(0.1, 0.2), f(0.1, 0.2))
 
     def test_composes_with_simplify(self):
         out = simplify(

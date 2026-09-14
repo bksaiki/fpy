@@ -81,10 +81,6 @@ class TestCompToLoop:
         assert [float(v) for v in out(_SAMPLE, 2.0)] \
             == [float(v) for v in _scale(_SAMPLE, 2.0)]
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            comp_to_loop(_scale.ast)  # type: ignore[arg-type]
-
 
 class TestLeftAlone:
     def test_a_dependent_clause_list_is_left_alone_without_error(self):

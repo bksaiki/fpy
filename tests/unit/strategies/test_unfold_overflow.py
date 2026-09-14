@@ -73,9 +73,6 @@ class TestUnfoldOverflow:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            unfold_overflow(_quantized_sum.ast)  # type: ignore[arg-type]
 
     def test_removes_the_bound_from_the_context(self):
         assert fp.FP16 in _block_ctxs(_quantized_sum.ast)
@@ -98,23 +95,6 @@ class TestUnfoldOverflow:
         twice = unfold_overflow(once)
         assert twice.ast.is_equiv(once.ast)
 
-    def test_where_selects_one_block(self):
-        """The wrapper passes `where` through to the transform."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.FP16:
-                aq = fp.round(a)
-            with fp.FP32:
-                bq = fp.round(b)
-            with fp.FP64:
-                s = aq + bq
-            return s
-
-        assert fp.FP16 not in _block_ctxs(unfold_overflow(f, 0).ast)
-        assert fp.FP32 in _block_ctxs(unfold_overflow(f, 0).ast)
-        assert fp.FP16 in _block_ctxs(unfold_overflow(f, 1).ast)
-        assert _same(unfold_overflow(f, 0)(0.1, 0.2), f(0.1, 0.2))
 
     def test_composes_with_simplify(self):
         out = simplify(

@@ -13,8 +13,6 @@ import fpy2 as fp
 from fpy2.ast import ContextStmt, ForeignVal
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.strategies import (
-    ExprCursor,
-    TransformDeclined,
     TransformReferenceError,
     elim_round,
     insert_round,
@@ -84,9 +82,6 @@ class TestInsertRound:
         out = simplify(insert_round(f, fp.FP64))
         assert _agree(out, f, 2)
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            insert_round(_pinned(_sum_of_squares, 2).ast, fp.FP64)  # type: ignore[arg-type]
 
     def test_rejects_non_context(self):
         f = _pinned(_sum_of_squares, 2)

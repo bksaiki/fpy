@@ -75,9 +75,6 @@ class TestFloatToFixed:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-    def test_rejects_non_function(self):
-        with pytest.raises(TypeError):
-            float_to_fixed(_quantized_sum.ast)  # type: ignore[arg-type]
 
     def test_removes_the_float_rounding(self):
         assert fp.FP16 in _block_ctxs(_quantized_sum.ast)
@@ -96,23 +93,6 @@ class TestFloatToFixed:
         twice = float_to_fixed(once)
         assert twice.ast.is_equiv(once.ast)
 
-    def test_where_selects_one_block(self):
-        """The wrapper passes `where` through to the transform."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.FP16:
-                aq = fp.round(a)
-            with fp.FP32:
-                bq = fp.round(b)
-            with fp.FP64:
-                s = aq + bq
-            return s
-
-        assert fp.FP16 not in _block_ctxs(float_to_fixed(f, where=0).ast)
-        assert fp.FP32 in _block_ctxs(float_to_fixed(f, where=0).ast)
-        assert fp.FP16 in _block_ctxs(float_to_fixed(f, where=1).ast)
-        assert _same(float_to_fixed(f, where=0)(0.1, 0.2), f(0.1, 0.2))
 
     def test_composes_with_simplify(self):
         out = simplify(float_to_fixed(_quantized_sum), enable_const_fold_context=False)

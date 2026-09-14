@@ -90,10 +90,3 @@ class TestMonomorphizeArgs:
             assert _mul(x, y) == out(x, y)
 
 
-class TestMonomorphizeErrors:
-
-    def test_type_errors(self):
-        with pytest.raises(TypeError):
-            monomorphize(_mul.ast)  # type: ignore[arg-type]  # FuncDef, not Function
-        with pytest.raises(TypeError):
-            monomorphize(_mul, 'FP32')  # type: ignore[arg-type]

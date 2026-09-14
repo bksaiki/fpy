@@ -3,7 +3,6 @@ Compilation tests for C++
 """
 
 import argparse
-import fpy2 as fp
 import hashlib
 import math
 import random
@@ -13,14 +12,14 @@ import signal
 import struct
 import subprocess
 import tempfile
-
 from collections import Counter
 from pathlib import Path
 from types import ModuleType
 
+import fpy2 as fp
 from fpy2.ast.visitor import DefaultVisitor
 
-from ..examples import all_unit_tests, all_example_tests
+from ..examples import all_example_tests, all_unit_tests
 
 # Test mode: how far each function is taken.
 #   'emit'    — emit the C++ source only (no compiler invoked)
@@ -47,6 +46,25 @@ def _inst_type(ty: fp.types.Type):
             return fp.types.ListType(_inst_type(ty.elt))
         case _:
             raise ValueError(f'Cannot instantiate type: {ty.format()}')
+
+
+def corpus():
+    """Every function the backend's corpus gates run over.
+
+    One definition: three profile tests sweep the same set, and a difference
+    between them would be a silent gap rather than a failure.
+    """
+    import importlib
+
+    from ..examples import all_example_tests, all_unit_tests
+
+    yield from all_unit_tests()
+    yield from all_example_tests()
+    for name in ('core', 'eft', 'vector', 'matrix'):
+        mod = importlib.import_module(f'fpy2.libraries.{name}')
+        for f in mod.__dict__.values():
+            if isinstance(f, fp.Function) and f.name not in _library_ignore:
+                yield f
 
 
 def _compile(
@@ -487,7 +505,7 @@ def _cpp_value(value, cty) -> str:
             # hex-float literal — keeps the driver valid under C++11.  A cast
             # for a narrower target, for the same braced-init reason; the value
             # is representable there (see ``_round_to_format``), so it is exact.
-            return repr(v) if t == 'double' else f'static_cast<{t}>({repr(v)})'
+            return repr(v) if t == 'double' else f'static_cast<{t}>({v!r})'
 
 
 def _cpp_literal(value, ty) -> str:

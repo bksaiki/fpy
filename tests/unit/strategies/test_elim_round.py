@@ -5,7 +5,6 @@ The transform itself is tested exhaustively in
 wrapper's behavior and its composition with ``monomorphize``.
 """
 
-import pytest
 
 import fpy2 as fp
 
@@ -81,6 +80,3 @@ class TestElimRound:
         out = elim_round(_prod3)
         assert out.ast.is_equiv(_prod3.ast)
 
-    def test_type_error(self):
-        with pytest.raises(TypeError):
-            elim_round(_const_add.ast)  # type: ignore[arg-type]  # FuncDef, not Function

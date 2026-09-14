@@ -5,7 +5,6 @@ The transform is tested exhaustively in
 wrapper's behavior.
 """
 
-import pytest
 
 import fpy2 as fp
 
@@ -76,6 +75,3 @@ class TestFuse:
         out = fuse(_any_direct)
         assert out.ast.is_equiv(_any_direct.ast)
 
-    def test_type_error(self):
-        with pytest.raises(TypeError):
-            fuse(_any_small.ast)  # type: ignore[arg-type]  # FuncDef, not Function

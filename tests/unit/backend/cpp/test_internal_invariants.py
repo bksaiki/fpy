@@ -25,22 +25,12 @@ from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.emitter import CppInternalError
 from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.types import BoolType, RealType
-from tests.infra.backend.cpp import _inst_type, _library_ignore
+from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
 # The generated matrix's mixed-format instantiations, which are what reach the
 # storage-reconciliation paths at all -- a uniform-format sweep never does.
 _FORMATS = (fp.FP32, fp.FP64)
-
-
-def _corpus():
-    yield from all_unit_tests()
-    yield from all_example_tests()
-    for name in ('core', 'eft', 'vector', 'matrix'):
-        mod = importlib.import_module(f'fpy2.libraries.{name}')
-        for f in mod.__dict__.values():
-            if isinstance(f, fp.Function) and f.name not in _library_ignore:
-                yield f
 
 
 def _internal_cause(exc: BaseException) -> CppInternalError | None:
@@ -74,7 +64,7 @@ def _attempt(func, arg_types) -> str | None:
 def _sweep():
     """Every corpus function, at uniform and at mixed argument formats."""
     hits: list[str] = []
-    for f in _corpus():
+    for f in corpus():
         try:
             ty = fp.analysis.TypeInfer.check(f.ast)
         except Exception:
