@@ -190,6 +190,24 @@ class TestContextUse:
         result = fp.analysis.ContextUse.analyze(f.ast)
         assert isinstance(result.scopes[-1].ctx, Context)
 
+    def test_partial_context_holes(self):
+        """``holes`` names the arguments a caller still has to pin."""
+        @fp.fpy
+        def f(x, n, rm):
+            with fp.MPFixedContext(n, rm):
+                return fp.round(x)
+
+        ctx = fp.analysis.ContextUse.analyze(f.ast).scopes[-1].ctx
+        assert [h.format() for h in ctx.holes] == ['n', 'rm']
+
+        @fp.fpy
+        def g(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTN):
+                return fp.round(x)
+
+        ctx = fp.analysis.ContextUse.analyze(g.ast).scopes[-1].ctx
+        assert [h.format() for h in ctx.holes] == ['n']
+
     # ------------------------------------------------------------------
     # Nested ContextStmt
 

@@ -30,6 +30,7 @@ __all__ = [
     'ContextUseSite',
     'PartialContext',
     'ScopeContext',
+    'base_env',
 ]
 
 ContextScopeSite: TypeAlias = FuncDef | ContextStmt
@@ -54,16 +55,34 @@ class PartialContext:
 
     Each entry of :attr:`args` / :attr:`kwargs` is the argument's partially
     evaluated *value* when it reduced, and the :class:`Expr` itself otherwise.
+    Those leftover expressions are the context's **holes**.  This is a record,
+    not a resolver: filling holes needs to know what a caller pinned, so it
+    lives with the analysis that knows (``FormatInfer._resolve_partial_ctx``).
     """
 
     cls: type[Context]
     """the context constructor"""
+
+    expr: Call
+    """the call this was built from, replayed to rebuild a closed context"""
 
     args: tuple[object, ...]
     """positional arguments: a value where it reduced, else the ``Expr``"""
 
     kwargs: tuple[tuple[str, object], ...]
     """keyword arguments, under the same convention as :attr:`args`"""
+
+    @property
+    def holes(self) -> tuple[Expr, ...]:
+        """The arguments that did not reduce, in positional-then-keyword order."""
+        vals = [*self.args, *(v for _, v in self.kwargs)]
+        return tuple(v for v in vals if isinstance(v, Expr))
+
+
+def base_env(func: FuncDef) -> dict[NamedId, object]:
+    """The free-variable environment needed to replay an expression of *func*
+    through the interpreter."""
+    return {d: func.env[str(d)] for d in func.free_vars}
 
 
 ScopeContext: TypeAlias = ContextParam | PartialContext
@@ -174,6 +193,7 @@ class _ContextUseInstance(DefaultVisitor):
             # shape intact.
             return PartialContext(
                 expr.fn,
+                expr,
                 tuple(self.eval_info.by_expr.get(a, a) for a in expr.args),
                 tuple((k, self.eval_info.by_expr.get(v, v)) for k, v in expr.kwargs),
             )

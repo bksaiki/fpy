@@ -2325,22 +2325,34 @@ class TestInnerSymbolicScope:
         from fpy2.ast.fpyast import Call
         return next(b for e, b in info.by_expr.items() if isinstance(e, Call))
 
+    @staticmethod
+    def _admits(bound, value):
+        """Does *bound* describe a set containing *value*?  Pinning the
+        callee's position makes the bound a ``SetFormat``, so this has to ask
+        the question in a way that does not assume a scalar ``Format``."""
+        if isinstance(bound, SetFormat):
+            return value.as_rational() in bound.values
+        return bound.representable_in(value)
+
     def test_bound_admits_the_actual_result(self):
+        """A ``with`` on a context *variable*: nothing about it is known, so
+        the fallback has to be ``REAL_FORMAT`` and not the caller's context."""
         from fpy2.transform import Monomorphize
 
         @fp.fpy(ctx=fp.REAL)
-        def g(x, n):
-            with fp.MPFixedContext(n):
+        def g(x, c):
+            with c:
                 return fp.round(x)
 
         @fp.fpy(ctx=fp.REAL)
-        def f(x):
-            return g(x, 127)      # quantum 2^128, coarser than any FP32 value
+        def f(x, c):
+            return g(x, c)
 
-        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32)])
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32), None])
         bound = self._call_bound(FormatInfer.analyze(mono))
+        # a caller passing `MPFixedContext(127)` rounds at a quantum of 2^128
         actual = fp.MPFixedContext(127).round(fp.FP32.round(3.4028234663852886e38))
-        assert bound.representable_in(actual), bound
+        assert self._admits(bound, actual), bound
 
     def test_the_interpreter_agrees(self):
         """The counterweight: rounding FP32's largest value at ``2^128`` really
@@ -2349,6 +2361,59 @@ class TestInnerSymbolicScope:
         actual = fp.MPFixedContext(127).round(fp.FP32.round(3.4028234663852886e38))
         assert int(fp.logb(actual)) == 128
         assert not fp.FP32.representable_under(actual)
+
+
+class TestPinnedArgumentsCloseAContext:
+    """A callee's ``with fp.MPFixedContext(n, rm):`` closes when the call site
+    pins ``n`` and ``rm``.
+
+    Formats alone cannot do this -- a rounding mode has no numeric format, so
+    ``arg_fmts`` carries ``None`` for one -- which is why the instantiation
+    signature also carries argument *values*.
+    """
+
+    @staticmethod
+    def _round_bound(info):
+        from fpy2.ast.fpyast import Call, Round
+        sub = next(s for e, s in info.by_call.items() if isinstance(e, Call))
+        return next(b for e, b in sub.by_expr.items() if isinstance(e, Round))
+
+    def test_pinned_position_and_mode_give_a_fixed_format(self):
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x, n, rm):
+            with fp.MPFixedContext(n, rm):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            return g(x, -10, fp.RM.RTZ)
+
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32)])
+        bound = self._round_bound(FormatInfer.analyze(mono))
+        assert bound != REAL_FORMAT, bound
+        af = AbstractFormat.from_format(bound)
+        assert af.exp == -9, bound        # MPFixedContext(-10) quantum is 2^-9
+
+    def test_an_open_position_stays_open(self):
+        """The counterweight: a position the call site cannot pin keeps the
+        context open, and the format stays unconstrained."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x, n):
+            with fp.MPFixedContext(n):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, n):
+            return g(x, n)
+
+        mono = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP32), RealType(fp.INTEGER)]
+        )
+        assert self._round_bound(FormatInfer.analyze(mono)) == REAL_FORMAT
 
 
 class TestSpecialSentinels:
