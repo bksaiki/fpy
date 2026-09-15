@@ -266,3 +266,67 @@ class TestIntegerOperand:
         assert 'std::trunc' not in out
         assert 'fabs' not in out
         assert '-100 <= v && v <= 100' in out
+
+
+_INT_DRIVER = r'''
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <cstdlib>
+int main(int argc, char** argv) {
+    (void) argc;
+    uint64_t b = (uint64_t) std::strtoull(argv[1], nullptr, 16);
+    double x; std::memcpy(&x, &b, 8);
+    std::printf("%FMT%\n", (%CTYPE%) q(x));
+    return 0;
+}
+'''
+
+
+class TestSixtyFourBitWrapIsExact:
+    """``WRAP`` at 64 bits, where the wrapped value is not a double.
+
+    ``-1`` wraps to ``18446744073709551615``, which no double holds -- the
+    nearest is 2**64 -- so normalizing a negative remainder by adding the
+    modulus reduces to zero instead.  Compared as exact integers, which is why
+    :class:`TestAgreesWithTheInterpreter` cannot carry these.
+    """
+
+    @pytest.mark.parametrize('ctx, ctype, fmt', [
+        pytest.param(fp.UINT64, 'unsigned long long', '%llu', id='uint64'),
+        pytest.param(fp.SINT64, 'long long', '%lld', id='sint64'),
+        # the narrow types take the same path; they would pass either way,
+        # which is what makes them the control
+        pytest.param(fp.UINT16, 'unsigned long long', '%llu', id='uint16'),
+        pytest.param(fp.SINT8, 'long long', '%lld', id='sint8'),
+    ])
+    def test_value_for_value(self, ctx, ctype, fmt):
+        if _CXX is None:
+            pytest.skip('no C++ compiler')
+        q = _round_fn(ctx)
+        src = _emit(ctx)
+        driver = _INT_DRIVER.replace('%FMT%', fmt).replace('%CTYPE%', ctype)
+        with tempfile.TemporaryDirectory() as td:
+            cpp, exe = Path(td) / 'm.cpp', Path(td) / 'm'
+            cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src + driver)
+            build = subprocess.run(
+                [_CXX, '-std=c++17', '-O0', '-o', str(exe), str(cpp)],
+                capture_output=True, text=True)
+            assert build.returncode == 0, build.stderr[-2000:]
+
+            bad = []
+            for x in _INPUTS:
+                bits = struct.unpack('<Q', struct.pack('<d', x))[0]
+                r = subprocess.run([str(exe), f'{bits:016x}'],
+                                   capture_output=True, text=True)
+                try:
+                    want, py_ok = int(q(x)), True
+                except Exception:
+                    want, py_ok = None, False
+                if (r.returncode == 0) != py_ok:
+                    bad.append(f'{x:g}: cpp '
+                               f'{"accepts" if r.returncode == 0 else "aborts"}, '
+                               f'py {"accepts" if py_ok else "raises"}')
+                elif py_ok and int(r.stdout) != want:
+                    bad.append(f'{x:g}: cpp {r.stdout.strip()} vs py {want}')
+        assert not bad, '; '.join(bad[:6])

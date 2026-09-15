@@ -39,6 +39,15 @@ class CppScalar(enum.Enum):
     def is_float(self) -> bool:
         return self in FLOAT_TYPES
 
+    def is_signed(self) -> bool:
+        """Is this a signed integer type?  ``False`` for every non-integer."""
+        return self in SIGNED_INT_TYPES
+
+    def int_bits(self) -> int | None:
+        """Width an integer type's values wrap at, or ``None`` for a
+        non-integer."""
+        return _INT_BITS.get(self)
+
     def format(self) -> str:
         match self:
             case CppScalar.BOOL:
@@ -154,3 +163,10 @@ FLOAT_TYPES = [CppScalar.F32, CppScalar.F64]
 UNSIGNED_INT_TYPES = [CppScalar.U8, CppScalar.U16, CppScalar.U32, CppScalar.U64]
 SIGNED_INT_TYPES = [CppScalar.S8, CppScalar.S16, CppScalar.S32, CppScalar.S64]
 INT_TYPES = SIGNED_INT_TYPES + UNSIGNED_INT_TYPES
+
+
+_INT_BITS: dict[CppScalar, int] = {
+    CppScalar.U8: 8, CppScalar.U16: 16, CppScalar.U32: 32, CppScalar.U64: 64,
+    CppScalar.S8: 8, CppScalar.S16: 16, CppScalar.S32: 32, CppScalar.S64: 64,
+}
+"""Value width of each integer type; see :meth:`CppScalar.int_bits`."""
