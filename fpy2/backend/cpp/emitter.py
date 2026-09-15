@@ -3000,9 +3000,10 @@ class CppEmitter(Visitor):
     ) -> str:
         """Assert *arg* is finite before a float-to-integer conversion.
 
-        Converting a NaN or an infinity to an integer type is undefined -- on
-        x86-64 it yields ``INT_MIN`` -- where the interpreter raises.  Where the
-        branches above *src* have ruled both out there is nothing to assert.
+        Converting a float to an integer is undefined for any value the
+        destination cannot hold, not just NaN and infinity.  This emits an
+        assertion for any non-finite value unless this is determined to
+        be impossible.s
 
         Returns the operand, bound where the assertion has to name it.
         """
@@ -3017,6 +3018,75 @@ class CppEmitter(Visitor):
             f'std::isfinite({operand})',
             'rounding is undefined for this value')
         return operand
+
+    def _emit_wrapping_float_to_integer(
+        self, e, arg: str, arg_ty, target_ty: CppScalar,
+    ) -> str | None:
+        """*arg* converted to *target_ty* modulo its width, or `None`.
+
+        `None` unless this is a float-to-integer conversion under a native
+        ``WRAP`` context; other overflow rules are asserted or refused upstream.
+
+        A ``static_cast`` cannot do this.  C++ promises wrapping only when the
+        source is already an integer; converting a float too big for the
+        destination is undefined behavior, and arm64 clamps where x86-64 does
+        not.  Native contexts only, because this wraps at the C++ type's width,
+        which is the context's own width only when the two ranges agree.
+
+        An in-range operand keeps the plain cast; the reduction sits behind a
+        branch.  ``std::fmod`` is exact, so only the sign needs fixing -- see
+        the comments below.
+        """
+        if arg_ty is None or not arg_ty.is_float():
+            return None
+        bits = target_ty.int_bits()
+        if bits is None:
+            return None
+        active = self._active_ctx_for(e)
+        if not is_native_ctx(active):
+            return None
+        if not isinstance(active, MPBFixedContext):
+            return None
+        if active.overflow is not OverflowMode.WRAP:
+            return None
+
+        ty = target_ty.format()
+        # both exact as written: a power of two is representable in a double
+        modulus = f'{2 ** bits}.0'
+        half = f'{2 ** (bits - 1)}.0'
+        signed = target_ty.is_signed()
+        lo, hi = (f'-{half}', half) if signed else ('0.0', modulus)
+
+        operand = self._bind_operand(arg)
+        out = self._fresh_temp()
+        rem = self._fresh_temp()
+        self.writer.add_line(f'{ty} {out};')
+        self.writer.add_line(f'if ({operand} >= {lo} && {operand} < {hi}) {{')
+        self.writer.indent()
+        self.writer.add_line(f'{out} = static_cast<{ty}>({operand});')
+        self.writer.dedent()
+        self.writer.add_line('} else {')
+        self.writer.indent()
+        self.writer.add_line(
+            f'double {rem} = std::fmod(std::trunc({operand}), {modulus});')
+        if signed:
+            # Exact in the double: each arm subtracts values within a factor
+            # of two, landing in [-2**(bits-1), 2**(bits-1)).
+            self.writer.add_line(f'if ({rem} >= {half}) {{ {rem} -= {modulus}; }}')
+            self.writer.add_line(
+                f'else if ({rem} < -{half}) {{ {rem} += {modulus}; }}')
+            self.writer.add_line(f'{out} = static_cast<{ty}>({rem});')
+        else:
+            # Not foldable in the double: at 64 bits ``2**64 - 1`` is not one,
+            # so adding the modulus rounds to it and reduces to zero.  The
+            # magnitude is exact, so negate in the integer, where it is modular.
+            self.writer.add_line(
+                f'{out} = static_cast<{ty}>(std::fabs({rem}));')
+            self.writer.add_line(
+                f'if ({rem} < 0.0) {{ {out} = static_cast<{ty}>(0u - {out}); }}')
+        self.writer.dedent()
+        self.writer.add_line('}')
+        return out
 
     def _visit_round(self, e, ctx) -> str:
         # A `static_cast`, whose rounding mode is the one the surrounding
@@ -3036,6 +3106,9 @@ class CppEmitter(Visitor):
         if arg_ty == target_ty:
             return arg
         arg = self._guard_float_to_integer(arg, arg_ty, target_ty, e.arg)
+        wrapped = self._emit_wrapping_float_to_integer(e, arg, arg_ty, target_ty)
+        if wrapped is not None:
+            return wrapped
         return self._explicit_cast(arg, target_ty)
 
     _INTEGRAL_ONE_CALL: ClassVar[dict[RM, str]] = {

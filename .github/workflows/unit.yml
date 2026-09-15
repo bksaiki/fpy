@@ -12,9 +12,10 @@ jobs:
   # entry point from regressing.
   build-uv:
     name: "Build (uv)"
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
@@ -30,9 +31,10 @@ jobs:
 
   build-pip:
     name: "Build (pip)"
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       matrix:
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12", "3.13"]
 
     steps:
@@ -96,6 +98,23 @@ jobs:
         run: uv run make unittest
       - name: Infrastucture Tests
         run: uv run python -m tests.infra
+
+  # macOS is arm64, where the C++ backend's float-to-integer conversions differ
+  # from x86-64's -- the `unit` job above cannot see that difference.  Unit
+  # tests only: the infrastructure tests need the FPBench corpus.
+  unit-macos:
+    name: "Unit Tests (macOS)"
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.11"
+      - name: Install
+        run: uv sync
+      - name: Unit Tests
+        run: uv run make unittest
 
   fpcore:
     name: "FPCore tests"

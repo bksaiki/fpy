@@ -20,6 +20,8 @@ that would otherwise reshape the generated C++ or sidestep
 rejection paths.
 """
 
+import re
+
 import fpy2 as fp
 import pytest
 
@@ -597,5 +599,9 @@ class TestRoundIntoAFixedScope:
         )
         assert out.startswith('int64_t g(const std::array<float, 32>& xs)'), out
         assert 'int64_t acc = 0;' in out, out
-        # the accumulator stays int, with the element rounded in place
-        assert 'acc = (acc + static_cast<int64_t>(x));' in out, out
+        # The accumulator stays int, with the element rounded in place.  By
+        # shape, not one spelling: a `float` can sit outside `int64_t`, so the
+        # conversion carries a wrapping guard and binds its own temporary.
+        assert 'static_cast<int64_t>(x)' in out, out
+        assert re.search(r'acc = \(acc \+ \w+\);', out), out
+        assert 'double acc' not in out and 'float acc' not in out, out

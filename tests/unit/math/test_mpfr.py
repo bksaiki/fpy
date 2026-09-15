@@ -21,6 +21,43 @@ def _gmp_lgamma(x):
     y, _ = gmp.lgamma(x)
     return y
 
+def _gmp_integral(f, x):
+    """`gmp.ceil`/`floor`/`trunc` as an `mpfr`, whatever gmpy2 hands back.
+
+    They return an `mpfr` up to gmpy2 2.2 and an `mpz` from 2.3 on, where a NaN
+    or an infinity raises instead; both set the same flags first, so the
+    operand stands in for those.
+
+    `gmp.mpfr` of an `mpz` rounds to the context's precision under its rounding
+    mode, so the round trip is exact only because the caller sets that to the
+    operand's own precision -- where an integral result is always
+    representable, the operand being an integer already above 2**(p-1) and the
+    result needing at most p bits below it.  A narrower context would round a
+    second time.  `gmp.rint_*` returns an `mpfr` directly but applies the
+    ambient rounding mode rather than the operation's own direction, answering
+    30 for `ceil(30.5)` under RTZ.
+
+    An `mpz` has no signed zero, so a zero result takes its sign back from the
+    operand: MPFR gives ``ceil(-0.5) == -0``.
+    """
+    try:
+        y = f(x)
+    except (ValueError, OverflowError):
+        return x
+    r = gmp.mpfr(y)
+    if gmp.is_zero(r):
+        return gmp.set_sign(r, x.is_signed())
+    return r
+
+def _gmp_ceil(x):
+    return _gmp_integral(gmp.ceil, x)
+
+def _gmp_floor(x):
+    return _gmp_integral(gmp.floor, x)
+
+def _gmp_trunc(x):
+    return _gmp_integral(gmp.trunc, x)
+
 def _gmp_fdim(x, y):
     if gmp.is_nan(x) or gmp.is_nan(y):
         # C reference: if either argument is NaN, NaN is returned
@@ -61,9 +98,9 @@ _unary_ops = {
     tan : gmp.tan,
     tanh : gmp.tanh,
     tgamma : gmp.gamma,
-    ceil : gmp.ceil,
-    floor : gmp.floor,
-    trunc : gmp.trunc,
+    ceil : _gmp_ceil,
+    floor : _gmp_floor,
+    trunc : _gmp_trunc,
     nearbyint : gmp.rint,
     roundint : gmp.round_away
 }
