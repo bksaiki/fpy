@@ -43,6 +43,14 @@ def two_rounds(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.REAL)
+def bound_operand(x: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        p = fp.round(x + y)
+    z = p + 1
+    return z
+
+
+@fp.fpy(ctx=fp.REAL)
 def exact(x: fp.Real) -> fp.Real:
     with fp.REAL:
         y = fp.round(x)
@@ -134,10 +142,11 @@ def test_forwarding_composes_across_two_passes():
 
 
 def test_a_region_forwards_as_a_region():
-    """A block of two rounds lowers to two statements, so the image of its
-    site is a region — which forwards on through the next pass as one."""
-    site = StmtCursor(two_rounds.ast, FuncBody().stmt(0))
-    f1 = float_to_fixed(two_rounds, where=0)
+    """A rounding whose operand has to be bound becomes two statements -- the
+    bind and the lowering -- so the image of its site is a region, which
+    forwards on through the next pass as one."""
+    site = StmtCursor(bound_operand.ast, FuncBody().stmt(0).block('body').stmt(0))
+    f1 = float_to_fixed(bound_operand, where=0)
 
     region = f1.forward(site)
     assert isinstance(region, BlockCursor)

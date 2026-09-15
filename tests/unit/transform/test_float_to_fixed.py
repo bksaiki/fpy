@@ -39,6 +39,7 @@ from fpy2.number import (
     MPSFloatContext,
 )
 from fpy2.transform import FloatToFixed, TransformDeclined, TransformReferenceError
+from fpy2.transform.utils import RoundingScopes
 from fpy2.types import RealType
 
 
@@ -69,6 +70,25 @@ def _block_ctxs(ast: FuncDef) -> list:
         v for s in _blocks(ast)
         if (v := eval_info.by_expr.get(s.ctx)) is not None
     ]
+
+
+def _round_ctxs(ast: FuncDef) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied is dropped by dead-code
+    elimination and not by the rewrite, so the *block* contexts still name the
+    source format.
+    """
+    scopes = RoundingScopes(ast)
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_round(self, e, ctx):
+            found.append(scopes.scope_ctx(e))
+            super()._visit_round(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
 
 
 def _ctx_calls(ast: FuncDef, ctx_type: type) -> list[Call]:
@@ -142,9 +162,8 @@ class TestLowering:
         out = FloatToFixed.apply(f.ast)
         # the float context is gone; what is left rounds under fixed-point
         # contexts, with everything else exact
-        ctxs = _block_ctxs(out)
-        assert REAL in ctxs
-        assert not any(isinstance(c, fp.IEEEContext) for c in ctxs)
+        assert REAL in _block_ctxs(out)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
         # one rounding per finite branch: subnormal and normal
         assert len(_ctx_calls(out, MPBFixedContext)) == 2
         assert _has_node(out, Round)
@@ -212,7 +231,7 @@ class TestLowering:
                 return fp.round(x)
 
         out = FloatToFixed.apply(f.ast)
-        assert not any(isinstance(c, fp.IEEEContext) for c in _block_ctxs(out))
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
         for x in _samples(fp.FP16):
             assert _same(_eval(out, f, x), f(x)), x
 
@@ -227,7 +246,7 @@ class TestLowering:
             return s
 
         out = FloatToFixed.apply(f.ast)
-        assert not any(c is fp.FP16 for c in _block_ctxs(out))
+        assert not any(c is fp.FP16 for c in _round_ctxs(out))
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
     def test_inside_a_loop(self):
@@ -275,7 +294,7 @@ class TestWhere:
         f = self._two()
         out = FloatToFixed.apply(f.ast, where=where)
         # the FP64 block is arithmetic, so it is never a candidate
-        remaining = [c for c in _block_ctxs(out) if c in (fp.FP16, fp.FP32)]
+        remaining = [c for c in _round_ctxs(out) if c in (fp.FP16, fp.FP32)]
         assert remaining == left
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
@@ -392,14 +411,29 @@ class TestUnchanged:
 
         assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
 
+
+# ----------------------------------------------------------------------
+# Sites the shape of the program used to hide
+
+
+class TestScopedSites:
+    """A site is a rounding under a float scope, whatever the program looks
+    like around it: the lowering asks `ContextUse` what is active, not whether
+    the statement sits in a block of a particular shape."""
+
     def test_round_of_an_expression(self):
+        """The operand is bound first, under the scope it was written in, so
+        the branches and the `logb` can each name it."""
         @fp.fpy(ctx=fp.REAL)
         def f(a, b):
             with fp.FP16:
                 y = fp.round(a + b)
             return y
 
-        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+        out = FloatToFixed.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for a, b in ((0.1, 0.2), (1e5, 1.0), (-7e4, -1.0)):
+            assert _same(_eval(out, f, a, b), f(a, b)), (a, b)
 
     def test_bound_context(self):
         @fp.fpy(ctx=fp.REAL)
@@ -408,7 +442,37 @@ class TestUnchanged:
                 y = fp.round(x)
             return y
 
-        assert FloatToFixed.apply(f.ast).is_equiv(f.ast)
+        out = FloatToFixed.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_function_annotation_scope(self):
+        """No `with` at all: the scope is the function's own annotation, which
+        `Specialize` is what usually leaves behind."""
+        @fp.fpy(ctx=fp.FP16)
+        def f(x):
+            y = fp.round(x)
+            return y
+
+        out = FloatToFixed.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_block_with_other_statements(self):
+        """One non-rounding statement in the block used to disqualify every
+        rounding in it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP16:
+                aq = fp.round(a)
+                s = aq + b
+            return s
+
+        out = FloatToFixed.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
 
 # ----------------------------------------------------------------------
