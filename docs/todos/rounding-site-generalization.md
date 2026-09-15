@@ -221,6 +221,16 @@ python -m pytest tests/unit/transform/test_unfold_special.py \
 
 ## Phase 4 — `rescale_fixed`
 
+**Found during the work:** the block-shape gate was also what made the
+symbolic-position path idempotent. A rescaled block's body holds the scale-in
+and scale-out wrappers, so `rounding_block` stopped matching it and a second
+run did nothing. Under the scoped gate the rounding inside is a site again, and
+`_symbolic_shift` re-shifted it by zero — `nmin = -1` reads as
+`Add(Integer(-1), Integer(1))`, which its `isinstance(scale, Integer)` check
+for "already at position zero" cannot see. Fixed by folding a literal position
+into a literal scale, so the check fires. Pinned by
+`TestSymbolicPosition::test_idempotent`.
+
 The only genuine blocker. `_symbolic_shift` (`rescale_fixed.py:351`) takes
 `stmt.ctx` as a `Call` and rewrites the constructor's position argument — that
 is how a run-time-known scale is supported. With no syntactic context there is
@@ -262,6 +272,10 @@ With the gate generalized, `_isolate` has nothing to do.
   is what makes running the ladder over the whole program safe" argument is
   now carried by each pass's own `_verify`, so check that the ladder over a
   whole program still declines the roundings the emitter already spells.
+- Delete the old gate from `fpy2/transform/utils.py`, which nothing calls once
+  the workaround is gone: `BlockRewriter`, `rounding_block` and
+  `is_rounding_block` (~70 lines). `_isolatable`'s docstring is the last
+  reference to `rounding_block` and goes with it.
 
 ```
 python -m pytest tests/unit/backend/cpp/ -q

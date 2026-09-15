@@ -152,10 +152,12 @@ class TestPipeline:
         fixed-point block sits at position zero."""
         out = rescale_fixed(float_to_fixed(_quantized_sum))
 
-        positions = []
-        for stmt in _blocks(out.ast):
-            e = stmt.ctx
-            if isinstance(e, Call) and e.fn is fp.MPBFixedContext:
-                positions.append(e.args[0].val)
+        # the contexts the roundings run under, rather than every block: an
+        # emptied one survives until dead-code elimination and still names the
+        # position it was written at
+        positions = [
+            c.nmin for c in _round_ctxs(out.ast)
+            if isinstance(c, fp.MPBFixedContext)
+        ]
         assert positions and all(p == -1 for p in positions)
         assert fp.FP16 not in _round_ctxs(out.ast)

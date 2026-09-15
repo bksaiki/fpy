@@ -58,7 +58,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
     Add,
     Assign,
@@ -78,7 +77,6 @@ from ..ast.fpyast import (
     Pow,
     Rational,
     RationalVal,
-    ReturnStmt,
     Round,
     Stmt,
     StmtBlock,
@@ -92,7 +90,6 @@ from ..number import (
     FixedContext,
     MPBFixedContext,
     MPFixedContext,
-    RealFloat,
     SMFixedContext,
 )
 from ..number.format import (
@@ -103,14 +100,13 @@ from ..number.format import (
     SMFixedFormat,
 )
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .cursor import Cursor, EditLog
 from .utils import (
-    BlockRewriter,
     Declined,
+    RoundingScopes,
+    ScopedRoundingRewriter,
     check_where,
-    is_rounding_block,
     number_literal,
-    rounding_block,
     shift,
 )
 
@@ -219,13 +215,17 @@ def _rescale(ctx: _FixedCtx, scale: int) -> _FixedCtx:
     return type(ctx).from_format(cast(Any, fmt), **kwargs)
 
 
-def _rescale_expr(e: Expr, ctx: _FixedCtx, scale: int) -> Expr:
+def _rescale_expr(
+    e: Expr | None, ctx: _FixedCtx, scale: int, loc: Location | None
+) -> Expr:
     """
     `e`, which evaluates to `ctx`, rewritten to evaluate at `scale`.
 
     A constructor call keeps its written form with only the digit-position
     argument replaced, so the rewritten program reads like the original.
-    Any other expression is replaced by the rescaled context itself.
+    Anything else — including a scope that is the function's own annotation,
+    which states no expression in the body — is replaced by the rescaled
+    context itself.
     """
     dst = _rescale(ctx, scale)
     info = _CTOR_ARGS.get(type(ctx))
@@ -245,7 +245,7 @@ def _rescale_expr(e: Expr, ctx: _FixedCtx, scale: int) -> Expr:
                 rewritten = bound
             return rewritten
 
-    return ForeignVal(dst, e.loc)
+    return ForeignVal(dst, loc)
 
 
 def _replace_arg(
@@ -276,40 +276,35 @@ def _arg_of(e: Call, name: str, index: int | None) -> Expr | None:
     return None
 
 
-class _RescaleFixedInstance(BlockRewriter):
-    """Rewrites every qualifying context statement in a function."""
+class _RescaleFixedInstance(ScopedRoundingRewriter):
+    """Rescales every qualifying rounding in a function to position zero."""
 
     _casts = True
-    """whether a `fp.cast` block counts as a candidate"""
+    """rounding commutes with the shift, and so does the cast it asserts"""
 
     func: FuncDef
-    eval_info: PartialEvalInfo
+    scopes: RoundingScopes
     gensym: Gensym
     where: int | Cursor | None
     site_idx: int
 
     def __init__(
-        self, func: FuncDef, eval_info: PartialEvalInfo,
+        self, func: FuncDef, scopes: RoundingScopes,
         where: int | Cursor | None = None,
     ):
         self.func = func
-        self.eval_info = eval_info
-        self.gensym = Gensym(eval_info.def_use.names())
+        self.scopes = scopes
+        self.gensym = Gensym(scopes.def_use.names())
         self.where = where
 
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
-
-    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """Rounding commutes with the shift; arithmetic does not."""
-        return rounding_block(stmt, casts=self._casts)
-
-    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Shift | Declined:
-        """How to rescale this block, or why it must be left alone."""
-        ctx = self.eval_info.by_expr.get(stmt.ctx)
+    def _verify(self, e: Expr, ctx: Context | None) -> _Shift | Declined:
+        """How to rescale this rounding, or why it must be left alone."""
+        loc = e.loc
+        ctx_expr = self.scopes.scope_ctx_expr(e)
         if isinstance(ctx, _FixedCtx):
+            fixed = ctx
             # a known format shifts by a constant, so the factors fold away
-            scale = _scale_of(ctx)
+            scale = _scale_of(fixed)
             if scale == 0:
                 return Declined(
                     'the format is already at digit position zero; there is '
@@ -322,7 +317,7 @@ class _RescaleFixedInstance(BlockRewriter):
             # here to shift.
             if any(
                 v is not None and not v.is_nar()
-                for v in (ctx.nan_value, ctx.inf_value)
+                for v in (fixed.nan_value, fixed.inf_value)
             ):
                 return Declined(
                     'a finite NaN or infinity substitute is a value in the '
@@ -330,13 +325,16 @@ class _RescaleFixedInstance(BlockRewriter):
                     '`unfold_special` first'
                 )
             return _Shift(
-                ctx=lambda: _rescale_expr(stmt.ctx, ctx, 0),
-                up=lambda: _pow2(-scale, stmt.loc),
-                down=lambda: _pow2(scale, stmt.loc),
+                ctx=lambda: _rescale_expr(ctx_expr, fixed, 0, loc),
+                up=lambda: _pow2(-scale, loc),
+                down=lambda: _pow2(scale, loc),
             )
 
-        if isinstance(stmt.ctx, Call):
-            sym = self._symbolic_shift(stmt.ctx)
+        # a run-time position is shifted by editing the constructor call, so
+        # this path needs the scope to have been written as one.  A function
+        # annotation states its context outside the body and has no call here.
+        if isinstance(ctx_expr, Call):
+            sym = self._symbolic_shift(ctx_expr)
             if sym is None:
                 return Declined(
                     'the constructor call is not a fixed-point context whose '
@@ -381,6 +379,10 @@ class _RescaleFixedInstance(BlockRewriter):
             if (isinstance(position, Sub) and isinstance(position.second, Integer)
                     and position.second.val == 1):
                 scale = position.first
+            elif isinstance(position, Integer):
+                # folded, so a position this pass wrote is recognized as the
+                # constant it is -- `nmin = -1` is scale zero, not `-1 + 1`
+                scale = Integer(position.val + 1, loc)
             else:
                 scale = Add(position, Integer(1, loc), loc)
         # a format already at position zero has nothing to shift
@@ -440,46 +442,33 @@ class _RescaleFixedInstance(BlockRewriter):
             return None
         return _Shift(ctx=build_ctx, up=up, down=down, preamble=preamble)
 
-    def _rescale_round(
-        self, e: Round | Cast, target: NamedId, loc: Location | None, shift: _Shift
-    ) -> list[Stmt]:
-        """`target = round(v)` scaled in, rounded at position zero, and scaled out."""
-        assert isinstance(e.arg, Var)
+    def _ladder(self, e: Expr, target: NamedId, out: list, shift: _Shift) -> None:
+        """`target = round(v)` scaled in, rounded at position zero, and scaled
+        out, under the rescaled context."""
+        assert isinstance(e, (Round, Cast))
+        loc = e.loc
+        # the scale-in reads the operand under `fp.REAL`, where an expression
+        # would be evaluated exactly rather than at the scope it was written in
+        name = self._arg_name(e, out)
 
         # scale in: the operand's digits move up to position zero
         scaled = self.gensym.fresh('_t')
-        up = Assign(scaled, None, Mul(shift.up(), e.arg, loc), loc)
+        up = Assign(scaled, None, Mul(shift.up(), Var(name, loc), loc), loc)
 
         # round under the rescaled context
         rounded = self.gensym.fresh('_t')
         round_ = Assign(rounded, None, type(e)(e.func, Var(scaled, loc), loc), loc)
 
         # scale out: the result returns to its original magnitude, under the
-        # original target name, so statements after the block are unaffected
+        # original target name, so statements after it are unaffected
         down = Assign(target, None, Mul(shift.down(), Var(rounded, loc), loc), loc)
 
-        return [
+        out.extend(shift.preamble)
+        out.append(ContextStmt(UnderscoreId(), shift.ctx(), StmtBlock([
             ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), StmtBlock([up]), loc),
             round_,
             ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), StmtBlock([down]), loc),
-        ]
-
-    def _rewrite(self, stmt: ContextStmt, shift: _Shift) -> list[Stmt]:
-        """The block, rescaled, after whatever its context expression needs."""
-        stmts: list[Stmt] = []
-        for s in stmt.body.stmts:
-            if isinstance(s, Assign):
-                assert isinstance(s.expr, (Round, Cast)) and isinstance(s.target, NamedId)
-                stmts.extend(self._rescale_round(s.expr, s.target, s.loc, shift))
-            else:
-                # a returned round scales out into a temporary, then returns it
-                assert isinstance(s, ReturnStmt) and isinstance(s.expr, (Round, Cast))
-                out = self.gensym.fresh('_t')
-                stmts.extend(self._rescale_round(s.expr, out, s.loc, shift))
-                stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
-
-        block: Stmt = ContextStmt(stmt.target, shift.ctx(), StmtBlock(stmts), stmt.loc)
-        return [*shift.preamble, block]
+        ]), loc))
 
 
 class RescaleFixed:
@@ -496,30 +485,27 @@ class RescaleFixed:
         the blocks `where=None` would rewrite: no candidate that this pass
         refuses appears here or consumes an index.
         """
-        eval_info = PartialEval.apply(func)
-        return _RescaleFixedInstance(func, eval_info).list_sites(within)
+        return _RescaleFixedInstance(func, RoundingScopes(func)).list_sites(within)
 
     @staticmethod
     def refusals(
         func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
-        """Why each rounding block of `func` that is not a site was refused,
-        in visit order.  A refusal takes no index, so this is how one is found.
+        """Why each rounding of `func` that is not a site was refused, in visit
+        order.  A refusal takes no index, so this is how one is found.
         """
-        eval_info = PartialEval.apply(func)
-        return _RescaleFixedInstance(func, eval_info).list_refusals(within)
+        return _RescaleFixedInstance(func, RoundingScopes(func)).list_refusals(within)
 
     @staticmethod
     def apply(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
         Rescales fixed-point rounding in `func` to digit position zero.
 
-        `where` selects one structurally-matching rounding block by index
-        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `where` selects one rounding by index (see
+        :class:`.utils.ScopedRoundingRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
 
         A format that substitutes a *finite* value for NaN or an infinity is
@@ -530,24 +516,19 @@ class RescaleFixed:
         return RescaleFixed.apply_with_edits(
             func,
             where=where,
-            eval_info=eval_info,
         ).result
 
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
 
-        if eval_info is None:
-            eval_info = PartialEval.apply(func)
-
-        vtor = _RescaleFixedInstance(func, eval_info, where)
+        vtor = _RescaleFixedInstance(func, RoundingScopes(func), where)
         out = vtor.apply()
-        vtor.check_site('a candidate rounding block')
+        vtor.check_site('a candidate rounding')
         return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)
