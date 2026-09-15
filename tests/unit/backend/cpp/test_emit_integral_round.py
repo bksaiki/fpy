@@ -284,6 +284,31 @@ class TestStorageFromTheInferredFormat:
         # a finite magnitude test, not a context-stated maxval
         assert 'std::fabs' in out
 
+    def test_an_integer_format_rounds_by_the_cast(self):
+        """The other lowering: where the inferred format fits an integer type,
+        the cast *is* the rounding, and the bound it asserts is the inferred
+        one -- the context states none."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(-1, RM.RTZ):
+                return fp.round(x)
+
+        out = CppCompiler(optimize=False).compile(g, arg_types=[RealType(fp.SINT8)])
+        assert 'static_cast<int8_t>' in out
+        assert '-128 <= x && x <= 127' in out
+        assert 'overflow occurred so rounding is undefined' in out
+
+    def test_the_cast_path_still_requires_rtz(self):
+        """C++ integer conversion rounds toward zero, so only `RTZ` is the
+        rounding it performs -- checked against the storage the format chose."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(-1, RM.RNE):
+                return fp.round(x)
+
+        with pytest.raises(CppCompileError, match='must use RTZ'):
+            CppCompiler(optimize=False).compile(g, arg_types=[RealType(fp.SINT8)])
+
     def test_an_unstorable_value_is_still_refused(self):
         """Deferring the scope's check lets no value through that no type
         holds: storage selection asks the same question per value."""
