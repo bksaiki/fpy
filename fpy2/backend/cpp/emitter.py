@@ -926,11 +926,12 @@ class CppEmitter(Visitor):
         # and worse, so descend like an integer scope.
         entry_rm = None
         if func_ctx is not None and func_ctx is not REAL:
-            storage = self._validate_context_rm(func_ctx, at=func)
+            ctx_storage = self._validate_context_rm(func_ctx, at=func)
             # only a floating-point context in float storage rounds through
             # `fesetround`; integer storage and the libm fixed-point lowering
             # both round by other means and want no scope
-            if storage.is_float() and isinstance(func_ctx, EFloatContext):
+            if (ctx_storage is not None and ctx_storage.is_float()
+                    and isinstance(func_ctx, EFloatContext)):
                 entry_rm = func_ctx.rm
         if entry_rm is None:
             self._visit_block(func.body, None)
@@ -1423,18 +1424,22 @@ class CppEmitter(Visitor):
 
     def _validate_context_rm(
         self, rctx: Context, at: Ast | None = None,
-    ) -> CppScalar:
+    ) -> CppScalar | None:
         """Validate *rctx* and return its scalar storage type.
 
-        Float storage needs an ``fesetround`` mode (RNE/RTZ/RTP/RTN) -- unless the
-        context is fixed-point, which instead needs an integral spelling; integer
-        storage needs RTZ, which is what C++ integer arithmetic does -- anything
-        else would need per-operation emulation.  Bool, list and tuple are out of
-        scope.  *at* anchors the error location.
+        ``None`` where a fixed-point context has no storage of its own: being
+        unbounded, or keeping a ``-0`` no integer type has.  Values under it are
+        stored as their inferred format says, as every value already is, so the
+        checks that storage decides (:meth:`_validate_ctx_storage`) wait for the
+        rounding, where that type is known.
+
+        Bool, list and tuple are out of scope.  *at* anchors the error location.
         """
         try:
             storage = choose_storage(rctx.format())
         except StorageSelectionError as e:
+            if isinstance(rctx, MPFixedContext | MPBFixedContext):
+                return None
             raise CppEmitError(
                 f'unsupported context `{rctx}`: {e}', at=at,
             ) from e
@@ -1445,21 +1450,36 @@ class CppEmitter(Visitor):
                 f'unsupported context storage `{storage!r}` for `{rctx}`',
                 at=at,
             )
+        # A stated substitute is a *value* the rounding must produce, and
+        # neither the libm lowering nor the cast produces one -- whatever the
+        # storage, so this one does not wait for it.
+        if isinstance(rctx, MPFixedContext | MPBFixedContext) and (
+            rctx.nan_value is not None or rctx.inf_value is not None
+        ):
+            raise CppEmitError(
+                f'context `{rctx}` substitutes a value for NaN or an '
+                'infinity; neither a libm rounding nor a cast produces '
+                'one, and an assertion cannot stand in for a substitution',
+                at=at,
+            )
+        self._validate_ctx_storage(rctx, storage, at=at)
+        return storage
+
+    def _validate_ctx_storage(
+        self, rctx: Context, storage: CppScalar, at: Ast | None = None,
+    ) -> None:
+        """The checks on *rctx* that its *storage* decides.
+
+        Float storage needs an ``fesetround`` mode (RNE/RTZ/RTP/RTN) -- unless
+        the context is fixed-point, which instead needs an integral spelling;
+        integer storage needs RTZ, which is what C++ integer arithmetic does --
+        anything else would need per-operation emulation.
+        """
         if isinstance(rctx, MPFixedContext | MPBFixedContext):
             # A fixed-point context rounds by a libm call (float storage) or a
             # cast (integer storage).  Neither goes through ``fesetround``, so
             # its rounding mode is checked against what that lowering can do
             # rather than against the ``fenv`` modes.
-            #
-            # A stated substitute is a *value* the rounding must produce, and
-            # neither lowering produces one -- whatever the storage.
-            if rctx.nan_value is not None or rctx.inf_value is not None:
-                raise CppEmitError(
-                    f'context `{rctx}` substitutes a value for NaN or an '
-                    'infinity; neither a libm rounding nor a cast produces '
-                    'one, and an assertion cannot stand in for a substitution',
-                    at=at,
-                )
             if storage.is_integer():
                 if rctx.rm != RM.RTZ:
                     raise CppEmitError(
@@ -1528,7 +1548,6 @@ class CppEmitter(Visitor):
                 '`MPBFixedContext` lower to integer arithmetic',
                 at=at,
             )
-        return storage
 
     @contextmanager
     def _fenv_scope(self, target_rm: RM):
@@ -1571,9 +1590,11 @@ class CppEmitter(Visitor):
             self._visit_block(stmt.body, ctx)
             return
         storage = self._validate_context_rm(rctx, at=stmt)
-        if storage.is_integer() or isinstance(rctx, MPFixedContext | MPBFixedContext):
+        if (storage is None or storage.is_integer()
+                or isinstance(rctx, MPFixedContext | MPBFixedContext)):
             # A fixed-point scope sets no ``fenv`` mode whichever storage it
-            # lands in: it rounds by a cast or by a libm call naming its mode.
+            # lands in -- or none at all, its roundings deciding for themselves:
+            # it rounds by a cast or by a libm call naming its mode.
             # The exceptions are RNE and RTE, built on ``std::nearbyint``, which
             # reads the live mode -- `_emit_integral_round` checks that.
             self._visit_block(stmt.body, ctx)
@@ -2955,7 +2976,7 @@ class CppEmitter(Visitor):
                 'cast is not exact: this context represents only integers')
         if isinstance(ctx, MPBFixedContext):
             self._emit_assert(
-                self._bound_test(ctx, operand, at=e, ty=arg_ty),
+                self._bound_test(self._ctx_bounds(ctx), operand, at=e, ty=arg_ty),
                 "cast is not exact: value is outside the context's bound")
         return operand
 
@@ -3219,16 +3240,18 @@ class CppEmitter(Visitor):
         """``round(v)`` under a fixed-point context, as a libm call or a cast.
 
         `None` leaves the caller's cast in place: a non-fixed-point context, a
-        native one (whose cast *is* its rounding), or an unbounded one.  Any other
-        fixed-point context is lowered here or refused -- a bare ``static_cast``
-        would drop its bound and its edge rule silently.
+        native one (whose cast *is* its rounding), or an unbounded one in its own
+        storage.  Any other fixed-point context is lowered here or refused -- a
+        bare ``static_cast`` would drop its bound and its edge rule silently.
 
         Float storage rounds by libm -- the result is an integral *value* in a
         float, which is what C++ rounds to natively.  Integer storage rounds by
-        the cast itself, ``RTZ`` being what C++ integer conversion does.
+        the cast itself, ``RTZ`` being what C++ integer conversion does.  A
+        context with no storage of its own takes it from the value's inferred
+        format, which is also where its bound then comes from.
 
-        The context's edges become assertions around it -- an operand it cannot
-        round, and a result past its bound.  Both vanish under ``NDEBUG``, as
+        The edges become assertions around it -- an operand the context cannot
+        round, and a result past the bound.  Both vanish under ``NDEBUG``, as
         every FPy assertion does.
         """
         active = self._active_ctx_for(e)
@@ -3242,7 +3265,15 @@ class CppEmitter(Visitor):
         # -128..127 values under `ASSERT` still need the assertion.
         if is_native_ctx(active):
             return None
-        target_ty = self._scalar_for_ctx(active, at=e)
+        ctx_storage = self._round_storage(e)
+        if ctx_storage is None:
+            # The context has no storage of its own, so the value's inferred
+            # format supplies it -- and with it the checks that storage decides,
+            # which `_validate_context_rm` left for the rounding to make.
+            target_ty = self._scalar_storage_for_expr(e)
+            self._validate_ctx_storage(active, target_ty, at=e)
+        else:
+            target_ty = ctx_storage
         # position zero: `nmin` is the last unrepresentable digit, so -1 is the
         # case whose representable values are the integers.  Any other position
         # needs the operand scaled first, which is `rescale_fixed`'s job rather
@@ -3259,24 +3290,38 @@ class CppEmitter(Visitor):
                 'libm function draws random bits',
                 at=e,
             )
-        if not isinstance(active, MPBFixedContext):
-            # unbounded: no bound to assert, and `_validate_context_rm` has
-            # already gated the `int64_t` truncation on `unsafe_cast_int`
+        if isinstance(active, MPBFixedContext):
+            # An edge *rule* is behavior, and this lowering implements none of
+            # it.  `ASSERT` alone is a claim that the edge is never reached,
+            # which an assertion states exactly.
+            if active.overflow is not OverflowMode.ASSERT:
+                raise CppEmitError(
+                    f'overflow mode {active.overflow} under `{active}` has no '
+                    f'C++ analogue: `{target_ty.format()}` is wider than the '
+                    'format, so neither its range nor its wrapping reproduces '
+                    'the rule.  Run `fpy2.strategies.unfold_overflow` to state '
+                    'the rule as program text.',
+                    at=e,
+                )
+            bounds = self._ctx_bounds(active)
+        elif ctx_storage is not None:
+            # Unbounded, in its own storage: nothing states a bound, and
+            # `_validate_context_rm` has already gated the `int64_t` truncation
+            # on `unsafe_cast_int`.
             return None
-        # An edge *rule* is behavior, and this lowering implements none of it.
-        # `ASSERT` alone is a claim that the edge is never reached, which an
-        # assertion states exactly.
-        if active.overflow is not OverflowMode.ASSERT:
-            raise CppEmitError(
-                f'overflow mode {active.overflow} under `{active}` has no C++ '
-                f'analogue: `{target_ty.format()}` is wider than the format, so '
-                'neither its range nor its wrapping reproduces the rule.  '
-                'Run `fpy2.strategies.unfold_overflow` to state the rule '
-                'as program text.',
-                at=e,
-            )
+        else:
+            # Unbounded, in the storage its inferred format chose.  The context
+            # states no bound, so the assertion carries what the analysis
+            # proved -- checking the inference rather than a claim the program
+            # made.
+            inferred = self._inferred_bounds(e)
+            if inferred is None:
+                # Nothing to assert from either source: decline, and let the
+                # caller's cast path refuse or not on its own terms.
+                return None
+            bounds = inferred
         if target_ty.is_integer():
-            return self._emit_cast_round(active, arg, target_ty, e)
+            return self._emit_cast_round(active, bounds, arg, target_ty, e)
         if active.rm not in self._INTEGRAL_MODES:
             raise CppEmitError(
                 f'rounding mode {active.rm} for context `{active}` has no '
@@ -3304,7 +3349,7 @@ class CppEmitter(Visitor):
             f'{target_ty.format()} {out} = '
             f'{self._emit_integral_value(active.rm, operand)};'
         )
-        bound = self._bound_test(active, out, at=e, ty=target_ty)
+        bound = self._bound_test(bounds, out, at=e, ty=target_ty)
         if (active.enable_nan or active.enable_inf) and cls & (
             ValueClass.NAN | ValueClass.INF
         ):
@@ -3318,7 +3363,9 @@ class CppEmitter(Visitor):
         return out
 
     def _emit_cast_round(
-        self, ctx: MPBFixedContext, arg: str, target_ty: CppScalar, e,
+        self, ctx: MPFixedContext | MPBFixedContext,
+        bounds: tuple[Fraction, Fraction], arg: str,
+        target_ty: CppScalar, e,
     ) -> str:
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
@@ -3340,7 +3387,7 @@ class CppEmitter(Visitor):
                 self._emit_assert(guard, 'rounding is undefined for this value')
         rounded = operand if integral else f'std::trunc({operand})'
         self._emit_assert(
-            self._bound_test(ctx, rounded, at=e, ty=arg_ty),
+            self._bound_test(bounds, rounded, at=e, ty=arg_ty),
             'overflow occurred so rounding is undefined')
         out = self._fresh_temp()
         self.writer.add_line(
@@ -3349,17 +3396,32 @@ class CppEmitter(Visitor):
         )
         return out
 
+    @staticmethod
+    def _ctx_bounds(ctx: MPBFixedContext) -> tuple[Fraction, Fraction]:
+        """*ctx*'s two bounds, read directly rather than through
+        ``maxval(s=True)``, which refuses an unsigned context instead of
+        answering zero."""
+        return ctx.pos_maxval.as_rational(), ctx.neg_maxval.as_rational()
+
+    def _inferred_bounds(self, e: Expr) -> tuple[Fraction, Fraction] | None:
+        """What format inference proves about *e*'s magnitude, or ``None``
+        where it proves nothing finite."""
+        fmt = self.format_info.by_expr.get(e)
+        if not isinstance(fmt, AbstractableFormat):
+            return None
+        af = AbstractFormat.from_format(fmt)
+        if not isinstance(af.pos_bound, RealFloat):
+            return None
+        if not isinstance(af.neg_bound, RealFloat):
+            return None
+        return af.pos_bound.as_rational(), af.neg_bound.as_rational()
+
     def _bound_test(
-        self, ctx: MPBFixedContext, operand: str, *, at: Expr,
+        self, bounds: tuple[Fraction, Fraction], operand: str, *, at: Expr,
         ty: CppScalar | None = None,
     ) -> str:
-        """A C++ test that *operand*, of type *ty*, lies within `ctx`'s bounds.
-
-        Reads the two bounds directly rather than through ``maxval(s=True)``,
-        which refuses an unsigned context instead of answering zero.
-        """
-        hi = ctx.pos_maxval.as_rational()
-        lo = ctx.neg_maxval.as_rational()
+        """A C++ test that *operand*, of type *ty*, lies within *bounds*."""
+        hi, lo = bounds
         integral = ty is not None and ty.is_integer()
         # `fabs` would promote an integer operand to `double`, which is lossy past
         # 2**53; the comparisons below are exact in integer arithmetic

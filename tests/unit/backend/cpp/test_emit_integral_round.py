@@ -232,6 +232,70 @@ class TestDeclines:
         )
 
 
+class TestStorageFromTheInferredFormat:
+    """A fixed-point context with no storage of its own.
+
+    ``MPFixedContext(-1)`` is unbounded *and* keeps a ``-0``, so no integer type
+    holds it and no float type spans it.  What limits the result is the value's
+    reach, which format inference has: the rounding takes its storage from there
+    and asserts the bound it proved.  This is what `rescale_fixed` leaves at a
+    run-time rounding position.
+    """
+
+    @staticmethod
+    def _rescaled():
+        import fpy2.strategies as strat
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], e: fp.Real) -> list[fp.Real]:
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return ys
+
+        return strat.simplify(strat.rescale_fixed(strat.comp_to_loop(f)))
+
+    @staticmethod
+    def _compile(fn):
+        from fpy2.types import ListType
+        return CppCompiler().compile(
+            fn, arg_types=[ListType(RealType(fp.FP32)), RealType(fp.SINT8)],
+        )
+
+    def test_the_context_alone_has_no_storage(self):
+        """The premise: nothing to pick from the context, so the old rule had
+        nothing to say."""
+        from fpy2.backend.cpp.storage import StorageSelectionError, choose_storage
+
+        with pytest.raises(StorageSelectionError):
+            choose_storage(fp.MPFixedContext(-1).format())
+
+    def test_a_rescaled_rounding_compiles(self):
+        out = self._compile(self._rescaled())
+        assert 'std::nearbyint' in out
+        assert 'double _t8' in out or 'double _tmp' in out
+
+    def test_the_bound_it_asserts_comes_from_the_analysis(self):
+        """The context states no bound, so the assertion carries the inferred
+        one -- which makes it a check on the inference."""
+        out = self._compile(self._rescaled())
+        assert 'overflow occurred so rounding is undefined' in out
+        # a finite magnitude test, not a context-stated maxval
+        assert 'std::fabs' in out
+
+    def test_arithmetic_under_the_same_context_is_still_refused(self):
+        """Deferring the scope's check does not let other ops through: storage
+        selection refuses a value the context's own format cannot hold."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(-1):
+                return x + y
+
+        with pytest.raises(CppCompileError, match='no storage format contains'):
+            CppCompiler(optimize=False).compile(
+                g, arg_types=[RealType(fp.FP32), RealType(fp.FP32)])
+
+
 class TestFloatContextUnaffected:
     """A genuine float context still goes through ``fesetround``; the
     restructured validation must not have changed that."""
