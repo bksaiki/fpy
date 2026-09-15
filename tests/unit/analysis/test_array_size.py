@@ -13,7 +13,7 @@ from fpy2.analysis import (
     ListSize,
     TupleSize,
 )
-from fpy2.analysis.array_size import concrete_size, is_size_eq
+from fpy2.analysis.array_size import ArraySizeBound, concrete_size, is_size_eq
 from fpy2.ast.fpyast import ListSlice
 from fpy2.transform.path import walk_exprs
 from fpy2.utils import NamedId
@@ -1923,4 +1923,75 @@ class TestArithmeticOverLengths:
             return fp.empty(n)
 
         info = ArraySizeInfer.analyze(f.ast)   # no lengths pinned
+        assert concrete_size(info.ret_size.size) is None
+
+
+class TestSizeAcrossACall:
+    """A callee's return size is asked for *at the call site*.
+
+    ``join`` returns ``len(xs) + len(ys)``, so it has no size to state on its
+    own -- analyzing it without argument sizes lost the length outright, and
+    ``FormatInfer._sum_bound`` then had no count for a sum over the result.
+    """
+
+    @staticmethod
+    def _join() -> fp.Function:
+        @fp.fpy(ctx=fp.REAL)
+        def join(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            zs = fp.empty(len(xs) + len(ys))
+            for i, x in enumerate(xs):
+                zs[i] = x
+            for i, y in enumerate(ys):
+                zs[i + len(xs)] = y
+            return zs
+        return join
+
+    @staticmethod
+    def _calls(info: ArraySizeAnalysis) -> list[ArraySizeBound]:
+        from fpy2.ast.fpyast import Call
+        return [b for e, b in info.by_expr.items() if isinstance(e, Call)]
+
+    def test_the_callee_alone_states_nothing(self):
+        """Why a per-callee answer cannot work: the size is arg-dependent."""
+        info = ArraySizeInfer.analyze(self._join().ast)
+        assert concrete_size(info.ret_size.size) is None
+
+    def test_a_length_crosses_the_call(self):
+        join = self._join()
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(c: fp.Real) -> list[fp.Real]:
+            prods = [c for _ in range(8)]
+            return join(prods, [c])
+
+        info = ArraySizeInfer.analyze(f.ast)
+        assert concrete_size(info.ret_size.size) == 9
+        assert len(f(1.0)) == 9      # the counterweight: the claim is true
+
+    def test_each_call_site_gets_its_own_size(self):
+        """The memo is keyed by the argument sizes, not by the callee."""
+        join = self._join()
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(c: fp.Real) -> list[fp.Real]:
+            a = join([c for _ in range(2)], [c])
+            b = join([c for _ in range(5)], [c])
+            return join(a, b)
+
+        info = ArraySizeInfer.analyze(f.ast)
+        sizes = sorted(concrete_size(b.size) for b in self._calls(info))
+        assert sizes == [3, 6, 9]
+        assert concrete_size(info.ret_size.size) == 9
+        assert len(f(1.0)) == 9
+
+    def test_an_unknown_length_stays_unknown(self):
+        """A caller's size *variable* says nothing in the callee's run, so it
+        is not carried across."""
+        join = self._join()
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], c: fp.Real) -> list[fp.Real]:
+            return join(xs, [c])
+
+        info = ArraySizeInfer.analyze(f.ast)
         assert concrete_size(info.ret_size.size) is None

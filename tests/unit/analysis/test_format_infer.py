@@ -2210,6 +2210,35 @@ class TestRoundIntoAFixedScope:
         assert not fp.SINT64.round(fp.Float(-0.0)).s
 
 
+class TestSumOverAJoinedList:
+    """`_sum_bound` needs a concrete count, so a length lost across a call
+    costs the bound: the sum over ``join(prods, [d])`` was top until
+    `ArraySizeInfer` became call-site sensitive."""
+
+    def test_the_count_bounds_the_sum(self):
+        @fp.fpy(ctx=fp.REAL)
+        def join(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            zs = fp.empty(len(xs) + len(ys))
+            for i, x in enumerate(xs):
+                zs[i] = x
+            for i, y in enumerate(ys):
+                zs[i + len(xs)] = y
+            return zs
+
+        @fp.fpy(ctx=fp.REAL)
+        def total(c: fp.Real) -> fp.Real:
+            with fp.FP32:
+                d = fp.round(c)
+            prods = [d for _ in range(8)]
+            return sum(join(prods, [d]))
+
+        fmt = FormatInfer.analyze(total.ast).fn_fmt.ret_fmt
+        assert fmt is not REAL_FORMAT, fmt
+        # nine FP32 values, so the sum is bounded by nine times the largest
+        af = AbstractFormat.from_format(fmt)
+        assert af.pos_bound == fp.FP32.maxval()._real * 9, fmt
+
+
 class TestRoundOntoACoarseGrid:
     """A round whose scope has the coarser quantum must keep the value.
 

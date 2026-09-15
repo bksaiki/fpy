@@ -128,6 +128,23 @@ Inferred array-size info for an expression or variable definition.
 - :class:`TupleSize` — heterogeneous tuple, per-element bounds preserved.
 """
 
+def _concrete_sizes(bound: ArraySizeBound) -> ArraySizeBound:
+    """*bound* with every non-concrete size dropped to ``None``.
+
+    Assumes *bound* is resolved.  Size variables are meaningful only within
+    the run that minted them, so this is what one run may hand another --
+    and what makes the bound a stable key for a callee's memo.
+    """
+    match bound:
+        case ListSize():
+            size = bound.size if isinstance(bound.size, int) else None
+            return ListSize(_concrete_sizes(bound.elt), size)
+        case TupleSize():
+            return TupleSize(tuple(_concrete_sizes(e) for e in bound.elts))
+        case _:
+            return None
+
+
 def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound) -> bool:
     """Structurally compare two (resolved) bounds, treating equal sizes
     at each level as equal."""
@@ -178,13 +195,21 @@ class _ArraySizeInferInstance(DefaultVisitor):
     gensym: Gensym
     _uf_changes: int
     _cond_depth: int
-    _callee_ret: dict[FuncDef, ArraySizeBound]
+    _arg_sizes: tuple[ArraySizeBound, ...] | None
+    _callee_ret: dict[tuple[FuncDef, tuple[ArraySizeBound, ...]], ArraySizeBound]
     _ctx_use_cache: ContextUseAnalysis | None
 
-    def __init__(self, func: FuncDef, partial_eval: PartialEvalInfo, type_info: TypeAnalysis):
+    def __init__(
+        self,
+        func: FuncDef,
+        partial_eval: PartialEvalInfo,
+        type_info: TypeAnalysis,
+        arg_sizes: tuple[ArraySizeBound, ...] | None = None,
+    ):
         self.func = func
         self.partial_eval = partial_eval
         self.type_info = type_info
+        self._arg_sizes = arg_sizes
         self.by_expr = {}
         self.by_def = {}
         self.ret_size = None
@@ -304,6 +329,27 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 return TupleSize(tuple(self._arg_bound(e) for e in ty.elts))
             case _:
                 return None
+
+    def _seed_arg(self, bound: ArraySizeBound, given: ArraySizeBound) -> ArraySizeBound:
+        """*bound* with each length the call site states concretely filled in.
+
+        *given* is a call site's argument bound.  Only its ``int`` sizes are
+        adopted: a size variable belongs to the caller's own run, so it says
+        nothing here (cf. :meth:`_refine_sizes`, the outbound rule).  An
+        annotated length wins over the call site, which cannot disagree with it.
+        """
+        match bound, given:
+            case ListSize(), ListSize():
+                size = bound.size
+                if isinstance(size, NamedId) and isinstance(given.size, int):
+                    size = given.size
+                return ListSize(self._seed_arg(bound.elt, given.elt), size)
+            case TupleSize(), TupleSize() if len(bound.elts) == len(given.elts):
+                return TupleSize(tuple(
+                    self._seed_arg(b, g) for b, g in zip(bound.elts, given.elts)
+                ))
+            case _:
+                return bound
 
     def _get_eval(self, e: Expr) -> Value | None:
         if e in self.partial_eval.by_expr:
@@ -715,25 +761,36 @@ class _ArraySizeInferInstance(DefaultVisitor):
     def _visit_call(self, e: Call, ctx: None):
         for arg in e.args:
             self._visit_expr(arg, ctx)
-        # Take the call's type shape, then overlay any concrete size the
-        # callee's own return-size analysis proved — a concrete callee
-        # ``ret_size`` is arg-independent, so it holds at every call site.
+        # Take the call's type shape, then overlay the size the callee's own
+        # return-size analysis proves for these arguments.
         shape = self._cvt_type(self.type_info.by_expr[e])
         return self._refine_sizes(shape, self._callee_ret_size(e))
 
     def _callee_ret_size(self, e: Call) -> ArraySizeBound:
-        """The callee's inferred return-size bound, or ``None`` when the
-        call target isn't an analyzable FPy function (primitive, context
-        constructor, or unbound call)."""
+        """The callee's inferred return-size bound at *this* call site, or
+        ``None`` when the call target isn't an analyzable FPy function
+        (primitive, context constructor, or unbound call).
+
+        The argument sizes go in with it: a callee returning ``len(xs) +
+        len(ys)`` has no arg-independent size to state, so analyzing it
+        without them loses the length outright.
+        """
         if not isinstance(e.fn, Function):
             return None
         callee = e.fn.ast
-        if callee not in self._callee_ret:
+        arg_sizes = tuple(
+            _concrete_sizes(self._resolve(self.by_expr.get(arg))) for arg in e.args
+        )
+        key = (callee, arg_sizes)
+        if key not in self._callee_ret:
             # The call graph is acyclic (enforced by ``TypeInfer.check``,
             # which has already run), so this recursion terminates;
-            # memoize so each callee is analyzed once per analysis run.
-            self._callee_ret[callee] = ArraySizeInfer.analyze(callee).ret_size
-        return self._callee_ret[callee]
+            # memoize so each callee is analyzed once per signature, which
+            # the loop fixpoint asks for repeatedly.
+            self._callee_ret[key] = ArraySizeInfer.analyze(
+                callee, arg_sizes=arg_sizes,
+            ).ret_size
+        return self._callee_ret[key]
 
     def _refine_sizes(self, shape: ArraySizeBound, src: ArraySizeBound) -> ArraySizeBound:
         """Overlay concrete sizes from *src* onto the structural *shape*.
@@ -920,11 +977,16 @@ class _ArraySizeInferInstance(DefaultVisitor):
         return ty
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        # arguments and free variables: list params get a fresh size var
-        for arg, ty in zip(func.args, self.type_info.arg_types):
+        # arguments and free variables: a list param gets the length its call
+        # site states, else a fresh size var
+        given = self._arg_sizes or ()
+        for i, (arg, ty) in enumerate(zip(func.args, self.type_info.arg_types)):
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                self.by_def[d] = self._arg_bound(ty)
+                bound = self._arg_bound(ty)
+                if i < len(given):
+                    bound = self._seed_arg(bound, given[i])
+                self.by_def[d] = bound
         for fv in func.free_vars:
             d = self.def_use.find_def_from_site(fv, func)
             ty = self.type_info.by_def[d]
@@ -945,6 +1007,7 @@ class ArraySizeInfer:
         *,
         partial_eval: PartialEvalInfo | None = None,
         type_info: TypeAnalysis | None = None,
+        arg_sizes: tuple[ArraySizeBound, ...] | None = None,
     ) -> ArraySizeAnalysis:
         """Analyze a function definition to infer array sizes.
 
@@ -952,6 +1015,8 @@ class ArraySizeInfer:
             func: Function definition to analyze.
             partial_eval: Optional pre-computed partial-evaluation info.
             type_info: Optional pre-computed type analysis.
+            arg_sizes: Optional per-parameter bounds from a call site; their
+                concrete lengths seed the parameters.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
@@ -961,4 +1026,4 @@ class ArraySizeInfer:
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=partial_eval.def_use)
 
-        return _ArraySizeInferInstance(func, partial_eval, type_info).analyze()
+        return _ArraySizeInferInstance(func, partial_eval, type_info, arg_sizes).analyze()
