@@ -1714,15 +1714,50 @@ class _FormatInferInstance(Visitor):
         a, b = cond.args
         out: list[tuple[Definition, AbstractFormat]] = []
         for x, y, o in ((a, b, op), (b, a, op.invert())):
-            if not isinstance(x, Var) or not isinstance(y, RationalVal):
+            if not isinstance(y, RationalVal):
                 continue
             c = y.as_rational()
+            if isinstance(x, Abs) and isinstance(x.arg, Var):
+                out += self._implied_magnitude(x.arg, o, c)
+                continue
+            if not isinstance(x, Var):
+                continue
             d = self.def_use.find_def_from_use(x)
             cons = _magnitude_constraint(o, c)
             if cons is not None:
                 out.append((d, cons))
             out += self._implied_logb(d, o, c)
         return out
+
+    def _implied_magnitude(
+        self, v: Var, op: CompareOp, c: Fraction
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        """What `abs(v) op c` says about *v*.
+
+        An upper bound holds on both sides at once, which a comparison against
+        `v` itself states on only one.  A lower bound is not statable as a bound
+        -- this domain has no "away from zero" -- but it pins the finest digit
+        `v` carries, which is what :meth:`_implied_logb` reads out of the same
+        fact spelled `logb(v) >= k`.
+        """
+        if not is_dyadic(c):
+            # a rounded bound could be tighter than the truth
+            return []
+        d = self.def_use.find_def_from_use(v)
+        b = RealFloat.from_rational(c)
+        if op in (CompareOp.LT, CompareOp.LE) and c >= 0:
+            return [(d, _unconstrained(pos_bound=b, neg_bound=-b))]
+        if op in (CompareOp.GE, CompareOp.GT) and c > 0:
+            # the stored bound, for the reason `_implied_logb` gives
+            fmt = self.by_def.get(d)
+            if not isinstance(fmt, AbstractableFormat):
+                return []
+            prec = AbstractFormat.from_format(fmt).prec
+            if not isinstance(prec, int):
+                return []       # unbounded precision pins no position
+            # `|v| >= 2 ** b.e`, so no digit finer than `b.e - p + 1`
+            return [(d, _unconstrained(exp=b.e - prec + 1))]
+        return []
 
     def _implied_logb(
         self, d: Definition, op: CompareOp, c: Fraction

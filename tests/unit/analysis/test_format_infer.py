@@ -2757,6 +2757,83 @@ class TestSelectTightens:
             == fp.RealFloat.from_int(0)
 
 
+class TestMagnitudeRefinement:
+    """``abs(x)`` compared against a literal says more than ``x`` does.
+
+    An upper bound holds on both sides at once, and a lower bound -- which no
+    bound in this domain can state -- still pins the finest digit ``x`` carries,
+    the same fact `logb(x) >= k` gives.
+    """
+
+    @staticmethod
+    def _defs(func, src=fp.FP32):
+        from fpy2.transform import Monomorphize
+        info = FormatInfer.analyze(
+            Monomorphize.apply(func.ast, None, [RealType(src)]))
+        return {d.name.base: b for d, b in info.by_def.items()}
+
+    @staticmethod
+    def _af(bound) -> AbstractFormat:
+        return AbstractFormat.from_format(bound)
+
+    def test_an_upper_test_bounds_both_sides(self):
+        """What ``x < c`` cannot do: it leaves the negative side at the
+        operand's own bound."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if abs(x) < 64:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        af = self._af(self._defs(f)['y'])
+        assert float(af.pos_bound) == 64.0
+        assert float(af.neg_bound) == -64.0
+
+    def test_a_lower_test_pins_the_finest_digit(self):
+        """``abs(x) >= 2 ** -14`` with 24 bits of precision leaves no digit
+        below ``2 ** -37``."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if abs(x) < fp.rational(1, 16384):
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        assert self._af(self._defs(f)['y']).exp == -14 - 24 + 1
+
+    def test_it_agrees_with_the_logb_spelling(self):
+        """The same fact stated either way gives the same position."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            e = fp.logb(x)
+            if e < -14:
+                y = 0
+            else:
+                with fp.REAL:
+                    y = x * 1
+            return y
+
+        assert self._af(self._defs(f)['y']).exp == -14 - 24 + 1
+
+    def test_a_non_dyadic_literal_refines_nothing(self):
+        """A rounded bound could be tighter than the truth."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if abs(x) < fp.rational(1, 3):
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        assert float(self._af(self._defs(f)['y']).pos_bound) == float(fp.FP32.maxval())
+
+
 class TestBranchRefinement:
     """A comparison against a literal bounds the variable it tests, in the arm
     where the comparison holds.
