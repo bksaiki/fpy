@@ -14,6 +14,8 @@ The context's edges become assertions around it: an operand it has no result
 for, and a result past its bound.
 """
 
+import re
+
 import pytest
 
 import fpy2 as fp
@@ -262,17 +264,17 @@ class TestStorageFromTheInferredFormat:
         )
 
     def test_the_context_alone_has_no_storage(self):
-        """The premise: nothing to pick from the context, so the old rule had
-        nothing to say."""
+        """The premise: the context names no type, so one has to come from
+        elsewhere."""
         from fpy2.backend.cpp.storage import StorageSelectionError, choose_storage
 
         with pytest.raises(StorageSelectionError):
             choose_storage(fp.MPFixedContext(-1).format())
 
     def test_a_rescaled_rounding_compiles(self):
+        """The libm rounding, in the type the inferred format chose."""
         out = self._compile(self._rescaled())
-        assert 'std::nearbyint' in out
-        assert 'double _t8' in out or 'double _tmp' in out
+        assert re.search(r'double \w+ = std::nearbyint\(', out), out
 
     def test_the_bound_it_asserts_comes_from_the_analysis(self):
         """The context states no bound, so the assertion carries the inferred
@@ -282,9 +284,9 @@ class TestStorageFromTheInferredFormat:
         # a finite magnitude test, not a context-stated maxval
         assert 'std::fabs' in out
 
-    def test_arithmetic_under_the_same_context_is_still_refused(self):
-        """Deferring the scope's check does not let other ops through: storage
-        selection refuses a value the context's own format cannot hold."""
+    def test_an_unstorable_value_is_still_refused(self):
+        """Deferring the scope's check lets no value through that no type
+        holds: storage selection asks the same question per value."""
 
         @fp.fpy(ctx=fp.REAL)
         def g(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -294,6 +296,23 @@ class TestStorageFromTheInferredFormat:
         with pytest.raises(CppCompileError, match='no storage format contains'):
             CppCompiler(optimize=False).compile(
                 g, arg_types=[RealType(fp.FP32), RealType(fp.FP32)])
+
+    def test_arithmetic_is_still_refused_where_the_value_is_storable(self):
+        """And where it does hold one, the op table refuses: a signature
+        matches only its own context, and no native context is this one.  Only
+        a rounding is lowered under a context with no storage."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.MPFixedContext(-1):
+                b = a * a
+            return b
+
+        with pytest.raises(CppCompileError, match='no matching signature'):
+            CppCompiler(optimize=False).compile(
+                g, arg_types=[RealType(fp.FP64)])
 
 
 class TestFloatContextUnaffected:
