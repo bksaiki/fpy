@@ -10,6 +10,7 @@ The classification belongs to the backend because :func:`is_native_ctx` does.
 The operators it names are backend-independent, and none of them changes.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
 
@@ -34,11 +35,14 @@ from ...number import (
 from ...number.context.context import Context
 from ...transform import (
     Cursor,
+    EditLog,
     ExprCursor,
     FloatToFixed,
     RescaleFixed,
     SplitRound,
+    StmtCursor,
     TransformDeclined,
+    TransformReferenceError,
     UnfoldOverflow,
     UnfoldSpecial,
 )
@@ -278,6 +282,36 @@ def unfold_arith(func: FuncDef) -> FuncDef:
     return func
 
 
+_LADDER: tuple[Callable[[FuncDef, Cursor], EditLog], ...] = (
+    lambda f, w: UnfoldSpecial.apply_with_edits(f, where=w),
+    lambda f, w: UnfoldOverflow.apply_with_edits(f, where=w, early_check=True),
+    lambda f, w: FloatToFixed.apply_with_edits(f, where=w),
+    lambda f, w: RescaleFixed.apply_with_edits(f, where=w),
+)
+"""The sequence of `docs/todos/native-lowering-roadmap.md`, one rounding at a
+time."""
+
+
+def _lower_at(
+    func: FuncDef, anchors: list[Cursor], i: int
+) -> tuple[FuncDef, list[Cursor]]:
+    """*func* with the rounding at `anchors[i]` expressed as integer
+    arithmetic, and every anchor carried across what that took.
+
+    A step that declines is an ordinary outcome -- the two rows of the ladder
+    are the same call with different steps applying -- and leaves both
+    unchanged.
+    """
+    for step in _LADDER:
+        try:
+            log = step(func, anchors[i])
+        except (TransformDeclined, TransformReferenceError):
+            continue
+        func = log.result
+        anchors = [log.forward(a) for a in anchors]
+    return func, anchors
+
+
 def _unfold_roundings(func: FuncDef) -> FuncDef:
     """*func* with every rounding the op table cannot spell expressed as
     integer arithmetic.
@@ -288,20 +322,28 @@ def _unfold_roundings(func: FuncDef) -> FuncDef:
     before `FloatToFixed`, so the latter sees an unbounded format and does the
     position axis alone.
 
-    One pass, not a fixpoint: each step selects its own candidates, so the two
-    rows of the ladder -- a non-native float context, and a fixed-point one the
-    backend cannot lower -- are the same call with different steps declining.
+    One pass per site, not a fixpoint: each step selects its own candidates, so
+    the two rows of the ladder -- a non-native float context, and a fixed-point
+    one the backend cannot lower -- are the same call with different steps
+    declining.
 
-    Each pass finds its own sites by active context, so a rounding written
-    under a `with` and one under the function's own annotation are the same
-    thing to it.  There is nothing here to put the block shape back.
+    *Aimed*, not run over the whole program.  Each pass finds its sites by
+    active context, so left to itself it would lower the roundings the emitter
+    already spells too -- correct, and pure waste.  The sites are this
+    module's, and they are pinned before anything moves.
     """
-    if not any(s.kind is not UnfoldKind.ARITH for s in sites(func)):
+    todo = [s for s in sites(func) if s.kind is not UnfoldKind.ARITH]
+    if not todo:
         return func
-    func = UnfoldSpecial.apply(func)
-    func = UnfoldOverflow.apply(func, early_check=True)
-    func = FloatToFixed.apply(func)
-    return RescaleFixed.apply(func)
+    # the anchor is the *statement* holding the rounding: each step consumes
+    # the rounding it acts on, so the expression `sites` reported names nothing
+    # afterwards, while the statement survives with what replaced it beneath
+    anchors: list[Cursor] = [
+        StmtCursor(func, s.cursor.path.stmt()) for s in todo
+    ]
+    for i in range(len(anchors)):
+        func, anchors = _lower_at(func, anchors, i)
+    return func
 
 
 def unfold(func: FuncDef, mode: UnfoldMode) -> FuncDef:

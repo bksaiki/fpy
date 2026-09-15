@@ -393,16 +393,46 @@ say so in `sites()`.
 
 ## Left over
 
-Two things this work surfaced but did not fix:
-
 - **`RoundAt` is a site for none of the five.**  `ScopedRoundingRewriter`
   matches `Round` and `Cast`; `fp.round_at` rounds at an absolute position and
   is a `NamedBinaryOp`, so it falls outside.  The cpp emitter refuses it
-  already (`emitter.py`'s `_unsupported('RoundAt')`), so nothing regressed —
-  but a rounding operator the scheduling language cannot aim at is a gap.
-- **The cpp ladder rewrites roundings the emitter already spells.**  Measured
-  in Phase 5 and pre-existing: `_unfold_roundings` runs its four passes with
-  `where=None`, so a native `FP32` rounding beside a non-native one is lowered
-  to an integer ladder for nothing.  Correct, just wasteful, and no test covers
-  it.  The fix has the shape of `unfold_arith`: re-derive sites after each
-  rewrite and aim one at a time, anchored on the statement.
+  already (`emitter.py`'s `_unsupported('RoundAt')`), so nothing regressed.
+  **Accepted as-is** — not a gap worth closing.
+
+## Phase 7 — aim the cpp ladder
+
+`_unfold_roundings` ran its four passes with `where=None`.  Each finds its own
+sites by active context, so it lowered every rounding in the program, including
+the ones the emitter spells natively.  Pre-existing, and measured in Phase 5 —
+but not something to keep.
+
+The sites are this module's: `sites(func)` already reports exactly the
+roundings the emitter would refuse.  So pin one **statement** anchor per site
+before anything moves (the rounding itself is consumed by the first step — see
+"Pinning a point across a sequence"), then run the ladder at each anchor in
+turn, carrying every anchor across each step's `EditLog`:
+
+```python
+anchors = [StmtCursor(func, s.cursor.path.stmt()) for s in todo]
+for i in range(len(anchors)):
+    func, anchors = _lower_at(func, anchors, i)
+```
+
+A step that declines is an ordinary outcome and leaves both unchanged, so the
+two rows of the ladder stay the same call.  No fixpoint: one pass per site.
+
+Measured on two programs pairing a native `FP32` rounding with a non-native
+`FP16` one — `fp.logb` is the ladder's signature, one per lowered rounding:
+
+```
+                   sites   logb before   logb after   compiles before/after
+mixed                  1             2            1         no  /  yes
+annotated_mixed        1             2            1         no  /  yes
+```
+
+Both previously failed to compile: lowering the native rounding produced an
+intermediate the emitter could not spell either.  Aiming the ladder is a strict
+improvement, not just a saving.  Pinned by
+`test_a_native_rounding_beside_a_lowered_one_is_left_alone` and
+`..._still_round_trips` (a full bit-exact round-trip over every `FP32` input)
+in `tests/unit/backend/cpp/test_lowered_roundtrip.py`.

@@ -29,11 +29,12 @@ import pytest
 
 import fpy2 as fp
 import fpy2.strategies as st
+from fpy2.backend.cpp import unfold_round
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.unfold_round import UnfoldMode
 from fpy2.module import Module
-from fpy2.strategies import FuncBody, StmtCursor
 from fpy2.number import EFloatContext, EFloatNanKind, RealFloat
+from fpy2.strategies import FuncBody, StmtCursor
 from fpy2.types import RealType
 
 _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
@@ -258,6 +259,47 @@ class TestLoweredRoundtrip:
         assert r.returncode == 0, (
             f'needs the support library after all:\n{r.stderr[-2000:]}'
         )
+
+
+# ----------------------------------------------------------------------
+# What the compiler's own lowering leaves alone
+
+
+def _native_beside_lowered() -> fp.Function:
+    """One rounding the emitter spells, one it refuses.  Named `q` because the
+    driver calls it that."""
+    @fp.fpy(ctx=fp.REAL)
+    def q(x: fp.Real) -> fp.Real:
+        with fp.FP32:
+            a = fp.round(x)
+        with fp.FP16:
+            b = fp.round(x)
+        with fp.FP32:
+            c = a + b
+        return c
+    return q
+
+
+def test_a_native_rounding_beside_a_lowered_one_is_left_alone():
+    """The compiler aims the ladder at the roundings it would refuse.
+
+    Each pass finds its own sites by active context, so run over the whole
+    program it would lower the `FP32` rounding too -- correct, and pure waste.
+    The `logb` count is the ladder's signature: one per lowered float rounding.
+    """
+    ref = st.monomorphize(_native_beside_lowered(), args=[RealType(fp.FP32)])
+    assert len(unfold_round.sites(ref.ast)) == 1
+
+    out = unfold_round.unfold(ref.ast, UnfoldMode.DOUBLE_ROUND)
+    assert out.format().count('fp.logb') == 1
+    assert not unfold_round.sites(out)
+
+
+def test_a_native_rounding_beside_a_lowered_one_still_round_trips():
+    """...and the program the compiler emits for it agrees with the
+    interpreter over every `FP32` input."""
+    ref = st.monomorphize(_native_beside_lowered(), args=[RealType(fp.FP32)])
+    _diff(ref, ref, fp.FP32, fp.FP32.nbits, via_flag=True)
 
 
 # ----------------------------------------------------------------------
