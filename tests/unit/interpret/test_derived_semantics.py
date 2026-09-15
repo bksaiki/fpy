@@ -925,8 +925,8 @@ class TestLists:
     def test_shape_queries_do_not_round(self):
         """``len`` / ``dim`` / ``size`` answer a shape, not a computation, so
         the active context does not round it -- a quantum coarser than the
-        length used to report zero.  The cpp backend already emits all three
-        exactly."""
+        length would otherwise drive it to zero.  The cpp backend emits all
+        three exactly."""
         C = fp.MPFixedContext(4)          # quantum 2**5 = 32
 
         @fp.fpy(ctx=fp.REAL)

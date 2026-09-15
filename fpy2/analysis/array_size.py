@@ -129,11 +129,10 @@ Inferred array-size info for an expression or variable definition.
 """
 
 def _concrete_sizes(bound: ArraySizeBound) -> ArraySizeBound:
-    """*bound* with every non-concrete size dropped to ``None``.
+    """*bound* (resolved) with every non-concrete size dropped to ``None``.
 
-    Assumes *bound* is resolved.  Size variables are meaningful only within
-    the run that minted them, so this is what one run may hand another --
-    and what makes the bound a stable key for a callee's memo.
+    A size variable means nothing outside the run that minted it, so dropping
+    them is what makes the bound a stable key for a callee's memo.
     """
     match bound:
         case ListSize():
@@ -181,6 +180,32 @@ class ArraySizeAnalysis:
 #####################################################################
 # Internal analysis visitor
 
+_CalleeSignature: TypeAlias = 'tuple[FuncDef, tuple[ArraySizeBound, ...]]'
+
+
+class _CalleeCache:
+    """Shared by an analysis and every callee analysis under it.
+
+    Both keys are run-independent -- the structural pre-analyses are a property
+    of the callee, and a signature holds only concrete sizes -- so sharing keeps
+    a diamond-shaped call graph from re-analyzing a callee on every path to it.
+    """
+
+    pre: dict[FuncDef, tuple[PartialEvalInfo, TypeAnalysis]]
+    ret: dict[_CalleeSignature, ArraySizeBound]
+
+    def __init__(self):
+        self.pre = {}
+        self.ret = {}
+
+    def analyses(self, func: FuncDef) -> tuple[PartialEvalInfo, TypeAnalysis]:
+        if func not in self.pre:
+            partial_eval = PartialEval.apply(func)
+            type_info = TypeInfer.check(func, def_use=partial_eval.def_use)
+            self.pre[func] = (partial_eval, type_info)
+        return self.pre[func]
+
+
 class _ArraySizeInferInstance(DefaultVisitor):
     """Single-use visitor that performs array-size inference."""
 
@@ -196,7 +221,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     _uf_changes: int
     _cond_depth: int
     _arg_sizes: tuple[ArraySizeBound, ...] | None
-    _callee_ret: dict[tuple[FuncDef, tuple[ArraySizeBound, ...]], ArraySizeBound]
+    _cache: _CalleeCache
     _ctx_use_cache: ContextUseAnalysis | None
 
     def __init__(
@@ -205,6 +230,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         partial_eval: PartialEvalInfo,
         type_info: TypeAnalysis,
         arg_sizes: tuple[ArraySizeBound, ...] | None = None,
+        cache: _CalleeCache | None = None,
     ):
         self.func = func
         self.partial_eval = partial_eval
@@ -221,7 +247,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         # Nesting depth in conditionally-executed regions (if / loop
         # bodies); only depth-0 asserts hold on every execution.
         self._cond_depth = 0
-        self._callee_ret = {}
+        self._cache = _CalleeCache() if cache is None else cache
         self._ctx_use_cache = None
 
     @contextmanager
@@ -329,27 +355,6 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 return TupleSize(tuple(self._arg_bound(e) for e in ty.elts))
             case _:
                 return None
-
-    def _seed_arg(self, bound: ArraySizeBound, given: ArraySizeBound) -> ArraySizeBound:
-        """*bound* with each length the call site states concretely filled in.
-
-        *given* is a call site's argument bound.  Only its ``int`` sizes are
-        adopted: a size variable belongs to the caller's own run, so it says
-        nothing here (cf. :meth:`_refine_sizes`, the outbound rule).  An
-        annotated length wins over the call site, which cannot disagree with it.
-        """
-        match bound, given:
-            case ListSize(), ListSize():
-                size = bound.size
-                if isinstance(size, NamedId) and isinstance(given.size, int):
-                    size = given.size
-                return ListSize(self._seed_arg(bound.elt, given.elt), size)
-            case TupleSize(), TupleSize() if len(bound.elts) == len(given.elts):
-                return TupleSize(tuple(
-                    self._seed_arg(b, g) for b, g in zip(bound.elts, given.elts)
-                ))
-            case _:
-                return bound
 
     def _get_eval(self, e: Expr) -> Value | None:
         if e in self.partial_eval.by_expr:
@@ -772,8 +777,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         (primitive, context constructor, or unbound call).
 
         The argument sizes go in with it: a callee returning ``len(xs) +
-        len(ys)`` has no arg-independent size to state, so analyzing it
-        without them loses the length outright.
+        len(ys)`` has no size to state without them.
         """
         if not isinstance(e.fn, Function):
             return None
@@ -782,27 +786,25 @@ class _ArraySizeInferInstance(DefaultVisitor):
             _concrete_sizes(self._resolve(self.by_expr.get(arg))) for arg in e.args
         )
         key = (callee, arg_sizes)
-        if key not in self._callee_ret:
+        if key not in self._cache.ret:
             # The call graph is acyclic (enforced by ``TypeInfer.check``,
-            # which has already run), so this recursion terminates;
-            # memoize so each callee is analyzed once per signature, which
-            # the loop fixpoint asks for repeatedly.
-            self._callee_ret[key] = ArraySizeInfer.analyze(
-                callee, arg_sizes=arg_sizes,
-            ).ret_size
-        return self._callee_ret[key]
+            # which has already run), so this recursion terminates.
+            partial_eval, type_info = self._cache.analyses(callee)
+            self._cache.ret[key] = _ArraySizeInferInstance(
+                callee, partial_eval, type_info, arg_sizes, self._cache,
+            ).analyze().ret_size
+        return self._cache.ret[key]
 
     def _refine_sizes(self, shape: ArraySizeBound, src: ArraySizeBound) -> ArraySizeBound:
         """Overlay concrete sizes from *src* onto the structural *shape*.
 
-        *shape* (from the call's type) has the correct shape; *src* (the
-        callee's ``ret_size``) may carry concrete sizes but — for a
-        generic callee monomorphized at this site — a possibly different
-        element shape.  Where shapes agree, prefer *src*'s concrete size;
-        on any mismatch, keep *shape* unchanged.
+        Where the two shapes agree, *src*'s concrete size wins; on any mismatch
+        *shape* is kept, since a generic callee monomorphized at one site can
+        have a different element shape there.
 
-        Only *concrete* ``int`` sizes are adopted: a *src* size variable
-        belongs to the callee's own run and must not leak across the call.
+        Only *concrete* ``int`` sizes are adopted: a size variable belongs to
+        the run that minted it and must not cross a call in either direction --
+        a callee's ``ret_size`` coming out, a call site's argument going in.
         """
         match shape, src:
             case ListSize(), ListSize():
@@ -985,7 +987,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 d = self.def_use.find_def_from_site(arg.name, arg)
                 bound = self._arg_bound(ty)
                 if i < len(given):
-                    bound = self._seed_arg(bound, given[i])
+                    bound = self._refine_sizes(bound, given[i])
                 self.by_def[d] = bound
         for fv in func.free_vars:
             d = self.def_use.find_def_from_site(fv, func)

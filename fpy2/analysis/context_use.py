@@ -62,8 +62,7 @@ class ContextUseAnalysis:
     uses: dict[ContextScope, set[ContextUseSite]]
     """mapping from context scope to use sites.
 
-    Only operators that actually consult the context are recorded; see
-    :data:`_CTX_FREE_OPS` for the ones left out.  An empty set therefore means
+    Only operators that consult the context are recorded, so an empty set means
     the scope is unobservable, not merely that its block is empty.
 
     A key here need not be in :attr:`scopes`: **E-Context** evaluates a

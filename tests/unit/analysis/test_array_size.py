@@ -1929,9 +1929,8 @@ class TestArithmeticOverLengths:
 class TestSizeAcrossACall:
     """A callee's return size is asked for *at the call site*.
 
-    ``join`` returns ``len(xs) + len(ys)``, so it has no size to state on its
-    own -- analyzing it without argument sizes lost the length outright, and
-    ``FormatInfer._sum_bound`` then had no count for a sum over the result.
+    ``join`` returns ``len(xs) + len(ys)``, so it has no size of its own to
+    state: the count exists only where the arguments do.
     """
 
     @staticmethod

@@ -3,7 +3,6 @@ Mathematical functions under rounding contexts.
 """
 
 from fractions import Fraction
-from unittest import case
 
 from .number import INTEGER, REAL, Context, Float, Real, RealFloat
 from .number.engine import ENGINES
@@ -1020,8 +1019,8 @@ def dim(x: list, ctx: Context = REAL):
 
     Assumes that `x` is not a ragged tensor.
 
-    A shape query, so the answer is an exact integer: `ctx` is accepted for
-    uniformity and ignored, as it is for the other queries and projections.
+    A shape query: the answer is an exact integer, so `ctx` is accepted for
+    uniformity and ignored (as it is by the other queries and projections).
     """
     # `dim` is list-only in FPy (matches `TypeInfer`, which unifies `Dim`'s
     # argument with a list type); reject a non-list operand rather than
@@ -1046,8 +1045,8 @@ def size(x: list, dim: Real, ctx: Context = REAL):
 
     Assumes that `x` is not a ragged tensor.
 
-    A shape query, so the answer is an exact integer: `ctx` is accepted for
-    uniformity and ignored, as it is for the other queries and projections.
+    A shape query: the answer is an exact integer, so `ctx` is accepted for
+    uniformity and ignored (as it is by the other queries and projections).
     """
     dim = _cvt_to_float(dim)
     # size(x, n) = len(x[0]...[0]), n indices deep

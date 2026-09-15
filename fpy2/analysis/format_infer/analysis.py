@@ -1833,35 +1833,24 @@ class _FormatInferInstance(Visitor):
         e: ContextUseSite,
         exact: SetFormat | AbstractFormat | None,
     ) -> FormatBound | None:
-        """Return the format of ``round_C(exact)``, where ``C`` is *e*'s
-        active scope and *exact* is the statically-known unrounded
-        result.  Returns ``None`` only when the helper can't compute a
-        usable bound (no *exact*, symbolic scope, non-abstractable
-        scope format, or :class:`SetFormat` that doesn't fit — the
-        last case becomes precise in Phase B).
+        """Return the format of ``round_C(exact)``, where ``C`` is *e*'s active
+        scope and *exact* is the statically-known unrounded result.
 
         Two regimes:
 
-        - ``exact ⊆ C``: every value is C-representable, so ``round_C``
-          is the identity and the inferred bound *is* ``exact`` — strict
-          improvement over the scope's format.  This is the case the
-          helper handled exclusively before; the name reflects that
-          legacy intent.
+        - ``exact ⊆ C``: every value is C-representable, so ``round_C`` is the
+          identity and the inferred bound *is* ``exact`` — strictly tighter
+          than the scope's format.  :data:`REAL` always lands here.
 
-        - ``exact ⊄ C`` (some dimension exceeds the scope but others
-          may be tighter): the image ``round_C(exact)`` is bounded by
-          the intersection ``exact & C`` at the
-          :class:`AbstractFormat` level (precision clipped down to
-          ``C``'s, quantum coarsened to ``max(F.exp, C.exp)``, magnitude
-          clipped to ``min(F.bound, C.bound)``).  The intersection is
-          a sound over-approximation of the image and is at most as
-          wide as ``C``.  Phase A widens to ``F & C`` here; Phase B
-          will additionally compute the precise value-image for
-          :class:`SetFormat` operands via :meth:`Context.round`.
+        - ``exact ⊄ C``: some dimension exceeds the scope, but others may be
+          tighter, so the image is bounded by the intersection ``exact & C``
+          at the :class:`AbstractFormat` level (precision clipped to ``C``'s,
+          quantum coarsened, magnitude clipped) -- a sound over-approximation
+          at most as wide as ``C``.
 
-        :data:`REAL` is the case where ``C.F`` trivially contains every
-        value (intersection equals *exact*).  Symbolic scopes return
-        ``None`` — we can't apply rounding to an unknown context.
+        ``None`` where no usable bound follows: no *exact*, a symbolic scope
+        (rounding to an unknown context says nothing), a non-abstractable scope
+        format, or a :class:`SetFormat` that doesn't fit.
         """
         if exact is None:
             return None
@@ -1869,21 +1858,17 @@ class _FormatInferInstance(Visitor):
         if resolved is None:
             return None
         # Under loop-fixpoint widening, bail to the scope format via
-        # :meth:`_op_bound`.  Both the REAL identity shortcut and the
-        # intersection branch below grow the inferred format every
-        # iteration as the unrounded chain grows, which prevents
-        # convergence — same intent as the widen-to-REAL branches in
+        # :meth:`_op_bound`: both branches below grow the inferred format
+        # every iteration as the unrounded chain grows, so neither
+        # converges.  Same intent as the widen-to-REAL branches in
         # :func:`_join_bounds`.
         if self._widen:
             return None
         if resolved is REAL:
             return exact if isinstance(exact, SetFormat) else exact.format()
-        # Identity-round fast path: when ``round_C(F) == F``, the
-        # rounded image equals *exact* itself.  Both the SetFormat
-        # fits-everywhere case and the AbstractFormat
-        # ``F ⊆ scope_af`` case collapse into this single check —
-        # single-sourced via :func:`round_is_identity` so external
-        # consumers (e.g. ``RoundElim``) see the same notion.
+        # Identity-round fast path: when ``round_C(F) == F``, the rounded
+        # image is *exact* itself.  Via :func:`round_is_identity`, so
+        # external consumers (e.g. ``RoundElim``) share the notion.
         scope_fmt = resolved.format()
         if round_is_identity(exact, resolved):
             if isinstance(exact, SetFormat):
@@ -1900,20 +1885,16 @@ class _FormatInferInstance(Visitor):
         if scope_af <= exact:
             return scope_fmt
 
-        # Mixed-overlap branch.  Tighten prec/exp unconditionally — both are
-        # sound under any rounding mode.
-        #
-        # Bounds are the pitfall: ``round_C(F.pos_bound)`` lands *above*
-        # F.pos_bound whenever C does not hold it exactly, so a bare
-        # ``min(F.pos_bound, C.pos_bound)`` under-claims the image.  Off C's
-        # grid the round goes to the next point on it, which is
-        # ``round_bound_out`` -- without it ``round(FP32_MAX)`` at quantum
-        # ``2**128`` keeps a bound of ``FP32_MAX``, a set holding only zero.
-        # Past C's precision nothing local says where the round lands, so
-        # ``F.prec > C.prec`` keeps C's bounds; under that gate the
+        # Mixed-overlap branch.  prec/exp tighten unconditionally -- both are
+        # sound under any rounding mode.  Bounds are the pitfall:
+        # ``round_C(F.pos_bound)`` lands *above* F.pos_bound whenever C does
+        # not hold it exactly, so a bare ``min`` under-claims the image.  Off
+        # C's grid, ``round_bound_out`` carries the bound to the next point on
+        # it; past C's precision nothing says where the round lands, so
+        # ``F.prec > C.prec`` keeps C's bounds instead.  Under that gate the
         # grid-rounded bound has at most C.prec significant bits and sits on
         # C's grid, so C holds it exactly.  ``int | float`` comparison works
-        # directly with the ``float('inf')`` sentinel used for unbounded prec.
+        # directly with the ``float('inf')`` unbounded-prec sentinel.
         prec = min(exact.prec, scope_af.prec)
         exp = max(exact.exp, scope_af.exp)
         if exact.prec > scope_af.prec:
@@ -1922,7 +1903,20 @@ class _FormatInferInstance(Visitor):
         else:
             pos_bound = min(round_bound_out(exact.pos_bound, exp), scope_af.pos_bound)
             neg_bound = max(round_bound_out(exact.neg_bound, exp), scope_af.neg_bound)
-        overlap = AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
+        # Specials the image can hold.  It lies inside C, so C gates each one:
+        # a magnitude past C's bound lands on C's infinity, and a negative
+        # value rounding to zero keeps C's ``-0``.  Dropping them (the
+        # constructor's default) excludes values the program computes.
+        overlap = AbstractFormat(
+            prec, exp, pos_bound, neg_bound=neg_bound,
+            has_pos_inf=scope_af.has_pos_inf and (
+                exact.has_pos_inf or exact.pos_bound > scope_af.pos_bound),
+            has_neg_inf=scope_af.has_neg_inf and (
+                exact.has_neg_inf or exact.neg_bound < scope_af.neg_bound),
+            has_nan=scope_af.has_nan and exact.has_nan,
+            has_neg_zero=scope_af.has_neg_zero and (
+                exact.has_neg_zero or exact.neg_bound < 0),
+        )
         return self._materialize_in_scope(overlap, scope_fmt)
 
     @staticmethod

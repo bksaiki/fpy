@@ -37,9 +37,9 @@ AbstractableFormat: TypeAlias = (
 def round_bound_out(bound: RealFloat | float, exp: int | float) -> RealFloat | float:
     """*bound* rounded away from zero onto the grid `2**exp` defines.
 
-    A bound off that grid is not a value the grid holds, and rounding carries it
-    to the next grid point *outward*, so this is what a bound becomes when the
-    quantum coarsens under it.  An unbounded bound or grid has nothing to round.
+    Rounding carries a bound off that grid to the next point *outward*, so this
+    is what a bound becomes when the quantum coarsens under it.  An unbounded
+    bound or grid has nothing to round.
     """
     if isinstance(bound, float) or isinstance(exp, float):
         return bound
