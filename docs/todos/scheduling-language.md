@@ -12,7 +12,7 @@ Each item says what transfers and what it fixes here.
 
 Failure used to be inconsistent: an out-of-range `where` raised `ValueError`
 in `inline`, `split`, and `unroll_for`, but silently no-opped in the
-`BlockRewriter`-based rounding operators, and a *declined* rewrite —
+block-based rounding operators, and a *declined* rewrite —
 `agrees` refusing a format it cannot reproduce — was also a silent no-op, so
 "it worked" and "nothing happened" printed the same.
 
@@ -54,8 +54,8 @@ invalidity and the reason.
 Roly-poly's central result: enumerating the valid next choices, with instant
 feedback per step, is what made novices productive (schedules ~5× faster than
 manual text scheduling). The enumeration already exists internally — each
-transform scans for its candidates (`BlockRewriter._candidate`, the loop and
-call scans) — it is just not exposed.
+transform scans for its candidates (`ScopedRoundingRewriter._candidate`, the
+loop and call scans) — it is just not exposed.
 
 - A way to list a strategy's candidate sites with source locations, so
   `where=2` is inspectable before choosing it and explicable after.

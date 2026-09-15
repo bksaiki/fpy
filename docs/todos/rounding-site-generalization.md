@@ -327,9 +327,10 @@ sequence" for why not the rounding).
   rescale_fixed → simplify` and never mentions `_isolate`, so the sequence is
   still accurate. Add one line recording that the passes now find their sites
   by active context, which is why the backend no longer synthesizes blocks.
-- Note in `docs/todos/rounding-operator-basis.md` (or here) that `RoundAt` is
-  still matched by none of the five — `fp.round_at` is a real operator the cpp
-  emitter already refuses, and generalizing the gate does not change that.
+- Note that `RoundAt` is still matched by none of the five — `fp.round_at` is
+  a real operator the cpp emitter already refuses, and generalizing the gate
+  did not change that.  It is recorded under "Left over" below rather than in
+  a sibling page.
 
 ```
 python -m pytest tests/unit/strategies/ -q
@@ -389,3 +390,19 @@ say so in `sites()`.
   has some. That is the point, but it means `apply(where=None)` over an
   existing pipeline can rewrite more than it used to — the cpp ladder in
   particular. Phase 5's whole-program check is where that shows up.
+
+## Left over
+
+Two things this work surfaced but did not fix:
+
+- **`RoundAt` is a site for none of the five.**  `ScopedRoundingRewriter`
+  matches `Round` and `Cast`; `fp.round_at` rounds at an absolute position and
+  is a `NamedBinaryOp`, so it falls outside.  The cpp emitter refuses it
+  already (`emitter.py`'s `_unsupported('RoundAt')`), so nothing regressed —
+  but a rounding operator the scheduling language cannot aim at is a gap.
+- **The cpp ladder rewrites roundings the emitter already spells.**  Measured
+  in Phase 5 and pre-existing: `_unfold_roundings` runs its four passes with
+  `where=None`, so a native `FP32` rounding beside a non-native one is lowered
+  to an integer ladder for nothing.  Correct, just wasteful, and no test covers
+  it.  The fix has the shape of `unfold_arith`: re-derive sites after each
+  rewrite and aim one at a time, anchored on the statement.

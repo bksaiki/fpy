@@ -36,8 +36,9 @@ def unfold_neg_zero(func: Function, where: int | Cursor | None = None) -> Functi
     :class:`fpy2.SMFixedContext` has its signed zero by construction, so it is
     rebuilt as the :class:`fpy2.MPBFixedContext` it derives from;
     :class:`fpy2.FixedContext` (two's complement) already has a single zero
-    and is never a candidate.  Only blocks whose body is entirely
-    ``x = fp.round(v)`` (or a returned round) are rewritten.
+    and is never a candidate.  A ``fp.cast`` is not a site: it asserts
+    exactness, and an exact result never rounds to zero from anything but
+    zero.  See :mod:`fpy2.strategies` for what a rounding site is.
 
     Run :func:`fpy2.strategies.unfold_overflow` afterwards: with the sign rule
     out of the context, the bound is the only edge rule left to state.
@@ -84,14 +85,18 @@ def unfold_neg_zero(func: Function, where: int | Cursor | None = None) -> Functi
             ctx=fp.REAL,
         )
         def quantize(x):
-            with fp.REAL:
-                with fp.MPFixedContext(-8, enable_neg_zero=False):
-                    t = fp.round(x)
-                if t == 0:
-                    y = fp.copysign(t, x)
-                else:
-                    y = t
+            with fp.MPFixedContext(-8):
+                with fp.REAL:
+                    with fp.MPFixedContext(-8, enable_neg_zero=False):
+                        t = fp.round(x)
+                    if t == 0:
+                        y = fp.copysign(t, x)
+                    else:
+                        y = t
             return y
+
+    Nothing rounds under the source context any more, so
+    :func:`fpy2.strategies.simplify` drops the block it left behind.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
