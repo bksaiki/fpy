@@ -922,6 +922,24 @@ class TestLists:
         assert float(dims(xs, ctx=FP64)) == 1.0
         assert float(size0(xs, ctx=FP64)) == 4.0
 
+    def test_shape_queries_do_not_round(self):
+        """``len`` / ``dim`` / ``size`` answer a shape, not a computation, so
+        the active context does not round it -- a quantum coarser than the
+        length used to report zero.  The cpp backend already emits all three
+        exactly."""
+        C = fp.MPFixedContext(4)          # quantum 2**5 = 32
+
+        @fp.fpy(ctx=fp.REAL)
+        def queries(xs: list[fp.Real]) -> tuple[fp.Real, fp.Real, fp.Real]:
+            with C:
+                n = len(xs)
+                d = fp.dim(xs)
+                m = fp.size(xs, 0)
+            return n, d, m
+
+        n, d, m = queries([1.0, 2.0, 3.0])
+        assert (float(n), float(d), float(m)) == (3.0, 1.0, 3.0)
+
     def test_range_forms(self):
         @fp.fpy
         def r1() -> list[fp.Real]:

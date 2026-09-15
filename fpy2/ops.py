@@ -5,7 +5,7 @@ Mathematical functions under rounding contexts.
 from fractions import Fraction
 from unittest import case
 
-from .number import REAL, Context, Float, Real, RealFloat
+from .number import INTEGER, REAL, Context, Float, Real, RealFloat
 from .number.engine import ENGINES
 from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
@@ -1019,6 +1019,9 @@ def dim(x: list, ctx: Context = REAL):
     Returns the number of dimensions of the tensor `x`.
 
     Assumes that `x` is not a ragged tensor.
+
+    A shape query, so the answer is an exact integer: `ctx` is accepted for
+    uniformity and ignored, as it is for the other queries and projections.
     """
     # `dim` is list-only in FPy (matches `TypeInfer`, which unifies `Dim`'s
     # argument with a list type); reject a non-list operand rather than
@@ -1035,32 +1038,22 @@ def dim(x: list, ctx: Context = REAL):
         else:
             break
 
-    if ctx is None:
-        return Float.from_int(dim)
-    else:
-        return ctx.round(dim)
+    return Float.from_int(dim, ctx=INTEGER, checked=False)
 
 def size(x: list, dim: Real, ctx: Context = REAL):
     """
     Returns the size of the dimension `dim` of the tensor `x`.
 
     Assumes that `x` is not a ragged tensor.
+
+    A shape query, so the answer is an exact integer: `ctx` is accepted for
+    uniformity and ignored, as it is for the other queries and projections.
     """
     dim = _cvt_to_float(dim)
-    if dim.is_zero():
-        # size(x, 0) = len(x)
-        if ctx is None:
-            return Float.from_int(len(x))
-        else:
-            return ctx.round(len(x))
-    else:
-        # size(x, n) = size(x[0], n - 1)
-        for _ in range(int(dim)):
-            x = x[0]
-        if ctx is None:
-            return Float.from_int(len(x))
-        else:
-            return ctx.round(len(x))
+    # size(x, n) = len(x[0]...[0]), n indices deep
+    for _ in range(int(dim)):
+        x = x[0]
+    return Float.from_int(len(x), ctx=INTEGER, checked=False)
 
 #############################################################################
 # Tuple
