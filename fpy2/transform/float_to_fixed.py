@@ -8,7 +8,7 @@ subnormal position ``EXP``, largest exponent ``EMAX``, and bound ``B``,
 .. math::
 
    \\mathrm{round}_F(x) = \\mathrm{round}_{A(\\infty, n, B)}(x),
-   \\quad n = \\mathrm{clamp}(\\mathrm{logb}(x) - P + 1,\\; EXP,\\; EMAX - P + 1)
+   \\quad n = \\min(\\mathrm{logb}(x),\\; EMAX) - P + 1
 
 That is, float rounding *is* fixed-point rounding, once the position is known.
 The value itself is never scaled, and the bound stays the format's own ``B``.
@@ -31,25 +31,22 @@ that position.
            y = (-fp.inf() if fp.signbit(x) else fp.inf())
        elif x == 0:
            y = (-0.0 if fp.signbit(x) else 0)
+       elif abs(x) < 6.103515625e-05:
+           with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
+               y = fp.round(x)
        else:
-           e = fp.logb(x)
-           if e < -14:
-               with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
-                   y = fp.round(x)
-           else:
-               exp = min(max((e - 10), -24), 5)
-               with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
-                   y = fp.round(x)
+           exp = (min(fp.logb(x), 15) - 10)
+           with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
+               y = fp.round(x)
 
 Below ``emin`` the format is fixed-point already: every value there rounds at
-``EXP``, so that branch's context is a constant and nothing in it depends on
-the exponent.  The normal branch's *lower* clamp is redundant because of it, and
-emitted anyway: inference reads a ``max`` where it cannot read a branch.
+``EXP``, so that branch's context is a constant and needs no exponent at all --
+which is why it is taken on ``|x| < 2 ** emin`` rather than on ``logb(x)``, and
+why ``logb`` is computed only where its answer is read.
 
-The upper clamp keeps the context constructible and the format shiftable:
-``B`` is representable at every position up to ``EMAX - P + 1`` and at none
-above it.  Anything above that exceeds ``B`` and overflows, which
-rounding at the clamped position against ``B`` produces.
+The clamp keeps the context constructible and the format shiftable: ``B`` is
+representable at the top binade's position and at none finer, so a value above
+that binade rounds there, against ``B``, and overflows.
 
 ``logb`` is undefined on NaN, an infinity, and a zero, so each takes a branch of
 its own.  All three are constants, so the branches assign what the format makes
@@ -171,9 +168,10 @@ class _Source:
     """
     expmin: int | None
     """position of the format's finest digit, if it has one"""
-    expmax: int | None
+    emax: int | None
     """
-    position of the bound's last digit, above which the bound is unrepresentable.
+    largest exponent: above it the bound is unrepresentable, so a value there
+    rounds at the top binade's position instead of its own.
 
     `None` for an unbounded format, whose position needs no upper clamp.
     """
@@ -250,7 +248,7 @@ def _describe(ctx: Context) -> _Source | Declined:
     # an unbounded format cannot overflow; a bounded one has to say where to
     maxval: RealFloat | None = None
     neg_maxval: RealFloat | None = None
-    expmax: int | None = None
+    emax: int | None = None
     policy = _Policy.UNBOUNDED
     if isinstance(ctx, (EFloatContext, MPBFloatContext)):
         maxval = ctx.maxval().as_real()
@@ -262,8 +260,8 @@ def _describe(ctx: Context) -> _Source | Declined:
         # the format's finest position in its top binade, which is where the clamp
         # puts a value too large for one of its own; the bound has to be
         # representable there
-        expmax = ctx.emax - ctx.pmax + 1
-        if maxval.exp < expmax:
+        emax = ctx.emax
+        if maxval.exp < emax - ctx.pmax + 1:
             return Declined(
                 'the bound is not representable at the finest position of '
                 "the format's top binade"
@@ -293,7 +291,7 @@ def _describe(ctx: Context) -> _Source | Declined:
     # at a position read off its own exponent
     return _Source(
         ctx.pmax, getattr(ctx, 'emin', None), getattr(ctx, 'expmin', None),
-        expmax, maxval, ctx.rm, policy, specials, specials[4].s,
+        emax, maxval, ctx.rm, policy, specials, specials[4].s,
     )
 
 
@@ -434,36 +432,34 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
                 ), loc))
             return stmts
 
-        e_name = self.gensym.fresh('e')
-        exponent = Assign(e_name, None, Logb(None, arg(), loc), loc)
-
-        # in the normal range the position follows the magnitude, capped by the
-        # position of the bound's last digit: above that the bound is
-        # unrepresentable, and everything up there overflows anyway
+        # in the normal range the position follows the magnitude, capped at the
+        # top binade: above that the bound is unrepresentable, and everything up
+        # there overflows anyway
         pos_name = self.gensym.fresh('exp')
-        scale: Expr = Sub(Var(e_name, loc), Integer(src.pmax - 1, loc), loc)
-        if src.emin is not None:
-            # Redundant at run time -- the subnormal branch below takes every
-            # `logb(x) < emin`, and `emin - P + 1 == expmin` -- but stated
-            # because inference reads a `max` and not a branch condition.
-            # Without it the scale-in is inferred `2 ** -expmin` times too far.
-            assert src.expmin is not None
-            scale = Max(None, [scale, Integer(src.expmin, loc)], loc)
-        if src.expmax is not None:
-            scale = Min(None, [scale, Integer(src.expmax, loc)], loc)
-        position = Assign(pos_name, None, scale, loc)
+        exponent: Expr = Logb(None, arg(), loc)
+        if src.emax is not None:
+            # a value above the top binade rounds at that binade's position:
+            # the bound is representable there and at no finer one
+            exponent = Min(None, [exponent, Integer(src.emax, loc)], loc)
+        position = Assign(
+            pos_name, None,
+            Sub(exponent, Integer(src.pmax - 1, loc), loc), loc,
+        )
         # `exp = logb(x) - P + 1`, so `|x| < 2 ** (logb(x) + 1) == 2 ** (exp + P)`
         normal_reach = Pow(
             None, Integer(2, loc),
             Add(Var(pos_name, loc), Integer(src.pmax, loc), loc), loc,
         )
+        # `nmin` is written as the scale minus one rather than folded: that is
+        # the form `RescaleFixed` cancels, which leaves the scale as this
+        # variable instead of an expression needing a binding of its own
         at_scale = rounding(
             Sub(Var(pos_name, loc), Integer(1, loc), loc), normal_reach,
         )
 
         if src.emin is None:
             # no subnormals: every value rounds at a position of its own
-            body: list[Stmt] = [exponent, position, *at_scale]
+            body: list[Stmt] = [position, *at_scale]
         else:
             # below `emin` the format is itself fixed-point: every value in
             # that range rounds at the same position, a constant
@@ -481,7 +477,7 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
             normal = IfStmt(
                 below,
                 StmtBlock(rounding(Integer(src.expmin - 1, loc), sub_reach)),
-                StmtBlock([exponent, position, *at_scale]),
+                StmtBlock([position, *at_scale]),
                 loc,
             )
             body = [normal]
