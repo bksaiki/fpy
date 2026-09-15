@@ -108,11 +108,23 @@ def calls(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 def test_the_rounding_strategies_list_their_blocks():
-    """The three that apply to a float format list both of its rounds."""
-    for strategy in (unfold_special, unfold_overflow, float_to_fixed):
+    """The two still aimed at blocks list both of this format's rounds."""
+    for strategy in (unfold_special, float_to_fixed):
         found = sites(strategy, two_sites)
         assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
         assert all(isinstance(c, StmtCursor) for c in found)
+
+
+def test_a_scoped_rounding_strategy_lists_its_roundings():
+    """`unfold_overflow` is aimed at the rounding itself, so it names an
+    expression.  The other three follow as they are migrated."""
+    found = sites(unfold_overflow, two_sites)
+    assert len(found) == 2
+    assert all(isinstance(c, ExprCursor) for c in found)
+    assert [c.path.stmt() for c in found] == [
+        FuncBody().stmt(0).block('body').stmt(0),
+        FuncBody().stmt(1).block('body').stmt(0),
+    ]
 
 
 def test_a_strategy_that_applies_to_nothing_lists_nothing():
@@ -217,8 +229,10 @@ def test_a_cast_block_is_not_listed_where_it_does_not_count():
     """...and must not, for the two that only take a round.  `unfold_neg_zero`
     is absent: it refuses a float format outright, so there is no program where
     it both verifies and sees a cast."""
-    for strategy in (unfold_overflow, float_to_fixed):
-        assert [c.index for c in sites(strategy, cast_and_round_fp16)] == [1]
+    assert [c.index for c in sites(float_to_fixed, cast_and_round_fp16)] == [1]
+    # `unfold_overflow` names the rounding, so its one site is an expression
+    listed = sites(unfold_overflow, cast_and_round_fp16)
+    assert [c.path.stmt().index for c in listed] == [0]
 
 
 def test_a_listed_insert_round_site_aims_the_same_as_its_index():
