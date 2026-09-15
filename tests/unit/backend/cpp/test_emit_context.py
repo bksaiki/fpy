@@ -103,6 +103,43 @@ class TestStaticResolution:
         )
         assert 'return xs[' in out
 
+    def test_with_block_of_only_list_queries_compiles(self):
+        """A block whose body reads no context needs no resolvable one --
+        ``len`` answers the same integer under any scope.  This is what
+        ``RescaleFixed`` leaves behind: the roundings move to an inner
+        concrete context and the original ``with`` wraps only the queries."""
+
+        from fpy2.types import ListType
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], n: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(n):     # symbolic: `n` is an argument
+                m = len(xs)
+            return m
+
+        out = CppCompiler(optimize=False).compile(
+            f, arg_types=[ListType(RealType(fp.FP64)), RealType(fp.INTEGER)],
+        )
+        assert 'size()' in out
+
+    def test_a_rounding_under_a_symbolic_ctx_is_still_refused(self):
+        """The companion refusal: one real rounding in the block and the
+        context has to resolve.  Storage selection reaches it first, so the
+        message names the value rather than the ``with``."""
+
+        from fpy2.types import ListType
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], n: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(n):
+                m = xs[0] + 1.0
+            return m
+
+        with pytest.raises(CppCompileError, match='symbolic'):
+            CppCompiler(optimize=False).compile(
+                f, arg_types=[ListType(RealType(fp.FP64)), RealType(fp.INTEGER)],
+            )
+
 
 class TestDefaultRmIsImplicit:
     """``with FP64:`` (RM=RNE) doesn't emit fesetround when the

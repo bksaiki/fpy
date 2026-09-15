@@ -10,6 +10,7 @@ resolution, and the round-trip between ``uses`` and ``use_to_scope``.
 
 import fpy2 as fp
 
+from fpy2 import dim, size
 from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis.context_use import ContextUse
@@ -167,6 +168,42 @@ class TestContextUse:
         assert len(result.uses[outer_scope]) == 2
         # inner with: Mul (a * 2)
         assert len(result.uses[inner_scope]) == 1
+
+    # ------------------------------------------------------------------
+    # Operations that read no context
+
+    def test_list_queries_are_not_uses(self):
+        """``len`` / ``dim`` / ``size`` / ``range`` / ``enumerate`` give an
+        integer answer whatever the scope, so they are not uses: a ``with``
+        wrapping only these is unobservable."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.IEEEContext(11, 64, fp.RM.RNE):
+                n = len(xs)
+                d = dim(xs)
+                m = size(xs, 0)
+                r = range(n, m, d)
+                e = enumerate(r)
+            return xs[len(e) - 1]
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        with_scope = result.scopes[-1]
+        assert result.uses[with_scope] == set()
+
+    def test_a_rounding_beside_a_query_is_still_a_use(self):
+        """The exclusion is per operator, not per block."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            with fp.IEEEContext(11, 64, fp.RM.RNE):
+                n = len(xs)
+                y = xs[0] + 1.0
+            return y * n
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        with_scope = result.scopes[-1]
+        assert len(result.uses[with_scope]) == 1
+        use = next(iter(result.uses[with_scope]))
+        assert isinstance(use, fp.ast.Add)
 
     # ------------------------------------------------------------------
     # find_scope_from_use / use_to_scope

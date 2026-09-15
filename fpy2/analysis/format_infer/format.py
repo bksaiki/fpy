@@ -21,6 +21,7 @@ from ...utils import default_repr
 __all__ = [
     'AbstractFormat',
     'AbstractableFormat',
+    'round_bound_out',
 ]
 
 AbstractableFormat: TypeAlias = (
@@ -31,6 +32,18 @@ AbstractableFormat: TypeAlias = (
     | EFloatFormat
 )
 """Union of :class:`Format` subclasses supported by :meth:`AbstractFormat.from_format`."""
+
+
+def round_bound_out(bound: RealFloat | float, exp: float) -> RealFloat | float:
+    """*bound* rounded away from zero onto the grid `2**exp` defines.
+
+    Rounding carries a bound off that grid to the next point *outward*, so this
+    is what a bound becomes when the quantum coarsens under it.  An unbounded
+    bound or grid has nothing to round.
+    """
+    if isinstance(bound, float) or isinstance(exp, float):
+        return bound
+    return bound.round(min_n=exp - 1, rm=RoundingMode.RAZ)
 
 
 def _maxval_precision(bound: RealFloat, exp: int) -> int:

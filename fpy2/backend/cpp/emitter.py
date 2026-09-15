@@ -1375,9 +1375,9 @@ class CppEmitter(Visitor):
         return self.format_info.fn_fmt.ctx
 
     def _resolve_used_ctx(self, site: ContextScopeSite) -> Context | None:
-        """The scope's resolved context, or ``None`` when no primitive op dispatches
-        under it -- the caller then skips validation and ``fesetround`` entirely, so
-        a program with no rounding-context use needs no supported context.
+        """The scope's resolved context, or ``None`` when nothing under it reads a
+        context -- the caller then skips validation and ``fesetround`` entirely, so
+        a block of nothing but list queries and ranges needs no supported context.
 
         Where uses exist the context must be statically resolvable; a symbolic one
         is rejected here, pointing at the ``with`` site rather than at the op that

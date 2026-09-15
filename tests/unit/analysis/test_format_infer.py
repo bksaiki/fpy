@@ -23,6 +23,7 @@ from fpy2.analysis.format_infer import (
 from fpy2.analysis.format_infer.analysis import _magnitude_constraint
 from fpy2.utils import CompareOp
 from fpy2.analysis.format_infer.analysis import (
+    NEG_ZERO,
     VAR_FORMAT,
     _INTEGER_FORMAT,
     _join_bounds,
@@ -2210,6 +2211,105 @@ class TestRoundIntoAFixedScope:
         assert not fp.SINT64.round(fp.Float(-0.0)).s
 
 
+class TestSumOverAJoinedList:
+    """`_sum_bound` needs a concrete count, so the bound over
+    ``join(prods, [d])`` is only as good as the length that crosses the call --
+    without one it is top."""
+
+    def test_the_count_bounds_the_sum(self):
+        @fp.fpy(ctx=fp.REAL)
+        def join(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            zs = fp.empty(len(xs) + len(ys))
+            for i, x in enumerate(xs):
+                zs[i] = x
+            for i, y in enumerate(ys):
+                zs[i + len(xs)] = y
+            return zs
+
+        @fp.fpy(ctx=fp.REAL)
+        def total(c: fp.Real) -> fp.Real:
+            with fp.FP32:
+                d = fp.round(c)
+            prods = [d for _ in range(8)]
+            return sum(join(prods, [d]))
+
+        fmt = FormatInfer.analyze(total.ast).fn_fmt.ret_fmt
+        assert fmt is not REAL_FORMAT, fmt
+        # nine FP32 values, so the sum is bounded by nine times the largest
+        af = AbstractFormat.from_format(fmt)
+        assert af.pos_bound == fp.FP32.maxval()._real * 9, fmt
+
+
+class TestOverlapKeepsTheScopeSpecials:
+    """The intersection's specials come from the scope, which the image lies
+    inside: a magnitude past the scope's bound lands on its infinity, and a
+    negative value rounding to zero keeps its ``-0``."""
+
+    @staticmethod
+    def _ret_fmt(src, scope):
+        @fp.fpy(ctx=fp.REAL)
+        def h(x: fp.Real) -> fp.Real:
+            with src:
+                y = fp.round(x)
+            with scope:
+                return fp.round(y)
+
+        return FormatInfer.analyze(h.ast).fn_fmt.ret_fmt
+
+    def test_a_negative_underflow_keeps_the_scope_s_neg_zero(self):
+        scope = fp.MPFixedContext(127)          # quantum 2**128
+        fmt = self._ret_fmt(fp.FP16, scope)
+        assert fmt.representable_in(scope.round(fp.Float(-1.0)))
+
+    def test_an_overflow_keeps_the_scope_s_infinity(self):
+        fmt = self._ret_fmt(fp.BF16, fp.FP16)   # BF16_MAX overflows FP16
+        assert fmt.representable_in(fp.FP16.round(fp.BF16.maxval()))
+
+
+class TestRoundOntoACoarseGrid:
+    """A round whose scope has the coarser quantum must keep the value.
+
+    The intersection `F & C` clips the bound to `min(F.bound, C.bound)`, but
+    `round_C` carries a bound off `C`'s grid *up* to the next point on it: at
+    quantum ``2 ** 128``, ``round(FP32_MAX)`` is ``2 ** 128``, above `FP32_MAX`.
+    Clipping alone leaves a set holding only zero -- the one value the program
+    cannot produce.
+    """
+
+    @staticmethod
+    def _ret_fmt(nmin: int):
+        C = fp.MPFixedContext(nmin)
+
+        @fp.fpy(ctx=fp.REAL)
+        def h(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            with C:
+                return fp.round(y)
+
+        return FormatInfer.analyze(h.ast).fn_fmt.ret_fmt, C
+
+    @pytest.mark.parametrize('nmin', [-10, 60, 120, 127])
+    def test_the_bound_admits_the_rounded_maxval(self, nmin):
+        """Sound at every quantum; the hazard starts about eight binades below
+        the operand's bound (``nmin`` 120 and up)."""
+        fmt, C = self._ret_fmt(nmin)
+        assert isinstance(fmt, Format), fmt
+        assert fmt.representable_in(C.round(fp.FP32.maxval())), fmt
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: the value really does leave `FP32`'s range, so
+        the bound above is a fact about the program."""
+        rounded = fp.MPFixedContext(127).round(fp.FP32.maxval())
+        assert rounded > fp.FP32.maxval()
+
+    def test_the_bound_is_not_widened_to_top(self):
+        """Rounding the bound outward, not dropping it: the scope is unbounded
+        above, so only the operand's (widened) bound states anything here."""
+        fmt, _ = self._ret_fmt(127)
+        assert fmt is not REAL_FORMAT, fmt
+
+
 class TestSpecialSentinels:
     """The ``Special`` members of ``SetValue``.  Nothing produces them yet --
     these pin the value domain itself."""
@@ -2929,7 +3029,7 @@ class TestZeroOnlyIntersection:
         info = FormatInfer.analyze(self._lower(fp.SINT32).ast)
         zeros = [b for b in info.by_def.values()
                  if isinstance(b, SetFormat) and b.values
-                 and all(v == 0 for v in b.values)]
+                 and all(v == 0 or v is NEG_ZERO for v in b.values)]
         assert zeros, 'the unreachable branch should report only zero'
 
     def test_it_is_not_widened_to_top(self):

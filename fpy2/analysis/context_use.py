@@ -36,6 +36,10 @@ ContextScopeSite: TypeAlias = FuncDef | ContextStmt
 ContextUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
 """AST nodes that use a rounding context"""
 
+_CTX_FREE_OPS = (Len, Dim, Size, Range1, Range2, Range3, Enumerate)
+"""Operators that never use the active context, so a `with` wrapping only
+these needs no resolvable one."""
+
 
 @dataclass(frozen=True)
 class ContextScope:
@@ -57,6 +61,9 @@ class ContextUseAnalysis:
 
     uses: dict[ContextScope, set[ContextUseSite]]
     """mapping from context scope to use sites.
+
+    Only operators that consult the context are recorded, so an empty set means
+    the scope is unobservable, not merely that its block is empty.
 
     A key here need not be in :attr:`scopes`: **E-Context** evaluates a
     ``with``'s context expression under ``REAL``, so its uses get a ``REAL``
@@ -131,6 +138,8 @@ class _ContextUseInstance(DefaultVisitor):
         return s
 
     def _record_use(self, use: ContextUseSite, scope: ContextScope):
+        if isinstance(use, _CTX_FREE_OPS):
+            return
         self.uses[scope].add(use)
 
     # ------------------------------------------------------------------

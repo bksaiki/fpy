@@ -284,10 +284,10 @@ class _DeadCodeEliminate:
         """The `with` blocks that install a context to no effect.
 
         Either nothing under the block observes it, or it installs the context
-        already in force.  Only operations and calls read a context, so an
-        empty use set means the block does nothing but nest -- and an operation
-        inside a *nested* `with` belongs to that inner scope, which is what
-        makes the outer one droppable.
+        already in force.  `ContextUse` records only the operators that read a
+        context, so an empty use set means the block does nothing but nest; an
+        operation inside a *nested* `with` belongs to that inner scope, which is
+        what makes the outer one droppable.
         """
         enclosing = _enclosing_scope(self.func)
         if not enclosing:
