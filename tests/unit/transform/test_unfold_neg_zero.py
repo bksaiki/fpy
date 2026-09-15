@@ -332,7 +332,7 @@ class TestUnchanged:
 
 
 # ----------------------------------------------------------------------
-# Sites the shape of the program used to hide
+# Sites outside a block of their own
 
 
 class TestScopedSites:

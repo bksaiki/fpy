@@ -7,23 +7,21 @@ names, so the statement an earlier rewrite left behind names the site now nested
 inside it; one from an earlier program is forwarded to this one first.
 :func:`sites` lists what a `where` may name.
 
-**What a rounding site is.**  The rounding rewrites are aimed at the rounding
-itself, not at the block it sits in: a ``fp.round`` -- or a ``fp.cast``, where
-the rewrite takes one -- is a site wherever the context active there is one that
-rewrite can restate.  Under a ``with``, under the function's own annotation, or
-beside statements rounding to something else: all the same to it.  An operand
-that is not already a name is bound to one first, in the scope it was written
-in, which is the scope that already rounded it.  A position with no statement
-slot for what the rewrite emits -- a ternary arm, a comprehension element -- is
-refused, and :func:`to_hoistable` gives it one.
+**What a rounding site is.**  A ``fp.round`` -- or a ``fp.cast``, where the
+rewrite takes one -- wherever the context active there is one that rewrite can
+restate.  Under a ``with``, under the function's own annotation, or beside
+statements rounding to something else: all the same to it.  An operand that is
+not already a name is bound to one first, in the scope it was written in, which
+is the scope that already rounded it.  A position with no statement slot for
+what the rewrite emits -- a ternary arm, a comprehension element -- is refused;
+:func:`to_hoistable` gives it one.
 
-**Pinning a point across a sequence.**  These rewrites emit *into* the block
-they found the rounding in rather than replacing it, so a ``with`` left holding
-no rounding goes when :func:`simplify` runs.  To aim a whole sequence at one
-program point, pin the *statement* holding the rounding rather than the
-expression :func:`sites` reports: each rewrite consumes the rounding it acts on,
-so that expression names nothing afterwards, while the statement survives with
-what replaced it beneath.
+**Pinning a point across a sequence.**  A rounding rewrite emits *into* the
+block it found the rounding in rather than replacing it, so a ``with`` left
+holding no rounding goes when :func:`simplify` runs.  Aim a sequence with the
+*statement* holding the rounding rather than the expression :func:`sites`
+reports: a rewrite consumes the rounding it acts on, so that expression names
+nothing afterwards, while the statement survives with what replaced it beneath.
 """
 
 from ..transform import (

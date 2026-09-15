@@ -413,7 +413,7 @@ class TestUnchanged:
 
 
 # ----------------------------------------------------------------------
-# Sites the shape of the program used to hide
+# Sites outside a block of their own
 
 
 class TestScopedSites:
@@ -461,8 +461,7 @@ class TestScopedSites:
             assert _same(_eval(out, f, x), f(x)), x
 
     def test_block_with_other_statements(self):
-        """One non-rounding statement in the block used to disqualify every
-        rounding in it."""
+        """A block whose body is not all roundings."""
         @fp.fpy(ctx=fp.REAL)
         def f(a, b):
             with fp.FP16:

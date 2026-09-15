@@ -76,9 +76,9 @@ Applies to a format whose overflow is a constant of its own: wrapping gives a
 different answer at every magnitude, and an unsigned format states no bound
 below zero, so neither is rewritten.
 
-Only a block whose body is entirely ``x = fp.round(v)`` (or a returned round)
-over variables is rewritten.  ``Cast`` is excluded: it asserts exactness, which
-this rewrite does not preserve.
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.
+``Cast`` is not: it asserts exactness, which this rewrite does not preserve.
 """
 
 from dataclasses import dataclass, replace
@@ -489,8 +489,7 @@ class _UnfoldOverflowInstance(ScopedRoundingRewriter):
         """`target = round(v)` as an unbounded rounding plus a bound check."""
         assert isinstance(e, Round)
         loc = e.loc
-        # the class of the operand as written: a name minted by the bind below
-        # is not a node the analysis saw
+        # the operand as written: a name the bind may mint has no class
         cls = self.class_info.classify(e.arg)
         name = self._arg_name(e, out)
 

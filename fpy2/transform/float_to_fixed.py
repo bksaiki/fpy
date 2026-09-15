@@ -67,10 +67,11 @@ Applies to a float format that rounds deterministically and whose overflow a
 fixed-point round can reproduce — an infinity, the bound, or a NaN.  An
 unbounded format (``MPSFloatContext``, ``MPFloatContext``) needs no upper
 clamp -- its target's bound states how far the operand reaches, not what the
-format does at an edge; one without subnormals needs no branch for them.  Only a
-block whose body is entirely ``x = fp.round(v)`` (or a returned round) over
-variables is rewritten.  The rewrite needs ``fpy2`` in scope, since it names the
-context constructor.
+format does at an edge; one without subnormals needs no branch for them.
+
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.  The
+rewrite needs ``fpy2`` in scope, since it names the context constructor.
 """
 
 from dataclasses import dataclass, replace

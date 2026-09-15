@@ -36,9 +36,10 @@ the sign of the *special* that was rounded.  A substitute is only consulted
 where its own rule is off, so one paired with an enabled rule is inert and
 does not decline.
 
-Only a block whose body is entirely ``x = fp.round(v)`` (or a returned round)
-over variables is rewritten.  ``Cast`` is excluded: it asserts exactness, and
-an exact result never rounds to zero from anything but zero.
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.
+``Cast`` is not: it asserts exactness, and an exact result never rounds to zero
+from anything but zero.
 
 `SMFixedContext` has its signed zero by construction, so it is rebuilt as the
 `MPBFixedContext` it derives from; the emitted context no longer names the

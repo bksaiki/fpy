@@ -684,7 +684,7 @@ class TestUnchanged:
 
 
 # ----------------------------------------------------------------------
-# Sites the shape of the program used to hide
+# Sites outside a block of their own
 
 
 class TestScopedSites:
@@ -711,8 +711,8 @@ class TestScopedSites:
         self._check(f, RescaleFixed.apply(f.ast), 0.1, 0.2)
 
     def test_bound_context(self):
-        """``with C as c:`` exposes the context to the body as a value, and the
-        rewrite no longer changes that block -- it emits a rescaled one inside."""
+        """``with C as c:`` exposes the context to the body as a value; the
+        rewrite leaves that block alone and emits a rescaled one inside."""
         @fp.fpy(ctx=fp.REAL)
         def f(a):
             with fp.FixedContext(True, -16, 32) as c:
@@ -732,8 +732,7 @@ class TestScopedSites:
         self._check(f, RescaleFixed.apply(f.ast), 0.1)
 
     def test_block_with_other_statements(self):
-        """One non-rounding statement in the block used to disqualify every
-        rounding in it."""
+        """A block whose body is not all roundings."""
         @fp.fpy(ctx=fp.REAL)
         def f(a, b):
             with fp.FixedContext(True, -16, 32):

@@ -99,8 +99,7 @@ def unfold_overflow(
                         y = t
             return y
 
-    Nothing rounds under the source context any more, so
-    :func:`fpy2.strategies.simplify` drops the block it left behind.
+    :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
 
     With ``early_check=True``, a check on ``x`` precedes all of that::
 

@@ -101,7 +101,7 @@ def test_a_cursor_takes_candidates_beneath_it():
 
     wrapper = f1.rebase(site)
     assert isinstance(wrapper, StmtCursor)
-    # the rounding is no longer the wrapper's own first line
+    # the rounding sits inside the wrapper, not on its first line
     assert 'fp.round' not in wrapper.resolve().format().splitlines()[0]
 
     f2 = unfold_overflow(f1, where=site, early_check=True)

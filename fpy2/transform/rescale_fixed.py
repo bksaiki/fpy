@@ -46,12 +46,10 @@ integer range is unchanged.
 The scale factors are emitted as constants, so :class:`fpy2.transform.ConstFold`
 folds them into the surrounding expressions.
 
-Only a block whose body is entirely ``x = fp.round(v)`` / ``x = fp.cast(v)``
-over variables is rewritten.  Rounding commutes with the shift, but
-arithmetic does not: a product of two shifted values is shifted by
-``2**2k``, and an added constant would have to be shifted too.  Every other
-block is left unchanged, including one that binds its context (``with C as
-c:``), whose body could observe the rescaled context as a value.
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.  A cast
+is one too; arithmetic never is: a product of two shifted values is shifted by
+``2**2k``, and an added constant would have to be shifted too.
 """
 
 from collections.abc import Callable
@@ -302,7 +300,7 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
         loc = e.loc
         ctx_expr = self.scopes.scope_ctx_expr(e)
         if isinstance(ctx, _FixedCtx):
-            fixed = ctx
+            fixed = ctx    # bound for the closures below, which mypy widens
             # a known format shifts by a constant, so the factors fold away
             scale = _scale_of(fixed)
             if scale == 0:
@@ -311,10 +309,8 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
                     'nothing to rescale'
                 )
             # a *finite* substitute for NaN or infinity is a value in the
-            # format, so it would have to shift along with it; a non-finite
-            # one is the same at every scale.  `UnfoldSpecial` takes the
-            # substitutes out of the context, after which nothing is left
-            # here to shift.
+            # format and would have to shift with it; a non-finite one is the
+            # same at every scale.  `UnfoldSpecial` takes those out.
             if any(
                 v is not None and not v.is_nar()
                 for v in (fixed.nan_value, fixed.inf_value)
@@ -331,8 +327,7 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
             )
 
         # a run-time position is shifted by editing the constructor call, so
-        # this path needs the scope to have been written as one.  A function
-        # annotation states its context outside the body and has no call here.
+        # a scope that states none -- a function annotation -- has no path here
         if isinstance(ctx_expr, Call):
             sym = self._symbolic_shift(ctx_expr)
             if sym is None:
@@ -380,8 +375,8 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
                     and position.second.val == 1):
                 scale = position.first
             elif isinstance(position, Integer):
-                # folded, so a position this pass wrote is recognized as the
-                # constant it is -- `nmin = -1` is scale zero, not `-1 + 1`
+                # folded, so the zero check below sees `nmin = -1` as scale
+                # zero rather than as `-1 + 1`
                 scale = Integer(position.val + 1, loc)
             else:
                 scale = Add(position, Integer(1, loc), loc)
@@ -447,8 +442,6 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
         out, under the rescaled context."""
         assert isinstance(e, (Round, Cast))
         loc = e.loc
-        # the scale-in reads the operand under `fp.REAL`, where an expression
-        # would be evaluated exactly rather than at the scope it was written in
         name = self._arg_name(e, out)
 
         # scale in: the operand's digits move up to position zero
@@ -460,7 +453,7 @@ class _RescaleFixedInstance(ScopedRoundingRewriter):
         round_ = Assign(rounded, None, type(e)(e.func, Var(scaled, loc), loc), loc)
 
         # scale out: the result returns to its original magnitude, under the
-        # original target name, so statements after it are unaffected
+        # name the rounding had, so statements after it are unaffected
         down = Assign(target, None, Mul(shift.down(), Var(rounded, loc), loc), loc)
 
         out.extend(shift.preamble)

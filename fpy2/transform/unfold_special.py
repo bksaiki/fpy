@@ -53,14 +53,13 @@ one pass the surviving operand is finite and non-zero, so a second pass states
 nothing.  Stating a zero alone is not worth a rewrite, so a format that refuses
 both specials is left unchanged.
 
-Only a block whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
-(or a returned round) over variables is rewritten.  A cast substitutes a special
-exactly as a round does — the substitution happens before the exactness check —
-so it takes the same branches.  Stochastic rounding takes them too: a special
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.  A cast
+is one too: it substitutes a special exactly as a round does, the substitution
+happening before the exactness check.  So is a stochastic rounding — a special
 never reaches the random draw, so the branches are deterministic and the
-surviving context keeps its random bits.  ``REAL`` is declined:
-it rounds exactly, so its specials pass through and the branches would say
-nothing.
+surviving context keeps its random bits.  ``REAL`` is declined: it rounds
+exactly, so its specials pass through and the branches would say nothing.
 
 `SMFixedContext` and `FixedContext` state no NaN or infinity of their own, so
 what they shed is a substituted *value* — which comes off in-class, keeping
@@ -369,8 +368,7 @@ class _UnfoldSpecialInstance(ScopedRoundingRewriter):
         rounding that sees only a finite, non-zero value."""
         assert isinstance(e, (Round, Cast))
         loc = e.loc
-        # the class of the operand as written: a name minted by the bind below
-        # is not a node the analysis saw
+        # the operand as written: a name the bind may mint has no class
         hoist = self._hoist(src, e.arg)
         ctx_expr = _ctx_expr(self.scopes.scope_ctx_expr(e), src, loc)
         name = self._arg_name(e, out)

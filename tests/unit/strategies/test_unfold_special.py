@@ -218,8 +218,7 @@ class TestComposition:
 
     @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
     def test_rescale_after_unfold(self, ctx):
-        """The composed route is what ``rescale_fixed``'s ``fold_specials``
-        knob used to do: the specials come out first, then the scale."""
+        """The specials come out first, then the scale."""
         q = _quantizer(ctx)
         out = rescale_fixed(unfold_special(q))
         for x in _samples(ctx):

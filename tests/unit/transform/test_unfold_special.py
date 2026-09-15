@@ -409,7 +409,7 @@ class TestUnchanged:
 
 
 # ----------------------------------------------------------------------
-# Sites the shape of the program used to hide
+# Sites outside a block of their own
 
 
 class TestScopedSites:
@@ -460,8 +460,7 @@ class TestScopedSites:
         self._check(f, UnfoldSpecial.apply(f.ast))
 
     def test_block_with_other_statements(self):
-        """One non-rounding statement in the block used to disqualify every
-        rounding in it."""
+        """A block whose body is not all roundings."""
         @fp.fpy(ctx=fp.REAL)
         def f(a):
             with fp.MPFixedContext(-8, enable_nan=True, enable_inf=True):

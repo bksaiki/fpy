@@ -106,8 +106,7 @@ def unfold_special(func: Function, where: int | Cursor | None = None) -> Functio
                             y = fp.round(x)
             return y
 
-    Nothing rounds under the source context any more, so
-    :func:`fpy2.strategies.simplify` drops the block it left behind.
+    :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
