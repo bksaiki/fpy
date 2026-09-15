@@ -2872,20 +2872,22 @@ class CppEmitter(Visitor):
                 at=e,
             )
 
-    def _scalar_cast_types(self, e):
-        """Source/target scalar storage for a round-like node *e*.
+    def _cast_arg_type(self, e) -> CppScalar | None:
+        """The operand's scalar storage for a round-like node *e*.
 
-        The argument's storage only short-circuits same-type casts, so a non-dyadic
-        literal with no representable storage is fine.  ``Round`` folds those earlier;
-        ``Cast`` refuses them, which is right for a cast asserting exactness.
+        ``None`` where it has none, which only short-circuits same-type casts, so
+        a non-dyadic literal is fine.  ``Round`` folds those earlier; ``Cast``
+        refuses them, which is right for a cast asserting exactness.
         """
         try:
-            arg_ty = self._scalar_storage_for_expr(e.arg)
+            return self._scalar_storage_for_expr(e.arg)
         except CppEmitError:
-            arg_ty = None
-        active = self._active_ctx_for(e)
-        target_ty = self._scalar_for_ctx(active, at=e)
-        return arg_ty, target_ty
+            return None
+
+    def _scalar_cast_types(self, e):
+        """Source/target scalar storage for a round-like node *e*."""
+        arg_ty = self._cast_arg_type(e)
+        return arg_ty, self._scalar_for_ctx(self._active_ctx_for(e), at=e)
 
     def _emit_exact_cast(self, e, arg: str) -> str:
         # ``Cast(arg)`` is a ``static_cast`` plus a runtime assertion
@@ -3367,18 +3369,15 @@ class CppEmitter(Visitor):
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
         The cast rounds -- C++ integer conversion is ``RTZ``, which
-        `_validate_ctx_storage` has already required of an integer storage --
-        but it wraps at the *type*'s range, not the format's.  So the bound is asserted first, on the rounded
-        value -- ``100.7`` is in bounds under ``RTZ`` even though ``100.7 > 100``
-        -- which also keeps the conversion itself in range, since an operand past
-        the type's range would be undefined.
+        `_validate_ctx_storage` requires of an integer storage -- but it wraps at
+        the *type*'s range, not the format's.  So the bound is asserted first, on
+        the rounded value -- ``100.7`` is in bounds under ``RTZ`` even though
+        ``100.7 > 100`` -- which also keeps the conversion itself in range, since
+        an operand past the type's range would be undefined.
         """
-        # the operand's storage alone: `_scalar_cast_types` would also ask the
-        # context for a target, which an unbounded one cannot answer
-        try:
-            arg_ty = self._scalar_storage_for_expr(e.arg)
-        except CppEmitError:
-            arg_ty = None
+        # not `_scalar_cast_types`: its target half asks the context, which an
+        # unbounded one cannot answer
+        arg_ty = self._cast_arg_type(e)
         integral = arg_ty is not None and arg_ty.is_integer()
         operand = self._bind_operand(arg)
         # an integer operand is already integral and never a NaN or an infinity;
