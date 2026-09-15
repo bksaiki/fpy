@@ -34,7 +34,7 @@ AbstractableFormat: TypeAlias = (
 """Union of :class:`Format` subclasses supported by :meth:`AbstractFormat.from_format`."""
 
 
-def round_bound_out(bound: RealFloat | float, exp: int | float) -> RealFloat | float:
+def round_bound_out(bound: RealFloat | float, exp: float) -> RealFloat | float:
     """*bound* rounded away from zero onto the grid `2**exp` defines.
 
     Rounding carries a bound off that grid to the next point *outward*, so this
