@@ -2210,6 +2210,50 @@ class TestRoundIntoAFixedScope:
         assert not fp.SINT64.round(fp.Float(-0.0)).s
 
 
+class TestRoundOntoACoarseGrid:
+    """A round whose scope has the coarser quantum must keep the value.
+
+    The intersection `F & C` clips the bound to `min(F.bound, C.bound)`, but
+    `round_C` carries a bound off `C`'s grid *up* to the next point on it: at
+    quantum ``2 ** 128``, ``round(FP32_MAX)`` is ``2 ** 128`` while `FP32_MAX`
+    is below it, so the clipped bound described a set holding only zero -- the
+    one value the program cannot produce.
+    """
+
+    @staticmethod
+    def _ret_fmt(nmin: int):
+        C = fp.MPFixedContext(nmin)
+
+        @fp.fpy(ctx=fp.REAL)
+        def h(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                y = fp.round(x)
+            with C:
+                return fp.round(y)
+
+        return FormatInfer.analyze(h.ast).fn_fmt.ret_fmt, C
+
+    @pytest.mark.parametrize('nmin', [-10, 60, 120, 127])
+    def test_the_bound_admits_the_rounded_maxval(self, nmin):
+        """Sound at every quantum.  It used to fail from about eight binades
+        below the operand's bound (``nmin`` 120 and up)."""
+        fmt, C = self._ret_fmt(nmin)
+        assert isinstance(fmt, Format), fmt
+        assert fmt.representable_in(C.round(fp.FP32.maxval())), fmt
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: the value really does leave `FP32`'s range, so
+        the bound above is a fact about the program."""
+        rounded = fp.MPFixedContext(127).round(fp.FP32.maxval())
+        assert rounded > fp.FP32.maxval()
+
+    def test_the_bound_is_not_widened_to_top(self):
+        """Rounding the bound outward, not dropping it: the scope is unbounded
+        above, so only the operand's (widened) bound states anything here."""
+        fmt, _ = self._ret_fmt(127)
+        assert fmt is not REAL_FORMAT, fmt
+
+
 class TestSpecialSentinels:
     """The ``Special`` members of ``SetValue``.  Nothing produces them yet --
     these pin the value domain itself."""

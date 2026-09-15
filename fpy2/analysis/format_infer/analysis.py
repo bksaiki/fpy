@@ -173,7 +173,7 @@ from ..context_use import ContextScope, ContextUse, ContextUseAnalysis, ContextU
 from ..define_use import DefineUse, DefineUseAnalysis
 from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
-from .format import AbstractableFormat, AbstractFormat
+from .format import AbstractableFormat, AbstractFormat, round_bound_out
 
 __all__ = [
     'FormatAnalysis',
@@ -1900,31 +1900,28 @@ class _FormatInferInstance(Visitor):
         if scope_af <= exact:
             return scope_fmt
 
-        # Mixed-overlap branch.  Tighten prec/exp unconditionally —
-        # both are sound under any rounding mode.  Tighten bounds
-        # only when F's precision fits in C's.
+        # Mixed-overlap branch.  Tighten prec/exp unconditionally — both are
+        # sound under any rounding mode.
         #
-        # Soundness pitfall on bounds: ``round_C(F.pos_bound)`` can
-        # land up to one ulp_C *above* F.pos_bound (round-up, or
-        # round-to-nearest with a tie pointing away from zero) when
-        # F.pos_bound isn't exactly C-representable.  A naive
-        # ``min(F.pos_bound, C.pos_bound)`` would then under-claim
-        # the image's bound and be unsound.
-        #
-        # The gate: when ``F.prec <= C.prec``, F.pos_bound has
-        # precision ≤ F.prec ≤ C.prec and is therefore exactly
-        # C-representable, so the intersection's bounds are sound.
-        # When ``F.prec > C.prec`` we fall back to C's bounds.
-        # ``int | float`` comparison works directly with the
-        # ``float('inf')`` sentinel used for unbounded prec.
+        # Bounds are the pitfall: ``round_C(F.pos_bound)`` lands *above*
+        # F.pos_bound whenever C does not hold it exactly, so a bare
+        # ``min(F.pos_bound, C.pos_bound)`` under-claims the image.  Off C's
+        # grid the round goes to the next point on it, which is
+        # ``round_bound_out`` -- without it ``round(FP32_MAX)`` at quantum
+        # ``2**128`` keeps a bound of ``FP32_MAX``, a set holding only zero.
+        # Past C's precision nothing local says where the round lands, so
+        # ``F.prec > C.prec`` keeps C's bounds; under that gate the
+        # grid-rounded bound has at most C.prec significant bits and sits on
+        # C's grid, so C holds it exactly.  ``int | float`` comparison works
+        # directly with the ``float('inf')`` sentinel used for unbounded prec.
         prec = min(exact.prec, scope_af.prec)
         exp = max(exact.exp, scope_af.exp)
         if exact.prec > scope_af.prec:
             pos_bound = scope_af.pos_bound
             neg_bound = scope_af.neg_bound
         else:
-            pos_bound = min(exact.pos_bound, scope_af.pos_bound)
-            neg_bound = max(exact.neg_bound, scope_af.neg_bound)
+            pos_bound = min(round_bound_out(exact.pos_bound, exp), scope_af.pos_bound)
+            neg_bound = max(round_bound_out(exact.neg_bound, exp), scope_af.neg_bound)
         overlap = AbstractFormat(prec, exp, pos_bound, neg_bound=neg_bound)
         return self._materialize_in_scope(overlap, scope_fmt)
 
