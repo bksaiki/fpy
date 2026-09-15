@@ -103,19 +103,22 @@ class TestStaticResolution:
         )
         assert 'return xs[' in out
 
-    def test_with_block_of_only_list_queries_compiles(self):
+    def test_with_block_that_reads_no_context_compiles(self):
         """A block whose body reads no context needs no resolvable one --
-        ``len`` answers the same integer under any scope.  This is what
-        ``RescaleFixed`` leaves behind: the roundings move to an inner
-        concrete context and the original ``with`` wraps only the queries."""
+        ``len`` answers the same integer under any scope, and ``empty`` rounds
+        nothing.  This is what ``RescaleFixed`` leaves behind: the roundings
+        move to an inner concrete context and the original ``with`` wraps only
+        the queries, the range and the allocation."""
 
         from fpy2.types import ListType
 
         @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real], n: fp.Real) -> fp.Real:
+        def f(xs: list[fp.Real], n: fp.Real) -> list[fp.Real]:
             with fp.MPFixedContext(n):     # symbolic: `n` is an argument
-                m = len(xs)
-            return m
+                ys = fp.empty(len(xs))
+                for i in range(len(xs)):
+                    ys[i] = xs[i]
+            return ys
 
         out = CppCompiler(optimize=False).compile(
             f, arg_types=[ListType(RealType(fp.FP64)), RealType(fp.INTEGER)],

@@ -1714,9 +1714,14 @@ class _FormatInferInstance(Visitor):
         a, b = cond.args
         out: list[tuple[Definition, AbstractFormat]] = []
         for x, y, o in ((a, b, op), (b, a, op.invert())):
-            if not isinstance(x, Var) or not isinstance(y, RationalVal):
+            if not isinstance(y, RationalVal):
                 continue
             c = y.as_rational()
+            if isinstance(x, Abs) and isinstance(x.arg, Var):
+                out += self._implied_magnitude(x.arg, o, c)
+                continue
+            if not isinstance(x, Var):
+                continue
             d = self.def_use.find_def_from_use(x)
             cons = _magnitude_constraint(o, c)
             if cons is not None:
@@ -1724,34 +1729,60 @@ class _FormatInferInstance(Visitor):
             out += self._implied_logb(d, o, c)
         return out
 
+    def _implied_magnitude(
+        self, v: Var, op: CompareOp, c: Fraction
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        """What `abs(v) op c` says about *v*.
+
+        An upper bound holds on both sides at once, which a comparison against
+        `v` itself states on only one.  A lower bound is not statable as a bound
+        -- this domain has no "away from zero" -- but it pins a digit position,
+        the same fact :meth:`_implied_logb` reads out of `logb(v) >= k`.
+        """
+        if not is_dyadic(c):
+            # a rounded bound could be tighter than the truth
+            return []
+        d = self.def_use.find_def_from_use(v)
+        b = RealFloat.from_rational(c)
+        if op in (CompareOp.LT, CompareOp.LE) and c >= 0:
+            return [(d, _unconstrained(pos_bound=b, neg_bound=-b))]
+        if op in (CompareOp.GE, CompareOp.GT) and c > 0:
+            return self._digit_floor(d, b.e)
+        return []
+
+    def _digit_floor(
+        self, d: Definition, binade: int
+    ) -> list[tuple[Definition, AbstractFormat]]:
+        """What `|v| >= 2 ** binade` says about *v*: a value that large with at
+        most `p` significant bits has no digit finer than `binade - p + 1`."""
+        # the stored bound, not `_bound_of_def`: this runs while the mask that
+        # method reads is still being built, and only the precision is wanted
+        fmt = self.by_def.get(d)
+        if not isinstance(fmt, AbstractableFormat):
+            return []
+        prec = AbstractFormat.from_format(fmt).prec
+        if not isinstance(prec, int):
+            return []       # unbounded precision pins no position
+        return [(d, _unconstrained(exp=binade - prec + 1))]
+
     def _implied_logb(
         self, d: Definition, op: CompareOp, c: Fraction
     ) -> list[tuple[Definition, AbstractFormat]]:
         """What a *lower* bound on `logb(v)` says about `v` itself.
 
-        ``logb(v) >= lo`` gives ``|v| >= 2 ** lo``, and a value that large with at
-        most ``p`` significant bits has no digit finer than ``lo - p + 1``.  This
-        domain cannot say "bounded away from zero", but it can say that, and it
-        is the half a bound alone never reaches: an `FP64` operand keeps a digit
-        at ``2 ** -1074`` however tightly its magnitude is bounded above.
+        ``logb(v) >= lo`` gives ``|v| >= 2 ** lo``.  This domain cannot say
+        "bounded away from zero", but the digit position that implies is the
+        half a bound alone never reaches: an `FP64` operand keeps a digit at
+        ``2 ** -1074`` however tightly its magnitude is bounded above.
         """
         if op not in (CompareOp.GE, CompareOp.GT):
             return []
         v = _logb_operand(d)
         if v is None:
             return []
-        d_v = self.def_use.find_def_from_use(v)
-        # the stored bound, not `_bound_of_def`: this runs while the mask that
-        # method reads is still being built, and only the precision is wanted
-        fmt = self.by_def.get(d_v)
-        if not isinstance(fmt, AbstractableFormat):
-            return []
-        prec = AbstractFormat.from_format(fmt).prec
-        if not isinstance(prec, int):
-            return []       # unbounded precision pins no position
-        # `logb(v) >= c` gives `|v| >= 2 ** floor(c)` whether or not `logb`'s
-        # result is known to be integral
-        return [(d_v, _unconstrained(exp=math.floor(c) - prec + 1))]
+        # `floor(c)` whether or not `logb`'s result is known to be integral
+        return self._digit_floor(
+            self.def_use.find_def_from_use(v), math.floor(c))
 
     def _join(self, s1: FormatBound, s2: FormatBound) -> FormatBound:
         """Join two formats, respecting the visitor's current widen state."""

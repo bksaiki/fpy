@@ -14,6 +14,8 @@ The context's edges become assertions around it: an operand it has no result
 for, and a result past its bound.
 """
 
+import re
+
 import pytest
 
 import fpy2 as fp
@@ -232,6 +234,87 @@ class TestDeclines:
         )
 
 
+class TestStorageFromTheInferredFormat:
+    """A fixed-point context with no storage of its own.
+
+    ``MPFixedContext(-1)`` is unbounded *and* keeps a ``-0``, so no integer type
+    holds it and no float type spans it.  What limits the result is the value's
+    reach, which format inference has: the rounding takes its storage from there
+    and asserts the bound it proved.  This is what `rescale_fixed` leaves at a
+    run-time rounding position.
+    """
+
+    @staticmethod
+    def _rescaled():
+        import fpy2.strategies as strat
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], e: fp.Real) -> list[fp.Real]:
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return ys
+
+        return strat.simplify(strat.rescale_fixed(strat.comp_to_loop(f)))
+
+    @staticmethod
+    def _compile(fn):
+        from fpy2.types import ListType
+        return CppCompiler().compile(
+            fn, arg_types=[ListType(RealType(fp.FP32)), RealType(fp.SINT8)],
+        )
+
+    def test_the_context_alone_has_no_storage(self):
+        """The premise: the context names no type, so one has to come from
+        elsewhere."""
+        from fpy2.backend.cpp.storage import StorageSelectionError, choose_storage
+
+        with pytest.raises(StorageSelectionError):
+            choose_storage(fp.MPFixedContext(-1).format())
+
+    def test_a_rescaled_rounding_compiles(self):
+        """The libm rounding, in the type the inferred format chose."""
+        out = self._compile(self._rescaled())
+        assert re.search(r'double \w+ = std::nearbyint\(', out), out
+
+    def test_the_bound_it_asserts_comes_from_the_analysis(self):
+        """The context states no bound, so the assertion carries the inferred
+        one -- which makes it a check on the inference."""
+        out = self._compile(self._rescaled())
+        assert 'overflow occurred so rounding is undefined' in out
+        # a finite magnitude test, not a context-stated maxval
+        assert 'std::fabs' in out
+
+    def test_an_unstorable_value_is_still_refused(self):
+        """Deferring the scope's check lets no value through that no type
+        holds: storage selection asks the same question per value."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real, y: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(-1):
+                return x + y
+
+        with pytest.raises(CppCompileError, match='no storage format contains'):
+            CppCompiler(optimize=False).compile(
+                g, arg_types=[RealType(fp.FP32), RealType(fp.FP32)])
+
+    def test_arithmetic_is_still_refused_where_the_value_is_storable(self):
+        """And where it does hold one, the op table refuses: a signature
+        matches only its own context, and no native context is this one.  Only
+        a rounding is lowered under a context with no storage."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = fp.round(x)
+            with fp.MPFixedContext(-1):
+                b = a * a
+            return b
+
+        with pytest.raises(CppCompileError, match='no matching signature'):
+            CppCompiler(optimize=False).compile(
+                g, arg_types=[RealType(fp.FP64)])
+
+
 class TestFloatContextUnaffected:
     """A genuine float context still goes through ``fesetround``; the
     restructured validation must not have changed that."""
@@ -252,6 +335,29 @@ class TestFloatContextUnaffected:
         # a fixed-point context at a non-zero position lands here
         with pytest.raises(CppCompileError):
             _emit(MPBFixedContext(-8, fp.RealFloat(exp=4, c=1), overflow=ASSERT))
+
+
+class TestTheLoweredScaleInStaysNarrow:
+    """The normal branch scales by ``2 ** -exp`` in the operand's own type.
+
+    `FloatToFixed` takes that branch on ``abs(x) >= 2 ** emin``, which tells
+    inference the finest digit ``x`` can carry (`_implied_magnitude`).  Without
+    that the operand's format keeps a digit it cannot have, and the scale-in
+    widens to ``double`` -- correct, and a type wider than the value needs.
+    """
+
+    def test_the_scale_in_takes_the_operand_unwidened(self):
+        import fpy2.strategies as strat
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                return fp.round(x)
+
+        g = strat.simplify(strat.rescale_fixed(strat.float_to_fixed(
+            strat.unfold_overflow(strat.unfold_special(f), early_check=True))))
+        out = CppCompiler().compile(g, arg_types=[RealType(fp.FP32)])
+        assert re.search(r'float \w+ = std::ldexp\(x,', out), out
 
 
 class TestScaleByPowerOfTwo:

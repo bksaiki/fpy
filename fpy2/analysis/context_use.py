@@ -36,7 +36,7 @@ ContextScopeSite: TypeAlias = FuncDef | ContextStmt
 ContextUseSite: TypeAlias = NullaryOp | UnaryOp | BinaryOp | TernaryOp | NaryOp | Call
 """AST nodes that use a rounding context"""
 
-_CTX_FREE_OPS = (Len, Dim, Size, Range1, Range2, Range3, Enumerate)
+_CTX_FREE_OPS = (Len, Dim, Size, Range1, Range2, Range3, Enumerate, Empty)
 """Operators that never use the active context, so a `with` wrapping only
 these needs no resolvable one."""
 

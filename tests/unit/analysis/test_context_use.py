@@ -190,6 +190,19 @@ class TestContextUse:
         with_scope = result.scopes[-1]
         assert result.uses[with_scope] == set()
 
+    def test_an_allocation_is_not_a_use(self):
+        """``empty`` reserves list slots and rounds nothing, so a scope it
+        allocates under is unobservable too."""
+        @fp.fpy
+        def f(n: fp.Real) -> list[fp.Real]:
+            with fp.IEEEContext(11, 64, fp.RM.RNE):
+                ys = fp.empty(n)
+            return ys
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        with_scope = result.scopes[-1]
+        assert result.uses[with_scope] == set()
+
     def test_a_rounding_beside_a_query_is_still_a_use(self):
         """The exclusion is per operator, not per block."""
         @fp.fpy
