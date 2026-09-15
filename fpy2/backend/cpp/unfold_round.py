@@ -15,24 +15,14 @@ from enum import Enum, auto
 
 from ...analysis import ContextUse, DefineUse
 from ...ast.fpyast import (
-    Assign,
     BinaryOp,
     Cast,
-    ContextStmt,
     Expr,
-    ForeignVal,
     FuncDef,
-    NamedId,
-    ReturnStmt,
     Round,
-    Stmt,
-    StmtBlock,
     TernaryOp,
     UnaryOp,
-    UnderscoreId,
-    Var,
 )
-from ...ast.visitor import DefaultTransformVisitor
 from ...number import (
     REAL,
     RM,
@@ -53,7 +43,6 @@ from ...transform import (
     UnfoldSpecial,
 )
 from ...transform.cursor import expr_sites
-from ...transform.path import resolve_stmt
 from .target import is_native_ctx, make_op_table
 
 __all__ = ['UnfoldKind', 'UnfoldMode', 'UnfoldSite', 'sites', 'unfold', 'unfold_arith']
@@ -289,65 +278,6 @@ def unfold_arith(func: FuncDef) -> FuncDef:
     return func
 
 
-def _isolatable(stmt: Stmt, e: Expr) -> bool:
-    """Whether wrapping *stmt* in a `with` gives the ladder a rounding block.
-
-    :func:`fpy2.transform.utils.rounding_block`'s condition for a single
-    statement: an unannotated assign to a name, or a return, whose whole
-    expression rounds a *variable*.  Anything else keeps its refusal -- and a
-    rounding of a literal never gets here, the emitter folding those.
-    """
-    match stmt:
-        case Assign(target=NamedId(), type=None) | ReturnStmt():
-            return stmt.expr is e and isinstance(e.arg, Var)   # type: ignore[attr-defined]
-        case _:
-            return False
-
-
-class _Isolate(DefaultTransformVisitor):
-    """Puts each named statement in a `with` block of its own."""
-
-    def __init__(self, blocks: dict[int, Context]):
-        self.blocks = blocks
-        """the statement to wrap, by identity, and the context to wrap it in"""
-
-    def apply(self, func: FuncDef) -> FuncDef:
-        return self._visit_function(func, None)
-
-    def _visit_block(self, block: StmtBlock, ctx):
-        out: list[Stmt] = []
-        for stmt in block.stmts:
-            want = self.blocks.get(id(stmt))
-            new, ctx = self._visit_statement(stmt, ctx)
-            if want is not None:
-                new = ContextStmt(
-                    UnderscoreId(), ForeignVal(want, new.loc),
-                    StmtBlock([new]), new.loc,
-                )
-            out.append(new)
-        return StmtBlock(out), ctx
-
-
-def _isolate(func: FuncDef, todo: list[UnfoldSite]) -> FuncDef:
-    """*func* with each of *todo*'s roundings inside a block of its own.
-
-    Every pass of the ladder takes a *rounding block*, and a specialized
-    function has none: `Specialize` folds a block whose context is the
-    function's own into the annotation, which is where all of these end up.  So
-    the shape has to be put back.
-
-    Only the sites are wrapped, which is what makes running the ladder over the
-    whole program safe: a rounding the emitter already spells is not a block, so
-    no pass considers it.
-    """
-    blocks: dict[int, Context] = {}
-    for site in todo:
-        stmt = resolve_stmt(func, site.cursor.path.stmt())
-        if _isolatable(stmt, site.cursor.resolve()):
-            blocks[id(stmt)] = site.ctx
-    return _Isolate(blocks).apply(func) if blocks else func
-
-
 def _unfold_roundings(func: FuncDef) -> FuncDef:
     """*func* with every rounding the op table cannot spell expressed as
     integer arithmetic.
@@ -361,11 +291,13 @@ def _unfold_roundings(func: FuncDef) -> FuncDef:
     One pass, not a fixpoint: each step selects its own candidates, so the two
     rows of the ladder -- a non-native float context, and a fixed-point one the
     backend cannot lower -- are the same call with different steps declining.
+
+    Each pass finds its own sites by active context, so a rounding written
+    under a `with` and one under the function's own annotation are the same
+    thing to it.  There is nothing here to put the block shape back.
     """
-    todo = [s for s in sites(func) if s.kind is not UnfoldKind.ARITH]
-    if not todo:
+    if not any(s.kind is not UnfoldKind.ARITH for s in sites(func)):
         return func
-    func = _isolate(func, todo)
     func = UnfoldSpecial.apply(func)
     func = UnfoldOverflow.apply(func, early_check=True)
     func = FloatToFixed.apply(func)

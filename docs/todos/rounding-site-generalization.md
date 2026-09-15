@@ -284,6 +284,27 @@ python -m pytest tests/unit/backend/cpp/ -q
 `test_lowered_roundtrip.py` is the bit-exactness pin and is the one that
 matters here.
 
+**Checked, and it is not what the docstring claimed.** `_isolate` said "only
+the sites are wrapped, which is what makes running the ladder over the whole
+program safe: a rounding the emitter already spells is not a block, so no pass
+considers it." The four passes run with `where=None`, so they always rewrote
+every candidate; `_isolate` only ever *added* the annotation-scoped roundings
+to that set. Measured on two programs mixing a native `FP32` rounding with a
+non-native `FP16` one, before and after the deletion:
+
+```
+                   sites  fp.logb  sites left
+mixed                  1        2           0
+annotated_mixed        1        2           0
+```
+
+Identical either way: one site, two roundings lowered. So the deletion is
+behavior-preserving, and **the ladder rewriting roundings the emitter already
+spells is a pre-existing issue** — worth its own fix, out of scope here. The
+shape of that fix is `unfold_arith`'s: re-derive sites after each rewrite and
+aim one at a time, anchored on the statement (see "Pinning a point across a
+sequence" for why not the rounding).
+
 ---
 
 ## Phase 6 — docs and the site contract
@@ -299,6 +320,8 @@ matters here.
   across a sequence"): to aim a *sequence* at one program point, pin the
   statement holding the rounding, not the expression `sites()` reports.
 - `fpy2/strategies/__init__.py` module docstring: same.
+- `docs/todos/rounding-axes.md:253` and `docs/todos/scheduling-language.md:15,57`
+  name `BlockRewriter`, which Phase 5 deleted.
 - `docs/todos/native-lowering-roadmap.md` §2 states the recipe as
   `monomorphize → unfold_special → unfold_overflow → float_to_fixed →
   rescale_fixed → simplify` and never mentions `_isolate`, so the sequence is

@@ -48,7 +48,6 @@ from ..ast.fpyast import (
     Neg,
     NullaryOp,
     Rational,
-    ReturnStmt,
     Round,
     Signbit,
     Stmt,
@@ -209,11 +208,6 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     )
 
 
-def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
-    """Whether *stmt* is a candidate rounding block: what :meth:`sites` lists."""
-    return isinstance(stmt, ContextStmt) and rounding_block(stmt, casts=casts) is not None
-
-
 def operands(e: Expr) -> list[Expr]:
     """The direct operands, left to right, of an operation.
 
@@ -266,32 +260,6 @@ def check_where(where: int | Cursor | None) -> None:
         raise TypeError(
             f'expected an \'int\', a cursor or None for where, got `{where}`'
         )
-
-
-def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
-    """The rounded operands of a structurally-matching block: an
-    underscore-bound context whose every statement assigns or returns a
-    round (or a cast too, where `casts`) of a variable.  `None` otherwise.
-    Pure syntax: this is what a `where` index counts.  An annotated assign
-    is no match: the rewrites cannot carry the annotation.
-    """
-    # a bound context is visible to the body as a value, which a rewrite changes
-    if not isinstance(stmt.target, UnderscoreId):
-        return None
-    args: list[Var] = []
-    for s in stmt.body.stmts:
-        match s:
-            case Assign(target=NamedId(), type=None) | ReturnStmt():
-                match s.expr:
-                    case Round(arg=Var() as v):
-                        args.append(v)
-                    case Cast(arg=Var() as v) if casts:
-                        args.append(v)
-                    case _:
-                        return None
-            case _:
-                return None
-    return args
 
 
 def _target_of(
@@ -930,66 +898,3 @@ class ScopedRoundingRewriter(PreambleScoped):
             return super()._visit_assign(stmt, ctx)
         finally:
             self._direct = None
-
-
-class BlockRewriter(SiteRewriter):
-    """
-    Rewrites selected `with` blocks, each into several statements.
-
-    A subclass says which blocks structurally match (`_candidate`), whether a
-    match may be rewritten (`_verify`), and what to put in its place
-    (`_rewrite`).  A candidate `_verify` declines is skipped, except that an
-    index naming one raises :class:`TransformDeclined`, as does a cursor or
-    region whose candidates *all* declined.
-    """
-
-    def _candidate(self, stmt: ContextStmt):
-        """What `_verify` needs for this block, or `None` where it does not
-        structurally match.  Only matches count toward `where`."""
-        raise NotImplementedError
-
-    def _verify(self, stmt: ContextStmt, info):
-        """What `_rewrite` needs for this match, or a `Declined` saying why
-        it cannot be rewritten.  By default every match verifies."""
-        return info
-
-    def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
-        """The statements that replace `stmt`."""
-        raise NotImplementedError
-
-    def _visit_block(self, block: StmtBlock, ctx):
-        # a rewritten block expands into several statements, so the splice
-        # happens here rather than in `_visit_context`
-        stmts: list[Stmt] = []
-        for pos, s in enumerate(block.stmts):
-            if isinstance(s, ContextStmt):
-                info = self._candidate(s)
-                if info is not None:
-                    # every candidate is verified, whether or not it is the one
-                    # aimed at: a refusal is not a site, so it must not consume
-                    # an index that a listing would not report
-                    verified = self._verify(s, info)
-                    if isinstance(verified, Declined):
-                        self.refused.append((s, verified.reason))
-                        if self._target is not None and self._selects(block, pos, -1):
-                            # a cursor named this candidate: say why, rather
-                            # than report that it named nothing
-                            self.declined.append(verified.reason)
-                    else:
-                        idx = self.site_idx
-                        self.site_idx += 1
-                        if self._selects(block, pos, idx):
-                            self._matched += 1
-                            if self.listing:
-                                self.found.append(
-                                    StmtPath(self._paths[id(block)], pos)
-                                )
-                                stmts.append(s)
-                                continue
-                            emitted = self._rewrite(s, verified)
-                            self._record(block, pos, len(emitted))
-                            stmts.extend(emitted)
-                            continue
-            new_s, ctx = self._visit_statement(s, ctx)
-            stmts.append(new_s)
-        return StmtBlock(stmts), ctx
