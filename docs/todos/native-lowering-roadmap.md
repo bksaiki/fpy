@@ -128,6 +128,10 @@ read the branches) and `logb` is computed once. `unfold_neg_zero` is *not* in th
 sequence — nothing reaches it, since the zero branch has already said what each
 zero rounds to.
 
+Each operator finds its own sites by *active context*, so a rounding under a
+`with` and one under the function's own annotation are the same thing to it —
+which is why a specialized function needs no blocks synthesized for it.
+
 **The cpp backend has an entry point**, `CppCompiler(unfold=...)`: it finds its
 own sites and runs the sequence, with a `split_round` step in front for
 arithmetic the op table cannot spell. See *Recovering from an unsupported

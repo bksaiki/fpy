@@ -67,18 +67,17 @@ Applies to a float format that rounds deterministically and whose overflow a
 fixed-point round can reproduce — an infinity, the bound, or a NaN.  An
 unbounded format (``MPSFloatContext``, ``MPFloatContext``) needs no upper
 clamp -- its target's bound states how far the operand reaches, not what the
-format does at an edge; one without subnormals needs no branch for them.  Only a
-block whose body is entirely ``x = fp.round(v)`` (or a returned round) over
-variables is rewritten.  The rewrite needs ``fpy2`` in scope, since it names the
-context constructor.
+format does at an edge; one without subnormals needs no branch for them.
+
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.  The
+rewrite needs ``fpy2`` in scope, since it names the context constructor.
 """
 
 from dataclasses import dataclass, replace
 from enum import Enum, auto
 
 from ..analysis import (
-    PartialEval,
-    PartialEvalInfo,
     ValueClass,
     ValueClassAnalysis,
     ValueClassInfer,
@@ -106,7 +105,6 @@ from ..ast.fpyast import (
     Min,
     NamedId,
     Pow,
-    ReturnStmt,
     Round,
     Stmt,
     StmtBlock,
@@ -130,16 +128,15 @@ from ..number import (
     RoundingMode,
 )
 from ..utils import CompareOp, Gensym
-from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .cursor import Cursor, EditLog
 from .error import TransformDeclined
 from .utils import (
-    BlockRewriter,
     Declined,
+    RoundingScopes,
+    ScopedRoundingRewriter,
     attribute,
     check_where,
-    is_rounding_block,
     number_literal,
-    rounding_block,
     sign_choice,
     value_literal,
 )
@@ -357,14 +354,14 @@ def _ctx_call(
     )
 
 
-class _FloatToFixedInstance(BlockRewriter):
-    """Rewrites every qualifying context statement in a function."""
+class _FloatToFixedInstance(ScopedRoundingRewriter):
+    """Lowers every qualifying rounding in a function to fixed-point."""
 
     _casts = False
-    """whether a `fp.cast` block counts as a candidate"""
+    """`Cast` asserts exactness, which the lowering would not preserve"""
 
     func: FuncDef
-    eval_info: PartialEvalInfo
+    scopes: RoundingScopes
     class_info: ValueClassAnalysis
     gensym: Gensym
     alias: str | None
@@ -372,13 +369,13 @@ class _FloatToFixedInstance(BlockRewriter):
     site_idx: int
 
     def __init__(
-        self, func: FuncDef, eval_info: PartialEvalInfo,
+        self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis, where: int | Cursor | None = None,
     ):
         self.func = func
-        self.eval_info = eval_info
+        self.scopes = scopes
         self.class_info = class_info
-        self.gensym = Gensym(eval_info.def_use.names())
+        self.gensym = Gensym(scopes.def_use.names())
         self.where = where
         # the name the program calls `fpy2` by: the rewrite constructs a
         # context per value, so it has to name the constructor
@@ -398,25 +395,19 @@ class _FloatToFixedInstance(BlockRewriter):
             func = FuncDef(func.name, func.args, func.body, meta, loc=func.loc)
         return func
 
-    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """Only a rounding is a fixed-point rounding in disguise; `Cast`
-        asserts exactness, which the lowering would not preserve."""
-        return rounding_block(stmt, casts=self._casts)
-
-    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
-        """The block's context, if its rounding can be lowered to fixed-point."""
-        ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, Context):
+    def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
+        """The rounding's context, if it can be lowered to fixed-point."""
+        if ctx is None:
             return Declined('the context is not statically known')
         return _describe(ctx)
 
-    def _lower_round(
-        self, e: Round, target: NamedId, loc: Location | None, src: _Source
-    ) -> Stmt:
+    def _ladder(self, e: Expr, target: NamedId, out: list, src: _Source) -> None:
         """`target = round(v)` as a fixed-point rounding at a computed position."""
-        assert isinstance(e.arg, Var) and self.alias is not None
-        name = e.arg.name
+        assert isinstance(e, Round) and self.alias is not None
+        loc = e.loc
         alias = self.alias
+        self.used_alias = True
+        name = self._arg_name(e, out)
 
         def arg() -> Var:
             return Var(name, loc)
@@ -516,24 +507,7 @@ class _FloatToFixedInstance(BlockRewriter):
             )])
 
         # only the roundings need a rounding context; the rest is exact
-        return ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), chain, loc)
-
-    def _rewrite(self, stmt: ContextStmt, src: _Source) -> list[Stmt]:
-        """The block's rounds, lowered.  Nothing rounds under the float context
-        afterwards, so the block itself goes away."""
-        self.used_alias = True
-        stmts: list[Stmt] = []
-        for s in stmt.body.stmts:
-            if isinstance(s, Assign):
-                assert isinstance(s.expr, Round) and isinstance(s.target, NamedId)
-                stmts.append(self._lower_round(s.expr, s.target, s.loc, src))
-            else:
-                # a returned round lands in a temporary, which the return names
-                assert isinstance(s, ReturnStmt) and isinstance(s.expr, Round)
-                out = self.gensym.fresh('_t')
-                stmts.append(self._lower_round(s.expr, out, s.loc, src))
-                stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
-        return stmts
+        out.append(ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), chain, loc))
 
 
 class FloatToFixed:
@@ -547,43 +521,43 @@ class FloatToFixed:
         and what `within` narrows.
 
         Runs the same decisions the rewrite does, so a listing reports exactly
-        the blocks `where=None` would rewrite: no candidate that this pass
+        the roundings `where=None` would rewrite: no candidate that this pass
         refuses appears here or consumes an index.
         """
-        eval_info = PartialEval.apply(func)
         class_info = ValueClassInfer.analyze(func)
-        return _FloatToFixedInstance(func, eval_info, class_info).list_sites(within)
+        return _FloatToFixedInstance(
+            func, RoundingScopes(func), class_info,
+        ).list_sites(within)
 
     @staticmethod
     def refusals(
         func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
-        """Why each rounding block of `func` that is not a site was refused,
-        in visit order.  A refusal takes no index, so this is how one is found.
+        """Why each rounding of `func` that is not a site was refused, in visit
+        order.  A refusal takes no index, so this is how one is found.
         """
-        eval_info = PartialEval.apply(func)
         class_info = ValueClassInfer.analyze(func)
-        return _FloatToFixedInstance(func, eval_info, class_info).list_refusals(within)
+        return _FloatToFixedInstance(
+            func, RoundingScopes(func), class_info,
+        ).list_refusals(within)
 
     @staticmethod
     def apply(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
         """
         Expresses float rounding in `func` as fixed-point rounding.
 
-        `where` selects one structurally-matching rounding block by index
-        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `where` selects one rounding by index (see
+        :class:`.utils.ScopedRoundingRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.  Raises
         :class:`TransformDeclined` up front where `fpy2` is not in scope.
         """
         return FloatToFixed.apply_with_edits(
             func,
             where=where,
-            eval_info=eval_info,
             class_info=class_info,
         ).result
 
@@ -591,7 +565,6 @@ class FloatToFixed:
     def apply_with_edits(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
@@ -606,12 +579,10 @@ class FloatToFixed:
                 'in scope to name it by'
             )
 
-        if eval_info is None:
-            eval_info = PartialEval.apply(func)
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        vtor = _FloatToFixedInstance(func, eval_info, class_info, where)
+        vtor = _FloatToFixedInstance(func, RoundingScopes(func), class_info, where)
         out = vtor.apply()
-        vtor.check_site('a candidate rounding block')
+        vtor.check_site('a candidate rounding')
         return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

@@ -10,6 +10,8 @@ import pytest
 
 import fpy2 as fp
 
+from fpy2.ast.fpyast import Round
+from fpy2.ast.visitor import DefaultVisitor
 from fpy2.strategies import (
     BlockCursor,
     FuncBody,
@@ -22,6 +24,7 @@ from fpy2.strategies import (
     unfold_overflow,
     unfold_special,
 )
+from fpy2.transform.utils import RoundingScopes
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -52,9 +55,22 @@ def exact(x: fp.Real) -> fp.Real:
     return y
 
 
-def _rounding_ctxs(func) -> list[str]:
-    """The rounding contexts still written as `with fp.FP16:` blocks."""
-    return [s.format() for s in func.ast.body.stmts if 'fp.FP16' in s.format()]
+def _fp16_rounds(func) -> int:
+    """How many roundings still run under `fp.FP16`.
+
+    A block a rewrite emptied survives until dead-code elimination, so the
+    question is what still rounds under the format, not which blocks name it.
+    """
+    scopes = RoundingScopes(func.ast)
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_round(self, e: Round, ctx):
+            found.append(scopes.scope_ctx(e))
+            super()._visit_round(e, ctx)
+
+    _C()._visit_function(func.ast, None)
+    return sum(c is fp.FP16 for c in found)
 
 
 # ----------------------------------------------------------------------
@@ -69,12 +85,12 @@ def test_a_pinned_cursor_aims_every_operator_in_the_sequence():
     f = float_to_fixed(f, where=site)
     f = rescale_fixed(f, where=site)
 
-    # the pinned block is gone, lowered to fixed-point rounding
+    # the pinned rounding is gone, lowered to fixed-point rounding
     assert 'MPBFixedContext' in f.format()
     assert 'fp.logb' in f.format()
     # the other one is exactly as it was
-    assert _rounding_ctxs(f) == _rounding_ctxs(two_sites)[1:]
-    assert len(_rounding_ctxs(f)) == 1
+    assert _fp16_rounds(two_sites) == 2 and _fp16_rounds(f) == 1
+    assert f.ast.body.stmts[1].format() == two_sites.ast.body.stmts[1].format()
 
 
 def test_a_cursor_takes_candidates_beneath_it():
@@ -85,7 +101,8 @@ def test_a_cursor_takes_candidates_beneath_it():
 
     wrapper = f1.rebase(site)
     assert isinstance(wrapper, StmtCursor)
-    assert 'fp.FP16' not in wrapper.resolve().format().splitlines()[0]
+    # the rounding sits inside the wrapper, not on its first line
+    assert 'fp.round' not in wrapper.resolve().format().splitlines()[0]
 
     f2 = unfold_overflow(f1, where=site, early_check=True)
     assert f2.edits is not None and len(f2.edits.edits) == 1
@@ -97,8 +114,10 @@ def test_a_cursor_selects_one_of_two_sites():
     first = unfold_special(two_sites, where=StmtCursor(two_sites.ast, FuncBody().stmt(0)))
     second = unfold_special(two_sites, where=StmtCursor(two_sites.ast, FuncBody().stmt(1)))
 
-    assert first.edits is not None and first.edits.edits[0].index == 0
-    assert second.edits is not None and second.edits.edits[0].index == 1
+    # the edit lands on the rounding, inside the block the cursor named
+    assert first.edits is not None and second.edits is not None
+    assert first.edits.edits[0].block_path == FuncBody().stmt(0).block('body')
+    assert second.edits.edits[0].block_path == FuncBody().stmt(1).block('body')
     assert first.format() != second.format()
 
 
@@ -107,9 +126,11 @@ def test_a_cursor_reaches_a_site_in_a_branch():
     out = unfold_special(branched, where=site)
 
     edit, = out.edits.edits if out.edits else ()
-    assert edit.block_path == FuncBody().stmt(0).block('iff')
+    assert edit.block_path == (
+        FuncBody().stmt(0).block('iff').stmt(0).block('body')
+    )
     # the other arm is untouched
-    assert 'fp.FP16' in out.ast.body.stmts[0].format()
+    assert 'fp.round' in out.ast.body.stmts[0].format()
 
 
 # ----------------------------------------------------------------------
@@ -120,14 +141,18 @@ def test_a_region_takes_every_candidate_within_it():
     whole = BlockCursor(two_sites.ast, FuncBody(), range(0, 2))
     out = unfold_special(two_sites, where=whole)
     assert out.edits is not None
-    assert [e.index for e in out.edits.edits] == [0, 1]
+    assert [e.block_path for e in out.edits.edits] == [
+        FuncBody().stmt(0).block('body'), FuncBody().stmt(1).block('body'),
+    ]
 
 
 def test_a_region_scopes_the_walk():
     part = BlockCursor(two_sites.ast, FuncBody(), range(1, 2))
     out = unfold_special(two_sites, where=part)
     assert out.edits is not None
-    assert [e.index for e in out.edits.edits] == [1]
+    assert [e.block_path for e in out.edits.edits] == [
+        FuncBody().stmt(1).block('body')
+    ]
 
 
 def test_a_region_reaches_candidates_nested_in_it():
@@ -136,7 +161,8 @@ def test_a_region_reaches_candidates_nested_in_it():
     out = unfold_special(branched, where=whole)
     assert out.edits is not None
     assert {e.block_path for e in out.edits.edits} == {
-        FuncBody().stmt(0).block('ift'), FuncBody().stmt(0).block('iff'),
+        FuncBody().stmt(0).block('ift').stmt(0).block('body'),
+        FuncBody().stmt(0).block('iff').stmt(0).block('body'),
     }
 
 

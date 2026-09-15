@@ -6,6 +6,22 @@ A cursor or region selects every candidate *at or beneath* the program point it
 names, so the statement an earlier rewrite left behind names the site now nested
 inside it; one from an earlier program is forwarded to this one first.
 :func:`sites` lists what a `where` may name.
+
+**What a rounding site is.**  A ``fp.round`` -- or a ``fp.cast``, where the
+rewrite takes one -- wherever the context active there is one that rewrite can
+restate.  Under a ``with``, under the function's own annotation, or beside
+statements rounding to something else: all the same to it.  An operand that is
+not already a name is bound to one first, in the scope it was written in, which
+is the scope that already rounded it.  A position with no statement slot for
+what the rewrite emits -- a ternary arm, a comprehension element -- is refused;
+:func:`to_hoistable` gives it one.
+
+**Pinning a point across a sequence.**  A rounding rewrite emits *into* the
+block it found the rounding in rather than replacing it, so a ``with`` left
+holding no rounding goes when :func:`simplify` runs.  Aim a sequence with the
+*statement* holding the rounding rather than the expression :func:`sites`
+reports: a rewrite consumes the rounding it acts on, so that expression names
+nothing afterwards, while the statement survives with what replaced it beneath.
 """
 
 from ..transform import (

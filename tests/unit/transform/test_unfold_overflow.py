@@ -40,6 +40,7 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldOverflow
+from fpy2.transform.utils import RoundingScopes
 from fpy2.types import RealType
 
 
@@ -67,6 +68,17 @@ def _block_ctxs(ast: FuncDef) -> list:
         v for s in _blocks(ast)
         if (v := eval_info.by_expr.get(s.ctx)) is not None
     ]
+
+
+def _round_ctxs(ast: FuncDef) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied is dropped by dead-code
+    elimination and not by the rewrite, so the *block* contexts still name the
+    source format.
+    """
+    scopes = RoundingScopes(ast)
+    return [scopes.scope_ctx(e) for e in _nodes(ast, Round)]
 
 
 def _nodes(ast: FuncDef, node_type) -> list:
@@ -163,8 +175,8 @@ class TestShape:
         f = _quantizer(fp.FP16)
         out = UnfoldOverflow.apply(f.ast)
 
-        ctxs = _block_ctxs(out)
-        assert REAL in ctxs
+        assert REAL in _block_ctxs(out)
+        ctxs = _round_ctxs(out)
         assert not any(isinstance(c, fp.IEEEContext) for c in ctxs)
         target = next(c for c in ctxs if isinstance(c, MPSFloatContext))
         assert (target.pmax, target.emin) == (fp.FP16.pmax, fp.FP16.emin)
@@ -289,7 +301,7 @@ class TestShape:
                 return fp.round(x)
 
         out = UnfoldOverflow.apply(f.ast)
-        assert not any(isinstance(c, fp.IEEEContext) for c in _block_ctxs(out))
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
         for x in _samples(fp.FP16):
             assert _same(_eval(out, f, x), f(x)), x
 
@@ -304,7 +316,7 @@ class TestShape:
             return s
 
         out = UnfoldOverflow.apply(f.ast)
-        assert not any(c is fp.FP16 for c in _block_ctxs(out))
+        assert not any(c is fp.FP16 for c in _round_ctxs(out))
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
         assert _same(_eval(out, f, 1e5, 1.0), f(1e5, 1.0))
 
@@ -479,7 +491,7 @@ class TestWhere:
         f = self._two()
         out = UnfoldOverflow.apply(f.ast, where=where)
         # the FP64 block is arithmetic, so it is never a candidate
-        remaining = [c for c in _block_ctxs(out) if c in (fp.FP16, fp.FP32)]
+        remaining = [c for c in _round_ctxs(out) if c in (fp.FP16, fp.FP32)]
         assert remaining == left
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
@@ -569,23 +581,84 @@ class TestUnchanged:
 
         assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
 
+
+# ----------------------------------------------------------------------
+# Sites outside a block of their own
+
+
+class TestScopedSites:
+    """A site is a rounding under a bounded scope, whatever the program looks
+    like around it: the rewrite asks `ContextUse` what is active, not whether
+    the statement sits in a block of a particular shape."""
+
     def test_round_of_an_expression(self):
+        """The operand is bound first.  It is evaluated under the scope it was
+        written in -- the same one the rounding runs under -- so the bind is an
+        identity, and the ladder gets the name it reads several times."""
         @fp.fpy(ctx=fp.REAL)
         def f(a, b):
             with fp.FP16:
                 y = fp.round(a + b)
             return y
 
-        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for a, b in ((0.1, 0.2), (1e5, 1.0), (-7e4, -1.0)):
+            assert _same(_eval(out, f, a, b), f(a, b)), (a, b)
 
     def test_bound_context(self):
+        """A bound context is visible to the body as a value, which is no
+        reason to leave the rounding under it alone."""
         @fp.fpy(ctx=fp.REAL)
         def f(x):
             with fp.FP16 as c:
                 y = fp.round(x)
             return y
 
-        assert UnfoldOverflow.apply(f.ast).is_equiv(f.ast)
+        out = UnfoldOverflow.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_function_annotation_scope(self):
+        """No `with` at all: the scope is the function's own annotation, which
+        `Specialize` is what usually leaves behind."""
+        @fp.fpy(ctx=fp.FP16)
+        def f(x):
+            y = fp.round(x)
+            return y
+
+        out = UnfoldOverflow.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, f, x), f(x)), x
+
+    def test_block_with_other_statements(self):
+        """A block whose body is not all roundings."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FP16:
+                aq = fp.round(a)
+                s = aq + b
+            return s
+
+        out = UnfoldOverflow.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
+
+    def test_annotated_assign(self):
+        """The ladder has several branches to sit in and the annotation one
+        place to sit, so the assignment stays and reads a temporary."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.FP16:
+                y: fp.Real = fp.round(x)
+            return y
+
+        out = UnfoldOverflow.apply(f.ast)
+        assert not any(isinstance(c, fp.IEEEContext) for c in _round_ctxs(out))
+        for x in _samples(fp.FP16):
+            assert _same(_eval(out, f, x), f(x)), x
 
 
 # ----------------------------------------------------------------------

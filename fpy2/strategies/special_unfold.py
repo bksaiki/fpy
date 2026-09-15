@@ -41,11 +41,10 @@ def unfold_special(func: Function, where: int | Cursor | None = None) -> Functio
     specials is left unchanged, as is ``REAL``, which rounds exactly.
 
     Which branches appear is decided per operand, so a class the operand
-    cannot hold gets none — which also makes the rewrite idempotent.  Only
-    blocks whose body is entirely ``x = fp.round(v)`` or ``x = fp.cast(v)``
-    (or a returned round) are rewritten; a cast substitutes a special exactly
-    as a round does, and a stochastic rounding takes the branches too, since
-    a special never reaches the random draw.
+    cannot hold gets none — which also makes the rewrite idempotent.  A
+    ``fp.cast`` is a site as well, substituting a special exactly as a round
+    does, and so is a stochastic rounding, since a special never reaches the
+    random draw.  See :mod:`fpy2.strategies` for what a rounding site is.
 
     Run :func:`fpy2.strategies.rescale_fixed` afterwards: a substituted
     constant does not commute with scaling, so the rescale declines a format
@@ -94,17 +93,20 @@ def unfold_special(func: Function, where: int | Cursor | None = None) -> Functio
             ctx=fp.REAL,
         )
         def quantize(x):
-            with fp.REAL:
-                if fp.isnan(x):
-                    y = (-fp.nan() if fp.signbit(x) else fp.nan())
-                elif fp.isinf(x):
-                    y = (-fp.inf() if fp.signbit(x) else fp.inf())
-                elif x == 0:
-                    y = (-0.0 if fp.signbit(x) else 0)
-                else:
-                    with fp.MPFixedContext(-8):
-                        y = fp.round(x)
+            with fp.MPFixedContext(-8, enable_nan=True, enable_inf=True):
+                with fp.REAL:
+                    if fp.isnan(x):
+                        y = (-fp.nan() if fp.signbit(x) else fp.nan())
+                    elif fp.isinf(x):
+                        y = (-fp.inf() if fp.signbit(x) else fp.inf())
+                    elif x == 0:
+                        y = (-0.0 if fp.signbit(x) else 0)
+                    else:
+                        with fp.MPFixedContext(-8):
+                            y = fp.round(x)
             return y
+
+    :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

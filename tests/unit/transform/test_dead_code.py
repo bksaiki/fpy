@@ -788,9 +788,12 @@ class TestDeadContext:
         reals = g.format().count('with fp.REAL')
 
         out = fp.Function(fp.transform.DeadCodeEliminate.apply(g.ast), runtime=g.runtime)
-        # the three that went are REAL blocks nested in REAL scopes
-        assert _with_count(out.ast) == _with_count(g.ast) - 3
+        # three REAL blocks nested in REAL scopes go...
         assert out.format().count('with fp.REAL') == reals - 3
+        # ...and so do the source blocks the rewrites emptied and left behind,
+        # which is the rest of the drop
+        assert _with_count(out.ast) < _with_count(g.ast) - 3
+        assert 'fp.BF16' not in out.format()
         for v in (float('nan'), float('inf'), float('-inf'), 0.0, -0.0,
                   1.5, -1.5, 1e40, -1e-42):
             assert repr(out(v)) == repr(g(v)), f'disagree at {v}'

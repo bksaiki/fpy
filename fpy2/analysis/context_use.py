@@ -81,10 +81,14 @@ class ContextUseAnalysis:
             for u in us:
                 self.use_to_scope[u] = s
 
-    def find_scope_from_use(self, site: ContextUseSite) -> ContextScope:
-        """Returns the context scope active at a use site."""
+    def find_scope_from_use(self, site: Expr) -> ContextScope:
+        """Returns the context scope active at a use site.
+
+        Takes any expression: a caller holding one from a visitor has lost the
+        narrower type, and an expression that uses no context raises.
+        """
         if site in self.use_to_scope:
-            return self.use_to_scope[site]
+            return self.use_to_scope[site]   # type: ignore[index]
         raise KeyError(f'no context scope found for use site {site}')
 
 

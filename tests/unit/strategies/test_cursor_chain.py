@@ -20,6 +20,7 @@ from fpy2.strategies import (
     simplify,
     unfold_overflow,
     unfold_special,
+    unroll_for,
 )
 
 
@@ -40,6 +41,23 @@ def two_rounds(x: fp.Real, y: fp.Real) -> fp.Real:
         q = fp.round(y)
     z = p + q
     return z
+
+
+@fp.fpy(ctx=fp.REAL)
+def bound_operand(x: fp.Real, y: fp.Real) -> fp.Real:
+    with fp.FP16:
+        p = fp.round(x + y)
+        q = fp.round(y)
+    z = p + q
+    return z
+
+
+@fp.fpy(ctx=fp.REAL)
+def loopy(xs: list[fp.Real]) -> fp.Real:
+    s = 0.0
+    for x in xs:
+        s = s + x
+    return s
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -78,13 +96,18 @@ def test_a_rewrite_reports_the_site_it_replaced():
     assert out.edits.source is two_sites.ast
     assert out.edits.result is out.ast
     edit, = out.edits.edits
-    assert (edit.block_path, edit.index, edit.removed) == (FuncBody(), 1, 1)
+    # the site is the rounding, so the edit lands in the block holding it
+    assert (edit.block_path, edit.index, edit.removed) == (
+        FuncBody().stmt(1).block('body'), 0, 1,
+    )
 
 
 def test_apply_everywhere_reports_every_site():
     out = unfold_special(two_sites)
     assert out.edits is not None
-    assert [e.index for e in out.edits.edits] == [1, 2]
+    assert [e.block_path for e in out.edits.edits] == [
+        FuncBody().stmt(1).block('body'), FuncBody().stmt(2).block('body'),
+    ]
 
 
 def test_a_declined_site_is_not_an_edit():
@@ -99,9 +122,10 @@ def test_a_declined_site_is_not_an_edit():
 
 
 def test_untouched_statements_survive_a_rewrite_that_grew_the_block():
-    """Two rounds become two statements, so what followed them shifts."""
-    after = StmtCursor(two_rounds.ast, FuncBody().stmt(1))
-    out = unfold_special(two_rounds, where=0)
+    """A rounding whose operand has to be bound becomes two statements -- the
+    bind and the ladder -- so what followed it inside the block shifts."""
+    after = StmtCursor(bound_operand.ast, FuncBody().stmt(0).block('body').stmt(1))
+    out = unfold_special(bound_operand, where=0)
     assert out.edits is not None and out.edits.edits[0].inserted == 2
 
     moved = out.forward(after)
@@ -134,10 +158,11 @@ def test_forwarding_composes_across_two_passes():
 
 
 def test_a_region_forwards_as_a_region():
-    """A block of two rounds lowers to two statements, so the image of its
-    site is a region — which forwards on through the next pass as one."""
-    site = StmtCursor(two_rounds.ast, FuncBody().stmt(0))
-    f1 = float_to_fixed(two_rounds, where=0)
+    """A rounding whose operand has to be bound becomes two statements -- the
+    bind and the lowering -- so the image of its site is a region, which
+    forwards on through the next pass as one."""
+    site = StmtCursor(bound_operand.ast, FuncBody().stmt(0).block('body').stmt(0))
+    f1 = float_to_fixed(bound_operand, where=0)
 
     region = f1.forward(site)
     assert isinstance(region, BlockCursor)
@@ -150,8 +175,12 @@ def test_a_region_forwards_as_a_region():
 
 
 def test_a_cursor_inside_a_rewritten_statement_does_not_forward():
-    inside = StmtCursor(two_sites.ast, FuncBody().stmt(1).block('body').stmt(0))
-    out = unfold_special(two_sites, where=0)
+    """`unroll_for` consumes a statement that has a block beneath it.  The
+    rounding rewrites replace the rounding's own statement, which has none, and
+    a cursor naming that statement forwards to its image instead -- the `at or
+    beneath` contract `test_a_cursor_takes_candidates_beneath_it` pins."""
+    inside = StmtCursor(loopy.ast, FuncBody().stmt(1).block('body').stmt(0))
+    out = unroll_for(loopy, where=0)
     with pytest.raises(TransformReferenceError, match='which was rewritten'):
         out.forward(inside)
 

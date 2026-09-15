@@ -10,23 +10,29 @@ import fpy2 as fp
 
 from fpy2.ast import Call, ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.transform.utils import RoundingScopes
 from fpy2.function import Function
 from fpy2.strategies import rescale_fixed, simplify
 
 
 def _fixed_scales(ast) -> list[int]:
-    """The scale of every ``FixedContext(...)`` block in *ast*."""
-    scales: list[int] = []
+    """The scale of the context every rounding in *ast* rounds under.
+
+    A block the rewrite emptied survives until dead-code elimination, so the
+    question is what still rounds at a scale, not which blocks name one.
+    """
+    scopes = RoundingScopes(ast)
+    found: list[int] = []
 
     class _C(DefaultVisitor):
-        def _visit_context(self, stmt: ContextStmt, ctx):
-            e = stmt.ctx
-            if isinstance(e, Call) and e.fn is fp.FixedContext:
-                scales.append(e.args[1].val)
-            super()._visit_context(stmt, ctx)
+        def _visit_round(self, e, ctx):
+            c = scopes.scope_ctx(e)
+            if isinstance(c, fp.FixedContext):
+                found.append(c.scale)
+            super()._visit_round(e, ctx)
 
     _C()._visit_function(ast, None)
-    return scales
+    return found
 
 
 @fp.fpy(ctx=fp.REAL)

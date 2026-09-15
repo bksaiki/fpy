@@ -16,11 +16,20 @@ against a hand-written golden AST is brittle.  These tests assert:
 import fpy2 as fp
 import pytest
 
-from fpy2.ast.fpyast import Call, ContextStmt, ForeignVal, FuncDef, Integer
+from fpy2.ast.fpyast import (
+    Call,
+    Cast,
+    ContextStmt,
+    ForeignVal,
+    FuncDef,
+    Integer,
+    Round,
+)
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
 from fpy2.transform import RescaleFixed, TransformDeclined, TransformReferenceError, UnfoldSpecial
 from fpy2.transform.rescale_fixed import _scale_of
+from fpy2.transform.utils import RoundingScopes
 
 
 # ----------------------------------------------------------------------
@@ -40,21 +49,39 @@ def _blocks(ast: FuncDef) -> list[ContextStmt]:
     return found
 
 
+def _roundings(ast: FuncDef) -> list:
+    """Every ``Round`` and ``Cast`` in *ast*, in visit order."""
+    found: list = []
+
+    class _C(DefaultVisitor):
+        def _visit_expr(self, e, ctx):
+            if isinstance(e, (Round, Cast)):
+                found.append(e)
+            super()._visit_expr(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
+
+
 def _fixed_scales(ast: FuncDef, ctx_type: type = fp.FixedContext) -> list[int]:
-    """The scale of every fixed-point block in *ast*, however it is written."""
-    scales: list[int] = []
-    for stmt in _blocks(ast):
-        e = stmt.ctx
-        if isinstance(e, Call) and e.fn is ctx_type:
-            # the position argument sits after `signed` for `FixedContext`
-            index = 1 if ctx_type is fp.FixedContext else 0
-            pos = e.args[index].val if len(e.args) > index else None
-            if pos is None:
-                pos = next(v.val for n, v in e.kwargs if n in ('scale', 'nmin'))
-            scales.append(pos if ctx_type in (fp.FixedContext, fp.SMFixedContext) else pos + 1)
-        elif isinstance(e, ForeignVal) and isinstance(e.val, ctx_type):
-            scales.append(_scale_of(e.val))
-    return scales
+    """The scale of the context every rounding in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied survives until dead-code
+    elimination, so the question is what still rounds at a scale, not which
+    blocks name one.  A context built per value has no static scale and
+    contributes nothing.
+    """
+    scopes = RoundingScopes(ast)
+    return [
+        _scale_of(c) for e in _roundings(ast)
+        if isinstance(c := scopes.scope_ctx(e), ctx_type)
+    ]
+
+
+def _round_ctx_exprs(ast: FuncDef) -> list:
+    """The context expression of the scope every rounding in *ast* runs under."""
+    scopes = RoundingScopes(ast)
+    return [scopes.scope_ctx_expr(e) for e in _roundings(ast)]
 
 
 def _real_blocks(ast: FuncDef) -> int:
@@ -154,7 +181,8 @@ class TestRescale:
             return s
 
         out = RescaleFixed.apply(f.ast)
-        assert _fixed_scales(out) == [0]
+        # one rescaled rounding each, so the block's scale is reported twice
+        assert _fixed_scales(out) == [0, 0]
         assert _real_blocks(out) == 4
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
@@ -272,9 +300,9 @@ class TestContextVariants:
         f = _quantizer(src)
         out = RescaleFixed.apply(f.ast)
 
-        block = _blocks(out)[0]
-        assert isinstance(block.ctx, ForeignVal)
-        dst = block.ctx.val
+        ctx_expr, = _round_ctx_exprs(out)
+        assert isinstance(ctx_expr, ForeignVal)
+        dst = ctx_expr.val
         assert dst.nmin == -1
         assert dst.pos_maxval.as_rational() == maxval.as_rational() * 2 ** 4
 
@@ -473,7 +501,7 @@ class TestSymbolicPosition:
         out = RescaleFixed.apply(f.ast)
         assert not out.is_equiv(f.ast)
         # the position is now zero, so the values are integers; the bound came along
-        call = _blocks(out)[0].ctx
+        call, = _round_ctx_exprs(out)
         assert isinstance(call, Call) and call.fn is fp.MPBFixedContext
         assert call.args[0].val == -1
         assert not isinstance(call.args[1], Integer)
@@ -644,30 +672,6 @@ class TestUnchanged:
 
         assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
 
-    def test_round_of_an_expression(self):
-        """The argument must be a variable: an inner expression would
-        round under the block's context before the shift applies."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.FixedContext(True, -16, 32):
-                aq = fp.round(a + b)
-            return aq
-
-        assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
-
-    def test_bound_context(self):
-        """``with C as c:`` exposes the context to the body as a value,
-        which the rescaled context would change."""
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(a):
-            with fp.FixedContext(True, -16, 32) as c:
-                aq = fp.round(a)
-            return aq
-
-        assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
-
     def test_nested_block_in_body(self):
         @fp.fpy(ctx=fp.REAL)
         def f(a):
@@ -677,6 +681,88 @@ class TestUnchanged:
             return aq
 
         assert RescaleFixed.apply(f.ast).is_equiv(f.ast)
+
+
+# ----------------------------------------------------------------------
+# Sites outside a block of their own
+
+
+class TestScopedSites:
+    """A site is a rounding under a fixed-point scope, whatever the program
+    looks like around it: the rewrite asks `ContextUse` what is active, not
+    whether the statement sits in a block of a particular shape."""
+
+    _CTX = fp.FixedContext(True, -16, 32)
+
+    def _check(self, f: fp.Function, out: FuncDef, *args) -> None:
+        assert _fixed_scales(out) == [0]
+        assert _same(_eval(out, f, *args), f(*args))
+
+    def test_round_of_an_expression(self):
+        """The operand is bound first, under the scope it was written in --
+        where the source already rounded it -- so the scale-in reads a name
+        rather than re-evaluating the expression under `fp.REAL`."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FixedContext(True, -16, 32):
+                aq = fp.round(a + b)
+            return aq
+
+        self._check(f, RescaleFixed.apply(f.ast), 0.1, 0.2)
+
+    def test_bound_context(self):
+        """``with C as c:`` exposes the context to the body as a value; the
+        rewrite leaves that block alone and emits a rescaled one inside."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.FixedContext(True, -16, 32) as c:
+                aq = fp.round(a)
+            return aq
+
+        self._check(f, RescaleFixed.apply(f.ast), 0.1)
+
+    def test_function_annotation_scope(self):
+        """No `with` at all, so no constructor call to shift: the rescaled
+        context is the rebuilt value."""
+        @fp.fpy(ctx=fp.FixedContext(True, -16, 32))
+        def f(a):
+            aq = fp.round(a)
+            return aq
+
+        self._check(f, RescaleFixed.apply(f.ast), 0.1)
+
+    def test_block_with_other_statements(self):
+        """A block whose body is not all roundings."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            with fp.FixedContext(True, -16, 32):
+                aq = fp.round(a)
+                s = aq + b
+            return s
+
+        self._check(f, RescaleFixed.apply(f.ast), 0.1, 0.2)
+
+    def test_annotated_assign(self):
+        """The rescale has a block to sit in and the annotation one place to
+        sit, so the assignment stays and reads a temporary."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.FixedContext(True, -16, 32):
+                aq: fp.Real = fp.round(a)
+            return aq
+
+        self._check(f, RescaleFixed.apply(f.ast), 0.1)
+
+    def test_a_run_time_position_needs_a_written_constructor(self):
+        """The symbolic shift edits the constructor call, so a scope that
+        states no call in the body is declined rather than shifted."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, k):
+            with fp.MPFixedContext(k - 1):
+                y = fp.round(x)
+            return y
+
+        assert len(RescaleFixed.sites(f.ast)) == 1
 
 
 # ----------------------------------------------------------------------

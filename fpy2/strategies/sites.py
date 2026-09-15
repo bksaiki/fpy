@@ -92,13 +92,17 @@ def sites(
     counts them.
 
     The kind of cursor is the kind of site the strategy is aimed at: a
-    :class:`fpy2.strategies.StmtCursor` for the rounding and loop rewrites, an
-    :class:`fpy2.strategies.ExprCursor` for :func:`fpy2.strategies.inline`,
-    whose sites are calls.
+    :class:`fpy2.strategies.StmtCursor` for the loop rewrites, an
+    :class:`fpy2.strategies.ExprCursor` for the rounding rewrites, whose sites
+    are the roundings, and for :func:`fpy2.strategies.inline`, whose sites are
+    calls.
 
     For the rounding rewrites a listing is *what `where=None` would rewrite*: a
     candidate the strategy refuses is not a site, so it neither appears here nor
     consumes an index.  Naming one with a cursor still says why it was refused.
+    A listed rounding aims the rewrite that reported it, but not the next one in
+    a sequence -- that rewrite consumes it.  See :mod:`fpy2.strategies` for what
+    to pin instead.
 
     A listing depends on whatever else decides the answer, so pass the same
     arguments the rewrite will get: `insert_round` needs `ctx`, and `split` and

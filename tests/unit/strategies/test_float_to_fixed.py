@@ -13,7 +13,27 @@ from fpy2.analysis import PartialEval
 from fpy2.ast import Call, ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
+from fpy2.transform.utils import RoundingScopes
 from fpy2.strategies import float_to_fixed, rescale_fixed, simplify
+
+
+def _round_ctxs(ast) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied is dropped by dead-code
+    elimination and not by the rewrite, so the *block* contexts still name the
+    source format.
+    """
+    scopes = RoundingScopes(ast)
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_round(self, e, ctx):
+            found.append(scopes.scope_ctx(e))
+            super()._visit_round(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
 
 
 def _blocks(ast) -> list:
@@ -77,10 +97,13 @@ class TestFloatToFixed:
 
 
     def test_removes_the_float_rounding(self):
-        assert fp.FP16 in _block_ctxs(_quantized_sum.ast)
+        assert fp.FP16 in _round_ctxs(_quantized_sum.ast)
         out = float_to_fixed(_quantized_sum)
-        assert fp.FP16 not in _block_ctxs(out.ast)
-        # the FP64 accumulation is untouched: its body is arithmetic, not a round
+        assert fp.FP16 not in _round_ctxs(out.ast)
+        # the emptied block survives until dead-code elimination drops it
+        assert fp.FP16 in _block_ctxs(out.ast)
+        assert fp.FP16 not in _block_ctxs(simplify(out).ast)
+        # the FP64 accumulation is untouched: it is arithmetic, not a round
         assert fp.FP64 in _block_ctxs(out.ast)
 
     def test_preserves_results(self):
@@ -129,10 +152,12 @@ class TestPipeline:
         fixed-point block sits at position zero."""
         out = rescale_fixed(float_to_fixed(_quantized_sum))
 
-        positions = []
-        for stmt in _blocks(out.ast):
-            e = stmt.ctx
-            if isinstance(e, Call) and e.fn is fp.MPBFixedContext:
-                positions.append(e.args[0].val)
+        # the contexts the roundings run under, rather than every block: an
+        # emptied one survives until dead-code elimination and still names the
+        # position it was written at
+        positions = [
+            c.nmin for c in _round_ctxs(out.ast)
+            if isinstance(c, fp.MPBFixedContext)
+        ]
         assert positions and all(p == -1 for p in positions)
-        assert fp.FP16 not in _block_ctxs(out.ast)
+        assert fp.FP16 not in _round_ctxs(out.ast)

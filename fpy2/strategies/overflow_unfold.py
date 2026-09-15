@@ -32,8 +32,9 @@ def unfold_overflow(
     Applies to a bounded format that rounds deterministically and whose
     overflow is a constant of its own: wrapping gives a different answer at
     every magnitude, and an unsigned format states no bound below zero, so
-    neither is rewritten.  Other contexts are left unchanged.  Only blocks whose
-    body is entirely ``x = fp.round(v)`` (or a returned round) are rewritten.
+    neither is rewritten.  Other contexts are left unchanged, and a ``fp.cast``
+    is not a site: it asserts exactness, which the rewrite would not preserve.
+    See :mod:`fpy2.strategies` for what a rounding site is.
 
     Run :func:`fpy2.strategies.float_to_fixed` afterwards: with no bound left in
     the context, it lowers the rounding through its unbounded path.
@@ -86,16 +87,19 @@ def unfold_overflow(
             ctx=fp.REAL,
         )
         def quantize(x):
-            with fp.REAL:
-                with fp.MPSFloatContext(11, -14):
-                    t = fp.round(x)
-                if t > 65504:
-                    y = fp.inf()
-                elif t < -65504:
-                    y = -fp.inf()
-                else:
-                    y = t
+            with fp.FP16:
+                with fp.REAL:
+                    with fp.MPSFloatContext(11, -14):
+                        t = fp.round(x)
+                    if t > 65504:
+                        y = fp.inf()
+                    elif t < -65504:
+                        y = -fp.inf()
+                    else:
+                        y = t
             return y
+
+    :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
 
     With ``early_check=True``, a check on ``x`` precedes all of that::
 

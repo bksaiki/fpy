@@ -13,6 +13,7 @@ from fpy2.analysis import PartialEval
 from fpy2.ast import Compare, ContextStmt, Copysign
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
+from fpy2.transform.utils import RoundingScopes
 from fpy2.number import (
     MPBFixedContext,
     MPFixedContext,
@@ -39,6 +40,25 @@ def _block_ctxs(ast) -> list:
             if value is not None:
                 found.append(value)
             super()._visit_context(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
+
+
+def _round_ctxs(ast) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    The claim the compositions make is about what still *rounds* under an edge
+    rule: a block a rewrite emptied survives until dead-code elimination, so
+    the block contexts still name the source format.
+    """
+    scopes = RoundingScopes(ast)
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_round(self, e, ctx):
+            found.append(scopes.scope_ctx(e))
+            super()._visit_round(e, ctx)
 
     _C()._visit_function(ast, None)
     return found
@@ -93,7 +113,12 @@ class TestUnfoldNegZero:
             for c in _block_ctxs(_quantized_sum.ast)
         )
         out = unfold_neg_zero(_quantized_sum)
-        ctxs = _block_ctxs(out.ast)
+        assert not any(
+            isinstance(c, MPFixedContext) and c.enable_neg_zero
+            for c in _round_ctxs(out.ast)
+        )
+        ctxs = _block_ctxs(simplify(out).ast)
+        # the emptied block still names the flag until DCE drops it
         assert not any(
             isinstance(c, MPFixedContext) and c.enable_neg_zero for c in ctxs
         )
@@ -195,7 +220,7 @@ class TestComposition:
         for out in (a, b):
             assert len(_nodes(out.ast, Copysign)) == 1
             target = next(
-                c for c in _block_ctxs(out.ast) if isinstance(c, MPFixedContext)
+                c for c in _round_ctxs(out.ast) if isinstance(c, MPFixedContext)
             )
             assert target.enable_neg_zero is False
         for x in _samples(ctx):
@@ -220,7 +245,7 @@ class TestComposition:
         out = rescale_fixed(unfold_overflow(unfold_neg_zero(q)))
 
         rounding = [
-            c for c in _block_ctxs(out.ast)
+            c for c in _round_ctxs(out.ast)
             if isinstance(c, MPFixedContext | MPBFixedContext)
         ]
         assert rounding

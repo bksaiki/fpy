@@ -23,12 +23,16 @@ def rescale_fixed(func: Function, where: int | Cursor | None = None) -> Function
     :class:`fpy2.MPFixedContext` and :class:`fpy2.MPBFixedContext`, which
     name it ``nmin``, one position below the scale.
 
-    Only blocks whose body is entirely ``x = fp.round(v)`` / ``x = fp.cast(v)``
-    (or a returned round) are rewritten, since arithmetic does not commute
-    with the shift.  A format that substitutes a *finite* value for NaN or an
+    A ``fp.cast`` is a site as well; arithmetic never is, since it does not
+    commute with the shift.  See :mod:`fpy2.strategies` for what a rounding
+    site is.  A format that substitutes a *finite* value for NaN or an
     infinity is declined — the substitute would have to shift along with the
     format.  Run :func:`fpy2.strategies.unfold_special` first, which takes
     those rules out of the context.
+
+    A context whose position is only known at run time is shifted by editing
+    the constructor call it is written as, so a rounding whose scope states no
+    such call — the function's own annotation — is declined.
 
     Run :func:`fpy2.strategies.simplify` afterwards to fold the scale
     constants into the surrounding expressions.
@@ -75,13 +79,16 @@ def rescale_fixed(func: Function, where: int | Cursor | None = None) -> Function
             ctx=fp.REAL,
         )
         def quantize(a):
-            with fp.FixedContext(True, 0, 32):
-                with fp.REAL:
-                    _t = (65536 * a)
-                _t3 = fp.round(_t)
-                with fp.REAL:
-                    aq = (fp.rational(1, 65536) * _t3)
+            with fp.FixedContext(True, -16, 32):
+                with fp.FixedContext(True, 0, 32):
+                    with fp.REAL:
+                        _t = (65536 * a)
+                    _t3 = fp.round(_t)
+                    with fp.REAL:
+                        aq = (fp.rational(1, 65536) * _t3)
             return aq
+
+    :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

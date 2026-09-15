@@ -32,7 +32,7 @@ operations may be given formats one at a time and in any order -- including one
 whose result a later exact operation reads.  Idempotence falls out: a second
 pass finds only ``Var``-argumented operations already under a format.
 
-The refusals, and why each one, are at :meth:`_RoundInsertInstance._verify`.
+The refusals, and why each one, are at :meth:`_RoundInsertInstance._check`.
 """
 
 from ..analysis import SyntaxCheck
@@ -77,7 +77,7 @@ class _RoundInsertInstance(RoundingRewriter):
         return isinstance(e, _ROUNDABLE) and self.scopes.is_exact(e)
 
 
-    def _verify(self, e: Expr) -> None | Declined:
+    def _check(self, e: Expr) -> None | Declined:
         """`None` where *e* may be given the target format, else why not."""
         if self.ctx.is_stochastic():
             return Declined(

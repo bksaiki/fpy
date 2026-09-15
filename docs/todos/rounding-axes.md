@@ -250,7 +250,7 @@ axes](#the-two-axes)). What is left:
   aimed — and it cannot join a per-rounding recipe of the kind `_lower_at` in
   `tests/unit/backend/cpp/test_lowered_roundtrip.py` builds. Retrofitting is
   not cheap: `RoundElim` uses its own `_Ctx` accumulator rather than
-  `SiteRewriter` / `BlockRewriter`, rewrites at expression level with a
+  `SiteRewriter`, rewrites at expression level with a
   greedy-outermost policy, and hoists — so it cannot claim
   `exprs_preserved=True`, and forwarding, not site listing, is the work. See
   item 3 of [scheduling-language.md](scheduling-language.md).

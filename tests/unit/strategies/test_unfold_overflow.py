@@ -13,6 +13,7 @@ from fpy2.analysis import PartialEval
 from fpy2.ast import ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
+from fpy2.transform.utils import RoundingScopes
 from fpy2.number import (
     EFloatContext,
     EFloatNanKind,
@@ -39,6 +40,25 @@ def _block_ctxs(ast) -> list:
             if value is not None:
                 found.append(value)
             super()._visit_context(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
+
+
+def _round_ctxs(ast) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied is dropped by dead-code
+    elimination and not by the rewrite, so the *block* contexts still name the
+    source format.
+    """
+    scopes = RoundingScopes(ast)
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_round(self, e, ctx):
+            found.append(scopes.scope_ctx(e))
+            super()._visit_round(e, ctx)
 
     _C()._visit_function(ast, None)
     return found
@@ -75,13 +95,16 @@ class TestUnfoldOverflow:
 
 
     def test_removes_the_bound_from_the_context(self):
-        assert fp.FP16 in _block_ctxs(_quantized_sum.ast)
+        assert fp.FP16 in _round_ctxs(_quantized_sum.ast)
         out = unfold_overflow(_quantized_sum)
-        ctxs = _block_ctxs(out.ast)
+        ctxs = _round_ctxs(out.ast)
         assert fp.FP16 not in ctxs
         assert any(isinstance(c, MPSFloatContext) for c in ctxs)
-        # the FP64 accumulation is untouched: its body is arithmetic, not a round
-        assert fp.FP64 in ctxs
+        # the emptied block survives until dead-code elimination drops it
+        assert fp.FP16 in _block_ctxs(out.ast)
+        assert fp.FP16 not in _block_ctxs(simplify(out).ast)
+        # the FP64 accumulation is untouched: it is arithmetic, not a round
+        assert fp.FP64 in _block_ctxs(out.ast)
 
     @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     def test_preserves_results(self, early_check):
@@ -172,10 +195,10 @@ class TestPipeline:
         """
         out = rescale_fixed(float_to_fixed(unfold_overflow(_quantizer(ctx))))
 
-        ctxs = _block_ctxs(out.ast)
+        ctxs = _round_ctxs(out.ast)
         assert not any(isinstance(c, MPSFloatContext) for c in ctxs)
-        # the claim, stated over *every* surviving context rather than the
-        # fixed-point ones alone
+        # the claim, stated over every context something still rounds under
+        # rather than the fixed-point ones alone
         for c in ctxs:
             ov = getattr(c, 'overflow', None)
             assert ov in (None, fp.OverflowMode.ASSERT), (c, ov)

@@ -20,6 +20,7 @@ import pytest
 
 from fpy2.analysis import PartialEval, ValueClass
 from fpy2.ast.fpyast import (
+    Cast,
     Compare,
     ContextStmt,
     Expr,
@@ -27,6 +28,7 @@ from fpy2.ast.fpyast import (
     FuncDef,
     IsInf,
     IsNan,
+    Round,
     Signbit,
 )
 from fpy2.ast.visitor import DefaultVisitor
@@ -37,6 +39,7 @@ from fpy2.number import (
     RealFloat,
 )
 from fpy2.transform import (
+    DeadCodeEliminate,
     FuncBody,
     StmtCursor,
     TransformDeclined,
@@ -44,6 +47,7 @@ from fpy2.transform import (
     UnfoldSpecial,
 )
 from fpy2.transform.unfold_special import _describe
+from fpy2.transform.utils import RoundingScopes
 
 
 # ----------------------------------------------------------------------
@@ -69,6 +73,20 @@ def _block_ctxs(ast: FuncDef) -> list:
     return [
         v for s in _blocks(ast)
         if (v := eval_info.by_expr.get(s.ctx)) is not None
+    ]
+
+
+def _round_ctxs(ast: FuncDef) -> list:
+    """The context every rounding in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied is dropped by dead-code
+    elimination and not by the rewrite, so the *block* contexts still name the
+    source format.
+    """
+    scopes = RoundingScopes(ast)
+    return [
+        scopes.scope_ctx(e)
+        for e in _nodes(ast, Round) + _nodes(ast, Cast)
     ]
 
 
@@ -173,9 +191,10 @@ class TestShape:
                               nan_value=_ZERO, inf_value=_MAX255)
         out = UnfoldSpecial.apply(_quantizer(src).ast)
 
-        ctxs = _block_ctxs(out)
-        assert REAL in ctxs
-        target = next(c for c in ctxs if isinstance(c, MPBFixedContext))
+        assert REAL in _block_ctxs(out)
+        target = next(
+            c for c in _round_ctxs(out) if isinstance(c, MPBFixedContext)
+        )
         assert target.nan_value is None and target.inf_value is None
         assert not target.enable_nan and not target.enable_inf
 
@@ -199,7 +218,8 @@ class TestShape:
 
         out = UnfoldSpecial.apply(f.ast)
         assert 'fp.MPFixedContext(-8)' in out.format()
-        assert 'enable_nan' not in out.format()
+        # the emptied block still names the source rules until it is dropped
+        assert 'enable_nan' not in DeadCodeEliminate.apply(out).format()
 
     def test_representable_specials_keep_their_sign(self):
         """A fixed-point format keeps the sign of the NaN it was given, so
@@ -219,7 +239,7 @@ class TestShape:
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)
 
-        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        target = next(c for c in _round_ctxs(out) if isinstance(c, MPBFixedContext))
         assert type(target) is fp.FixedContext
         assert target.nan_value is None
         assert target.enable_neg_zero is False
@@ -236,7 +256,7 @@ class TestShape:
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)
 
-        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        target = next(c for c in _round_ctxs(out) if isinstance(c, MPBFixedContext))
         assert type(target) is fp.SMFixedContext
         assert target.nan_value is None
 
@@ -262,7 +282,7 @@ class TestShape:
 
         out = UnfoldSpecial.apply(f.ast)
         src = MPFixedContext(-8, enable_nan=True, enable_inf=True)
-        assert src not in _block_ctxs(out)
+        assert src not in _round_ctxs(out)
         for x in _samples(src):
             _assert_agrees(f, out, x)
 
@@ -313,7 +333,7 @@ class TestPartialShed:
 
         assert len(_nodes(out, IsNan)) == 1
         assert len(_nodes(out, IsInf)) == 1     # stated
-        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        target = next(c for c in _round_ctxs(out) if isinstance(c, MPBFixedContext))
         assert target.enable_inf is True        # but not shed
         assert target.nan_value is None         # this one is
         for x in _samples(src):
@@ -340,7 +360,7 @@ class TestPartialShed:
         out = UnfoldSpecial.apply(f.ast)
         assert len(_nodes(out, IsNan)) == 1
         assert len(_nodes(out, IsInf)) == 1
-        shed = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
+        shed = next(c for c in _round_ctxs(out) if isinstance(c, MPFixedContext))
         assert not shed.enable_nan and not shed.enable_inf
 
     def test_a_side_that_cannot_be_shed_is_still_stated(self):
@@ -355,7 +375,7 @@ class TestPartialShed:
 
         assert len(_nodes(out, IsInf)) == 1
         assert not _nodes(out, IsNan)           # refused, so unstateable
-        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        target = next(c for c in _round_ctxs(out) if isinstance(c, MPBFixedContext))
         assert target == src                    # untouched
         for x in _samples(src):
             _assert_agrees(f, out, x)
@@ -387,23 +407,79 @@ class TestUnchanged:
 
         assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
 
+
+# ----------------------------------------------------------------------
+# Sites outside a block of their own
+
+
+class TestScopedSites:
+    """A site is a rounding under a scope with a rule to state, whatever the
+    program looks like around it: the rewrite asks `ContextUse` what is active,
+    not whether the statement sits in a block of a particular shape."""
+
+    _CTX = MPFixedContext(-8, enable_nan=True, enable_inf=True)
+
+    def _check(self, f: fp.Function, out: FuncDef) -> None:
+        assert self._CTX not in _round_ctxs(out)
+        for x in _samples(self._CTX):
+            _assert_agrees(f, out, x)
+
     def test_round_of_an_expression(self):
+        """The operand is bound first, under the scope it was written in, so
+        each branch can name it."""
         @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
-            with fp.MPFixedContext(-8, enable_nan=True):
-                y = fp.round(a + b)
+        def f(a):
+            with fp.MPFixedContext(-8, enable_nan=True, enable_inf=True):
+                y = fp.round(a + 1)
             return y
 
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        out = UnfoldSpecial.apply(f.ast)
+        assert self._CTX not in _round_ctxs(out)
+        for x in _samples(self._CTX):
+            _assert_agrees(f, out, x)
 
     def test_bound_context(self):
+        """A bound context is visible to the body as a value, which is no
+        reason to leave the rounding under it alone."""
         @fp.fpy(ctx=fp.REAL)
         def f(x):
-            with fp.MPFixedContext(-8, enable_nan=True) as c:
+            with fp.MPFixedContext(-8, enable_nan=True, enable_inf=True) as c:
                 y = fp.round(x)
             return y
 
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
+        self._check(f, UnfoldSpecial.apply(f.ast))
+
+    def test_function_annotation_scope(self):
+        """No `with` at all, so no constructor call to shed from: the emitted
+        context is the rebuilt value."""
+        @fp.fpy(ctx=MPFixedContext(-8, enable_nan=True, enable_inf=True))
+        def f(x):
+            y = fp.round(x)
+            return y
+
+        self._check(f, UnfoldSpecial.apply(f.ast))
+
+    def test_block_with_other_statements(self):
+        """A block whose body is not all roundings."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a):
+            with fp.MPFixedContext(-8, enable_nan=True, enable_inf=True):
+                y = fp.round(a)
+                s = y + 1
+            return s
+
+        assert self._CTX not in _round_ctxs(UnfoldSpecial.apply(f.ast))
+
+    def test_annotated_assign(self):
+        """The ladder has several branches to sit in and the annotation one
+        place to sit, so the assignment stays and reads a temporary."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8, enable_nan=True, enable_inf=True):
+                y: fp.Real = fp.round(x)
+            return y
+
+        self._check(f, UnfoldSpecial.apply(f.ast))
 
 
 # ----------------------------------------------------------------------
@@ -436,7 +512,7 @@ class TestWhere:
         out = UnfoldSpecial.apply(f.ast, where=where)
         # the FP64 block is arithmetic, so it is never a candidate
         remaining = [
-            c.nmin for c in _block_ctxs(out)
+            c.nmin for c in _round_ctxs(out)
             if isinstance(c, MPFixedContext) and c.enable_nan
         ]
         assert remaining == kept
@@ -476,7 +552,9 @@ class TestWhere:
         it -- but a cursor that names it still says why."""
         f = self._real_then_fp16()
         listed = UnfoldSpecial.sites(f.ast)
-        assert [c.path for c in listed] == [FuncBody().stmt(1)]
+        assert [c.path.stmt() for c in listed] == [
+            FuncBody().stmt(1).block('body').stmt(0)
+        ]
 
         at_real = StmtCursor(f.ast, FuncBody().stmt(0))
         with pytest.raises(TransformDeclined, match='REAL'):
@@ -498,19 +576,6 @@ class TestWhere:
         once = UnfoldSpecial.apply(_quantizer(fp.FP16).ast)
         with pytest.raises(TransformReferenceError, match='nothing to state'):
             UnfoldSpecial.apply(once, where=0)
-
-    def test_an_annotated_assign_is_not_a_candidate(self):
-        """The rewrites cannot carry an annotation, so the block is left
-        alone rather than rewritten without it."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(x):
-            with fp.FP16:
-                y: fp.Real = fp.round(x)
-            return y
-
-        assert UnfoldSpecial.apply(f.ast).is_equiv(f.ast)
-        with pytest.raises(TransformReferenceError):
-            UnfoldSpecial.apply(f.ast, where=0)
 
 
 # ----------------------------------------------------------------------
@@ -582,7 +647,7 @@ class TestEquivalence:
         out = UnfoldSpecial.apply(f.ast)
         assert not out.is_equiv(f.ast)
 
-        target = next(c for c in _block_ctxs(out) if isinstance(c, MPFixedContext))
+        target = next(c for c in _round_ctxs(out) if isinstance(c, MPFixedContext))
         assert target.num_randbits == 2
         assert target.nan_value is None
         # the special paths draw no bits, so they stay deterministic
@@ -649,7 +714,7 @@ class TestFloatFormats:
         out = UnfoldSpecial.apply(f.ast)
 
         assert len(_nodes(out, IsNan)) == 1
-        assert _block_ctxs(out).count(src) == 1, 'the format itself is unchanged'
+        assert _round_ctxs(out).count(src) == 1, 'the format itself is unchanged'
         for x in _samples(src):
             _assert_agrees(f, out, x)
 
@@ -715,7 +780,7 @@ class TestMPFloatFormats:
 
         assert len(_nodes(out, IsNan)) == 1
         assert len(_nodes(out, IsInf)) == 1
-        surviving, = [c for c in _block_ctxs(out) if c != REAL]
+        surviving, = _round_ctxs(out)
         assert not surviving.enable_nan
         assert not surviving.enable_inf
         for x in _samples(src):
@@ -729,7 +794,7 @@ class TestMPFloatFormats:
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)
 
-        surviving, = [c for c in _block_ctxs(out) if c != REAL]
+        surviving, = _round_ctxs(out)
         assert not surviving.enable_nan
         assert surviving.enable_inf, 'the overflow still has to reach infinity'
         for x in _samples(src):
@@ -743,7 +808,7 @@ class TestMPFloatFormats:
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)
 
-        surviving, = [c for c in _block_ctxs(out) if c != REAL]
+        surviving, = _round_ctxs(out)
         assert not surviving.enable_nan
         assert not surviving.enable_inf
         for x in _samples(src):

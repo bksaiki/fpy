@@ -13,6 +13,7 @@ from fpy2.analysis import PartialEval
 from fpy2.ast import Compare, ContextStmt, Copysign, IsInf, IsNan
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
+from fpy2.transform.utils import RoundingScopes
 from fpy2.number import (
     MPBFixedContext,
     MPFixedContext,
@@ -43,6 +44,25 @@ def _block_ctxs(ast) -> list:
             if value is not None:
                 found.append(value)
             super()._visit_context(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return found
+
+
+def _round_ctxs(ast) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    The claim the compositions make is about what still *rounds* under an edge
+    rule: a block a rewrite emptied survives until dead-code elimination, so
+    the block contexts still name the source format.
+    """
+    scopes = RoundingScopes(ast)
+    found = []
+
+    class _C(DefaultVisitor):
+        def _visit_round(self, e, ctx):
+            found.append(scopes.scope_ctx(e))
+            super()._visit_round(e, ctx)
 
     _C()._visit_function(ast, None)
     return found
@@ -105,12 +125,17 @@ class TestUnfoldSpecial:
             for c in _block_ctxs(_quantized_sum.ast)
         )
         out = unfold_special(_quantized_sum)
-        ctxs = _block_ctxs(out.ast)
         assert not any(
-            isinstance(c, MPFixedContext) and c.enable_nan for c in ctxs
+            isinstance(c, MPFixedContext) and c.enable_nan
+            for c in _round_ctxs(out.ast)
         )
-        # the FP64 accumulation is untouched: its body is arithmetic, not a round
-        assert fp.FP64 in ctxs
+        # the emptied block still names the source rules until DCE drops it
+        assert not any(
+            isinstance(c, MPFixedContext) and c.enable_nan
+            for c in _block_ctxs(simplify(out).ast)
+        )
+        # the FP64 accumulation is untouched: it is arithmetic, not a round
+        assert fp.FP64 in _block_ctxs(out.ast)
 
     def test_preserves_results(self):
         out = unfold_special(_quantized_sum)
@@ -193,8 +218,7 @@ class TestComposition:
 
     @pytest.mark.parametrize('ctx', _PIPELINE_CTXS, ids=_PIPELINE_IDS)
     def test_rescale_after_unfold(self, ctx):
-        """The composed route is what ``rescale_fixed``'s ``fold_specials``
-        knob used to do: the specials come out first, then the scale."""
+        """The specials come out first, then the scale."""
         q = _quantizer(ctx)
         out = rescale_fixed(unfold_special(q))
         for x in _samples(ctx):
@@ -229,7 +253,7 @@ class TestComposition:
         out = rescale_fixed(unfold_overflow(unfold_neg_zero(unfold_special(q))))
 
         rounding = [
-            c for c in _block_ctxs(out.ast)
+            c for c in _round_ctxs(out.ast)
             if isinstance(c, MPFixedContext | MPBFixedContext)
         ]
         assert rounding

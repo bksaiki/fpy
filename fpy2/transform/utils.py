@@ -14,10 +14,8 @@ from ..analysis import (
     ListSize,
     concrete_size,
 )
-from ..analysis.format_infer import FormatInfer
+from ..analysis.format_infer import FormatAnalysis, FormatInfer
 from ..ast.fpyast import (
-    Abs,
-    Add,
     Assign,
     Attribute,
     BinaryOp,
@@ -37,7 +35,6 @@ from ..ast.fpyast import (
     Integer,
     ListComp,
     Location,
-    Mul,
     NamedBinaryOp,
     NamedId,
     NamedNaryOp,
@@ -47,12 +44,10 @@ from ..ast.fpyast import (
     Neg,
     NullaryOp,
     Rational,
-    ReturnStmt,
     Round,
     Signbit,
     Stmt,
     StmtBlock,
-    Sub,
     TernaryOp,
     TupleBinding,
     UnaryOp,
@@ -208,11 +203,6 @@ def sign_choice(pos: Float, neg: Float, operand: Expr, loc: Location | None) -> 
     )
 
 
-def is_rounding_block(stmt: Stmt, *, casts: bool) -> bool:
-    """Whether *stmt* is a candidate rounding block: what :meth:`sites` lists."""
-    return isinstance(stmt, ContextStmt) and rounding_block(stmt, casts=casts) is not None
-
-
 def operands(e: Expr) -> list[Expr]:
     """The direct operands, left to right, of an operation.
 
@@ -267,32 +257,6 @@ def check_where(where: int | Cursor | None) -> None:
         )
 
 
-def rounding_block(stmt: ContextStmt, *, casts: bool) -> list[Var] | None:
-    """The rounded operands of a structurally-matching block: an
-    underscore-bound context whose every statement assigns or returns a
-    round (or a cast too, where `casts`) of a variable.  `None` otherwise.
-    Pure syntax: this is what a `where` index counts.  An annotated assign
-    is no match: the rewrites cannot carry the annotation.
-    """
-    # a bound context is visible to the body as a value, which a rewrite changes
-    if not isinstance(stmt.target, UnderscoreId):
-        return None
-    args: list[Var] = []
-    for s in stmt.body.stmts:
-        match s:
-            case Assign(target=NamedId(), type=None) | ReturnStmt():
-                match s.expr:
-                    case Round(arg=Var() as v):
-                        args.append(v)
-                    case Cast(arg=Var() as v) if casts:
-                        args.append(v)
-                    case _:
-                        return None
-            case _:
-                return None
-    return args
-
-
 def _target_of(
     where: int | Cursor | None, func: FuncDef
 ) -> tuple[BlockPath, range] | None:
@@ -310,7 +274,7 @@ def _target_of(
 
 @dataclass(frozen=True)
 class Declined:
-    """A verification refusal: why a candidate block was not rewritten."""
+    """A verification refusal: why a candidate was not rewritten."""
     reason: str
 
 
@@ -322,11 +286,30 @@ class RoundingScopes:
     """
 
     def __init__(self, func: FuncDef):
+        self.func = func
         self.def_use = DefineUse.analyze(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
-        self.format_info = FormatInfer.analyze(
-            func, def_use=self.def_use, ctx_use=self.ctx_use,
-        )
+        self._format_info: FormatAnalysis | None = None
+
+    @property
+    def format_info(self) -> FormatAnalysis:
+        """Format inference, run on first use: the rounding rewrites need the
+        context scopes alone and must not pay for this."""
+        if self._format_info is None:
+            self._format_info = FormatInfer.analyze(
+                self.func, def_use=self.def_use, ctx_use=self.ctx_use,
+            )
+        return self._format_info
+
+    def scope_ctx_expr(self, e: Expr) -> Expr | None:
+        """The context expression of the `with` introducing *e*'s scope.
+
+        `None` where the scope is the function's own annotation, which states
+        its context outside the body: a rewrite that rebuilds a context by
+        editing its constructor call has none to edit and declines.
+        """
+        site = self.ctx_use.find_scope_from_use(e).site
+        return site.ctx if isinstance(site, ContextStmt) else None
 
     def scope_ctx(self, e: Expr) -> Context | None:
         """*e*'s active context, or `None` where the scope stays symbolic.
@@ -334,7 +317,7 @@ class RoundingScopes:
         A function-level annotation is already resolved by `ContextUse`, so a
         `None` here means genuinely unknown.
         """
-        scope = self.ctx_use.find_scope_from_use(e)   # type: ignore[arg-type]
+        scope = self.ctx_use.find_scope_from_use(e)
         return scope.ctx if isinstance(scope.ctx, Context) else None
 
     def is_exact(self, e: Expr) -> bool:
@@ -371,6 +354,9 @@ class SiteRewriter(DefaultTransformVisitor):
     _replaced: bool
     """set by a statement visitor that replaced the statement it was handed;
     `_visit_block` turns it into an edit"""
+    _dropped: bool = False
+    """set by a statement visitor whose statement is wholly subsumed by what it
+    emitted; `_visit_block` then leaves the statement out"""
     _site: tuple[StmtBlock, int]
     """the block and index of the statement being visited, for a visitor whose
     context carries something else"""
@@ -402,6 +388,7 @@ class SiteRewriter(DefaultTransformVisitor):
         self.refused = []
         self._matched = 0
         self._replaced = False
+        self._dropped = False
         self._paths = block_paths(func)
         self._target = None
         self._target_expr = None
@@ -561,7 +548,9 @@ class SiteRewriter(DefaultTransformVisitor):
 
         A statement visitor emits its replacement into the list handed to it as
         the context and returns the last statement, so the count is the growth
-        of that list, and signals the rewrite with `_replaced`.
+        of that list, and signals the rewrite with `_replaced`.  One whose
+        emission already covers the statement signals `_dropped` instead, and
+        the statement is left out.
         """
         out: list[Stmt] = []
         # a nested block must not lose an edit the enclosing statement already
@@ -570,12 +559,17 @@ class SiteRewriter(DefaultTransformVisitor):
         for pos, stmt in enumerate(block.stmts):
             self._site = (block, pos)
             self._replaced = False
+            self._dropped = False
             before = len(out)
             s, _ = self._visit_statement(stmt, out)
-            out.append(s)
+            if not self._dropped:
+                out.append(s)
             if self._replaced:
                 self._record(block, pos, len(out) - before)
                 self._replaced = False
+            # cleared before returning, or a nested block whose last statement
+            # was dropped would drop the compound statement around it too
+            self._dropped = False
         self._replaced = outer
         return StmtBlock(out), None
 
@@ -633,7 +627,70 @@ class PreambleScoped(SiteRewriter):
         return IfExpr(cond, ift, iff, e.loc)
 
 
-class RoundingRewriter(PreambleScoped):
+class ExprSiteRewriter(PreambleScoped):
+    """A rewrite whose sites are expressions and whose replacement needs a
+    statement slot.
+
+    Holds the walk the rounding rewrites share: decide the refusal before an
+    index is spent, count the site, and either list it or emit.  A subclass
+    says which expressions it considers (`_candidate`), whether one may be
+    rewritten (`_check`), and what replaces it (`_emit`).
+    """
+
+    _expr_sited = True   # the sites are expressions, not statements
+    _no_slot: str
+    """the refusal for a position no statement-level preamble reaches"""
+
+    func: FuncDef
+    scopes: 'RoundingScopes'
+    gensym: Gensym
+    where: 'Cursor | int | None'
+
+    def apply(self) -> FuncDef:
+        return self._visit_function(self.func, None)
+
+    def _candidate(self, e: Expr) -> bool:
+        """Whether *e* is an expression this rewrite considers at all."""
+        raise NotImplementedError
+
+    def _check(self, e: Expr):
+        """What `_emit` needs for *e*, or a `Declined` saying why it cannot be
+        rewritten."""
+        raise NotImplementedError
+
+    def _emit(self, e: Expr, info, out: list) -> Expr:
+        """What replaces *e*, with whatever it needs appended to `out`."""
+        raise NotImplementedError
+
+    def _visit_expr(self, e: Expr, ctx) -> Expr:
+        if not self._candidate(e):
+            return super()._visit_expr(e, ctx)
+
+        # a refusal is not a site, so it is decided before an index is spent:
+        # `ctx` is `None` where no statement-level preamble reaches
+        info = Declined(self._no_slot) if ctx is None else self._check(e)
+        if isinstance(info, Declined):
+            self.refused.append((e, info.reason))
+            if self._named_by_cursor(e):
+                # a cursor named it: say why, rather than that it named nothing
+                self.declined.append(info.reason)
+            return super()._visit_expr(e, ctx)
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if not self._selects_expr(e, idx):
+            return super()._visit_expr(e, ctx)
+
+        self._matched += 1
+        if self.listing:
+            self.found_exprs.append(e)
+            return super()._visit_expr(e, ctx)
+
+        self._replaced = True
+        return self._emit(e, info, ctx)
+
+
+class RoundingRewriter(ExprSiteRewriter):
     """Shared machinery for the rounding rewrites that lift one operation into
     a block of its own.
 
@@ -644,13 +701,12 @@ class RoundingRewriter(PreambleScoped):
     what stands in its place (:meth:`_wrap`).
     """
 
-    _expr_sited = True   # the sites are expressions, not statements
+    _no_slot = (
+        'the operation has no statement-level position for the block the '
+        'rewrite emits'
+    )
 
-    func: FuncDef
     ctx: Context
-    scopes: 'RoundingScopes'
-    gensym: Gensym
-    where: 'Cursor | int | None'
 
     def __init__(
         self,
@@ -665,17 +721,7 @@ class RoundingRewriter(PreambleScoped):
         self.gensym = Gensym(reserved=scopes.def_use.names())
         self.where = where
 
-    def apply(self) -> FuncDef:
-        return self._visit_function(self.func, None)
-
-    # ------------------------------------------------------------------
-    # What a subclass supplies
-
-    def _candidate(self, e: Expr) -> bool:
-        """Whether *e* is an operation this rewrite considers at all."""
-        raise NotImplementedError
-
-    def _verify(self, e: Expr) -> 'Declined | None':
+    def _check(self, e: Expr) -> 'Declined | None':
         """`None` where *e* may be rewritten, else why not."""
         raise NotImplementedError
 
@@ -683,9 +729,7 @@ class RoundingRewriter(PreambleScoped):
         """What replaces the operation, given the temporary holding it."""
         raise NotImplementedError
 
-    # ------------------------------------------------------------------
-
-    def _emit(self, e: Expr, out: list) -> Expr:
+    def _emit(self, e: Expr, info, out: list) -> Expr:
         """Compute *e* alone under `self.ctx`; return :meth:`_wrap` of it.
 
         Each operand that survives the visit as a non-``Var`` is bound under the
@@ -711,99 +755,111 @@ class RoundingRewriter(PreambleScoped):
         ))
         return self._wrap(result, loc)
 
-    def _visit_expr(self, e: Expr, ctx) -> Expr:
-        if not self._candidate(e):
-            return super()._visit_expr(e, ctx)
 
-        # a refusal is not a site, so it is decided before an index is spent:
-        # `ctx` is `None` where no statement-level preamble reaches
-        declined = (
-            Declined(
-                'the operation has no statement-level position for the block '
-                'the rewrite emits'
-            )
-            if ctx is None
-            else self._verify(e)
+class ScopedRoundingRewriter(ExprSiteRewriter):
+    """Shared machinery for the rewrites that restate one rounding as program
+    text: :class:`fpy2.transform.UnfoldSpecial`,
+    :class:`fpy2.transform.UnfoldNegZero`,
+    :class:`fpy2.transform.UnfoldOverflow`,
+    :class:`fpy2.transform.FloatToFixed` and
+    :class:`fpy2.transform.RescaleFixed`.
+
+    A site is a `Round` -- or a `Cast`, where `_casts` -- wherever the scope it
+    runs under can be restated, which `ContextUse` answers and the shape of the
+    program around it does not.  A subclass says whether a given context can be
+    restated (`_verify`) and appends the statements that restate it
+    (`_ladder`).
+
+    Sibling of :class:`RoundingRewriter`, which lifts an operation into a block
+    of its own rather than replacing it: same seal on positions with no
+    statement slot, different thing emitted into that slot.
+    """
+
+    _no_slot = (
+        'the rounding has no statement-level position for the statements the '
+        'rewrite emits'
+    )
+    _casts: bool = False
+    """whether a `fp.cast` is a candidate as well as a `fp.round`"""
+
+    where: 'Cursor | int | None'
+    _direct: 'tuple[NamedId, Expr] | None'
+    """the name a site may assign directly, and the expression that may take
+    it: the right-hand side of the assignment being visited"""
+
+    def _begin(self, func: FuncDef) -> None:
+        super()._begin(func)
+        self._direct = None
+
+    # ------------------------------------------------------------------
+    # What a subclass supplies
+
+    def _verify(self, e: Expr, ctx: Context | None):
+        """What `_ladder` needs to restate *e*'s rounding, or a `Declined`
+        saying why it cannot be.  `ctx` is the scope *e* runs under, or `None`
+        where that scope stays symbolic."""
+        raise NotImplementedError
+
+    def _check(self, e: Expr):
+        return self._verify(e, self.scopes.scope_ctx(e))
+
+    def _ladder(self, e: Expr, target: NamedId, out: list, info) -> None:
+        """Append to `out` the statements assigning `target` what *e* rounds
+        to."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+
+    def _arg_name(self, e: 'Round | Cast', out: list) -> NamedId:
+        """The name holding *e*'s operand, binding it where it is not one.
+
+        A ladder names its operand several times, from inside the
+        ``with fp.REAL:`` it wraps itself in.  So the bind goes before that
+        block, in the current one -- the scope the operand was written in, and
+        the one the rounding runs under, which makes it an identity.
+        """
+        arg = e.arg
+        if isinstance(arg, Var):
+            return arg.name
+        t = self.gensym.fresh('_a')
+        out.append(Assign(t, None, self._visit_expr(arg, out), e.loc))
+        return t
+
+    def _candidate(self, e: Expr) -> bool:
+        """Whether *e* is a rounding this rewrite considers at all.
+
+        Every rounding is, whatever its scope: a scope that cannot be restated
+        is a refusal with a reason, which is the only way one gets reported.
+        """
+        return isinstance(e, (Round, Cast) if self._casts else Round)
+
+    def _emit(self, e: Expr, info, out: list) -> Expr:
+        """*e*'s ladder, appended to `out`; returns what reads its result."""
+        direct = (
+            self._direct[0]
+            if self._direct is not None and self._direct[1] is e
+            else None
         )
-        if declined is not None:
-            self.refused.append((e, declined.reason))
-            if self._named_by_cursor(e):
-                # a cursor named it: say why, rather than that it named nothing
-                self.declined.append(declined.reason)
-            return super()._visit_expr(e, ctx)
+        target = direct if direct is not None else self.gensym.fresh('t')
+        self._ladder(e, target, out, info)
+        if direct is not None:
+            # the ladder assigned the statement's own target; what is left of
+            # the assignment would copy that name onto itself
+            self._dropped = True
+        return Var(target, e.loc)
 
-        idx = self.site_idx
-        self.site_idx += 1
-        if not self._selects_expr(e, idx):
-            return super()._visit_expr(e, ctx)
-
-        self._matched += 1
-        if self.listing:
-            self.found_exprs.append(e)
-            return super()._visit_expr(e, ctx)
-
-        emitted = self._emit(e, ctx)
-        self._replaced = True
-        return emitted
-
-class BlockRewriter(SiteRewriter):
-    """
-    Rewrites selected `with` blocks, each into several statements.
-
-    A subclass says which blocks structurally match (`_candidate`), whether a
-    match may be rewritten (`_verify`), and what to put in its place
-    (`_rewrite`).  A candidate `_verify` declines is skipped, except that an
-    index naming one raises :class:`TransformDeclined`, as does a cursor or
-    region whose candidates *all* declined.
-    """
-
-    def _candidate(self, stmt: ContextStmt):
-        """What `_verify` needs for this block, or `None` where it does not
-        structurally match.  Only matches count toward `where`."""
-        raise NotImplementedError
-
-    def _verify(self, stmt: ContextStmt, info):
-        """What `_rewrite` needs for this match, or a `Declined` saying why
-        it cannot be rewritten.  By default every match verifies."""
-        return info
-
-    def _rewrite(self, stmt: ContextStmt, info) -> list[Stmt]:
-        """The statements that replace `stmt`."""
-        raise NotImplementedError
-
-    def _visit_block(self, block: StmtBlock, ctx):
-        # a rewritten block expands into several statements, so the splice
-        # happens here rather than in `_visit_context`
-        stmts: list[Stmt] = []
-        for pos, s in enumerate(block.stmts):
-            if isinstance(s, ContextStmt):
-                info = self._candidate(s)
-                if info is not None:
-                    # every candidate is verified, whether or not it is the one
-                    # aimed at: a refusal is not a site, so it must not consume
-                    # an index that a listing would not report
-                    verified = self._verify(s, info)
-                    if isinstance(verified, Declined):
-                        self.refused.append((s, verified.reason))
-                        if self._target is not None and self._selects(block, pos, -1):
-                            # a cursor named this candidate: say why, rather
-                            # than report that it named nothing
-                            self.declined.append(verified.reason)
-                    else:
-                        idx = self.site_idx
-                        self.site_idx += 1
-                        if self._selects(block, pos, idx):
-                            self._matched += 1
-                            if self.listing:
-                                self.found.append(
-                                    StmtPath(self._paths[id(block)], pos)
-                                )
-                                stmts.append(s)
-                                continue
-                            emitted = self._rewrite(s, verified)
-                            self._record(block, pos, len(emitted))
-                            stmts.extend(emitted)
-                            continue
-            new_s, ctx = self._visit_statement(s, ctx)
-            stmts.append(new_s)
-        return StmtBlock(stmts), ctx
+    def _visit_assign(self, stmt: Assign, ctx):
+        # a site that is the whole right-hand side assigns this name directly,
+        # rather than a temporary the statement copies onto it.  Not where the
+        # assignment is annotated: the ladder has several branches to sit in
+        # and the annotation one place to sit.
+        self._direct = (
+            (stmt.target, stmt.expr)
+            if ctx is not None and stmt.type is None
+            and isinstance(stmt.target, NamedId) and self._candidate(stmt.expr)
+            else None
+        )
+        try:
+            return super()._visit_assign(stmt, ctx)
+        finally:
+            self._direct = None

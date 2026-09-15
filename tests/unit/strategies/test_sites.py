@@ -43,6 +43,26 @@ def two_sites(x: fp.Real, y: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.REAL)
+def two_fixed(x: fp.Real, y: fp.Real) -> fp.Real:
+    """Two sites for `rescale_fixed`, whose formats are fixed-point."""
+    with fp.FixedContext(True, -4, 16):
+        p = fp.round(x)
+    with fp.FixedContext(True, -8, 16):
+        q = fp.round(y)
+    return p + q
+
+
+@fp.fpy(ctx=fp.REAL)
+def two_neg_zero(x: fp.Real, y: fp.Real) -> fp.Real:
+    """Two sites for `unfold_neg_zero`, whose formats keep a signed zero."""
+    with fp.MPFixedContext(-4):
+        p = fp.round(x)
+    with fp.MPFixedContext(-8):
+        q = fp.round(y)
+    return p + q
+
+
+@fp.fpy(ctx=fp.REAL)
 def nested(x: fp.Real) -> fp.Real:
     if x > 0:
         with fp.FP16:
@@ -107,12 +127,22 @@ def calls(x: fp.Real, y: fp.Real) -> fp.Real:
 # What a listing names
 
 
-def test_the_rounding_strategies_list_their_blocks():
-    """The three that apply to a float format list both of its rounds."""
-    for strategy in (unfold_special, unfold_overflow, float_to_fixed):
-        found = sites(strategy, two_sites)
-        assert [c.path for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
-        assert all(isinstance(c, StmtCursor) for c in found)
+def test_the_rounding_strategies_list_their_roundings():
+    """Every one of them is aimed at the rounding itself, so it names an
+    expression rather than the block the rounding happens to sit in."""
+    cases = [
+        (unfold_special, two_sites), (unfold_overflow, two_sites),
+        (float_to_fixed, two_sites), (rescale_fixed, two_fixed),
+        (unfold_neg_zero, two_neg_zero),
+    ]
+    for strategy, func in cases:
+        found = sites(strategy, func)
+        assert len(found) == 2, strategy
+        assert all(isinstance(c, ExprCursor) for c in found)
+        assert [c.path.stmt() for c in found] == [
+            FuncBody().stmt(0).block('body').stmt(0),
+            FuncBody().stmt(1).block('body').stmt(0),
+        ], strategy
 
 
 def test_a_strategy_that_applies_to_nothing_lists_nothing():
@@ -124,7 +154,9 @@ def test_a_strategy_that_applies_to_nothing_lists_nothing():
 
 def test_a_listing_is_outermost_first():
     found = sites(unfold_special, nested)
-    assert [c.path for c in found] == [FuncBody().stmt(0).block('ift').stmt(0)]
+    assert [c.path.stmt() for c in found] == [
+        FuncBody().stmt(0).block('ift').stmt(0).block('body').stmt(0)
+    ]
 
 
 def test_the_loop_strategies_list_their_loops():
@@ -208,7 +240,7 @@ def test_a_cast_block_is_listed_where_it_counts(strategy, func):
     """A `cast` block is a candidate for these two, so it has to appear in the
     listing at the index `where` gives it."""
     listed = sites(strategy, func)
-    assert [c.index for c in listed] == [0, 1]
+    assert len(listed) == 2
     for i, cursor in enumerate(listed):
         _aims_alike(strategy, func, i, cursor)
 
@@ -217,8 +249,10 @@ def test_a_cast_block_is_not_listed_where_it_does_not_count():
     """...and must not, for the two that only take a round.  `unfold_neg_zero`
     is absent: it refuses a float format outright, so there is no program where
     it both verifies and sees a cast."""
+    # both name the rounding, so each has one site and it is an expression
     for strategy in (unfold_overflow, float_to_fixed):
-        assert [c.index for c in sites(strategy, cast_and_round_fp16)] == [1]
+        listed = sites(strategy, cast_and_round_fp16)
+        assert [c.path.stmt().index for c in listed] == [0]
 
 
 def test_a_listed_insert_round_site_aims_the_same_as_its_index():
@@ -242,8 +276,8 @@ def test_a_listed_call_aims_the_same_as_its_index():
 
 def test_within_narrows_to_a_region():
     part = BlockCursor(two_sites.ast, FuncBody(), range(1, 2))
-    assert [c.path for c in sites(unfold_special, two_sites, part)] == [
-        FuncBody().stmt(1)
+    assert [c.path.stmt() for c in sites(unfold_special, two_sites, part)] == [
+        FuncBody().stmt(1).block('body').stmt(0)
     ]
 
 
@@ -255,14 +289,19 @@ def test_within_narrows_to_what_a_cursor_holds():
 
 
 def test_within_asks_a_forwarded_site_what_it_now_holds():
-    """The step a schedule takes: rewrite at a site, then look inside its image."""
-    site = sites(unfold_special, two_sites)[0]
-    out = unfold_special(two_sites, where=site)
+    """The step a schedule takes: rewrite at a site, then look inside its image.
 
-    inner = sites(unfold_overflow, out, out.rebase(site))
+    The anchor is a *statement*: a rewrite consumes the rounding it acts on, so
+    the expression `sites` reported is gone afterwards and cannot be forwarded.
+    The statement holding it survives and still has the new rounding beneath it.
+    """
+    anchor = StmtCursor(two_sites.ast, FuncBody().stmt(0))
+    out = unfold_special(two_sites, where=anchor)
+
+    inner = sites(unfold_overflow, out, out.rebase(anchor))
     assert len(inner) == 1
     # ... and it is inside the wrapper the rewrite left behind
-    assert inner[0].path != site.path
+    assert inner[0].path.stmt() != FuncBody().stmt(0).block('body').stmt(0)
 
 
 def test_within_of_another_program_is_a_bad_reference():
@@ -272,17 +311,27 @@ def test_within_of_another_program_is_a_bad_reference():
 
 
 def test_within_is_forwarded_like_a_where():
-    """A site listed against one program narrows a listing against a later
+    """A point pinned against one program narrows a listing against a later
     one, without the caller forwarding it by hand."""
+    anchor = StmtCursor(two_sites.ast, FuncBody().stmt(0))
+    out = unfold_special(two_sites, where=anchor)
+    assert len(sites(unfold_overflow, out, anchor)) == 1
+
+
+def test_a_rewritten_site_does_not_narrow_a_later_listing():
+    """The other side of it: the expression a listing reported is consumed by
+    the rewrite aimed at it, so it names nothing afterwards and says so."""
     site = sites(unfold_special, two_sites)[0]
     out = unfold_special(two_sites, where=site)
-    assert len(sites(unfold_overflow, out, site)) == 1
+    with pytest.raises(TransformReferenceError, match='which was rewritten'):
+        sites(unfold_overflow, out, site)
 
 
 def test_an_expression_cannot_narrow_a_statement_listing():
-    cur = ExprCursor(calls.ast, FuncBody().stmt(0).expr('expr'))
+    """No rounding strategy is statement-sited any more; the loop rewrites are."""
+    cur = ExprCursor(loops.ast, FuncBody().stmt(0).expr('expr'))
     with pytest.raises(TransformReferenceError, match='these sites are statements'):
-        sites(unfold_special, calls, cur)
+        sites(unroll_for, loops, cur)
 
 
 def test_an_expression_narrows_a_call_listing():
@@ -303,7 +352,10 @@ def test_refusals_explains_what_a_listing_omits():
     it.  The listing says nothing; this says why."""
     assert sites(rescale_fixed, two_sites) == []
     found = refusals(rescale_fixed, two_sites)
-    assert [c.path for c, _ in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
+    assert [c.path.stmt() for c, _ in found] == [
+        FuncBody().stmt(0).block('body').stmt(0),
+        FuncBody().stmt(1).block('body').stmt(0),
+    ]
     assert all('fixed-point' in why for _, why in found)
 
 

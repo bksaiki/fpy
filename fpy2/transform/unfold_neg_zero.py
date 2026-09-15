@@ -36,9 +36,10 @@ the sign of the *special* that was rounded.  A substitute is only consulted
 where its own rule is off, so one paired with an enabled rule is inert and
 does not decline.
 
-Only a block whose body is entirely ``x = fp.round(v)`` (or a returned round)
-over variables is rewritten.  ``Cast`` is excluded: it asserts exactness, and
-an exact result never rounds to zero from anything but zero.
+A site is the rounding itself, wherever the active context is one this rewrite
+can restate; see :class:`~fpy2.transform.utils.ScopedRoundingRewriter`.
+``Cast`` is not: it asserts exactness, and an exact result never rounds to zero
+from anything but zero.
 
 `SMFixedContext` has its signed zero by construction, so it is rebuilt as the
 `MPBFixedContext` it derives from; the emitted context no longer names the
@@ -48,7 +49,6 @@ zero, so it is never a candidate.
 
 from dataclasses import dataclass
 
-from ..analysis import PartialEval, PartialEvalInfo
 from ..ast.fpyast import (
     Assign,
     BoolVal,
@@ -63,9 +63,7 @@ from ..ast.fpyast import (
     Integer,
     Location,
     NamedId,
-    ReturnStmt,
     Round,
-    Stmt,
     StmtBlock,
     UnderscoreId,
     Var,
@@ -80,13 +78,12 @@ from ..number import (
     OverflowMode,
 )
 from ..utils import CompareOp, Gensym
-from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .cursor import Cursor, EditLog
 from .utils import (
-    BlockRewriter,
     Declined,
+    RoundingScopes,
+    ScopedRoundingRewriter,
     check_where,
-    is_rounding_block,
-    rounding_block,
 )
 
 _FixedCtx = MPFixedContext | MPBFixedContext
@@ -155,12 +152,13 @@ def _sign_survives(ctx: _FixedCtx) -> bool:
     return not any(v is not None and not v.is_nar() and v.is_zero() for v in subs)
 
 
-def _ctx_expr(e: Expr, src: _Source) -> Expr:
+def _ctx_expr(e: Expr | None, src: _Source, loc: Location | None) -> Expr:
     """
     The dropped context as an expression, in fresh nodes.  A constructor call
     keeps its written form with only the flag stated, so the rewritten
-    program reads like the original; anything else — the rebuilt context
-    itself.
+    program reads like the original; anything else — including a scope that is
+    the function's own annotation, which states no expression in the body —
+    the rebuilt context itself.
     """
     if (
         isinstance(e, Call) and e.fn is type(src.ctx)
@@ -174,43 +172,38 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
         kwargs = tuple(kv for kv in call.kwargs if kv[0] != 'enable_neg_zero')
         kwargs += (('enable_neg_zero', BoolVal(False, e.loc)),)
         return Call(call.func, call.fn, call.args, kwargs, call.loc)
-    return ForeignVal(src.dropped, e.loc)
+    return ForeignVal(src.dropped, loc)
 
 
-class _UnfoldNegZeroInstance(BlockRewriter):
-    """Rewrites every qualifying context statement in a function."""
+class _UnfoldNegZeroInstance(ScopedRoundingRewriter):
+    """Restates the sign of zero of every qualifying rounding in a function."""
 
     _casts = False
-    """whether a `fp.cast` block counts as a candidate"""
+    """`Cast` asserts exactness, and an exact result never rounds to zero from
+    anything but zero"""
 
     func: FuncDef
-    eval_info: PartialEvalInfo
+    scopes: RoundingScopes
     gensym: Gensym
     where: int | Cursor | None
     site_idx: int
 
     def __init__(
-        self, func: FuncDef, eval_info: PartialEvalInfo,
+        self, func: FuncDef, scopes: RoundingScopes,
         where: int | Cursor | None = None,
     ):
         self.func = func
-        self.eval_info = eval_info
-        self.gensym = Gensym(eval_info.def_use.names())
+        self.scopes = scopes
+        self.gensym = Gensym(scopes.def_use.names())
         self.where = where
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """Only a rounding rounds onto zero; `Cast` asserts exactness, and
-        an exact result never rounds to zero from anything but zero."""
-        return rounding_block(stmt, casts=self._casts)
-
-    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
-        """The block's format, if its sign of zero can be taken out of its
+    def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
+        """The rounding's format, if its sign of zero can be taken out of its
         context."""
-        ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, Context):
+        if ctx is None:
             return Declined('the context is not statically known')
         if not isinstance(ctx, _FixedCtx):
             return Declined(
@@ -236,12 +229,12 @@ class _UnfoldNegZeroInstance(BlockRewriter):
             )
         return _Source(ctx, dropped)
 
-    def _unfold(
-        self, e: Round, target: NamedId, loc: Location | None, ctx_expr: Expr,
-    ) -> Stmt:
+    def _ladder(self, e: Expr, target: NamedId, out: list, src: _Source) -> None:
         """`target = round(v)` as a one-zero rounding plus a sign restoration."""
-        assert isinstance(e.arg, Var)
-        name = e.arg.name
+        assert isinstance(e, Round)
+        loc = e.loc
+        ctx_expr = _ctx_expr(self.scopes.scope_ctx_expr(e), src, loc)
+        name = self._arg_name(e, out)
 
         def arg() -> Var:
             return Var(name, loc)
@@ -265,29 +258,10 @@ class _UnfoldNegZeroInstance(BlockRewriter):
 
         # the comparison and the sign transfer are exact whatever context
         # encloses this statement; the rounding sets its own
-        return ContextStmt(
+        out.append(ContextStmt(
             UnderscoreId(), ForeignVal(REAL, loc),
             StmtBlock([rounding, fixup]), loc,
-        )
-
-    def _rewrite(self, stmt: ContextStmt, src: _Source) -> list[Stmt]:
-        """The block's rounds, with the sign of zero taken out of the context.
-        Nothing rounds under the source context afterwards, so the block
-        itself goes away."""
-        stmts: list[Stmt] = []
-        for s in stmt.body.stmts:
-            # each emitted block gets its own context expression
-            ctx_expr = _ctx_expr(stmt.ctx, src)
-            if isinstance(s, Assign):
-                assert isinstance(s.expr, Round) and isinstance(s.target, NamedId)
-                stmts.append(self._unfold(s.expr, s.target, s.loc, ctx_expr))
-            else:
-                # a returned round lands in a temporary, which the return names
-                assert isinstance(s, ReturnStmt) and isinstance(s.expr, Round)
-                out = self.gensym.fresh('t')
-                stmts.append(self._unfold(s.expr, out, s.loc, ctx_expr))
-                stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
-        return stmts
+        ))
 
 
 class UnfoldNegZero:
@@ -301,57 +275,49 @@ class UnfoldNegZero:
         and what `within` narrows.
 
         Runs the same decisions the rewrite does, so a listing reports exactly
-        the blocks `where=None` would rewrite: no candidate that this pass
+        the roundings `where=None` would rewrite: no candidate that this pass
         refuses appears here or consumes an index.
         """
-        eval_info = PartialEval.apply(func)
-        return _UnfoldNegZeroInstance(func, eval_info).list_sites(within)
+        return _UnfoldNegZeroInstance(func, RoundingScopes(func)).list_sites(within)
 
     @staticmethod
     def refusals(
         func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
-        """Why each rounding block of `func` that is not a site was refused,
-        in visit order.  A refusal takes no index, so this is how one is found.
+        """Why each rounding of `func` that is not a site was refused, in visit
+        order.  A refusal takes no index, so this is how one is found.
         """
-        eval_info = PartialEval.apply(func)
-        return _UnfoldNegZeroInstance(func, eval_info).list_refusals(within)
+        return _UnfoldNegZeroInstance(func, RoundingScopes(func)).list_refusals(within)
 
     @staticmethod
     def apply(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
     ) -> FuncDef:
         """
         Takes the signed zero out of every qualifying rounding context in
         `func`, restoring the sign with `copysign` after the rounding.
 
-        `where` selects one structurally-matching rounding block by index
-        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `where` selects one rounding by index (see
+        :class:`.utils.ScopedRoundingRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
         """
         return UnfoldNegZero.apply_with_edits(
             func,
             where=where,
-            eval_info=eval_info,
         ).result
 
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
 
-        if eval_info is None:
-            eval_info = PartialEval.apply(func)
-
-        vtor = _UnfoldNegZeroInstance(func, eval_info, where)
+        vtor = _UnfoldNegZeroInstance(func, RoundingScopes(func), where)
         out = vtor.apply()
-        vtor.check_site('a candidate rounding block')
+        vtor.check_site('a candidate rounding')
         return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

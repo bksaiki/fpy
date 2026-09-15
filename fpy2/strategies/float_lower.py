@@ -28,9 +28,9 @@ def float_to_fixed(func: Function, where: int | Cursor | None = None) -> Functio
     of it.
 
     Applies to a float format that rounds deterministically and whose overflow
-    a fixed-point round can reproduce; other contexts are left unchanged.  Only
-    blocks whose body is entirely ``x = fp.round(v)`` (or a returned round) are
-    rewritten.
+    a fixed-point round can reproduce; other contexts are left unchanged, and a
+    ``fp.cast`` is not a site: it asserts exactness, which the lowering would
+    not preserve.  See :mod:`fpy2.strategies` for what a rounding site is.
 
     Run :func:`fpy2.strategies.rescale_fixed` afterwards to shift the resulting
     fixed-point rounding to digit position zero, where its values are integers.
@@ -77,23 +77,26 @@ def float_to_fixed(func: Function, where: int | Cursor | None = None) -> Functio
             ctx=fp.REAL,
         )
         def quantize(x):
-            with fp.REAL:
-                if fp.isnan(x):
-                    y = fp.nan()
-                elif fp.isinf(x):
-                    y = (-fp.inf() if fp.signbit(x) else fp.inf())
-                elif x == 0:
-                    y = (-0.0 if fp.signbit(x) else 0)
-                else:
-                    e = fp.logb(x)
-                    if e < -14:
-                        with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
-                            y = fp.round(x)
+            with fp.FP16:
+                with fp.REAL:
+                    if fp.isnan(x):
+                        y = fp.nan()
+                    elif fp.isinf(x):
+                        y = (-fp.inf() if fp.signbit(x) else fp.inf())
+                    elif x == 0:
+                        y = (-0.0 if fp.signbit(x) else 0)
                     else:
-                        exp = min(max((e - 10), -24), 5)
-                        with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
-                            y = fp.round(x)
+                        e = fp.logb(x)
+                        if e < -14:
+                            with fp.MPBFixedContext(-25, 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
+                                y = fp.round(x)
+                        else:
+                            exp = min(max((e - 10), -24), 5)
+                            with fp.MPBFixedContext((exp - 1), 65504, overflow=fp.OverflowMode.OVERFLOW, enable_inf=True):
+                                y = fp.round(x)
             return y
+
+    :func:`fpy2.strategies.simplify` drops the block, which no longer rounds.
     """
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")

@@ -187,7 +187,7 @@ class _SplitRoundInstance(RoundingRewriter):
         bound = self.scopes.format_info.by_expr.get(e)
         return isinstance(bound, (AbstractableFormat, AbstractFormat, SetFormat))
 
-    def _verify(self, e: Expr) -> None | Declined:
+    def _check(self, e: Expr) -> None | Declined:
         """`None` where *e*'s rounding may be split, else why not."""
         target = self.scopes.scope_ctx(e)
         if target is None:
