@@ -3366,14 +3366,19 @@ class CppEmitter(Visitor):
     ) -> str:
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
-        The cast rounds (C++ integer conversion is ``RTZ``, which
-        `_validate_context_rm` has already required) but it wraps at the *type*'s
-        range, not the format's.  So the bound is asserted first, on the rounded
+        The cast rounds -- C++ integer conversion is ``RTZ``, which
+        `_validate_ctx_storage` has already required of an integer storage --
+        but it wraps at the *type*'s range, not the format's.  So the bound is asserted first, on the rounded
         value -- ``100.7`` is in bounds under ``RTZ`` even though ``100.7 > 100``
         -- which also keeps the conversion itself in range, since an operand past
         the type's range would be undefined.
         """
-        arg_ty, _ = self._scalar_cast_types(e)
+        # the operand's storage alone: `_scalar_cast_types` would also ask the
+        # context for a target, which an unbounded one cannot answer
+        try:
+            arg_ty = self._scalar_storage_for_expr(e.arg)
+        except CppEmitError:
+            arg_ty = None
         integral = arg_ty is not None and arg_ty.is_integer()
         operand = self._bind_operand(arg)
         # an integer operand is already integral and never a NaN or an infinity;
