@@ -337,6 +337,29 @@ class TestFloatContextUnaffected:
             _emit(MPBFixedContext(-8, fp.RealFloat(exp=4, c=1), overflow=ASSERT))
 
 
+class TestTheLoweredScaleInStaysNarrow:
+    """The normal branch scales by ``2 ** -exp`` in the operand's own type.
+
+    `FloatToFixed` takes that branch on ``abs(x) >= 2 ** emin``, which tells
+    inference the finest digit ``x`` can carry (`_implied_magnitude`).  Without
+    that the operand's format keeps a digit it cannot have, and the scale-in
+    widens to ``double`` -- correct, and a type wider than the value needs.
+    """
+
+    def test_the_scale_in_takes_the_operand_unwidened(self):
+        import fpy2.strategies as strat
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                return fp.round(x)
+
+        g = strat.simplify(strat.rescale_fixed(strat.float_to_fixed(
+            strat.unfold_overflow(strat.unfold_special(f), early_check=True))))
+        out = CppCompiler().compile(g, arg_types=[RealType(fp.FP32)])
+        assert re.search(r'float \w+ = std::ldexp\(x,', out), out
+
+
 class TestScaleByPowerOfTwo:
     """``2 ** n * v`` becomes ``std::ldexp(v, n)``.
 

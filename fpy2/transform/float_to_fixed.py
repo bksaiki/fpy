@@ -83,6 +83,7 @@ from ..analysis import (
     ValueClassInfer,
 )
 from ..ast.fpyast import (
+    Abs,
     Add,
     Assign,
     BoolVal,
@@ -467,15 +468,23 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
             # below `emin` the format is itself fixed-point: every value in
             # that range rounds at the same position, a constant
             assert src.expmin is not None
-            # this branch is `logb(x) < emin`, so `|x| < 2 ** emin`
+            # `|x| < 2 ** emin` is `logb(x) < emin` said of the magnitude, which
+            # keeps `logb` off this branch -- it reads no exponent -- and states
+            # in each arm what inference reads: a bound here, a finest digit
+            # there (see `FormatInfer._implied_magnitude`)
             sub_reach = number_literal(RealFloat(exp=src.emin, c=1), loc)
-            normal = IfStmt(
-                Compare([CompareOp.LT], [Var(e_name, loc), Integer(src.emin, loc)], loc),
-                StmtBlock(rounding(Integer(src.expmin - 1, loc), sub_reach)),
-                StmtBlock([position, *at_scale]),
+            below = Compare(
+                [CompareOp.LT],
+                [Abs(arg(), loc), number_literal(RealFloat(exp=src.emin, c=1), loc)],
                 loc,
             )
-            body = [exponent, normal]
+            normal = IfStmt(
+                below,
+                StmtBlock(rounding(Integer(src.expmin - 1, loc), sub_reach)),
+                StmtBlock([exponent, position, *at_scale]),
+                loc,
+            )
+            body = [normal]
 
         nan_v, pos_inf, neg_inf, pos_zero, neg_zero = src.specials
 

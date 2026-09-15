@@ -19,13 +19,16 @@ import pytest
 
 from fpy2.analysis import PartialEval
 from fpy2.ast.fpyast import (
+    Abs,
     Call,
+    Compare,
     ContextStmt,
     FuncDef,
     Integer,
     IsFinite,
     IsInf,
     IsNan,
+    Logb,
     Round,
 )
 from fpy2.ast.visitor import DefaultVisitor
@@ -112,6 +115,34 @@ def _has_node(ast: FuncDef, node_type) -> bool:
     return found[0]
 
 
+def _block_has(block, node_type) -> bool:
+    found = [False]
+
+    class _C(DefaultVisitor):
+        def _visit_expr(self, e, ctx):
+            if isinstance(e, node_type):
+                found[0] = True
+            super()._visit_expr(e, ctx)
+
+    _C()._visit_block(block, None)
+    return found[0]
+
+
+def _magnitude_branch(ast: FuncDef):
+    """The arms of the ``if`` that tests ``abs(x)``, or ``(None, None)``."""
+    out = [None, None]
+
+    class _C(DefaultVisitor):
+        def _visit_if(self, stmt, ctx):
+            if (isinstance(stmt.cond, Compare)
+                    and any(isinstance(a, Abs) for a in stmt.cond.args)):
+                out[0], out[1] = stmt.ift, stmt.iff
+            super()._visit_if(stmt, ctx)
+
+    _C()._visit_function(ast, None)
+    return out[0], out[1]
+
+
 def _eval(ast: FuncDef, fn: fp.Function, *args):
     return fn.with_ast(ast)(*args)
 
@@ -188,6 +219,17 @@ class TestLowering:
         neg_nan = fp.Float(isnan=True, s=True)
         assert not _eval(out, f, neg_nan).s
         assert _same(_eval(out, f, neg_nan), f(neg_nan))
+
+    def test_the_subnormal_branch_is_taken_on_the_magnitude(self):
+        """``|x| < 2 ** emin`` is ``logb(x) < emin`` said of the value, so the
+        branch needs no exponent -- and each arm states what inference reads."""
+        f = _quantizer(fp.FP16)
+        out = FloatToFixed.apply(f.ast)
+
+        ift, iff = _magnitude_branch(out)
+        assert ift is not None, out.format()
+        assert not _block_has(ift, Logb)
+        assert _block_has(iff, Logb)
 
     def test_subnormal_branch_is_static(self):
         """Below `emin` the format is fixed-point already, so that branch's
