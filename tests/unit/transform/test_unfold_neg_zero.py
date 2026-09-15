@@ -25,6 +25,7 @@ from fpy2.ast.fpyast import (
     Expr,
     ForeignVal,
     FuncDef,
+    Round,
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import (
@@ -33,7 +34,13 @@ from fpy2.number import (
     MPFixedContext,
     RealFloat,
 )
-from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldNegZero
+from fpy2.transform import (
+    DeadCodeEliminate,
+    TransformDeclined,
+    TransformReferenceError,
+    UnfoldNegZero,
+)
+from fpy2.transform.utils import RoundingScopes
 from fpy2.transform.unfold_neg_zero import _sign_survives
 
 
@@ -61,6 +68,17 @@ def _block_ctxs(ast: FuncDef) -> list:
         v for s in _blocks(ast)
         if (v := eval_info.by_expr.get(s.ctx)) is not None
     ]
+
+
+def _round_ctxs(ast: FuncDef) -> list:
+    """The context every ``Round`` in *ast* rounds under.
+
+    What the rewrite changes.  A block it emptied is dropped by dead-code
+    elimination and not by the rewrite, so the *block* contexts still name the
+    source format.
+    """
+    scopes = RoundingScopes(ast)
+    return [scopes.scope_ctx(e) for e in _nodes(ast, Round)]
 
 
 def _nodes(ast: FuncDef, node_type) -> list:
@@ -136,9 +154,10 @@ class TestShape:
         f = _quantizer(MPFixedContext(-8))
         out = UnfoldNegZero.apply(f.ast)
 
-        ctxs = _block_ctxs(out)
-        assert REAL in ctxs
-        target = next(c for c in ctxs if isinstance(c, MPFixedContext))
+        assert REAL in _block_ctxs(out)
+        target = next(
+            c for c in _round_ctxs(out) if isinstance(c, MPFixedContext)
+        )
         assert target.nmin == -8
         assert target.enable_neg_zero is False
 
@@ -160,7 +179,7 @@ class TestShape:
                 y = fp.round(x)
             return y
 
-        out = UnfoldNegZero.apply(f.ast)
+        out = DeadCodeEliminate.apply(UnfoldNegZero.apply(f.ast))
         call = next(
             s.ctx for s in _blocks(out)
             if isinstance(s.ctx, Call) and s.ctx.fn is MPFixedContext
@@ -175,7 +194,9 @@ class TestShape:
         f = _quantizer(src)
         out = UnfoldNegZero.apply(f.ast)
 
-        target = next(c for c in _block_ctxs(out) if isinstance(c, MPBFixedContext))
+        target = next(
+            c for c in _round_ctxs(out) if isinstance(c, MPBFixedContext)
+        )
         assert type(target) is MPBFixedContext
         assert target.enable_neg_zero is False
         assert target.pos_maxval == src.pos_maxval
@@ -209,7 +230,8 @@ class TestShape:
 
         out = UnfoldNegZero.apply(f.ast)
         assert not any(
-            isinstance(c, MPFixedContext) and c.enable_neg_zero for c in _block_ctxs(out)
+            isinstance(c, MPFixedContext) and c.enable_neg_zero
+            for c in _round_ctxs(out)
         )
         src = MPFixedContext(-8)
         for x in _samples(src):
@@ -308,14 +330,33 @@ class TestUnchanged:
 
         assert UnfoldNegZero.apply(f.ast).is_equiv(f.ast)
 
+
+# ----------------------------------------------------------------------
+# Sites the shape of the program used to hide
+
+
+class TestScopedSites:
+    """A site is a rounding under a scope with a signed zero, whatever the
+    program looks like around it: the rewrite asks `ContextUse` what is active,
+    not whether the statement sits in a block of a particular shape."""
+
+    _CTX = MPFixedContext(-8)
+
+    def _check(self, f: fp.Function, out: FuncDef) -> None:
+        assert self._CTX not in _round_ctxs(out)
+        for x in _samples(self._CTX):
+            assert _same(_eval(out, f, x), f(x)), x
+
     def test_round_of_an_expression(self):
+        """The operand is bound first, under the scope it was written in, so
+        the `copysign` can name it."""
         @fp.fpy(ctx=fp.REAL)
-        def f(a, b):
+        def f(a):
             with fp.MPFixedContext(-8):
-                y = fp.round(a + b)
+                y = fp.round(a + 1)
             return y
 
-        assert UnfoldNegZero.apply(f.ast).is_equiv(f.ast)
+        self._check(f, UnfoldNegZero.apply(f.ast))
 
     def test_bound_context(self):
         @fp.fpy(ctx=fp.REAL)
@@ -324,7 +365,28 @@ class TestUnchanged:
                 y = fp.round(x)
             return y
 
-        assert UnfoldNegZero.apply(f.ast).is_equiv(f.ast)
+        self._check(f, UnfoldNegZero.apply(f.ast))
+
+    def test_function_annotation_scope(self):
+        """No `with` at all, so no constructor call to state the flag on: the
+        emitted context is the rebuilt value."""
+        @fp.fpy(ctx=MPFixedContext(-8))
+        def f(x):
+            y = fp.round(x)
+            return y
+
+        self._check(f, UnfoldNegZero.apply(f.ast))
+
+    def test_annotated_assign(self):
+        """The ladder has two branches to sit in and the annotation one place
+        to sit, so the assignment stays and reads a temporary."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(-8):
+                y: fp.Real = fp.round(x)
+            return y
+
+        self._check(f, UnfoldNegZero.apply(f.ast))
 
 
 # ----------------------------------------------------------------------
@@ -357,7 +419,7 @@ class TestWhere:
         out = UnfoldNegZero.apply(f.ast, where=where)
         # the FP64 block is arithmetic, so it is never a candidate
         remaining = [
-            c.nmin for c in _block_ctxs(out)
+            c.nmin for c in _round_ctxs(out)
             if isinstance(c, MPFixedContext) and c.enable_neg_zero
         ]
         assert remaining == kept

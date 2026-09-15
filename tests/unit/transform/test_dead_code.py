@@ -788,9 +788,9 @@ class TestDeadContext:
         reals = g.format().count('with fp.REAL')
 
         out = fp.Function(fp.transform.DeadCodeEliminate.apply(g.ast), runtime=g.runtime)
-        # three REAL blocks nested in REAL scopes, plus the two source blocks
-        # `unfold_overflow` and `float_to_fixed` emptied for this pass to drop
-        assert _with_count(out.ast) == _with_count(g.ast) - 5
+        # three REAL blocks nested in REAL scopes, plus the source blocks the
+        # four rewrites emptied and left for this pass to drop
+        assert _with_count(out.ast) == _with_count(g.ast) - 6
         assert out.format().count('with fp.REAL') == reals - 3
         for v in (float('nan'), float('inf'), float('-inf'), 0.0, -0.0,
                   1.5, -1.5, 1e40, -1e-42):

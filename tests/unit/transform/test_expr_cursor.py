@@ -185,17 +185,18 @@ def test_an_expression_cursor_aims_inline_at_one_call():
 def test_a_statement_sited_rewrite_refuses_an_expression_cursor():
     """No statement sits beneath an expression, and the message says so rather
     than reporting no candidate."""
-    from fpy2.strategies import unfold_special
+    from fpy2.strategies import unroll_for
 
     @fp.fpy(ctx=fp.REAL)
-    def rounded(x: fp.Real) -> fp.Real:
-        with fp.FP16:
-            y = fp.round(x)
-        return y
+    def loop(xs: list[fp.Real]) -> fp.Real:
+        s = 0.0
+        for x in xs:
+            s = s + x
+        return s
 
-    cur = ExprCursor(rounded.ast, FuncBody().stmt(1).expr('expr'))
+    cur = ExprCursor(loop.ast, FuncBody().stmt(0).expr('expr'))
     with pytest.raises(TransformReferenceError, match='these sites are statements'):
-        unfold_special(rounded, where=cur)
+        unroll_for(loop, where=cur)
 
 
 def test_rebasing_an_expression_cursor_is_the_identity_on_its_own_program():

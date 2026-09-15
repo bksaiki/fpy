@@ -75,7 +75,8 @@ def test_a_cursor_survives_monomorphize_into_the_rest_of_a_schedule():
     f = unfold_special(f, where=site)
 
     assert f.edits is not None and len(f.edits.edits) == 1
-    assert f.edits.edits[0].index == 1
+    # the site is the rounding, so the edit lands in the block holding it
+    assert f.edits.edits[0].block_path == FuncBody().stmt(1).block('body')
 
 
 # ----------------------------------------------------------------------

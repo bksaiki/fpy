@@ -71,8 +71,6 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from ..analysis import (
-    PartialEval,
-    PartialEvalInfo,
     ValueClass,
     ValueClassAnalysis,
     ValueClassInfer,
@@ -93,9 +91,7 @@ from ..ast.fpyast import (
     IsNan,
     Location,
     NamedId,
-    ReturnStmt,
     Round,
-    Stmt,
     StmtBlock,
     UnderscoreId,
     Var,
@@ -113,13 +109,12 @@ from ..number import (
     OverflowMode,
 )
 from ..utils import CompareOp, Gensym
-from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .cursor import Cursor, EditLog
 from .utils import (
-    BlockRewriter,
     Declined,
+    RoundingScopes,
+    ScopedRoundingRewriter,
     check_where,
-    is_rounding_block,
-    rounding_block,
     sign_choice,
     try_round,
 )
@@ -279,12 +274,13 @@ def _hoisted(src: _Source, cls: ValueClass) -> ValueClass:
     return out
 
 
-def _ctx_expr(e: Expr, src: _Source) -> Expr:
+def _ctx_expr(e: Expr | None, src: _Source, loc: Location | None) -> Expr:
     """
     The dropped context as an expression, in fresh nodes.  A constructor call
     keeps its written form with only the shed rules removed, so the rewritten
-    program reads like the original; anything else — the rebuilt context
-    itself.
+    program reads like the original; anything else — including a scope that is
+    the function's own annotation, which states no expression in the body —
+    the rebuilt context itself.
     """
     if (
         isinstance(e, Call) and e.fn is type(src.ctx)
@@ -310,46 +306,41 @@ def _ctx_expr(e: Expr, src: _Source) -> Expr:
                 for name in ('enable_nan', 'enable_inf') if name in shed
             )
         return Call(call.func, call.fn, call.args, kwargs, call.loc)
-    return ForeignVal(src.dropped, e.loc)
+    return ForeignVal(src.dropped, loc)
 
 
-class _UnfoldSpecialInstance(BlockRewriter):
-    """Rewrites every qualifying context statement in a function."""
+class _UnfoldSpecialInstance(ScopedRoundingRewriter):
+    """States the special values of every qualifying rounding in a function."""
 
     _casts = True
-    """whether a `fp.cast` block counts as a candidate"""
+    """a cast substitutes a special exactly as a round does: the substitution
+    happens before the exactness check"""
 
     func: FuncDef
-    eval_info: PartialEvalInfo
+    scopes: RoundingScopes
     class_info: ValueClassAnalysis
     gensym: Gensym
     where: int | Cursor | None
     site_idx: int
 
     def __init__(
-        self, func: FuncDef, eval_info: PartialEvalInfo,
+        self, func: FuncDef, scopes: RoundingScopes,
         class_info: ValueClassAnalysis, where: int | Cursor | None = None,
     ):
         self.func = func
-        self.eval_info = eval_info
+        self.scopes = scopes
         self.class_info = class_info
-        self.gensym = Gensym(eval_info.def_use.names())
+        self.gensym = Gensym(scopes.def_use.names())
         self.where = where
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
 
-    def _candidate(self, stmt: ContextStmt) -> list[Var] | None:
-        """A cast substitutes a special exactly as a round does: the
-        substitution happens before the exactness check."""
-        return rounding_block(stmt, casts=self._casts)
-
-    def _verify(self, stmt: ContextStmt, args: list[Var]) -> _Source | Declined:
-        """The block's format, if any of its special values can be stated as
-        a branch or shed from it."""
+    def _verify(self, e: Expr, ctx: Context | None) -> _Source | Declined:
+        """The rounding's format, if any of its special values can be stated
+        as a branch or shed from it."""
         # the branch values are the context's own answers, so it has to be known here
-        ctx = self.eval_info.by_expr.get(stmt.ctx)
-        if not isinstance(ctx, Context):
+        if ctx is None:
             return Declined(
                 'the context is not statically known, so the branch values '
                 'cannot be computed'
@@ -362,25 +353,27 @@ class _UnfoldSpecialInstance(BlockRewriter):
         # the specials, and a format that refuses both has none to state
         src = _describe(ctx)
         specials = ValueClass.NAN | ValueClass.INF
-        if src.shed or any(self._hoist(src, arg) & specials for arg in args):
+        assert isinstance(e, (Round, Cast))
+        if src.shed or self._hoist(src, e.arg) & specials:
             return src
         return Declined(
             'nothing to state: no special-value rule can be shed from the '
             'format and no operand can be a special value'
         )
 
-    def _hoist(self, src: _Source, arg: Var) -> ValueClass:
+    def _hoist(self, src: _Source, arg: Expr) -> ValueClass:
         return _hoisted(src, self.class_info.classify(arg))
 
-    def _unfold(
-        self, e: Round | Cast, target: NamedId, loc: Location | None,
-        src: _Source, ctx_expr: Expr,
-    ) -> Stmt:
+    def _ladder(self, e: Expr, target: NamedId, out: list, src: _Source) -> None:
         """`target = round(v)` as branches on the operand's class plus a
         rounding that sees only a finite, non-zero value."""
-        assert isinstance(e.arg, Var)
-        name = e.arg.name
+        assert isinstance(e, (Round, Cast))
+        loc = e.loc
+        # the class of the operand as written: a name minted by the bind below
+        # is not a node the analysis saw
         hoist = self._hoist(src, e.arg)
+        ctx_expr = _ctx_expr(self.scopes.scope_ctx_expr(e), src, loc)
+        name = self._arg_name(e, out)
 
         def arg() -> Var:
             return Var(name, loc)
@@ -415,26 +408,7 @@ class _UnfoldSpecialInstance(BlockRewriter):
 
         # the branches compare and assign constants, so they are exact
         # whatever context encloses this statement; the rounding sets its own
-        return ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), body, loc)
-
-    def _rewrite(self, stmt: ContextStmt, src: _Source) -> list[Stmt]:
-        """The block's rounds, with the stated rules taken out of the
-        context.  Nothing rounds under the source context afterwards, so the
-        block itself goes away."""
-        stmts: list[Stmt] = []
-        for s in stmt.body.stmts:
-            # each emitted block gets its own context expression
-            ctx_expr = _ctx_expr(stmt.ctx, src)
-            if isinstance(s, Assign):
-                assert isinstance(s.expr, (Round, Cast)) and isinstance(s.target, NamedId)
-                stmts.append(self._unfold(s.expr, s.target, s.loc, src, ctx_expr))
-            else:
-                # a returned round lands in a temporary, which the return names
-                assert isinstance(s, ReturnStmt) and isinstance(s.expr, (Round, Cast))
-                out = self.gensym.fresh('t')
-                stmts.append(self._unfold(s.expr, out, s.loc, src, ctx_expr))
-                stmts.append(ReturnStmt(Var(out, s.loc), s.loc))
-        return stmts
+        out.append(ContextStmt(UnderscoreId(), ForeignVal(REAL, loc), body, loc))
 
 
 class UnfoldSpecial:
@@ -448,29 +422,30 @@ class UnfoldSpecial:
         and what `within` narrows.
 
         Runs the same decisions the rewrite does, so a listing reports exactly
-        the blocks `where=None` would rewrite: no candidate that this pass
+        the roundings `where=None` would rewrite: no candidate that this pass
         refuses appears here or consumes an index.
         """
-        eval_info = PartialEval.apply(func)
         class_info = ValueClassInfer.analyze(func)
-        return _UnfoldSpecialInstance(func, eval_info, class_info).list_sites(within)
+        return _UnfoldSpecialInstance(
+            func, RoundingScopes(func), class_info,
+        ).list_sites(within)
 
     @staticmethod
     def refusals(
         func: FuncDef, within: Cursor | None = None
     ) -> list[tuple[Cursor, str]]:
-        """Why each rounding block of `func` that is not a site was refused,
-        in visit order.  A refusal takes no index, so this is how one is found.
+        """Why each rounding of `func` that is not a site was refused, in visit
+        order.  A refusal takes no index, so this is how one is found.
         """
-        eval_info = PartialEval.apply(func)
         class_info = ValueClassInfer.analyze(func)
-        return _UnfoldSpecialInstance(func, eval_info, class_info).list_refusals(within)
+        return _UnfoldSpecialInstance(
+            func, RoundingScopes(func), class_info,
+        ).list_refusals(within)
 
     @staticmethod
     def apply(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> FuncDef:
         """
@@ -478,14 +453,13 @@ class UnfoldSpecial:
         context in `func`, stating each as a branch on the operand; the
         surviving rounding sees only a finite, non-zero value.
 
-        `where` selects one structurally-matching rounding block by index
-        (see :class:`.utils.BlockRewriter` for the numbering and errors);
+        `where` selects one rounding by index (see
+        :class:`.utils.ScopedRoundingRewriter` for the numbering and errors);
         `None` rewrites every one that verifies.
         """
         return UnfoldSpecial.apply_with_edits(
             func,
             where=where,
-            eval_info=eval_info,
             class_info=class_info,
         ).result
 
@@ -493,7 +467,6 @@ class UnfoldSpecial:
     def apply_with_edits(
         func: FuncDef, *,
         where: int | Cursor | None = None,
-        eval_info: PartialEvalInfo | None = None,
         class_info: ValueClassAnalysis | None = None,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
@@ -501,12 +474,10 @@ class UnfoldSpecial:
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         check_where(where)
 
-        if eval_info is None:
-            eval_info = PartialEval.apply(func)
         if class_info is None:
             class_info = ValueClassInfer.analyze(func)
 
-        vtor = _UnfoldSpecialInstance(func, eval_info, class_info, where)
+        vtor = _UnfoldSpecialInstance(func, RoundingScopes(func), class_info, where)
         out = vtor.apply()
-        vtor.check_site('a candidate rounding block')
+        vtor.check_site('a candidate rounding')
         return EditLog(func, out, tuple(vtor.edits), exprs_preserved=True)

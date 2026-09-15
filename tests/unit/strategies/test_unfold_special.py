@@ -125,12 +125,17 @@ class TestUnfoldSpecial:
             for c in _block_ctxs(_quantized_sum.ast)
         )
         out = unfold_special(_quantized_sum)
-        ctxs = _block_ctxs(out.ast)
         assert not any(
-            isinstance(c, MPFixedContext) and c.enable_nan for c in ctxs
+            isinstance(c, MPFixedContext) and c.enable_nan
+            for c in _round_ctxs(out.ast)
         )
-        # the FP64 accumulation is untouched: its body is arithmetic, not a round
-        assert fp.FP64 in ctxs
+        # the emptied block still names the source rules until DCE drops it
+        assert not any(
+            isinstance(c, MPFixedContext) and c.enable_nan
+            for c in _block_ctxs(simplify(out).ast)
+        )
+        # the FP64 accumulation is untouched: it is arithmetic, not a round
+        assert fp.FP64 in _block_ctxs(out.ast)
 
     def test_preserves_results(self):
         out = unfold_special(_quantized_sum)

@@ -113,7 +113,12 @@ class TestUnfoldNegZero:
             for c in _block_ctxs(_quantized_sum.ast)
         )
         out = unfold_neg_zero(_quantized_sum)
-        ctxs = _block_ctxs(out.ast)
+        assert not any(
+            isinstance(c, MPFixedContext) and c.enable_neg_zero
+            for c in _round_ctxs(out.ast)
+        )
+        ctxs = _block_ctxs(simplify(out).ast)
+        # the emptied block still names the flag until DCE drops it
         assert not any(
             isinstance(c, MPFixedContext) and c.enable_neg_zero for c in ctxs
         )
@@ -215,7 +220,7 @@ class TestComposition:
         for out in (a, b):
             assert len(_nodes(out.ast, Copysign)) == 1
             target = next(
-                c for c in _block_ctxs(out.ast) if isinstance(c, MPFixedContext)
+                c for c in _round_ctxs(out.ast) if isinstance(c, MPFixedContext)
             )
             assert target.enable_neg_zero is False
         for x in _samples(ctx):

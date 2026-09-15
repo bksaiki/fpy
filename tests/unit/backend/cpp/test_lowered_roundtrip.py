@@ -32,6 +32,7 @@ import fpy2.strategies as st
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.unfold_round import UnfoldMode
 from fpy2.module import Module
+from fpy2.strategies import FuncBody, StmtCursor
 from fpy2.number import EFloatContext, EFloatNanKind, RealFloat
 from fpy2.types import RealType
 
@@ -285,8 +286,15 @@ def _lower_at(func, src, site):
 @pytest.mark.parametrize('which', [0, 1])
 def test_a_cursor_aims_the_whole_sequence(which):
     """One cursor, chosen once, carries four rewrites to the same program point
-    and leaves the other rounding exactly as it was."""
-    found = st.sites(st.unfold_special, _two_roundings)
+    and leaves the other rounding exactly as it was.
+
+    The anchor is the *block*, not the rounding `sites` reports: each rewrite
+    consumes the rounding it acts on, so an expression cursor names nothing
+    afterwards, while the statement holding it keeps the new rounding beneath.
+    """
+    found = [
+        StmtCursor(_two_roundings.ast, FuncBody().stmt(i)) for i in (0, 1)
+    ]
     chosen, other = found[which], found[1 - which]
 
     out = _lower_at(_two_roundings, fp.FP32, chosen)
@@ -296,9 +304,9 @@ def test_a_cursor_aims_the_whole_sequence(which):
     assert 'MPBFixedContext' in text
     assert 'fp.logb' in text
 
-    # the other one is the block it always was; the block the sequence emptied
-    # is still there, for dead-code elimination rather than the rewrites to drop
-    assert text.count('fp.FP16') == 2
+    # the other one is the block it always was.  The blocks the sequence
+    # emptied still name `fp.FP16` until dead-code elimination drops them, so
+    # the count is taken where that has happened
     assert st.simplify(out).format().count('fp.FP16') == 1
     assert out.forward(other).resolve().format() == other.resolve().format()
 

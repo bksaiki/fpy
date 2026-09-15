@@ -281,6 +281,9 @@ matters here.
   worked example against the real output.
 - `fpy2/strategies/sites.py`: the module docstring and `sites()` both say the
   rounding rewrites are aimed with a `StmtCursor`. They are expression-sited now.
+- **Document the anchoring rule** (found in Phase 3, see "Pinning a point
+  across a sequence"): to aim a *sequence* at one program point, pin the
+  statement holding the rounding, not the expression `sites()` reports.
 - `fpy2/strategies/__init__.py` module docstring: same.
 - `docs/todos/native-lowering-roadmap.md` §2 states the recipe as
   `monomorphize → unfold_special → unfold_overflow → float_to_fixed →
@@ -296,6 +299,38 @@ python -m pytest tests/unit/strategies/ -q
 ```
 
 ---
+
+## Pinning a point across a sequence
+
+A rewrite consumes the rounding it acts on, so the `ExprCursor` that `sites()`
+reports names nothing afterwards: `EditLog._forward_expr` refuses an expression
+whose statement was replaced, which is correct and not worked around.
+
+```python
+site = sites(unfold_special, f)[0]        # an ExprCursor
+f1 = unfold_special(f, where=site)
+unfold_overflow(f1, where=site)           # TransformReferenceError: rewritten
+```
+
+The durable anchor is a **statement** cursor. A statement selects every
+candidate at or beneath it, and the statement survives: a `with` block the
+rewrite emptied is still there, with the new rounding inside, and an assignment
+the rewrite replaced forwards to its image. Both carry the whole sequence:
+
+```python
+anchor = StmtCursor(f.ast, FuncBody().stmt(0))
+f = unfold_special(f, where=anchor)
+f = unfold_overflow(f, where=anchor, early_check=True)
+f = float_to_fixed(f, where=anchor)
+f = rescale_fixed(f, where=anchor)        # all four land on the same rounding
+```
+
+Verified for both a `with`-block scope and a function-annotation scope, and
+pinned by `test_a_cursor_aims_the_whole_sequence` in
+`tests/unit/backend/cpp/test_lowered_roundtrip.py` and
+`test_within_is_forwarded_like_a_where` in `tests/unit/strategies/test_sites.py`.
+This is a real narrowing of what a listed site is good for, and Phase 6 has to
+say so in `sites()`.
 
 ## Risks
 
