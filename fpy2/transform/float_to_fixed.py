@@ -99,7 +99,6 @@ from ..ast.fpyast import (
     IsNan,
     Location,
     Logb,
-    Max,
     Min,
     NamedId,
     Pow,
@@ -170,8 +169,8 @@ class _Source:
     """position of the format's finest digit, if it has one"""
     emax: int | None
     """
-    largest exponent: above it the bound is unrepresentable, so a value there
-    rounds at the top binade's position instead of its own.
+    largest exponent: a value in a higher binade rounds at this one's position,
+    the finest at which the bound is still representable.
 
     `None` for an unbounded format, whose position needs no upper clamp.
     """
@@ -450,9 +449,8 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
             None, Integer(2, loc),
             Add(Var(pos_name, loc), Integer(src.pmax, loc), loc), loc,
         )
-        # `nmin` is written as the scale minus one rather than folded: that is
-        # the form `RescaleFixed` cancels, which leaves the scale as this
-        # variable instead of an expression needing a binding of its own
+        # `nmin` as the scale minus one rather than folded: that is the form
+        # `RescaleFixed` cancels, leaving the scale as this variable
         at_scale = rounding(
             Sub(Var(pos_name, loc), Integer(1, loc), loc), normal_reach,
         )
@@ -464,18 +462,14 @@ class _FloatToFixedInstance(ScopedRoundingRewriter):
             # below `emin` the format is itself fixed-point: every value in
             # that range rounds at the same position, a constant
             assert src.expmin is not None
-            # `|x| < 2 ** emin` is `logb(x) < emin` said of the magnitude, which
-            # keeps `logb` off this branch -- it reads no exponent -- and states
-            # in each arm what inference reads: a bound here, a finest digit
-            # there (see `FormatInfer._implied_magnitude`)
+            # `2 ** emin` twice, as two nodes: it is both what the branch tests
+            # and how far the operand reaches inside it.  Testing the magnitude
+            # is also what each arm gives inference -- a two-sided bound here, a
+            # digit position there (`FormatInfer._implied_magnitude`)
             sub_reach = number_literal(RealFloat(exp=src.emin, c=1), loc)
-            below = Compare(
-                [CompareOp.LT],
-                [Abs(arg(), loc), number_literal(RealFloat(exp=src.emin, c=1), loc)],
-                loc,
-            )
+            threshold = number_literal(RealFloat(exp=src.emin, c=1), loc)
             normal = IfStmt(
-                below,
+                Compare([CompareOp.LT], [Abs(arg(), loc), threshold], loc),
                 StmtBlock(rounding(Integer(src.expmin - 1, loc), sub_reach)),
                 StmtBlock([position, *at_scale]),
                 loc,

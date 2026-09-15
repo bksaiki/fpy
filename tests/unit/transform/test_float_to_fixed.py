@@ -102,7 +102,8 @@ def _ctx_calls(ast: FuncDef, ctx_type: type) -> list[Call]:
     ]
 
 
-def _has_node(ast: FuncDef, node_type) -> bool:
+def _has_node(node, node_type) -> bool:
+    """Whether *node*, a function or a block, holds a *node_type* expression."""
     found = [False]
 
     class _C(DefaultVisitor):
@@ -111,20 +112,11 @@ def _has_node(ast: FuncDef, node_type) -> bool:
                 found[0] = True
             super()._visit_expr(e, ctx)
 
-    _C()._visit_function(ast, None)
-    return found[0]
-
-
-def _block_has(block, node_type) -> bool:
-    found = [False]
-
-    class _C(DefaultVisitor):
-        def _visit_expr(self, e, ctx):
-            if isinstance(e, node_type):
-                found[0] = True
-            super()._visit_expr(e, ctx)
-
-    _C()._visit_block(block, None)
+    c = _C()
+    if isinstance(node, FuncDef):
+        c._visit_function(node, None)
+    else:
+        c._visit_block(node, None)
     return found[0]
 
 
@@ -222,14 +214,14 @@ class TestLowering:
 
     def test_the_subnormal_branch_is_taken_on_the_magnitude(self):
         """``|x| < 2 ** emin`` is ``logb(x) < emin`` said of the value, so the
-        branch needs no exponent -- and each arm states what inference reads."""
+        branch needs no exponent and only the other arm computes one."""
         f = _quantizer(fp.FP16)
         out = FloatToFixed.apply(f.ast)
 
         ift, iff = _magnitude_branch(out)
         assert ift is not None, out.format()
-        assert not _block_has(ift, Logb)
-        assert _block_has(iff, Logb)
+        assert not _has_node(ift, Logb)
+        assert _has_node(iff, Logb)
 
     def test_subnormal_branch_is_static(self):
         """Below `emin` the format is fixed-point already, so that branch's
