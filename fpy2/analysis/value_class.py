@@ -353,8 +353,10 @@ class _ValueClassInstance(DefaultVisitor):
 
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
+    elt_by_def: dict[Definition, ValueClass]
 
     _refine: dict[Definition, ValueClass]
+    _refine_elt: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
 
@@ -369,7 +371,9 @@ class _ValueClassInstance(DefaultVisitor):
         self.ctx_use = ctx_use
         self.by_def = {}
         self.by_expr = {}
+        self.elt_by_def = {}
         self._refine = {}
+        self._refine_elt = {}
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -397,6 +401,38 @@ class _ValueClassInstance(DefaultVisitor):
         cls = self.by_def.get(d)
         return cls if isinstance(cls, ValueClass) else _TOP
 
+    def _elt_class(self, e: Expr) -> ValueClass:
+        """The class every element of the list *e* names belongs to.
+
+        The list analogue of :meth:`_visit_var`: what the definition always
+        holds, met with what the enclosing branches proved.  A list that is not
+        a plain name -- a call's result, a slice -- has no definition to carry
+        either, so it is the top class.
+        """
+        if not isinstance(e, Var):
+            return _TOP
+        d = self.def_use.find_def_from_use(e)
+        stored = self.elt_by_def.get(d, _TOP)
+        return stored & self._refine_elt.get(d, _TOP)
+
+    def _set_elt(self, d: Definition, cls: ValueClass):
+        self.elt_by_def[d] = cls
+
+    def _join_elt_phi(self, phi: Definition, lhs: Definition, rhs: Definition):
+        """A phi's element class, where either arm has one.
+
+        Absent means "not a list, or a list nothing has said anything about",
+        and the two read differently: joining an absent arm with a known one
+        must give the top, or a store on one path would look like a promise
+        about the other.
+        """
+        if lhs not in self.elt_by_def and rhs not in self.elt_by_def:
+            return
+        self._set_elt(
+            phi,
+            self.elt_by_def.get(lhs, _TOP) | self.elt_by_def.get(rhs, _TOP),
+        )
+
     def _bind(self, site: DefSite, binding: Id | TupleBinding, cls: ValueClass | None):
         """Records *cls* for every variable *binding* introduces at *site*."""
         match binding:
@@ -420,9 +456,9 @@ class _ValueClassInstance(DefaultVisitor):
         sound direction.
         """
         for phi in self.def_use.phis[stmt]:
-            lhs = self._def_class(self.def_use.defs[phi.lhs])
-            rhs = self._def_class(self.def_use.defs[phi.rhs])
-            self._set_def(phi, lhs | rhs)
+            lhs, rhs = self.def_use.defs[phi.lhs], self.def_use.defs[phi.rhs]
+            self._set_def(phi, self._def_class(lhs) | self._def_class(rhs))
+            self._join_elt_phi(phi, lhs, rhs)
 
     # ------------------------------------------------------------------
     # Refinement
@@ -620,6 +656,17 @@ class _ValueClassInstance(DefaultVisitor):
             return _TOP
         return exact if scope.ctx is REAL else representable_classes(scope.ctx)
 
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> ValueClass:
+        """``xs[i]``: whatever every element of ``xs`` is.
+
+        The list analogue of :meth:`_visit_var`, and the reason a list carries
+        an element class at all -- without it this is the top, and every guard
+        a caller wrote about the list is lost at the read.
+        """
+        self._visit_expr(e.index, ctx)
+        self._visit_expr(e.value, ctx)
+        return self._elt_class(e.value)
+
     def _visit_var(self, e: Var, ctx: None) -> ValueClass:
         d = self.def_use.find_def_from_use(e)
         return self._def_class(d) & self._refine.get(d, _TOP)
@@ -660,7 +707,12 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._rounded(e, a)
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
-            case AMin() | AMax() | Fst() | Snd():
+            case AMin() | AMax():
+                # the result *is* one element, so it is bounded by what the
+                # elements are; the ordering rule adds nothing without a
+                # per-element class, and the join of one class is itself
+                return _exact_select([self._elt_class(e.arg)], is_max=False)
+            case Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
                 return self._rounded(e, _TOP)
@@ -723,13 +775,54 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         self._bind(stmt, stmt.target, self._visit_expr(stmt.expr, ctx))
+        if isinstance(stmt.target, NamedId):
+            elt = self._elt_of_list_expr(stmt.expr)
+            if elt is not None:
+                self._set_elt(
+                    self.def_use.find_def_from_site(stmt.target, stmt), elt,
+                )
+
+    def _elt_of_list_expr(self, e: Expr) -> ValueClass | None:
+        """The element class of the list *e* builds, or ``None`` where *e* is
+        not a list this can say anything about.
+
+        ``None`` and bottom are different answers: bottom is a fresh
+        ``empty(...)``, whose elements no store has reached yet, and ``None``
+        leaves the definition with no entry at all, which reads as the top.
+        """
+        match e:
+            case Empty():
+                return _BOT
+            case ListExpr():
+                out = _BOT
+                for elt in e.elts:
+                    cls = self.by_expr.get(elt)
+                    out |= cls if isinstance(cls, ValueClass) else _TOP
+                return out
+            case Var():
+                d = self.def_use.find_def_from_use(e)
+                return self.elt_by_def.get(d)
+            case _:
+                return None
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         for s in stmt.indices:
             self._visit_expr(s, ctx)
-        self._visit_expr(stmt.expr, ctx)
-        # a fresh def of a list, which carries no class
+        stored = self._visit_expr(stmt.expr, ctx)
+        # The list itself still carries no *scalar* class; what the store says
+        # is about its elements, and joins with whatever was there before --
+        # the definition this one supersedes still happened.
         self._bind(stmt, stmt.var, None)
+        d = self.def_use.find_def_from_site(stmt.var, stmt)
+        # the definition this one supersedes still happened, so its elements
+        # are still reachable and join in
+        was = _BOT if d.prev is None else self.elt_by_def.get(
+            self.def_use.defs[d.prev], _TOP,
+        )
+        # a nested store (`xs[i][j] = e`) constrains the *inner* list, which
+        # this channel does not reach, so the outer one falls back to the top
+        cls = stored if isinstance(stored, ValueClass) else _TOP
+        self._set_elt(d, was | (cls if len(stmt.indices) == 1 else _TOP))
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -757,8 +850,8 @@ class _ValueClassInstance(DefaultVisitor):
         self._visit_expr(stmt.iterable, ctx)
 
         def body():
-            # no structural classes, so an element is unconstrained
-            self._bind(stmt, stmt.target, _TOP)
+            # the target *is* an element, so it inherits the list's class
+            self._bind(stmt, stmt.target, self._elt_class(stmt.iterable))
             self._visit_block(stmt.body, ctx)
 
         self._fixpoint(stmt, body)
@@ -771,18 +864,24 @@ class _ValueClassInstance(DefaultVisitor):
         """
         phis = self.def_use.phis[stmt]
         for phi in phis:
-            self._set_def(phi, self._def_class(self.def_use.defs[phi.lhs]))
+            lhs = self.def_use.defs[phi.lhs]
+            self._set_def(phi, self._def_class(lhs))
+            if lhs in self.elt_by_def:
+                self._set_elt(phi, self.elt_by_def[lhs])
         for _ in range(self._ROUNDS_PER_PHI * len(phis) + 1):
-            prev = {phi: self.by_def[phi] for phi in phis}
+            prev = {phi: (self.by_def[phi], self.elt_by_def.get(phi))
+                    for phi in phis}
             run_body()
             for phi in phis:
-                lhs = self._def_class(self.def_use.defs[phi.lhs])
-                rhs = self._def_class(self.def_use.defs[phi.rhs])
-                self._set_def(phi, lhs | rhs)
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+                lhs, rhs = self.def_use.defs[phi.lhs], self.def_use.defs[phi.rhs]
+                self._set_def(phi, self._def_class(lhs) | self._def_class(rhs))
+                self._join_elt_phi(phi, lhs, rhs)
+            if all((self.by_def[phi], self.elt_by_def.get(phi)) == prev[phi]
+                   for phi in phis):
                 return
         for phi in phis:
             self._set_def(phi, _TOP)
+            self._set_elt(phi, _TOP)
         run_body()
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
