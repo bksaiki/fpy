@@ -530,7 +530,7 @@ class CppCompiler(Backend):
             du = format_info.type_info.def_use
             chosen = StorageInfer.infer(
                 du, format_info.by_def, format_info.by_expr,
-                CppStorageDomain(), class_info.by_def,
+                CppStorageDomain(), class_info.by_def, class_info.by_elt,
             )
         except StorageSelectionError as e:
             raise CppCompileError(

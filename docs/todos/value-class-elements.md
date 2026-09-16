@@ -1,9 +1,9 @@
 # Value classes for list elements
 
 A list carries a class for its *elements*, so a guard over the list reaches the
-reads inside it.  **Phases 1, 2, 5 and 6 are done**; 3 and 4 did not survive
-being attempted, and what they were reaching for is phase 7 below, which now
-has the witness they lacked.
+reads inside it.  **Done.**  Phases 3 and 4 did not survive being attempted;
+what they were reaching for landed as phase 7, once phases 5 and 6 produced the
+case they had no witness for.
 
 ## What exists
 
@@ -37,23 +37,30 @@ has the witness they lacked.
   comprehension is an expression and `all` a single node, so the written form
   has neither an element store nor a reduction loop, and checking it alone left
   every one of these phases uncovered.
+- **Element storage.**  A list stores at what its elements can be rather than
+  at their format, so the guarded `fp.logb` list is a byte array folded on the
+  integer path.  Three things had to line up, and all three are the general
+  rule rather than a special case:
+  - `by_elt` joins every class ever stored into a region, monotone where `_elt`
+    is flow-sensitive: a buffer holds what a list *ever* held.
+  - `_require_no_narrowing` asks whether the **value** fits the slot, not
+    whether the expression's storage does.  An expression's storage is what its
+    *operands* are cast to -- `max(logb(x), -126)` computes at `float` because
+    `logb` does -- and the store spells the conversion it then needs.
+  - `_storage_for_expr` defers to the declaration for a `Var` or a `ListRef`.
+    There were two storage oracles, one per-expression and format-driven and
+    one per-definition and class-aware; they differ exactly where a class
+    narrowed a definition, and the declaration is the one that was emitted.
 
 ## What is left
 
-**7. A list's element storage.**  `t9` in `sandbox3.py` holds
-`max(fp.logb(x), FP32_EMIN)` for a guarded `x` -- a finite integer in
-`[-126, 127]` -- and is still a `std::array<float, 32>`.  `of_bound` narrows by
-a class at a scalar only, deliberately: storage is chosen at several sites and
-only that one consults a class, so narrowing a list's elements there alone
-would disagree with the stores into it and the reduction over it.  Doing it
-means the element class reaching `StorageInfer` per *definition* rather than
-only per read, and every site agreeing on the answer.
+**Signed zero.**  `_emit_amin_amax` still emits the `signbit` tie for a float
+reduction, because `ValueClass.ZERO` does not track the sign and `logb` yields
+only `+0`.  Splitting it the way `INF` was split into `POS_INF` / `NEG_INF`
+would drop the term.
 
-Phases 3 and 4 were this without a case that failed.  Phase 6 produces one, and
-the rule to apply is the same: does it follow from the semantics of the
-operation, or from the shape of one program?
-
-**Signed zero.**  `_emit_amin_amax` still emits the `signbit` tie for `max(t9)`,
-because `ValueClass.ZERO` does not track the sign and `logb` yields only `+0`.
-Splitting it the way `INF` was split into `POS_INF`/`NEG_INF` would drop the
-term.
+**`_emit_min_max` takes its type from the active context**, working around the
+two oracles disagreeing (`library_core.max_e` in its docstring).  With one
+oracle that workaround looks unnecessary -- taking the type from the operands
+passes the unit suite -- but it was not measured against the differentials and
+is not this phase's business.

@@ -875,9 +875,22 @@ class CppEmitter(Visitor):
     def _storage_for_expr(self, e: Expr) -> CppType:
         """The C++ storage chosen for an expression's result.
 
+        A name has a declaration, and the declaration is the answer: it is
+        `StorageInfer` that emitted it, over the *class* of definitions the name
+        belongs to and the value classes of its members, where an expression's
+        own bound knows neither.  Reading a `Var` as its bound instead can
+        contradict the line that declared it -- a list narrowed to
+        ``array<int8_t, N>`` still bounds as a list of the element *format*.  A
+        `ListRef` peels that declaration rather than taking its own bound, for
+        the same reason.
+
         Falls back to ``CppEmitError`` if format inference produced
         nothing storable (e.g., a symbolic ``REAL_FORMAT``).
         """
+        if isinstance(e, (Var, ListRef)):
+            decl = self.storage.of_expr(e)
+            if decl is not None:
+                return decl if self.unbox is None else self.unbox.annotate(e, decl)
         fmt = self.format_info.by_expr.get(e)
         rounded = self._round_storage(e)
         if rounded is not None:
@@ -1074,7 +1087,15 @@ class CppEmitter(Visitor):
             # narrowing conversion into a slot is a wrong answer rather than a
             # compile error, so it is refused before that.
             if cannot_convert:
-                self._require_no_narrowing(self._storage_or_none(e), want, e)
+                src = self._storage_or_none(e)
+                self._require_no_narrowing(src, want, e)
+                if isinstance(src, CppScalar) and not scalar_fits_in(src, want):
+                    # the check passed on the *value* where the storage does
+                    # not fit, so the conversion is exact but not implicit-safe
+                    # to read: spell it
+                    return self._convert_storage(
+                        self._visit_expr(e, ctx), src, want, at=e,
+                    )
             return self._visit_expr(e, ctx)
         match e:
             case ListExpr() if isinstance(want, CppList):
@@ -1237,6 +1258,18 @@ class CppEmitter(Visitor):
             return
         if scalar_fits_in(src, want):
             return
+        # An expression's storage is what its *operands* are cast to, which the
+        # result need not need: ``max(logb(x), -126)`` computes at ``float``
+        # because ``logb`` does, and is an integer in ``[-126, 127]``.  So ask
+        # the value -- its own bound, narrowed by its class.
+        fmt = self.format_info.by_expr.get(at)
+        if fmt is not None:
+            try:
+                exact = choose_storage(fmt, self._value_class(at))
+            except StorageSelectionError:
+                exact = None
+            if isinstance(exact, CppScalar) and scalar_fits_in(exact, want):
+                return
         raise CppEmitError(
             f'unsupported: storing a `{src.format()}` into a slot of '
             f'`{want.format()}` would narrow it, and the list would then not '
@@ -2794,6 +2827,12 @@ class CppEmitter(Visitor):
                 at=e,
             )
         elt_ty = arg_storage.elt
+        # The result *is* an element, so the fold runs at the elements' storage
+        # wherever the declared result can hold it -- and a list of integers
+        # then reduces on the integer path.  Where it cannot, each element is
+        # cast up instead, which is what `result_ty` was.
+        if scalar_fits_in(elt_ty, result_ty):
+            result_ty = elt_ty
         is_min = isinstance(e, AMin)
 
         src = self._bind_operand(arg_str)

@@ -303,6 +303,15 @@ class ValueClassAnalysis:
     """Class of each expression, refined by the branches that dominate it.
     ``None`` for a non-real-valued expression."""
 
+    by_elt: dict[Definition, ValueClass]
+    """For a list definition, every class its elements are ever stored at.
+
+    Where :attr:`by_def` is what a *name* holds, this is what the list behind it
+    holds, so a consumer picking storage can narrow the element type.  Joined
+    over the whole function rather than read at a point -- storage holds what a
+    list ever held.  A definition is absent where nothing was stored through it:
+    a parameter, a call's result, or a list that escapes to a callee."""
+
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
     expression had, joined across incoming edges at a phi.  A consumer wants
@@ -389,6 +398,11 @@ class _ValueClassInstance(DefaultVisitor):
     :attr:`_touched` stamp at the exit.  Absent means the loop's accumulator
     says nothing; see :meth:`_implied_universal`."""
 
+    _stored: dict[Region, ValueClass]
+    """Every class ever stored into each region -- monotone, where :attr:`_elt`
+    is flow-sensitive.  Storage has to hold what a list ever held, not what it
+    holds at a point."""
+
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
@@ -412,6 +426,7 @@ class _ValueClassInstance(DefaultVisitor):
         self.ctx_use = ctx_use
         self.alias = alias
         self._elt = {}
+        self._stored = {}
         self._clock = 0
         self._touched = {}
         self._scanned = {}
@@ -424,12 +439,25 @@ class _ValueClassInstance(DefaultVisitor):
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
 
+    def _by_elt(self) -> dict[Definition, ValueClass]:
+        """:attr:`ValueClassAnalysis.by_elt`, per definition rather than per
+        region."""
+        out: dict[Definition, ValueClass] = {}
+        for d in self.def_use.defs:
+            region = self.alias.region_of(d)
+            if region is None or self.alias.escapes_at(region):
+                continue
+            if region in self._stored:
+                out[d] = self._stored[region]
+        return out
+
     def analyze(self) -> ValueClassAnalysis:
         self._visit_function(self.func, None)
         return ValueClassAnalysis(
             func=self.func,
             by_expr=self.by_expr,
             by_def=self.by_def,
+            by_elt=self._by_elt(),
             alias=self.alias,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
@@ -473,6 +501,7 @@ class _ValueClassInstance(DefaultVisitor):
         store did not reach are still there."""
         if region is not None:
             self._elt[region] = self._elt.get(region, _TOP) | cls
+            self._stored[region] = self._stored.get(region, _BOT) | cls
             self._touch(region)
 
     @staticmethod

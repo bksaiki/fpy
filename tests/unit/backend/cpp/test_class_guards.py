@@ -30,7 +30,7 @@ import pytest
 import fpy2 as fp
 from fpy2.backend.cpp import CppCompiler
 from fpy2.number import MPBFixedContext
-from fpy2.types import RealType
+from fpy2.types import ListType, RealType
 
 _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
 
@@ -264,6 +264,59 @@ class TestAClampReachesIntegerStorage:
 
         out = CppCompiler().compile(half, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
         assert 'float half(' in out
+
+
+class TestAListStoresAtItsElements:
+    """The same narrowing, one level in: a list stores at what its elements can
+    be rather than at their format.
+
+    Over a list the guard has to be a guard over the *whole* list, since nothing
+    else rules a NaN out of every element -- so this is what the reduction
+    refinement buys.  `float` here would be four bytes per element to hold a
+    value in ``[-126, 127]``, and a `float` reduction to fold them.
+    """
+
+    @staticmethod
+    def _guarded():
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            if all([fp.isfinite(x) and x != 0 for x in xs]):
+                ys = [max(fp.logb(x), -126) for x in xs]
+                return max(ys)
+            else:
+                return 0
+        return q
+
+    @staticmethod
+    def _emit(q):
+        return CppCompiler().compile(
+            q, arg_types=[ListType(RealType(fp.FP32), 8)])
+
+    def test_the_buffer_holds_the_element_type(self):
+        assert 'std::array<int8_t, 8>' in self._emit(self._guarded())
+
+    def test_the_store_spells_its_conversion(self):
+        """The *value* fits where the expression's storage does not: ``max``
+        computes at ``float`` because ``logb`` does."""
+        assert 'static_cast<int8_t>(std::max(' in self._emit(self._guarded())
+
+    def test_the_reduction_folds_on_the_integer_path(self):
+        out = self._emit(self._guarded())
+        assert 'std::max(_tmp3, ys[' in out
+        assert 'signbit' not in out
+        assert 'quiet_NaN' not in out
+
+    def test_without_the_guard_it_stays_a_float(self):
+        """``logb(0)`` is ``-inf`` and ``logb(inf)`` is ``+inf``, so an element
+        can be one and no integer rung holds it."""
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            ys = [max(fp.logb(x), -126) for x in xs]
+            return max(ys)
+
+        out = self._emit(q)
+        assert 'std::array<float, 8>' in out
+        assert 'std::array<int8_t' not in out
 
 
 class TestMinMax:

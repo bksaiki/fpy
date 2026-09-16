@@ -898,6 +898,69 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f, scalars=1) == TOP
 
 
+def _elt_classes(fn, n: int = 4) -> dict:
+    """``by_elt``, keyed by variable name, after lowering."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        return {str(d.name): cls for d, cls in info.by_elt.items()}
+    raise AssertionError(f'no {fn.name}')
+
+
+class TestElementClassesPerDefinition:
+    """:attr:`ValueClassAnalysis.by_elt` -- what a list's elements are *ever*
+    stored at, which is the question a storage choice asks.
+
+    Where ``by_expr`` is what a read yields at a point, this is joined over the
+    whole function: a buffer has to hold every value that ever lands in it.
+    """
+
+    def test_a_list_built_here(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        assert not (_elt_classes(f)['ys'] & NEG_INF)
+
+    def test_every_store_counts(self):
+        """Not the class at the end -- the join over all of them."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            ys[0] = -fp.inf()
+            return max(ys)
+
+        assert _elt_classes(f)['ys'] & NEG_INF
+
+    def test_a_parameter_is_absent(self):
+        """Nothing was stored through it, so nothing is known -- and absent is
+        how a consumer reads that."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return max(xs)
+
+        assert 'xs' not in _elt_classes(f)
+
+    def test_a_list_handed_to_a_call_is_absent(self):
+        @fp.fpy(ctx=fp.REAL)
+        def poison(ys):
+            ys[0] = fp.nan()
+            return 0
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            zs = [abs(x) for x in xs]
+            w = poison(zs)
+            return max(zs) + w
+
+        assert 'zs' not in _elt_classes(f)
+
+
 class TestWhichListsCarryAFact:
     """:meth:`ValueClassAnalysis.element_region` -- where a fact about a list's
     elements may be recorded at all.

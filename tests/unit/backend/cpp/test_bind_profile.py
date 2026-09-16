@@ -31,7 +31,7 @@ holds -- fewer programs is fewer opportunities to mint."""
 EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
     '_emit_empty': 29,         # a dimension, read once per fixed-size layer
-    '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
+    '_emit_ieee_min_max': 6,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced
@@ -48,6 +48,9 @@ path did not.
 longer bound, since the `std::array` spells it and nothing reads the name.  The
 two that went were the corpus's only fixed-length allocations; the rest are
 `std::vector`, whose constructor does read the dimension.
+
+``_emit_ieee_min_max`` dropped one when a list of integers started storing as
+one: its reduction folds on the integer path, where `std::max` binds nothing.
 """
 
 
