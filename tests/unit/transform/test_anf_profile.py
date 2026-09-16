@@ -24,7 +24,7 @@ import fpy2 as fp
 from fpy2.transform import ANF, Hoistable
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_FUNCTIONS = 230
+EXPECTED_FUNCTIONS = 243
 """Corpus size.  An empty result only means something while this holds."""
 
 EXPECTED_RESIDUE = {

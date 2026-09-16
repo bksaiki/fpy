@@ -9,16 +9,21 @@ and the observed result must fall inside what the table predicted.  The
 class the analysis gives a marked expression in each arm.
 """
 
+import math
+
 import pytest
 
 import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of, representable_classes
 from fpy2.analysis.value_class import (
+    ListClass,
+    TupleClass,
+    join_class,
     _ATOMS, _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select,
     _exact_sub, _map,
 )
-from fpy2.ast.fpyast import Expr
+from fpy2.ast.fpyast import Expr, Var
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.types import ListType, RealType
 
@@ -141,6 +146,11 @@ def _pow2(a: fp.Real) -> fp.Real:
     return 2 ** a
 
 
+@fp.fpy(ctx=fp.FP64)
+def _pow2_fp64(a: fp.Real) -> fp.Real:
+    return 2 ** a
+
+
 @fp.fpy(ctx=fp.REAL)
 def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
     return max(a, b)
@@ -162,10 +172,12 @@ class TestTransferFunctionsAreSound:
     describes executions in which every operation has a result.
     """
 
-    def _sweep(self, predict, fn, arity: int):
+    def _sweep(self, predict, fn, arity: int, *, rows: int, only=None):
         bad = []
-        atoms = [(a,) for a in _ATOMS] if arity == 1 else [
-            (a, b) for a in _ATOMS for b in _ATOMS]
+        pool = _ATOMS if only is None else only
+        atoms = [(a,) for a in pool] if arity == 1 else [
+            (a, b) for a in pool for b in pool]
+        covered = set()
         for combo in atoms:
             want = predict(*combo)
             for vals in _value_combos(combo):
@@ -173,32 +185,51 @@ class TestTransferFunctionsAreSound:
                     got = class_of(fn(*vals))
                 except Exception:
                     continue        # no result: says nothing about the class
+                covered.add(combo)
                 if not (got & want):
                     bad.append(f'{fn.name}{vals}: {got} not in {want}')
         assert not bad, '; '.join(bad[:6])
+        # an operation the interpreter refuses is skipped, and a table whose
+        # rows are *all* refused would sweep green having compared nothing
+        assert len(covered) == rows, (
+            f'{fn.name} compared {len(covered)} of {rows} rows; the rest were '
+            f'skipped, so those rows of the table are untested'
+        )
 
     def test_add(self):
-        self._sweep(_exact_add, _add, 2)
+        self._sweep(_exact_add, _add, 2, rows=25)
 
     def test_sub(self):
         # its own table since the sign split: `_exact_add` sweeps against `-`
         # only while the infinities are one atom
-        self._sweep(_exact_sub, _sub, 2)
+        self._sweep(_exact_sub, _sub, 2, rows=25)
 
     def test_mul(self):
-        self._sweep(_exact_mul, _mul, 2)
+        self._sweep(_exact_mul, _mul, 2, rows=25)
 
     def test_max(self):
-        self._sweep(lambda a, b: _exact_select([a, b], is_max=True), _max2, 2)
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=True), _max2, 2, rows=25)
 
     def test_min(self):
-        self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2)
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2, rows=25)
 
     def test_logb(self):
-        self._sweep(lambda a: _map(_LOGB, a), _logb, 1)
+        self._sweep(lambda a: _map(_LOGB, a), _logb, 1, rows=5)
 
     def test_pow_with_a_positive_base(self):
-        self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1)
+        """Two rows under ``REAL``: the interpreter has no exact ``2 ** x`` for
+        a NaN or an infinity."""
+        self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1, rows=2)
+
+    def test_pow_with_a_positive_base_at_a_concrete_context(self):
+        """The three rows ``REAL`` cannot reach.  Sound against a *rounded* run
+        only for these: their results -- a NaN, ``+inf``, ``+0`` -- are exactly
+        representable, where the finite row overflows (``2 ** 1e300``) and the
+        exact table rightly does not say so."""
+        self._sweep(
+            lambda a: _map(_POW_POS_BASE, a), _pow2_fp64, 1, rows=3,
+            only=(NAN, POS_INF, NEG_INF),
+        )
 
     @pytest.mark.parametrize('table', [
         pytest.param(_exact_add, id='add'),
@@ -547,7 +578,8 @@ class TestALoweredChain:
         @fp.fpy(ctx=fp.REAL)
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             t = not fp.isnan(a)
-            if b > 0:
+            p = b > 0
+            if p:
                 t = True
             if t:
                 y = fp.fabs(a)
@@ -667,6 +699,550 @@ class TestArgumentsAndContexts:
             return y
 
         assert _cls(f, 'g(x)') == TOP
+
+
+def _trackable(fn, name: str, n: int = 4) -> bool:
+    """Whether a fact about the list *name*'s elements may be recorded."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        for e in info.by_expr:
+            if isinstance(e, Var) and str(e.name) == name:
+                return info.element_region(e) is not None
+    raise AssertionError(f'no `{name}` in {fn.name}')
+
+
+def _arg_types(n: int, lists: int, scalars: int) -> list:
+    return [ListType(RealType(fp.FP32), n)] * lists + [RealType(fp.FP32)] * scalars
+
+
+def _ref_classes(fn, n: int = 4, *, lists: int = 0, scalars: int = 0) -> list:
+    """The class of every ``xs[i]`` read in *fn*, after lowering."""
+    from fpy2.ast.fpyast import ListRef
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        return [v for e, v in info.by_expr.items() if isinstance(e, ListRef)]
+    raise AssertionError(f'no {fn.name}')
+
+
+def _amax_class(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> ValueClass:
+    """The class of the ``max(...)`` over a list in *fn*, after lowering."""
+    from fpy2.ast.fpyast import AMax
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        for e, v in info.by_expr.items():
+            if isinstance(e, AMax):
+                return v
+    raise AssertionError(f'no reduction in {fn.name}')
+
+
+class TestListElementClasses:
+    """What a list's elements are, keyed by the location they live in.
+
+    ``abs`` never yields a negative infinity, so a list filled with it has none
+    -- until a store puts one there, through *any* name for that location.
+    """
+
+    def test_a_list_built_here_carries_its_stores(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        assert not (_amax_class(f) & NEG_INF)
+
+    def test_a_parameter_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return max(xs)
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_is_seen(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            ys[0] = -fp.inf()
+            return max(ys)
+
+        assert _amax_class(f) & NEG_INF
+
+    def test_a_store_through_another_name_is_seen(self):
+        """One location, two names."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            zs = ys
+            zs[0] = -fp.inf()
+            return max(ys)
+
+        assert _amax_class(f) & NEG_INF
+
+    def test_a_store_in_one_arm_reaches_the_join(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c: fp.Real):
+            ys = [abs(x) for x in xs]
+            if c > 0:
+                ys[0] = -fp.inf()
+            return max(ys)
+
+        assert _amax_class(f, scalars=1) & NEG_INF
+
+
+class TestAGuardOverAWholeList:
+    """``all(p(x) for x in xs)`` holding means every element satisfies ``p``:
+    the loop covers the list, FPy having no ``break``.
+
+    The fact is about the contents *at the loop's exit*, so a store anywhere
+    between there and the read voids it.
+    """
+
+    def test_a_universal_reaches_the_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == ZERO | FINITE
+
+    def test_an_existential_reaches_the_arm_it_fails_in(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if any([fp.isnan(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert not (_amax_class(f) & NAN)
+
+    def test_the_other_arm_learns_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert _amax_class(f) == TOP
+
+    def test_a_fold_written_by_hand(self):
+        """The predicate is inlined and the fold is a guarded assignment, so
+        nothing here is the shape `ReduceFusion` emits."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == ZERO | FINITE
+
+    def test_a_fold_that_is_not_one_says_nothing(self):
+        """``ok`` is the *last* element's predicate, not every element's.  An
+        ``and`` that does not carry the accumulator is still not a fold."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                p = fp.isfinite(x)
+                q = x != 0
+                ok = p and q
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_fold_rebuilt_each_round_says_nothing(self):
+        """A guarded assignment is a fold only where what it guards on is what
+        the loop carried in."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                ok = x > 0
+                if ok:
+                    ok = fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_scan_walked_again_does_not_speak_early(self):
+        """A `for` inside a loop is walked more than once, and inside it the
+        accumulator covers only the part scanned so far."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, n: fp.Real) -> fp.Real:
+            y = 0.0
+            i = 0.0
+            while i < n:
+                ok = True
+                for x in xs:
+                    ok = ok and fp.isfinite(x)
+                    if ok:
+                        y = max(xs)
+                i = i + 1.0
+            return y
+
+        assert _amax_class(f, scalars=1) == TOP
+        assert math.isnan(f([1.0, float('nan')], 2.0))
+
+    def test_a_store_inside_the_scan_voids_the_fact(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                xs[0] = fp.nan()
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_into_another_list_inside_the_scan(self):
+        """The stamp is per region, so this keeps the fact."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [fp.nan() for _ in xs]
+            ok = True
+            for x in xs:
+                ys[0] = fp.nan()
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == ZERO | FINITE
+
+    def test_a_store_between_the_scan_and_the_guard(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = all([fp.isfinite(x) for x in xs])
+            xs[0] = fp.nan()
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_under_a_branch_nested_in_the_arm(self):
+        """The arm *restores* the mask, so without the stamp the inner branch
+        would hand back a fact its own store had invalidated."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c: fp.Real):
+            if all([fp.isfinite(x) for x in xs]):
+                if c > 0:
+                    xs[0] = fp.nan()
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f, scalars=1) == TOP
+
+
+def _bounds(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> dict:
+    """``bound_of`` per definition, keyed by variable name, after lowering."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        return {
+            str(d.name): info.bound_of(d)
+            for d in info.type_info.def_use.defs
+        }
+    raise AssertionError(f'no {fn.name}')
+
+
+def _elt_classes(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> dict:
+    """``by_elt``, keyed by variable name, after lowering."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        return {str(d.name): cls for d, cls in info.by_elt.items()}
+    raise AssertionError(f'no {fn.name}')
+
+
+class TestAStructuralClass:
+    """A class shaped like the value, so an aggregate narrows piece by piece."""
+
+    def test_a_tuple_joins_field_by_field(self):
+        a = TupleClass((NAN, ZERO))
+        b = TupleClass((ZERO, ZERO))
+        assert join_class(a, b) == TupleClass((NAN | ZERO, ZERO))
+
+    def test_a_list_definition_carries_its_elements(self):
+        """The shape `StorageInfer` consumes: a list narrows through its
+        element, not through a class of its own."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        b = _bounds(f)['ys']
+        assert isinstance(b, ListClass) and not (b.elt & NEG_INF)
+
+    def test_a_list_nothing_was_stored_into_is_bottom(self):
+        """``fp.empty`` holds nothing and reading it is undefined, so no
+        execution contradicts any class of its elements."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            ys = fp.empty(3)
+            ys[0] = 1.0
+            return ys[0]
+
+        assert _bounds(f, lists=0, scalars=1)['ys'] == ListClass(FINITE)
+
+    def test_a_list_joins_its_element(self):
+        assert join_class(ListClass(NAN), ListClass(ZERO)) == ListClass(NAN | ZERO)
+
+    def test_a_shape_mismatch_knows_nothing(self):
+        """Not the top class -- the top is a fact about a *number*, and there is
+        no such fact about a value whose shape is in question."""
+        assert join_class(TupleClass((NAN,)), NAN) is None
+        assert join_class(TupleClass((NAN,)), TupleClass((NAN, ZERO))) is None
+
+    def test_an_unknown_side_stays_unknown(self):
+        assert join_class(None, NAN) is None
+        assert join_class(TupleClass((NAN, None)), TupleClass((ZERO, ZERO))) == \
+            TupleClass((NAN | ZERO, None))
+
+
+class TestElementClassesPerDefinition:
+    """:attr:`ValueClassAnalysis.by_elt` -- what a list's elements are *ever*
+    stored at, which is the question a storage choice asks.
+
+    Where ``by_expr`` is what a read yields at a point, this is joined over the
+    whole function: a buffer has to hold every value that ever lands in it.
+    """
+
+    def test_a_list_built_here(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        assert not (_elt_classes(f)['ys'] & NEG_INF)
+
+    def test_a_store_after_the_read_still_counts(self):
+        """Joined over the whole function, where ``by_expr`` is read at a
+        point: a buffer holds every value that ever lands in it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            r = max(ys)
+            ys[0] = -fp.inf()
+            return r + ys[1]
+
+        assert _elt_classes(f)['ys'] & NEG_INF
+
+    def test_a_parameter_is_absent(self):
+        """Nothing was stored through it, so nothing is known -- and absent is
+        how a consumer reads that."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return max(xs)
+
+        assert 'xs' not in _elt_classes(f)
+
+
+class TestTheBackendSharesItsAliasAnalysis:
+    """`ValueClassInfer` builds an `Alias` when none is passed, and that one has
+    no escape summaries -- so every list handed to a call reads as escaping and
+    loses its element facts.  A caller holding a summarized one has to pass it,
+    or it pays for two analyses and uses the weaker."""
+
+    def test_the_compiler_passes_the_alias_it_built(self):
+        from fpy2.backend.cpp.compiler import CppCompiler
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        m = fp.Module()
+        m.add(f, arg_types=[ListType(RealType(fp.FP32), 4)])
+        compiler = CppCompiler()
+        specs = compiler.specialize(m)
+        for spec, analyses in compiler._analyze_all(specs, {}):
+            if spec.ast.name == 'f':
+                assert analyses.class_info.alias is analyses.alias
+                return
+        raise AssertionError('no f')
+
+
+class TestARegionMayHoldMoreThanOneList:
+    """Alias analysis merges two lists into one region as soon as anything
+    makes them may-alias, and then a fact about "the" list names neither.
+
+    Each of these reported a class a run contradicts.
+    """
+
+    def test_an_allocation_does_not_wipe_a_list_it_shares_a_region_with(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            a = fp.empty(2)
+            a[0] = 1.0
+            b = fp.empty(2)
+            b[0] = fp.nan()
+            xss = fp.empty(2)
+            xss[0] = a
+            xss[1] = b
+            return a[0]
+
+        assert _ref_classes(f, scalars=1) == [TOP]
+        assert f(1.0) == 1.0
+
+    def test_a_universal_needs_the_region_to_be_one_list(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, c: fp.Real):
+            ok = all([fp.isfinite(x) for x in xs])
+            zs = xs if c > 0 else ys
+            if ok:
+                return max(zs)
+            else:
+                return 0.0
+
+        assert _amax_class(f, lists=2, scalars=1) == TOP
+
+
+class TestElementsThatArrivedWithoutAStore:
+    """`_stored` is seeded where a list is seen *empty*, so a list built any
+    other way keeps the top class however much is stored into it afterwards.
+
+    Each of these reported a class a run contradicts.
+    """
+
+    def test_a_parameter_was_filled_by_the_caller(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            xs[0] = 1.0
+            return max(xs)
+
+        assert _elt_classes(f)['xs'] == TOP
+        assert math.isnan(f([5.0, float('nan'), 2.0]))
+
+    def test_a_literal_carries_its_own_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            xs = [1.0, fp.nan()]
+            xs[0] = 2.0
+            return xs[1]
+
+        assert _elt_classes(f, lists=0, scalars=1)['xs'] == TOP
+        assert math.isnan(f(1.0))
+
+    def test_a_nested_store_reaches_the_list_it_writes(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            row = fp.empty(2)
+            row[0] = 1.0
+            xss = fp.empty(2)
+            xss[0] = row
+            xss[0][0] = fp.nan()
+            return row[0]
+
+        assert _elt_classes(f, lists=0, scalars=1)['row'] == TOP
+        assert math.isnan(f(1.0))
+
+
+class TestWhichListsCarryAFact:
+    """:meth:`ValueClassAnalysis.element_region` -- where a fact about a list's
+    elements may be recorded at all.
+
+    An element class is a property of the *location*, and an FPy list is a
+    reference, so the region is the key.  Two names for one share it; a
+    list handed to a call has none, since the callee may store through it.
+    """
+
+    def test_a_read_only_list(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            t = xs
+            return fp.logb(t[0])
+
+        assert _trackable(f, 'xs')
+
+    def test_a_list_built_here(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [fp.logb(x) for x in xs]
+            return max(ys)
+
+        assert _trackable(f, 'ys')
+
+    def test_an_alias_is_the_same_region_not_a_refusal(self):
+        """``ys = xs`` is one location under two names, so a store through either
+        lands on the region both resolve to -- which is why the region is the
+        key rather than something to refuse."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = xs
+            ys[0] = fp.nan()
+            return fp.logb(xs[0])
+
+        assert _trackable(f, 'xs')
+
+    def test_a_list_handed_to_a_call_has_no_element_class(self):
+        """A callee may store through it, so neither accessor answers."""
+        @fp.fpy(ctx=fp.REAL)
+        def poison(ys):
+            ys[0] = fp.nan()
+            return 0
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            zs = [abs(x) for x in xs]
+            w = poison(zs)
+            return max(zs) + w
+
+        assert 'zs' not in _elt_classes(f)
+        assert _bounds(f)['zs'] is None
+
+    def test_a_list_handed_to_a_call_carries_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def poison(ys):
+            ys[0] = fp.nan()
+            return 0
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            z = poison(xs)
+            return fp.logb(xs[0]) + z
+
+        assert not _trackable(f, 'xs')
 
 
 class TestTheLoweredRounding:

@@ -29,7 +29,7 @@ from ...analysis.storage_infer import (
     join,
     of_bound,
 )
-from ...analysis.value_class import ValueClass
+from ...analysis.value_class import ClassBound
 from ...ast.fpyast import Var
 from ...number import (
     FP32,
@@ -132,7 +132,7 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
     return ty
 
 
-def choose_storage(bound: FormatBound, cls: ValueClass | None = None) -> CppType:
+def choose_storage(bound: FormatBound, cls: ClassBound = None) -> CppType:
     """The storage containing *bound*, spelled.
 
     One implementation, in the analysis: :func:`of_bound` searches the domain and

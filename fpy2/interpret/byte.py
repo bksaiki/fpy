@@ -30,6 +30,9 @@ CTX_NAME = '__ctx__'
 REAL_NAME = '__fpy_real'
 """namespace symbol bound to the real context ``REAL``"""
 
+HOOK_NAME = '__fpy_hook'
+"""namespace symbol bound to :attr:`BytecodeCompiler.hook`, when one is given"""
+
 
 def _is_integer(x: Float | Fraction) -> bool:
     match x:
@@ -587,13 +590,43 @@ class BytecodeCompiler(Visitor):
     gensym: Gensym
     foreign_vals: dict[str, object]
 
-    def __init__(self, func: FuncDef, env: ForeignEnv):
+    hook: 'Callable[[int, Any], Any] | None'
+    """Called with ``(index, value)`` for every expression evaluated, returning
+    the value.  ``hook_sites[index]`` is where it came from.  ``None`` compiles
+    the program unchanged."""
+
+    hook_sites: list[Expr]
+    """The expressions :attr:`hook` fires at, indexed by the id it is passed."""
+
+    def __init__(
+        self, func: FuncDef, env: ForeignEnv,
+        *, hook: 'Callable[[int, Any], Any] | None' = None,
+    ):
         self.func = func
         self.env = env
         # reserve the program's own names: a bare `fresh('__fpy_cmp')` would
         # otherwise return that very name and shadow a source variable
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.foreign_vals = {}
+        self.hook = hook
+        self.hook_sites = []
+
+    def _visit_expr(self, e: Expr, ctx):
+        """Every expression, wrapped in :attr:`hook` where one is given.
+
+        The wrapper is the identity, so the program runs as it would.
+        """
+        out = super()._visit_expr(e, ctx)
+        if self.hook is None or not isinstance(out, pyast.expr):
+            return out
+        attrs = self._location_to_attributes(e.loc)
+        idx = len(self.hook_sites)
+        self.hook_sites.append(e)
+        return pyast.Call(
+            func=pyast.Name(id=HOOK_NAME, ctx=pyast.Load(), **attrs),
+            args=[pyast.Constant(value=idx, kind=None, **attrs), out],
+            keywords=[], **attrs,
+        )
 
     def compile(self):
         # compile the function to a Python AST
@@ -612,6 +645,8 @@ class BytecodeCompiler(Visitor):
             namespace[name] = to_value(self.env[name])
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
+        if self.hook is not None:
+            namespace[HOOK_NAME] = self.hook
         # return the function object
         exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]

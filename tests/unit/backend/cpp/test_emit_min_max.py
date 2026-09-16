@@ -278,6 +278,28 @@ class TestTheFloatPathReachesTheLibraryForm:
         assert 'isnan' in out and 'signbit' in out
 
 
+    def test_a_reduction_over_guarded_elements_uses_the_library_form(self):
+        """The fold reads the *element* class, so a guard over the whole list
+        drops the propagation the same way a guard on two names does."""
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            if all([not fp.isnan(x) for x in xs]):
+                return max(xs)
+            else:
+                return 0
+
+        out = CppCompiler().compile(q, arg_types=[ListType(RealType(fp.FP64))])
+        assert 'quiet_NaN' not in out
+
+    def test_a_reduction_over_unguarded_elements_stays_inline(self):
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            return max(xs)
+
+        out = CppCompiler().compile(q, arg_types=[ListType(RealType(fp.FP64))])
+        assert 'quiet_NaN' in out
+
+
 class TestIntegerPathUnchanged:
     def test_an_integer_reduction_keeps_the_library_form(self):
         """The fold in ``_emit_amin_amax`` chooses per storage kind too."""

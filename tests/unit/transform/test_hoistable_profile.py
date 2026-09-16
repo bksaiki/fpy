@@ -20,7 +20,7 @@ from fpy2.transform import ANF, CompToLoop, Hoistable
 from fpy2.transform.path import walk_stmts
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_FUNCTIONS = 230
+EXPECTED_FUNCTIONS = 243
 """Corpus size.  A count only means something while this holds."""
 
 _ELEMENT = "a comprehension's element runs once per iteration"
@@ -28,10 +28,10 @@ _ITERABLE = "a comprehension's iterable may read an earlier target"
 _MESSAGE = "an assert message is evaluated only on failure"
 _COMPARE = "a chained comparison short-circuits after the first pair"
 
-EXPECTED_RESIDUE = {_ELEMENT: 20, _ITERABLE: 16, _MESSAGE: 1, _COMPARE: 4}
+EXPECTED_RESIDUE = {_ELEMENT: 23, _ITERABLE: 16, _MESSAGE: 1, _COMPARE: 4}
 """Sealed positions left holding a non-atom, by reason.
 
-Only the three the pass has no lowering for.  The other three -- a ternary arm,
+Only the ones the pass has no lowering for.  The other three -- a ternary arm,
 a short-circuited operand, a `while` condition -- are emptied outright, and each
 is a miscompile recorded in ``docs/todos/backend-cpp.md`` when a backend meets
 one.
@@ -52,13 +52,13 @@ a fixpoint rather than a sequence.
 The other two are the positions nothing lowers at all.
 """
 
-EXPECTED_STATEMENTS = 831
-EXPECTED_GROWTH = 66
+EXPECTED_STATEMENTS = 894
+EXPECTED_GROWTH = 105
 """Statements this pass adds over the whole corpus: each lowering's expansion,
 the second copy of each rotated condition, and the prefix rule's temporaries.
 The whole cost of being able to hoist anywhere."""
 
-EXPECTED_ATOMIZATION_GROWTH = 291
+EXPECTED_ATOMIZATION_GROWTH = 295
 """What `ANF` adds on top of hoistable form.  Context for
 :data:`EXPECTED_GROWTH`, pinned so the comparison cannot quietly stop holding."""
 
@@ -118,8 +118,9 @@ def test_comp_to_loop_first_leaves_only_what_it_declined():
 
 
 def test_the_pass_stays_weak():
-    """Being able to hoist anywhere costs 66 statements; the atomization on top
-    of it costs several times that, and a rewrite needs only the first."""
+    """Being able to hoist anywhere costs `EXPECTED_GROWTH` statements; the
+    atomization on top of it costs several times that, and a rewrite needs only
+    the first."""
     _n, _residue, _after, (before, grown, atomized) = _PROFILE
     assert before == EXPECTED_STATEMENTS
     assert grown - before == EXPECTED_GROWTH

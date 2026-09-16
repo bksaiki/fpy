@@ -19,6 +19,7 @@ apart: rounding to a narrower format can *produce* an infinity, and the analysis
 has to say so.
 """
 
+import re
 import shutil
 import struct
 import subprocess
@@ -30,7 +31,7 @@ import pytest
 import fpy2 as fp
 from fpy2.backend.cpp import CppCompiler
 from fpy2.number import MPBFixedContext
-from fpy2.types import RealType
+from fpy2.types import ListType, RealType
 
 _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
 
@@ -264,6 +265,137 @@ class TestAClampReachesIntegerStorage:
 
         out = CppCompiler().compile(half, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
         assert 'float half(' in out
+
+
+class TestAResultStorageIsNotAnOperandTarget:
+    """A class narrows where a result *goes*, never what is fed in.
+
+    Which C++ signature runs is a question about the values that occur, so a
+    `logb` a branch has made finite reaches the integer one -- and then nothing
+    converts to a float and back to use it.
+    """
+
+    def test_a_guarded_logb_reaches_the_integer_op(self):
+        @fp.fpy
+        def q(x: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(x) or x == 0:
+                return 0
+            else:
+                with fp.REAL:
+                    return fp.logb(x)
+
+        out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::ilogb(' in out
+        assert 'std::logb(' not in out
+
+    def test_an_unguarded_logb_stays_on_the_float_op(self):
+        """``logb(0)`` is ``-inf``, and converting one to an ``int`` is
+        undefined -- ``std::ilogb`` would be a wrong answer, not a wider one."""
+        @fp.fpy
+        def q(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                return fp.logb(x)
+
+        out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::logb(' in out
+        assert 'std::ilogb(' not in out
+
+    def test_an_operand_is_not_narrowed_by_the_result(self):
+        """``max`` is finite where ``logb`` is not, so its operands stay
+        ``float``."""
+        @fp.fpy
+        def q(x: fp.Real) -> fp.Real:
+            if fp.isnan(x):
+                return 0
+            else:
+                return min(max(fp.logb(x), -126), 128)
+
+        out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'int8_t q(' in out
+        assert 'std::logb(' in out          # the operand keeps its float op
+        assert 'std::ilogb(' not in out
+
+
+class TestATupleReturnNarrowsPerField:
+    """A function's return type is its ABI, so a field that collapses to one
+    class for the whole tuple stays wide in every caller too."""
+
+    def test_the_narrow_field_stays_narrow(self):
+        @fp.fpy
+        def q(x: fp.Real) -> tuple[fp.Real, fp.Real]:
+            if fp.isnan(x) or fp.isinf(x) or x == 0:
+                return x, 0
+            else:
+                with fp.REAL:
+                    return x, fp.logb(x)
+
+        out = CppCompiler().compile(
+            q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::tuple<float, int16_t> q(' in out
+
+    def test_a_field_that_can_be_an_infinity_does_not(self):
+        """The same shape with the guard removed: `logb(0)` is ``-inf``."""
+        @fp.fpy
+        def q(x: fp.Real) -> tuple[fp.Real, fp.Real]:
+            with fp.REAL:
+                return x, fp.logb(x)
+
+        out = CppCompiler().compile(
+            q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::tuple<float, float> q(' in out
+
+
+class TestAListStoresAtItsElements:
+    """The same narrowing, one level in: a list stores at what its elements can
+    be rather than at their format.
+
+    Over a list the guard has to be a guard over the *whole* list, since nothing
+    else rules a NaN out of every element -- so this is what the reduction
+    refinement buys.  `float` here would be four bytes per element to hold a
+    value in ``[-126, 127]``, and a `float` reduction to fold them.
+    """
+
+    @staticmethod
+    def _guarded():
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            if all([fp.isfinite(x) and x != 0 for x in xs]):
+                ys = [max(fp.logb(x), -126) for x in xs]
+                return max(ys)
+            else:
+                return 0
+        return q
+
+    @staticmethod
+    def _emit(q):
+        return CppCompiler().compile(
+            q, arg_types=[ListType(RealType(fp.FP32), 8)])
+
+    def test_the_buffer_holds_the_element_type(self):
+        assert 'std::array<int8_t, 8>' in self._emit(self._guarded())
+
+    def test_the_store_spells_its_conversion(self):
+        """The *value* fits where the expression's storage does not: ``max``
+        computes at ``float`` because ``logb`` does."""
+        assert 'static_cast<int8_t>(std::max(' in self._emit(self._guarded())
+
+    def test_the_reduction_folds_on_the_integer_path(self):
+        out = self._emit(self._guarded())
+        assert re.search(r'= std::max\(\w+, ys\[', out), out
+        assert 'signbit' not in out
+        assert 'quiet_NaN' not in out
+
+    def test_without_the_guard_it_stays_a_float(self):
+        """``logb(0)`` is ``-inf`` and ``logb(inf)`` is ``+inf``, so an element
+        can be one and no integer rung holds it."""
+        @fp.fpy(ctx=fp.REAL)
+        def q(xs) -> fp.Real:
+            ys = [max(fp.logb(x), -126) for x in xs]
+            return max(ys)
+
+        out = self._emit(q)
+        assert 'std::array<float, 8>' in out
+        assert 'std::array<int8_t' not in out
 
 
 class TestMinMax:

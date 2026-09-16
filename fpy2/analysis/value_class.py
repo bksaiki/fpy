@@ -62,11 +62,13 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
+from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import REAL, Context, Float
 from ..types import RealType, Type
+from .alias import Alias, AliasAnalysis, Region
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
 from .define_use import (
     AssignDef,
@@ -79,6 +81,9 @@ from .define_use import (
 from .type_infer import TypeAnalysis, TypeInfer
 
 __all__ = [
+    'ClassBound',
+    'ListClass',
+    'TupleClass',
     'ValueClass',
     'ValueClassAnalysis',
     'ValueClassInfer',
@@ -123,6 +128,46 @@ _BOT = ValueClass(0)
 _ATOMS = (_NAN, _POS_INF, _NEG_INF, _ZERO, _FINITE)
 """The join-irreducible classes.  ``INF`` is not one: it is the composite a
 consumer uses to ask "infinite at all"."""
+
+
+@dataclass(frozen=True)
+class TupleClass:
+    """What each field of a tuple can be."""
+    elts: 'tuple[ClassBound, ...]'
+
+
+@dataclass(frozen=True)
+class ListClass:
+    """What every element of a list can be."""
+    elt: 'ClassBound'
+
+
+ClassBound: TypeAlias = 'ValueClass | TupleClass | ListClass | None'
+"""A class shaped like the value it describes, mirroring
+:data:`~fpy2.analysis.format_infer.FormatBound`.
+
+A storage choice is structural -- a tuple's is field-wise, a list's is its
+element's -- so a class that is not loses at the first aggregate: one
+:class:`ValueClass` for a whole tuple is the top class and narrows nothing.
+``None`` says nothing about the value at that position, and so does a shape
+that does not match the bound's.
+"""
+
+
+def join_class(a: ClassBound, b: ClassBound) -> ClassBound:
+    """Either of *a* and *b*, structurally.  ``None`` where they disagree about
+    the shape, since nothing is then known of the whole."""
+    match a, b:
+        case ValueClass(), ValueClass():
+            return a | b
+        case TupleClass(), TupleClass() if len(a.elts) == len(b.elts):
+            return TupleClass(tuple(
+                join_class(x, y) for x, y in zip(a.elts, b.elts)
+            ))
+        case ListClass(), ListClass():
+            return ListClass(join_class(a.elt, b.elt))
+        case _:
+            return None
 
 
 def _negate(a: ValueClass) -> ValueClass:
@@ -284,6 +329,17 @@ def _exact_select(args: list[ValueClass], *, is_max: bool) -> ValueClass:
     return out
 
 
+def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None':
+    """*region*, unless no fact about its elements may be recorded.
+
+    ``None`` where the list escapes -- handed to a call, which may store
+    through it after this analysis has stopped looking.
+    """
+    if region is None or alias.escapes_at(region):
+        return None
+    return region
+
+
 def _positive_literal(e: Expr) -> bool:
     return isinstance(e, RationalVal) and e.as_rational() > 0
 
@@ -302,6 +358,17 @@ class ValueClassAnalysis:
     """Class of each expression, refined by the branches that dominate it.
     ``None`` for a non-real-valued expression."""
 
+    by_elt: dict[Definition, ValueClass]
+    """For a list definition, every class its elements are ever stored at.
+
+    Where :attr:`by_def` is what a *name* holds, this is what the list behind it
+    holds, so a consumer picking storage can narrow the element type.  Joined
+    over the whole function rather than read at a point -- storage holds what a
+    list ever held.  The top class stands for "anything", which is what a list
+    built where no store was walked gets: a literal, a parameter, a callee's
+    result.  A definition is absent where no fact may be recorded at all --
+    a list that escapes to a callee."""
+
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
     expression had, joined across incoming edges at a phi.  A consumer wants
@@ -309,11 +376,40 @@ class ValueClassAnalysis:
     per-definition view the other analyses expose, and what
     ``tests/infra/analysis/value_class.py`` dumps."""
 
+    alias: AliasAnalysis
+    """Underlying alias analysis: which lists may be the same location.  A class
+    for a list's *elements* is a property of that location rather than of a
+    name, so a `Region` -- the set of locations a place may hold -- is the key.
+    See :meth:`element_region`."""
+
     type_info: TypeAnalysis
     """Underlying basic-type analysis, which decides what carries a class."""
 
     ctx_use: ContextUseAnalysis
     """Underlying context-use analysis, which supplies each operation's context."""
+
+    def element_region(self, e: Expr) -> 'Region | None':
+        """The region whose elements a fact about the list *e* belongs to, or
+        ``None`` where no fact may be recorded.
+
+        A list is a reference, so ``ys = xs`` is one location under two names
+        and a store through either is visible through both; the region is what
+        both resolve to.
+        """
+        return _trackable(self.alias, self.alias.region_of_expr(e))
+
+    def bound_of(self, d: Definition) -> ClassBound:
+        """*d*'s class, shaped like the value it holds.
+
+        :attr:`by_def` and :attr:`by_elt` answer for a scalar and for a list's
+        elements; this is the one a structural consumer wants, and the only
+        place that knows both.
+        """
+        elt = self.by_elt.get(d)
+        if elt is not None:
+            return ListClass(elt)
+        cls = self.by_def.get(d)
+        return cls if isinstance(cls, ValueClass) else None
 
     def classify(self, e: Expr) -> ValueClass:
         """The class of *e*, or the top class where nothing is known."""
@@ -348,26 +444,78 @@ class _ValueClassInstance(DefaultVisitor):
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
 
+    alias: AliasAnalysis
+
+    _elt: dict[Region, ValueClass]
+    """What every element of each list currently is.  Keyed by `Region` because
+    an element class is a property of the *location*, not of the name reaching
+    it, and flow-sensitive because a store changes it -- the same shape as
+    :attr:`_refine`, merged at a branch and iterated at a loop."""
+
+    _clock: int
+    _touched: dict[Region, int]
+    """When each region's elements last changed.  Monotone and never restored,
+    so a store anywhere already walked voids a fact taken before it."""
+
+    _scanned: dict[ForStmt, int]
+    """For a loop that did *not* store into the list it iterates, that list's
+    :attr:`_touched` stamp at the exit.  Absent means the loop's accumulator
+    says nothing; see :meth:`_implied_universal`."""
+
+    _stored: dict[Region, ValueClass]
+    """Every class ever stored into each region, for a consumer choosing
+    storage: a buffer holds what a list *ever* held.  Seeded at bottom only
+    where a region holding one list is seen empty, so a list built any other
+    way -- a literal, a parameter, a callee's result -- stays at the top."""
+
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
+
+    _refine_elt: dict[Region, tuple[ValueClass, int]]
+    """The same, per region, with the :attr:`_touched` stamp it was taken at.
+
+    :attr:`_refine` needs no stamp, a rebind making a new `Definition` where a
+    list's contents change under a fixed one.  An arm *restores* this map, so
+    without the stamp a store in a branch nested inside it would come back
+    undone on the way out."""
 
     def __init__(
         self,
         func: FuncDef,
         type_info: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
+        alias: AliasAnalysis,
     ):
         self.func = func
         self.type_info = type_info
         self.ctx_use = ctx_use
+        self.alias = alias
+        self._elt = {}
+        self._stored = {}
+        self._clock = 0
+        self._touched = {}
+        self._scanned = {}
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
+        self._refine_elt = {}
 
     @property
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
+
+    def _by_elt(self) -> dict[Definition, ValueClass]:
+        """:attr:`ValueClassAnalysis.by_elt`, per definition rather than per
+        region."""
+        # every key of `_stored` went through `_trackable`, so an escaping
+        # region is already absent
+        out: dict[Definition, ValueClass] = {}
+        for d in self.def_use.defs:
+            region = self.alias.region_of(d)
+            if region is not None and region in self._stored:
+                out[d] = self._stored[region]
+        return out
 
     def analyze(self) -> ValueClassAnalysis:
         self._visit_function(self.func, None)
@@ -375,12 +523,68 @@ class _ValueClassInstance(DefaultVisitor):
             func=self.func,
             by_expr=self.by_expr,
             by_def=self.by_def,
+            by_elt=self._by_elt(),
+            alias=self.alias,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
         )
 
     # ------------------------------------------------------------------
     # Definitions
+
+    def _region_of(self, e: Expr) -> 'Region | None':
+        """See :meth:`ValueClassAnalysis.element_region`."""
+        return _trackable(self.alias, self.alias.region_of_expr(e))
+
+    def _one_list(self, region: Region) -> bool:
+        """Whether *region* abstracts a single list.
+
+        Two lists share a region as soon as anything makes them may-alias, and
+        then "every element of *the* list" names neither of them.  Only a count
+        answers it, and a region with no site is as unanswerable as one with
+        two.
+        """
+        return len(self.alias.sites_at(region)) == 1
+
+    def _elements_of(self, e: Expr) -> ValueClass:
+        """What every element of the list *e* names currently is."""
+        region = self._region_of(e)
+        if region is None:
+            return _TOP
+        return self._elt.get(region, _TOP) & self._mask_of(region)
+
+    def _stamp(self, region: Region) -> int:
+        return self._touched.get(region, 0)
+
+    def _touch(self, region: Region):
+        """Record that *region*'s elements changed."""
+        self._clock += 1
+        self._touched[region] = self._clock
+
+    def _mask_of(self, region: Region) -> ValueClass:
+        """What the enclosing branches imply about *region*'s elements, or the
+        top class once a store has landed since that was taken."""
+        cls, stamp = self._refine_elt.get(region, (_TOP, 0))
+        return cls if stamp == self._stamp(region) else _TOP
+
+    def _store_element(self, region: 'Region | None', cls: ValueClass):
+        """Record a store of *cls* into *region*, which joins: the elements the
+        store did not reach are still there."""
+        if region is not None:
+            self._elt[region] = self._elt.get(region, _TOP) | cls
+            self._stored[region] = self._stored.get(region, _TOP) | cls
+            self._touch(region)
+
+    @staticmethod
+    def _join_elements(
+        a: 'dict[Region, ValueClass]', b: 'dict[Region, ValueClass]',
+    ) -> 'dict[Region, ValueClass]':
+        """Two paths' element maps.  Absent means *unknown*, so it joins to the
+        top rather than being skipped."""
+        return {
+            r: a.get(r, _TOP) | b.get(r, _TOP)
+            for r in (*a, *b)
+        }
 
     def _set_def(self, d: Definition, cls: ValueClass | None):
         if not isinstance(self.type_info.by_def.get(d), RealType):
@@ -430,15 +634,21 @@ class _ValueClassInstance(DefaultVisitor):
         into its sibling -- intersecting ``{NaN}`` with ``{Inf}`` down an ``elif``
         ladder and driving every later use to the empty class.
         """
-        saved = self._refine
+        saved, saved_elt = self._refine, self._refine_elt
         out = dict(saved)
         for d, cls in self._implied(cond, truth):
             out[d] = out.get(d, _TOP) & cls
-        self._refine = out
+        # re-stamped, so an entry a store has already invalidated reads as the
+        # top class here rather than coming back as this arm's starting point
+        out_elt = {r: (self._mask_of(r), self._stamp(r)) for r in saved_elt}
+        for region, cls in self._implied_elements(cond, truth):
+            prev, _ = out_elt.get(region, (_TOP, 0))
+            out_elt[region] = (prev & cls, self._stamp(region))
+        self._refine, self._refine_elt = out, out_elt
         try:
             yield
         finally:
-            self._refine = saved
+            self._refine, self._refine_elt = saved, saved_elt
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the definitions it tests."""
@@ -532,6 +742,106 @@ class _ValueClassInstance(DefaultVisitor):
             return self._implied(d.site.expr, truth)
         return self._implied_ladder(d, truth)     # a longer ladder
 
+    def _implied_elements(
+        self, cond: Expr, truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """What *cond* being *truth* says about the elements of a list."""
+        match cond:
+            case Not():
+                return self._implied_elements(cond.arg, not truth)
+            case And() if truth:
+                return [i for a in cond.args
+                        for i in self._implied_elements(a, True)]
+            case Or() if not truth:
+                return [i for a in cond.args
+                        for i in self._implied_elements(a, False)]
+            case Var():
+                src = self.def_use.defining_expr(cond)
+                if src is not cond:
+                    return self._implied_elements(src, truth)
+                return self._implied_universal(
+                    self.def_use.use_to_def.get(cond), truth,
+                )
+            case _:
+                return []
+
+    def _implied_universal(
+        self, d: 'Definition | None', truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """What a *lowered* ``all`` / ``any`` being *truth* says about the list
+        it scanned.
+
+        :class:`~fpy2.transform.ReduceFusion` leaves the reduction as a
+        loop-carried fold, which the ``And`` case above cannot match:
+
+        .. code-block:: python
+
+            acc = True                  # `all([isfinite(x) for x in xs])`
+            for x in xs:
+                b = isfinite(x)
+                acc = acc and b
+
+        The exit value is ``seed and b_1 and ... and b_n``, so ``acc`` true
+        forces every ``b`` -- whatever the seed, with an empty list vacuous.
+        The loop covers the list, FPy having no ``break``, so what the fold's
+        other operands say about the target they say about every element.
+        Dually for ``any``, an ``Or`` that speaks when it is false.
+
+        Nothing here names what the lowering minted: an inlined predicate and a
+        hand-written fold match too.
+        """
+        if not isinstance(d, PhiDef) or not isinstance(d.site, ForStmt):
+            return []
+        stmt = d.site
+        if not isinstance(stmt.target, NamedId):
+            return []
+        region = self._region_of(stmt.iterable)
+        # a store since the exit -- or one the loop made itself, which leaves
+        # no entry -- means the list read is not the list scanned, and a region
+        # holding two lists means scanning one says nothing about the other
+        if region is None or not self._one_list(region):
+            return []
+        if self._scanned.get(stmt) != self._stamp(region):
+            return []
+        target = self.def_use.find_def_from_site(stmt.target, stmt)
+        return [
+            (region, cls)
+            for td, cls in self._implied_fold(d, truth)
+            if td == target
+        ]
+
+    def _implied_fold(
+        self, d: PhiDef, truth: bool
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What one round of the fold *d* accumulates says, given the exit value
+        is *truth*.
+
+        The accumulator must be an operand of its own new value.  That is what
+        makes the fold monotone, and so what lets the exit value speak for every
+        round: ``acc = p(x)`` speaks for the last element alone.
+        """
+        step = self.def_use.defs[d.rhs]
+        if isinstance(step, PhiDef):
+            # `Hoistable` moves the fold into a guarded assignment, and the
+            # guard it checks for is the accumulator -- but only where that is
+            # what the loop carried in.  `ok = x > 0; if ok: ok = p(x)` rebuilds
+            # `ok` each round, so it too speaks for the last element alone.
+            if self.def_use.def_to_idx.get(d) != step.lhs:
+                return []
+            return self._implied_ladder(step, truth)
+        if not isinstance(step, AssignDef) or not isinstance(step.site, Assign):
+            return []
+        fold = step.site.expr
+        if not isinstance(fold, And if truth else Or):
+            return []
+        rest = [
+            a for a in fold.args
+            if not (isinstance(a, Var) and self.def_use.use_to_def.get(a) == d)
+        ]
+        if len(rest) == len(fold.args):
+            return []
+        return [i for a in rest for i in self._implied(a, truth)]
+
     def _implied_compare(
         self, cond: Compare, truth: bool
     ) -> list[tuple[Definition, ValueClass]]:
@@ -614,6 +924,12 @@ class _ValueClassInstance(DefaultVisitor):
             return _TOP
         return exact if scope.ctx is REAL else representable_classes(scope.ctx)
 
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> ValueClass:
+        """``xs[i]``: whatever every element of ``xs`` currently is."""
+        self._visit_expr(e.index, ctx)
+        self._visit_expr(e.value, ctx)
+        return self._elements_of(e.value)
+
     def _visit_var(self, e: Var, ctx: None) -> ValueClass:
         d = self.def_use.find_def_from_use(e)
         return self._def_class(d) & self._refine.get(d, _TOP)
@@ -654,7 +970,10 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._rounded(e, a)
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
-            case AMin() | AMax() | Fst() | Snd():
+            case AMin() | AMax():
+                # the result *is* one element, so it is bounded by them
+                return self._elements_of(e.arg)
+            case Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
                 return self._rounded(e, _TOP)
@@ -716,26 +1035,68 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         self._bind(stmt, stmt.target, self._visit_expr(stmt.expr, ctx))
+        if isinstance(stmt.expr, Empty):
+            # A fresh allocation holds nothing yet, which is what lets the
+            # stores that follow say anything.  Only where the region is one
+            # list: it is the sole *strong* update here, and wiping a region
+            # two lists share would drop the other one's elements.  Every other
+            # way of building a list -- a literal, a parameter, a callee's
+            # result -- puts elements there without a store, so a region never
+            # seen empty keeps the top class however much is stored into it.
+            region = self._region_of_def(stmt.target, stmt)
+            if region is not None:
+                if self._one_list(region):
+                    self._elt[region] = _BOT
+                    self._stored[region] = _BOT
+                self._touch(region)
+
+    def _region_of_def(self, target, site, depth: int = 0) -> 'Region | None':
+        """The region *depth* list levels inside what *target* binds at *site*.
+        ``depth`` is what a nested store writes through."""
+        if not isinstance(target, NamedId):
+            return None
+        return _trackable(self.alias, self.alias.region_of(
+            self.def_use.find_def_from_site(target, site), depth,
+        ))
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         for s in stmt.indices:
             self._visit_expr(s, ctx)
-        self._visit_expr(stmt.expr, ctx)
-        # a fresh def of a list, which carries no class
+        stored = self._visit_expr(stmt.expr, ctx)
+        # a fresh def of a list, which carries no *scalar* class; what the store
+        # says is about the region's elements
         self._bind(stmt, stmt.var, None)
+        # `xss[i][j] = v` writes the region one level in, which is where the
+        # alias analysis puts it too; the level above holds lists, and what a
+        # store says about those is nothing.
+        depth = len(stmt.indices) - 1
+        self._store_element(
+            self._region_of_def(stmt.var, stmt, depth),
+            stored if isinstance(stored, ValueClass) else _TOP,
+        )
+        for above in range(depth):
+            self._store_element(
+                self._region_of_def(stmt.var, stmt, above), _TOP,
+            )
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
+        entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
+        # the body may not have run, so its stores only *may* have happened
+        self._elt = self._join_elements(entry, self._elt)
         self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
+        entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)
+        taken, self._elt = self._elt, entry
         with self._refined(stmt.cond, False):
             self._visit_block(stmt.iff, ctx)
+        self._elt = self._join_elements(taken, self._elt)
         self._merge_phis(stmt)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
@@ -748,13 +1109,22 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
+        region = self._region_of(stmt.iterable)
+        before = None if region is None else self._stamp(region)
 
         def body():
-            # no structural classes, so an element is unconstrained
-            self._bind(stmt, stmt.target, _TOP)
+            # the target *is* an element, so it is whatever they are
+            self._bind(stmt, stmt.target, self._elements_of(stmt.iterable))
             self._visit_block(stmt.body, ctx)
 
+        # dropped before the body runs, not after: a `for` inside a loop is
+        # walked again, and inside it the accumulator covers only the part
+        # scanned so far -- an entry left from the previous walk would speak
+        # for the whole list
+        self._scanned.pop(stmt, None)
         self._fixpoint(stmt, body)
+        if region is not None and self._stamp(region) == before:
+            self._scanned[stmt] = before
 
     def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]):
         """Drives a loop's phi classes to convergence.
@@ -768,17 +1138,22 @@ class _ValueClassInstance(DefaultVisitor):
         phis = self.def_use.phis[stmt]
         for phi in phis:
             self._set_def(phi, self._def_class(self.def_use.defs[phi.lhs]))
+        entry = dict(self._elt)
         for _ in range(self._ROUNDS_PER_PHI * len(phis) + 1):
-            prev = {phi: self.by_def[phi] for phi in phis}
+            prev = ({phi: self.by_def[phi] for phi in phis}, dict(self._elt))
             run_body()
             for phi in phis:
                 lhs = self._def_class(self.def_use.defs[phi.lhs])
                 rhs = self._def_class(self.def_use.defs[phi.rhs])
                 self._set_def(phi, lhs | rhs)
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+            # the body runs zero or more times, so its stores join with the
+            # state that reached the loop as well as with the round before
+            self._elt = self._join_elements(entry, self._elt)
+            if (({phi: self.by_def[phi] for phi in phis}, self._elt)) == prev:
                 return
         for phi in phis:
             self._set_def(phi, _TOP)
+        self._elt = {r: _TOP for r in self._elt}
         run_body()
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
@@ -847,13 +1222,21 @@ class ValueClassInfer:
         def_use: DefineUseAnalysis | None = None,
         type_info: TypeAnalysis | None = None,
         ctx_use: ContextUseAnalysis | None = None,
+        alias: AliasAnalysis | None = None,
     ) -> ValueClassAnalysis:
         """
         Runs value-class analysis on a function.
 
         The pre-analyses are accepted as keyword arguments so a caller that
-        already holds them -- the C++ compiler holds all three -- does not
-        recompute them.
+        already holds them does not recompute them.
+
+        *alias* is computed here when absent rather than the analysis going
+        without: it costs about half what this analysis does, and without it a
+        list fact would have to be dropped silently.  Computed here it has no
+        escape summaries, which is the *conservative* reading -- every list
+        handed to a call is marked as escaping.  A caller holding a summarized
+        one should pass it: the C++ backend does, and gets the element facts
+        the conservative reading throws away.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
@@ -863,4 +1246,6 @@ class ValueClassInfer:
             type_info = TypeInfer.check(func, def_use=def_use)
         if ctx_use is None:
             ctx_use = ContextUse.analyze(func, def_use=def_use)
-        return _ValueClassInstance(func, type_info, ctx_use).analyze()
+        if alias is None:
+            alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
+        return _ValueClassInstance(func, type_info, ctx_use, alias).analyze()

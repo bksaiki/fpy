@@ -28,7 +28,8 @@ from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
 from ...analysis.storage_infer import StorageInfer
-from ...ast.fpyast import Call, FuncDef, NamedId, ReturnStmt
+from ...analysis.value_class import ClassBound, TupleClass, join_class
+from ...ast.fpyast import Call, Expr, FuncDef, NamedId, ReturnStmt, TupleExpr, Var
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
@@ -158,18 +159,40 @@ def _function_calls(ast: FuncDef) -> dict[Call, Function]:
     return out
 
 
-def _return_class(ast: FuncDef, class_info: ValueClassAnalysis) -> ValueClass:
-    """The value class joined over every ``ReturnStmt`` expression.
+def _returned_class(e: Expr, class_info: ValueClassAnalysis) -> ClassBound:
+    """The class of one returned expression, shaped like its value."""
+    match e:
+        case TupleExpr():
+            return TupleClass(tuple(
+                _returned_class(a, class_info) for a in e.elts
+            ))
+        case Var():
+            # a name carries the class of what it was built from, which for a
+            # list is its elements'
+            return class_info.bound_of(
+                class_info.type_info.def_use.find_def_from_use(e)
+            )
+        case _:
+            return class_info.classify(e)
 
-    An expression carrying no class -- a tuple, a list -- classifies as the top
-    and narrows nothing, so an aggregate return opts out.
+
+def _return_bound(ast: FuncDef, class_info: ValueClassAnalysis) -> ClassBound:
+    """The class of the return value, joined over every ``ReturnStmt``.
+
+    The return is the one storage choice :class:`StorageInfer` does not make,
+    so the structure it narrows by has to be rebuilt here.  A tuple joins field
+    by field -- one class for the whole of it would be the top, and a function
+    returning a small integer beside a float would widen the integer in its own
+    ABI.
     """
-    out = ValueClass(0)
+    out: ClassBound | None = None
+    first = True
 
     class _Collector(DefaultVisitor):
         def _visit_return(self, stmt: ReturnStmt, ctx):
-            nonlocal out
-            out |= class_info.classify(stmt.expr)
+            nonlocal out, first
+            cls = _returned_class(stmt.expr, class_info)
+            out, first = (cls if first else join_class(out, cls)), False
             super()._visit_return(stmt, ctx)
 
     _Collector()._visit_function(ast, None)
@@ -522,15 +545,20 @@ class CppCompiler(Backend):
             ctx_use=ctx_use,
             array_size=array_size,
         )
+        # before the value classes, which read it: without the summaries every
+        # list handed to a call reads as escaping and loses its element facts
+        alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
         class_info = ValueClassInfer.analyze(
-            ast, type_info=format_info.type_info, ctx_use=ctx_use,
+            ast, def_use=def_use, type_info=format_info.type_info,
+            ctx_use=ctx_use, alias=alias,
         )
 
         try:
             du = format_info.type_info.def_use
             chosen = StorageInfer.infer(
                 du, format_info.by_def, format_info.by_expr,
-                CppStorageDomain(), class_info.by_def,
+                CppStorageDomain(),
+                {d: class_info.bound_of(d) for d in du.defs},
             )
         except StorageSelectionError as e:
             raise CppCompileError(
@@ -549,7 +577,6 @@ class CppCompiler(Backend):
         storage = CppStorage(chosen)
         variables = VariableAlloc.assign(du, storage)
 
-        alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
         # This function's own summary, from the alias analysis it already has.
         # Its callers read it to decide whether they can stop treating an
         # argument as shared; it reads its own to decide the same about its
@@ -578,7 +605,7 @@ class CppCompiler(Backend):
         try:
             ret_ty = return_storage(
                 format_info.fn_fmt.ret_fmt, unbox,
-                _return_class(ast, class_info),
+                _return_bound(ast, class_info),
             )
         except StorageSelectionError as e:
             raise CppCompileError(
