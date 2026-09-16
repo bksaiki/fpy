@@ -30,7 +30,7 @@ holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
-    '_emit_empty': 30,         # a dimension, read once per fixed-size layer
+    '_emit_empty': 28,         # a dimension, read once per fixed-size layer
     '_emit_ieee_min_max': 6,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_list_range': 4,          # the list being iterated
@@ -38,11 +38,16 @@ EXPECTED_MINTS = {
 }
 """Emitter sites that invent a name, and how often, over the corpus.
 
-``_emit_zip`` used to mint 4 and ``_emit_empty`` 28.  Both moved when the
-`zip` / `enumerate` unfolds joined `_to_statement_form`: the lists a `zip`
+``_emit_zip`` used to mint 4 and ``_emit_empty`` 28, then 30.  Both moved when
+the `zip` / `enumerate` unfolds joined `_to_statement_form`: the lists a `zip`
 traversed twice are now a comprehension's, so the allocation is where the mint
 happens, and one tuple conversion reaches `_convert_storage` that the zip's own
 path did not.
+
+``_emit_empty`` is back to 28: a dimension the *type* already carries is no
+longer bound, since the `std::array` spells it and nothing reads the name.  The
+two that went were the corpus's only fixed-length allocations; the rest are
+`std::vector`, whose constructor does read the dimension.
 """
 
 

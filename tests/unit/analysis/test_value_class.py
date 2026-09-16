@@ -14,22 +14,25 @@ import pytest
 import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of, representable_classes
-from fpy2.analysis.value_class import _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _map
+from fpy2.analysis.value_class import (
+    _ATOMS, _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select,
+    _exact_sub, _map,
+)
 from fpy2.ast.fpyast import Expr
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.types import ListType, RealType
 
-NAN, INF, ZERO, FINITE = (
-    ValueClass.NAN, ValueClass.INF, ValueClass.ZERO, ValueClass.FINITE)
+NAN, ZERO, FINITE = ValueClass.NAN, ValueClass.ZERO, ValueClass.FINITE
+POS_INF, NEG_INF = ValueClass.POS_INF, ValueClass.NEG_INF
+INF = ValueClass.INF        # the composite, `POS_INF | NEG_INF`
 TOP = ValueClass.TOP
 
 _NAN, _INF = float('nan'), float('inf')
 
-_ATOMS = (NAN, INF, ZERO, FINITE)
-
 _SAMPLES: dict[ValueClass, list[float]] = {
     NAN: [_NAN],
-    INF: [_INF, -_INF],
+    POS_INF: [_INF],
+    NEG_INF: [-_INF],
     ZERO: [0.0, -0.0],
     FINITE: [1.0, -1.0, 2.5, -0.5, 3.0, 1e300, -1e-300],
 }
@@ -72,7 +75,7 @@ def _cls(func, text: str) -> ValueClass:
 class TestTheLattice:
     def test_the_atoms_partition_every_value(self):
         for x, want in (
-            (_NAN, NAN), (_INF, INF), (-_INF, INF),
+            (_NAN, NAN), (_INF, POS_INF), (-_INF, NEG_INF),
             (0.0, ZERO), (-0.0, ZERO), (1.5, FINITE), (-1e300, FINITE),
         ):
             assert class_of(fp.REAL.round(x)) is want, x
@@ -138,6 +141,16 @@ def _pow2(a: fp.Real) -> fp.Real:
     return 2 ** a
 
 
+@fp.fpy(ctx=fp.REAL)
+def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
+    return max(a, b)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _min2(a: fp.Real, b: fp.Real) -> fp.Real:
+    return min(a, b)
+
+
 class TestTransferFunctionsAreSound:
     """Every observed result must be inside the predicted class.
 
@@ -168,10 +181,18 @@ class TestTransferFunctionsAreSound:
         self._sweep(_exact_add, _add, 2)
 
     def test_sub(self):
-        self._sweep(_exact_add, _sub, 2)
+        # its own table since the sign split: `_exact_add` sweeps against `-`
+        # only while the infinities are one atom
+        self._sweep(_exact_sub, _sub, 2)
 
     def test_mul(self):
         self._sweep(_exact_mul, _mul, 2)
+
+    def test_max(self):
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=True), _max2, 2)
+
+    def test_min(self):
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2)
 
     def test_logb(self):
         self._sweep(lambda a: _map(_LOGB, a), _logb, 1)
@@ -179,8 +200,11 @@ class TestTransferFunctionsAreSound:
     def test_pow_with_a_positive_base(self):
         self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1)
 
-    @pytest.mark.parametrize('table', [_exact_add, _exact_mul],
-                             ids=['add', 'mul'])
+    @pytest.mark.parametrize('table', [
+        pytest.param(_exact_add, id='add'),
+        pytest.param(_exact_mul, id='mul'),
+        pytest.param(lambda a, b: _exact_select([a, b], is_max=True), id='max'),
+    ])
     def test_the_tables_distribute_over_the_join(self, table):
         """Sweeping one atom at a time is only enough because a table applied to
         a union is the union of applying it to each atom."""
@@ -208,7 +232,7 @@ def _value_combos(atoms: tuple[ValueClass, ...]):
 
 
 def _every_class():
-    for i in range(16):
+    for i in range(1 << len(_ATOMS)):
         yield ValueClass(i)
 
 
@@ -257,6 +281,65 @@ def _siblings(x: fp.Real) -> fp.Real:
     return y
 
 
+class TestTheSignedInfinities:
+    """``POS_INF`` and ``NEG_INF`` are separate atoms; ``INF`` is their join."""
+
+    def test_the_composite_reads_as_before(self):
+        # every consumer outside this module asks `cls & INF`, i.e. "infinite
+        # at all"; that question must not have changed meaning
+        assert INF == POS_INF | NEG_INF
+        assert POS_INF & INF and NEG_INF & INF
+        assert not (ZERO & INF) and not (NAN & INF)
+
+    def test_negation_swaps_them(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isinf(x):
+                return -x
+            return 0.0
+
+        assert _cls(f, '-x') == INF          # either, since `x` is either
+
+    def test_abs_has_no_negative_infinity(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            return abs(x)
+
+        assert _cls(f, 'abs(x)') == TOP & ~NEG_INF
+
+    def test_logb_of_a_zero_is_only_negative(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if x == 0:
+                return fp.logb(x)
+            return 0.0
+
+        assert _cls(f, 'logb(x)') == NEG_INF
+
+    def test_logb_of_an_infinity_is_only_positive(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isinf(x):
+                return fp.logb(x)
+            return 0.0
+
+        assert _cls(f, 'logb(x)') == POS_INF
+
+    def test_adding_the_same_infinity_is_not_a_nan(self):
+        """The split's point for arithmetic: ``inf + inf`` is an infinity, and
+        only ``inf + -inf`` is a NaN.  One atom could not tell them apart."""
+        assert _exact_add(POS_INF, POS_INF) == POS_INF
+        assert _exact_add(NEG_INF, NEG_INF) == NEG_INF
+        assert _exact_add(POS_INF, NEG_INF) == NAN
+        assert _exact_add(INF, INF) == NAN | INF
+
+    def test_subtraction_is_not_addition(self):
+        """``inf - inf`` is a NaN where ``inf + inf`` is not, which is why the
+        two have separate tables now."""
+        assert _exact_sub(POS_INF, POS_INF) == NAN
+        assert _exact_sub(POS_INF, NEG_INF) == POS_INF
+
+
 class TestRefinement:
     def test_the_ladder_reaches_finite(self):
         """The chain from the module docstring: three tests intersect down to a
@@ -271,7 +354,7 @@ class TestRefinement:
 
     def test_each_arm_gets_its_own_refinement(self):
         assert _cls(_both_arms, 'logb(x)') == NAN
-        assert _cls(_both_arms, 'abs(x)') == INF | ZERO | FINITE
+        assert _cls(_both_arms, 'abs(x)') == POS_INF | ZERO | FINITE
 
     def test_a_sibling_arm_does_not_inherit_the_first_arm_s_mask(self):
         """``isinf(x)`` holds in the second arm of the ladder, and ``isnan(x)``
@@ -279,7 +362,7 @@ class TestRefinement:
         Narrowing the second condition against the *first arm's* mask instead of
         the enclosing one intersected ``{NaN}`` with ``{Inf}`` and drove every
         later use to the empty class."""
-        assert _cls(_siblings, 'abs(x)') == INF
+        assert _cls(_siblings, 'abs(x)') == POS_INF
 
     def test_a_phi_joins_the_arms(self):
         @fp.fpy(ctx=fp.REAL)
@@ -302,7 +385,7 @@ class TestRefinement:
             return y
 
         assert _cls(f, 'abs(x)') == ZERO | FINITE
-        assert _cls(f, 'logb(x)') == NAN | INF
+        assert _cls(f, 'logb(x)') == NAN | POS_INF
 
     def test_isnormal_implies_finite_and_non_zero(self):
         """The premise the refinement rests on, checked against the interpreter:
@@ -358,7 +441,7 @@ class TestRefinement:
                 y = 0
             return y
 
-        assert _cls(f, 'abs(x)') == INF | ZERO | FINITE
+        assert _cls(f, 'abs(x)') == POS_INF | ZERO | FINITE
 
     def test_an_ordered_comparison_rules_out_a_nan_where_it_holds(self):
         """A NaN compares false to everything, so a comparison that *holds*
@@ -371,7 +454,7 @@ class TestRefinement:
                 y = fp.logb(x)
             return y
 
-        assert _cls(f, 'abs(x)') == INF | ZERO | FINITE
+        assert _cls(f, 'abs(x)') == POS_INF | ZERO | FINITE
         assert _cls(f, 'logb(x)') == TOP
 
     def test_equality_against_a_non_zero_literal_pins_finite(self):
@@ -390,7 +473,7 @@ class TestRefinement:
         def f(x: fp.Real) -> fp.Real:
             return fp.logb(x) if fp.isinf(x) else fp.fabs(x)
 
-        assert _cls(f, 'logb(x)') == INF
+        assert _cls(f, 'logb(x)') == POS_INF
         assert _cls(f, 'abs(x)') == NAN | ZERO | FINITE
 
 
@@ -502,10 +585,10 @@ class TestLoops:
                     y = n
             return fp.fabs(x)
 
-        assert _cls(f, 'abs(x)') == TOP
+        assert _cls(f, 'abs(x)') == TOP & ~NEG_INF
 
     def test_a_loop_phi_settles(self):
-        """The lattice has height 4, so the fixpoint converges without widening;
+        """The lattice is finite, so the fixpoint converges without widening;
         the accumulator ends up admitting the zero it starts at."""
         @fp.fpy(ctx=fp.REAL)
         def f(n: fp.Real) -> fp.Real:
@@ -526,7 +609,7 @@ class TestNonScalars:
         mono = st.monomorphize(f, args=[ListType(RealType(fp.FP64))])
         info = ValueClassInfer.analyze(mono.ast)
         assert info.by_expr[_find(mono.ast, 'xs')] is None
-        assert info.classify(_find(mono.ast, 'abs(xs[0])')) == TOP
+        assert info.classify(_find(mono.ast, 'abs(xs[0])')) == TOP & ~NEG_INF
 
 
 class TestArgumentsAndContexts:
@@ -546,7 +629,7 @@ class TestArgumentsAndContexts:
 
         mono = st.monomorphize(f, args=[RealType(fp.FP32)])
         info = ValueClassInfer.analyze(mono.ast)
-        assert info.classify(_find(mono.ast, 'abs(x)')) == TOP
+        assert info.classify(_find(mono.ast, 'abs(x)')) == TOP & ~NEG_INF
 
     def test_a_narrow_context_bounds_a_result_by_what_it_represents(self):
         """Rounding under a context yields a value that context holds, so an

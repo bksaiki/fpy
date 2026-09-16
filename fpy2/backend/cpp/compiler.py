@@ -18,6 +18,8 @@ from ...analysis import (
     DefineUse,
     Escape,
     FormatInfer,
+    ValueClass,
+    ValueClassAnalysis,
     ValueClassInfer,
 )
 from ...analysis.alias import AliasAnalysis
@@ -26,8 +28,7 @@ from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
 from ...analysis.storage_infer import StorageInfer
-from ...analysis.value_class import ValueClassAnalysis
-from ...ast.fpyast import Call, FuncDef, NamedId
+from ...ast.fpyast import Call, FuncDef, NamedId, ReturnStmt
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
@@ -77,6 +78,9 @@ which a type checker cannot follow -- so completion on
 class CppCompileError(CompileError):
     """Raised when cpp compilation fails."""
 
+    unfold_answers = False
+    """:class:`CppEmitError`'s flag, carried through the wrap."""
+
 
 @dataclass
 class SpecAnalyses:
@@ -84,6 +88,10 @@ class SpecAnalyses:
 
     ``ast`` is post-specialization, so its types are concrete — which is why a
     consumer cannot simply re-run the analyses on the user's original function.
+
+    ``ret_ty`` is a field rather than something each consumer derives: the ABI a
+    caller compiles against and the definition a callee emits must agree, and
+    both read it here.
     """
 
     ast: FuncDef
@@ -96,6 +104,7 @@ class SpecAnalyses:
     alias: AliasAnalysis
     summary: EscapeSummary
     unbox: UnboxAnalysis | None
+    ret_ty: CppType
 
 
 
@@ -144,6 +153,24 @@ def _function_calls(ast: FuncDef) -> dict[Call, Function]:
             if isinstance(e.fn, Function):
                 out[e] = e.fn
             super()._visit_call(e, ctx)
+
+    _Collector()._visit_function(ast, None)
+    return out
+
+
+def _return_class(ast: FuncDef, class_info: ValueClassAnalysis) -> ValueClass:
+    """The value class joined over every ``ReturnStmt`` expression.
+
+    An expression carrying no class -- a tuple, a list -- classifies as the top
+    and narrows nothing, so an aggregate return opts out.
+    """
+    out = ValueClass(0)
+
+    class _Collector(DefaultVisitor):
+        def _visit_return(self, stmt: ReturnStmt, ctx):
+            nonlocal out
+            out |= class_info.classify(stmt.expr)
+            super()._visit_return(stmt, ctx)
 
     _Collector()._visit_function(ast, None)
     return out
@@ -205,7 +232,7 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
             a.alias.region_of(d), ty,
         )
         params.append(ParamAbi(ty, written))
-    return CalleeAbi(params, _return_storage(a))
+    return CalleeAbi(params, a.ret_ty)
 
 
 def _check_signature_monomorphic(a: SpecAnalyses) -> None:
@@ -230,10 +257,6 @@ def _check_signature_monomorphic(a: SpecAnalyses) -> None:
             f'({fn_type.format()}); emitting it would need a C++ template. '
             'Annotate the type, or give the value an element to infer from.'
         )
-
-
-def _return_storage(a: SpecAnalyses) -> CppType:
-    return return_storage(a.format_info.fn_fmt.ret_fmt, a.unbox)
 
 
 class CppCompiler(Backend):
@@ -371,8 +394,13 @@ class CppCompiler(Backend):
             # fails further along: a rounding the emitter could name became a
             # temporary storage selection cannot place.  Report what the
             # unrewritten program says, so the flag never costs a diagnosis.
-            self._without_unfold()._compile_module(module)
-            raise   # it compiled unrewritten, so the rewrite's own error stands
+            try:
+                self._without_unfold()._compile_module(module)
+            except CppCompileError as e:
+                # a refusal this flag answers would advise the mode in effect
+                if not e.unfold_answers:
+                    raise
+            raise   # the rewrite's own error stands
 
     def _without_unfold(self) -> 'CppCompiler':
         """This compiler with the rewrite off, for a second opinion."""
@@ -502,7 +530,7 @@ class CppCompiler(Backend):
             du = format_info.type_info.def_use
             chosen = StorageInfer.infer(
                 du, format_info.by_def, format_info.by_expr,
-                CppStorageDomain(),
+                CppStorageDomain(), class_info.by_def,
             )
         except StorageSelectionError as e:
             raise CppCompileError(
@@ -548,7 +576,10 @@ class CppCompiler(Backend):
         # Checked here for every mode so each entry point reports the same
         # error -- `signature` has no emission step to catch it later.
         try:
-            ret_ty = return_storage(format_info.fn_fmt.ret_fmt, unbox)
+            ret_ty = return_storage(
+                format_info.fn_fmt.ret_fmt, unbox,
+                _return_class(ast, class_info),
+            )
         except StorageSelectionError as e:
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: {e}'
@@ -573,6 +604,7 @@ class CppCompiler(Backend):
             alias=alias,
             summary=summary,
             unbox=unbox,
+            ret_ty=ret_ty,
         )
 
     def signature(
@@ -631,6 +663,7 @@ class CppCompiler(Backend):
 
         emitter = CppEmitter(
             ast=ast,
+            ret_ty=a.ret_ty,
             storage=a.storage,
             variables=a.variables,
             def_use=a.def_use,
@@ -655,6 +688,6 @@ class CppCompiler(Backend):
                 f'strict unboxing failed for `{func.name}`: {e}'
             ) from e
         except CppEmitError as e:
-            raise CppCompileError(
-                f'compilation failed for `{func.name}`: {e}'
-            ) from e
+            err = CppCompileError(f'compilation failed for `{func.name}`: {e}')
+            err.unfold_answers = e.unfold_answers
+            raise err from e

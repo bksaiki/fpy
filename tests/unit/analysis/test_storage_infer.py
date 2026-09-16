@@ -18,6 +18,7 @@ from fpy2.analysis import (
     of_bound,
 )
 from fpy2.analysis.format_infer import FormatInfer, ListFormat, SetFormat
+from fpy2.analysis.format_infer.format import MPBFixedFormat, RealFloat
 from fpy2.analysis.storage_infer import join
 
 _I8 = fp.SINT8.format()
@@ -173,3 +174,22 @@ class TestIsRebound:
         _fmt, storage = _analyze(f, _Tiny())
         d = next(d for d in storage.def_class if str(d.name) == 'ys')
         assert not storage.is_rebound(d)
+
+
+class TestTheRefusalNamesTheDemand:
+    """An *exact* bound -- unbounded precision -- is the one whose repr does not
+    say why no rung holds it: it shows a grid and a maximum, and leaves the
+    significand between them to be worked out."""
+
+    def test_it_names_the_bits_needed_and_available(self):
+        # multiples of 2^-47 up to 2096128: 68 bits, where `double` holds 53
+        bound = MPBFixedFormat(
+            nmin=-48,
+            pos_maxval=RealFloat(s=False, exp=4, c=131008),
+            neg_maxval=RealFloat(s=True, exp=4, c=131008),
+        )
+        with pytest.raises(
+            StorageSelectionError,
+            match='needs 68 significand bits and the widest storage holds 53',
+        ):
+            of_bound(_Tiny(), bound)

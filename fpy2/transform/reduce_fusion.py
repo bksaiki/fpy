@@ -15,9 +15,10 @@ eliminating the intermediate ``list[bool]``::
 (``all`` seeds ``True`` and combines with ``and``.)
 
 Unfused, the comprehension materializes the whole list before the reduction
-scans it.  In C++ that is a ``std::vector<bool>`` — the bit-packed
-specialization, so a heap allocation plus per-element bit twiddling — which
-``-O2`` does not elide; the fused form measures 2-4x faster.
+scans it.  Whether skipping that is a *win* depends on the list's
+representation, and where the length is proven it is a loss -- see "When
+``ReduceFusion`` pays, and when it costs" in ``docs/todos/backend-cpp.md`` for
+the measurements and why the pass runs anyway.
 
 ``b`` is bound rather than inlined into ``acc or <elt>``, and the bind is
 load-bearing: FPy's ``or`` short-circuits, so an inlined element would stop
@@ -27,11 +28,11 @@ observable.  Binding forces every element, matching both the unfused program
 and CPython — whose ``any`` short-circuits the *iterable*, but is handed an
 already-built list.
 
-Only the boolean reductions are fused.  ``Sum`` / ``AMin`` / ``AMax`` pay the
-same allocation cost, but fusing them is blocked on the cpp emitter accepting
-an implicit narrowing inside ``std::accumulate`` that it rejects at an
-ordinary assignment; tracked under "Open TODOs" in ``docs/todos/backend-cpp.md``,
-where the blocker lives.  Multi-stage comprehensions
+Only the boolean reductions are fused, and the others turn out not to want it:
+fusing ``Sum`` / ``AMin`` / ``AMax`` measures neutral-to-worse, and is *also*
+blocked on the cpp emitter accepting an implicit narrowing inside
+``std::accumulate`` that it rejects at an ordinary assignment.  Both are in
+``docs/todos/backend-cpp.md``.  Multi-stage comprehensions
 (``[e for a in xs for b in ys]``) would need nested loops and are left alone.
 """
 

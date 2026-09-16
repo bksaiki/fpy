@@ -156,3 +156,28 @@ leaves the other alone). Only the entry point itself is left. See
   significand — is what a hand-written soft-float does, and would remove
   `ldexp`, `logb`, and the float round-trip entirely. A larger rewrite, and
   probably the step after this roadmap.
+
+## What the ladder costs
+
+One program's generated C++, hand-rewritten, every variant checksum-identical at
+`n=1024` (`-O2`, pinned, min-of-trials).  The program guards its input, takes
+the `max` of a `logb` comprehension, rounds to `FP16` and sums:
+
+| variant | ns/call | vs generated |
+|---|---|---|
+| generated | 23062 | — |
+| reductions fused, both intermediate arrays gone | 23472 | **+1.8%** |
+| all four scans merged into one | 22507 | -2.4% |
+| the ladder replaced by hardware `fp16` | 5361 | **-77%** |
+| and `logb` by an exponent bit-extract | 4315 | -81% |
+
+**The ladder is ~77% of that program and `logb` another ~4%**, so every codegen
+change competes over the last quarter — and the two that remove intermediate
+lists measure at or below noise.  This roadmap is worth more than all of them
+together.
+
+It is not an argument for emitting `_Float16`, though: the hardware variant
+needs `-mf16c`, and without it GCC emits `__truncsfhf2` and the same code
+measures 57000 ns — 2.3x *worse* than the ladder.  The ladder is the right
+default, and a hardware path needs a target-feature story rather than a
+substitution.

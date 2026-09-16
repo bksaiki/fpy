@@ -219,6 +219,53 @@ class TestCastExactness:
         assert 'std::isnan' not in _asserts(_emit(guarded))
 
 
+class TestAClampReachesIntegerStorage:
+    """A selection's *order* is what lets a clamp narrow storage.
+
+    `logb` is integer-valued, but its format admits both infinities --
+    ``logb(0)`` is ``-inf`` and ``logb(inf)`` is ``+inf`` -- so no integer rung
+    contains it.  Clamping removes them, and only an order-aware `min`/`max`
+    rule can see that: the join of the operand classes carries the infinity
+    straight through.
+    """
+
+    def test_a_double_clamp_gives_an_integer(self):
+        @fp.fpy
+        def unclamped(x: fp.Real) -> fp.Real:
+            if fp.isnan(x):
+                return 0
+            else:
+                return fp.logb(x)
+
+        @fp.fpy
+        def clamped(x: fp.Real) -> fp.Real:
+            if fp.isnan(x):
+                return 0
+            else:
+                return min(max(fp.logb(x), -126), 128)
+
+        tys = [RealType(fp.FP32)]
+        assert 'float unclamped(' in CppCompiler().compile(
+            unclamped, ctx=fp.REAL, arg_types=tys)
+        # `logb` of an FP32 tops out at 127, so `min(., 128)` bounds the range
+        # to [-126, 127] -- which is why this is `int8_t` and not `int16_t`
+        assert 'int8_t clamped(' in CppCompiler().compile(
+            clamped, ctx=fp.REAL, arg_types=tys)
+
+    def test_one_clamp_is_not_enough(self):
+        """Clamping below leaves ``+inf`` from ``logb(inf)``, and an integer
+        rung holds neither infinity."""
+        @fp.fpy
+        def half(x: fp.Real) -> fp.Real:
+            if fp.isnan(x):
+                return 0
+            else:
+                return max(fp.logb(x), -126)
+
+        out = CppCompiler().compile(half, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'float half(' in out
+
+
 class TestMinMax:
     """``_emit_ieee_min_max``: IEEE ``minimum`` propagates a NaN."""
 

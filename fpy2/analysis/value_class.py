@@ -1,10 +1,10 @@
 """
 Path-sensitive value-class analysis.
 
-One question per expression: can this value be a NaN, an infinity, a zero, or a
-finite non-zero?  The four atoms form a 16-element lattice — union is the join,
-intersection the meet, height 4, so no widening is needed — and it is *refined*
-at every branch that tests a value's class.
+One question per expression: can this value be a NaN, an infinity of either
+sign, a zero, or a finite non-zero?  The five atoms form a finite lattice —
+union is the join, intersection the meet, so no widening is needed — and it is
+*refined* at every branch that tests a value's class.
 
 Format inference cannot answer this, and this is deliberately not a fourth flag
 on :class:`~fpy2.analysis.format_infer.AbstractFormat`, which already carries
@@ -44,14 +44,16 @@ Precision
 Sound by default, precise where it has been taught to be.  An operation with no
 rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
-never correct.  Scalars only: a list or tuple carries no class, and reading an
-element gives the top class.
+never correct.
 
-Not yet taught: sign (splitting ``±0`` and ``±Inf`` would let ``signbit`` refine),
-magnitudes (``x > 1`` says nothing here), ``assert`` statements as refinements,
-a bool-valued variable holding a test's result, the class of a numeric free
-variable, and a ``for`` target -- a loop counter over ``range`` is an integer and
-so neither special, but it reports the top class.
+Scalars only: a list or tuple carries no class, and reading an element gives the
+top class.
+
+Not yet taught: the sign of a zero, which would let ``signbit`` refine;
+magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
+refinement; the class of a numeric free variable; a ``for`` target over
+``range``; and the code after an early return, since :meth:`_visit_if1` refines
+only its body.
 """
 
 import enum
@@ -96,21 +98,49 @@ class ValueClass(enum.Flag):
     """
 
     NAN = enum.auto()
-    INF = enum.auto()
+    POS_INF = enum.auto()
+    NEG_INF = enum.auto()
     ZERO = enum.auto()
     """Either signed zero -- the sign is not tracked."""
     FINITE = enum.auto()
-    """Finite and **non-zero**."""
+    """Finite and **non-zero**, of either sign."""
+
+    INF = POS_INF | NEG_INF
+    """Either infinity.  A composite: ``cls & INF`` asks "infinite at all"."""
 
     TOP = NAN | INF | ZERO | FINITE
 
 
 _NAN = ValueClass.NAN
+_POS_INF = ValueClass.POS_INF
+_NEG_INF = ValueClass.NEG_INF
 _INF = ValueClass.INF
 _ZERO = ValueClass.ZERO
 _FINITE = ValueClass.FINITE
 _TOP = ValueClass.TOP
 _BOT = ValueClass(0)
+
+_ATOMS = (_NAN, _POS_INF, _NEG_INF, _ZERO, _FINITE)
+"""The join-irreducible classes.  ``INF`` is not one: it is the composite a
+consumer uses to ask "infinite at all"."""
+
+
+def _negate(a: ValueClass) -> ValueClass:
+    """*a* under negation: the infinities swap, the rest are sign-blind."""
+    out = a & ~_INF
+    if a & _POS_INF:
+        out |= _NEG_INF
+    if a & _NEG_INF:
+        out |= _POS_INF
+    return out
+
+
+def _magnitude(a: ValueClass) -> ValueClass:
+    """*a* under ``abs``: a negative infinity becomes a positive one."""
+    out = a & ~_NEG_INF
+    if a & _NEG_INF:
+        out |= _POS_INF
+    return out
 
 
 def class_of(x: Float) -> ValueClass:
@@ -118,7 +148,7 @@ def class_of(x: Float) -> ValueClass:
     if x.isnan:
         return _NAN
     if x.isinf:
-        return _INF
+        return _NEG_INF if x.s else _POS_INF
     return _ZERO if x.is_zero() else _FINITE
 
 
@@ -160,24 +190,45 @@ def _map(table: dict[ValueClass, ValueClass], a: ValueClass) -> ValueClass:
     return out
 
 
-_LOGB = {_NAN: _NAN, _INF: _INF, _ZERO: _INF, _FINITE: _ZERO | _FINITE}
-"""``logb(0)`` is an infinity; ``logb(1.5)`` is ``0``."""
+_LOGB = {
+    _NAN: _NAN,
+    _POS_INF: _POS_INF, _NEG_INF: _POS_INF,   # `logb` reads a magnitude
+    _ZERO: _NEG_INF,
+    _FINITE: _ZERO | _FINITE,
+}
+"""``logb(0)`` is ``-inf``, ``logb(inf)`` is ``+inf``, ``logb(1.5)`` is ``0``."""
 
-_POW_POS_BASE = {_NAN: _NAN, _INF: _INF | _ZERO, _ZERO: _FINITE, _FINITE: _FINITE}
-"""``b ** y`` for a positive constant ``b``: ``b ** 0`` is ``1``, and an infinite
-exponent gives an infinity or a zero depending on signs neither tracked here."""
+_POW_INF = _POS_INF | _ZERO | _FINITE
+"""``b ** (+-inf)`` for a positive literal ``b``: ``+inf`` when ``b > 1``, ``0``
+when ``b < 1``, ``1`` when ``b`` is ``1``.  The literal is not inspected, so all
+three stand; never ``-inf``, since a positive base has no negative power."""
+
+_POW_POS_BASE = {
+    _NAN: _NAN,
+    _POS_INF: _POW_INF, _NEG_INF: _POW_INF,
+    _ZERO: _FINITE, _FINITE: _FINITE,
+}
+"""``b ** y`` for a positive constant ``b``: ``b ** 0`` is ``1``."""
 
 
 def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
-    """``a + b`` and ``a - b``: the atoms are sign-blind, so one table serves."""
+    """``a + b``; :func:`_exact_sub` negates *b* and reuses this.
+
+    An infinity survives unless the opposite one is added to it, which is where
+    the NaN comes from.  ``FINITE`` is sign-blind, so a finite operand can
+    neither create nor cancel an infinity.
+    """
     if not (a and b):
         return _BOT             # an operand nothing reaches produces nothing
     out = _BOT
     if (a | b) & _NAN:
         out |= _NAN
-    if (a | b) & _INF:
-        out |= _INF
-    if a & _INF and b & _INF:
+    for x, y in ((a, b), (b, a)):
+        if x & _POS_INF and y & (_POS_INF | _ZERO | _FINITE):
+            out |= _POS_INF
+        if x & _NEG_INF and y & (_NEG_INF | _ZERO | _FINITE):
+            out |= _NEG_INF
+    if (a & _POS_INF and b & _NEG_INF) or (a & _NEG_INF and b & _POS_INF):
         out |= _NAN                      # inf - inf
     if a & _ZERO and b & _ZERO:
         out |= _ZERO
@@ -188,6 +239,11 @@ def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
     return out
 
 
+def _exact_sub(a: ValueClass, b: ValueClass) -> ValueClass:
+    """``a - b``, as ``a + (-b)``."""
+    return _exact_add(a, _negate(b))
+
+
 def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
     if not (a and b):
         return _BOT
@@ -196,6 +252,7 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
         out |= _NAN
     for x, y in ((a, b), (b, a)):
         if x & _INF and y & (_INF | _FINITE):
+            # a product's sign needs both operands', and `FINITE` is sign-blind
             out |= _INF
         if x & _INF and y & _ZERO:
             out |= _NAN                  # 0 * inf
@@ -203,6 +260,27 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
             out |= _ZERO
     if a & _FINITE and b & _FINITE:
         out |= _FINITE
+    return out
+
+
+def _exact_select(args: list[ValueClass], *, is_max: bool) -> ValueClass:
+    """``max(...)`` or ``min(...)`` over operands of classes *args*.
+
+    A selection knows which operand it picks, which the join does not: ``max``
+    is ``+inf`` when *some* operand can be, and ``-inf`` only when *every* one
+    can, since an operand that is provably greater is already a larger maximum.
+    ``min`` is the dual.  So ``max(logb(x), -126)`` cannot be ``-inf``.
+
+    NaN propagates from any operand, and the finite atoms are joined.
+    """
+    if not args or not all(args):
+        return _BOT             # an operand nothing reaches produces nothing
+    near, far = (_POS_INF, _NEG_INF) if is_max else (_NEG_INF, _POS_INF)
+    out = _BOT
+    for a in args:
+        out |= a & (_NAN | _ZERO | _FINITE | near)
+    if all(a & far for a in args):
+        out |= far
     return out
 
 
@@ -257,10 +335,11 @@ class ValueClassAnalysis:
 class _ValueClassInstance(DefaultVisitor):
     """Single-use instance of value-class analysis."""
 
-    _ROUNDS_PER_PHI = 4
-    """A phi can grow once per atom, so a loop settles within this many rounds
-    per phi.  Exceeding the bound means a transfer function is not monotone -- a
-    bug -- and the phis drop to the top class rather than the walk spinning."""
+    _ROUNDS_PER_PHI = len(_ATOMS)
+    """A phi gains at least one atom per round until it stops growing, so this
+    many rounds per phi is enough to reach a fixpoint.  Exceeding it means a
+    transfer function is not monotone -- a bug -- and the phis drop to the top
+    class rather than the loop running forever."""
 
     func: FuncDef
     type_info: TypeAnalysis
@@ -559,7 +638,7 @@ class _ValueClassInstance(DefaultVisitor):
             case ConstNan():
                 exact = _NAN
             case ConstInf():
-                exact = _INF
+                exact = _POS_INF        # `-inf` is a `Neg` of this
             case _:
                 exact = _FINITE      # pi, e, sqrt2, ...
         return self._rounded(e, exact)
@@ -567,7 +646,11 @@ class _ValueClassInstance(DefaultVisitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> ValueClass:
         a = self._operand(e.arg, ctx)
         match e:
-            case Neg() | Abs() | Cast():
+            case Neg():
+                return self._rounded(e, _negate(a))
+            case Abs():
+                return self._rounded(e, _magnitude(a))
+            case Cast():
                 return self._rounded(e, a)
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
@@ -586,8 +669,10 @@ class _ValueClassInstance(DefaultVisitor):
         a = self._operand(e.first, ctx)
         b = self._operand(e.second, ctx)
         match e:
-            case Add() | Sub():
+            case Add():
                 return self._rounded(e, _exact_add(a, b))
+            case Sub():
+                return self._rounded(e, _exact_sub(a, b))
             case Mul():
                 return self._rounded(e, _exact_mul(a, b))
             case Pow() if _positive_literal(e.first):
@@ -604,11 +689,8 @@ class _ValueClassInstance(DefaultVisitor):
         args = [self._operand(arg, ctx) for arg in e.args]
         match e:
             case Min() | Max():
-                # the result *is* one operand, unrounded
-                out = _BOT
-                for a in args:
-                    out |= a
-                return out
+                # a selection, not a rounding: no `_rounded`
+                return _exact_select(args, is_max=isinstance(e, Max))
             case _:
                 return self._rounded(e, _TOP)
 
@@ -677,8 +759,11 @@ class _ValueClassInstance(DefaultVisitor):
     def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]):
         """Drives a loop's phi classes to convergence.
 
-        Each phi starts at its pre-loop class and only ever joins, so the walk
-        ascends a height-4 lattice and settles without widening.
+        A phi's class starts at what reached the loop and is re-joined with the
+        body's result until two rounds agree.  Joining only ever adds atoms and
+        there are finitely many, so the sequence stops on its own; if it has not
+        stopped after :attr:`_ROUNDS_PER_PHI` rounds per phi, a transfer
+        function is not monotone and every phi is dropped to the top class.
         """
         phis = self.def_use.phis[stmt]
         for phi in phis:

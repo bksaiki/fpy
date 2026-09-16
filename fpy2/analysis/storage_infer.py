@@ -52,7 +52,9 @@ from .format_infer import (
     is_bottom,
 )
 from .format_infer.analysis import _to_abstract
+from .format_infer.format import RealFloat
 from .reaching_defs import AssignDef, Definition, same_object_defs
+from .value_class import ValueClass
 
 
 class StorageSelectionError(Exception):
@@ -165,7 +167,59 @@ def _lift(bound: FormatBound) -> AbstractFormat | None:
     return None
 
 
-def of_bound(domain: StorageDomain, bound: FormatBound) -> FormatBound:
+def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
+    """Why an *exact* bound exceeds every rung, or ``''`` where that is not what
+    happened.
+
+    An unbounded precision is the signature of exact arithmetic -- a ``REAL``
+    accumulator, a fixed-point intermediate -- and the significand it demands is
+    what the repr leaves the reader to work out from the grid and the maximum.
+    """
+    if af.prec != float('inf'):
+        return ''
+    top = max(
+        (b for b in (af.pos_bound, af.neg_bound) if isinstance(b, RealFloat)),
+        key=lambda b: b.e, default=None,
+    )
+    if top is None or not isinstance(af.exp, int):
+        return ''
+    precs = [AbstractFormat.from_format(f).prec for f in domain.sigma]
+    widest = max((p for p in precs if isinstance(p, int)), default=None)
+    if widest is None:
+        return ''
+    return (
+        f': exact on a 2^{af.exp} grid up to {top}, so it needs '
+        f'{top.e - af.exp + 1} significand bits and the widest storage holds '
+        f'{widest}'
+    )
+
+
+def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
+    """*af* with the special values *cls* rules out removed.
+
+    A format says whether the *format* has a NaN; a class says whether *this
+    value* is one.  Storage need only hold the values that occur, so a
+    definition the class proves finite can reach an integer rung its format
+    alone never would.  The signs are asked about separately: `abs` and `logb`
+    never yield a ``-inf``.
+
+    Only these flags: a format structurally cannot say "not zero".  Narrowing
+    only, and per definition, so the join over a class keeps a ``float``
+    wherever one member can still be infinite.
+    """
+    return AbstractFormat(
+        af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
+        has_pos_inf=af.has_pos_inf and bool(cls & ValueClass.POS_INF),
+        has_neg_inf=af.has_neg_inf and bool(cls & ValueClass.NEG_INF),
+        has_nan=af.has_nan and bool(cls & ValueClass.NAN),
+        has_neg_zero=af.has_neg_zero,
+    )
+
+
+def of_bound(
+    domain: StorageDomain, bound: FormatBound,
+    cls: ValueClass | None = None,
+) -> FormatBound:
     """The smallest storage in *domain* containing *bound*.
 
     Structural: a list's storage is a list of its element's storage, a tuple's
@@ -176,6 +230,11 @@ def of_bound(domain: StorageDomain, bound: FormatBound) -> FormatBound:
     A bottom bound holds no value, so every member contains it vacuously and the
     first wins.  Where no member contains the bound the domain gets one chance to
     accept it anyway (:meth:`StorageDomain.fallback`) before this refuses.
+
+    *cls* narrows the special values away (:func:`_without_absent`).  It stops
+    at a scalar: storage is chosen at several sites and only this one consults a
+    class, so narrowing a list's elements here would disagree with the
+    reduction over them.  See ``docs/todos/value-class-elements.md``.
     """
     if bound is None or isinstance(bound, VarFormat):
         return None
@@ -197,13 +256,17 @@ def of_bound(domain: StorageDomain, bound: FormatBound) -> FormatBound:
             f'cannot compare {bound!r} against the storage formats; '
             'storage selection requires a dyadic format'
         )
+    if cls is not None:
+        af = _without_absent(af, cls)
     for sigma in domain.sigma:
         if af <= AbstractFormat.from_format(sigma):
             return sigma
     chosen = domain.fallback(bound)
     if chosen is not None:
         return chosen
-    raise StorageSelectionError(f'no storage format contains {bound!r}')
+    raise StorageSelectionError(
+        f'no storage format contains {bound!r}{_exact_demand(domain, af)}'
+    )
 
 
 def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
@@ -256,7 +319,11 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
     raise StorageSelectionError(f'no storage format subsumes {storages!r}')
 
 
-def _aggregate(domain: StorageDomain, bounds: list[FormatBound]) -> FormatBound:
+def _aggregate(
+    domain: StorageDomain,
+    bounds: list[FormatBound],
+    classes: list[ValueClass | None] | None = None,
+) -> FormatBound:
     """One storage containing every bound in *bounds*.
 
     A bottom bound -- a fresh ``empty(...)`` -- holds no value, so it constrains
@@ -271,8 +338,11 @@ def _aggregate(domain: StorageDomain, bounds: list[FormatBound]) -> FormatBound:
     Joining the bounds and choosing storage once would be strictly tighter.
     """
     assert bounds, 'a class has at least one member'
-    constraining = [b for b in bounds if not is_bottom(b)]
-    return join(domain, [of_bound(domain, b) for b in (constraining or bounds)])
+    if classes is None:
+        classes = [None] * len(bounds)
+    pairs = [(b, c) for b, c in zip(bounds, classes) if not is_bottom(b)]
+    pairs = pairs or list(zip(bounds, classes))
+    return join(domain, [of_bound(domain, b, c) for b, c in pairs])
 
 
 class StorageInfer:
@@ -284,8 +354,13 @@ class StorageInfer:
         def_to_bound: dict[Definition, FormatBound],
         expr_to_bound: dict[Expr, FormatBound],
         domain: StorageDomain,
+        def_to_class: dict[Definition, ValueClass | None] | None = None,
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
+
+        *def_to_class* is :class:`~fpy2.analysis.ValueClassAnalysis`'s ``by_def``
+        where the caller has it, narrowing each member's bound by the special
+        values that definition cannot hold.  Omitting it only costs precision.
 
         Raises :class:`StorageSelectionError` when no member of *domain* covers
         some class's joined bound.
@@ -314,8 +389,12 @@ class StorageInfer:
                 f'class {c} has members with no format bound: {missing}'
             )
             bounds = [def_to_bound[d] for d in members]
+            classes = (
+                None if def_to_class is None
+                else [def_to_class.get(d) for d in members]
+            )
             try:
-                class_storage[c] = _aggregate(domain, bounds)
+                class_storage[c] = _aggregate(domain, bounds, classes)
             except StorageSelectionError as e:
                 name = members[0].name
                 raise StorageSelectionError(

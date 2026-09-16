@@ -247,6 +247,37 @@ class TestTheNaryFold:
         assert out.count('std::isnan(b)') == 1
 
 
+class TestTheFloatPathReachesTheLibraryForm:
+    """Once both facts are known, the float path is the library form too --
+    the open-coded predicate exists only to carry the NaN and the ±0 tie."""
+
+    def test_a_guarded_float_min_max_uses_the_library_form(self):
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real, y: fp.Real) -> fp.Real:
+            # non-NaN and non-zero, so neither the propagation nor the tie
+            # has anything left to decide
+            if fp.isnan(x) or fp.isnan(y) or x == 0 or y == 0:
+                return 0
+            else:
+                return max(x, y)
+
+        out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 2)
+        assert 'std::max(' in out
+        assert 'isnan' not in out.split('return')[-1]
+        assert 'signbit' not in out
+
+    def test_an_unguarded_float_min_max_stays_inline(self):
+        """Without the facts the library form is *wrong*, not merely longer:
+        it neither propagates a NaN nor picks the signed zero."""
+        @fp.fpy(ctx=fp.REAL)
+        def q(x: fp.Real, y: fp.Real) -> fp.Real:
+            return max(x, y)
+
+        out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 2)
+        assert 'std::max(' not in out
+        assert 'isnan' in out and 'signbit' in out
+
+
 class TestIntegerPathUnchanged:
     def test_an_integer_reduction_keeps_the_library_form(self):
         """The fold in ``_emit_amin_amax`` chooses per storage kind too."""

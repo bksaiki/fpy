@@ -346,7 +346,10 @@ that programs which refused now compile, bit-exactly:
 
 It never costs a diagnosis: where the rewrite leaves a program that still
 fails, it fails further along than the original would have, so
-`compile_module` asks the unrewritten one and reports that.
+`compile_module` asks the unrewritten one and reports that — unless the
+unrewritten one's only complaint is the refusal this flag answers
+(`CppEmitError.unfold_answers`), which would advise the mode already in
+effect.
 
 **No round-to-odd level**, though it is the mode `derive_intermediate` returns
 and the one Figure 8 covers for arbitrary reals — so it is accepted exactly
@@ -529,6 +532,49 @@ inside FP64 functions. Dropping it would trade smaller objects for emitted code
 that says `double` wherever FPy says real. *Integer*-typed FPy values keep integer
 storage regardless; `range(...)` needs an integer list and must stay one — that is
 what an early measured attempt broke.
+
+### When `ReduceFusion` pays, and when it costs
+
+`ReduceFusion` replaces `any`/`all` over a comprehension with a running
+accumulator, skipping the intermediate `list[bool]`. Whether that is a win
+turns entirely on the list's *representation*, and the two cases go opposite
+ways. Measured at `n=1024`, `-O2`, pinned, min-of-trials, with each variant
+checksummed so a difference in speed is not a difference in answer. The harness
+was a one-off and is not in the tree; the numbers below are the record:
+
+| | materialized | fused |
+|---|---|---|
+| length unknown — `std::vector<bool>` | 3491 | **720** |
+| length proven — `std::array<bool, K>` | **476** | 717 |
+
+So fusing is 4.8x faster where the length is unproven and a 1.5x loss where it
+is proven. The bit-packing is the whole of it: a `std::vector<uint8_t>` measures
+476, level with the stack array, so the heap allocation costs nothing and
+`std::vector<bool>`'s packing costs 7.3x.  (That control and the `AMax` number
+below were hand-written C++, not FPy output.)
+
+Confirmed by toggling the pass rather than comparing two programs: the same
+kernel with `ReduceFusion` monkeypatched to the identity is 475 sized and 3500
+unsized against 719 / 721 fused, with the checksum unchanged either way.
+
+**The pass pays exactly where the length is not proven, and is applied
+regardless.** It runs before `Specialize`, so the representation it would need
+to decide by has not been chosen yet. Gating it means moving it, or splitting
+the decision from the rewrite; neither is done, and the sized-path loss is
+accepted.
+
+Spelling a vector's `bool` element `uint8_t` would remove the cliff and make
+materializing win everywhere — considered and declined, since it would make one
+FPy type spell its element two ways depending on representation.
+
+**The other reductions do not want fusing.** `Sum` / `AMin` / `AMax` allocate
+too, but their element is a float, so the unsized form is a plain
+`std::vector<float>` with no specialization to pay for: sized and unsized agree
+to ~1%, and `sum` is already at the latency of a serial add chain that fusing
+does not shorten. For `AMax` it is worse than neutral — a hand-written fused
+`max([logb(x) for x in xs])` measures 11% *slower* (3703 against 3343), because
+the accumulator has to survive an opaque `logbf` call and so spills and reloads
+every iteration, where the materialized fill loop keeps its registers.
 
 ### Narrowing inside `std::accumulate`, so `Sum` can fuse
 

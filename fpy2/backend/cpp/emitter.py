@@ -298,11 +298,17 @@ class CppEmitError(Exception):
 
     An optional ``at`` node prefixes the message with a source location, which
     the wrapping :class:`CppCompileError` passes through untouched.
+
+    ``unfold_answers`` marks a refusal whose advice names the ``unfold`` flag,
+    which `compile_module` reads: under the flag it is not a second opinion.
     """
 
-    def __init__(self, msg: str, *, at: 'Ast | None' = None):
+    def __init__(
+        self, msg: str, *, at: 'Ast | None' = None, unfold_answers: bool = False,
+    ):
         self.msg = msg
         self.at = at
+        self.unfold_answers = unfold_answers
         loc = at.loc if at is not None else None
         if loc is not None:
             super().__init__(f'{loc.format()}: {msg}')
@@ -333,6 +339,7 @@ class CppEmitter(Visitor):
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
     ctx_use: ContextUseAnalysis
+    ret_ty: CppType | None
     writer: _IndentedWriter
 
     def __init__(
@@ -345,6 +352,7 @@ class CppEmitter(Visitor):
         class_info: ValueClassAnalysis,
         ctx_use: ContextUseAnalysis,
         *,
+        ret_ty: CppType | None = None,
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
@@ -358,6 +366,7 @@ class CppEmitter(Visitor):
         self.format_info = format_info
         self.class_info = class_info
         self.ctx_use = ctx_use
+        self.ret_ty = ret_ty
         # How each list is represented, or ``None`` to keep every handle.
         self.unbox = unbox
         # Emitted parameter types of the callees, so a call site can adapt.
@@ -498,11 +507,13 @@ class CppEmitter(Visitor):
     def _bind_operand(self, expr: str) -> str:
         """A name for *expr*, so it can be read more than once.
 
-        Already a name — evaluated once, no side effects — so nothing to bind.
-        Otherwise bind it to a temp; ``auto&&`` binds a reference, so this
-        copies nothing whatever the representation.
+        Already a name, or an integer literal — re-readable, no side effects —
+        so nothing to bind.  Both are tests on the *emitted text*, and a literal
+        is not an identifier, hence the second.  Otherwise bind it to a temp;
+        ``auto&&`` binds a reference, so this copies nothing whatever the
+        representation.
         """
-        if expr.isidentifier():
+        if expr.isidentifier() or expr.isdigit():
             return expr
         tmp = self._fresh_temp()
         self.writer.add_line(f'auto&& {tmp} = {expr};')
@@ -964,10 +975,17 @@ class CppEmitter(Visitor):
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """The function's return storage, with a source location on failure.
 
+        ``ret_ty`` from :class:`SpecAnalyses` where the caller supplied one: it
+        is the type the ABI was published with, and deriving a second answer
+        here would let the two disagree.  The fallback is for a standalone
+        emitter, and does without the compiler's value-class narrowing.
+
         See :func:`return_storage`.  A ``None`` bound is not a missing return --
         FPy's reachability check rejects those at decoration time -- but format
         inference's convention for a non-numeric result, which maps to ``BOOL``.
         """
+        if self.ret_ty is not None:
+            return self.ret_ty
         try:
             return return_storage(self.format_info.fn_fmt.ret_fmt, self.unbox)
         except StorageSelectionError as e:
@@ -1869,6 +1887,7 @@ class CppEmitter(Visitor):
             f'no matching signature for {type(e).__name__} under context '
             f'`{active}`: {[s.format() for s in storages]}{advice}',
             at=e,
+            unfold_answers=bool(advice),
         )
 
     def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
@@ -2653,8 +2672,16 @@ class CppEmitter(Visitor):
         goes: the two cannot both be zero, and only ``a = -0`` against
         ``b = +0`` needs it -- the mirror case already picks the right zero,
         since ``min``/``max`` return *b* when the predicate fails.
+
+        With both, the library form is exact and is emitted instead, as on the
+        integer path.  ``std::min`` differs from the predicate only on a tie,
+        which *zero_tie_free* promises is between equal non-zero values.  The
+        operands stay bound either way: the library form returns a *reference*
+        to one of them.
         """
         a, b = self._bind_operand(a), self._bind_operand(b)
+        if nan_free and zero_tie_free:
+            return f'{"std::min" if is_min else "std::max"}({a}, {b})'
         tie = '' if zero_tie_free else f' || ({a} == {b} && std::signbit({a}))'
         a_wins = f'({a} < {b}{tie})'
         chosen = f'{a_wins} ? {a} : {b}' if is_min else f'{a_wins} ? {b} : {a}'
@@ -2669,7 +2696,8 @@ class CppEmitter(Visitor):
         ``_eval_sum`` seeds with ``xs[0]`` **unrounded** and does *n-1* additions;
         an empty list is an exact ``+0``.  ``accumulate`` takes seed and range
         separately, so that is a range starting one past ``begin``.  The empty guard
-        is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there.
+        is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there --
+        except where a non-zero length in the type has already settled it.
 
         The accumulator may be *wider* than the element but not narrower:
         ``init + *first`` converts to the common type, which is the accumulator only
@@ -2702,11 +2730,18 @@ class CppEmitter(Visitor):
             # `accumulate` deduces `T` from its seed, so an uncast one would run
             # the whole fold in the element type.  Exact, by the check above.
             seed = self._explicit_cast(seed, result_ty)
+        fold = (
+            f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
+            f'{self._list_end(arg_ty, src)}, {seed})'
+        )
+        if isinstance(arg_ty, CppList) and arg_ty.size:
+            # a *non-zero* length settles the guard; `size == 0` is falsy here
+            # and keeps it, which is the case a `std::array<T, 0>` needs
+            return fold
         return (
             f'({self._list_len(arg_ty, src)} == 0'
             f' ? static_cast<{result_ty.format()}>(0)'
-            f' : std::accumulate({self._list_begin(arg_ty, src)} + 1, '
-            f'{self._list_end(arg_ty, src)}, {seed}))'
+            f' : {fold})'
         )
 
     def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
@@ -2794,33 +2829,41 @@ class CppEmitter(Visitor):
         first; ``empty()`` is a scalar ``T()``.  A non-constant dimension is
         bound to a name so a fixed-size layer repeating its fill ``K`` times
         does not re-evaluate it.
+
+        A result whose every list level is fixed-length takes no dimension
+        operand -- ``std::array<T, K>{}`` spells ``K`` -- so none is bound.  The
+        expressions are still visited, which is what emits the statements some
+        of them need.
         """
-        dims = []
+        sized = self._all_sized(result_ty)
+        dims: list[str] = []
         for a in e.args:
-            d = self._visit_expr(a, ctx)
-            dims.append(d if d.isdigit() else self._bind_operand(d))
+            code = self._visit_expr(a, ctx)
+            if not sized:
+                dims.append(self._bind_operand(code))
+        if _list_depth(result_ty) < len(e.args):
+            raise CppEmitError(
+                f'empty(...) shape mismatch: result type `{result_ty!r}` '
+                f'has depth {_list_depth(result_ty)}, but {len(e.args)} '
+                f'dimensions were given',
+                at=e,
+            )
+        if sized:
+            # Every dimension is in the type, and value-initialising a nested
+            # `std::array` zeroes it recursively -- no per-layer fill needed.
+            return self._list_empty(result_ty)
         dim_storages = [
             self._scalar_storage_for_expr(a) for a in e.args
         ]
         # a dimension goes through size_t in the vector constructor: cast
         # explicitly rather than rely on implicit narrowing
         dim_strs = [
-            self._explicit_cast(d, CppScalar.U64) if s != CppScalar.U64 else d
-            for d, s in zip(dims, dim_storages)
+            self._explicit_cast(code, CppScalar.U64)
+            if storage != CppScalar.U64 else code
+            for code, storage in zip(dims, dim_storages)
         ]
-        if _list_depth(result_ty) < len(dim_strs):
-            raise CppEmitError(
-                f'empty(...) shape mismatch: result type `{result_ty!r}` '
-                f'has depth {_list_depth(result_ty)}, but {len(dim_strs)} '
-                f'dimensions were given',
-                at=e,
-            )
-        if self._all_sized(result_ty):
-            # Every dimension is in the type, and value-initialising a nested
-            # `std::array` zeroes it recursively -- no per-layer fill needed.
-            return self._list_empty(result_ty)
         # Build from the inside out: innermost is ``T()``-default,
-        # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
+        # each outer layer wraps it in ``vector<inner>(dim, inner_val)``.
         ty: CppType = result_ty
         # One layer per dimension given.  Fewer than the type's depth allocates
         # only the outer layers, whose cells default-construct: an empty vector,
@@ -2833,8 +2876,8 @@ class CppEmitter(Visitor):
             peeled.append(ty)
             ty = ty.elt
         inner = f'{ty.format()}{{}}'
-        for layer, d in zip(reversed(peeled), reversed(dim_strs)):
-            inner = self._list_new_filled(layer, d, inner)
+        for layer, dim in zip(reversed(peeled), reversed(dim_strs)):
+            inner = self._list_new_filled(layer, dim, inner)
         return inner
 
     def _require_cast_is_round(self, e: NamedUnaryOp) -> None:
@@ -2870,6 +2913,7 @@ class CppEmitter(Visitor):
                 f'`{storage.format()}` rounds to that type\'s own format, not '
                 'to this one.  Compile with `unfold=UnfoldMode.ROUNDINGS`.',
                 at=e,
+                unfold_answers=True,
             )
 
     def _cast_arg_type(self, e) -> CppScalar | None:
