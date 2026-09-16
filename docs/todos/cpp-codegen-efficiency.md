@@ -272,26 +272,43 @@ else:           return min(max(fp.logb(x), -126), 128)   # `int8_t`, was `float`
 (`int8_t` rather than `int16_t` because `logb` of an FP32 tops out at 127, so
 the upper clamp never binds.)
 
-**Phase 8 (optional) — an element class for lists.** What is still missing for
-`max_e` in the motivating program, and it is two features, not one:
+**Phase 8 — an element class for lists.** Done, and it took both halves:
 
-- *Forward* — `AMin`/`AMax` return `TOP` outright, so a reduction discards
-  whatever its elements were. A list built by stores in a loop has a knowable
-  element class: the join of what is stored. This is ordinary propagation.
-- *Backward* — `x` reports `TOP` inside the `else` of
-  `any([fp.isinf(x) for x in xs])`, so `logb(x)` keeps its `NaN` and `+inf`.
-  By the time `ValueClassInfer` runs, `CompToLoop` has turned that guard into an
-  or-reduction loop, so this is inferring a universally-quantified invariant
-  over a list from a loop -- not a pattern match.
+- *Forward* — a list definition carries a class for its elements, joined from
+  the stores that build it (`empty(...)` is bottom, a store joins in, a literal
+  joins its elements, a copy inherits). Phis merge it and the loop fixpoint
+  iterates on it, with *absent* reading as the top so a store on one path cannot
+  look like a promise about the other. Consumed by an element read -- `ListRef`
+  had no case at all and fell through to the top -- by a `for` target over a
+  list, and by `AMin`/`AMax`, which returned the top outright.
+- *Backward* — `_implied_elements` matches the lowered reduction loop and reads
+  it as a universal: `all(...)` refines the taken arm, `any(...)` the untaken
+  one. Sound because FPy has no `break`, so a `for` runs the whole iterable, and
+  the match is strict: a literal seed, a step that is exactly `acc <op> b`
+  naming that phi, a predicate reading only the loop target, and no store into
+  the list anywhere in the body.
 
-Neither alone suffices: the forward half leaves the `NaN` from `logb(NaN)`, and
-with the backward half the clamp stops being needed at all. Measured:
-`min(max(logb(x), -126), 128)` over a list gives an element class of
-`NAN|ZERO|FINITE` and an `AMax` of `TOP`. See **Headroom** for what this is
-worth on a program that spends 77% of its time in the FP16 ladder.
+The motivating program now gives `int8_t max_e` unchanged. The clamp is still
+load-bearing: the guards cannot exclude a *zero*, so `logb(0)` is still `-inf`,
+and `max(logb(x), FP32_EMIN)` is what removes it -- which is Phase 7's ordering
+rule. `if all([fp.isfinite(x) for x in xs])` works as well as the `any` form.
 
-Ordering: 1, 4 and 7 are independent of each other. 3 is closed with no work.
-8 needs 7's lattice to say anything useful about an infinity. 5 and 6 both extend `ReduceFusion` and both are argued
+**Phase 9 — `min`/`max` reach the library form.** With both facts known the
+open-coded predicate has nothing left to decide, so `_emit_ieee_min_max` emits
+`std::min`/`std::max` -- which is what the integer path already did. `std::max`
+is the predicate verbatim; `std::min` differs only on a tie, and *zero_tie_free*
+is exactly the promise that a tie is between equal non-zero values. The operands
+stay bound: the library form returns a *reference* to one of them.
+
+`_emit_amin_amax` also asks now, of the element class Phase 8 gives it -- it
+passed no facts at all before, so a reduction over a provably-finite list still
+emitted the NaN propagation. The `signbit` tie stays, and correctly: `logb` of a
+value in `[1, 2)` is a zero, and `ValueClass.ZERO` carries no sign, so
+*zero_tie_free* is not provable. Splitting `±0` is the remaining half of
+Phase 7's sign work and would close it.
+
+Ordering: 1, 4, 7, 8 and 9 all landed, in that order; 3 closed with no work,
+and 5 and 6 stay optional and argued against. 5 and 6 both extend `ReduceFusion` and both are argued
 against by the benchmark; neither is on the path.
 
 ## Not shortcomings

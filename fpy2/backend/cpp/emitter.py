@@ -2673,8 +2673,19 @@ class CppEmitter(Visitor):
         goes: the two cannot both be zero, and only ``a = -0`` against
         ``b = +0`` needs it -- the mirror case already picks the right zero,
         since ``min``/``max`` return *b* when the predicate fails.
+
+        With *both*, nothing is left that the library form does not already do,
+        so it is emitted -- the same reasoning the integer path uses.
+        ``std::max`` is the predicate verbatim; ``std::min`` differs only on a
+        tie, where it returns *a* and the open-coded form returns *b*, and
+        *zero_tie_free* is exactly the promise that a tie is between equal
+        non-zero values, which are indistinguishable.  The operands stay bound:
+        the library form returns a *reference* to one of them, so both have to
+        outlive the expression it appears in.
         """
         a, b = self._bind_operand(a), self._bind_operand(b)
+        if nan_free and zero_tie_free:
+            return f'{"std::min" if is_min else "std::max"}({a}, {b})'
         tie = '' if zero_tie_free else f' || ({a} == {b} && std::signbit({a}))'
         a_wins = f'({a} < {b}{tie})'
         chosen = f'{a_wins} ? {a} : {b}' if is_min else f'{a_wins} ? {b} : {a}'
@@ -2805,7 +2816,14 @@ class CppEmitter(Visitor):
             self._list_at_raw(arg_storage, src, i), elt_ty, result_ty, at=e,
         )
         if result_ty.is_float():
-            step = self._emit_ieee_min_max(acc, elt, result_ty, is_min=is_min)
+            # both operands are elements of the same list, so one class
+            # answers for the accumulator and the incoming value alike
+            elt_cls = self.class_info.classify_elements(e.arg)
+            step = self._emit_ieee_min_max(
+                acc, elt, result_ty, is_min=is_min,
+                nan_free=not (elt_cls & ValueClass.NAN),
+                zero_tie_free=not (elt_cls & ValueClass.ZERO),
+            )
         else:
             # integers have no NaN and no signed zero
             fn = 'std::min' if is_min else 'std::max'

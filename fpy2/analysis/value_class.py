@@ -44,14 +44,21 @@ Precision
 Sound by default, precise where it has been taught to be.  An operation with no
 rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
-never correct.  Scalars only: a list or tuple carries no class, and reading an
-element gives the top class.
+never correct.
 
-Not yet taught: sign (splitting ``±0`` and ``±Inf`` would let ``signbit`` refine),
-magnitudes (``x > 1`` says nothing here), ``assert`` statements as refinements,
-a bool-valued variable holding a test's result, the class of a numeric free
-variable, and a ``for`` target -- a loop counter over ``range`` is an integer and
-so neither special, but it reports the top class.
+A *list* carries a class for its elements, which an element read, a ``for``
+target over it and ``min``/``max`` over it all use.  It comes from the stores
+that build the list, and from a reduction over it: ``all(p(x) for x)`` where it
+holds, and ``any(...)`` where it does not, each say something about *every*
+element (:meth:`_implied_elements`).  A tuple still carries nothing.
+
+Not yet taught: the sign of a *zero* -- the infinities are split, and ``±0``
+would let ``signbit`` refine the rest; magnitudes (``x > 1`` says nothing here,
+and is `FormatInfer`'s question); ``assert`` statements as refinements; the
+class of a numeric free variable; and a ``for`` target over ``range``, which is
+an integer and so neither special, but reports the top class.  An early-return
+guard does not reach the code after it either: :meth:`_visit_if1` refines its
+body, and an ``if``/``else`` is what refines both arms.
 """
 
 import enum
@@ -309,6 +316,15 @@ class ValueClassAnalysis:
     """Class of each expression, refined by the branches that dominate it.
     ``None`` for a non-real-valued expression."""
 
+    elt_by_def: dict[Definition, ValueClass]
+    """Class of every *element* of each list definition, unrefined -- the list
+    analogue of :attr:`by_def`.  Absent means nothing is known."""
+
+    elt_by_expr: dict[Expr, ValueClass]
+    """Class of every element of the list each expression names, refined by the
+    branches that dominate it.  The analogue of :attr:`by_expr`, and what
+    :meth:`classify_elements` reads."""
+
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
     expression had, joined across incoming edges at a phi.  A consumer wants
@@ -335,6 +351,11 @@ class ValueClassAnalysis:
         """Is *e* neither a NaN nor an infinity?"""
         return self.excludes(e, _NAN | _INF)
 
+    def classify_elements(self, e: Expr) -> ValueClass:
+        """The class every element of the list *e* names belongs to, or the top
+        class where nothing is known."""
+        return self.elt_by_expr.get(e, _TOP)
+
 
 #####################################################################
 # Analysis
@@ -354,6 +375,7 @@ class _ValueClassInstance(DefaultVisitor):
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
     elt_by_def: dict[Definition, ValueClass]
+    elt_by_expr: dict[Expr, ValueClass]
 
     _refine: dict[Definition, ValueClass]
     _refine_elt: dict[Definition, ValueClass]
@@ -372,6 +394,7 @@ class _ValueClassInstance(DefaultVisitor):
         self.by_def = {}
         self.by_expr = {}
         self.elt_by_def = {}
+        self.elt_by_expr = {}
         self._refine = {}
         self._refine_elt = {}
 
@@ -385,6 +408,8 @@ class _ValueClassInstance(DefaultVisitor):
             func=self.func,
             by_expr=self.by_expr,
             by_def=self.by_def,
+            elt_by_def=self.elt_by_def,
+            elt_by_expr=self.elt_by_expr,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
         )
@@ -413,7 +438,9 @@ class _ValueClassInstance(DefaultVisitor):
             return _TOP
         d = self.def_use.find_def_from_use(e)
         stored = self.elt_by_def.get(d, _TOP)
-        return stored & self._refine_elt.get(d, _TOP)
+        out = stored & self._refine_elt.get(d, _TOP)
+        self.elt_by_expr[e] = out
+        return out
 
     def _set_elt(self, d: Definition, cls: ValueClass):
         self.elt_by_def[d] = cls
