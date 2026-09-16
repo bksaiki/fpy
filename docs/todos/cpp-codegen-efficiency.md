@@ -87,8 +87,10 @@ flags are the whole blocker.
 
 ## Baseline
 
-`tests/infra/backend/cpp_bench.py`, `-O2`, pinned, min-of-trials, checksummed.
-At `49e471b9`, `n=1024`, 15 trials x 7 loops x 1953 calls:
+`-O2`, pinned with `taskset`, min over 15 trials, each kernel's result folded
+into a checksum so a speed difference is never an answer difference. The
+harness was a one-off and is not in the tree; these numbers are the record. At
+`49e471b9`, `n=1024`:
 
 | kernel | ns/call | ns/elt | what it isolates |
 |---|---|---|---|
@@ -161,13 +163,42 @@ the evidence, so they are not picked up again without it:
 - **Teaching the fuse to see through a name is worse than not.** It would make
   the pass fire more often, and firing is the pessimization on the sized path.
 
+## Headroom: what any of this can be worth
+
+The generated C++ for `sandbox` hand-rewritten, every variant checksum-identical
+at `n=1024`:
+
+| variant | ns/call | vs generated | what changed |
+|---|---|---|---|
+| generated | 23062 | — | — |
+| reductions fused | 23472 | **+1.8%** | both intermediate arrays gone |
+| one pass | 22507 | -2.4% | all four scans merged |
+| hardware `fp16` | 5361 | **-77%** | the ladder replaced, `logb` untouched |
+| + bit-extract `logb` | 4315 | -81% | both |
+
+**The FP16 rounding ladder is ~77% of this program, and `logb` another ~4%.**
+Fusing the reductions on the real program buys nothing — it measures slightly
+negative, matching the +2.5% the pass toggle reports for `sandbox`. Merging all
+four passes buys 2-6%.
+
+So every phase in this file competes over the last quarter of the runtime, and
+mostly over a few percent of it. Native lowering
+([native-lowering-roadmap.md](native-lowering-roadmap.md)) is worth more than
+all of them together.
+
+One caveat against reading that as "emit `_Float16`": the hardware variant needs
+`-mf16c`. Without it GCC emits `__truncsfhf2` and the same code measures 57000 ns
+-- 2.3x *worse* than the ladder. The ladder is the right default; a hardware
+path needs a target-feature story, not a substitution.
+
 ## Phases
 
 Each is about one commit. Pause for review between them; run the listed tests
 only, and the full suites at the end.
 
-**Phase 0 — the benchmark.** `tests/infra/backend/cpp_bench.py` plus the
-baseline above. Done.
+**Phase 0 — the benchmark.** A one-off harness plus the baseline above. Kept
+as numbers rather than as code: it was worth building to answer these
+questions and not worth maintaining afterwards.
 
 **Phase 1 — stop emitting what the type proves dead** (S3, S4).
 `_emit_empty` hoists the `_all_sized` test above the dimension binding, still
@@ -223,8 +254,36 @@ unsized agree to ~1% for these, and a hand-written fused `max([logb(x) ...])`
 is 11% *slower*. This is the highest-risk item in the file and currently the
 lowest-value one.
 
+**Phase 7 (optional) — reach an integer `max_e`.** The clamp below is the
+natural way to write "no `-inf` from `logb(0)`", and it does not narrow
+anything:
+
+```python
+max_e = max([max(fp.logb(x), FP32_EMIN) for x in xs])   # still `float`
+```
+
+Measured, it needs *three* changes, not one, and no two of them suffice:
+
+1. **`min`/`max` must order their operands.** `_visit_naryop` joins the operand
+   classes, since the result *is* one operand — sound but order-blind. A `max`
+   is `-inf` only if *every* operand can be, `+inf` if *any* can.
+2. **`ValueClass.INF` must split by sign.** It is one atom, so "can be `+inf`"
+   and "can be `-inf`" are the same question, and (1) cannot use its own rule:
+   `logb(0)` is `-inf` and `logb(inf)` is `+inf`, and the clamp only kills the
+   first. This is the "sign" line in `value_class.py`'s "not yet taught" list.
+3. **A guard over a list must refine its elements.** `x` reports
+   `ValueClass.TOP` inside the `else` of `any([fp.isinf(x) for x in xs])`,
+   because a list carries no class and an element read gives the top. Without
+   this the element can still be an infinity, so (1) and (2) have nothing to
+   work with. This is the largest of the three and relates a reduction over a
+   comprehension back to the reads inside it.
+
+Tests: `test_value_class`, plus a cpp witness. Worth recording rather than
+doing: see **Headroom** for what `max_e`'s storage is worth on a program whose
+time is 77% FP16 ladder.
+
 Ordering: 1 and 4 are independent of each other and of everything else. 3 is
-closed with no work. 5 and 6 both extend `ReduceFusion` and both are argued
+closed with no work. 7 needs 4. 5 and 6 both extend `ReduceFusion` and both are argued
 against by the benchmark; neither is on the path.
 
 ## Not shortcomings

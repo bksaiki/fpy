@@ -538,8 +538,9 @@ what an early measured attempt broke.
 `ReduceFusion` replaces `any`/`all` over a comprehension with a running
 accumulator, skipping the intermediate `list[bool]`. Whether that is a win
 turns entirely on the list's *representation*, and the two cases go opposite
-ways. Measured at `n=1024` by `tests/infra/backend/cpp_bench.py --repr
-sized,unsized`:
+ways. Measured at `n=1024`, `-O2`, pinned, min-of-trials, with each variant
+checksummed so a difference in speed is not a difference in answer. The harness
+was a one-off and is not in the tree; the numbers below are the record:
 
 | | materialized | fused |
 |---|---|---|
@@ -549,7 +550,12 @@ sized,unsized`:
 So fusing is 4.8x faster where the length is unproven and a 1.5x loss where it
 is proven. The bit-packing is the whole of it: a `std::vector<uint8_t>` measures
 476, level with the stack array, so the heap allocation costs nothing and
-`std::vector<bool>`'s packing costs 7.3x.
+`std::vector<bool>`'s packing costs 7.3x.  (That control and the `AMax` number
+below were hand-written C++, not FPy output.)
+
+Confirmed by toggling the pass rather than comparing two programs: the same
+kernel with `ReduceFusion` monkeypatched to the identity is 475 sized and 3500
+unsized against 719 / 721 fused, with the checksum unchanged either way.
 
 **The pass pays exactly where the length is not proven, and is applied
 regardless.** It runs before `Specialize`, so the representation it would need
