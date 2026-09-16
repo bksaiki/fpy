@@ -2,10 +2,10 @@
 Free-variable capture at decoration.
 
 The decorator collects the names an FPy body may read from its defining Python
-scope.  Before Python 3.12 a comprehension compiles to its own code object, so
-reading one code object -- which is all :func:`inspect.getclosurevars` does --
-missed every name used only inside ``[... for x in xs]``, and `SyntaxCheck`
-reported it unbound.  These pin the names being found, on every version.
+scope.  Before Python 3.12 a comprehension compiles to its own code object, and
+:func:`inspect.getclosurevars` reads only one -- so a name used only inside
+``[... for x in xs]`` needs the walk that :func:`_closure_names` does.  These
+pin the same answer on every version.
 """
 
 import pytest
@@ -29,7 +29,7 @@ class TestComprehensionScope:
 
     def test_nested_call(self):
         # `fp.logb` inside a comprehension: the module alias `fp` is itself a
-        # free variable, and was lost with the rest of the nested code object
+        # free variable, and lives in the nested code object too
         @fp.fpy(ctx=fp.FP64)
         def f(xs):
             return [max(fp.logb(x), _K) for x in xs]

@@ -15,8 +15,8 @@ import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of, representable_classes
 from fpy2.analysis.value_class import (
-    _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select, _exact_sub,
-    _map,
+    _ATOMS, _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select,
+    _exact_sub, _map,
 )
 from fpy2.ast.fpyast import Expr
 from fpy2.ast.visitor import DefaultVisitor
@@ -28,11 +28,6 @@ INF = ValueClass.INF        # the composite, `POS_INF | NEG_INF`
 TOP = ValueClass.TOP
 
 _NAN, _INF = float('nan'), float('inf')
-
-_ATOMS = (NAN, POS_INF, NEG_INF, ZERO, FINITE)
-"""The join-irreducible classes.  ``INF`` is *not* one: it is the composite a
-consumer uses to ask "infinite at all", and sweeping it as an atom would let a
-table that is wrong on one sign pass."""
 
 _SAMPLES: dict[ValueClass, list[float]] = {
     NAN: [_NAN],

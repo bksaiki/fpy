@@ -88,6 +88,10 @@ class SpecAnalyses:
 
     ``ast`` is post-specialization, so its types are concrete — which is why a
     consumer cannot simply re-run the analyses on the user's original function.
+
+    ``ret_ty`` is a field rather than something each consumer derives: the ABI a
+    caller compiles against and the definition a callee emits must agree, and
+    both read it here.
     """
 
     ast: FuncDef

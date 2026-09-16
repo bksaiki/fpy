@@ -299,9 +299,8 @@ class CppEmitError(Exception):
     An optional ``at`` node prefixes the message with a source location, which
     the wrapping :class:`CppCompileError` passes through untouched.
 
-    ``unfold_answers`` marks a refusal whose advice names the ``unfold`` flag.
-    `compile_module` reads it to know that this refusal is not a second opinion
-    worth reporting: under the flag it is the very thing being answered.
+    ``unfold_answers`` marks a refusal whose advice names the ``unfold`` flag,
+    which `compile_module` reads: under the flag it is not a second opinion.
     """
 
     def __init__(
@@ -340,7 +339,7 @@ class CppEmitter(Visitor):
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
     ctx_use: ContextUseAnalysis
-    ret_ty: 'CppType | None'
+    ret_ty: CppType | None
     writer: _IndentedWriter
 
     def __init__(
@@ -353,7 +352,7 @@ class CppEmitter(Visitor):
         class_info: ValueClassAnalysis,
         ctx_use: ContextUseAnalysis,
         *,
-        ret_ty: 'CppType | None' = None,
+        ret_ty: CppType | None = None,
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
@@ -509,10 +508,10 @@ class CppEmitter(Visitor):
         """A name for *expr*, so it can be read more than once.
 
         Already a name, or an integer literal — re-readable, no side effects —
-        so nothing to bind.  Note these are tests on the *emitted text*, which
-        is all a caller has: a literal is not an identifier, so it needs its
-        own case.  Otherwise bind it to a temp; ``auto&&`` binds a reference,
-        so this copies nothing whatever the representation.
+        so nothing to bind.  Both are tests on the *emitted text*, and a literal
+        is not an identifier, hence the second.  Otherwise bind it to a temp;
+        ``auto&&`` binds a reference, so this copies nothing whatever the
+        representation.
         """
         if expr.isidentifier() or expr.isdigit():
             return expr
@@ -976,10 +975,10 @@ class CppEmitter(Visitor):
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """The function's return storage, with a source location on failure.
 
-        ``ret_ty`` from :class:`SpecAnalyses` where the caller supplied one --
-        it is the type the ABI was published with, and re-deriving it here once
-        let the two disagree.  Falling back keeps a standalone emitter working,
-        at the cost of the value-class narrowing the compiler applies.
+        ``ret_ty`` from :class:`SpecAnalyses` where the caller supplied one: it
+        is the type the ABI was published with, and deriving a second answer
+        here would let the two disagree.  The fallback is for a standalone
+        emitter, and does without the compiler's value-class narrowing.
 
         See :func:`return_storage`.  A ``None`` bound is not a missing return --
         FPy's reachability check rejects those at decoration time -- but format
@@ -2674,14 +2673,11 @@ class CppEmitter(Visitor):
         ``b = +0`` needs it -- the mirror case already picks the right zero,
         since ``min``/``max`` return *b* when the predicate fails.
 
-        With *both*, nothing is left that the library form does not already do,
-        so it is emitted -- the same reasoning the integer path uses.
-        ``std::max`` is the predicate verbatim; ``std::min`` differs only on a
-        tie, where it returns *a* and the open-coded form returns *b*, and
-        *zero_tie_free* is exactly the promise that a tie is between equal
-        non-zero values, which are indistinguishable.  The operands stay bound:
-        the library form returns a *reference* to one of them, so both have to
-        outlive the expression it appears in.
+        With both, the library form is exact and is emitted instead, as on the
+        integer path.  ``std::min`` differs from the predicate only on a tie,
+        which *zero_tie_free* promises is between equal non-zero values.  The
+        operands stay bound either way: the library form returns a *reference*
+        to one of them.
         """
         a, b = self._bind_operand(a), self._bind_operand(b)
         if nan_free and zero_tie_free:
@@ -2739,9 +2735,8 @@ class CppEmitter(Visitor):
             f'{self._list_end(arg_ty, src)}, {seed})'
         )
         if isinstance(arg_ty, CppList) and arg_ty.size:
-            # A *non-zero* length in the type settles the guard statically.
-            # `size == 0` is falsy here and keeps it, which is right: a
-            # `std::array<T, 0>` is legal and is exactly the case it guards.
+            # a *non-zero* length settles the guard; `size == 0` is falsy here
+            # and keeps it, which is the case a `std::array<T, 0>` needs
             return fold
         return (
             f'({self._list_len(arg_ty, src)} == 0'
@@ -2836,9 +2831,9 @@ class CppEmitter(Visitor):
         does not re-evaluate it.
 
         A result whose every list level is fixed-length takes no dimension
-        operand -- ``std::array<T, K>{}`` spells ``K`` in the type -- so none is
-        bound.  The expressions are still visited, since that is what emits any
-        statement they need.
+        operand -- ``std::array<T, K>{}`` spells ``K`` -- so none is bound.  The
+        expressions are still visited, which is what emits the statements some
+        of them need.
         """
         sized = self._all_sized(result_ty)
         dims: list[str] = []

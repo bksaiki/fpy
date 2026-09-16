@@ -179,8 +179,8 @@ def _closure_names(func: Callable, env: ForeignEnv) -> set[str]:
 
     The nested code objects are walked because :func:`inspect.getclosurevars`
     reads only one, and before PEP 709 (Python 3.12) a comprehension compiles
-    to its own -- so a name used only inside ``[... for x in xs]`` was invisible
-    and `SyntaxCheck` called it unbound.
+    to its own -- so a name used only inside ``[... for x in xs]`` is otherwise
+    invisible, and `SyntaxCheck` would call it unbound.
 
     ``co_names`` also holds attribute names, so ``fp.logb`` contributes
     ``logb``; membership in *env* is the filter, as it is in

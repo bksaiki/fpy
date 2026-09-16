@@ -183,13 +183,8 @@ def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
     )
     if top is None or not isinstance(af.exp, int):
         return ''
-    widest = max(
-        (
-            p for f in domain.sigma
-            if isinstance(p := AbstractFormat.from_format(f).prec, int)
-        ),
-        default=None,
-    )
+    precs = [AbstractFormat.from_format(f).prec for f in domain.sigma]
+    widest = max((p for p in precs if isinstance(p, int)), default=None)
     if widest is None:
         return ''
     return (
@@ -208,7 +203,7 @@ def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
     alone never would.  The signs are asked about separately: `abs` and `logb`
     never yield a ``-inf``.
 
-    Only these flags -- a format structurally cannot say "not zero".  Narrowing
+    Only these flags: a format structurally cannot say "not zero".  Narrowing
     only, and per definition, so the join over a class keeps a ``float``
     wherever one member can still be infinite.
     """
@@ -236,10 +231,10 @@ def of_bound(
     first wins.  Where no member contains the bound the domain gets one chance to
     accept it anyway (:meth:`StorageDomain.fallback`) before this refuses.
 
-    *cls* narrows the special values away (:func:`_without_absent`), and only
-    for a scalar: an expression's storage is chosen elsewhere and is not
-    narrowed, so narrowing a list's elements here would leave the reduction over
-    them folding at the wider type.
+    *cls* narrows the special values away (:func:`_without_absent`).  It stops
+    at a scalar: storage is chosen at several sites and only this one consults a
+    class, so narrowing a list's elements here would disagree with the
+    reduction over them.  See ``docs/todos/value-class-elements.md``.
     """
     if bound is None or isinstance(bound, VarFormat):
         return None

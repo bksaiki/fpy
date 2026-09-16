@@ -263,7 +263,7 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
     return out
 
 
-def _exact_select(args: list[ValueClass], is_max: bool) -> ValueClass:
+def _exact_select(args: list[ValueClass], *, is_max: bool) -> ValueClass:
     """``max(...)`` or ``min(...)`` over operands of classes *args*.
 
     A selection knows which operand it picks, which the join does not: ``max``
@@ -347,6 +347,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
+
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
