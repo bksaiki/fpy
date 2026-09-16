@@ -13,6 +13,7 @@ from fractions import Fraction
 
 import fpy2 as fp
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of
+from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.interpret.byte import BytecodeCompiler
 from fpy2.interpret.value import to_value
 from fpy2.number import REAL, Float
@@ -72,20 +73,38 @@ _SECOND_ARG = [float('nan'), float('inf'), 0.0, 2.5]
 """Arguments after the first are sampled rather than crossed, which would raise
 the grid to a power for no new classes."""
 
+_LIST_VALUES = [
+    [1.0, -2.5, 3.0],
+    [1.0, 0.0, 3.0],
+    [1.0, float('nan'), 3.0],
+    [1.0, float('-inf'), float('inf')],
+    [],
+]
+"""One list per class an *element* can be, plus an empty one -- what a fact
+about a whole list has to be checked against.  The first is the filler."""
 
-def _grid(arity: int) -> list[tuple[float, ...]]:
-    """Argument tuples reaching every class in every position."""
-    if arity == 0:
+
+def _grid(kinds: 'list[bool]') -> list[tuple]:
+    """Argument tuples reaching every class in every position.  ``kinds[i]`` is
+    true for a list argument, whose samples vary an *element*'s class."""
+    cols = [_LIST_VALUES if k else _PROBE_VALUES for k in kinds]
+    n = len(kinds)
+    if n == 0:
         return [()]
-    if arity == 1:
-        return [(v,) for v in _PROBE_VALUES]
-    if arity == 2:
-        return [(x, y) for x in _PROBE_VALUES for y in _SECOND_ARG]
-    # beyond two, vary one position at a time and once all together
-    out = [(v,) * arity for v in _PROBE_VALUES]
-    for i in range(arity):
-        for v in _PROBE_VALUES:
-            args = [1.0] * arity
+    if n == 1:
+        return [(v,) for v in cols[0]]
+    if n == 2:
+        second = _LIST_VALUES if kinds[1] else _SECOND_ARG
+        return [(x, y) for x in cols[0] for y in second]
+    # beyond two, every position at once and then one at a time
+    out = [
+        tuple(col[j % len(col)] for col in cols)
+        for j in range(len(_PROBE_VALUES))
+    ]
+    filler = [_LIST_VALUES[0] if k else 1.0 for k in kinds]
+    for i in range(n):
+        for v in cols[i]:
+            args = list(filler)
             args[i] = v
             out.append(tuple(args))
     return out
@@ -132,19 +151,45 @@ def _observed_class(v) -> 'ValueClass | None':
             return None
 
 
-def _scalar_arity(func: fp.Function) -> int | None:
-    """How many arguments *func* takes, or ``None`` unless every one is a plain
-    real -- the probe values are reals, so nothing else can be driven."""
-    args = func.ast.args
-    for a in args:
-        if not isinstance(a.type, fp.ast.RealTypeAnn):
-            return None
-    return len(args)
+def _arg_kinds(func: fp.Function) -> 'list[bool] | None':
+    """One entry per argument, true for a list of reals -- or ``None`` where
+    some argument is neither, the probe values being reals and lists of them."""
+    kinds: list[bool] = []
+    for a in func.ast.args:
+        match a.type:
+            case fp.ast.RealTypeAnn():
+                kinds.append(False)
+            case fp.ast.ListTypeAnn(elt=fp.ast.RealTypeAnn()):
+                kinds.append(True)
+            case _:
+                return None
+    return kinds
+
+
+def _forms(func: fp.Function) -> list[fp.Function]:
+    """*func* as written, and as the C++ backend analyzes it.
+
+    A comprehension is an expression and `any` / `all` a single node, so the
+    written form has no element store and no reduction loop -- the two shapes a
+    class for a list's elements comes from.  Both are checked, since a consumer
+    may analyze either.
+    """
+    out = [func]
+    try:
+        m = fp.Module()
+        m.add(func)
+        out += [
+            spec for spec in CppCompiler().specialize(m)
+            if spec.name == func.name
+        ]
+    except Exception:  # noqa: BLE001 -- not every example specializes
+        pass
+    return out
 
 
 def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int]':
     """``(contradictions, informative comparisons)`` from running *func* over
-    the probe values.
+    the probe values, in each of :func:`_forms`.
 
     Driven under ``REAL``, which is the only context where the analysis says
     anything: under a concrete one :meth:`_rounded` reports the classes that
@@ -153,10 +198,21 @@ def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int]':
     were *not* against the top, so a check that has quietly gone vacuous is
     visible rather than green.
     """
-    arity = _scalar_arity(func)
-    if arity is None:
-        return []
+    kinds = _arg_kinds(func)
+    if kinds is None:
+        return [], 0
+    bad: list[str] = []
+    informative = 0
+    for form in _forms(func):
+        found, n = _check_one_form(form, kinds)
+        bad += found
+        informative += n
+    return bad, informative
 
+
+def _check_one_form(
+    func: fp.Function, kinds: 'list[bool]'
+) -> 'tuple[list[str], int]':
     info = ValueClassInfer.analyze(func.ast)
     bad: list[str] = []
     informative = 0
@@ -178,7 +234,7 @@ def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int]':
     compiler = BytecodeCompiler(func.ast, func.env, probe=probe)
     fn = compiler.compile()
 
-    grid = _grid(arity)
+    grid = _grid(kinds)
 
     def run_grid():
         for args in grid:

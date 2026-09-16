@@ -377,9 +377,28 @@ class _ValueClassInstance(DefaultVisitor):
     it, and flow-sensitive because a store changes it -- the same shape as
     :attr:`_refine`, merged at a branch and iterated at a loop."""
 
+    _clock: int
+    _touched: dict[Region, int]
+    """When each region's elements last changed.  Monotone and never restored,
+    so a store anywhere already walked voids a fact taken before it -- which
+    :attr:`_refine_elt` needs and :attr:`_elt`, joined at a merge rather than
+    saved, does not."""
+
+    _scanned: dict[ForStmt, int]
+    """For a loop that did *not* store into the list it iterates, that list's
+    :attr:`_touched` stamp at the exit.  Absent means the loop's accumulator
+    says nothing; see :meth:`_implied_universal`."""
+
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
+
+    _refine_elt: dict[Region, tuple[ValueClass, int]]
+    """The same, per region, with the :attr:`_touched` stamp it was taken at.
+    :attr:`_refine` needs no stamp: a rebind makes a new `Definition`, where a
+    list's contents change under a fixed one -- and an arm *restores* this map,
+    so a store in a branch nested inside would otherwise bring back a mask the
+    store had invalidated."""
 
     def __init__(
         self,
@@ -393,9 +412,13 @@ class _ValueClassInstance(DefaultVisitor):
         self.ctx_use = ctx_use
         self.alias = alias
         self._elt = {}
+        self._clock = 0
+        self._touched = {}
+        self._scanned = {}
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
+        self._refine_elt = {}
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -427,13 +450,30 @@ class _ValueClassInstance(DefaultVisitor):
     def _elements_of(self, e: Expr) -> ValueClass:
         """What every element of the list *e* names currently is."""
         region = self._region_of(e)
-        return _TOP if region is None else self._elt.get(region, _TOP)
+        if region is None:
+            return _TOP
+        return self._elt.get(region, _TOP) & self._mask_of(region)
+
+    def _stamp(self, region: Region) -> int:
+        return self._touched.get(region, 0)
+
+    def _touch(self, region: Region):
+        """Record that *region*'s elements changed."""
+        self._clock += 1
+        self._touched[region] = self._clock
+
+    def _mask_of(self, region: Region) -> ValueClass:
+        """What the enclosing branches imply about *region*'s elements, or the
+        top class once a store has landed since that was taken."""
+        cls, stamp = self._refine_elt.get(region, (_TOP, 0))
+        return cls if stamp == self._stamp(region) else _TOP
 
     def _store_element(self, region: 'Region | None', cls: ValueClass):
         """Record a store of *cls* into *region*, which joins: the elements the
         store did not reach are still there."""
         if region is not None:
             self._elt[region] = self._elt.get(region, _TOP) | cls
+            self._touch(region)
 
     @staticmethod
     def _join_elements(
@@ -494,15 +534,21 @@ class _ValueClassInstance(DefaultVisitor):
         into its sibling -- intersecting ``{NaN}`` with ``{Inf}`` down an ``elif``
         ladder and driving every later use to the empty class.
         """
-        saved = self._refine
+        saved, saved_elt = self._refine, self._refine_elt
         out = dict(saved)
         for d, cls in self._implied(cond, truth):
             out[d] = out.get(d, _TOP) & cls
-        self._refine = out
+        # re-stamped, so an entry a store has already invalidated reads as the
+        # top class here rather than coming back as this arm's starting point
+        out_elt = {r: (self._mask_of(r), self._stamp(r)) for r in saved_elt}
+        for region, cls in self._implied_elements(cond, truth):
+            prev, _ = out_elt.get(region, (_TOP, 0))
+            out_elt[region] = (prev & cls, self._stamp(region))
+        self._refine, self._refine_elt = out, out_elt
         try:
             yield
         finally:
-            self._refine = saved
+            self._refine, self._refine_elt = saved, saved_elt
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the definitions it tests."""
@@ -595,6 +641,103 @@ class _ValueClassInstance(DefaultVisitor):
         if isinstance(d, AssignDef) and isinstance(d.site, Assign):
             return self._implied(d.site.expr, truth)
         return self._implied_ladder(d, truth)     # a longer ladder
+
+    def _implied_elements(
+        self, cond: Expr, truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """What *cond* being *truth* says about the elements of a list."""
+        match cond:
+            case Not():
+                return self._implied_elements(cond.arg, not truth)
+            case And() if truth:
+                return [i for a in cond.args
+                        for i in self._implied_elements(a, True)]
+            case Or() if not truth:
+                return [i for a in cond.args
+                        for i in self._implied_elements(a, False)]
+            case Var():
+                src = self.def_use.defining_expr(cond)
+                if src is not cond:
+                    return self._implied_elements(src, truth)
+                return self._implied_universal(
+                    self.def_use.use_to_def.get(cond), truth,
+                )
+            case _:
+                return []
+
+    def _implied_universal(
+        self, d: 'Definition | None', truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """What a *lowered* ``all`` / ``any`` being *truth* says about the list
+        it scanned.
+
+        :class:`~fpy2.transform.ReduceFusion` leaves the reduction as a
+        loop-carried fold, which the ``And`` case above cannot match:
+
+        .. code-block:: python
+
+            acc = True                  # `all([isfinite(x) for x in xs])`
+            for x in xs:
+                b = isfinite(x)
+                acc = acc and b
+
+        The exit value is ``seed and b_1 and ... and b_n``, so ``acc`` true
+        forces every ``b`` -- whatever the seed, with an empty list vacuous.
+        The loop covers the list, FPy having no ``break``, so what the fold's
+        other operands say about the target they say about every element.
+        Dually for ``any``, an ``Or`` that speaks when it is false.
+
+        Nothing here names what the lowering minted: an inlined predicate and a
+        hand-written fold match too.
+        """
+        if not isinstance(d, PhiDef) or not isinstance(d.site, ForStmt):
+            return []
+        stmt = d.site
+        if not isinstance(stmt.target, NamedId):
+            return []
+        region = self._region_of(stmt.iterable)
+        # a store since the exit -- or one the loop made itself, which leaves
+        # no entry -- means the list read is not the list scanned
+        if region is None or self._scanned.get(stmt) != self._stamp(region):
+            return []
+        target = self.def_use.find_def_from_site(stmt.target, stmt)
+        return [
+            (region, cls)
+            for td, cls in self._implied_fold(d, truth)
+            if td == target
+        ]
+
+    def _implied_fold(
+        self, d: PhiDef, truth: bool
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What one round of the fold *d* accumulates says, given the exit value
+        is *truth*.
+
+        The accumulator must be an operand of its own new value.  That is what
+        makes the fold monotone, and so what lets the exit value speak for every
+        round: ``acc = p(x)`` speaks for the last element alone.
+        """
+        step = self.def_use.defs[d.rhs]
+        if isinstance(step, PhiDef):
+            # `Hoistable` moves the fold into a guarded assignment, and the
+            # guard it checks for is the accumulator -- but only where that is
+            # what the loop carried in.  `ok = x > 0; if ok: ok = p(x)` rebuilds
+            # `ok` each round, so it too speaks for the last element alone.
+            if self.def_use.def_to_idx.get(d) != step.lhs:
+                return []
+            return self._implied_ladder(step, truth)
+        if not isinstance(step, AssignDef) or not isinstance(step.site, Assign):
+            return []
+        fold = step.site.expr
+        if not isinstance(fold, And if truth else Or):
+            return []
+        rest = [
+            a for a in fold.args
+            if not (isinstance(a, Var) and self.def_use.use_to_def.get(a) == d)
+        ]
+        if len(rest) == len(fold.args):
+            return []
+        return [i for a in rest for i in self._implied(a, truth)]
 
     def _implied_compare(
         self, cond: Compare, truth: bool
@@ -795,6 +938,7 @@ class _ValueClassInstance(DefaultVisitor):
             region = self._region_of_def(stmt.target, stmt)
             if region is not None:
                 self._elt[region] = _BOT
+                self._touch(region)
 
     def _region_of_def(self, target, site) -> 'Region | None':
         if not isinstance(target, NamedId):
@@ -854,6 +998,8 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
+        region = self._region_of(stmt.iterable)
+        before = None if region is None else self._stamp(region)
 
         def body():
             # the target *is* an element, so it is whatever they are
@@ -861,6 +1007,9 @@ class _ValueClassInstance(DefaultVisitor):
             self._visit_block(stmt.body, ctx)
 
         self._fixpoint(stmt, body)
+        self._scanned.pop(stmt, None)
+        if region is not None and self._stamp(region) == before:
+            self._scanned[stmt] = before
 
     def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]):
         """Drives a loop's phi classes to convergence.

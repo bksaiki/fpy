@@ -684,12 +684,14 @@ def _trackable(fn, name: str, n: int = 4) -> bool:
     raise AssertionError(f'no `{name}` in {fn.name}')
 
 
-def _amax_class(fn, n: int = 4) -> ValueClass:
+def _amax_class(fn, n: int = 4, *, scalars: int = 0) -> ValueClass:
     """The class of the ``max(...)`` over a list in *fn*, after lowering."""
     from fpy2.ast.fpyast import AMax
     from fpy2.backend.cpp.compiler import CppCompiler
     m = fp.Module()
-    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    m.add(fn, arg_types=(
+        [ListType(RealType(fp.FP32), n)] + [RealType(fp.FP32)] * scalars
+    ))
     for spec in CppCompiler().specialize(m):
         if spec.ast.name != fn.name:
             continue
@@ -751,24 +753,157 @@ class TestListElementClasses:
                 ys[0] = -fp.inf()
             return max(ys)
 
-        m = fp.Module()
-        m.add(f, arg_types=[ListType(RealType(fp.FP32), 4), RealType(fp.FP32)])
-        from fpy2.ast.fpyast import AMax
-        from fpy2.backend.cpp.compiler import CppCompiler
-        for spec in CppCompiler().specialize(m):
-            if spec.ast.name != 'f':
-                continue
-            info = ValueClassInfer.analyze(spec.ast)
-            got = [v for e, v in info.by_expr.items() if isinstance(e, AMax)]
-            assert got and (got[0] & NEG_INF)
+        assert _amax_class(f, scalars=1) & NEG_INF
+
+
+class TestAGuardOverAWholeList:
+    """``all(p(x) for x in xs)`` holding means every element satisfies ``p``:
+    the loop covers the list, FPy having no ``break``.
+
+    The fact is about the contents *at the loop's exit*, so a store anywhere
+    between there and the read voids it.
+    """
+
+    def test_a_universal_reaches_the_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == ZERO | FINITE
+
+    def test_an_existential_reaches_the_arm_it_fails_in(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if any([fp.isnan(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert not (_amax_class(f) & NAN)
+
+    def test_the_other_arm_learns_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert _amax_class(f) == TOP
+
+    def test_a_fold_written_by_hand(self):
+        """Nothing here is `ReduceFusion`'s: the predicate is inlined rather
+        than bound, and ``Hoistable`` leaves the fold as a guarded assignment
+        rather than an ``and``."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == ZERO | FINITE
+
+    def test_a_fold_that_is_not_one_says_nothing(self):
+        """``ok`` is the *last* element's predicate, not every element's."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                ok = fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_fold_rebuilt_each_round_says_nothing(self):
+        """``ok`` is the last element's again: the guarded assignment is a fold
+        only where what it guards on is what the loop carried in."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                ok = x > 0
+                if ok:
+                    ok = fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_inside_the_scan(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = True
+            for x in xs:
+                xs[0] = fp.nan()
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_into_another_list_inside_the_scan(self):
+        """The stamp is per region, so this keeps the fact."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [fp.nan() for _ in xs]
+            ok = True
+            for x in xs:
+                ys[0] = fp.nan()
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == ZERO | FINITE
+
+    def test_a_store_between_the_scan_and_the_guard(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ok = all([fp.isfinite(x) for x in xs])
+            xs[0] = fp.nan()
+            if ok:
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_under_a_branch_nested_in_the_arm(self):
+        """The arm *restores* the mask, so without the stamp the inner branch
+        would hand back a fact its own store had invalidated."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c: fp.Real):
+            if all([fp.isfinite(x) for x in xs]):
+                if c > 0:
+                    xs[0] = fp.nan()
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_class(f, scalars=1) == TOP
 
 
 class TestWhichListsCarryAFact:
     """:meth:`ValueClassAnalysis.element_region` -- where a fact about a list's
     elements may be recorded at all.
 
-    An element class is a property of the *object*, and an FPy list is a
-    reference, so the region is the key.  Two names for one object share it; a
+    An element class is a property of the *location*, and an FPy list is a
+    reference, so the region is the key.  Two names for one share it; a
     list handed to a call has none, since the callee may store through it.
     """
 
@@ -789,7 +924,7 @@ class TestWhichListsCarryAFact:
         assert _trackable(f, 'ys')
 
     def test_an_alias_is_the_same_region_not_a_refusal(self):
-        """``ys = xs`` is one object under two names, so a store through either
+        """``ys = xs`` is one location under two names, so a store through either
         lands on the region both resolve to -- which is why the region is the
         key rather than something to refuse."""
         @fp.fpy(ctx=fp.REAL)

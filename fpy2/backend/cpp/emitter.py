@@ -2811,7 +2811,18 @@ class CppEmitter(Visitor):
             self._list_at_raw(arg_storage, src, i), elt_ty, result_ty, at=e,
         )
         if result_ty.is_float():
-            step = self._emit_ieee_min_max(acc, elt, result_ty, is_min=is_min)
+            # both operands are elements, so the element class bounds each --
+            # but only where the cast above is not one, since a narrowing cast
+            # can flush a value the class calls non-zero
+            cls = (
+                self._value_class(e) if elt_ty == result_ty
+                else ValueClass.TOP
+            )
+            step = self._emit_ieee_min_max(
+                acc, elt, result_ty, is_min=is_min,
+                nan_free=not (cls & ValueClass.NAN),
+                zero_tie_free=not (cls & ValueClass.ZERO),
+            )
         else:
             # integers have no NaN and no signed zero
             fn = 'std::min' if is_min else 'std::max'

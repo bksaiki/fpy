@@ -24,14 +24,14 @@ from fpy2.backend.cpp.compiler import CppCompiler
 from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_COMPILED = 208
+EXPECTED_COMPILED = 210
 """Corpus functions that compile.  A mint count only means something while this
 holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
-    '_emit_empty': 28,         # a dimension, read once per fixed-size layer
-    '_emit_ieee_min_max': 6,   # a cast result, not a nested operand
+    '_emit_empty': 29,         # a dimension, read once per fixed-size layer
+    '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced

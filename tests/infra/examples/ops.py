@@ -26,6 +26,34 @@ def test_logb_guarded(x: fp.Real) -> fp.Real:
             return fp.logb(x)
 
 @fp.fpy
+def test_logb_guarded_list(xs: list[fp.Real]) -> fp.Real:
+    """The same, reached through a guard over a whole list.
+
+    ``all`` covers the list, FPy having no ``break``, so what it tests holds of
+    every element -- the only way a fact reaches the elements of a parameter.
+    """
+    if all([fp.isfinite(x) and x != 0 for x in xs]):
+        with fp.REAL:
+            return max([fp.logb(x) for x in xs])
+    else:
+        return 0
+
+@fp.fpy
+def test_logb_guarded_list_stale(xs: list[fp.Real]) -> fp.Real:
+    """The same guard, and a store that makes it say nothing.
+
+    The fact is about the contents at the loop's *exit*, and the read here is
+    of a list the loop never saw.
+    """
+    ok = all([fp.isfinite(x) and x != 0 for x in xs])
+    xs[0] = fp.nan()
+    if ok:
+        with fp.REAL:
+            return fp.logb(xs[0])
+    else:
+        return 0
+
+@fp.fpy
 def test_pow(x: fp.Real, y: fp.Real) -> fp.Real:
     """Example function for `pow`."""
     return x ** y
