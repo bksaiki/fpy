@@ -286,6 +286,77 @@ def _exact_select(args: list[ValueClass], is_max: bool) -> ValueClass:
     return out
 
 
+def _shared_and_mutated(func: FuncDef) -> set[NamedId]:
+    """List names whose elements cannot be tracked.
+
+    An element class is a property of the *object*, but definitions are per
+    name, and an FPy list is a reference: ``ys = xs`` makes one object with two
+    names, so ``ys[0] = e`` changes what ``xs[0]`` reads while leaving ``xs``'s
+    definition -- and anything recorded against it -- untouched.
+
+    Neither half alone is a problem.  Aliasing without mutation is what
+    `CompToLoop` emits when it binds an iterable; mutation without aliasing goes
+    through the one name, which the per-definition join follows.  A name is
+    dropped when its copy group holds a store, or when it reaches somewhere a
+    store could happen unseen -- an argument of a call, a cell of an aggregate,
+    or a call's result, which may alias anything the callee held.
+
+    `Alias` is the real answer for the first half, but its ``written_regions``
+    is intraprocedural, so a callee storing through a list it was handed does
+    not appear; that needs escape summaries, which a standalone caller cannot
+    build.
+    """
+    group: dict[NamedId, set[NamedId]] = {}
+    stored: set[NamedId] = set()
+    escaped: set[NamedId] = set()
+
+    def join(a: NamedId, b: NamedId):
+        merged = group.setdefault(a, {a}) | group.setdefault(b, {b})
+        for n in merged:
+            group[n] = merged
+
+    def escape(e: Expr):
+        if isinstance(e, Var):
+            escaped.add(e.name)
+
+    class _Scan(DefaultVisitor):
+        def _visit_assign(self, stmt: Assign, ctx):
+            if isinstance(stmt.target, NamedId):
+                if isinstance(stmt.expr, Var):
+                    join(stmt.target, stmt.expr.name)
+                elif isinstance(stmt.expr, Call):
+                    escaped.add(stmt.target)
+            super()._visit_assign(stmt, ctx)
+
+        def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+            if isinstance(stmt.var, NamedId):
+                stored.add(stmt.var)
+            escape(stmt.expr)           # `outer[i] = xs` shares `xs`'s cells
+            super()._visit_indexed_assign(stmt, ctx)
+
+        def _visit_call(self, e: Call, ctx):
+            for arg in e.args:
+                escape(arg)
+            super()._visit_call(e, ctx)
+
+        def _visit_list_expr(self, e: ListExpr, ctx):
+            for elt in e.elts:
+                escape(elt)
+            super()._visit_list_expr(e, ctx)
+
+        def _visit_tuple_expr(self, e: TupleExpr, ctx):
+            for elt in e.elts:
+                escape(elt)
+            super()._visit_tuple_expr(e, ctx)
+
+    _Scan()._visit_function(func, None)
+    out = set(escaped)
+    for g in group.values():
+        if len(g) > 1 and (g & stored or g & escaped):
+            out |= g
+    return out
+
+
 def _positive_literal(e: Expr) -> bool:
     return isinstance(e, RationalVal) and e.as_rational() > 0
 
@@ -367,6 +438,10 @@ class _ValueClassInstance(DefaultVisitor):
 
     _refine: dict[Definition, ValueClass]
     _refine_elt: dict[Definition, ValueClass]
+
+    _shared: set[NamedId]
+    """Lists no element class may be recorded against; see
+    :func:`_shared_and_mutated`."""
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
 
@@ -385,12 +460,14 @@ class _ValueClassInstance(DefaultVisitor):
         self.elt_by_expr = {}
         self._refine = {}
         self._refine_elt = {}
+        self._shared = set()
 
     @property
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
 
     def analyze(self) -> ValueClassAnalysis:
+        self._shared = _shared_and_mutated(self.func)
         self._visit_function(self.func, None)
         return ValueClassAnalysis(
             func=self.func,
@@ -421,7 +498,7 @@ class _ValueClassInstance(DefaultVisitor):
         with what the enclosing branches proved.  A list that is not a plain
         name carries no definition, so it is the top class.
         """
-        if not isinstance(e, Var):
+        if not isinstance(e, Var) or e.name in self._shared:
             return _TOP
         d = self.def_use.find_def_from_use(e)
         stored = self.elt_by_def.get(d, _TOP)
@@ -430,7 +507,8 @@ class _ValueClassInstance(DefaultVisitor):
         return out
 
     def _set_elt(self, d: Definition, cls: ValueClass):
-        self.elt_by_def[d] = cls
+        if d.name not in self._shared:
+            self.elt_by_def[d] = cls
 
     def _join_elt_phi(self, phi: Definition, lhs: Definition, rhs: Definition):
         """A phi's element class, where either arm has one.
@@ -561,7 +639,7 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         target_def = self.def_use.find_def_from_site(loop.target, loop)
         cls = dict(self._implied(pred, want)).get(target_def)
-        if cls is None:
+        if cls is None or loop.iterable.name in self._shared:
             return []
         return [(self.def_use.find_def_from_use(loop.iterable), cls)]
 
@@ -879,8 +957,10 @@ class _ValueClassInstance(DefaultVisitor):
                     out |= cls if isinstance(cls, ValueClass) else _TOP
                 return out
             case Var():
-                d = self.def_use.find_def_from_use(e)
-                return self.elt_by_def.get(d)
+                # `_elt_class`, not the stored class: a copy made inside a
+                # refined branch carries that branch's refinement, and
+                # `CompToLoop` binds the iterable to a name before reading it
+                return self._elt_class(e)
             case _:
                 return None
 

@@ -684,10 +684,13 @@ def _lowered_cls(fn, text: str, n: int = 8) -> ValueClass:
     from fpy2.backend.cpp.compiler import CppCompiler
     m = fp.Module()
     m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    # leaves-first, so a callee comes before the function asked about
     for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
         info = ValueClassInfer.analyze(spec.ast)
         return info.classify(_find(spec.ast, text))
-    raise AssertionError('no spec')
+    raise AssertionError(f'no spec named {fn.name}')
 
 
 class TestListElementClasses:
@@ -717,6 +720,45 @@ class TestListElementClasses:
             return max(xs)
 
         assert _lowered_cls(f, 'max(xs)') == TOP
+
+
+class TestSharingDefeatsTheElementClass:
+    """An element class is a fact about the *object*; definitions are per name.
+
+    An FPy list is a reference, so a store through one name is visible through
+    every other.  Both of these once reported ``ZERO|FINITE`` for a value the
+    interpreter makes a NaN.
+    """
+
+    def test_a_store_through_an_alias(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                ys = xs
+                ys[0] = fp.nan()
+                return fp.logb(xs[0])
+            else:
+                return 0
+
+        assert f([1.0, 2.0, 3.0, 4.0]).isnan
+        assert _lowered_cls(f, 'logb(xs[0])', n=4) == TOP
+
+    def test_a_store_inside_a_callee(self):
+        @fp.fpy(ctx=fp.REAL)
+        def poison(ys):
+            ys[0] = fp.nan()
+            return 0
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                z = poison(xs)
+                return fp.logb(xs[0]) + z
+            else:
+                return 0
+
+        assert f([1.0, 2.0, 3.0, 4.0]).isnan
+        assert _lowered_cls(f, 'logb(xs[0])', n=4) == TOP
 
 
 class TestAReductionRefinesTheElements:
