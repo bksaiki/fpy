@@ -52,6 +52,7 @@ from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatBound
 from ...analysis.reaching_defs import AssignDef
+from ...analysis.value_class import ValueClass
 from ...ast.fpyast import (
     Argument,
     Call,
@@ -533,14 +534,21 @@ def _binds_by_reference(
 
 def return_storage(
     ret_fmt: FormatBound, unbox: UnboxAnalysis | None,
+    cls: 'ValueClass | None' = None,
 ) -> CppType:
     """The storage a function's return value takes.
 
     ``ret_fmt`` joins every ``ReturnStmt``, so a multiple-return program gets a
     class wide enough for every path.  A ``None`` bound is not a missing return
     but format inference's convention for a non-numeric result.
+
+    *cls* is the value class joined over those same ``ReturnStmt`` expressions,
+    where every one is a scalar; it narrows the bound the way
+    :class:`~fpy2.analysis.StorageInfer` narrows a definition's.  This is the
+    one storage choice that analysis does not make, so the narrowing has to be
+    repeated here rather than inherited.
     """
-    ty = choose_storage(ret_fmt)
+    ty = choose_storage(ret_fmt, cls)
     return ty if unbox is None else unbox.annotate_return(ty)
 
 

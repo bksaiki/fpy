@@ -340,6 +340,7 @@ class CppEmitter(Visitor):
     format_info: FormatAnalysis
     class_info: ValueClassAnalysis
     ctx_use: ContextUseAnalysis
+    ret_ty: 'CppType | None'
     writer: _IndentedWriter
 
     def __init__(
@@ -352,6 +353,7 @@ class CppEmitter(Visitor):
         class_info: ValueClassAnalysis,
         ctx_use: ContextUseAnalysis,
         *,
+        ret_ty: 'CppType | None' = None,
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
@@ -365,6 +367,7 @@ class CppEmitter(Visitor):
         self.format_info = format_info
         self.class_info = class_info
         self.ctx_use = ctx_use
+        self.ret_ty = ret_ty
         # How each list is represented, or ``None`` to keep every handle.
         self.unbox = unbox
         # Emitted parameter types of the callees, so a call site can adapt.
@@ -973,10 +976,17 @@ class CppEmitter(Visitor):
     def _infer_return_storage(self, func: FuncDef) -> CppType | None:
         """The function's return storage, with a source location on failure.
 
+        ``ret_ty`` from :class:`SpecAnalyses` where the caller supplied one --
+        it is the type the ABI was published with, and re-deriving it here once
+        let the two disagree.  Falling back keeps a standalone emitter working,
+        at the cost of the value-class narrowing the compiler applies.
+
         See :func:`return_storage`.  A ``None`` bound is not a missing return --
         FPy's reachability check rejects those at decoration time -- but format
         inference's convention for a non-numeric result, which maps to ``BOOL``.
         """
+        if self.ret_ty is not None:
+            return self.ret_ty
         try:
             return return_storage(self.format_info.fn_fmt.ret_fmt, self.unbox)
         except StorageSelectionError as e:
@@ -2717,7 +2727,7 @@ class CppEmitter(Visitor):
             f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
             f'{self._list_end(arg_ty, src)}, {seed})'
         )
-        if arg_ty.size:
+        if isinstance(arg_ty, CppList) and arg_ty.size:
             # A *non-zero* length in the type settles the guard statically.
             # `size == 0` is falsy here and keeps it, which is right: a
             # `std::array<T, 0>` is legal and is exactly the case it guards.

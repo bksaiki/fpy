@@ -63,13 +63,23 @@ and ±inf. No integer rung admits those, so the search falls through to `float`.
 `exact_logb` sets `has_neg_inf=True` *unconditionally*, because `logb(±0)` is
 `-inf` and every format contains a zero.
 
-Two things are needed, and neither alone suffices:
+`ValueClassInfer` already answers this. `_LOGB` maps `NaN -> NaN`,
+`Zero -> Inf`, `Inf -> Inf`, `Finite -> Zero|Finite` (`logb(1.5)` is `0`), and on
+a program guarding NaN, Inf and zero under `REAL` the `Logb` expression reports
+`ZERO|FINITE` — NaN and Inf both excluded. That is exactly what is missing from
+the format.
 
-- `ValueClassInfer` has **no `Logb` rule**. Measured on a program guarding NaN,
-  Inf and zero: the argument narrows to `ValueClass.FINITE`, and the `Logb`
-  result is still `ValueClass.TOP`.
-- `StorageInfer` never sees value classes. `compiler.py` computes `class_info`
-  and hands it to the emitter, but `StorageInfer.infer` takes formats only.
+**The one gap is that `StorageInfer` never sees it.** `compiler.py` computes
+`class_info` and hands it to the emitter; `StorageInfer.infer` takes formats
+only, so the `enable_nan` / `enable_inf` flags stand and the search falls
+through to `float`.
+
+`ValueClassInfer` does lose the class under a *concrete* context — `_rounded`
+replaces the exact class with `representable_classes(ctx)` wholesale rather than
+intersecting, so the same program at `FP32` reports `TOP`. That is sound
+(rounding can move a value between classes: overflow to `Inf`, underflow to
+`Zero`, saturation back to finite) and it does not matter here, because the
+exact integer format only survives under `REAL` anyway.
 
 Integer storage is otherwise reachable — a loop counter already gets `int8_t`
 and an integer accumulator `int16_t` — so the ladder works; the special-value
@@ -93,37 +103,63 @@ Per-element cost is flat from `n=256` up (swept 32 / 256 / 1024 / 4096 /
 
 ### The baseline contradicts the premise
 
-**`any_direct` — the fused one — is 51% *slower* than `any_named`.** Reproduced
-across a five-point sweep and two full runs; the minima are stable even where
-the spread is not.
+**`any_direct` — the fused one — is 51% *slower* than `any_named`.** Measured
+both ways, at `n=1024`:
+
+| kernel | sized (`std::array`) | unsized (`std::vector`) |
+|---|---|---|
+| `any_named` (materialized) | **476** | **3491** |
+| `any_direct` (fused) | 717 | 720 |
 
 `ReduceFusion`'s docstring claims the fused form "measures 2-4x faster", and
-that is not wrong — it is measured against a different representation:
+that is right — for the unsized path, where it is 4.85x. On the sized path it
+is a 1.50x *loss*. The fused number is the same either way because fusing
+removes the list, so no representation is chosen.
 
-```
-length proven   →  std::array<bool, 1024>   stack, no allocation
-length unknown  →  std::vector<bool>        heap + per-element bit twiddling
-```
+### But the representation is the bug, not the fuse
 
-The 2-4x is the `std::vector<bool>` path. On the `std::array` path the
-materialized form vectorizes — a fill loop with no loop-carried dependency,
-then a vectorized `any_of` — while the fused form serializes on the
-accumulator. Rewriting `acc || b` as `acc | b` does not recover it (measured:
-no reliable difference).
+The cliff is not heap-versus-stack. `reduce_sum` is 988 sized against 976
+unsized and `reduce_max` 3915 against 3779 — a heap allocation costs those
+nothing. It is `std::vector<bool>` specifically, and isolating it in plain C++
+says so:
 
-**So S1 and S2 are not automatically wins.** Eliminating a materialization is a
-win when it removes an allocation and a loss when it removes a vectorizable
-loop. `reduce_sum` says the same from the other side: at 0.96 ns/elt it is
-already at the latency of a serial FP add chain, so the array is nearly free
-there and removing it cannot buy much.
+| representation | ns/call |
+|---|---|
+| `std::array<bool, 1024>` | 478 |
+| `std::vector<bool>` | **3483** |
+| `std::vector<uint8_t>` | **476** |
+| fused loop | 724 |
 
-This is the plan's main open question, and it has an awkward shape:
-`ReduceFusion` runs *before* `Specialize`, so it cannot know whether the list
-will be a `std::array` or a `std::vector`. Options, none yet chosen:
+Bit-packing is the entire 7.3x. A `std::vector<uint8_t>` matches the stack
+array to within noise, so the allocation is free and the packing is not.
 
-1. decide the fuse after storage is known, which means moving it or splitting it;
-2. leave the decision to the emitter, against the direction `backend-independence.md` argues for;
-3. fuse unconditionally and fix the fused *shape* to vectorize, which the `|` measurement suggests is not simply a matter of the operator.
+**The spelling is where the cost is** — `CppList.format()` spells a `bool`
+element as `bool`, which is `std::vector<bool>` in the two unsized spellings
+(`std::vector<bool>` and `std::shared_ptr<std::vector<bool>>`);
+`std::array<bool, K>` is unaffected and already fast. Spelling those two
+`uint8_t` would take the unsized bool reductions from 3491 to about 480.
+
+**Decided against.** Changing the representation of `list[bool]` to buy back a
+fuse's worth of time is a larger commitment than the win justifies, and it
+would make one FPy type spell its element two ways depending on representation.
+`ReduceFusion` stays, and its docstring now states where it pays and where it
+does not. That leaves a known 1.5x loss on the sized path, accepted: the pass
+runs before `Specialize`, so gating it on representation means moving it or
+splitting the decision from the rewrite, and neither is worth doing for this.
+
+What the measurement argues against — kept as optional Phases 7 and 8, with
+the evidence, so they are not picked up again without it:
+
+- **Fusing `Sum` / `AMin` / `AMax` is not worth doing.** Their sized and unsized
+  numbers agree to ~1%, so the intermediate is nearly free: their element is a
+  float, with no bit-packed specialization to pay for, and `reduce_sum` at
+  0.96 ns/elt is already at the latency of a serial FP add chain that fusing
+  does not shorten. For `AMax` fusing is actively worse — a hand-written fused
+  `max([logb(x) ...])` measures 11% slower (3703ns against 3343ns), since the
+  accumulator spills across each opaque `logbf` call. This retires the plan's highest-risk item — the `_eval_sum`
+  seeding trap — on evidence rather than by doing it carefully.
+- **Teaching the fuse to see through a name is worse than not.** It would make
+  the pass fire more often, and firing is the pessimization on the sized path.
 
 ## Phases
 
@@ -140,33 +176,22 @@ visiting args for their statement effects; `_emit_sum` drops the guard when
 Tests: `test_bind_profile`, `test_emit_sum`, `test_emit_array`,
 `test_emit_list`, `test_storage`. *Prototyped; lowest risk.*
 
-**Phase 2 — resolve the fusion question.** Not code first: decide, against the
-benchmark, whether fusion should be gated on representation. Phases 3 and 4
-below are contingent on the answer, and may reduce to "gate the existing fuse"
-rather than "extend it".
+**Phase 2 — resolve the fusion question.** Done, above. The answer was that
+the fuse is not what needs gating and the `bool` spelling is what costs, and
+then that changing the spelling is not worth it either. The commit is this
+file plus `ReduceFusion`'s docstring, which now states the two cases and their
+numbers. The durable statement of that now lives in `backend-cpp.md` under
+"When `ReduceFusion` pays, and when it costs"; what is below is the record of
+how the decision was reached. S1 and S2 move to Phases 6 and 5, optional and
+argued against.
 
-**Phase 3 — fuse through a single-use name** (S2). Match a reduction whose
-argument is a `Var` whose definition is a `ListComp` with exactly one use in the
-same block; leave the dead definition to `Simplify`'s DCE. Gate on no
-intervening statement writing a name the comprehension reads. Tests:
-`test_reduce_fusion`, plus a cpp witness.
+**Phase 3 — a `Logb` rule for `ValueClassInfer`** (S5a). **Not needed.** The
+rule is already there and already precise under `REAL`; see S5. Verified by
+compiling the guarded witness and reading the class off the `Logb` expression.
+No commit.
 
-**Phase 4 — cover `Sum` / `AMin` / `AMax`** (S1). The trap: `_eval_sum` seeds
-with `val[0]` **unrounded** and does *n-1* rounded adds, so `acc = 0;
-acc = acc + b` is wrong twice over — it rounds the seed and adds *n* times. It
-needs a peeled first iteration, sound only where the length is proven nonzero.
-`AMin`/`AMax` are easier: the empty list is already undefined. Corrects
-`reduce_fusion.py`'s docstring, `backend-cpp.md` §*Narrowing inside
-`std::accumulate`*, and `backend-independence.md`'s "`ReduceFusion` never
-fires". Tests: `test_reduce_fusion`, `test_emit_sum`, `test_emit_min_max`,
-`test_lowered_roundtrip`.
-
-**Phase 5 — a `Logb` rule for `ValueClassInfer`** (S5a). `logb(FINITE)` is
-finite, `logb(ZERO)` and `logb(INF)` are infinite, `logb(NAN)` is NaN. Analysis
-only, no codegen change. Tests: `test_value_class`.
-
-**Phase 6 — `StorageInfer` consults value classes** (S5b). Pass `class_info`
-into `StorageInfer.infer` and clear the special-value flags a class rules out
+**Phase 4 — `StorageInfer` consults value classes** (all of S5, now that
+Phase 3 is closed). Pass `class_info` into `StorageInfer.infer` and clear the special-value flags a class rules out
 before the domain search, joining across a storage class so one member that can
 be ±inf still forces `float`. Expected: `max_e` to `int16_t` under a zero
 guard, and the FP16 ladder's own `exp` to `int8_t`, dropping two
@@ -177,8 +202,30 @@ benchmark. Tests: `test_storage_infer`, `test_storage_ladder`,
 `test_class_guards`, `test_unfold_round`, `test_lowered_roundtrip`,
 `test_bind_profile`.
 
-Ordering: 5 before 6, or 6 does nothing for `logb`. 1 is independent of
-everything. 3 and 4 are both downstream of 2's decision.
+**Phase 5 (optional) — fuse through a single-use name** (S2). Match a reduction
+whose argument is a `Var` whose definition is a `ListComp` with exactly one use
+in the same block; leave the dead definition to `Simplify`'s DCE. Gate on no
+intervening statement writing a name the comprehension reads. Tests:
+`test_reduce_fusion`, plus a cpp witness. **The measurement argues against it**:
+it makes the fuse fire more often, and on the sized path firing is the
+pessimization (476 -> 717). Worth doing only if the sized-path loss is addressed
+first, which nothing here plans to do.
+
+**Phase 6 (optional) — cover `Sum` / `AMin` / `AMax`** (S1). The trap: `_eval_sum`
+seeds with `val[0]` **unrounded** and does *n-1* rounded adds, so `acc = 0;
+acc = acc + b` is wrong twice over — it rounds the seed and adds *n* times. It
+needs a peeled first iteration, sound only where the length is proven nonzero.
+`AMin`/`AMax` are easier: the empty list is already undefined. Would also
+correct `backend-cpp.md` §*Narrowing inside `std::accumulate`*. Tests:
+`test_reduce_fusion`, `test_emit_sum`, `test_emit_min_max`,
+`test_lowered_roundtrip`. **The measurement argues against it too**: sized and
+unsized agree to ~1% for these, and a hand-written fused `max([logb(x) ...])`
+is 11% *slower*. This is the highest-risk item in the file and currently the
+lowest-value one.
+
+Ordering: 1 and 4 are independent of each other and of everything else. 3 is
+closed with no work. 5 and 6 both extend `ReduceFusion` and both are argued
+against by the benchmark; neither is on the path.
 
 ## Not shortcomings
 
@@ -189,5 +236,5 @@ everything. 3 and 4 are both downstream of 2's decision.
   `int`, so there is no sign-compare warning and no bug.
 - `float` for `max_e` in the program above is **correct as written**. `xs` may
   contain a zero, `logb(0)` is `-inf`, so the value really can be infinite.
-  Phases 5 and 6 change that program not at all; they pay where a guard
-  excludes zero, and inside the ladder, which already does.
+  Phase 4 changes that program not at all; it pays where a guard excludes
+  zero, and inside the ladder, which already does.

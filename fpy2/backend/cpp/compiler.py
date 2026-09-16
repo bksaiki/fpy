@@ -18,6 +18,8 @@ from ...analysis import (
     DefineUse,
     Escape,
     FormatInfer,
+    ValueClass,
+    ValueClassAnalysis,
     ValueClassInfer,
 )
 from ...analysis.alias import AliasAnalysis
@@ -26,8 +28,7 @@ from ...analysis.define_use import DefineUseAnalysis
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
 from ...analysis.storage_infer import StorageInfer
-from ...analysis.value_class import ValueClassAnalysis
-from ...ast.fpyast import Call, FuncDef, NamedId
+from ...ast.fpyast import Call, FuncDef, NamedId, ReturnStmt
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
@@ -101,6 +102,7 @@ class SpecAnalyses:
     alias: AliasAnalysis
     summary: EscapeSummary
     unbox: UnboxAnalysis | None
+    ret_ty: CppType
 
 
 
@@ -149,6 +151,26 @@ def _function_calls(ast: FuncDef) -> dict[Call, Function]:
             if isinstance(e.fn, Function):
                 out[e] = e.fn
             super()._visit_call(e, ctx)
+
+    _Collector()._visit_function(ast, None)
+    return out
+
+
+def _return_class(ast: FuncDef, class_info: ValueClassAnalysis) -> ValueClass:
+    """The value class joined over every ``ReturnStmt`` expression.
+
+    The return is the one storage choice :class:`StorageInfer` does not make, so
+    the narrowing it does per definition is repeated for the return here.  An
+    expression carrying no class -- a tuple, a list -- classifies as the top,
+    which narrows nothing, so an aggregate return simply opts out.
+    """
+    out = ValueClass(0)
+
+    class _Collector(DefaultVisitor):
+        def _visit_return(self, stmt: ReturnStmt, ctx):
+            nonlocal out
+            out |= class_info.classify(stmt.expr)
+            super()._visit_return(stmt, ctx)
 
     _Collector()._visit_function(ast, None)
     return out
@@ -238,7 +260,7 @@ def _check_signature_monomorphic(a: SpecAnalyses) -> None:
 
 
 def _return_storage(a: SpecAnalyses) -> CppType:
-    return return_storage(a.format_info.fn_fmt.ret_fmt, a.unbox)
+    return a.ret_ty
 
 
 class CppCompiler(Backend):
@@ -513,7 +535,7 @@ class CppCompiler(Backend):
             du = format_info.type_info.def_use
             chosen = StorageInfer.infer(
                 du, format_info.by_def, format_info.by_expr,
-                CppStorageDomain(),
+                CppStorageDomain(), class_info.by_def,
             )
         except StorageSelectionError as e:
             raise CppCompileError(
@@ -559,7 +581,10 @@ class CppCompiler(Backend):
         # Checked here for every mode so each entry point reports the same
         # error -- `signature` has no emission step to catch it later.
         try:
-            ret_ty = return_storage(format_info.fn_fmt.ret_fmt, unbox)
+            ret_ty = return_storage(
+                format_info.fn_fmt.ret_fmt, unbox,
+                _return_class(ast, class_info),
+            )
         except StorageSelectionError as e:
             raise CppCompileError(
                 f'storage selection failed for `{func.name}`: {e}'
@@ -584,6 +609,7 @@ class CppCompiler(Backend):
             alias=alias,
             summary=summary,
             unbox=unbox,
+            ret_ty=ret_ty,
         )
 
     def signature(
@@ -642,6 +668,7 @@ class CppCompiler(Backend):
 
         emitter = CppEmitter(
             ast=ast,
+            ret_ty=a.ret_ty,
             storage=a.storage,
             variables=a.variables,
             def_use=a.def_use,

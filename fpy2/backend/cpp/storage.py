@@ -29,6 +29,7 @@ from ...analysis.storage_infer import (
     join,
     of_bound,
 )
+from ...analysis.value_class import ValueClass
 from ...ast.fpyast import Var
 from ...number import (
     FP32,
@@ -131,15 +132,18 @@ def choose_storage_scalar(bound: FormatBound) -> CppScalar:
     return ty
 
 
-def choose_storage(bound: FormatBound) -> CppType:
+def choose_storage(bound: FormatBound, cls: 'ValueClass | None' = None) -> CppType:
     """The storage containing *bound*, spelled.
 
     One implementation, in the analysis: :func:`of_bound` searches the domain and
     :func:`to_cpp` spells the result.  The search has a subtlety worth not
     repeating -- the sequence is a tie-break, not a presentation order -- so the
     backend asks rather than walking the ladder itself.
+
+    *cls* narrows the bound by the special values the value cannot hold; see
+    :func:`~fpy2.analysis.storage_infer.of_bound`.
     """
-    return to_cpp(of_bound(CppStorageDomain(), bound))
+    return to_cpp(of_bound(CppStorageDomain(), bound, cls))
 
 
 def scalar_sup(scalars: list[CppScalar]) -> CppScalar:

@@ -533,6 +533,43 @@ that says `double` wherever FPy says real. *Integer*-typed FPy values keep integ
 storage regardless; `range(...)` needs an integer list and must stay one — that is
 what an early measured attempt broke.
 
+### When `ReduceFusion` pays, and when it costs
+
+`ReduceFusion` replaces `any`/`all` over a comprehension with a running
+accumulator, skipping the intermediate `list[bool]`. Whether that is a win
+turns entirely on the list's *representation*, and the two cases go opposite
+ways. Measured at `n=1024` by `tests/infra/backend/cpp_bench.py --repr
+sized,unsized`:
+
+| | materialized | fused |
+|---|---|---|
+| length unknown — `std::vector<bool>` | 3491 | **720** |
+| length proven — `std::array<bool, K>` | **476** | 717 |
+
+So fusing is 4.8x faster where the length is unproven and a 1.5x loss where it
+is proven. The bit-packing is the whole of it: a `std::vector<uint8_t>` measures
+476, level with the stack array, so the heap allocation costs nothing and
+`std::vector<bool>`'s packing costs 7.3x.
+
+**The pass pays exactly where the length is not proven, and is applied
+regardless.** It runs before `Specialize`, so the representation it would need
+to decide by has not been chosen yet. Gating it means moving it, or splitting
+the decision from the rewrite; neither is done, and the sized-path loss is
+accepted.
+
+Spelling a vector's `bool` element `uint8_t` would remove the cliff and make
+materializing win everywhere — considered and declined, since it would make one
+FPy type spell its element two ways depending on representation.
+
+**The other reductions do not want fusing.** `Sum` / `AMin` / `AMax` allocate
+too, but their element is a float, so the unsized form is a plain
+`std::vector<float>` with no specialization to pay for: sized and unsized agree
+to ~1%, and `sum` is already at the latency of a serial add chain that fusing
+does not shorten. For `AMax` it is worse than neutral — a hand-written fused
+`max([logb(x) for x in xs])` measures 11% *slower* (3703 against 3343), because
+the accumulator has to survive an opaque `logbf` call and so spills and reloads
+every iteration, where the materialized fill loop keeps its registers.
+
 ### Narrowing inside `std::accumulate`, so `Sum` can fuse
 
 `ReduceFusion` fuses `any` / `all` over a comprehension into one loop, skipping
