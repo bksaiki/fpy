@@ -472,15 +472,106 @@ class _ValueClassInstance(DefaultVisitor):
         into its sibling -- intersecting ``{NaN}`` with ``{Inf}`` down an ``elif``
         ladder and driving every later use to the empty class.
         """
-        saved = self._refine
+        saved, saved_elt = self._refine, self._refine_elt
         out = dict(saved)
         for d, cls in self._implied(cond, truth):
             out[d] = out.get(d, _TOP) & cls
-        self._refine = out
+        out_elt = dict(saved_elt)
+        for d, cls in self._implied_elements(cond, truth):
+            out_elt[d] = out_elt.get(d, _TOP) & cls
+        self._refine, self._refine_elt = out, out_elt
         try:
             yield
         finally:
-            self._refine = saved
+            self._refine, self._refine_elt = saved, saved_elt
+
+    def _implied_elements(
+        self, cond: Expr, truth: bool,
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What *cond* being *truth* says about the *elements* of a list.
+
+        One shape, and it is a loop rather than the ``any``/``all`` it was
+        written as -- `CompToLoop` lowers the comprehension long before this
+        analysis runs::
+
+            acc = False                 # `True` for `all`
+            for x in xs:
+                b = <pred>(x)
+                acc = acc or b          # `and` for `all`
+
+        ``not acc`` after the ``or`` form and ``acc`` after the ``and`` form say
+        the same thing: the predicate's verdict holds for *every* element.  The
+        quantifier is universal because FPy has no ``break``, so the loop always
+        runs the whole iterable.
+
+        Sound only while the accumulator really is that fold, so the match is
+        strict: the seed is a literal, the step is exactly ``acc <op> b`` naming
+        this phi, the predicate reads only the loop target, and nothing in the
+        body writes the list.  Anything else returns nothing.
+        """
+        if not isinstance(cond, Var):
+            return []
+        d = self.def_use.find_def_from_use(cond)
+        if not (isinstance(d, PhiDef) and d.is_loop):
+            return []
+        loop = d.site
+        if not isinstance(loop, ForStmt) or not isinstance(loop.iterable, Var):
+            return []
+        if not isinstance(loop.target, NamedId):
+            return []
+
+        seed = self._assigned_expr(self.def_use.defs[d.lhs])
+        step = self._assigned_expr(self.def_use.defs[d.rhs])
+        if not isinstance(seed, BoolVal) or not isinstance(step, (And, Or)):
+            return []
+        # `acc = acc <op> b`, with the accumulator being this very phi
+        if len(step.args) != 2:
+            return []
+        carried, probe = step.args
+        if not isinstance(carried, Var) or not isinstance(probe, Var):
+            return []
+        if self.def_use.find_def_from_use(carried) is not d:
+            return []
+
+        # `all` refines where it holds, `any` where it does not, and each needs
+        # the seed that makes it a fold rather than a constant
+        if isinstance(step, And):
+            if not (seed.val and truth):
+                return []
+            want = True
+        else:
+            if seed.val or truth:
+                return []
+            want = False
+
+        pred = self.def_use.defining_expr(probe)
+        if pred is probe:
+            return []
+        target_def = self.def_use.find_def_from_site(loop.target, loop)
+        cls = dict(self._implied(pred, want)).get(target_def)
+        if cls is None or self._writes_list(loop.body, loop.iterable):
+            return []
+        return [(self.def_use.find_def_from_use(loop.iterable), cls)]
+
+    def _assigned_expr(self, d: Definition) -> Expr | None:
+        """The expression *d* is assigned, where *d* is a plain assignment."""
+        site = getattr(d, 'site', None)
+        return site.expr if isinstance(site, Assign) else None
+
+    def _writes_list(self, body: StmtBlock, name: Var) -> bool:
+        """Does *body* store into the list *name*?  A refinement read off the
+        loop would describe elements a later store replaced."""
+        found = False
+
+        class _Scan(DefaultVisitor):
+            def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+                nonlocal found
+                if stmt.var == name.name:
+                    found = True
+                super()._visit_indexed_assign(stmt, ctx)
+
+        _Scan()._visit_block(body, None)
+        return found
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the definitions it tests."""

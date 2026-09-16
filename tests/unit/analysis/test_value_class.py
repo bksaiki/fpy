@@ -674,6 +674,110 @@ class TestArgumentsAndContexts:
         assert _cls(f, 'g(x)') == TOP
 
 
+def _lowered_cls(fn, text: str, n: int = 8) -> ValueClass:
+    """The class of *text* in *fn* after the cpp pipeline has lowered it.
+
+    The element rules only matter on the lowered form: a comprehension is a
+    fill loop by then, and ``any``/``all`` an accumulator loop, which is what
+    the recognizer has to match.
+    """
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    for spec in CppCompiler().specialize(m):
+        info = ValueClassInfer.analyze(spec.ast)
+        return info.classify(_find(spec.ast, text))
+    raise AssertionError('no spec')
+
+
+class TestListElementClasses:
+    """A list carries a class for its elements; a read and a reduction use it."""
+
+    def test_a_built_list_gets_the_class_of_what_is_stored(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        # `abs` never yields a -inf, so neither does an element of `ys`
+        assert not (_lowered_cls(f, 'max(ys)') & NEG_INF)
+
+    def test_a_reduction_reads_the_element_class(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [min(max(fp.logb(x), -126), 128) for x in xs]
+            return max(ys)
+
+        # both clamps bind, so only a NaN survives from `logb(NaN)`
+        assert _lowered_cls(f, 'max(ys)') == NAN | ZERO | FINITE
+
+    def test_a_parameter_list_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return max(xs)
+
+        assert _lowered_cls(f, 'max(xs)') == TOP
+
+
+class TestAReductionRefinesTheElements:
+    """`all(...)` where it holds, and `any(...)` where it does not, each say
+    something about *every* element."""
+
+    def test_all_refines_the_taken_arm(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return max([fp.logb(x) for x in xs])
+            return 0
+
+        # every element is finite, so `logb` is only ever -inf (from a zero)
+        assert _lowered_cls(f, 'logb(x)') == NEG_INF | ZERO | FINITE
+
+    def test_any_refines_the_untaken_arm(self):
+        # an explicit `else`: `_visit_if1` refines only its body, so an
+        # early-return guard does not reach the code after it
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if any([fp.isinf(x) for x in xs]):
+                return 0
+            else:
+                return max([fp.logb(x) for x in xs])
+
+        assert not (_lowered_cls(f, 'logb(x)') & POS_INF)
+
+    def test_all_says_nothing_on_the_untaken_arm(self):
+        """`not all(p)` is "some element fails", which constrains none of them."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return 0
+            return max([fp.logb(x) for x in xs])
+
+        assert _lowered_cls(f, 'logb(x)') == TOP
+
+    def test_any_says_nothing_on_the_taken_arm(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if any([fp.isinf(x) for x in xs]):
+                return max([fp.logb(x) for x in xs])
+            return 0
+
+        assert _lowered_cls(f, 'logb(x)') == TOP
+
+    def test_a_body_that_stores_into_the_list_is_not_refined(self):
+        """The guard describes the elements it read, not the ones a later store
+        put there."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                for i in range(len(xs)):
+                    xs[i] = fp.nan()
+                return max([fp.logb(x) for x in xs])
+            return 0
+
+        assert _lowered_cls(f, 'logb(x)') == TOP
+
+
 class TestTheLoweredRounding:
     """The payoff, and the acceptance test for the consumers that follow.
 
