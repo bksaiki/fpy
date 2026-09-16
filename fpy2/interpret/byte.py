@@ -613,9 +613,7 @@ class BytecodeCompiler(Visitor):
     def _visit_expr(self, e: Expr, ctx):
         """Every expression, wrapped in :attr:`probe` where one is given.
 
-        The wrapper is the identity, so the program runs as it would; it is the
-        one place a consumer can see what each expression actually evaluated
-        to, which is what checking an analysis against a run needs.
+        The wrapper is the identity, so the program runs as it would.
         """
         out = super()._visit_expr(e, ctx)
         if self.probe is None or not isinstance(out, pyast.expr):

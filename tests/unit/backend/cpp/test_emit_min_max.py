@@ -278,8 +278,8 @@ class TestTheFloatPathReachesTheLibraryForm:
         assert 'isnan' in out and 'signbit' in out
 
 
-    def test_a_reduction_over_guarded_elements(self):
-        """The fold reads the *element* class: a guard over the whole list
+    def test_a_reduction_over_guarded_elements_uses_the_library_form(self):
+        """The fold reads the *element* class, so a guard over the whole list
         drops the propagation the same way a guard on two names does."""
         @fp.fpy(ctx=fp.REAL)
         def q(xs) -> fp.Real:
@@ -289,7 +289,7 @@ class TestTheFloatPathReachesTheLibraryForm:
                 return 0
 
         out = CppCompiler().compile(q, arg_types=[ListType(RealType(fp.FP64))])
-        assert 'isnan' not in out.split('for (size_t')[-1]
+        assert 'quiet_NaN' not in out
 
     def test_a_reduction_over_unguarded_elements_stays_inline(self):
         @fp.fpy(ctx=fp.REAL)

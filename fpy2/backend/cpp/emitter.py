@@ -898,7 +898,7 @@ class CppEmitter(Visitor):
             ty: CppType = rounded
         else:
             try:
-                ty = choose_storage(fmt)
+                ty = choose_storage(fmt, self._value_class(e))
             except StorageSelectionError as err:
                 raise CppEmitError(
                     f'cannot pick storage for {type(e).__name__}: {err}',
@@ -1257,20 +1257,8 @@ class CppEmitter(Visitor):
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
-        if scalar_fits_in(src, want):
+        if scalar_fits_in(src, want) or self._value_fits(at, want):
             return
-        # An expression's storage is what its *operands* are cast to, which the
-        # result need not need: ``max(logb(x), -126)`` computes at ``float``
-        # because ``logb`` does, and is an integer in ``[-126, 127]``.  So ask
-        # the value -- its own bound, narrowed by its class.
-        fmt = self.format_info.by_expr.get(at)
-        if fmt is not None:
-            try:
-                exact = choose_storage(fmt, self._value_class(at))
-            except StorageSelectionError:
-                exact = None
-            if isinstance(exact, CppScalar) and scalar_fits_in(exact, want):
-                return
         raise CppEmitError(
             f'unsupported: storing a `{src.format()}` into a slot of '
             f'`{want.format()}` would narrow it, and the list would then not '
@@ -1376,15 +1364,21 @@ class CppEmitter(Visitor):
         return out
 
     def _storage_or_none(self, e: Expr) -> CppType | None:
-        """The storage *e* actually emits as, or ``None`` where unknown.
+        """The storage *e* actually emits as, or ``None`` where it has none.
 
-        :meth:`CppStorage.of_expr` chooses the type; the representation is
-        stamped here, since it is decided per alias region (see :mod:`.unbox`).
+        :meth:`CppStorage.of_expr` decides *whether* there is one -- a boolean
+        and a non-numeric result have none -- and :meth:`_storage_for_expr`
+        gives it.  Both, so this cannot answer a different type from the one the
+        expression was emitted at: a class narrows there and not in `of_expr`,
+        and a caller comparing the two would then skip the conversion between
+        them.
         """
-        ty = self.storage.of_expr(e)
-        if ty is None:
+        if self.storage.of_expr(e) is None:
             return None
-        return ty if self.unbox is None else self.unbox.annotate(e, ty)
+        try:
+            return self._storage_for_expr(e)
+        except CppEmitError:
+            return None
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         # A function has one return type, so every `return` produces it: built
@@ -1742,6 +1736,35 @@ class CppEmitter(Visitor):
             )
         return ty
 
+    def _value_fits(self, e: Expr, want: CppScalar) -> bool:
+        """Whether every value *e* can take is representable in *want*.
+
+        An expression's storage is what its *operands* are cast to, which the
+        result need not need: ``max(logb(x), -126)`` computes at ``float``
+        because ``logb`` does, and is an integer in ``[-126, 127]``.  So ask the
+        value -- its own bound, narrowed by its class.
+        """
+        fmt = self.format_info.by_expr.get(e)
+        if fmt is None:
+            return False
+        try:
+            exact = choose_storage(fmt, self._value_class(e))
+        except StorageSelectionError:
+            return False
+        return isinstance(exact, CppScalar) and scalar_fits_in(exact, want)
+
+    def _narrow_result(
+        self, code: str, have: CppScalar, want: CppScalar, e: Expr,
+    ) -> str:
+        """*code*, computed at *have*, in the storage *e* reports.
+
+        A selection returns an operand unrounded, so it computes at the join of
+        its operands -- which a class may have narrowed the *result* below.
+        """
+        if have is want or not self._value_fits(e, want):
+            return self._maybe_cast(code, have, want, at=e, src=e)
+        return self._explicit_cast(code, want)
+
     def _maybe_cast(
         self, arg: str, arg_ty: CppScalar, target_ty: CppScalar,
         *, at: Ast | None = None, src: Expr | None = None,
@@ -1847,30 +1870,6 @@ class CppEmitter(Visitor):
                 at=at,
             )
         return storage
-
-    def _result_storage(self, e: Expr) -> CppType:
-        """Where *e*'s own result is held, narrowed by what it can be.
-
-        The other half of :meth:`_storage_for_expr`, which is the type *e*'s
-        operands are cast to.  The two differ wherever a value class rules out
-        what the format admits, and only one of them may use it: the operands of
-        a selection are not bounded by its result, so ``max(logb(x), -126)``
-        must keep ``float`` operands although it is an integer -- casting a
-        ``logb`` that may be an infinity into one is undefined.  So a class
-        narrows where the *result* goes, never what is fed in.
-
-        Falls back to the unnarrowed answer wherever a class cannot apply: a
-        rounded expression takes its storage from the context, and a bound with
-        no storage has nothing to narrow.
-        """
-        fmt = self.format_info.by_expr.get(e)
-        if fmt is None or self._round_storage(e) is not None:
-            return self._storage_for_expr(e)
-        try:
-            ty = choose_storage(fmt, self._value_class(e))
-        except StorageSelectionError:
-            return self._storage_for_expr(e)
-        return ty if self.unbox is None else self.unbox.annotate(e, ty)
 
     def _dispatch(
         self,
@@ -2005,7 +2004,7 @@ class CppEmitter(Visitor):
         keeps a possibly-infinite operand out of an integer signature.
         """
         try:
-            result_ty = self._result_storage(e)
+            result_ty = self._storage_for_expr(e)
         except CppEmitError:
             return None
         if not isinstance(result_ty, CppScalar):
@@ -2671,22 +2670,24 @@ class CppEmitter(Visitor):
         """Reduce an ``n``-ary ``min`` / ``max`` to nested pairwise steps.
 
         Each operand is cast losslessly into one storage type, so the integer
-        form has a single deduced template type.  That type is the active
-        context's, oddly -- these ops return an operand unrounded and need no
-        context -- because taking it from the operands instead does not work:
-        `by_expr` storage can disagree with the type `StorageInfer` gave the
-        declaration, and the cast decision then misses (`library_core.max_e`).
-        `REAL` has no storage, so there the operands are all that is left."""
+        form has a single deduced template type.  Under a rounding context that
+        is the context's; under ``REAL``, which has no storage, it is the join
+        of the operands -- these ops return an operand unrounded, so nothing
+        wider is needed.  The result then converts to the storage the
+        expression reports, which a class may have narrowed below the join."""
         if not e.args:
             raise CppInternalError(
                 f'{type(e).__name__} requires at least one argument',
                 at=e,
             )
         active = self._active_ctx_for(e)
+        # the operands are cast to `target`, so it has to hold each of them;
+        # the *result* is one of them and needs nothing wider
         target = (
-            self._scalar_storage_for_expr(e) if active is REAL
-            else self._scalar_for_ctx(active, at=e)
+            scalar_sup([self._scalar_storage_for_expr(a) for a in e.args])
+            if active is REAL else self._scalar_for_ctx(active, at=e)
         )
+        want = self._scalar_storage_for_expr(e)
         args = [self._visit_expr(a, ctx) for a in e.args]
         arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         casted = [
@@ -2710,13 +2711,13 @@ class CppEmitter(Visitor):
                     or not (cls & ValueClass.ZERO),
                 )
                 acc |= cls
-            return result
+            return self._narrow_result(result, target, want, e)
         # integers have no NaN and no signed zero, so the library form is exact
         fn = 'std::min' if isinstance(e, Min) else 'std::max'
         result = casted[0]
         for nxt in casted[1:]:
             result = f'{fn}({result}, {nxt})'
-        return result
+        return self._narrow_result(result, target, want, e)
 
     def _emit_ieee_min_max(
         self, a: str, b: str, ty: CppScalar, *, is_min: bool,
@@ -2844,14 +2845,16 @@ class CppEmitter(Visitor):
     def _emit_amin_amax(self, e: 'AMin | AMax', arg_str: str) -> str:
         """Reduce ``min(xs)`` / ``max(xs)`` to a hoisted for-loop.
 
-        Combiner as in :meth:`_emit_min_max`.  Both demand uniform operands, so each
-        element is cast to ``result_ty``.  The empty list is undefined, matching the
-        interpreter's ``ValueError``: the emit indexes ``xs[0]`` unguarded.
+        Combiner as in :meth:`_emit_min_max`.  The result *is* an element, so
+        the fold runs at the elements' own storage -- a list of integers reduces
+        on the integer path -- and converts once at the end to what consumers
+        were told.  The empty list is undefined, matching the interpreter's
+        ``ValueError``: the emit indexes ``xs[0]`` unguarded.
         """
-        result_ty = self._storage_for_expr(e)
-        if not isinstance(result_ty, CppScalar):
+        want = self._storage_for_expr(e)
+        if not isinstance(want, CppScalar):
             raise CppInternalError(
-                f'expected scalar result for {type(e).__name__}, got {result_ty!r}',
+                f'expected scalar result for {type(e).__name__}, got {want!r}',
                 at=e,
             )
         arg_storage = self._storage_for_expr(e.arg)
@@ -2863,38 +2866,24 @@ class CppEmitter(Visitor):
                 at=e,
             )
         elt_ty = arg_storage.elt
-        # The result *is* an element, so the fold runs at the elements' storage
-        # wherever the declared result can hold it -- and a list of integers
-        # then reduces on the integer path.  Where it cannot, each element is
-        # cast up instead, which is what `result_ty` was.
-        if scalar_fits_in(elt_ty, result_ty):
-            result_ty = elt_ty
         is_min = isinstance(e, AMin)
 
         src = self._bind_operand(arg_str)
         acc = self._fresh_temp()
         first = self._list_at_raw(arg_storage, src, '0')
-        init = self._maybe_cast(first, elt_ty, result_ty, at=e)
-        self.writer.add_line(f'{result_ty.format()} {acc} = {init};')
+        self.writer.add_line(f'{elt_ty.format()} {acc} = {first};')
         i = self._fresh_temp()
         self.writer.add_line(
             f'for (size_t {i} = 1; {i} < '
             f'{self._list_len(arg_storage, src)}; ++{i}) {{'
         )
         self.writer.indent()
-        elt = self._maybe_cast(
-            self._list_at_raw(arg_storage, src, i), elt_ty, result_ty, at=e,
-        )
-        if result_ty.is_float():
-            # both operands are elements, so the element class bounds each --
-            # but only where the cast above is not one, since a narrowing cast
-            # can flush a value the class calls non-zero
-            cls = (
-                self._value_class(e) if elt_ty == result_ty
-                else ValueClass.TOP
-            )
+        elt = self._list_at_raw(arg_storage, src, i)
+        if elt_ty.is_float():
+            # both operands are elements, so the element class bounds each
+            cls = self._value_class(e)
             step = self._emit_ieee_min_max(
-                acc, elt, result_ty, is_min=is_min,
+                acc, elt, elt_ty, is_min=is_min,
                 nan_free=not (cls & ValueClass.NAN),
                 zero_tie_free=not (cls & ValueClass.ZERO),
             )
@@ -2905,7 +2894,7 @@ class CppEmitter(Visitor):
         self.writer.add_line(f'{acc} = {step};')
         self.writer.dedent()
         self.writer.add_line('}')
-        return acc
+        return self._narrow_result(acc, elt_ty, want, e)
 
     def _emit_empty(self, e: Empty, result_ty: CppType, ctx) -> str:
         """``empty(d1, ..., dN)``: a zero-initialised list of storage

@@ -19,6 +19,7 @@ apart: rounding to a narrower format can *produce* an infinity, and the analysis
 has to say so.
 """
 
+import re
 import shutil
 import struct
 import subprocess
@@ -102,6 +103,29 @@ def _asserts(src: str) -> str:
     """Only the assertion lines.  The programs here *test* for a NaN themselves,
     so searching the whole output would find the branch and not the guard."""
     return '\n'.join(ln for ln in src.splitlines() if 'assert(' in ln)
+
+
+def _compiles(src: str) -> None:
+    """*src* is C++ a compiler accepts.
+
+    Every assertion in this file greps emitted text, which a type error passes
+    unnoticed -- a narrowed element type once produced ``std::max(int16_t,
+    float)`` under a passing test.  Warnings are errors here: a narrowing
+    inside a braced initializer is only a warning on GCC and ill-formed in the
+    standard.
+    """
+    if _CXX is None:
+        pytest.skip('no C++ compiler')
+    from fpy2.backend.cpp.utils import CPP_HEADERS
+    with tempfile.TemporaryDirectory() as td:
+        cpp = Path(td) / 'm.cpp'
+        cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src)
+        out = subprocess.run(
+            [_CXX, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-fsyntax-only',
+             str(cpp)],
+            capture_output=True, text=True,
+        )
+    assert out.returncode == 0, out.stderr[-2000:]
 
 
 def _build(src: str, name: str, td: str) -> Path:
@@ -300,8 +324,8 @@ class TestAResultStorageIsNotAnOperandTarget:
         assert 'std::ilogb(' not in out
 
     def test_an_operand_is_not_narrowed_by_the_result(self):
-        """The rule that keeps this from being old phase 3: ``max`` is finite
-        where ``logb`` is not, and its operands stay ``float``."""
+        """``max`` is finite where ``logb`` is not, so its operands stay
+        ``float``."""
         @fp.fpy
         def q(x: fp.Real) -> fp.Real:
             if fp.isnan(x):
@@ -367,8 +391,10 @@ class TestAListStoresAtItsElements:
 
     @staticmethod
     def _emit(q):
-        return CppCompiler().compile(
+        out = CppCompiler().compile(
             q, arg_types=[ListType(RealType(fp.FP32), 8)])
+        _compiles(out)
+        return out
 
     def test_the_buffer_holds_the_element_type(self):
         assert 'std::array<int8_t, 8>' in self._emit(self._guarded())
@@ -380,7 +406,7 @@ class TestAListStoresAtItsElements:
 
     def test_the_reduction_folds_on_the_integer_path(self):
         out = self._emit(self._guarded())
-        assert 'std::max(_tmp3, ys[' in out
+        assert re.search(r'= std::max\(\w+, ys\[', out), out
         assert 'signbit' not in out
         assert 'quiet_NaN' not in out
 

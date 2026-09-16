@@ -329,6 +329,17 @@ def _exact_select(args: list[ValueClass], *, is_max: bool) -> ValueClass:
     return out
 
 
+def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None':
+    """*region*, unless no fact about its elements may be recorded.
+
+    ``None`` where the list escapes -- handed to a call, which may store
+    through it after this analysis has stopped looking.
+    """
+    if region is None or alias.escapes_at(region):
+        return None
+    return region
+
+
 def _positive_literal(e: Expr) -> bool:
     return isinstance(e, RationalVal) and e.as_rational() > 0
 
@@ -381,13 +392,9 @@ class ValueClassAnalysis:
 
         A list is a reference, so ``ys = xs`` is one location under two names
         and a store through either is visible through both; the region is what
-        both resolve to.  ``None`` where the list escapes -- handed to a call,
-        which may store through it after this analysis has stopped looking.
+        both resolve to.
         """
-        region = self.alias.region_of_expr(e)
-        if region is None or self.alias.escapes_at(region):
-            return None
-        return region
+        return _trackable(self.alias, self.alias.region_of_expr(e))
 
     def bound_of(self, d: Definition) -> ClassBound:
         """*d*'s class, shaped like the value it holds.
@@ -446,9 +453,7 @@ class _ValueClassInstance(DefaultVisitor):
     _clock: int
     _touched: dict[Region, int]
     """When each region's elements last changed.  Monotone and never restored,
-    so a store anywhere already walked voids a fact taken before it -- which
-    :attr:`_refine_elt` needs and :attr:`_elt`, joined at a merge rather than
-    saved, does not."""
+    so a store anywhere already walked voids a fact taken before it."""
 
     _scanned: dict[ForStmt, int]
     """For a loop that did *not* store into the list it iterates, that list's
@@ -456,9 +461,10 @@ class _ValueClassInstance(DefaultVisitor):
     says nothing; see :meth:`_implied_universal`."""
 
     _stored: dict[Region, ValueClass]
-    """Every class ever stored into each region -- monotone, where :attr:`_elt`
-    is flow-sensitive.  Storage has to hold what a list ever held, not what it
-    holds at a point."""
+    """Every class ever stored into each region, for a consumer choosing
+    storage: a buffer holds what a list *ever* held.  Seeded only where the
+    list was seen empty, so one built any other way -- a literal, a parameter,
+    a callee's result -- stays at the top class."""
 
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
@@ -466,10 +472,11 @@ class _ValueClassInstance(DefaultVisitor):
 
     _refine_elt: dict[Region, tuple[ValueClass, int]]
     """The same, per region, with the :attr:`_touched` stamp it was taken at.
-    :attr:`_refine` needs no stamp: a rebind makes a new `Definition`, where a
-    list's contents change under a fixed one -- and an arm *restores* this map,
-    so a store in a branch nested inside would otherwise bring back a mask the
-    store had invalidated."""
+
+    :attr:`_refine` needs no stamp, a rebind making a new `Definition` where a
+    list's contents change under a fixed one.  An arm *restores* this map, so
+    without the stamp a store in a branch nested inside it would come back
+    undone on the way out."""
 
     def __init__(
         self,
@@ -524,13 +531,19 @@ class _ValueClassInstance(DefaultVisitor):
     # Definitions
 
     def _region_of(self, e: Expr) -> 'Region | None':
-        """The region whose elements a fact about *e* belongs to, or ``None``
-        where none may be recorded; see
-        :meth:`ValueClassAnalysis.element_region`."""
-        region = self.alias.region_of_expr(e)
-        if region is None or self.alias.escapes_at(region):
-            return None
-        return region
+        """See :meth:`ValueClassAnalysis.element_region`."""
+        return _trackable(self.alias, self.alias.region_of_expr(e))
+
+    def _one_list(self, region: Region) -> bool:
+        """Whether *region* abstracts a single list.
+
+        Two lists share a region as soon as anything makes them may-alias, and
+        then "every element of *the* list" names neither of them.  Only a count
+        answers it: a region with two allocation sites is two lists as far as
+        anything here can see.
+        """
+        return len(self.alias.sites_at(region)) == 1
+
 
     def _elements_of(self, e: Expr) -> ValueClass:
         """What every element of the list *e* names currently is."""
@@ -558,7 +571,7 @@ class _ValueClassInstance(DefaultVisitor):
         store did not reach are still there."""
         if region is not None:
             self._elt[region] = self._elt.get(region, _TOP) | cls
-            self._stored[region] = self._stored.get(region, _BOT) | cls
+            self._stored[region] = self._stored.get(region, _TOP) | cls
             self._touch(region)
 
     @staticmethod
@@ -783,8 +796,11 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         region = self._region_of(stmt.iterable)
         # a store since the exit -- or one the loop made itself, which leaves
-        # no entry -- means the list read is not the list scanned
-        if region is None or self._scanned.get(stmt) != self._stamp(region):
+        # no entry -- means the list read is not the list scanned, and a region
+        # holding two lists means scanning one says nothing about the other
+        if region is None or not self._one_list(region):
+            return []
+        if self._scanned.get(stmt) != self._stamp(region):
             return []
         target = self.def_use.find_def_from_site(stmt.target, stmt)
         return [
@@ -1019,22 +1035,28 @@ class _ValueClassInstance(DefaultVisitor):
     def _visit_assign(self, stmt: Assign, ctx: None):
         self._bind(stmt, stmt.target, self._visit_expr(stmt.expr, ctx))
         if isinstance(stmt.expr, Empty):
-            # a fresh allocation: no store has reached its elements yet, which
-            # is what lets the stores that follow say anything
+            # A fresh allocation holds nothing yet, which is what lets the
+            # stores that follow say anything.  Only where the region is one
+            # list: it is the sole *strong* update here, and wiping a region
+            # two lists share would drop the other one's elements.  Every other
+            # way of building a list -- a literal, a parameter, a callee's
+            # result -- puts elements there without a store, so a region never
+            # seen empty keeps the top class however much is stored into it.
             region = self._region_of_def(stmt.target, stmt)
             if region is not None:
-                self._elt[region] = _BOT
+                if self._one_list(region):
+                    self._elt[region] = _BOT
+                    self._stored[region] = _BOT
                 self._touch(region)
 
-    def _region_of_def(self, target, site) -> 'Region | None':
+    def _region_of_def(self, target, site, depth: int = 0) -> 'Region | None':
+        """The region *depth* list levels inside what *target* binds at *site*.
+        ``depth`` is what a nested store writes through."""
         if not isinstance(target, NamedId):
             return None
-        region = self.alias.region_of(
-            self.def_use.find_def_from_site(target, site),
-        )
-        if region is None or self.alias.escapes_at(region):
-            return None
-        return region
+        return _trackable(self.alias, self.alias.region_of(
+            self.def_use.find_def_from_site(target, site), depth,
+        ))
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         for s in stmt.indices:
@@ -1043,16 +1065,18 @@ class _ValueClassInstance(DefaultVisitor):
         # a fresh def of a list, which carries no *scalar* class; what the store
         # says is about the region's elements
         self._bind(stmt, stmt.var, None)
-        d = self.def_use.find_def_from_site(stmt.var, stmt)
-        region = self.alias.region_of(d)
-        if region is not None and self.alias.escapes_at(region):
-            region = None
-        # a nested store constrains the inner list, which this does not reach
+        # `xss[i][j] = v` writes the region one level in, which is where the
+        # alias analysis puts it too; the level above holds lists, and what a
+        # store says about those is nothing.
+        depth = len(stmt.indices) - 1
         self._store_element(
-            region,
-            stored if isinstance(stored, ValueClass) and len(stmt.indices) == 1
-            else _TOP,
+            self._region_of_def(stmt.var, stmt, depth),
+            stored if isinstance(stored, ValueClass) else _TOP,
         )
+        for above in range(depth):
+            self._store_element(
+                self._region_of_def(stmt.var, stmt, above), _TOP,
+            )
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)

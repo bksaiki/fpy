@@ -533,6 +533,46 @@ that says `double` wherever FPy says real. *Integer*-typed FPy values keep integ
 storage regardless; `range(...)` needs an integer list and must stay one — that is
 what an early measured attempt broke.
 
+### Casts pile up where every node picks its own type
+
+A guarded `fp.logb(x) - 10` emits
+
+```cpp
+int8_t exp = static_cast<int8_t>(static_cast<float>(static_cast<int8_t>(std::ilogb(x))) - static_cast<float>(10));
+```
+
+where `static_cast<int8_t>(std::ilogb(x) - 10)` is meant. Two problems, and
+they have to be taken in this order.
+
+**The subtraction runs at `float`.** `_try_widen`'s second pass takes the first
+qualifying signature in *table order*, and the floats come first. The `S16`
+signature qualifies on every count and is never looked at. It has to prefer the
+narrowest instead; the storage ladder is already the tie-break for that.
+
+**Nothing folds a narrow-then-widen pair.** Fixing the above makes the line
+integer arithmetic and four casts:
+
+```cpp
+static_cast<int8_t>(static_cast<int16_t>(static_cast<int8_t>(std::ilogb(x))) - static_cast<int16_t>(10))
+```
+
+Each node converts its result to its own storage and its parent converts it
+back. Cast minimization is a separate concern from type selection, and doing
+the second without the first is not an improvement.
+
+### The `signbit` tie a sign-aware zero would drop
+
+`_emit_ieee_min_max` keeps the `a == b && signbit(a)` term wherever both
+operands can be zero. `ValueClass.ZERO` does not carry the sign, so a value like
+`fp.logb`'s, which is only ever `+0`, cannot say so. Splitting it the way `INF`
+is split into `POS_INF` / `NEG_INF` would drop the term.
+
+### A tuple definition carries no class
+
+`ValueClassAnalysis.bound_of` gives a `ListClass` for a list and a `ValueClass`
+for a scalar. `t = (a, b)` gets neither, so only a tuple built at a `return`
+narrows per field. No case wants it yet.
+
 ### When `ReduceFusion` pays, and when it costs
 
 `ReduceFusion` replaces `any`/`all` over a comprehension with a running

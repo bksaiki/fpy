@@ -69,7 +69,7 @@ _PROBE_VALUES = [
 ]
 """One per atom, and a few finites: the point is to reach every class."""
 
-_SECOND_ARG = [float('nan'), float('inf'), 0.0, 2.5]
+_SECOND_ARG = [float('nan'), float('inf'), float('-inf'), 0.0, 2.5]
 """Arguments after the first are sampled rather than crossed, which would raise
 the grid to a power for no new classes."""
 
@@ -94,7 +94,7 @@ def _grid(kinds: 'list[bool]') -> list[tuple]:
     if n == 1:
         return [(v,) for v in cols[0]]
     if n == 2:
-        second = _LIST_VALUES if kinds[1] else _SECOND_ARG
+        second = cols[1] if kinds[1] else _SECOND_ARG
         return [(x, y) for x in cols[0] for y in second]
     # beyond two, every position at once and then one at a time
     out = [
@@ -109,11 +109,19 @@ def _grid(kinds: 'list[bool]') -> list[tuple]:
             out.append(tuple(args))
     return out
 
-_MIN_INFORMATIVE = 1000
-"""A claim of the top class cannot be contradicted, so a run comparing only
-against it proves nothing.  The corpus gives six figures of informative
-comparisons across 114 of its functions; this is a floor well under that, to
-catch the check going vacuous rather than to pin a number."""
+_MIN_INFORMATIVE_EXPRS = 850
+_MIN_INFORMATIVE_FUNCS = 115
+_MIN_LOWERED = 150
+"""Floors, to catch the check going quiet rather than to pin a number.
+
+A claim of the top class cannot be contradicted, so a run comparing only
+against it proves nothing.  Counted as *distinct expressions* rather than
+comparisons: a comparison count is dominated by whichever program loops longest
+before :data:`_SECONDS` interrupts it, which makes it a measure of how fast the
+machine is.  The per-function floor is what catches one shape going dark, and
+:data:`_MIN_LOWERED` catches :func:`_forms` silently failing to lower -- the
+lowered form is the only one with an element store or a reduction loop in it.
+"""
 
 _SECONDS = 2.0
 """Wall clock per function.  An ``inf`` reaching a loop bound runs forever, so
@@ -187,27 +195,28 @@ def _forms(func: fp.Function) -> list[fp.Function]:
     return out
 
 
-def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int]':
-    """``(contradictions, informative comparisons)`` from running *func* over
-    the probe values, in each of :func:`_forms`.
+def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int, int]':
+    """``(contradictions, informative expressions, forms)`` from running *func*
+    over the probe values, in each of :func:`_forms`.
 
     Driven under ``REAL``, which is the only context where the analysis says
     anything: under a concrete one :meth:`_rounded` reports the classes that
     context can represent, and for ``FP64`` that is every class -- a claim no
-    run can contradict.  The second return value counts the comparisons that
-    were *not* against the top, so a check that has quietly gone vacuous is
-    visible rather than green.
+    run can contradict.  The counts are what :data:`_MIN_INFORMATIVE_EXPRS` and
+    friends hold, so a check that has quietly gone vacuous is visible rather
+    than green.
     """
     kinds = _arg_kinds(func)
     if kinds is None:
-        return [], 0
+        return [], 0, 0
     bad: list[str] = []
     informative = 0
-    for form in _forms(func):
+    forms = _forms(func)
+    for form in forms:
         found, n = _check_one_form(form, kinds)
         bad += found
         informative += n
-    return bad, informative
+    return bad, informative, len(forms) - 1
 
 
 def _check_one_form(
@@ -215,18 +224,17 @@ def _check_one_form(
 ) -> 'tuple[list[str], int]':
     info = ValueClassInfer.analyze(func.ast)
     bad: list[str] = []
-    informative = 0
+    informative: set[int] = set()
     compiler: BytecodeCompiler
 
     def probe(i: int, v):
-        nonlocal informative
         e = compiler.probed[i]
         claimed = info.by_expr.get(e)
         seen = _observed_class(v)
         if not isinstance(claimed, ValueClass) or seen is None:
             return v
         if claimed != ValueClass.TOP:
-            informative += 1
+            informative.add(i)
         if not (seen & claimed):
             bad.append(f'{func.name}: `{e.format()}` is {seen}, claimed {claimed}')
         return v
@@ -246,27 +254,36 @@ def _check_one_form(
                 continue
 
     _with_timeout(_SECONDS, run_grid)
-    return bad, informative
+    return bad, len(informative)
 
 
 def _test_value_class_against_runs():
     bad: list[str] = []
-    informative = 0
+    exprs = funcs = lowered = 0
     for core in all_tests():
         if core.name in _unit_ignore:
             continue
         try:
-            found, n = _check_against_a_run(core)
+            found, n, forms = _check_against_a_run(core)
         except Exception as exc:   # noqa: BLE001 -- not every example is drivable
             print(f'  {core.name}: not driven ({type(exc).__name__})')
             continue
         bad += found
-        informative += n
-    print(f'value classes checked against runs: {informative} informative')
+        exprs += n
+        funcs += bool(n)
+        lowered += forms
+    print(
+        f'value classes checked against runs: {exprs} expressions over '
+        f'{funcs} functions, {lowered} lowered forms'
+    )
     assert not bad, 'value class contradicted by a run:\n  ' + '\n  '.join(bad)
-    assert informative >= _MIN_INFORMATIVE, (
-        f'only {informative} comparisons were against anything but the top '
-        f'class; the check has gone vacuous'
+    assert exprs >= _MIN_INFORMATIVE_EXPRS and funcs >= _MIN_INFORMATIVE_FUNCS, (
+        f'only {exprs} expressions over {funcs} functions were compared '
+        f'against anything but the top class; the check has gone vacuous'
+    )
+    assert lowered >= _MIN_LOWERED, (
+        f'only {lowered} functions produced a lowered form; the shapes this '
+        f'check exists for live there'
     )
 
 

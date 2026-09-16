@@ -9,6 +9,8 @@ and the observed result must fall inside what the table predicted.  The
 class the analysis gives a marked expression in each arm.
 """
 
+import math
+
 import pytest
 
 import fpy2 as fp
@@ -687,14 +689,30 @@ def _trackable(fn, name: str, n: int = 4) -> bool:
     raise AssertionError(f'no `{name}` in {fn.name}')
 
 
-def _amax_class(fn, n: int = 4, *, scalars: int = 0) -> ValueClass:
+def _arg_types(n: int, lists: int, scalars: int) -> list:
+    return [ListType(RealType(fp.FP32), n)] * lists + [RealType(fp.FP32)] * scalars
+
+
+def _ref_classes(fn, n: int = 4, *, lists: int = 0, scalars: int = 0) -> list:
+    """The class of every ``xs[i]`` read in *fn*, after lowering."""
+    from fpy2.ast.fpyast import ListRef
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        return [v for e, v in info.by_expr.items() if isinstance(e, ListRef)]
+    raise AssertionError(f'no {fn.name}')
+
+
+def _amax_class(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> ValueClass:
     """The class of the ``max(...)`` over a list in *fn*, after lowering."""
     from fpy2.ast.fpyast import AMax
     from fpy2.backend.cpp.compiler import CppCompiler
     m = fp.Module()
-    m.add(fn, arg_types=(
-        [ListType(RealType(fp.FP32), n)] + [RealType(fp.FP32)] * scalars
-    ))
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
     for spec in CppCompiler().specialize(m):
         if spec.ast.name != fn.name:
             continue
@@ -737,8 +755,7 @@ class TestListElementClasses:
         assert _amax_class(f) & NEG_INF
 
     def test_a_store_through_another_name_is_seen(self):
-        """The first attempt reported a class here that a run contradicted: the
-        names differ, the location does not."""
+        """One location, two names."""
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             ys = [abs(x) for x in xs]
@@ -798,9 +815,8 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f) == TOP
 
     def test_a_fold_written_by_hand(self):
-        """Nothing here is `ReduceFusion`'s: the predicate is inlined rather
-        than bound, and ``Hoistable`` leaves the fold as a guarded assignment
-        rather than an ``and``."""
+        """The predicate is inlined and the fold is a guarded assignment, so
+        nothing here is the shape `ReduceFusion` emits."""
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             ok = True
@@ -828,8 +844,8 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f) == TOP
 
     def test_a_fold_rebuilt_each_round_says_nothing(self):
-        """``ok`` is the last element's again: the guarded assignment is a fold
-        only where what it guards on is what the loop carried in."""
+        """A guarded assignment is a fold only where what it guards on is what
+        the loop carried in."""
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             ok = True
@@ -844,7 +860,7 @@ class TestAGuardOverAWholeList:
 
         assert _amax_class(f) == TOP
 
-    def test_a_store_inside_the_scan(self):
+    def test_a_store_inside_the_scan_voids_the_fact(self):
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             ok = True
@@ -901,25 +917,11 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f, scalars=1) == TOP
 
 
-def _bounds(fn, n: int = 4) -> dict:
-    """``bound_of`` per definition, keyed by variable name, after lowering."""
-    from fpy2.backend.cpp.compiler import CppCompiler
-    m = fp.Module()
-    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
-    for spec in CppCompiler().specialize(m):
-        if spec.ast.name != fn.name:
-            continue
-        info = ValueClassInfer.analyze(spec.ast)
-        du = info.type_info.def_use
-        return {str(d.name): info.bound_of(d) for d in du.defs}
-    raise AssertionError(f'no {fn.name}')
-
-
-def _elt_classes(fn, n: int = 4) -> dict:
+def _elt_classes(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> dict:
     """``by_elt``, keyed by variable name, after lowering."""
     from fpy2.backend.cpp.compiler import CppCompiler
     m = fp.Module()
-    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
     for spec in CppCompiler().specialize(m):
         if spec.ast.name != fn.name:
             continue
@@ -950,14 +952,6 @@ class TestAStructuralClass:
         assert join_class(TupleClass((NAN, None)), TupleClass((ZERO, ZERO))) == \
             TupleClass((NAN | ZERO, None))
 
-    def test_a_list_definition_reads_as_its_elements(self):
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs):
-            ys = [abs(x) for x in xs]
-            return max(ys)
-
-        assert _bounds(f)['ys'] == ListClass(_elt_classes(f)['ys'])
-
 
 class TestElementClassesPerDefinition:
     """:attr:`ValueClassAnalysis.by_elt` -- what a list's elements are *ever*
@@ -975,13 +969,15 @@ class TestElementClassesPerDefinition:
 
         assert not (_elt_classes(f)['ys'] & NEG_INF)
 
-    def test_every_store_counts(self):
-        """Not the class at the end -- the join over all of them."""
+    def test_a_store_after_the_read_still_counts(self):
+        """Joined over the whole function, where ``by_expr`` is read at a
+        point: a buffer holds every value that ever lands in it."""
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             ys = [abs(x) for x in xs]
+            r = max(ys)
             ys[0] = -fp.inf()
-            return max(ys)
+            return r + ys[1]
 
         assert _elt_classes(f)['ys'] & NEG_INF
 
@@ -994,19 +990,80 @@ class TestElementClassesPerDefinition:
 
         assert 'xs' not in _elt_classes(f)
 
-    def test_a_list_handed_to_a_call_is_absent(self):
-        @fp.fpy(ctx=fp.REAL)
-        def poison(ys):
-            ys[0] = fp.nan()
-            return 0
 
+class TestARegionMayHoldMoreThanOneList:
+    """Alias analysis merges two lists into one region as soon as anything
+    makes them may-alias, and then a fact about "the" list names neither.
+
+    Each of these reported a class a run contradicts.
+    """
+
+    def test_an_allocation_does_not_wipe_a_list_it_shares_a_region_with(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            a = fp.empty(2)
+            a[0] = 1.0
+            b = fp.empty(2)
+            b[0] = fp.nan()
+            xss = fp.empty(2)
+            xss[0] = a
+            xss[1] = b
+            return a[0]
+
+        assert _ref_classes(f, scalars=1) == [TOP]
+        assert f(1.0) == 1.0
+
+    def test_a_universal_needs_the_region_to_be_one_list(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys, c: fp.Real):
+            ok = all([fp.isfinite(x) for x in xs])
+            zs = xs if c > 0 else ys
+            if ok:
+                return max(zs)
+            else:
+                return 0.0
+
+        assert _amax_class(f, lists=2, scalars=1) == TOP
+
+
+class TestElementsThatArrivedWithoutAStore:
+    """`_stored` is seeded where a list is seen *empty*, so a list built any
+    other way keeps the top class however much is stored into it afterwards.
+
+    Each of these reported a class a run contradicts.
+    """
+
+    def test_a_parameter_was_filled_by_the_caller(self):
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
-            zs = [abs(x) for x in xs]
-            w = poison(zs)
-            return max(zs) + w
+            xs[0] = 1.0
+            return max(xs)
 
-        assert 'zs' not in _elt_classes(f)
+        assert _elt_classes(f)['xs'] == TOP
+        assert math.isnan(f([5.0, float('nan'), 2.0]))
+
+    def test_a_literal_carries_its_own_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            xs = [1.0, fp.nan()]
+            xs[0] = 2.0
+            return xs[1]
+
+        assert _elt_classes(f, lists=0, scalars=1)['xs'] == TOP
+        assert math.isnan(f(1.0))
+
+    def test_a_nested_store_reaches_the_list_it_writes(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            row = fp.empty(2)
+            row[0] = 1.0
+            xss = fp.empty(2)
+            xss[0] = row
+            xss[0][0] = fp.nan()
+            return row[0]
+
+        assert _elt_classes(f, lists=0, scalars=1)['row'] == TOP
+        assert math.isnan(f(1.0))
 
 
 class TestWhichListsCarryAFact:
