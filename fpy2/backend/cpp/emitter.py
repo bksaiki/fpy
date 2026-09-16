@@ -39,6 +39,7 @@ from ...analysis.format_infer import (
     exact_exp2,
     round_is_identity,
 )
+from ...analysis.storage_infer import without_absent
 from ...ast.fpyast import (
     AllOf,
     AMax,
@@ -1847,6 +1848,30 @@ class CppEmitter(Visitor):
             )
         return storage
 
+    def _result_storage(self, e: Expr) -> CppType:
+        """Where *e*'s own result is held, narrowed by what it can be.
+
+        The other half of :meth:`_storage_for_expr`, which is the type *e*'s
+        operands are cast to.  The two differ wherever a value class rules out
+        what the format admits, and only one of them may use it: the operands of
+        a selection are not bounded by its result, so ``max(logb(x), -126)``
+        must keep ``float`` operands although it is an integer -- casting a
+        ``logb`` that may be an infinity into one is undefined.  So a class
+        narrows where the *result* goes, never what is fed in.
+
+        Falls back to the unnarrowed answer wherever a class cannot apply: a
+        rounded expression takes its storage from the context, and a bound with
+        no storage has nothing to narrow.
+        """
+        fmt = self.format_info.by_expr.get(e)
+        if fmt is None or self._round_storage(e) is not None:
+            return self._storage_for_expr(e)
+        try:
+            ty = choose_storage(fmt, self._value_class(e))
+        except StorageSelectionError:
+            return self._storage_for_expr(e)
+        return ty if self.unbox is None else self.unbox.annotate(e, ty)
+
     def _dispatch(
         self,
         e: UnaryOp | BinaryOp | TernaryOp,
@@ -1940,16 +1965,22 @@ class CppEmitter(Visitor):
 
 
     def _result_fits_ctx(self, e: Expr, ctx: Context) -> bool:
-        """Is rounding the inferred result format of *e* under *ctx* an
-        identity?  True iff the exact unrounded result of *e* (recorded
-        in ``format_info.by_expr``) is representable in ``ctx.format()``
-        — so the C++ op performed under *ctx* yields exactly the value
-        format inference predicted."""
+        """Is rounding *e*'s result under *ctx* an identity?  True iff every
+        value *e* can take is representable in ``ctx.format()``, so the C++ op
+        performed under *ctx* yields exactly what format inference predicted.
+
+        About the *values*, not the format they are drawn from: an integer
+        context represents no NaN, so a `logb` a branch has already made finite
+        reaches ``std::ilogb`` where its format alone never would.
+        """
         fmt = self.format_info.by_expr.get(e)
         if isinstance(fmt, SetFormat):
             return round_is_identity(fmt, ctx)
         if isinstance(fmt, AbstractableFormat):
-            return round_is_identity(AbstractFormat.from_format(fmt), ctx)
+            af = AbstractFormat.from_format(fmt)
+            if af is not None:
+                af = without_absent(af, self._value_class(e))
+            return round_is_identity(af, ctx)
         return False
 
     def _try_widen(
@@ -1967,9 +1998,14 @@ class CppEmitter(Visitor):
 
         Two passes, to prefer a narrower signature: first those whose output
         already *is* ``result_ty``, then those needing the downcast.
+
+        ``result_ty`` is :meth:`_result_storage`, so a class narrows which
+        signature is reached.  The operands are safe from it: a slot has to
+        receive what each operand's own storage holds, which is the check that
+        keeps a possibly-infinite operand out of an integer signature.
         """
         try:
-            result_ty = self._storage_for_expr(e)
+            result_ty = self._result_storage(e)
         except CppEmitError:
             return None
         if not isinstance(result_ty, CppScalar):

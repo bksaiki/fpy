@@ -58,8 +58,24 @@ case they had no witness for.
   the integer in its own ABI.  This subsumed the separate element-class
   parameter that landed with element storage -- the tuple was the same crack at
   another node.
+- **A result's storage is not an operand target.**  `_storage_for_expr` answered
+  both "where does this result go" and "what are the operands cast to", and only
+  the first may use a class: the operands of a selection are not bounded by its
+  result, so `max(logb(x), -126)` is an integer whose operands must stay `float`.
+  Splitting off `_result_storage` lets `_try_widen` reach an integer signature,
+  and a guarded `fp.logb` becomes `std::ilogb` instead of a `float` result
+  converted back to an `int`.  What keeps this from repeating phase 3 is already
+  in `_try_widen`: a signature's slot has to receive each operand's own storage,
+  which is what excludes a possibly-infinite `logb` from an integer op.
 
 ## What is left
+
+**An integer literal on the ladder.**  ``exp = fp.logb(x) - 10`` still computes
+at `float`: `10` stores as `uint8_t`, which does not nest into the `int8_t` the
+other operand has (`bound_fits_in_scalar` explains why), so no same-type integer
+signature matches.  The line also carries a redundant
+``static_cast<int8_t>(static_cast<int8_t>(...))``.
+
 
 **Signed zero.**  `_emit_amin_amax` still emits the `signbit` tie for a float
 reduction, because `ValueClass.ZERO` does not track the sign and `logb` yields

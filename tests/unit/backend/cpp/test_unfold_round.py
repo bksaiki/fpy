@@ -307,7 +307,7 @@ class TestTheFlag:
 
         with pytest.raises(CppCompileError, match='no C.. analogue'):
             self._compile(f, fp.FP16, 1)
-        assert 'std::logb' in self._compile(
+        assert 'logb(' in self._compile(
             f, fp.FP16, 1, unfold=UnfoldMode.DOUBLE_ROUND,
         )
 
@@ -322,7 +322,7 @@ class TestTheFlag:
             self._compile(f, fp.FP16, 2)
         out = self._compile(f, fp.FP16, 2, unfold=UnfoldMode.DOUBLE_ROUND)
         assert 'float f(float x, float y)' in out
-        assert 'std::logb' in out
+        assert 'logb(' in out
 
     def test_roundings_alone_leaves_the_arithmetic(self):
         """The middle level is a smaller claim: lowering a rounding is a
@@ -339,7 +339,7 @@ class TestTheFlag:
         def f(x: fp.Real) -> fp.Real:
             return fp.round(x)
 
-        assert 'std::logb' in self._compile(
+        assert 'logb(' in self._compile(
             f, fp.FP16, 1, unfold=UnfoldMode.ROUNDINGS,
         )
 
@@ -403,7 +403,7 @@ class TestTheFlag:
         def f(x: fp.Real) -> fp.Real:
             return fp.round(x)
 
-        assert 'std::logb' in CppCompiler(unfold=UnfoldMode.ROUNDINGS).compile(
+        assert 'logb(' in CppCompiler(unfold=UnfoldMode.ROUNDINGS).compile(
             f, ctx=target, arg_types=[RealType(fp.FP64)],
         )
 

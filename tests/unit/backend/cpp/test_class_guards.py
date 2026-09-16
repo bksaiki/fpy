@@ -266,6 +266,55 @@ class TestAClampReachesIntegerStorage:
         assert 'float half(' in out
 
 
+class TestAResultStorageIsNotAnOperandTarget:
+    """A class narrows where a result *goes*, never what is fed in.
+
+    Which C++ signature runs is a question about the values that occur, so a
+    `logb` a branch has made finite reaches the integer one -- and then nothing
+    converts to a float and back to use it.
+    """
+
+    def test_a_guarded_logb_reaches_the_integer_op(self):
+        @fp.fpy
+        def q(x: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(x) or x == 0:
+                return 0
+            else:
+                with fp.REAL:
+                    return fp.logb(x)
+
+        out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::ilogb(' in out
+        assert 'std::logb(' not in out
+
+    def test_an_unguarded_logb_stays_on_the_float_op(self):
+        """``logb(0)`` is ``-inf``, and converting one to an ``int`` is
+        undefined -- ``std::ilogb`` would be a wrong answer, not a wider one."""
+        @fp.fpy
+        def q(x: fp.Real) -> fp.Real:
+            with fp.REAL:
+                return fp.logb(x)
+
+        out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::logb(' in out
+        assert 'std::ilogb(' not in out
+
+    def test_an_operand_is_not_narrowed_by_the_result(self):
+        """The rule that keeps this from being old phase 3: ``max`` is finite
+        where ``logb`` is not, and its operands stay ``float``."""
+        @fp.fpy
+        def q(x: fp.Real) -> fp.Real:
+            if fp.isnan(x):
+                return 0
+            else:
+                return min(max(fp.logb(x), -126), 128)
+
+        out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'int8_t q(' in out
+        assert 'std::logb(' in out          # the operand keeps its float op
+        assert 'std::ilogb(' not in out
+
+
 class TestATupleReturnNarrowsPerField:
     """A function's return type is its ABI, so a field that collapses to one
     class for the whole tuple stays wide in every caller too."""

@@ -194,7 +194,7 @@ def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
     )
 
 
-def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
+def without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
     """*af* with the special values *cls* rules out removed.
 
     A format says whether the *format* has a NaN; a class says whether *this
@@ -206,6 +206,10 @@ def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
     Only these flags: a format structurally cannot say "not zero".  Narrowing
     only, and per definition, so the join over a class keeps a ``float``
     wherever one member can still be infinite.
+
+    Public because the backend asks the same question of an *operation*: which
+    C++ signature produces the value exactly is a question about the values that
+    occur, not about the format they are drawn from.
     """
     return AbstractFormat(
         af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
@@ -230,7 +234,7 @@ def of_bound(
     first wins.  Where no member contains the bound the domain gets one chance to
     accept it anyway (:meth:`StorageDomain.fallback`) before this refuses.
 
-    *cls* narrows the special values away (:func:`_without_absent`).  It is
+    *cls* narrows the special values away (:func:`without_absent`).  It is
     shaped like *bound*, and is descended alongside it, so an aggregate narrows
     field by field: a class that stopped at the outermost node would say
     nothing about any container, a `ValueClass` being a fact about a number.  A
@@ -266,7 +270,7 @@ def of_bound(
             'storage selection requires a dyadic format'
         )
     if isinstance(cls, ValueClass):
-        af = _without_absent(af, cls)
+        af = without_absent(af, cls)
     for sigma in domain.sigma:
         if af <= AbstractFormat.from_format(sigma):
             return sigma
