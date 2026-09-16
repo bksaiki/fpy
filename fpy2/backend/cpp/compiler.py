@@ -76,12 +76,10 @@ which a type checker cannot follow -- so completion on
 
 
 class CppCompileError(CompileError):
-    """Raised when cpp compilation fails.
-
-    ``unfold_answers`` carries :class:`CppEmitError`'s flag through the wrap.
-    """
+    """Raised when cpp compilation fails."""
 
     unfold_answers = False
+    """:class:`CppEmitError`'s flag, carried through the wrap."""
 
 
 @dataclass
@@ -159,10 +157,8 @@ def _function_calls(ast: FuncDef) -> dict[Call, Function]:
 def _return_class(ast: FuncDef, class_info: ValueClassAnalysis) -> ValueClass:
     """The value class joined over every ``ReturnStmt`` expression.
 
-    The return is the one storage choice :class:`StorageInfer` does not make, so
-    the narrowing it does per definition is repeated for the return here.  An
-    expression carrying no class -- a tuple, a list -- classifies as the top,
-    which narrows nothing, so an aggregate return simply opts out.
+    An expression carrying no class -- a tuple, a list -- classifies as the top
+    and narrows nothing, so an aggregate return opts out.
     """
     out = ValueClass(0)
 
@@ -232,7 +228,7 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
             a.alias.region_of(d), ty,
         )
         params.append(ParamAbi(ty, written))
-    return CalleeAbi(params, _return_storage(a))
+    return CalleeAbi(params, a.ret_ty)
 
 
 def _check_signature_monomorphic(a: SpecAnalyses) -> None:
@@ -257,10 +253,6 @@ def _check_signature_monomorphic(a: SpecAnalyses) -> None:
             f'({fn_type.format()}); emitting it would need a C++ template. '
             'Annotate the type, or give the value an element to infer from.'
         )
-
-
-def _return_storage(a: SpecAnalyses) -> CppType:
-    return a.ret_ty
 
 
 class CppCompiler(Backend):
@@ -401,10 +393,9 @@ class CppCompiler(Backend):
             try:
                 self._without_unfold()._compile_module(module)
             except CppCompileError as e:
+                # a refusal this flag answers would advise the mode in effect
                 if not e.unfold_answers:
                     raise
-                # Its only complaint is the refusal this flag answers, so
-                # reporting it would advise the mode already in effect.
             raise   # the rewrite's own error stands
 
     def _without_unfold(self) -> 'CppCompiler':

@@ -1,10 +1,10 @@
 """
 Path-sensitive value-class analysis.
 
-One question per expression: can this value be a NaN, an infinity, a zero, or a
-finite non-zero?  The four atoms form a 16-element lattice — union is the join,
-intersection the meet, height 4, so no widening is needed — and it is *refined*
-at every branch that tests a value's class.
+One question per expression: can this value be a NaN, an infinity of either
+sign, a zero, or a finite non-zero?  The five atoms form a finite lattice —
+union is the join, intersection the meet, so no widening is needed — and it is
+*refined* at every branch that tests a value's class.
 
 Format inference cannot answer this, and this is deliberately not a fourth flag
 on :class:`~fpy2.analysis.format_infer.AbstractFormat`, which already carries
@@ -46,19 +46,16 @@ rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
 never correct.
 
-A *list* carries a class for its elements, which an element read, a ``for``
-target over it and ``min``/``max`` over it all use.  It comes from the stores
-that build the list, and from a reduction over it: ``all(p(x) for x)`` where it
-holds, and ``any(...)`` where it does not, each say something about *every*
-element (:meth:`_implied_elements`).  A tuple still carries nothing.
+A *list* carries a class for its elements, read by an element access, a ``for``
+target over it, and ``min``/``max`` over it.  It comes from the stores that build
+the list and from a reduction over it (:meth:`_implied_elements`).  A tuple
+carries nothing.
 
-Not yet taught: the sign of a *zero* -- the infinities are split, and ``±0``
-would let ``signbit`` refine the rest; magnitudes (``x > 1`` says nothing here,
-and is `FormatInfer`'s question); ``assert`` statements as refinements; the
-class of a numeric free variable; and a ``for`` target over ``range``, which is
-an integer and so neither special, but reports the top class.  An early-return
-guard does not reach the code after it either: :meth:`_visit_if1` refines its
-body, and an ``if``/``else`` is what refines both arms.
+Not yet taught: the sign of a zero, which would let ``signbit`` refine;
+magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
+refinement; the class of a numeric free variable; a ``for`` target over
+``range``; and the code after an early return, since :meth:`_visit_if1` refines
+only its body.
 """
 
 import enum
@@ -111,8 +108,7 @@ class ValueClass(enum.Flag):
     """Finite and **non-zero**, of either sign."""
 
     INF = POS_INF | NEG_INF
-    """Either infinity.  A composite, so a consumer asking ``cls & INF`` --
-    "can this be infinite at all" -- reads the same as before the split."""
+    """Either infinity.  A composite: ``cls & INF`` asks "infinite at all"."""
 
     TOP = NAN | INF | ZERO | FINITE
 
@@ -125,6 +121,10 @@ _ZERO = ValueClass.ZERO
 _FINITE = ValueClass.FINITE
 _TOP = ValueClass.TOP
 _BOT = ValueClass(0)
+
+_ATOMS = (_NAN, _POS_INF, _NEG_INF, _ZERO, _FINITE)
+"""The join-irreducible classes.  ``INF`` is not one: it is the composite a
+consumer uses to ask "infinite at all"."""
 
 
 def _negate(a: ValueClass) -> ValueClass:
@@ -202,9 +202,8 @@ _LOGB = {
 
 _POW_INF = _POS_INF | _ZERO | _FINITE
 """``b ** (+-inf)`` for a positive literal ``b``: ``+inf`` when ``b > 1``, ``0``
-when ``b < 1``, and ``1`` -- finite -- when ``b`` is exactly ``1``.  The literal
-is not inspected, so all three stand.  Never ``-inf``: a positive base has no
-negative power."""
+when ``b < 1``, ``1`` when ``b`` is ``1``.  The literal is not inspected, so all
+three stand; never ``-inf``, since a positive base has no negative power."""
 
 _POW_POS_BASE = {
     _NAN: _NAN,
@@ -215,13 +214,11 @@ _POW_POS_BASE = {
 
 
 def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
-    """``a + b``.
+    """``a + b``; :func:`_exact_sub` negates *b* and reuses this.
 
-    Subtraction negates *b* first (:func:`_exact_sub`), so the infinity cases
-    are stated once.  They are the only ones the sign split buys: an infinity
-    survives an addition unless the *opposite* one is added to it, which is
-    where the NaN comes from.  ``FINITE`` stays sign-blind, so a finite operand
-    can neither create nor cancel an infinity.
+    An infinity survives unless the opposite one is added to it, which is where
+    the NaN comes from.  ``FINITE`` is sign-blind, so a finite operand can
+    neither create nor cancel an infinity.
     """
     if not (a and b):
         return _BOT             # an operand nothing reaches produces nothing
@@ -257,8 +254,7 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
         out |= _NAN
     for x, y in ((a, b), (b, a)):
         if x & _INF and y & (_INF | _FINITE):
-            # the product's sign needs both operands' signs, and `FINITE` is
-            # sign-blind, so neither infinity can be ruled out here
+            # a product's sign needs both operands', and `FINITE` is sign-blind
             out |= _INF
         if x & _INF and y & _ZERO:
             out |= _NAN                  # 0 * inf
@@ -272,20 +268,12 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
 def _exact_select(args: list[ValueClass], is_max: bool) -> ValueClass:
     """``max(...)`` or ``min(...)`` over operands of classes *args*.
 
-    The result *is* one operand, so the naive rule is the join -- sound, and
-    blind to the one thing a selection knows: which operand it picks.  An
-    infinity at the far end is dropped instead of carried:
+    A selection knows which operand it picks, which the join does not: ``max``
+    is ``+inf`` when *some* operand can be, and ``-inf`` only when *every* one
+    can, since an operand that is provably greater is already a larger maximum.
+    ``min`` is the dual.  So ``max(logb(x), -126)`` cannot be ``-inf``.
 
-    - ``max`` is ``+inf`` when *some* operand can be, since nothing exceeds it;
-    - ``max`` is ``-inf`` only when *every* operand can be, since one operand
-      that is provably greater is already a larger maximum.
-
-    ``min`` is the dual.  NaN propagates from any operand (`_emit_ieee_min_max`
-    open-codes exactly that), and the finite atoms are joined: `FINITE` is
-    sign-blind, so a selection among finites can land anywhere.
-
-    This is what makes a clamp mean something: ``max(logb(x), -126)`` cannot be
-    ``-inf``, because ``-126`` is not.
+    NaN propagates from any operand, and the finite atoms are joined.
     """
     if not args or not all(args):
         return _BOT             # an operand nothing reaches produces nothing
@@ -317,13 +305,12 @@ class ValueClassAnalysis:
     ``None`` for a non-real-valued expression."""
 
     elt_by_def: dict[Definition, ValueClass]
-    """Class of every *element* of each list definition, unrefined -- the list
-    analogue of :attr:`by_def`.  Absent means nothing is known."""
+    """Class of every *element* of each list definition, unrefined.  The list
+    analogue of :attr:`by_def`; absent means nothing is known."""
 
     elt_by_expr: dict[Expr, ValueClass]
     """Class of every element of the list each expression names, refined by the
-    branches that dominate it.  The analogue of :attr:`by_expr`, and what
-    :meth:`classify_elements` reads."""
+    branches dominating it.  The list analogue of :attr:`by_expr`."""
 
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
@@ -363,10 +350,11 @@ class ValueClassAnalysis:
 class _ValueClassInstance(DefaultVisitor):
     """Single-use instance of value-class analysis."""
 
-    _ROUNDS_PER_PHI = 4
-    """A phi can grow once per atom, so a loop settles within this many rounds
-    per phi.  Exceeding the bound means a transfer function is not monotone -- a
-    bug -- and the phis drop to the top class rather than the walk spinning."""
+    _ROUNDS_PER_PHI = len(_ATOMS)
+    """A phi gains at least one atom per round until it stops growing, so this
+    many rounds per phi is enough to reach a fixpoint.  Exceeding it means a
+    transfer function is not monotone -- a bug -- and the phis drop to the top
+    class rather than the loop running forever."""
 
     func: FuncDef
     type_info: TypeAnalysis
@@ -429,10 +417,9 @@ class _ValueClassInstance(DefaultVisitor):
     def _elt_class(self, e: Expr) -> ValueClass:
         """The class every element of the list *e* names belongs to.
 
-        The list analogue of :meth:`_visit_var`: what the definition always
-        holds, met with what the enclosing branches proved.  A list that is not
-        a plain name -- a call's result, a slice -- has no definition to carry
-        either, so it is the top class.
+        The list analogue of :meth:`_visit_var`: what the definition holds, met
+        with what the enclosing branches proved.  A list that is not a plain
+        name carries no definition, so it is the top class.
         """
         if not isinstance(e, Var):
             return _TOP
@@ -448,10 +435,8 @@ class _ValueClassInstance(DefaultVisitor):
     def _join_elt_phi(self, phi: Definition, lhs: Definition, rhs: Definition):
         """A phi's element class, where either arm has one.
 
-        Absent means "not a list, or a list nothing has said anything about",
-        and the two read differently: joining an absent arm with a known one
-        must give the top, or a store on one path would look like a promise
-        about the other.
+        An absent arm joins as the top, or a store on one path would look like
+        a promise about the other.
         """
         if lhs not in self.elt_by_def and rhs not in self.elt_by_def:
             return
@@ -517,24 +502,24 @@ class _ValueClassInstance(DefaultVisitor):
     ) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the *elements* of a list.
 
-        One shape, and it is a loop rather than the ``any``/``all`` it was
-        written as -- `CompToLoop` lowers the comprehension long before this
-        analysis runs::
+        One shape: ``any``/``all`` over a comprehension, as `CompToLoop` leaves
+        it::
 
             acc = False                 # `True` for `all`
             for x in xs:
                 b = <pred>(x)
                 acc = acc or b          # `and` for `all`
 
-        ``not acc`` after the ``or`` form and ``acc`` after the ``and`` form say
-        the same thing: the predicate's verdict holds for *every* element.  The
-        quantifier is universal because FPy has no ``break``, so the loop always
-        runs the whole iterable.
+        ``not acc`` after the ``or`` form, and ``acc`` after the ``and`` form,
+        both say the predicate's verdict holds for *every* element.  FPy has no
+        ``break``, so the loop runs the whole iterable and the quantifier is
+        universal.
 
-        Sound only while the accumulator really is that fold, so the match is
-        strict: the seed is a literal, the step is exactly ``acc <op> b`` naming
-        this phi, the predicate reads only the loop target, and nothing in the
-        body writes the list.  Anything else returns nothing.
+        The match is strict -- a literal seed, a step that is exactly
+        ``acc <op> b`` naming this phi, and a refinement the loop target itself
+        carries -- and anything else returns nothing.  A store into the list
+        needs no check: it is a new definition, and a refinement recorded
+        against the old one does not reach it.
         """
         if not isinstance(cond, Var):
             return []
@@ -576,29 +561,13 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         target_def = self.def_use.find_def_from_site(loop.target, loop)
         cls = dict(self._implied(pred, want)).get(target_def)
-        if cls is None or self._writes_list(loop.body, loop.iterable):
+        if cls is None:
             return []
         return [(self.def_use.find_def_from_use(loop.iterable), cls)]
 
     def _assigned_expr(self, d: Definition) -> Expr | None:
         """The expression *d* is assigned, where *d* is a plain assignment."""
-        site = getattr(d, 'site', None)
-        return site.expr if isinstance(site, Assign) else None
-
-    def _writes_list(self, body: StmtBlock, name: Var) -> bool:
-        """Does *body* store into the list *name*?  A refinement read off the
-        loop would describe elements a later store replaced."""
-        found = False
-
-        class _Scan(DefaultVisitor):
-            def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-                nonlocal found
-                if stmt.var == name.name:
-                    found = True
-                super()._visit_indexed_assign(stmt, ctx)
-
-        _Scan()._visit_block(body, None)
-        return found
+        return d.site.expr if isinstance(d.site, Assign) else None
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the definitions it tests."""
@@ -775,12 +744,7 @@ class _ValueClassInstance(DefaultVisitor):
         return exact if scope.ctx is REAL else representable_classes(scope.ctx)
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> ValueClass:
-        """``xs[i]``: whatever every element of ``xs`` is.
-
-        The list analogue of :meth:`_visit_var`, and the reason a list carries
-        an element class at all -- without it this is the top, and every guard
-        a caller wrote about the list is lost at the read.
-        """
+        """``xs[i]``: whatever every element of ``xs`` is."""
         self._visit_expr(e.index, ctx)
         self._visit_expr(e.value, ctx)
         return self._elt_class(e.value)
@@ -826,10 +790,8 @@ class _ValueClassInstance(DefaultVisitor):
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
             case AMin() | AMax():
-                # the result *is* one element, so it is bounded by what the
-                # elements are; the ordering rule adds nothing without a
-                # per-element class, and the join of one class is itself
-                return _exact_select([self._elt_class(e.arg)], is_max=False)
+                # the result *is* one element, so it is bounded by them
+                return self._elt_class(e.arg)
             case Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
@@ -865,8 +827,7 @@ class _ValueClassInstance(DefaultVisitor):
         args = [self._operand(arg, ctx) for arg in e.args]
         match e:
             case Min() | Max():
-                # a selection, not a rounding: the result *is* one operand, so
-                # this does not go through `_rounded`
+                # a selection, not a rounding: no `_rounded`
                 return _exact_select(args, is_max=isinstance(e, Max))
             case _:
                 return self._rounded(e, _TOP)
@@ -977,8 +938,11 @@ class _ValueClassInstance(DefaultVisitor):
     def _fixpoint(self, stmt: Stmt, run_body: Callable[[], None]):
         """Drives a loop's phi classes to convergence.
 
-        Each phi starts at its pre-loop class and only ever joins, so the walk
-        ascends a height-4 lattice and settles without widening.
+        A phi's class starts at what reached the loop and is re-joined with the
+        body's result until two rounds agree.  Joining only ever adds atoms and
+        there are finitely many, so the sequence stops on its own; if it has not
+        stopped after :attr:`_ROUNDS_PER_PHI` rounds per phi, a transfer
+        function is not monotone and every phi is dropped to the top class.
         """
         phis = self.def_use.phis[stmt]
         for phi in phis:

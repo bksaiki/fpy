@@ -593,7 +593,7 @@ class TestLoops:
         assert _cls(f, 'abs(x)') == TOP & ~NEG_INF
 
     def test_a_loop_phi_settles(self):
-        """The lattice has height 4, so the fixpoint converges without widening;
+        """The lattice is finite, so the fixpoint converges without widening;
         the accumulator ends up admitting the zero it starts at."""
         @fp.fpy(ctx=fp.REAL)
         def f(n: fp.Real) -> fp.Real:

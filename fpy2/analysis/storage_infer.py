@@ -172,9 +172,8 @@ def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
     happened.
 
     An unbounded precision is the signature of exact arithmetic -- a ``REAL``
-    accumulator, a fixed-point intermediate -- and then the significand the
-    bound demands is the number to act on.  The repr alone shows only the grid
-    and the maximum it lies between, leaving the reader to subtract.
+    accumulator, a fixed-point intermediate -- and the significand it demands is
+    what the repr leaves the reader to work out from the grid and the maximum.
     """
     if af.prec != float('inf'):
         return ''
@@ -203,19 +202,15 @@ def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
 def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
     """*af* with the special values *cls* rules out removed.
 
-    A format says whether the *format* has a NaN, a value class says whether
-    *this value* is one, and storage only has to hold the values that occur --
-    so a definition the class proves finite may store in an integer rung its
-    format alone would never reach.  Only the two flags: a format structurally
-    cannot say "not zero" (``pos_bound >= 0 >= neg_bound`` holds by convention),
-    which is the same reason :mod:`.value_class` exists separately.
+    A format says whether the *format* has a NaN; a class says whether *this
+    value* is one.  Storage need only hold the values that occur, so a
+    definition the class proves finite can reach an integer rung its format
+    alone never would.  The signs are asked about separately: `abs` and `logb`
+    never yield a ``-inf``.
 
-    The two infinities are asked about separately, which is why
-    :class:`ValueClass` splits them: `abs` and `logb` never yield a ``-inf``, so
-    a format admitting one can drop it even where ``+inf`` stays.
-
-    Narrowing only, and per definition; the join over a class then keeps a
-    ``float`` wherever one member can still be infinite.
+    Only these flags -- a format structurally cannot say "not zero".  Narrowing
+    only, and per definition, so the join over a class keeps a ``float``
+    wherever one member can still be infinite.
     """
     return AbstractFormat(
         af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
@@ -240,6 +235,11 @@ def of_bound(
     A bottom bound holds no value, so every member contains it vacuously and the
     first wins.  Where no member contains the bound the domain gets one chance to
     accept it anyway (:meth:`StorageDomain.fallback`) before this refuses.
+
+    *cls* narrows the special values away (:func:`_without_absent`), and only
+    for a scalar: an expression's storage is chosen elsewhere and is not
+    narrowed, so narrowing a list's elements here would leave the reduction over
+    them folding at the wider type.
     """
     if bound is None or isinstance(bound, VarFormat):
         return None
@@ -364,11 +364,8 @@ class StorageInfer:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 
         *def_to_class* is :class:`~fpy2.analysis.ValueClassAnalysis`'s ``by_def``
-        where the caller has it.  It narrows each member's bound by the special
-        values that definition cannot hold, which is what lets an integer-valued
-        `logb` reach an integer rung: its format admits a NaN and an infinity
-        because `logb(0)` is one, and a guarded definition admits neither.
-        Optional, and omitting it only costs precision.
+        where the caller has it, narrowing each member's bound by the special
+        values that definition cannot hold.  Omitting it only costs precision.
 
         Raises :class:`StorageSelectionError` when no member of *domain* covers
         some class's joined bound.

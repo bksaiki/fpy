@@ -173,28 +173,26 @@ def _function_env(func: Callable) -> ForeignEnv:
 
     return ForeignEnv(globs, nonlocals, built_ins)
 
+
 def _closure_names(func: Callable, env: ForeignEnv) -> set[str]:
     """Every name *func*'s body may read from its defining scope.
 
-    :func:`inspect.getclosurevars` reads *one* code object, and before Python
-    3.12 a comprehension compiles to a separate one -- so a name used only
-    inside ``[... for x in xs]`` was invisible here and `SyntaxCheck` called it
-    unbound.  Walking the nested objects is what fixes that; on 3.12+, where
-    PEP 709 inlines comprehensions, the walk simply finds nothing extra.
+    The nested code objects are walked because :func:`inspect.getclosurevars`
+    reads only one, and before PEP 709 (Python 3.12) a comprehension compiles
+    to its own -- so a name used only inside ``[... for x in xs]`` was invisible
+    and `SyntaxCheck` called it unbound.
 
     ``co_names`` also holds attribute names, so ``fp.logb`` contributes
-    ``logb``.  Membership in *env* is the filter, exactly as
-    ``getclosurevars`` filters its own ``globals`` and ``builtins`` -- an
-    attribute that happens to share a global's name is a pre-existing
-    over-approximation, not a new one.
+    ``logb``; membership in *env* is the filter, as it is in
+    ``getclosurevars``.
     """
     names = set(inspect.getclosurevars(func).nonlocals)
     codes = [func.__code__]
     while codes:
         code = codes.pop()
         names |= {n for n in code.co_names if n in env}
-        # a nested object's own `co_freevars` name the *enclosing function's*
-        # locals, which are FPy locals rather than foreign, so they stay out
+        # a nested object's `co_freevars` name the enclosing function's locals,
+        # which are FPy locals rather than foreign
         codes.extend(c for c in code.co_consts if isinstance(c, CodeType))
     return names
 
