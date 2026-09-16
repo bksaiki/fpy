@@ -52,6 +52,7 @@ from .format_infer import (
     is_bottom,
 )
 from .format_infer.analysis import _to_abstract
+from .format_infer.format import RealFloat
 from .reaching_defs import AssignDef, Definition, same_object_defs
 
 
@@ -165,6 +166,39 @@ def _lift(bound: FormatBound) -> AbstractFormat | None:
     return None
 
 
+def _exact_demand(domain: StorageDomain, af: AbstractFormat) -> str:
+    """Why an *exact* bound exceeds every rung, or ``''`` where that is not what
+    happened.
+
+    An unbounded precision is the signature of exact arithmetic -- a ``REAL``
+    accumulator, a fixed-point intermediate -- and then the significand the
+    bound demands is the number to act on.  The repr alone shows only the grid
+    and the maximum it lies between, leaving the reader to subtract.
+    """
+    if af.prec != float('inf'):
+        return ''
+    top = max(
+        (b for b in (af.pos_bound, af.neg_bound) if isinstance(b, RealFloat)),
+        key=lambda b: b.e, default=None,
+    )
+    if top is None or not isinstance(af.exp, int):
+        return ''
+    widest = max(
+        (
+            p for f in domain.sigma
+            if isinstance(p := AbstractFormat.from_format(f).prec, int)
+        ),
+        default=None,
+    )
+    if widest is None:
+        return ''
+    return (
+        f': exact on a 2^{af.exp} grid up to {top}, so it needs '
+        f'{top.e - af.exp + 1} significand bits and the widest storage holds '
+        f'{widest}'
+    )
+
+
 def of_bound(domain: StorageDomain, bound: FormatBound) -> FormatBound:
     """The smallest storage in *domain* containing *bound*.
 
@@ -203,7 +237,9 @@ def of_bound(domain: StorageDomain, bound: FormatBound) -> FormatBound:
     chosen = domain.fallback(bound)
     if chosen is not None:
         return chosen
-    raise StorageSelectionError(f'no storage format contains {bound!r}')
+    raise StorageSelectionError(
+        f'no storage format contains {bound!r}{_exact_demand(domain, af)}'
+    )
 
 
 def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:

@@ -298,11 +298,18 @@ class CppEmitError(Exception):
 
     An optional ``at`` node prefixes the message with a source location, which
     the wrapping :class:`CppCompileError` passes through untouched.
+
+    ``unfold_answers`` marks a refusal whose advice names the ``unfold`` flag.
+    `compile_module` reads it to know that this refusal is not a second opinion
+    worth reporting: under the flag it is the very thing being answered.
     """
 
-    def __init__(self, msg: str, *, at: 'Ast | None' = None):
+    def __init__(
+        self, msg: str, *, at: 'Ast | None' = None, unfold_answers: bool = False,
+    ):
         self.msg = msg
         self.at = at
+        self.unfold_answers = unfold_answers
         loc = at.loc if at is not None else None
         if loc is not None:
             super().__init__(f'{loc.format()}: {msg}')
@@ -1869,6 +1876,7 @@ class CppEmitter(Visitor):
             f'no matching signature for {type(e).__name__} under context '
             f'`{active}`: {[s.format() for s in storages]}{advice}',
             at=e,
+            unfold_answers=bool(advice),
         )
 
     def _dispatch_unary(self, e: UnaryOp, arg: str) -> str:
@@ -2870,6 +2878,7 @@ class CppEmitter(Visitor):
                 f'`{storage.format()}` rounds to that type\'s own format, not '
                 'to this one.  Compile with `unfold=UnfoldMode.ROUNDINGS`.',
                 at=e,
+                unfold_answers=True,
             )
 
     def _cast_arg_type(self, e) -> CppScalar | None:

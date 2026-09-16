@@ -346,7 +346,10 @@ that programs which refused now compile, bit-exactly:
 
 It never costs a diagnosis: where the rewrite leaves a program that still
 fails, it fails further along than the original would have, so
-`compile_module` asks the unrewritten one and reports that.
+`compile_module` asks the unrewritten one and reports that — unless the
+unrewritten one's only complaint is the refusal this flag answers
+(`CppEmitError.unfold_answers`), which would advise the mode already in
+effect.
 
 **No round-to-odd level**, though it is the mode `derive_intermediate` returns
 and the one Figure 8 covers for arbitrary reals — so it is accepted exactly

@@ -75,7 +75,12 @@ which a type checker cannot follow -- so completion on
 
 
 class CppCompileError(CompileError):
-    """Raised when cpp compilation fails."""
+    """Raised when cpp compilation fails.
+
+    ``unfold_answers`` carries :class:`CppEmitError`'s flag through the wrap.
+    """
+
+    unfold_answers = False
 
 
 @dataclass
@@ -371,8 +376,14 @@ class CppCompiler(Backend):
             # fails further along: a rounding the emitter could name became a
             # temporary storage selection cannot place.  Report what the
             # unrewritten program says, so the flag never costs a diagnosis.
-            self._without_unfold()._compile_module(module)
-            raise   # it compiled unrewritten, so the rewrite's own error stands
+            try:
+                self._without_unfold()._compile_module(module)
+            except CppCompileError as e:
+                if not e.unfold_answers:
+                    raise
+                # Its only complaint is the refusal this flag answers, so
+                # reporting it would advise the mode already in effect.
+            raise   # the rewrite's own error stands
 
     def _without_unfold(self) -> 'CppCompiler':
         """This compiler with the rewrite off, for a second opinion."""
@@ -655,6 +666,6 @@ class CppCompiler(Backend):
                 f'strict unboxing failed for `{func.name}`: {e}'
             ) from e
         except CppEmitError as e:
-            raise CppCompileError(
-                f'compilation failed for `{func.name}`: {e}'
-            ) from e
+            err = CppCompileError(f'compilation failed for `{func.name}`: {e}')
+            err.unfold_answers = e.unfold_answers
+            raise err from e
