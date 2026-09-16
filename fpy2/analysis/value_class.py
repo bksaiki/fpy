@@ -96,16 +96,23 @@ class ValueClass(enum.Flag):
     """
 
     NAN = enum.auto()
-    INF = enum.auto()
+    POS_INF = enum.auto()
+    NEG_INF = enum.auto()
     ZERO = enum.auto()
     """Either signed zero -- the sign is not tracked."""
     FINITE = enum.auto()
-    """Finite and **non-zero**."""
+    """Finite and **non-zero**, of either sign."""
+
+    INF = POS_INF | NEG_INF
+    """Either infinity.  A composite, so a consumer asking ``cls & INF`` --
+    "can this be infinite at all" -- reads the same as before the split."""
 
     TOP = NAN | INF | ZERO | FINITE
 
 
 _NAN = ValueClass.NAN
+_POS_INF = ValueClass.POS_INF
+_NEG_INF = ValueClass.NEG_INF
 _INF = ValueClass.INF
 _ZERO = ValueClass.ZERO
 _FINITE = ValueClass.FINITE
@@ -113,12 +120,30 @@ _TOP = ValueClass.TOP
 _BOT = ValueClass(0)
 
 
+def _negate(a: ValueClass) -> ValueClass:
+    """*a* under negation: the infinities swap, the rest are sign-blind."""
+    out = a & ~_INF
+    if a & _POS_INF:
+        out |= _NEG_INF
+    if a & _NEG_INF:
+        out |= _POS_INF
+    return out
+
+
+def _magnitude(a: ValueClass) -> ValueClass:
+    """*a* under ``abs``: a negative infinity becomes a positive one."""
+    out = a & ~_NEG_INF
+    if a & _NEG_INF:
+        out |= _POS_INF
+    return out
+
+
 def class_of(x: Float) -> ValueClass:
     """The class *x* belongs to."""
     if x.isnan:
         return _NAN
     if x.isinf:
-        return _INF
+        return _NEG_INF if x.s else _POS_INF
     return _ZERO if x.is_zero() else _FINITE
 
 
@@ -160,24 +185,48 @@ def _map(table: dict[ValueClass, ValueClass], a: ValueClass) -> ValueClass:
     return out
 
 
-_LOGB = {_NAN: _NAN, _INF: _INF, _ZERO: _INF, _FINITE: _ZERO | _FINITE}
-"""``logb(0)`` is an infinity; ``logb(1.5)`` is ``0``."""
+_LOGB = {
+    _NAN: _NAN,
+    _POS_INF: _POS_INF, _NEG_INF: _POS_INF,   # `logb` reads a magnitude
+    _ZERO: _NEG_INF,
+    _FINITE: _ZERO | _FINITE,
+}
+"""``logb(0)`` is ``-inf``, ``logb(inf)`` is ``+inf``, ``logb(1.5)`` is ``0``."""
 
-_POW_POS_BASE = {_NAN: _NAN, _INF: _INF | _ZERO, _ZERO: _FINITE, _FINITE: _FINITE}
-"""``b ** y`` for a positive constant ``b``: ``b ** 0`` is ``1``, and an infinite
-exponent gives an infinity or a zero depending on signs neither tracked here."""
+_POW_INF = _POS_INF | _ZERO | _FINITE
+"""``b ** (+-inf)`` for a positive literal ``b``: ``+inf`` when ``b > 1``, ``0``
+when ``b < 1``, and ``1`` -- finite -- when ``b`` is exactly ``1``.  The literal
+is not inspected, so all three stand.  Never ``-inf``: a positive base has no
+negative power."""
+
+_POW_POS_BASE = {
+    _NAN: _NAN,
+    _POS_INF: _POW_INF, _NEG_INF: _POW_INF,
+    _ZERO: _FINITE, _FINITE: _FINITE,
+}
+"""``b ** y`` for a positive constant ``b``: ``b ** 0`` is ``1``."""
 
 
 def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
-    """``a + b`` and ``a - b``: the atoms are sign-blind, so one table serves."""
+    """``a + b``.
+
+    Subtraction negates *b* first (:func:`_exact_sub`), so the infinity cases
+    are stated once.  They are the only ones the sign split buys: an infinity
+    survives an addition unless the *opposite* one is added to it, which is
+    where the NaN comes from.  ``FINITE`` stays sign-blind, so a finite operand
+    can neither create nor cancel an infinity.
+    """
     if not (a and b):
         return _BOT             # an operand nothing reaches produces nothing
     out = _BOT
     if (a | b) & _NAN:
         out |= _NAN
-    if (a | b) & _INF:
-        out |= _INF
-    if a & _INF and b & _INF:
+    for x, y in ((a, b), (b, a)):
+        if x & _POS_INF and y & (_POS_INF | _ZERO | _FINITE):
+            out |= _POS_INF
+        if x & _NEG_INF and y & (_NEG_INF | _ZERO | _FINITE):
+            out |= _NEG_INF
+    if (a & _POS_INF and b & _NEG_INF) or (a & _NEG_INF and b & _POS_INF):
         out |= _NAN                      # inf - inf
     if a & _ZERO and b & _ZERO:
         out |= _ZERO
@@ -188,6 +237,11 @@ def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
     return out
 
 
+def _exact_sub(a: ValueClass, b: ValueClass) -> ValueClass:
+    """``a - b``, as ``a + (-b)``."""
+    return _exact_add(a, _negate(b))
+
+
 def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
     if not (a and b):
         return _BOT
@@ -196,6 +250,8 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
         out |= _NAN
     for x, y in ((a, b), (b, a)):
         if x & _INF and y & (_INF | _FINITE):
+            # the product's sign needs both operands' signs, and `FINITE` is
+            # sign-blind, so neither infinity can be ruled out here
             out |= _INF
         if x & _INF and y & _ZERO:
             out |= _NAN                  # 0 * inf
@@ -559,7 +615,7 @@ class _ValueClassInstance(DefaultVisitor):
             case ConstNan():
                 exact = _NAN
             case ConstInf():
-                exact = _INF
+                exact = _POS_INF        # `-inf` is a `Neg` of this
             case _:
                 exact = _FINITE      # pi, e, sqrt2, ...
         return self._rounded(e, exact)
@@ -567,7 +623,11 @@ class _ValueClassInstance(DefaultVisitor):
     def _visit_unaryop(self, e: UnaryOp, ctx: None) -> ValueClass:
         a = self._operand(e.arg, ctx)
         match e:
-            case Neg() | Abs() | Cast():
+            case Neg():
+                return self._rounded(e, _negate(a))
+            case Abs():
+                return self._rounded(e, _magnitude(a))
+            case Cast():
                 return self._rounded(e, a)
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
@@ -586,8 +646,10 @@ class _ValueClassInstance(DefaultVisitor):
         a = self._operand(e.first, ctx)
         b = self._operand(e.second, ctx)
         match e:
-            case Add() | Sub():
+            case Add():
                 return self._rounded(e, _exact_add(a, b))
+            case Sub():
+                return self._rounded(e, _exact_sub(a, b))
             case Mul():
                 return self._rounded(e, _exact_mul(a, b))
             case Pow() if _positive_literal(e.first):

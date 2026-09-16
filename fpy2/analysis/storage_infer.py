@@ -210,13 +210,17 @@ def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
     cannot say "not zero" (``pos_bound >= 0 >= neg_bound`` holds by convention),
     which is the same reason :mod:`.value_class` exists separately.
 
+    The two infinities are asked about separately, which is why
+    :class:`ValueClass` splits them: `abs` and `logb` never yield a ``-inf``, so
+    a format admitting one can drop it even where ``+inf`` stays.
+
     Narrowing only, and per definition; the join over a class then keeps a
     ``float`` wherever one member can still be infinite.
     """
     return AbstractFormat(
         af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
-        has_pos_inf=af.has_pos_inf and bool(cls & ValueClass.INF),
-        has_neg_inf=af.has_neg_inf and bool(cls & ValueClass.INF),
+        has_pos_inf=af.has_pos_inf and bool(cls & ValueClass.POS_INF),
+        has_neg_inf=af.has_neg_inf and bool(cls & ValueClass.NEG_INF),
         has_nan=af.has_nan and bool(cls & ValueClass.NAN),
         has_neg_zero=af.has_neg_zero,
     )
