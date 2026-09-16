@@ -24,7 +24,7 @@ from fpy2.backend.cpp.compiler import CppCompiler
 from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_COMPILED = 207
+EXPECTED_COMPILED = 208
 """Corpus functions that compile.  A mint count only means something while this
 holds -- fewer programs is fewer opportunities to mint."""
 
