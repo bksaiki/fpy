@@ -266,6 +266,35 @@ class TestAClampReachesIntegerStorage:
         assert 'float half(' in out
 
 
+class TestATupleReturnNarrowsPerField:
+    """A function's return type is its ABI, so a field that collapses to one
+    class for the whole tuple stays wide in every caller too."""
+
+    def test_the_narrow_field_stays_narrow(self):
+        @fp.fpy
+        def q(x: fp.Real) -> tuple[fp.Real, fp.Real]:
+            if fp.isnan(x) or fp.isinf(x) or x == 0:
+                return x, 0
+            else:
+                with fp.REAL:
+                    return x, fp.logb(x)
+
+        out = CppCompiler().compile(
+            q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::tuple<float, int16_t> q(' in out
+
+    def test_a_field_that_can_be_an_infinity_does_not(self):
+        """The same shape with the guard removed: `logb(0)` is ``-inf``."""
+        @fp.fpy
+        def q(x: fp.Real) -> tuple[fp.Real, fp.Real]:
+            with fp.REAL:
+                return x, fp.logb(x)
+
+        out = CppCompiler().compile(
+            q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        assert 'std::tuple<float, float> q(' in out
+
+
 class TestAListStoresAtItsElements:
     """The same narrowing, one level in: a list stores at what its elements can
     be rather than at their format.

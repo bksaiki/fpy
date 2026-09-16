@@ -20,7 +20,7 @@ from fpy2.transform import ANF, CompToLoop, Hoistable
 from fpy2.transform.path import walk_stmts
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_FUNCTIONS = 233
+EXPECTED_FUNCTIONS = 234
 """Corpus size.  A count only means something while this holds."""
 
 _ELEMENT = "a comprehension's element runs once per iteration"
@@ -52,13 +52,13 @@ a fixpoint rather than a sequence.
 The other two are the positions nothing lowers at all.
 """
 
-EXPECTED_STATEMENTS = 845
-EXPECTED_GROWTH = 71
+EXPECTED_STATEMENTS = 849
+EXPECTED_GROWTH = 76
 """Statements this pass adds over the whole corpus: each lowering's expansion,
 the second copy of each rotated condition, and the prefix rule's temporaries.
 The whole cost of being able to hoist anywhere."""
 
-EXPECTED_ATOMIZATION_GROWTH = 292
+EXPECTED_ATOMIZATION_GROWTH = 293
 """What `ANF` adds on top of hoistable form.  Context for
 :data:`EXPECTED_GROWTH`, pinned so the comparison cannot quietly stop holding."""
 
@@ -118,8 +118,9 @@ def test_comp_to_loop_first_leaves_only_what_it_declined():
 
 
 def test_the_pass_stays_weak():
-    """Being able to hoist anywhere costs 66 statements; the atomization on top
-    of it costs several times that, and a rewrite needs only the first."""
+    """Being able to hoist anywhere costs `EXPECTED_GROWTH` statements; the
+    atomization on top of it costs several times that, and a rewrite needs only
+    the first."""
     _n, _residue, _after, (before, grown, atomized) = _PROFILE
     assert before == EXPECTED_STATEMENTS
     assert grown - before == EXPECTED_GROWTH

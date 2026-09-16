@@ -54,6 +54,20 @@ def test_logb_guarded_list_stale(xs: list[fp.Real]) -> fp.Real:
         return 0
 
 @fp.fpy
+def test_logb_guarded_pair(x: fp.Real) -> tuple[fp.Real, fp.Real]:
+    """A tuple return narrows field by field.
+
+    The exponent is a small integer where the value beside it is not, and one
+    class for the whole tuple is the top class -- so the field would widen back
+    in the function's own ABI.
+    """
+    if fp.isnan(x) or fp.isinf(x) or x == 0:
+        return x, 0
+    else:
+        with fp.REAL:
+            return x, fp.logb(x)
+
+@fp.fpy
 def test_pow(x: fp.Real, y: fp.Real) -> fp.Real:
     """Example function for `pow`."""
     return x ** y

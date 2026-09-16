@@ -54,7 +54,7 @@ from .format_infer import (
 from .format_infer.analysis import _to_abstract
 from .format_infer.format import RealFloat
 from .reaching_defs import AssignDef, Definition, same_object_defs
-from .value_class import ValueClass
+from .value_class import ClassBound, ListClass, TupleClass, ValueClass
 
 
 class StorageSelectionError(Exception):
@@ -217,9 +217,7 @@ def _without_absent(af: AbstractFormat, cls: ValueClass) -> AbstractFormat:
 
 
 def of_bound(
-    domain: StorageDomain, bound: FormatBound,
-    cls: ValueClass | None = None,
-    elt_cls: 'ValueClass | None' = None,
+    domain: StorageDomain, bound: FormatBound, cls: ClassBound = None,
 ) -> FormatBound:
     """The smallest storage in *domain* containing *bound*.
 
@@ -232,16 +230,27 @@ def of_bound(
     first wins.  Where no member contains the bound the domain gets one chance to
     accept it anyway (:meth:`StorageDomain.fallback`) before this refuses.
 
-    *cls* narrows the special values away (:func:`_without_absent`); *elt_cls*
-    does the same one level in, for what a list's elements can be.  One level
-    only: a nested list's elements are not the outer list's.
+    *cls* narrows the special values away (:func:`_without_absent`).  It is
+    shaped like *bound*, and is descended alongside it, so an aggregate narrows
+    field by field: a class that stopped at the outermost node would say
+    nothing about any container, a `ValueClass` being a fact about a number.  A
+    shape that does not match says nothing, which is how a partial class -- a
+    list whose elements are known, a tuple whose fields are not -- is written.
     """
     if bound is None or isinstance(bound, VarFormat):
         return None
     if isinstance(bound, TupleFormat):
-        return TupleFormat(tuple(of_bound(domain, b) for b in bound.elts))
+        fields = (
+            cls.elts if isinstance(cls, TupleClass)
+            and len(cls.elts) == len(bound.elts)
+            else (None,) * len(bound.elts)
+        )
+        return TupleFormat(tuple(
+            of_bound(domain, b, c) for b, c in zip(bound.elts, fields)
+        ))
     if isinstance(bound, ListFormat):
-        return ListFormat(of_bound(domain, bound.elt, elt_cls))
+        elt = cls.elt if isinstance(cls, ListClass) else None
+        return ListFormat(of_bound(domain, bound.elt, elt))
     if is_bottom(bound):
         return domain.sigma[0]
     if bound == REAL_FORMAT:
@@ -256,7 +265,7 @@ def of_bound(
             f'cannot compare {bound!r} against the storage formats; '
             'storage selection requires a dyadic format'
         )
-    if cls is not None:
+    if isinstance(cls, ValueClass):
         af = _without_absent(af, cls)
     for sigma in domain.sigma:
         if af <= AbstractFormat.from_format(sigma):
@@ -322,8 +331,7 @@ def join(domain: StorageDomain, storages: list[FormatBound]) -> FormatBound:
 def _aggregate(
     domain: StorageDomain,
     bounds: list[FormatBound],
-    classes: list[ValueClass | None] | None = None,
-    elt_classes: 'list[ValueClass | None] | None' = None,
+    classes: 'list[ClassBound] | None' = None,
 ) -> FormatBound:
     """One storage containing every bound in *bounds*.
 
@@ -341,14 +349,9 @@ def _aggregate(
     assert bounds, 'a class has at least one member'
     if classes is None:
         classes = [None] * len(bounds)
-    if elt_classes is None:
-        elt_classes = [None] * len(bounds)
-    triples = [
-        (b, c, e) for b, c, e in zip(bounds, classes, elt_classes)
-        if not is_bottom(b)
-    ]
-    triples = triples or list(zip(bounds, classes, elt_classes))
-    return join(domain, [of_bound(domain, b, c, e) for b, c, e in triples])
+    pairs = [(b, c) for b, c in zip(bounds, classes) if not is_bottom(b)]
+    pairs = pairs or list(zip(bounds, classes))
+    return join(domain, [of_bound(domain, b, c) for b, c in pairs])
 
 
 class StorageInfer:
@@ -360,16 +363,14 @@ class StorageInfer:
         def_to_bound: dict[Definition, FormatBound],
         expr_to_bound: dict[Expr, FormatBound],
         domain: StorageDomain,
-        def_to_class: dict[Definition, ValueClass | None] | None = None,
-        def_to_elt: 'dict[Definition, ValueClass] | None' = None,
+        def_to_class: 'dict[Definition, ClassBound] | None' = None,
     ) -> StorageAnalysis:
         """Build a :class:`StorageAnalysis` from def-use info and per-def bounds.
 
-        *def_to_class* is :class:`~fpy2.analysis.ValueClassAnalysis`'s ``by_def``
-        where the caller has it, narrowing each member's bound by the special
-        values that definition cannot hold; *def_to_elt* is its ``by_elt``,
-        doing the same for what a list's elements can be.  Omitting either only
-        costs precision.
+        *def_to_class* is :meth:`~fpy2.analysis.ValueClassAnalysis.bound_of`
+        per definition where the caller has it, narrowing each member's bound by
+        the special values that definition cannot hold.  Omitting it only costs
+        precision.
 
         Raises :class:`StorageSelectionError` when no member of *domain* covers
         some class's joined bound.
@@ -402,12 +403,8 @@ class StorageInfer:
                 None if def_to_class is None
                 else [def_to_class.get(d) for d in members]
             )
-            elt_classes = (
-                None if def_to_elt is None
-                else [def_to_elt.get(d) for d in members]
-            )
             try:
-                class_storage[c] = _aggregate(domain, bounds, classes, elt_classes)
+                class_storage[c] = _aggregate(domain, bounds, classes)
             except StorageSelectionError as e:
                 name = members[0].name
                 raise StorageSelectionError(

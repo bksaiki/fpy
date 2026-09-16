@@ -15,6 +15,9 @@ import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of, representable_classes
 from fpy2.analysis.value_class import (
+    ListClass,
+    TupleClass,
+    join_class,
     _ATOMS, _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select,
     _exact_sub, _map,
 )
@@ -898,6 +901,20 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f, scalars=1) == TOP
 
 
+def _bounds(fn, n: int = 4) -> dict:
+    """``bound_of`` per definition, keyed by variable name, after lowering."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        du = info.type_info.def_use
+        return {str(d.name): info.bound_of(d) for d in du.defs}
+    raise AssertionError(f'no {fn.name}')
+
+
 def _elt_classes(fn, n: int = 4) -> dict:
     """``by_elt``, keyed by variable name, after lowering."""
     from fpy2.backend.cpp.compiler import CppCompiler
@@ -909,6 +926,37 @@ def _elt_classes(fn, n: int = 4) -> dict:
         info = ValueClassInfer.analyze(spec.ast)
         return {str(d.name): cls for d, cls in info.by_elt.items()}
     raise AssertionError(f'no {fn.name}')
+
+
+class TestAStructuralClass:
+    """A class shaped like the value, so an aggregate narrows piece by piece."""
+
+    def test_a_tuple_joins_field_by_field(self):
+        a = TupleClass((NAN, ZERO))
+        b = TupleClass((ZERO, ZERO))
+        assert join_class(a, b) == TupleClass((NAN | ZERO, ZERO))
+
+    def test_a_list_joins_its_element(self):
+        assert join_class(ListClass(NAN), ListClass(ZERO)) == ListClass(NAN | ZERO)
+
+    def test_a_shape_mismatch_knows_nothing(self):
+        """Not the top class -- the top is a fact about a *number*, and there is
+        no such fact about a value whose shape is in question."""
+        assert join_class(TupleClass((NAN,)), NAN) is None
+        assert join_class(TupleClass((NAN,)), TupleClass((NAN, ZERO))) is None
+
+    def test_an_unknown_side_stays_unknown(self):
+        assert join_class(None, NAN) is None
+        assert join_class(TupleClass((NAN, None)), TupleClass((ZERO, ZERO))) == \
+            TupleClass((NAN | ZERO, None))
+
+    def test_a_list_definition_reads_as_its_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        assert _bounds(f)['ys'] == ListClass(_elt_classes(f)['ys'])
 
 
 class TestElementClassesPerDefinition:

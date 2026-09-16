@@ -17,6 +17,7 @@ _ignore = [
     'test_logb_guarded',
     'test_logb_guarded_list',
     'test_logb_guarded_list_stale',
+    'test_logb_guarded_pair',
 
     # unsupported type
     'dpN',

@@ -62,6 +62,7 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from fractions import Fraction
+from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
@@ -80,6 +81,9 @@ from .define_use import (
 from .type_infer import TypeAnalysis, TypeInfer
 
 __all__ = [
+    'ClassBound',
+    'ListClass',
+    'TupleClass',
     'ValueClass',
     'ValueClassAnalysis',
     'ValueClassInfer',
@@ -124,6 +128,46 @@ _BOT = ValueClass(0)
 _ATOMS = (_NAN, _POS_INF, _NEG_INF, _ZERO, _FINITE)
 """The join-irreducible classes.  ``INF`` is not one: it is the composite a
 consumer uses to ask "infinite at all"."""
+
+
+@dataclass(frozen=True)
+class TupleClass:
+    """What each field of a tuple can be."""
+    elts: 'tuple[ClassBound, ...]'
+
+
+@dataclass(frozen=True)
+class ListClass:
+    """What every element of a list can be."""
+    elt: 'ClassBound'
+
+
+ClassBound: TypeAlias = 'ValueClass | TupleClass | ListClass | None'
+"""A class shaped like the value it describes, mirroring
+:data:`~fpy2.analysis.format_infer.FormatBound`.
+
+A storage choice is structural -- a tuple's is field-wise, a list's is its
+element's -- so a class that is not loses at the first aggregate: one
+:class:`ValueClass` for a whole tuple is the top class and narrows nothing.
+``None`` says nothing about the value at that position, and so does a shape
+that does not match the bound's.
+"""
+
+
+def join_class(a: ClassBound, b: ClassBound) -> ClassBound:
+    """Either of *a* and *b*, structurally.  ``None`` where they disagree about
+    the shape, since nothing is then known of the whole."""
+    match a, b:
+        case ValueClass(), ValueClass():
+            return a | b
+        case TupleClass(), TupleClass() if len(a.elts) == len(b.elts):
+            return TupleClass(tuple(
+                join_class(x, y) for x, y in zip(a.elts, b.elts)
+            ))
+        case ListClass(), ListClass():
+            return ListClass(join_class(a.elt, b.elt))
+        case _:
+            return None
 
 
 def _negate(a: ValueClass) -> ValueClass:
@@ -344,6 +388,19 @@ class ValueClassAnalysis:
         if region is None or self.alias.escapes_at(region):
             return None
         return region
+
+    def bound_of(self, d: Definition) -> ClassBound:
+        """*d*'s class, shaped like the value it holds.
+
+        :attr:`by_def` and :attr:`by_elt` answer for a scalar and for a list's
+        elements; this is the one a structural consumer wants, and the only
+        place that knows both.
+        """
+        elt = self.by_elt.get(d)
+        if elt is not None:
+            return ListClass(elt)
+        cls = self.by_def.get(d)
+        return cls if isinstance(cls, ValueClass) else None
 
     def classify(self, e: Expr) -> ValueClass:
         """The class of *e*, or the top class where nothing is known."""

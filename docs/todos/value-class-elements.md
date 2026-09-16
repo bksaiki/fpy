@@ -51,6 +51,13 @@ case they had no witness for.
     There were two storage oracles, one per-expression and format-driven and
     one per-definition and class-aware; they differ exactly where a class
     narrowed a definition, and the declaration is the one that was emitted.
+- **A class shaped like its value.**  `ClassBound` mirrors `FormatBound`, and
+  `of_bound` descends the two together.  A storage choice is structural, so a
+  flat class loses at the first aggregate: one `ValueClass` for a whole tuple is
+  the top class, and a function returning a small integer beside a float widened
+  the integer in its own ABI.  This subsumed the separate element-class
+  parameter that landed with element storage -- the tuple was the same crack at
+  another node.
 
 ## What is left
 
@@ -58,6 +65,10 @@ case they had no witness for.
 reduction, because `ValueClass.ZERO` does not track the sign and `logb` yields
 only `+0`.  Splitting it the way `INF` was split into `POS_INF` / `NEG_INF`
 would drop the term.
+
+**A tuple *definition* carries no class.**  `bound_of` builds a `ListClass` for
+a list and a `ValueClass` for a scalar; `t = (a, b)` gets neither, so only a
+tuple built at a `return` narrows.  No case wants it yet.
 
 **`_emit_min_max` takes its type from the active context**, working around the
 two oracles disagreeing (`library_core.max_e` in its docstring).  With one
