@@ -505,11 +505,13 @@ class CppEmitter(Visitor):
     def _bind_operand(self, expr: str) -> str:
         """A name for *expr*, so it can be read more than once.
 
-        Already a name — evaluated once, no side effects — so nothing to bind.
-        Otherwise bind it to a temp; ``auto&&`` binds a reference, so this
-        copies nothing whatever the representation.
+        Already a name, or an integer literal — re-readable, no side effects —
+        so nothing to bind.  Note these are tests on the *emitted text*, which
+        is all a caller has: a literal is not an identifier, so it needs its
+        own case.  Otherwise bind it to a temp; ``auto&&`` binds a reference,
+        so this copies nothing whatever the representation.
         """
-        if expr.isidentifier():
+        if expr.isidentifier() or expr.isdigit():
             return expr
         tmp = self._fresh_temp()
         self.writer.add_line(f'auto&& {tmp} = {expr};')
@@ -2677,7 +2679,8 @@ class CppEmitter(Visitor):
         ``_eval_sum`` seeds with ``xs[0]`` **unrounded** and does *n-1* additions;
         an empty list is an exact ``+0``.  ``accumulate`` takes seed and range
         separately, so that is a range starting one past ``begin``.  The empty guard
-        is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there.
+        is not optional -- both ``begin() + 1`` and ``xs[0]`` are undefined there --
+        except where a non-zero length in the type has already settled it.
 
         The accumulator may be *wider* than the element but not narrower:
         ``init + *first`` converts to the common type, which is the accumulator only
@@ -2710,11 +2713,19 @@ class CppEmitter(Visitor):
             # `accumulate` deduces `T` from its seed, so an uncast one would run
             # the whole fold in the element type.  Exact, by the check above.
             seed = self._explicit_cast(seed, result_ty)
+        fold = (
+            f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
+            f'{self._list_end(arg_ty, src)}, {seed})'
+        )
+        if arg_ty.size:
+            # A *non-zero* length in the type settles the guard statically.
+            # `size == 0` is falsy here and keeps it, which is right: a
+            # `std::array<T, 0>` is legal and is exactly the case it guards.
+            return fold
         return (
             f'({self._list_len(arg_ty, src)} == 0'
             f' ? static_cast<{result_ty.format()}>(0)'
-            f' : std::accumulate({self._list_begin(arg_ty, src)} + 1, '
-            f'{self._list_end(arg_ty, src)}, {seed}))'
+            f' : {fold})'
         )
 
     def _emit_any_all(self, e: 'AnyOf | AllOf', arg_str: str) -> str:
@@ -2802,33 +2813,41 @@ class CppEmitter(Visitor):
         first; ``empty()`` is a scalar ``T()``.  A non-constant dimension is
         bound to a name so a fixed-size layer repeating its fill ``K`` times
         does not re-evaluate it.
+
+        A result whose every list level is fixed-length takes no dimension
+        operand -- ``std::array<T, K>{}`` spells ``K`` in the type -- so none is
+        bound.  The expressions are still visited, since that is what emits any
+        statement they need.
         """
-        dims = []
+        sized = self._all_sized(result_ty)
+        dims: list[str] = []
         for a in e.args:
-            d = self._visit_expr(a, ctx)
-            dims.append(d if d.isdigit() else self._bind_operand(d))
+            code = self._visit_expr(a, ctx)
+            if not sized:
+                dims.append(self._bind_operand(code))
+        if _list_depth(result_ty) < len(e.args):
+            raise CppEmitError(
+                f'empty(...) shape mismatch: result type `{result_ty!r}` '
+                f'has depth {_list_depth(result_ty)}, but {len(e.args)} '
+                f'dimensions were given',
+                at=e,
+            )
+        if sized:
+            # Every dimension is in the type, and value-initialising a nested
+            # `std::array` zeroes it recursively -- no per-layer fill needed.
+            return self._list_empty(result_ty)
         dim_storages = [
             self._scalar_storage_for_expr(a) for a in e.args
         ]
         # a dimension goes through size_t in the vector constructor: cast
         # explicitly rather than rely on implicit narrowing
         dim_strs = [
-            self._explicit_cast(d, CppScalar.U64) if s != CppScalar.U64 else d
-            for d, s in zip(dims, dim_storages)
+            self._explicit_cast(code, CppScalar.U64)
+            if storage != CppScalar.U64 else code
+            for code, storage in zip(dims, dim_storages)
         ]
-        if _list_depth(result_ty) < len(dim_strs):
-            raise CppEmitError(
-                f'empty(...) shape mismatch: result type `{result_ty!r}` '
-                f'has depth {_list_depth(result_ty)}, but {len(dim_strs)} '
-                f'dimensions were given',
-                at=e,
-            )
-        if self._all_sized(result_ty):
-            # Every dimension is in the type, and value-initialising a nested
-            # `std::array` zeroes it recursively -- no per-layer fill needed.
-            return self._list_empty(result_ty)
         # Build from the inside out: innermost is ``T()``-default,
-        # each outer layer wraps it in ``vector<inner>(d, inner_val)``.
+        # each outer layer wraps it in ``vector<inner>(dim, inner_val)``.
         ty: CppType = result_ty
         # One layer per dimension given.  Fewer than the type's depth allocates
         # only the outer layers, whose cells default-construct: an empty vector,
@@ -2841,8 +2860,8 @@ class CppEmitter(Visitor):
             peeled.append(ty)
             ty = ty.elt
         inner = f'{ty.format()}{{}}'
-        for layer, d in zip(reversed(peeled), reversed(dim_strs)):
-            inner = self._list_new_filled(layer, d, inner)
+        for layer, dim in zip(reversed(peeled), reversed(dim_strs)):
+            inner = self._list_new_filled(layer, dim, inner)
         return inner
 
     def _require_cast_is_round(self, e: NamedUnaryOp) -> None:
