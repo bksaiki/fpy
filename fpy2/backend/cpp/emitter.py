@@ -2816,14 +2816,7 @@ class CppEmitter(Visitor):
             self._list_at_raw(arg_storage, src, i), elt_ty, result_ty, at=e,
         )
         if result_ty.is_float():
-            # both operands are elements of the same list, so one class
-            # answers for the accumulator and the incoming value alike
-            elt_cls = self.class_info.classify_elements(e.arg)
-            step = self._emit_ieee_min_max(
-                acc, elt, result_ty, is_min=is_min,
-                nan_free=not (elt_cls & ValueClass.NAN),
-                zero_tie_free=not (elt_cls & ValueClass.ZERO),
-            )
+            step = self._emit_ieee_min_max(acc, elt, result_ty, is_min=is_min)
         else:
             # integers have no NaN and no signed zero
             fn = 'std::min' if is_min else 'std::max'

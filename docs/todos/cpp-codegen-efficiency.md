@@ -272,40 +272,26 @@ else:           return min(max(fp.logb(x), -126), 128)   # `int8_t`, was `float`
 (`int8_t` rather than `int16_t` because `logb` of an FP32 tops out at 127, so
 the upper clamp never binds.)
 
-**Phase 8 — an element class for lists.** Done, and it took both halves:
+**Phase 8 — an element class for lists.** Built, then **held back**: see the
+`value-class-elements` branch.  A list definition carried a class for its
+elements, joined forward from the stores that build it and refined backward from
+`all(...)` / `any(...)` over it, which got the motivating program to
+`int8_t max_e`.
 
-- *Forward* — a list definition carries a class for its elements, joined from
-  the stores that build it (`empty(...)` is bottom, a store joins in, a literal
-  joins its elements, a copy inherits). Phis merge it and the loop fixpoint
-  iterates on it, with *absent* reading as the top so a store on one path cannot
-  look like a promise about the other. Consumed by an element read -- `ListRef`
-  had no case at all and fell through to the top -- by a `for` target over a
-  list, and by `AMin`/`AMax`, which returned the top outright.
-- *Backward* — `_implied_elements` matches the lowered reduction loop and reads
-  it as a universal: `all(...)` refines the taken arm, `any(...)` the untaken
-  one. Sound because FPy has no `break`, so a `for` runs the whole iterable, and
-  the match is strict: a literal seed, a step that is exactly `acc <op> b`
-  naming that phi, a predicate reading only the loop target, and no store into
-  the list anywhere in the body.
+It is not merged because the design keys a property of the *object* by
+*definition*, and an FPy list is a reference.  Two unsound cases came straight
+out of that -- a store through an alias (``ys = xs; ys[0] = fp.nan()``) and a
+store inside a callee -- each reporting a finite class for a value the
+interpreter makes a NaN.  Both are guarded on that branch by a syntactic
+"shared and mutated" rule, but the guard is an approximation of `Alias`, whose
+own ``written_regions`` is intraprocedural and which runs after this analysis.
 
-The motivating program now gives `int8_t max_e` unchanged. The clamp is still
-load-bearing: the guards cannot exclude a *zero*, so `logb(0)` is still `-inf`,
-and `max(logb(x), FP32_EMIN)` is what removes it -- which is Phase 7's ordering
-rule. `if all([fp.isfinite(x) for x in xs])` works as well as the `any` form.
-
-**Phase 9 — `min`/`max` reach the library form.** With both facts known the
-open-coded predicate has nothing left to decide, so `_emit_ieee_min_max` emits
-`std::min`/`std::max` -- which is what the integer path already did. `std::max`
-is the predicate verbatim; `std::min` differs only on a tie, and *zero_tie_free*
-is exactly the promise that a tie is between equal non-zero values. The operands
-stay bound: the library form returns a *reference* to one of them.
-
-`_emit_amin_amax` also asks now, of the element class Phase 8 gives it -- it
-passed no facts at all before, so a reduction over a provably-finite list still
-emitted the NaN propagation. The `signbit` tie stays, and correctly: `logb` of a
-value in `[1, 2)` is a zero, and `ValueClass.ZERO` carries no sign, so
-*zero_tie_free* is not provable. Splitting `±0` is the remaining half of
-Phase 7's sign work and would close it.
+Converging needs the facts keyed by alias region rather than definition, and
+storage narrowed in *one* place: it is chosen at four independent sites, and
+narrowing two of them produced an ``int8_t`` array reduced by a ``float`` fold.
+What would earn confidence is property-testing element classes against the
+interpreter the way :class:`TestTransferFunctionsAreSound` already does for the
+scalar tables.
 
 Ordering: 1, 4, 7, 8 and 9 all landed, in that order; 3 closed with no work,
 and 5 and 6 stay optional and argued against. 5 and 6 both extend `ReduceFusion` and both are argued

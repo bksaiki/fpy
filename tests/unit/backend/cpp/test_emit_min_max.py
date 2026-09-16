@@ -278,36 +278,6 @@ class TestTheFloatPathReachesTheLibraryForm:
         assert 'isnan' in out and 'signbit' in out
 
 
-class TestTheReductionUsesTheElementClass:
-    """``_emit_amin_amax`` asks the same questions the n-ary fold does, of the
-    list's *element* class."""
-
-    def test_a_guarded_list_drops_the_propagation(self):
-        @fp.fpy(ctx=fp.REAL)
-        def q(xs) -> fp.Real:
-            if all([fp.isfinite(x) for x in xs]):
-                return max([fp.logb(x) for x in xs])
-            else:
-                return 0
-
-        out = CppCompiler().compile(
-            q, arg_types=[ListType(RealType(fp.FP32), 8)])
-        # every element is finite, so the fold's NaN propagation is dead; the
-        # signbit tie is not, since `ValueClass.ZERO` carries no sign and
-        # `logb` of a value in [1, 2) is a zero
-        assert 'isnan' not in out
-        assert 'std::signbit' in out
-
-    def test_an_unguarded_list_keeps_it(self):
-        @fp.fpy(ctx=fp.REAL)
-        def q(xs) -> fp.Real:
-            return max([fp.logb(x) for x in xs])
-
-        out = CppCompiler().compile(
-            q, arg_types=[ListType(RealType(fp.FP32), 8)])
-        assert 'isnan' in out
-
-
 class TestIntegerPathUnchanged:
     def test_an_integer_reduction_keeps_the_library_form(self):
         """The fold in ``_emit_amin_amax`` chooses per storage kind too."""

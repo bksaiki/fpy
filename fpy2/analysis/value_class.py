@@ -46,10 +46,8 @@ rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
 never correct.
 
-A *list* carries a class for its elements, read by an element access, a ``for``
-target over it, and ``min``/``max`` over it.  It comes from the stores that build
-the list and from a reduction over it (:meth:`_implied_elements`).  A tuple
-carries nothing.
+Scalars only: a list or tuple carries no class, and reading an element gives the
+top class.
 
 Not yet taught: the sign of a zero, which would let ``signbit`` refine;
 magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
@@ -286,77 +284,6 @@ def _exact_select(args: list[ValueClass], is_max: bool) -> ValueClass:
     return out
 
 
-def _shared_and_mutated(func: FuncDef) -> set[NamedId]:
-    """List names whose elements cannot be tracked.
-
-    An element class is a property of the *object*, but definitions are per
-    name, and an FPy list is a reference: ``ys = xs`` makes one object with two
-    names, so ``ys[0] = e`` changes what ``xs[0]`` reads while leaving ``xs``'s
-    definition -- and anything recorded against it -- untouched.
-
-    Neither half alone is a problem.  Aliasing without mutation is what
-    `CompToLoop` emits when it binds an iterable; mutation without aliasing goes
-    through the one name, which the per-definition join follows.  A name is
-    dropped when its copy group holds a store, or when it reaches somewhere a
-    store could happen unseen -- an argument of a call, a cell of an aggregate,
-    or a call's result, which may alias anything the callee held.
-
-    `Alias` is the real answer for the first half, but its ``written_regions``
-    is intraprocedural, so a callee storing through a list it was handed does
-    not appear; that needs escape summaries, which a standalone caller cannot
-    build.
-    """
-    group: dict[NamedId, set[NamedId]] = {}
-    stored: set[NamedId] = set()
-    escaped: set[NamedId] = set()
-
-    def join(a: NamedId, b: NamedId):
-        merged = group.setdefault(a, {a}) | group.setdefault(b, {b})
-        for n in merged:
-            group[n] = merged
-
-    def escape(e: Expr):
-        if isinstance(e, Var):
-            escaped.add(e.name)
-
-    class _Scan(DefaultVisitor):
-        def _visit_assign(self, stmt: Assign, ctx):
-            if isinstance(stmt.target, NamedId):
-                if isinstance(stmt.expr, Var):
-                    join(stmt.target, stmt.expr.name)
-                elif isinstance(stmt.expr, Call):
-                    escaped.add(stmt.target)
-            super()._visit_assign(stmt, ctx)
-
-        def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-            if isinstance(stmt.var, NamedId):
-                stored.add(stmt.var)
-            escape(stmt.expr)           # `outer[i] = xs` shares `xs`'s cells
-            super()._visit_indexed_assign(stmt, ctx)
-
-        def _visit_call(self, e: Call, ctx):
-            for arg in e.args:
-                escape(arg)
-            super()._visit_call(e, ctx)
-
-        def _visit_list_expr(self, e: ListExpr, ctx):
-            for elt in e.elts:
-                escape(elt)
-            super()._visit_list_expr(e, ctx)
-
-        def _visit_tuple_expr(self, e: TupleExpr, ctx):
-            for elt in e.elts:
-                escape(elt)
-            super()._visit_tuple_expr(e, ctx)
-
-    _Scan()._visit_function(func, None)
-    out = set(escaped)
-    for g in group.values():
-        if len(g) > 1 and (g & stored or g & escaped):
-            out |= g
-    return out
-
-
 def _positive_literal(e: Expr) -> bool:
     return isinstance(e, RationalVal) and e.as_rational() > 0
 
@@ -374,14 +301,6 @@ class ValueClassAnalysis:
     by_expr: dict[Expr, ValueClass | None]
     """Class of each expression, refined by the branches that dominate it.
     ``None`` for a non-real-valued expression."""
-
-    elt_by_def: dict[Definition, ValueClass]
-    """Class of every *element* of each list definition, unrefined.  The list
-    analogue of :attr:`by_def`; absent means nothing is known."""
-
-    elt_by_expr: dict[Expr, ValueClass]
-    """Class of every element of the list each expression names, refined by the
-    branches dominating it.  The list analogue of :attr:`by_expr`."""
 
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
@@ -409,11 +328,6 @@ class ValueClassAnalysis:
         """Is *e* neither a NaN nor an infinity?"""
         return self.excludes(e, _NAN | _INF)
 
-    def classify_elements(self, e: Expr) -> ValueClass:
-        """The class every element of the list *e* names belongs to, or the top
-        class where nothing is known."""
-        return self.elt_by_expr.get(e, _TOP)
-
 
 #####################################################################
 # Analysis
@@ -433,15 +347,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
-    elt_by_def: dict[Definition, ValueClass]
-    elt_by_expr: dict[Expr, ValueClass]
-
     _refine: dict[Definition, ValueClass]
-    _refine_elt: dict[Definition, ValueClass]
-
-    _shared: set[NamedId]
-    """Lists no element class may be recorded against; see
-    :func:`_shared_and_mutated`."""
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
 
@@ -456,25 +362,18 @@ class _ValueClassInstance(DefaultVisitor):
         self.ctx_use = ctx_use
         self.by_def = {}
         self.by_expr = {}
-        self.elt_by_def = {}
-        self.elt_by_expr = {}
         self._refine = {}
-        self._refine_elt = {}
-        self._shared = set()
 
     @property
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
 
     def analyze(self) -> ValueClassAnalysis:
-        self._shared = _shared_and_mutated(self.func)
         self._visit_function(self.func, None)
         return ValueClassAnalysis(
             func=self.func,
             by_expr=self.by_expr,
             by_def=self.by_def,
-            elt_by_def=self.elt_by_def,
-            elt_by_expr=self.elt_by_expr,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
         )
@@ -490,38 +389,6 @@ class _ValueClassInstance(DefaultVisitor):
     def _def_class(self, d: Definition) -> ValueClass:
         cls = self.by_def.get(d)
         return cls if isinstance(cls, ValueClass) else _TOP
-
-    def _elt_class(self, e: Expr) -> ValueClass:
-        """The class every element of the list *e* names belongs to.
-
-        The list analogue of :meth:`_visit_var`: what the definition holds, met
-        with what the enclosing branches proved.  A list that is not a plain
-        name carries no definition, so it is the top class.
-        """
-        if not isinstance(e, Var) or e.name in self._shared:
-            return _TOP
-        d = self.def_use.find_def_from_use(e)
-        stored = self.elt_by_def.get(d, _TOP)
-        out = stored & self._refine_elt.get(d, _TOP)
-        self.elt_by_expr[e] = out
-        return out
-
-    def _set_elt(self, d: Definition, cls: ValueClass):
-        if d.name not in self._shared:
-            self.elt_by_def[d] = cls
-
-    def _join_elt_phi(self, phi: Definition, lhs: Definition, rhs: Definition):
-        """A phi's element class, where either arm has one.
-
-        An absent arm joins as the top, or a store on one path would look like
-        a promise about the other.
-        """
-        if lhs not in self.elt_by_def and rhs not in self.elt_by_def:
-            return
-        self._set_elt(
-            phi,
-            self.elt_by_def.get(lhs, _TOP) | self.elt_by_def.get(rhs, _TOP),
-        )
 
     def _bind(self, site: DefSite, binding: Id | TupleBinding, cls: ValueClass | None):
         """Records *cls* for every variable *binding* introduces at *site*."""
@@ -546,9 +413,9 @@ class _ValueClassInstance(DefaultVisitor):
         sound direction.
         """
         for phi in self.def_use.phis[stmt]:
-            lhs, rhs = self.def_use.defs[phi.lhs], self.def_use.defs[phi.rhs]
-            self._set_def(phi, self._def_class(lhs) | self._def_class(rhs))
-            self._join_elt_phi(phi, lhs, rhs)
+            lhs = self._def_class(self.def_use.defs[phi.lhs])
+            rhs = self._def_class(self.def_use.defs[phi.rhs])
+            self._set_def(phi, lhs | rhs)
 
     # ------------------------------------------------------------------
     # Refinement
@@ -562,90 +429,15 @@ class _ValueClassInstance(DefaultVisitor):
         into its sibling -- intersecting ``{NaN}`` with ``{Inf}`` down an ``elif``
         ladder and driving every later use to the empty class.
         """
-        saved, saved_elt = self._refine, self._refine_elt
+        saved = self._refine
         out = dict(saved)
         for d, cls in self._implied(cond, truth):
             out[d] = out.get(d, _TOP) & cls
-        out_elt = dict(saved_elt)
-        for d, cls in self._implied_elements(cond, truth):
-            out_elt[d] = out_elt.get(d, _TOP) & cls
-        self._refine, self._refine_elt = out, out_elt
+        self._refine = out
         try:
             yield
         finally:
-            self._refine, self._refine_elt = saved, saved_elt
-
-    def _implied_elements(
-        self, cond: Expr, truth: bool,
-    ) -> list[tuple[Definition, ValueClass]]:
-        """What *cond* being *truth* says about the *elements* of a list.
-
-        One shape: ``any``/``all`` over a comprehension, as `CompToLoop` leaves
-        it::
-
-            acc = False                 # `True` for `all`
-            for x in xs:
-                b = <pred>(x)
-                acc = acc or b          # `and` for `all`
-
-        ``not acc`` after the ``or`` form, and ``acc`` after the ``and`` form,
-        both say the predicate's verdict holds for *every* element.  FPy has no
-        ``break``, so the loop runs the whole iterable and the quantifier is
-        universal.
-
-        The match is strict -- a literal seed, a step that is exactly
-        ``acc <op> b`` naming this phi, and a refinement the loop target itself
-        carries -- and anything else returns nothing.  A store into the list
-        needs no check: it is a new definition, and a refinement recorded
-        against the old one does not reach it.
-        """
-        if not isinstance(cond, Var):
-            return []
-        d = self.def_use.find_def_from_use(cond)
-        if not (isinstance(d, PhiDef) and d.is_loop):
-            return []
-        loop = d.site
-        if not isinstance(loop, ForStmt) or not isinstance(loop.iterable, Var):
-            return []
-        if not isinstance(loop.target, NamedId):
-            return []
-
-        seed = self._assigned_expr(self.def_use.defs[d.lhs])
-        step = self._assigned_expr(self.def_use.defs[d.rhs])
-        if not isinstance(seed, BoolVal) or not isinstance(step, (And, Or)):
-            return []
-        # `acc = acc <op> b`, with the accumulator being this very phi
-        if len(step.args) != 2:
-            return []
-        carried, probe = step.args
-        if not isinstance(carried, Var) or not isinstance(probe, Var):
-            return []
-        if self.def_use.find_def_from_use(carried) is not d:
-            return []
-
-        # `all` refines where it holds, `any` where it does not, and each needs
-        # the seed that makes it a fold rather than a constant
-        if isinstance(step, And):
-            if not (seed.val and truth):
-                return []
-            want = True
-        else:
-            if seed.val or truth:
-                return []
-            want = False
-
-        pred = self.def_use.defining_expr(probe)
-        if pred is probe:
-            return []
-        target_def = self.def_use.find_def_from_site(loop.target, loop)
-        cls = dict(self._implied(pred, want)).get(target_def)
-        if cls is None or loop.iterable.name in self._shared:
-            return []
-        return [(self.def_use.find_def_from_use(loop.iterable), cls)]
-
-    def _assigned_expr(self, d: Definition) -> Expr | None:
-        """The expression *d* is assigned, where *d* is a plain assignment."""
-        return d.site.expr if isinstance(d.site, Assign) else None
+            self._refine = saved
 
     def _implied(self, cond: Expr, truth: bool) -> list[tuple[Definition, ValueClass]]:
         """What *cond* being *truth* says about the definitions it tests."""
@@ -821,12 +613,6 @@ class _ValueClassInstance(DefaultVisitor):
             return _TOP
         return exact if scope.ctx is REAL else representable_classes(scope.ctx)
 
-    def _visit_list_ref(self, e: ListRef, ctx: None) -> ValueClass:
-        """``xs[i]``: whatever every element of ``xs`` is."""
-        self._visit_expr(e.index, ctx)
-        self._visit_expr(e.value, ctx)
-        return self._elt_class(e.value)
-
     def _visit_var(self, e: Var, ctx: None) -> ValueClass:
         d = self.def_use.find_def_from_use(e)
         return self._def_class(d) & self._refine.get(d, _TOP)
@@ -867,10 +653,7 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._rounded(e, a)
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
-            case AMin() | AMax():
-                # the result *is* one element, so it is bounded by them
-                return self._elt_class(e.arg)
-            case Fst() | Snd():
+            case AMin() | AMax() | Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
                 return self._rounded(e, _TOP)
@@ -932,56 +715,13 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         self._bind(stmt, stmt.target, self._visit_expr(stmt.expr, ctx))
-        if isinstance(stmt.target, NamedId):
-            elt = self._elt_of_list_expr(stmt.expr)
-            if elt is not None:
-                self._set_elt(
-                    self.def_use.find_def_from_site(stmt.target, stmt), elt,
-                )
-
-    def _elt_of_list_expr(self, e: Expr) -> ValueClass | None:
-        """The element class of the list *e* builds, or ``None`` where *e* is
-        not a list this can say anything about.
-
-        ``None`` and bottom are different answers: bottom is a fresh
-        ``empty(...)``, whose elements no store has reached yet, and ``None``
-        leaves the definition with no entry at all, which reads as the top.
-        """
-        match e:
-            case Empty():
-                return _BOT
-            case ListExpr():
-                out = _BOT
-                for elt in e.elts:
-                    cls = self.by_expr.get(elt)
-                    out |= cls if isinstance(cls, ValueClass) else _TOP
-                return out
-            case Var():
-                # `_elt_class`, not the stored class: a copy made inside a
-                # refined branch carries that branch's refinement, and
-                # `CompToLoop` binds the iterable to a name before reading it
-                return self._elt_class(e)
-            case _:
-                return None
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         for s in stmt.indices:
             self._visit_expr(s, ctx)
-        stored = self._visit_expr(stmt.expr, ctx)
-        # The list itself still carries no *scalar* class; what the store says
-        # is about its elements, and joins with whatever was there before --
-        # the definition this one supersedes still happened.
+        self._visit_expr(stmt.expr, ctx)
+        # a fresh def of a list, which carries no class
         self._bind(stmt, stmt.var, None)
-        d = self.def_use.find_def_from_site(stmt.var, stmt)
-        # the definition this one supersedes still happened, so its elements
-        # are still reachable and join in
-        was = _BOT if d.prev is None else self.elt_by_def.get(
-            self.def_use.defs[d.prev], _TOP,
-        )
-        # a nested store (`xs[i][j] = e`) constrains the *inner* list, which
-        # this channel does not reach, so the outer one falls back to the top
-        cls = stored if isinstance(stored, ValueClass) else _TOP
-        self._set_elt(d, was | (cls if len(stmt.indices) == 1 else _TOP))
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
@@ -1009,8 +749,8 @@ class _ValueClassInstance(DefaultVisitor):
         self._visit_expr(stmt.iterable, ctx)
 
         def body():
-            # the target *is* an element, so it inherits the list's class
-            self._bind(stmt, stmt.target, self._elt_class(stmt.iterable))
+            # no structural classes, so an element is unconstrained
+            self._bind(stmt, stmt.target, _TOP)
             self._visit_block(stmt.body, ctx)
 
         self._fixpoint(stmt, body)
@@ -1026,24 +766,18 @@ class _ValueClassInstance(DefaultVisitor):
         """
         phis = self.def_use.phis[stmt]
         for phi in phis:
-            lhs = self.def_use.defs[phi.lhs]
-            self._set_def(phi, self._def_class(lhs))
-            if lhs in self.elt_by_def:
-                self._set_elt(phi, self.elt_by_def[lhs])
+            self._set_def(phi, self._def_class(self.def_use.defs[phi.lhs]))
         for _ in range(self._ROUNDS_PER_PHI * len(phis) + 1):
-            prev = {phi: (self.by_def[phi], self.elt_by_def.get(phi))
-                    for phi in phis}
+            prev = {phi: self.by_def[phi] for phi in phis}
             run_body()
             for phi in phis:
-                lhs, rhs = self.def_use.defs[phi.lhs], self.def_use.defs[phi.rhs]
-                self._set_def(phi, self._def_class(lhs) | self._def_class(rhs))
-                self._join_elt_phi(phi, lhs, rhs)
-            if all((self.by_def[phi], self.elt_by_def.get(phi)) == prev[phi]
-                   for phi in phis):
+                lhs = self._def_class(self.def_use.defs[phi.lhs])
+                rhs = self._def_class(self.def_use.defs[phi.rhs])
+                self._set_def(phi, lhs | rhs)
+            if all(self.by_def[phi] == prev[phi] for phi in phis):
                 return
         for phi in phis:
             self._set_def(phi, _TOP)
-            self._set_elt(phi, _TOP)
         run_body()
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):
