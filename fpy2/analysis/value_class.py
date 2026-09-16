@@ -311,9 +311,10 @@ class ValueClassAnalysis:
     ``tests/infra/analysis/value_class.py`` dumps."""
 
     alias: AliasAnalysis
-    """Underlying alias analysis: which lists may be the same object.  A class
-    for a list's *elements* is a property of the object, so it can only be keyed
-    by region -- see :meth:`elements_tracked`."""
+    """Underlying alias analysis: which lists may be the same location.  A class
+    for a list's *elements* is a property of that location rather than of a
+    name, so a `Region` -- the set of locations a place may hold -- is the key.
+    See :meth:`element_region`."""
 
     type_info: TypeAnalysis
     """Underlying basic-type analysis, which decides what carries a class."""
@@ -325,10 +326,10 @@ class ValueClassAnalysis:
         """The region whose elements a fact about the list *e* belongs to, or
         ``None`` where no fact may be recorded.
 
-        A list is a reference, so ``ys = xs`` is one object under two names and
-        a store through either is visible through both; the region is what both
-        resolve to.  ``None`` where the list escapes -- handed to a call, which
-        may store through it after this analysis has stopped looking.
+        A list is a reference, so ``ys = xs`` is one location under two names
+        and a store through either is visible through both; the region is what
+        both resolve to.  ``None`` where the list escapes -- handed to a call,
+        which may store through it after this analysis has stopped looking.
         """
         region = self.alias.region_of_expr(e)
         if region is None or self.alias.escapes_at(region):
@@ -370,6 +371,12 @@ class _ValueClassInstance(DefaultVisitor):
 
     alias: AliasAnalysis
 
+    _elt: dict[Region, ValueClass]
+    """What every element of each list currently is.  Keyed by `Region` because
+    an element class is a property of the *location*, not of the name reaching
+    it, and flow-sensitive because a store changes it -- the same shape as
+    :attr:`_refine`, merged at a branch and iterated at a loop."""
+
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
@@ -385,6 +392,7 @@ class _ValueClassInstance(DefaultVisitor):
         self.type_info = type_info
         self.ctx_use = ctx_use
         self.alias = alias
+        self._elt = {}
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
@@ -406,6 +414,37 @@ class _ValueClassInstance(DefaultVisitor):
 
     # ------------------------------------------------------------------
     # Definitions
+
+    def _region_of(self, e: Expr) -> 'Region | None':
+        """The region whose elements a fact about *e* belongs to, or ``None``
+        where none may be recorded; see
+        :meth:`ValueClassAnalysis.element_region`."""
+        region = self.alias.region_of_expr(e)
+        if region is None or self.alias.escapes_at(region):
+            return None
+        return region
+
+    def _elements_of(self, e: Expr) -> ValueClass:
+        """What every element of the list *e* names currently is."""
+        region = self._region_of(e)
+        return _TOP if region is None else self._elt.get(region, _TOP)
+
+    def _store_element(self, region: 'Region | None', cls: ValueClass):
+        """Record a store of *cls* into *region*, which joins: the elements the
+        store did not reach are still there."""
+        if region is not None:
+            self._elt[region] = self._elt.get(region, _TOP) | cls
+
+    @staticmethod
+    def _join_elements(
+        a: 'dict[Region, ValueClass]', b: 'dict[Region, ValueClass]',
+    ) -> 'dict[Region, ValueClass]':
+        """Two paths' element maps.  Absent means *unknown*, so it joins to the
+        top rather than being skipped."""
+        return {
+            r: a.get(r, _TOP) | b.get(r, _TOP)
+            for r in (*a, *b)
+        }
 
     def _set_def(self, d: Definition, cls: ValueClass | None):
         if not isinstance(self.type_info.by_def.get(d), RealType):
@@ -639,6 +678,12 @@ class _ValueClassInstance(DefaultVisitor):
             return _TOP
         return exact if scope.ctx is REAL else representable_classes(scope.ctx)
 
+    def _visit_list_ref(self, e: ListRef, ctx: None) -> ValueClass:
+        """``xs[i]``: whatever every element of ``xs`` currently is."""
+        self._visit_expr(e.index, ctx)
+        self._visit_expr(e.value, ctx)
+        return self._elements_of(e.value)
+
     def _visit_var(self, e: Var, ctx: None) -> ValueClass:
         d = self.def_use.find_def_from_use(e)
         return self._def_class(d) & self._refine.get(d, _TOP)
@@ -679,7 +724,10 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._rounded(e, a)
             case Logb():
                 return self._rounded(e, _map(_LOGB, a))
-            case AMin() | AMax() | Fst() | Snd():
+            case AMin() | AMax():
+                # the result *is* one element, so it is bounded by them
+                return self._elements_of(e.arg)
+            case Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
                 return self._rounded(e, _TOP)
@@ -741,26 +789,59 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_assign(self, stmt: Assign, ctx: None):
         self._bind(stmt, stmt.target, self._visit_expr(stmt.expr, ctx))
+        if isinstance(stmt.expr, Empty):
+            # a fresh allocation: no store has reached its elements yet, which
+            # is what lets the stores that follow say anything
+            region = self._region_of_def(stmt.target, stmt)
+            if region is not None:
+                self._elt[region] = _BOT
+
+    def _region_of_def(self, target, site) -> 'Region | None':
+        if not isinstance(target, NamedId):
+            return None
+        region = self.alias.region_of(
+            self.def_use.find_def_from_site(target, site),
+        )
+        if region is None or self.alias.escapes_at(region):
+            return None
+        return region
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
         for s in stmt.indices:
             self._visit_expr(s, ctx)
-        self._visit_expr(stmt.expr, ctx)
-        # a fresh def of a list, which carries no class
+        stored = self._visit_expr(stmt.expr, ctx)
+        # a fresh def of a list, which carries no *scalar* class; what the store
+        # says is about the region's elements
         self._bind(stmt, stmt.var, None)
+        d = self.def_use.find_def_from_site(stmt.var, stmt)
+        region = self.alias.region_of(d)
+        if region is not None and self.alias.escapes_at(region):
+            region = None
+        # a nested store constrains the inner list, which this does not reach
+        self._store_element(
+            region,
+            stored if isinstance(stored, ValueClass) and len(stmt.indices) == 1
+            else _TOP,
+        )
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
+        entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
+        # the body may not have run, so its stores only *may* have happened
+        self._elt = self._join_elements(entry, self._elt)
         self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
+        entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)
+        taken, self._elt = self._elt, entry
         with self._refined(stmt.cond, False):
             self._visit_block(stmt.iff, ctx)
+        self._elt = self._join_elements(taken, self._elt)
         self._merge_phis(stmt)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
@@ -775,8 +856,8 @@ class _ValueClassInstance(DefaultVisitor):
         self._visit_expr(stmt.iterable, ctx)
 
         def body():
-            # no structural classes, so an element is unconstrained
-            self._bind(stmt, stmt.target, _TOP)
+            # the target *is* an element, so it is whatever they are
+            self._bind(stmt, stmt.target, self._elements_of(stmt.iterable))
             self._visit_block(stmt.body, ctx)
 
         self._fixpoint(stmt, body)
@@ -793,17 +874,22 @@ class _ValueClassInstance(DefaultVisitor):
         phis = self.def_use.phis[stmt]
         for phi in phis:
             self._set_def(phi, self._def_class(self.def_use.defs[phi.lhs]))
+        entry = dict(self._elt)
         for _ in range(self._ROUNDS_PER_PHI * len(phis) + 1):
-            prev = {phi: self.by_def[phi] for phi in phis}
+            prev = ({phi: self.by_def[phi] for phi in phis}, dict(self._elt))
             run_body()
             for phi in phis:
                 lhs = self._def_class(self.def_use.defs[phi.lhs])
                 rhs = self._def_class(self.def_use.defs[phi.rhs])
                 self._set_def(phi, lhs | rhs)
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+            # the body runs zero or more times, so its stores join with the
+            # state that reached the loop as well as with the round before
+            self._elt = self._join_elements(entry, self._elt)
+            if (({phi: self.by_def[phi] for phi in phis}, self._elt)) == prev:
                 return
         for phi in phis:
             self._set_def(phi, _TOP)
+        self._elt = {r: _TOP for r in self._elt}
         run_body()
 
     def _visit_context(self, stmt: ContextStmt, ctx: None):

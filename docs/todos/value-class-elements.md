@@ -69,13 +69,12 @@ should not be trusted.
 Six phases, each about one commit, ordered so the two that make the feature
 *safe* land before the two that make it *pay*, and the feature itself last.
 
-**Only phase 1 stands alone.**  Measured against the merged tree, phases 2-4
-have nothing to exercise them until phase 5 exists: no consumer would read the
-alias information; the emitter's two expression-storage paths already agree on
-every type in the corpus, differing only in representation, which `unbox` owns
-deliberately; and the slot-store check is reached 48 times and fits every time,
-so relaxing it changes nothing.  They are prerequisites of phase 5, not
-independent improvements, so 2-5 is one arc rather than four merges.
+**Phases 1 and 2 are done; 3 and 4 did not survive being attempted.**  Both
+were written from one observation during the failed attempt, and neither holds
+up on its own (see their entries).  The storage question they were meant to
+answer is real but underdetermined until phase 5 produces a concrete case, so
+the arc is 2 -> 5 -> 6, and whatever coherence phase 5 needs gets written then
+against something that actually fails.
 
 That is a statement about *shape*, not about worth.  The corpus is example
 programs and the runtime is dominated by the FP16 ladder, so neither says
@@ -112,25 +111,22 @@ case falls out too, and is why the region is the key rather than something to
 refuse: ``ys = xs`` is one object under two names, so a store through either
 lands on the region both resolve to.
 
-**3. One storage-narrowing site** (prerequisite).  (Its payoff is thin and worth knowing:
-`logb` is nearly the only operation whose format is integer-valued, range-bounded
-*and* special-admitting, so it is nearly the only beneficiary -- `floor`,
-`trunc` and `nearbyint` under `REAL` are unbounded and refused before narrowing
-applies.  The mechanism is right; the population is small.)  Storage is chosen at four independent
-places -- `StorageInfer._aggregate`, `return_storage`,
-`CppEmitter._storage_for_expr` and `CppStorage.of_expr` -- and only the first two
-consult a value class.  Narrowing a list's elements without the other two
-produced an `int8_t` array reduced by a `float` fold.  Make one place own it and
-the rest read it, as `SpecAnalyses.ret_ty` already does one level up.  No new
-precision, so the output should not move.
+**3. One storage-narrowing site.**  **Tried and withdrawn.**  Narrowing
+`_storage_for_expr` by the expression's class is wrong: an expression's storage
+is the type its *operands* are cast to, and the operands of a selection are not
+bounded by its result.  ``max(logb(x), -126)`` is finite, but ``logb(x)`` is not
+-- ``max`` must stay ``float -> float -> float`` and the narrowing belongs at
+the *boundary*, not at the operation.  Attempting it broke the double-clamp
+witness with a refused ``float`` to ``int8_t`` cast, and moved one corpus
+function.
 
-**4. An exact store into a narrower slot** (prerequisite).  `_require_no_narrowing` refuses on
-storage types alone.  Where the value's *format* fits the slot the conversion is
-exact and should emit the cast: `fmt(max(logb(x), emin)) <= int8_t` holds, so the
-store wants `static_cast<int8_t>(std::max(...))` while the `max` itself stays
-`float -> float -> float`, since `fmt(logb(x)) <= float`.  Useful on its own --
-the refusal is currently over-strict -- and without it a narrowed element type
-only produces a compile error.
+**4. An exact store into a narrower slot.**  **No witness.**
+`_require_no_narrowing` is reached 48 times over the corpus and fits every time,
+and a list whose declared element format is narrower than the stored value's
+storage compiles today without reaching it -- the emitted store is an implicit
+conversion.  Making the check class-aware changes no corpus output.  Whatever
+phase 5 needs here should be written from the case phase 5 actually produces,
+not from this one.
 
 **5. Element classes, forward, keyed by region.**  A list carries its elements'
 class, joined from the stores that build it, keyed by the alias region from

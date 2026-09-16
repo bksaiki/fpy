@@ -684,6 +684,85 @@ def _trackable(fn, name: str, n: int = 4) -> bool:
     raise AssertionError(f'no `{name}` in {fn.name}')
 
 
+def _amax_class(fn, n: int = 4) -> ValueClass:
+    """The class of the ``max(...)`` over a list in *fn*, after lowering."""
+    from fpy2.ast.fpyast import AMax
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        for e, v in info.by_expr.items():
+            if isinstance(e, AMax):
+                return v
+    raise AssertionError(f'no reduction in {fn.name}')
+
+
+class TestListElementClasses:
+    """What a list's elements are, keyed by the location they live in.
+
+    ``abs`` never yields a negative infinity, so a list filled with it has none
+    -- until a store puts one there, through *any* name for that location.
+    """
+
+    def test_a_list_built_here_carries_its_stores(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        assert not (_amax_class(f) & NEG_INF)
+
+    def test_a_parameter_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return max(xs)
+
+        assert _amax_class(f) == TOP
+
+    def test_a_store_is_seen(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            ys[0] = -fp.inf()
+            return max(ys)
+
+        assert _amax_class(f) & NEG_INF
+
+    def test_a_store_through_another_name_is_seen(self):
+        """The first attempt reported a class here that a run contradicted: the
+        names differ, the location does not."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            zs = ys
+            zs[0] = -fp.inf()
+            return max(ys)
+
+        assert _amax_class(f) & NEG_INF
+
+    def test_a_store_in_one_arm_reaches_the_join(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c: fp.Real):
+            ys = [abs(x) for x in xs]
+            if c > 0:
+                ys[0] = -fp.inf()
+            return max(ys)
+
+        m = fp.Module()
+        m.add(f, arg_types=[ListType(RealType(fp.FP32), 4), RealType(fp.FP32)])
+        from fpy2.ast.fpyast import AMax
+        from fpy2.backend.cpp.compiler import CppCompiler
+        for spec in CppCompiler().specialize(m):
+            if spec.ast.name != 'f':
+                continue
+            info = ValueClassInfer.analyze(spec.ast)
+            got = [v for e, v in info.by_expr.items() if isinstance(e, AMax)]
+            assert got and (got[0] & NEG_INF)
+
+
 class TestWhichListsCarryAFact:
     """:meth:`ValueClassAnalysis.element_region` -- where a fact about a list's
     elements may be recorded at all.
