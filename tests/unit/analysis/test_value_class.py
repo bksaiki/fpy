@@ -15,7 +15,8 @@ import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of, representable_classes
 from fpy2.analysis.value_class import (
-    _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_sub, _map,
+    _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select, _exact_sub,
+    _map,
 )
 from fpy2.ast.fpyast import Expr
 from fpy2.ast.visitor import DefaultVisitor
@@ -145,6 +146,16 @@ def _pow2(a: fp.Real) -> fp.Real:
     return 2 ** a
 
 
+@fp.fpy(ctx=fp.REAL)
+def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
+    return max(a, b)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _min2(a: fp.Real, b: fp.Real) -> fp.Real:
+    return min(a, b)
+
+
 class TestTransferFunctionsAreSound:
     """Every observed result must be inside the predicted class.
 
@@ -182,14 +193,23 @@ class TestTransferFunctionsAreSound:
     def test_mul(self):
         self._sweep(_exact_mul, _mul, 2)
 
+    def test_max(self):
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=True), _max2, 2)
+
+    def test_min(self):
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2)
+
     def test_logb(self):
         self._sweep(lambda a: _map(_LOGB, a), _logb, 1)
 
     def test_pow_with_a_positive_base(self):
         self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1)
 
-    @pytest.mark.parametrize('table', [_exact_add, _exact_mul],
-                             ids=['add', 'mul'])
+    @pytest.mark.parametrize('table', [
+        pytest.param(_exact_add, id='add'),
+        pytest.param(_exact_mul, id='mul'),
+        pytest.param(lambda a, b: _exact_select([a, b], is_max=True), id='max'),
+    ])
     def test_the_tables_distribute_over_the_join(self, table):
         """Sweeping one atom at a time is only enough because a table applied to
         a union is the union of applying it to each atom."""

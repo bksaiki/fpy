@@ -254,36 +254,44 @@ unsized agree to ~1% for these, and a hand-written fused `max([logb(x) ...])`
 is 11% *slower*. This is the highest-risk item in the file and currently the
 lowest-value one.
 
-**Phase 7 (optional) — reach an integer `max_e`.** The clamp below is the
-natural way to write "no `-inf` from `logb(0)`", and it does not narrow
-anything:
+**Phase 7 — sign-split `ValueClass`, and order-aware `min`/`max`.** Done.
+`POS_INF` and `NEG_INF` are separate atoms with `INF` kept as their composite,
+so every consumer asking `cls & INF` reads unchanged; `logb`, `abs`, `Neg`,
+`Add`/`Sub` and `ConstInf` became sign-aware, and `StorageInfer` now asks about
+the two infinities separately. A selection is no longer the join of its
+operands: `max` is `+inf` when *some* operand can be and `-inf` only when
+*every* one can.
+
+The witness is a clamp, which previously narrowed nothing:
 
 ```python
-max_e = max([max(fp.logb(x), FP32_EMIN) for x in xs])   # still `float`
+if fp.isnan(x): return 0
+else:           return min(max(fp.logb(x), -126), 128)   # `int8_t`, was `float`
 ```
 
-Measured, it needs *three* changes, not one, and no two of them suffice:
+(`int8_t` rather than `int16_t` because `logb` of an FP32 tops out at 127, so
+the upper clamp never binds.)
 
-1. **`min`/`max` must order their operands.** `_visit_naryop` joins the operand
-   classes, since the result *is* one operand — sound but order-blind. A `max`
-   is `-inf` only if *every* operand can be, `+inf` if *any* can.
-2. **`ValueClass.INF` must split by sign.** It is one atom, so "can be `+inf`"
-   and "can be `-inf`" are the same question, and (1) cannot use its own rule:
-   `logb(0)` is `-inf` and `logb(inf)` is `+inf`, and the clamp only kills the
-   first. This is the "sign" line in `value_class.py`'s "not yet taught" list.
-3. **A guard over a list must refine its elements.** `x` reports
-   `ValueClass.TOP` inside the `else` of `any([fp.isinf(x) for x in xs])`,
-   because a list carries no class and an element read gives the top. Without
-   this the element can still be an infinity, so (1) and (2) have nothing to
-   work with. This is the largest of the three and relates a reduction over a
-   comprehension back to the reads inside it.
+**Phase 8 (optional) — an element class for lists.** What is still missing for
+`max_e` in the motivating program, and it is two features, not one:
 
-Tests: `test_value_class`, plus a cpp witness. Worth recording rather than
-doing: see **Headroom** for what `max_e`'s storage is worth on a program whose
-time is 77% FP16 ladder.
+- *Forward* — `AMin`/`AMax` return `TOP` outright, so a reduction discards
+  whatever its elements were. A list built by stores in a loop has a knowable
+  element class: the join of what is stored. This is ordinary propagation.
+- *Backward* — `x` reports `TOP` inside the `else` of
+  `any([fp.isinf(x) for x in xs])`, so `logb(x)` keeps its `NaN` and `+inf`.
+  By the time `ValueClassInfer` runs, `CompToLoop` has turned that guard into an
+  or-reduction loop, so this is inferring a universally-quantified invariant
+  over a list from a loop -- not a pattern match.
 
-Ordering: 1 and 4 are independent of each other and of everything else. 3 is
-closed with no work. 7 needs 4. 5 and 6 both extend `ReduceFusion` and both are argued
+Neither alone suffices: the forward half leaves the `NaN` from `logb(NaN)`, and
+with the backward half the clamp stops being needed at all. Measured:
+`min(max(logb(x), -126), 128)` over a list gives an element class of
+`NAN|ZERO|FINITE` and an `AMax` of `TOP`. See **Headroom** for what this is
+worth on a program that spends 77% of its time in the FP16 ladder.
+
+Ordering: 1, 4 and 7 are independent of each other. 3 is closed with no work.
+8 needs 7's lattice to say anything useful about an infinity. 5 and 6 both extend `ReduceFusion` and both are argued
 against by the benchmark; neither is on the path.
 
 ## Not shortcomings

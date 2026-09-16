@@ -262,6 +262,35 @@ def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
     return out
 
 
+def _exact_select(args: list[ValueClass], is_max: bool) -> ValueClass:
+    """``max(...)`` or ``min(...)`` over operands of classes *args*.
+
+    The result *is* one operand, so the naive rule is the join -- sound, and
+    blind to the one thing a selection knows: which operand it picks.  An
+    infinity at the far end is dropped instead of carried:
+
+    - ``max`` is ``+inf`` when *some* operand can be, since nothing exceeds it;
+    - ``max`` is ``-inf`` only when *every* operand can be, since one operand
+      that is provably greater is already a larger maximum.
+
+    ``min`` is the dual.  NaN propagates from any operand (`_emit_ieee_min_max`
+    open-codes exactly that), and the finite atoms are joined: `FINITE` is
+    sign-blind, so a selection among finites can land anywhere.
+
+    This is what makes a clamp mean something: ``max(logb(x), -126)`` cannot be
+    ``-inf``, because ``-126`` is not.
+    """
+    if not args or not all(args):
+        return _BOT             # an operand nothing reaches produces nothing
+    near, far = (_POS_INF, _NEG_INF) if is_max else (_NEG_INF, _POS_INF)
+    out = _BOT
+    for a in args:
+        out |= a & (_NAN | _ZERO | _FINITE | near)
+    if all(a & far for a in args):
+        out |= far
+    return out
+
+
 def _positive_literal(e: Expr) -> bool:
     return isinstance(e, RationalVal) and e.as_rational() > 0
 
@@ -666,11 +695,9 @@ class _ValueClassInstance(DefaultVisitor):
         args = [self._operand(arg, ctx) for arg in e.args]
         match e:
             case Min() | Max():
-                # the result *is* one operand, unrounded
-                out = _BOT
-                for a in args:
-                    out |= a
-                return out
+                # a selection, not a rounding: the result *is* one operand, so
+                # this does not go through `_rounded`
+                return _exact_select(args, is_max=isinstance(e, Max))
             case _:
                 return self._rounded(e, _TOP)
 
