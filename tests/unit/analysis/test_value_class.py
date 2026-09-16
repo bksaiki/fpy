@@ -18,7 +18,7 @@ from fpy2.analysis.value_class import (
     _ATOMS, _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select,
     _exact_sub, _map,
 )
-from fpy2.ast.fpyast import Expr
+from fpy2.ast.fpyast import Expr, Var
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.types import ListType, RealType
 
@@ -667,6 +667,72 @@ class TestArgumentsAndContexts:
             return y
 
         assert _cls(f, 'g(x)') == TOP
+
+
+def _trackable(fn, name: str, n: int = 4) -> bool:
+    """Whether a fact about the list *name*'s elements may be recorded."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=[ListType(RealType(fp.FP32), n)])
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        for e in info.by_expr:
+            if isinstance(e, Var) and str(e.name) == name:
+                return info.element_region(e) is not None
+    raise AssertionError(f'no `{name}` in {fn.name}')
+
+
+class TestWhichListsCarryAFact:
+    """:meth:`ValueClassAnalysis.element_region` -- where a fact about a list's
+    elements may be recorded at all.
+
+    An element class is a property of the *object*, and an FPy list is a
+    reference, so the region is the key.  Two names for one object share it; a
+    list handed to a call has none, since the callee may store through it.
+    """
+
+    def test_a_read_only_list(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            t = xs
+            return fp.logb(t[0])
+
+        assert _trackable(f, 'xs')
+
+    def test_a_list_built_here(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [fp.logb(x) for x in xs]
+            return max(ys)
+
+        assert _trackable(f, 'ys')
+
+    def test_an_alias_is_the_same_region_not_a_refusal(self):
+        """``ys = xs`` is one object under two names, so a store through either
+        lands on the region both resolve to -- which is why the region is the
+        key rather than something to refuse."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = xs
+            ys[0] = fp.nan()
+            return fp.logb(xs[0])
+
+        assert _trackable(f, 'xs')
+
+    def test_a_list_handed_to_a_call_carries_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def poison(ys):
+            ys[0] = fp.nan()
+            return 0
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            z = poison(xs)
+            return fp.logb(xs[0]) + z
+
+        assert not _trackable(f, 'xs')
 
 
 class TestTheLoweredRounding:

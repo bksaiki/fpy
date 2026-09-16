@@ -30,6 +30,9 @@ CTX_NAME = '__ctx__'
 REAL_NAME = '__fpy_real'
 """namespace symbol bound to the real context ``REAL``"""
 
+PROBE_NAME = '__fpy_probe'
+"""namespace symbol bound to :attr:`BytecodeCompiler.probe`, when one is given"""
+
 
 def _is_integer(x: Float | Fraction) -> bool:
     match x:
@@ -587,13 +590,44 @@ class BytecodeCompiler(Visitor):
     gensym: Gensym
     foreign_vals: dict[str, object]
 
-    def __init__(self, func: FuncDef, env: ForeignEnv):
+    probe: 'Callable[[int, Any], Any] | None'
+    """Called with ``(index, value)`` for every expression evaluated, returning
+    the value.  ``probed[index]`` is the expression it came from.  ``None``
+    compiles the program unchanged."""
+
+    probed: list[Expr]
+
+    def __init__(
+        self, func: FuncDef, env: ForeignEnv,
+        *, probe: 'Callable[[int, Any], Any] | None' = None,
+    ):
         self.func = func
         self.env = env
         # reserve the program's own names: a bare `fresh('__fpy_cmp')` would
         # otherwise return that very name and shadow a source variable
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.foreign_vals = {}
+        self.probe = probe
+        self.probed = []
+
+    def _visit_expr(self, e: Expr, ctx):
+        """Every expression, wrapped in :attr:`probe` where one is given.
+
+        The wrapper is the identity, so the program runs as it would; it is the
+        one place a consumer can see what each expression actually evaluated
+        to, which is what checking an analysis against a run needs.
+        """
+        out = super()._visit_expr(e, ctx)
+        if self.probe is None or not isinstance(out, pyast.expr):
+            return out
+        attrs = self._location_to_attributes(e.loc)
+        idx = len(self.probed)
+        self.probed.append(e)
+        return pyast.Call(
+            func=pyast.Name(id=PROBE_NAME, ctx=pyast.Load(), **attrs),
+            args=[pyast.Constant(value=idx, kind=None, **attrs), out],
+            keywords=[], **attrs,
+        )
 
     def compile(self):
         # compile the function to a Python AST
@@ -612,6 +646,8 @@ class BytecodeCompiler(Visitor):
             namespace[name] = to_value(self.env[name])
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
+        if self.probe is not None:
+            namespace[PROBE_NAME] = self.probe
         # return the function object
         exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]

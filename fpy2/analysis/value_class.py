@@ -67,6 +67,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import REAL, Context, Float
 from ..types import RealType, Type
+from .alias import Alias, AliasAnalysis, Region
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
 from .define_use import (
     AssignDef,
@@ -309,11 +310,30 @@ class ValueClassAnalysis:
     per-definition view the other analyses expose, and what
     ``tests/infra/analysis/value_class.py`` dumps."""
 
+    alias: AliasAnalysis
+    """Underlying alias analysis: which lists may be the same object.  A class
+    for a list's *elements* is a property of the object, so it can only be keyed
+    by region -- see :meth:`elements_tracked`."""
+
     type_info: TypeAnalysis
     """Underlying basic-type analysis, which decides what carries a class."""
 
     ctx_use: ContextUseAnalysis
     """Underlying context-use analysis, which supplies each operation's context."""
+
+    def element_region(self, e: Expr) -> 'Region | None':
+        """The region whose elements a fact about the list *e* belongs to, or
+        ``None`` where no fact may be recorded.
+
+        A list is a reference, so ``ys = xs`` is one object under two names and
+        a store through either is visible through both; the region is what both
+        resolve to.  ``None`` where the list escapes -- handed to a call, which
+        may store through it after this analysis has stopped looking.
+        """
+        region = self.alias.region_of_expr(e)
+        if region is None or self.alias.escapes_at(region):
+            return None
+        return region
 
     def classify(self, e: Expr) -> ValueClass:
         """The class of *e*, or the top class where nothing is known."""
@@ -348,6 +368,8 @@ class _ValueClassInstance(DefaultVisitor):
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
 
+    alias: AliasAnalysis
+
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
@@ -357,10 +379,12 @@ class _ValueClassInstance(DefaultVisitor):
         func: FuncDef,
         type_info: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
+        alias: AliasAnalysis,
     ):
         self.func = func
         self.type_info = type_info
         self.ctx_use = ctx_use
+        self.alias = alias
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
@@ -375,6 +399,7 @@ class _ValueClassInstance(DefaultVisitor):
             func=self.func,
             by_expr=self.by_expr,
             by_def=self.by_def,
+            alias=self.alias,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
         )
@@ -847,13 +872,20 @@ class ValueClassInfer:
         def_use: DefineUseAnalysis | None = None,
         type_info: TypeAnalysis | None = None,
         ctx_use: ContextUseAnalysis | None = None,
+        alias: AliasAnalysis | None = None,
     ) -> ValueClassAnalysis:
         """
         Runs value-class analysis on a function.
 
         The pre-analyses are accepted as keyword arguments so a caller that
-        already holds them -- the C++ compiler holds all three -- does not
+        already holds them -- the C++ compiler holds all four -- does not
         recompute them.
+
+        *alias* is computed here when absent rather than the analysis going
+        without: it costs less than this analysis does, and without it a list
+        fact would have to be dropped silently.  Computing it without escape
+        summaries is the *conservative* reading -- every list handed to a call
+        is marked as escaping -- which is what :meth:`element_region` wants.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
@@ -863,4 +895,6 @@ class ValueClassInfer:
             type_info = TypeInfer.check(func, def_use=def_use)
         if ctx_use is None:
             ctx_use = ContextUse.analyze(func, def_use=def_use)
-        return _ValueClassInstance(func, type_info, ctx_use).analyze()
+        if alias is None:
+            alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
+        return _ValueClassInstance(func, type_info, ctx_use, alias).analyze()

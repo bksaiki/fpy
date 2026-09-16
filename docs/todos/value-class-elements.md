@@ -5,8 +5,10 @@ reads inside it.  Built once and abandoned: the design keyed a property of the
 runtime *object* by *definition*, and an FPy list is a reference.  What follows
 is what the attempt established and the order to rebuild it in.
 
-The motivating program, which the attempt compiled to `int8_t max_e` and `main`
-compiles to `float`:
+## The acceptance test
+
+This program, which the first attempt compiled to `int8_t max_e` and `main`
+still compiles to `float`:
 
 ```python
 if all([fp.isfinite(x) for x in xs]):
@@ -18,6 +20,9 @@ both infinities, because `logb(0)` is `-inf` and `logb(inf)` is `+inf`.  No
 integer rung holds those, so storage falls to `float`.  The guard rules out the
 NaN and the `+inf`, the clamp rules out the `-inf` — and neither reaches the
 element read without this.
+
+Done means `max_e` is an integer type here, soundly: with the two witnesses
+below still reporting the top class, and phase 1's differential check green.
 
 ## What the attempt established
 
@@ -63,16 +68,29 @@ should not be trusted.
 
 Six phases, each about one commit, ordered so the two that make the feature
 *safe* land before the two that make it *pay*, and the feature itself last.
-Phases 1-4 are worth merging on their own.
+
+**Only phase 1 stands alone.**  Measured against the merged tree, phases 2-4
+have nothing to exercise them until phase 5 exists: no consumer would read the
+alias information; the emitter's two expression-storage paths already agree on
+every type in the corpus, differing only in representation, which `unbox` owns
+deliberately; and the slot-store check is reached 48 times and fits every time,
+so relaxing it changes nothing.  They are prerequisites of phase 5, not
+independent improvements, so 2-5 is one arc rather than four merges.
+
+That is a statement about *shape*, not about worth.  The corpus is example
+programs and the runtime is dominated by the FP16 ladder, so neither says
+anything about whether this matters -- the acceptance test is the program
+below, and a compiler that emits a ``float`` for a value it can prove is a
+small integer is the thing being fixed.
 
 One test to apply to each: does the rule follow from the *semantics of the
 operation*, or from the shape of one program?  Phases 1-5 pass it outright.
 Phase 6's rule passes and its implementation is where the judgement is.
 
-**1. A differential check for value classes.**  Every defect in the first
-attempt was found by reading code, not by a test: the suites stayed green
-throughout, and the storage narrowing that did merge turns out to be inert on
-all 127 corpus functions.  Extend the `--mode run` machinery so a program's
+**1. A differential check for value classes.**  **Done.**  Every defect in the
+first attempt was found by reading code, not by a test: the suites stayed green
+throughout, and the storage narrowing that did merge was inert on every corpus
+function.  Extend the `--mode run` machinery so a program's
 *claims* are checked against its run -- for each expression the analysis gives a
 class, assert no observed value falls outside it.  It costs nothing to build
 before the feature, checks the existing scalar classes meanwhile, and is the one
@@ -82,15 +100,19 @@ A cheaper down payment, worth doing first either way: one guarded-`logb`
 program in `tests/infra/examples/`, which pulls the *merged* storage narrowing
 into the bit-exact differential it currently sits outside of.
 
-**2. `Alias` available to `ValueClassInfer`.**  It needs only def-use and escape
-summaries, so there is no cycle with this analysis -- it is merely ordered after
-it today.  Plumb it as an optional input and decide what a standalone caller
-gets without it: `unfold_special` constructs `ValueClassInfer` directly, and the
-answer should be that element tracking is simply off.  Escape summaries are what
-cover a callee storing through a list it was handed, which `written_regions`
-alone does not.
+**2. `Alias` available to `ValueClassInfer`** (prerequisite).  **Done.**  It is
+an optional argument, computed here when absent: `Alias` costs less than this
+analysis does, so there is no reason to let a caller silently lose a fact.
 
-**3. One storage-narrowing site.**  (Its payoff is thin and worth knowing:
+Escape summaries turn out not to be needed.  Without them `Alias` marks *every*
+list handed to a call as escaping, which is the conservative reading and
+exactly what is wanted -- so `ValueClassAnalysis.element_region` is
+"the region, unless it escapes", and the callee case falls out.  The aliasing
+case falls out too, and is why the region is the key rather than something to
+refuse: ``ys = xs`` is one object under two names, so a store through either
+lands on the region both resolve to.
+
+**3. One storage-narrowing site** (prerequisite).  (Its payoff is thin and worth knowing:
 `logb` is nearly the only operation whose format is integer-valued, range-bounded
 *and* special-admitting, so it is nearly the only beneficiary -- `floor`,
 `trunc` and `nearbyint` under `REAL` are unbounded and refused before narrowing
@@ -102,7 +124,7 @@ produced an `int8_t` array reduced by a `float` fold.  Make one place own it and
 the rest read it, as `SpecAnalyses.ret_ty` already does one level up.  No new
 precision, so the output should not move.
 
-**4. An exact store into a narrower slot.**  `_require_no_narrowing` refuses on
+**4. An exact store into a narrower slot** (prerequisite).  `_require_no_narrowing` refuses on
 storage types alone.  Where the value's *format* fits the slot the conversion is
 exact and should emit the cast: `fmt(max(logb(x), emin)) <= int8_t` holds, so the
 store wants `static_cast<int8_t>(std::max(...))` while the `max` itself stays
