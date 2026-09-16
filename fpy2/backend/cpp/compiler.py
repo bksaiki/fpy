@@ -545,8 +545,12 @@ class CppCompiler(Backend):
             ctx_use=ctx_use,
             array_size=array_size,
         )
+        # before the value classes, which read it: without the summaries every
+        # list handed to a call reads as escaping and loses its element facts
+        alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
         class_info = ValueClassInfer.analyze(
-            ast, type_info=format_info.type_info, ctx_use=ctx_use,
+            ast, def_use=def_use, type_info=format_info.type_info,
+            ctx_use=ctx_use, alias=alias,
         )
 
         try:
@@ -573,7 +577,6 @@ class CppCompiler(Backend):
         storage = CppStorage(chosen)
         variables = VariableAlloc.assign(du, storage)
 
-        alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
         # This function's own summary, from the alias analysis it already has.
         # Its callers read it to decide whether they can stop treating an
         # argument as shared; it reads its own to decide the same about its

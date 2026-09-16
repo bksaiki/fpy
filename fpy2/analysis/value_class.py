@@ -364,8 +364,10 @@ class ValueClassAnalysis:
     Where :attr:`by_def` is what a *name* holds, this is what the list behind it
     holds, so a consumer picking storage can narrow the element type.  Joined
     over the whole function rather than read at a point -- storage holds what a
-    list ever held.  A definition is absent where nothing was stored through it:
-    a parameter, a call's result, or a list that escapes to a callee."""
+    list ever held.  The top class stands for "anything", which is what a list
+    built where no store was walked gets: a literal, a parameter, a callee's
+    result.  A definition is absent where no fact may be recorded at all --
+    a list that escapes to a callee."""
 
     by_def: dict[Definition, ValueClass | None]
     """Class of each variable definition, *unrefined* -- the class the defining
@@ -462,9 +464,9 @@ class _ValueClassInstance(DefaultVisitor):
 
     _stored: dict[Region, ValueClass]
     """Every class ever stored into each region, for a consumer choosing
-    storage: a buffer holds what a list *ever* held.  Seeded only where the
-    list was seen empty, so one built any other way -- a literal, a parameter,
-    a callee's result -- stays at the top class."""
+    storage: a buffer holds what a list *ever* held.  Seeded at bottom only
+    where a region holding one list is seen empty, so a list built any other
+    way -- a literal, a parameter, a callee's result -- stays at the top."""
 
     _refine: dict[Definition, ValueClass]
     """Per-definition mask the enclosing branches imply, intersected into every
@@ -506,12 +508,12 @@ class _ValueClassInstance(DefaultVisitor):
     def _by_elt(self) -> dict[Definition, ValueClass]:
         """:attr:`ValueClassAnalysis.by_elt`, per definition rather than per
         region."""
+        # every key of `_stored` went through `_trackable`, so an escaping
+        # region is already absent
         out: dict[Definition, ValueClass] = {}
         for d in self.def_use.defs:
             region = self.alias.region_of(d)
-            if region is None or self.alias.escapes_at(region):
-                continue
-            if region in self._stored:
+            if region is not None and region in self._stored:
                 out[d] = self._stored[region]
         return out
 
@@ -539,11 +541,10 @@ class _ValueClassInstance(DefaultVisitor):
 
         Two lists share a region as soon as anything makes them may-alias, and
         then "every element of *the* list" names neither of them.  Only a count
-        answers it: a region with two allocation sites is two lists as far as
-        anything here can see.
+        answers it, and a region with no site is as unanswerable as one with
+        two.
         """
         return len(self.alias.sites_at(region)) == 1
-
 
     def _elements_of(self, e: Expr) -> ValueClass:
         """What every element of the list *e* names currently is."""
@@ -1116,8 +1117,12 @@ class _ValueClassInstance(DefaultVisitor):
             self._bind(stmt, stmt.target, self._elements_of(stmt.iterable))
             self._visit_block(stmt.body, ctx)
 
-        self._fixpoint(stmt, body)
+        # dropped before the body runs, not after: a `for` inside a loop is
+        # walked again, and inside it the accumulator covers only the part
+        # scanned so far -- an entry left from the previous walk would speak
+        # for the whole list
         self._scanned.pop(stmt, None)
+        self._fixpoint(stmt, body)
         if region is not None and self._stamp(region) == before:
             self._scanned[stmt] = before
 
@@ -1223,14 +1228,15 @@ class ValueClassInfer:
         Runs value-class analysis on a function.
 
         The pre-analyses are accepted as keyword arguments so a caller that
-        already holds them -- the C++ compiler holds all four -- does not
-        recompute them.
+        already holds them does not recompute them.
 
         *alias* is computed here when absent rather than the analysis going
-        without: it costs less than this analysis does, and without it a list
-        fact would have to be dropped silently.  Computing it without escape
-        summaries is the *conservative* reading -- every list handed to a call
-        is marked as escaping -- which is what :meth:`element_region` wants.
+        without: it costs about half what this analysis does, and without it a
+        list fact would have to be dropped silently.  Computed here it has no
+        escape summaries, which is the *conservative* reading -- every list
+        handed to a call is marked as escaping.  A caller holding a summarized
+        one should pass it: the C++ backend does, and gets the element facts
+        the conservative reading throws away.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')

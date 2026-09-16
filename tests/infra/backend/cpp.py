@@ -761,6 +761,14 @@ _test_ignore = [
     # guard refuses -- nothing to do with `empty` (`test_empty1` compiles).
     'test_empty2',
     'test_empty3',
+    # exact arithmetic under `REAL`: the sum of two FP64s needs 2099
+    # significand bits and no storage holds it.  These exist to give the
+    # value-class differential the operand shapes the rest of the corpus
+    # lacks, and that check drives the interpreter, not this backend.
+    'test_specials_add',
+    'test_specials_sub',
+    'test_specials_mul',
+    'test_cancelling_add',
 ]
 
 _example_ignore = [

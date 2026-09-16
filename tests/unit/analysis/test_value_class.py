@@ -146,6 +146,11 @@ def _pow2(a: fp.Real) -> fp.Real:
     return 2 ** a
 
 
+@fp.fpy(ctx=fp.FP64)
+def _pow2_fp64(a: fp.Real) -> fp.Real:
+    return 2 ** a
+
+
 @fp.fpy(ctx=fp.REAL)
 def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
     return max(a, b)
@@ -167,10 +172,12 @@ class TestTransferFunctionsAreSound:
     describes executions in which every operation has a result.
     """
 
-    def _sweep(self, predict, fn, arity: int):
+    def _sweep(self, predict, fn, arity: int, *, rows: int, only=None):
         bad = []
-        atoms = [(a,) for a in _ATOMS] if arity == 1 else [
-            (a, b) for a in _ATOMS for b in _ATOMS]
+        pool = _ATOMS if only is None else only
+        atoms = [(a,) for a in pool] if arity == 1 else [
+            (a, b) for a in pool for b in pool]
+        covered = set()
         for combo in atoms:
             want = predict(*combo)
             for vals in _value_combos(combo):
@@ -178,32 +185,51 @@ class TestTransferFunctionsAreSound:
                     got = class_of(fn(*vals))
                 except Exception:
                     continue        # no result: says nothing about the class
+                covered.add(combo)
                 if not (got & want):
                     bad.append(f'{fn.name}{vals}: {got} not in {want}')
         assert not bad, '; '.join(bad[:6])
+        # an operation the interpreter refuses is skipped, and a table whose
+        # rows are *all* refused would sweep green having compared nothing
+        assert len(covered) == rows, (
+            f'{fn.name} compared {len(covered)} of {rows} rows; the rest were '
+            f'skipped, so those rows of the table are untested'
+        )
 
     def test_add(self):
-        self._sweep(_exact_add, _add, 2)
+        self._sweep(_exact_add, _add, 2, rows=25)
 
     def test_sub(self):
         # its own table since the sign split: `_exact_add` sweeps against `-`
         # only while the infinities are one atom
-        self._sweep(_exact_sub, _sub, 2)
+        self._sweep(_exact_sub, _sub, 2, rows=25)
 
     def test_mul(self):
-        self._sweep(_exact_mul, _mul, 2)
+        self._sweep(_exact_mul, _mul, 2, rows=25)
 
     def test_max(self):
-        self._sweep(lambda a, b: _exact_select([a, b], is_max=True), _max2, 2)
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=True), _max2, 2, rows=25)
 
     def test_min(self):
-        self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2)
+        self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2, rows=25)
 
     def test_logb(self):
-        self._sweep(lambda a: _map(_LOGB, a), _logb, 1)
+        self._sweep(lambda a: _map(_LOGB, a), _logb, 1, rows=5)
 
     def test_pow_with_a_positive_base(self):
-        self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1)
+        """Two rows under ``REAL``: the interpreter has no exact ``2 ** x`` for
+        a NaN or an infinity."""
+        self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1, rows=2)
+
+    def test_pow_with_a_positive_base_at_a_concrete_context(self):
+        """The three rows ``REAL`` cannot reach.  Sound against a *rounded* run
+        only for these: their results -- a NaN, ``+inf``, ``+0`` -- are exactly
+        representable, where the finite row overflows (``2 ** 1e300``) and the
+        exact table rightly does not say so."""
+        self._sweep(
+            lambda a: _map(_POW_POS_BASE, a), _pow2_fp64, 1, rows=3,
+            only=(NAN, POS_INF, NEG_INF),
+        )
 
     @pytest.mark.parametrize('table', [
         pytest.param(_exact_add, id='add'),
@@ -552,7 +578,8 @@ class TestALoweredChain:
         @fp.fpy(ctx=fp.REAL)
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             t = not fp.isnan(a)
-            if b > 0:
+            p = b > 0
+            if p:
                 t = True
             if t:
                 y = fp.fabs(a)
@@ -830,12 +857,15 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f) == ZERO | FINITE
 
     def test_a_fold_that_is_not_one_says_nothing(self):
-        """``ok`` is the *last* element's predicate, not every element's."""
+        """``ok`` is the *last* element's predicate, not every element's.  An
+        ``and`` that does not carry the accumulator is still not a fold."""
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             ok = True
             for x in xs:
-                ok = fp.isfinite(x)
+                p = fp.isfinite(x)
+                q = x != 0
+                ok = p and q
             if ok:
                 return max(xs)
             else:
@@ -859,6 +889,25 @@ class TestAGuardOverAWholeList:
                 return 0.0
 
         assert _amax_class(f) == TOP
+
+    def test_a_scan_walked_again_does_not_speak_early(self):
+        """A `for` inside a loop is walked more than once, and inside it the
+        accumulator covers only the part scanned so far."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, n: fp.Real) -> fp.Real:
+            y = 0.0
+            i = 0.0
+            while i < n:
+                ok = True
+                for x in xs:
+                    ok = ok and fp.isfinite(x)
+                    if ok:
+                        y = max(xs)
+                i = i + 1.0
+            return y
+
+        assert _amax_class(f, scalars=1) == TOP
+        assert math.isnan(f([1.0, float('nan')], 2.0))
 
     def test_a_store_inside_the_scan_voids_the_fact(self):
         @fp.fpy(ctx=fp.REAL)
@@ -917,6 +966,22 @@ class TestAGuardOverAWholeList:
         assert _amax_class(f, scalars=1) == TOP
 
 
+def _bounds(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> dict:
+    """``bound_of`` per definition, keyed by variable name, after lowering."""
+    from fpy2.backend.cpp.compiler import CppCompiler
+    m = fp.Module()
+    m.add(fn, arg_types=_arg_types(n, lists, scalars))
+    for spec in CppCompiler().specialize(m):
+        if spec.ast.name != fn.name:
+            continue
+        info = ValueClassInfer.analyze(spec.ast)
+        return {
+            str(d.name): info.bound_of(d)
+            for d in info.type_info.def_use.defs
+        }
+    raise AssertionError(f'no {fn.name}')
+
+
 def _elt_classes(fn, n: int = 4, *, lists: int = 1, scalars: int = 0) -> dict:
     """``by_elt``, keyed by variable name, after lowering."""
     from fpy2.backend.cpp.compiler import CppCompiler
@@ -937,6 +1002,28 @@ class TestAStructuralClass:
         a = TupleClass((NAN, ZERO))
         b = TupleClass((ZERO, ZERO))
         assert join_class(a, b) == TupleClass((NAN | ZERO, ZERO))
+
+    def test_a_list_definition_carries_its_elements(self):
+        """The shape `StorageInfer` consumes: a list narrows through its
+        element, not through a class of its own."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        b = _bounds(f)['ys']
+        assert isinstance(b, ListClass) and not (b.elt & NEG_INF)
+
+    def test_a_list_nothing_was_stored_into_is_bottom(self):
+        """``fp.empty`` holds nothing and reading it is undefined, so no
+        execution contradicts any class of its elements."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(n: fp.Real) -> fp.Real:
+            ys = fp.empty(3)
+            ys[0] = 1.0
+            return ys[0]
+
+        assert _bounds(f, lists=0, scalars=1)['ys'] == ListClass(FINITE)
 
     def test_a_list_joins_its_element(self):
         assert join_class(ListClass(NAN), ListClass(ZERO)) == ListClass(NAN | ZERO)
@@ -989,6 +1076,31 @@ class TestElementClassesPerDefinition:
             return max(xs)
 
         assert 'xs' not in _elt_classes(f)
+
+
+class TestTheBackendSharesItsAliasAnalysis:
+    """`ValueClassInfer` builds an `Alias` when none is passed, and that one has
+    no escape summaries -- so every list handed to a call reads as escaping and
+    loses its element facts.  A caller holding a summarized one has to pass it,
+    or it pays for two analyses and uses the weaker."""
+
+    def test_the_compiler_passes_the_alias_it_built(self):
+        from fpy2.backend.cpp.compiler import CppCompiler
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = [abs(x) for x in xs]
+            return max(ys)
+
+        m = fp.Module()
+        m.add(f, arg_types=[ListType(RealType(fp.FP32), 4)])
+        compiler = CppCompiler()
+        specs = compiler.specialize(m)
+        for spec, analyses in compiler._analyze_all(specs, {}):
+            if spec.ast.name == 'f':
+                assert analyses.class_info.alias is analyses.alias
+                return
+        raise AssertionError('no f')
 
 
 class TestARegionMayHoldMoreThanOneList:
@@ -1102,6 +1214,22 @@ class TestWhichListsCarryAFact:
             return fp.logb(xs[0])
 
         assert _trackable(f, 'xs')
+
+    def test_a_list_handed_to_a_call_has_no_element_class(self):
+        """A callee may store through it, so neither accessor answers."""
+        @fp.fpy(ctx=fp.REAL)
+        def poison(ys):
+            ys[0] = fp.nan()
+            return 0
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            zs = [abs(x) for x in xs]
+            w = poison(zs)
+            return max(zs) + w
+
+        assert 'zs' not in _elt_classes(f)
+        assert _bounds(f)['zs'] is None
 
     def test_a_list_handed_to_a_call_carries_nothing(self):
         @fp.fpy(ctx=fp.REAL)

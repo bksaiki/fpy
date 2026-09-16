@@ -30,8 +30,8 @@ CTX_NAME = '__ctx__'
 REAL_NAME = '__fpy_real'
 """namespace symbol bound to the real context ``REAL``"""
 
-PROBE_NAME = '__fpy_probe'
-"""namespace symbol bound to :attr:`BytecodeCompiler.probe`, when one is given"""
+HOOK_NAME = '__fpy_hook'
+"""namespace symbol bound to :attr:`BytecodeCompiler.hook`, when one is given"""
 
 
 def _is_integer(x: Float | Fraction) -> bool:
@@ -590,16 +590,17 @@ class BytecodeCompiler(Visitor):
     gensym: Gensym
     foreign_vals: dict[str, object]
 
-    probe: 'Callable[[int, Any], Any] | None'
+    hook: 'Callable[[int, Any], Any] | None'
     """Called with ``(index, value)`` for every expression evaluated, returning
-    the value.  ``probed[index]`` is the expression it came from.  ``None``
-    compiles the program unchanged."""
+    the value.  ``hook_sites[index]`` is where it came from.  ``None`` compiles
+    the program unchanged."""
 
-    probed: list[Expr]
+    hook_sites: list[Expr]
+    """The expressions :attr:`hook` fires at, indexed by the id it is passed."""
 
     def __init__(
         self, func: FuncDef, env: ForeignEnv,
-        *, probe: 'Callable[[int, Any], Any] | None' = None,
+        *, hook: 'Callable[[int, Any], Any] | None' = None,
     ):
         self.func = func
         self.env = env
@@ -607,22 +608,22 @@ class BytecodeCompiler(Visitor):
         # otherwise return that very name and shadow a source variable
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.foreign_vals = {}
-        self.probe = probe
-        self.probed = []
+        self.hook = hook
+        self.hook_sites = []
 
     def _visit_expr(self, e: Expr, ctx):
-        """Every expression, wrapped in :attr:`probe` where one is given.
+        """Every expression, wrapped in :attr:`hook` where one is given.
 
         The wrapper is the identity, so the program runs as it would.
         """
         out = super()._visit_expr(e, ctx)
-        if self.probe is None or not isinstance(out, pyast.expr):
+        if self.hook is None or not isinstance(out, pyast.expr):
             return out
         attrs = self._location_to_attributes(e.loc)
-        idx = len(self.probed)
-        self.probed.append(e)
+        idx = len(self.hook_sites)
+        self.hook_sites.append(e)
         return pyast.Call(
-            func=pyast.Name(id=PROBE_NAME, ctx=pyast.Load(), **attrs),
+            func=pyast.Name(id=HOOK_NAME, ctx=pyast.Load(), **attrs),
             args=[pyast.Constant(value=idx, kind=None, **attrs), out],
             keywords=[], **attrs,
         )
@@ -644,8 +645,8 @@ class BytecodeCompiler(Visitor):
             namespace[name] = to_value(self.env[name])
         # add foreign values to the namespace
         namespace.update(self.foreign_vals)
-        if self.probe is not None:
-            namespace[PROBE_NAME] = self.probe
+        if self.hook is not None:
+            namespace[HOOK_NAME] = self.hook
         # return the function object
         exec(code, namespace)  # noqa: S102 -- executing generated FPy bytecode is the interpreter's purpose
         return namespace[self.func.name]

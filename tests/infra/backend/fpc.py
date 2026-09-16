@@ -20,6 +20,10 @@ _ignore = [
     'test_logb_guarded_pair',
 
     # unsupported type
+    '_fill_first',
+    'test_elements_after_a_call',
+
+    # unsupported type
     'dpN',
 
     # context values
@@ -37,6 +41,14 @@ _ignore = [
     'test_list_comp5',
 
     # multiple return statements (FPCore is single-exit by design)
+    'test_cancelling_add',
+    'test_elements_after_a_call',
+    'test_finite_product',
+    'test_not_a_fold',
+    'test_specials_add',
+    'test_specials_mul',
+    'test_specials_sub',
+    'test_unrelated_named_guard',
     'test_return1',
     'test_return2',
     'test_return3',

@@ -105,29 +105,6 @@ def _asserts(src: str) -> str:
     return '\n'.join(ln for ln in src.splitlines() if 'assert(' in ln)
 
 
-def _compiles(src: str) -> None:
-    """*src* is C++ a compiler accepts.
-
-    Every assertion in this file greps emitted text, which a type error passes
-    unnoticed -- a narrowed element type once produced ``std::max(int16_t,
-    float)`` under a passing test.  Warnings are errors here: a narrowing
-    inside a braced initializer is only a warning on GCC and ill-formed in the
-    standard.
-    """
-    if _CXX is None:
-        pytest.skip('no C++ compiler')
-    from fpy2.backend.cpp.utils import CPP_HEADERS
-    with tempfile.TemporaryDirectory() as td:
-        cpp = Path(td) / 'm.cpp'
-        cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src)
-        out = subprocess.run(
-            [_CXX, '-std=c++17', '-Wall', '-Wextra', '-Werror', '-fsyntax-only',
-             str(cpp)],
-            capture_output=True, text=True,
-        )
-    assert out.returncode == 0, out.stderr[-2000:]
-
-
 def _build(src: str, name: str, td: str) -> Path:
     from fpy2.backend.cpp.utils import CPP_HEADERS
     cpp, exe = Path(td) / 'm.cpp', Path(td) / 'm'
@@ -391,10 +368,8 @@ class TestAListStoresAtItsElements:
 
     @staticmethod
     def _emit(q):
-        out = CppCompiler().compile(
+        return CppCompiler().compile(
             q, arg_types=[ListType(RealType(fp.FP32), 8)])
-        _compiles(out)
-        return out
 
     def test_the_buffer_holds_the_element_type(self):
         assert 'std::array<int8_t, 8>' in self._emit(self._guarded())

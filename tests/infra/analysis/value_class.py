@@ -1,8 +1,9 @@
 """
 Value-class analysis integration tests.
 
-The claims are also *checked against a run*: every expression is probed as the
-program executes and its value compared with the class the analysis gave it.
+The claims are also *checked against a run*: the interpreter's hook sees every
+expression as the program executes, and its value is compared with the class the
+analysis gave it.
 The analysis is sound only if no observed value falls outside its class, and
 that is the property nothing else here tests -- the unit sweeps cover the
 transfer functions, not the flow through a whole program.
@@ -13,6 +14,14 @@ from fractions import Fraction
 
 import fpy2 as fp
 from fpy2.analysis import ValueClass, ValueClassInfer, class_of
+from fpy2.analysis.value_class import (
+    ClassBound,
+    ListClass,
+    TupleClass,
+    ValueClassAnalysis,
+    join_class,
+)
+from fpy2.ast.fpyast import Var
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.interpret.byte import BytecodeCompiler
 from fpy2.interpret.value import to_value
@@ -69,9 +78,11 @@ _PROBE_VALUES = [
 ]
 """One per atom, and a few finites: the point is to reach every class."""
 
-_SECOND_ARG = [float('nan'), float('inf'), float('-inf'), 0.0, 2.5]
+_SECOND_ARG = [float('nan'), float('inf'), float('-inf'), 0.0, 2.5, 1e300]
 """Arguments after the first are sampled rather than crossed, which would raise
-the grid to a power for no new classes."""
+the grid to a power for no new classes.  ``1e300`` is not a class of its own --
+it is there so a *product* overflows, which is the only way a concrete context
+turns a finite operand into an infinity."""
 
 _LIST_VALUES = [
     [1.0, -2.5, 3.0],
@@ -112,6 +123,7 @@ def _grid(kinds: 'list[bool]') -> list[tuple]:
 _MIN_INFORMATIVE_EXPRS = 850
 _MIN_INFORMATIVE_FUNCS = 115
 _MIN_LOWERED = 150
+_MIN_INFORMATIVE_LISTS = 1
 """Floors, to catch the check going quiet rather than to pin a number.
 
 A claim of the top class cannot be contradicted, so a run comparing only
@@ -123,7 +135,15 @@ machine is.  The per-function floor is what catches one shape going dark, and
 lowered form is the only one with an element store or a reduction loop in it.
 """
 
-_SECONDS = 2.0
+_CONTEXTS = (REAL, fp.FP64)
+"""Runtime contexts each program is driven under.
+
+``REAL`` is where an exact claim is testable at all.  A concrete one is where a
+program with a *symbolic* context rounds -- and rounding is what turns a finite
+value into an infinity, which an exact-only run never sees.
+"""
+
+_SECONDS = 4.0
 """Wall clock per function.  An ``inf`` reaching a loop bound runs forever, so
 the grid is interrupted rather than bounded -- the same reason
 ``tests.infra.backend.cpp`` carries a timeout."""
@@ -148,15 +168,77 @@ def _with_timeout(seconds: float, run):
         signal.signal(signal.SIGALRM, old)
 
 
-def _observed_class(v) -> 'ValueClass | None':
-    """The class of a runtime value, or ``None`` where it carries none."""
+def _observed_class(v) -> ClassBound:
+    """A runtime value's class, shaped like the value.
+
+    Structural, because a claim about a list is: ``by_elt`` and ``bound_of``
+    are what a storage consumer reads, and a scalar-only observation compares
+    against neither.  A list contributes the join over its elements, and an
+    empty one contributes bottom, which contradicts nothing.
+    """
     match v:
         case Float():
             return class_of(v)
         case Fraction():
             return class_of(Float.from_rational(v, ctx=REAL))
+        case list():
+            elt: ClassBound = ValueClass(0)
+            for x in v:
+                elt = join_class(elt, _observed_class(x))
+            return ListClass(elt)
+        case tuple():
+            return TupleClass(tuple(_observed_class(x) for x in v))
         case _:
             return None
+
+
+def _claimed_class(info: 'ValueClassAnalysis', e) -> ClassBound:
+    """What the analysis says *e* is, shaped like the value.
+
+    ``by_expr`` answers for a scalar; a list carries its class per *definition*,
+    so a name is followed to the one it reads.
+    """
+    cls = info.by_expr.get(e)
+    if isinstance(cls, ValueClass):
+        return cls
+    if isinstance(e, Var):
+        try:
+            return info.bound_of(info.type_info.def_use.find_def_from_use(e))
+        except KeyError:
+            return None
+    return None
+
+
+def _contradicts(seen: ClassBound, claimed: ClassBound) -> bool:
+    """Whether *seen* is a value *claimed* rules out.
+
+    A bottom observation -- an empty list -- rules out nothing, and so does a
+    shape the claim does not match.
+    """
+    match seen, claimed:
+        case ValueClass(), ValueClass():
+            return bool(seen) and not (seen & claimed)
+        case ListClass(), ListClass():
+            return _contradicts(seen.elt, claimed.elt)
+        case TupleClass(), TupleClass() if len(seen.elts) == len(claimed.elts):
+            return any(
+                _contradicts(s, c) for s, c in zip(seen.elts, claimed.elts)
+            )
+        case _:
+            return False
+
+
+def _is_informative(b: ClassBound) -> bool:
+    """Whether *b* rules anything out at all."""
+    match b:
+        case ValueClass():
+            return b != ValueClass.TOP
+        case ListClass():
+            return _is_informative(b.elt)
+        case TupleClass():
+            return any(_is_informative(x) for x in b.elts)
+        case _:
+            return False
 
 
 def _arg_kinds(func: fp.Function) -> 'list[bool] | None':
@@ -195,86 +277,91 @@ def _forms(func: fp.Function) -> list[fp.Function]:
     return out
 
 
-def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int, int]':
-    """``(contradictions, informative expressions, forms)`` from running *func*
-    over the probe values, in each of :func:`_forms`.
+def _check_against_a_run(func: fp.Function) -> 'tuple[list[str], int, int, int]':
+    """``(contradictions, informative scalars, informative lists, forms)`` from
+    running *func* over the probe values, in each of :func:`_forms`.
 
-    Driven under ``REAL``, which is the only context where the analysis says
-    anything: under a concrete one :meth:`_rounded` reports the classes that
-    context can represent, and for ``FP64`` that is every class -- a claim no
-    run can contradict.  The counts are what :data:`_MIN_INFORMATIVE_EXPRS` and
-    friends hold, so a check that has quietly gone vacuous is visible rather
-    than green.
+    Driven under each of :data:`_CONTEXTS`.  The claims are static, so any
+    runtime context may be compared against them -- and a program whose own
+    context is symbolic says something different at each, which is what makes
+    the concrete one worth the second pass.  The counts are what
+    :data:`_MIN_INFORMATIVE_EXPRS` and friends hold, so a check that has
+    quietly gone vacuous is visible rather than green.
     """
     kinds = _arg_kinds(func)
     if kinds is None:
-        return [], 0, 0
+        return [], 0, 0, 0
     bad: list[str] = []
-    informative = 0
+    informative = structural = 0
     forms = _forms(func)
     for form in forms:
-        found, n = _check_one_form(form, kinds)
+        found, n, k = _check_one_form(form, kinds)
         bad += found
         informative += n
-    return bad, informative, len(forms) - 1
+        structural += k
+    return bad, informative, structural, len(forms) - 1
 
 
 def _check_one_form(
     func: fp.Function, kinds: 'list[bool]'
-) -> 'tuple[list[str], int]':
+) -> 'tuple[list[str], int, int]':
     info = ValueClassInfer.analyze(func.ast)
     bad: list[str] = []
     informative: set[int] = set()
+    structural: set[int] = set()
     compiler: BytecodeCompiler
 
-    def probe(i: int, v):
-        e = compiler.probed[i]
-        claimed = info.by_expr.get(e)
+    def observe(i: int, v):
+        e = compiler.hook_sites[i]
+        claimed = _claimed_class(info, e)
         seen = _observed_class(v)
-        if not isinstance(claimed, ValueClass) or seen is None:
+        if claimed is None or seen is None:
             return v
-        if claimed != ValueClass.TOP:
-            informative.add(i)
-        if not (seen & claimed):
+        if _is_informative(claimed):
+            (structural if isinstance(claimed, ListClass | TupleClass)
+             else informative).add(i)
+        if _contradicts(seen, claimed):
             bad.append(f'{func.name}: `{e.format()}` is {seen}, claimed {claimed}')
         return v
 
-    compiler = BytecodeCompiler(func.ast, func.env, probe=probe)
+    compiler = BytecodeCompiler(func.ast, func.env, hook=observe)
     fn = compiler.compile()
 
     grid = _grid(kinds)
 
     def run_grid():
-        for args in grid:
-            try:
-                fn(*[to_value(a) for a in args], REAL)
-            except _Timeout:
-                raise
-            except Exception:  # noqa: BLE001, S112 -- a refusal has no class
-                continue
+        for ctx in _CONTEXTS:
+            for args in grid:
+                try:
+                    fn(*[to_value(a) for a in args], ctx)
+                except _Timeout:
+                    raise
+                except Exception:  # noqa: BLE001, S112 -- a refusal has no class
+                    continue
 
     _with_timeout(_SECONDS, run_grid)
-    return bad, len(informative)
+    return bad, len(informative), len(structural)
 
 
 def _test_value_class_against_runs():
     bad: list[str] = []
-    exprs = funcs = lowered = 0
+    exprs = funcs = lists = lowered = 0
     for core in all_tests():
         if core.name in _unit_ignore:
             continue
         try:
-            found, n, forms = _check_against_a_run(core)
+            found, n, k, forms = _check_against_a_run(core)
         except Exception as exc:   # noqa: BLE001 -- not every example is drivable
             print(f'  {core.name}: not driven ({type(exc).__name__})')
             continue
         bad += found
         exprs += n
+        lists += k
         funcs += bool(n)
         lowered += forms
     print(
         f'value classes checked against runs: {exprs} expressions over '
-        f'{funcs} functions, {lowered} lowered forms'
+        f'{funcs} functions, {lists} structural, {lowered} lowered forms'
     )
     assert not bad, 'value class contradicted by a run:\n  ' + '\n  '.join(bad)
     assert exprs >= _MIN_INFORMATIVE_EXPRS and funcs >= _MIN_INFORMATIVE_FUNCS, (
@@ -284,6 +371,10 @@ def _test_value_class_against_runs():
     assert lowered >= _MIN_LOWERED, (
         f'only {lowered} functions produced a lowered form; the shapes this '
         f'check exists for live there'
+    )
+    assert lists >= _MIN_INFORMATIVE_LISTS, (
+        f'only {lists} list or tuple claims were compared against anything but '
+        f'the top class; `by_elt` and `bound_of` are unchecked'
     )
 
 

@@ -24,14 +24,14 @@ from fpy2.backend.cpp.compiler import CppCompiler
 from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_COMPILED = 211
+EXPECTED_COMPILED = 216
 """Corpus functions that compile.  A mint count only means something while this
 holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
     '_emit_empty': 29,         # a dimension, read once per fixed-size layer
-    '_emit_ieee_min_max': 6,   # a cast result, not a nested operand
+    '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced
@@ -44,13 +44,10 @@ traversed twice are now a comprehension's, so the allocation is where the mint
 happens, and one tuple conversion reaches `_convert_storage` that the zip's own
 path did not.
 
-``_emit_empty`` is back to 28: a dimension the *type* already carries is no
-longer bound, since the `std::array` spells it and nothing reads the name.  The
-two that went were the corpus's only fixed-length allocations; the rest are
-`std::vector`, whose constructor does read the dimension.
-
-``_emit_ieee_min_max`` dropped one when a list of integers started storing as
-one: its reduction folds on the integer path, where `std::max` binds nothing.
+A dimension the *type* already carries is not bound, since the `std::array`
+spells it and nothing reads the name; the corpus's only fixed-length
+allocations are why `_emit_empty` is not higher, the rest being `std::vector`,
+whose constructor does read the dimension.
 """
 
 

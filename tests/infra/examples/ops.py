@@ -13,11 +13,10 @@ def test_logb(x: fp.Real) -> fp.Real:
 def test_logb_guarded(x: fp.Real) -> fp.Real:
     """`logb` of a finite non-zero value, which is a small integer.
 
-    The one shape that reaches an integer storage through a value class: the
-    guards rule out the NaN and the ``+inf``, ``x == 0`` rules out the ``-inf``
-    that ``logb(0)`` gives, and the ``REAL`` block keeps the exact integer
-    format -- under a concrete context the class is the one the context can
-    represent, which is every class.
+    The guards rule out the NaN and the ``+inf``, ``x == 0`` rules out the
+    ``-inf`` that ``logb(0)`` gives, and the ``REAL`` block keeps the exact
+    integer format -- under a concrete context the class is the one the context
+    can represent, which is every class.
     """
     if fp.isnan(x) or fp.isinf(x) or x == 0:
         return 0
@@ -66,6 +65,119 @@ def test_logb_guarded_pair(x: fp.Real) -> tuple[fp.Real, fp.Real]:
     else:
         with fp.REAL:
             return x, fp.logb(x)
+
+@fp.fpy
+def test_specials_add(a: fp.Real, b: fp.Real) -> fp.Real:
+    """Operands that exclude a NaN but span both infinities.
+
+    ``inf + -inf`` is a NaN, so the sum keeps one although neither operand can
+    be one -- the shape that tells the addition table apart from a join.
+    """
+    if fp.isnan(a) or fp.isnan(b):
+        return 0
+    else:
+        with fp.REAL:
+            return a + b
+
+@fp.fpy
+def test_specials_sub(a: fp.Real, b: fp.Real) -> fp.Real:
+    """The same for subtraction, which negates its right operand before the
+    table applies -- ``inf - inf`` is a NaN where ``inf + inf`` is not."""
+    if fp.isnan(a) or fp.isnan(b):
+        return 0
+    else:
+        with fp.REAL:
+            return a - b
+
+@fp.fpy
+def test_specials_mul(a: fp.Real, b: fp.Real) -> fp.Real:
+    """``0 * inf`` is a NaN, from operands neither of which can be one."""
+    if fp.isnan(a) or fp.isnan(b):
+        return 0
+    else:
+        with fp.REAL:
+            return a * b
+
+@fp.fpy
+def test_cancelling_add(a: fp.Real, b: fp.Real) -> fp.Real:
+    """Two finite non-zeros summing to zero, so the class keeps a zero its
+    operands rule out."""
+    if fp.isnan(a) or fp.isinf(a) or a == 0:
+        return 0
+    elif fp.isnan(b) or fp.isinf(b) or b == 0:
+        return 0
+    else:
+        with fp.REAL:
+            return a + b
+
+@fp.fpy
+def test_unrelated_named_guard(a: fp.Real, b: fp.Real) -> fp.Real:
+    """``if p: t = True`` has a lowered ``and``'s shape and says nothing.
+
+    Reaching the second guard with ``t`` true means ``p`` held or the first
+    test did, and ``p`` tests something else -- so ``a`` may still be a NaN.
+    The guard has to be a *name* for the match to get this far.
+    """
+    t = not fp.isnan(a)
+    p = b > 0
+    if p:
+        t = True
+    if t:
+        with fp.REAL:
+            return fp.fabs(a)
+    else:
+        return 0
+
+@fp.fpy
+def test_not_a_fold(xs: list[fp.Real]) -> fp.Real:
+    """An ``and`` that does not carry the accumulator is not a fold.
+
+    ``ok`` is the *last* element's predicate, so it says nothing about the
+    others and the reduction over them keeps every class.
+    """
+    ok = True
+    for x in xs:
+        p = fp.isfinite(x)
+        q = x != 0
+        ok = p and q
+    if ok:
+        with fp.REAL:
+            return max(xs)
+    else:
+        return 0
+
+@fp.fpy
+def _fill_first(ys: list[fp.Real]) -> fp.Real:
+    """A callee that stores through the list it is handed."""
+    ys[0] = fp.nan()
+    return 0
+
+@fp.fpy
+def test_elements_after_a_call(xs: list[fp.Real]) -> fp.Real:
+    """What the caller stored does not survive the call.
+
+    The callee may store through the same list, so every element fact has to be
+    dropped at the call -- the one shape that exercises that.
+    """
+    xs[0] = 1.0
+    y = _fill_first(xs)
+    return xs[0] + y
+
+@fp.fpy
+def test_finite_product(a: fp.Real, b: fp.Real) -> fp.Real:
+    """A product of two finite non-zeros, under whatever context the caller
+    brings.
+
+    Exactly it is finite; *rounded* it can be an infinity, so the class holds
+    only where the context is known.  The one shape that tells an exact claim
+    apart from a rounded one at run time.
+    """
+    if fp.isnan(a) or fp.isinf(a) or a == 0:
+        return 0
+    elif fp.isnan(b) or fp.isinf(b) or b == 0:
+        return 0
+    else:
+        return a * b
 
 @fp.fpy
 def test_pow(x: fp.Real, y: fp.Real) -> fp.Real:

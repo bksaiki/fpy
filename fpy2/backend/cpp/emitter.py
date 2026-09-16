@@ -1257,7 +1257,7 @@ class CppEmitter(Visitor):
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
-        if scalar_fits_in(src, want) or self._value_fits(at, want):
+        if scalar_fits_in(src, want):
             return
         raise CppEmitError(
             f'unsupported: storing a `{src.format()}` into a slot of '
@@ -1368,17 +1368,14 @@ class CppEmitter(Visitor):
 
         :meth:`CppStorage.of_expr` decides *whether* there is one -- a boolean
         and a non-numeric result have none -- and :meth:`_storage_for_expr`
-        gives it.  Both, so this cannot answer a different type from the one the
-        expression was emitted at: a class narrows there and not in `of_expr`,
-        and a caller comparing the two would then skip the conversion between
-        them.
+        gives it, so the two agree wherever a class narrows.  They still part
+        under a concrete rounding context, where :meth:`_dispatch` emits at the
+        context's storage and no class reaches it; see *Casts pile up where
+        every node picks its own type* in ``docs/todos/backend-cpp.md``.
         """
         if self.storage.of_expr(e) is None:
             return None
-        try:
-            return self._storage_for_expr(e)
-        except CppEmitError:
-            return None
+        return self._storage_for_expr(e)
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         # A function has one return type, so every `return` produces it: built
@@ -1736,34 +1733,17 @@ class CppEmitter(Visitor):
             )
         return ty
 
-    def _value_fits(self, e: Expr, want: CppScalar) -> bool:
-        """Whether every value *e* can take is representable in *want*.
-
-        An expression's storage is what its *operands* are cast to, which the
-        result need not need: ``max(logb(x), -126)`` computes at ``float``
-        because ``logb`` does, and is an integer in ``[-126, 127]``.  So ask the
-        value -- its own bound, narrowed by its class.
-        """
-        fmt = self.format_info.by_expr.get(e)
-        if fmt is None:
-            return False
-        try:
-            exact = choose_storage(fmt, self._value_class(e))
-        except StorageSelectionError:
-            return False
-        return isinstance(exact, CppScalar) and scalar_fits_in(exact, want)
-
     def _narrow_result(
         self, code: str, have: CppScalar, want: CppScalar, e: Expr,
     ) -> str:
         """*code*, computed at *have*, in the storage *e* reports.
 
         A selection returns an operand unrounded, so it computes at the join of
-        its operands -- which a class may have narrowed the *result* below.
+        its operands, which a class may have narrowed the *result* below.  That
+        narrowing is what chose *want*, so the conversion is exact and only
+        needs spelling.
         """
-        if have is want or not self._value_fits(e, want):
-            return self._maybe_cast(code, have, want, at=e, src=e)
-        return self._explicit_cast(code, want)
+        return code if have is want else self._explicit_cast(code, want)
 
     def _maybe_cast(
         self, arg: str, arg_ty: CppScalar, target_ty: CppScalar,
@@ -1998,10 +1978,10 @@ class CppEmitter(Visitor):
         Two passes, to prefer a narrower signature: first those whose output
         already *is* ``result_ty``, then those needing the downcast.
 
-        ``result_ty`` is :meth:`_result_storage`, so a class narrows which
-        signature is reached.  The operands are safe from it: a slot has to
-        receive what each operand's own storage holds, which is the check that
-        keeps a possibly-infinite operand out of an integer signature.
+        A class narrows both ``result_ty`` and the operand storages, so it
+        decides which signature is reached.  What keeps a possibly-infinite
+        operand out of an integer one is the slot check: a signature is only
+        taken where each slot receives what that operand's own storage holds.
         """
         try:
             result_ty = self._storage_for_expr(e)
@@ -2681,15 +2661,23 @@ class CppEmitter(Visitor):
                 at=e,
             )
         active = self._active_ctx_for(e)
+        arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         # the operands are cast to `target`, so it has to hold each of them;
         # the *result* is one of them and needs nothing wider
-        target = (
-            scalar_sup([self._scalar_storage_for_expr(a) for a in e.args])
-            if active is REAL else self._scalar_for_ctx(active, at=e)
-        )
+        try:
+            target = (
+                scalar_sup(arg_storages) if active is REAL
+                else self._scalar_for_ctx(active, at=e)
+            )
+        except StorageSelectionError as err:
+            # `scalar_sup` speaks in formats and has no source location
+            raise CppEmitError(
+                f'no storage holds every operand of {type(e).__name__}: '
+                f'{[s.format() for s in arg_storages]}',
+                at=e,
+            ) from err
         want = self._scalar_storage_for_expr(e)
         args = [self._visit_expr(a, ctx) for a in e.args]
-        arg_storages = [self._scalar_storage_for_expr(a) for a in e.args]
         casted = [
             self._call_arg(self._maybe_cast(a, s, target, at=e), src, target)
             for a, s, src in zip(args, arg_storages, e.args)
