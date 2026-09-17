@@ -132,6 +132,81 @@ class TestAgreesWithTheInterpreter:
         assert not bad, '; '.join(bad[:6])
 
 
+_FLOAT_DRIVER = r'''
+#include <cstdio>
+#include <cstring>
+#include <cstdint>
+#include <cstdlib>
+int main(int argc, char** argv) {
+    (void) argc;
+    uint32_t b = (uint32_t) std::strtoul(argv[1], nullptr, 16);
+    float x; std::memcpy(&x, &b, 4);
+    std::printf("%.17g\n", (double) q(x));
+    return 0;
+}
+'''
+
+# `int32_t`'s upper bound is not a `float`
+_INT32_ASSERT = fp.SINT32.with_params(overflow=A)
+_F32_INPUTS = [
+    2147483392.0, 2147483520.0, 2147483648.0, 2147483904.0,
+    -2147483648.0, -2147483904.0, 0.0, 1.0, -1.0,
+]
+
+
+class TestABoundTheOperandTypeCannotHold:
+    """A bound is compared in the *operand's* type.
+
+    ``int32_t``'s ``2**31 - 1`` is not a ``float``, so emitted as itself it
+    converted to ``2**31`` in the comparison -- the assertion admitted the one
+    value it exists to reject, and the ``static_cast`` that followed was
+    undefined.  Moving the bound inward loses nothing: no ``float`` lies
+    between ``2**31 - 1`` and the largest one below it.
+    """
+
+    def test_the_emitted_bound_is_one_the_operand_type_holds(self):
+        out = _emit(_INT32_ASSERT, arg_ctx=fp.FP32)
+        assert '2147483520' in out
+        assert '2147483647' not in out
+
+    def test_a_double_operand_keeps_the_exact_bound(self):
+        """`double` holds it, so nothing moves."""
+        out = _emit(_INT32_ASSERT, arg_ctx=fp.FP64)
+        assert '2147483647' in out
+
+    def test_value_for_value_at_the_boundary(self):
+        """``2**31`` is the value the old test admitted; the two below it are
+        the coverage the fix must not cost."""
+        if _CXX is None:
+            pytest.skip('no C++ compiler')
+        q = _round_fn(_INT32_ASSERT)
+        src = _emit(_INT32_ASSERT, arg_ctx=fp.FP32)
+        with tempfile.TemporaryDirectory() as td:
+            cpp, exe = Path(td) / 'm.cpp', Path(td) / 'm'
+            cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src + _FLOAT_DRIVER)
+            build = subprocess.run(
+                [_CXX, '-std=c++17', '-O0', '-o', str(exe), str(cpp)],
+                capture_output=True, text=True)
+            assert build.returncode == 0, build.stderr[-2000:]
+
+            bad = []
+            for x in _F32_INPUTS:
+                bits = struct.unpack('<I', struct.pack('<f', x))[0]
+                r = subprocess.run([str(exe), f'{bits:08x}'],
+                                   capture_output=True, text=True)
+                try:
+                    want, py_ok = float(q(fp.FP32.round(x))), True
+                except Exception:
+                    want, py_ok = None, False
+                if (r.returncode == 0) != py_ok:
+                    bad.append(f'{x:g}: cpp '
+                               f'{"accepts" if r.returncode == 0 else "aborts"}, '
+                               f'py {"accepts" if py_ok else "raises"}')
+                elif py_ok and float(r.stdout) != want:
+                    bad.append(f'{x:g}: cpp {r.stdout.strip()} vs py {want:g}')
+        assert not bad, '; '.join(bad[:6])
+
+
 class TestBoundAndSpecialsAreAsserted:
     def test_the_bound_is_asserted_in_integer_storage(self):
         """Integer storage is wider than the format, so the bound needs its own

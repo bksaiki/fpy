@@ -130,6 +130,8 @@ from ...ast.fpyast import (
 from ...ast.visitor import Visitor
 from ...function import Function
 from ...number import (
+    FP32,
+    FP64,
     REAL,
     RM,
     EFloatContext,
@@ -187,6 +189,31 @@ _NULLARY_CONSTS: dict[type[NullaryOp], Callable[..., Float]] = {
     ConstSqrt2: fpy_ops.const_sqrt2,
     ConstSqrt1_2: fpy_ops.const_sqrt1_2,
 }
+
+_FLOAT_CTXS: 'dict[CppScalar, Context]' = {
+    CppScalar.F32: FP32,
+    CppScalar.F64: FP64,
+}
+
+
+def _inward(v: Fraction, ty: 'CppScalar | None', *, upper: bool) -> Fraction:
+    """*v* moved to the nearest value *ty* represents, never outward.
+
+    A bound is compared in the *operand's* type, so one that type cannot hold is
+    converted before the comparison -- and converting it outward widens the test
+    past what it is checking.  ``int32_t``'s ``2**31 - 1`` against a ``float``
+    operand becomes ``2**31``, admitting the one value the test exists to
+    reject.
+
+    Exact rather than conservative: no value of *ty* lies strictly between *v*
+    and the result, so nothing the old test accepted is lost.  Integer operands
+    compare exactly already and are returned unchanged.
+    """
+    ctx = _FLOAT_CTXS.get(ty) if ty is not None else None
+    if ctx is None:
+        return v
+    return ctx.with_params(rm=RM.RTN if upper else RM.RTP).round(v).as_rational()
+
 
 def _value_cpp_type(v: Fraction) -> 'CppScalar | None':
     """The C++ type of the token *v* prints as, or ``None`` if none can hold it.
@@ -3663,6 +3690,10 @@ class CppEmitter(Visitor):
         """A C++ test that *operand*, of type *ty*, lies within *bounds*."""
         hi, lo = bounds
         integral = ty is not None and ty.is_integer()
+        # The comparison runs in *ty*, so a bound it cannot hold has to be one
+        # it can before the test says what it means (:func:`_inward`).
+        hi = _inward(hi, ty, upper=True)
+        lo = _inward(lo, ty, upper=False)
         # `fabs` would promote an integer operand to `double`, which is lossy past
         # 2**53; the comparisons below are exact in integer arithmetic
         if lo == -hi and not integral:
