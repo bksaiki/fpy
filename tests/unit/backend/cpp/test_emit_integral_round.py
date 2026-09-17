@@ -196,6 +196,65 @@ class TestIntegerStorage:
             _emit(fp.SINT32.with_params(rm=RM.RAZ, overflow=ASSERT))
 
 
+class TestWrappingOverflow:
+    """``WRAP`` is the one edge rule with a lowering, and only where the C++
+    type holds exactly the values the format does -- then the type's own
+    wrapping *is* the context's.
+
+    Reached for any supported mode now, the value being made integral before
+    the range test rather than by the cast.
+    """
+
+    def test_a_matching_format_wraps(self):
+        out = _emit(fp.SINT32.with_params(rm=RM.RTP))
+        assert 'std::ceil(x)' in out
+        assert 'std::fmod' in out
+        assert '4294967296.0' in out
+
+    def test_the_range_test_is_on_the_rounded_value(self):
+        """Under ``RTP`` an operand inside the type's range can round to one
+        outside it, and the cast in that arm would be undefined."""
+        out = _emit(fp.SINT32.with_params(rm=RM.RTP))
+        rounded = re.search(r'auto&& (\w+) = std::ceil\(x\);', out)
+        assert rounded, out
+        assert f'if ({rounded.group(1)} >= -2147483648.0' in out
+
+    def test_truncation_keeps_its_shape(self):
+        """``RTZ`` needs no call: the cast truncates and the reduction is handed
+        the truncation, so the operand's own range test is the rounded one."""
+        out = _emit(fp.SINT32)
+        assert 'if (x >= -2147483648.0' in out
+        assert 'std::fmod(std::trunc(x)' in out
+
+    def test_an_unsigned_format_wraps_at_its_own_width(self):
+        out = _emit(fp.UINT8.with_params(rm=RM.RTP))
+        assert 'std::ceil(x)' in out
+        assert '256.0' in out
+
+    def test_a_format_the_type_does_not_hold_exactly_is_refused(self):
+        """``int8_t`` runs to -128..127, so it would wrap a step further out
+        than a ``+-100`` format does."""
+        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
+                              overflow=fp.OverflowMode.WRAP)
+        with pytest.raises(CppCompileError, match='does not hold exactly'):
+            _emit(ctx)
+
+    def test_the_advice_does_not_name_a_pass_that_cannot_help(self):
+        """``unfold_overflow`` states an overflow as a constant, and a wrapping
+        rule has none -- its value varies with the operand."""
+        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
+                              overflow=fp.OverflowMode.WRAP)
+        with pytest.raises(CppCompileError) as exc:
+            _emit(ctx)
+        assert 'cannot state a wrapping rule' in str(exc.value)
+
+    def test_saturation_still_names_the_pass(self):
+        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
+                              overflow=fp.OverflowMode.SATURATE)
+        with pytest.raises(CppCompileError, match='unfold_overflow'):
+            _emit(ctx)
+
+
 class TestAssertions:
     """A context states which values it has no result for; each statement becomes
     an assertion.  The *bound* assertions live in `test_round_fixed_bound.py`,

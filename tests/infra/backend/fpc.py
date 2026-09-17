@@ -42,6 +42,7 @@ _ignore = [
 
     # multiple return statements (FPCore is single-exit by design)
     'test_round_int_up',
+    'test_round_int_up_wrapping',
     'test_round_int_down',
     'test_round_int_nearest_away',
     'test_round_int_nearest_even',

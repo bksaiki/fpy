@@ -64,16 +64,31 @@ perform, compared against the interpreter by `tests.infra.backend.cpp --mode
 run`. Each guards its operand: a NaN or an infinity has no integer to convert
 to, and the generated pool contains both.
 
+## Wrapping
+
+`WRAP` is the one edge rule with a lowering, and the only rule with no
+strategy-level alternative: `unfold_overflow` states an overflow as a *constant*
+substitution, and a wrapping value varies with the operand, so it declines by
+design. It is also the default `with_params` leaves in place.
+
+`_emit_wrapping_float_to_integer` performs it, and was gated on `is_native_ctx`
+-- which answers "does the op table dispatch on this context", a question that
+happens to coincide on the native set but is not the one wrapping asks. The gate
+is now `_type_range_is_the_format`: does the C++ type hold exactly the values
+the format does, which is what makes the type's own wrapping the context's. A
+storage merely wide enough would wrap a step further out.
+
+The operand is rounded before the range test and both arms, for the same reason
+the bound is: under `RTP` an operand inside the type's range can round to one
+outside it, and the cast in that arm would be undefined. `RTZ` keeps its shape,
+the cast truncating and the reduction being handed the truncation.
+
+A format the type does not hold exactly is still refused, and says so rather
+than claiming the storage is wider -- for `SINT32` the two coincide, which the
+old message denied -- and it no longer advises a pass that cannot help.
+
 ## Left over
 
-A context whose *range* matches a C++ type but whose mode is not `RTZ` cannot
-reach the wrapping lowering: `_emit_wrapping_float_to_integer` implements
-float-to-integer `WRAP` but is gated on `is_native_ctx`, which keys on the whole
-context including `rm`. So `fp.SINT32.with_params(rm=RM.RTP)` is refused for its
-*overflow* rule although both halves of what it needs exist. The two workarounds
-are `overflow=ASSERT` and `unfold_overflow`.
-
-That refusal also mis-states its reason for this case -- it says the storage is
-wider than the format, where for `SINT32` the two coincide exactly; what the
-cast actually cannot do is wrap, C++ promising that only for integer sources.
-And it advises `unfold_overflow`, which leaves such a program unchanged.
+`SATURATE` and `OVERFLOW` remain behaviour the backend does not perform.
+`unfold_overflow` handles `SATURATE`; `OVERFLOW` has no route, though an integer
+format represents no infinity for it to produce.

@@ -3153,23 +3153,61 @@ class CppEmitter(Visitor):
             'rounding is undefined for this value')
         return operand
 
+    @staticmethod
+    def _overflow_advice(mode: OverflowMode) -> str:
+        """What to run instead, for an edge rule with no lowering.
+
+        ``unfold_overflow`` states the rule as program text, which it can only
+        do where the overflow *value* is a constant -- wrapping is the operand
+        reduced modulo the width, so it has none to state.
+        """
+        if mode is OverflowMode.WRAP:
+            return (
+                'Give the context a format one of the integer types holds '
+                'exactly; `fpy2.strategies.unfold_overflow` cannot state a '
+                'wrapping rule, whose value varies with the operand.'
+            )
+        return (
+            'Run `fpy2.strategies.unfold_overflow` to state the rule as '
+            'program text.'
+        )
+
+    def _type_range_is_the_format(
+        self, ctx: MPBFixedContext, ty: CppScalar,
+    ) -> bool:
+        """Whether *ty* holds exactly the values *ctx*'s format does.
+
+        What makes the C++ type's own wrapping the *context*'s wrapping.  A
+        storage merely wide enough is not enough: it would wrap a step further
+        out than the format does.
+        """
+        bits = ty.int_bits()
+        if bits is None:
+            return False
+        hi, lo = self._ctx_bounds(ctx)
+        if ty.is_signed():
+            return hi == 2 ** (bits - 1) - 1 and lo == -(2 ** (bits - 1))
+        return hi == 2 ** bits - 1 and lo == 0
+
     def _emit_wrapping_float_to_integer(
         self, e, arg: str, arg_ty, target_ty: CppScalar,
     ) -> str | None:
         """*arg* converted to *target_ty* modulo its width, or `None`.
 
-        `None` unless this is a float-to-integer conversion under a native
-        ``WRAP`` context; other overflow rules are asserted or refused upstream.
+        `None` unless this is a float-to-integer conversion under a ``WRAP``
+        context whose format the type holds exactly; other overflow rules are
+        asserted or refused upstream.
 
         A ``static_cast`` cannot do this.  C++ promises wrapping only when the
         source is already an integer; converting a float too big for the
         destination is undefined behavior, and arm64 clamps where x86-64 does
-        not.  Native contexts only, because this wraps at the C++ type's width,
-        which is the context's own width only when the two ranges agree.
+        not.
 
-        An in-range operand keeps the plain cast; the reduction sits behind a
-        branch.  ``std::fmod`` is exact, so only the sign needs fixing -- see
-        the comments below.
+        The operand is rounded first, and the range test and both arms are on
+        that -- under ``RTP`` an operand inside the type's range can round to
+        one outside it.  An in-range value keeps the plain cast; the reduction
+        sits behind a branch.  ``std::fmod`` is exact, so only the sign needs
+        fixing -- see the comments below.
         """
         if arg_ty is None or not arg_ty.is_float():
             return None
@@ -3177,11 +3215,11 @@ class CppEmitter(Visitor):
         if bits is None:
             return None
         active = self._active_ctx_for(e)
-        if not is_native_ctx(active):
-            return None
         if not isinstance(active, MPBFixedContext):
             return None
         if active.overflow is not OverflowMode.WRAP:
+            return None
+        if not self._type_range_is_the_format(active, target_ty):
             return None
 
         ty = target_ty.format()
@@ -3192,17 +3230,26 @@ class CppEmitter(Visitor):
         lo, hi = (f'-{half}', half) if signed else ('0.0', modulus)
 
         operand = self._bind_operand(arg)
+        if active.rm is RM.RTZ:
+            # the cast truncates and the reduction is handed the truncation
+            # below, so testing the operand is testing the rounded value
+            rounded = operand
+            reduce_arg = f'std::trunc({operand})'
+        else:
+            rounded = self._bind_operand(
+                f'{self._INTEGRAL_ONE_CALL[active.rm]}({operand})')
+            reduce_arg = rounded
         out = self._fresh_temp()
         rem = self._fresh_temp()
         self.writer.add_line(f'{ty} {out};')
-        self.writer.add_line(f'if ({operand} >= {lo} && {operand} < {hi}) {{')
+        self.writer.add_line(f'if ({rounded} >= {lo} && {rounded} < {hi}) {{')
         self.writer.indent()
-        self.writer.add_line(f'{out} = static_cast<{ty}>({operand});')
+        self.writer.add_line(f'{out} = static_cast<{ty}>({rounded});')
         self.writer.dedent()
         self.writer.add_line('} else {')
         self.writer.indent()
         self.writer.add_line(
-            f'double {rem} = std::fmod(std::trunc({operand}), {modulus});')
+            f'double {rem} = std::fmod({reduce_arg}, {modulus});')
         if signed:
             # Exact in the double: each arm subtracts values within a factor
             # of two, landing in [-2**(bits-1), 2**(bits-1)).
@@ -3403,16 +3450,30 @@ class CppEmitter(Visitor):
                 at=e,
             )
         if isinstance(active, MPBFixedContext):
-            # An edge *rule* is behavior, and this lowering implements none of
-            # it.  `ASSERT` alone is a claim that the edge is never reached,
-            # which an assertion states exactly.
+            # `WRAP` is the one edge rule with a lowering, and only where the
+            # type holds exactly the format: then the type's own wrapping *is*
+            # the context's.
+            if (
+                active.overflow is OverflowMode.WRAP
+                and self._type_range_is_the_format(active, target_ty)
+            ):
+                arg_ty = self._cast_arg_type(e)
+                guarded = self._guard_float_to_integer(
+                    arg, arg_ty, target_ty, e.arg)
+                wrapped = self._emit_wrapping_float_to_integer(
+                    e, guarded, arg_ty, target_ty)
+                if wrapped is not None:
+                    return wrapped
+            # Any other edge rule is behavior this lowering does not perform.
+            # `ASSERT` alone needs none: it is a claim the edge is never
+            # reached, which an assertion states exactly.
             if active.overflow is not OverflowMode.ASSERT:
                 raise CppEmitError(
                     f'overflow mode {active.overflow} under `{active}` has no '
-                    f'C++ analogue: `{target_ty.format()}` is wider than the '
-                    'format, so neither its range nor its wrapping reproduces '
-                    'the rule.  Run `fpy2.strategies.unfold_overflow` to state '
-                    'the rule as program text.',
+                    f'C++ analogue: `{target_ty.format()}` does not hold '
+                    'exactly the values the format does, so its own wrapping '
+                    'is not the rule.  '
+                    + self._overflow_advice(active.overflow),
                     at=e,
                 )
             bounds: tuple[Fraction, Fraction] | None = self._ctx_bounds(active)

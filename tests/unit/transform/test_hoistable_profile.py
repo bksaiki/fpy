@@ -20,7 +20,7 @@ from fpy2.transform import ANF, CompToLoop, Hoistable
 from fpy2.transform.path import walk_stmts
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-EXPECTED_FUNCTIONS = 247
+EXPECTED_FUNCTIONS = 248
 """Corpus size.  A count only means something while this holds."""
 
 _ELEMENT = "a comprehension's element runs once per iteration"
@@ -52,8 +52,8 @@ a fixpoint rather than a sequence.
 The other two are the positions nothing lowers at all.
 """
 
-EXPECTED_STATEMENTS = 910
-EXPECTED_GROWTH = 117
+EXPECTED_STATEMENTS = 914
+EXPECTED_GROWTH = 120
 """Statements this pass adds over the whole corpus: each lowering's expansion,
 the second copy of each rotated condition, and the prefix rule's temporaries.
 The whole cost of being able to hoist anywhere."""

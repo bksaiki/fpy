@@ -57,6 +57,22 @@ def test_round_int_nearest_even(x: fp.Real) -> fp.Real:
         with _INT_RNE:
             return fp.round(x)
 
+_INT_RTP_WRAP = fp.SINT32.with_params(rm=fp.RM.RTP)
+
+@fp.fpy
+def test_round_int_up_wrapping(x: fp.Real) -> fp.Real:
+    """`round` toward positive infinity into integer storage that wraps.
+
+    ``int32_t`` holds exactly what the format does, so the type's own wrapping
+    is the context's -- reduced from the *rounded* value, which under this mode
+    can sit a step outside the range its operand was inside.
+    """
+    if fp.isnan(x) or fp.isinf(x):
+        return 0
+    else:
+        with _INT_RTP_WRAP:
+            return fp.round(x)
+
 @fp.fpy
 def test_logb(x: fp.Real) -> fp.Real:
     """Example function for `logb`."""
