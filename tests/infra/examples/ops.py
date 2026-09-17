@@ -4,6 +4,59 @@ Example functions for each operation.
 
 import fpy2 as fp
 
+_ASSERT = fp.OverflowMode.ASSERT
+
+_INT_RTP = fp.SINT32.with_params(rm=fp.RM.RTP, overflow=_ASSERT)
+_INT_RTN = fp.SINT32.with_params(rm=fp.RM.RTN, overflow=_ASSERT)
+_INT_RNA = fp.SINT32.with_params(rm=fp.RM.RNA, overflow=_ASSERT)
+_INT_RNE = fp.SINT32.with_params(rm=fp.RM.RNE, overflow=_ASSERT)
+
+# Each is one mode the cast does not perform: C++ integer conversion truncates,
+# so the value is made integral in the float type first and the cast only
+# converts it.  Each guards its operand, a NaN and an infinity having no integer
+# to convert to.  The four differ only on which value they land on, which is
+# what a bit-exact run against the interpreter checks.
+
+@fp.fpy
+def test_round_int_up(x: fp.Real) -> fp.Real:
+    """`round` toward positive infinity into integer storage."""
+    if fp.isnan(x) or fp.isinf(x):
+        return 0
+    else:
+        with _INT_RTP:
+            return fp.round(x)
+
+@fp.fpy
+def test_round_int_down(x: fp.Real) -> fp.Real:
+    """`round` toward negative infinity into integer storage."""
+    if fp.isnan(x) or fp.isinf(x):
+        return 0
+    else:
+        with _INT_RTN:
+            return fp.round(x)
+
+@fp.fpy
+def test_round_int_nearest_away(x: fp.Real) -> fp.Real:
+    """`round` to nearest, ties away from zero, into integer storage."""
+    if fp.isnan(x) or fp.isinf(x):
+        return 0
+    else:
+        with _INT_RNA:
+            return fp.round(x)
+
+@fp.fpy
+def test_round_int_nearest_even(x: fp.Real) -> fp.Real:
+    """`round` to nearest, ties to even, into integer storage.
+
+    ``std::nearbyint`` follows the live ``fenv`` mode, so this also pins that
+    the kernel is entered under ``FE_TONEAREST``.
+    """
+    if fp.isnan(x) or fp.isinf(x):
+        return 0
+    else:
+        with _INT_RNE:
+            return fp.round(x)
+
 @fp.fpy
 def test_logb(x: fp.Real) -> fp.Real:
     """Example function for `logb`."""

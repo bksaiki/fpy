@@ -58,6 +58,22 @@ Relax `_validate_ctx_storage`'s integer check from `== RTZ` to membership.
 Carry the `FE_TONEAREST` precondition. Unit tests per mode, plus the case where
 `RTP` rounds an in-bounds operand out of bounds.
 
-**2. Bit-exact witnesses.** Corpus programs under `tests/infra/examples/` for
-several modes, so `tests.infra.backend.cpp --mode run` compares them against the
-interpreter. That is the check that decides whether this is right.
+**2. Bit-exact witnesses.** `test_round_int_up` / `_down` / `_nearest_away` /
+`_nearest_even` in `tests/infra/examples/ops.py`, one per mode the cast does not
+perform, compared against the interpreter by `tests.infra.backend.cpp --mode
+run`. Each guards its operand: a NaN or an infinity has no integer to convert
+to, and the generated pool contains both.
+
+## Left over
+
+A context whose *range* matches a C++ type but whose mode is not `RTZ` cannot
+reach the wrapping lowering: `_emit_wrapping_float_to_integer` implements
+float-to-integer `WRAP` but is gated on `is_native_ctx`, which keys on the whole
+context including `rm`. So `fp.SINT32.with_params(rm=RM.RTP)` is refused for its
+*overflow* rule although both halves of what it needs exist. The two workarounds
+are `overflow=ASSERT` and `unfold_overflow`.
+
+That refusal also mis-states its reason for this case -- it says the storage is
+wider than the format, where for `SINT32` the two coincide exactly; what the
+cast actually cannot do is wrap, C++ promising that only for integer sources.
+And it advises `unfold_overflow`, which leaves such a program unchanged.
