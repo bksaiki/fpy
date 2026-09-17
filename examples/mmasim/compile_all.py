@@ -23,6 +23,8 @@ from utils import make_fma_dpa
 
 import fpy2 as fp
 import fpy2.strategies as st
+from fpy2.strategies import TransformDeclined
+from fpy2.transform import CompToLoop, RescaleFixed, Simplify
 from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 
 _L = fp.types.ListType
@@ -87,18 +89,33 @@ DESIGNS = [
 ]
 
 
-def compile_design(build) -> str:
-    """The C++ for one design; raises whatever refused it.
+def _prepare(_module, func):
+    """Put one function in the shape the backend needs.
 
     `comp_to_loop` precedes `rescale_fixed`: the latter emits the scale-in and
     scale-out as statements, which a rounding inside a comprehension has no
-    slot for.
+    slot for.  A transform with nothing to do declines, which is not a
+    failure.
+    """
+    for step in (CompToLoop.apply, RescaleFixed.apply, Simplify.apply):
+        try:
+            func = step(func)
+        except TransformDeclined:
+            pass
+    return func
+
+
+def compile_design(build) -> str:
+    """The C++ for one design; raises whatever refused it.
+
+    Every function is prepared, not just the entry: a model's rounding at a
+    run-time position usually sits in a helper, and a transform applied to
+    the caller alone never reaches it.
     """
     func, arg_types = build()
-    f = st.monomorphize(func, args=arg_types)
-    f = st.simplify(st.rescale_fixed(st.comp_to_loop(f)))
     mod = fp.Module()
-    mod.add(f)
+    mod.add(st.monomorphize(func, args=arg_types))
+    mod = mod.map(_prepare)
     return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS).compile_module(mod)
 
 

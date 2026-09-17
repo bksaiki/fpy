@@ -88,10 +88,10 @@ def flush_subnormal_signed(x, tiny):
 ###########################################################
 # Model factories
 
-def make_e_fdpa(l_max: int):
+def make_e_fdpa(L: int):
     """
     Builds a Phi_E-FDPA dot-product-accumulate (Algorithm 6), chained
-    L = min(K, Lmax) elements at a time; CDNA1 BF16 (L = 2) and FP16
+    `L` elements at a time; CDNA1 BF16 (L = 2) and FP16
     (L = 4) MFMA instructions.
 
     Each block computes `c + sum a_k * b_k` exactly and rounds once
@@ -115,14 +115,15 @@ def make_e_fdpa(l_max: int):
 
     @fp.fpy(ctx=fp.REAL)
     def e_fdpa(A, B, c):
-        """Chain of E-FDPAs (Algorithm 5)."""
-        k = len(A)
-        L = min(k, l_max)
+        """Chain of E-FDPAs (Algorithm 5).
 
+        Algorithm 5 takes a full block of `L` each step, which assumes
+        `L` divides `K` -- as every instruction's vector length does.
+        """
+        k = len(A)
         d = c
         for i in range(0, k, L):
-            hi = min(i + L, k)
-            d = e_fdpa_block(A[i:hi], B[i:hi], d)
+            d = e_fdpa_block(A[i:i + L], B[i:i + L], d)
         return d
     return e_fdpa
 
@@ -178,11 +179,11 @@ def make_ftz_addmul(a_ctx: fp.EFloatContext, P: int):
 
     return ftz_addmul
 
-def make_tr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
+def make_tr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
                  F: int = 24, F2: int = 31, rho: fp.Context = RNE_FP32):
     """
     Builds a Phi_TR-FDPA dot-product-accumulate (Algorithm 10),
-    chained L = min(K, Lmax) elements at a time; CDNA3 TF32 (L = 4)
+    chained `L` elements at a time; CDNA3 TF32 (L = 4)
     and BF16/FP16 (L = 8) MFMA instructions.
 
     Each block truncates the exact products at F fractional bits, then
@@ -224,22 +225,23 @@ def make_tr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
 
     @fp.fpy(ctx=fp.REAL)
     def tr_fdpa(A, B, c):
-        """Chain of TR-FDPAs (Algorithm 5)."""
-        k = len(A)
-        L = min(k, l_max)
+        """Chain of TR-FDPAs (Algorithm 5).
 
+        Algorithm 5 takes a full block of `L` each step, which assumes
+        `L` divides `K` -- as every instruction's vector length does.
+        """
+        k = len(A)
         d = c
         for i in range(0, k, L):
-            hi = min(i + L, k)
-            d = tr_fdpa_block(A[i:hi], B[i:hi], d)
+            d = tr_fdpa_block(A[i:i + L], B[i:i + L], d)
         return d
     return tr_fdpa
 
-def make_gtr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
+def make_gtr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
                   F: int = 24, F2: int = 31, rho: fp.Context = RNE_FP32):
     """
     Builds a Phi_GTR-FDPA dot-product-accumulate (Algorithm 11),
-    chained L = min(K, Lmax) elements at a time; CDNA3 FP8 (L = 16,
+    chained `L` elements at a time; CDNA3 FP8 (L = 16,
     `fp.S1E4M3`/`fp.S1E5M2`) MFMA instructions.
 
     Like TR-FDPA, but the truncated fused sum is computed separately
@@ -298,14 +300,15 @@ def make_gtr_fdpa(l_max: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
 
     @fp.fpy(ctx=fp.REAL)
     def gtr_fdpa(A, B, c):
-        """Chain of GTR-FDPAs (Algorithm 5)."""
-        k = len(A)
-        L = min(k, l_max)
+        """Chain of GTR-FDPAs (Algorithm 5).
 
+        Algorithm 5 takes a full block of `L` each step, which assumes
+        `L` divides `K` -- as every instruction's vector length does.
+        """
+        k = len(A)
         d = c
         for i in range(0, k, L):
-            hi = min(i + L, k)
-            d = gtr_fdpa_block(A[i:hi], B[i:hi], d)
+            d = gtr_fdpa_block(A[i:i + L], B[i:i + L], d)
         return d
     return gtr_fdpa
 
