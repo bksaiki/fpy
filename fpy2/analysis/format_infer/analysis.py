@@ -594,13 +594,12 @@ def _instantiate_real_at_ctx(ty: Type, ctx: Context) -> Type:
     callee body sees concrete inputs instead of ``REAL_FORMAT``
     everywhere.
 
-    A :class:`RealType` with an *already-concrete* ``ctx`` keeps its
-    own context — explicit annotations win over caller defaults.
-    Unknown leaf types pass through unchanged (the caller absorbs the
-    fallback)."""
+    A :class:`RealType` with an *already-pinned* format keeps it —
+    explicit annotations win over caller defaults.  Unknown leaf types pass
+    through unchanged (the caller absorbs the fallback)."""
     match ty:
         case RealType():
-            if isinstance(ty.ctx, Context):
+            if ty.fmt is not None:
                 return ty
             return RealType(ctx)
         case VarType():
@@ -643,13 +642,9 @@ def _bound_of_type(ty: Type) -> FormatBound:
     """
     match ty:
         case RealType():
-            # If the type carries a concrete rounding context, the format
-            # is pinned by that context — typically the case after a
-            # monomorphization pass.  Otherwise (symbolic or absent ctx)
-            # the format is unknown and we report the scalar top.
-            if isinstance(ty.ctx, Context):
-                return ty.ctx.format()
-            return REAL_FORMAT
+            # A pinned format is typically what a monomorphization pass left;
+            # without one the format is unknown and we report the scalar top.
+            return REAL_FORMAT if ty.fmt is None else ty.fmt
         case TupleType():
             return TupleFormat(tuple(_bound_of_type(t) for t in ty.elts))
         case ListType():

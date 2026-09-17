@@ -39,6 +39,7 @@ from collections.abc import Iterable
 from typing import TypeAlias
 
 from .number import Context
+from .number.context.format import Format
 from .utils import NamedId, default_repr
 
 __all__ = [
@@ -167,12 +168,17 @@ class BoolType(Type):
 
 
 class RealType(Type):
-    """Real number type."""
+    """Real number type.
 
-    ctx: ContextParam | None
+    Carries the :class:`Format` its values are drawn from, if known.  A
+    :class:`Context` is accepted and reduced to its format: a context says how
+    to *round into* a format, which a value that already exists has no use for.
+    """
 
-    def __init__(self, ctx: ContextParam | None = None):
-        self.ctx = ctx
+    fmt: Format | None
+
+    def __init__(self, fmt: Format | Context | None = None):
+        self.fmt = fmt.format() if isinstance(fmt, Context) else fmt
 
     def __eq__(self, other):
         return isinstance(other, RealType)
@@ -181,29 +187,25 @@ class RealType(Type):
         return hash(type(self))
 
     def is_context_type(self):
-        return self.ctx is not None
+        return self.fmt is not None
 
     def format(self) -> str:
-        if self.ctx is None:
+        if self.fmt is None:
             return "real"
         else:
-            return f"real[{self.ctx}]"
+            return f"real[{self.fmt}]"
 
     def free_type_vars(self) -> set[NamedId]:
         return set()
 
     def free_context_vars(self) -> set[NamedId]:
-        if isinstance(self.ctx, NamedId):
-            return { self.ctx }
-        else:
-            return set()
+        return set()
 
     def subst_type(self, subst: dict[NamedId, Type]) -> Type:
         return self
 
     def subst_context(self, subst: dict[NamedId, ContextParam]) -> Type:
-        ctx = subst.get(self.ctx, self.ctx) if isinstance(self.ctx, NamedId) else self.ctx
-        return RealType(ctx)
+        return self
 
 
 class ContextType(Type):

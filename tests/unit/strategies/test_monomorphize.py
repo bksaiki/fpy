@@ -62,21 +62,19 @@ class TestMonomorphizeArgs:
         out = monomorphize(_add_third, args=[RealType(fp.FP32)])
         ann = out.ast.args[0].type
         assert isinstance(ann, RealTypeAnn)
-        assert ann.ctx is not None
-        assert ann.ctx.is_equiv(fp.FP32)
+        assert ann.fmt == fp.FP32.format()
 
     def test_list_arg(self):
         out = monomorphize(_first, args=[ListType(RealType(fp.FP32))])
         ann = out.ast.args[0].type
         assert isinstance(ann, ListTypeAnn)
         assert isinstance(ann.elt, RealTypeAnn)
-        assert ann.elt.ctx is not None
-        assert ann.elt.ctx.is_equiv(fp.FP32)
+        assert ann.elt.fmt == fp.FP32.format()
 
     def test_none_entry_unchanged(self):
         out = monomorphize(_mul, args=[RealType(fp.FP32), None])
         ann0 = out.ast.args[0].type
-        assert isinstance(ann0, RealTypeAnn) and ann0.ctx is not None
+        assert isinstance(ann0, RealTypeAnn) and ann0.fmt is not None
         assert out.ast.args[1].type.is_equiv(_mul.ast.args[1].type)
 
     def test_arity_mismatch_raises(self):

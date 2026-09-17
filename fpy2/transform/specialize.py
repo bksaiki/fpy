@@ -205,9 +205,7 @@ def _type_to_fmt(t: Type | None) -> FormatBound:
     if t is None or isinstance(t, BoolType):
         return None
     if isinstance(t, RealType):
-        if t.ctx is None or not isinstance(t.ctx, Context):
-            return None
-        return t.ctx.format()
+        return t.fmt
     if isinstance(t, TupleType):
         return TupleFormat(tuple(_type_to_fmt(e) for e in t.elts))
     if isinstance(t, ListType):

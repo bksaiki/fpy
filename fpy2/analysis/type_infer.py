@@ -146,10 +146,10 @@ def _ann_to_type(ty: TypeAnn | None, fresh_var: Callable[[], VarType]) -> Type:
             # boolean type
             return BoolType()
         case RealTypeAnn():
-            # Preserve the annotated context so that downstream analyses
-            # (notably format inference) can recover the format pinned by
-            # a monomorphizing pass via ``RealType.ctx``.
-            return RealType(ty.ctx)
+            # Preserve the annotated format so that downstream analyses
+            # (notably format inference) can read what a monomorphizing pass
+            # pinned.
+            return RealType(ty.fmt)
         case TupleTypeAnn():
             # tuple type
             elt_tys = [_ann_to_type(elt, fresh_var) for elt in ty.elts]
