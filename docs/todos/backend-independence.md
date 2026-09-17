@@ -27,6 +27,13 @@ in order of how much it was worth:
    see.
 3. **Reuse by a second backend** — genuine, but contingent on a second backend
    existing. Do not let it justify work on its own.
+   [backend-triton.md](backend-triton.md) is the first candidate, and it
+   inverts the relationship: its §5 (uniformity) and §6 (if-conversion) are new
+   *backend-independent* passes that a SIMD target needs and this one does not,
+   so they belong to this pipeline rather than to that backend. Its §8 argues
+   the same for tensorization. That still does not license work under (3)
+   alone — it means a section promising (3) now has somewhere concrete to be
+   judged against.
 
 Judge a candidate section by (1) and (2). A section that only promises (3) can
 wait.

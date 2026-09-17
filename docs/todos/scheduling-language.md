@@ -136,7 +136,13 @@ the rewritten program, and forwarding does not carry them (see item 3).
 
 ## 7. The recipe as a parameterized function
 
-Gap 2 of [native-lowering-roadmap.md](native-lowering-roadmap.md). Exo 2's
+Gap 2 of [native-lowering-roadmap.md](native-lowering-roadmap.md), and now
+also §8 of [backend-triton.md](backend-triton.md), which argues that
+tensorization is this item rather than backend work: the tiling decisions are
+rewrites from FPy source to FPy source (`split` and `unroll_for` already
+exist), only tile-shape legality and the spellings are target facts, and a
+tiled program stays interpretable — so the whole layer is testable without a
+GPU. Exo 2's
 `optimize_level_1` is the model: one entry point taking the function, a
 location, and a target descriptor object, built by composing the public
 operators, with deviations as hooks rather than policy baked into transforms.
@@ -158,6 +164,10 @@ needs a second import from the transform layer.
   patterns already provide that language for free.
 - **Cost estimation and autotuning.** The objective here (exactness, then
   code shape) is not a scalar; Roly-poly also found cost hints double-edged —
-  users follow them blindly.
+  users follow them blindly. Unchanged by
+  [backend-triton.md](backend-triton.md), which reaches the same conclusion
+  from the other side: a tile width is a number FPy has no basis to choose, so
+  it emits one as a `tl.constexpr` and lets `triton.autotune` pick it. Borrow
+  a target's tuner; do not build one.
 - **A GUI.** Items 1 and 2 are the textual versions of the two things its
   study showed actually helped.
