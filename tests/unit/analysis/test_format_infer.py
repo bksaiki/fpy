@@ -3350,3 +3350,81 @@ class TestMulByZeroNarrowsToTheOperand:
         g = monomorphize(f, args=[fp.types.RealType(fp.FP32)])
         fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
         assert fmt == SetFormat(frozenset((Fraction(0), NEG_ZERO, Special.NAN)))
+
+
+class TestMinMaxOverKnownValues:
+    """`min`/`max` return one operand, but *which* is decided by the order --
+    so over known values the result is the pointwise selection, not the union
+    the join gives."""
+
+    def test_a_clamp_against_a_constant_is_exact(self):
+        @fp.fpy(ctx=fp.REAL)
+        def g(xs):
+            n = len(xs)
+            return min(n, 4), max(n, 4)
+
+        g = monomorphize(g, args=[fp.types.ListType(fp.types.RealType(fp.FP16), 8)])
+        fi = FormatInfer.analyze(g.ast)
+        assert _fmt_of(fi, 'min(n, 4)') == SetFormat(frozenset((Fraction(4),)))
+        assert _fmt_of(fi, 'max(n, 4)') == SetFormat(frozenset((Fraction(8),)))
+
+    def test_it_bounds_a_loop_variable_and_its_clamp(self):
+        """`L` exact makes `range(0, k, L)` concrete, which bounds `i`, which
+        bounds the clamp -- the chain that leaves a slice length unknown."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(xs):
+            k = len(xs)
+            L = min(k, 4)
+            acc = 0
+            for i in range(0, k, L):
+                hi = min(i + L, k)
+                acc = acc + hi
+            return acc
+
+        g = monomorphize(g, args=[fp.types.ListType(fp.types.RealType(fp.FP16), 8)])
+        fi = FormatInfer.analyze(g.ast)
+        seen = {str(d.name): v for d, v in fi.by_def.items()}
+        assert seen['L'] == SetFormat(frozenset((Fraction(4),)))
+        assert seen['hi'] == SetFormat(frozenset((Fraction(4), Fraction(8))))
+
+    def test_a_tied_zero_admits_both_signs(self):
+        """The interpreter breaks the `min(+0.0, -0.0)` tie by sign only when
+        both operands are floats -- a literal arrives as a `Fraction` and the
+        `-0.0` survives -- so a format that claimed the IEEE answer would drop
+        a value the program produces."""
+        from fpy2.analysis.format_infer.analysis import _set_pick
+        pos, neg = Fraction(0), NEG_ZERO
+        both = frozenset((pos, neg))
+        for least in (True, False):
+            assert _set_pick(pos, neg, least=least) == both
+            assert _set_pick(neg, pos, least=least) == both
+
+    def test_a_nan_propagates(self):
+        """Unlike IEEE-754 `minNum`, which returns the non-NaN operand."""
+        from fpy2.analysis.format_infer.analysis import _set_pick
+        nan = frozenset((Special.NAN,))
+        assert _set_pick(Special.NAN, Fraction(1), least=True) == nan
+        assert _set_pick(Fraction(1), Special.NAN, least=True) == nan
+        assert _set_pick(Special.NAN, Fraction(1), least=False) == nan
+
+    def test_infinities_order_as_extremes(self):
+        from fpy2.analysis.format_infer.analysis import _set_pick
+        one = frozenset((Fraction(1),))
+        assert _set_pick(Special.POS_INF, Fraction(1), least=True) == one
+        assert _set_pick(Special.NEG_INF, Fraction(1), least=True) \
+            == frozenset((Special.NEG_INF,))
+        assert _set_pick(Special.POS_INF, Fraction(1), least=False) \
+            == frozenset((Special.POS_INF,))
+
+    def test_a_signed_zero_the_interpreter_keeps_is_not_dropped(self):
+        """The regression this guards: `x * 0` can be `-0.0`, and `max` with a
+        literal leaves it standing."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real):
+            z = x * 0
+            return max(z, 0.0)
+
+        g = monomorphize(g, args=[fp.types.RealType(fp.FP32)])
+        fi = FormatInfer.analyze(g.ast)
+        fmt = _fmt_of(fi, 'max(z, 0)')
+        assert isinstance(fmt, SetFormat) and NEG_ZERO in fmt.values

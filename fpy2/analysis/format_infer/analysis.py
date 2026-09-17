@@ -899,6 +899,35 @@ def _set_mul(a: SetValue, b: SetValue) -> SetValue:
     return NEG_ZERO if neg else Fraction(0)
 
 
+def _set_order(v: SetValue) -> tuple[int, Fraction]:
+    """Numeric order on :data:`SetValue`.  The two zeros tie; a NaN has no
+    place here, and callers dispatch on it first."""
+    if isinstance(v, Special):
+        return (-1 if v is Special.NEG_INF else 1, Fraction(0))
+    if isinstance(v, NegZero):
+        return (0, Fraction(0))
+    return (0, v)
+
+
+def _set_pick(a: SetValue, b: SetValue, *, least: bool) -> 'frozenset[SetValue]':
+    """What ``min``/``max`` may return for *a* and *b*.
+
+    Both, where they tie: the only tie is between the two zeros, and the
+    interpreter breaks it by sign *only when both operands are floats* --
+    a literal arrives as a `Fraction` and leaves a `-0.0` standing.  A format
+    cannot tell those apart, so it admits either.  Claiming the IEEE
+    tie-break would drop a `-0.0` the program can produce, and
+    ``has_neg_zero`` is what keeps a bound off the integer rungs of the C++
+    ladder.
+    """
+    if a is Special.NAN or b is Special.NAN:
+        return frozenset((Special.NAN,))
+    ka, kb = _set_order(a), _set_order(b)
+    if ka == kb:
+        return frozenset((a, b))
+    return frozenset((a if (ka < kb) == least else b,))
+
+
 _SET_BINOPS: dict[Any, Callable[[SetValue, SetValue], SetValue]] = {
     operator.add: _set_add,
     operator.sub: _set_sub,
@@ -2437,9 +2466,23 @@ class _FormatInferInstance(Visitor):
                 # operand, so the format joins operand formats (no scope
                 # widening; mirrors :meth:`_visit_if_expr`).
                 joined = reduce(self._join, arg_fmts)
-                if isinstance(joined, SetFormat):
-                    # a union of known values is already exact
-                    return joined
+                sets = [f for f in arg_fmts if isinstance(f, SetFormat)]
+                if len(sets) == len(arg_fmts):
+                    # the result is one operand, but *which* is decided by the
+                    # order -- so the result set is the pointwise selection,
+                    # not the union the join would give: `min({8}, {4})` is
+                    # `{4}`, and `{4, 8}` would lose the clamp entirely
+                    least = isinstance(e, Min)
+                    vals = sets[0].values
+                    for f in sets[1:]:
+                        vals = frozenset(
+                            v for a in vals for b in f.values
+                            for v in _set_pick(a, b, least=least)
+                        )
+                        if len(vals) > self._set_format_threshold:
+                            break
+                    else:
+                        return SetFormat(vals)
                 # selection also *orders*, which the join does not record: a
                 # clamp against a constant bounds its result by that constant
                 tight = exact_select(arg_fmts, is_min=isinstance(e, Min))

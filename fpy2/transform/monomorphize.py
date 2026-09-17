@@ -10,6 +10,7 @@ from ..analysis import TypeAnalysis, TypeInfer
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..fpc_context import FPCoreContext
+from ..number.context.real import REAL_FORMAT
 from ..types import *
 from .cursor import EditLog
 
@@ -82,9 +83,12 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case BoolTypeAnn(), BoolTypeAnn():
                 return a
             case RealTypeAnn(), RealTypeAnn():
-                if a.fmt is None:
+                # `REAL_FORMAT` is the format of a value nothing is known
+                # about, so it carries no more than no format at all -- merging
+                # it as a rival would refuse a later, tighter answer.
+                if a.fmt is None or a.fmt == REAL_FORMAT:
                     return b
-                if b.fmt is None:
+                if b.fmt is None or b.fmt == REAL_FORMAT:
                     return a
                 if a.fmt != b.fmt:
                     raise RuntimeError(f'Cannot merge different formats `{a.fmt}` and `{b.fmt}`')
