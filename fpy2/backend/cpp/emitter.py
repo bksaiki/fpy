@@ -35,6 +35,7 @@ from ...analysis import (
 from ...analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
+    FormatBound,
     SetFormat,
     exact_exp2,
     round_is_identity,
@@ -1121,10 +1122,7 @@ class CppEmitter(Visitor):
                 if isinstance(src, CppScalar) and not scalar_fits_in(src, want):
                     # The check passed on the *value* where the storage does
                     # not fit, so this narrowing is exact -- spelled rather than
-                    # left implicit.  Not `_convert_storage`: that reconciles
-                    # two storages, and would put a scalar pair through it from
-                    # somewhere other than a tuple field, which is the
-                    # invariant its silent cast rests on.
+                    # left implicit.
                     return self._explicit_cast(self._visit_expr(e, ctx), want)
             return self._visit_expr(e, ctx)
         match e:
@@ -1222,6 +1220,11 @@ class CppEmitter(Visitor):
         if src == want:
             return code
         if isinstance(src, CppScalar) and isinstance(want, CppScalar):
+            # Cast without asking whether the value fits: *at* is the container
+            # a field or element is being taken from, so its bound answers a
+            # different question than the one :meth:`_value_fits` would need
+            # (`ListFormat` against an `int8_t`).  Peeling it to the right depth
+            # is what would let this ask; see `docs/todos/cast-discipline.md`.
             return self._explicit_cast(code, want)
         if isinstance(src, CppTuple) and isinstance(want, CppTuple):
             if len(src.elts) != len(want.elts):
@@ -1274,6 +1277,32 @@ class CppEmitter(Visitor):
             at=at,
         )
 
+    def _value_fits(
+        self, bound: FormatBound, src: CppScalar, want: CppScalar,
+    ) -> bool:
+        """Can a value bounded by *bound*, emitted as *src*, live in *want*?
+
+        The third question the emitter asks about a conversion, after what type
+        the *place* holds and what type the *expression* has.  It is the weaker
+        one and the one soundness turns on: :func:`scalar_fits_in` asks whether
+        the two *types* nest, where a conversion only needs the *values* to.
+
+        They come apart wherever storage is wider than the bound it was chosen
+        to hold -- a `Round` reports its context's type, as wide as the context,
+        where the value it produces is bounded by the operand, so
+        ``round_SINT64(x: FP32)`` is 24 significand bits and a ``float`` holds
+        it exactly.
+
+        Takes the *bound* rather than the expression: a list element has no
+        expression of its own, so a caller converting one has to peel the
+        container's bound to the depth it is converting at.
+        """
+        return scalar_fits_in(src, want) or bound_fits_in_scalar(bound, want)
+
+    def _bound_of(self, e: Expr | None) -> FormatBound:
+        """What format inference proved about *e*, or ``None``."""
+        return self.format_info.by_expr.get(e) if e is not None else None
+
     def _require_no_narrowing(
         self, src: CppType | None, want: CppType | None, at: Expr,
     ) -> None:
@@ -1286,14 +1315,7 @@ class CppEmitter(Visitor):
         """
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
-        if scalar_fits_in(src, want):
-            return
-        # `scalar_fits_in` asks whether the *types* nest, and a store only needs
-        # the *values* to.  The two differ: a `Round` reports its context's type,
-        # which is as wide as the context, where the value it produces is
-        # bounded by the operand -- `round_SINT64(x: FP32)` is 24 significand
-        # bits, which a `float` holds exactly.
-        if bound_fits_in_scalar(self.format_info.by_expr.get(at), want):
+        if self._value_fits(self._bound_of(at), src, want):
             return
         raise CppEmitError(
             f'unsupported: storing a `{src.format()}` into a slot of '
@@ -1787,7 +1809,7 @@ class CppEmitter(Visitor):
 
     def _maybe_cast(
         self, arg: str, arg_ty: CppScalar, target_ty: CppScalar,
-        *, at: Ast | None = None, src: Expr | None = None,
+        *, at: Ast | None = None, bound_of: Expr | None = None,
     ) -> str:
         """Emit *arg* in *target_ty* form, rejecting unsafe casts.
 
@@ -1797,17 +1819,13 @@ class CppEmitter(Visitor):
         active context or write ``fp.round(...)``.  A cast the user *did* write
         goes through :meth:`_explicit_cast`, which never refuses.
 
-        Pass *src* to fall back on :func:`bound_fits_in_scalar` when the
-        type-level test refuses.
+        *bound_of* is the expression whose bound decides it -- usually the one
+        *arg* was emitted from.  Without it only the types can be compared, and
+        :meth:`_value_fits` says why that is the stronger question.
         """
         if arg_ty == target_ty:
             return arg
-        if not scalar_fits_in(arg_ty, target_ty) and not (
-            src is not None
-            and bound_fits_in_scalar(
-                self.format_info.by_expr.get(src), target_ty,
-            )
-        ):
+        if not self._value_fits(self._bound_of(bound_of), arg_ty, target_ty):
             raise CppEmitError(
                 f'cannot implicitly cast `{arg_ty.format()}` to '
                 f'`{target_ty.format()}`: conversion is lossy.  '
@@ -1940,7 +1958,7 @@ class CppEmitter(Visitor):
             for sig in sigs:
                 if sig.in_tys == want and sig.out_ctx == active:
                     casts = [
-                        self._maybe_cast(code, have, target, at=e, src=src)
+                        self._maybe_cast(code, have, target, at=e, bound_of=src)
                         for code, have, src in zip(codes, storages, srcs)
                     ]
                     if sig.is_call:
@@ -3893,8 +3911,8 @@ class CppEmitter(Visitor):
             lambda: self._visit_expr(e.iff, ctx), 'a ternary arm', e.iff)
         ift_ty = self._scalar_storage_for_expr(e.ift)
         iff_ty = self._scalar_storage_for_expr(e.iff)
-        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e, src=e.ift)
-        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e, src=e.iff)
+        ift = self._maybe_cast(ift, ift_ty, out_ty, at=e, bound_of=e.ift)
+        iff = self._maybe_cast(iff, iff_ty, out_ty, at=e, bound_of=e.iff)
         return f'({cond} ? {ift} : {iff})'
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
