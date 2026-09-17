@@ -165,17 +165,32 @@ top.
   no exact-real literal, so this is the only way an inexact constant is
   representable at all, and it also gets the mode the program asked for rather
   than whatever `fesetround` last left behind.
-- `Round(arg)` under a **fixed-point** context goes to `_emit_integral_round`,
-  which either lowers it faithfully or refuses; it never falls through to a bare
-  cast. Both storages round by libm (`trunc`/`floor`/`ceil`/`round`/`nearbyint`);
+- `Round(arg)` under a **fixed-point** context goes to `_emit_integral_round`.
+  Both storages round by libm (`trunc`/`floor`/`ceil`/`round`/`nearbyint`);
   integer storage then casts the integral value, which converts rather than
   rounds. `RTZ` is the one mode needing no call, the cast already truncating.
   Either way the bound is asserted, on the *rounded* value — `100.7` is in bounds
   under `RTZ` even though `100.7 > 100`, and under `RTP` an operand inside the
   bound can round to one outside it.
-  An overflow *rule* other than `ASSERT` is refused: `SATURATE`/`WRAP`/`OVERFLOW`
-  are behavior this lowering does not implement, and `unfold_overflow` is what
-  turns them into program text.
+  `_emit_integral_round` can also **decline**, and then the bare cast below it is
+  the rounding — which it only is under `RTZ`, so `_require_cast_is_round`
+  refuses any other mode that reaches it. Admitting non-RTZ integer contexts
+  without that guard was a silent truncation.
+  Of the overflow *rules*, `ASSERT` needs no behavior and `WRAP` is performed by
+  `_emit_wrapping_float_to_integer` — but only where
+  `_type_range_is_the_format`, i.e. the C++ type holds exactly the values the
+  format does; a storage merely wide enough would wrap a step further out.
+  `SATURATE` and `OVERFLOW` are refused, and `unfold_overflow` turns `SATURATE`
+  into program text. It cannot do the same for `WRAP`, whose overflow value
+  varies with the operand rather than being a constant — which is why `WRAP`
+  needs a lowering at all.
+  **A `SATURATE` program `unfold_overflow` has rewritten still fails under a
+  non-RTZ mode**: the rewrite rounds under the *unbounded* counterpart, which
+  states no bound, and `_emit_integral_round` declines where there is nothing to
+  assert. Spelling the mode and asserting nothing there fixes it (measured: six
+  lines, bit-exact, no differential movement) and costs the backend no new edge
+  rule. That would likely make the `_require_cast_is_round` guard above
+  unreachable.
 - `Cast(arg)` — the node `fp.cast` and `fp.round_exact` both parse to — is the
   same cast plus a runtime assertion that it was lossless. Under a native context
   a storage round-trip *is* that claim, NaN-aware for FP operands. Under a

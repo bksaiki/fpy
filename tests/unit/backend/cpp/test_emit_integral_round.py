@@ -196,6 +196,49 @@ class TestIntegerStorage:
             _emit(fp.SINT32.with_params(rm=RM.RAZ, overflow=ASSERT))
 
 
+class TestTheCastFallbackKeepsTheMode:
+    """`_emit_integral_round` may *decline* -- an unbounded context with no
+    bound to assert -- and then the bare cast below is the rounding.  A cast
+    truncates, so that is this context's rounding only under ``RTZ``.
+
+    Relaxing the integer-storage gate to admit other modes made this reachable:
+    the mode was accepted and then dropped, which is a wrong answer rather than
+    a refusal.
+    """
+
+    @staticmethod
+    def _unfolded(rm):
+        """A ``SATURATE`` context with its rule stated as program text.
+
+        What `unfold_overflow` leaves is a round under the *unbounded*
+        counterpart, which states no bound -- so `_emit_integral_round` has
+        nothing to assert and declines.
+        """
+        import fpy2.strategies as st
+
+        ctx = fp.SINT32.with_params(rm=rm, overflow=fp.OverflowMode.SATURATE)
+
+        @fp.fpy
+        def q(x):
+            with ctx:
+                return fp.round(x)
+
+        return st.unfold_overflow(
+            st.monomorphize(q, args=[RealType(fp.FP64)]))
+
+    def test_a_non_rtz_mode_is_refused(self):
+        """It rounded *up* and the cast truncates: `2.4` came out `2`."""
+        with pytest.raises(CppCompileError, match='only a .static_cast. is left'):
+            CppCompiler().compile(self._unfolded(RM.RTP),
+                                  arg_types=[RealType(fp.FP64)])
+
+    def test_truncation_still_reaches_the_cast(self):
+        """`RTZ` is what the cast performs, so it needs no spelling."""
+        out = CppCompiler().compile(self._unfolded(RM.RTZ),
+                                    arg_types=[RealType(fp.FP64)])
+        assert 'static_cast<int64_t>' in out
+
+
 class TestWrappingOverflow:
     """``WRAP`` is the one edge rule with a lowering, and only where the C++
     type holds exactly the values the format does -- then the type's own

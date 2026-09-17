@@ -147,6 +147,46 @@ class TestSlotStoreTypes:
     -- unless the emitter is *constructing* it, in which case it is built at the
     slot's type and its own storage is not the question."""
 
+    def test_a_value_that_fits_stores_though_its_type_does_not(self):
+        """"Does it fit" is a question about the *values*, not about whether the
+        types nest.  A `Round` reports its context's type, as wide as the
+        context, where the value is bounded by the operand: ``round_SINT64`` of
+        an ``FP32`` is 24 significand bits, which a ``float`` holds exactly.
+
+        Asking the type question refused this while the same value built into a
+        fresh list was accepted -- the same conversion, two verdicts.
+        """
+        @fp.fpy
+        def slot(x: fp.Real):
+            zs = [1.5, 2.5]
+            with fp.SINT64:
+                zs[0] = fp.round(x)
+            return zs[0]
+
+        @fp.fpy
+        def fresh(x: fp.Real):
+            with fp.SINT64:
+                zs = [fp.round(x)]
+            return zs[0]
+
+        for f in (slot, fresh):
+            out = CppCompiler().compile(f, arg_types=[RealType(fp.FP32)])
+            assert 'static_cast<float>' in out, f.name
+
+    def test_a_container_widens_rather_than_refusing(self):
+        """Why the refusal is hard to reach: a slot's type comes from the
+        container's *class*, which the store joins into -- so a value needing
+        53 bits makes the container ``double`` rather than being refused."""
+        @fp.fpy
+        def f(zs: list[fp.Real], x: fp.Real):
+            with fp.SINT64:
+                zs[0] = fp.round(x)
+            return zs[0]
+
+        out = CppCompiler().compile(
+            f, arg_types=[ListType(RealType(fp.FP32)), RealType(fp.FP64)])
+        assert 'std::vector<double>& zs' in out
+
     def test_an_allocation_into_a_slot_is_built_at_the_slot(self):
         """``fp.empty``'s bound is the lattice bottom, so its own storage is the
         ladder's first rung -- ``std::vector<uint8_t>`` -- whatever the row it is

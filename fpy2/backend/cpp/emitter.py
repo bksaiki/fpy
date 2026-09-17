@@ -1091,12 +1091,13 @@ class CppEmitter(Visitor):
                 src = self._storage_or_none(e)
                 self._require_no_narrowing(src, want, e)
                 if isinstance(src, CppScalar) and not scalar_fits_in(src, want):
-                    # the check passed on the *value* where the storage does
-                    # not fit, so the conversion is exact but not implicit-safe
-                    # to read: spell it
-                    return self._convert_storage(
-                        self._visit_expr(e, ctx), src, want, at=e,
-                    )
+                    # The check passed on the *value* where the storage does
+                    # not fit, so this narrowing is exact -- spelled rather than
+                    # left implicit.  Not `_convert_storage`: that reconciles
+                    # two storages, and would put a scalar pair through it from
+                    # somewhere other than a tuple field, which is the
+                    # invariant its silent cast rests on.
+                    return self._explicit_cast(self._visit_expr(e, ctx), want)
             return self._visit_expr(e, ctx)
         match e:
             case ListExpr() if isinstance(want, CppList):
@@ -1258,6 +1259,13 @@ class CppEmitter(Visitor):
         if not (isinstance(src, CppScalar) and isinstance(want, CppScalar)):
             return
         if scalar_fits_in(src, want):
+            return
+        # `scalar_fits_in` asks whether the *types* nest, and a store only needs
+        # the *values* to.  The two differ: a `Round` reports its context's type,
+        # which is as wide as the context, where the value it produces is
+        # bounded by the operand -- `round_SINT64(x: FP32)` is 24 significand
+        # bits, which a `float` holds exactly.
+        if bound_fits_in_scalar(self.format_info.by_expr.get(at), want):
             return
         raise CppEmitError(
             f'unsupported: storing a `{src.format()}` into a slot of '
@@ -2957,11 +2965,20 @@ class CppEmitter(Visitor):
         op table matches on whole contexts (:meth:`CppOp.matches`); these two
         bypass it, so the same discipline is applied here.
 
-        Fixed-point contexts are exempt: `_emit_integral_round` (`Round`) and
-        `_assert_fixed_exact` (`Cast`) lower or refuse them.
+        A fixed-point context is normally `_emit_integral_round`'s (`Round`) or
+        `_assert_fixed_exact`'s (`Cast`), but either may *decline* and leave the
+        cast here -- and the cast truncates, so it is that context's rounding
+        only under ``RTZ``.
         """
         active = self._active_ctx_for(e)
         if isinstance(active, MPFixedContext | MPBFixedContext):
+            if active.rm is not RM.RTZ:
+                raise CppEmitError(
+                    f'rounding mode {active.rm} under `{active}` has no C++ '
+                    'analogue: the context states no bound, so only a '
+                    '`static_cast` is left, and it truncates.',
+                    at=e,
+                )
             return
         # resolved first: a context with no storage at all -- ``REAL``, or a
         # format wider than the ladder -- has a more specific complaint than this
