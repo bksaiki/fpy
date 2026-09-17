@@ -41,6 +41,7 @@ from ...analysis.format_infer import (
 )
 from ...analysis.storage_infer import without_absent
 from ...ast.fpyast import (
+    Abs,
     AllOf,
     AMax,
     AMin,
@@ -2097,13 +2098,38 @@ class CppEmitter(Visitor):
                     'states every one as a comprehension before codegen',
                     at=e,
                 )
+            case Abs():
+                return self._emit_abs(e, arg)
             case UnaryOp() if type(e) in self.op_table.unary:
-                # Op-table-dispatched unary (Neg, Abs, all <cmath>).
+                # Op-table-dispatched unary (Neg, all <cmath>).
                 return self._dispatch_unary(e, arg)
             case _:
                 raise CppEmitError(
                     f'unsupported unary op: {type(e).__name__}', at=e,
                 )
+
+    def _emit_abs(self, e: Abs, arg: str) -> str:
+        """``abs`` of an unsigned value is the value.
+
+        An unsigned type holds no negative value and no signed zero, so the
+        magnitude is the operand and there is no operation to emit.  It has no
+        ``std::abs`` either: ``uint8_t`` / ``uint16_t`` promote to ``int`` and
+        pick the signed overload, ``uint32_t`` / ``uint64_t`` are ambiguous and
+        do not compile.
+
+        A *bound* proving the operand non-negative would not be enough --
+        ``fabs(-0.0)`` is ``+0.0``, and a zero's sign is not something
+        `ValueClass` carries.  Only the type can rule that out.
+        """
+        src = self._storage_for_expr(e.arg)
+        if not isinstance(src, CppScalar) or src not in UNSIGNED_INT_TYPES:
+            return self._dispatch_unary(e, arg)
+        # `format_infer` treats `Abs` as exact, so the result bounds as the
+        # operand does and the two storages agree; `_maybe_cast` is here for
+        # the active context asking for a wider one.
+        want = self._storage_for_expr(e)
+        assert isinstance(want, CppScalar), f'`abs` of a scalar gave {want}'
+        return self._maybe_cast(arg, src, want, at=e)
 
     def _emit_tuple_accessor(self, e: UnaryOp, ctx) -> str:
         """Emit a (possibly nested) ``fst``/``snd`` chain.

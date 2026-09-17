@@ -239,9 +239,12 @@ def _make_unary_table() -> UnaryOpTable:
     table: UnaryOpTable = {
         Neg: [CppOp('-', (_ty_of(c),), c, style=CppOpStyle.PREFIX)
               for c in same],
+        # No unsigned row: an unsigned value is its own magnitude, so
+        # ``_emit_abs`` emits the operand rather than a call.
         Abs: (
             [CppOp('std::fabs', (_ty_of(c),), c) for c in fp]
-            + [CppOp('std::abs', (_ty_of(c),), c) for c in ints]
+            + [CppOp('std::abs', (_ty_of(c),), c)
+               for c in ints if _ty_of(c).is_signed()]
         ),
     }
     for op_cls, name in _UNARY_CMATH:

@@ -62,6 +62,14 @@ class TestOpTableShape:
         assert len(sigs) == 1
         assert sigs[0].name == 'std::abs'
 
+    def test_abs_has_no_unsigned_signature(self):
+        """`std::abs` has no unsigned overload, and an unsigned value is its
+        own magnitude, so `_emit_abs` answers without the table."""
+        t = make_op_table()
+        from fpy2.ast.fpyast import Abs
+        for ctx in (fp.UINT8, fp.UINT16, fp.UINT32, fp.UINT64):
+            assert not [s for s in t.unary[Abs] if s.out_ctx == ctx]
+
     def test_binary_table_has_per_rm_fp_signatures(self):
         """Each FP base gets one signature per supported rounding
         mode — the dispatch matches the active context's RM
@@ -92,6 +100,23 @@ class TestDispatchDirect:
         )
         assert 'return (x + y);' in out
         assert 'static_cast' not in out
+
+    @pytest.mark.parametrize(
+        'ctx', [fp.UINT8, fp.UINT16, fp.UINT32, fp.UINT64],
+    )
+    def test_unsigned_abs_is_the_operand(self, ctx):
+        """`std::abs(uint32_t)` is ambiguous and `std::abs(uint8_t)` picks the
+        signed overload by promotion, so neither is emitted.  That the result
+        compiles is the autouse fixture's to check."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return fp.fabs(x)
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=ctx, arg_types=[RealType(ctx)],
+        )
+        assert 'abs' not in out
+        assert 'return x;' in out
 
 
 class TestDispatchCastFallback:
