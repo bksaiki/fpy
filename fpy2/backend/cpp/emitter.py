@@ -3251,13 +3251,22 @@ class CppEmitter(Visitor):
         storage merely wide enough is not enough: it would wrap a step further
         out than the format does.
         """
+        bounds = self._type_bounds(ty)
+        return bounds is not None and bounds == self._ctx_bounds(ctx)
+
+    @staticmethod
+    def _type_bounds(ty: CppScalar) -> tuple[Fraction, Fraction] | None:
+        """The values *ty* holds, as ``(hi, lo)``, or `None` for a non-integer.
+
+        A *type*'s range rather than a format's: what a conversion into it is
+        defined for, which an unbounded context has nothing of its own to say.
+        """
         bits = ty.int_bits()
         if bits is None:
-            return False
-        hi, lo = self._ctx_bounds(ctx)
+            return None
         if ty.is_signed():
-            return hi == 2 ** (bits - 1) - 1 and lo == -(2 ** (bits - 1))
-        return hi == 2 ** bits - 1 and lo == 0
+            return Fraction(2 ** (bits - 1) - 1), Fraction(-(2 ** (bits - 1)))
+        return Fraction(2 ** bits - 1), Fraction(0)
 
     def _emit_wrapping_float_to_integer(
         self, e, arg: str, arg_ty, target_ty: CppScalar,
@@ -3493,7 +3502,10 @@ class CppEmitter(Visitor):
         # `WRAP` is what `static_cast<int8_t>` already does.  Matching *formats*
         # would not be enough, since a format carries no edge rule: the same
         # -128..127 values under `ASSERT` still need the assertion.
-        if is_native_ctx(active):
+        # `INTEGER` is the one native context this does not cover: it is
+        # unbounded, so no type's range is its own and the cast can overflow
+        # where the context cannot.  Every other native one is bounded.
+        if is_native_ctx(active) and isinstance(active, MPBFixedContext):
             return None
         ctx_storage = self._round_storage(e)
         if ctx_storage is None:
@@ -3548,10 +3560,12 @@ class CppEmitter(Visitor):
                 )
             bounds: tuple[Fraction, Fraction] | None = self._ctx_bounds(active)
         elif ctx_storage is not None:
-            # Unbounded, in its own storage: nothing states a bound, and
-            # `_validate_context_rm` has already gated the `int64_t` truncation
-            # on `unsafe_cast_int`.
-            return None
+            # Unbounded, in its own storage: the format states no bound, so the
+            # only one is the storage's -- and a value past it is undefined
+            # rather than wrapped, an unbounded format having no edge rule to
+            # perform.  `_validate_context_rm` has already gated the `int64_t`
+            # truncation on `unsafe_cast_int`; this states what it costs.
+            bounds = self._type_bounds(ctx_storage)
         else:
             # The context states no bound, so the assertion carries the one the
             # analysis proved -- a check on the inference rather than on a claim

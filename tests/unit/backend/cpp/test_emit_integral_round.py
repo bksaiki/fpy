@@ -197,13 +197,12 @@ class TestIntegerStorage:
 
 
 class TestTheCastFallbackKeepsTheMode:
-    """`_emit_integral_round` may *decline* -- an unbounded context with no
-    bound to assert -- and then the bare cast below is the rounding.  A cast
-    truncates, so that is this context's rounding only under ``RTZ``.
+    """An unbounded context in its own storage still performs its mode.
 
-    Relaxing the integer-storage gate to admit other modes made this reachable:
-    the mode was accepted and then dropped, which is a wrong answer rather than
-    a refusal.
+    The bound it asserts is the *storage*'s, the format having none of its own,
+    and the mode is spelled before the cast.  Getting this wrong is a wrong
+    answer rather than a refusal: a cast truncates, so a dropped ``RTP`` turns
+    ``2.4`` into ``2``.
     """
 
     @staticmethod
@@ -211,8 +210,7 @@ class TestTheCastFallbackKeepsTheMode:
         """A ``SATURATE`` context with its rule stated as program text.
 
         What `unfold_overflow` leaves is a round under the *unbounded*
-        counterpart, which states no bound -- so `_emit_integral_round` has
-        nothing to assert and declines.
+        counterpart, whose only bound is its storage's.
         """
         import fpy2.strategies as st
 
@@ -226,11 +224,20 @@ class TestTheCastFallbackKeepsTheMode:
         return st.unfold_overflow(
             st.monomorphize(q, args=[RealType(fp.FP64)]))
 
-    def test_a_non_rtz_mode_is_refused(self):
-        """It rounded *up* and the cast truncates: `2.4` came out `2`."""
-        with pytest.raises(CppCompileError, match='only a .static_cast. is left'):
-            CppCompiler().compile(self._unfolded(RM.RTP),
-                                  arg_types=[RealType(fp.FP64)])
+    def test_a_non_rtz_mode_is_spelled_not_dropped(self):
+        """The cast truncates, so the mode has to happen before it."""
+        out = CppCompiler().compile(self._unfolded(RM.RTP),
+                                    arg_types=[RealType(fp.FP64)])
+        assert 'std::ceil' in out
+        assert 'static_cast<int64_t>' in out
+
+    def test_the_storage_bound_is_asserted(self):
+        """The format is unbounded where `int64_t` is not, so the conversion
+        has a range the context does not state."""
+        out = CppCompiler().compile(self._unfolded(RM.RTZ),
+                                    arg_types=[RealType(fp.FP64)])
+        assert '9223372036854774784' in out
+        assert 'overflow occurred so rounding is undefined' in out
 
     def test_truncation_still_reaches_the_cast(self):
         """`RTZ` is what the cast performs, so it needs no spelling."""
