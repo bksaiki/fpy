@@ -25,6 +25,7 @@ from fpy2.utils import CompareOp
 from fpy2.analysis.format_infer.analysis import (
     NEG_ZERO,
     VAR_FORMAT,
+    Special,
     _INTEGER_FORMAT,
     _join_bounds,
     _list_set_widen,
@@ -1609,26 +1610,38 @@ class TestFormatInfer:
         assert _free_var_format(Float(s=False, exp=0, c=0)) \
             == SetFormat(frozenset((Fraction(0),)))
 
-    def test_exact_binop_mul_by_zero_format_widens(self):
+    def test_exact_binop_mul_by_zero_names_the_three_results(self):
         """``Mul(loose_format, SetFormat({0}))`` must not answer ``{0}``.
 
         IEEE 754 makes ``0 * x`` a NaN for an infinite or NaN *x* and ``-0.0``
-        for a negative *x*.  An ``FP32`` bound admits all three, so none can be
-        ruled out -- and a ``Fraction`` set can state none of them.  ``{0}`` was
-        the old answer, and it is what made ``0.0 * inf`` compile to
-        ``static_cast<uint8_t>(NaN)``.
+        for a negative *x*.  Answering ``{0}`` is what made ``0.0 * inf``
+        compile to ``static_cast<uint8_t>(NaN)``.
 
-        ``None`` specifically, rather than falling through to the abstract path:
-        ``{0}`` lifts to an ``AbstractFormat`` bounded by zero on both sides,
-        whose product drives a later ``add``/``sub``'s ``prec`` to 0.  ``None``
-        makes the caller use the scope format, which is well-formed.
+        All three are :data:`SetValue`\\s, so the set states them exactly --
+        far tighter than the abstract path, which would bound the product by
+        zero on both sides and drive a later ``add``/``sub``'s ``prec`` to 0.
         """
         from fpy2.analysis.format_infer.analysis import exact_binop
         import operator
         fp32_fmt = fp.FP32.format()
         zero = SetFormat(frozenset((Fraction(0),)))
-        assert exact_binop(fp32_fmt, zero, operator.mul) is None
-        assert exact_binop(zero, fp32_fmt, operator.mul) is None
+        both = SetFormat(frozenset((Fraction(0), NEG_ZERO, Special.NAN)))
+        assert exact_binop(fp32_fmt, zero, operator.mul) == both
+        assert exact_binop(zero, fp32_fmt, operator.mul) == both
+
+    def test_exact_binop_mul_by_zero_drops_nan_when_unreachable(self):
+        """A format with no NaN and no infinity cannot produce one, so the
+        product is just the two zeros."""
+        from fpy2.analysis.format_infer.analysis import exact_binop
+        import operator
+        from fpy2.number import RealFloat
+        finite = fp.MPBFloatContext(
+            24, -126, RealFloat(s=False, exp=104, c=(1 << 24) - 1),
+            enable_nan=False, enable_inf=False,
+        ).format()
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_binop(finite, zero, operator.mul) \
+            == SetFormat(frozenset((Fraction(0), NEG_ZERO)))
 
     def test_exact_binop_add_zero_set_is_identity(self):
         """``Add(F, SetFormat({0}))`` and ``Sub(F, SetFormat({0}))``

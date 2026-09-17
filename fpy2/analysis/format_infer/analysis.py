@@ -960,9 +960,9 @@ def exact_binop(
     When one operand is the precise zero singleton ``SetFormat({0})``,
     the abstract path would produce a zero-bounded ``AbstractFormat``
     that loses the singleton precision and can drive subsequent
-    ``prec`` computations to ``0``.  Short-circuit through the
-    algebraic identities (``0 * x = 0``, ``0 + x = x``, ``x - 0 = x``)
-    so the precise format survives.
+    ``prec`` computations to ``0``.  Short-circuit instead: ``0 + x`` and
+    ``x - 0`` are ``x``, and ``0 * x`` is the set of the results IEEE 754
+    allows -- the two zeros, plus a NaN where *x* can be infinite or NaN.
 
     Used by :meth:`_FormatInferInstance._visit_binaryop` to compute
     the candidate ``F`` that :meth:`_bound_if_fits` then checks
@@ -998,15 +998,18 @@ def exact_binop(
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
-        # `0 * x` is not `{0}`: IEEE-754 gives NaN for an infinite or NaN *x*
-        # and `-0.0` for a negative *x*.  The other operand is a `Format` here
-        # — the set/set case returned above — and a float format admits all
-        # three, so none of them can be ruled out.
-        #
-        # Widen rather than falling through to the abstract path: `{0}` lifts to
-        # an AbstractFormat bounded by zero on both sides, whose product drives
-        # a later add/sub's `prec` to 0.
-        return None
+        # `0 * x` is not `{0}`: IEEE-754 gives `-0.0` for a negative *x* and
+        # NaN for an infinite or NaN one.  Naming those three is still far
+        # tighter than the abstract path, which would bound the product by
+        # zero on both sides and drive a later add/sub's `prec` to 0.  The
+        # other operand is a `Format` here — the set/set case returned above.
+        other = _to_abstract(rhs if lhs_zero else lhs)
+        if other is None:
+            return None
+        values: set[SetValue] = {Fraction(0), NEG_ZERO}
+        if other.has_nan or other.has_pos_inf or other.has_neg_inf:
+            values.add(Special.NAN)
+        return SetFormat(frozenset(values))
     if op is operator.add:
         if lhs_zero:
             return rhs if isinstance(rhs, SetFormat) else _to_abstract(rhs)
