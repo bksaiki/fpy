@@ -147,6 +147,8 @@ from typing import Any, TypeAlias
 from ...ast.fpyast import *
 from ...ast.visitor import Visitor
 from ...function import Function
+from ...interpret import get_default_interpreter
+from ...interpret.value import unwrap_foreign
 from ...number import INTEGER, REAL, Context, Float, RealFloat
 from ...number.format import REAL_FORMAT, Format
 from ...types import (
@@ -169,8 +171,16 @@ from ..array_size import (
     list_depth,
 )
 from ..call_graph import CallGraph, CallGraphError
-from ..context_use import ContextScope, ContextUse, ContextUseAnalysis, ContextUseSite
+from ..context_use import (
+    ContextScope,
+    ContextUse,
+    ContextUseAnalysis,
+    ContextUseSite,
+    PartialContext,
+    base_env,
+)
 from ..define_use import DefineUse, DefineUseAnalysis
+from ..partial_eval import PartialEval, PartialEvalInfo
 from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
 from .format import AbstractableFormat, AbstractFormat, round_bound_out
@@ -412,10 +422,22 @@ class TupleFormat:
     elts: tuple['FormatBound', ...]
 
 
+class _NoValue:
+    """Type of :data:`NO_VALUE`."""
+
+    def __repr__(self):
+        return 'NO_VALUE'
+
+
 @dataclass(frozen=True)
 class ListFormat:
     """Format for a list-valued expression (homogeneous element format)."""
     elt: 'FormatBound'
+
+
+NO_VALUE = _NoValue()
+"""Placeholder in :attr:`FunctionFormat.arg_vals` for an argument whose value
+is not statically known."""
 
 
 @dataclass(frozen=True)
@@ -454,6 +476,15 @@ class FunctionFormat:
     ret_fmt: 'FormatBound'
     """Format bound for the function's return value (mirrors
     :attr:`FunctionType.return_type`)."""
+
+    arg_vals: tuple[object, ...]
+    """Per-parameter *value*, where the call site's argument was statically
+    known, and :data:`NO_VALUE` where it was not.  Empty means no values were
+    pinned at all.
+
+    Formats cannot carry this: a rounding mode has no numeric format, so
+    ``arg_fmts`` reports ``None`` for one.  These values are what fills the
+    holes of a :class:`PartialContext` inside the callee."""
 
 
 @dataclass(frozen=True)
@@ -563,13 +594,12 @@ def _instantiate_real_at_ctx(ty: Type, ctx: Context) -> Type:
     callee body sees concrete inputs instead of ``REAL_FORMAT``
     everywhere.
 
-    A :class:`RealType` with an *already-concrete* ``ctx`` keeps its
-    own context — explicit annotations win over caller defaults.
-    Unknown leaf types pass through unchanged (the caller absorbs the
-    fallback)."""
+    A :class:`RealType` with an *already-pinned* format keeps it —
+    explicit annotations win over caller defaults.  Unknown leaf types pass
+    through unchanged (the caller absorbs the fallback)."""
     match ty:
         case RealType():
-            if isinstance(ty.ctx, Context):
+            if ty.fmt is not None:
                 return ty
             return RealType(ctx)
         case VarType():
@@ -592,7 +622,7 @@ def _bound_of_type(ty: Type) -> FormatBound:
     expression-level format is yet available.
 
     For scalar real values, the result depends on whether the type
-    carries a concrete rounding context (``RealType.ctx``):
+    carries a concrete format:
 
     - **No context** (the default for un-monomorphized programs): the
       format is unknown, so we return the scalar top ``REAL_FORMAT``.
@@ -612,13 +642,9 @@ def _bound_of_type(ty: Type) -> FormatBound:
     """
     match ty:
         case RealType():
-            # If the type carries a concrete rounding context, the format
-            # is pinned by that context — typically the case after a
-            # monomorphization pass.  Otherwise (symbolic or absent ctx)
-            # the format is unknown and we report the scalar top.
-            if isinstance(ty.ctx, Context):
-                return ty.ctx.format()
-            return REAL_FORMAT
+            # A pinned format is typically what a monomorphization pass left;
+            # without one the format is unknown and we report the scalar top.
+            return REAL_FORMAT if ty.fmt is None else ty.fmt
         case TupleType():
             return TupleFormat(tuple(_bound_of_type(t) for t in ty.elts))
         case ListType():
@@ -934,9 +960,9 @@ def exact_binop(
     When one operand is the precise zero singleton ``SetFormat({0})``,
     the abstract path would produce a zero-bounded ``AbstractFormat``
     that loses the singleton precision and can drive subsequent
-    ``prec`` computations to ``0``.  Short-circuit through the
-    algebraic identities (``0 * x = 0``, ``0 + x = x``, ``x - 0 = x``)
-    so the precise format survives.
+    ``prec`` computations to ``0``.  Short-circuit instead: ``0 + x`` and
+    ``x - 0`` are ``x``, and ``0 * x`` is the set of the results IEEE 754
+    allows -- the two zeros, plus a NaN where *x* can be infinite or NaN.
 
     Used by :meth:`_FormatInferInstance._visit_binaryop` to compute
     the candidate ``F`` that :meth:`_bound_if_fits` then checks
@@ -972,22 +998,28 @@ def exact_binop(
     lhs_zero = _is_zero_set(lhs)
     rhs_zero = _is_zero_set(rhs)
     if op is operator.mul and (lhs_zero or rhs_zero):
-        # `0 * x` is not `{0}`: IEEE-754 gives NaN for an infinite or NaN *x*
-        # and `-0.0` for a negative *x*.  The other operand is a `Format` here
-        # — the set/set case returned above — and a float format admits all
-        # three, so none of them can be ruled out.
-        #
-        # Widen rather than falling through to the abstract path: `{0}` lifts to
-        # an AbstractFormat bounded by zero on both sides, whose product drives
-        # a later add/sub's `prec` to 0.
-        return None
+        # `0 * x` is not `{0}`: IEEE-754 gives `-0.0` for a negative *x* and
+        # NaN for an infinite or NaN one.  Naming those three is still far
+        # tighter than the abstract path, which would bound the product by
+        # zero on both sides and drive a later add/sub's `prec` to 0.  The
+        # other operand is a `Format` here — the set/set case returned above.
+        other = _to_abstract(rhs if lhs_zero else lhs)
+        if other is None:
+            return None
+        values: set[SetValue] = {Fraction(0)}
+        if other.neg_bound != 0:
+            values.add(NEG_ZERO)
+        if other.has_nan or other.has_pos_inf or other.has_neg_inf:
+            values.add(Special.NAN)
+        return SetFormat(frozenset(values))
+    # the other operand is a `Format` -- the set/set case returned above
     if op is operator.add:
         if lhs_zero:
-            return rhs if isinstance(rhs, SetFormat) else _to_abstract(rhs)
+            return _to_abstract(rhs)
         if rhs_zero:
-            return lhs if isinstance(lhs, SetFormat) else _to_abstract(lhs)
+            return _to_abstract(lhs)
     if op is operator.sub and rhs_zero:
-        return lhs if isinstance(lhs, SetFormat) else _to_abstract(lhs)
+        return _to_abstract(lhs)
     af_a = _to_abstract(lhs)
     af_b = _to_abstract(rhs)
     if af_a is None or af_b is None:
@@ -1381,6 +1413,7 @@ class PreAnalyses:
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
     alias: AliasAnalysis
+    partial_eval: PartialEvalInfo
 
 
 class PreAnalysisCache:
@@ -1419,8 +1452,9 @@ class PreAnalysisCache:
             def_use = DefineUse.analyze(func)
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=def_use)
+        partial_eval = PartialEval.apply(func, def_use=def_use)
         if ctx_use is None:
-            ctx_use = ContextUse.analyze(func, def_use=def_use)
+            ctx_use = ContextUse.analyze(func, partial_eval=partial_eval)
         if array_size is None:
             array_size = ArraySizeInfer.analyze(func, type_info=type_info)
         if alias is None:
@@ -1428,7 +1462,7 @@ class PreAnalysisCache:
             # what a call may retain, which over-approximates the aliasing --
             # exactly the safe direction for the widening below.
             alias = Alias.analyze(func, def_use=def_use, type_info=type_info)
-        pre = PreAnalyses(def_use, type_info, ctx_use, array_size, alias)
+        pre = PreAnalyses(def_use, type_info, ctx_use, array_size, alias, partial_eval)
         self._table[key] = pre
         return pre
 
@@ -1498,6 +1532,11 @@ class FormatAnalysis:
     sizes -- reads it instead of recomputing.
     """
 
+    partial_eval: PartialEvalInfo
+    """The partial evaluation this instantiation used, exposed for the same
+    reason as :attr:`array_size`: ``Specialize`` reads the values a call site
+    pins from it."""
+
     by_call: dict[Call, 'FormatAnalysis']
     """
     Per-call-site sub-analyses — the :class:`FormatAnalysis` graph
@@ -1536,6 +1575,7 @@ class _FormatInferInstance(Visitor):
     type_info: TypeAnalysis
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
+    partial_eval: PartialEvalInfo
 
     by_def: dict[Definition, FormatBound]
     by_expr: dict[Expr, FormatBound]
@@ -1574,6 +1614,12 @@ class _FormatInferInstance(Visitor):
         self.by_expr = {}
         self.by_call = {}
         self._pre_cache = pre_cache
+        self.pre = pre
+        # Statically-known values for parameters the call site pinned, and a
+        # memo for the `PartialContext` resolution they feed (which replays a
+        # call through the interpreter, so it should happen once per scope).
+        self._def_values: dict[Definition, object] = {}
+        self._scope_ctx_cache: dict[ContextScope, Context | PartialContext] = {}
         # The instantiation signature the caller pinned.  ``None``
         # means "no substitution" — the function is analyzed
         # standalone, with declared parameter types and any symbolic
@@ -1813,14 +1859,76 @@ class _FormatInferInstance(Visitor):
         unresolvable.
 
         Looks up *e*'s active scope and returns the scope's context
-        when it's a concrete :class:`Context`.  Symbolic scopes are
-        substituted with :attr:`_outer_ctx` when the caller provided
-        one — this is how the recursive call-site instantiation flows
-        the caller's active context into the callee's outer scope."""
+        when it's a concrete :class:`Context`.
+
+        An unresolved *function-level* scope is substituted with
+        :attr:`_outer_ctx` when the caller provided one: a callee with no
+        context annotation runs under its caller's active context, and this is
+        how call-site instantiation flows that in.  A scope introduced by a
+        ``with`` gets no such substitution — its context is whatever the
+        ``with`` expression evaluates to, which has nothing to do with the
+        caller.  Substituting there reported an inner
+        ``with fp.MPFixedContext(n):`` as the caller's context, making the
+        rounding look like the identity and yielding a format that *excludes*
+        the real result."""
+        resolved = self._resolve_scope_ctx(e)
+        return resolved if isinstance(resolved, Context) else None
+
+    def _resolve_scope_ctx(self, e: ContextUseSite) -> 'Context | PartialContext | None':
+        """The context active at *e*, with call-site-pinned arguments filled in.
+
+        A :class:`PartialContext` whose holes all close becomes a concrete
+        :class:`Context`; one with holes left comes back tightened, which is
+        what later phases read the rounding mode and digit position off.
+        """
         scope = self.ctx_use.find_scope_from_use(e)
-        if isinstance(scope.ctx, Context):
-            return scope.ctx
-        return self._outer_ctx
+        ctx = scope.ctx
+        if isinstance(ctx, Context):
+            return ctx
+        if isinstance(ctx, PartialContext):
+            if scope not in self._scope_ctx_cache:
+                self._scope_ctx_cache[scope] = self._resolve_partial_ctx(ctx)
+            return self._scope_ctx_cache[scope]
+        if isinstance(scope.site, FuncDef):
+            return self._outer_ctx
+        return None
+
+    def _resolve_partial_ctx(
+        self, ctx: PartialContext
+    ) -> 'Context | PartialContext':
+        """Fill *ctx*'s holes from the values the call site pinned.
+
+        A hole closes when it reads a parameter this instantiation pinned.  A
+        context left with no holes is rebuilt by replaying its original call
+        through the interpreter, which is what turns partial evaluation's
+        values back into constructor arguments; anything still open — or a
+        constructor that rejects the combination — comes back tightened.
+        """
+        def fill(v):
+            if not isinstance(v, Var):
+                return v
+            d = self.def_use.find_def_from_use(v)
+            return self._def_values.get(d, v)
+
+        args = tuple(fill(v) for v in ctx.args)
+        kwargs = tuple((k, fill(v)) for k, v in ctx.kwargs)
+        filled = PartialContext(ctx.cls, ctx.expr, args, kwargs)
+        if filled.holes:
+            return filled
+
+        e = ctx.expr
+        call = Call(
+            e.func, e.fn,
+            [ForeignVal(v, None) for v in args],
+            [(k, ForeignVal(v, None)) for k, v in kwargs],
+            e.loc,
+        )
+        try:
+            rt = get_default_interpreter()
+            val = unwrap_foreign(rt.eval_expr(call, base_env(self.func), REAL))
+        except Exception:  # noqa: BLE001 -- best-effort, as partial eval is
+            return filled
+        return val if isinstance(val, Context) else filled
 
     def _scope_format(self, e: ContextUseSite) -> Format:
         """Returns the format of the rounding context scope for *e*.
@@ -2411,10 +2519,15 @@ class _FormatInferInstance(Visitor):
         # time.  The ``ret_fmt`` slot is a placeholder; the
         # sub-analysis will compute the real value from the body.
         arg_fmts = tuple(self.by_expr.get(arg) for arg in e.args)
+        # Values, not just formats: a rounding mode has no format, and it is
+        # exactly what a `PartialContext` in the callee needs to close.
+        pe = self.pre.partial_eval.by_expr
+        arg_vals = tuple(pe.get(arg, NO_VALUE) for arg in e.args)
         callee_signature = FunctionFormat(
             ctx=callee_outer,
             arg_fmts=arg_fmts,
             ret_fmt=REAL_FORMAT,
+            arg_vals=arg_vals,
         )
         pre = self._pre_cache.get(fn.ast)
         return _FormatInferInstance(
@@ -2740,6 +2853,7 @@ class _FormatInferInstance(Visitor):
         fn_fmt = self._fn_fmt
         outer_ctx = fn_fmt.ctx if fn_fmt is not None else None
         params = fn_fmt.arg_fmts if fn_fmt is not None else None
+        param_vals = fn_fmt.arg_vals if fn_fmt is not None else ()
 
         def param_from_type(ty: Type) -> FormatBound:
             if outer_ctx is not None:
@@ -2755,6 +2869,8 @@ class _FormatInferInstance(Visitor):
                 self._set_def_bound(d, params[i])
             else:
                 self._set_def_bound(d, param_from_type(self.type_info.by_def[d]))
+            if i < len(param_vals) and param_vals[i] is not NO_VALUE:
+                self._def_values[d] = param_vals[i]
         # Free-variable defs (captured from an outer scope).  A finite numeric
         # capture pins the def to the singleton set {value}; a native
         # tuple/list capture recurses to per-element singletons; anything else
@@ -2789,6 +2905,9 @@ class _FormatInferInstance(Visitor):
             ctx=outer_ctx,
             arg_fmts=tuple(arg_fmts),
             ret_fmt=self._return_fmt,
+            # echoed back so a consumer reading `by_call` can see which
+            # arguments the call site pinned
+            arg_vals=param_vals,
         )
 
 
@@ -2802,6 +2921,7 @@ class _FormatInferInstance(Visitor):
             by_def=self.by_def,
             by_expr=self.by_expr,
             array_size=self.array_size,
+            partial_eval=self.pre.partial_eval,
             by_call=self.by_call,
         )
 

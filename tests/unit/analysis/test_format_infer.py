@@ -25,6 +25,7 @@ from fpy2.utils import CompareOp
 from fpy2.analysis.format_infer.analysis import (
     NEG_ZERO,
     VAR_FORMAT,
+    Special,
     _INTEGER_FORMAT,
     _join_bounds,
     _list_set_widen,
@@ -32,8 +33,10 @@ from fpy2.analysis.format_infer.analysis import (
 )
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
+from fpy2.number import FixedContext
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
+from fpy2.strategies import monomorphize
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType
 
 from ..generators import fpy_real_funcdef
@@ -69,7 +72,7 @@ class TestFormatInfer:
 
     def test_monomorphized_scalar_arg_format(self):
         """
-        After monomorphization, ``RealType.ctx`` carries the concrete
+        After monomorphization, ``RealType.fmt`` carries the concrete
         format.  ``_top_bound`` extracts that format so the argument's
         bound is the precise pinned format, not ``REAL_FORMAT``.
         """
@@ -108,7 +111,7 @@ class TestFormatInfer:
 
     def test_unmonomorphized_arg_keeps_real_format(self):
         """
-        Without a monomorphization pass, ``RealType.ctx`` is ``None`` and
+        Without a monomorphization pass, ``RealType.fmt`` is ``None`` and
         ``_top_bound`` reports ``REAL_FORMAT`` as before — no regression.
         """
         @fp.fpy
@@ -1609,26 +1612,39 @@ class TestFormatInfer:
         assert _free_var_format(Float(s=False, exp=0, c=0)) \
             == SetFormat(frozenset((Fraction(0),)))
 
-    def test_exact_binop_mul_by_zero_format_widens(self):
+    def test_exact_binop_mul_by_zero_names_the_three_results(self):
         """``Mul(loose_format, SetFormat({0}))`` must not answer ``{0}``.
 
         IEEE 754 makes ``0 * x`` a NaN for an infinite or NaN *x* and ``-0.0``
-        for a negative *x*.  An ``FP32`` bound admits all three, so none can be
-        ruled out -- and a ``Fraction`` set can state none of them.  ``{0}`` was
-        the old answer, and it is what made ``0.0 * inf`` compile to
-        ``static_cast<uint8_t>(NaN)``.
+        for a negative *x*.  Answering ``{0}`` is what made ``0.0 * inf``
+        compile to ``static_cast<uint8_t>(NaN)``.
 
-        ``None`` specifically, rather than falling through to the abstract path:
-        ``{0}`` lifts to an ``AbstractFormat`` bounded by zero on both sides,
-        whose product drives a later ``add``/``sub``'s ``prec`` to 0.  ``None``
-        makes the caller use the scope format, which is well-formed.
+        All three are :data:`SetValue`\\s, so the set states them exactly --
+        far tighter than the abstract path, which would bound the product by
+        zero on both sides and drive a later ``add``/``sub``'s ``prec`` to 0.
         """
         from fpy2.analysis.format_infer.analysis import exact_binop
         import operator
         fp32_fmt = fp.FP32.format()
         zero = SetFormat(frozenset((Fraction(0),)))
-        assert exact_binop(fp32_fmt, zero, operator.mul) is None
-        assert exact_binop(zero, fp32_fmt, operator.mul) is None
+        both = SetFormat(frozenset((Fraction(0), NEG_ZERO, Special.NAN)))
+        assert exact_binop(fp32_fmt, zero, operator.mul) == both
+        assert exact_binop(zero, fp32_fmt, operator.mul) == both
+
+    def test_exact_binop_mul_by_zero_drops_nan_when_unreachable(self):
+        """A format with no NaN and no infinity cannot produce one, so the
+        product is just the two zeros."""
+        import operator
+
+        from fpy2.analysis.format_infer.analysis import exact_binop
+        from fpy2.number import RealFloat
+        finite = fp.MPBFloatContext(
+            24, -126, RealFloat(s=False, exp=104, c=(1 << 24) - 1),
+            enable_nan=False, enable_inf=False,
+        ).format()
+        zero = SetFormat(frozenset((Fraction(0),)))
+        assert exact_binop(finite, zero, operator.mul) \
+            == SetFormat(frozenset((Fraction(0), NEG_ZERO)))
 
     def test_exact_binop_add_zero_set_is_identity(self):
         """``Add(F, SetFormat({0}))`` and ``Sub(F, SetFormat({0}))``
@@ -2308,6 +2324,112 @@ class TestRoundOntoACoarseGrid:
         above, so only the operand's (widened) bound states anything here."""
         fmt, _ = self._ret_fmt(127)
         assert fmt is not REAL_FORMAT, fmt
+
+
+class TestInnerSymbolicScope:
+    """A ``with`` whose context does not reduce is not the caller's context.
+
+    ``_resolve_active_ctx`` substituted the caller's active context for *every*
+    unresolved scope, not just the callee's function-level one.  An inner
+    ``with fp.MPFixedContext(n):`` then read as the caller's ``REAL``, the
+    rounding looked like the identity, and the callee's result inherited the
+    argument's format -- a bound that excludes the value the program computes.
+    """
+
+    @staticmethod
+    def _call_bound(info):
+        from fpy2.ast.fpyast import Call
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Call))
+
+    @staticmethod
+    def _admits(bound, value):
+        """Does *bound* describe a set containing *value*?  Pinning the
+        callee's position makes the bound a ``SetFormat``, so this has to ask
+        the question in a way that does not assume a scalar ``Format``."""
+        if isinstance(bound, SetFormat):
+            return value.as_rational() in bound.values
+        return bound.representable_in(value)
+
+    def test_bound_admits_the_actual_result(self):
+        """A ``with`` on a context *variable*: nothing about it is known, so
+        the fallback has to be ``REAL_FORMAT`` and not the caller's context."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x, c):
+            with c:
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, c):
+            return g(x, c)
+
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32), None])
+        bound = self._call_bound(FormatInfer.analyze(mono))
+        # a caller passing `MPFixedContext(127)` rounds at a quantum of 2^128
+        actual = fp.MPFixedContext(127).round(fp.FP32.round(3.4028234663852886e38))
+        assert self._admits(bound, actual), bound
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: rounding FP32's largest value at ``2^128`` really
+        does leave the source format, so the bound above is a fact about the
+        program rather than about the analysis."""
+        actual = fp.MPFixedContext(127).round(fp.FP32.round(3.4028234663852886e38))
+        assert int(fp.logb(actual)) == 128
+        assert not fp.FP32.representable_under(actual)
+
+
+class TestPinnedArgumentsCloseAContext:
+    """A callee's ``with fp.MPFixedContext(n, rm):`` closes when the call site
+    pins ``n`` and ``rm``.
+
+    Formats alone cannot do this -- a rounding mode has no numeric format, so
+    ``arg_fmts`` carries ``None`` for one -- which is why the instantiation
+    signature also carries argument *values*.
+    """
+
+    @staticmethod
+    def _round_bound(info):
+        from fpy2.ast.fpyast import Call, Round
+        sub = next(s for e, s in info.by_call.items() if isinstance(e, Call))
+        return next(b for e, b in sub.by_expr.items() if isinstance(e, Round))
+
+    def test_pinned_position_and_mode_give_a_fixed_format(self):
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x, n, rm):
+            with fp.MPFixedContext(n, rm):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            return g(x, -10, fp.RM.RTZ)
+
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32)])
+        bound = self._round_bound(FormatInfer.analyze(mono))
+        assert bound != REAL_FORMAT, bound
+        af = AbstractFormat.from_format(bound)
+        assert af.exp == -9, bound        # MPFixedContext(-10) quantum is 2^-9
+
+    def test_an_open_position_stays_open(self):
+        """The counterweight: a position the call site cannot pin keeps the
+        context open, and the format stays unconstrained."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(x, n):
+            with fp.MPFixedContext(n):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, n):
+            return g(x, n)
+
+        mono = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP32), RealType(fp.INTEGER)]
+        )
+        assert self._round_bound(FormatInfer.analyze(mono)) == REAL_FORMAT
 
 
 class TestSpecialSentinels:
@@ -3194,3 +3316,37 @@ class TestZeroOnlyIntersection:
         assert holds(0) and holds(112) and holds(-128)
         assert not holds(127)    # not a multiple of 16
         assert not holds(128)    # a multiple of 16, but past the bound
+
+
+def _fmt_of(analysis, text: str):
+    """The inferred format of the one expression printing as *text*."""
+    for e, fmt in analysis.by_expr.items():
+        if e.format() == text:
+            return fmt
+    raise AssertionError(f'no expression prints as {text!r}')
+
+
+class TestMulByZeroNarrowsToTheOperand:
+    """`0 * x` names only the results *x* can actually produce."""
+
+    def test_an_unsigned_operand_keeps_the_exact_zero(self):
+        """No negative value, no NaN, no infinity -- so the product is `{0}`,
+        and a `{+0, -0}` guess would not even fit an unsigned format."""
+        u8 = FixedContext(False, 0, 8)
+
+        @fp.fpy(ctx=u8)
+        def f(x):
+            return x * 0
+
+        g = monomorphize(f, args=[fp.types.RealType(u8)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
+        assert fmt == SetFormat(frozenset((Fraction(0),)))
+
+    def test_a_float_operand_keeps_all_three(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            return x * 0
+
+        g = monomorphize(f, args=[fp.types.RealType(fp.FP32)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
+        assert fmt == SetFormat(frozenset((Fraction(0), NEG_ZERO, Special.NAN)))

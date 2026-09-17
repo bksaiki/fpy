@@ -52,10 +52,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case BoolType():
                 return BoolTypeAnn(None)
             case RealType():
-                if isinstance(ty.ctx, NamedId):
-                    return RealTypeAnn(None, None)
-                else:
-                    return RealTypeAnn(ty.ctx, None)
+                return RealTypeAnn(ty.fmt, None)
             case ContextType():
                 return ContextTypeAnn(None)
             case TupleType():
@@ -85,17 +82,13 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
             case BoolTypeAnn(), BoolTypeAnn():
                 return a
             case RealTypeAnn(), RealTypeAnn():
-                match a.ctx, b.ctx:
-                    case None, _:
-                        return b
-                    case _, None:
-                        return a
-                    case Context(), Context():
-                        if not a.ctx.is_equiv(b.ctx):
-                            raise RuntimeError(f'Cannot merge different contexts `{a.ctx}` and `{b.ctx}`')
-                        return a
-                    case _:
-                        raise RuntimeError('unreachable')
+                if a.fmt is None:
+                    return b
+                if b.fmt is None:
+                    return a
+                if a.fmt != b.fmt:
+                    raise RuntimeError(f'Cannot merge different formats `{a.fmt}` and `{b.fmt}`')
+                return a
             case ContextTypeAnn(), ContextTypeAnn():
                 return a
             case TupleTypeAnn(), TupleTypeAnn():
@@ -190,7 +183,6 @@ class Monomorphize:
             ty_info = TypeInfer.check(func)
 
         ty_subst: dict[NamedId, Type] = {}
-        ctx_subst: dict[NamedId, Context] = {}
 
         def _raise_conflict(curr_ty: Type, new_ty: Type):
             raise ValueError(f'Conflicting type info: cannot override {new_ty.format()} with {curr_ty.format()}')
@@ -206,16 +198,7 @@ class Monomorphize:
                 case BoolType(), BoolType():
                     pass
                 case RealType(), RealType():
-                    # TODO: how should we handle context merging?
-                    match a_ty.ctx, b_ty.ctx:
-                        case NamedId(), Context():
-                            if a_ty.ctx in ctx_subst:
-                                if not ctx_subst[a_ty.ctx].is_equiv(b_ty.ctx):
-                                    raise ValueError(f'Conflicting context info: cannot override {new_ty} with {curr_ty}')
-                            else:
-                                ctx_subst[a_ty.ctx] = b_ty.ctx
-                        case _:
-                            pass
+                    pass
                 case ContextType(), ContextType():
                     pass
                 case TupleType(), TupleType():

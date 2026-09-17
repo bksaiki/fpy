@@ -14,7 +14,8 @@ from fpy2 import dim, size
 from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis.context_use import ContextUse
-from fpy2.ast.fpyast import Ast, Call, ContextStmt, ForeignVal, FuncDef
+from fpy2.analysis.context_use import PartialContext
+from fpy2.ast.fpyast import Ast, Call, ContextStmt, ForeignVal, FuncDef, Var
 from fpy2.number import Context
 from fpy2.utils import NamedId
 
@@ -144,6 +145,68 @@ class TestContextUse:
         with_scope = result.scopes[-1]
         # Cannot be resolved statically → symbolic variable
         assert isinstance(with_scope.ctx, fp.utils.NamedId)
+
+    # ------------------------------------------------------------------
+    # ContextStmt whose constructor is known but whose arguments are not
+
+    def test_context_stmt_partial(self):
+        """A context constructor with a runtime argument keeps its shape."""
+        @fp.fpy
+        def f(x, n):
+            with fp.MPFixedContext(n):
+                return fp.round(x)
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        with_scope = result.scopes[-1]
+
+        assert isinstance(with_scope.ctx, PartialContext)
+        assert with_scope.ctx.cls is fp.MPFixedContext
+        # the unresolved position survives as the expression itself
+        (pos,) = with_scope.ctx.args
+        assert isinstance(pos, Var)
+
+    def test_context_stmt_partial_reduces_static_args(self):
+        """Arguments that *do* reduce are recorded as values, not expressions."""
+        @fp.fpy
+        def f(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTN):
+                return fp.round(x)
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        ctx = result.scopes[-1].ctx
+
+        assert isinstance(ctx, PartialContext)
+        pos, rm = ctx.args
+        assert isinstance(pos, Var)
+        assert not isinstance(rm, Ast)
+
+    def test_context_stmt_fully_static_is_concrete(self):
+        """A constructor whose arguments all reduce is still a ``Context``."""
+        @fp.fpy
+        def f(x):
+            with fp.MPFixedContext(5):
+                return fp.round(x)
+
+        result = fp.analysis.ContextUse.analyze(f.ast)
+        assert isinstance(result.scopes[-1].ctx, Context)
+
+    def test_partial_context_holes(self):
+        """``holes`` names the arguments a caller still has to pin."""
+        @fp.fpy
+        def f(x, n, rm):
+            with fp.MPFixedContext(n, rm):
+                return fp.round(x)
+
+        ctx = fp.analysis.ContextUse.analyze(f.ast).scopes[-1].ctx
+        assert [h.format() for h in ctx.holes] == ['n', 'rm']
+
+        @fp.fpy
+        def g(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTN):
+                return fp.round(x)
+
+        ctx = fp.analysis.ContextUse.analyze(g.ast).scopes[-1].ctx
+        assert [h.format() for h in ctx.holes] == ['n']
 
     # ------------------------------------------------------------------
     # Nested ContextStmt

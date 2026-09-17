@@ -67,6 +67,7 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import REAL, Context, Float
+from ..number.context.format import Format
 from ..types import RealType, Type
 from .alias import Alias, AliasAnalysis, Region
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
@@ -212,6 +213,22 @@ def representable_classes(ctx: Context) -> ValueClass:
     out = _ZERO | _FINITE
     for x in _PROBES:
         out |= _rounded_class(ctx, x)
+    return out
+
+
+@functools.cache
+def representable_classes_of(fmt: Format) -> ValueClass:
+    """Which classes *fmt* can hold.
+
+    The format-level counterpart of :func:`representable_classes`, for a value
+    that is already in the format rather than being rounded into it -- an
+    argument binding.  Nothing rounds, so a context's substitution and refusal
+    rules cannot apply and membership settles it.
+    """
+    out = _ZERO | _FINITE
+    for x in _PROBES:
+        if fmt.representable_in(x):
+            out |= class_of(x)
     return out
 
 
@@ -1199,9 +1216,9 @@ def _literal_class(e: RationalVal) -> ValueClass:
 
 
 def _arg_class(ty: Type | None) -> ValueClass:
-    """A parameter's class, from the context its declared type pins it to."""
-    if isinstance(ty, RealType) and isinstance(ty.ctx, Context):
-        return representable_classes(ty.ctx)
+    """A parameter's class, from the format its declared type pins it to."""
+    if isinstance(ty, RealType) and ty.fmt is not None:
+        return representable_classes_of(ty.fmt)
     return _TOP
 
 

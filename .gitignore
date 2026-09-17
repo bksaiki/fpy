@@ -179,3 +179,6 @@ cython_debug/
 # VS Code settings
 .vscode/
 tests/unit/backend/cpp/test_unbox_runtime.py
+
+# Common output directory
+output/

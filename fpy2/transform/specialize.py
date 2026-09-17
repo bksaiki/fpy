@@ -2,24 +2,19 @@
 Module-level specialization.
 
 Expands a :class:`~fpy2.Module` into a new ``Module`` where every function is
-fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-formats)``
+fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-types)``
 spec.  Each unique spec becomes one entry; cross-function calls are rewired
 to the appropriate spec.
 
-The spec key is ``(FuncDef, calling-ctx, fingerprint of per-argument
-FormatBounds)`` — the natural domain produced by :class:`FormatInfer`.
-Public entries convert their user-supplied ``arg_types`` to
-:class:`FormatBound`\\s via :func:`_type_to_fmt`; callees take their
-``arg_fmts`` directly from FormatInfer's per-call-site analysis.  Trivial
-bounds (``None`` for non-numeric args, ``REAL_FORMAT`` for the polymorphic
-top) fingerprint to the empty string, so polymorphic specs pass through
-unchanged.
-
-Callee monomorphization converts ``arg_fmts`` back to ``Type``\\s via
-:func:`_bound_to_type` only to feed :class:`Monomorphize` — the key itself
-lives in pure :class:`FormatBound` space.  Backends (notably cpp's storage
-selection) rely on the resulting per-arg ctx annotations to pick concrete
-representations.
+A spec is keyed on two axes.  The refined argument *types* say what each
+argument may be -- a public entry supplies them directly, a callee gets them
+from FormatInfer's per-call-site ``arg_fmts`` and the caller-proven lengths.
+The pinned argument *values* say which value it is, for the contexts and
+rounding modes partial evaluation resolved at the call site; those are
+substituted into the body rather than annotated, since a value is not a type.
+Both axes are exactly what ``Monomorphize`` is given, so one fingerprint means
+one body.  An argument that pins nothing contributes nothing, leaving
+polymorphic specs unchanged.
 """
 
 import hashlib
@@ -31,6 +26,7 @@ from ..analysis.array_size import (
     TupleSize,
     concrete_size,
 )
+from ..analysis.define_use import AssignDef, DefineUse
 from ..analysis.format_infer import (
     FormatBound,
     FormatInfer,
@@ -38,89 +34,25 @@ from ..analysis.format_infer import (
     SetFormat,
     TupleFormat,
     VarFormat,
+    to_abstract,
 )
-from ..ast import Call, FuncDef
+from ..analysis.partial_eval import PartialEvalInfo
+from ..ast import Call, Expr, ForeignVal, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
+from ..interpret.value import Foreign
 from ..module import Module
 from ..number import Context, RoundingMode
-from ..number.context.efloat import EFloatContext, EFloatFormat
-from ..number.context.exponential import ExpContext, ExpFormat
-from ..number.context.fixed import FixedContext, FixedFormat
 from ..number.context.format import Format
-from ..number.context.ieee754 import IEEEContext, IEEEFormat
-from ..number.context.mp_fixed import MPFixedContext, MPFixedFormat
-from ..number.context.mp_float import MPFloatContext, MPFloatFormat
-from ..number.context.mpb_fixed import MPBFixedContext, MPBFixedFormat
-from ..number.context.mpb_float import MPBFloatContext, MPBFloatFormat
-from ..number.context.mps_float import MPSFloatContext, MPSFloatFormat
-from ..number.context.real import REAL_FORMAT, RealFormat
-from ..number.context.sm_fixed import SMFixedContext, SMFixedFormat
-from ..types import BoolType, ListType, RealType, TupleType, Type
+from ..number.context.real import REAL_FORMAT
+from ..types import ListType, RealType, TupleType, Type
+from ..utils import NamedId
 from .monomorphize import Monomorphize
+from .subst_var import SubstVar
 
 # ----------------------------------------------------------------------
-# Format -> Context recovery + FormatBound -> Type conversion (used only
-# to feed `Monomorphize` at callees — the spec key does *not* go through
-# this conversion).
-
-def _format_to_ctx(fmt: Format) -> Context | None:
-    """Best-effort recovery of a :class:`Context` from a :class:`Format`.
-
-    Each format is paired with the context class that describes it, and the
-    context is rebuilt via that class's ``from_format``.  Returns ``None``
-    when no context can describe the format — the caller falls back to
-    ``RealType(None)``.
-
-    The cases are ordered most-derived first, since ``IEEEFormat`` is an
-    ``EFloatFormat`` and ``FixedFormat``/``SMFixedFormat`` are both
-    ``MPBFixedFormat``\\s.
-    """
-    # A `Format` describes a set of values, not how to round into it, so the
-    # rounding mode has to be chosen here.  RNE is `from_format`'s default and
-    # matches every canonical float context; the fixed-point family instead
-    # uses RTZ, which is what every canonical integer context (`SINT*`,
-    # `UINT*`, `INTEGER`) is built with and what the cpp backend requires of
-    # integer storage, since C++ integer arithmetic truncates.
-    if isinstance(fmt, MPFixedFormat | MPBFixedFormat):
-        rm = RoundingMode.RTZ
-    else:
-        rm = RoundingMode.RNE
-
-    try:
-        match fmt:
-            # `IEEEFormat` before `EFloatFormat`
-            case IEEEFormat():
-                return IEEEContext.from_format(fmt, rm=rm)
-            case EFloatFormat():
-                return EFloatContext.from_format(fmt, rm=rm)
-            # `FixedFormat` and `SMFixedFormat` before `MPBFixedFormat`
-            case FixedFormat():
-                return FixedContext.from_format(fmt, rm=rm)
-            case SMFixedFormat():
-                return SMFixedContext.from_format(fmt, rm=rm)
-            case MPBFixedFormat():
-                return MPBFixedContext.from_format(fmt, rm=rm)
-            case MPFixedFormat():
-                return MPFixedContext.from_format(fmt, rm=rm)
-            case ExpFormat():
-                return ExpContext.from_format(fmt, rm=rm)
-            case MPBFloatFormat():
-                return MPBFloatContext.from_format(fmt, rm=rm)
-            case MPSFloatFormat():
-                return MPSFloatContext.from_format(fmt, rm=rm)
-            case MPFloatFormat():
-                return MPFloatContext.from_format(fmt, rm=rm)
-            case RealFormat():
-                # the polymorphic top: callers treat it as "no context"
-                return None
-            case _:
-                return None
-    except (NotImplementedError, TypeError, ValueError):
-        # some `from_format`s reject formats their context cannot express;
-        # recovery is best-effort
-        return None
-
+# FormatBound -> Type conversion, used only to feed `Monomorphize` at
+# callees — the spec key does *not* go through it.
 
 def _bound_to_type(
     bound: FormatBound, size: ArraySizeBound = None,
@@ -128,11 +60,10 @@ def _bound_to_type(
     """Convert a :class:`FormatBound` to a :class:`Type` for use as a
     ``Monomorphize`` argument override.
 
-    Scalar ``Format`` bounds attempt ``Format → Context`` recovery via
-    :func:`_format_to_ctx` and become ``RealType(<recovered ctx>)`` on
-    success (fallback ``RealType(None)`` otherwise).  ``SetFormat`` and
-    ``None`` collapse to ``RealType(None)`` / ``None``, as does
-    :class:`VarFormat` -- an unresolved kind names no type.
+    A scalar ``Format`` becomes ``RealType(fmt)`` directly.  A ``SetFormat``
+    names no ``Format``, so it is widened to the tightest one containing its
+    values -- a superset, which is what the callee's storage has to hold
+    anyway.  ``None`` and :class:`VarFormat` name no type at all.
 
     *size* rides along structurally: a ``ListSize`` with a concrete ``int``
     length puts that length on the ``ListType``, which is how a caller's proven
@@ -163,9 +94,10 @@ def _bound_to_type(
         length = concrete_size(size.size) if isinstance(size, ListSize) else None
         return ListType(elt_type, length)
     if isinstance(bound, SetFormat):
-        return RealType(None)
+        af = to_abstract(bound)
+        return RealType(None if af is None else af.format())
     assert isinstance(bound, Format), f'unexpected FormatBound: {type(bound)}'
-    return RealType(_format_to_ctx(bound))
+    return RealType(bound)
 
 
 def _arg_fmts_to_arg_types(
@@ -182,41 +114,12 @@ def _arg_fmts_to_arg_types(
 
 class _SpecKey(NamedTuple):
     """A specialization is identified by the original ``FuncDef``, the calling
-    (outer) context, and stable fingerprints of the per-argument
-    :class:`FormatBound`\\s and -- when the caller asked for size keying --
-    concrete lengths."""
+    (outer) context, and a stable fingerprint of the refined argument types --
+    which are exactly what :class:`Monomorphize` is given."""
     fdef: FuncDef
     ctx: Context | None
-    arg_fmts_fp: str   # '' when no arg formats are pinned
-    arg_sizes_fp: str  # '' when no argument carries a concrete length
-
-
-# ----------------------------------------------------------------------
-# Type -> FormatBound conversion (for public keying).
-
-
-def _type_to_fmt(t: Type | None) -> FormatBound:
-    """Convert a :class:`Type` to a :class:`FormatBound` for spec keying.
-
-    ``RealType(ctx)`` → ``ctx.format()`` (a ``Format``).  Aggregates
-    recurse (``TupleType`` → ``TupleFormat``, ``ListType`` →
-    ``ListFormat``).  Non-numeric and ctx-less types yield ``None`` —
-    no specialization info to key on."""
-    if t is None or isinstance(t, BoolType):
-        return None
-    if isinstance(t, RealType):
-        if t.ctx is None or not isinstance(t.ctx, Context):
-            return None
-        return t.ctx.format()
-    if isinstance(t, TupleType):
-        return TupleFormat(tuple(_type_to_fmt(e) for e in t.elts))
-    if isinstance(t, ListType):
-        return ListFormat(_type_to_fmt(t.elt))
-    return None
-
-
-# ----------------------------------------------------------------------
-# Spec-key fingerprints.
+    arg_types_fp: str  # '' when the argument types constrain nothing
+    arg_vals_fp: str = ''  # '' when no argument is pinned to a value
 
 
 def _ctx_fingerprint(ctx: Context) -> str:
@@ -227,25 +130,67 @@ def _ctx_fingerprint(ctx: Context) -> str:
     return hashlib.sha1(str(ctx).encode()).hexdigest()[:8]
 
 
-def _is_trivial_fmt(f: FormatBound) -> bool:
+def _is_trivial_fmt(f: 'FormatBound') -> bool:
     """A :class:`FormatBound` that conveys no specialization information:
     ``None`` (non-numeric) or ``REAL_FORMAT`` (the polymorphic scalar
     top)."""
     return f is None or f is REAL_FORMAT or f == REAL_FORMAT
 
 
-def _arg_fmts_fingerprint(
-    arg_fmts: tuple[FormatBound, ...] | None,
-) -> str:
-    """A short fingerprint of a per-argument :class:`FormatBound` tuple.
-    Returns ``''`` when *arg_fmts* is ``None`` or every entry is trivial
-    — so polymorphic specs pass through unchanged.  Otherwise distinct
-    bound reprs dedupe to one spec via SHA-1 (matching cpp's mangling
-    shape)."""
-    if arg_fmts is None or all(_is_trivial_fmt(f) for f in arg_fmts):
+def _type_pin(t: Type | None, size_key: bool) -> str | None:
+    """What *t* pins, as a canonical string, or ``None`` when it pins nothing.
+
+    The format of a real, the shape of an aggregate, and the length of a list
+    all distinguish one spec from another.  *size_key* off drops lengths,
+    keeping keys byte-identical to a size-blind run.
+    """
+    match t:
+        case RealType():
+            return None if _is_trivial_fmt(t.fmt) else f'r{t.fmt!r}'
+        case ListType():
+            # the shape pins even when the leaves do not: a spec whose argument
+            # is known to be a list differs from one where nothing is known
+            elt = _type_pin(t.elt, size_key)
+            # a symbolic length is a per-run gensym and must never be keyed on
+            n = concrete_size(t.length) if size_key else None
+            return f'l[{elt or "_"};{"_" if n is None else n}]'
+        case TupleType():
+            return 't[' + ';'.join(
+                _type_pin(e, size_key) or '_' for e in t.elts
+            ) + ']'
+        case _:
+            return None
+
+
+def _arg_vals_fingerprint(vals: tuple[object, ...] | None) -> str:
+    """A short fingerprint of the argument values a call pins.
+
+    A *separate* axis from :func:`_arg_types_fingerprint`: a format or a length
+    constrains what a value may be, while a pin says which value it is.  That
+    is partial evaluation, not typing, so it keys on its own and is applied by
+    substitution rather than by an annotation.
+    """
+    if vals is None or all(v is None for v in vals):
         return ''
-    parts = [repr(f) if f is not None else 'X' for f in arg_fmts]
-    raw = '|'.join(parts)
+    raw = '|'.join('X' if v is None else f'{type(v).__name__}:{v}' for v in vals)
+    return hashlib.sha1(raw.encode()).hexdigest()[:8]
+
+
+def _arg_types_fingerprint(
+    atypes: 'tuple[Type | None, ...] | None', size_key: bool,
+) -> str:
+    """A short fingerprint of the refined argument types.
+
+    ``''`` when nothing is pinned, so a polymorphic spec passes through
+    unchanged.  These types are exactly what :class:`Monomorphize` is given,
+    so two specs with the same fingerprint have identical bodies.
+    """
+    if atypes is None:
+        return ''
+    pins = [_type_pin(t, size_key) for t in atypes]
+    if all(p is None for p in pins):
+        return ''
+    raw = '|'.join(p if p is not None else 'X' for p in pins)
     return hashlib.sha1(raw.encode()).hexdigest()[:8]
 
 
@@ -274,58 +219,88 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
             return None
 
 
-def _type_to_size(t: Type | None) -> ArraySizeBound:
-    """The concrete lengths a user-supplied ``arg_type`` carries, as a
-    *sanitized* :class:`ArraySizeBound` -- the size analog of
-    :func:`_type_to_fmt`, for public keying.  Two entries differing only in
-    length must not collapse to one spec: the length reaches the annotations
-    and, with the cpp backend's arrays, the ABI."""
-    if isinstance(t, TupleType):
-        elts = tuple(_type_to_size(e) for e in t.elts)
-        if all(e is None for e in elts):
-            return None
-        return TupleSize(elts)
-    if isinstance(t, ListType):
-        elt = _type_to_size(t.elt)
-        length = t.length if isinstance(t.length, int) else None
-        if elt is None and length is None:
-            return None
-        return ListSize(elt, length)
-    return None
-
-
-def _arg_sizes_fingerprint(
-    arg_sizes: 'tuple[ArraySizeBound, ...] | None',
-) -> str:
-    """A short fingerprint of *sanitized* per-argument sizes.  Returns
-    ``''`` when nothing carries a concrete length -- so a size-free program
-    produces byte-identical keys and mangled names to a size-blind run."""
-    if arg_sizes is None or all(s is None for s in arg_sizes):
-        return ''
-    parts = [repr(s) if s is not None else 'X' for s in arg_sizes]
-    return hashlib.sha1('|'.join(parts).encode()).hexdigest()[:8]
-
-
 def _mangle_private(
-    name: str, ctx: Context | None, arg_fmts_fp: str, arg_sizes_fp: str = '',
+    name: str, ctx: Context | None, arg_types_fp: str, arg_vals_fp: str = '',
 ) -> str:
-    """Build a stable name for a private spec.  Includes the ctx fingerprint
-    (when present) and the arg-format and arg-size fingerprints (when
-    non-empty), so two specs of the same function with different ``(ctx,
-    arg_fmts, arg_sizes)`` produce distinguishable names."""
+    """Build a stable name for a private spec, from the ctx, argument-type and
+    pinned-value fingerprints, so two specs of the same function are
+    distinguishable."""
     parts = [name]
     if ctx is not None:
         parts.append(_ctx_fingerprint(ctx))
-    if arg_fmts_fp:
-        parts.append(arg_fmts_fp)
-    if arg_sizes_fp:
-        # `s`-tagged so a format and a size fingerprint cannot collide.
-        parts.append(f's{arg_sizes_fp}')
+    if arg_types_fp:
+        parts.append(arg_types_fp)
+    if arg_vals_fp:
+        # `v`-tagged so a type and a value fingerprint cannot collide
+        parts.append(f'v{arg_vals_fp}')
     return '__'.join(parts)
 
 
+_PINNABLE = (Context, RoundingMode)
+"""Value kinds a call site may pin into a callee.
+
+Both reach a rounding: a :class:`Context` directly, a :class:`RoundingMode`
+through a context constructor.  Numbers are left out -- their formats already
+travel as types, and pinning every constant would multiply specs for no gain.
+"""
+
+
+def _pinned_value(v: object) -> object | None:
+    """*v* if a call site may pin it, else ``None``.
+
+    Partial evaluation wraps a value FPy cannot compute on in a ``Foreign``,
+    which is how a rounding mode arrives.
+    """
+    if isinstance(v, Foreign):
+        v = v.val
+    return v if isinstance(v, _PINNABLE) else None
+
+
+def _pinnable_args(
+    callee: FuncDef, args: tuple[Expr, ...], pe: PartialEvalInfo,
+) -> tuple[object, ...]:
+    """The value each of *args* pins in *callee*, or ``None`` where it pins
+    nothing.
+
+    A discarded parameter takes no substitution, so keying on its value would
+    only split one spec into identical copies.  An unused *named* parameter
+    still splits, which costs a duplicate body rather than a wrong one.
+    """
+    out: list[object] = []
+    for i, a in enumerate(args):
+        param = callee.args[i].name if i < len(callee.args) else None
+        val = _pinned_value(pe.by_expr.get(a))
+        out.append(val if isinstance(param, NamedId) else None)
+    return tuple(out)
+
+
+def _pin_arg_values(
+    func: FuncDef, vals: tuple[object, ...] | None,
+) -> FuncDef:
+    """*func* with each pinned parameter replaced by its value.
+
+    The pin is a partial-evaluation fact, not a type, so it is applied by
+    substituting the value into the body -- which is what makes a ``with`` over
+    a context *parameter* resolvable.  The parameter is left in place and
+    becomes dead; dropping it would have to rewrite every call site too.
+    """
+    if vals is None or all(v is None for v in vals) or not func.args:
+        return func
+
+    def_use = DefineUse.analyze(func)
+    subst: dict[AssignDef, Expr] = {}
+    for arg, val in zip(func.args, vals):
+        if val is None or not isinstance(arg.name, NamedId):
+            continue
+        # both kinds are opaque to FPy and spell as a foreign literal
+        subst[def_use.find_def_from_site(arg.name, arg)] = ForeignVal(val, None)
+    if not subst:
+        return func
+    return SubstVar.apply(func, def_use, subst)
+
+
 # ----------------------------------------------------------------------
-# Per-call-site rebinder (same shape as v1).
+# Per-call-site rebinder.
 
 
 class _RebindCallSites(DefaultTransformVisitor):
@@ -387,42 +362,26 @@ class Specialize:
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
 
-        # --- 1. Enumerate specs.  Start with each public entry; walk
-        #        callees via `FormatInfer.by_call` (which gives the
-        #        calling ctx *and* per-argument formats per call site).
+        # --- 1. Enumerate specs: each public entry, then its callees.
         monos: dict[_SpecKey, FuncDef] = {}
         call_targets: dict[_SpecKey, dict[Call, _SpecKey]] = {}
         callees_of: dict[_SpecKey, list[_SpecKey]] = {}
         orig_func: dict[_SpecKey, Function] = {}
-        # The arg_types tuple used to monomorphize each spec.  For public
-        # roots this is the user-supplied ``entry.arg_types``; for callees
-        # it is derived from ``sub_fa.fn_fmt.arg_fmts`` via
-        # ``_arg_fmts_to_arg_types`` so the body's arg annotations get
-        # per-arg ctx pinning (needed by cpp's storage selection).
+        # What each spec is monomorphized at: a public root's own
+        # `arg_types`, or a callee's derived from the call site.
         arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
+        # Per-spec argument values the caller pinned, applied by substitution.
+        arg_vals_for: dict[_SpecKey, tuple[object, ...] | None] = {}
 
         public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
 
         worklist: list[_SpecKey] = []
         for entry in module:
             atypes = entry.arg_types
-            # Derive arg_fmts from the user-supplied arg_types so the key
-            # lives in FormatBound space (matching what callees produce).
-            pub_arg_fmts = (
-                tuple(_type_to_fmt(t) for t in atypes)
-                if atypes is not None else None
-            )
-            # ...and the lengths those arg_types carry, so two entries
-            # differing only in length get distinct specs.
-            pub_arg_sizes = (
-                tuple(_type_to_size(t) for t in atypes)
-                if size_key and atypes is not None else None
-            )
             key = _SpecKey(
                 fdef=entry.func.ast,
                 ctx=entry.ctx,
-                arg_fmts_fp=_arg_fmts_fingerprint(pub_arg_fmts),
-                arg_sizes_fp=_arg_sizes_fingerprint(pub_arg_sizes),
+                arg_types_fp=_arg_types_fingerprint(atypes, size_key),
             )
             public_keys.append((entry.name, key))
             if key not in orig_func:
@@ -435,13 +394,11 @@ class Specialize:
             key = worklist.pop(0)
             atypes = arg_types_for.get(key)
             mono = Monomorphize.apply(key.fdef, key.ctx, atypes)
+            mono = _pin_arg_values(mono, arg_vals_for.get(key))
             monos[key] = mono
 
-            # FormatInfer gives, for each Function-targeted Call in
-            # ``mono``, the sub-analysis whose ``fn_fmt`` describes the
-            # callee at that call site — calling ctx + per-argument
-            # format bounds.  Both feed the callee's spec identity.
             fa = FormatInfer.analyze(mono)
+            pe = fa.partial_eval
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
             local_seen: set[_SpecKey] = set()
@@ -452,9 +409,7 @@ class Specialize:
                 # Only concrete ``Context``s count; symbolic / None collapse.
                 callee_ctx = callee_ctx_raw if isinstance(callee_ctx_raw, Context) else None
                 callee_arg_fmts = sub_fa.fn_fmt.arg_fmts
-                # The caller-side proven length of each argument expression,
-                # sanitized to concrete ints (a symbolic size is a per-run
-                # gensym and must never reach a fingerprint).
+                # concrete ints only: a symbolic size is a per-run gensym
                 callee_arg_sizes = (
                     tuple(
                         _sanitize_size(fa.array_size.by_expr.get(a))
@@ -462,11 +417,18 @@ class Specialize:
                     )
                     if size_key else None
                 )
+                # both the spec's identity and what `Monomorphize` is given
+                callee_atypes = _arg_fmts_to_arg_types(
+                    callee_arg_fmts, callee_arg_sizes,
+                )
+                # a `Context` makes a callee's `with` resolvable; a rounding
+                # mode reaches one through a context constructor
+                callee_arg_vals = _pinnable_args(callee_fn.ast, call.args, pe)
                 callee_key = _SpecKey(
                     fdef=callee_fn.ast,
                     ctx=callee_ctx,
-                    arg_fmts_fp=_arg_fmts_fingerprint(callee_arg_fmts),
-                    arg_sizes_fp=_arg_sizes_fingerprint(callee_arg_sizes),
+                    arg_types_fp=_arg_types_fingerprint(callee_atypes, size_key),
+                    arg_vals_fp=_arg_vals_fingerprint(callee_arg_vals),
                 )
 
                 site_map[call] = callee_key
@@ -476,13 +438,8 @@ class Specialize:
                 if callee_key not in seen:
                     seen.add(callee_key)
                     orig_func[callee_key] = callee_fn
-                    # ``Monomorphize`` takes Types; convert the arg_fmts
-                    # here (and only here — the key already lives in
-                    # FormatBound space) so the body's arg annotations
-                    # get per-arg ctx pinning that backends need.
-                    arg_types_for[callee_key] = _arg_fmts_to_arg_types(
-                        callee_arg_fmts, callee_arg_sizes,
-                    )
+                    arg_types_for[callee_key] = callee_atypes
+                    arg_vals_for[callee_key] = callee_arg_vals
                     worklist.append(callee_key)
 
             call_targets[key] = site_map
@@ -503,9 +460,8 @@ class Specialize:
         for k in monos:
             _post_order(k)
 
-        # --- 3. Decide names.  Publics: first registering entry's name
-        #        (no mangling).  Privates: original name + ctx + arg_types
-        #        fingerprints.
+        # --- 3. Name each spec: a public keeps its entry name, a private
+        #        is mangled from the fingerprints.
         spec_to_public_name: dict[_SpecKey, str] = {}
         for entry_name, k in public_keys:
             spec_to_public_name.setdefault(k, entry_name)
@@ -516,12 +472,10 @@ class Specialize:
                 names[k] = spec_to_public_name[k]
             else:
                 names[k] = _mangle_private(
-                    orig_func[k].name, k.ctx, k.arg_fmts_fp, k.arg_sizes_fp,
+                    orig_func[k].name, k.ctx, k.arg_types_fp, k.arg_vals_fp,
                 )
 
-        # --- 4. Build new ``Function``s in leaves-first order, rewiring
-        #        each spec's body to point at the already-built callee
-        #        specs (per-call-site).
+        # --- 4. Build leaves-first, rewiring each body per call site.
         new_funcs: dict[_SpecKey, Function] = {}
         for k in order:
             site_to_func = {
@@ -532,10 +486,8 @@ class Specialize:
             rewired.name = names[k]
             new_funcs[k] = orig_func[k].with_ast(rewired)
 
-        # --- 5. Assemble the output module.  Each public entry is re-added
-        #        with its original name; private specs are picked up
-        #        automatically by ``add``'s eager call-graph discovery,
-        #        which walks the rewired ``Call.fn`` references.
+        # --- 5. Re-add the publics; `add` discovers the privates through
+        #        the rewired `Call.fn` references.
         out = Module(module.name)
         for entry_name, k in public_keys:
             out.add(new_funcs[k], name=entry_name)

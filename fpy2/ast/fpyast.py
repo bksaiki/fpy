@@ -11,6 +11,7 @@ from typing import Any, Self, TypeAlias
 from ..env import ForeignEnv
 from ..fpc_context import FPCoreContext
 from ..number import Context, Float
+from ..number.context.format import Format
 from ..utils import (
     CompareOp,
     Id,
@@ -261,17 +262,26 @@ class AnyTypeAnn(TypeAnn):
         return isinstance(other, AnyTypeAnn)
 
 class RealTypeAnn(TypeAnn):
-    """FPy AST: real type annotation"""
-    __slots__ = ('ctx',)
+    """FPy AST: real type annotation
 
-    ctx: Context | None
+    Carries the :class:`Format` the values are drawn from, if known.  A
+    :class:`Context` is accepted and reduced to its format, as in
+    :class:`~fpy2.types.RealType`.
+    """
+    __slots__ = ('fmt',)
 
-    def __init__(self, ctx: Context | None, loc: Location | None):
+    fmt: Format | None
+
+    def __init__(self, fmt: Format | Context | None, loc: Location | None):
         super().__init__(loc)
-        self.ctx = ctx
+        if isinstance(fmt, Context):
+            fmt = fmt.format()
+        elif not isinstance(fmt, Format | None):
+            raise TypeError(f'expected a `Format` or `Context`, got {fmt!r}')
+        self.fmt = fmt
 
     def is_equiv(self, other):
-        return isinstance(other, RealTypeAnn) and self.ctx == other.ctx
+        return isinstance(other, RealTypeAnn) and self.fmt == other.fmt
 
 class BoolTypeAnn(TypeAnn):
     """FPy AST: boolean type annotation"""
