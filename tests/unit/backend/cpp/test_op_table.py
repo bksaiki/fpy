@@ -119,6 +119,57 @@ class TestDispatchDirect:
         assert 'return x;' in out
 
 
+class TestTheBoundDecidesNotJustTheType:
+    """Cast-to-active asks whether the *values* fit, not only the types.
+
+    A `double` holding an FP32 value narrows to `float` exactly, and the
+    emitter already does that silently one function over -- as a tuple field.
+    As an operand it refused, because the guard asked `scalar_fits_in` where
+    the bound answers.  Same definition, same storage, same target.
+    """
+
+    _ARGS = [RealType(fp.FP32), RealType(fp.FP64), RealType(fp.FP64)]
+
+    def test_as_a_container_field(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> tuple[fp.Real, fp.Real]:
+            t = (a, b)
+            if c > 0:
+                t = (a, b)
+                a, b = b, a
+            return t
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=self._ARGS)
+        assert 'static_cast<float>(a)' in out
+
+    def test_as_an_operand(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+            s = b
+            if c > 0:
+                with fp.FP32:
+                    s = a + a
+                a, b = b, a
+            return s
+
+        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=self._ARGS)
+        assert '(static_cast<float>(a) + static_cast<float>(a))' in out
+
+    def test_a_genuinely_lossy_operand_is_still_refused(self):
+        """The bound is a fallback, not a licence: an FP64 value has no
+        `float` to narrow to."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return a + b
+
+        with pytest.raises(CppCompileError, match='conversion is lossy'):
+            CppCompiler().compile(
+                f, ctx=fp.FP64,
+                arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
+            )
+
+
 class TestDispatchCastFallback:
     """Cast-to-active fires when operand storage doesn't match the
     signature's input slot.  The cast must be lossless — lossy

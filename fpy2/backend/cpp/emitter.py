@@ -1940,8 +1940,8 @@ class CppEmitter(Visitor):
             for sig in sigs:
                 if sig.in_tys == want and sig.out_ctx == active:
                     casts = [
-                        self._maybe_cast(code, have, target, at=e)
-                        for code, have in zip(codes, storages)
+                        self._maybe_cast(code, have, target, at=e, src=src)
+                        for code, have, src in zip(codes, storages, srcs)
                     ]
                     if sig.is_call:
                         casts = spell(casts, want)
@@ -2045,13 +2045,12 @@ class CppEmitter(Visitor):
                 return None
             if not self._result_fits_ctx(e, sig.out_ctx):
                 return None
-            try:
-                casts = [
-                    self._maybe_cast(code, have, want, at=e)
-                    for (code, have), want in zip(operands, slots)
-                ]
-            except CppEmitError:
-                return None
+            # the slot check above is `_maybe_cast`'s own test, so no cast
+            # here can refuse
+            casts = [
+                self._maybe_cast(code, have, want, at=e)
+                for (code, have), want in zip(operands, slots)
+            ]
             out = sig.format(*casts)
             if sig_out_ty is not result_ty:
                 out = f'static_cast<{result_ty.format()}>({out})'
@@ -2609,6 +2608,8 @@ class CppEmitter(Visitor):
             arg_tys.append(ty)
         clauses = []
         for i, op in enumerate(e.ops):
+            # a supremum contains both operands, so neither cast can refuse
+            # and neither needs a bound to fall back on
             common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
             lhs = self._maybe_cast(args[i], arg_tys[i], common)
             rhs = self._maybe_cast(args[i + 1], arg_tys[i + 1], common)
