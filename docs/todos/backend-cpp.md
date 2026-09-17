@@ -29,7 +29,10 @@ the bottom.
 
 Everything C++-specific lives here. Analyses this backend depends on but does
 not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
-`array-size-integer-exactness.md`.
+`array-size-integer-exactness.md`. A second backend is scoped in
+`backend-triton.md`; the storage-versus-rounding rule below gets a second
+instance there, since Triton promotes `fp16 / fp16` and `bf16` min/max to fp32
+without announcing it.
 
 The emitter's input is in **hoistable form**: `fpy2.transform.Hoistable` runs in
 `specialize()`, so every expression sits where a statement may be inserted above

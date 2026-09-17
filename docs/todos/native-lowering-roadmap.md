@@ -6,6 +6,12 @@ Rewrite a program whose roundings are floating-point into one whose roundings
 are integer, and compile that to C++ that needs no support library — no MPFR,
 no soft-float, no `fpy::` runtime.
 
+The property matters more off the CPU than on it:
+[backend-triton.md](backend-triton.md) rests on this sequence, because a GPU
+target has no support library to link even in principle, and because Triton
+dispatches natively on RNE only — so every non-RNE rounding reaches codegen
+through here or not at all.
+
 ## Where we are
 
 **Reached, for `FP32` *and* `FP64` sources.** Four operators, each one idea, plus
