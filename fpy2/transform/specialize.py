@@ -306,6 +306,86 @@ def _pin_arg_values(
 
 
 # ----------------------------------------------------------------------
+# Dead-parameter elimination.
+
+
+def _dead_args(func: FuncDef) -> tuple[int, ...]:
+    """The positions of parameters *func*'s body has no use for.
+
+    A parameter reaching only a phi still carries a value into the merge, so a
+    phi operand counts as a use.
+    """
+    du = DefineUse.analyze(func)
+    merged = {
+        du.defs[i]
+        for phis in du.phis.values() for phi in phis for i in (phi.lhs, phi.rhs)
+    }
+    out: list[int] = []
+    for i, arg in enumerate(func.args):
+        if not isinstance(arg.name, NamedId):
+            continue
+        d = du.find_def_from_site(arg.name, arg)
+        if not du.uses[d] and d not in merged:
+            out.append(i)
+    return tuple(out)
+
+
+class _DropCallArgs(DefaultTransformVisitor):
+    """Drop, at every call site, the arguments whose parameters went away."""
+
+    def __init__(self, dropped: dict[FuncDef, tuple[int, ...]]):
+        self._dropped = dropped
+
+    def _visit_call(self, e: Call, ctx):
+        args = [self._visit_expr(a, ctx) for a in e.args]
+        kwargs = [(k, self._visit_expr(v, ctx)) for k, v in e.kwargs]
+        gone = set(
+            self._dropped.get(e.fn.ast, ()) if isinstance(e.fn, Function) else ()
+        )
+        return Call(
+            e.func, e.fn,
+            [a for i, a in enumerate(args) if i not in gone],
+            kwargs, e.loc,
+        )
+
+    def apply(self, func: FuncDef) -> FuncDef:
+        return self._visit_function(func, None)
+
+
+def _drop_dead_args(module: Module) -> Module:
+    """Drop parameters no private spec's body uses any more.
+
+    Pinning substitutes a value into every use of a parameter, leaving the
+    parameter dead -- and a dead parameter has nothing left to infer a type
+    from, which the C++ backend refuses.  A public entry keeps its signature:
+    its callers are outside the module.
+
+    Once the specs have settled, not per round: a spec's identity is partly
+    the values its caller pinned, which a dropped argument no longer spells.
+
+    The argument goes with the parameter, so an expression that only ever fed
+    a dead one is no longer evaluated.  That is a change in what runs -- an
+    out-of-range index there stops raising -- and is sound only because FPy
+    leaves such a read undefined.
+    """
+    public = {f.ast.name for f in module.call_graph().publics}
+    dropped: dict[FuncDef, tuple[int, ...]] = {}
+
+    def step(_m: Module, func: FuncDef) -> FuncDef:
+        # callees first, so what each one shed is already known
+        func = _DropCallArgs(dropped).apply(func)
+        gone = () if func.name in public else _dead_args(func)
+        if not gone:
+            return func
+        kept = [a for i, a in enumerate(func.args) if i not in set(gone)]
+        out = FuncDef(func.name, kept, func.body, func.meta, loc=func.loc)
+        dropped[out] = gone
+        return out
+
+    return module.map(step)
+
+
+# ----------------------------------------------------------------------
 # Per-call-site rebinder.
 
 
@@ -379,7 +459,7 @@ class Specialize:
             out = Specialize._expand(module, size_key=size_key, bases=bases)
             names = frozenset(f.name for f in out.functions())
             if names == previous:
-                return out
+                return _drop_dead_args(out)
             previous = names
             # re-registered as they were, since a public entry's name, context
             # and argument types are the caller's and not the spec's
