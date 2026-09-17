@@ -6,13 +6,15 @@ fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-types)``
 spec.  Each unique spec becomes one entry; cross-function calls are rewired
 to the appropriate spec.
 
-A public entry's ``arg_types`` are already refined types; a callee's come
-from FormatInfer's per-call-site ``arg_fmts``, the caller-proven lengths, and
-the contexts partial evaluation pinned, combined by :func:`_bound_to_type`.
-Either way the refined types are both the key and what ``Monomorphize`` is
-given, so two specs with one fingerprint have identical bodies.  Arguments
-that pin nothing fingerprint to the empty string, leaving polymorphic specs
-unchanged.
+A spec is keyed on two axes.  The refined argument *types* say what each
+argument may be -- a public entry supplies them directly, a callee gets them
+from FormatInfer's per-call-site ``arg_fmts`` and the caller-proven lengths.
+The pinned argument *values* say which value it is, for the contexts and
+rounding modes partial evaluation resolved at the call site; those are
+substituted into the body rather than annotated, since a value is not a type.
+Both axes are exactly what ``Monomorphize`` is given, so one fingerprint means
+one body.  An argument that pins nothing contributes nothing, leaving
+polymorphic specs unchanged.
 """
 
 import hashlib
@@ -24,7 +26,7 @@ from ..analysis.array_size import (
     TupleSize,
     concrete_size,
 )
-from ..analysis.partial_eval import PartialEval
+from ..analysis.partial_eval import PartialEvalInfo
 from ..analysis.format_infer import (
     FormatBound,
     FormatInfer,
@@ -43,7 +45,7 @@ from ..module import Module
 from ..number import Context, RoundingMode
 from ..number.context.format import Format
 from ..number.context.real import REAL_FORMAT
-from ..types import BoolType, ListType, RealType, TupleType, Type
+from ..types import ListType, RealType, TupleType, Type
 from ..utils import NamedId
 from .monomorphize import Monomorphize
 from .subst_var import SubstVar
@@ -120,10 +122,6 @@ class _SpecKey(NamedTuple):
     arg_vals_fp: str = ''  # '' when no argument is pinned to a value
 
 
-# ----------------------------------------------------------------------
-# Type -> FormatBound conversion (for public keying).
-
-
 def _ctx_fingerprint(ctx: Context) -> str:
     """A short, stable, identifier-safe fingerprint for a context.  Used
     in mangled private-spec names *and* in the spec key.  Matches cpp's
@@ -142,26 +140,24 @@ def _is_trivial_fmt(f: 'FormatBound') -> bool:
 def _type_pin(t: Type | None, size_key: bool) -> str | None:
     """What *t* pins, as a canonical string, or ``None`` when it pins nothing.
 
-    A refined argument type is the whole of what distinguishes one spec from
-    another -- the format of a real, the length of a list, the context of a
-    context -- so this is what the spec key is built from.  *size_key* off
-    drops lengths, keeping keys byte-identical to a size-blind run.
+    The format of a real, the shape of an aggregate, and the length of a list
+    all distinguish one spec from another.  *size_key* off drops lengths,
+    keeping keys byte-identical to a size-blind run.
     """
     match t:
         case RealType():
             return None if _is_trivial_fmt(t.fmt) else f'r{t.fmt!r}'
         case ListType():
+            # the shape pins even when the leaves do not: a spec whose argument
+            # is known to be a list differs from one where nothing is known
             elt = _type_pin(t.elt, size_key)
             # a symbolic length is a per-run gensym and must never be keyed on
             n = concrete_size(t.length) if size_key else None
-            if elt is None and n is None:
-                return None
             return f'l[{elt or "_"};{"_" if n is None else n}]'
         case TupleType():
-            pins = [_type_pin(e, size_key) for e in t.elts]
-            if all(p is None for p in pins):
-                return None
-            return 't[' + ';'.join(p or '_' for p in pins) + ']'
+            return 't[' + ';'.join(
+                _type_pin(e, size_key) or '_' for e in t.elts
+            ) + ']'
         case _:
             return None
 
@@ -260,6 +256,24 @@ def _pinned_value(v: object) -> object | None:
     return v if isinstance(v, _PINNABLE) else None
 
 
+def _pinnable_args(
+    callee: FuncDef, args: 'list[Expr]', pe: PartialEvalInfo,
+) -> tuple[object, ...]:
+    """The value each of *args* pins in *callee*, or ``None`` where it pins
+    nothing.
+
+    A discarded parameter takes no substitution, so keying on its value would
+    only split one spec into identical copies.  An unused *named* parameter
+    still splits, which costs a duplicate body rather than a wrong one.
+    """
+    out: list[object] = []
+    for i, a in enumerate(args):
+        param = callee.args[i].name if i < len(callee.args) else None
+        val = _pinned_value(pe.by_expr.get(a))
+        out.append(val if isinstance(param, NamedId) else None)
+    return tuple(out)
+
+
 def _pin_arg_values(
     func: FuncDef, vals: tuple[object, ...] | None,
 ) -> FuncDef:
@@ -286,7 +300,7 @@ def _pin_arg_values(
 
 
 # ----------------------------------------------------------------------
-# Per-call-site rebinder (same shape as v1).
+# Per-call-site rebinder.
 
 
 class _RebindCallSites(DefaultTransformVisitor):
@@ -348,18 +362,13 @@ class Specialize:
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
 
-        # --- 1. Enumerate specs.  Start with each public entry; walk
-        #        callees via `FormatInfer.by_call` (which gives the
-        #        calling ctx *and* per-argument formats per call site).
+        # --- 1. Enumerate specs: each public entry, then its callees.
         monos: dict[_SpecKey, FuncDef] = {}
         call_targets: dict[_SpecKey, dict[Call, _SpecKey]] = {}
         callees_of: dict[_SpecKey, list[_SpecKey]] = {}
         orig_func: dict[_SpecKey, Function] = {}
-        # The arg_types tuple used to monomorphize each spec.  For public
-        # roots this is the user-supplied ``entry.arg_types``; for callees
-        # it is derived from ``sub_fa.fn_fmt.arg_fmts`` via
-        # ``_arg_fmts_to_arg_types`` so the body's arg annotations get
-        # per-arg ctx pinning (needed by cpp's storage selection).
+        # What each spec is monomorphized at: a public root's own
+        # `arg_types`, or a callee's derived from the call site.
         arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
         # Per-spec argument values the caller pinned, applied by substitution.
         arg_vals_for: dict[_SpecKey, tuple[object, ...] | None] = {}
@@ -388,14 +397,8 @@ class Specialize:
             mono = _pin_arg_values(mono, arg_vals_for.get(key))
             monos[key] = mono
 
-            # FormatInfer gives, for each Function-targeted Call in
-            # ``mono``, the sub-analysis whose ``fn_fmt`` describes the
-            # callee at that call site — calling ctx + per-argument
-            # format bounds.  Both feed the callee's spec identity.
             fa = FormatInfer.analyze(mono)
-            # A context passed as a *value* carries no format, so the caller's
-            # partial evaluation is what pins it.
-            pe = PartialEval.apply(mono)
+            pe = fa.partial_eval
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
             local_seen: set[_SpecKey] = set()
@@ -406,9 +409,7 @@ class Specialize:
                 # Only concrete ``Context``s count; symbolic / None collapse.
                 callee_ctx = callee_ctx_raw if isinstance(callee_ctx_raw, Context) else None
                 callee_arg_fmts = sub_fa.fn_fmt.arg_fmts
-                # The caller-side proven length of each argument expression,
-                # sanitized to concrete ints (a symbolic size is a per-run
-                # gensym and must never reach a fingerprint).
+                # concrete ints only: a symbolic size is a per-run gensym
                 callee_arg_sizes = (
                     tuple(
                         _sanitize_size(fa.array_size.by_expr.get(a))
@@ -416,17 +417,13 @@ class Specialize:
                     )
                     if size_key else None
                 )
-                # The refined types are both part of the spec's identity and
-                # what `Monomorphize` is given, so they are built once.
+                # both the spec's identity and what `Monomorphize` is given
                 callee_atypes = _arg_fmts_to_arg_types(
                     callee_arg_fmts, callee_arg_sizes,
                 )
-                # Values the caller knows: a `Context` is what makes a callee's
-                # `with` resolvable, and a rounding mode reaches one through a
-                # context constructor.
-                callee_arg_vals = tuple(
-                    _pinned_value(pe.by_expr.get(a)) for a in call.args
-                )
+                # a `Context` makes a callee's `with` resolvable; a rounding
+                # mode reaches one through a context constructor
+                callee_arg_vals = _pinnable_args(callee_fn.ast, call.args, pe)
                 callee_key = _SpecKey(
                     fdef=callee_fn.ast,
                     ctx=callee_ctx,
@@ -463,9 +460,8 @@ class Specialize:
         for k in monos:
             _post_order(k)
 
-        # --- 3. Decide names.  Publics: first registering entry's name
-        #        (no mangling).  Privates: original name + ctx + arg_types
-        #        fingerprints.
+        # --- 3. Name each spec: a public keeps its entry name, a private
+        #        is mangled from the fingerprints.
         spec_to_public_name: dict[_SpecKey, str] = {}
         for entry_name, k in public_keys:
             spec_to_public_name.setdefault(k, entry_name)
@@ -479,9 +475,7 @@ class Specialize:
                     orig_func[k].name, k.ctx, k.arg_types_fp, k.arg_vals_fp,
                 )
 
-        # --- 4. Build new ``Function``s in leaves-first order, rewiring
-        #        each spec's body to point at the already-built callee
-        #        specs (per-call-site).
+        # --- 4. Build leaves-first, rewiring each body per call site.
         new_funcs: dict[_SpecKey, Function] = {}
         for k in order:
             site_to_func = {
@@ -492,10 +486,8 @@ class Specialize:
             rewired.name = names[k]
             new_funcs[k] = orig_func[k].with_ast(rewired)
 
-        # --- 5. Assemble the output module.  Each public entry is re-added
-        #        with its original name; private specs are picked up
-        #        automatically by ``add``'s eager call-graph discovery,
-        #        which walks the rewired ``Call.fn`` references.
+        # --- 5. Re-add the publics; `add` discovers the privates through
+        #        the rewired `Call.fn` references.
         out = Module(module.name)
         for entry_name, k in public_keys:
             out.add(new_funcs[k], name=entry_name)

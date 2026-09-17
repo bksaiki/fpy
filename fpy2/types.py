@@ -178,7 +178,11 @@ class RealType(Type):
     fmt: Format | None
 
     def __init__(self, fmt: Format | Context | None = None):
-        self.fmt = fmt.format() if isinstance(fmt, Context) else fmt
+        if isinstance(fmt, Context):
+            fmt = fmt.format()
+        elif not isinstance(fmt, Format | None):
+            raise TypeError(f'expected a `Format` or `Context`, got {fmt!r}')
+        self.fmt = fmt
 
     def __eq__(self, other):
         return isinstance(other, RealType)
@@ -284,7 +288,7 @@ class ListType(Type):
 
     length: int | NamedId | None
     """optional list size: a known ``int``, a symbolic ``NamedId``, or
-    ``None`` (unknown).  This is *metadata* — like :attr:`RealType.ctx` it
+    ``None`` (unknown).  This is *metadata* — like :attr:`RealType.fmt` it
     is ignored by ``__eq__`` / ``__hash__`` (and hence by unification), and
     is read only by array-size inference, monomorphization, and the FPCore
     backend."""

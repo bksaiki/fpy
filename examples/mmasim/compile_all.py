@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import fpy2 as fp
 import fpy2.strategies as st
+from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 
 import amd
 import nv
@@ -87,7 +88,7 @@ DESIGNS = [
 
 
 def compile_design(build) -> str:
-    """The C++ for one design, or the exception that stopped it.
+    """The C++ for one design; raises whatever refused it.
 
     `comp_to_loop` precedes `rescale_fixed`: the latter emits the scale-in and
     scale-out as statements, which a rounding inside a comprehension has no
@@ -99,6 +100,11 @@ def compile_design(build) -> str:
     mod = fp.Module()
     mod.add(f)
     return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS).compile_module(mod)
+
+
+def _translation_unit(src: str) -> str:
+    """*src* with the headers it needs, so the file builds on its own."""
+    return '\n'.join(CPP_HEADERS) + '\n' + CPP_HELPERS + '\n' + src
 
 
 def _filename(name: str) -> str:
@@ -143,11 +149,11 @@ def main(argv: list[str]) -> int:
         note = ''
         if args.out is not None:
             path = args.out / _filename(name)
-            path.write_text(src)
+            path.write_text(_translation_unit(src))
             note = f'  -> {path}'
         print(f'{name:{width}}  OK{note}')
         if args.emit:
-            print(f'\n// ==== {name} ====\n{src}\n')
+            print(f'\n// ==== {name} ====\n{_translation_unit(src)}\n')
     print(f'\n{ok}/{len(designs)} compile')
     return 0 if ok == len(designs) else 1
 

@@ -70,7 +70,7 @@ class TestFormatInfer:
 
     def test_monomorphized_scalar_arg_format(self):
         """
-        After monomorphization, ``RealType.ctx`` carries the concrete
+        After monomorphization, ``RealType.fmt`` carries the concrete
         format.  ``_top_bound`` extracts that format so the argument's
         bound is the precise pinned format, not ``REAL_FORMAT``.
         """
@@ -109,7 +109,7 @@ class TestFormatInfer:
 
     def test_unmonomorphized_arg_keeps_real_format(self):
         """
-        Without a monomorphization pass, ``RealType.ctx`` is ``None`` and
+        Without a monomorphization pass, ``RealType.fmt`` is ``None`` and
         ``_top_bound`` reports ``REAL_FORMAT`` as before — no regression.
         """
         @fp.fpy
@@ -3313,3 +3313,40 @@ class TestZeroOnlyIntersection:
         assert holds(0) and holds(112) and holds(-128)
         assert not holds(127)    # not a multiple of 16
         assert not holds(128)    # a multiple of 16, but past the bound
+
+
+def _fmt_of(analysis, text: str):
+    """The inferred format of the one expression printing as *text*."""
+    for e, fmt in analysis.by_expr.items():
+        if e.format() == text:
+            return fmt
+    raise AssertionError(f'no expression prints as {text!r}')
+
+
+class TestMulByZeroNarrowsToTheOperand:
+    """`0 * x` names only the results *x* can actually produce."""
+
+    def test_an_unsigned_operand_keeps_the_exact_zero(self):
+        """No negative value, no NaN, no infinity -- so the product is `{0}`,
+        and a `{+0, -0}` guess would not even fit an unsigned format."""
+        from fpy2.number import FixedContext
+        u8 = FixedContext(False, 0, 8)
+
+        @fp.fpy(ctx=u8)
+        def f(x):
+            return x * 0
+
+        from fpy2.strategies import monomorphize
+        g = monomorphize(f, args=[fp.types.RealType(u8)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
+        assert fmt == SetFormat(frozenset((Fraction(0),)))
+
+    def test_a_float_operand_keeps_all_three(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            return x * 0
+
+        from fpy2.strategies import monomorphize
+        g = monomorphize(f, args=[fp.types.RealType(fp.FP32)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
+        assert fmt == SetFormat(frozenset((Fraction(0), NEG_ZERO, Special.NAN)))

@@ -274,7 +274,11 @@ class RealTypeAnn(TypeAnn):
 
     def __init__(self, fmt: Format | Context | None, loc: Location | None):
         super().__init__(loc)
-        self.fmt = fmt.format() if isinstance(fmt, Context) else fmt
+        if isinstance(fmt, Context):
+            fmt = fmt.format()
+        elif not isinstance(fmt, Format | None):
+            raise TypeError(f'expected a `Format` or `Context`, got {fmt!r}')
+        self.fmt = fmt
 
     def is_equiv(self, other):
         return isinstance(other, RealTypeAnn) and self.fmt == other.fmt

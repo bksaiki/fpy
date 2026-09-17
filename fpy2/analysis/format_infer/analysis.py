@@ -622,7 +622,7 @@ def _bound_of_type(ty: Type) -> FormatBound:
     expression-level format is yet available.
 
     For scalar real values, the result depends on whether the type
-    carries a concrete rounding context (``RealType.ctx``):
+    carries a concrete format:
 
     - **No context** (the default for un-monomorphized programs): the
       format is unknown, so we return the scalar top ``REAL_FORMAT``.
@@ -1006,17 +1006,20 @@ def exact_binop(
         other = _to_abstract(rhs if lhs_zero else lhs)
         if other is None:
             return None
-        values: set[SetValue] = {Fraction(0), NEG_ZERO}
+        values: set[SetValue] = {Fraction(0)}
+        if other.neg_bound != 0:
+            values.add(NEG_ZERO)
         if other.has_nan or other.has_pos_inf or other.has_neg_inf:
             values.add(Special.NAN)
         return SetFormat(frozenset(values))
+    # the other operand is a `Format` -- the set/set case returned above
     if op is operator.add:
         if lhs_zero:
-            return rhs if isinstance(rhs, SetFormat) else _to_abstract(rhs)
+            return _to_abstract(rhs)
         if rhs_zero:
-            return lhs if isinstance(lhs, SetFormat) else _to_abstract(lhs)
+            return _to_abstract(lhs)
     if op is operator.sub and rhs_zero:
-        return lhs if isinstance(lhs, SetFormat) else _to_abstract(lhs)
+        return _to_abstract(lhs)
     af_a = _to_abstract(lhs)
     af_b = _to_abstract(rhs)
     if af_a is None or af_b is None:
@@ -1529,6 +1532,11 @@ class FormatAnalysis:
     sizes -- reads it instead of recomputing.
     """
 
+    partial_eval: PartialEvalInfo
+    """The partial evaluation this instantiation used, exposed for the same
+    reason as :attr:`array_size`: ``Specialize`` reads the values a call site
+    pins from it."""
+
     by_call: dict[Call, 'FormatAnalysis']
     """
     Per-call-site sub-analyses — the :class:`FormatAnalysis` graph
@@ -1567,6 +1575,7 @@ class _FormatInferInstance(Visitor):
     type_info: TypeAnalysis
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
+    partial_eval: PartialEvalInfo
 
     by_def: dict[Definition, FormatBound]
     by_expr: dict[Expr, FormatBound]
@@ -2912,6 +2921,7 @@ class _FormatInferInstance(Visitor):
             by_def=self.by_def,
             by_expr=self.by_expr,
             array_size=self.array_size,
+            partial_eval=self.pre.partial_eval,
             by_call=self.by_call,
         )
 
