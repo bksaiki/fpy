@@ -38,89 +38,21 @@ from ..analysis.format_infer import (
     SetFormat,
     TupleFormat,
     VarFormat,
+    to_abstract,
 )
 from ..ast import Call, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..module import Module
-from ..number import Context, RoundingMode
-from ..number.context.efloat import EFloatContext, EFloatFormat
-from ..number.context.exponential import ExpContext, ExpFormat
-from ..number.context.fixed import FixedContext, FixedFormat
+from ..number import Context
 from ..number.context.format import Format
-from ..number.context.ieee754 import IEEEContext, IEEEFormat
-from ..number.context.mp_fixed import MPFixedContext, MPFixedFormat
-from ..number.context.mp_float import MPFloatContext, MPFloatFormat
-from ..number.context.mpb_fixed import MPBFixedContext, MPBFixedFormat
-from ..number.context.mpb_float import MPBFloatContext, MPBFloatFormat
-from ..number.context.mps_float import MPSFloatContext, MPSFloatFormat
-from ..number.context.real import REAL_FORMAT, RealFormat
-from ..number.context.sm_fixed import SMFixedContext, SMFixedFormat
+from ..number.context.real import REAL_FORMAT
 from ..types import BoolType, ListType, RealType, TupleType, Type
 from .monomorphize import Monomorphize
 
 # ----------------------------------------------------------------------
-# Format -> Context recovery + FormatBound -> Type conversion (used only
-# to feed `Monomorphize` at callees — the spec key does *not* go through
-# this conversion).
-
-def _format_to_ctx(fmt: Format) -> Context | None:
-    """Best-effort recovery of a :class:`Context` from a :class:`Format`.
-
-    Each format is paired with the context class that describes it, and the
-    context is rebuilt via that class's ``from_format``.  Returns ``None``
-    when no context can describe the format — the caller falls back to
-    ``RealType(None)``.
-
-    The cases are ordered most-derived first, since ``IEEEFormat`` is an
-    ``EFloatFormat`` and ``FixedFormat``/``SMFixedFormat`` are both
-    ``MPBFixedFormat``\\s.
-    """
-    # A `Format` describes a set of values, not how to round into it, so the
-    # rounding mode has to be chosen here.  RNE is `from_format`'s default and
-    # matches every canonical float context; the fixed-point family instead
-    # uses RTZ, which is what every canonical integer context (`SINT*`,
-    # `UINT*`, `INTEGER`) is built with and what the cpp backend requires of
-    # integer storage, since C++ integer arithmetic truncates.
-    if isinstance(fmt, MPFixedFormat | MPBFixedFormat):
-        rm = RoundingMode.RTZ
-    else:
-        rm = RoundingMode.RNE
-
-    try:
-        match fmt:
-            # `IEEEFormat` before `EFloatFormat`
-            case IEEEFormat():
-                return IEEEContext.from_format(fmt, rm=rm)
-            case EFloatFormat():
-                return EFloatContext.from_format(fmt, rm=rm)
-            # `FixedFormat` and `SMFixedFormat` before `MPBFixedFormat`
-            case FixedFormat():
-                return FixedContext.from_format(fmt, rm=rm)
-            case SMFixedFormat():
-                return SMFixedContext.from_format(fmt, rm=rm)
-            case MPBFixedFormat():
-                return MPBFixedContext.from_format(fmt, rm=rm)
-            case MPFixedFormat():
-                return MPFixedContext.from_format(fmt, rm=rm)
-            case ExpFormat():
-                return ExpContext.from_format(fmt, rm=rm)
-            case MPBFloatFormat():
-                return MPBFloatContext.from_format(fmt, rm=rm)
-            case MPSFloatFormat():
-                return MPSFloatContext.from_format(fmt, rm=rm)
-            case MPFloatFormat():
-                return MPFloatContext.from_format(fmt, rm=rm)
-            case RealFormat():
-                # the polymorphic top: callers treat it as "no context"
-                return None
-            case _:
-                return None
-    except (NotImplementedError, TypeError, ValueError):
-        # some `from_format`s reject formats their context cannot express;
-        # recovery is best-effort
-        return None
-
+# FormatBound -> Type conversion, used only to feed `Monomorphize` at
+# callees — the spec key does *not* go through it.
 
 def _bound_to_type(
     bound: FormatBound, size: ArraySizeBound = None,
@@ -128,11 +60,10 @@ def _bound_to_type(
     """Convert a :class:`FormatBound` to a :class:`Type` for use as a
     ``Monomorphize`` argument override.
 
-    Scalar ``Format`` bounds attempt ``Format → Context`` recovery via
-    :func:`_format_to_ctx` and become ``RealType(<recovered ctx>)`` on
-    success (fallback ``RealType(None)`` otherwise).  ``SetFormat`` and
-    ``None`` collapse to ``RealType(None)`` / ``None``, as does
-    :class:`VarFormat` -- an unresolved kind names no type.
+    A scalar ``Format`` becomes ``RealType(fmt)`` directly.  A ``SetFormat``
+    names no ``Format``, so it is widened to the tightest one containing its
+    values -- a superset, which is what the callee's storage has to hold
+    anyway.  ``None`` and :class:`VarFormat` name no type at all.
 
     *size* rides along structurally: a ``ListSize`` with a concrete ``int``
     length puts that length on the ``ListType``, which is how a caller's proven
@@ -163,9 +94,10 @@ def _bound_to_type(
         length = concrete_size(size.size) if isinstance(size, ListSize) else None
         return ListType(elt_type, length)
     if isinstance(bound, SetFormat):
-        return RealType(None)
+        af = to_abstract(bound)
+        return RealType(None if af is None else af.format())
     assert isinstance(bound, Format), f'unexpected FormatBound: {type(bound)}'
-    return RealType(_format_to_ctx(bound))
+    return RealType(bound)
 
 
 def _arg_fmts_to_arg_types(
