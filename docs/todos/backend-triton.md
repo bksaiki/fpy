@@ -14,6 +14,43 @@ backend `exec`s a string, Triton JITs it at first call, and the result takes
 backend already carries, and it is the whole reason to prefer the harder
 codegen target.
 
+## The contract: semantics-preserving, floating-point included
+
+[backend-cpp.md](backend-cpp.md) states the criterion this project inherits:
+*if the compiler succeeds, the emitted code must behave as the FPy interpreter
+does wherever FPy's semantics are defined.* A refusal is always acceptable; a
+different answer is not.
+
+**Holding that criterion on a GPU is the unusual part.** Compilation to GPUs
+normally treats floating-point semantics as approximately preserved, and the
+approximation is not considered a defect: fast-math is on, fp32 matmul inputs
+are silently substituted with TF32, reductions are reassociated into trees
+because that is how a parallel reduction works, multiply-add is contracted,
+transcendentals are a few ULP off, and denormals may flush. Every one of those
+is a deliberate trade of numerical agreement for throughput, and for the
+workloads GPUs are usually compiled for it is the right trade.
+
+It is the wrong trade here. The object being compiled is a *model of an
+arithmetic*, and a model that disagrees with itself under compilation has
+stopped being one. So this backend takes the opposite default everywhere the
+two conflict:
+
+| Where the GPU default trades accuracy | What this backend does |
+|---|---|
+| `default_dot_input_precision = "tf32"` | pin `input_precision='ieee'` |
+| contract multiply-add freely | contract only where the analysis proves the product exact (§1) |
+| implicit fp16 arithmetic on fp16 operands | cast per `StorageInfer`, which is what makes the product exact (§1) |
+| tree-reduce a fold | keep FPy's left fold unless `ValueClassInfer` discharges reassociation (§8) |
+| approximate transcendentals | do not emit them at all |
+| `/` and `tl.sqrt` | `div_rn` and `sqrt_rn` |
+
+The point is not that the fast paths are wrong. It is that choosing between
+them is a *semantic* decision, and this compiler is the thing that holds enough
+information to make it — which is why §1's fusion result generalizes: the
+question "is this optimization observable?" has an answer in `FormatInfer` and
+`ValueClassInfer`, and a target that cannot ask it has to assume the worst or
+ignore the problem. Traditional GPU compilation ignores it. This one asks.
+
 ## Scope: float storage is FP16 and wider
 
 The float storage ladder is `fp16`, `fp32`, `fp64`, plus the integer rungs.
@@ -365,19 +402,58 @@ not; it revised one of its own instructions and confirmed the rest.
 
 ### 2. Target description
 
-`backend/triton/{types,storage,target}.py`. Self-contained and testable with no
-emitter — `StorageInfer` runs against a domain directly, as
-`tests/unit/backend/cpp/test_storage_ladder.py` does.
+**Done — `fpy2/backend/triton/{types,storage,target}.py`**, 37 tests in
+`tests/unit/backend/triton/`, no emitter. `StorageInfer` runs against the
+domain directly and the running example's storage is checkable without
+generating a line of Triton: fp16 arguments stay fp16, the exact product lands
+on fp32 and not fp64, and fp32 arguments push the product to fp64 — the
+contrast that shows the first two measured something.
 
-The real content is the ladder's *order*. `StorageDomain.sigma` is a sequence,
-not a set, and its docstring already warns that containment over formats is not
-a join-semilattice and that the order decides which programs compile. Adding
-`fp16` and `bf16` adds two mutually incomparable rungs — fp16 is (es 5,
-prec 11), bf16 is (es 8, prec 8) — neither of which contains `u16`, so their
-placement against the integer rungs is a real decision with no obviously right
-answer. C++ never had to rule on it.
+**The ladder.** `u8, s8, u16, s16, f16, u32, s32, f32, u64, s64, f64`.
 
-Also settle the `is_native_ctx` arity question from *The fp16/bf16 trap*.
+With `bf16` out of scope the **float rungs are a chain**, so the open question
+this section was written around — how to order two mutually incomparable float
+rungs — never arises. The ladder as a whole is still not a lattice, since the
+integer rungs stay incomparable with each other exactly as in C++, so the
+sequence is still the tie-break.
+
+`F16` after `S16` is the one real decision. It must follow `u8`/`s8`, which
+nest in it; against the 16-bit integers it is incomparable, so the placement is
+free, and putting it later means a bound like "integers in [0, 2000]" takes
+`u16` rather than `f16` even though fp16 holds every such value exactly. Same
+reasoning as the cpp ladder putting `F32` after `S32`: a count is not a float.
+
+**`is_native_ctx` stays a predicate on the context**, not on `(op, context)`.
+The two readings the cpp backend can conflate come apart here — `Add` at FP16
+dispatches and `Div` at FP16 does not — and the *cast* reading is the one that
+must survive, because `x.to(tl.float16)` really is FP16's round-to-nearest-even
+and answering `False` would send a native `fp.round` through `unfold_round`'s
+integer lowering. The cost is confined to a diagnostic: an operation the table
+lacks under an otherwise-native context refuses with "no matching signature"
+and without the `DOUBLE_ROUND` advice. That message is accurate — no amount of
+double rounding recovers an operation the target cannot perform.
+
+**The table is small, and every omission is a refusal.** This is where the
+contract stops being a slogan:
+
+| Omitted | Because |
+|---|---|
+| every transcendental | no correctly-rounded `exp`/`log`/`sin`/`erf` exists; omitting them makes the differential check's exclusion list *empty* |
+| `Div` at FP16 | Triton computes `fp16 / fp16` in fp32, so the result is a double rounding |
+| integer `Div` | FPy's integer contexts truncate; Triton's `//` floors |
+| `/`, `tl.sqrt` | the fast variants; the table names `tl.div_rn` and `tl.sqrt_rn` |
+| every mode but RNE | no per-instruction rounding modifier exists |
+
+**No list storage.** `to_triton` refuses a `ListFormat` rather than spelling it:
+a proven-length list unrolls into registers before reaching here, and an
+unproven-length one is §8's problem. Refusing names the reason; spelling it as
+a tile would silently change what the program means.
+
+One piece of debt: `TritonOp` / `ScalarOpTable` parallel the cpp shapes in
+`backend/cpp/ops.py` rather than sharing them, because those are parameterized
+by `CppScalar` and spell C++. Unifying is a refactor of the cpp backend, not of
+this one, and it belongs to
+[backend-independence.md](backend-independence.md) if it is worth doing at all.
 
 ### 3. Scalar emitter
 
