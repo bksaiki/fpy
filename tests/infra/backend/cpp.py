@@ -18,6 +18,7 @@ from types import ModuleType
 
 import fpy2 as fp
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.number.context.ieee754 import IEEEContext
 
 from ..examples import all_example_tests, all_unit_tests
 
@@ -409,7 +410,9 @@ def _round_to_format(value, ty):
     """
     match ty:
         case fp.types.RealType():
-            return float(ty.ctx.round(value))
+            # a type carries its `Format`, and rounding needs a context; every
+            # format the corpus instantiates is IEEE
+            return float(IEEEContext.from_format(ty.fmt).round(value))
         case fp.types.ListType():
             return [_round_to_format(v, ty.elt) for v in value]
         case fp.types.TupleType():

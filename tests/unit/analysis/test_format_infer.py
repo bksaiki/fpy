@@ -33,8 +33,10 @@ from fpy2.analysis.format_infer.analysis import (
 )
 from fpy2.analysis.reaching_defs import AssignDef
 from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
+from fpy2.number import FixedContext
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
+from fpy2.strategies import monomorphize
 from fpy2.types import BoolType, ContextType, ListType, RealType, TupleType
 
 from ..generators import fpy_real_funcdef
@@ -1632,8 +1634,9 @@ class TestFormatInfer:
     def test_exact_binop_mul_by_zero_drops_nan_when_unreachable(self):
         """A format with no NaN and no infinity cannot produce one, so the
         product is just the two zeros."""
-        from fpy2.analysis.format_infer.analysis import exact_binop
         import operator
+
+        from fpy2.analysis.format_infer.analysis import exact_binop
         from fpy2.number import RealFloat
         finite = fp.MPBFloatContext(
             24, -126, RealFloat(s=False, exp=104, c=(1 << 24) - 1),
@@ -3329,14 +3332,12 @@ class TestMulByZeroNarrowsToTheOperand:
     def test_an_unsigned_operand_keeps_the_exact_zero(self):
         """No negative value, no NaN, no infinity -- so the product is `{0}`,
         and a `{+0, -0}` guess would not even fit an unsigned format."""
-        from fpy2.number import FixedContext
         u8 = FixedContext(False, 0, 8)
 
         @fp.fpy(ctx=u8)
         def f(x):
             return x * 0
 
-        from fpy2.strategies import monomorphize
         g = monomorphize(f, args=[fp.types.RealType(u8)])
         fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
         assert fmt == SetFormat(frozenset((Fraction(0),)))
@@ -3346,7 +3347,6 @@ class TestMulByZeroNarrowsToTheOperand:
         def f(x):
             return x * 0
 
-        from fpy2.strategies import monomorphize
         g = monomorphize(f, args=[fp.types.RealType(fp.FP32)])
         fmt = _fmt_of(FormatInfer.analyze(g.ast), '(x * 0)')
         assert fmt == SetFormat(frozenset((Fraction(0), NEG_ZERO, Special.NAN)))

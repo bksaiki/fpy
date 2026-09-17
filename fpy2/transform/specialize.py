@@ -26,7 +26,7 @@ from ..analysis.array_size import (
     TupleSize,
     concrete_size,
 )
-from ..analysis.partial_eval import PartialEvalInfo
+from ..analysis.define_use import AssignDef, DefineUse
 from ..analysis.format_infer import (
     FormatBound,
     FormatInfer,
@@ -36,7 +36,7 @@ from ..analysis.format_infer import (
     VarFormat,
     to_abstract,
 )
-from ..analysis.define_use import AssignDef, DefineUse
+from ..analysis.partial_eval import PartialEvalInfo
 from ..ast import Call, Expr, ForeignVal, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function

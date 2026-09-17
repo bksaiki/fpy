@@ -16,14 +16,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import fpy2 as fp
-import fpy2.strategies as st
-from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
-
 import amd
 import nv
 from nv import RZ_E8M13, RZ_FP32
 from utils import make_fma_dpa
+
+import fpy2 as fp
+import fpy2.strategies as st
+from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 
 _L = fp.types.ListType
 _R = fp.types.RealType
@@ -141,7 +141,7 @@ def main(argv: list[str]) -> int:
     for name, build in designs:
         try:
             src = compile_design(build)
-        except Exception as ex:
+        except Exception as ex:  # noqa: BLE001 -- any refusal is a result
             detail = str(ex) if args.verbose else str(ex).split('\n')[0][:110]
             print(f'{name:{width}}  {type(ex).__name__}: {detail}')
             continue
