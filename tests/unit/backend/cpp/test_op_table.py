@@ -365,3 +365,47 @@ class TestLossyCastAdvice:
                 f, ctx=fp.SINT32, arg_types=[RealType(fp.SINT64)],
             )
         assert 'format contains the operand' in str(exc.value)
+
+
+class TestWideningPrefersTheNarrowestSignature:
+    """Every signature widening admits computes the same value.
+
+    `_result_fits_ctx` only lets through a context the operation is an identity
+    under, so which candidate is taken decides the emitted *type* alone.  Taken
+    in table order it decided by where the rows happen to be written, and the
+    float rows are written first -- so arithmetic on two small integers came
+    out as `float`.
+    """
+
+    def test_small_integers_stay_integers(self):
+        """The quantization position `RescaleFixed` computes.
+
+        It is left under `REAL`, which has no storage to dispatch on, so this
+        reaches widening -- and its own storage is `int8_t`, which no signature
+        outputs, so the exact-output pass finds nothing and the order of the
+        rest is what decides.  A guarded `logb` alone does not witness it: its
+        result is `int16_t`, and the `S16` signature then matches exactly.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP16:
+                y = fp.round(x)
+            return y
+
+        out = CppCompiler(unfold=CppCompiler.UnfoldMode.ROUNDINGS).compile(
+            f, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
+        line, = [l for l in out.splitlines() if 'ilogb' in l]
+        assert 'static_cast<int16_t>' in line
+        assert 'static_cast<float>' not in line
+
+    def test_abs_of_an_integer_does_not_detour_through_float(self):
+        """`std::fabs` sits above `std::abs` in the table, and both are exact
+        here."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            return fp.fabs(x)
+
+        out = CppCompiler(unsafe_cast_int=True).compile(
+            f, ctx=fp.SINT8, arg_types=[RealType(fp.SINT8)])
+        assert 'std::abs' in out
+        assert 'fabs' not in out

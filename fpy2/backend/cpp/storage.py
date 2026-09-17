@@ -86,6 +86,21 @@ _ABSTRACT: dict[CppScalar, AbstractFormat] = {
 """Each rung lifted for comparison.  ``AbstractFormat`` is what carries ``<=``."""
 
 
+_LADDER_RANK: dict[CppScalar, int] = {ty: i for i, (ty, _) in enumerate(_SIGMA)}
+
+
+def ladder_rank(ty: CppScalar) -> int:
+    """Where *ty* sits on the ladder :func:`choose_storage_scalar` walks,
+    narrowest first.
+
+    A *total* order where :func:`scalar_fits_in` is only partial -- `int32_t`
+    and `float` each hold values the other does not -- so it can rank
+    candidates that containment leaves incomparable.  Anything off the ladder
+    ranks widest.
+    """
+    return _LADDER_RANK.get(ty, len(_SIGMA))
+
+
 def scalar_fits_in(a: CppScalar, b: CppScalar) -> bool:
     """Does scalar *a* fit inside scalar *b*?
 

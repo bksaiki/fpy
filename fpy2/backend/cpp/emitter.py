@@ -150,6 +150,7 @@ from .storage import (
     bound_fits_in_scalar,
     choose_storage,
     exact_integer_bits,
+    ladder_rank,
     scalar_fits_in,
     scalar_sup,
 )
@@ -2048,6 +2049,14 @@ class CppEmitter(Visitor):
         if not isinstance(result_ty, CppScalar):
             return None
 
+        def _rank(sig) -> int:
+            """Ladder position of *sig*'s output storage; a context with no
+            storage ranks widest, and `_try` declines it anyway."""
+            try:
+                return ladder_rank(self._scalar_for_ctx(sig.out_ctx))
+            except CppEmitError:
+                return ladder_rank(CppScalar.BOOL)
+
         def _try(sig, *, exact_out: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
@@ -2074,8 +2083,15 @@ class CppEmitter(Visitor):
                 out = f'static_cast<{result_ty.format()}>({out})'
             return out
 
+        # Every candidate computes the same value -- `_result_fits_ctx` admits
+        # only signatures the operation is an identity under -- so which one is
+        # taken decides the emitted *type* alone.  Narrowest first, by the
+        # ladder storage selection itself walks: the table's own order is where
+        # its rows were written, and would spell integer arithmetic as `float`
+        # for no reason.
+        ordered = sorted(sigs, key=_rank)
         for exact_out in (True, False):
-            for sig in sigs:
+            for sig in ordered:
                 emitted = _try(sig, exact_out=exact_out)
                 if emitted is not None:
                     return emitted
