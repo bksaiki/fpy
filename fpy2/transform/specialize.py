@@ -257,7 +257,7 @@ def _pinned_value(v: object) -> object | None:
 
 
 def _pinnable_args(
-    callee: FuncDef, args: 'list[Expr]', pe: PartialEvalInfo,
+    callee: FuncDef, args: tuple[Expr, ...], pe: PartialEvalInfo,
 ) -> tuple[object, ...]:
     """The value each of *args* pins in *callee*, or ``None`` where it pins
     nothing.
