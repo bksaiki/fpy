@@ -1515,8 +1515,8 @@ class CppEmitter(Visitor):
 
         Float storage needs an ``fesetround`` mode (RNE/RTZ/RTP/RTN) -- unless
         the context is fixed-point, which instead needs an integral spelling;
-        integer storage needs RTZ, which is what C++ integer arithmetic does --
-        anything else would need per-operation emulation.
+        integer storage needs a mode libm rounds to an integral value in one
+        call, since the cast that follows performs no rounding of its own.
         """
         if isinstance(rctx, MPFixedContext | MPBFixedContext):
             # A fixed-point context rounds by a libm call (float storage) or a
@@ -1524,11 +1524,15 @@ class CppEmitter(Visitor):
             # its rounding mode is checked against what that lowering can do
             # rather than against the ``fenv`` modes.
             if storage.is_integer():
-                if rctx.rm != RM.RTZ:
+                if rctx.rm not in self._INTEGRAL_ONE_CALL:
+                    spellable = ', '.join(
+                        rm.name for rm in self._INTEGRAL_ONE_CALL
+                    )
                     raise CppEmitError(
-                        f'integer context `{rctx}` must use RTZ rounding mode '
-                        '(C++ integer arithmetic rounds toward zero); got '
-                        f'{rctx.rm}',
+                        f'rounding mode {rctx.rm} under integer context '
+                        f'`{rctx}` has no single libm call that rounds to an '
+                        f'integral value; got {rctx.rm}, need one of '
+                        f'{spellable}',
                         at=at,
                     )
                 # C++ has no arbitrary-precision integer, so the int64_t
@@ -3426,22 +3430,15 @@ class CppEmitter(Visitor):
             # Nothing to assert: decline, leaving the caller's cast path to
             # refuse on its own terms.
             return None
+        # before the split: the precondition is on the spelling the mode picks,
+        # and both storages pick from the same table
+        self._require_tonearest(active, at=e)
         if target_ty.is_integer():
             return self._emit_cast_round(active, bounds, arg, target_ty, e)
         if active.rm not in self._INTEGRAL_MODES:
             raise CppEmitError(
                 f'rounding mode {active.rm} for context `{active}` has no '
                 'spelling that rounds to an integral value',
-                at=e,
-            )
-        # `RTE` is built on the same call, so it inherits the precondition
-        if (
-            active.rm in (RM.RNE, RM.RTE)
-            and self._current_rm not in (None, RM.RNE)
-        ):
-            raise CppEmitError(
-                f'rounding under `{active}` needs `std::nearbyint` in '
-                f'FE_TONEAREST, but the enclosing scope set {self._current_rm}',
                 at=e,
             )
 
@@ -3468,6 +3465,22 @@ class CppEmitter(Visitor):
         self._emit_assert(bound, 'overflow occurred so rounding is undefined')
         return out
 
+    def _require_tonearest(
+        self, ctx: MPFixedContext | MPBFixedContext, *, at: Expr,
+    ) -> None:
+        """Refuse a mode spelled with ``std::nearbyint`` under another live mode.
+
+        ``nearbyint`` follows the *current* ``fenv`` mode, so it is `RNE` only
+        under ``FE_TONEAREST``.  `RTE` is built on the same call and inherits the
+        precondition.
+        """
+        if ctx.rm in (RM.RNE, RM.RTE) and self._current_rm not in (None, RM.RNE):
+            raise CppEmitError(
+                f'rounding under `{ctx}` needs `std::nearbyint` in '
+                f'FE_TONEAREST, but the enclosing scope set {self._current_rm}',
+                at=at,
+            )
+
     def _emit_cast_round(
         self, ctx: MPFixedContext | MPBFixedContext,
         bounds: tuple[Fraction, Fraction], arg: str,
@@ -3475,12 +3488,17 @@ class CppEmitter(Visitor):
     ) -> str:
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
-        The cast rounds -- C++ integer conversion is ``RTZ``, which
-        `_validate_ctx_storage` requires of an integer storage -- but it wraps at
-        the *type*'s range, not the format's.  So the bound is asserted first, on
-        the rounded value -- ``100.7`` is in bounds under ``RTZ`` even though
-        ``100.7 > 100`` -- which also keeps the conversion itself in range, since
-        an operand past the type's range would be undefined.
+        C++ integer conversion truncates, so ``RTZ`` needs no call of its own.
+        Any other mode rounds to an integral *value* first -- exactly, and in the
+        float type -- and the cast that follows performs no rounding: every
+        result of ``floor`` / ``ceil`` / ``round`` / ``nearbyint`` is an integer
+        the same float type holds exactly.
+
+        The cast wraps at the *type*'s range, not the format's, so the bound is
+        asserted first and on the *rounded* value -- ``100.7`` is in bounds under
+        ``RTZ`` even though ``100.7 > 100``, and under ``RTP`` an operand inside
+        the bound can round to one outside it.  That assertion also keeps the
+        conversion in range, an operand past the type's being undefined.
         """
         # not `_scalar_cast_types`: its target half asks the context, which an
         # unbounded one cannot answer
@@ -3493,14 +3511,25 @@ class CppEmitter(Visitor):
             guard = self._undefined_guard(ctx, operand, self._value_class(e.arg))
             if guard is not None:
                 self._emit_assert(guard, 'rounding is undefined for this value')
-        rounded = operand if integral else f'std::trunc({operand})'
+        if integral:
+            rounded = operand
+            value = operand
+        elif ctx.rm is RM.RTZ:
+            # the cast truncates, so the call would only repeat it; the bound
+            # still has to be tested on what the cast will produce
+            rounded = f'std::trunc({operand})'
+            value = operand
+        else:
+            rounded = self._bind_operand(
+                f'{self._INTEGRAL_ONE_CALL[ctx.rm]}({operand})')
+            value = rounded
         self._emit_assert(
             self._bound_test(bounds, rounded, at=e, ty=arg_ty),
             'overflow occurred so rounding is undefined')
         out = self._fresh_temp()
         self.writer.add_line(
             f'{target_ty.format()} {out} = '
-            f'{self._explicit_cast(operand, target_ty)};'
+            f'{self._explicit_cast(value, target_ty)};'
         )
         return out
 

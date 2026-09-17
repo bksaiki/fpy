@@ -156,6 +156,46 @@ class TestModeTable:
             [3.0, 4.0, 3.0, 4.0]
 
 
+class TestIntegerStorage:
+    """Into integer storage the cast performs no rounding: the value is made
+    integral in the float type first, exactly, and the cast converts it.
+
+    ``RTZ`` is the exception -- C++ integer conversion truncates, so the call
+    would only repeat the cast.
+    """
+
+    @pytest.mark.parametrize('rm, fn', [
+        (RM.RTN, 'std::floor'),
+        (RM.RTP, 'std::ceil'),
+        (RM.RNA, 'std::round'),
+        (RM.RNE, 'std::nearbyint'),
+    ], ids=['rtn', 'rtp', 'rna', 'rne'])
+    def test_the_value_is_made_integral_before_the_cast(self, rm, fn):
+        out = _emit(fp.SINT32.with_params(rm=rm, overflow=ASSERT))
+        assert re.search(rf'auto&& (\w+) = {re.escape(fn)}\(x\);', out), out
+        assert re.search(r'int32_t \w+ = static_cast<int32_t>\(\w+\);', out), out
+
+    def test_truncation_needs_no_call(self):
+        """The cast already truncates, so ``RTZ`` keeps the plain conversion."""
+        out = _emit(fp.SINT32.with_params(rm=RM.RTZ, overflow=ASSERT))
+        assert 'static_cast<int32_t>(x)' in out
+        assert 'std::trunc(x);' not in out
+
+    def test_the_bound_is_tested_on_the_rounded_value(self):
+        """Under ``RTP`` an operand inside the bound can round to one outside
+        it, so testing the operand would miss the overflow."""
+        out = _emit(fp.SINT8.with_params(rm=RM.RTP, overflow=ASSERT))
+        rounded = re.search(r'auto&& (\w+) = std::ceil\(x\);', out)
+        assert rounded, out
+        assert f'<= {rounded.group(1)} && {rounded.group(1)} <=' in out
+
+    def test_a_mode_with_no_single_call_is_refused(self):
+        """``RAZ`` takes three calls.  The float path spells it; this one does
+        not, and says so rather than truncating."""
+        with pytest.raises(CppCompileError, match='no single libm call'):
+            _emit(fp.SINT32.with_params(rm=RM.RAZ, overflow=ASSERT))
+
+
 class TestAssertions:
     """A context states which values it has no result for; each statement becomes
     an assertion.  The *bound* assertions live in `test_round_fixed_bound.py`,
@@ -298,16 +338,17 @@ class TestStorageFromTheInferredFormat:
         assert '-128 <= x && x <= 127' in out
         assert 'overflow occurred so rounding is undefined' in out
 
-    def test_the_cast_path_still_requires_rtz(self):
-        """C++ integer conversion rounds toward zero, so only `RTZ` is the
-        rounding it performs -- checked against the storage the format chose."""
+    def test_an_integral_operand_needs_no_rounding(self):
+        """The mode is irrelevant where the operand is already an integer --
+        the same storage, the same bound, and no call to round it."""
         @fp.fpy(ctx=fp.REAL)
         def g(x: fp.Real) -> fp.Real:
             with fp.MPFixedContext(-1, RM.RNE):
                 return fp.round(x)
 
-        with pytest.raises(CppCompileError, match='must use RTZ'):
-            CppCompiler(optimize=False).compile(g, arg_types=[RealType(fp.SINT8)])
+        out = CppCompiler(optimize=False).compile(g, arg_types=[RealType(fp.SINT8)])
+        assert 'static_cast<int8_t>' in out
+        assert 'std::nearbyint' not in out
 
     def test_an_unstorable_value_is_still_refused(self):
         """Deferring the scope's check lets no value through that no type

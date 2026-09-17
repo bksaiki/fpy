@@ -151,7 +151,9 @@ When a scope is used:
   integer). Either way no entry `fesetround` is emitted. `None` = unknown — a
   context nothing resolved, or an RM `fesetround` cannot express — is the one
   case where a nested concrete `with` must set the mode unconditionally.
-- **Integer contexts** must use RTZ — that is what C++ integer truncation does.
+- **Integer contexts** need a mode libm rounds to an integral value in one call
+  (RTZ / RTN / RTP / RNA / RNE). The cast performs no rounding of its own; the
+  value is made integral in the float type first, which is exact.
 
 `Round` / `Cast`: both bypass the op table, so both carry its discipline
 themselves (`_require_cast_is_round`) — see the storage-versus-format rule at the
@@ -165,9 +167,12 @@ top.
   than whatever `fesetround` last left behind.
 - `Round(arg)` under a **fixed-point** context goes to `_emit_integral_round`,
   which either lowers it faithfully or refuses; it never falls through to a bare
-  cast. Float storage rounds by libm (`trunc`/`floor`/`ceil`/`round`/`nearbyint`),
-  integer storage by the cast itself. Either way the bound is asserted, on the
-  *rounded* value — `100.7` is in bounds under `RTZ` even though `100.7 > 100`.
+  cast. Both storages round by libm (`trunc`/`floor`/`ceil`/`round`/`nearbyint`);
+  integer storage then casts the integral value, which converts rather than
+  rounds. `RTZ` is the one mode needing no call, the cast already truncating.
+  Either way the bound is asserted, on the *rounded* value — `100.7` is in bounds
+  under `RTZ` even though `100.7 > 100`, and under `RTP` an operand inside the
+  bound can round to one outside it.
   An overflow *rule* other than `ASSERT` is refused: `SATURATE`/`WRAP`/`OVERFLOW`
   are behavior this lowering does not implement, and `unfold_overflow` is what
   turns them into program text.

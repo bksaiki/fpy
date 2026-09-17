@@ -7,9 +7,10 @@ The active rounding context is taken from the
 are statically resolvable; symbolic context variables are rejected.
 
 For float contexts the rounding mode must be one of the four
-``fesetround``-supported modes (RNE / RTZ / RTP / RTN).  For integer
-contexts the rounding mode must be RTZ — C++ integer arithmetic
-already truncates toward zero, so no runtime support is needed.
+``fesetround``-supported modes (RNE / RTZ / RTP / RTN).  Integer
+*arithmetic* dispatches through the op table, which holds only the
+native integer contexts, so any other is refused there; rounding
+*into* one is lowered by ``_emit_integral_round`` instead.
 
 Tests in this module assert specific bare-emitter output and the
 rejection-mechanism behavior — both surfaces that optimizing
@@ -420,11 +421,13 @@ class TestRejection:
                 f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
             )
 
-    def test_integer_non_rtz_rejected(self):
-        """Integer contexts must use RTZ.
+    def test_integer_arithmetic_needs_a_native_context(self):
+        """The op table dispatches on whole contexts and holds only the native
+        integer ones, so *arithmetic* under any other is refused -- where
+        ``Round`` into one lowers through `_emit_integral_round`.
 
         Pinned with ``optimize=False`` — ``RoundElim`` would
-        otherwise hoist the integer-add out of the bad-RM scope
+        otherwise hoist the integer-add out of the scope
         (the unrounded sum of two ints is an int and fits the
         scope, so the round is identity), sidestepping the
         rejection.  The rejection mechanism is what this test
@@ -445,7 +448,7 @@ class TestRejection:
 
         with pytest.raises(
             CppCompileError,
-            match='must use RTZ rounding mode',
+            match='no matching signature for Add',
         ):
             CppCompiler(
                 unsafe_cast_int=True, optimize=False,
@@ -462,7 +465,7 @@ class TestRejection:
         opt-out path.
 
         Pinned with ``optimize=False`` for the same reason as
-        :meth:`test_integer_non_rtz_rejected` — ``RoundElim``
+        :meth:`test_integer_arithmetic_needs_a_native_context` — ``RoundElim``
         would otherwise eliminate the (identity) integer round
         and sidestep the rejection."""
 
