@@ -1,5 +1,7 @@
 """Unit tests for :class:`fpy2.transform.ConstFold`."""
 
+import pytest
+
 import fpy2 as fp
 
 from fpy2.analysis import ArraySizeInfer, concrete_size
@@ -8,6 +10,7 @@ from fpy2.ast import (
     BoolVal,
     ContextStmt,
     Decnum,
+    Dim,
     ForeignVal,
     Integer,
     Len,
@@ -16,6 +19,7 @@ from fpy2.ast import (
     Rational,
     RealTypeAnn,
     ReturnStmt,
+    Size,
     Var,
 )
 from fpy2.number import Context
@@ -577,3 +581,119 @@ class TestLenFoldingInAsserts:
             Simplify.apply(UnfoldZip.apply(f.ast)), runtime=f.runtime
         ).format()
         assert 'assert len(ys) == len(xs)' in src, src
+
+
+class TestDimFolding:
+    """``dim(xs)`` is the type's list-nesting, cut short where `ops.dim`'s
+    own descent through ``x[0]`` would stop at an empty level."""
+
+    def test_nesting_the_type_settles(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> fp.Real:
+            return fp.dim([[1.0, 2.0], [3.0, 4.0]])
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 2
+
+    def test_an_empty_level_cuts_the_descent(self):
+        """The trap: the *type* nests twice, but the outer list is empty, so
+        `ops.dim` never reaches the inner one and answers 1."""
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> fp.Real:
+            xs = [[1.0, 2.0], [3.0, 4.0]][0:0]
+            return fp.dim(xs)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 1, 'the type depth (2) is not the answer here'
+        assert e.val == int(f()), 'must agree with the interpreter'
+
+    def test_a_tuple_element_stops_the_descent(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> fp.Real:
+            return fp.dim([(1.0, 2.0), (3.0, 4.0)])
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 1
+
+    def test_unknown_outer_length_is_left_alone(self):
+        """An argument of unknown length might be empty, which would cut the
+        descent, so the nesting alone does not settle ``dim``."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            return fp.dim(xss)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Dim), f'expected Dim; got {type(e).__name__}'
+
+    def test_fixed_outer_length_settles_it(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            return fp.dim(xss)
+
+        f.ast.args[0].type = ListTypeAnn(
+            ListTypeAnn(RealTypeAnn(None, None), None, None), 4, None
+        )
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 2
+
+
+class TestSizeFolding:
+    """``size(xs, n)`` is ``len(xs[0]...[0])``, *n* deep."""
+
+    def test_outer_dimension(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> fp.Real:
+            return fp.size([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], 0)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer) and e.val == 2, e
+
+    def test_inner_dimension(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> fp.Real:
+            return fp.size([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], 1)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer) and e.val == 3, e
+
+    def test_it_will_not_read_past_an_empty_level(self):
+        """``size(xs, 1)`` is ``len(xs[0])``, and ``xs[0]`` raises on an empty
+        ``xs`` — a fold here would invent a value for a program that fails."""
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> fp.Real:
+            xs = [[1.0, 2.0], [3.0, 4.0]][0:0]
+            return fp.size(xs, 1)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Size), f'expected Size; got {type(e).__name__}'
+        with pytest.raises(IndexError):
+            f()
+
+    def test_unknown_index_is_left_alone(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(n: fp.Real) -> fp.Real:
+            return fp.size([[1.0, 2.0], [3.0, 4.0]], n)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Size), f'expected Size; got {type(e).__name__}'
+
+    def test_unknown_length_is_left_alone(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return fp.size(xs, 0)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Size), f'expected Size; got {type(e).__name__}'
+
+    def test_fixed_dimension_argument(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return fp.size(xs, 0)
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 32, None)
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Integer) and e.val == 32, e

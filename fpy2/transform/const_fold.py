@@ -4,12 +4,12 @@ Constant folding — thin rewriter over :class:`fpy2.analysis.PartialEval`.
 Queries ``partial_eval.by_expr`` at each AST node and substitutes a literal
 when a value is available.  No value-tracking dataflow lives here.
 
-``len(xs)`` is the one fold that does not come from a value.  `PartialEval`
-reasons only about values, so it folds a `Len` only when it knows the whole
-list -- a length it cannot get from a list whose elements are unknown.
-:class:`fpy2.analysis.ArraySizeInfer` proves exactly that length, and this is
-the layer where both analyses are in scope: the size analysis *consumes*
-`PartialEval`, so the query cannot live inside it.
+The shape queries -- ``len``, ``dim``, ``size`` -- are the folds that do not
+come from a value.  `PartialEval` reasons only about values, so it folds one
+only when it knows the whole list, a shape it cannot get from a list whose
+elements are unknown.  :class:`fpy2.analysis.ArraySizeInfer` proves exactly
+that shape, and this is the layer where both analyses are in scope: the size
+analysis *consumes* `PartialEval`, so the query cannot live inside it.
 """
 
 import math
@@ -17,6 +17,7 @@ from fractions import Fraction
 
 from ..analysis import (
     ArraySizeAnalysis,
+    ArraySizeBound,
     ArraySizeInfer,
     DefineUse,
     DefineUseAnalysis,
@@ -24,11 +25,14 @@ from ..analysis import (
     PartialEval,
     PartialEvalInfo,
     Purity,
+    TypeAnalysis,
+    TypeInfer,
     concrete_size,
 )
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..number import Context, Float
+from ..types import ListType, Type, VarType
 
 
 def _rational_literal(val: Fraction, loc):
@@ -75,13 +79,48 @@ def value_to_literal(val: object, loc):
             return None
 
 
-class _LenScan(DefaultVisitor):
-    """Where *func* has a ``Len``: anywhere (``found``) and inside an
-    assertion's test (``in_assert``).
+def _list_type_depth(ty: Type | None) -> int | None:
+    """How many ``list`` layers *ty* nests, or ``None`` when the innermost
+    element is an unresolved type variable that may yet be one.
+
+    The *type* has to answer this, not the size bound: `ArraySizeBound` spells
+    a scalar element and an element it failed to track both ``None``, and the
+    two give different depths.
+    """
+    depth = 0
+    while isinstance(ty, ListType):
+        depth += 1
+        ty = ty.elt
+    return None if ty is None or isinstance(ty, VarType) else depth
+
+
+def _runtime_dim(bound: ArraySizeBound, type_depth: int) -> int | None:
+    """``dim`` as `ops.dim` computes it, or ``None`` if not provable.
+
+    The descent walks ``x[0]`` and stops at ``x == []``, so an empty level cuts
+    the answer short of the type's depth -- ``dim`` of ``[[1.,2.],[3.,4.]][0:0]``
+    is 1 where the type nests twice.  Only the levels *above* the last can cut
+    it, and a level of unknown length might be the empty one.
+    """
+    for level in range(type_depth - 1):
+        if not isinstance(bound, ListSize):
+            return None
+        size = concrete_size(bound.size)
+        if size is None:
+            return None
+        if size == 0:
+            return level + 1
+        bound = bound.elt
+    return type_depth
+
+
+class _ShapeScan(DefaultVisitor):
+    """Where *func* has a shape query (``len`` / ``size`` / ``dim``): anywhere
+    (``found``) and inside an assertion's test (``in_assert``).
 
     `ArraySizeInfer` runs `TypeInfer` and walks callees, so it is far from
     free, and the assert-free reading of it is a second run.  A function with
-    no ``len`` pays for neither, one with no ``len`` in an assert pays for the
+    no shape query pays for neither, one with none in an assert pays for the
     first only.
     """
 
@@ -94,12 +133,20 @@ class _LenScan(DefaultVisitor):
         self.in_assert = False
         self._depth = 0
 
+    def _mark(self):
+        self.found = True
+        if self._depth > 0:
+            self.in_assert = True
+
     def _visit_unaryop(self, e: UnaryOp, ctx: None):
-        if isinstance(e, Len):
-            self.found = True
-            if self._depth > 0:
-                self.in_assert = True
+        if isinstance(e, Len | Dim):
+            self._mark()
         super()._visit_unaryop(e, ctx)
+
+    def _visit_binaryop(self, e: BinaryOp, ctx: None):
+        if isinstance(e, Size):
+            self._mark()
+        super()._visit_binaryop(e, ctx)
 
     def _visit_assert(self, stmt: AssertStmt, ctx: None):
         self._depth += 1
@@ -109,8 +156,8 @@ class _LenScan(DefaultVisitor):
             self._depth -= 1
 
     @staticmethod
-    def scan(func: FuncDef) -> '_LenScan':
-        inst = _LenScan()
+    def scan(func: FuncDef) -> '_ShapeScan':
+        inst = _ShapeScan()
         inst._visit_function(func, None)
         return inst
 
@@ -125,6 +172,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
     partial_eval: PartialEvalInfo
     array_size: ArraySizeAnalysis | None
     array_size_no_assert: ArraySizeAnalysis | None
+    type_info: TypeAnalysis | None
     def_use: DefineUseAnalysis
     enable_context: bool
     enable_op: bool
@@ -137,6 +185,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         partial_eval: PartialEvalInfo,
         array_size: ArraySizeAnalysis | None,
         array_size_no_assert: ArraySizeAnalysis | None,
+        type_info: TypeAnalysis | None,
         def_use: DefineUseAnalysis,
         enable_context: bool,
         enable_op: bool,
@@ -145,6 +194,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         self.partial_eval = partial_eval
         self.array_size = array_size
         self.array_size_no_assert = array_size_no_assert
+        self.type_info = type_info
         self.def_use = def_use
         self.enable_context = enable_context
         self.enable_op = enable_op
@@ -180,14 +230,15 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         self.changed = True
         return lit
 
-    def _fold_len(self, e: Expr) -> Expr | None:
-        """``len(xs)`` where the size analysis proves a concrete length.
+    def _fold_shape(self, e: Expr) -> Expr | None:
+        """A shape query -- ``len(xs)``, ``dim(xs)``, ``size(xs, n)`` -- that
+        the size analysis answers.
 
-        This is the one fold not keyed on a value.  `PartialEval` reaches a
-        `Len` only through `_visit_unaryop`, which wants the argument's whole
-        value, so a list of known length and unknown elements -- an argument
-        with a fixed dimension, the list `UnfoldZip` indexes -- never folds
-        there.
+        These are the folds not keyed on a value.  `PartialEval` reaches them
+        through `_visit_unaryop` / `_visit_binaryop`, which want the
+        argument's whole value, so a list of known shape and unknown elements
+        -- an argument with a fixed dimension, the list `UnfoldZip` indexes --
+        never folds there.
 
         Inside an assertion's test the sizes are read from the analysis that
         did *not* seed itself from asserts.  `ArraySizeInfer` learns from
@@ -198,26 +249,76 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         it folds only when the lengths were already known some other way, and
         then losing the assert costs nothing.
 
-        The argument must be pure: substituting the literal drops it, and the
-        size analysis will happily report the length of a list a call
-        returned.  A pure argument is droppable on the same terms
+        The operands must be pure: substituting the literal drops them, and
+        the size analysis will happily report the shape of a list a call
+        returned.  A pure operand is droppable on the same terms
         `DeadCodeEliminate` already drops one.
         """
+        if not self.enable_op:
+            return None
         sizes = self.array_size_no_assert if self._in_assert else self.array_size
-        if sizes is None or not self.enable_op or not isinstance(e, Len):
+        if sizes is None:
             return None
-        bound = sizes.by_expr.get(e.arg)
-        if not isinstance(bound, ListSize):
+
+        operands: tuple[Expr, ...]
+        match e:
+            case Len():
+                operands = (e.arg,)
+                bound = sizes.by_expr.get(e.arg)
+                val = concrete_size(bound.size) if isinstance(bound, ListSize) else None
+            case Dim():
+                operands = (e.arg,)
+                val = self._dim_of(e.arg, sizes)
+            case Size():
+                operands = (e.first, e.second)
+                val = self._size_of(e.first, e.second, sizes)
+            case _:
+                return None
+
+        if val is None:
             return None
-        size = concrete_size(bound.size)
-        if size is None:
+        if not all(Purity.analyze_expr(arg, self.def_use) for arg in operands):
             return None
-        if not Purity.analyze_expr(e.arg, self.def_use):
-            return None
-        # The literal sits where the `len` sat, so it rounds under the same
-        # context the `len` would have: no rounding is owed here.
+        # The literal sits where the query sat, so it rounds under the same
+        # context the query would have: no rounding is owed here.
         self.changed = True
-        return Integer(size, e.loc)
+        return Integer(val, e.loc)
+
+    def _dim_of(self, arg: Expr, sizes: ArraySizeAnalysis) -> int | None:
+        """``dim(arg)`` when the type settles the nesting and no level that
+        the descent passes through might be empty."""
+        if self.type_info is None:
+            return None
+        depth = _list_type_depth(self.type_info.by_expr.get(arg))
+        if depth is None or depth == 0:
+            # depth 0 is a non-list, which `dim` rejects at runtime; leave the
+            # error where it is rather than folding a program that raises.
+            return None
+        return _runtime_dim(sizes.by_expr.get(arg), depth)
+
+    def _size_of(self, arg: Expr, index: Expr, sizes: ArraySizeAnalysis) -> int | None:
+        """``size(arg, n)`` -- ``len(arg[0]...[0])``, *n* deep -- when *n* is
+        a known index and every level it passes through has a known,
+        *non-empty* length.
+
+        An empty level makes the runtime's ``x[0]`` raise, so a size read past
+        one is not a value this may claim.
+        """
+        if index not in self.partial_eval.by_expr:
+            return None
+        lit = value_to_literal(self.partial_eval.by_expr[index], None)
+        if not isinstance(lit, Integer) or lit.val < 0:
+            return None
+
+        bound = sizes.by_expr.get(arg)
+        for _ in range(lit.val):
+            if not isinstance(bound, ListSize):
+                return None
+            size = concrete_size(bound.size)
+            if size is None or size == 0:
+                return None
+            bound = bound.elt
+        return concrete_size(bound.size) if isinstance(bound, ListSize) else None
 
     def _visit_expr(self, e: Expr, ctx) -> Expr:
         # Single chokepoint: every expression in the tree comes here
@@ -225,7 +326,7 @@ class _ConstFoldInstance(DefaultTransformVisitor):
         lit = self._fold(e)
         if lit is not None:
             return lit
-        lit = self._fold_len(e)
+        lit = self._fold_shape(e)
         if lit is not None:
             return lit
         return super()._visit_expr(e, ctx)
@@ -251,14 +352,18 @@ class ConstFold:
     :class:`PartialEval`; pass an existing analysis via
     ``partial_eval=`` to avoid re-running it.
 
-    ``len(xs)`` also folds when :class:`ArraySizeInfer` proves a concrete
-    length and the argument is pure, even though its *value* is unknown --
-    the one fold whose source is not :class:`PartialEval`.  Inside an
-    assertion's test the sizes come from a second run of the analysis with
-    ``seed_from_asserts=False``, so an assertion is never discharged by what
-    the analysis learned from it.  Neither run happens unless the function
-    has a ``len`` in the corresponding position; pass ``array_size=`` to
-    reuse the first.
+    A shape query -- ``len(xs)``, ``dim(xs)``, ``size(xs, n)`` -- also folds
+    when :class:`ArraySizeInfer` proves the shape and the operands are pure,
+    even though the list's *value* is unknown: the folds whose source is not
+    :class:`PartialEval`.  ``dim`` and ``size`` are answered only where the
+    runtime's own descent through ``x[0]`` is known to reach that far, since
+    it stops at the first empty level.
+
+    Inside an assertion's test the sizes come from a second run of the
+    analysis with ``seed_from_asserts=False``, so an assertion is never
+    discharged by what the analysis learned from it.  Neither run happens
+    unless the function has a shape query in the corresponding position; pass
+    ``array_size=`` / ``type_info=`` to reuse the analyses.
 
     A list or tuple *literal* is never substituted, however statically
     known: it allocates, so putting one at a use site is not the shrink
@@ -276,18 +381,20 @@ class ConstFold:
         def_use: DefineUseAnalysis | None = None,
         partial_eval: PartialEvalInfo | None = None,
         array_size: ArraySizeAnalysis | None = None,
+        type_info: TypeAnalysis | None = None,
         enable_context: bool = True,
         enable_op: bool = True,
     ) -> FuncDef:
-        """Apply constant folding to *func*.  Pass cached ``def_use``
-        / ``partial_eval`` / ``array_size`` to share with other passes.
-        Set ``enable_context=False`` to skip ``Context`` folds or
+        """Apply constant folding to *func*.  Pass cached ``def_use`` /
+        ``partial_eval`` / ``array_size`` / ``type_info`` to share with other
+        passes.  Set ``enable_context=False`` to skip ``Context`` folds or
         ``enable_op=False`` to skip everything else."""
         func, _ = ConstFold.apply_with_status(
             func,
             def_use=def_use,
             partial_eval=partial_eval,
             array_size=array_size,
+            type_info=type_info,
             enable_context=enable_context,
             enable_op=enable_op,
         )
@@ -300,6 +407,7 @@ class ConstFold:
         def_use: DefineUseAnalysis | None = None,
         partial_eval: PartialEvalInfo | None = None,
         array_size: ArraySizeAnalysis | None = None,
+        type_info: TypeAnalysis | None = None,
         enable_context: bool = True,
         enable_op: bool = True,
     ) -> tuple[FuncDef, bool]:
@@ -313,15 +421,23 @@ class ConstFold:
             partial_eval = PartialEval.apply(func, def_use=def_use)
         array_size_no_assert: ArraySizeAnalysis | None = None
         if enable_op:
-            scan = _LenScan.scan(func)
-            if array_size is None and scan.found:
-                array_size = ArraySizeInfer.analyze(func, partial_eval=partial_eval)
-            if scan.in_assert:
-                array_size_no_assert = ArraySizeInfer.analyze(
-                    func, partial_eval=partial_eval, seed_from_asserts=False
-                )
+            scan = _ShapeScan.scan(func)
+            if scan.found:
+                # `ArraySizeInfer` runs this itself if not given one; sharing
+                # it keeps a `dim` fold from paying for a second run.
+                if type_info is None:
+                    type_info = TypeInfer.check(func, def_use=def_use)
+                if array_size is None:
+                    array_size = ArraySizeInfer.analyze(
+                        func, partial_eval=partial_eval, type_info=type_info
+                    )
+                if scan.in_assert:
+                    array_size_no_assert = ArraySizeInfer.analyze(
+                        func, partial_eval=partial_eval, type_info=type_info,
+                        seed_from_asserts=False,
+                    )
         inst = _ConstFoldInstance(
-            func, partial_eval, array_size, array_size_no_assert, def_use,
-            enable_context, enable_op,
+            func, partial_eval, array_size, array_size_no_assert, type_info,
+            def_use, enable_context, enable_op,
         )
         return inst.apply(), inst.changed
