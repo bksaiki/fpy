@@ -190,120 +190,78 @@ class _SimplifyIfInstance(SiteRewriter):
         return True
 
     def _emit(self, ctx: list[Stmt], stmts: list[Stmt]):
-        """Hand *stmts* to the enclosing block in place of the `if`."""
+        """Give the enclosing block *stmts* in place of the `if`, returning the
+        last as the replacement per :meth:`SiteRewriter._visit_block`."""
         self._replaced = True
-        if not stmts:
-            self._dropped = True
-            return None, None
         ctx.extend(stmts[:-1])
         return stmts[-1], None
 
-    def _visit_branches(self, ctx, *blocks: StmtBlock) -> list[StmtBlock]:
-        return [self._visit_block(b, ctx)[0] for b in blocks]
+    def _rewrite(
+        self, cond_e: Expr, ift: StmtBlock, iff: StmtBlock | None, ctx,
+    ) -> list[Stmt]:
+        """The statements replacing an `if`, with *iff* `None` for a one-armed
+        one -- which is this rewrite with an empty else throughout: no names
+        merge from that side, so each takes its pre-`if` value there.
+
+        `None` rather than an empty block because `mutated_in` / `introed_in`
+        index by block identity, and a synthesized one is in neither.
+        """
+        stmts: list[Stmt] = []
+        cond = self._visit_expr(cond_e, ctx)
+        if not isinstance(cond, Var):
+            t = self.gensym.fresh('cond')
+            stmts.append(Assign(t, BoolTypeAnn(None), cond, None))
+            cond = Var(t, None)
+
+        bodies = [
+            None if b is None else self._visit_block(b, ctx)[0]
+            for b in (ift, iff)
+        ]
+
+        # FPy semantics: a name is introduced in both arms or in neither
+        intros = sorted(
+            self.def_use.introed_in(ift) & self.def_use.introed_in(iff)
+        ) if iff is not None else []
+
+        renames: list[dict[NamedId, NamedId]] = []
+        merged: set[NamedId] = set()
+        for src, body in zip((ift, iff), bodies):
+            if src is None or body is None:
+                renames.append({})
+                continue
+            mutated = sorted(self.def_use.mutated_in(src))
+            rename = {v: self.gensym.refresh(v) for v in mutated + intros}
+            renames.append(rename)
+            merged |= rename.keys()
+            # a mutated name carries its pre-`if` value in; an introduced one
+            # has none to carry
+            for v in mutated:
+                stmts.append(Assign(rename[v], None, Var(v, None), None))
+            stmts.extend(RenameTarget.apply_block(body, rename).stmts)
+
+        # Over the union: a name mutated in one arm only still needs a merge,
+        # and takes its pre-`if` name on the other side.
+        for var in sorted(merged):
+            e = IfExpr(
+                cond,
+                Var(renames[0].get(var, var), None),
+                Var(renames[1].get(var, var), None),
+                None,
+            )
+            stmts.append(Assign(var, None, e, None))
+        return stmts
 
     def _visit_if1(self, stmt: If1Stmt, ctx: list[Stmt]):
         if not self._claims(stmt, stmt.body):
             return super()._visit_if1(stmt, ctx)
-        stmts: list[Stmt] = []
-
-        # compile condition
-        cond = self._visit_expr(stmt.cond, ctx)
-
-        # generate temporary if needed
-        if not isinstance(cond, Var):
-            t = self.gensym.fresh('cond')
-            s = Assign(t, BoolTypeAnn(None), cond, None)
-            stmts.append(s)
-            cond = Var(t, None)
-
-        # compile the body
-        (body,) = self._visit_branches(ctx, stmt.body)
-
-        # identify variables that were mutated in the body
-        mutated = self.def_use.mutated_in(stmt.body)
-
-        # rename mutated variables in the body
-        rename = { var: self.gensym.refresh(var) for var in mutated }
-        body = RenameTarget.apply_block(body, rename)
-
-        # generate assignments and inline the body
-        for var in mutated:
-            t = rename[var]
-            s = Assign(t, None, Var(var, None), None)
-            stmts.append(s)
-        stmts.extend(body.stmts)
-
-        # make if expressions for each mutated variable
-        for var in mutated:
-            e = IfExpr(cond, Var(rename[var], None), Var(var, None), None)
-            s = Assign(var, None, e, None)
-            stmts.append(s)
-
-        return self._emit(ctx, stmts)
+        return self._emit(ctx, self._rewrite(stmt.cond, stmt.body, None, ctx))
 
     def _visit_if(self, stmt: IfStmt, ctx: list[Stmt]):
         if not self._claims(stmt, stmt.ift, stmt.iff):
             return super()._visit_if(stmt, ctx)
-        stmts: list[Stmt] = []
-
-        # compile condition
-        cond = self._visit_expr(stmt.cond, ctx)
-
-        # generate temporary if needed
-        if not isinstance(cond, Var):
-            t = self.gensym.fresh('cond')
-            s = Assign(t, BoolTypeAnn(None), cond, None)
-            stmts.append(s)
-            cond = Var(t, None)
-
-        # compile the bodies
-        ift, iff = self._visit_branches(ctx, stmt.ift, stmt.iff)
-
-        # identify variables that were mutated in each body
-        mutated_ift = self.def_use.mutated_in(stmt.ift)
-        mutated_iff = self.def_use.mutated_in(stmt.iff)
-
-        # identify variables that were introduced in the bodies
-        # FPy semantics says they must be introduced in both branches
-        intros_ift = self.def_use.introed_in(stmt.ift)
-        intros_iff = self.def_use.introed_in(stmt.iff)
-        intros = sorted(intros_ift & intros_iff) # intersection of fresh variables
-
-        # combine sets
-        mutated_or_new_ift = sorted(mutated_ift)
-        mutated_or_new_iff = sorted(mutated_iff)
-        mutated_or_new_ift.extend(intros)
-        mutated_or_new_iff.extend(intros)
-
-        # rename mutated variables in each body, generate assignments, and inline
-        rename_ift = { var: self.gensym.refresh(var) for var in mutated_or_new_ift }
-        rename_iff = { var: self.gensym.refresh(var) for var in mutated_or_new_iff }
-
-        ift = RenameTarget.apply_block(ift, rename_ift)
-        iff = RenameTarget.apply_block(iff, rename_iff)
-
-        for var in mutated_ift:
-            t = rename_ift[var]
-            s = Assign(t, None, Var(var, None), None)
-            stmts.append(s)
-        stmts.extend(ift.stmts)
-
-        for var in mutated_iff:
-            t = rename_iff[var]
-            s = Assign(t, None, Var(var, None), None)
-            stmts.append(s)
-        stmts.extend(iff.stmts)
-
-        # Over the union: a variable mutated in one arm only still needs a
-        # merge, and takes its pre-`if` name on the other side.
-        for var in sorted(set(mutated_or_new_ift) | set(mutated_or_new_iff)):
-            ift_name = rename_ift.get(var, var)
-            iff_name = rename_iff.get(var, var)
-            e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
-            stmts.append(Assign(var, None, e, None))
-
-        return self._emit(ctx, stmts)
-
+        return self._emit(
+            ctx, self._rewrite(stmt.cond, stmt.ift, stmt.iff, ctx)
+        )
 
 #
 # This transformation rewrites a block of the form:
