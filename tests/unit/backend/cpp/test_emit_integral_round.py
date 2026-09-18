@@ -156,6 +156,153 @@ class TestModeTable:
             [3.0, 4.0, 3.0, 4.0]
 
 
+class TestIntegerStorage:
+    """Into integer storage the cast performs no rounding: the value is made
+    integral in the float type first, exactly, and the cast converts it.
+
+    ``RTZ`` is the exception -- C++ integer conversion truncates, so the call
+    would only repeat the cast.
+    """
+
+    @pytest.mark.parametrize('rm, fn', [
+        (RM.RTN, 'std::floor'),
+        (RM.RTP, 'std::ceil'),
+        (RM.RNA, 'std::round'),
+        (RM.RNE, 'std::nearbyint'),
+    ], ids=['rtn', 'rtp', 'rna', 'rne'])
+    def test_the_value_is_made_integral_before_the_cast(self, rm, fn):
+        out = _emit(fp.SINT32.with_params(rm=rm, overflow=ASSERT))
+        assert re.search(rf'auto&& (\w+) = {re.escape(fn)}\(x\);', out), out
+        assert re.search(r'int32_t \w+ = static_cast<int32_t>\(\w+\);', out), out
+
+    def test_truncation_needs_no_call(self):
+        """The cast already truncates, so ``RTZ`` keeps the plain conversion."""
+        out = _emit(fp.SINT32.with_params(rm=RM.RTZ, overflow=ASSERT))
+        assert 'static_cast<int32_t>(x)' in out
+        assert 'std::trunc(x);' not in out
+
+    def test_the_bound_is_tested_on_the_rounded_value(self):
+        """Under ``RTP`` an operand inside the bound can round to one outside
+        it, so testing the operand would miss the overflow."""
+        out = _emit(fp.SINT8.with_params(rm=RM.RTP, overflow=ASSERT))
+        rounded = re.search(r'auto&& (\w+) = std::ceil\(x\);', out)
+        assert rounded, out
+        assert f'<= {rounded.group(1)} && {rounded.group(1)} <=' in out
+
+    def test_a_mode_with_no_single_call_is_refused(self):
+        """``RAZ`` takes three calls.  The float path spells it; this one does
+        not, and says so rather than truncating."""
+        with pytest.raises(CppCompileError, match='no single libm call'):
+            _emit(fp.SINT32.with_params(rm=RM.RAZ, overflow=ASSERT))
+
+
+class TestTheCastFallbackKeepsTheMode:
+    """An unbounded context in its own storage still performs its mode.
+
+    The bound it asserts is the *storage*'s, the format having none of its own,
+    and the mode is spelled before the cast.  Getting this wrong is a wrong
+    answer rather than a refusal: a cast truncates, so a dropped ``RTP`` turns
+    ``2.4`` into ``2``.
+    """
+
+    @staticmethod
+    def _unfolded(rm):
+        """A ``SATURATE`` context with its rule stated as program text.
+
+        What `unfold_overflow` leaves is a round under the *unbounded*
+        counterpart, whose only bound is its storage's.
+        """
+        import fpy2.strategies as st
+
+        ctx = fp.SINT32.with_params(rm=rm, overflow=fp.OverflowMode.SATURATE)
+
+        @fp.fpy
+        def q(x):
+            with ctx:
+                return fp.round(x)
+
+        return st.unfold_overflow(
+            st.monomorphize(q, args=[RealType(fp.FP64)]))
+
+    def test_a_non_rtz_mode_is_spelled_not_dropped(self):
+        """The cast truncates, so the mode has to happen before it."""
+        out = CppCompiler().compile(self._unfolded(RM.RTP),
+                                    arg_types=[RealType(fp.FP64)])
+        assert 'std::ceil' in out
+        assert 'static_cast<int64_t>' in out
+
+    def test_the_storage_bound_is_asserted(self):
+        """The format is unbounded where `int64_t` is not, so the conversion
+        has a range the context does not state."""
+        out = CppCompiler().compile(self._unfolded(RM.RTZ),
+                                    arg_types=[RealType(fp.FP64)])
+        assert '9223372036854774784' in out
+        assert 'overflow occurred so rounding is undefined' in out
+
+    def test_truncation_still_reaches_the_cast(self):
+        """`RTZ` is what the cast performs, so it needs no spelling."""
+        out = CppCompiler().compile(self._unfolded(RM.RTZ),
+                                    arg_types=[RealType(fp.FP64)])
+        assert 'static_cast<int64_t>' in out
+
+
+class TestWrappingOverflow:
+    """``WRAP`` is the one edge rule with a lowering, and only where the C++
+    type holds exactly the values the format does -- then the type's own
+    wrapping *is* the context's.  The value is made integral before the range
+    test rather than by the cast, so any supported mode reaches it.
+    """
+
+    def test_a_matching_format_wraps(self):
+        out = _emit(fp.SINT32.with_params(rm=RM.RTP))
+        assert 'std::ceil(x)' in out
+        assert 'std::fmod' in out
+        assert '4294967296.0' in out
+
+    def test_the_range_test_is_on_the_rounded_value(self):
+        """Under ``RTP`` an operand inside the type's range can round to one
+        outside it, and the cast in that arm would be undefined."""
+        out = _emit(fp.SINT32.with_params(rm=RM.RTP))
+        rounded = re.search(r'auto&& (\w+) = std::ceil\(x\);', out)
+        assert rounded, out
+        assert f'if ({rounded.group(1)} >= -2147483648.0' in out
+
+    def test_truncation_keeps_its_shape(self):
+        """``RTZ`` needs no call: the cast truncates and the reduction is handed
+        the truncation, so the operand's own range test is the rounded one."""
+        out = _emit(fp.SINT32)
+        assert 'if (x >= -2147483648.0' in out
+        assert 'std::fmod(std::trunc(x)' in out
+
+    def test_an_unsigned_format_wraps_at_its_own_width(self):
+        out = _emit(fp.UINT8.with_params(rm=RM.RTP))
+        assert 'std::ceil(x)' in out
+        assert '256.0' in out
+
+    def test_a_format_the_type_does_not_hold_exactly_is_refused(self):
+        """``int8_t`` runs to -128..127, so it would wrap a step further out
+        than a ``+-100`` format does."""
+        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
+                              overflow=fp.OverflowMode.WRAP)
+        with pytest.raises(CppCompileError, match='does not hold exactly'):
+            _emit(ctx)
+
+    def test_the_advice_does_not_name_a_pass_that_cannot_help(self):
+        """``unfold_overflow`` states an overflow as a constant, and a wrapping
+        rule has none -- its value varies with the operand."""
+        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
+                              overflow=fp.OverflowMode.WRAP)
+        with pytest.raises(CppCompileError) as exc:
+            _emit(ctx)
+        assert 'cannot state a wrapping rule' in str(exc.value)
+
+    def test_saturation_still_names_the_pass(self):
+        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
+                              overflow=fp.OverflowMode.SATURATE)
+        with pytest.raises(CppCompileError, match='unfold_overflow'):
+            _emit(ctx)
+
+
 class TestAssertions:
     """A context states which values it has no result for; each statement becomes
     an assertion.  The *bound* assertions live in `test_round_fixed_bound.py`,
@@ -298,16 +445,17 @@ class TestStorageFromTheInferredFormat:
         assert '-128 <= x && x <= 127' in out
         assert 'overflow occurred so rounding is undefined' in out
 
-    def test_the_cast_path_still_requires_rtz(self):
-        """C++ integer conversion rounds toward zero, so only `RTZ` is the
-        rounding it performs -- checked against the storage the format chose."""
+    def test_an_integral_operand_needs_no_rounding(self):
+        """The mode is irrelevant where the operand is already an integer --
+        the same storage, the same bound, and no call to round it."""
         @fp.fpy(ctx=fp.REAL)
         def g(x: fp.Real) -> fp.Real:
             with fp.MPFixedContext(-1, RM.RNE):
                 return fp.round(x)
 
-        with pytest.raises(CppCompileError, match='must use RTZ'):
-            CppCompiler(optimize=False).compile(g, arg_types=[RealType(fp.SINT8)])
+        out = CppCompiler(optimize=False).compile(g, arg_types=[RealType(fp.SINT8)])
+        assert 'static_cast<int8_t>' in out
+        assert 'std::nearbyint' not in out
 
     def test_an_unstorable_value_is_still_refused(self):
         """Deferring the scope's check lets no value through that no type
@@ -650,3 +798,73 @@ class TestScaleByPowerOfTwo:
         with pytest.raises(CppCompileError, match='no matching signature'):
             CppCompiler().compile(
                 f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])
+
+
+_DIRECTED = fp.FP64.with_params(rm=RM.RTZ)
+
+
+def _under_directed_mode(inner, arg_ctx):
+    """``round`` under *inner*, inside a scope that set ``FE_TOWARDZERO``.
+
+    The branch below the rounding keeps the enclosing scope live past it, so
+    ``_current_rm`` is the directed mode at the rounding site, not unknown.
+    """
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real, n: fp.Real) -> fp.Real:
+        with _DIRECTED:
+            w = x / x
+            with inner:
+                y = fp.round(n)
+            if w > 0.0:
+                r = y
+            else:
+                r = y
+        return r
+
+    return CppCompiler(optimize=False).compile(
+        f, arg_types=[RealType(fp.FP64), RealType(arg_ctx)])
+
+
+class TestNearbyintNeedsFeTonearest:
+    """``std::nearbyint`` follows the *live* mode, so it is `RNE` only under
+    ``FE_TONEAREST``.
+
+    The precondition belongs to the spelling, not to the rounding: a path that
+    emits the call must carry it, and a path that emits none must not.
+    """
+
+    def test_the_wrapping_lowering_carries_it(self):
+        """`WRAP` reaches `nearbyint` by a route of its own, where a missed
+        check emits a call that truncates under the caller's mode."""
+        with pytest.raises(CppCompileError, match='FE_TONEAREST'):
+            _under_directed_mode(fp.SINT8.with_params(rm=RM.RNE), fp.FP64)
+
+    def test_a_directed_mode_is_unaffected(self):
+        """`ceil` does not read the rounding direction."""
+        out = _under_directed_mode(fp.SINT8.with_params(rm=RM.RTP), fp.FP64)
+        assert 'std::ceil' in out
+
+    def test_an_integral_operand_emits_no_call_and_is_accepted(self):
+        """Nothing rounds an `int16_t`, so the mode reaches no spelling and
+        refusing on it would refuse a program with no ``nearbyint`` in it."""
+        ctx = MPBFixedContext(
+            -1, fp.RealFloat(exp=10, c=1), rm=RM.RNE, overflow=ASSERT,
+            enable_neg_zero=False)
+        out = _under_directed_mode(ctx, fp.SINT16)
+        assert 'nearbyint' not in out
+        assert 'static_cast<int16_t>(n)' in out
+
+
+class TestCastCarriesNoMode:
+    """`fp.cast` asserts the conversion exact, and an exact conversion has no
+    rounding mode -- so the guard that holds a declined `Round` to ``RTZ``,
+    the cast below it being a truncation, does not apply to a `Cast`."""
+
+    @pytest.mark.parametrize('rm', [RM.RTP, RM.RTN, RM.RNA])
+    def test_a_non_rtz_mode_still_casts(self, rm):
+        ctx = MPBFixedContext(
+            -1, fp.RealFloat(exp=10, c=1), rm=rm, overflow=ASSERT,
+            enable_neg_zero=True)
+        out = _emit(ctx, body='cast')
+        assert 'static_cast<float>' in out
+        assert 'cast is not exact' in out

@@ -7,9 +7,10 @@ The active rounding context is taken from the
 are statically resolvable; symbolic context variables are rejected.
 
 For float contexts the rounding mode must be one of the four
-``fesetround``-supported modes (RNE / RTZ / RTP / RTN).  For integer
-contexts the rounding mode must be RTZ — C++ integer arithmetic
-already truncates toward zero, so no runtime support is needed.
+``fesetround``-supported modes (RNE / RTZ / RTP / RTN).  Integer
+*arithmetic* dispatches through the op table, which holds only the
+native integer contexts, so any other is refused there; rounding
+*into* one is lowered by ``_emit_integral_round`` instead.
 
 Tests in this module assert specific bare-emitter output and the
 rejection-mechanism behavior — both surfaces that optimizing
@@ -420,11 +421,13 @@ class TestRejection:
                 f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
             )
 
-    def test_integer_non_rtz_rejected(self):
-        """Integer contexts must use RTZ.
+    def test_integer_arithmetic_needs_a_native_context(self):
+        """The op table dispatches on whole contexts and holds only the native
+        integer ones, so *arithmetic* under any other is refused -- where
+        ``Round`` into one lowers through `_emit_integral_round`.
 
         Pinned with ``optimize=False`` — ``RoundElim`` would
-        otherwise hoist the integer-add out of the bad-RM scope
+        otherwise hoist the integer-add out of the scope
         (the unrounded sum of two ints is an int and fits the
         scope, so the round is identity), sidestepping the
         rejection.  The rejection mechanism is what this test
@@ -445,7 +448,7 @@ class TestRejection:
 
         with pytest.raises(
             CppCompileError,
-            match='must use RTZ rounding mode',
+            match='no matching signature for Add',
         ):
             CppCompiler(
                 unsafe_cast_int=True, optimize=False,
@@ -462,7 +465,7 @@ class TestRejection:
         opt-out path.
 
         Pinned with ``optimize=False`` for the same reason as
-        :meth:`test_integer_non_rtz_rejected` — ``RoundElim``
+        :meth:`test_integer_arithmetic_needs_a_native_context` — ``RoundElim``
         would otherwise eliminate the (identity) integer round
         and sidestep the rejection."""
 
@@ -645,3 +648,95 @@ class TestRoundIntoAFixedScope:
         assert 'static_cast<int64_t>(x)' in out, out
         assert re.search(r'acc = \(acc \+ \w+\);', out), out
         assert 'double acc' not in out and 'float acc' not in out, out
+
+
+class TestEnableFenv:
+    """``enable_fenv=False`` forbids ``std::fesetround``.
+
+    Changing the hardware rounding mode is a performance cliff, so a caller may
+    rule it out.  It changes nothing about how anything is emitted: it narrows
+    the *target* to the one mode the process already runs in, and the contexts
+    that stop being native become ordinary `unfold` sites.
+    """
+
+    _FP32_RTP = fp.FP32.with_params(rm=fp.RM.RTP)
+
+    @staticmethod
+    def _rounding():
+        ctx = TestEnableFenv._FP32_RTP
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+        return f
+
+    def test_the_mode_is_set_by_default(self):
+        out = CppCompiler().compile(
+            self._rounding(), arg_types=[RealType(fp.FP32)])
+        assert 'std::fesetround(FE_UPWARD)' in out
+
+    def test_it_is_refused_instead(self):
+        with pytest.raises(CppCompileError, match='enable_fenv=False'):
+            CppCompiler(enable_fenv=False).compile(
+                self._rounding(), arg_types=[RealType(fp.FP32)])
+
+    def test_unfold_answers_the_refusal(self):
+        """The point of the option: the refusal it creates is one `unfold`
+        already knows how to remove."""
+        out = CppCompiler(
+            enable_fenv=False, unfold=CppCompiler.UnfoldMode.ROUNDINGS,
+        ).compile(self._rounding(), arg_types=[RealType(fp.FP32)])
+        assert 'fesetround' not in out
+
+    def test_rne_needs_no_mode_change(self):
+        """`RNE` is the mode the process starts in, so it stays native."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return a + b
+
+        out = CppCompiler(enable_fenv=False).compile(
+            f, arg_types=[RealType(fp.FP32)] * 2)
+        assert 'fesetround' not in out
+        assert '(a + b)' in out
+
+    @pytest.mark.parametrize('rm', [fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP, fp.RM.RNA])
+    def test_integer_roundings_are_untouched(self, rm):
+        """`trunc` / `floor` / `ceil` / `round` do not read the rounding
+        direction, so a float-to-integer rounding needs nothing set."""
+        ctx = fp.SINT32.with_params(rm=rm, overflow=fp.OverflowMode.ASSERT)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+
+        out = CppCompiler(enable_fenv=False).compile(
+            f, arg_types=[RealType(fp.FP64)])
+        assert 'fesetround' not in out
+
+    def test_nearbyint_is_rne_because_nothing_sets_the_mode(self):
+        """The one integral spelling that *does* read the mode is still `RNE`
+        here, for the same reason the option exists."""
+        ctx = fp.SINT32.with_params(
+            rm=fp.RM.RNE, overflow=fp.OverflowMode.ASSERT)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+
+        out = CppCompiler(enable_fenv=False).compile(
+            f, arg_types=[RealType(fp.FP64)])
+        assert 'std::nearbyint' in out
+        assert 'fesetround' not in out
+
+    def test_the_header_goes_too(self):
+        """Nothing emitted can name it, and its absence is what a reader
+        checks the promise against."""
+        assert '#include <cfenv>' in CppCompiler().headers()
+        assert '#include <cfenv>' not in CppCompiler(enable_fenv=False).headers()

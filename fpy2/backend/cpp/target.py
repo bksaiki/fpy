@@ -104,13 +104,27 @@ from .types import CppScalar
 _FP_RMS = (RM.RNE, RM.RTZ, RM.RTP, RM.RTN)
 
 
-def _fp_ctxs() -> list[Context]:
+def fp_rms(enable_fenv: bool) -> tuple[RM, ...]:
+    """The FP rounding modes the target dispatches on.
+
+    All four ``fesetround`` can express, or -- where the emitter may not call it
+    -- only ``RNE``, the mode the emitted contract states the caller delivers
+    and the only one then reachable.
+
+    Shrinking this set is the whole of ``enable_fenv=False``: the op table loses
+    those signatures, `is_native_ctx` stops claiming those contexts, and
+    `unfold_round` therefore sees them as sites to rewrite.
+    """
+    return _FP_RMS if enable_fenv else (RM.RNE,)
+
+
+def _fp_ctxs(rms: tuple[RM, ...] = _FP_RMS) -> list[Context]:
     """All FP32 / FP64 contexts the cpp backend dispatches against
     — one per supported rounding mode."""
     return [
         IEEEContext(es, nbits, rm)
         for (es, nbits) in ((8, 32), (11, 64))
-        for rm in _FP_RMS
+        for rm in rms
     ]
 
 
@@ -125,21 +139,23 @@ def _int_ctxs() -> list[Context]:
     ]
 
 
-def _all_arith_ctxs() -> list[Context]:
-    return _fp_ctxs() + _int_ctxs()
+def _all_arith_ctxs(rms: tuple[RM, ...] = _FP_RMS) -> list[Context]:
+    return _fp_ctxs(rms) + _int_ctxs()
 
 
-_NATIVE_CTXS = frozenset(_all_arith_ctxs())
+@cache
+def _native_ctxs(enable_fenv: bool) -> frozenset[Context]:
+    return frozenset(_all_arith_ctxs(fp_rms(enable_fenv)))
 
 
-def is_native_ctx(ctx: Context) -> bool:
+def is_native_ctx(ctx: Context, *, enable_fenv: bool = True) -> bool:
     """Does the op table dispatch on *ctx*?
 
     Equivalently: is a ``static_cast`` into its storage the same operation as its
     ``round``?  Whole contexts, not formats, as :meth:`CppOp.matches` compares
     them -- a format carries neither the overflow rule nor the random bits.
     """
-    return ctx in _NATIVE_CTXS
+    return ctx in _native_ctxs(enable_fenv)
 
 
 def _ty_of(ctx: Context) -> CppScalar:
@@ -152,30 +168,29 @@ def _ty_of(ctx: Context) -> CppScalar:
 # Per-arity factory helpers — generate signature sets parameterized
 # by the contexts above.
 
-def _fp_unary(name: str) -> list[CppOp]:
+def _fp_unary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
     """Same-context FP-only unary signatures for one ``<cmath>``
-    function.  One sig per FP context (FP32 / FP64 × the four
-    supported rounding modes)."""
+    function.  One sig per FP context: FP32 / FP64 × *rms*."""
     return [
         CppOp(name, (_ty_of(c),), c)
-        for c in _fp_ctxs()
+        for c in _fp_ctxs(rms)
     ]
 
 
-def _fp_binary(name: str) -> list[CppOp]:
+def _fp_binary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
     """Same-context FP-only binary signatures for one ``<cmath>``
     function (function-call form, not infix)."""
     return [
         CppOp(name, (_ty_of(c), _ty_of(c)), c)
-        for c in _fp_ctxs()
+        for c in _fp_ctxs(rms)
     ]
 
 
-def _fp_ternary(name: str) -> list[CppOp]:
+def _fp_ternary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
     """Same-context FP-only ternary signatures."""
     return [
         CppOp(name, (_ty_of(c),) * 3, c)
-        for c in _fp_ctxs()
+        for c in _fp_ctxs(rms)
     ]
 
 
@@ -232,20 +247,23 @@ _TERNARY_CMATH = (
 # ---------------------------------------------------------------------
 # Per-arity table builders.
 
-def _make_unary_table() -> UnaryOpTable:
-    fp = _fp_ctxs()
+def _make_unary_table(rms: tuple[RM, ...]) -> UnaryOpTable:
+    fp = _fp_ctxs(rms)
     ints = _int_ctxs()
-    same = _all_arith_ctxs()
+    same = _all_arith_ctxs(rms)
     table: UnaryOpTable = {
         Neg: [CppOp('-', (_ty_of(c),), c, style=CppOpStyle.PREFIX)
               for c in same],
+        # no unsigned row: an unsigned value is its own magnitude, and
+        # `_emit_abs` emits the operand rather than a call
         Abs: (
             [CppOp('std::fabs', (_ty_of(c),), c) for c in fp]
-            + [CppOp('std::abs', (_ty_of(c),), c) for c in ints]
+            + [CppOp('std::abs', (_ty_of(c),), c)
+               for c in ints if _ty_of(c).is_signed()]
         ),
     }
     for op_cls, name in _UNARY_CMATH:
-        table[op_cls] = _fp_unary(name)
+        table[op_cls] = _fp_unary(name, rms)
 
     # ``logb`` under an integer output context lowers to
     # ``std::ilogb`` plus an explicit widening cast to the output's
@@ -261,8 +279,8 @@ def _make_unary_table() -> UnaryOpTable:
     return table
 
 
-def _make_binary_table() -> BinaryOpTable:
-    same = _all_arith_ctxs()
+def _make_binary_table(rms: tuple[RM, ...]) -> BinaryOpTable:
+    same = _all_arith_ctxs(rms)
     table: BinaryOpTable = {
         op_cls: [
             CppOp(name, (_ty_of(c), _ty_of(c)), c,
@@ -277,28 +295,29 @@ def _make_binary_table() -> BinaryOpTable:
         )
     }
     for op_cls, name in _BINARY_CMATH:
-        table[op_cls] = _fp_binary(name)
+        table[op_cls] = _fp_binary(name, rms)
     return table
 
 
-def _make_ternary_table() -> TernaryOpTable:
-    return {op_cls: _fp_ternary(name) for op_cls, name in _TERNARY_CMATH}
+def _make_ternary_table(rms: tuple[RM, ...]) -> TernaryOpTable:
+    return {op_cls: _fp_ternary(name, rms) for op_cls, name in _TERNARY_CMATH}
 
 
 # ---------------------------------------------------------------------
 # Public entry point.
 
 @cache
-def make_op_table() -> ScalarOpTable:
+def make_op_table(*, enable_fenv: bool = True) -> ScalarOpTable:
     """The cpp backend's default :class:`ScalarOpTable`.
 
-    Cached: it takes no arguments and every entry is derived from the module
-    constants above, so building it per emitter recomputed the same thing --
-    and it is not cheap, since each signature's storage goes through
-    `AbstractFormat.from_format`.  Callers only read it.
+    *enable_fenv* false drops every FP signature but ``RNE``; see :func:`fp_rms`.
+
+    Cached per flag: building one is not cheap -- each signature's storage goes
+    through `AbstractFormat.from_format` -- and callers only read it.
     """
+    rms = fp_rms(enable_fenv)
     return ScalarOpTable(
-        unary=_make_unary_table(),
-        binary=_make_binary_table(),
-        ternary=_make_ternary_table(),
+        unary=_make_unary_table(rms),
+        binary=_make_binary_table(rms),
+        ternary=_make_ternary_table(rms),
     )
