@@ -14,13 +14,15 @@ program here is pure and total, so it stays accepted under every mode the pass
 grows.
 """
 
+import re
+
 import pytest
 
 import fpy2 as fp
 from fpy2 import Function
 from fpy2.ast.fpyast import If1Stmt, IfExpr, IfStmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.transform import SimplifyIf
+from fpy2.transform import SimplifyIf, TransformDeclined
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -193,4 +195,138 @@ class TestTheConditionTemporary:
     def test_a_var_condition_needs_no_temporary(self):
         ast = SimplifyIf.apply(condition_is_a_var.ast)
         assert 'cond' not in {str(n) for n in _names(ast)}
+
+
+
+# ----------------------------------------------------------------------
+# Refusals that hold under every mode
+
+
+@fp.fpy
+def returns_in_branch(x):
+    if x > 0:
+        return 1.0
+    return x * 2
+
+
+@fp.fpy
+def asserts_in_branch(x):
+    if x > 0:
+        assert x > 10, 'too small'
+        y = x
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def effect_in_branch(x):
+    y = 0.0
+    if x > 0:
+        fp.round(x)
+        y = 1.0
+    return y
+
+
+@fp.fpy
+def writes_in_branch(xs: list[fp.Real], x):
+    if x > 0:
+        xs[0] = x
+        y = x
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def while_in_branch(x, n: int):
+    if x > 0:
+        y = 0.0
+        i = 0
+        while i < n:
+            y = y + x
+            i = i + 1
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def for_in_branch(x, n: int):
+    if x > 0:
+        y = 0.0
+        for _i in range(n):
+            y = y + x
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def cast_in_branch(x):
+    if x > 0:
+        y = fp.cast(x)
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def nested_unhoistable(x, y):
+    if x > 0:
+        if y > 0:
+            assert y > 10, 'too small'
+            z = 1.0
+        else:
+            z = 2.0
+    else:
+        z = 3.0
+    return z
+
+
+@fp.fpy
+def guarded_read(xs: list[fp.Real], i: int):
+    if i < len(xs):
+        y = xs[i]
+    else:
+        y = 0.0
+    return y
+
+
+_REFUSED = [
+    (returns_in_branch, '`return` escapes'),
+    (asserts_in_branch, '`assert` would run unconditionally'),
+    (effect_in_branch, 'effect would run unconditionally'),
+    (writes_in_branch, 'list write would run unconditionally'),
+    (while_in_branch, '`while` would run unconditionally'),
+    (for_in_branch, '`for` would run unconditionally'),
+    (cast_in_branch, 'asserts its result is exact'),
+    (nested_unhoistable, '`assert` would run unconditionally'),
+]
+
+
+class TestUnconditionalRefusals:
+    """Constructs that can change whether, or which, value comes out.  No
+    evaluation strategy makes these legal, so no mode admits them."""
+
+    @pytest.mark.parametrize('f,why', _REFUSED, ids=lambda v: getattr(v, 'name', ''))
+    def test_declines(self, f, why):
+        with pytest.raises(TransformDeclined, match=re.escape(why)):
+            SimplifyIf.apply(f.ast)
+
+    def test_a_return_no_longer_raises_a_syntax_error(self):
+        """It used to fail as `FPySyntaxError: unbound variable`, naming a
+        variable the user never wrote."""
+        with pytest.raises(TransformDeclined):
+            SimplifyIf.apply(returns_in_branch.ast)
+
+    def test_an_inner_refusal_declines_the_outer_if(self):
+        with pytest.raises(TransformDeclined):
+            SimplifyIf.apply(nested_unhoistable.ast)
+
+
+class TestTheRefusalsDoNotOverreach:
+    def test_a_guarded_read_is_still_accepted(self):
+        """Partial *reads* are the keyword's business, not this phase's."""
+        SimplifyIf.apply(guarded_read.ast)
 

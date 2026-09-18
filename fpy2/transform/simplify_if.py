@@ -4,7 +4,73 @@ from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..ast import *
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
+from .error import TransformDeclined
 from .rename_target import RenameTarget
+
+# Constructs that cannot be hoisted out of a branch under any mode: each can
+# change whether, or which, value the function produces.  Scoped statements
+# (`with`) are not listed -- the scan descends into them, since their contents
+# become unconditional too.
+_UNHOISTABLE: dict[type[Stmt], str] = {
+    ReturnStmt: 'a `return` escapes the branch and has no expression form',
+    AssertStmt: 'an `assert` would run unconditionally and can abort',
+    EffectStmt: 'an effect would run unconditionally',
+    IndexedAssign: 'a list write would run unconditionally',
+    WhileStmt: 'a `while` would run unconditionally and may not terminate',
+    ForStmt: 'a `for` would run unconditionally',
+}
+
+
+class _Unhoistable(DefaultVisitor):
+    """Reports why a branch body cannot be hoisted, or ``None``.
+
+    Descends to any depth: a branch's statements all become unconditional, and
+    so do those of any block nested inside it.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.why: str | None = None
+
+    def _reject(self, node: Stmt) -> None:
+        if self.why is None:
+            self.why = _UNHOISTABLE[type(node)]
+
+    def _visit_return(self, stmt: ReturnStmt, ctx):
+        self._reject(stmt)
+
+    def _visit_assert(self, stmt: AssertStmt, ctx):
+        self._reject(stmt)
+        super()._visit_assert(stmt, ctx)
+
+    def _visit_effect(self, stmt: EffectStmt, ctx):
+        self._reject(stmt)
+        super()._visit_effect(stmt, ctx)
+
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
+        self._reject(stmt)
+        super()._visit_indexed_assign(stmt, ctx)
+
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        self._reject(stmt)
+        super()._visit_while(stmt, ctx)
+
+    def _visit_for(self, stmt: ForStmt, ctx):
+        self._reject(stmt)
+        super()._visit_for(stmt, ctx)
+
+    def _visit_unaryop(self, e: UnaryOp, ctx):
+        if isinstance(e, Cast) and self.why is None:
+            self.why = (
+                '`fp.cast` asserts its result is exact, so hoisting it can abort'
+            )
+        super()._visit_unaryop(e, ctx)
+
+
+def _why_unhoistable(block: StmtBlock) -> str | None:
+    v = _Unhoistable()
+    v._visit_block(block, None)
+    return v.why
 
 
 class _SimplifyIfInstance(DefaultTransformVisitor):
@@ -22,7 +88,14 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         func = self._visit_function(self.func, None)
         return func, self.gensym.generated
 
+    @staticmethod
+    def _require_hoistable(block: StmtBlock) -> None:
+        why = _why_unhoistable(block)
+        if why is not None:
+            raise TransformDeclined(f'cannot rewrite `if` to `if` expression: {why}')
+
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
+        self._require_hoistable(stmt.body)
         stmts: list[Stmt] = []
 
         # compile condition
@@ -62,6 +135,8 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
 
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
+        self._require_hoistable(stmt.ift)
+        self._require_hoistable(stmt.iff)
         stmts: list[Stmt] = []
 
         # compile condition
