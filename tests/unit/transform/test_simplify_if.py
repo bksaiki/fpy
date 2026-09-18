@@ -412,11 +412,46 @@ class TestAbortsRefuseUnderEveryMode:
             SimplifyIf.apply(f.ast, strict=strict)
 
 
-class TestStrictDoesNotDisturbTotalPrograms:
+@fp.fpy(ctx=fp.FP64)
+def pinned_two_armed(x):
+    if x > 0:
+        y = x * 2
+    else:
+        y = -x
+    return y
+
+
+class TestStrictNeedsAResolvedContext:
+    """`strict` promises observational equivalence, and an unresolved context
+    is exactly what denies it.
+
+    A function with no ``ctx=`` inherits its caller's, so every rounded
+    operation in it -- all arithmetic, not just `fp.round` -- might be under a
+    context that aborts on overflow.  `strict` therefore declines an
+    unannotated branch and accepts a pinned one; the default hoists both.
+    """
+
     @pytest.mark.parametrize('f', _UNARY + [nested])
+    def test_the_default_accepts_an_unannotated_program(self, f):
+        SimplifyIf.apply(f.ast)
+
+    @pytest.mark.parametrize(
+        'f', [one_armed, two_armed, mutated_in_both, two_variables]
+    )
+    def test_strict_declines_unannotated_arithmetic(self, f):
+        with pytest.raises(TransformDeclined, match='unresolved context'):
+            SimplifyIf.apply(f.ast, strict=True)
+
+    @pytest.mark.parametrize('f', [condition_is_a_var, nested])
+    def test_a_literal_only_branch_is_accepted(self, f):
+        """`ContextUse` records no use site for a literal, and a literal does
+        not overflow its context -- so there is nothing here `strict` cannot
+        prove."""
+        SimplifyIf.apply(f.ast, strict=True)
+
     @pytest.mark.parametrize('strict', [False, True])
-    def test_accepted(self, f, strict):
-        SimplifyIf.apply(f.ast, strict=strict)
+    def test_a_pinned_context_is_accepted_under_both(self, strict):
+        SimplifyIf.apply(pinned_two_armed.ast, strict=strict)
 
 
 # ----------------------------------------------------------------------
@@ -606,3 +641,117 @@ class TestExpressionCursorsForward:
             assert c.resolve().is_equiv(got.resolve())
             checked += 1
         assert checked, 'no expression cursor forwarded, so nothing was checked'
+
+
+@fp.fpy
+def mutated_in_one_arm_each(c):
+    a = 0.0
+    b = 0.0
+    if c > 0:
+        a = 1.0
+    else:
+        b = 2.0
+    return a + b
+
+
+@fp.fpy
+def mutated_in_one_arm_only(c, x):
+    y = x
+    if c > 0:
+        y = x * 2
+    else:
+        pass
+    return y
+
+
+class TestAsymmetricMutation:
+    """A variable mutated in one arm only still needs a merge.
+
+    The merge once ran over the `if` arm's names alone, so a variable touched
+    only in the `else` arm kept its pre-`if` value -- a wrong answer with no
+    refusal.  Every other program here assigns the same names in both arms,
+    which is why the suite could not see it.
+    """
+
+    @pytest.mark.parametrize('c', [1.0, -1.0])
+    def test_a_variable_per_arm(self, c):
+        _agrees(mutated_in_one_arm_each, c)
+
+    @pytest.mark.parametrize('c', [1.0, -1.0])
+    def test_an_empty_else(self, c):
+        _agrees(mutated_in_one_arm_only, c, 3.0)
+
+    def test_both_variables_are_merged(self):
+        assert _count(SimplifyIf.apply(mutated_in_one_arm_each.ast), IfExpr) == 2
+
+
+# ----------------------------------------------------------------------
+# Aborts reachable other than through `Round`
+
+
+@fp.fpy
+def arithmetic_under_assert_overflow(x):
+    if x < 2:
+        with fp.MPBFixedContext(-1, 128, overflow=fp.OverflowMode.ASSERT):
+            y = x * x
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def round_at_under_assert_overflow(x):
+    if x < 0:
+        with fp.MPBFixedContext(-1, 128, overflow=fp.OverflowMode.ASSERT):
+            y = fp.round_at(x, 2)
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def _asserting_callee(x):
+    assert x > 0, 'positive'
+    return x
+
+
+@fp.fpy
+def calls_an_asserting_function(x):
+    if x > 0:
+        y = _asserting_callee(x)
+    else:
+        y = 0.0
+    return y
+
+
+class TestAbortsNotReachedThroughRound:
+    """The check is keyed on whether an expression consults the rounding
+    context, not on its node class.
+
+    Keying it on `isinstance(e, Round | Cast)` let three shapes through, each
+    of which diverged from the interpreter under *both* modes: arithmetic
+    (every rounded operation consults the context), `fp.round_at`, and an
+    abort reached through a callee.
+    """
+
+    @pytest.mark.parametrize('strict', [False, True])
+    @pytest.mark.parametrize('f', [
+        arithmetic_under_assert_overflow,
+        round_at_under_assert_overflow,
+    ])
+    def test_assert_overflow_is_found_whatever_rounds(self, f, strict):
+        with pytest.raises(TransformDeclined, match='ASSERT` overflow'):
+            SimplifyIf.apply(f.ast, strict=strict)
+
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_a_callee_is_refused_rather_than_scanned(self, strict):
+        with pytest.raises(TransformDeclined, match='callee is not scanned'):
+            SimplifyIf.apply(calls_an_asserting_function.ast, strict=strict)
+
+    def test_a_context_constructor_is_not_a_refused_call(self):
+        """`fp.MPBFixedContext(...)` in a `with` header is a `Call` too;
+        refusing every call would decline any branch that opens a context."""
+        assert SimplifyIf.refusals(arithmetic_under_assert_overflow.ast)
+        reasons = [w for _c, w in
+                   SimplifyIf.refusals(arithmetic_under_assert_overflow.ast)]
+        assert not any('foreign' in w for w in reasons)

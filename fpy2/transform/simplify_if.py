@@ -3,7 +3,9 @@
 from ..analysis import ContextUse, DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..analysis.context_use import ContextUseAnalysis
 from ..ast import *
+from ..function import Function
 from ..number import Context, OverflowMode
+from ..primitive import Primitive
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
 from .cursor import Cursor, EditLog, StmtPath
@@ -31,9 +33,6 @@ class _Unhoistable(DefaultVisitor):
     ``aborts`` can change whether, or which, value the function produces, so no
     mode admits it.  ``unproven`` is preserved in value but not in observable
     effect, which is what ``strict`` governs.
-
-    Descends to any depth: a branch's statements all become unconditional, and
-    so do those of any block nested inside it.
     """
 
     def __init__(self, ctx_use: ContextUseAnalysis):
@@ -42,36 +41,19 @@ class _Unhoistable(DefaultVisitor):
         self.aborts: str | None = None
         self.unproven: str | None = None
 
-    def _reject(self, node: Stmt) -> None:
+    def _abort(self, why: str) -> None:
         if self.aborts is None:
-            self.aborts = _UNHOISTABLE[type(node)]
+            self.aborts = why
 
     def _cannot_prove(self, why: str) -> None:
         if self.unproven is None:
             self.unproven = why
 
-    def _visit_return(self, stmt: ReturnStmt, ctx):
-        self._reject(stmt)
-
-    def _visit_assert(self, stmt: AssertStmt, ctx):
-        self._reject(stmt)
-        super()._visit_assert(stmt, ctx)
-
-    def _visit_effect(self, stmt: EffectStmt, ctx):
-        self._reject(stmt)
-        super()._visit_effect(stmt, ctx)
-
-    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx):
-        self._reject(stmt)
-        super()._visit_indexed_assign(stmt, ctx)
-
-    def _visit_while(self, stmt: WhileStmt, ctx):
-        self._reject(stmt)
-        super()._visit_while(stmt, ctx)
-
-    def _visit_for(self, stmt: ForStmt, ctx):
-        self._reject(stmt)
-        super()._visit_for(stmt, ctx)
+    def _visit_statement(self, stmt: Stmt, ctx):
+        why = _UNHOISTABLE.get(type(stmt))
+        if why is not None:
+            self._abort(why)
+        return super()._visit_statement(stmt, ctx)
 
     def _visit_list_ref(self, e: ListRef, ctx):
         self._cannot_prove('a subscript may be out of range outside its guard')
@@ -81,36 +63,63 @@ class _Unhoistable(DefaultVisitor):
         self._cannot_prove('a slice may be out of range outside its guard')
         super()._visit_list_slice(e, ctx)
 
-    def _visit_unaryop(self, e: UnaryOp, ctx):
-        if isinstance(e, Cast) and self.aborts is None:
-            self.aborts = (
+    def _visit_call(self, e: Call, ctx):
+        """A callee's body is not scanned, so an abort inside it -- an
+        `assert`, a rounding that overflows -- would reach the hoist unseen.
+        Refused rather than analyzed interprocedurally.
+
+        A context constructor is exempt: it builds a value and the `with` it
+        heads is where any rounding happens.  Mirrors the callee taxonomy of
+        :class:`fpy2.analysis.Purity`.
+        """
+        match e.fn:
+            case type() if issubclass(e.fn, Context):
+                pass
+            case Function():
+                self._abort(
+                    f'`{e.fn.name}` may abort, and a callee is not scanned'
+                )
+            case Primitive() if e.fn.pure:
+                pass
+            case _:
+                self._abort('a call to a foreign function may abort')
+        super()._visit_call(e, ctx)
+
+    def _visit_expr(self, e: Expr, ctx):
+        if isinstance(e, Cast):
+            self._abort(
                 '`fp.cast` asserts its result is exact, so hoisting it can abort'
             )
-        elif isinstance(e, Round):
-            self._check_round(e)
-        super()._visit_unaryop(e, ctx)
+        self._check_context(e)
+        return super()._visit_expr(e, ctx)
 
-    def _check_round(self, e: Round) -> None:
-        """A rounding aborts where its context overflows by assertion.
+    def _check_context(self, e: Expr) -> None:
+        """Whether *e* can abort through the context it rounds under.
+
+        Keyed on whether `ContextUse` records *e* as a use site, not on its node
+        class: every rounded operation consults the ambient context, so `x * x`
+        overflows under an `ASSERT` context exactly as `fp.round(x)` does.  An
+        earlier version asked `isinstance(e, Round | Cast)` and let arithmetic,
+        and `fp.round_at`, through.
 
         A context that does not resolve to a concrete one -- a function with no
         ``ctx=`` inherits its caller's -- cannot be shown either way, so it is
-        ``unproven`` rather than an abort.  Refusing it outright would decline
-        every rounding inside a branch of an unannotated function.
+        ``unproven``.  That makes ``strict`` conservative in an unannotated
+        function, which is the honest reading: the equivalence it promises is
+        exactly what an unknown context denies.
         """
         try:
             resolved = self.ctx_use.find_scope_from_use(e).ctx
         except KeyError:
-            resolved = None
+            return
         if isinstance(resolved, Context):
             if getattr(resolved, 'overflow', None) is OverflowMode.ASSERT:
-                if self.aborts is None:
-                    self.aborts = (
-                        'a rounding under an `ASSERT` overflow context can abort'
-                    )
+                self._abort(
+                    'an operation under an `ASSERT` overflow context can abort'
+                )
         else:
             self._cannot_prove(
-                'a rounding under an unresolved context may abort on overflow'
+                'an operation under an unresolved context may abort on overflow'
             )
 
 
@@ -285,16 +294,13 @@ class _SimplifyIfInstance(SiteRewriter):
             stmts.append(s)
         stmts.extend(iff.stmts)
 
-        # make if expressions for each mutated or introduced variable
-        unique: set[NamedId] = set()
-        for var in mutated_or_new_ift:
-            if var not in unique:
-                ift_name = rename_ift.get(var, var)
-                iff_name = rename_iff.get(var, var)
-                e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
-                s = Assign(var, None, e, None)
-                stmts.append(s)
-                unique.add(var)
+        # Over the union: a variable mutated in one arm only still needs a
+        # merge, and takes its pre-`if` name on the other side.
+        for var in sorted(set(mutated_or_new_ift) | set(mutated_or_new_iff)):
+            ift_name = rename_ift.get(var, var)
+            iff_name = rename_iff.get(var, var)
+            e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
+            stmts.append(Assign(var, None, e, None))
 
         return self._emit(ctx, stmts)
 
@@ -327,20 +333,11 @@ class SimplifyIf:
     The inner block is hoisted into the outer block and each
     phi variable is made explicit with an if expression.
 
-    Hoisting makes a branch body unconditional, so a construct that could
-    change whether -- or which -- value the function produces is declined under
-    every mode: `return`, `assert`, an effect, a list write, `while`, `for`,
-    `fp.cast`, and a rounding under an `ASSERT` overflow context.
-
-    ``strict`` governs what is left: operations whose *value* is preserved but
-    whose observable effects may differ.  ``strict=False`` (the default) hoists
-    them, in the same spirit as `CppCompiler.unsafe_cast_int` -- an
-    out-of-range subscript is behavior FPy already leaves undefined.
-    ``strict=True`` declines them, making the rewrite observationally
-    equivalent.
-
-    A consumer that evaluates only the taken arm of an `IfExpr` -- C++ `?:`,
-    the interpreter -- gets that equivalence for free and wants the default.
+    Hoisting makes a branch body unconditional, so any construct that could
+    change whether -- or which -- value the function produces is declined.
+    ``strict`` additionally declines what is preserved in value but not
+    provably in observable effect.  :func:`fpy2.strategies.simplify_if`
+    documents both.
     """
 
     @staticmethod
