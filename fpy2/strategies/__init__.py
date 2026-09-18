@@ -46,6 +46,7 @@ from .float_lower import float_to_fixed
 from .free_var import close
 from .func_inline import inline
 from .hoistable import to_hoistable
+from .if_simplify import simplify_if
 from .iter_elim import elim_iter
 from .iter_unfold import unfold_enumerate, unfold_zip
 from .loop_split import split
@@ -87,6 +88,7 @@ __all__ = [
     'refusals',
     'rescale_fixed',
     'simplify',
+    'simplify_if',
     'sites',
     'split',
     'split_round',

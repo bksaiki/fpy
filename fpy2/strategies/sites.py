@@ -13,6 +13,7 @@ from ..transform import (
     FuncInline,
     RescaleFixed,
     RoundInsert,
+    SimplifyIf,
     SplitLoop,
     SplitRound,
     UnfoldEnumerate,
@@ -26,6 +27,7 @@ from .comp_lower import comp_to_loop
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
 from .func_inline import inline
+from .if_simplify import simplify_if
 from .iter_unfold import unfold_enumerate, unfold_zip
 from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
@@ -47,6 +49,7 @@ _REFUSALS: dict[Callable, Callable] = {
     unfold_zip: UnfoldZip.refusals,
     unfold_enumerate: UnfoldEnumerate.refusals,
     inline: FuncInline.refusals,
+    simplify_if: SimplifyIf.refusals,
     split: SplitLoop.refusals,
     unroll_for: ForUnroll.refusals,
 }
@@ -68,6 +71,7 @@ _SITES: dict[Callable, Callable] = {
     comp_to_loop: CompToLoop.sites,
     unfold_zip: UnfoldZip.sites,
     unfold_enumerate: UnfoldEnumerate.sites,
+    simplify_if: SimplifyIf.sites,
     split: SplitLoop.sites,
     unroll_for: ForUnroll.sites,
     unroll_while: WhileUnroll.sites,
