@@ -66,7 +66,10 @@ class _ForBundlingInstance(DefaultTransformVisitor):
         # 
 
         # identify variables that were mutated in the body
-        mutated = self.def_use.mutated_in(stmt.body)
+        # sorted: the order decides the tuple's element order and each
+        # name's index in it, so a set would make the emitted program
+        # depend on hash order and differ run to run
+        mutated = sorted(self.def_use.mutated_in(stmt.body))
         if len(mutated) > 1:
             # need to apply the transformation
             stmts: list[Stmt] = []
