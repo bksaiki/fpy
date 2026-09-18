@@ -31,6 +31,25 @@ class _Vars(DefaultVisitor):
         return inst.found
 
 
+class _Contexts(DefaultVisitor):
+    """Every `ContextStmt` in a subtree, the root included."""
+
+    found: list[ContextStmt]
+
+    def __init__(self):
+        self.found = []
+
+    def _visit_context(self, stmt: ContextStmt, ctx: None):
+        self.found.append(stmt)
+        super()._visit_context(stmt, ctx)
+
+    @staticmethod
+    def of(stmt: Stmt) -> list[ContextStmt]:
+        inst = _Contexts()
+        inst._visit_statement(stmt, None)
+        return inst.found
+
+
 class _Unnester(DefaultTransformVisitor):
     """
     Context statement unnester.
@@ -44,13 +63,15 @@ class _Unnester(DefaultTransformVisitor):
         self.changed = False
 
     @staticmethod
-    def _leading_run(stmts: list[Stmt]) -> list[Stmt]:
+    def _leading_run(stmts: list[Stmt]) -> list[ContextStmt]:
         """The `with`s at the front of *stmts*, never all of them: one
         statement stays behind, so the block cannot empty."""
-        n = 0
-        while n < len(stmts) - 1 and isinstance(stmts[n], ContextStmt):
-            n += 1
-        return stmts[:n]
+        run: list[ContextStmt] = []
+        for s in stmts[:-1]:
+            if not isinstance(s, ContextStmt):
+                break
+            run.append(s)
+        return run
 
     def _may_lead(self, stmt: ContextStmt) -> bool:
         """Whether the `with`s leading *stmt*'s body may be hoisted out.
@@ -67,14 +88,16 @@ class _Unnester(DefaultTransformVisitor):
         if not run:
             return False
 
-        # the header is evaluated after the hoisted blocks rather than before
-        # them, so neither side of that swap may be observable
+        # The header is evaluated after the hoisted blocks rather than before
+        # them, so neither side of that swap may be observable.  Every context
+        # in the run counts, not just the one at its root: peeling is bottom-up,
+        # so a block nested inside one of these may be promoted alongside it.
         if not Purity.analyze_expr(stmt.ctx, self.def_use):
             return False
         for s in run:
-            assert isinstance(s, ContextStmt)
-            if not Purity.analyze_expr(s.ctx, self.def_use):
-                return False
+            for nested in _Contexts.of(s):
+                if not Purity.analyze_expr(nested.ctx, self.def_use):
+                    return False
 
         # ...and the header must not read a name the hoisted blocks rebind,
         # which would leave it reading the new value instead of the old
@@ -107,9 +130,9 @@ class _Unnester(DefaultTransformVisitor):
         body, _ = self._visit_block(stmt.body, ctx)
         stmts = list(body.stmts)
 
-        # Peel both edges.  Stopping at one statement leaves
-        # `with e1: (with e2: B)` alone: `DeadCodeEliminate` drops the outer
-        # block outright, which is better than making siblings of the two.
+        # Peel both edges.  The one-statement floor leaves
+        # `with e1: (with e2: B)` to `DeadCodeEliminate`, which drops the
+        # outer block outright.
         after: list[Stmt] = []
         while len(stmts) > 1 and isinstance(stmts[-1], ContextStmt):
             after.append(stmts.pop())
@@ -137,7 +160,8 @@ class UnnestContext:
     one replaces the active context outright rather than merging with the
     context in force, so the parent contributes nothing to the nested block.
     Where that block sits at an *edge* of its parent's body, the two can be
-    written as siblings::
+    written as siblings -- here the trailing edge, the leading one being its
+    mirror::
 
         with e1:                    with e1:
             X                           X
@@ -150,8 +174,8 @@ class UnnestContext:
     The two edges are not alike.  Hoisting a *trailing* block changes no
     evaluation order at all and is always allowed.  Hoisting a *leading* one
     moves the enclosing header after it, so that case additionally requires
-    the header and the hoisted contexts to be pure, the header to read no name
-    the hoisted blocks rebind, and the hoisted blocks not to read the
+    the header and every context *within* the hoisted blocks to be pure, the
+    header to read no name those blocks rebind, and the blocks not to read the
     enclosing `as` target -- which is bound after them once the rewrite lands.
 
     A nested block that is its parent's *only* statement is left alone, since

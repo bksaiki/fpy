@@ -1,5 +1,5 @@
 """
-`UnnestContext` — hoisting a `with` out of the end of another one's body.
+`UnnestContext` — hoisting a `with` out of either edge of another one's body.
 
 Shape tests say the rewrite fired where it should and not where it should not.
 The differential tests are what catch a rewrite that fired *wrongly*: values
@@ -120,38 +120,6 @@ class TestTrailing:
         assert count(UnnestContext.apply(f.ast)) == count(f.ast) == 2
 
 
-class TestRefusals:
-
-    def test_a_nested_block_in_the_middle_is_left_alone(self):
-        """Splitting here would need two copies of the outer `with`, which
-        grows the program."""
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                a = x + 1.0
-                with fp.FP16:
-                    b = a * 3.0
-                c = b + 1.0
-            return c
-
-        out, changed = UnnestContext.apply_with_status(f.ast)
-        assert not changed
-        assert _nested_pairs(out) == 1
-
-    def test_a_sole_nested_block_is_left_to_dead_code(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                with fp.FP16:
-                    b = x * 3.0
-            return b
-
-        out, changed = UnnestContext.apply_with_status(f.ast)
-        assert not changed
-        assert _nested_pairs(out) == 1
-        # ...which `DeadCodeEliminate` then drops outright
-        assert _nested_pairs(DeadCodeEliminate.apply(f.ast)) == 0
-
     def test_a_peel_may_leave_a_sole_nested_block(self):
         """Peeling the trailing block leaves the parent holding one nested
         statement, which this pass declines and `DeadCodeEliminate`
@@ -190,6 +158,54 @@ class TestRefusals:
         assert _agrees(f, out)
         assert _nested_pairs(DeadCodeEliminate.apply(out)) == 1
 
+    def test_the_hoisted_block_may_read_the_outer_target(self):
+        """The trailing case needs no guard on the outer target: it stays
+        bound where the hoisted block can still read it."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32 as c:
+                a = x + 1.0
+                with fp.FP16:
+                    with c:
+                        b = a * 3.0
+            return b
+
+        out = UnnestContext.apply(f.ast)
+        assert _agrees(f, out)
+
+
+class TestRefusals:
+
+    def test_a_nested_block_in_the_middle_is_left_alone(self):
+        """Splitting here would need two copies of the outer `with`, which
+        grows the program."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                a = x + 1.0
+                with fp.FP16:
+                    b = a * 3.0
+                c = b + 1.0
+            return c
+
+        out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+        assert _nested_pairs(out) == 1
+
+    def test_a_sole_nested_block_is_left_to_dead_code(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                with fp.FP16:
+                    b = x * 3.0
+            return b
+
+        out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+        assert _nested_pairs(out) == 1
+        # ...which `DeadCodeEliminate` then drops outright
+        assert _nested_pairs(DeadCodeEliminate.apply(f.ast)) == 0
+
     def test_no_context_statements_at_all(self):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -220,37 +236,6 @@ class TestIdempotence:
         assert changed
         _twice, changed_again = UnnestContext.apply_with_status(once)
         assert not changed_again
-
-
-class TestTargets:
-    """The trailing case needs no guard on the outer target: it stays bound
-    where the hoisted block can still read it."""
-
-    def test_the_hoisted_block_may_read_the_outer_target(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32 as c:
-                a = x + 1.0
-                with fp.FP16:
-                    with c:
-                        b = a * 3.0
-            return b
-
-        out = UnnestContext.apply(f.ast)
-        assert _agrees(f, out)
-
-    def test_the_hoisted_block_may_read_earlier_definitions(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                a = x + 1.0
-                with fp.FP16:
-                    b = a * 3.0
-            return b
-
-        out = UnnestContext.apply(f.ast)
-        assert _nested_pairs(out) == 0
-        assert _agrees(f, out)
 
 
 class TestLeading:
@@ -343,6 +328,28 @@ class TestLeadingGuards:
 
         _out, changed = UnnestContext.apply_with_status(f.ast)
         assert not changed
+
+    def test_an_impure_context_promoted_into_the_run_is_refused(self):
+        """Peeling is bottom-up, so a block nested *inside* the leading one
+        can be promoted alongside it.  Its header is checked too, or the
+        purity guard would only cover the run's roots."""
+        def make_ctx():          # a foreign callable: impure by default
+            return fp.FP64
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                with fp.FP16:
+                    a = x * 3.0
+                    with make_ctx():
+                        c = a + 1.0
+                b = c + 1.0
+            return b
+
+        # the program cannot be run -- the interpreter refuses to call a
+        # foreign function -- so the shape is the whole assertion
+        src = _text(f, UnnestContext.apply(f.ast))
+        assert src.index('fp.FP32') < src.index('make_ctx'), src
 
     def test_a_header_reading_a_rebound_name_is_refused(self):
         """``with c:`` evaluated after a block that rebinds ``c`` would

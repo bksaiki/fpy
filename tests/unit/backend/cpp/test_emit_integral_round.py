@@ -116,7 +116,15 @@ class TestModeTable:
 
     def test_toward_even_inherits_the_fe_tonearest_precondition(self):
         """``std::nearbyint`` follows the dynamic mode, so `RTE` is refused where
-        `RNE` is -- under an enclosing scope that set another one."""
+        `RNE` is -- under an enclosing scope that set another one.
+
+        ``z`` is load-bearing: it is RTZ arithmetic that outlives the inner
+        block, which is what keeps the ``fesetround(FE_TOWARDZERO)`` scope open
+        across the ``nearbyint``.  Without it the inner ``with`` is the outer
+        one's last statement, `UnnestContext` lifts it out, the RTZ scope closes
+        first, and the program compiles -- correctly.  See
+        ``docs/todos/backend-cpp.md``.
+        """
         outer = fp.IEEEContext(8, 32, RM.RTZ)
         inner = MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), rm=RM.RTE,
                                 overflow=ASSERT)
@@ -127,7 +135,8 @@ class TestModeTable:
                 t = fp.round(x)
                 with inner:
                     y = fp.round(t)
-            return y
+                z = t * y
+            return z
 
         with pytest.raises(CppCompileError, match='FE_TONEAREST'):
             CppCompiler().compile(f, arg_types=[RealType(fp.FP64)])

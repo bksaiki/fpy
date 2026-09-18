@@ -260,6 +260,53 @@ result is fully determined compiles to `return <constant>;`. An emitter witness
 has to take a parameter, or read its own result more than once, or it pins
 nothing. See §9 in [backend-independence.md](backend-independence.md).
 
+### `Simplify` can also dissolve an emitter *refusal*
+
+`_require_tonearest` refuses `RNE` / `RTE` spelled with `std::nearbyint` when an
+enclosing scope set another mode: the call follows the dynamic `fenv` mode, so it
+is round-to-nearest only under `FE_TONEAREST`.
+
+`UnnestContext`, which `Simplify` runs, lifts a `with` out of the *end* of its
+parent. That closes the parent's `fesetround` scope before the call, and the
+program then compiles — correctly:
+
+```c
+const auto _tmp1 = std::fegetround();
+std::fesetround(FE_TOWARDZERO);
+float t = static_cast<float>(x);
+std::fesetround(_tmp1);                        // the RTZ scope ends here
+auto&& _tmp3 = std::nearbyint(t * 0.5) * 2;    // so this runs under the caller's mode
+```
+
+which the kernel's precondition says is the mode the top-level context names —
+`FE_TONEAREST` for `REAL`. So this is a widening, not a regression: an equivalent
+program the emitter can take.
+
+The consequence is for *witnesses*. A test for this refusal needs something after
+the inner block that keeps the outer scope live, and it has to survive
+optimization: an identity round folds away, the inner `with` becomes the last
+statement, and the refusal disappears.
+`test_toward_even_inherits_the_fe_tonearest_precondition` uses `z = t * y` —
+real RTZ arithmetic — for exactly that reason. Same shape as
+[§`Simplify` evaporates a static witness](#simplify-evaporates-a-static-witness),
+one level up: there the *value* evaporates, here the *diagnostic* does.
+
+**The principled fix is to stop refusing.** `_fenv_scope` already emits a
+save/set/restore, so the call could be wrapped in `_fenv_scope(RM.RNE)` instead,
+and the enclosing mode would stop mattering. Not done, and not scoped here.
+
+Worth recording while it is in view: `RTE` is a *directed* mode —
+`RoundingMode.to_direction` gives it `nearest=False`, against `RNE`'s `True` — yet
+it is spelled with a nearest primitive. That works because for a value strictly
+between two integers the even neighbour *is* the nearest even integer, so
+`nearbyint(t * 0.5) * 2` lands on it; the `|t - e| == 1` guard covers the one
+case where the two notions part, an exactly-representable odd integer, which must
+not move. The `FE_TONEAREST` precondition therefore belongs to the spelling, not
+to the mode. This path is bit-exact against the interpreter: `float_to_fixed`
+turns the `fp16_rte` target of `test_lowered_roundtrip` into an
+`MPBFixedContext` with `rm=RTE`, so the roundtrip covers it from both FP32 and
+FP64 sources.
+
 ### `ANF` is not in this pipeline
 
 `fpy2.transform.ANF` flattens every operand to a name.  It ran last in
