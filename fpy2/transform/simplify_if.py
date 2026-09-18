@@ -6,8 +6,10 @@ from ..ast import *
 from ..number import Context, OverflowMode
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
+from .cursor import Cursor, StmtPath
 from .error import TransformDeclined
 from .rename_target import RenameTarget
+from .utils import SiteRewriter, check_where
 
 # Constructs that cannot be hoisted out of a branch under any mode: each can
 # change whether, or which, value the function produces.  Scoped statements
@@ -120,7 +122,7 @@ def _why_unhoistable(
     return v.aborts or (v.unproven if strict else None)
 
 
-class _SimplifyIfInstance(DefaultTransformVisitor):
+class _SimplifyIfInstance(SiteRewriter):
     """Single-use instance of the SimplifyIf pass."""
     func: FuncDef
     def_use: DefineUseAnalysis
@@ -132,24 +134,67 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
         def_use: DefineUseAnalysis,
         ctx_use: ContextUseAnalysis,
         strict: bool,
+        where: int | Cursor | None = None,
     ):
+        super().__init__()
         self.func = func
         self.def_use = def_use
         self.ctx_use = ctx_use
         self.strict = strict
+        self.where = where
         self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self):
         func = self._visit_function(self.func, None)
+        self.check_site('an `if` statement')
         return func, self.gensym.generated
 
-    def _require_hoistable(self, block: StmtBlock) -> None:
-        why = _why_unhoistable(block, self.ctx_use, self.strict)
-        if why is not None:
-            raise TransformDeclined(f'cannot rewrite `if` to `if` expression: {why}')
+    def _claims(self, stmt: Stmt, *bodies: StmtBlock) -> bool:
+        """Whether to rewrite here, recording a refusal and a listing on the
+        way.  A refusal that was aimed at is raised rather than skipped: the
+        pass is total by contract, so a site it cannot take is an error."""
+        block, pos = self._site
+        why: str | None = None
+        for body in bodies:
+            why = _why_unhoistable(body, self.ctx_use, self.strict)
+            if why is not None:
+                break
 
-    def _visit_if1(self, stmt: If1Stmt, ctx: None):
-        self._require_hoistable(stmt.body)
+        if why is not None:
+            self.refused.append((stmt, why))
+            if self._selects(block, pos, -1):
+                self.declined.append(why)
+                if not self.listing:
+                    raise TransformDeclined(
+                        f'cannot rewrite `if` to `if` expression: {why}'
+                    )
+            return False
+
+        idx = self.site_idx
+        self.site_idx += 1
+        if not self._selects(block, pos, idx):
+            return False
+        self._matched += 1
+        if self.listing:
+            self.found.append(StmtPath(self._paths[id(block)], pos))
+            return False
+        return True
+
+    def _emit(self, ctx: list[Stmt], stmts: list[Stmt]):
+        """Hand *stmts* to the enclosing block in place of the `if`."""
+        self._replaced = True
+        if not stmts:
+            self._dropped = True
+            return None, None
+        ctx.extend(stmts[:-1])
+        return stmts[-1], None
+
+    def _visit_branches(self, ctx, *blocks: StmtBlock) -> list[StmtBlock]:
+        return [self._visit_block(b, ctx)[0] for b in blocks]
+
+    def _visit_if1(self, stmt: If1Stmt, ctx: list[Stmt]):
+        if not self._claims(stmt, stmt.body):
+            return super()._visit_if1(stmt, ctx)
         stmts: list[Stmt] = []
 
         # compile condition
@@ -163,7 +208,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
             cond = Var(t, None)
 
         # compile the body
-        body, _ = self._visit_block(stmt.body, ctx)
+        (body,) = self._visit_branches(ctx, stmt.body)
 
         # identify variables that were mutated in the body
         mutated = self.def_use.mutated_in(stmt.body)
@@ -185,12 +230,11 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
             s = Assign(var, None, e, None)
             stmts.append(s)
 
-        return StmtBlock(stmts)
+        return self._emit(ctx, stmts)
 
-
-    def _visit_if(self, stmt: IfStmt, ctx: None):
-        self._require_hoistable(stmt.ift)
-        self._require_hoistable(stmt.iff)
+    def _visit_if(self, stmt: IfStmt, ctx: list[Stmt]):
+        if not self._claims(stmt, stmt.ift, stmt.iff):
+            return super()._visit_if(stmt, ctx)
         stmts: list[Stmt] = []
 
         # compile condition
@@ -204,8 +248,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
             cond = Var(t, None)
 
         # compile the bodies
-        ift, _ = self._visit_block(stmt.ift, ctx)
-        iff, _ = self._visit_block(stmt.iff, ctx)
+        ift, iff = self._visit_branches(ctx, stmt.ift, stmt.iff)
 
         # identify variables that were mutated in each body
         mutated_ift = self.def_use.mutated_in(stmt.ift)
@@ -253,23 +296,7 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
                 stmts.append(s)
                 unique.add(var)
 
-        return StmtBlock(stmts)
-
-
-    def _visit_block(self, block: StmtBlock, ctx: None):
-        stmts: list[Stmt] = []
-        for stmt in block.stmts:
-            match stmt:
-                case If1Stmt():
-                    if1_block = self._visit_if1(stmt, ctx)
-                    stmts.extend(if1_block.stmts)
-                case IfStmt():
-                    if_block = self._visit_if(stmt, ctx)
-                    stmts.extend(if_block.stmts)
-                case _:
-                    stmt, _ = self._visit_statement(stmt, ctx)
-                    stmts.append(stmt)
-        return StmtBlock(stmts), None
+        return self._emit(ctx, stmts)
 
 
 #
@@ -317,10 +344,52 @@ class SimplifyIf:
     """
 
     @staticmethod
-    def apply(func: FuncDef, *, strict: bool = False):
+    def _instance(
+        func: FuncDef, strict: bool, where: 'int | Cursor | None',
+    ) -> _SimplifyIfInstance:
         def_use = DefineUse.analyze(func)
         ctx_use = ContextUse.analyze(func, def_use=def_use)
-        ast, new_ids = _SimplifyIfInstance(func, def_use, ctx_use, strict).apply()
+        return _SimplifyIfInstance(func, def_use, ctx_use, strict, where)
+
+    @staticmethod
+    def sites(
+        func: FuncDef, within: 'Cursor | None' = None, *, strict: bool = False,
+    ) -> list[Cursor]:
+        """The `if` statements this pass would rewrite, in visit order --
+        what a `where` index counts, and what `within` narrows.
+
+        `strict` is taken because it decides what is a site: a branch this pass
+        would decline is not one.
+        """
+        return SimplifyIf._instance(func, strict, None).list_sites(within)
+
+    @staticmethod
+    def refusals(
+        func: FuncDef, within: 'Cursor | None' = None, *, strict: bool = False,
+    ) -> list[tuple[Cursor, str]]:
+        """Why each `if` this pass could have rewritten is not a site."""
+        return SimplifyIf._instance(func, strict, None).list_refusals(within)
+
+    @staticmethod
+    def apply(
+        func: FuncDef,
+        where: 'int | Cursor | None' = None,
+        *,
+        strict: bool = False,
+    ):
+        """Rewrite `if` statements into `if` expressions.
+
+        `where` names one site: an index counting `if` statements in visit
+        order, or a cursor or region, which takes the sites at or beneath it.
+        `None` rewrites every one.
+
+        A nested `if` left behind is sound: it becomes unconditional, but a
+        branch body is effect-free by this pass's own refusals, so the value it
+        computes is simply discarded by the enclosing `IfExpr`.
+        """
+        check_where(where)
+        inst = SimplifyIf._instance(func, strict, where)
+        ast, new_ids = inst.apply()
         ast = CopyPropagate.apply(ast, names=new_ids)
         SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

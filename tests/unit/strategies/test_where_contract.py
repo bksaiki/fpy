@@ -25,6 +25,7 @@ from fpy2.strategies import (
     monomorphize,
     refusals,
     rescale_fixed,
+    simplify_if,
     sites,
     split,
     split_round,
@@ -244,6 +245,31 @@ _STRICT_SPLIT = {'factor': Integer(2, None), 'strategy': SplitLoopStrategy.STRIC
 _STRICT_UNROLL = {'times': 1, 'strategy': ForUnrollStrategy.STRICT}
 
 # Rows where the strategy has sites.
+@fp.fpy
+def _two_ifs(x: fp.Real, y: fp.Real) -> fp.Real:
+    if x > 0:
+        a = 1.0
+    else:
+        a = 2.0
+    if y > 0:
+        b = 3.0
+    else:
+        b = 4.0
+    return a + b
+
+
+@fp.fpy
+def _nested_ifs(x: fp.Real, y: fp.Real) -> fp.Real:
+    if x > 0:
+        if y > 0:
+            z = 1.0
+        else:
+            z = 2.0
+    else:
+        z = 3.0
+    return z
+
+
 ACTS = [
     ('unfold_special', unfold_special, _two_floats, {}),
     ('unfold_special/mixed', unfold_special, _refuses_then_acts, {}),
@@ -265,6 +291,8 @@ ACTS = [
     ('split_round', split_round, _two_rounded, _VIA32),
     ('unfold_zip', unfold_zip, _two_zips, {}),
     ('unfold_enumerate', unfold_enumerate, _two_enumerates, {}),
+    ('simplify_if', simplify_if, _two_ifs, {}),
+    ('simplify_if/nested', simplify_if, _nested_ifs, {}),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the

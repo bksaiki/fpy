@@ -22,7 +22,11 @@ import fpy2 as fp
 from fpy2 import Function
 from fpy2.ast.fpyast import If1Stmt, IfExpr, IfStmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.transform import SimplifyIf, TransformDeclined
+from fpy2.transform import (
+    SimplifyIf,
+    TransformDeclined,
+    TransformReferenceError,
+)
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -411,3 +415,113 @@ class TestStrictDoesNotDisturbTotalPrograms:
     @pytest.mark.parametrize('strict', [False, True])
     def test_accepted(self, f, strict):
         SimplifyIf.apply(f.ast, strict=strict)
+
+
+# ----------------------------------------------------------------------
+# Aiming the rewrite
+
+
+@fp.fpy
+def two_ifs(x, y):
+    if x > 0:
+        a = 1.0
+    else:
+        a = 2.0
+    if y > 0:
+        b = 3.0
+    else:
+        b = 4.0
+    return a + b
+
+
+def _n_ifs(ast) -> int:
+    return _count(ast, IfStmt) + _count(ast, If1Stmt)
+
+
+class TestSites:
+    def test_listing_counts_every_if(self):
+        assert len(SimplifyIf.sites(two_ifs.ast)) == 2
+
+    def test_a_listing_matches_what_where_none_rewrites(self):
+        """The pass's own walk, so a listing and an apply cannot disagree."""
+        assert len(SimplifyIf.sites(two_ifs.ast)) == _n_ifs(two_ifs.ast)
+        assert _n_ifs(SimplifyIf.apply(two_ifs.ast)) == 0
+
+    def test_a_declined_branch_is_not_a_site(self):
+        assert SimplifyIf.sites(asserts_in_branch.ast) == []
+
+    def test_but_it_is_a_refusal(self):
+        refused = SimplifyIf.refusals(asserts_in_branch.ast)
+        assert len(refused) == 1 and 'assert' in refused[0][1]
+
+    def test_strict_changes_what_is_a_site(self):
+        """`strict` decides what the pass declines, so it decides what a
+        `where` index counts."""
+        assert len(SimplifyIf.sites(guarded_read.ast)) == 1
+        assert SimplifyIf.sites(guarded_read.ast, strict=True) == []
+
+
+class TestWhere:
+    @pytest.mark.parametrize('where', [0, 1])
+    def test_an_index_rewrites_exactly_one(self, where):
+        assert _n_ifs(SimplifyIf.apply(two_ifs.ast, where)) == 1
+
+    def test_none_rewrites_every_one(self):
+        assert _n_ifs(SimplifyIf.apply(two_ifs.ast, None)) == 0
+
+    def test_a_cursor_rewrites_the_one_it_names(self):
+        cursor = SimplifyIf.sites(two_ifs.ast)[1]
+        assert _n_ifs(SimplifyIf.apply(two_ifs.ast, cursor)) == 1
+
+    def test_an_out_of_range_index_is_a_bad_reference(self):
+        with pytest.raises(TransformReferenceError, match='does not correspond'):
+            SimplifyIf.apply(two_ifs.ast, 5)
+
+    @pytest.mark.parametrize('where', [0, 1])
+    def test_semantics_are_preserved(self, where):
+        out = SimplifyIf.apply(two_ifs.ast, where)
+        g = Function(out, runtime=two_ifs.runtime)
+        for x in (1.0, -1.0):
+            for y in (1.0, -1.0):
+                assert repr(g(x, y)) == repr(two_ifs(x, y))
+
+
+class TestNestedIfs:
+    """A cursor takes the sites beneath it; an index takes exactly one.
+
+    Leaving a nested `if` behind is sound rather than merely tolerated: it
+    becomes unconditional, but a branch body is effect-free by this pass's own
+    refusals, so the value it computes is discarded by the enclosing `IfExpr`.
+    """
+
+    def test_an_index_takes_only_the_outer_if(self):
+        assert _n_ifs(nested.ast) == 2
+        assert _n_ifs(SimplifyIf.apply(nested.ast, 0)) == 1
+
+    def test_a_cursor_takes_the_subtree(self):
+        outer = SimplifyIf.sites(nested.ast)[0]
+        assert _n_ifs(SimplifyIf.apply(nested.ast, outer)) == 0
+
+    @pytest.mark.parametrize('x', [1.0, -1.0])
+    @pytest.mark.parametrize('y', [1.0, -1.0])
+    def test_semantics_are_preserved(self, x, y):
+        out = SimplifyIf.apply(nested.ast, 0)
+        assert repr(Function(out, runtime=nested.runtime)(x, y)) == repr(nested(x, y))
+
+    def test_an_inner_refusal_removes_the_outer_site(self):
+        """The subtree rule runs both ways: an `if` whose branch holds an
+        unhoistable statement at any depth is not a site."""
+        assert SimplifyIf.sites(nested_unhoistable.ast) == []
+
+    def test_an_index_then_names_nothing_but_says_why(self):
+        """`check_site` reports an index naming no site as a bad reference,
+        carrying the reasons its candidates were refused for."""
+        with pytest.raises(TransformReferenceError, match='assert'):
+            SimplifyIf.apply(nested_unhoistable.ast, 0)
+
+    def test_a_cursor_naming_a_refused_candidate_declines(self):
+        """Deliberately not a reference error: a cursor names a real place, so
+        saying why beats saying it named nothing."""
+        cursor, _why = SimplifyIf.refusals(nested_unhoistable.ast)[0]
+        with pytest.raises(TransformDeclined, match='assert'):
+            SimplifyIf.apply(nested_unhoistable.ast, cursor)

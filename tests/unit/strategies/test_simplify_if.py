@@ -10,7 +10,12 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
-from fpy2.strategies import TransformDeclined, simplify_if
+import fpy2.strategies as st
+from fpy2.strategies import (
+    TransformDeclined,
+    TransformReferenceError,
+    simplify_if,
+)
 
 
 @fp.fpy
@@ -66,3 +71,45 @@ class TestRefusalsCrossTheLayer:
         a strategy and a raw transform alike."""
         with pytest.raises(TransformDeclined, match='assert'):
             simplify_if(_asserts, strict=strict)
+
+
+@fp.fpy
+def _two_ifs(x: fp.Real, y: fp.Real) -> fp.Real:
+    if x > 0:
+        a = 1.0
+    else:
+        a = 2.0
+    if y > 0:
+        b = 3.0
+    else:
+        b = 4.0
+    return a + b
+
+
+class TestWhereThroughTheStrategyLayer:
+    def test_sites_are_reported_by_the_generic_lister(self):
+        assert len(st.sites(simplify_if, _two_ifs)) == 2
+
+    def test_refusals_are_reported_by_the_generic_lister(self):
+        refused = st.refusals(simplify_if, _asserts)
+        assert len(refused) == 1 and 'assert' in refused[0][1]
+
+    @pytest.mark.parametrize('where', [0, 1])
+    def test_an_index_is_forwarded(self, where):
+        g = simplify_if(_two_ifs, where)
+        for x in (1.0, -1.0):
+            for y in (1.0, -1.0):
+                assert repr(g(x, y)) == repr(_two_ifs(x, y))
+
+    def test_a_cursor_is_forwarded(self):
+        cursor = st.sites(simplify_if, _two_ifs)[1]
+        g = simplify_if(_two_ifs, cursor)
+        assert repr(g(1.0, 1.0)) == repr(_two_ifs(1.0, 1.0))
+
+    def test_strict_is_still_forwarded_alongside_where(self):
+        """`strict` decides what is a site, so it reaches the pass before the
+        index is resolved: without it `where=0` succeeds, with it there is no
+        site 0 at all."""
+        assert isinstance(simplify_if(_guarded_read, 0), Function)
+        with pytest.raises(TransformReferenceError, match='subscript'):
+            simplify_if(_guarded_read, 0, strict=True)
