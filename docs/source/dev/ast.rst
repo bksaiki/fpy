@@ -166,6 +166,10 @@ Transformations
    :members:
    :show-inheritance:
 
+.. autoclass:: fpy2.transform.UnnestContext
+   :members:
+   :show-inheritance:
+
 .. autoclass:: fpy2.transform.WhileBundling
    :members:
    :show-inheritance:
