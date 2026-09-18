@@ -1127,7 +1127,7 @@ class _FPCoreCompileInstance(Visitor):
         else:
             # more than one mutated variable
             # cannot compile to FPCore
-            raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {list(mutated)}')
+            raise FPCoreCompileError(f'if statements cannot have more than 1 mutated variable: {sorted(mutated)}')
 
     def _visit_if(self, stmt: IfStmt, ret: fpc.Expr):
         # check that only one variable is mutated in the loop
@@ -1191,7 +1191,7 @@ class _FPCoreCompileInstance(Visitor):
             body = self._visit_block(stmt.body, fpc.Var(loop_id))
             return fpc.While(cond, [(loop_id, fpc.Var(loop_id), body)], ret)
         else:
-            raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {list(mutated)}')
+            raise FPCoreCompileError(f'while loops cannot have more than 1 mutated variable: {sorted(mutated)}')
 
 
     def _visit_for(self, stmt: ForStmt, ret: fpc.Expr):
