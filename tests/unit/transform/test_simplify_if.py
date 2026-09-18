@@ -20,9 +20,11 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
-from fpy2.ast.fpyast import If1Stmt, IfExpr, IfStmt
+from fpy2.ast.fpyast import Assign, BinaryOp, If1Stmt, IfExpr, IfStmt, ReturnStmt
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.transform.cursor import expr_sites, stmt_sites
 from fpy2.transform import (
+    BlockCursor,
     SimplifyIf,
     TransformDeclined,
     TransformReferenceError,
@@ -525,3 +527,82 @@ class TestNestedIfs:
         cursor, _why = SimplifyIf.refusals(nested_unhoistable.ast)[0]
         with pytest.raises(TransformDeclined, match='assert'):
             SimplifyIf.apply(nested_unhoistable.ast, cursor)
+
+
+# ----------------------------------------------------------------------
+# Forwarding
+
+
+@fp.fpy
+def around_an_if(x, y):
+    a = x + 1.0
+    if x > 0:
+        b = 1.0
+    else:
+        b = 2.0
+    c = y * 2.0
+    return a + b + c
+
+
+def _stmts(ast, kind):
+    return stmt_sites(ast, lambda s: isinstance(s, kind))
+
+
+class TestTheEditLog:
+    def test_an_if_is_one_edit(self):
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        assert len(log.edits) == 1
+        (e,) = log.edits
+        assert (e.index, e.removed) == (1, 1)
+        assert e.inserted > 1
+
+    def test_apply_is_the_log_result(self):
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        assert log.result.is_equiv(SimplifyIf.apply(around_an_if.ast))
+
+
+class TestStatementCursorsForward:
+    def test_one_before_the_rewrite_is_unmoved(self):
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        before = _stmts(around_an_if.ast, Assign)[0]
+        assert log.forward(before).path.index == before.path.index
+
+    def test_one_after_shifts_by_the_growth(self):
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        (e,) = log.edits
+        after = _stmts(around_an_if.ast, ReturnStmt)[0]
+        moved = log.forward(after).path.index
+        assert moved == after.path.index + e.inserted - e.removed
+
+    def test_the_if_forwards_to_the_region_that_replaced_it(self):
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        got = log.forward(_stmts(around_an_if.ast, IfStmt)[0])
+        assert isinstance(got, BlockCursor)
+
+    def test_one_inside_a_branch_fails_loudly(self):
+        """That subtree was rebuilt and renamed; only the pass could say what
+        became of it, so forwarding refuses rather than mis-aiming."""
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        inner = [c for c in _stmts(around_an_if.ast, Assign)
+                 if c.path.parent != _stmts(around_an_if.ast, Assign)[0].path.parent]
+        assert inner
+        with pytest.raises(TransformReferenceError):
+            log.forward(inner[0])
+
+
+class TestExpressionCursorsForward:
+    def test_expressions_outside_the_rewrite_are_preserved(self):
+        """What `exprs_preserved=True` claims.  The only rewrite reaching past
+        a replaced statement is the closing `CopyPropagate`, restricted to
+        names this pass minted."""
+        log = SimplifyIf.apply_with_edits(around_an_if.ast)
+        outside = expr_sites(around_an_if.ast, lambda e: isinstance(e, BinaryOp))
+        checked = 0
+        for c in outside:
+            try:
+                got = log.forward(c)
+            except TransformReferenceError:
+                continue
+            assert c.resolve().is_equiv(got.resolve())
+            checked += 1
+        assert checked, 'no expression cursor forwarded, so nothing was checked'

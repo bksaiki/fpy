@@ -10,6 +10,8 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
+from fpy2.ast.fpyast import ReturnStmt
+from fpy2.transform.cursor import stmt_sites
 import fpy2.strategies as st
 from fpy2.strategies import (
     TransformDeclined,
@@ -113,3 +115,34 @@ class TestWhereThroughTheStrategyLayer:
         assert isinstance(simplify_if(_guarded_read, 0), Function)
         with pytest.raises(TransformReferenceError, match='subscript'):
             simplify_if(_guarded_read, 0, strict=True)
+
+
+@fp.fpy
+def _around_an_if(x: fp.Real) -> fp.Real:
+    a = x + 1.0
+    if x > 0:
+        b = 1.0
+    else:
+        b = 2.0
+    return a + b
+
+
+class TestCursorsForwardThroughTheLayer:
+    def _ret(self):
+        return stmt_sites(_around_an_if.ast, lambda s: isinstance(s, ReturnStmt))[0]
+
+    def test_a_cursor_reaches_the_rewritten_program(self):
+        g = simplify_if(_around_an_if)
+        assert g.forward(self._ret()).resolve() is not None
+
+    def test_it_forwards_past_the_growth(self):
+        g = simplify_if(_around_an_if)
+        cursor = self._ret()
+        assert g.forward(cursor).path.index > cursor.path.index
+
+    def test_it_chains_across_two_applications(self):
+        """The second pass finds no `if`, so its log is empty -- which is the
+        identity, not a broken chain."""
+        g = simplify_if(_around_an_if)
+        h = simplify_if(g)
+        assert h.forward(self._ret()).path.index == g.forward(self._ret()).path.index

@@ -6,7 +6,7 @@ from ..ast import *
 from ..number import Context, OverflowMode
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
-from .cursor import Cursor, StmtPath
+from .cursor import Cursor, EditLog, StmtPath
 from .error import TransformDeclined
 from .rename_target import RenameTarget
 from .utils import SiteRewriter, check_where
@@ -376,7 +376,7 @@ class SimplifyIf:
         where: 'int | Cursor | None' = None,
         *,
         strict: bool = False,
-    ):
+    ) -> FuncDef:
         """Rewrite `if` statements into `if` expressions.
 
         `where` names one site: an index counting `if` statements in visit
@@ -387,9 +387,33 @@ class SimplifyIf:
         branch body is effect-free by this pass's own refusals, so the value it
         computes is simply discarded by the enclosing `IfExpr`.
         """
+        return SimplifyIf.apply_with_edits(func, where, strict=strict).result
+
+    @staticmethod
+    def apply_with_edits(
+        func: FuncDef,
+        where: 'int | Cursor | None' = None,
+        *,
+        strict: bool = False,
+    ) -> EditLog:
+        """:meth:`apply`, with an :class:`EditLog` of what it replaced.
+
+        Each rewritten `if` is one edit: the statement is consumed and the
+        flattened body takes its place, so a cursor naming it forwards to that
+        region.  A cursor naming a statement *inside* a rewritten branch does
+        not forward -- the subtree was rebuilt and renamed, and only this pass
+        could say what became of it.
+
+        Expressions outside the edits are preserved: the only rewrite reaching
+        past a replaced statement is the closing `CopyPropagate`, and it is
+        restricted to the names this pass minted, which nothing outside the
+        statements it emitted can mention.
+        """
+        if not isinstance(func, FuncDef):
+            raise TypeError(f"Expected a 'FuncDef', got {func}")
         check_where(where)
         inst = SimplifyIf._instance(func, strict, where)
         ast, new_ids = inst.apply()
         ast = CopyPropagate.apply(ast, names=new_ids)
         SyntaxCheck.check(ast, ignore_unknown=True)
-        return ast
+        return EditLog(func, ast, tuple(inst.edits), exprs_preserved=True)

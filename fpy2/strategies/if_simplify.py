@@ -37,8 +37,9 @@ def simplify_if(
     equivalent; it is most useful after :func:`monomorphize`, which makes
     contexts concrete.
 
-    Cursors do not forward across this pass: it rewrites at sites it does
-    not report.
+    Cursors forward across this pass.  A rewritten `if` forwards to the region
+    that replaced it; a cursor naming a statement *inside* a branch does not,
+    since that subtree was rebuilt and renamed.
 
     Examples
     --------
@@ -65,6 +66,6 @@ def simplify_if(
     if not isinstance(func, Function):
         raise TypeError(f"Expected a \'Function\', got {func}")
 
-    return func.with_ast(
-        SimplifyIf.apply(func.ast, func.rebase(where), strict=strict)
+    return func.with_edits(
+        SimplifyIf.apply_with_edits(func.ast, func.rebase(where), strict=strict)
     )
