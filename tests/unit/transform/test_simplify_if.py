@@ -9,9 +9,8 @@ bodies and merging each phi with an `IfExpr`.  It mints fresh names via
    appears for each merged variable.
 2. **Semantic equivalence** via the interpreter, on inputs taking each branch.
 
-This file is the regression net for the refusal conditions that follow.  Every
-program here is pure and total, so it stays accepted under every mode the pass
-grows.
+Every program in the first section is pure and total, so it stays accepted
+under both modes.
 """
 
 import re
@@ -320,9 +319,9 @@ class TestUnconditionalRefusals:
         with pytest.raises(TransformDeclined, match=re.escape(why)):
             SimplifyIf.apply(f.ast)
 
-    def test_a_return_no_longer_raises_a_syntax_error(self):
-        """It used to fail as `FPySyntaxError: unbound variable`, naming a
-        variable the user never wrote."""
+    def test_a_return_declines_rather_than_erroring(self):
+        """A `return` in a branch has no expression form; the refusal has to
+        come before the rewrite, which would fail on a name it had renamed."""
         with pytest.raises(TransformDeclined):
             SimplifyIf.apply(returns_in_branch.ast)
 
@@ -407,7 +406,7 @@ class TestAbortsRefuseUnderEveryMode:
 
     @pytest.mark.parametrize('f,why', _REFUSED, ids=lambda v: getattr(v, 'name', ''))
     @pytest.mark.parametrize('strict', [False, True])
-    def test_phase_2_refusals_hold_under_strict(self, f, why, strict):
+    def test_refusals_hold_under_strict(self, f, why, strict):
         with pytest.raises(TransformDeclined, match=re.escape(why)):
             SimplifyIf.apply(f.ast, strict=strict)
 
