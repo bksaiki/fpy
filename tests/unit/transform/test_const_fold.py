@@ -2,6 +2,7 @@
 
 import fpy2 as fp
 
+from fpy2.analysis import ArraySizeInfer, concrete_size
 from fpy2.ast import (
     BinaryOp,
     BoolVal,
@@ -9,13 +10,16 @@ from fpy2.ast import (
     Decnum,
     ForeignVal,
     Integer,
+    Len,
+    ListTypeAnn,
     NullaryOp,
     Rational,
+    RealTypeAnn,
     ReturnStmt,
     Var,
 )
 from fpy2.number import Context
-from fpy2.transform import ConstFold
+from fpy2.transform import ConstFold, Simplify, UnfoldZip
 
 
 def _return_expr(fd):
@@ -456,3 +460,120 @@ class TestNonFiniteValues:
         e = _return_expr(ConstFold.apply(f.ast))
         assert isinstance(e, Decnum), f'expected Decnum; got {type(e).__name__}'
         assert e.val == '-0.0'
+
+
+class TestLenFolding:
+    """``len(xs)`` folds on a length `ArraySizeInfer` proves, even though
+    `PartialEval` never has the list's value."""
+
+    @staticmethod
+    def _fixed(f, *sizes: int):
+        """*f* with each list argument annotated at a concrete length —
+        what an FPCore fixed dimension gives, stated directly."""
+        for arg, n in zip(f.ast.args, sizes):
+            arg.type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+        return f.ast
+
+    def test_argument_with_a_fixed_dimension(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return len(xs)
+
+        e = _return_expr(ConstFold.apply(self._fixed(f, 32)))
+        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
+        assert e.val == 32
+
+    def test_unknown_length_is_left_alone(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return len(xs)
+
+        e = _return_expr(ConstFold.apply(f.ast))
+        assert isinstance(e, Len), f'expected Len; got {type(e).__name__}'
+
+    def test_comprehension_bound_list(self):
+        """The length is the analysis's alone: a comprehension binds ``xs``,
+        so partial evaluation never holds its value."""
+        @fp.fpy(ctx=fp.FP64)
+        def f() -> list[fp.Real]:
+            return [len(xs) for xs in [[1.0, 2.0], [3.0, 4.0]]]
+
+        src = fp.Function(ConstFold.apply(f.ast), runtime=f.runtime).format()
+        assert 'len(' not in src, src
+
+    def test_impure_argument_is_not_dropped(self):
+        """Substituting the literal deletes the argument, so an argument that
+        does something may not be folded away."""
+        @fp.fpy(ctx=fp.FP64)
+        def sneaky(xs: list[fp.Real]) -> list[fp.Real]:
+            xs[0] = 1.0
+            return xs
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return len(sneaky(xs))
+
+        e = _return_expr(ConstFold.apply(self._fixed(f, 32)))
+        assert isinstance(e, Len), f'expected Len; got {type(e).__name__}'
+
+    def test_enable_op_false_suppresses_it(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            return len(xs)
+
+        e = _return_expr(ConstFold.apply(self._fixed(f, 32), enable_op=False))
+        assert isinstance(e, Len), f'expected Len; got {type(e).__name__}'
+
+
+class TestLenFoldingInAsserts:
+    """An assertion is never discharged by a size the analysis learned from
+    that same assertion — see `_fold_len`."""
+
+    def test_both_lengths_known_independently(self):
+        """`UnfoldZip`'s assert, with both lengths fixed: it folds to a
+        tautology and `DeadCodeEliminate` takes it."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x, y in zip(xs, ys):
+                acc = acc + x * y
+            return acc
+
+        ast = TestLenFolding._fixed(f, 32, 32)
+        out = Simplify.apply(UnfoldZip.apply(ast))
+        src = fp.Function(out, runtime=f.runtime).format()
+        assert 'assert' not in src, src
+        assert 'range(32)' in src, src
+
+    def test_the_assert_is_the_only_source_of_the_length(self):
+        """Only ``xs`` is fixed, so ``len(ys)`` is 32 *because of* the assert.
+        Folding it would delete the fact, so only ``len(xs)`` folds — and
+        ``ys`` is still 32 afterwards."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x, y in zip(xs, ys):
+                acc = acc + x * y
+            return acc
+
+        ast = TestLenFolding._fixed(f, 32)          # xs only
+        out = Simplify.apply(UnfoldZip.apply(ast))
+        src = fp.Function(out, runtime=f.runtime).format()
+        assert 'assert len(ys) == 32' in src, src
+
+        sizes = ArraySizeInfer.analyze(out)
+        ys_bound = [b for d, b in sizes.by_def.items() if d.name.base == 'ys'][0]
+        assert concrete_size(ys_bound.size) == 32
+
+    def test_neither_length_known(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x, y in zip(xs, ys):
+                acc = acc + x * y
+            return acc
+
+        src = fp.Function(
+            Simplify.apply(UnfoldZip.apply(f.ast)), runtime=f.runtime
+        ).format()
+        assert 'assert len(ys) == len(xs)' in src, src

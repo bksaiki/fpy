@@ -220,6 +220,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
     gensym: Gensym
     _uf_changes: int
     _cond_depth: int
+    _seed_from_asserts: bool
     _arg_sizes: tuple[ArraySizeBound, ...] | None
     _cache: _CalleeCache
     _ctx_use_cache: ContextUseAnalysis | None
@@ -231,10 +232,12 @@ class _ArraySizeInferInstance(DefaultVisitor):
         type_info: TypeAnalysis,
         arg_sizes: tuple[ArraySizeBound, ...] | None = None,
         cache: _CalleeCache | None = None,
+        seed_from_asserts: bool = True,
     ):
         self.func = func
         self.partial_eval = partial_eval
         self.type_info = type_info
+        self._seed_from_asserts = seed_from_asserts
         self._arg_sizes = arg_sizes
         self.by_expr = {}
         self.by_def = {}
@@ -932,7 +935,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
         self._visit_expr(stmt.test, ctx)
         # Only an *unconditional* assert holds on every execution, so only
         # then may it constrain sizes globally (cf. strict ``zip``).
-        if self._cond_depth == 0:
+        if self._cond_depth == 0 and self._seed_from_asserts:
             self._seed_from_assert(stmt.test)
 
     def _seed_from_assert(self, test: Expr):
@@ -1010,6 +1013,7 @@ class ArraySizeInfer:
         partial_eval: PartialEvalInfo | None = None,
         type_info: TypeAnalysis | None = None,
         arg_sizes: tuple[ArraySizeBound, ...] | None = None,
+        seed_from_asserts: bool = True,
     ) -> ArraySizeAnalysis:
         """Analyze a function definition to infer array sizes.
 
@@ -1019,6 +1023,11 @@ class ArraySizeInfer:
             type_info: Optional pre-computed type analysis.
             arg_sizes: Optional per-parameter bounds from a call site; their
                 concrete lengths seed the parameters.
+            seed_from_asserts: Whether an unconditional ``assert len(a) ==
+                len(b)`` may constrain sizes.  ``False`` answers "what does
+                the program prove *without* its assertions?" -- what a
+                consumer about to rewrite an assertion away needs to ask, so
+                that discharging one never deletes the fact it carried.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')
@@ -1028,4 +1037,7 @@ class ArraySizeInfer:
         if type_info is None:
             type_info = TypeInfer.check(func, def_use=partial_eval.def_use)
 
-        return _ArraySizeInferInstance(func, partial_eval, type_info, arg_sizes).analyze()
+        return _ArraySizeInferInstance(
+            func, partial_eval, type_info, arg_sizes,
+            seed_from_asserts=seed_from_asserts,
+        ).analyze()

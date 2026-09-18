@@ -30,7 +30,7 @@ holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
-    '_emit_empty': 29,         # a dimension, read once per fixed-size layer
+    '_emit_empty': 28,         # a dimension, read once per fixed-size layer
     '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_list_range': 4,          # the list being iterated
@@ -43,6 +43,12 @@ the `zip` / `enumerate` unfolds joined `_to_statement_form`: the lists a `zip`
 traversed twice are now a comprehension's, so the allocation is where the mint
 happens, and one tuple conversion reaches `_convert_storage` that the zip's own
 path did not.
+
+``_emit_empty`` then went 29 -> 28 when `ConstFold` learned to fold a ``len``
+whose length `ArraySizeInfer` proves.  The one that went is
+``test_list_comp5``'s inner list: a comprehension binds it, so `PartialEval`
+never had its value, and the dimension it allocates against is now the literal
+``2`` rather than a name bound to ``xs.size()``.
 
 A dimension the *type* already carries is not bound, since the `std::array`
 spells it and nothing reads the name; the corpus's only fixed-length
