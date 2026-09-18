@@ -154,7 +154,7 @@ from .storage import (
     scalar_fits_in,
     scalar_sup,
 )
-from .target import is_native_ctx, make_op_table
+from .target import fp_rms, is_native_ctx, make_op_table
 from .types import (
     UNSIGNED_INT_TYPES,
     CppList,
@@ -387,6 +387,7 @@ class CppEmitter(Visitor):
         func_name_override: str | None = None,
         call_names: dict | None = None,
         unsafe_cast_int: bool = False,
+        enable_fenv: bool = True,
         unbox: UnboxAnalysis | None = None,
         callee_params: dict | None = None,
     ):
@@ -416,12 +417,17 @@ class CppEmitter(Visitor):
         # ``int64_t``).  Forwarded from
         # :attr:`CppCompiler.unsafe_cast_int`; defaults to ``False``.
         self._unsafe_cast_int = unsafe_cast_int
+        self._enable_fenv = enable_fenv
+        self._fp_rms = frozenset(fp_rms(enable_fenv))
+        """Modes an FP context may name: `_FE_RM_MACRO`'s, or only `RNE`
+        where the emitter may not call ``fesetround``."""
         self.writer = _IndentedWriter()
         self._tmp_counter = 0
         # The storage this function returns, set once the signature is
         # emitted; see :meth:`_visit_return`.
         self._return_storage: CppType | None = None
-        self.op_table: ScalarOpTable = make_op_table()
+        self.op_table: ScalarOpTable = make_op_table(
+            enable_fenv=enable_fenv)
         # Build a site → scope lookup over the analysis's scope list.
         self._scope_by_site: dict[ContextScopeSite, ContextScope] = {
             scope.site: scope for scope in ctx_use.scopes
@@ -1510,8 +1516,14 @@ class CppEmitter(Visitor):
 
         ``None`` is for the cases with no answer -- a context nothing resolved, an
         RM ``fesetround`` cannot express -- where a nested ``with`` must set the
-        mode unconditionally.
+        mode unconditionally.  Never that where the emitter may not set it at
+        all.
         """
+        if not self._enable_fenv:
+            # Nothing ever calls `fesetround`, so the mode is the one the
+            # process starts in.  That is what makes `std::nearbyint` `RNE`
+            # here, and it is why only `RNE` FP contexts get this far.
+            return RM.RNE
         scope = self._scope_by_site.get(site)
         if scope is None:
             return RM.RNE
@@ -1641,11 +1653,22 @@ class CppEmitter(Visitor):
                     '``fesetround`` mode',
                     at=at,
                 )
-            if rctx.rm not in _FE_RM_MACRO:
+            if rctx.rm not in self._fp_rms:
+                if self._enable_fenv:
+                    raise CppEmitError(
+                        f'rounding mode {rctx.rm} for context `{rctx}` is not '
+                        'supported by ``fesetround`` (need RNE, RTZ, RTP, or '
+                        'RTN)',
+                        at=at,
+                    )
                 raise CppEmitError(
-                    f'rounding mode {rctx.rm} for context `{rctx}` is not '
-                    'supported by ``fesetround`` (need RNE, RTZ, RTP, or RTN)',
+                    f'rounding mode {rctx.rm} for context `{rctx}` needs '
+                    '``fesetround``, which `enable_fenv=False` forbids.  '
+                    'Compile with `unfold=UnfoldMode.ROUNDINGS` to state the '
+                    'rounding as arithmetic instead, or with '
+                    '`enable_fenv=True` to set the mode.',
                     at=at,
+                    unfold_answers=True,
                 )
         else:
             raise CppEmitError(
@@ -1666,6 +1689,10 @@ class CppEmitter(Visitor):
         if self._current_rm is not None and target_rm == self._current_rm:
             yield
             return
+        assert self._enable_fenv, (
+            f'`enable_fenv=False` reached a mode change to {target_rm}; '
+            'validation was meant to refuse it'
+        )
         fenv = self._fresh_temp()
         prev_rm = self._current_rm
         self.writer.add_line(f'const auto {fenv} = std::fegetround();')

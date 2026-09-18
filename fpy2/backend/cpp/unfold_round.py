@@ -47,11 +47,10 @@ from ...transform import (
     UnfoldSpecial,
 )
 from ...transform.cursor import expr_sites
+from .ops import ScalarOpTable
 from .target import is_native_ctx, make_op_table
 
 __all__ = ['UnfoldKind', 'UnfoldMode', 'UnfoldSite', 'sites', 'unfold', 'unfold_arith']
-
-_TABLE = make_op_table()
 
 _FIXED = (MPFixedContext, MPBFixedContext)
 
@@ -121,7 +120,7 @@ class _Scopes:
         return scope.ctx if isinstance(scope.ctx, Context) else None
 
 
-def _dispatches(e: Expr) -> bool:
+def _dispatches(e: Expr, table: ScalarOpTable) -> bool:
     """Whether the op table is what emits *e*.
 
     Its keys are the definition: a node it does not key reaches the emitter
@@ -130,11 +129,11 @@ def _dispatches(e: Expr) -> bool:
     """
     match e:
         case UnaryOp():
-            return type(e) in _TABLE.unary
+            return type(e) in table.unary
         case BinaryOp():
-            return type(e) in _TABLE.binary
+            return type(e) in table.binary
         case TernaryOp():
-            return type(e) in _TABLE.ternary
+            return type(e) in table.ternary
         case _:
             return False
 
@@ -154,12 +153,18 @@ def _fixed_is_lowerable(ctx: MPFixedContext | MPBFixedContext) -> bool:
     )
 
 
-def _classify(e: Expr, active_of: _Scopes) -> tuple[UnfoldKind, Context] | None:
+def _classify(
+    e: Expr, active_of: _Scopes, table: ScalarOpTable, enable_fenv: bool,
+) -> tuple[UnfoldKind, Context] | None:
     """*e*'s kind and the context that gives it one, or `None` where the
-    emitter needs no help."""
+    emitter needs no help.
+
+    *enable_fenv* false shrinks what counts as native, so a mode the emitter may
+    no longer set becomes a site here instead of a refusal there.
+    """
     if isinstance(e, Round | Cast):
         active = active_of(e)
-        if active is None or is_native_ctx(active):
+        if active is None or is_native_ctx(active, enable_fenv=enable_fenv):
             return None
         if active.is_stochastic():
             # no step of the ladder draws random bits, so this is not a site --
@@ -170,17 +175,21 @@ def _classify(e: Expr, active_of: _Scopes) -> tuple[UnfoldKind, Context] | None:
                 return None
             return UnfoldKind.FIXED_ROUND, active
         return UnfoldKind.FLOAT_ROUND, active
-    if _dispatches(e):
+    if _dispatches(e, table):
         # `REAL` is the one non-native context the table reaches, by widening to
         # an op that gives the exact result and rounds to itself.
         active = active_of(e)
-        if active is None or active is REAL or is_native_ctx(active):
+        if active is None or active is REAL or is_native_ctx(
+            active, enable_fenv=enable_fenv,
+        ):
             return None
         return UnfoldKind.ARITH, active
     return None
 
 
-def sites(func: FuncDef, within: Cursor | None = None) -> list[UnfoldSite]:
+def sites(
+    func: FuncDef, within: Cursor | None = None, *, enable_fenv: bool = True,
+) -> list[UnfoldSite]:
     """The program points of *func* the emitter would refuse, in visit order.
 
     *func* is a specialized :class:`FuncDef`, before the analyses the emitter
@@ -189,17 +198,20 @@ def sites(func: FuncDef, within: Cursor | None = None) -> list[UnfoldSite]:
     if not isinstance(func, FuncDef):
         raise TypeError(f'Expected \'FuncDef\', got {func}')
     active_of = _Scopes(func)
+    table = make_op_table(enable_fenv=enable_fenv)
     out: list[UnfoldSite] = []
     for cursor in expr_sites(
-        func, lambda e: _classify(e, active_of) is not None, within,
+        func,
+        lambda e: _classify(e, active_of, table, enable_fenv) is not None,
+        within,
     ):
-        got = _classify(cursor.resolve(), active_of)
+        got = _classify(cursor.resolve(), active_of, table, enable_fenv)
         assert got is not None
         out.append(UnfoldSite(cursor, *got))
     return out
 
 
-def _intermediates() -> list[Context]:
+def _intermediates(enable_fenv: bool) -> list[Context]:
     """Native contexts to offer as an intermediate, narrowest first.
 
     Narrowest because the intermediate's width becomes the arithmetic's
@@ -217,11 +229,14 @@ def _intermediates() -> list[Context]:
     return [
         cand
         for es, nbits in ((8, 32), (11, 64))
-        if is_native_ctx(cand := IEEEContext(es, nbits, RM.RNE))
+        if is_native_ctx(cand := IEEEContext(es, nbits, RM.RNE),
+                         enable_fenv=enable_fenv)
     ]
 
 
-def _split_arith(func: FuncDef, site: UnfoldSite) -> FuncDef | None:
+def _split_arith(
+    func: FuncDef, site: UnfoldSite, enable_fenv: bool,
+) -> FuncDef | None:
     """*func* with *site*'s operation computed at a native intermediate and
     re-rounded to the target, or `None` where no intermediate is admissible.
 
@@ -235,7 +250,7 @@ def _split_arith(func: FuncDef, site: UnfoldSite) -> FuncDef | None:
     A refusal is an ordinary outcome: an operation with no rule keeps the
     refusal it has.
     """
-    for cand in _intermediates():
+    for cand in _intermediates(enable_fenv):
         try:
             return SplitRound.apply(func, cand, where=site.cursor)
         except TransformDeclined:
@@ -243,19 +258,22 @@ def _split_arith(func: FuncDef, site: UnfoldSite) -> FuncDef | None:
     return None
 
 
-def _arith(func: FuncDef) -> list[UnfoldSite]:
-    return [s for s in sites(func) if s.kind is UnfoldKind.ARITH]
+def _arith(func: FuncDef, enable_fenv: bool) -> list[UnfoldSite]:
+    return [s for s in sites(func, enable_fenv=enable_fenv)
+            if s.kind is UnfoldKind.ARITH]
 
 
-def _step(func: FuncDef, todo: list[UnfoldSite]) -> FuncDef | None:
+def _step(
+    func: FuncDef, todo: list[UnfoldSite], enable_fenv: bool,
+) -> FuncDef | None:
     for site in todo:
-        out = _split_arith(func, site)
+        out = _split_arith(func, site, enable_fenv)
         if out is not None:
             return out
     return None
 
 
-def unfold_arith(func: FuncDef) -> FuncDef:
+def unfold_arith(func: FuncDef, *, enable_fenv: bool = True) -> FuncDef:
     """*func* with every arithmetic site the op table cannot spell computed at
     a native intermediate instead.
 
@@ -267,13 +285,13 @@ def unfold_arith(func: FuncDef) -> FuncDef:
     Sites are re-derived after each rewrite rather than forwarded: the rewrite
     lifts its operation into a new block, so the cursors below it move.
     """
-    todo = _arith(func)
+    todo = _arith(func, enable_fenv)
     while todo:
-        out = _step(func, todo)
+        out = _step(func, todo, enable_fenv)
         if out is None:
             return func
         func = out
-        left = _arith(func)
+        left = _arith(func, enable_fenv)
         # the operation lands under a native context and the rounding it gains
         # is to the target, which is a rounding site rather than an arithmetic
         # one -- so this is what makes the loop finite
@@ -297,7 +315,7 @@ axis alone.
 """
 
 
-def _unfold_roundings(func: FuncDef) -> FuncDef:
+def _unfold_roundings(func: FuncDef, enable_fenv: bool) -> FuncDef:
     """*func* with every rounding the op table cannot spell expressed as
     integer arithmetic.
 
@@ -306,7 +324,8 @@ def _unfold_roundings(func: FuncDef) -> FuncDef:
     emitter already spells too -- correct, and pure waste.  The sites are this
     module's, and one pass of the ladder clears each.
     """
-    todo = [s for s in sites(func) if s.kind is not UnfoldKind.ARITH]
+    todo = [s for s in sites(func, enable_fenv=enable_fenv)
+            if s.kind is not UnfoldKind.ARITH]
     if not todo:
         return func
     # the anchor is the *statement* holding the rounding: a step consumes the
@@ -326,7 +345,9 @@ def _unfold_roundings(func: FuncDef) -> FuncDef:
     return func
 
 
-def unfold(func: FuncDef, mode: UnfoldMode) -> FuncDef:
+def unfold(
+    func: FuncDef, mode: UnfoldMode, *, enable_fenv: bool = True,
+) -> FuncDef:
     """*func* with every rounding the cpp op table cannot spell replaced, as
     far as *mode* allows.
 
@@ -339,5 +360,5 @@ def unfold(func: FuncDef, mode: UnfoldMode) -> FuncDef:
     if mode is UnfoldMode.NONE:
         return func
     if mode is UnfoldMode.DOUBLE_ROUND:
-        func = unfold_arith(func)
-    return _unfold_roundings(func)
+        func = unfold_arith(func, enable_fenv=enable_fenv)
+    return _unfold_roundings(func, enable_fenv)

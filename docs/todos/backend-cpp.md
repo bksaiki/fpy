@@ -337,6 +337,33 @@ real in a finite C++ type* accounts for 233 of 543 refusals, and the next two ar
 downstream of the same storage question. That is the only lever that would move
 the *number* of compilable programs, and it is out of scope above.
 
+### Forbidding `fesetround`
+
+*Done, behind `CppCompiler(enable_fenv=False)`.* Changing the hardware rounding
+mode is a known performance cliff, so a caller may rule it out.
+
+It is not a change to how anything is emitted. It narrows `target.fp_rms` to
+`RNE` — the mode the process already runs in, which is the only one an operation
+can be under if nothing ever sets one — and every consequence follows from
+there: the op table loses those signatures, `is_native_ctx` stops claiming those
+contexts, and `unfold_round` therefore sees them as sites. So the flag's own
+refusals are ones `unfold` already removes, and `enable_fenv=False` with
+`unfold=ROUNDINGS` compiles the same *roundings* with the mode stated as
+arithmetic instead. `<cfenv>` is dropped from the headers, which is what a
+reader checks the promise against.
+
+Float-to-integer roundings are untouched, and deliberately so: `std::trunc` /
+`floor` / `ceil` / `round` do not consult the rounding direction (measured), and
+`std::nearbyint` is `RNE` here for exactly the reason the flag exists — nothing
+changes the mode, so `_entry_rm` answers `RNE` unconditionally and
+`_require_tonearest` is satisfied by construction.
+
+**Arithmetic under a *directed* mode has no recovery.** `with FP32(rm=RTP): a +
+b` is refused, and correctly: `SplitRound` will not compose a nearest
+intermediate with a directed target, and no native mode is round-to-odd. The
+same gap as "No round-to-odd level" below, reached a second way. Roundings are
+the case the flag is for; this one stays a refusal.
+
 ### Recovering from an unsupported rounding instead of refusing
 
 *Done, behind `CppCompiler(unfold=UnfoldMode....)`* — `ROUNDINGS` for

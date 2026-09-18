@@ -648,3 +648,96 @@ class TestRoundIntoAFixedScope:
         assert 'static_cast<int64_t>(x)' in out, out
         assert re.search(r'acc = \(acc \+ \w+\);', out), out
         assert 'double acc' not in out and 'float acc' not in out, out
+
+
+class TestEnableFenv:
+    """``enable_fenv=False`` forbids ``std::fesetround``.
+
+    Changing the hardware rounding mode is a performance cliff, so a caller may
+    rule it out.  It is not a change to how anything is emitted: it narrows what
+    the *target* supports, to the one mode the process already runs in.  The
+    contexts that stop being native are then ordinary `unfold` sites, so the
+    same programs compile with the rounding stated as arithmetic.
+    """
+
+    _FP32_RTP = fp.FP32.with_params(rm=fp.RM.RTP)
+
+    @staticmethod
+    def _rounding():
+        ctx = TestEnableFenv._FP32_RTP
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+        return f
+
+    def test_the_mode_is_set_by_default(self):
+        out = CppCompiler().compile(
+            self._rounding(), arg_types=[RealType(fp.FP32)])
+        assert 'std::fesetround(FE_UPWARD)' in out
+
+    def test_it_is_refused_instead(self):
+        with pytest.raises(CppCompileError, match='enable_fenv=False'):
+            CppCompiler(enable_fenv=False).compile(
+                self._rounding(), arg_types=[RealType(fp.FP32)])
+
+    def test_unfold_answers_the_refusal(self):
+        """The point of the option: the refusal it creates is one `unfold`
+        already knows how to remove."""
+        out = CppCompiler(
+            enable_fenv=False, unfold=CppCompiler.UnfoldMode.ROUNDINGS,
+        ).compile(self._rounding(), arg_types=[RealType(fp.FP32)])
+        assert 'fesetround' not in out
+
+    def test_rne_needs_no_mode_change(self):
+        """`RNE` is the mode the process starts in, so it stays native."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            with fp.FP32:
+                return a + b
+
+        out = CppCompiler(enable_fenv=False).compile(
+            f, arg_types=[RealType(fp.FP32)] * 2)
+        assert 'fesetround' not in out
+        assert '(a + b)' in out
+
+    @pytest.mark.parametrize('rm', [fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP, fp.RM.RNA])
+    def test_integer_roundings_are_untouched(self, rm):
+        """`trunc` / `floor` / `ceil` / `round` do not read the rounding
+        direction, so a float-to-integer rounding needs nothing set."""
+        ctx = fp.SINT32.with_params(rm=rm, overflow=fp.OverflowMode.ASSERT)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+
+        out = CppCompiler(enable_fenv=False).compile(
+            f, arg_types=[RealType(fp.FP64)])
+        assert 'fesetround' not in out
+
+    def test_nearbyint_is_rne_because_nothing_sets_the_mode(self):
+        """The one integral spelling that *does* read the mode is still `RNE`
+        here, for the same reason the option exists."""
+        ctx = fp.SINT32.with_params(
+            rm=fp.RM.RNE, overflow=fp.OverflowMode.ASSERT)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            with ctx:
+                y = fp.round(x)
+            return y
+
+        out = CppCompiler(enable_fenv=False).compile(
+            f, arg_types=[RealType(fp.FP64)])
+        assert 'std::nearbyint' in out
+        assert 'fesetround' not in out
+
+    def test_the_header_goes_too(self):
+        """Nothing emitted can name it, and its absence is what a reader
+        checks the promise against."""
+        assert '#include <cfenv>' in CppCompiler().headers()
+        assert '#include <cfenv>' not in CppCompiler(enable_fenv=False).headers()

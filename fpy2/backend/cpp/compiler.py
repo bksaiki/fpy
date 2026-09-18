@@ -340,11 +340,16 @@ class CppCompiler(Backend):
     _unbox: _UnboxMode
     _unfold: _UnfoldMode
     _arrays: bool
+    _enable_fenv: bool
 
     def __init__(
-        self, *, unsafe_cast_int: bool = True, optimize: bool = True,
-        unbox: _UnboxMode = UnboxMode.STRICT, arrays: bool = True,
+        self, *,
+        unsafe_cast_int: bool = True,
+        optimize: bool = True,
+        unbox: _UnboxMode = UnboxMode.STRICT,
+        arrays: bool = True,
         unfold: _UnfoldMode = UnfoldMode.NONE,
+        enable_fenv: bool = True,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
@@ -362,14 +367,20 @@ class CppCompiler(Backend):
         self._unbox = unbox
         self._arrays = arrays
         self._unfold = unfold
+        self._enable_fenv = enable_fenv
 
     # ------------------------------------------------------------------
     # Translation-unit preamble.  ``compile`` returns a function definition
     # only, so single-function tests can use exact-string equality.
 
     def headers(self) -> list[str]:
-        """C++ headers required by every emitted unit."""
-        return list(CPP_HEADERS)
+        """C++ headers required by every emitted unit.
+
+        ``<cfenv>`` is left out under ``enable_fenv=False``: nothing emitted can
+        name it, and its absence is what a reader checks the promise against.
+        """
+        return [h for h in CPP_HEADERS
+                if self._enable_fenv or h != '#include <cfenv>']
 
     def helpers(self) -> str:
         """Support code an emitted unit needs: currently none.
@@ -430,6 +441,7 @@ class CppCompiler(Backend):
         return CppCompiler(
             unsafe_cast_int=self._unsafe_cast_int, optimize=self._optimize,
             unbox=self._unbox, arrays=self._arrays, unfold=UnfoldMode.NONE,
+            enable_fenv=self._enable_fenv,
         )
 
     def _compile_module(self, module: Module) -> str:
@@ -509,7 +521,9 @@ class CppCompiler(Backend):
             # lower, and re-normalized after: the lowering emits `with` blocks
             # and branches of its own.
             mode = self._unfold
-            specialized = specialized.map(lambda _m, fd: unfold_round(fd, mode))
+            fenv = self._enable_fenv
+            specialized = specialized.map(
+                lambda _m, fd: unfold_round(fd, mode, enable_fenv=fenv))
             specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
 
         if self._optimize:
@@ -699,6 +713,7 @@ class CppCompiler(Backend):
             ctx_use=a.ctx_use,
             call_names=call_names,
             unsafe_cast_int=self._unsafe_cast_int,
+            enable_fenv=self._enable_fenv,
             unbox=a.unbox,
             callee_params=callee_params,
         )
