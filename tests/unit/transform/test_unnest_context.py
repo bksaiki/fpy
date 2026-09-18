@@ -152,20 +152,43 @@ class TestRefusals:
         # ...which `DeadCodeEliminate` then drops outright
         assert _nested_pairs(DeadCodeEliminate.apply(f.ast)) == 0
 
-    def test_a_leading_block_is_not_handled_yet(self):
-        """Phase 3 adds this case; it needs guards the trailing one does
-        not."""
+    def test_a_peel_may_leave_a_sole_nested_block(self):
+        """Peeling the trailing block leaves the parent holding one nested
+        statement, which this pass declines and `DeadCodeEliminate`
+        finishes."""
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
             with fp.FP32:
                 with fp.FP16:
                     a = x * 3.0
-                b = a + 1.0
+                with fp.FP64:
+                    b = a + 1.0
             return b
 
         out, changed = UnnestContext.apply_with_status(f.ast)
-        assert not changed
+        assert changed
         assert _nested_pairs(out) == 1
+        assert _agrees(f, out)
+        assert _nested_pairs(DeadCodeEliminate.apply(out)) == 0
+
+    def test_a_live_target_keeps_the_leftover_nest(self):
+        """Same peel, but the hoisted block reads the parent's target, so
+        `DeadCodeEliminate` may not drop the header that binds it and the
+        nesting stays.  Correct, and the reason the pair count is not a
+        measure of success on its own."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32 as c:
+                with fp.FP16:
+                    a = x * 3.0
+                with c:
+                    b = a + 1.0
+            return b
+
+        out, changed = UnnestContext.apply_with_status(f.ast)
+        assert changed
+        assert _agrees(f, out)
+        assert _nested_pairs(DeadCodeEliminate.apply(out)) == 1
 
     def test_no_context_statements_at_all(self):
         @fp.fpy
@@ -226,5 +249,162 @@ class TestTargets:
             return b
 
         out = UnnestContext.apply(f.ast)
+        assert _nested_pairs(out) == 0
+        assert _agrees(f, out)
+
+
+class TestLeading:
+    """Hoisting a block out of the *front* of its parent moves the parent's
+    header after it, which the trailing case never does."""
+
+    def test_the_shape_it_states(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                with fp.FP16:
+                    a = x * 3.0
+                b = a + 1.0
+            return b
+
+        out = UnnestContext.apply(f.ast)
+        assert _text(f, out) == (
+            '@fp.fpy def f(x): with fp.FP16: a = (x * 3) '
+            'with fp.FP32: b = (a + 1) return b'
+        )
+        assert _nested_pairs(out) == 0
+        assert _agrees(f, out)
+
+    def test_it_peels_a_run_of_them(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                with fp.FP16:
+                    a = x * 3.0
+                with fp.FP64:
+                    b = a * 3.0
+                c = b + 1.0
+            return c
+
+        out = UnnestContext.apply(f.ast)
+        assert _nested_pairs(out) == 0
+        src = _text(f, out)
+        assert src.index('fp.FP16') < src.index('fp.FP64') < src.index('fp.FP32')
+        assert _agrees(f, out)
+
+    def test_both_edges_at_once(self):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                with fp.FP16:
+                    a = x * 3.0
+                b = a + 1.0
+                with fp.FP64:
+                    c = b * 3.0
+            return c
+
+        out = UnnestContext.apply(f.ast)
+        assert _nested_pairs(out) == 0
+        assert _agrees(f, out)
+
+
+class TestLeadingGuards:
+    """Each refusal below is a way the hoist would be observable."""
+
+    def test_an_impure_header_is_refused(self):
+        """The header is evaluated after the hoisted block instead of before
+        it, so its evaluation may have no effects to reorder."""
+        def make_ctx():          # a foreign callable: impure by default
+            return fp.FP32
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with make_ctx():
+                with fp.FP16:
+                    a = x * 3.0
+                b = a + 1.0
+            return b
+
+        _out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+
+    def test_an_impure_hoisted_context_is_refused(self):
+        """The hoisted block's own header is evaluated before the enclosing
+        one instead of after, so it may have no effects to reorder either."""
+        def make_ctx():          # a foreign callable: impure by default
+            return fp.FP16
+
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32:
+                with make_ctx():
+                    a = x * 3.0
+                b = a + 1.0
+            return b
+
+        _out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+
+    def test_a_header_reading_a_rebound_name_is_refused(self):
+        """``with c:`` evaluated after a block that rebinds ``c`` would
+        install the new context instead of the old one."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            c = fp.FP32
+            with c:
+                with fp.FP16:
+                    c = fp.FP64
+                    a = x * 3.0
+                b = a + 1.0
+            return b
+
+        _out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+
+    def test_a_hoisted_block_reading_the_outer_target_is_refused(self):
+        """``c`` is bound by the header, which now comes *after* the block
+        that reads it."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32 as c:
+                with fp.FP16:
+                    with c:
+                        a = x * 3.0
+                b = a + 1.0
+            return b
+
+        _out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+
+    def test_the_outer_target_read_through_a_loop_is_refused(self):
+        """Same, with the read behind a loop -- the case where the use might
+        reach the target's definition through a phi rather than directly."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32 as c:
+                with fp.FP16:
+                    a = x
+                    for _ in range(2):
+                        with c:
+                            a = a * 3.0
+                b = a + 1.0
+            return b
+
+        _out, changed = UnnestContext.apply_with_status(f.ast)
+        assert not changed
+
+    def test_an_unread_target_is_no_obstacle(self):
+        """A `NamedId` target the hoisted block does not read refuses
+        nothing -- the guard is a def-use question, not `UnderscoreId` or
+        bust."""
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.FP32 as c:
+                with fp.FP16:
+                    a = x * 3.0
+                b = a + 1.0
+            return b
+
+        out, changed = UnnestContext.apply_with_status(f.ast)
+        assert changed
         assert _nested_pairs(out) == 0
         assert _agrees(f, out)
