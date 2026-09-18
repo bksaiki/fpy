@@ -1,7 +1,9 @@
 """Transformation pass to rewrite if statements to if expressions."""
 
-from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..analysis import ContextUse, DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..analysis.context_use import ContextUseAnalysis
 from ..ast import *
+from ..number import Context, OverflowMode
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
 from .error import TransformDeclined
@@ -22,19 +24,29 @@ _UNHOISTABLE: dict[type[Stmt], str] = {
 
 
 class _Unhoistable(DefaultVisitor):
-    """Reports why a branch body cannot be hoisted, or ``None``.
+    """Why a branch body cannot be hoisted, in two categories.
+
+    ``aborts`` can change whether, or which, value the function produces, so no
+    mode admits it.  ``unproven`` is preserved in value but not in observable
+    effect, which is what ``strict`` governs.
 
     Descends to any depth: a branch's statements all become unconditional, and
     so do those of any block nested inside it.
     """
 
-    def __init__(self):
+    def __init__(self, ctx_use: ContextUseAnalysis):
         super().__init__()
-        self.why: str | None = None
+        self.ctx_use = ctx_use
+        self.aborts: str | None = None
+        self.unproven: str | None = None
 
     def _reject(self, node: Stmt) -> None:
-        if self.why is None:
-            self.why = _UNHOISTABLE[type(node)]
+        if self.aborts is None:
+            self.aborts = _UNHOISTABLE[type(node)]
+
+    def _cannot_prove(self, why: str) -> None:
+        if self.unproven is None:
+            self.unproven = why
 
     def _visit_return(self, stmt: ReturnStmt, ctx):
         self._reject(stmt)
@@ -59,18 +71,53 @@ class _Unhoistable(DefaultVisitor):
         self._reject(stmt)
         super()._visit_for(stmt, ctx)
 
+    def _visit_list_ref(self, e: ListRef, ctx):
+        self._cannot_prove('a subscript may be out of range outside its guard')
+        super()._visit_list_ref(e, ctx)
+
+    def _visit_list_slice(self, e: ListSlice, ctx):
+        self._cannot_prove('a slice may be out of range outside its guard')
+        super()._visit_list_slice(e, ctx)
+
     def _visit_unaryop(self, e: UnaryOp, ctx):
-        if isinstance(e, Cast) and self.why is None:
-            self.why = (
+        if isinstance(e, Cast) and self.aborts is None:
+            self.aborts = (
                 '`fp.cast` asserts its result is exact, so hoisting it can abort'
             )
+        elif isinstance(e, Round):
+            self._check_round(e)
         super()._visit_unaryop(e, ctx)
 
+    def _check_round(self, e: Round) -> None:
+        """A rounding aborts where its context overflows by assertion.
 
-def _why_unhoistable(block: StmtBlock) -> str | None:
-    v = _Unhoistable()
+        A context that does not resolve to a concrete one -- a function with no
+        ``ctx=`` inherits its caller's -- cannot be shown either way, so it is
+        ``unproven`` rather than an abort.  Refusing it outright would decline
+        every rounding inside a branch of an unannotated function.
+        """
+        try:
+            resolved = self.ctx_use.find_scope_from_use(e).ctx
+        except KeyError:
+            resolved = None
+        if isinstance(resolved, Context):
+            if getattr(resolved, 'overflow', None) is OverflowMode.ASSERT:
+                if self.aborts is None:
+                    self.aborts = (
+                        'a rounding under an `ASSERT` overflow context can abort'
+                    )
+        else:
+            self._cannot_prove(
+                'a rounding under an unresolved context may abort on overflow'
+            )
+
+
+def _why_unhoistable(
+    block: StmtBlock, ctx_use: ContextUseAnalysis, strict: bool,
+) -> str | None:
+    v = _Unhoistable(ctx_use)
     v._visit_block(block, None)
-    return v.why
+    return v.aborts or (v.unproven if strict else None)
 
 
 class _SimplifyIfInstance(DefaultTransformVisitor):
@@ -79,18 +126,25 @@ class _SimplifyIfInstance(DefaultTransformVisitor):
     def_use: DefineUseAnalysis
     gensym: Gensym
 
-    def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
+    def __init__(
+        self,
+        func: FuncDef,
+        def_use: DefineUseAnalysis,
+        ctx_use: ContextUseAnalysis,
+        strict: bool,
+    ):
         self.func = func
         self.def_use = def_use
+        self.ctx_use = ctx_use
+        self.strict = strict
         self.gensym = Gensym(reserved=def_use.names())
 
     def apply(self):
         func = self._visit_function(self.func, None)
         return func, self.gensym.generated
 
-    @staticmethod
-    def _require_hoistable(block: StmtBlock) -> None:
-        why = _why_unhoistable(block)
+    def _require_hoistable(self, block: StmtBlock) -> None:
+        why = _why_unhoistable(block, self.ctx_use, self.strict)
         if why is not None:
             raise TransformDeclined(f'cannot rewrite `if` to `if` expression: {why}')
 
@@ -245,12 +299,28 @@ class SimplifyIf:
     Transforms if statements into if expressions.
     The inner block is hoisted into the outer block and each
     phi variable is made explicit with an if expression.
+
+    Hoisting makes a branch body unconditional, so a construct that could
+    change whether -- or which -- value the function produces is declined under
+    every mode: `return`, `assert`, an effect, a list write, `while`, `for`,
+    `fp.cast`, and a rounding under an `ASSERT` overflow context.
+
+    ``strict`` governs what is left: operations whose *value* is preserved but
+    whose observable effects may differ.  ``strict=False`` (the default) hoists
+    them, in the same spirit as `CppCompiler.unsafe_cast_int` -- an
+    out-of-range subscript is behavior FPy already leaves undefined.
+    ``strict=True`` declines them, making the rewrite observationally
+    equivalent.
+
+    A consumer that evaluates only the taken arm of an `IfExpr` -- C++ `?:`,
+    the interpreter -- gets that equivalence for free and wants the default.
     """
 
     @staticmethod
-    def apply(func: FuncDef):
+    def apply(func: FuncDef, *, strict: bool = False):
         def_use = DefineUse.analyze(func)
-        ast, new_ids = _SimplifyIfInstance(func, def_use).apply()
+        ctx_use = ContextUse.analyze(func, def_use=def_use)
+        ast, new_ids = _SimplifyIfInstance(func, def_use, ctx_use, strict).apply()
         ast = CopyPropagate.apply(ast, names=new_ids)
         SyntaxCheck.check(ast, ignore_unknown=True)
         return ast

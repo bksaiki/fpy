@@ -330,3 +330,84 @@ class TestTheRefusalsDoNotOverreach:
         """Partial *reads* are the keyword's business, not this phase's."""
         SimplifyIf.apply(guarded_read.ast)
 
+
+
+# ----------------------------------------------------------------------
+# What the `strict` keyword governs
+
+
+@fp.fpy
+def rounds_under_symbolic_ctx(x):
+    if x > 0:
+        y = fp.round(x)
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy(ctx=fp.FP32)
+def rounds_under_fp32(x):
+    if x > 0:
+        y = fp.round(x)
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def rounds_under_assert_overflow(x):
+    if x > 0:
+        with fp.MPBFixedContext(-1, 128, overflow=fp.OverflowMode.ASSERT):
+            y = fp.round(x)
+    else:
+        y = 0.0
+    return y
+
+
+@fp.fpy
+def slices_in_branch(xs: list[fp.Real], i: int):
+    if i < len(xs):
+        ys = xs[0:i]
+    else:
+        ys = xs[0:0]
+    return len(ys)
+
+
+_UNPROVEN = [guarded_read, slices_in_branch, rounds_under_symbolic_ctx]
+
+
+class TestStrictGovernsUnprovenEffects:
+    """Value preserved, observable effects possibly not."""
+
+    @pytest.mark.parametrize('f', _UNPROVEN)
+    def test_the_default_hoists(self, f):
+        SimplifyIf.apply(f.ast)
+
+    @pytest.mark.parametrize('f', _UNPROVEN)
+    def test_strict_declines(self, f):
+        with pytest.raises(TransformDeclined):
+            SimplifyIf.apply(f.ast, strict=True)
+
+    def test_a_resolved_safe_context_is_accepted_under_strict(self):
+        """`strict` refuses what cannot be *shown* safe, not every rounding."""
+        SimplifyIf.apply(rounds_under_fp32.ast, strict=True)
+
+
+class TestAbortsRefuseUnderEveryMode:
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_assert_overflow_rounding(self, strict):
+        with pytest.raises(TransformDeclined, match='ASSERT` overflow'):
+            SimplifyIf.apply(rounds_under_assert_overflow.ast, strict=strict)
+
+    @pytest.mark.parametrize('f,why', _REFUSED, ids=lambda v: getattr(v, 'name', ''))
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_phase_2_refusals_hold_under_strict(self, f, why, strict):
+        with pytest.raises(TransformDeclined, match=re.escape(why)):
+            SimplifyIf.apply(f.ast, strict=strict)
+
+
+class TestStrictDoesNotDisturbTotalPrograms:
+    @pytest.mark.parametrize('f', _UNARY + [nested])
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_accepted(self, f, strict):
+        SimplifyIf.apply(f.ast, strict=strict)
