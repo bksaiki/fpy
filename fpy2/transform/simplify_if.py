@@ -4,7 +4,17 @@ from ..analysis import ContextUse, DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..analysis.context_use import ContextUseAnalysis
 from ..ast import *
 from ..function import Function
-from ..number import Context, OverflowMode
+from ..number import (
+    Context,
+    EFloatContext,
+    ExpContext,
+    FixedContext,
+    IEEEContext,
+    MPBFixedContext,
+    MPBFloatContext,
+    OverflowMode,
+    SMFixedContext,
+)
 from ..primitive import Primitive
 from ..utils import Gensym
 from .copy_propagate import CopyPropagate
@@ -13,10 +23,8 @@ from .error import TransformDeclined
 from .rename_target import RenameTarget
 from .utils import SiteRewriter, check_where
 
-# Constructs that cannot be hoisted out of a branch under any mode: each can
-# change whether, or which, value the function produces.  Scoped statements
-# (`with`) are not listed -- the scan descends into them, since their contents
-# become unconditional too.
+# Scoped statements (`with`) are absent on purpose: the scan descends into
+# them, since their contents become unconditional too.
 _UNHOISTABLE: dict[type[Stmt], str] = {
     ReturnStmt: 'a `return` escapes the branch and has no expression form',
     AssertStmt: 'an `assert` would run unconditionally and can abort',
@@ -113,7 +121,14 @@ class _Unhoistable(DefaultVisitor):
         except KeyError:
             return
         if isinstance(resolved, Context):
-            if getattr(resolved, 'overflow', None) is OverflowMode.ASSERT:
+            # The tuple is literal rather than a named constant: mypy
+            # narrows on a literal and so type-checks `.overflow`, which the
+            # base `Context` does not declare.  `getattr` would answer `None`
+            # on a rename and silently stop refusing.
+            if isinstance(resolved, (
+                EFloatContext, ExpContext, FixedContext, IEEEContext,
+                MPBFixedContext, MPBFloatContext, SMFixedContext,
+            )) and resolved.overflow is OverflowMode.ASSERT:
                 self._abort(
                     'an operation under an `ASSERT` overflow context can abort'
                 )
@@ -159,9 +174,8 @@ class _SimplifyIfInstance(SiteRewriter):
         return func, self.gensym.generated
 
     def _claims(self, stmt: Stmt, *bodies: StmtBlock) -> bool:
-        """Whether to rewrite here, recording a refusal and a listing on the
-        way.  A refusal that was aimed at is raised rather than skipped: the
-        pass is total by contract, so a site it cannot take is an error."""
+        """Whether to rewrite here.  A refusal that was aimed at is raised
+        rather than skipped: a named site this pass cannot take is an error."""
         block, pos = self._site
         why: str | None = None
         for body in bodies:
@@ -190,148 +204,90 @@ class _SimplifyIfInstance(SiteRewriter):
         return True
 
     def _emit(self, ctx: list[Stmt], stmts: list[Stmt]):
-        """Hand *stmts* to the enclosing block in place of the `if`."""
+        """Give the enclosing block *stmts* in place of the `if`, returning the
+        last as the replacement per :meth:`SiteRewriter._visit_block`."""
         self._replaced = True
-        if not stmts:
-            self._dropped = True
-            return None, None
         ctx.extend(stmts[:-1])
         return stmts[-1], None
 
-    def _visit_branches(self, ctx, *blocks: StmtBlock) -> list[StmtBlock]:
-        return [self._visit_block(b, ctx)[0] for b in blocks]
+    def _rewrite(
+        self, cond_e: Expr, ift: StmtBlock, iff: StmtBlock | None, ctx,
+    ) -> list[Stmt]:
+        """The statements replacing an `if`, with *iff* `None` for a one-armed
+        one -- which is this rewrite with an empty else throughout: no names
+        merge from that side, so each takes its pre-`if` value there.
+
+        `None` rather than an empty block because `mutated_in` / `introed_in`
+        index by block identity, and a synthesized one is in neither.
+        """
+        stmts: list[Stmt] = []
+        cond = self._visit_expr(cond_e, ctx)
+        if not isinstance(cond, Var):
+            t = self.gensym.fresh('cond')
+            stmts.append(Assign(t, BoolTypeAnn(None), cond, None))
+            cond = Var(t, None)
+
+        bodies = [
+            None if b is None else self._visit_block(b, ctx)[0]
+            for b in (ift, iff)
+        ]
+
+        # FPy semantics: a name is introduced in both arms or in neither
+        intros = sorted(
+            self.def_use.introed_in(ift) & self.def_use.introed_in(iff)
+        ) if iff is not None else []
+
+        renames: list[dict[NamedId, NamedId]] = []
+        merged: set[NamedId] = set()
+        for src, body in zip((ift, iff), bodies):
+            if src is None or body is None:
+                renames.append({})
+                continue
+            mutated = sorted(self.def_use.mutated_in(src))
+            rename = {v: self.gensym.refresh(v) for v in mutated + intros}
+            renames.append(rename)
+            merged |= rename.keys()
+            # a mutated name carries its pre-`if` value in; an introduced one
+            # has none to carry
+            for v in mutated:
+                stmts.append(Assign(rename[v], None, Var(v, None), None))
+            stmts.extend(RenameTarget.apply_block(body, rename).stmts)
+
+        # Over the union: a name mutated in one arm only still needs a merge,
+        # and takes its pre-`if` name on the other side.
+        for var in sorted(merged):
+            e = IfExpr(
+                cond,
+                Var(renames[0].get(var, var), None),
+                Var(renames[1].get(var, var), None),
+                None,
+            )
+            stmts.append(Assign(var, None, e, None))
+        return stmts
 
     def _visit_if1(self, stmt: If1Stmt, ctx: list[Stmt]):
         if not self._claims(stmt, stmt.body):
             return super()._visit_if1(stmt, ctx)
-        stmts: list[Stmt] = []
-
-        # compile condition
-        cond = self._visit_expr(stmt.cond, ctx)
-
-        # generate temporary if needed
-        if not isinstance(cond, Var):
-            t = self.gensym.fresh('cond')
-            s = Assign(t, BoolTypeAnn(None), cond, None)
-            stmts.append(s)
-            cond = Var(t, None)
-
-        # compile the body
-        (body,) = self._visit_branches(ctx, stmt.body)
-
-        # identify variables that were mutated in the body
-        mutated = self.def_use.mutated_in(stmt.body)
-
-        # rename mutated variables in the body
-        rename = { var: self.gensym.refresh(var) for var in mutated }
-        body = RenameTarget.apply_block(body, rename)
-
-        # generate assignments and inline the body
-        for var in mutated:
-            t = rename[var]
-            s = Assign(t, None, Var(var, None), None)
-            stmts.append(s)
-        stmts.extend(body.stmts)
-
-        # make if expressions for each mutated variable
-        for var in mutated:
-            e = IfExpr(cond, Var(rename[var], None), Var(var, None), None)
-            s = Assign(var, None, e, None)
-            stmts.append(s)
-
-        return self._emit(ctx, stmts)
+        return self._emit(ctx, self._rewrite(stmt.cond, stmt.body, None, ctx))
 
     def _visit_if(self, stmt: IfStmt, ctx: list[Stmt]):
         if not self._claims(stmt, stmt.ift, stmt.iff):
             return super()._visit_if(stmt, ctx)
-        stmts: list[Stmt] = []
+        return self._emit(
+            ctx, self._rewrite(stmt.cond, stmt.ift, stmt.iff, ctx)
+        )
 
-        # compile condition
-        cond = self._visit_expr(stmt.cond, ctx)
-
-        # generate temporary if needed
-        if not isinstance(cond, Var):
-            t = self.gensym.fresh('cond')
-            s = Assign(t, BoolTypeAnn(None), cond, None)
-            stmts.append(s)
-            cond = Var(t, None)
-
-        # compile the bodies
-        ift, iff = self._visit_branches(ctx, stmt.ift, stmt.iff)
-
-        # identify variables that were mutated in each body
-        mutated_ift = self.def_use.mutated_in(stmt.ift)
-        mutated_iff = self.def_use.mutated_in(stmt.iff)
-
-        # identify variables that were introduced in the bodies
-        # FPy semantics says they must be introduced in both branches
-        intros_ift = self.def_use.introed_in(stmt.ift)
-        intros_iff = self.def_use.introed_in(stmt.iff)
-        intros = sorted(intros_ift & intros_iff) # intersection of fresh variables
-
-        # combine sets
-        mutated_or_new_ift = sorted(mutated_ift)
-        mutated_or_new_iff = sorted(mutated_iff)
-        mutated_or_new_ift.extend(intros)
-        mutated_or_new_iff.extend(intros)
-
-        # rename mutated variables in each body, generate assignments, and inline
-        rename_ift = { var: self.gensym.refresh(var) for var in mutated_or_new_ift }
-        rename_iff = { var: self.gensym.refresh(var) for var in mutated_or_new_iff }
-
-        ift = RenameTarget.apply_block(ift, rename_ift)
-        iff = RenameTarget.apply_block(iff, rename_iff)
-
-        for var in mutated_ift:
-            t = rename_ift[var]
-            s = Assign(t, None, Var(var, None), None)
-            stmts.append(s)
-        stmts.extend(ift.stmts)
-
-        for var in mutated_iff:
-            t = rename_iff[var]
-            s = Assign(t, None, Var(var, None), None)
-            stmts.append(s)
-        stmts.extend(iff.stmts)
-
-        # Over the union: a variable mutated in one arm only still needs a
-        # merge, and takes its pre-`if` name on the other side.
-        for var in sorted(set(mutated_or_new_ift) | set(mutated_or_new_iff)):
-            ift_name = rename_ift.get(var, var)
-            iff_name = rename_iff.get(var, var)
-            e = IfExpr(cond, Var(ift_name, None), Var(iff_name, None), None)
-            stmts.append(Assign(var, None, e, None))
-
-        return self._emit(ctx, stmts)
-
-
-#
-# This transformation rewrites a block of the form:
-# ```
-# if <cond>
-#     S1 ...
-# else:
-#     S2 ...
-# S3 ...
-# ```
-# to an equivalent block using if expressions:
-# ```
-# t = <cond>
-# S1 ...
-# S2 ...
-# x_i = x_{i, S1} if t else x_{i, S2}
-# S3 ...
-# ```
-# where `x_i` is a phi node merging `phi(x_{i, S1}` and `x_{i, S2})`
-# that is associated with the if-statement and `t` is a free variable.
 
 class SimplifyIf:
-    """
-    Control flow simplification:
+    """Rewrites `if` statements into `if` expressions::
 
-    Transforms if statements into if expressions.
-    The inner block is hoisted into the outer block and each
-    phi variable is made explicit with an if expression.
+        if <cond>:          t = <cond>
+            S1 ...    ⇝     S1 ...
+        else:               S2 ...
+            S2 ...          x = x_S1 if t else x_S2
+
+    Both bodies are hoisted into the enclosing block and each merged name is
+    made explicit with an `IfExpr`.
 
     Hoisting makes a branch body unconditional, so any construct that could
     change whether -- or which -- value the function produces is declined.
@@ -376,13 +332,10 @@ class SimplifyIf:
     ) -> FuncDef:
         """Rewrite `if` statements into `if` expressions.
 
-        `where` names one site: an index counting `if` statements in visit
-        order, or a cursor or region, which takes the sites at or beneath it.
-        `None` rewrites every one.
-
-        A nested `if` left behind is sound: it becomes unconditional, but a
-        branch body is effect-free by this pass's own refusals, so the value it
-        computes is simply discarded by the enclosing `IfExpr`.
+        `where` names one site: an index counting the `if` statements this
+        rewrite acts on, in visit order, or a cursor or region, which takes the
+        sites at or beneath it.  `None` rewrites every one.
+        :func:`fpy2.strategies.simplify_if` documents the rest.
         """
         return SimplifyIf.apply_with_edits(func, where, strict=strict).result
 
@@ -395,16 +348,8 @@ class SimplifyIf:
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced.
 
-        Each rewritten `if` is one edit: the statement is consumed and the
-        flattened body takes its place, so a cursor naming it forwards to that
-        region.  A cursor naming a statement *inside* a rewritten branch does
-        not forward -- the subtree was rebuilt and renamed, and only this pass
-        could say what became of it.
-
-        Expressions outside the edits are preserved: the only rewrite reaching
-        past a replaced statement is the closing `CopyPropagate`, and it is
-        restricted to the names this pass minted, which nothing outside the
-        statements it emitted can mention.
+        A cursor naming a statement *inside* a rewritten branch does not
+        forward: that subtree was rebuilt and renamed.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f"Expected a 'FuncDef', got {func}")
