@@ -1024,10 +1024,9 @@ class ArraySizeInfer:
             arg_sizes: Optional per-parameter bounds from a call site; their
                 concrete lengths seed the parameters.
             seed_from_asserts: Whether an unconditional ``assert len(a) ==
-                len(b)`` may constrain sizes.  ``False`` answers "what does
-                the program prove *without* its assertions?" -- what a
-                consumer about to rewrite an assertion away needs to ask, so
-                that discharging one never deletes the fact it carried.
+                len(b)`` may constrain sizes.  ``False`` asks what the program
+                proves without its assertions, which is what a consumer about
+                to rewrite one away needs in order not to delete what it carried.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected `FuncDef`, got {type(func)} for {func}')

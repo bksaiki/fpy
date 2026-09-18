@@ -41,6 +41,14 @@ def _return_expr(fd):
         )
 
 
+def _fix_lengths(f, *sizes: int):
+    """*f* with each list argument annotated at a concrete length — what an
+    FPCore fixed dimension gives, stated directly."""
+    for arg, n in zip(f.ast.args, sizes):
+        arg.type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+    return f.ast
+
+
 def _outer_context_stmt(fd) -> ContextStmt:
     [ctx_stmt] = [s for s in fd.body.stmts if isinstance(s, ContextStmt)]
     return ctx_stmt
@@ -470,20 +478,12 @@ class TestLenFolding:
     """``len(xs)`` folds on a length `ArraySizeInfer` proves, even though
     `PartialEval` never has the list's value."""
 
-    @staticmethod
-    def _fixed(f, *sizes: int):
-        """*f* with each list argument annotated at a concrete length —
-        what an FPCore fixed dimension gives, stated directly."""
-        for arg, n in zip(f.ast.args, sizes):
-            arg.type = ListTypeAnn(RealTypeAnn(None, None), n, None)
-        return f.ast
-
     def test_argument_with_a_fixed_dimension(self):
         @fp.fpy(ctx=fp.FP64)
         def f(xs: list[fp.Real]) -> fp.Real:
             return len(xs)
 
-        e = _return_expr(ConstFold.apply(self._fixed(f, 32)))
+        e = _return_expr(ConstFold.apply(_fix_lengths(f, 32)))
         assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
         assert e.val == 32
 
@@ -517,7 +517,7 @@ class TestLenFolding:
         def f(xs: list[fp.Real]) -> fp.Real:
             return len(sneaky(xs))
 
-        e = _return_expr(ConstFold.apply(self._fixed(f, 32)))
+        e = _return_expr(ConstFold.apply(_fix_lengths(f, 32)))
         assert isinstance(e, Len), f'expected Len; got {type(e).__name__}'
 
     def test_enable_op_false_suppresses_it(self):
@@ -525,13 +525,13 @@ class TestLenFolding:
         def f(xs: list[fp.Real]) -> fp.Real:
             return len(xs)
 
-        e = _return_expr(ConstFold.apply(self._fixed(f, 32), enable_op=False))
+        e = _return_expr(ConstFold.apply(_fix_lengths(f, 32), enable_op=False))
         assert isinstance(e, Len), f'expected Len; got {type(e).__name__}'
 
 
 class TestLenFoldingInAsserts:
     """An assertion is never discharged by a size the analysis learned from
-    that same assertion — see `_fold_len`."""
+    that same assertion — see `_fold_shape`."""
 
     def test_both_lengths_known_independently(self):
         """`UnfoldZip`'s assert, with both lengths fixed: it folds to a
@@ -543,7 +543,7 @@ class TestLenFoldingInAsserts:
                 acc = acc + x * y
             return acc
 
-        ast = TestLenFolding._fixed(f, 32, 32)
+        ast = _fix_lengths(f, 32, 32)
         out = Simplify.apply(UnfoldZip.apply(ast))
         src = fp.Function(out, runtime=f.runtime).format()
         assert 'assert' not in src, src
@@ -560,7 +560,7 @@ class TestLenFoldingInAsserts:
                 acc = acc + x * y
             return acc
 
-        ast = TestLenFolding._fixed(f, 32)          # xs only
+        ast = _fix_lengths(f, 32)          # xs only
         out = Simplify.apply(UnfoldZip.apply(ast))
         src = fp.Function(out, runtime=f.runtime).format()
         assert 'assert len(ys) == 32' in src, src

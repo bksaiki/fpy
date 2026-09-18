@@ -4,7 +4,7 @@ Mathematical functions under rounding contexts.
 
 from fractions import Fraction
 
-from .number import INTEGER, REAL, Context, Float, Real, RealFloat
+from .number import REAL, Context, Float, Real, RealFloat
 from .number.engine import ENGINES
 from .utils import UNINIT, digits_to_fraction, hexnum_to_fraction, is_dyadic
 
@@ -1037,7 +1037,7 @@ def dim(x: list, ctx: Context = REAL):
         else:
             break
 
-    return Float.from_int(dim, ctx=INTEGER, checked=False)
+    return Float.from_int(dim, checked=False)
 
 def size(x: list, dim: Real, ctx: Context = REAL):
     """
@@ -1052,7 +1052,7 @@ def size(x: list, dim: Real, ctx: Context = REAL):
     # size(x, n) = len(x[0]...[0]), n indices deep
     for _ in range(int(dim)):
         x = x[0]
-    return Float.from_int(len(x), ctx=INTEGER, checked=False)
+    return Float.from_int(len(x), checked=False)
 
 #############################################################################
 # Tuple
