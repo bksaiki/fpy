@@ -249,10 +249,8 @@ class TestTheCastFallbackKeepsTheMode:
 class TestWrappingOverflow:
     """``WRAP`` is the one edge rule with a lowering, and only where the C++
     type holds exactly the values the format does -- then the type's own
-    wrapping *is* the context's.
-
-    Reached for any supported mode now, the value being made integral before
-    the range test rather than by the cast.
+    wrapping *is* the context's.  The value is made integral before the range
+    test rather than by the cast, so any supported mode reaches it.
     """
 
     def test_a_matching_format_wraps(self):
@@ -809,8 +807,7 @@ def _under_directed_mode(inner, arg_ctx):
     """``round`` under *inner*, inside a scope that set ``FE_TOWARDZERO``.
 
     The branch below the rounding keeps the enclosing scope live past it, so
-    ``_current_rm`` is the directed mode at the rounding site rather than
-    unknown.
+    ``_current_rm`` is the directed mode at the rounding site, not unknown.
     """
     @fp.fpy(ctx=fp.REAL)
     def f(x: fp.Real, n: fp.Real) -> fp.Real:
@@ -837,8 +834,8 @@ class TestNearbyintNeedsFeTonearest:
     """
 
     def test_the_wrapping_lowering_carries_it(self):
-        """`WRAP` reaches `nearbyint` by its own route, which bypassed the
-        check -- emitting a call that truncates under the caller's mode."""
+        """`WRAP` reaches `nearbyint` by a route of its own, where a missed
+        check emits a call that truncates under the caller's mode."""
         with pytest.raises(CppCompileError, match='FE_TONEAREST'):
             _under_directed_mode(fp.SINT8.with_params(rm=RM.RNE), fp.FP64)
 
@@ -848,9 +845,8 @@ class TestNearbyintNeedsFeTonearest:
         assert 'std::ceil' in out
 
     def test_an_integral_operand_emits_no_call_and_is_accepted(self):
-        """Nothing rounds an `int16_t`, so the mode never reaches a spelling
-        and refusing on it would be refusing a program with no ``nearbyint``
-        in it."""
+        """Nothing rounds an `int16_t`, so the mode reaches no spelling and
+        refusing on it would refuse a program with no ``nearbyint`` in it."""
         ctx = MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), rm=RM.RNE, overflow=ASSERT,
             enable_neg_zero=False)

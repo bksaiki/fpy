@@ -395,8 +395,7 @@ class CppEmitter(Visitor):
 
     _unsafe_cast_int: bool
     """Whether rounded arithmetic may dispatch under an unbounded-integer
-    context, truncating silently to ``int64_t``.  Forwarded from
-    :attr:`CppCompiler.unsafe_cast_int`."""
+    context, truncating silently to ``int64_t``."""
 
     _enable_fenv: bool
     """Whether the emitter may call ``fesetround``."""
@@ -406,7 +405,6 @@ class CppEmitter(Visitor):
     emitter may not call ``fesetround``."""
 
     _scope_by_site: dict[ContextScopeSite, ContextScope]
-    """Site -> scope lookup over the analysis's scope list."""
 
     _current_rm: RM | None
     """The mode in effect at the current emission point; `None` is unknown,
@@ -415,9 +413,9 @@ class CppEmitter(Visitor):
     _fenv_saved: list[str]
     """Saved mode of each enclosing ``fesetround`` scope, outermost first.
 
-    :meth:`_visit_return` restores from this, since a ``return`` jumps over the
-    restore at the end of every scope it sits inside.  That covers every path:
-    FPy has no ``break`` or ``continue``, so ``return`` is the only early exit.
+    :meth:`_visit_return` restores from this, a ``return`` jumping over the
+    restore at the end of every scope it sits inside.  That is every path: FPy
+    has no ``break`` or ``continue``.
     """
 
     _return_storage: CppType | None
@@ -3097,9 +3095,9 @@ class CppEmitter(Visitor):
 
         A fixed-point context is normally `_emit_integral_round`'s (`Round`) or
         `_assert_fixed_exact`'s (`Cast`), but either may *decline* and leave the
-        cast here.  For a `Round` that cast is the rounding, and it truncates,
-        so only ``RTZ`` survives.  A `Cast` is exempt: `_assert_fixed_exact`
-        asserts the conversion exact, and an exact conversion has no mode.
+        cast here.  For a `Round` that cast is the rounding and it truncates, so
+        only ``RTZ`` survives; a `Cast` is exempt, `_assert_fixed_exact` having
+        asserted the conversion exact and an exact conversion having no mode.
         """
         active = self._active_ctx_for(e)
         if isinstance(active, MPFixedContext | MPBFixedContext):
@@ -3355,18 +3353,15 @@ class CppEmitter(Visitor):
         """*arg* converted to *target_ty* modulo its width, or `None`.
 
         `None` unless this is a float-to-integer conversion under a ``WRAP``
-        context whose format the type holds exactly; other overflow rules are
-        asserted or refused upstream.
+        context whose format the type holds exactly.
 
-        A ``static_cast`` cannot do this.  C++ promises wrapping only when the
-        source is already an integer; converting a float too big for the
-        destination is undefined behavior, and arm64 clamps where x86-64 does
-        not.
-
-        The operand is rounded first and the range test and both arms are on
-        that: under ``RTP`` an operand inside the type's range can round to one
-        outside it.  An in-range value keeps the plain cast; the reduction sits
-        behind a branch.  ``std::fmod`` is exact, so only the sign needs fixing.
+        A ``static_cast`` cannot do it: C++ promises wrapping only from an
+        integer source, and a float too big for the destination is undefined --
+        arm64 clamps where x86-64 does not.  The operand is made integral first
+        and the range test and both arms read that, since under ``RTP`` an
+        operand inside the type's range can round to one outside it.  An
+        in-range value keeps the plain cast; ``std::fmod`` is exact, so the
+        reduction only needs its sign fixed.
         """
         if arg_ty is None or not arg_ty.is_float():
             return None
@@ -3576,11 +3571,10 @@ class CppEmitter(Visitor):
         if not isinstance(active, MPFixedContext | MPBFixedContext):
             return None
         # A context the op table dispatches on needs no help: the C++ type's
-        # own range and wrapping *are* the context's, so the plain cast
-        # reproduces the rounding and the edge rule together -- `SINT8`'s `WRAP`
-        # is what `static_cast<int8_t>` already does.  Matching *formats* would
-        # not do, a format carrying no edge rule.  `INTEGER` is excluded: being
-        # unbounded, no type's range is its own.
+        # range and wrapping *are* the context's, so the plain cast reproduces
+        # rounding and edge rule together -- `SINT8`'s `WRAP` is what
+        # `static_cast<int8_t>` does.  Formats would not do, carrying no edge
+        # rule; `INTEGER` is excluded, being unbounded.
         if is_native_ctx(active) and isinstance(active, MPBFixedContext):
             return None
         ctx_storage = self._round_storage(e)
@@ -3609,8 +3603,8 @@ class CppEmitter(Visitor):
             )
         if isinstance(active, MPBFixedContext):
             # `WRAP` is the one edge rule with a lowering, and only where the
-            # type holds exactly the format: then the type's own wrapping *is*
-            # the context's.
+            # type holds exactly the format -- then its own wrapping *is* the
+            # context's
             if (
                 active.overflow is OverflowMode.WRAP
                 and self._type_range_is_the_format(active, target_ty)
@@ -3622,9 +3616,8 @@ class CppEmitter(Visitor):
                     e, guarded, arg_ty, target_ty)
                 if wrapped is not None:
                     return wrapped
-            # Any other edge rule is behavior this lowering does not perform.
-            # `ASSERT` alone needs none: it is a claim the edge is never
-            # reached, which an assertion states exactly.
+            # any other edge rule is behavior this lowering does not perform;
+            # `ASSERT` needs none, being a claim the edge is never reached
             if active.overflow is not OverflowMode.ASSERT:
                 raise CppEmitError(
                     f'overflow mode {active.overflow} under `{active}` has no '
@@ -3636,11 +3629,10 @@ class CppEmitter(Visitor):
                 )
             bounds: tuple[Fraction, Fraction] | None = self._ctx_bounds(active)
         elif ctx_storage is not None:
-            # Unbounded, in its own storage: the format states no bound, so the
-            # only one is the storage's -- and a value past it is undefined
-            # rather than wrapped, an unbounded format having no edge rule to
-            # perform.  `_validate_context_rm` has already gated the `int64_t`
-            # truncation on `unsafe_cast_int`; this states what it costs.
+            # Unbounded, in its own storage: the only bound is the storage's,
+            # and a value past it is undefined rather than wrapped -- an
+            # unbounded format has no edge rule.  `_validate_context_rm` gated
+            # the `int64_t` truncation on `unsafe_cast_int`; this is its cost.
             bounds = self._type_bounds(ctx_storage)
         else:
             # The context states no bound, so the assertion carries the one the
@@ -3705,10 +3697,9 @@ class CppEmitter(Visitor):
     ) -> str:
         """*operand* made integral by the one libm call *ctx*'s mode names.
 
-        The ``FE_TONEAREST`` precondition is checked here rather than at the
-        caller, because it belongs to the spelling: the paths emitting no call
-        -- an already-integral operand, or ``RTZ``, which the cast performs --
-        do not carry it.
+        The ``FE_TONEAREST`` precondition belongs to the spelling, so it is
+        checked here: a path emitting no call -- an already-integral operand, or
+        ``RTZ``, which the cast performs -- does not carry it.
         """
         self._require_tonearest(ctx, at=at)
         return self._bind_operand(
@@ -3721,9 +3712,9 @@ class CppEmitter(Visitor):
     ) -> str:
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
-        C++ integer conversion truncates, so ``RTZ`` needs no call of its own.
-        Any other mode makes the value integral first -- exactly, and in the
-        float type -- and the cast that follows performs no rounding.
+        C++ integer conversion truncates, so ``RTZ`` needs no call of its own;
+        any other mode makes the value integral first, exactly and in the float
+        type, leaving the cast no rounding to do.
 
         The cast wraps at the *type*'s range, not the format's, so the bound is
         asserted first and on the *rounded* value: ``100.7`` is in bounds under
@@ -3746,8 +3737,8 @@ class CppEmitter(Visitor):
             rounded = operand
             value = operand
         elif ctx.rm is RM.RTZ:
-            # the cast truncates, so the call would only repeat it; the bound
-            # still has to be tested on what the cast will produce
+            # the cast truncates, so a call would only repeat it -- but the
+            # bound is still tested on what the cast will produce
             rounded = f'std::trunc({operand})'
             value = operand
         else:

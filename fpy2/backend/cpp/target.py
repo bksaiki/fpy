@@ -108,8 +108,8 @@ def fp_rms(enable_fenv: bool) -> tuple[RM, ...]:
     """The FP rounding modes the target dispatches on.
 
     All four ``fesetround`` can express, or -- where the emitter may not call it
-    -- only ``RNE``, the mode the emitted contract states the caller delivers.
-    Nothing else is reachable then, no operation having a way to get one.
+    -- only ``RNE``, the mode the emitted contract states the caller delivers
+    and the only one then reachable.
 
     Shrinking this set is the whole of ``enable_fenv=False``: the op table loses
     those signatures, `is_native_ctx` stops claiming those contexts, and
@@ -170,8 +170,7 @@ def _ty_of(ctx: Context) -> CppScalar:
 
 def _fp_unary(name: str, rms: tuple[RM, ...]) -> list[CppOp]:
     """Same-context FP-only unary signatures for one ``<cmath>``
-    function.  One sig per FP context (FP32 / FP64 × the four
-    supported rounding modes)."""
+    function.  One sig per FP context: FP32 / FP64 × *rms*."""
     return [
         CppOp(name, (_ty_of(c),), c)
         for c in _fp_ctxs(rms)
@@ -313,9 +312,8 @@ def make_op_table(*, enable_fenv: bool = True) -> ScalarOpTable:
 
     *enable_fenv* false drops every FP signature but ``RNE``; see :func:`fp_rms`.
 
-    Cached per flag: every entry derives from the module constants above, and
-    building one is not cheap -- each signature's storage goes through
-    `AbstractFormat.from_format`.  Callers only read it.
+    Cached per flag: building one is not cheap -- each signature's storage goes
+    through `AbstractFormat.from_format` -- and callers only read it.
     """
     rms = fp_rms(enable_fenv)
     return ScalarOpTable(

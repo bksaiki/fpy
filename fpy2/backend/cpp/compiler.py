@@ -377,7 +377,7 @@ class CppCompiler(Backend):
     def headers(self) -> list[str]:
         """C++ headers required by every emitted unit.
 
-        ``<cfenv>`` is left out under ``enable_fenv=False``: nothing emitted can
+        ``<cfenv>`` goes out under ``enable_fenv=False``: nothing emitted can
         name it, and its absence is what a reader checks the promise against.
         """
         return [h for h in CPP_HEADERS
@@ -440,8 +440,8 @@ class CppCompiler(Backend):
     def _without_unfold(self) -> 'CppCompiler':
         """This compiler with the rewrite off, for a second opinion.
 
-        Copied rather than rebuilt, so a flag added later is carried over
-        without having to be listed here.
+        Copied rather than rebuilt, so a flag added later carries over on its
+        own.
         """
         other = copy.copy(self)
         other._unfold = UnfoldMode.NONE

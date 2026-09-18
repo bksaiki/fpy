@@ -654,10 +654,9 @@ class TestEnableFenv:
     """``enable_fenv=False`` forbids ``std::fesetround``.
 
     Changing the hardware rounding mode is a performance cliff, so a caller may
-    rule it out.  It is not a change to how anything is emitted: it narrows what
-    the *target* supports, to the one mode the process already runs in.  The
-    contexts that stop being native are then ordinary `unfold` sites, so the
-    same programs compile with the rounding stated as arithmetic.
+    rule it out.  It changes nothing about how anything is emitted: it narrows
+    the *target* to the one mode the process already runs in, and the contexts
+    that stop being native become ordinary `unfold` sites.
     """
 
     _FP32_RTP = fp.FP32.with_params(rm=fp.RM.RTP)

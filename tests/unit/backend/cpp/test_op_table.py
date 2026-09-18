@@ -414,7 +414,7 @@ class TestAbsAtASignedMinimum:
     bound, so a signature under that same format is not an identity.
 
     `std::abs(INT32_MIN)` is undefined, and preferring the narrowest signature
-    is what would reach for it: `AbstractFormat.__abs__` taking the larger
+    is what reaches for it; `AbstractFormat.__abs__` taking the larger
     *magnitude* is what keeps it out.
     """
 

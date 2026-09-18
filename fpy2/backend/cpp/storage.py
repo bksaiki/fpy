@@ -94,8 +94,7 @@ def ladder_rank(ty: CppScalar) -> int:
     narrowest first; anything off the ladder ranks widest.
 
     A *total* order where :func:`scalar_fits_in` is only partial -- `int32_t`
-    and `float` each hold values the other does not -- so it ranks candidates
-    containment leaves incomparable.
+    and `float` each hold values the other does not.
     """
     return _LADDER_RANK.get(ty, len(_SIGMA))
 
