@@ -97,6 +97,32 @@ class TestTupleAccessors:
             fp.snd((1, 2, 3))
 
 
+class TestShapeQueries:
+    """``dim`` / ``size`` answer with an exact integer.  The ``ctx`` argument
+    is accepted for uniformity and ignored, so the result carries no context
+    of its own -- a `ConstFold` literal in its place has to be the same value.
+    """
+
+    def test_dim(self):
+        assert fp.dim([[1.0, 2.0], [3.0, 4.0]]) == 2
+
+    def test_dim_stops_at_an_empty_level(self):
+        assert fp.dim([]) == 1
+
+    def test_dim_rejects_a_non_list(self):
+        with pytest.raises(TypeError):
+            fp.dim(1.0)
+
+    def test_size(self):
+        xs = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        assert fp.size(xs, 0) == 2
+        assert fp.size(xs, 1) == 3
+
+    def test_results_carry_no_context(self):
+        assert fp.dim([1.0]).ctx is None
+        assert fp.size([1.0], 0).ctx is None
+
+
 class TestPowReal:
     """``pow`` under ``REAL``, which is exact only for an integer exponent."""
 

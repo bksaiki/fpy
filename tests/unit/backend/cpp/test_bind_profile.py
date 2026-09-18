@@ -30,7 +30,7 @@ holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
-    '_emit_empty': 29,         # a dimension, read once per fixed-size layer
+    '_emit_empty': 28,         # a dimension, read once per fixed-size layer
     '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded
     '_integral_one_call': 5,   # the value made integral before the cast
@@ -39,16 +39,15 @@ EXPECTED_MINTS = {
 }
 """Emitter sites that invent a name, and how often, over the corpus.
 
-``_emit_zip`` used to mint 4 and ``_emit_empty`` 28, then 30.  Both moved when
-the `zip` / `enumerate` unfolds joined `_to_statement_form`: the lists a `zip`
-traversed twice are now a comprehension's, so the allocation is where the mint
-happens, and one tuple conversion reaches `_convert_storage` that the zip's own
-path did not.
+There is no `_emit_zip` entry because the `zip` / `enumerate` unfolds run
+ahead of codegen: the lists a `zip` traversed twice are a comprehension's, so
+the allocation is where the mint happens.
 
 A dimension the *type* already carries is not bound, since the `std::array`
 spells it and nothing reads the name; the corpus's only fixed-length
 allocations are why `_emit_empty` is not higher, the rest being `std::vector`,
-whose constructor does read the dimension.
+whose constructor does read the dimension.  A dimension `ConstFold` resolved
+to a literal is not bound either -- that is one of ``test_list_comp5``'s.
 """
 
 
