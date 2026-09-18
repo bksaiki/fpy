@@ -122,10 +122,9 @@ class TestDispatchDirect:
 class TestTheBoundDecidesNotJustTheType:
     """Cast-to-active asks whether the *values* fit, not only the types.
 
-    A `double` holding an FP32 value narrows to `float` exactly, and the
-    emitter already does that silently one function over -- as a tuple field.
-    As an operand it refused, because the guard asked `scalar_fits_in` where
-    the bound answers.  Same definition, same storage, same target.
+    A `double` holding an FP32 value narrows to `float` exactly, so the same
+    definition at the same storage converts the same way whether it is read as
+    a tuple field or as an operand.
     """
 
     _ARGS = [RealType(fp.FP32), RealType(fp.FP64), RealType(fp.FP64)]
@@ -371,10 +370,9 @@ class TestWideningPrefersTheNarrowestSignature:
     """Every signature widening admits computes the same value.
 
     `_result_fits_ctx` only lets through a context the operation is an identity
-    under, so which candidate is taken decides the emitted *type* alone.  Taken
-    in table order it decided by where the rows happen to be written, and the
-    float rows are written first -- so arithmetic on two small integers came
-    out as `float`.
+    under, so which candidate is taken decides the emitted *type* alone.  Table
+    order would decide it by where the rows were written, and the float rows
+    come first -- spelling arithmetic on two small integers as `float`.
     """
 
     def test_small_integers_stay_integers(self):
@@ -409,3 +407,26 @@ class TestWideningPrefersTheNarrowestSignature:
             f, ctx=fp.SINT8, arg_types=[RealType(fp.SINT8)])
         assert 'std::abs' in out
         assert 'fabs' not in out
+
+
+class TestAbsAtASignedMinimum:
+    """`abs` of a two's-complement minimum is one past the format's positive
+    bound, so a signature under that same format is not an identity.
+
+    `std::abs(INT32_MIN)` is undefined, and preferring the narrowest signature
+    is what would reach for it: `AbstractFormat.__abs__` taking the larger
+    *magnitude* is what keeps it out.
+    """
+
+    @pytest.mark.parametrize('ctx, wider', [
+        (fp.SINT8, 'int16_t'),
+        (fp.SINT16, 'int32_t'),
+        (fp.SINT32, 'int64_t'),
+    ])
+    def test_the_operand_widens_first(self, ctx, wider):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real) -> fp.Real:
+            return abs(a)
+
+        out = CppCompiler().compile(f, arg_types=[RealType(ctx)])
+        assert f'std::abs(static_cast<{wider}>(a))' in out

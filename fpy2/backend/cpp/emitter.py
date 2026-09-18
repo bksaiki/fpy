@@ -162,7 +162,13 @@ from .types import (
     CppTuple,
     CppType,
 )
-from .unbox import ParamAbi, UnboxAnalysis, contains_boxed, return_storage
+from .unbox import (
+    CalleeAbi,
+    ParamAbi,
+    UnboxAnalysis,
+    contains_boxed,
+    return_storage,
+)
 from .variables import VariableAnalysis, binds_by_reference
 
 # Map FPy rounding modes to ``<cfenv>`` macros.  Only the four modes
@@ -201,15 +207,14 @@ _FLOAT_CTXS: 'dict[CppScalar, Context]' = {
 def _inward(v: Fraction, ty: 'CppScalar | None', *, upper: bool) -> Fraction:
     """*v* moved to the nearest value *ty* represents, never outward.
 
-    A bound is compared in the *operand's* type, so one that type cannot hold is
-    converted before the comparison -- and converting it outward widens the test
-    past what it is checking.  ``int32_t``'s ``2**31 - 1`` against a ``float``
-    operand becomes ``2**31``, admitting the one value the test exists to
-    reject.
+    A bound is compared in the *operand's* type, so one that type cannot hold
+    converts before the comparison -- outward, which widens the test past what
+    it checks: ``int32_t``'s ``2**31 - 1`` against a ``float`` operand becomes
+    ``2**31``, the one value the test exists to reject.
 
-    Exact rather than conservative: no value of *ty* lies strictly between *v*
-    and the result, so nothing the old test accepted is lost.  Integer operands
-    compare exactly already and are returned unchanged.
+    Exact, not conservative: no value of *ty* lies strictly between *v* and the
+    result.  Integer operands compare exactly already and are returned
+    unchanged.
     """
     ctx = _FLOAT_CTXS.get(ty) if ty is not None else None
     if ctx is None:
@@ -372,6 +377,54 @@ class CppEmitter(Visitor):
     ctx_use: ContextUseAnalysis
     ret_ty: CppType | None
     writer: _IndentedWriter
+    op_table: ScalarOpTable
+
+    unbox: UnboxAnalysis | None
+    """How each list is represented, or ``None`` to keep every handle."""
+
+    _callee_params: dict[FuncDef, CalleeAbi]
+    """Emitted signatures of the callees, so a call site can adapt."""
+
+    _call_names: dict[Call, str]
+    """Call -> mangled target name, one per (callee, outer_ctx).  A `Call` not
+    in the map falls back to the callee's declared name."""
+
+    _func_name_override: str | None
+    """C++ name for the function-signature site, distinguishing the compiler's
+    specializations of one callee.  ``None`` uses the AST's declared name."""
+
+    _unsafe_cast_int: bool
+    """Whether rounded arithmetic may dispatch under an unbounded-integer
+    context, truncating silently to ``int64_t``.  Forwarded from
+    :attr:`CppCompiler.unsafe_cast_int`."""
+
+    _enable_fenv: bool
+    """Whether the emitter may call ``fesetround``."""
+
+    _fp_rms: frozenset[RM]
+    """Modes an FP context may name: `_FE_RM_MACRO`'s, or only `RNE` where the
+    emitter may not call ``fesetround``."""
+
+    _scope_by_site: dict[ContextScopeSite, ContextScope]
+    """Site -> scope lookup over the analysis's scope list."""
+
+    _current_rm: RM | None
+    """The mode in effect at the current emission point; `None` is unknown,
+    which forces `_fenv_scope` to set it rather than assume."""
+
+    _fenv_saved: list[str]
+    """Saved mode of each enclosing ``fesetround`` scope, outermost first.
+
+    :meth:`_visit_return` restores from this, since a ``return`` jumps over the
+    restore at the end of every scope it sits inside.  That covers every path:
+    FPy has no ``break`` or ``continue``, so ``return`` is the only early exit.
+    """
+
+    _return_storage: CppType | None
+    """The storage this function returns, set once the signature is emitted;
+    see :meth:`_visit_return`."""
+
+    _tmp_counter: int
 
     def __init__(
         self,
@@ -385,11 +438,11 @@ class CppEmitter(Visitor):
         *,
         ret_ty: CppType | None = None,
         func_name_override: str | None = None,
-        call_names: dict | None = None,
+        call_names: dict[Call, str] | None = None,
         unsafe_cast_int: bool = False,
         enable_fenv: bool = True,
         unbox: UnboxAnalysis | None = None,
-        callee_params: dict | None = None,
+        callee_params: dict[FuncDef, CalleeAbi] | None = None,
     ):
         self.ast = ast
         self.storage = storage
@@ -399,50 +452,20 @@ class CppEmitter(Visitor):
         self.class_info = class_info
         self.ctx_use = ctx_use
         self.ret_ty = ret_ty
-        # How each list is represented, or ``None`` to keep every handle.
+        self.writer = _IndentedWriter()
+        self.op_table = make_op_table(enable_fenv=enable_fenv)
         self.unbox = unbox
-        # Emitted parameter types of the callees, so a call site can adapt.
-        self._callee_params: dict = callee_params or {}
-        # Optional C++ name to emit at the function-signature site
-        # — used by the compiler to differentiate specializations of
-        # the same callee at distinct rounding contexts (template-
-        # style monomorphization).  When ``None``, the AST's declared
-        # name is used.
+        self._callee_params = callee_params or {}
+        self._call_names = call_names or {}
         self._func_name_override = func_name_override
-        # Call -> mangled target name, one per (callee, outer_ctx).  A Call not
-        # in the map falls back to the callee's declared name.
-        self._call_names: dict = call_names or {}
-        # When True, allow rounded arithmetic to dispatch under an
-        # unbounded-integer context (truncating silently to
-        # ``int64_t``).  Forwarded from
-        # :attr:`CppCompiler.unsafe_cast_int`; defaults to ``False``.
         self._unsafe_cast_int = unsafe_cast_int
         self._enable_fenv = enable_fenv
         self._fp_rms = frozenset(fp_rms(enable_fenv))
-        """Modes an FP context may name: `_FE_RM_MACRO`'s, or only `RNE`
-        where the emitter may not call ``fesetround``."""
-        self.writer = _IndentedWriter()
+        self._scope_by_site = {scope.site: scope for scope in ctx_use.scopes}
+        self._current_rm = None
+        self._fenv_saved = []
+        self._return_storage = None
         self._tmp_counter = 0
-        # The storage this function returns, set once the signature is
-        # emitted; see :meth:`_visit_return`.
-        self._return_storage: CppType | None = None
-        self.op_table: ScalarOpTable = make_op_table(
-            enable_fenv=enable_fenv)
-        # Build a site → scope lookup over the analysis's scope list.
-        self._scope_by_site: dict[ContextScopeSite, ContextScope] = {
-            scope.site: scope for scope in ctx_use.scopes
-        }
-        # The mode in effect at the current emission point; `None` is unknown,
-        # which forces `_fenv_scope` to set it rather than assume.
-        self._current_rm: RM | None = None
-        self._fenv_saved: list[str] = []
-        """Saved mode of each enclosing ``fesetround`` scope, outermost first.
-
-        :meth:`_visit_return` restores from this, since a ``return`` jumps over
-        the restore at the end of every scope it sits inside.  That covers every
-        path: FPy has no ``break`` or ``continue``, so ``return`` is the only
-        early exit.
-        """
 
     # ------------------------------------------------------------------
     # List representation
@@ -1227,11 +1250,9 @@ class CppEmitter(Visitor):
         if src == want:
             return code
         if isinstance(src, CppScalar) and isinstance(want, CppScalar):
-            # Cast without asking whether the value fits: *at* is the container
-            # a field or element is being taken from, so its bound answers a
-            # different question than the one :meth:`_value_fits` would need
-            # (`ListFormat` against an `int8_t`).  Peeling it to the right depth
-            # is what would let this ask; see `docs/todos/cast-discipline.md`.
+            # No `_value_fits`: *at* is the container the field or element
+            # comes from, so the bound in hand is a `ListFormat` where the
+            # question is about an `int8_t`.  See `backend-cpp.md`.
             return self._explicit_cast(code, want)
         if isinstance(src, CppTuple) and isinstance(want, CppTuple):
             if len(src.elts) != len(want.elts):
@@ -1289,25 +1310,21 @@ class CppEmitter(Visitor):
     ) -> bool:
         """Can a value bounded by *bound*, emitted as *src*, live in *want*?
 
-        The third question the emitter asks about a conversion, after what type
-        the *place* holds and what type the *expression* has.  It is the weaker
-        one and the one soundness turns on: :func:`scalar_fits_in` asks whether
-        the two *types* nest, where a conversion only needs the *values* to.
+        The third question about a conversion, after what type the *place* holds
+        and what type the *expression* has -- the weaker one, and the one
+        soundness turns on: :func:`scalar_fits_in` asks whether the two *types*
+        nest, where a conversion only needs the *values* to.  They come apart
+        wherever storage is wider than the bound it was chosen to hold:
+        ``round_SINT64(x: FP32)`` reports ``int64_t`` and is 24 significand
+        bits, which a ``float`` holds exactly.
 
-        They come apart wherever storage is wider than the bound it was chosen
-        to hold -- a `Round` reports its context's type, as wide as the context,
-        where the value it produces is bounded by the operand, so
-        ``round_SINT64(x: FP32)`` is 24 significand bits and a ``float`` holds
-        it exactly.
-
-        Takes the *bound* rather than the expression: a list element has no
-        expression of its own, so a caller converting one has to peel the
-        container's bound to the depth it is converting at.
+        Takes the *bound* rather than the expression, since a list element has
+        no expression of its own; see `docs/todos/backend-cpp.md`.
         """
         return scalar_fits_in(src, want) or bound_fits_in_scalar(bound, want)
 
     def _bound_of(self, e: Expr | None) -> FormatBound:
-        """What format inference proved about *e*, or ``None``."""
+        """What format inference proved about *e*."""
         return self.format_info.by_expr.get(e) if e is not None else None
 
     def _require_no_narrowing(
@@ -1520,9 +1537,8 @@ class CppEmitter(Visitor):
         all.
         """
         if not self._enable_fenv:
-            # Nothing ever calls `fesetround`, so the mode is the one the
-            # process starts in.  That is what makes `std::nearbyint` `RNE`
-            # here, and it is why only `RNE` FP contexts get this far.
+            # nothing ever sets the mode, so it is the one the process starts
+            # in -- which is also why only `RNE` FP contexts get this far
             return RM.RNE
         scope = self._scope_by_site.get(site)
         if scope is None:
@@ -1602,8 +1618,7 @@ class CppEmitter(Visitor):
                     raise CppEmitError(
                         f'rounding mode {rctx.rm} under integer context '
                         f'`{rctx}` has no single libm call that rounds to an '
-                        f'integral value; got {rctx.rm}, need one of '
-                        f'{spellable}',
+                        f'integral value; need one of {spellable}',
                         at=at,
                     )
                 # C++ has no arbitrary-precision integer, so the int64_t
@@ -2076,12 +2091,12 @@ class CppEmitter(Visitor):
         if not isinstance(result_ty, CppScalar):
             return None
 
-        def _rank(sig) -> int:
-            """Ladder position of *sig*'s output storage; a context with no
-            storage ranks widest, and `_try` declines it anyway."""
+        def _rank(sig: CppOp) -> int:
+            """Ladder position of *sig*'s output storage, narrowest first."""
             try:
                 return ladder_rank(self._scalar_for_ctx(sig.out_ctx))
             except CppEmitError:
+                # off the ladder, so it ranks widest; `_try` declines it anyway
                 return ladder_rank(CppScalar.BOOL)
 
         def _try(sig, *, exact_out: bool) -> str | None:
@@ -2111,11 +2126,10 @@ class CppEmitter(Visitor):
             return out
 
         # Every candidate computes the same value -- `_result_fits_ctx` admits
-        # only signatures the operation is an identity under -- so which one is
-        # taken decides the emitted *type* alone.  Narrowest first, by the
-        # ladder storage selection itself walks: the table's own order is where
-        # its rows were written, and would spell integer arithmetic as `float`
-        # for no reason.
+        # only signatures the operation is an identity under -- so the choice
+        # decides the emitted *type* alone.  Narrowest first, by the ladder
+        # storage selection itself walks; table order would spell integer
+        # arithmetic as `float` for no reason.
         ordered = sorted(sigs, key=_rank)
         for exact_out in (True, False):
             for sig in ordered:
@@ -2123,9 +2137,6 @@ class CppEmitter(Visitor):
                 if emitted is not None:
                     return emitted
         return None
-
-
-
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         if isinstance(e, (Fst, Snd)):
@@ -2199,21 +2210,18 @@ class CppEmitter(Visitor):
         """``abs`` of an unsigned value is the value.
 
         An unsigned type holds no negative value and no signed zero, so the
-        magnitude is the operand and there is no operation to emit.  It has no
-        ``std::abs`` either: ``uint8_t`` / ``uint16_t`` promote to ``int`` and
-        pick the signed overload, ``uint32_t`` / ``uint64_t`` are ambiguous and
-        do not compile.
+        magnitude is the operand.  It has no ``std::abs`` either: ``uint8_t`` /
+        ``uint16_t`` promote to ``int`` and pick the signed overload,
+        ``uint32_t`` / ``uint64_t`` are ambiguous and do not compile.
 
-        A *bound* proving the operand non-negative would not be enough --
-        ``fabs(-0.0)`` is ``+0.0``, and a zero's sign is not something
-        `ValueClass` carries.  Only the type can rule that out.
+        The *type* has to rule it out, not a bound: ``fabs(-0.0)`` is ``+0.0``,
+        and a zero's sign is not something `ValueClass` carries.
         """
         src = self._storage_for_expr(e.arg)
         if not isinstance(src, CppScalar) or src not in UNSIGNED_INT_TYPES:
             return self._dispatch_unary(e, arg)
-        # `format_infer` treats `Abs` as exact, so the result bounds as the
-        # operand does and the two storages agree; `_maybe_cast` is here for
-        # the active context asking for a wider one.
+        # the two storages agree on every unsigned operand; `_maybe_cast` is
+        # here for an active context asking for a wider one
         want = self._storage_for_expr(e)
         assert isinstance(want, CppScalar), f'`abs` of a scalar gave {want}'
         return self._maybe_cast(arg, src, want, at=e)
@@ -2670,8 +2678,15 @@ class CppEmitter(Visitor):
         clauses = []
         for i, op in enumerate(e.ops):
             # a supremum contains both operands, so neither cast can refuse
-            # and neither needs a bound to fall back on
-            common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
+            # and neither needs a bound to fall back on -- where one exists
+            try:
+                common = scalar_sup([arg_tys[i], arg_tys[i + 1]])
+            except StorageSelectionError as err:
+                raise CppEmitError(
+                    f'no storage holds both operands of this comparison: '
+                    f'{arg_tys[i].format()} and {arg_tys[i + 1].format()}',
+                    at=e,
+                ) from err
             lhs = self._maybe_cast(args[i], arg_tys[i], common)
             rhs = self._maybe_cast(args[i + 1], arg_tys[i + 1], common)
             clauses.append(f'({lhs} {op.symbol()} {rhs})')
@@ -3082,15 +3097,16 @@ class CppEmitter(Visitor):
 
         A fixed-point context is normally `_emit_integral_round`'s (`Round`) or
         `_assert_fixed_exact`'s (`Cast`), but either may *decline* and leave the
-        cast here -- and the cast truncates, so it is that context's rounding
-        only under ``RTZ``.
+        cast here.  For a `Round` that cast is the rounding, and it truncates,
+        so only ``RTZ`` survives.  A `Cast` is exempt: `_assert_fixed_exact`
+        asserts the conversion exact, and an exact conversion has no mode.
         """
         active = self._active_ctx_for(e)
         if isinstance(active, MPFixedContext | MPBFixedContext):
-            if active.rm is not RM.RTZ:
+            if isinstance(e, Round) and active.rm is not RM.RTZ:
                 raise CppEmitError(
                     f'rounding mode {active.rm} under `{active}` has no C++ '
-                    'analogue: the context states no bound, so only a '
+                    'analogue: nothing lowered the rounding, so only a '
                     '`static_cast` is left, and it truncates.',
                     at=e,
                 )
@@ -3115,7 +3131,7 @@ class CppEmitter(Visitor):
                 unfold_answers=True,
             )
 
-    def _cast_arg_type(self, e) -> CppScalar | None:
+    def _cast_arg_type(self, e: NamedUnaryOp) -> CppScalar | None:
         """The operand's scalar storage for a round-like node *e*.
 
         ``None`` where it has none, which only short-circuits same-type casts, so
@@ -3127,12 +3143,14 @@ class CppEmitter(Visitor):
         except CppEmitError:
             return None
 
-    def _scalar_cast_types(self, e):
+    def _scalar_cast_types(
+        self, e: NamedUnaryOp,
+    ) -> tuple[CppScalar | None, CppScalar]:
         """Source/target scalar storage for a round-like node *e*."""
         arg_ty = self._cast_arg_type(e)
         return arg_ty, self._scalar_for_ctx(self._active_ctx_for(e), at=e)
 
-    def _emit_exact_cast(self, e, arg: str) -> str:
+    def _emit_exact_cast(self, e: NamedUnaryOp, arg: str) -> str:
         # ``Cast(arg)`` is a ``static_cast`` plus a runtime assertion
         # that the cast was lossless: cast → bind to a temp →
         # ``assert(arg == tmp || (NaN-aware equality))``.
@@ -3262,14 +3280,15 @@ class CppEmitter(Visitor):
         return self._explicit_cast(lit, target_ty)
 
     def _guard_float_to_integer(
-        self, arg: str, arg_ty, target_ty: CppScalar, src: Expr,
+        self, arg: str, arg_ty: CppScalar | None, target_ty: CppScalar,
+        src: Expr,
     ) -> str:
         """Assert *arg* is finite before a float-to-integer conversion.
 
         Converting a float to an integer is undefined for any value the
         destination cannot hold, not just NaN and infinity.  This emits an
         assertion for any non-finite value unless this is determined to
-        be impossible.s
+        be impossible.
 
         Returns the operand, bound where the assertion has to name it.
         """
@@ -3289,9 +3308,9 @@ class CppEmitter(Visitor):
     def _overflow_advice(mode: OverflowMode) -> str:
         """What to run instead, for an edge rule with no lowering.
 
-        ``unfold_overflow`` states the rule as program text, which it can only
-        do where the overflow *value* is a constant -- wrapping is the operand
-        reduced modulo the width, so it has none to state.
+        ``unfold_overflow`` states the rule as program text, which needs the
+        overflow *value* to be a constant.  Wrapping's is the operand reduced
+        modulo the width, so it has none.
         """
         if mode is OverflowMode.WRAP:
             return (
@@ -3309,9 +3328,8 @@ class CppEmitter(Visitor):
     ) -> bool:
         """Whether *ty* holds exactly the values *ctx*'s format does.
 
-        What makes the C++ type's own wrapping the *context*'s wrapping.  A
-        storage merely wide enough is not enough: it would wrap a step further
-        out than the format does.
+        What makes the C++ type's own wrapping the *context*'s.  A storage
+        merely wide enough would wrap a step further out.
         """
         bounds = self._type_bounds(ty)
         return bounds is not None and bounds == self._ctx_bounds(ctx)
@@ -3321,7 +3339,7 @@ class CppEmitter(Visitor):
         """The values *ty* holds, as ``(hi, lo)``, or `None` for a non-integer.
 
         A *type*'s range rather than a format's: what a conversion into it is
-        defined for, which an unbounded context has nothing of its own to say.
+        defined for, which an unbounded context cannot say.
         """
         bits = ty.int_bits()
         if bits is None:
@@ -3331,7 +3349,8 @@ class CppEmitter(Visitor):
         return Fraction(2 ** bits - 1), Fraction(0)
 
     def _emit_wrapping_float_to_integer(
-        self, e, arg: str, arg_ty, target_ty: CppScalar,
+        self, e: NamedUnaryOp, arg: str, arg_ty: CppScalar | None,
+        target_ty: CppScalar,
     ) -> str | None:
         """*arg* converted to *target_ty* modulo its width, or `None`.
 
@@ -3344,11 +3363,10 @@ class CppEmitter(Visitor):
         destination is undefined behavior, and arm64 clamps where x86-64 does
         not.
 
-        The operand is rounded first, and the range test and both arms are on
-        that -- under ``RTP`` an operand inside the type's range can round to
-        one outside it.  An in-range value keeps the plain cast; the reduction
-        sits behind a branch.  ``std::fmod`` is exact, so only the sign needs
-        fixing -- see the comments below.
+        The operand is rounded first and the range test and both arms are on
+        that: under ``RTP`` an operand inside the type's range can round to one
+        outside it.  An in-range value keeps the plain cast; the reduction sits
+        behind a branch.  ``std::fmod`` is exact, so only the sign needs fixing.
         """
         if arg_ty is None or not arg_ty.is_float():
             return None
@@ -3372,13 +3390,12 @@ class CppEmitter(Visitor):
 
         operand = self._bind_operand(arg)
         if active.rm is RM.RTZ:
-            # the cast truncates and the reduction is handed the truncation
-            # below, so testing the operand is testing the rounded value
+            # the cast truncates, so no call is needed; testing the untruncated
+            # operand only sends more values down the reduction, which agrees
             rounded = operand
             reduce_arg = f'std::trunc({operand})'
         else:
-            rounded = self._bind_operand(
-                f'{self._INTEGRAL_ONE_CALL[active.rm]}({operand})')
+            rounded = self._integral_one_call(active, operand, at=e)
             reduce_arg = rounded
         out = self._fresh_temp()
         rem = self._fresh_temp()
@@ -3537,7 +3554,7 @@ class CppEmitter(Visitor):
             return f'std::isfinite({operand})'
         return tests[0] if tests else None
 
-    def _emit_integral_round(self, e, arg: str) -> str | None:
+    def _emit_integral_round(self, e: NamedUnaryOp, arg: str) -> str | None:
         """``round(v)`` under a fixed-point context, as a libm call or a cast.
 
         `None` leaves the caller's cast in place: a non-fixed-point context, a
@@ -3558,15 +3575,12 @@ class CppEmitter(Visitor):
         active = self._active_ctx_for(e)
         if not isinstance(active, MPFixedContext | MPBFixedContext):
             return None
-        # A context the op table dispatches on is the one case needing no help:
-        # the C++ type's own range and wrapping *are* the context's, so the plain
-        # cast reproduces the rounding and the edge rule together -- `SINT8`'s
-        # `WRAP` is what `static_cast<int8_t>` already does.  Matching *formats*
-        # would not be enough, since a format carries no edge rule: the same
-        # -128..127 values under `ASSERT` still need the assertion.
-        # `INTEGER` is the one native context this does not cover: it is
-        # unbounded, so no type's range is its own and the cast can overflow
-        # where the context cannot.  Every other native one is bounded.
+        # A context the op table dispatches on needs no help: the C++ type's
+        # own range and wrapping *are* the context's, so the plain cast
+        # reproduces the rounding and the edge rule together -- `SINT8`'s `WRAP`
+        # is what `static_cast<int8_t>` already does.  Matching *formats* would
+        # not do, a format carrying no edge rule.  `INTEGER` is excluded: being
+        # unbounded, no type's range is its own.
         if is_native_ctx(active) and isinstance(active, MPBFixedContext):
             return None
         ctx_storage = self._round_storage(e)
@@ -3637,9 +3651,6 @@ class CppEmitter(Visitor):
             # Nothing to assert: decline, leaving the caller's cast path to
             # refuse on its own terms.
             return None
-        # before the split: the precondition is on the spelling the mode picks,
-        # and both storages pick from the same table
-        self._require_tonearest(active, at=e)
         if target_ty.is_integer():
             return self._emit_cast_round(active, bounds, arg, target_ty, e)
         if active.rm not in self._INTEGRAL_MODES:
@@ -3649,6 +3660,7 @@ class CppEmitter(Visitor):
                 at=e,
             )
 
+        self._require_tonearest(active, at=e)
         cls = self._value_class(e.arg)
         operand = self._bind_operand(arg)
         guard = self._undefined_guard(active, operand, cls)
@@ -3688,6 +3700,20 @@ class CppEmitter(Visitor):
                 at=at,
             )
 
+    def _integral_one_call(
+        self, ctx: MPFixedContext | MPBFixedContext, operand: str, *, at: Expr,
+    ) -> str:
+        """*operand* made integral by the one libm call *ctx*'s mode names.
+
+        The ``FE_TONEAREST`` precondition is checked here rather than at the
+        caller, because it belongs to the spelling: the paths emitting no call
+        -- an already-integral operand, or ``RTZ``, which the cast performs --
+        do not carry it.
+        """
+        self._require_tonearest(ctx, at=at)
+        return self._bind_operand(
+            f'{self._INTEGRAL_ONE_CALL[ctx.rm]}({operand})')
+
     def _emit_cast_round(
         self, ctx: MPFixedContext | MPBFixedContext,
         bounds: tuple[Fraction, Fraction], arg: str,
@@ -3696,13 +3722,11 @@ class CppEmitter(Visitor):
         """``round(v)`` into integer storage wider than *ctx*'s own format.
 
         C++ integer conversion truncates, so ``RTZ`` needs no call of its own.
-        Any other mode rounds to an integral *value* first -- exactly, and in the
-        float type -- and the cast that follows performs no rounding: every
-        result of ``floor`` / ``ceil`` / ``round`` / ``nearbyint`` is an integer
-        the same float type holds exactly.
+        Any other mode makes the value integral first -- exactly, and in the
+        float type -- and the cast that follows performs no rounding.
 
         The cast wraps at the *type*'s range, not the format's, so the bound is
-        asserted first and on the *rounded* value -- ``100.7`` is in bounds under
+        asserted first and on the *rounded* value: ``100.7`` is in bounds under
         ``RTZ`` even though ``100.7 > 100``, and under ``RTP`` an operand inside
         the bound can round to one outside it.  That assertion also keeps the
         conversion in range, an operand past the type's being undefined.
@@ -3727,8 +3751,7 @@ class CppEmitter(Visitor):
             rounded = f'std::trunc({operand})'
             value = operand
         else:
-            rounded = self._bind_operand(
-                f'{self._INTEGRAL_ONE_CALL[ctx.rm]}({operand})')
+            rounded = self._integral_one_call(ctx, operand, at=e)
             value = rounded
         self._emit_assert(
             self._bound_test(bounds, rounded, at=e, ty=arg_ty),

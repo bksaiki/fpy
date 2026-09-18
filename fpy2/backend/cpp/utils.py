@@ -21,11 +21,14 @@ exercise that boundary.
 """
 
 
+CPP_FENV_HEADER = '#include <cfenv>'
+"""Dropped from :meth:`CppCompiler.headers` under ``enable_fenv=False``."""
+
 CPP_HEADERS: tuple[str, ...] = (
     '#include <algorithm>',
     '#include <array>',
     '#include <cassert>',
-    '#include <cfenv>',
+    CPP_FENV_HEADER,
     '#include <cmath>',
     '#include <cstddef>',
     '#include <cstdint>',

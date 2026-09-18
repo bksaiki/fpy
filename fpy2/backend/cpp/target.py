@@ -108,13 +108,12 @@ def fp_rms(enable_fenv: bool) -> tuple[RM, ...]:
     """The FP rounding modes the target dispatches on.
 
     All four ``fesetround`` can express, or -- where the emitter may not call it
-    -- only ``RNE``.  Nothing else is reachable then: the live mode is whatever
-    the caller delivers, which the emitted contract states as ``FE_TONEAREST``,
-    and an operation under any other mode has no way to get one.
+    -- only ``RNE``, the mode the emitted contract states the caller delivers.
+    Nothing else is reachable then, no operation having a way to get one.
 
-    Shrinking this set is the whole of the option.  Every consequence follows
-    from it: the op table loses those signatures, `is_native_ctx` stops claiming
-    those contexts, and `unfold_round` therefore sees them as sites to rewrite.
+    Shrinking this set is the whole of ``enable_fenv=False``: the op table loses
+    those signatures, `is_native_ctx` stops claiming those contexts, and
+    `unfold_round` therefore sees them as sites to rewrite.
     """
     return _FP_RMS if enable_fenv else (RM.RNE,)
 
@@ -256,8 +255,8 @@ def _make_unary_table(rms: tuple[RM, ...]) -> UnaryOpTable:
     table: UnaryOpTable = {
         Neg: [CppOp('-', (_ty_of(c),), c, style=CppOpStyle.PREFIX)
               for c in same],
-        # No unsigned row: an unsigned value is its own magnitude, so
-        # ``_emit_abs`` emits the operand rather than a call.
+        # no unsigned row: an unsigned value is its own magnitude, and
+        # `_emit_abs` emits the operand rather than a call
         Abs: (
             [CppOp('std::fabs', (_ty_of(c),), c) for c in fp]
             + [CppOp('std::abs', (_ty_of(c),), c)
@@ -314,10 +313,9 @@ def make_op_table(*, enable_fenv: bool = True) -> ScalarOpTable:
 
     *enable_fenv* false drops every FP signature but ``RNE``; see :func:`fp_rms`.
 
-    Cached per flag: every entry is derived from the module constants above, so
-    building it per emitter recomputed the same thing -- and it is not cheap,
-    since each signature's storage goes through `AbstractFormat.from_format`.
-    Callers only read it.
+    Cached per flag: every entry derives from the module constants above, and
+    building one is not cheap -- each signature's storage goes through
+    `AbstractFormat.from_format`.  Callers only read it.
     """
     rms = fp_rms(enable_fenv)
     return ScalarOpTable(

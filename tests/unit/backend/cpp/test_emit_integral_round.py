@@ -800,3 +800,75 @@ class TestScaleByPowerOfTwo:
         with pytest.raises(CppCompileError, match='no matching signature'):
             CppCompiler().compile(
                 f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])
+
+
+_DIRECTED = fp.FP64.with_params(rm=RM.RTZ)
+
+
+def _under_directed_mode(inner, arg_ctx):
+    """``round`` under *inner*, inside a scope that set ``FE_TOWARDZERO``.
+
+    The branch below the rounding keeps the enclosing scope live past it, so
+    ``_current_rm`` is the directed mode at the rounding site rather than
+    unknown.
+    """
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real, n: fp.Real) -> fp.Real:
+        with _DIRECTED:
+            w = x / x
+            with inner:
+                y = fp.round(n)
+            if w > 0.0:
+                r = y
+            else:
+                r = y
+        return r
+
+    return CppCompiler(optimize=False).compile(
+        f, arg_types=[RealType(fp.FP64), RealType(arg_ctx)])
+
+
+class TestNearbyintNeedsFeTonearest:
+    """``std::nearbyint`` follows the *live* mode, so it is `RNE` only under
+    ``FE_TONEAREST``.
+
+    The precondition belongs to the spelling, not to the rounding: a path that
+    emits the call must carry it, and a path that emits none must not.
+    """
+
+    def test_the_wrapping_lowering_carries_it(self):
+        """`WRAP` reaches `nearbyint` by its own route, which bypassed the
+        check -- emitting a call that truncates under the caller's mode."""
+        with pytest.raises(CppCompileError, match='FE_TONEAREST'):
+            _under_directed_mode(fp.SINT8.with_params(rm=RM.RNE), fp.FP64)
+
+    def test_a_directed_mode_is_unaffected(self):
+        """`ceil` does not read the rounding direction."""
+        out = _under_directed_mode(fp.SINT8.with_params(rm=RM.RTP), fp.FP64)
+        assert 'std::ceil' in out
+
+    def test_an_integral_operand_emits_no_call_and_is_accepted(self):
+        """Nothing rounds an `int16_t`, so the mode never reaches a spelling
+        and refusing on it would be refusing a program with no ``nearbyint``
+        in it."""
+        ctx = MPBFixedContext(
+            -1, fp.RealFloat(exp=10, c=1), rm=RM.RNE, overflow=ASSERT,
+            enable_neg_zero=False)
+        out = _under_directed_mode(ctx, fp.SINT16)
+        assert 'nearbyint' not in out
+        assert 'static_cast<int16_t>(n)' in out
+
+
+class TestCastCarriesNoMode:
+    """`fp.cast` asserts the conversion exact, and an exact conversion has no
+    rounding mode -- so the guard that holds a declined `Round` to ``RTZ``,
+    the cast below it being a truncation, does not apply to a `Cast`."""
+
+    @pytest.mark.parametrize('rm', [RM.RTP, RM.RTN, RM.RNA])
+    def test_a_non_rtz_mode_still_casts(self, rm):
+        ctx = MPBFixedContext(
+            -1, fp.RealFloat(exp=10, c=1), rm=rm, overflow=ASSERT,
+            enable_neg_zero=True)
+        out = _emit(ctx, body='cast')
+        assert 'static_cast<float>' in out
+        assert 'cast is not exact' in out

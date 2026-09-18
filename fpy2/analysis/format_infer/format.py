@@ -171,10 +171,14 @@ class AbstractFormat:
     def __abs__(self) -> 'AbstractFormat':
         """Absolute value of the format (clamps the negative bound to zero)."""
         # abs maps -inf to +inf, so +inf is present if either infinity was.
+        # The bound is the larger *magnitude*, not the positive one: a
+        # two's-complement format runs a step further below zero than above, so
+        # `abs` of its minimum is a value the format itself does not hold.
         # `has_neg_zero` is left at its default: `abs` never yields a negative
         # zero, so false is the derived answer here, not an omission.
         return AbstractFormat(
-            self.prec, self.exp, self.pos_bound, neg_bound=RealFloat.from_int(0),
+            self.prec, self.exp, max(self.pos_bound, -self.neg_bound),
+            neg_bound=RealFloat.from_int(0),
             has_pos_inf=self.has_pos_inf or self.has_neg_inf, has_neg_inf=False, has_nan=self.has_nan,
         )
 

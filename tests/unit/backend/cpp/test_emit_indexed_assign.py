@@ -148,13 +148,11 @@ class TestSlotStoreTypes:
     slot's type and its own storage is not the question."""
 
     def test_a_value_that_fits_stores_though_its_type_does_not(self):
-        """"Does it fit" is a question about the *values*, not about whether the
-        types nest.  A `Round` reports its context's type, as wide as the
-        context, where the value is bounded by the operand: ``round_SINT64`` of
-        an ``FP32`` is 24 significand bits, which a ``float`` holds exactly.
-
-        Asking the type question refused this while the same value built into a
-        fresh list was accepted -- the same conversion, two verdicts.
+        """"Does it fit" is about the *values*, not whether the types nest.
+        A `Round` reports its context's type where the value is bounded by the
+        operand: ``round_SINT64`` of an ``FP32`` is 24 significand bits, which
+        a ``float`` holds exactly.  A store and a fresh list are the same
+        conversion and must agree.
         """
         @fp.fpy
         def slot(x: fp.Real):

@@ -8,6 +8,7 @@ inference) on a :class:`Function` and hands the result to
 surface as :class:`CppCompileError`.
 """
 
+import copy
 from collections.abc import Collection
 from dataclasses import dataclass
 
@@ -65,7 +66,7 @@ from .unbox import (
 )
 from .unfold_round import UnfoldMode
 from .unfold_round import unfold as unfold_round
-from .utils import CPP_HEADERS, CPP_HELPERS
+from .utils import CPP_FENV_HEADER, CPP_HEADERS, CPP_HELPERS
 from .variables import VariableAlloc, VariableAnalysis
 
 _UnboxMode = UnboxMode
@@ -380,7 +381,7 @@ class CppCompiler(Backend):
         name it, and its absence is what a reader checks the promise against.
         """
         return [h for h in CPP_HEADERS
-                if self._enable_fenv or h != '#include <cfenv>']
+                if self._enable_fenv or h != CPP_FENV_HEADER]
 
     def helpers(self) -> str:
         """Support code an emitted unit needs: currently none.
@@ -437,12 +438,14 @@ class CppCompiler(Backend):
             raise   # the rewrite's own error stands
 
     def _without_unfold(self) -> 'CppCompiler':
-        """This compiler with the rewrite off, for a second opinion."""
-        return CppCompiler(
-            unsafe_cast_int=self._unsafe_cast_int, optimize=self._optimize,
-            unbox=self._unbox, arrays=self._arrays, unfold=UnfoldMode.NONE,
-            enable_fenv=self._enable_fenv,
-        )
+        """This compiler with the rewrite off, for a second opinion.
+
+        Copied rather than rebuilt, so a flag added later is carried over
+        without having to be listed here.
+        """
+        other = copy.copy(self)
+        other._unfold = UnfoldMode.NONE
+        return other
 
     def _compile_module(self, module: Module) -> str:
         specs = self.specialize(module)

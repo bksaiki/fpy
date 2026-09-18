@@ -11,11 +11,10 @@ _INT_RTN = fp.SINT32.with_params(rm=fp.RM.RTN, overflow=_ASSERT)
 _INT_RNA = fp.SINT32.with_params(rm=fp.RM.RNA, overflow=_ASSERT)
 _INT_RNE = fp.SINT32.with_params(rm=fp.RM.RNE, overflow=_ASSERT)
 
-# Each is one mode the cast does not perform: C++ integer conversion truncates,
-# so the value is made integral in the float type first and the cast only
-# converts it.  Each guards its operand, a NaN and an infinity having no integer
-# to convert to.  The four differ only on which value they land on, which is
-# what a bit-exact run against the interpreter checks.
+# Each is a mode the cast does not perform: C++ integer conversion truncates, so
+# the value is made integral in the float type first.  Each guards its operand, a
+# NaN and an infinity having no integer to convert to.  The four differ only on
+# which value they land on, which is what a bit-exact run checks.
 
 @fp.fpy
 def test_round_int_up(x: fp.Real) -> fp.Real:

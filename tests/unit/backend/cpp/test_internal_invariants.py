@@ -195,14 +195,9 @@ class TestReferenceBindingStorage:
 class TestBothGuardsAskOneQuestion:
     """"Can this value live in that type?" has one implementation.
 
-    It used to have two: the slot-store guard and the operand guard each
-    spelled their own test, so a fix to one silently left the other behind --
-    which is how `xs[0] = fp.round(x)` came to refuse a store that `[fp.round(x)]`
-    accepted, and how the operand guard went on refusing a conversion the same
-    emitter performed as a tuple field.
-
-    Wiring rather than behaviour: both guards must *route* through
-    `_value_fits`, so neither can drift again.
+    The slot-store guard and the operand guard must *route* through
+    `_value_fits` rather than each spelling their own test, or a fix to one
+    leaves the other behind.  Wiring, not behaviour.
     """
 
     @staticmethod
@@ -226,7 +221,7 @@ class TestBothGuardsAskOneQuestion:
 
     @pytest.mark.parametrize('shape', ['_slot_store', '_operand'])
     def test_refusing_the_predicate_refuses_the_shape(self, shape, monkeypatch):
-        """With the one predicate saying no, every guard that asks it says no.
+        """With the predicate saying no, every guard that asks it says no.
 
         A guard keeping its own copy of the test would go on accepting.
         """

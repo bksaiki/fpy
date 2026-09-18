@@ -91,12 +91,11 @@ _LADDER_RANK: dict[CppScalar, int] = {ty: i for i, (ty, _) in enumerate(_SIGMA)}
 
 def ladder_rank(ty: CppScalar) -> int:
     """Where *ty* sits on the ladder :func:`choose_storage_scalar` walks,
-    narrowest first.
+    narrowest first; anything off the ladder ranks widest.
 
     A *total* order where :func:`scalar_fits_in` is only partial -- `int32_t`
-    and `float` each hold values the other does not -- so it can rank
-    candidates that containment leaves incomparable.  Anything off the ladder
-    ranks widest.
+    and `float` each hold values the other does not -- so it ranks candidates
+    containment leaves incomparable.
     """
     return _LADDER_RANK.get(ty, len(_SIGMA))
 

@@ -172,10 +172,15 @@ top.
   Either way the bound is asserted, on the *rounded* value — `100.7` is in bounds
   under `RTZ` even though `100.7 > 100`, and under `RTP` an operand inside the
   bound can round to one outside it.
+  An unbounded context in its own storage asserts the *storage*'s bound, the
+  format stating none — which is what lets an `unfold_overflow`-rewritten
+  `SATURATE` program keep its mode, since the rewrite rounds under the unbounded
+  counterpart.
   `_emit_integral_round` can also **decline**, and then the bare cast below it is
   the rounding — which it only is under `RTZ`, so `_require_cast_is_round`
-  refuses any other mode that reaches it. Admitting non-RTZ integer contexts
-  without that guard was a silent truncation.
+  refuses any other mode a `Round` brings there. A `Cast` is exempt:
+  `_assert_fixed_exact` asserts the conversion exact, and an exact conversion
+  has no mode.
   Of the overflow *rules*, `ASSERT` needs no behavior and `WRAP` is performed by
   `_emit_wrapping_float_to_integer` — but only where
   `_type_range_is_the_format`, i.e. the C++ type holds exactly the values the
@@ -184,13 +189,10 @@ top.
   into program text. It cannot do the same for `WRAP`, whose overflow value
   varies with the operand rather than being a constant — which is why `WRAP`
   needs a lowering at all.
-  **A `SATURATE` program `unfold_overflow` has rewritten still fails under a
-  non-RTZ mode**: the rewrite rounds under the *unbounded* counterpart, which
-  states no bound, and `_emit_integral_round` declines where there is nothing to
-  assert. Spelling the mode and asserting nothing there fixes it (measured: six
-  lines, bit-exact, no differential movement) and costs the backend no new edge
-  rule. That would likely make the `_require_cast_is_round` guard above
-  unreachable.
+  The `FE_TONEAREST` precondition `nearbyint` carries belongs to the *spelling*
+  (`_integral_one_call`), not to the rounding: a path emitting no call — an
+  already-integral operand, or `RTZ` — does not carry it, and one that does must
+  not be able to skip it.
 - `Cast(arg)` — the node `fp.cast` and `fp.round_exact` both parse to — is the
   same cast plus a runtime assertion that it was lossless. Under a native context
   a storage round-trip *is* that claim, NaN-aware for FP operands. Under a
@@ -305,9 +307,28 @@ rounding assertions, and it would want the array-size work first: the checks
 worth keeping are the ones `array-size-symbolic.md`'s size equalities cannot
 discharge statically.
 
-### One question answered in four places
+### `std::abs` has no answer at a signed type's minimum
 
-"Can this value inhabit that place?" is decided four times, with different rules:
+`abs` of a two's-complement minimum is one past the format's positive bound, so
+`std::abs(INT32_MIN)` is undefined and `std::abs(INT64_MIN)` with it. The
+operand's own widening handles the narrow rungs — `AbstractFormat.__abs__` takes
+the larger *magnitude*, so `abs` of an `int32_t` is bounded by `2**31`, no
+signature under `SINT32` is an identity, and the emitted call is
+`std::abs(static_cast<int64_t>(a))`.
+
+`INTEGER` is where it still bites: the row `std::abs: (int64_t) -> INTEGER` is
+an identity under an unbounded context for every operand, so it is always taken,
+and there is no wider integer to widen into. `std::fabs(static_cast<double>(a))`
+is exact at `INT64_MIN` — a power of two — and lossy everywhere past `2**53`, so
+it is not the answer either. The row is unsound at exactly one value, and
+`unsafe_cast_int` does not gate it; the same shape applies to every `INTEGER`
+row, whose `int64_t` storage can overflow where the context cannot.
+
+### Casts: the third question
+
+A value is converted at sixteen kinds of place — a return, a slot store, a
+container field, an operand rebind, a loop target, a callee argument. Thirteen
+functions decide what to emit at one, and they do not all agree:
 
 | path | sites | scalar | list element type | boxing |
 |---|---|---|---|---|
@@ -316,21 +337,58 @@ discharge statically.
 `_adapt_result` | callee results | — | refuse on mismatch | refuse if boxed; unboxed→boxed via `make_shared` |
 `_adapt_arg` | call arguments | — | refuse on mismatch | **boxed→unboxed via deref**; reverse refused |
 
-The scalar rules only *look* contradictory: `_emit_at` returns early when `want`
-is a scalar, so `_convert_storage` sees scalars only as tuple fields, where the
-target is the join and never narrower than a contributor. Measured — zero lossy
-narrowings through it across the corpus. But that reasoning is written nowhere
-and has to be rederived from two early-returns in different functions. Every site
-is defensible alone, none states its precondition, so the set can only be audited
-by reconstructing it.
+That reads as a pile of special cases. It is one model with **three questions**:
 
-The fix: one predicate per *place kind* — return, argument, slot store, container
-field, operand rebind, callee result — in one module, called from each site
-instead of reimplemented. Deferred: instrumenting every `raise` and running the
-corpus plus 400 generated programs fired only 8 of ~75 sites, so this buys
-maintainability rather than correctness, at ~33 call sites in the most delicate
-part of the emitter. Worth doing when something next changes representation
-handling.
+| # | question | asked by |
+|---|---|---|
+| 1 | what type does the **place** hold? | `StorageInfer`, `choose_storage` |
+| 2 | what type does the **expression** have? | `format_info.by_expr`, `_storage_for_expr` |
+| 3 | does every **value** fit? | `_value_fits` |
+
+The first two are the storage/format distinction stated at the top. The third is
+what soundness turns on: `scalar_fits_in` asks whether the types nest,
+`bound_fits_in_scalar` asks whether the values do, and the two disagree by
+design. `round_SINT64(x: FP32)` is the standing example — storage `int64_t`,
+expression type `int64_t`, value 24 significand bits, which a `float` holds
+exactly. `scalar_fits_in(S64, F32)` is `False` and the conversion is exact.
+Every guard that reached for the first where it meant the third was a defect.
+
+Both guards that *refuse* — `_require_no_narrowing` and `_maybe_cast` — route
+through `_value_fits`, which `test_internal_invariants.py` pins. `_emit_deduced`
+asks only whether to spell a cast and never refuses, so it needs no test.
+
+`_convert_storage` is the one that cannot ask: its `at` is the container the
+field or element is taken from, so the bound in hand is a `ListFormat` where the
+question is about an `int8_t`. It does see narrowing scalars — `_rebuild_list`
+sends it a list element, and the tuple-field recursion sends `int64_t → uint8_t`.
+Both are exact today, but only because the storage and format lattices agree on
+those programs, and nothing there checks that they do: `example_set` at
+`list[SINT8]` emits `static_cast<int8_t>(x[i])` out of an `int16_t`, exact
+because `x`'s `int16_t` is `uint8 ⊔ int8` in the *storage* lattice while the
+return element came from the *format* lattice, where `{0,1} ∪ SINT8 = int8`.
+Peeling the container's bound to the depth being converted at is what would let
+it ask. Until then the invariant is "two analyses agree here", not "this cannot
+narrow".
+
+The wider fix — one predicate per *place kind*: return, argument, slot store,
+container field, operand rebind, callee result — stays deferred, at ~33 call
+sites in the most delicate part of the emitter. Worth doing when something next
+changes representation handling. Out of scope with it:
+
+- The remaining nine unchecked place kinds. Several are exact by construction
+  (`_call_arg`'s literal spelling, `range` bounds) and the rest are unreachable
+  while `Specialize` keys a callee on its call-site types.
+- The unspelled implicit narrowings. `_emit_at`'s scalar early return and
+  `_require_bridgeable`'s scalar pass-through both emit nothing where the rule
+  says every conversion is an explicit `static_cast`. All are exact in value
+  today. The loop target (`_foreach_decl`) is the interesting one — there is
+  nowhere to put a cast, and `for (int8_t x : xs)` over a `std::vector<double>`
+  is two storages for one datum with none spelled.
+- `_narrow_result`'s unguarded float-to-integer conversions. Dead today — the
+  operands come from integer storage — but `ValueClassInfer` claims NaN is
+  possible for a value whose storage is `uint8_t`, so the class analysis and the
+  storage ladder already disagree in the direction that would make these
+  undefined.
 
 Those 8 also say where the compilable set is actually bounded: *unconstrained
 real in a finite C++ type* accounts for 233 of 543 refusals, and the next two are

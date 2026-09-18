@@ -157,11 +157,11 @@ _F32_INPUTS = [
 class TestABoundTheOperandTypeCannotHold:
     """A bound is compared in the *operand's* type.
 
-    ``int32_t``'s ``2**31 - 1`` is not a ``float``, so emitted as itself it
-    converted to ``2**31`` in the comparison -- the assertion admitted the one
-    value it exists to reject, and the ``static_cast`` that followed was
-    undefined.  Moving the bound inward loses nothing: no ``float`` lies
-    between ``2**31 - 1`` and the largest one below it.
+    ``int32_t``'s ``2**31 - 1`` is not a ``float``; emitted as itself it
+    converts to ``2**31`` in the comparison, admitting the one value the
+    assertion exists to reject and leaving the ``static_cast`` undefined.
+    Moving the bound inward loses nothing: no ``float`` lies between
+    ``2**31 - 1`` and the largest one below it.
     """
 
     def test_the_emitted_bound_is_one_the_operand_type_holds(self):
@@ -175,8 +175,8 @@ class TestABoundTheOperandTypeCannotHold:
         assert '2147483647' in out
 
     def test_value_for_value_at_the_boundary(self):
-        """``2**31`` is the value the old test admitted; the two below it are
-        the coverage the fix must not cost."""
+        """``2**31`` is the value the inward bound rejects; the two below it
+        are the coverage that must survive it."""
         if _CXX is None:
             pytest.skip('no C++ compiler')
         q = _round_fn(_INT32_ASSERT)

@@ -47,7 +47,6 @@ from ...transform import (
     UnfoldSpecial,
 )
 from ...transform.cursor import expr_sites
-from .ops import ScalarOpTable
 from .target import is_native_ctx, make_op_table
 
 __all__ = ['UnfoldKind', 'UnfoldMode', 'UnfoldSite', 'sites', 'unfold', 'unfold_arith']
@@ -120,13 +119,14 @@ class _Scopes:
         return scope.ctx if isinstance(scope.ctx, Context) else None
 
 
-def _dispatches(e: Expr, table: ScalarOpTable) -> bool:
+def _dispatches(e: Expr, enable_fenv: bool) -> bool:
     """Whether the op table is what emits *e*.
 
     Its keys are the definition: a node it does not key reaches the emitter
     another way -- `Min` and `Max` select an operand rather than rounding, `Len`
     is exact -- so it has no signature to miss.
     """
+    table = make_op_table(enable_fenv=enable_fenv)
     match e:
         case UnaryOp():
             return type(e) in table.unary
@@ -154,13 +154,13 @@ def _fixed_is_lowerable(ctx: MPFixedContext | MPBFixedContext) -> bool:
 
 
 def _classify(
-    e: Expr, active_of: _Scopes, table: ScalarOpTable, enable_fenv: bool,
+    e: Expr, active_of: _Scopes, enable_fenv: bool,
 ) -> tuple[UnfoldKind, Context] | None:
     """*e*'s kind and the context that gives it one, or `None` where the
     emitter needs no help.
 
     *enable_fenv* false shrinks what counts as native, so a mode the emitter may
-    no longer set becomes a site here instead of a refusal there.
+    no longer set is a site here rather than a refusal there.
     """
     if isinstance(e, Round | Cast):
         active = active_of(e)
@@ -175,7 +175,7 @@ def _classify(
                 return None
             return UnfoldKind.FIXED_ROUND, active
         return UnfoldKind.FLOAT_ROUND, active
-    if _dispatches(e, table):
+    if _dispatches(e, enable_fenv):
         # `REAL` is the one non-native context the table reaches, by widening to
         # an op that gives the exact result and rounds to itself.
         active = active_of(e)
@@ -198,14 +198,13 @@ def sites(
     if not isinstance(func, FuncDef):
         raise TypeError(f'Expected \'FuncDef\', got {func}')
     active_of = _Scopes(func)
-    table = make_op_table(enable_fenv=enable_fenv)
     out: list[UnfoldSite] = []
     for cursor in expr_sites(
         func,
-        lambda e: _classify(e, active_of, table, enable_fenv) is not None,
+        lambda e: _classify(e, active_of, enable_fenv) is not None,
         within,
     ):
-        got = _classify(cursor.resolve(), active_of, table, enable_fenv)
+        got = _classify(cursor.resolve(), active_of, enable_fenv)
         assert got is not None
         out.append(UnfoldSite(cursor, *got))
     return out

@@ -32,9 +32,8 @@ EXPECTED_MINTS = {
     '_convert_storage': 1,     # a tuple read field by field
     '_emit_empty': 29,         # a dimension, read once per fixed-size layer
     '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
-    '_emit_cast_round': 4,     # the value made integral before the cast
-    '_emit_wrapping_float_to_integer': 1,   # the same, before the wrap
     '_emit_sum': 3,            # the list being folded
+    '_integral_one_call': 5,   # the value made integral before the cast
     '_list_range': 4,          # the list being iterated
     '_visit_list_slice': 1,    # the list being sliced
 }
