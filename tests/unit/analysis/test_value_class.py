@@ -20,7 +20,8 @@ from fpy2.analysis.value_class import (
     ListClass,
     TupleClass,
     join_class,
-    _ATOMS, _LOGB, _POW_POS_BASE, _exact_add, _exact_mul, _exact_select,
+    _ATOMS, _LOGB, _POW_BIG_BASE, _POW_ONE_BASE, _POW_SMALL_BASE,
+    _exact_add, _exact_mul, _exact_select,
     _exact_sub, _map,
 )
 from fpy2.ast.fpyast import Expr, Var
@@ -151,6 +152,16 @@ def _pow2_fp64(a: fp.Real) -> fp.Real:
     return 2 ** a
 
 
+@fp.fpy(ctx=fp.FP64)
+def _pow_half_fp64(a: fp.Real) -> fp.Real:
+    return 0.5 ** a
+
+
+@fp.fpy(ctx=fp.FP64)
+def _pow_one_fp64(a: fp.Real) -> fp.Real:
+    return 1 ** a
+
+
 @fp.fpy(ctx=fp.REAL)
 def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
     return max(a, b)
@@ -216,18 +227,24 @@ class TestTransferFunctionsAreSound:
     def test_logb(self):
         self._sweep(lambda a: _map(_LOGB, a), _logb, 1, rows=5)
 
-    def test_pow_with_a_positive_base(self):
+    def test_pow_with_a_base_above_one(self):
         """Two rows under ``REAL``: the interpreter has no exact ``2 ** x`` for
         a NaN or an infinity."""
-        self._sweep(lambda a: _map(_POW_POS_BASE, a), _pow2, 1, rows=2)
+        self._sweep(lambda a: _map(_POW_BIG_BASE, a), _pow2, 1, rows=2)
 
-    def test_pow_with_a_positive_base_at_a_concrete_context(self):
-        """The three rows ``REAL`` cannot reach.  Sound against a *rounded* run
-        only for these: their results -- a NaN, ``+inf``, ``+0`` -- are exactly
-        representable, where the finite row overflows (``2 ** 1e300``) and the
-        exact table rightly does not say so."""
+    @pytest.mark.parametrize('table,fn', [
+        pytest.param(_POW_BIG_BASE, _pow2_fp64, id='2 ** x'),
+        pytest.param(_POW_SMALL_BASE, _pow_half_fp64, id='0.5 ** x'),
+        pytest.param(_POW_ONE_BASE, _pow_one_fp64, id='1 ** x'),
+    ])
+    def test_pow_at_a_concrete_context(self, table, fn):
+        """The three rows ``REAL`` cannot reach, and the ones the base literal
+        tells apart: ``2 ** -inf`` is ``+0`` where ``0.5 ** -inf`` is ``+inf``.
+        Sound against a *rounded* run only for these -- their results are
+        exactly representable, where the finite row overflows (``2 ** 1e300``)
+        and the exact table rightly does not say so."""
         self._sweep(
-            lambda a: _map(_POW_POS_BASE, a), _pow2_fp64, 1, rows=3,
+            lambda a: _map(table, a), fn, 1, rows=3,
             only=(NAN, POS_INF, NEG_INF),
         )
 

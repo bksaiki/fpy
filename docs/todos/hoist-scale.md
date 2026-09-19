@@ -192,7 +192,7 @@ since there is no "after" until Phase 4; `_scale_factor`, `_text`,
 `_agrees_by_value` and the `fused_sum` fixture are imported from
 `test_hoist_invariant.py` rather than copied.
 
-### Phase 2 — `value_class` inspects the base literal
+### Phase 2 — `value_class` inspects the base literal — **Done.**
 
 - `_POW_POS_BASE` splits by the base: greater than one, equal to one, less than
   one.  `_visit_binaryop`'s `Pow` case picks the table from the literal.
@@ -209,6 +209,23 @@ diff there is explained in this document before the phase closes.
 python3 -m pytest tests/unit/analysis/test_value_class.py \
     tests/unit/transform/test_hoist_scale.py -q
 ```
+
+108 passed.  Full suites green and unchanged: unit 4779, `tests.infra` exit 0,
+cpp corpus exit 0 at 130/136 bit-compared — the same coverage as before.  So
+the open item below resolves: no consumer's output moved.
+
+`_POW_POS_BASE` became three tables — `_POW_BIG_BASE`, `_POW_SMALL_BASE`,
+`_POW_ONE_BASE` — selected by `_pow_table(base)`.  Two things the phase found:
+
+- **`1 ** nan` is `1.0`, not NaN.**  The first cut carried `NAN -> NAN` into the
+  base-one table by analogy with the other two.  The existing sweep against the
+  interpreter caught it: IEEE 754 has `pow(1, y) = 1` for every `y`.  The table
+  is now `dict.fromkeys(_ATOMS, _FINITE)`.
+- **The sweep does the verifying.**  `test_pow_at_a_concrete_context` is
+  parametrized over the three bases and checks each against the interpreter at
+  `NAN`, `POS_INF` and `NEG_INF` — the rows `REAL` cannot reach, and exactly
+  the rows the base literal tells apart (`2 ** -inf` is `+0` where
+  `0.5 ** -inf` is `+inf`).
 
 ### Phase 3 — `array_size` carries a symbolic dimension
 
@@ -292,10 +309,11 @@ information, but consumers use them to drop guards, so "more precise" is not
 the same as "no diff".  If the cpp corpus changes, the question becomes whether
 each change is an improvement or a latent bug the old imprecision was masking.
 
-**Provisional call:** expect no diff, and treat one as a finding to explain
-here rather than a result to accept.  If a diff turns out to be large or
-contentious, the sharpening splits into its own PR ahead of this one — the
-phase boundary is already drawn so that it can.
+**Resolved in Phase 2: no.**  Unit, infra and the cpp corpus are all green and
+the corpus reports the same 130/136 bit-compared as before.  The sharpening
+only splits rows that were already joined, so no consumer sees a class it did
+not see before — it sees a narrower one, and none of them narrowed enough to
+change a decision.
 
 ### Should the write be allowed inside an `if` in the loop body?
 

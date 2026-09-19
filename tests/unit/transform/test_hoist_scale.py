@@ -97,14 +97,18 @@ class TestConditionsThatAlreadyHold:
         )
 
 
-class TestConditionsThatDoNotHoldYet:
+class TestConditionsNowAnswerable:
 
-    def test_the_factor_is_not_yet_known_finite(self):
+    def test_the_factor_is_known_finite(self):
+        """Condition 3.  `_k` may be `-inf` (an all-zero input makes
+        `logb(0) = -inf`), and `2 ** -inf` is zero, not an infinity — which is
+        exactly what reading the base literal establishes."""
         out = _scheduled()
         _, _, _, factor = _scale_factor(out)
         cls = ValueClassInfer.analyze(out.ast).classify(factor)
-        # flips in Phase 2: inspecting the base literal drops `POS_INF`
-        assert str(cls) == 'ValueClass.POS_INF|ZERO|FINITE'
+        assert str(cls) == 'ValueClass.ZERO|FINITE'
+
+    # --- still open: Phase 3 ---
 
     def test_the_result_list_has_no_known_size(self):
         out = _scheduled()
