@@ -20,6 +20,7 @@ from fpy2.strategies import (
     TransformReferenceError,
     comp_to_loop,
     float_to_fixed,
+    hoist_invariant,
     inline,
     insert_round,
     monomorphize,
@@ -105,6 +106,31 @@ def _nested_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     for x in xs:
         for y in ys:
             a = a + x * y
+    return a
+
+
+@fp.fpy
+def _two_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    a = 0.0
+    for x in xs:
+        p = n + 1
+        a = a + p * x
+    for y in ys:
+        q = n + 2
+        a = a + q * y
+    return a
+
+
+@fp.fpy
+def _nested_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    a = 0.0
+    for x in xs:
+        p = n + 1
+        for y in ys:
+            q = n + 2
+            a = a + (p * q) * (x * y)
     return a
 
 
@@ -293,6 +319,8 @@ ACTS = [
     ('unfold_enumerate', unfold_enumerate, _two_enumerates, {}),
     ('simplify_if', simplify_if, _two_ifs, {}),
     ('simplify_if/nested', simplify_if, _nested_ifs, {}),
+    ('hoist_invariant', hoist_invariant, _two_invariant_for, {}),
+    ('hoist_invariant/nested', hoist_invariant, _nested_invariant_for, {}),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the
@@ -305,6 +333,7 @@ REFUSES = [
     ('float_to_fixed/refuses', float_to_fixed, _two_fixed, {}),
     ('rescale_fixed/refuses', rescale_fixed, _two_floats, {}),
     ('inline/refuses', inline, _refuses_inline, {}),
+    ('hoist_invariant/refuses', hoist_invariant, _two_for, {}),
     ('split/refuses', split, _odd_trip, _STRICT_SPLIT),
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),

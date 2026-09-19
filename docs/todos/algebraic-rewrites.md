@@ -35,61 +35,42 @@ return sum(ts)
 
 ## Target form
 
-What the whole schedule should produce once everything below has landed —
-`fuse; comp_to_loop; rescale_fixed; to_anf; simplify; hoist_invariant;
-hoist_scale; simplify`.  `to_anf` runs *after* `rescale_fixed`, since it is the
-rescaling that introduces `2 ** -_k` and `2 ** _k`; ANF ahead of it names
-nothing useful.  Names below are written for legibility — ANF also binds `-_k`
-to a name of its own:
+What the schedule should produce once everything below has landed —
+`fuse; comp_to_loop; rescale_fixed; hoist_invariant; hoist_scale; simplify`:
 
 ```python
-@fp.fpy(ctx=fp.REAL)
-def fused_sum(xs):
-    acc = True
-    for x in xs:
-        b = fp.isfinite(x)
-        acc = acc and b
-    if acc:
-        t8 = fp.empty(len(xs))
-        for t9 in range(len(xs)):
-            x = xs[t9]
-            t8[t9] = fp.logb(x)
-        e = max(t8)
-        _k = ((e - 12) + 1)                 # hoisted: invariant
-        _r = (2 ** -_k)                     # hoisted: invariant, needs `to_anf`
-        _s = (2 ** _k)                      # hoisted out of the reduction
+        e = max(t7)
         ts = fp.empty(len(xs))
-        for t11 in range(len(xs)):
-            x = xs[t11]
-            _t = (_r * x)
+        _k = ((e - 12) + 1)                 # hoisted: invariant
+        for t10 in range(len(xs)):
+            x = xs[t10]
+            _t = ((2 ** -_k) * x)
             with fp.MPFixedContext(-1, rm=fp.RM.RTZ, enable_neg_zero=False):
-                _t14 = fp.round(_t)
-            ts[t11] = _t14                  # integers: position zero
-        return (_s * sum(ts))
-    else:
-        with fp.FP32:
-            return sum(xs)
+                _t13 = fp.round(_t)
+            ts[t10] = _t13                  # integers: position zero
+        return ((2 ** _k) * sum(ts))        # hoisted out of the reduction
 ```
 
-Three hoists, not one.  `_k` and `_r` are ordinary loop-invariant code motion —
-`_r` only after `to_anf` gives the subexpression a name of its own, since
-`hoist_invariant` moves statements rather than subexpressions.  **Both come out
-in a single `hoist_invariant` pass** (verified in PR 1, Phase 3): the query
-takes body statements in order, each hoisted one counting as invariant for the
-ones after it.  `_s` is the reduction hoist, and it is the one that needs the
-side conditions below.
+Two hoists.  `_k` is ordinary loop-invariant code motion, and it is what makes
+the second one legal: `hoist_scale`'s condition is that every free variable of
+the factor is bound outside the loop, which `2 ** _k` satisfies once `_k` is.
+The factor itself needs no name — the rewrite moves the whole expression out
+with the reduction.
 
-The payoff is not fewer multiplies.  The loop body is reduced to one multiply
-and one round, and the `ts` are *integers* — `MPFixedContext(-1)` is position
-zero — so `sum(ts)` is an integer accumulation scaled once at the end, which is
-what the backend wants.
+The payoff is not fewer multiplies.  The `ts` are *integers* —
+`MPFixedContext(-1)` is position zero — so `sum(ts)` is an integer accumulation
+scaled once at the end, which is what the backend wants.
 
-**Checked, not assumed.**  Written out by hand and interpreted against the
-current `fuse; comp_to_loop; rescale_fixed; simplify` output over ten inputs
-spanning subnormals, overflow, cancellation, `inf` and `NaN`: 8 of 10 are
-bit-identical, and the other two are exact zeros differing only in the stored
-exponent of the zero (`c=0`, same sign, `==` holds).  Nothing in the target form
-changes a value the current schedule produces.
+`(2 ** -_k)` is still recomputed each iteration.  That is a subexpression, not a
+statement, so statement-level motion cannot reach it; it would want either a
+subexpression-level pass or whatever common-subexpression elimination the
+backend does.  Out of scope here, and it costs nothing that matters to the
+integer accumulation.
+
+**Checked, not assumed.**  The form above is what
+`fuse; comp_to_loop; rescale_fixed; simplify; hoist_invariant` emits today, less
+the `hoist_scale` line; interpreted against the un-hoisted schedule over inputs
+spanning subnormals, overflow, cancellation, `inf` and `NaN`, the values agree.
 
 Nothing in FPy discovers this.  `fpy2.rewrite` is a syntactic `l -> r` rewriter
 that checks nothing; `ConstFold` is partial evaluation, so a symbolic `2 ** _k`

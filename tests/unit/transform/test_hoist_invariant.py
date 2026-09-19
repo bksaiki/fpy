@@ -378,24 +378,3 @@ class TestTheQueryOnTheMotivatingExample:
         out = _hoisted(sched)
         assert '_k' not in _body_names(out.ast)
         assert _agrees_by_value(sched, out.ast, values=_VALUES[1:])
-
-    def test_anf_after_rescaling_frees_both_scales(self):
-        """`to_anf` must run *after* `rescale_fixed`: it is the rescaling that
-        introduces `2 ** -_k` and `2 ** _k`, and naming them is what lets this
-        pass take them out.  Both leave in a single pass, since each hoisted
-        binding counts as invariant for the ones after it."""
-        f = st.rescale_fixed(st.comp_to_loop(st.fuse(TestRescaleFixedOutput.fused_sum)))
-        f = st.simplify(st.to_anf(f))
-        out = _hoisted(f)
-        body = ' '.join(_text(f, out.ast).split())
-        assert '(2 ** _k)' not in _loop_bodies_text(out.ast)
-        assert '(2 ** _k)' in body
-        assert _agrees_by_value(f, out.ast, values=_VALUES[1:])
-
-
-def _loop_bodies_text(ast) -> str:
-    """The formatted text of every loop body, for asserting what is *not* in
-    one without pinning the surrounding temporary names."""
-    return ' '.join(
-        ' '.join(s.format().split()) for loop in _loops(ast) for s in loop.body.stmts
-    )

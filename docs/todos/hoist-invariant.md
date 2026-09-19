@@ -231,13 +231,13 @@ python3 -m pytest tests/unit/transform/test_hoist_invariant.py -q
 38 passed; `tests/unit/transform` green at 1184; `ruff` and `mypy` clean across
 the package.  What the phase found:
 
-- **`to_anf` belongs *after* `rescale_fixed`, not before.**  It is the rescaling
-  that introduces `2 ** -_k` and `2 ** _k`, so ANF ahead of it names nothing
-  useful.  With `fuse; comp_to_loop; rescale_fixed; to_anf; simplify`, a single
-  hoist pass lifts `_k`, `-_k`, `2 ** -_k` *and* `2 ** _k` above the loop —
-  two of the three hoists in the target form, in one pass, because of the
-  in-order chain rule.  The roadmap's target-form schedule is corrected to
-  match.
+- **`to_anf` is not needed, and should not have been in the plan.**  It got
+  there because the target form was written with `2 ** -_k` bound to a name,
+  which only a statement-level pass could then move.  But `hoist_scale` does
+  not need its factor pre-named: its condition is that the factor's free
+  variables are bound outside the loop, and hoisting `_k` alone establishes
+  that.  Phase 6's ANF case is dropped.  The chain rule that ANF was showing
+  off is real and stays, tested directly on `a = n + 1; b = a * 2`.
 - **`where=None` must not turn a refusal into a decline.**  `_selects(block,
   pos, -1)` answers `True` whenever `where is None`, since that means "every
   site", so the refusal branch has to test `self._target is not None` first.
@@ -251,7 +251,7 @@ the package.  What the phase found:
   a foreign Python function — so it is excluded from the differential sweeps
   and checked by shape only.
 
-### Phase 4 — the scheduling primitive
+### Phase 4 — the scheduling primitive — **Done.**
 
 - New `fpy2/strategies/invariant_hoist.py` exporting `hoist_invariant(func,
   where=None)`, added to `fpy2/strategies/__init__.py`'s imports and `__all__`.
@@ -270,6 +270,26 @@ the two failure kinds — and because nothing before this phase is user-visible.
 python3 -m pytest tests/unit/transform/test_hoist_invariant.py \
     tests/unit/strategies/test_hoist_invariant.py -q
 ```
+
+46 passed there, and the full unit suite at 4752; `ruff` and `mypy` clean.  Two
+things the phase found:
+
+- **The `where` contract has a coverage guard**, and it is worth knowing about:
+  `test_every_aimable_strategy_is_covered` in
+  `tests/unit/strategies/test_where_contract.py` fails when a strategy joins
+  `_SITES` without a row in its table.  So registering in
+  `fpy2/strategies/sites.py` also means adding acting, nested and refusing
+  rows there — `_two_invariant_for`, `_nested_invariant_for`, and the existing
+  `_two_for`, which this pass refuses outright.
+- **Rebuilding the loop body broke cursors, and the nested row caught it.**  The
+  first cut replaced the body with a freshly built `StmtBlock`.  A block this
+  pass synthesized is in no entry of `_paths`, so `_selects_at` answers `False`
+  for everything inside it — and a cursor aimed at an outer loop therefore
+  stopped reaching a loop nested in it, though the contract says a cursor takes
+  every candidate at or beneath it.  The fix is to leave the body to the normal
+  walk and mark the hoisted statements, letting `_visit_block`'s `_dropped`
+  path leave them out and record the removal.  Shorter, and the block keeps its
+  path.
 
 ### Phase 5 — into `Simplify`
 
@@ -294,10 +314,9 @@ python3 -m pytest tests/unit/transform tests/unit/strategies -q
 
 - Integration test: the full `fused_sum` schedule, asserting `_k` above the loop
   and the interpreted results unchanged across the `_VALUES`-style sweep.
-- A second case with `to_anf` in the schedule, which names `2 ** -_k` and so
-  lets this pass hoist it as well — two of the three hoists in the target form
-  of [algebraic-rewrites.md](algebraic-rewrites.md) are this pass's, and the
-  `to_anf` dependency is worth pinning rather than leaving to PR 2 to discover.
+- Assert the handoff shape directly: `_k` bound above the loop, so that
+  `2 ** _k`'s only free variable is outside it — which is exactly
+  `hoist_scale`'s precondition in [algebraic-rewrites.md](algebraic-rewrites.md).
 - Mark PR 1 **Done.** in [algebraic-rewrites.md](algebraic-rewrites.md) and
   record whether `HoistScale`'s "free variables defined outside the loop"
   condition now holds on the example — that is the handoff to PR 2.

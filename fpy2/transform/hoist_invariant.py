@@ -139,6 +139,8 @@ class _HoistInvariant(SiteRewriter):
 
     func: FuncDef
     def_use: DefineUseAnalysis
+    _hoisting: set[int]
+    """statements already emitted above their loop, to be left out of the body"""
 
     def __init__(
         self,
@@ -150,6 +152,7 @@ class _HoistInvariant(SiteRewriter):
         self.func = func
         self.def_use = def_use
         self.where = where
+        self._hoisting = set()
 
     def _claims(self, stmt: ForStmt | WhileStmt, hoistable: list[Assign]) -> bool:
         """Whether to hoist here.  A loop with nothing to hoist is no site, and
@@ -176,28 +179,42 @@ class _HoistInvariant(SiteRewriter):
             return False
         return True
 
-    def _hoist(self, stmt: ForStmt | WhileStmt, ctx) -> StmtBlock | None:
-        """Emit the invariant bindings before the loop, returning the body that
-        is left, or `None` where this loop is not rewritten."""
+    def _hoist(self, stmt: ForStmt | WhileStmt, ctx) -> None:
+        """Emit the invariant bindings before the loop, and mark them so the
+        walk of the body leaves them out.
+
+        Marking rather than rebuilding the body here: a block this pass
+        synthesized is in no path, so a cursor could not name anything inside
+        it and a nested loop would stop being reachable from one aimed at the
+        loop around it.
+        """
         hoistable = _invariants(stmt, self.def_use)
         if not self._claims(stmt, hoistable):
-            return None
-        taken = {id(s) for s in hoistable}
+            return
+        self._hoisting.update(id(s) for s in hoistable)
         self._replaced = True
         ctx.extend(hoistable)
-        return StmtBlock([s for s in stmt.body.stmts if id(s) not in taken])
+
+    def _visit_assign(self, stmt: Assign, ctx):
+        if id(stmt) in self._hoisting:
+            # already emitted above the loop; `_visit_block` leaves it out and
+            # records the removal
+            self._dropped = True
+            self._replaced = True
+            return stmt, ctx
+        return super()._visit_assign(stmt, ctx)
 
     def _visit_for(self, stmt: ForStmt, ctx):
-        body = self._hoist(stmt, ctx)
-        if body is not None:
-            stmt = ForStmt(stmt.target, stmt.iterable, body, stmt.loc)
+        self._hoist(stmt, ctx)
         return super()._visit_for(stmt, ctx)
 
     def _visit_while(self, stmt: WhileStmt, ctx):
-        body = self._hoist(stmt, ctx)
-        if body is not None:
-            stmt = WhileStmt(stmt.cond, body, stmt.loc)
+        self._hoist(stmt, ctx)
         return super()._visit_while(stmt, ctx)
+
+    def _visit_function(self, func: FuncDef, ctx):
+        self._hoisting = set()
+        return super()._visit_function(func, ctx)
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
