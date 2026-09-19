@@ -97,7 +97,7 @@ class TestConditionsThatAlreadyHold:
         )
 
 
-class TestConditionsNowAnswerable:
+class TestConditionsTheAnalysisUpgradesAnswer:
 
     def test_the_factor_is_known_finite(self):
         """Condition 3.  `_k` may be `-inf` (an all-zero input makes
@@ -108,25 +108,22 @@ class TestConditionsNowAnswerable:
         cls = ValueClassInfer.analyze(out.ast).classify(factor)
         assert str(cls) == 'ValueClass.ZERO|FINITE'
 
-    # --- still open: Phase 3 ---
-
-    def test_the_result_list_has_no_known_size(self):
+    def test_the_result_list_is_the_same_size_as_the_input(self):
+        """Condition 5, with no length annotation anywhere: `xs` carries a
+        fresh size symbol and `fp.empty(len(xs))` now keeps it, so the trip
+        count and the list length are provably the same."""
         out = _scheduled()
         info = ArraySizeInfer.analyze(out.ast)
-        sizes = {
-            str(d.name): b for d, b in info.by_def.items()
-            if b is not None and str(d.name) in ('xs', 'ts')
-        }
-        # flips in Phase 3: `fp.empty(len(xs))` keeps `xs`'s size symbol
-        assert isinstance(sizes['xs'], ListSize) and sizes['xs'].size is not None
+        xs, = [b for d, b in info.by_def.items()
+               if b is not None and str(d.name) == 'xs']
         ts = [b for d, b in info.by_def.items()
               if b is not None and str(d.name) == 'ts']
-        assert all(b.size is None for b in ts)
-        assert not any(is_size_eq(sizes['xs'], b) for b in ts)
+        assert isinstance(xs, ListSize) and xs.size is not None
+        assert ts and all(is_size_eq(xs, b) for b in ts)
 
-    def test_the_loop_covers_the_list_in_source_form(self):
-        """Not an analysis fact — what Phase 3 has to make provable.  The loop
-        runs `len(xs)` times and the list is `fp.empty(len(xs))`."""
+    def test_the_loop_runs_once_per_element(self):
+        """The other half of condition 5: the trip count is `len(xs)`, which
+        the size above ties to the list."""
         out = _scheduled()
         loop = _loops(out.ast)[-1]
         assert loop.iterable.format() == 'range(len(xs))'

@@ -227,7 +227,7 @@ the open item below resolves: no consumer's output moved.
   the rows the base literal tells apart (`2 ** -inf` is `+0` where
   `0.5 ** -inf` is `+inf`).
 
-### Phase 3 — `array_size` carries a symbolic dimension
+### Phase 3 — `array_size` carries a symbolic dimension — **Done.**
 
 - A `_size_of` sibling to `_const_int` in `fpy2/analysis/array_size.py`, which
   may answer with a `NamedId` from the union-find; the `Empty` rule uses it.
@@ -237,13 +237,28 @@ the open item below resolves: no consumer's output moved.
   unifies with `xs` unannotated, with `xs` annotated, and across two parameters
   of the same symbolic length.
 
-Separate from Phase 2 for the same reason and with the same bar: the cpp
-backend's storage selection reads sizes.
+Separate from Phase 2 for the same reason: the cpp backend's storage selection
+reads sizes.  Its direct consumers run with it; the full suites wait for the
+end, per the working policy.
 
 ```bash
 python3 -m pytest tests/unit/analysis/test_array_size.py \
+    tests/unit/analysis/test_region_sizes.py \
+    tests/unit/analysis/test_storage_infer.py \
+    tests/unit/backend/cpp/test_emit_array.py \
     tests/unit/transform/test_hoist_scale.py -q
 ```
+
+208 passed; `ruff` and `mypy` clean.  `_size_of` sits beside `_const_int` and
+the `Empty` rule calls it; `_const_int` is untouched, since its other callers
+do arithmetic on the result and a `NamedId` dies in `_visit_unaryop` on
+`max(0, n)`.
+
+Condition 5 now holds with no length annotation anywhere: `xs` carries a fresh
+size symbol, `fp.empty(len(xs))` keeps it, and `is_size_eq` ties the trip count
+to the list.  Four cases pinned in `test_array_size.py` — symbolic, concrete,
+unified across two parameters, and an allocation from a plain argument that
+stays unknown.
 
 ### Phase 4 — the transform
 
