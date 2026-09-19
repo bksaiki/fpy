@@ -28,6 +28,7 @@ from fpy2.transform.utils import RoundingScopes
 from .test_hoist_invariant import (
     _VALUES,
     _agrees_by_value,
+    _loop_bodies_text,
     _loops,
     _scale_factor,
     _text,
@@ -275,3 +276,40 @@ class TestAiming:
         where = [c for c, _ in HoistScale.refusals(rounds_between_adds.ast)]
         with pytest.raises(TransformDeclined, match='round exactly'):
             HoistScale.apply(rounds_between_adds.ast, where[0])
+
+
+# ----------------------------------------------------------------------
+# Phase 6: the whole schedule
+
+
+def _full_schedule(func):
+    """What a user writes, through the strategies."""
+    f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(func))))
+    return st.simplify(st.hoist_scale(st.hoist_invariant(f)))
+
+
+class TestTheWholeSchedule:
+
+    def test_it_reaches_the_target_form(self):
+        """`docs/todos/algebraic-rewrites.md`: the loop body is one multiply,
+        one round and one store, and the scaling is a single multiply after an
+        integer accumulation."""
+        out = _full_schedule(fused_sum)
+        src = _text(out, out.ast)
+        assert 'ts[t10] = _t13' in src
+        assert 'return (t14 * sum(ts))' in src
+        assert len(_loops(out.ast)[-1].body.stmts) == 4
+
+    def test_the_elements_are_written_unscaled(self):
+        out = _full_schedule(fused_sum)
+        assert '2 **' not in _loop_bodies_text(out.ast)
+
+    def test_the_fp32_branch_is_untouched(self):
+        """Condition 1 is per-site: the `else` arm rounds, so its reduction is
+        refused while the other is rewritten."""
+        out = _full_schedule(fused_sum)
+        assert 'return sum(xs)' in _text(out, out.ast)
+
+    def test_the_values_are_unchanged(self):
+        out = _full_schedule(fused_sum)
+        assert _agrees_by_value(fused_sum, out.ast, values=_VALUES[1:])

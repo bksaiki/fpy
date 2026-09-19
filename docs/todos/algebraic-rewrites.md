@@ -33,44 +33,46 @@ return sum(ts)
 
 `2 ** _k` is loop-invariant, so it can be pushed past the `sum`.
 
-## Target form
+## Target form — **reached**
 
-What the schedule should produce once everything below has landed —
-`fuse; comp_to_loop; rescale_fixed; hoist_invariant; hoist_scale; simplify`:
+`fuse; comp_to_loop; rescale_fixed; simplify; hoist_invariant; hoist_scale;
+simplify` produces:
 
 ```python
         e = max(t7)
         ts = fp.empty(len(xs))
         _k = ((e - 12) + 1)                 # hoisted: invariant
-        _r = (2 ** -_k)                     # hoisted: invariant subexpression
+        t = (2 ** -_k)                      # hoisted: invariant subexpression
+        t14 = (2 ** _k)                     # hoisted: invariant subexpression
         for t10 in range(len(xs)):
             x = xs[t10]
-            _t = (_r * x)
+            _t = (t * x)
             with fp.MPFixedContext(-1, rm=fp.RM.RTZ, enable_neg_zero=False):
                 _t13 = fp.round(_t)
             ts[t10] = _t13                  # integers: position zero
-        return ((2 ** _k) * sum(ts))        # hoisted out of the reduction
+        return (t14 * sum(ts))              # hoisted out of the reduction
 ```
 
-`_k` and `_r` are ordinary loop-invariant code motion, and `_k` is what makes
-the reduction hoist legal: `hoist_scale`'s condition is that every free variable of
-the factor is bound outside the loop, which `2 ** _k` satisfies once `_k` is.
-The factor itself needs no name — the rewrite moves the whole expression out
-with the reduction.
+The loop body is one multiply, one round and one store.  The `ts` are
+*integers* — `MPFixedContext(-1)` is position zero — so `sum(ts)` is an
+integer accumulation scaled once at the end, which is what the backend wants.
 
-The payoff is not fewer multiplies.  The `ts` are *integers* —
-`MPFixedContext(-1)` is position zero — so `sum(ts)` is an integer accumulation
-scaled once at the end, which is what the backend wants.
+`_k`, `t` and `t14` are ordinary loop-invariant code motion (#307).  `t14`
+leaving the reduction is the algebraic one, and `_k` being outside the loop is
+what makes it legal: `hoist_scale` requires every free variable of the factor
+to be bound outside.
 
-`hoist_invariant` takes `(2 ** -_k)` out as well, though it is a subexpression
-rather than a statement: where a binding cannot move, its invariant
-subexpressions are named and moved instead.  The loop body is then a multiply,
-a round and a store.
+The `else` arm is untouched — it rounds under `fp.FP32`, and the exactness
+condition is per-site.
 
-**Checked, not assumed.**  The form above is what
-`fuse; comp_to_loop; rescale_fixed; simplify; hoist_invariant` emits today, less
-the `hoist_scale` line; interpreted against the un-hoisted schedule over inputs
-spanning subnormals, overflow, cancellation, `inf` and `NaN`, the values agree.
+**Why `fuse` is in that schedule.**  Only to compensate for a `value_class`
+gap, not because the rewrite needs it.  `comp_to_loop` lowers
+`all([fp.isfinite(x) for x in xs])` to a materialized list plus `all(t5)`, and
+the refinement reads a fold accumulator (`_implied_fold`) rather than `all`
+over a list — so the guard tells it nothing, `_k` stays `TOP`, and `2 ** _k`
+picks up a `NAN` the factor cannot be proved free of.  `fuse` turns the guard
+into an accumulator loop, which is read.  Closing the gap directly would drop
+`fuse` from the schedule; a separate branch is expected to.
 
 Nothing in FPy discovers this.  `fpy2.rewrite` is a syntactic `l -> r` rewriter
 that checks nothing; `ConstFold` is partial evaluation, so a symbolic `2 ** _k`
@@ -197,6 +199,17 @@ hold **outside** `REAL` — the only such rewrite here.  It needs its own proof
 around NaN propagation, signed zero in ties, and `c <= 0` flipping the
 selection.  Not assumed; not started.
 
+**Reassessed after PR 2, and still worth doing.**  The original argument for
+deferring was that no schedule produces a scaled `max` — `fused_sum`'s
+`max(t7)` is over `logb(x)`, with no factor — and that is still true.  But PR 2
+ships the *comprehension* form, so `max([c * x for x in xs])` is now something
+a person may write directly, which the `sum` case does not cover.
+
+Measured, the semantics look favourable: `max` propagates NaN, returns `+0.0`
+for a `±0` mix regardless of order, and selects rather than accumulates.  It
+shares the matcher and the invariance and coverage conditions with `HoistScale`,
+so it belongs in that file — a follow-up commit, not a new transform.
+
 ### 4. REAL-gated identity table — `2**a * 2**b -> 2**(a+b)`, `2**k * (2**-k * x) -> x`
 
 Nice to have, **not** needed by the motivating example: after #2 no
@@ -239,22 +252,33 @@ Landed as `st.hoist_invariant` in #307.  Two things it settled that PR 2 depends
   simplification.  So PR 2's schedule must name `hoist_invariant` explicitly;
   `simplify` will not have done it.
 
-### PR 2 — `HoistScale` *(critical path)*
+### PR 2 — `HoistScale` *(critical path)* — **Done.**
 
 `fpy2/transform/hoist_scale.py`, wrapper `fpy2/strategies/scale_hoist.py`
-exporting `hoist_scale`.  Carries **everything needed to make it fire on
-`fused_sum`**: the `value_class` refinement through `all` / `any` over a
-materialized list, and the finiteness and sign source for `2 ** k`.
+exporting `hoist_scale`, with two analysis upgrades it needed and consumes.
 
-*Works afterwards:* `fused_sum` schedules to an integer accumulation —
-`ts[t12] = _t15` in the loop, `return ((2 ** _k) * sum(ts))` outside — with the
-`FP32` branch of the same function correctly declined.
+*Works now:* `fused_sum` schedules to an integer accumulation — `ts[t10] =
+_t13` in the loop, `return (t14 * sum(ts))` outside — with the `FP32` branch of
+the same function declined.  A comprehension is rewritten directly, without
+lowering: `sum([c * e for x in xs]) -> c * sum([e for x in xs])`.
 
-**This is the big one, and it carries the unknown.**  Settle the finiteness and
-sign route first (`exact_exp2` hook vs. `format_infer` bounds vs.
-context-constructor argument domains) — a spike, not a PR.  Shipping
-`hoist_scale` against a `value_class` that cannot discharge its side conditions
-would mean a pass that declines on its own motivating example.
+What the spike settled, and what shipped:
+
+- **Format bounds were a dead end**, by construction rather than for want of
+  effort: under an exact scope every format is `RealFormat`, which carries no
+  bounds — and an exact scope is the rewrite's first condition.
+- **Finiteness** came from splitting `value_class`'s positive-base power table
+  by the base literal.  `2 ** +inf` is an infinity where `2 ** -inf` is zero,
+  a distinction the old table dropped, and it is what takes `2 ** _k` from
+  `POS_INF|ZERO|FINITE` to `ZERO|FINITE`.
+- **Sign** is syntactic: the factor must be a power with a positive literal
+  base.  Incomplete, not unsound — the lattice split that would generalize it
+  touches every table in a shared analysis and is not needed here.
+- **Coverage** came from teaching `array_size`'s allocation rule to carry a
+  size *symbol*, not only a concrete integer, so `fp.empty(len(xs))` stays tied
+  to `xs` with no length annotation anywhere.
+- **Purity** turned out to be a sixth condition: the factor goes from once per
+  element to once.
 
 ### Follow-ups — not new transforms
 

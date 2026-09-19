@@ -338,7 +338,7 @@ The refusing fixture had to carry `ctx=fp.REAL` on the acting side: the
 contract fixtures are bare `@fp.fpy`, whose scope is symbolic, and a symbolic
 scope is refused by condition 1.
 
-### Phase 6 — end to end
+### Phase 6 — end to end — **Done.**
 
 - The full schedule reaches the target form of
   [algebraic-rewrites.md](algebraic-rewrites.md): `ts[t10] = _t13` in the loop,
@@ -351,6 +351,11 @@ scope is refused by condition 1.
 ```bash
 python3 -m pytest tests/unit/transform/test_hoist_scale.py -q
 ```
+
+25 passed.  The schedule reaches the target form with no step the roadmap did
+not already name, and the `fp.FP32` reduction in the same function is refused
+while the other is rewritten — the per-site exactness check, asserted rather
+than assumed.
 
 ### After the last phase
 
@@ -399,3 +404,14 @@ before this pass, it would leave a shape this rewrite does not recognise —
 *reduction* must run after this pass rather than before.  Matching both shapes
 doubles the matcher for a schedule nobody has asked for.  Reopen if the cpp
 path wants the fused form earlier.
+
+## Result
+
+All six phases done.  `make lint` clean; unit **4819**; `tests.infra`,
+`tests.infra.fpcore` and the cpp corpus all exit 0, the corpus reporting the
+same 130/136 bit-compared as before the change.
+
+Three open items, all resolved: the `value_class` sharpening moved no
+consumer's output; the element write stays a direct child of the loop body;
+and the accumulator form is not matched, so `fuse` over a reduction runs after
+this pass rather than before.
