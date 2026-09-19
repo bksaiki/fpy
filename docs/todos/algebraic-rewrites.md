@@ -227,8 +227,7 @@ other consumer.
 than once per iteration, in every `rescale_fixed` output — not just this one.  A
 standalone scheduling primitive, useful whether or not PR 2 ever lands.
 
-Landed as `st.hoist_invariant`; see [hoist-invariant.md](hoist-invariant.md) for
-the phase record.  Two things it settled that PR 2 depends on:
+Landed as `st.hoist_invariant` in #307.  Two things it settled that PR 2 depends on:
 
 - **The handoff holds.**  After `fuse; comp_to_loop; rescale_fixed; simplify;
   hoist_invariant`, every name the factor `2 ** _k` reads is bound before the
