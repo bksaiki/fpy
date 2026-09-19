@@ -47,6 +47,7 @@ from .free_var import close
 from .func_inline import inline
 from .hoistable import to_hoistable
 from .if_simplify import simplify_if
+from .invariant_hoist import hoist_invariant
 from .iter_elim import elim_iter
 from .iter_unfold import unfold_enumerate, unfold_zip
 from .loop_split import split
@@ -81,6 +82,7 @@ __all__ = [
     'elim_round',
     'float_to_fixed',
     'fuse',
+    'hoist_invariant',
     'inline',
     'insert_round',
     'lift_context',

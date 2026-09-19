@@ -11,6 +11,7 @@ from ..transform import (
     FloatToFixed,
     ForUnroll,
     FuncInline,
+    HoistInvariant,
     RescaleFixed,
     RoundInsert,
     SimplifyIf,
@@ -28,6 +29,7 @@ from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
 from .func_inline import inline
 from .if_simplify import simplify_if
+from .invariant_hoist import hoist_invariant
 from .iter_unfold import unfold_enumerate, unfold_zip
 from .loop_split import split
 from .loop_unroll import unroll_for, unroll_while
@@ -52,6 +54,7 @@ _REFUSALS: dict[Callable, Callable] = {
     simplify_if: SimplifyIf.refusals,
     split: SplitLoop.refusals,
     unroll_for: ForUnroll.refusals,
+    hoist_invariant: HoistInvariant.refusals,
 }
 """Which strategies can explain a refusal, and what explains it.
 
@@ -76,6 +79,7 @@ _SITES: dict[Callable, Callable] = {
     unroll_for: ForUnroll.sites,
     unroll_while: WhileUnroll.sites,
     inline: FuncInline.sites,
+    hoist_invariant: HoistInvariant.sites,
 }
 """Which strategies can be aimed, and what lists their sites.
 
