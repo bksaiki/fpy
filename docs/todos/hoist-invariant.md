@@ -56,15 +56,35 @@ when all of:
 | simple assignment, `NamedId` target | `isinstance(stmt, Assign)`, target not a `TupleBinding` |
 | `e` is pure | `Purity.analyze_expr(e, def_use)` |
 | every free variable of `e` is bound outside the loop | `DefineUseAnalysis`: each use's def site is not within the loop body, and is not a loop-carried `PhiDef` |
-| `x` is not rebound in the body, and is not a loop-carried phi | `def_use` — a second def of `x` in the body, or a `PhiDef` with `is_loop`, refuses |
-| the destination has the same active rounding context | `ContextUse`: the scope of `e` equals the scope the loop statement sits in |
+| `x` is bound exactly once in the body | `def_use.name_to_defs`, counting defs sited inside the body |
+| `x` is not read from outside the body | `def_use.uses` — see below; **added in Phase 2** |
 
-The context check is the one that is easy to get wrong.  Motion is sound under
-*any* context — it relocates an expression rather than re-associating one — but
-only to a destination that rounds the same way.  A body statement inside a
-`with` nested in the loop must not land outside that `with`.  Restricting to the
-top level of the body makes this a single equality rather than a walk, and costs
-nothing on the motivating example, where `_k` is a direct child of the `for`.
+Motion is sound under *any* rounding context — it relocates an expression
+rather than re-associating one — but only to a destination that rounds the same
+way.  Restricting to direct children of the body settles that outright rather
+than merely cheaply: neither `ForStmt` nor `WhileStmt` is a `ContextScopeSite`
+(only `FuncDef` and `ContextStmt` are), so a direct child of the body is
+*already* in the scope the loop statement sits in, which is the scope it would
+move to.  No context query is needed at all — Phase 2 dropped the planned
+`ContextUse` check.  A statement under a `with` in the body is excluded by the
+direct-child rule, which is the case that check existed for.
+
+**The last row is new.**  The plan's zero-trip decision covered the hoisted
+expression being *evaluated* where it previously was not.  It missed the mirror
+case: if `x` is read after the loop and the loop runs zero times, the reader saw
+whatever reached the loop, and after hoisting it sees the invariant value
+instead.
+
+```python
+c = 0.0
+for x in xs:
+    c = n + 1          # hoisting this changes `return acc + c` on `xs = []`
+    acc = acc + c * x
+return acc + c
+```
+
+That is a wrong answer, not a permitted extra evaluation, so it is refused
+rather than waved through under the undefined-behaviour argument.
 
 ### Decisions taken
 
@@ -161,7 +181,7 @@ Not fixed, deliberately: `ruff` reports `C419` on the `all([...])` inside the
 `comp_to_loop` lowers — and `tests/` is outside `make ruff`'s target, which
 checks `fpy2` only.  The tree already carries 37 of these.
 
-### Phase 2 — the invariance query
+### Phase 2 — the invariance query — **Done.**
 
 - New `fpy2/transform/hoist_invariant.py` with the private helper only: given a
   `ForStmt` or `WhileStmt` and a `DefineUseAnalysis`, return the body statements
@@ -176,6 +196,22 @@ mechanical.  Reviewing them together buries the conditions under AST surgery.
 ```bash
 python3 -m pytest tests/unit/transform/test_hoist_invariant.py -q
 ```
+
+18 passed; `ruff` and `mypy` clean on the new module.  What the phase decided:
+
+- **The context check is unnecessary**, for the reason now recorded in the
+  design above.  One fewer analysis to thread through.
+- **A condition was missing**: the target must not be read from outside the
+  body.  Also recorded above.
+- **The query is one round.**  Where an invariant statement reads another, the
+  second stays behind until the first has moved — `b = a * 2` after
+  `a = n + 1` yields `['a']`, not `['a', 'b']`.  Phase 3's transform re-runs
+  the query to a fixpoint; in `Simplify` (Phase 5) the outer fixpoint would get
+  there anyway, but the standalone primitive must not depend on that.
+
+Each refusal was checked to fire for the reason it claims rather than
+vacuously, by instrumenting the predicate and printing which condition rejected
+each body statement.
 
 ### Phase 3 — the transform
 

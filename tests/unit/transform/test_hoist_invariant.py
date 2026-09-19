@@ -14,8 +14,10 @@ recorded in the plan is to hoist anyway.
 import fpy2 as fp
 import fpy2.strategies as st
 
+from fpy2.analysis import DefineUse
 from fpy2.ast import Assign, ForStmt, StmtBlock, WhileStmt
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.transform.hoist_invariant import _invariants
 from fpy2.utils import NamedId
 
 # zero-trip, one-trip, and a spread that straddles the FP16 subnormal and
@@ -160,3 +162,159 @@ class TestRescaleFixedOutput:
         against.  The empty list is excluded: `max([])` has no value."""
         out = self._schedule(self.fused_sum)
         assert _agrees_by_value(self.fused_sum, out.ast, values=_VALUES[1:])
+
+
+# ----------------------------------------------------------------------
+# Phase 2: the invariance query
+
+
+def _loops(ast) -> list:
+    """Every `for` and `while` in *ast*, outermost first."""
+    found = []
+
+    class V(DefaultVisitor):
+        def _visit_for(self, stmt: ForStmt, ctx):
+            found.append(stmt)
+            super()._visit_for(stmt, ctx)
+
+        def _visit_while(self, stmt: WhileStmt, ctx):
+            found.append(stmt)
+            super()._visit_while(stmt, ctx)
+
+    V()._visit_function(ast, None)
+    return found
+
+
+def _query(func, which: int = 0) -> list[str]:
+    """The names `_invariants` says may leave the *which*-th loop of *func*."""
+    def_use = DefineUse.analyze(func.ast)
+    return [str(s.target) for s in _invariants(_loops(func.ast)[which], def_use)]
+
+
+def _foreign(x):
+    return x
+
+
+class TestTheQueryFinds:
+
+    def test_an_invariant_in_a_for_body(self):
+        assert _query(scaled_sum) == ['c']
+
+    def test_an_invariant_in_a_while_body(self):
+        assert _query(scaled_while) == ['c']
+
+    def test_one_round_only(self):
+        """`b` reads `a`, which is still inside the loop, so it stays behind
+        until `a` has moved.  The caller re-runs the query."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            n = len(xs)
+            acc = 0.0
+            for x in xs:
+                a = n + 1
+                b = a * 2
+                acc = acc + b * x
+            return acc
+
+        assert _query(f) == ['a']
+
+
+class TestTheQueryRefuses:
+
+    def test_a_read_of_the_loop_target(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                c = x + 1
+                acc = acc + c
+            return acc
+
+        assert _query(f) == []
+
+    def test_a_read_of_a_name_the_body_rebinds(self):
+        """`m` reaches `c` through the loop's phi, not from before it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            m = 1.0
+            acc = 0.0
+            for x in xs:
+                c = m + 1
+                m = m + 1
+                acc = acc + c * x
+            return acc
+
+        assert _query(f) == []
+
+    def test_a_target_the_body_binds_twice(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            n = len(xs)
+            acc = 0.0
+            for x in xs:
+                c = n + 1
+                acc = acc + c * x
+                c = n + 2
+            return acc
+
+        assert _query(f) == []
+
+    def test_a_target_read_after_the_loop(self):
+        """A zero-trip loop would leave the pre-loop value in place; hoisting
+        would put the invariant one there instead."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            n = len(xs)
+            c = 0.0
+            acc = 0.0
+            for x in xs:
+                c = n + 1
+                acc = acc + c * x
+            return acc + c
+
+        assert _query(f) == []
+
+    def test_a_tuple_target(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            n = len(xs)
+            acc = 0.0
+            for x in xs:
+                a, b = (n + 1, n + 2)
+                acc = acc + (a + b) * x
+            return acc
+
+        assert _query(f) == []
+
+    def test_a_statement_under_a_nested_with(self):
+        """Not a direct child of the body: it would land outside the `with`
+        and be rounded differently."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            n = len(xs)
+            acc = 0.0
+            for x in xs:
+                with fp.FP32:
+                    c = n + 1
+                acc = acc + c * x
+            return acc
+
+        assert _query(f) == []
+
+    def test_an_impure_expression(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                c = _foreign(1.0)
+                acc = acc + c * x
+            return acc
+
+        assert _query(f) == []
+
+
+class TestTheQueryOnTheMotivatingExample:
+
+    def test_it_finds_the_scale(self):
+        out = TestRescaleFixedOutput._schedule(TestRescaleFixedOutput.fused_sum)
+        assert '_k' in _query(out, which=2)
