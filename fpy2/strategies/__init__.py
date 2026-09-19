@@ -59,6 +59,7 @@ from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .round_insert import insert_round
 from .round_split import split_round
+from .scale_hoist import hoist_scale
 from .simple import simplify
 from .sites import refusals, sites
 from .special_unfold import unfold_special
@@ -83,6 +84,7 @@ __all__ = [
     'float_to_fixed',
     'fuse',
     'hoist_invariant',
+    'hoist_scale',
     'inline',
     'insert_round',
     'lift_context',

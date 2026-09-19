@@ -89,6 +89,7 @@ __all__ = [
     'ValueClassAnalysis',
     'ValueClassInfer',
     'class_of',
+    'is_positive_literal',
     'representable_classes',
 ]
 
@@ -260,17 +261,26 @@ _LOGB = {
 }
 """``logb(0)`` is ``-inf``, ``logb(inf)`` is ``+inf``, ``logb(1.5)`` is ``0``."""
 
-_POW_INF = _POS_INF | _ZERO | _FINITE
-"""``b ** (+-inf)`` for a positive literal ``b``: ``+inf`` when ``b > 1``, ``0``
-when ``b < 1``, ``1`` when ``b`` is ``1``.  The literal is not inspected, so all
-three stand; never ``-inf``, since a positive base has no negative power."""
-
-_POW_POS_BASE = {
+_POW_BIG_BASE = {
     _NAN: _NAN,
-    _POS_INF: _POW_INF, _NEG_INF: _POW_INF,
+    _POS_INF: _POS_INF, _NEG_INF: _ZERO,
     _ZERO: _FINITE, _FINITE: _FINITE,
 }
-"""``b ** y`` for a positive constant ``b``: ``b ** 0`` is ``1``."""
+"""``b ** y`` for a literal ``b > 1``: ``b ** +inf`` is ``+inf`` and
+``b ** -inf`` is ``0``.  Which way round is what reading the literal buys --
+the two infinities are not alike, and a caller asking whether ``2 ** k`` can be
+infinite gets an answer only here."""
+
+_POW_SMALL_BASE = {
+    _NAN: _NAN,
+    _POS_INF: _ZERO, _NEG_INF: _POS_INF,
+    _ZERO: _FINITE, _FINITE: _FINITE,
+}
+"""``b ** y`` for a literal ``0 < b < 1``: the mirror of :data:`_POW_BIG_BASE`."""
+
+_POW_ONE_BASE = dict.fromkeys(_ATOMS, _FINITE)
+"""``1 ** y`` is ``1`` whatever ``y`` is -- a NaN exponent included, which is
+what IEEE 754 says and what the sweep against the interpreter confirms."""
 
 
 def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
@@ -357,8 +367,26 @@ def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None'
     return region
 
 
-def _positive_literal(e: Expr) -> bool:
+def is_positive_literal(e: Expr) -> bool:
+    """Whether *e* is a literal greater than zero."""
     return isinstance(e, RationalVal) and e.as_rational() > 0
+
+
+def _pow_table(base: Expr) -> dict[ValueClass, ValueClass] | None:
+    """Which ``b ** y`` table *base* selects, or `None` where it is not a
+    positive literal.  A negative or symbolic base gets no rule.
+
+    None of the three yields ``-inf``: a positive base has no negative power.
+    """
+    if not is_positive_literal(base):
+        return None
+    assert isinstance(base, RationalVal)
+    b = base.as_rational()
+    if b > 1:
+        return _POW_BIG_BASE
+    if b < 1:
+        return _POW_SMALL_BASE
+    return _POW_ONE_BASE
 
 
 #####################################################################
@@ -1011,8 +1039,8 @@ class _ValueClassInstance(DefaultVisitor):
                 return self._rounded(e, _exact_sub(a, b))
             case Mul():
                 return self._rounded(e, _exact_mul(a, b))
-            case Pow() if _positive_literal(e.first):
-                return self._rounded(e, _map(_POW_POS_BASE, b))
+            case Pow() if (table := _pow_table(e.first)) is not None:
+                return self._rounded(e, _map(table, b))
             case _:
                 return self._rounded(e, _TOP)
 

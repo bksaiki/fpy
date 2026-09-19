@@ -25,6 +25,7 @@ from .for_unroll import ForUnroll, ForUnrollStrategy
 from .free_var_elim import FreeVarElim
 from .func_inline import FuncInline
 from .hoist_invariant import HoistInvariant
+from .hoist_scale import HoistScale
 from .hoistable import Hoistable
 from .if_bundling import IfBundling
 from .lift_context import LiftContext

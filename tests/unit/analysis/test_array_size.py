@@ -110,6 +110,67 @@ class TestArraySizeInfer:
         ys_b = [b for d, b in info.by_def.items() if d.name.base == 'ys'][0]
         assert is_size_eq(xs_b, ys_b)
 
+    def test_empty_keeps_a_symbolic_length(self):
+        """``fp.empty(len(xs))`` is the same size as ``xs`` with no annotation
+        anywhere: the parameter's fresh size symbol survives the allocation."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            ys = fp.empty(len(xs))
+            ys[0] = xs[0]
+            return ys[0]
+
+        info = self._run(f)
+        xs_b = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
+        ys_bs = [b for d, b in info.by_def.items() if d.name.base == 'ys']
+        assert ys_bs and all(is_size_eq(xs_b, b) for b in ys_bs)
+
+    def test_empty_keeps_a_concrete_length(self):
+        """The concrete case still folds to an ``int``, not a symbol."""
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            ys = fp.empty(len(xs))
+            ys[0] = xs[0]
+            return ys[0]
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 16, None)
+        info = self._run(f)
+        ys_b = [b for d, b in info.by_def.items() if d.name.base == 'ys'][0]
+        assert concrete_size(ys_b.size) == 16
+
+    def test_empty_unifies_across_two_parameters(self):
+        """Two parameters of the same symbolic length, and a list allocated
+        from one of them: all three are one size class."""
+        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
+
+        n = NamedId('N')
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            zs = fp.empty(len(ys))
+            zs[0] = xs[0]
+            return zs[0]
+
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+        f.ast.args[1].type = ListTypeAnn(RealTypeAnn(None, None), n, None)
+        info = self._run(f)
+        xs_b = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
+        zs_b = [b for d, b in info.by_def.items() if d.name.base == 'zs'][0]
+        assert is_size_eq(xs_b, zs_b)
+
+    def test_empty_of_an_unknown_length_stays_unknown(self):
+        """No size to carry: `n` is a plain argument, not a list length."""
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            ys = fp.empty(n)
+            ys[0] = 1.0
+            return ys[0]
+
+        info = self._run(f)
+        ys_b = [b for d, b in info.by_def.items() if d.name.base == 'ys'][0]
+        assert ys_b.size is None
+
     def test_tuple_argument_has_tuplesize(self):
         """A tuple argument is a TupleSize with one entry per element."""
 

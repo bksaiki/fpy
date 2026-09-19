@@ -12,6 +12,7 @@ from ..transform import (
     ForUnroll,
     FuncInline,
     HoistInvariant,
+    HoistScale,
     RescaleFixed,
     RoundInsert,
     SimplifyIf,
@@ -37,6 +38,7 @@ from .neg_zero_unfold import unfold_neg_zero
 from .overflow_unfold import unfold_overflow
 from .round_insert import insert_round
 from .round_split import split_round
+from .scale_hoist import hoist_scale
 from .special_unfold import unfold_special
 
 _REFUSALS: dict[Callable, Callable] = {
@@ -55,6 +57,7 @@ _REFUSALS: dict[Callable, Callable] = {
     split: SplitLoop.refusals,
     unroll_for: ForUnroll.refusals,
     hoist_invariant: HoistInvariant.refusals,
+    hoist_scale: HoistScale.refusals,
 }
 """Which strategies can explain a refusal, and what explains it.
 
@@ -80,6 +83,7 @@ _SITES: dict[Callable, Callable] = {
     unroll_while: WhileUnroll.sites,
     inline: FuncInline.sites,
     hoist_invariant: HoistInvariant.sites,
+    hoist_scale: HoistScale.sites,
 }
 """Which strategies can be aimed, and what lists their sites.
 

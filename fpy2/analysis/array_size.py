@@ -525,9 +525,7 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
                 acc: ArraySizeBound = elt_ty
                 for arg in arg_rev:
-                    # `_const_int`, not `_get_eval`: a dimension is commonly
-                    # `len(xs)`, which only the former folds
-                    acc = ListSize(acc, self._const_int(arg))
+                    acc = ListSize(acc, self._size_of(arg))
                 return acc
 
             case _:
@@ -722,6 +720,25 @@ class _ArraySizeInferInstance(DefaultVisitor):
                     case _:
                         folded = lhs * rhs
                 return folded if self._holds_int(e, folded) else None
+        return None
+
+    def _size_of(self, e: Expr) -> ArraySize:
+        """:meth:`_const_int`, but also answering with a size *symbol*.
+
+        A dimension is commonly ``len(xs)``, and an unannotated list parameter
+        carries a fresh symbol rather than a concrete length, so insisting on
+        an ``int`` loses the one fact that relates the allocation to what it
+        was sized from.  Separate from `_const_int` because that one's other
+        callers do arithmetic on the result.
+        """
+        n = self._const_int(e)
+        if n is not None:
+            return n
+        d = self.def_use.defining_expr(e)
+        if isinstance(d, Len):
+            bound = self.by_expr.get(d.arg)
+            if isinstance(bound, ListSize) and isinstance(bound.size, NamedId):
+                return self.uf.find(bound.size)
         return None
 
     def _holds_int(self, e: ContextUseSite, value: int) -> bool:

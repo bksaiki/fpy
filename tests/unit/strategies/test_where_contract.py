@@ -21,6 +21,7 @@ from fpy2.strategies import (
     comp_to_loop,
     float_to_fixed,
     hoist_invariant,
+    hoist_scale,
     inline,
     insert_round,
     monomorphize,
@@ -41,6 +42,13 @@ from fpy2.strategies import (
 from fpy2.strategies.sites import _SITES
 from fpy2.transform import ForUnrollStrategy, SplitLoopStrategy, contains
 from fpy2.types import RealType
+
+from ..transform.test_hoist_scale import (
+    rounds_between_adds as _sums_that_round,
+)
+from ..transform.test_hoist_scale import (
+    two_sums as _two_scaled_sums,
+)
 
 # ----------------------------------------------------------------------
 # Programs, chosen so each strategy has at least one site in its own
@@ -321,6 +329,7 @@ ACTS = [
     ('simplify_if/nested', simplify_if, _nested_ifs, {}),
     ('hoist_invariant', hoist_invariant, _two_invariant_for, {}),
     ('hoist_invariant/nested', hoist_invariant, _nested_invariant_for, {}),
+    ('hoist_scale', hoist_scale, _two_scaled_sums, {}),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the
@@ -334,6 +343,7 @@ REFUSES = [
     ('rescale_fixed/refuses', rescale_fixed, _two_floats, {}),
     ('inline/refuses', inline, _refuses_inline, {}),
     ('hoist_invariant/refuses', hoist_invariant, _two_for, {}),
+    ('hoist_scale/refuses', hoist_scale, _sums_that_round, {}),
     ('split/refuses', split, _odd_trip, _STRICT_SPLIT),
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),
