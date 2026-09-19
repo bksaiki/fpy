@@ -415,3 +415,37 @@ Three open items, all resolved: the `value_class` sharpening moved no
 consumer's output; the element write stays a direct child of the loop body;
 and the accumulator form is not matched, so `fuse` over a reduction runs after
 this pass rather than before.
+
+## Review: seven soundness bugs, all in the lowered shape
+
+An adversarial pass over the finished PR found seven, every one a silent
+miscompile through `st.hoist_scale(f)` with no `where`.  The comprehension
+shape, the `value_class` pow tables and the `array_size` change all held up.
+
+| # | what stood between the parts | was |
+|---|---|---|
+| 1 | `ts = ys` after the loop | factor applied to an unrelated list |
+| 2 | `c` rebound before the reduction | re-emitted `Var` bound to the new value |
+| 3 | `ts[0] = t` — index is not the loop target | one slot written, the rest scaled unwritten |
+| 4 | a second `ts[i] =` under an `if` | an unscaled element scaled anyway |
+| 5 | `acc = acc + ts[i]` in the body | a read observing the scaled value |
+| 6 | `acc = acc + t` in the body | the product read by something else |
+| 7 | the product under its own `with fp.FP32` | dropping the multiply dropped its rounding |
+
+**The shared mistake was matching by position and name rather than by
+definition.**  `_find` scanned backwards for a loop writing the same *name*,
+and the conditions then policed the gap with an ad-hoc use check that exempted
+everything inside the loop body.
+
+The fix inverts it: the loop is found through the definition the reduction
+reads.  After a filling loop the name resolves to a `PhiDef` sited at that
+loop, whose arms are the allocation and the write; a later rebinding resolves
+to an `AssignDef` at the rebinding instead, so #1 is refused by construction
+and no backward scan is needed.  On top of that the conditions now require the
+write to be indexed by the loop's own target, the list and the product each to
+be used by nothing but the write and the reduction, the product's scope to be
+exact, and every name the factor reads to mean the same thing at the reduction
+as it did at the product.
+
+`_covers` also refused to answer "covered" from two unknown sizes, which
+`is_size_eq` reports as equal.  No program was found that reached it.

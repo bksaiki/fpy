@@ -43,6 +43,13 @@ from fpy2.strategies.sites import _SITES
 from fpy2.transform import ForUnrollStrategy, SplitLoopStrategy, contains
 from fpy2.types import RealType
 
+from ..transform.test_hoist_scale import (
+    rounds_between_adds as _sums_that_round,
+)
+from ..transform.test_hoist_scale import (
+    two_sums as _two_scaled_sums,
+)
+
 # ----------------------------------------------------------------------
 # Programs, chosen so each strategy has at least one site in its own
 
@@ -133,24 +140,6 @@ def _nested_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
             q = n + 2
             a = a + (p * q) * (x * y)
     return a
-
-
-@fp.fpy(ctx=fp.REAL)
-def _two_scaled_sums(xs: list[fp.Real], ys: list[fp.Real], k: fp.Real) -> fp.Real:
-    if fp.isfinite(k):
-        a = sum([(2 ** k) * x for x in xs])
-        b = sum([(2 ** k) * y for y in ys])
-        return a + b
-    else:
-        return 0.0
-
-
-@fp.fpy(ctx=fp.FP32)
-def _sums_that_round(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-    if fp.isfinite(k):
-        return sum([(2 ** k) * x for x in xs])
-    else:
-        return 0.0
 
 
 @fp.fpy

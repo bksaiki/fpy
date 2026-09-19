@@ -89,6 +89,7 @@ __all__ = [
     'ValueClassAnalysis',
     'ValueClassInfer',
     'class_of',
+    'is_positive_literal',
     'representable_classes',
 ]
 
@@ -281,8 +282,6 @@ _POW_ONE_BASE = dict.fromkeys(_ATOMS, _FINITE)
 """``1 ** y`` is ``1`` whatever ``y`` is -- a NaN exponent included, which is
 what IEEE 754 says and what the sweep against the interpreter confirms."""
 
-"""Never ``-inf`` in any of the three: a positive base has no negative power."""
-
 
 def _exact_add(a: ValueClass, b: ValueClass) -> ValueClass:
     """``a + b``; :func:`_exact_sub` negates *b* and reuses this.
@@ -368,14 +367,18 @@ def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None'
     return region
 
 
-def _positive_literal(e: Expr) -> bool:
+def is_positive_literal(e: Expr) -> bool:
+    """Whether *e* is a literal greater than zero."""
     return isinstance(e, RationalVal) and e.as_rational() > 0
 
 
 def _pow_table(base: Expr) -> dict[ValueClass, ValueClass] | None:
     """Which ``b ** y`` table *base* selects, or `None` where it is not a
-    positive literal.  A negative or symbolic base gets no rule."""
-    if not _positive_literal(base):
+    positive literal.  A negative or symbolic base gets no rule.
+
+    None of the three yields ``-inf``: a positive base has no negative power.
+    """
+    if not is_positive_literal(base):
         return None
     assert isinstance(base, RationalVal)
     b = base.as_rational()

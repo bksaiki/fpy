@@ -5,16 +5,19 @@ from typing import NamedTuple
 from ..analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
+    AssignDef,
     DefineUse,
     DefineUseAnalysis,
+    Definition,
     LiveVars,
+    PhiDef,
     Purity,
     SyntaxCheck,
     ValueClassAnalysis,
     ValueClassInfer,
 )
-from ..analysis.array_size import is_size_eq
-from ..analysis.value_class import _positive_literal
+from ..analysis.array_size import ListSize, is_size_eq
+from ..analysis.value_class import is_positive_literal
 from ..ast import *
 from .cursor import Cursor, EditLog
 from .error import TransformDeclined
@@ -77,6 +80,7 @@ class _Site(NamedTuple):
     elt: Expr
     fixed: tuple[NamedId, ...]
     """names bound per element, which the factor must not read"""
+    red_stmt: 'Stmt | None' = None
     loop: 'ForStmt | None' = None
     write: 'IndexedAssign | None' = None
     prod_stmt: 'Assign | None' = None
@@ -114,60 +118,99 @@ def _writes(loop: ForStmt) -> list[IndexedAssign]:
     return [s for s in loop.body.stmts if isinstance(s, IndexedAssign)]
 
 
-def _find(block: StmtBlock, pos: int, name: NamedId) -> 'ForStmt | None':
-    """The nearest loop above ``block[pos]`` that fills *name*, or `None`.
+def _all_writes(loop: ForStmt, name: NamedId) -> int:
+    """How many list writes to *name* the whole body holds, nested included.
 
-    Interference in between needs no check here: a statement that reads or
-    writes *name* is a use of it, and `_why_not` refuses any use outside the
-    loop body other than the reduction itself -- a second filling loop
-    included.
+    `_writes` looks at direct children, which is what coverage needs; this
+    counts every one, because a second write -- under an ``if``, say -- can
+    leave an element holding a value the factor was never applied to.
     """
-    for i in range(pos - 1, -1, -1):
-        stmt = block.stmts[i]
-        if isinstance(stmt, ForStmt):
-            writes = _writes(stmt)
-            if len(writes) == 1 and writes[0].var == name:
-                return stmt
+    count = 0
+
+    class V(DefaultVisitor):
+        def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: None):
+            nonlocal count
+            if stmt.var == name:
+                count += 1
+            super()._visit_indexed_assign(stmt, ctx)
+
+    V()._visit_block(loop.body, None)
+    return count
+
+
+def _created_by(stmt: Stmt, name: NamedId, facts: '_Facts') -> 'Definition | None':
+    """The definition of *name* that *stmt* introduces."""
+    for d in facts.def_use.name_to_defs.get(name, set()):
+        if isinstance(d, AssignDef) and d.site is stmt:
+            return d
     return None
 
 
-def _loop_site(
-    block: StmtBlock, pos: int, red: Sum, facts: '_Facts'
-) -> '_Site | None':
-    """``sum(ts)`` over a list a loop above it filled.
+def _loop_site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+    """``sum(ts)`` over a list a loop filled.
 
-    The element write reads a *name* -- `rescale_fixed` binds the scaled value
-    first -- so both the product and the factor's own definition are reached
-    through `defining_expr`.
+    The loop is found through the *definition* the reduction reads, not by
+    scanning backwards for one that writes the same name: after the loop the
+    name resolves to a phi sited at it, and a later rebinding resolves to that
+    rebinding instead, which is how ``ts = ys; return sum(ts)`` is refused.
+
+    The element write reads a name -- `rescale_fixed` binds the scaled value
+    first -- so the product is reached through `defining_expr`.
     """
     if not isinstance(red.arg, Var):
         return None
-    loop = _find(block, pos, red.arg.name)
-    if loop is None:
+    d = facts.def_use.find_def_from_use(red.arg)
+    if not isinstance(d, PhiDef) or not isinstance(d.site, ForStmt):
         return None
-    write = _writes(loop)[0]
+    loop = d.site
+
+    writes = _writes(loop)
+    if len(writes) != 1 or writes[0].var != red.arg.name:
+        return None
+    write = writes[0]
+    created = _created_by(write, write.var, facts)
+    if created is None or facts.def_use.def_to_idx[created] not in (d.lhs, d.rhs):
+        return None
+
+    if not isinstance(write.expr, Var):
+        return None
     prod = facts.def_use.defining_expr(write.expr)
-    if not isinstance(prod, Mul) or not isinstance(write.expr, Var):
+    if not isinstance(prod, Mul):
         return None
     prod_stmt = facts.def_use.find_def_from_use(write.expr).site
-    if not isinstance(prod_stmt, Assign):
+    if not isinstance(prod_stmt, Assign) or prod_stmt not in loop.body.stmts:
         return None
     return _Site(
         red, prod, prod.args[0], prod.args[1], (),
-        loop=loop, write=write, prod_stmt=prod_stmt,
+        red_stmt=stmt, loop=loop, write=write, prod_stmt=prod_stmt,
     )
 
 
-def _site(block: StmtBlock, pos: int, red: Sum, facts: '_Facts') -> '_Site | None':
+def _site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     """The rewrite's shape at *red*, in whichever form it takes."""
-    return _comp_site(red) or _loop_site(block, pos, red, facts)
+    return _comp_site(red) or _loop_site(red, stmt, facts)
+
+
+def _indexed_by_target(site: _Site) -> bool:
+    """Whether the write's index is exactly the loop's own target.
+
+    Without this a loop of the right trip count may still write one slot over
+    and over, leaving the rest to be scaled unwritten.
+    """
+    assert site.loop is not None and site.write is not None
+    target = site.loop.target
+    if not isinstance(target, NamedId) or len(site.write.indices) != 1:
+        return False
+    index = site.write.indices[0]
+    return isinstance(index, Var) and index.name == target
 
 
 def _covers(site: _Site, facts: '_Facts') -> bool:
     """Whether the loop writes every element of the list it fills.
 
-    The trip count is ``range(len(v))`` and the list is the same size as *v*,
-    which the size union-find answers even where neither length is concrete.
+    The trip count is ``range(len(v))`` and the list is the same size as *v*.
+    Both sizes must be *known*: `is_size_eq` answers `True` for two unknowns,
+    which would read as coverage rather than ignorance.
     """
     assert site.loop is not None and site.write is not None
     it = site.loop.iterable
@@ -177,7 +220,12 @@ def _covers(site: _Site, facts: '_Facts') -> bool:
     if not isinstance(stop, Len):
         return False
     d = facts.def_use.find_def_from_use(site.write)
-    return is_size_eq(facts.sizes.by_expr.get(stop.arg), facts.sizes.by_def.get(d))
+    a, b = facts.sizes.by_expr.get(stop.arg), facts.sizes.by_def.get(d)
+    if not isinstance(a, ListSize) or not isinstance(b, ListSize):
+        return False
+    if a.size is None or b.size is None:
+        return False
+    return is_size_eq(a, b)
 
 
 def _varies(site: _Site, facts: '_Facts') -> list[str]:
@@ -199,7 +247,7 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     if not facts.scopes.is_exact(site.red):
         return 'the reduction does not round exactly'
     if not Purity.analyze_expr(site.factor, facts.def_use):
-        return 'the factor is not pure, and would be evaluated once instead of once per element'
+        return 'the factor is not pure'
 
     varies = _varies(site, facts)
     if varies:
@@ -208,22 +256,54 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     if not facts.classes.is_finite(site.factor):
         return 'the factor may be an infinity or a NaN'
     base = facts.def_use.defining_expr(site.factor)
-    if not isinstance(base, Pow) or not _positive_literal(base.args[0]):
+    if not isinstance(base, Pow) or not is_positive_literal(base.args[0]):
         return 'the factor is not a power with a positive base, so may be negative'
 
     if site.loop is None:
-        # a comprehension defines every element; there is nothing to cover
+        # a comprehension defines every element, and both halves of the rewrite
+        # sit in the one expression, so nothing below applies
         return None
 
-    assert site.write is not None
-    body = _Nodes.of(site.loop.body)
-    # the reduction's own use is the `Var` it reads, not the `Sum` around it
+    assert site.write is not None and site.prod_stmt is not None
+    assert site.red_stmt is not None
+
+    # deleting the multiply deletes its rounding, which is only harmless where
+    # it rounded exactly
+    if not facts.scopes.is_exact(site.prod):
+        return 'the product does not round exactly'
+
+    # the factor is re-emitted at the reduction, so every name it reads must
+    # mean the same thing there as it did in the loop
+    at_prod = facts.def_use.reach[site.prod_stmt]
+    at_red = facts.def_use.reach[site.red_stmt]
+    moved = sorted(
+        str(n) for n in LiveVars.analyze(site.factor)
+        if at_prod.get(n) is not at_red.get(n)
+    )
+    if moved:
+        return f'{", ".join(f"`{n}`" for n in moved)} is rebound before the reduction'
+
+    # dropping the factor changes the product, so nothing but the write may
+    # read it
+    target = site.prod_stmt.target
+    if not isinstance(target, NamedId):
+        return 'the product is not bound to a name'
+    prod_def = _created_by(site.prod_stmt, target, facts)
+    if prod_def is None or facts.def_use.uses.get(prod_def, set()) != {site.write.expr}:
+        return f'`{target}` is read by something other than the write'
+
+    # and nothing but the write and the reduction may touch the list
     if any(
-        u is not site.red.arg and id(u) not in body
+        u is not site.write and u is not site.red.arg
         for d in facts.def_use.name_to_defs.get(site.write.var, set())
         for u in facts.def_use.uses.get(d, set())
     ):
-        return f'`{site.write.var}` is read somewhere other than the reduction'
+        return f'`{site.write.var}` is used somewhere other than the write and the reduction'
+    if _all_writes(site.loop, site.write.var) != 1:
+        return f'`{site.write.var}` is written more than once in the body'
+
+    if not _indexed_by_target(site):
+        return f'`{site.write.var}` is not written at the loop index'
     if not _covers(site, facts):
         return f'the loop may not write every element of `{site.write.var}`'
     return None
@@ -288,7 +368,7 @@ class _HoistScale(SiteRewriter):
                 self._site = (block, pos)
                 for e in _own_exprs(stmt):
                     for red in _Reductions.of(e):
-                        site = _site(block, pos, red, self.facts)
+                        site = _site(red, stmt, self.facts)
                         why = (
                             'no scaled list write fills the reduction'
                             if site is None else _why_not(site, self.facts)

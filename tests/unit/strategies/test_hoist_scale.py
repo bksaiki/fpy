@@ -5,7 +5,6 @@ The transform itself is tested in
 how it is aimed, and how it fails when aimed at nothing.
 """
 
-import fpy2 as fp
 import pytest
 
 from fpy2.function import Function
@@ -17,24 +16,7 @@ from fpy2.strategies import (
     sites,
 )
 
-
-@fp.fpy(ctx=fp.REAL)
-def two_sums(xs: list[fp.Real], ys: list[fp.Real], k: fp.Real) -> fp.Real:
-    if fp.isfinite(k):
-        a = sum([(2 ** k) * x for x in xs])
-        b = sum([(2 ** k) * y for y in ys])
-        return a + b
-    else:
-        return 0.0
-
-
-@fp.fpy(ctx=fp.FP32)
-def rounds_between_adds(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-    if fp.isfinite(k):
-        return sum([(2 ** k) * x for x in xs])
-    else:
-        return 0.0
-
+from ..transform.test_hoist_scale import rounds_between_adds, two_sums
 
 _VALUES = ([], [1.0], [1.5, -2.0, 3.25])
 
