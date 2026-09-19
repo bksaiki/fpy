@@ -138,6 +138,18 @@ allocation rule.
 
 ## What the pass matches
 
+**Two shapes.**  `sum([c * e for x in xs])` is the one a program is written in,
+and the one the rewrite is really about — a comprehension defines every
+element, so coverage needs no proof and condition 5 does not arise.  `sum(ts)`
+over a list a loop filled is the same thing after `comp_to_loop`, which
+`rescale_fixed` requires; there the elements *not* written are the whole
+difficulty, and conditions 5 and the no-other-use check exist for it.
+
+The first cut matched only the lowered shape, which was overfitting to the
+motivating schedule.
+
+For the lowered shape:
+
 - The reduction is `sum(name)` over a list the loop built.
 - The element write is `ts[i] = t`, and the product is reached through
   `DefineUseAnalysis.defining_expr` — `rescale_fixed` binds the scaled value to
@@ -260,7 +272,7 @@ to the list.  Four cases pinned in `test_array_size.py` — symbolic, concrete,
 unified across two parameters, and an allocation from a plain argument that
 stays unknown.
 
-### Phase 4 — the transform
+### Phase 4 — the transform — **Done.**
 
 - New `fpy2/transform/hoist_scale.py`: `_HoistScale(SiteRewriter)` and
   `HoistScale` with `apply`, `apply_with_edits`, `sites`, `refusals`; exported
@@ -273,6 +285,29 @@ stays unknown.
 ```bash
 python3 -m pytest tests/unit/transform/test_hoist_scale.py -q
 ```
+
+21 passed; `tests/unit/transform` and `tests/unit/analysis` green at 2186;
+`ruff` and `mypy` clean.  What the phase found:
+
+- **The comprehension form belongs in the pass.**  Matching only the lowered
+  shape was overfitting; a user writing `sum([2 ** k * x for x in xs])` gets
+  the rewrite now, and that path needs neither `ArraySize` nor the
+  no-other-use check.  Recorded in the design above.
+- **Sites are expressions, not statements.**  The first cut recorded refusals
+  keyed by the reduction while leaving `_expr_sited` false, so `list_sites` and
+  `list_refusals` looked for statements and found nothing — a silent empty
+  listing.  `_expr_sited = True` with `found_exprs` and `_named_by_cursor` is
+  the right pairing, and it makes a cursor name the reduction exactly.
+- **A use of `ts` is the `Var`, not the `Sum`.**  The no-other-use check
+  compared against the reduction node and so refused every program, since the
+  reduction's own use site is the variable it reads.
+- **Both edits have to be planned before either is applied.**  The loop that
+  fills the list comes before the reduction that reads it, so deciding at the
+  reduction left the product already rebuilt and the factor applied twice.
+  `_plan` walks the original tree once and the rewrite walk applies what it
+  chose.
+- **Purity is a condition.**  Not in the original five: the factor goes from
+  being evaluated once per element to once, so an impure one is refused.
 
 ### Phase 5 — the scheduling primitive
 

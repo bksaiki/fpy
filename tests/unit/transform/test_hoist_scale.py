@@ -13,13 +13,16 @@ answered by the analysis upgrades below.  The fifth is the syntactic sign check,
 which is the pass's own and has nothing to pin here.
 """
 
+import fpy2 as fp
 import fpy2.strategies as st
+import pytest
 
 from fpy2.analysis import ArraySizeInfer, LiveVars, ValueClassInfer
 from fpy2.analysis.array_size import ListSize, is_size_eq
 from fpy2.ast import IndexedAssign, Pow, Sum, Var
 from fpy2.transform import walk_exprs
 from fpy2.transform.hoist_invariant import _from_before, _Nodes
+from fpy2.transform import HoistScale, TransformDeclined
 from fpy2.transform.utils import RoundingScopes
 
 from .test_hoist_invariant import (
@@ -135,3 +138,140 @@ class TestTheBaseline:
     def test_the_schedule_computes_what_the_source_computes(self):
         """The empty list is excluded: `max([])` has no value."""
         assert _agrees_by_value(fused_sum, _scheduled().ast, values=_VALUES[1:])
+
+
+# ----------------------------------------------------------------------
+# Phase 4: the transform
+
+
+def _hoisted(func):
+    return func.with_ast(HoistScale.apply(func.ast))
+
+
+def _why(func) -> list[str]:
+    return [why for _, why in HoistScale.refusals(func.ast)]
+
+
+@fp.fpy(ctx=fp.REAL)
+def guarded_comp(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    if fp.isfinite(k):
+        return sum([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.REAL)
+def factor_reads_the_target(xs: list[fp.Real]) -> fp.Real:
+    return sum([(2 ** x) * x for x in xs])
+
+
+@fp.fpy(ctx=fp.REAL)
+def factor_may_be_infinite(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    return sum([(2 ** k) * x for x in xs])
+
+
+@fp.fpy(ctx=fp.FP32)
+def rounds_between_adds(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    if fp.isfinite(k):
+        return sum([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.REAL)
+def negative_factor(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    if fp.isfinite(k):
+        return sum([k * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.REAL)
+def loop_may_not_cover(xs: list[fp.Real], ys: list[fp.Real], k: fp.Real) -> fp.Real:
+    """`ts` is as long as `ys` but the loop runs `len(xs)` times, so an element
+    may be left holding whatever `fp.empty` put there.  `k` is guarded so that
+    coverage is the condition that refuses, not the factor."""
+    if fp.isfinite(k):
+        ts = fp.empty(len(ys))
+        for i in range(len(xs)):
+            t = (2 ** k) * xs[i]
+            ts[i] = t
+        return sum(ts)
+    else:
+        return 0.0
+
+
+class TestTheComprehensionForm:
+    """The shape a program is written in, and the simpler of the two: a
+    comprehension defines every element, so coverage needs no proof."""
+
+    def test_it_hoists_the_factor(self):
+        out = _hoisted(guarded_comp)
+        assert '((2 ** k) * sum([x for x in xs]))' in _text(guarded_comp, out.ast)
+
+    def test_the_values_are_unchanged(self):
+        out = fp.Function(_hoisted(guarded_comp).ast, runtime=guarded_comp.runtime)
+        for xs in ([], [1.0], [1.5, -2.0, 3.25], [1e300, -1e300, 1.0]):
+            for k in (3.0, -5.0, 0.0):
+                assert repr(out(xs, k)) == repr(guarded_comp(xs, k))
+
+    def test_a_factor_reading_the_comprehension_target_is_refused(self):
+        assert HoistScale.sites(factor_reads_the_target.ast) == []
+        assert _why(factor_reads_the_target) == [
+            'the factor reads `x`, which varies'
+        ]
+
+    def test_a_factor_that_may_be_infinite_is_refused(self):
+        """`2 ** k` for an unconstrained `k` is `+inf` at `k = +inf`, and an
+        infinite factor turns a cancellation into a survivor."""
+        assert HoistScale.sites(factor_may_be_infinite.ast) == []
+        assert _why(factor_may_be_infinite) == [
+            'the factor may be an infinity or a NaN'
+        ]
+
+    def test_a_factor_that_may_be_negative_is_refused(self):
+        assert HoistScale.sites(negative_factor.ast) == []
+        assert 'may be negative' in _why(negative_factor)[0]
+
+    def test_a_rounding_scope_is_refused(self):
+        """The same program under `fp.FP32`: the partial sums round, so the
+        two orders disagree."""
+        assert HoistScale.sites(rounds_between_adds.ast) == []
+        assert _why(rounds_between_adds) == [
+            'the reduction does not round exactly'
+        ]
+
+
+class TestTheLoweredForm:
+    """What the motivating schedule produces, where coverage is the difficulty."""
+
+    def test_it_hoists_the_factor(self):
+        out = _hoisted(_scheduled())
+        src = _text(out, out.ast)
+        assert 'return (t14 * sum(ts))' in src
+        assert '(t14 * _t13)' not in src
+
+    def test_the_values_are_unchanged(self):
+        before = _scheduled()
+        assert _agrees_by_value(before, _hoisted(before).ast, values=_VALUES[1:])
+
+    def test_the_fp32_branch_is_refused(self):
+        """`sum(xs)` reads an argument, not a list a loop filled."""
+        assert 'no scaled list write fills the reduction' in _why(_scheduled())
+
+    def test_a_loop_that_may_not_cover_the_list_is_refused(self):
+        assert HoistScale.sites(loop_may_not_cover.ast) == []
+        assert 'may not write every element' in _why(loop_may_not_cover)[0]
+
+
+class TestAiming:
+
+    def test_the_only_site_is_the_exact_reduction(self):
+        out = _scheduled()
+        site, = HoistScale.sites(out.ast)
+        assert site.resolve().format() == 'sum(ts)'
+
+    def test_a_cursor_on_a_refused_reduction_says_why(self):
+        where = [c for c, _ in HoistScale.refusals(rounds_between_adds.ast)]
+        with pytest.raises(TransformDeclined, match='round exactly'):
+            HoistScale.apply(rounds_between_adds.ast, where[0])
