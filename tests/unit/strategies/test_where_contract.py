@@ -21,6 +21,7 @@ from fpy2.strategies import (
     comp_to_loop,
     float_to_fixed,
     hoist_invariant,
+    hoist_scale,
     inline,
     insert_round,
     monomorphize,
@@ -132,6 +133,24 @@ def _nested_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
             q = n + 2
             a = a + (p * q) * (x * y)
     return a
+
+
+@fp.fpy(ctx=fp.REAL)
+def _two_scaled_sums(xs: list[fp.Real], ys: list[fp.Real], k: fp.Real) -> fp.Real:
+    if fp.isfinite(k):
+        a = sum([(2 ** k) * x for x in xs])
+        b = sum([(2 ** k) * y for y in ys])
+        return a + b
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.FP32)
+def _sums_that_round(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    if fp.isfinite(k):
+        return sum([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
 
 
 @fp.fpy
@@ -321,6 +340,7 @@ ACTS = [
     ('simplify_if/nested', simplify_if, _nested_ifs, {}),
     ('hoist_invariant', hoist_invariant, _two_invariant_for, {}),
     ('hoist_invariant/nested', hoist_invariant, _nested_invariant_for, {}),
+    ('hoist_scale', hoist_scale, _two_scaled_sums, {}),
 ]
 
 # Rows where it has none: a program it refuses outright.  These are where the
@@ -334,6 +354,7 @@ REFUSES = [
     ('rescale_fixed/refuses', rescale_fixed, _two_floats, {}),
     ('inline/refuses', inline, _refuses_inline, {}),
     ('hoist_invariant/refuses', hoist_invariant, _two_for, {}),
+    ('hoist_scale/refuses', hoist_scale, _sums_that_round, {}),
     ('split/refuses', split, _odd_trip, _STRICT_SPLIT),
     ('unroll_for/refuses', unroll_for, _odd_trip, _STRICT_UNROLL),
     ('insert_round/refuses', insert_round, _pin(_sum_of_squares, 2), {'ctx': fp.FP16}),

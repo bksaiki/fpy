@@ -309,7 +309,7 @@ python3 -m pytest tests/unit/transform/test_hoist_scale.py -q
 - **Purity is a condition.**  Not in the original five: the factor goes from
   being evaluated once per element to once, so an impure one is refused.
 
-### Phase 5 — the scheduling primitive
+### Phase 5 — the scheduling primitive — **Done.**
 
 - New `fpy2/strategies/scale_hoist.py` exporting `hoist_scale(func,
   where=None)`, in `fpy2/strategies/__init__.py`'s imports and `__all__`, and
@@ -325,6 +325,18 @@ python3 -m pytest tests/unit/transform/test_hoist_scale.py \
     tests/unit/strategies/test_hoist_scale.py \
     tests/unit/strategies/test_where_contract.py -q
 ```
+
+9 passed in the new strategy file; `tests/unit/transform` and
+`tests/unit/strategies` green at 1816; `ruff` and `mypy` clean.
+
+No nested row in the `where` contract: the sites are expressions, and
+`test_a_listed_cursor_aims_the_same_as_its_index` skips the containment check
+for an `ExprCursor`, so a nested case would assert nothing.  Acting and
+refusing rows are there — `_two_scaled_sums` and `_sums_that_round`.
+
+The refusing fixture had to carry `ctx=fp.REAL` on the acting side: the
+contract fixtures are bare `@fp.fpy`, whose scope is symbolic, and a symbolic
+scope is refused by condition 1.
 
 ### Phase 6 — end to end
 
