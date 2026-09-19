@@ -217,7 +217,7 @@ Analysis work ships inside the PR whose rewrite needs it, never on its own.
 
 That makes **two new transforms**, and they are the whole critical path:
 
-### PR 1 — `HoistInvariant` *(critical path)*
+### PR 1 — `HoistInvariant` *(critical path)* — **Done.**
 
 `fpy2/transform/hoist_invariant.py`, wrapper `fpy2/strategies/invariant_hoist.py`
 exporting `hoist_invariant`.  #0 lands here: the loop-invariance query has no
@@ -226,6 +226,19 @@ other consumer.
 *Works afterwards:* `_k = ((e - 12) + 1)` is computed once above the loop rather
 than once per iteration, in every `rescale_fixed` output — not just this one.  A
 standalone scheduling primitive, useful whether or not PR 2 ever lands.
+
+Landed as `st.hoist_invariant`; see [hoist-invariant.md](hoist-invariant.md) for
+the phase record.  Two things it settled that PR 2 depends on:
+
+- **The handoff holds.**  After `fuse; comp_to_loop; rescale_fixed; simplify;
+  hoist_invariant`, every name the factor `2 ** _k` reads is bound before the
+  loop.  Asserted, not eyeballed: the test computes the reaching definition of
+  each of the factor's free names and checks none is sited at or inside the
+  loop — false before the hoist, true after.  That *is* `HoistScale`'s
+  condition 2, so PR 2 can take it as given rather than re-deriving it.
+- **It is not in `Simplify`,** by decision: relocating a computation is not a
+  simplification.  So PR 2's schedule must name `hoist_invariant` explicitly;
+  `simplify` will not have done it.
 
 ### PR 2 — `HoistScale` *(critical path)*
 

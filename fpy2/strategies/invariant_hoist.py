@@ -31,8 +31,10 @@ def hoist_invariant(
 
     One pass.  A chain comes out together, each hoisted binding counting as
     invariant for the ones after it, but a binding freed by hoisting out of an
-    *inner* loop needs another; :func:`fpy2.strategies.simplify` provides that
-    fixpoint.
+    *inner* loop needs another -- apply the strategy again where a schedule
+    wants that.  :func:`fpy2.strategies.simplify` does *not* run this pass:
+    moving a computation is not a simplification, and nothing downstream
+    depends on it having happened.
 
     Cursors forward across this pass.
 

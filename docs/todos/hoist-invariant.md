@@ -99,29 +99,15 @@ rather than waved through under the undefined-behaviour argument.
   behaviour by design and the interpreter's runtime checks are not a contract a
   transform must preserve, so no guard is emitted.  Phase 1 and Phase 3 pin the
   empty-list case so the behaviour is visible rather than merely permitted.
-- **It joins `Simplify`.**  Like `UnnestContext` in #306, this is cleanup every
-  lowering-heavy pipeline wants, and leaving it opt-in would mean every
-  `rescale_fixed` output keeps the wart until a user knows to ask.  It lands
-  behind an `enable_hoist_invariant` flag, on by default, in the same fixpoint.
-
-### `Simplify`'s termination measure has to grow
-
-`fpy2/transform/simplify.py` documents its termination argument as a
-lexicographic measure on **(statement count, nested `ContextStmt` ancestor
-pairs)**.  Const-fold, copy-prop and DCE strictly decrease the first;
-`UnnestContext` holds the first fixed and strictly decreases the second.
-
-`HoistInvariant` fits neither: it holds the statement count fixed and does not
-touch `with` nesting.  The measure becomes
-
-**(statement count, Σ over statements of enclosing-loop depth, nested `with`
-ancestor pairs)**
-
-which `HoistInvariant` strictly decreases in the second component while holding
-the first, and which the other three leave alone or decrease — removing a
-statement cannot raise anyone's loop depth, and unnesting a `with` moves
-statements between `with` bodies, never out of a loop.  The module docstring is
-part of the change, not an afterthought.
+- **It stays out of `Simplify`.**  Briefly planned to join it, by analogy with
+  `UnnestContext` in #306, and reversed after Phase 4: the passes `Simplify`
+  runs shrink or reformat a program, and this one *relocates computation*.
+  That is an optimization, not a simplification, and nothing downstream depends
+  on it having happened.  The tell was the termination measure — `Simplify`
+  argues termination from **(statement count, nested `with` ancestor pairs)**,
+  and this pass decreases neither, so admitting it would have meant inventing a
+  third component for a pass that did not belong.  A schedule that wants the
+  motion asks for it.
 
 ### What is out of scope for this PR
 
@@ -138,8 +124,9 @@ Follows `SplitLoop`: a `_HoistInvariant(SiteRewriter)` instance plus a
 `where`, `SyntaxCheck.check` on the result.  Sites are loops, counted in visit
 order, outermost first — so `where` aims at a loop, and the pass hoists every
 qualifying statement out of it.  A loop with no qualifying statement is not a
-candidate and takes no index.  `apply_with_status` is added alongside, since
-`Simplify`'s fixpoint needs the `changed` flag.
+candidate and takes no index.  No `apply_with_status`: in this tree that method
+exists for `Simplify`'s fixpoint, which this pass does not join, and `sites`
+already answers whether anything is left to hoist.
 
 ## Phases
 
@@ -156,8 +143,8 @@ Pin today's behaviour before anything moves.
   value sweep includes the empty list.
 
 Separate because it is the only phase whose assertions are *supposed* to flip in
-Phase 3 and Phase 5 — keeping it alone makes those flips a reviewable diff
-rather than noise inside the phase that causes them.
+Phase 3 — keeping it alone makes that flip a reviewable diff rather than noise
+inside the phase that causes it.
 
 ```bash
 python3 -m pytest tests/unit/transform/test_hoist_invariant.py -q
@@ -217,7 +204,7 @@ each body statement.
 ### Phase 3 — the transform — **Done.**
 
 - `_HoistInvariant(SiteRewriter)` and `HoistInvariant` in the same module, with
-  `apply`, `apply_with_status` and `apply_with_edits`; export from
+  `apply` and `apply_with_edits`; export from
   `fpy2/transform/__init__.py`.
 - Flip the Phase 1 assertions that this pass owns: `_k` now sits above the loop.
 - Shape tests for each refusal, and **differential tests** in the house style —
@@ -246,7 +233,9 @@ the package.  What the phase found:
   below: `SimplifyIf` has the same bare call.
 - **Phase 1's flip annotations were wrong** on three tests.  Those assertions
   pin the *source* program and stay true; it is `TestTheTransform` that asserts
-  the after-side.  Corrected in place.
+  the after-side.  Corrected in place.  The `TestSimplify` pair became
+  permanent when the `Simplify` integration was dropped: they now assert that
+  `simplify` leaves an invariant binding alone, by design.
 - **The impure fixture cannot be interpreted** — the interpreter refuses to call
   a foreign Python function — so it is excluded from the differential sweeps
   and checked by shape only.
@@ -291,26 +280,7 @@ things the phase found:
   path leave them out and record the removal.  Shorter, and the block keeps its
   path.
 
-### Phase 5 — into `Simplify`
-
-- `enable_hoist_invariant: bool = True` through `Simplify.apply` and
-  `apply_with_status`, and through the `fpy2.strategies.simplify` wrapper.
-- Rewrite the termination paragraph in `fpy2/transform/simplify.py`'s module
-  docstring for the three-component measure.
-- Flip the Phase 1 assertion that `simplify` leaves invariant statements alone.
-- **Repair the fallout.**  Every existing golden that runs `simplify` over a
-  loop with an invariant body statement changes.  The phase is not done until
-  `tests/unit/transform` and `tests/unit/strategies` are green.
-
-Last, and separate, because it is the only phase with blast radius outside its
-own test file — bundling it with Phase 3 would mix "the pass is correct" with
-"the pipeline's goldens moved".
-
-```bash
-python3 -m pytest tests/unit/transform tests/unit/strategies -q
-```
-
-### Phase 6 — end to end
+### Phase 5 — end to end — **Done.**
 
 - Integration test: the full `fused_sum` schedule, asserting `_k` above the loop
   and the interpreted results unchanged across the `_VALUES`-style sweep.
@@ -324,6 +294,17 @@ python3 -m pytest tests/unit/transform tests/unit/strategies -q
 ```bash
 python3 -m pytest tests/unit/transform/test_hoist_invariant.py -q
 ```
+
+41 passed.  The handoff assertion is the one that matters: it resolves each of
+the factor's free names to its reaching definition and checks none is sited at
+or inside the loop — `False` before the hoist, `True` after.  PR 2 inherits
+that rather than re-deriving it.
+
+`_scale_factor` has to follow a name to find the product: the write reads
+`ts[i] = t`, not `ts[i] = c * e`, because `rescale_fixed` binds the scaled value
+first.  `DefineUseAnalysis.defining_expr` exists for exactly that, and
+`HoistScale` will need it for the same reason — its matcher cannot key on the
+`IndexedAssign`'s expression alone.
 
 ### After the last phase
 

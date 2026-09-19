@@ -2,9 +2,7 @@
 Regression net for `HoistInvariant` — Phase 1 of `docs/todos/hoist-invariant.md`.
 
 Nothing hoists yet.  These assertions pin what the tree does *today*, so that the
-diffs in Phase 3 (the transform) and Phase 5 (its entry into `Simplify`) show
-exactly which statements moved.  Every assertion that is meant to flip later
-says so on the line above it.
+diff in Phase 3 (the transform) shows exactly which statements moved.
 
 The sweeps include the empty list on purpose: a zero-trip loop is where hoisting
 changes *whether* an invariant expression is evaluated at all, and the decision
@@ -15,11 +13,11 @@ import fpy2 as fp
 import fpy2.strategies as st
 import pytest
 
-from fpy2.analysis import DefineUse
-from fpy2.ast import Assign, ForStmt, StmtBlock, WhileStmt
+from fpy2.analysis import DefineUse, LiveVars
+from fpy2.ast import Assign, ForStmt, IndexedAssign, Mul, StmtBlock, WhileStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import HoistInvariant
-from fpy2.transform.hoist_invariant import _invariants
+from fpy2.transform.hoist_invariant import _from_before, _invariants, _Nodes
 from fpy2.utils import NamedId
 
 # zero-trip, one-trip, and a spread that straddles the FP16 subnormal and
@@ -111,17 +109,19 @@ class TestTheLoopsThemselves:
 
 
 class TestSimplify:
-    """`Simplify` has no pass that relocates a statement."""
+    """`Simplify` relocates no statement, and does not run `HoistInvariant`.
+
+    Not an accident of what has been written yet: moving a computation is not a
+    simplification, so a schedule that wants it asks for it.
+    """
 
     def test_it_leaves_a_for_invariant_alone(self):
         out = st.simplify(scaled_sum)
-        # flips in Phase 5: `simplify` gains `HoistInvariant`
         assert 'c' in _body_names(out.ast)
         assert _agrees(scaled_sum, out.ast)
 
     def test_it_leaves_a_while_invariant_alone(self):
         out = st.simplify(scaled_while)
-        # flips in Phase 5: `simplify` gains `HoistInvariant`
         assert 'c' in _body_names(out.ast)
         assert _agrees(scaled_while, out.ast)
 
@@ -378,3 +378,72 @@ class TestTheQueryOnTheMotivatingExample:
         out = _hoisted(sched)
         assert '_k' not in _body_names(out.ast)
         assert _agrees_by_value(sched, out.ast, values=_VALUES[1:])
+
+
+# ----------------------------------------------------------------------
+# Phase 5: the motivating schedule, end to end
+
+
+def _scale_factor(func) -> tuple:
+    """The `(def_use, loop, statement, factor)` of the scaled element write.
+
+    This is the shape `HoistScale` will match in PR 2: an invariant factor
+    multiplying each element on its way into the result list.  The write itself
+    reads `ts[i] = t`, so the product is found through the name `t` was bound
+    to — `defining_expr` is what follows that.
+    """
+    def_use = DefineUse.analyze(func.ast)
+    for loop in _loops(func.ast):
+        writes = [s for s in loop.body.stmts if isinstance(s, IndexedAssign)]
+        if not writes:
+            continue
+        value = def_use.defining_expr(writes[0].expr)
+        for stmt in loop.body.stmts:
+            if isinstance(stmt, Assign) and stmt.expr is value and isinstance(value, Mul):
+                return def_use, loop, stmt, value.args[0]
+    raise AssertionError('no scaled list write found')
+
+
+class TestTheMotivatingSchedule:
+    """`fuse; comp_to_loop; rescale_fixed; simplify; hoist_invariant` — what a
+    user writes, through the strategy rather than the transform."""
+
+    @staticmethod
+    def _scheduled():
+        f = TestRescaleFixedOutput.fused_sum
+        f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(f))))
+        return f, st.hoist_invariant(f)
+
+    def test_the_scale_leaves_the_loop(self):
+        before, after = self._scheduled()
+        assert '_k' in _body_names(before.ast)
+        assert '_k' not in _body_names(after.ast)
+
+    def test_the_values_are_unchanged(self):
+        before, after = self._scheduled()
+        assert _agrees_by_value(before, after.ast, values=_VALUES[1:])
+
+    def test_the_fp32_branch_is_untouched(self):
+        """The `else` arm rounds under `fp.FP32` and has no loop; nothing in it
+        moves.  PR 2's rewrite is the one that must decline there."""
+        before, after = self._scheduled()
+        assert 'sum(xs)' in _text(before, after.ast)
+
+    def test_the_handoff_to_hoist_scale_holds(self):
+        """`HoistScale`'s precondition, checked rather than eyeballed: in
+        ``ts[i] = (2 ** _k) * _t``, every name the factor reads is bound before
+        the loop.  False beforehand — `_k` is bound in the body — and true
+        after, which is what makes PR 2 applicable at all."""
+        before, after = self._scheduled()
+
+        def factor_is_invariant(func) -> bool:
+            def_use, loop, stmt, factor = _scale_factor(func)
+            body = _Nodes.of(loop.body)
+            reaching = def_use.reach[stmt]
+            return all(
+                _from_before(reaching.get(name), loop, body, set())
+                for name in LiveVars.analyze(factor)
+            )
+
+        assert not factor_is_invariant(before)
+        assert factor_is_invariant(after)

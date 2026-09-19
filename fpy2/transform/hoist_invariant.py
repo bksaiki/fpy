@@ -235,9 +235,10 @@ class HoistInvariant:
     in the scope they were already written in.  See `_invariants` for what
     qualifies.
 
-    One pass.  A chain within one body comes out together, but a binding freed
-    by hoisting out of an *inner* loop needs the pass to run again;
-    :class:`Simplify` provides that fixpoint.
+    One pass, and deliberately not part of :class:`Simplify`: this relocates
+    computation rather than shrinking or reformatting it.  A chain within one
+    body comes out together, but a binding freed by hoisting out of an *inner*
+    loop needs the pass applied again.
     """
 
     @staticmethod
@@ -277,17 +278,6 @@ class HoistInvariant:
         beneath it.  `None` hoists out of every one.
         """
         return HoistInvariant.apply_with_edits(func, where, def_use=def_use).result
-
-    @staticmethod
-    def apply_with_status(
-        func: FuncDef,
-        where: 'int | Cursor | None' = None,
-        *,
-        def_use: DefineUseAnalysis | None = None,
-    ) -> tuple[FuncDef, bool]:
-        """:meth:`apply` with a ``changed`` flag -- `True` iff a binding moved."""
-        log = HoistInvariant.apply_with_edits(func, where, def_use=def_use)
-        return log.result, bool(log.edits)
 
     @staticmethod
     def apply_with_edits(
