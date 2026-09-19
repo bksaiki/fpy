@@ -13,10 +13,12 @@ recorded in the plan is to hoist anyway.
 
 import fpy2 as fp
 import fpy2.strategies as st
+import pytest
 
 from fpy2.analysis import DefineUse
 from fpy2.ast import Assign, ForStmt, StmtBlock, WhileStmt
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.transform import HoistInvariant
 from fpy2.transform.hoist_invariant import _invariants
 from fpy2.utils import NamedId
 
@@ -100,11 +102,11 @@ class TestTheLoopsThemselves:
     """`c` is invariant in both bodies and nothing moves it."""
 
     def test_a_for_body_keeps_its_invariant(self):
-        # flips in Phase 3: `c` leaves the body
+        # the "before" side; `TestTheTransform` asserts the "after"
         assert 'c' in _body_names(scaled_sum.ast)
 
     def test_a_while_body_keeps_its_invariant(self):
-        # flips in Phase 3: `c` leaves the body
+        # the "before" side; `TestTheTransform` asserts the "after"
         assert 'c' in _body_names(scaled_while.ast)
 
 
@@ -147,7 +149,7 @@ class TestRescaleFixedOutput:
 
     def test_the_scale_is_recomputed_every_iteration(self):
         out = self._schedule(self.fused_sum)
-        # flips in Phase 3: `_k` is bound once, above the loop
+        # the "before" side; `TestTheTransform` asserts the "after"
         assert '_k' in _body_names(out.ast)
 
     def test_the_scale_is_written_as_a_power_of_two(self):
@@ -165,7 +167,7 @@ class TestRescaleFixedOutput:
 
 
 # ----------------------------------------------------------------------
-# Phase 2: the invariance query
+# Phase 2: the invariance query, and Phase 3: the transform that acts on it
 
 
 def _loops(ast) -> list:
@@ -191,8 +193,114 @@ def _query(func, which: int = 0) -> list[str]:
     return [str(s.target) for s in _invariants(_loops(func.ast)[which], def_use)]
 
 
+def _hoisted(func):
+    """*func* with every invariant binding moved above its loop."""
+    return func.with_ast(HoistInvariant.apply(func.ast))
+
+
 def _foreign(x):
     return x
+
+
+# The programs the query refuses, one per condition.  Shared so that the
+# transform is tested against exactly what the query rejects.
+
+
+@fp.fpy(ctx=fp.REAL)
+def reads_the_loop_target(xs: list[fp.Real]) -> fp.Real:
+    acc = 0.0
+    for x in xs:
+        c = x + 1
+        acc = acc + c
+    return acc
+
+
+@fp.fpy(ctx=fp.REAL)
+def reads_a_name_the_body_rebinds(xs: list[fp.Real]) -> fp.Real:
+    m = 1.0
+    acc = 0.0
+    for x in xs:
+        c = m + 1
+        m = m + 1
+        acc = acc + c * x
+    return acc
+
+
+@fp.fpy(ctx=fp.REAL)
+def binds_the_target_twice(xs: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    acc = 0.0
+    for x in xs:
+        c = n + 1
+        acc = acc + c * x
+        c = n + 2
+    return acc
+
+
+@fp.fpy(ctx=fp.REAL)
+def reads_the_target_after_the_loop(xs: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    c = 0.0
+    acc = 0.0
+    for x in xs:
+        c = n + 1
+        acc = acc + c * x
+    return acc + c
+
+
+@fp.fpy(ctx=fp.REAL)
+def binds_a_tuple(xs: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    acc = 0.0
+    for x in xs:
+        a, b = (n + 1, n + 2)
+        acc = acc + (a + b) * x
+    return acc
+
+
+@fp.fpy(ctx=fp.REAL)
+def binds_under_a_nested_with(xs: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    acc = 0.0
+    for x in xs:
+        with fp.FP32:
+            c = n + 1
+        acc = acc + c * x
+    return acc
+
+
+@fp.fpy(ctx=fp.REAL)
+def binds_an_impure_expression(xs: list[fp.Real]) -> fp.Real:
+    acc = 0.0
+    for x in xs:
+        c = _foreign(1.0)
+        acc = acc + c * x
+    return acc
+
+
+# `binds_an_impure_expression` is not among them: the interpreter refuses to
+# call a foreign Python function, so there is nothing to run a sweep against.
+REFUSED_RUNNABLE = (
+    reads_the_loop_target,
+    reads_a_name_the_body_rebinds,
+    binds_the_target_twice,
+    reads_the_target_after_the_loop,
+    binds_a_tuple,
+    binds_under_a_nested_with,
+)
+
+REFUSED = (*REFUSED_RUNNABLE, binds_an_impure_expression)
+
+
+@fp.fpy(ctx=fp.REAL)
+def chained(xs: list[fp.Real]) -> fp.Real:
+    n = len(xs)
+    acc = 0.0
+    for x in xs:
+        a = n + 1
+        b = a * 2
+        acc = acc + b * x
+    return acc
 
 
 class TestTheQueryFinds:
@@ -203,114 +311,60 @@ class TestTheQueryFinds:
     def test_an_invariant_in_a_while_body(self):
         assert _query(scaled_while) == ['c']
 
-    def test_one_round_only(self):
-        """`b` reads `a`, which is still inside the loop, so it stays behind
-        until `a` has moved.  The caller re-runs the query."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            n = len(xs)
-            acc = 0.0
-            for x in xs:
-                a = n + 1
-                b = a * 2
-                acc = acc + b * x
-            return acc
-
-        assert _query(f) == ['a']
+    def test_a_chain_in_one_pass(self):
+        """`b` reads `a`, which this same pass is taking out, so both go."""
+        assert _query(chained) == ['a', 'b']
 
 
 class TestTheQueryRefuses:
 
-    def test_a_read_of_the_loop_target(self):
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            acc = 0.0
-            for x in xs:
-                c = x + 1
-                acc = acc + c
-            return acc
+    @pytest.mark.parametrize('func', REFUSED, ids=lambda f: f.name)
+    def test_it(self, func):
+        assert _query(func) == []
 
-        assert _query(f) == []
 
-    def test_a_read_of_a_name_the_body_rebinds(self):
-        """`m` reaches `c` through the loop's phi, not from before it."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            m = 1.0
-            acc = 0.0
-            for x in xs:
-                c = m + 1
-                m = m + 1
-                acc = acc + c * x
-            return acc
+class TestTheTransform:
 
-        assert _query(f) == []
+    def test_it_hoists_out_of_a_for(self):
+        out = _hoisted(scaled_sum)
+        assert 'c' not in _body_names(out.ast)
+        assert 'c' in _block_names(out.ast.body)
+        assert _agrees(scaled_sum, out.ast)
 
-    def test_a_target_the_body_binds_twice(self):
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            n = len(xs)
-            acc = 0.0
-            for x in xs:
-                c = n + 1
-                acc = acc + c * x
-                c = n + 2
-            return acc
+    def test_it_hoists_out_of_a_while(self):
+        out = _hoisted(scaled_while)
+        assert 'c' not in _body_names(out.ast)
+        assert 'c' in _block_names(out.ast.body)
+        assert _agrees(scaled_while, out.ast)
 
-        assert _query(f) == []
+    def test_it_hoists_a_chain_in_one_pass(self):
+        out = _hoisted(chained)
+        assert _body_names(out.ast) == {'acc'}
+        assert {'a', 'b'} <= _block_names(out.ast.body)
+        assert _agrees(chained, out.ast)
 
-    def test_a_target_read_after_the_loop(self):
-        """A zero-trip loop would leave the pre-loop value in place; hoisting
-        would put the invariant one there instead."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            n = len(xs)
-            c = 0.0
-            acc = 0.0
-            for x in xs:
-                c = n + 1
-                acc = acc + c * x
-            return acc + c
+    @pytest.mark.parametrize('func', REFUSED, ids=lambda f: f.name)
+    def test_it_leaves_a_refused_loop_alone(self, func):
+        assert _hoisted(func).ast.is_equiv(func.ast)
 
-        assert _query(f) == []
+    @pytest.mark.parametrize('func', REFUSED_RUNNABLE, ids=lambda f: f.name)
+    def test_a_refused_loop_still_computes_what_it_did(self, func):
+        assert _agrees(func, _hoisted(func).ast)
 
-    def test_a_tuple_target(self):
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            n = len(xs)
-            acc = 0.0
-            for x in xs:
-                a, b = (n + 1, n + 2)
-                acc = acc + (a + b) * x
-            return acc
+    def test_a_refused_loop_is_no_site_and_says_why(self):
+        assert HoistInvariant.sites(reads_the_loop_target.ast) == []
+        (_, why), = HoistInvariant.refusals(reads_the_loop_target.ast)
+        assert '`x` varies across iterations' in why
 
-        assert _query(f) == []
-
-    def test_a_statement_under_a_nested_with(self):
-        """Not a direct child of the body: it would land outside the `with`
-        and be rounded differently."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            n = len(xs)
-            acc = 0.0
-            for x in xs:
-                with fp.FP32:
-                    c = n + 1
-                acc = acc + c * x
-            return acc
-
-        assert _query(f) == []
-
-    def test_an_impure_expression(self):
-        @fp.fpy(ctx=fp.REAL)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            acc = 0.0
-            for x in xs:
-                c = _foreign(1.0)
-                acc = acc + c * x
-            return acc
-
-        assert _query(f) == []
+    def test_the_zero_trip_case_is_pinned(self):
+        """The decision recorded in the plan: an invariant binding is hoisted
+        out of a loop that may never run.  The value is unchanged — what moves
+        is *when* the expression is evaluated, not what the function returns."""
+        out = _hoisted(scaled_sum)
+        assert 'c' in _block_names(out.ast.body)
+        assert repr(fp.Function(out.ast, runtime=scaled_sum.runtime)([])) == repr(
+            scaled_sum([])
+        )
 
 
 class TestTheQueryOnTheMotivatingExample:
@@ -318,3 +372,30 @@ class TestTheQueryOnTheMotivatingExample:
     def test_it_finds_the_scale(self):
         out = TestRescaleFixedOutput._schedule(TestRescaleFixedOutput.fused_sum)
         assert '_k' in _query(out, which=2)
+
+    def test_the_transform_takes_it_out(self):
+        sched = TestRescaleFixedOutput._schedule(TestRescaleFixedOutput.fused_sum)
+        out = _hoisted(sched)
+        assert '_k' not in _body_names(out.ast)
+        assert _agrees_by_value(sched, out.ast, values=_VALUES[1:])
+
+    def test_anf_after_rescaling_frees_both_scales(self):
+        """`to_anf` must run *after* `rescale_fixed`: it is the rescaling that
+        introduces `2 ** -_k` and `2 ** _k`, and naming them is what lets this
+        pass take them out.  Both leave in a single pass, since each hoisted
+        binding counts as invariant for the ones after it."""
+        f = st.rescale_fixed(st.comp_to_loop(st.fuse(TestRescaleFixedOutput.fused_sum)))
+        f = st.simplify(st.to_anf(f))
+        out = _hoisted(f)
+        body = ' '.join(_text(f, out.ast).split())
+        assert '(2 ** _k)' not in _loop_bodies_text(out.ast)
+        assert '(2 ** _k)' in body
+        assert _agrees_by_value(f, out.ast, values=_VALUES[1:])
+
+
+def _loop_bodies_text(ast) -> str:
+    """The formatted text of every loop body, for asserting what is *not* in
+    one without pinning the surrounding temporary names."""
+    return ' '.join(
+        ' '.join(s.format().split()) for loop in _loops(ast) for s in loop.body.stmts
+    )

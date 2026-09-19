@@ -205,15 +205,16 @@ python3 -m pytest tests/unit/transform/test_hoist_invariant.py -q
   body.  Also recorded above.
 - **The query is one round.**  Where an invariant statement reads another, the
   second stays behind until the first has moved — `b = a * 2` after
-  `a = n + 1` yields `['a']`, not `['a', 'b']`.  Phase 3's transform re-runs
-  the query to a fixpoint; in `Simplify` (Phase 5) the outer fixpoint would get
-  there anyway, but the standalone primitive must not depend on that.
+  `a = n + 1` yielded `['a']`, not `['a', 'b']`.  **Superseded in Phase 3**:
+  the query now takes body statements in order, each hoisted one counting as
+  invariant for those after it, so a chain comes out in a single pass and no
+  fixpoint is needed inside the transform.
 
 Each refusal was checked to fire for the reason it claims rather than
 vacuously, by instrumenting the predicate and printing which condition rejected
 each body statement.
 
-### Phase 3 — the transform
+### Phase 3 — the transform — **Done.**
 
 - `_HoistInvariant(SiteRewriter)` and `HoistInvariant` in the same module, with
   `apply`, `apply_with_status` and `apply_with_edits`; export from
@@ -226,6 +227,29 @@ each body statement.
 ```bash
 python3 -m pytest tests/unit/transform/test_hoist_invariant.py -q
 ```
+
+38 passed; `tests/unit/transform` green at 1184; `ruff` and `mypy` clean across
+the package.  What the phase found:
+
+- **`to_anf` belongs *after* `rescale_fixed`, not before.**  It is the rescaling
+  that introduces `2 ** -_k` and `2 ** _k`, so ANF ahead of it names nothing
+  useful.  With `fuse; comp_to_loop; rescale_fixed; to_anf; simplify`, a single
+  hoist pass lifts `_k`, `-_k`, `2 ** -_k` *and* `2 ** _k` above the loop —
+  two of the three hoists in the target form, in one pass, because of the
+  in-order chain rule.  The roadmap's target-form schedule is corrected to
+  match.
+- **`where=None` must not turn a refusal into a decline.**  `_selects(block,
+  pos, -1)` answers `True` whenever `where is None`, since that means "every
+  site", so the refusal branch has to test `self._target is not None` first.
+  Without the guard the pass raised `TransformDeclined` on the motivating
+  schedule, whose first two loops have nothing to hoist.  See the open item
+  below: `SimplifyIf` has the same bare call.
+- **Phase 1's flip annotations were wrong** on three tests.  Those assertions
+  pin the *source* program and stay true; it is `TestTheTransform` that asserts
+  the after-side.  Corrected in place.
+- **The impure fixture cannot be interpreted** — the interpreter refuses to call
+  a foreign Python function — so it is excluded from the differential sweeps
+  and checked by shape only.
 
 ### Phase 4 — the scheduling primitive
 
@@ -293,6 +317,31 @@ python3 -m tests.infra.backend.cpp --mode run
 ```
 
 ## Open items
+
+### Does `SimplifyIf` decline when it should not?
+
+Found while fixing the same shape in this pass, not introduced by it.
+`_SimplifyIfInstance._claims` (`fpy2/transform/simplify_if.py:189`) tests
+`self._selects(block, pos, -1)` without first checking that a cursor was given,
+and `_selects` answers `True` for `where=None`.  So:
+
+```python
+@fp.fpy(ctx=fp.REAL)
+def f(x: fp.Real) -> fp.Real:
+    if x > 0:
+        return x
+    else:
+        return -x
+```
+
+`SimplifyIf.apply(f.ast)` raises `TransformDeclined: a `return` escapes the
+branch and has no expression form`, where `docs/source/strategies.rst` says
+"``where=None`` rewrites every site the strategy can and skips the rest".
+
+**Provisional call:** leave it.  It is a different pass, the fix is one
+conjunct, but it needs its own regression test and may move goldens — neither
+belongs in this PR.  Worth its own small change; reopen if a schedule here
+starts composing `simplify_if`.
 
 ### What resolves `HoistScale`'s finiteness and sign condition?
 

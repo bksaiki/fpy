@@ -36,8 +36,11 @@ return sum(ts)
 ## Target form
 
 What the whole schedule should produce once everything below has landed —
-`fuse; to_anf; comp_to_loop; rescale_fixed; hoist_invariant; hoist_scale;
-simplify`:
+`fuse; comp_to_loop; rescale_fixed; to_anf; simplify; hoist_invariant;
+hoist_scale; simplify`.  `to_anf` runs *after* `rescale_fixed`, since it is the
+rescaling that introduces `2 ** -_k` and `2 ** _k`; ANF ahead of it names
+nothing useful.  Names below are written for legibility — ANF also binds `-_k`
+to a name of its own:
 
 ```python
 @fp.fpy(ctx=fp.REAL)
@@ -70,8 +73,11 @@ def fused_sum(xs):
 
 Three hoists, not one.  `_k` and `_r` are ordinary loop-invariant code motion —
 `_r` only after `to_anf` gives the subexpression a name of its own, since
-`hoist_invariant` moves statements rather than subexpressions.  `_s` is the
-reduction hoist, and it is the one that needs the side conditions below.
+`hoist_invariant` moves statements rather than subexpressions.  **Both come out
+in a single `hoist_invariant` pass** (verified in PR 1, Phase 3): the query
+takes body statements in order, each hoisted one counting as invariant for the
+ones after it.  `_s` is the reduction hoist, and it is the one that needs the
+side conditions below.
 
 The payoff is not fewer multiplies.  The loop body is reduced to one multiply
 and one round, and the `ts` are *integers* — `MPFixedContext(-1)` is position
