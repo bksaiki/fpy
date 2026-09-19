@@ -8,8 +8,6 @@ surface — how it is aimed, and how it fails when aimed at nothing.
 import fpy2 as fp
 import pytest
 
-from fpy2.ast import Assign, ForStmt, StmtBlock
-from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.strategies import (
     TransformDeclined,
@@ -18,28 +16,8 @@ from fpy2.strategies import (
     refusals,
     sites,
 )
-from fpy2.utils import NamedId
 
-
-def _block_names(block: StmtBlock) -> set[str]:
-    return {
-        str(s.target) for s in block.stmts
-        if isinstance(s, Assign) and isinstance(s.target, NamedId)
-    }
-
-
-def _body_names(ast) -> set[str]:
-    """Names assigned directly in some loop body."""
-    found: set[str] = set()
-
-    class V(DefaultVisitor):
-        def _visit_for(self, stmt: ForStmt, ctx):
-            found.update(_block_names(stmt.body))
-            super()._visit_for(stmt, ctx)
-
-    V()._visit_function(ast, None)
-    return found
-
+from ..transform.test_hoist_invariant import _block_names, _body_names
 
 @fp.fpy(ctx=fp.REAL)
 def two_loops(xs: list[fp.Real]) -> fp.Real:

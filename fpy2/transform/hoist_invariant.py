@@ -1,8 +1,12 @@
 """Loop-invariant code motion: moving a loop body's invariant work above it."""
 
 from collections.abc import Callable
+from typing import NamedTuple
 
 from ..analysis import (
+    Alias,
+    AliasAnalysis,
+    AssignDef,
     DefineUse,
     DefineUseAnalysis,
     Definition,
@@ -40,6 +44,23 @@ class _Nodes(DefaultVisitor):
         return inst.found
 
 
+class _Context(NamedTuple):
+    """The analyses the query consults, and the one body fact it precomputes."""
+
+    def_use: DefineUseAnalysis
+    alias: AliasAnalysis | None
+    """what may be the same list as what; computed only where it is consulted,
+    since it needs type inference and not every program admits it"""
+    mutating: bool
+    """whether the function writes into a list in place"""
+
+    @staticmethod
+    def of(func: FuncDef, def_use: DefineUseAnalysis) -> '_Context':
+        mutating = _mutating(_Nodes.of(func.body), def_use)
+        alias = Alias.analyze(func, def_use=def_use) if mutating else None
+        return _Context(def_use, alias, mutating)
+
+
 def _from_before(
     d: Definition | None,
     loop: ForStmt | WhileStmt,
@@ -57,12 +78,51 @@ def _from_before(
     return id(d.site) in taken or (d.site is not loop and id(d.site) not in body)
 
 
-def _read_outside(name: NamedId, body: set[int], def_use: DefineUseAnalysis) -> bool:
-    """Whether any definition of *name* is read from outside the loop body."""
+def _other_def_is_read(
+    name: NamedId, stmt: Stmt, def_use: DefineUseAnalysis
+) -> bool:
+    """Whether any definition of *name* other than *stmt*'s is ever read.
+
+    Both directions matter, and an outside-only test catches just one.  A read
+    *after* the loop sees whatever reached it when the loop runs zero times.  A
+    read *earlier in the body* resolves to the loop's phi, so it sees the
+    previous iteration's value -- the pre-loop one on the first pass.  Hoisting
+    would answer the invariant value in either case.
+    """
     return any(
-        id(u) not in body
+        def_use.uses.get(d, set())
         for d in def_use.name_to_defs.get(name, set())
-        for u in def_use.uses.get(d, set())
+        if not (isinstance(d, AssignDef) and d.site is stmt)
+    )
+
+
+def _mutating(body: set[int], def_use: DefineUseAnalysis) -> bool:
+    """Whether the loop body writes into a list in place."""
+    return any(
+        isinstance(u, IndexedAssign) and id(u) in body
+        for us in def_use.uses.values() for u in us
+    )
+
+
+def _may_be_mutated(
+    e: Expr,
+    reaching: dict[NamedId, Definition],
+    alias: AliasAnalysis | None,
+) -> bool:
+    """Whether *e* reads a list, which a body that mutates one may change.
+
+    Reaching definitions model ``zs[i] = v`` as a fresh definition of ``zs``
+    alone, so a read of an aliased ``ys`` still looks like it came from before
+    the loop although the list it names changes every iteration.  Being blunt
+    here -- any list-valued read, once the body mutates anything -- rather than
+    comparing regions, which would be sharper and is not needed by any schedule
+    yet.
+    """
+    if alias is None:
+        return True
+    return any(
+        (d := reaching.get(name)) is not None and alias.region_of(d) is not None
+        for name in LiveVars.analyze(e)
     )
 
 
@@ -76,28 +136,27 @@ def _why_not(
     loop: ForStmt | WhileStmt,
     body: set[int],
     taken: set[int],
-    def_use: DefineUseAnalysis,
+    ctx: '_Context',
 ) -> str | None:
     """Why *stmt* may not move above *loop*, or `None` where it may."""
     if not isinstance(stmt, Assign) or not isinstance(stmt.target, NamedId):
         return 'not a simple assignment to a name'
     target = stmt.target
-    if not Purity.analyze_expr(stmt.expr, def_use):
+    if not Purity.analyze_expr(stmt.expr, ctx.def_use):
         return f'`{target}` is bound to an impure expression'
 
-    reaching = def_use.reach[stmt]
+    reaching = ctx.def_use.reach[stmt]
     varies = sorted(
         str(name) for name in LiveVars.analyze(stmt.expr)
         if not _from_before(reaching.get(name), loop, body, taken)
     )
     if varies:
         return f'{", ".join(f"`{n}`" for n in varies)} varies across iterations'
-
-    # a zero-trip loop would leave whatever reached it in place, where the
-    # hoisted binding puts the invariant value instead
-    if _read_outside(target, body, def_use):
-        return f'`{target}` is read from outside the body'
-    bound = _bound_in(target, body, def_use)
+    if ctx.mutating and _may_be_mutated(stmt.expr, reaching, ctx.alias):
+        return f'`{target}` reads a list the body may write into'
+    if _other_def_is_read(target, stmt, ctx.def_use):
+        return f'another definition of `{target}` is read'
+    bound = _bound_in(target, body, ctx.def_use)
     if len(bound) != 1 or bound[0].site is not stmt:
         return f'`{target}` is bound more than once in the body'
     return None
@@ -118,7 +177,16 @@ def _own_exprs(stmt: Stmt) -> list[Expr]:
 
 class _Maximal(DefaultVisitor):
     """The largest subexpressions satisfying a predicate, never one inside
-    another: a match is taken whole and not descended into."""
+    another: a match is taken whole and not descended into.
+
+    A position that is not evaluated every time its statement is reached is not
+    descended into either, whether it matches or not -- moving such an
+    expression above the loop evaluates it where the original may never have,
+    and the guard that stopped it is often the point: in
+    ``ok and len(ys) > 0 and ys[0] > x`` the subscript is reached only when the
+    length test passes.  :class:`PreambleScoped` seals the same positions for
+    the same reason.
+    """
 
     def __init__(self, ok: Callable[[Expr], bool]):
         self.ok = ok
@@ -129,6 +197,19 @@ class _Maximal(DefaultVisitor):
             self.found.append(e)
             return None
         return super()._visit_expr(e, ctx)
+
+    def _visit_naryop(self, e: NaryOp, ctx: None):
+        if isinstance(e, And | Or):
+            return self._visit_expr(e.args[0], ctx)
+        return super()._visit_naryop(e, ctx)
+
+    def _visit_if_expr(self, e: IfExpr, ctx: None):
+        return self._visit_expr(e.cond, ctx)
+
+    def _visit_list_comp(self, e: ListComp, ctx: None):
+        # the element runs once per element, and a later iterable sees the
+        # targets of an earlier one
+        return None
 
     @staticmethod
     def of(e: Expr, ok: Callable[[Expr], bool]) -> list[Expr]:
@@ -142,7 +223,7 @@ def _invariant_exprs(
     loop: ForStmt | WhileStmt,
     body: set[int],
     taken: set[int],
-    def_use: DefineUseAnalysis,
+    ctx: _Context,
 ) -> list[Expr]:
     """The subexpressions of *stmt* worth computing once above *loop*.
 
@@ -151,10 +232,9 @@ def _invariant_exprs(
     :class:`ConstFold`'s to fold rather than this pass's to move.
 
     A statement whose *whole* right-hand side qualifies is included -- the
-    binding itself may be pinned in the body (its name read after the loop, or
-    bound twice) while the work it does is not.
+    binding itself may be pinned in the body while the work it does is not.
     """
-    reaching = def_use.reach[stmt]
+    reaching = ctx.def_use.reach[stmt]
 
     def ok(e: Expr) -> bool:
         if isinstance(e, Var):
@@ -164,78 +244,71 @@ def _invariant_exprs(
             return False
         if not all(_from_before(reaching.get(n), loop, body, taken) for n in names):
             return False
-        return Purity.analyze_expr(e, def_use)
+        if ctx.mutating and _may_be_mutated(e, reaching, ctx.alias):
+            return False
+        return Purity.analyze_expr(e, ctx.def_use)
 
     return [h for e in _own_exprs(stmt) for h in _Maximal.of(e, ok)]
 
 
-def _invariants(
-    loop: ForStmt | WhileStmt, def_use: DefineUseAnalysis
-) -> list[Assign]:
-    """The direct children of *loop*'s body that may be hoisted above it.
+class _Plan(NamedTuple):
+    """What to emit above a loop, and what that changes in its body."""
 
-    Only direct children: a statement under a ``with`` in the body would land
-    outside that ``with`` and be rounded differently.  Confining the query this
-    way settles the question outright rather than merely cheaply, since neither
-    loop form opens a context scope -- a direct child of the body is already in
-    the scope the loop statement sits in, which is the scope it moves to.
+    emit: list[Stmt]
+    """the statements to put before the loop"""
+    drop: set[int]
+    """ids of the body statements they replace"""
+    subst: dict[int, NamedId]
+    """subexpressions to substitute a name for, by id"""
+    dirty: set[int]
+    """positions in the body whose expressions that touches"""
 
-    Taken in body order, each one counting as hoisted for those after it, so a
-    chain (``_k``, then ``2 ** -_k``) comes out in a single pass.  A binding
-    that becomes invariant only once an *inner* loop has been hoisted out of
-    needs another pass.
+
+def _plan(loop: ForStmt | WhileStmt, ctx: _Context, gensym: Gensym) -> _Plan:
+    """Plan the motion out of *loop*.
+
+    Only direct children of the body are considered: a statement under a
+    ``with`` would land outside it and be rounded differently.  That confines
+    the rounding question rather than merely cheapening it, since neither loop
+    form opens a context scope and nor does any expression -- a direct child,
+    and every subexpression of it, is already in the scope the loop sits in,
+    which is the scope it moves to.
+
+    One walk in body order, each statement taken out counting as invariant for
+    those after it, so a chain comes out in a single pass and an emission may
+    read a name an earlier one bound.  A statement that moves whole is not also
+    picked over for subexpressions.
+
+    One statement always stays: a loop whose body emptied would not re-parse,
+    and :class:`UnnestContext` keeps its blocks non-empty the same way.
     """
     body = _Nodes.of(loop.body)
     taken: set[int] = set()
-    out: list[Assign] = []
-    for stmt in loop.body.stmts:
-        if _why_not(stmt, loop, body, taken, def_use) is None:
-            assert isinstance(stmt, Assign)
-            out.append(stmt)
-            taken.add(id(stmt))
-    return out
-
-
-def _plan(
-    loop: ForStmt | WhileStmt,
-    def_use: DefineUseAnalysis,
-    gensym: Gensym,
-) -> tuple[list[Stmt], set[int], dict[int, NamedId], set[int]]:
-    """What to emit above *loop*, and what that changes in its body.
-
-    Returns the statements to put before the loop, the ids of the body
-    statements they replace, the subexpressions to substitute a name for, and
-    the positions in the body whose expressions that touches.
-
-    One walk in body order, so an emission may read a name an earlier one
-    bound.  A statement that moves whole is not also picked over for
-    subexpressions.
-    """
-    body = _Nodes.of(loop.body)
-    taken: set[int] = set()
-    emit: list[Stmt] = []
-    drop: set[int] = set()
-    subst: dict[int, NamedId] = {}
-    dirty: set[int] = set()
+    plan = _Plan([], set(), {}, set())
 
     for pos, stmt in enumerate(loop.body.stmts):
-        if _why_not(stmt, loop, body, taken, def_use) is None:
-            emit.append(stmt)
-            drop.add(id(stmt))
+        if _why_not(stmt, loop, body, taken, ctx) is None:
+            plan.emit.append(stmt)
+            plan.drop.add(id(stmt))
             taken.add(id(stmt))
             continue
-        for e in _invariant_exprs(stmt, loop, body, taken, def_use):
+        for e in _invariant_exprs(stmt, loop, body, taken, ctx):
             name = gensym.fresh('t')
-            emit.append(Assign(name, None, e, e.loc))
-            subst[id(e)] = name
-            dirty.add(pos)
-    return emit, drop, subst, dirty
+            plan.emit.append(Assign(name, None, e, e.loc))
+            plan.subst[id(e)] = name
+            plan.dirty.add(pos)
+
+    if len(plan.drop) == len(loop.body.stmts):
+        last = loop.body.stmts[-1]
+        plan.emit.remove(last)
+        plan.drop.discard(id(last))
+    return plan
 
 
-def _refusals(loop: ForStmt | WhileStmt, def_use: DefineUseAnalysis) -> list[str]:
+def _refusals(loop: ForStmt | WhileStmt, ctx: _Context) -> list[str]:
     """Why each statement of *loop*'s body stayed, for a loop that is no site."""
     body = _Nodes.of(loop.body)
-    reasons = [_why_not(s, loop, body, set(), def_use) for s in loop.body.stmts]
+    reasons = [_why_not(s, loop, body, set(), ctx) for s in loop.body.stmts]
     return sorted({why for why in reasons if why is not None})
 
 
@@ -243,7 +316,7 @@ class _HoistInvariant(SiteRewriter):
     """Loop-invariant code motion visitor."""
 
     func: FuncDef
-    def_use: DefineUseAnalysis
+    ctx: _Context
     gensym: Gensym
     _hoisting: set[int]
     """statements already emitted above their loop, to be left out of the body"""
@@ -258,7 +331,7 @@ class _HoistInvariant(SiteRewriter):
     ):
         super().__init__()
         self.func = func
-        self.def_use = def_use
+        self.ctx = _Context.of(func, def_use)
         self.where = where
         self.gensym = Gensym(def_use.names())
         self._hoisting = set()
@@ -269,7 +342,7 @@ class _HoistInvariant(SiteRewriter):
         one an explicit `where` named is an error rather than a silent no-op."""
         block, pos = self._site
         if not hoistable:
-            why = '; '.join(_refusals(stmt, self.def_use)) or 'the body is empty'
+            why = '; '.join(_refusals(stmt, self.ctx)) or 'the body is empty'
             self.refused.append((stmt, why))
             # only a cursor can name a refusal: an index counts sites, and
             # `where=None` means "every site", not "this one too"
@@ -293,20 +366,19 @@ class _HoistInvariant(SiteRewriter):
         """Emit the invariant work before the loop, and mark what that leaves
         out of, or changes in, the body.
 
-        Marking rather than rebuilding the body here: a block this pass
-        synthesized is in no path, so a cursor could not name anything inside
-        it and a nested loop would stop being reachable from one aimed at the
-        loop around it.
+        The body keeps its own block rather than being rebuilt here: a block
+        this pass synthesized is in no path, so no cursor could reach a loop
+        nested inside it.
         """
-        emit, drop, subst, dirty = _plan(stmt, self.def_use, self.gensym)
-        if not self._claims(stmt, emit):
+        plan = _plan(stmt, self.ctx, self.gensym)
+        if not self._claims(stmt, plan.emit):
             return
-        self._hoisting |= drop
-        self._subst |= subst
-        for pos in sorted(dirty):
+        self._hoisting |= plan.drop
+        self._subst |= plan.subst
+        for pos in sorted(plan.dirty):
             self._mark_exprs(stmt.body, pos)
         self._replaced = True
-        ctx.extend(emit)
+        ctx.extend(plan.emit)
 
     def _visit_expr(self, e: Expr, ctx):
         name = self._subst.get(id(e))
@@ -362,10 +434,9 @@ class HoistInvariant:
     destination in the scope they were already written in.  See `_why_not` and
     `_invariant_exprs` for what qualifies.
 
-    One pass, and deliberately not part of :class:`Simplify`: this relocates
-    computation rather than shrinking or reformatting it.  A chain within one
-    body comes out together, but a binding freed by hoisting out of an *inner*
-    loop needs the pass applied again.
+    One pass: a chain within one body comes out together, but work freed by
+    hoisting out of an *inner* loop needs the pass applied again.
+    :func:`fpy2.strategies.hoist_invariant` documents the rest.
     """
 
     @staticmethod
@@ -398,7 +469,7 @@ class HoistInvariant:
         *,
         def_use: DefineUseAnalysis | None = None,
     ) -> FuncDef:
-        """Hoist the invariant bindings out of *func*'s loops.
+        """Hoist the invariant work out of *func*'s loops.
 
         `where` names one site: an index counting the loops this rewrite acts
         on, in visit order, or a cursor or region, which takes the sites at or
@@ -420,7 +491,7 @@ class HoistInvariant:
 
         inst = HoistInvariant._instance(func, where, def_use)
         out = inst.apply()
-        inst.check_site('a loop with an invariant binding')
+        inst.check_site('a loop with invariant work in it')
         SyntaxCheck.check(out, ignore_unknown=True)
         return EditLog(
             func, out, tuple(inst.edits),

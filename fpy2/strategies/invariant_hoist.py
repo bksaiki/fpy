@@ -23,12 +23,14 @@ def hoist_invariant(
     a ``with`` inside the body therefore stays.
 
     A whole binding moves when its expression is pure, every name it reads was
-    bound before the loop, its own name is bound just once in the body, and
-    that name is not read from outside the body.  The last of those is what a
-    loop that runs zero times needs: a reader after the loop would otherwise
-    see the hoisted value in place of whatever reached the loop.  Hoisting
-    *does* make the expression evaluate where it previously would not have,
-    which FPy permits -- the value the function returns is unchanged.
+    bound before the loop, its own name is bound just once in the body, and no
+    *other* definition of that name is ever read.  The last of those covers two
+    readers that would otherwise see the hoisted value: one after a loop that
+    runs zero times, which should see whatever reached the loop, and one
+    earlier in the body, which reads through the loop's phi and so should see
+    the previous iteration's value.  Hoisting *does* make the expression
+    evaluate where it previously would not have, which FPy permits -- the value
+    the function returns is unchanged.
 
     Where the binding is pinned, its invariant *subexpressions* still move,
     each bound to a fresh name above the loop.  That is what reaches an operand
@@ -37,6 +39,17 @@ def hoist_invariant(
     right-hand side too, since what pins the name says nothing about the work.
     A bare name is left alone, as is an expression that reads nothing, which is
     :func:`fpy2.strategies.simplify`'s to fold rather than this pass's to move.
+    So is a position that is not evaluated every time its statement is reached
+    -- an ``and``/``or`` operand after the first, a ternary arm, a
+    comprehension element -- since moving one of those runs it where the
+    original may never have, and the guard in front of it is often the point.
+
+    A loop body that writes into a list in place pins every read of a list:
+    reaching definitions model ``zs[i] = v`` as a definition of ``zs`` alone,
+    so a read of an aliased ``ys`` would otherwise look invariant.
+
+    Idempotent: a second application finds only names and non-invariant
+    expressions where the first left them.
 
     One pass.  A chain comes out together, each hoisted binding counting as
     invariant for the ones after it, but a binding freed by hoisting out of an
@@ -45,7 +58,9 @@ def hoist_invariant(
     moving a computation is not a simplification, and nothing downstream
     depends on it having happened.
 
-    Cursors forward across this pass.
+    Cursors forward across this pass, except an expression cursor inside a
+    statement a subexpression was lifted out of: that statement's expressions
+    were rewritten, so the cursor no longer names what it named.
 
     Parameters
     ----------
@@ -56,7 +71,7 @@ def hoist_invariant(
         acts on, in visit order, outermost-first, or a cursor or region, which
         takes every one at or beneath it. If `None`, hoist out of them all. A
         loop with nothing to hoist is not one of them and takes no index;
-        naming it with a cursor says why each of its bindings stayed.
+        naming it with a cursor says why each of its statements stayed.
 
     Returns
     -------
@@ -67,13 +82,10 @@ def hoist_invariant(
     ------
     TransformDeclined
         If an explicit `where` names a loop with nothing to hoist; the message
-        says why each binding stayed.
+        says why each statement stayed.
     TransformReferenceError
         If an explicit `where` names no such loop, or a cursor of a program
         this one was not derived from.
-
-    Idempotent: a second application finds only names and non-invariant
-    expressions where the first left them.
 
     Examples
     --------

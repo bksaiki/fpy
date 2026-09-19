@@ -431,3 +431,62 @@ with `is_equiv` kept for the four that have no invariant subexpression either.
 does not replace, so it records `dirty_exprs` via `_mark_exprs` and the
 `EditLog` carries `exprs_rewritten`.  `exprs_preserved` stays `True`: outside
 those statements every expression is untouched.
+
+## Review: four soundness bugs, and what they have in common
+
+Found by an adversarial correctness pass over the finished PR, all four
+confirmed by differential testing and all four now fixed with a regression
+test apiece in `TestSoundness`.
+
+**1. The zero-trip guard only looked outward.**  `_read_outside` refused a
+target read from outside the body.  But a read *earlier in the body* resolves
+to the loop's phi, so it sees the previous iteration's value — the pre-loop one
+on the first pass — and that use is inside the body, so the guard passed:
+
+```python
+for x in xs:
+    acc = acc + c * x      # reads the *previous* c
+    c = n + 1.0            # was hoisted
+```
+
+`f([1.0], 9.0)` gave 1.0 before and 10.0 after.  Now `_other_def_is_read`
+refuses when any definition of the name *other than this statement's* is read
+anywhere, which subsumes the outside-only test.  The binding stays; the work it
+does still moves.
+
+**2. In-place mutation through an alias.**  Reaching definitions model
+`zs[i] = v` as a fresh definition of `zs` alone, so a read of an aliased `ys`
+still looked like it came from before the loop.  `Purity` does not object
+either: no argument is mutated.  Now a body that writes into a list in place
+pins every read of a list, decided with `Alias` — computed lazily, since it
+needs type inference and the foreign-call fixture defeats that.
+
+**3. A body that emptied.**  Hoisting every statement left `for x in xs:` with
+no body, which `SyntaxCheck` accepted and the interpreter rejected at run time.
+One statement now stays behind, as `UnnestContext` already does for its blocks.
+
+**4. Lifting out of conditionally-evaluated positions.**  `_Maximal` descended
+into `and`/`or` operands after the first, both ternary arms and comprehension
+elements.  Hoisting one of those runs it where the original may never have —
+and unlike the zero-trip decision, the loop here *does* run:
+
+```python
+ok = ok and (len(ys) > 0) and (ys[0] > x)
+```
+
+lifted `ys[0]` above the loop, turning `False` into an `IndexError`.  The guard
+in front of it was the point.  `_Maximal` now stops at those positions, which
+is what `PreambleScoped` already does for statement-level preambles — the rule
+existed in `fpy2/transform/utils.py`, and this pass extends `SiteRewriter`
+rather than `PreambleScoped`, so it did not inherit it.
+
+**What they have in common.**  Three of the four are the same mistake: reasoning
+about *where a name is defined* while the thing that matters is *when a value is
+read* (1), *whether something else may change it* (2), or *whether the code runs
+at all* (4).  Reaching definitions answer the first question well and the other
+two not at all.
+
+The review also confirmed, by attack rather than by argument, that the rounding
+question really is closed, that node-identity keying is safe because every
+transform rebuilds, and that the emission ordering admits no forward reference.
+

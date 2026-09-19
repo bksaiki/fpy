@@ -17,8 +17,8 @@ from fpy2.analysis import DefineUse, LiveVars
 from fpy2.ast import Assign, ForStmt, IndexedAssign, Mul, StmtBlock, WhileStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import HoistInvariant
-from fpy2.transform.hoist_invariant import _from_before, _invariants, _Nodes
-from fpy2.utils import NamedId
+from fpy2.transform.hoist_invariant import _Context, _from_before, _Nodes, _plan
+from fpy2.utils import Gensym, NamedId
 
 # zero-trip, one-trip, and a spread that straddles the FP16 subnormal and
 # overflow boundaries, so a hoist that changed rounding would show up
@@ -126,44 +126,22 @@ class TestSimplify:
         assert _agrees(scaled_while, out.ast)
 
 
-class TestRescaleFixedOutput:
-    """The motivating schedule, and the wart this PR exists to remove."""
+@fp.fpy(ctx=fp.REAL)
+def fused_sum(xs: list[fp.Real]) -> fp.Real:
+    if all([fp.isfinite(x) for x in xs]):
+        e = max([fp.logb(x) for x in xs])
+        with fp.MPFixedContext(e - 12, rm=fp.RM.RTZ, enable_neg_zero=False):
+            ts = [fp.round(x) for x in xs]
+        return sum(ts)
+    else:
+        with fp.FP32:
+            return sum(xs)
 
-    P = 12
 
-    @staticmethod
-    @fp.fpy(ctx=fp.REAL)
-    def fused_sum(xs: list[fp.Real]) -> fp.Real:
-        if all([fp.isfinite(x) for x in xs]):
-            e = max([fp.logb(x) for x in xs])
-            with fp.MPFixedContext(e - 12, rm=fp.RM.RTZ, enable_neg_zero=False):
-                ts = [fp.round(x) for x in xs]
-            return sum(ts)
-        else:
-            with fp.FP32:
-                return sum(xs)
-
-    @staticmethod
-    def _schedule(func):
-        return st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(func))))
-
-    def test_the_scale_is_recomputed_every_iteration(self):
-        out = self._schedule(self.fused_sum)
-        # the "before" side; `TestTheTransform` asserts the "after"
-        assert '_k' in _body_names(out.ast)
-
-    def test_the_scale_is_written_as_a_power_of_two(self):
-        """What `HoistScale` will look for in PR 2: an invariant factor
-        multiplying each element, written into the result list."""
-        src = _text(self.fused_sum, self._schedule(self.fused_sum).ast)
-        assert '_k = ((e - 12) + 1)' in src
-        assert '(2 ** _k)' in src
-
-    def test_the_schedule_preserves_the_source_semantics(self):
-        """Not about hoisting — the baseline the later phases are measured
-        against.  The empty list is excluded: `max([])` has no value."""
-        out = self._schedule(self.fused_sum)
-        assert _agrees_by_value(self.fused_sum, out.ast, values=_VALUES[1:])
+def _scheduled():
+    """The motivating schedule, before and after this pass."""
+    f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(fused_sum))))
+    return f, st.hoist_invariant(f)
 
 
 # ----------------------------------------------------------------------
@@ -188,9 +166,11 @@ def _loops(ast) -> list:
 
 
 def _query(func, which: int = 0) -> list[str]:
-    """The names `_invariants` says may leave the *which*-th loop of *func*."""
+    """The names `_plan` says may leave the *which*-th loop of *func* whole."""
     def_use = DefineUse.analyze(func.ast)
-    return [str(s.target) for s in _invariants(_loops(func.ast)[which], def_use)]
+    ctx = _Context.of(func.ast, def_use)
+    plan = _plan(_loops(func.ast)[which], ctx, Gensym(def_use.names()))
+    return [str(s.target) for s in plan.emit if id(s) in plan.drop]
 
 
 def _loop_bodies_text(ast) -> str:
@@ -395,19 +375,6 @@ class TestTheTransform:
         )
 
 
-class TestTheQueryOnTheMotivatingExample:
-
-    def test_it_finds_the_scale(self):
-        out = TestRescaleFixedOutput._schedule(TestRescaleFixedOutput.fused_sum)
-        assert '_k' in _query(out, which=2)
-
-    def test_the_transform_takes_it_out(self):
-        sched = TestRescaleFixedOutput._schedule(TestRescaleFixedOutput.fused_sum)
-        out = _hoisted(sched)
-        assert '_k' not in _body_names(out.ast)
-        assert _agrees_by_value(sched, out.ast, values=_VALUES[1:])
-
-
 # ----------------------------------------------------------------------
 # Phase 5: the motivating schedule, end to end
 
@@ -436,25 +403,36 @@ class TestTheMotivatingSchedule:
     """`fuse; comp_to_loop; rescale_fixed; simplify; hoist_invariant` — what a
     user writes, through the strategy rather than the transform."""
 
-    @staticmethod
-    def _scheduled():
-        f = TestRescaleFixedOutput.fused_sum
-        f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(f))))
-        return f, st.hoist_invariant(f)
+    def test_the_query_finds_the_scale(self):
+        before, _ = _scheduled()
+        assert '_k' in _query(before, which=2)
 
     def test_the_scale_leaves_the_loop(self):
-        before, after = self._scheduled()
+        before, after = _scheduled()
         assert '_k' in _body_names(before.ast)
         assert '_k' not in _body_names(after.ast)
 
+    def test_both_scale_factors_leave_the_loop(self):
+        """What statement-level motion alone could not reach: the two powers
+        were operands, recomputed once per element."""
+        before, after = _scheduled()
+        assert '(2 ** -_k)' in _loop_bodies_text(before.ast)
+        assert '(2 ** _k)' in _loop_bodies_text(before.ast)
+        assert '2 **' not in _loop_bodies_text(after.ast)
+
+    def test_the_loop_body_is_a_multiply_a_round_and_a_store(self):
+        _, after = _scheduled()
+        _, loop, _, _ = _scale_factor(after)
+        assert len(loop.body.stmts) == 5
+
     def test_the_values_are_unchanged(self):
-        before, after = self._scheduled()
+        before, after = _scheduled()
         assert _agrees_by_value(before, after.ast, values=_VALUES[1:])
 
     def test_the_fp32_branch_is_untouched(self):
         """The `else` arm rounds under `fp.FP32` and has no loop; nothing in it
         moves.  PR 2's rewrite is the one that must decline there."""
-        before, after = self._scheduled()
+        before, after = _scheduled()
         assert 'sum(xs)' in _text(before, after.ast)
 
     def test_the_handoff_to_hoist_scale_holds(self):
@@ -462,7 +440,7 @@ class TestTheMotivatingSchedule:
         ``ts[i] = (2 ** _k) * _t``, every name the factor reads is bound before
         the loop.  False beforehand — `_k` is bound in the body — and true
         after, which is what makes PR 2 applicable at all."""
-        before, after = self._scheduled()
+        before, after = _scheduled()
 
         def factor_is_invariant(func) -> bool:
             def_use, loop, stmt, factor = _scale_factor(func)
@@ -527,18 +505,106 @@ class TestSubexpressions:
         assert _hoisted(once).ast.is_equiv(once.ast)
 
 
-class TestTheMotivatingScheduleSubexpressions:
+# ----------------------------------------------------------------------
+# Soundness regressions, from an adversarial review of the first cut
 
-    def test_both_scale_factors_leave_the_loop(self):
-        """What statement-level motion alone could not reach: the two powers
-        were operands, recomputed once per element."""
-        before, after = TestTheMotivatingSchedule._scheduled()
-        assert '(2 ** -_k)' in _loop_bodies_text(before.ast)
-        assert '(2 ** _k)' in _loop_bodies_text(before.ast)
-        assert '2 **' not in _loop_bodies_text(after.ast)
-        assert _agrees_by_value(before, after.ast, values=_VALUES[1:])
 
-    def test_the_loop_body_is_a_multiply_a_round_and_a_store(self):
-        _, after = TestTheMotivatingSchedule._scheduled()
-        _, loop, _, _ = _scale_factor(after)
-        assert len(loop.body.stmts) == 5
+class TestSoundness:
+
+    def test_a_loop_carried_read_earlier_in_the_body(self):
+        """`acc` reads the *previous* `c`, through the loop's phi.  That use is
+        inside the body, so an outside-only guard missed it and the first
+        iteration saw the hoisted value instead of the pre-loop one.
+
+        The binding stays; only the work it does moves, which is enough."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], n: fp.Real) -> fp.Real:
+            acc = 0.0
+            c = 1.0
+            for x in xs:
+                acc = acc + c * x
+                c = n + 1.0
+            return acc
+
+        out = _hoisted(f)
+        assert _body_sizes(out.ast) == _body_sizes(f.ast)
+        assert 'c' in _body_names(out.ast)
+        g = fp.Function(out.ast, runtime=f.runtime)
+        for xs in ([1.0], [1.0, 1.0], [1.0, 2.0, 3.0]):
+            assert repr(g(xs, 9.0)) == repr(f(xs, 9.0))
+
+    def test_a_list_the_body_mutates_through_an_alias(self):
+        """`zs` and `ys` are the same list, and reaching definitions model the
+        write as a fresh definition of `zs` alone — so `ys[0]` still looked
+        like it came from before the loop."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            ys = [10.0]
+            zs = ys
+            acc = 0.0
+            for x in xs:
+                c = ys[0] + 0.0
+                acc = acc + c * x
+                zs[0] = zs[0] + 1.0
+            return acc
+
+        out = _hoisted(f)
+        g = fp.Function(out.ast, runtime=f.runtime)
+        for xs in ([1.0, 1.0], [1.0, 1.0, 1.0]):
+            assert repr(g(xs)) == repr(f(xs))
+
+    def test_a_body_that_would_empty_keeps_one_statement(self):
+        """A `for` with no statements does not re-parse and the interpreter
+        rejects it, so the last one stays behind."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], n: fp.Real) -> fp.Real:
+            for x in xs:
+                c = n + 1.0
+            return n
+
+        out = _hoisted(f)
+        assert _body_sizes(out.ast) == [1]
+        assert repr(fp.Function(out.ast, runtime=f.runtime)([1.0], 2.0)) == repr(
+            f([1.0], 2.0)
+        )
+
+    def test_a_guarded_operand_is_not_lifted_past_its_guard(self):
+        """`ys[0]` runs only when `len(ys) > 0` passes.  Lifting it above the
+        loop evaluates it either way — the loop still runs, so this is not the
+        zero-trip case."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+            ok = True
+            for x in xs:
+                ok = ok and (len(ys) > 0) and (ys[0] > x)
+            return ok
+
+        out = _hoisted(f)
+        assert out.ast.is_equiv(f.ast)
+        g = fp.Function(out.ast, runtime=f.runtime)
+        for ys in ([], [5.0]):
+            assert repr(g([1.0], ys)) == repr(f([1.0], ys))
+
+    def test_a_ternary_arm_is_not_lifted(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], n: fp.Real, d: fp.Real) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + (n / d if x > 0.0 else 0.0)
+            return acc
+
+        assert _hoisted(f).ast.is_equiv(f.ast)
+
+    def test_a_comprehension_element_is_not_lifted(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss: list[list[fp.Real]], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for row in xss:
+                zs = [ys[0] + w for w in row]
+                acc = acc + sum(zs)
+            return acc
+
+        out = _hoisted(f)
+        assert '(ys[0] + w)' in _loop_bodies_text(out.ast)
+        g = fp.Function(out.ast, runtime=f.runtime)
+        assert repr(g([[]], [])) == repr(f([[]], []))
