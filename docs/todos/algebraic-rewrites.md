@@ -42,17 +42,18 @@ What the schedule should produce once everything below has landed —
         e = max(t7)
         ts = fp.empty(len(xs))
         _k = ((e - 12) + 1)                 # hoisted: invariant
+        _r = (2 ** -_k)                     # hoisted: invariant subexpression
         for t10 in range(len(xs)):
             x = xs[t10]
-            _t = ((2 ** -_k) * x)
+            _t = (_r * x)
             with fp.MPFixedContext(-1, rm=fp.RM.RTZ, enable_neg_zero=False):
                 _t13 = fp.round(_t)
             ts[t10] = _t13                  # integers: position zero
         return ((2 ** _k) * sum(ts))        # hoisted out of the reduction
 ```
 
-Two hoists.  `_k` is ordinary loop-invariant code motion, and it is what makes
-the second one legal: `hoist_scale`'s condition is that every free variable of
+`_k` and `_r` are ordinary loop-invariant code motion, and `_k` is what makes
+the reduction hoist legal: `hoist_scale`'s condition is that every free variable of
 the factor is bound outside the loop, which `2 ** _k` satisfies once `_k` is.
 The factor itself needs no name — the rewrite moves the whole expression out
 with the reduction.
@@ -61,11 +62,10 @@ The payoff is not fewer multiplies.  The `ts` are *integers* —
 `MPFixedContext(-1)` is position zero — so `sum(ts)` is an integer accumulation
 scaled once at the end, which is what the backend wants.
 
-`(2 ** -_k)` is still recomputed each iteration.  That is a subexpression, not a
-statement, so statement-level motion cannot reach it; it would want either a
-subexpression-level pass or whatever common-subexpression elimination the
-backend does.  Out of scope here, and it costs nothing that matters to the
-integer accumulation.
+`hoist_invariant` takes `(2 ** -_k)` out as well, though it is a subexpression
+rather than a statement: where a binding cannot move, its invariant
+subexpressions are named and moved instead.  The loop body is then a multiply,
+a round and a store.
 
 **Checked, not assumed.**  The form above is what
 `fuse; comp_to_loop; rescale_fixed; simplify; hoist_invariant` emits today, less

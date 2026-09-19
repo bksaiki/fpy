@@ -193,6 +193,19 @@ def _query(func, which: int = 0) -> list[str]:
     return [str(s.target) for s in _invariants(_loops(func.ast)[which], def_use)]
 
 
+def _loop_bodies_text(ast) -> str:
+    """The formatted text of every loop body, for asserting what is *not* in
+    one without pinning the surrounding temporary names."""
+    return ' '.join(
+        ' '.join(s.format().split()) for loop in _loops(ast) for s in loop.body.stmts
+    )
+
+
+def _body_sizes(ast) -> list[int]:
+    """How many statements each loop body holds, outermost first."""
+    return [len(loop.body.stmts) for loop in _loops(ast)]
+
+
 def _hoisted(func):
     """*func* with every invariant binding moved above its loop."""
     return func.with_ast(HoistInvariant.apply(func.ast))
@@ -291,6 +304,15 @@ REFUSED_RUNNABLE = (
 
 REFUSED = (*REFUSED_RUNNABLE, binds_an_impure_expression)
 
+# Of those, the ones with no invariant *subexpression* either, so the pass is a
+# no-op rather than merely leaving the binding in place.
+UNTOUCHED = (
+    reads_the_loop_target,
+    reads_a_name_the_body_rebinds,
+    binds_under_a_nested_with,
+    binds_an_impure_expression,
+)
+
 
 @fp.fpy(ctx=fp.REAL)
 def chained(xs: list[fp.Real]) -> fp.Real:
@@ -344,7 +366,13 @@ class TestTheTransform:
         assert _agrees(chained, out.ast)
 
     @pytest.mark.parametrize('func', REFUSED, ids=lambda f: f.name)
-    def test_it_leaves_a_refused_loop_alone(self, func):
+    def test_no_statement_leaves_a_refused_loop(self, func):
+        """The binding stays put.  Its right-hand side may still move — see
+        `TestSubexpressions` — but the body keeps every statement it had."""
+        assert _body_sizes(_hoisted(func).ast) == _body_sizes(func.ast)
+
+    @pytest.mark.parametrize('func', UNTOUCHED, ids=lambda f: f.name)
+    def test_it_changes_nothing_at_all(self, func):
         assert _hoisted(func).ast.is_equiv(func.ast)
 
     @pytest.mark.parametrize('func', REFUSED_RUNNABLE, ids=lambda f: f.name)
@@ -447,3 +475,70 @@ class TestTheMotivatingSchedule:
 
         assert not factor_is_invariant(before)
         assert factor_is_invariant(after)
+
+
+# ----------------------------------------------------------------------
+# Invariant subexpressions
+
+
+@fp.fpy(ctx=fp.REAL)
+def constant_operand(xs: list[fp.Real]) -> fp.Real:
+    acc = 0.0
+    for x in xs:
+        acc = acc + (1.0 + 2.0) * x
+    return acc
+
+
+class TestSubexpressions:
+
+    def test_it_lifts_an_invariant_operand(self):
+        """`n + 1` is not a statement of its own, and `(n + 1) * x` is not
+        invariant; the operand between them is."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real]) -> fp.Real:
+            n = len(xs)
+            acc = 0.0
+            for x in xs:
+                acc = acc + (n + 1) * x
+            return acc
+
+        out = _hoisted(f)
+        assert '(n + 1)' in _text(f, out.ast)
+        assert '(n + 1)' not in _loop_bodies_text(out.ast)
+        assert _body_sizes(out.ast) == _body_sizes(f.ast)
+        assert _agrees(f, out.ast)
+
+    def test_it_lifts_the_rhs_of_a_binding_that_cannot_move(self):
+        """`c` is read after the loop, so the binding is pinned — but the work
+        it does is invariant and need not be repeated.  The zero-trip case is
+        what the pinning protects, and it still holds."""
+        f = reads_the_target_after_the_loop
+        out = _hoisted(f)
+        assert 'c' in _body_names(out.ast)
+        assert '(n + 1)' not in _loop_bodies_text(out.ast)
+        assert _agrees(f, out.ast)
+
+    def test_it_leaves_a_constant_expression_to_const_fold(self):
+        """Moving `1.0 + 2.0` would only race `ConstFold` to it."""
+        assert _hoisted(constant_operand).ast.is_equiv(constant_operand.ast)
+
+    def test_it_is_idempotent(self):
+        once = _hoisted(scaled_sum)
+        assert _hoisted(once).ast.is_equiv(once.ast)
+
+
+class TestTheMotivatingScheduleSubexpressions:
+
+    def test_both_scale_factors_leave_the_loop(self):
+        """What statement-level motion alone could not reach: the two powers
+        were operands, recomputed once per element."""
+        before, after = TestTheMotivatingSchedule._scheduled()
+        assert '(2 ** -_k)' in _loop_bodies_text(before.ast)
+        assert '(2 ** _k)' in _loop_bodies_text(before.ast)
+        assert '2 **' not in _loop_bodies_text(after.ast)
+        assert _agrees_by_value(before, after.ast, values=_VALUES[1:])
+
+    def test_the_loop_body_is_a_multiply_a_round_and_a_store(self):
+        _, after = TestTheMotivatingSchedule._scheduled()
+        _, loop, _, _ = _scale_factor(after)
+        assert len(loop.body.stmts) == 5

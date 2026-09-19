@@ -113,9 +113,8 @@ rather than waved through under the undefined-behaviour argument.
 
 - **Nested positions.**  Only direct children of the loop body.  A statement
   inside a `with` or `if` within the body is left alone even when invariant.
-- **Expression-level motion.**  `(2 ** -_k)` is an invariant *subexpression* of
-  `_t`, not a statement.  `to_anf` already names such subexpressions, so a
-  schedule that wants this runs it first.  This pass moves statements.
+- **Nothing, as it turned out.**  Expression-level motion was deferred and then
+  done; see the follow-up at the end.
 
 ### Shape of the pass
 
@@ -381,3 +380,54 @@ Three routes, and the spike is to try each on `fused_sum`:
 **Provisional call:** none.  Pick during the spike, on evidence.  What must not
 happen is `HoistScale` shipping against an analysis that cannot discharge its
 side conditions, since the pass would then decline on its own motivating example.
+
+## Follow-up: invariant subexpressions — **Done.**
+
+`hoist_invariant` moved statements, so the motivating loop still recomputed two
+powers per iteration — `(2 ** -_k)` and `(2 ** _k)` are operands, not
+statements.  Neither was needed for PR 2, but both were real recomputation, and
+the fix was a widening of this pass rather than a new one.
+
+**What it took.**  The same predicate over subexpressions: walk each
+direct-child statement's own expressions top-down, take the largest pure
+subexpression whose free names are all bound before the loop, bind it to a
+fresh `Gensym` name above the loop, and substitute a `Var`.  `_plan` now makes
+one walk of the body in order, emitting a whole statement where one qualifies
+and otherwise the subexpressions of it that do, so an emission may read a name
+an earlier one bound.
+
+**What it did not take.**  The context question stayed closed, as predicted: an
+expression's scope comes only from an enclosing `ContextStmt` or the `FuncDef`,
+so every subexpression of a direct-child statement is already in the loop's own
+scope.
+
+**Two exclusions**, both to avoid doing another pass's job or nothing at all: a
+bare `Var`, which would only be rebound, and an expression that reads no name,
+which is `ConstFold`'s to fold.
+
+**Result on the motivating loop** — no ANF, one pass:
+
+```python
+        _k = ((e - 12) + 1)
+        t = (2 ** -_k)
+        t14 = (2 ** _k)
+        for t10 in range(len(xs)):
+            x = xs[t10]
+            _t = (t * x)
+            with fp.MPFixedContext(-1, rm=fp.RM.RTZ, enable_neg_zero=False):
+                _t13 = fp.round(_t)
+            t12 = (t14 * _t13)
+            ts[t10] = t12
+```
+
+**What it changed in the tests.**  Three of the seven refusal fixtures now
+*do* change: `binds_the_target_twice`, `reads_the_target_after_the_loop` and
+`binds_a_tuple` have invariant right-hand sides even though their bindings are
+pinned.  That is correct — what pins the name says nothing about the work — so
+the shared assertion became "no statement leaves the body" (true of all seven)
+with `is_equiv` kept for the four that have no invariant subexpression either.
+
+**One contract change.**  The pass now rewrites expressions in statements it
+does not replace, so it records `dirty_exprs` via `_mark_exprs` and the
+`EditLog` carries `exprs_rewritten`.  `exprs_preserved` stays `True`: outside
+those statements every expression is untouched.
