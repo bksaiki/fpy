@@ -170,3 +170,32 @@ class TestShape:
 
         specs = _specs(_module((caller, [RealType(fp.FP64)])))
         assert len([n for n in specs if n.startswith('callee')]) == 1
+
+
+class TestAUserNameIsNotUnmangled:
+    """Specialization re-reads its own output, so it has to recover a spec's
+    base name -- but by tracking what it coined, not by stripping a suffix a
+    user's name can have too."""
+
+    def test_two_functions_keep_two_symbols(self):
+        import fpy2 as fp
+        from fpy2.backend.cpp import CppCompiler
+        from fpy2.types import RealType
+
+        @fp.fpy(ctx=fp.FP64)
+        def helper__deadbeef(x):
+            return x + 1
+
+        @fp.fpy(ctx=fp.FP64)
+        def helper(x):
+            return x + 2
+
+        @fp.fpy(ctx=fp.FP64)
+        def entry(x):
+            return helper__deadbeef(x) + helper(x)
+
+        m = fp.Module()
+        m.add(entry, arg_types=[RealType(fp.FP64)])
+        out = CppCompiler().compile_module(m)
+        defs = [l for l in out.splitlines() if l.startswith('double helper')]
+        assert len(defs) == 2 and len(set(defs)) == 2, defs

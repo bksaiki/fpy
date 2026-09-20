@@ -27,7 +27,7 @@ Instruction-to-model mapping on NVIDIA Tensor Cores (Table 3):
     MXFP8/6/4       -> `make_st_fdpa`    (scaled truncated FDPA)
     MXFP4/NVFP4     -> `make_gst_fdpa`   (group-scaled truncated FDPA)
 
-When K exceeds the FDPA arity `Lmax`, FDPAs are chained
+When K exceeds the FDPA arity `L`, FDPAs are chained
 (`make_t_fdpa_chain`). TF32 instructions truncate their FP32 operands
 to TF32 (`RZ_TF32`) before the dot product.
 
@@ -35,7 +35,7 @@ T-FDPA / ST-FDPA parameters by architecture (paper Table 4; `e_zero`
 from the MMA-Sim reference implementation, keyed by the accumulator
 type: FP32 / FP16):
 
-    architecture    inputs      output  Lmax  F   rho       e_zero
+    architecture    inputs      output  L     F   rho       e_zero
     ----------------------------------------------------------------
     Volta           FP16        FP32    4     23  RZ_FP32   -131
     Volta           FP16        FP16    4     23  RNE_FP16  -20
@@ -164,14 +164,13 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
         return fdpa_round(s, rho)
     return t_fdpa
 
-def make_t_fdpa_chain(l_max: int,
+def make_t_fdpa_chain(L: int,
                       a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
                       F: int, rho: fp.Context,
                       *, e_zero: int | None = None, is_mma: bool = True):
     """
     Builds a Phi_FDPA dot-product-accumulate (Algorithm 5): chains
-    T-FDPAs over vectors of length K, L = min(K, Lmax) elements at
-    a time.
+    T-FDPAs over vectors of length K, `L` elements at a time.
 
     Assumes `rho` outputs the accumulator format, so `c_ctx` also
     describes the running accumulator.
@@ -180,14 +179,15 @@ def make_t_fdpa_chain(l_max: int,
 
     @fp.fpy(ctx=fp.REAL)
     def t_fdpa_chain(A, B, c):
-        """Chain of T-FDPAs (Algorithm 5)."""
-        k = len(A)
-        L = min(k, l_max)
+        """Chain of T-FDPAs (Algorithm 5).
 
+        Algorithm 5 takes a full block of `L` each step, which assumes
+        `L` divides `K` -- as every instruction's vector length does.
+        """
+        k = len(A)
         d = c
         for i in range(0, k, L):
-            hi = min(i + L, k)
-            d = fdpa_op(A[i:hi], B[i:hi], d)
+            d = fdpa_op(A[i:i + L], B[i:i + L], d)
         return d
     return t_fdpa_chain
 

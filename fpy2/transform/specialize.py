@@ -220,12 +220,18 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
 
 
 def _mangle_private(
-    name: str, ctx: Context | None, arg_types_fp: str, arg_vals_fp: str = '',
+    base: str, ctx: Context | None, arg_types_fp: str, arg_vals_fp: str = '',
 ) -> str:
     """Build a stable name for a private spec, from the ctx, argument-type and
     pinned-value fingerprints, so two specs of the same function are
-    distinguishable."""
-    parts = [name]
+    distinguishable.
+
+    *base* is the unmangled name, which the caller tracks: specialization
+    re-reads its own output, and recovering the base by stripping the suffix
+    would take `helper__deadbeef` apart too and collide it with a `helper`
+    beside it.
+    """
+    parts = [base]
     if ctx is not None:
         parts.append(_ctx_fingerprint(ctx))
     if arg_types_fp:
@@ -300,6 +306,86 @@ def _pin_arg_values(
 
 
 # ----------------------------------------------------------------------
+# Dead-parameter elimination.
+
+
+def _dead_args(func: FuncDef) -> tuple[int, ...]:
+    """The positions of parameters *func*'s body has no use for.
+
+    A parameter reaching only a phi still carries a value into the merge, so a
+    phi operand counts as a use.
+    """
+    du = DefineUse.analyze(func)
+    merged = {
+        du.defs[i]
+        for phis in du.phis.values() for phi in phis for i in (phi.lhs, phi.rhs)
+    }
+    out: list[int] = []
+    for i, arg in enumerate(func.args):
+        if not isinstance(arg.name, NamedId):
+            continue
+        d = du.find_def_from_site(arg.name, arg)
+        if not du.uses[d] and d not in merged:
+            out.append(i)
+    return tuple(out)
+
+
+class _DropCallArgs(DefaultTransformVisitor):
+    """Drop, at every call site, the arguments whose parameters went away."""
+
+    def __init__(self, dropped: dict[FuncDef, tuple[int, ...]]):
+        self._dropped = dropped
+
+    def _visit_call(self, e: Call, ctx):
+        args = [self._visit_expr(a, ctx) for a in e.args]
+        kwargs = [(k, self._visit_expr(v, ctx)) for k, v in e.kwargs]
+        gone = set(
+            self._dropped.get(e.fn.ast, ()) if isinstance(e.fn, Function) else ()
+        )
+        return Call(
+            e.func, e.fn,
+            [a for i, a in enumerate(args) if i not in gone],
+            kwargs, e.loc,
+        )
+
+    def apply(self, func: FuncDef) -> FuncDef:
+        return self._visit_function(func, None)
+
+
+def _drop_dead_args(module: Module) -> Module:
+    """Drop parameters no private spec's body uses any more.
+
+    Pinning substitutes a value into every use of a parameter, leaving the
+    parameter dead -- and a dead parameter has nothing left to infer a type
+    from, which the C++ backend refuses.  A public entry keeps its signature:
+    its callers are outside the module.
+
+    Once the specs have settled, not per round: a spec's identity is partly
+    the values its caller pinned, which a dropped argument no longer spells.
+
+    The argument goes with the parameter, so an expression that only ever fed
+    a dead one is no longer evaluated.  That is a change in what runs -- an
+    out-of-range index there stops raising -- and is sound only because FPy
+    leaves such a read undefined.
+    """
+    public = {f.ast.name for f in module.call_graph().publics}
+    dropped: dict[FuncDef, tuple[int, ...]] = {}
+
+    def step(_m: Module, func: FuncDef) -> FuncDef:
+        # callees first, so what each one shed is already known
+        func = _DropCallArgs(dropped).apply(func)
+        gone = () if func.name in public else _dead_args(func)
+        if not gone:
+            return func
+        kept = [a for i, a in enumerate(func.args) if i not in set(gone)]
+        out = FuncDef(func.name, kept, func.body, func.meta, loc=func.loc)
+        dropped[out] = gone
+        return out
+
+    return module.map(step)
+
+
+# ----------------------------------------------------------------------
 # Per-call-site rebinder.
 
 
@@ -346,9 +432,57 @@ class Specialize:
     specialization itself would surface at the output ``add`` call.
     """
 
+    _MAX_ROUNDS = 8
+    """How many expansions to allow before treating the lack of a fixpoint as
+    a defect.  Each round can only sharpen what the round before it knew, so
+    reaching this means something is not monotone -- which is a bug to find,
+    not a budget to raise."""
+
     @staticmethod
     def apply(module: Module, *, size_key: bool = False) -> Module:
-        """Specialize *module*.
+        """Specialize *module*, to a fixpoint.
+
+        One expansion is not enough where a callee's argument comes back from
+        the call: a loop-carried accumulator only takes its format once the
+        callee's return is known, and the callee is specialized from that
+        argument.  Expanding again feeds each spec the sharper annotations the
+        round before it derived, and the specs stop changing once nothing more
+        is learned.
+        """
+        if not isinstance(module, Module):
+            raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
+
+        previous: frozenset[str] | None = None
+        # every name this pass has coined, and the name it was coined from
+        bases: dict[str, str] = {}
+        for _ in range(Specialize._MAX_ROUNDS):
+            out = Specialize._expand(module, size_key=size_key, bases=bases)
+            names = frozenset(f.name for f in out.functions())
+            if names == previous:
+                return _drop_dead_args(out)
+            previous = names
+            # re-registered as they were, since a public entry's name, context
+            # and argument types are the caller's and not the spec's
+            module = Module(out.name)
+            for entry in out:
+                module.add(
+                    entry.func, name=entry.name, ctx=entry.ctx,
+                    arg_types=entry.arg_types,
+                )
+        raise RuntimeError(
+            f'specialization did not settle in {Specialize._MAX_ROUNDS} '
+            'rounds: either a round is not monotone, or a program needs a '
+            'deeper chain than this allows'
+        )
+
+    @staticmethod
+    def _expand(
+        module: Module,
+        *,
+        size_key: bool = False,
+        bases: 'dict[str, str] | None' = None,
+    ) -> Module:
+        """One expansion of *module*.
 
         *size_key* additionally keys each spec on its arguments' concrete
         lengths, so a function called with 3- and 5-element lists compiles
@@ -471,9 +605,13 @@ class Specialize:
             if k in spec_to_public_name:
                 names[k] = spec_to_public_name[k]
             else:
+                name = orig_func[k].name
+                base = name if bases is None else bases.get(name, name)
                 names[k] = _mangle_private(
-                    orig_func[k].name, k.ctx, k.arg_types_fp, k.arg_vals_fp,
+                    base, k.ctx, k.arg_types_fp, k.arg_vals_fp,
                 )
+                if bases is not None:
+                    bases[names[k]] = base
 
         # --- 4. Build leaves-first, rewiring each body per call site.
         new_funcs: dict[_SpecKey, Function] = {}

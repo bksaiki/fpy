@@ -182,6 +182,9 @@ class ArraySizeAnalysis:
 
 _CalleeSignature: TypeAlias = 'tuple[FuncDef, tuple[ArraySizeBound, ...]]'
 
+_Affine: TypeAlias = 'tuple[Expr | None, int, int]'
+"""``(base, scale, offset)``, standing for ``base * scale + offset``."""
+
 
 class _CalleeCache:
     """Shared by an analysis and every callee analysis under it.
@@ -594,11 +597,11 @@ class _ArraySizeInferInstance(DefaultVisitor):
         # constant (``x[1:3]`` -> 2, or ``x[i:i+16]`` where the base
         # cancels; see ``_affine``).  An omitted ``stop`` is the list's own
         # size, usable only when concrete.
-        start: tuple[Expr | None, int]
-        start = (None, 0) if e.start is None else self._affine(e.start)
-        stop: tuple[Expr | None, int] | None
+        start: _Affine
+        start = (None, 1, 0) if e.start is None else self._affine(e.start)
+        stop: _Affine | None
         if e.stop is None:
-            stop = (None, ty.size) if isinstance(ty.size, int) else None
+            stop = (None, 1, ty.size) if isinstance(ty.size, int) else None
         else:
             stop = self._affine(e.stop)
 
@@ -612,59 +615,68 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         return ListSize(ty.elt, slice_size)
 
-    def _affine(self, e: Expr) -> tuple[Expr | None, int]:
-        """Decompose *e* into ``(base, offset)`` with ``e == base +
-        offset``, where *offset* is a compile-time integer and *base* is
-        the residual expression (``None`` when *e* is a pure constant).
+    def _affine(self, e: Expr) -> _Affine:
+        """Decompose *e* into ``(base, scale, offset)`` with ``e == base *
+        scale + offset``, where *scale* and *offset* are compile-time integers
+        and *base* is the residual expression (``None`` when *e* is a pure
+        constant).
 
-        Only descends through ``+`` / ``-`` whose result is computed
+        Only descends through ``+`` / ``-`` / ``*`` whose result is computed
         under the exact (``REAL``) context: under a rounding context the
-        addition could perturb the value, so ``(i + 16) - i`` would not
-        be guaranteed to equal ``16``.  Falls back to ``(e, 0)`` when no
-        constant offset can be peeled off — sound, just less precise.
+        arithmetic could perturb the value, so ``(i + 16) - i`` would not be
+        guaranteed to equal ``16``.  Falls back to ``(e, 1, 0)`` when nothing
+        can be peeled off — sound, just less precise.
+
+        The scale is what a group index needs: ``g * G`` and ``(g + 1) * G``
+        share a base and a scale, so their difference is ``G`` whatever ``g``
+        is.
         """
         c = self._const_int(e)
         if c is not None:
-            return (None, c)
+            return (None, 1, c)
 
         # through a name: `t = i + 32; xs[i:t]` sizes like `xs[i:i+32]`
         e = self.def_use.defining_expr(e)
         match e:
             case Add() if self._is_exact(e):
-                c = self._const_int(e.second)
-                if c is not None:
-                    base, off = self._affine(e.first)
-                    return (base, off + c)
-                c = self._const_int(e.first)
-                if c is not None:
-                    base, off = self._affine(e.second)
-                    return (base, off + c)
+                for rest, const in ((e.first, e.second), (e.second, e.first)):
+                    c = self._const_int(const)
+                    if c is not None:
+                        base, scale, off = self._affine(rest)
+                        return (base, scale, off + c)
             case Sub() if self._is_exact(e):
                 c = self._const_int(e.second)
                 if c is not None:
-                    base, off = self._affine(e.first)
-                    return (base, off - c)
+                    base, scale, off = self._affine(e.first)
+                    return (base, scale, off - c)
+            case Mul() if self._is_exact(e):
+                for rest, const in ((e.first, e.second), (e.second, e.first)):
+                    k = self._const_int(const)
+                    if k is None:
+                        continue
+                    if k == 0:
+                        return (None, 1, 0)
+                    base, scale, off = self._affine(rest)
+                    return (base, scale * k, off * k)
 
-        return (e, 0)
+        return (e, 1, 0)
 
-    def _affine_diff(
-        self,
-        lo: tuple[Expr | None, int],
-        hi: tuple[Expr | None, int],
-    ) -> int | None:
+    def _affine_diff(self, lo: _Affine, hi: _Affine) -> int | None:
         """``hi - lo`` as a compile-time constant, or ``None``.
 
-        Constant exactly when the two affine forms share a base — both pure
-        constants, or one variable with one *definition*.  Definitions, not
+        Constant exactly when the two forms share a base *and* a scale — both
+        pure constants, or one variable with one *definition*.  Definitions, not
         names: :meth:`_affine` follows a name to what it was assigned, so the two
         bases may come from different program points, where a structural
         comparison would match ``a + b`` against a later ``a + b`` that reads a
         reassigned ``a``.
         """
-        (lbase, loff), (hbase, hoff) = lo, hi
+        (lbase, lscale, loff), (hbase, hscale, hoff) = lo, hi
         if lbase is None and hbase is None:
             return hoff - loff
         if not (isinstance(lbase, Var) and isinstance(hbase, Var)):
+            return None
+        if lscale != hscale:
             return None
         ldef = self.def_use.find_def_from_use(lbase)
         if ldef is not self.def_use.find_def_from_use(hbase):

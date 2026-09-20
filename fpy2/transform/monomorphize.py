@@ -7,11 +7,32 @@ Both type and context monomorphization.
 from collections.abc import Collection, Iterable
 
 from ..analysis import TypeAnalysis, TypeInfer
+from ..analysis.format_infer.format import AbstractableFormat, AbstractFormat
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultTransformVisitor
 from ..fpc_context import FPCoreContext
+from ..number.context.format import Format
 from ..types import *
 from .cursor import EditLog
+
+
+def _merge_format(a: Format, b: Format) -> Format:
+    """Merge two formats, preferring the narrower.
+
+    Both describe the same argument, so a format that contains the other adds
+    nothing -- keeping the wider one would refuse a later, tighter answer.
+    Incomparable formats are a genuine contradiction and raise.
+    """
+    if a == b:
+        return a
+    if isinstance(a, AbstractableFormat) and isinstance(b, AbstractableFormat):
+        fa = AbstractFormat.from_format(a)
+        fb = AbstractFormat.from_format(b)
+        if fa <= fb:
+            return a
+        if fb <= fa:
+            return b
+    raise RuntimeError(f'Cannot merge different formats `{a}` and `{b}`')
 
 
 def _merge_length(a: int | NamedId | None, b: int | NamedId | None) -> int | NamedId | None:
@@ -86,9 +107,7 @@ class _MonomorphizeVisitor(DefaultTransformVisitor):
                     return b
                 if b.fmt is None:
                     return a
-                if a.fmt != b.fmt:
-                    raise RuntimeError(f'Cannot merge different formats `{a.fmt}` and `{b.fmt}`')
-                return a
+                return RealTypeAnn(_merge_format(a.fmt, b.fmt), a.loc)
             case ContextTypeAnn(), ContextTypeAnn():
                 return a
             case TupleTypeAnn(), TupleTypeAnn():

@@ -688,6 +688,30 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size == 16
 
+    def test_list_slice_scaled_index_under_real(self):
+        """``x[g*G : (g+1)*G]`` -> ``G``: the two endpoints share a base *and*
+        a scale, so the group index cancels however wide the groups are."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], g: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[g * 16:(g + 1) * 16]
+            return y
+
+        assert self._slice_bound(f).size == 16
+
+    def test_list_slice_mismatched_scales_are_unknown(self):
+        """``x[g*16 : (g+1)*8]`` does not cancel: the bases scale differently,
+        so the span depends on ``g``."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], g: fp.Real) -> list[fp.Real]:
+            with fp.REAL:
+                y = x[g * 16:(g + 1) * 8]
+            return y
+
+        assert self._slice_bound(f).size is None
+
     def test_list_slice_symbolic_offset_not_under_real_is_unknown(self):
         """Without an exact context, rounding could perturb ``i + 16``,
         so the difference is not provably constant -> unknown."""
