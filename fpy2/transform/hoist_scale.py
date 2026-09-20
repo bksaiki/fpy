@@ -1,6 +1,6 @@
 """Pulling an invariant factor out of a reduction."""
 
-from typing import NamedTuple
+from typing import NamedTuple, TypeAlias
 
 from ..analysis import (
     ArraySizeAnalysis,
@@ -17,7 +17,7 @@ from ..analysis import (
     ValueClassInfer,
 )
 from ..analysis.array_size import ListSize, is_size_eq
-from ..analysis.value_class import is_positive_literal
+from ..analysis.value_class import ValueClass, is_positive_literal
 from ..ast import *
 from .cursor import Cursor, EditLog
 from .error import TransformDeclined
@@ -25,20 +25,23 @@ from .hoist_invariant import _from_before, _Nodes, _own_exprs
 from .path import walk_blocks
 from .utils import RoundingScopes, SiteRewriter, check_where
 
+_Reduction: TypeAlias = 'Sum | AMax | AMin'
+"""The reductions this rewrite knows."""
+
 
 class _Reductions(DefaultVisitor):
-    """Every `sum(...)` in an expression, outermost first."""
+    """Every reduction in an expression, outermost first."""
 
     def __init__(self):
-        self.found: list[Sum] = []
+        self.found: list[_Reduction] = []
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None):
-        if isinstance(e, Sum):
+        if isinstance(e, Sum | AMax | AMin):
             self.found.append(e)
         super()._visit_unaryop(e, ctx)
 
     @staticmethod
-    def of(e: Expr) -> list[Sum]:
+    def of(e: Expr) -> list[_Reduction]:
         inst = _Reductions()
         inst._visit_expr(e, None)
         return inst.found
@@ -66,14 +69,14 @@ class _Facts(NamedTuple):
 class _Site(NamedTuple):
     """A reduction over scaled elements, in either of the two shapes it takes.
 
-    ``sum([c * e for x in xs])`` is the one a program is written in, and the
-    one this rewrite is really about: a comprehension defines every element, so
-    there is nothing to prove about coverage.  ``sum(ts)`` over a list a loop
-    filled is the same thing after `comp_to_loop`, which `rescale_fixed`
-    requires -- and there the elements not written are the whole difficulty.
+    A comprehension is the one a program is written in, and the one this
+    rewrite is really about: it defines every element, so there is nothing to
+    prove about coverage.  A list a loop filled is the same thing after
+    `comp_to_loop`, which `rescale_fixed` requires -- and there the elements
+    not written are the whole difficulty.
     """
 
-    red: Sum
+    red: _Reduction
     prod: Mul
     """the product to replace with the operand that stays"""
     factor: Expr
@@ -100,8 +103,8 @@ def _targets(comp: ListComp) -> tuple[NamedId, ...]:
     return tuple(out)
 
 
-def _comp_site(red: Sum) -> '_Site | None':
-    """``sum([c * e for x in xs])``."""
+def _comp_site(red: _Reduction) -> '_Site | None':
+    """A reduction over a scaled comprehension."""
     comp = red.arg
     if not isinstance(comp, ListComp) or not isinstance(comp.elt, Mul):
         return None
@@ -146,8 +149,8 @@ def _created_by(stmt: Stmt, name: NamedId, facts: '_Facts') -> 'Definition | Non
     return None
 
 
-def _loop_site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
-    """``sum(ts)`` over a list a loop filled.
+def _loop_site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+    """A reduction over a list a loop above it filled.
 
     The loop is found through the *definition* the reduction reads, not by
     scanning backwards for one that writes the same name: after the loop the
@@ -186,7 +189,7 @@ def _loop_site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     )
 
 
-def _site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+def _site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     """The rewrite's shape at *red*, in whichever form it takes."""
     return _comp_site(red) or _loop_site(red, stmt, facts)
 
@@ -255,6 +258,13 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
 
     if not facts.classes.is_finite(site.factor):
         return 'the factor may be an infinity or a NaN'
+    # a selection needs more than `sum` does, not less: `c * x` makes a NaN out
+    # of `0 * inf`, and `max`/`min` propagate a NaN from *any* element where
+    # the hoisted form only computes the selected one
+    if not isinstance(site.red, Sum) and not facts.classes.excludes(
+        site.factor, ValueClass.ZERO
+    ):
+        return 'the factor may be zero, and `0 * inf` is a NaN the selection would propagate'
     base = facts.def_use.defining_expr(site.factor)
     if not isinstance(base, Pow) or not is_positive_literal(base.args[0]):
         return 'the factor is not a power with a positive base, so may be negative'
@@ -329,7 +339,7 @@ class _HoistScale(SiteRewriter):
         self._drop = {}
         self._wrap = {}
 
-    def _claims(self, red: Sum, why: str | None) -> bool:
+    def _claims(self, red: _Reduction, why: str | None) -> bool:
         if why is not None:
             self.refused.append((red, why))
             if self._named_by_cursor(red):
@@ -412,13 +422,18 @@ class HoistScale:
 
     Algebra, not relocation, so unlike :class:`HoistInvariant` it needs an
     exact scope -- under a rounding one the partial sums round and the two
-    disagree.  It also needs the factor finite (an infinite `c` turns a
-    cancellation into a survivor), non-negative (a negative one signs a zero
-    the original never signed), invariant across the loop, and the loop to
-    write every element, since an unwritten one would be scaled too.
+    orders disagree.  `sum`, `max` and `min` are all reductions for this
+    purpose and all need it.
 
-    `max` / `min` are not reductions for this purpose: a monotone selection
-    needs its own proof.
+    A selection needs *more* than a sum, not less.  `c * x` makes a NaN out of
+    `0 * inf`, and `max` / `min` propagate a NaN from any element where the
+    hoisted form computes only the selected one -- so the factor must be
+    non-zero as well as finite.
+
+    Both need the factor non-negative -- a negative one reorders a selection
+    and signs a zero a sum never signed -- and pure, and invariant.  Over a
+    list a loop filled, both also need the loop to write every element, since
+    an unwritten one would be scaled too.
     """
 
     @staticmethod
