@@ -3237,31 +3237,21 @@ class TestZeroOnlyIntersection:
         info = FormatInfer.analyze(self._lower(fp.SINT32).ast)
         assert not any(b is REAL_FORMAT for b in info.by_def.values())
 
-    @pytest.mark.parametrize('src', [fp.SINT8, fp.SINT16, fp.SINT32],
-                             ids=['sint8', 'sint16', 'sint32'])
-    def test_a_signed_integer_source_now_compiles(self, src):
+    @pytest.mark.parametrize(
+        'src',
+        [fp.SINT8, fp.SINT16, fp.SINT32, fp.UINT8, fp.UINT16, fp.UINT32],
+        ids=['sint8', 'sint16', 'sint32', 'uint8', 'uint16', 'uint32'],
+    )
+    def test_an_integer_source_compiles(self, src):
+        """An unsigned source used to stop here too: the scale-out's overlap
+        cannot be materialized inside an unsigned scope, and the fall-back was
+        the scope format -- `REAL`, so top.  `logb` reads a range off a
+        one-signed format now, which leaves nothing unconstrained."""
         from fpy2.backend.cpp import CppCompiler
-
-        assert CppCompiler().compile(self._lower(src))
-
-    @pytest.mark.parametrize('src', [fp.UINT8, fp.UINT16, fp.UINT32],
-                             ids=['uint8', 'uint16', 'uint32'])
-    def test_an_unsigned_source_still_fails_elsewhere(self, src):
-        """A separate blocker, upstream of this one and left standing.
-
-        The scale-out's overlap cannot be materialized inside an unsigned scope
-        (`_materialize_in_scope` says why), and the fall-back is the *scope*
-        format -- which here is `REAL`, so it is top.  ``t`` is unconstrained
-        before any join happens, and storage selection has nothing to pick.
-        """
-        from fpy2.backend.cpp import CppCompiler
-        from fpy2.backend.cpp.compiler import CppCompileError
 
         info = FormatInfer.analyze(self._lower(src).ast)
-        assert any(b is REAL_FORMAT for d, b in info.by_def.items()
-                   if str(d.name) == 't')
-        with pytest.raises(CppCompileError, match='cannot pick storage'):
-            CppCompiler().compile(self._lower(src))
+        assert not any(b is REAL_FORMAT for b in info.by_def.values())
+        assert CppCompiler().compile(self._lower(src))
 
     @pytest.mark.parametrize('src', [fp.SINT16, fp.SINT32], ids=['sint16', 'sint32'])
     def test_a_signed_integer_source_is_bit_exact(self, src):

@@ -1114,10 +1114,16 @@ def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
     if af is None or not isinstance(af.exp, int):
         return None
 
-    mags = [b for b in (af.pos_bound, af.neg_bound) if isinstance(b, RealFloat)]
-    if len(mags) != 2 or any(b.is_zero() for b in mags):
-        # unbounded, or the zero-only format whose `logb` is `-inf` alone
-        return None
+    if any(not isinstance(b, RealFloat) for b in (af.pos_bound, af.neg_bound)):
+        return None     # unbounded, so the exponent it reports is unbounded too
+    # A one-signed format bounds nothing on the other side, and a zero bound is
+    # that absence, not a magnitude `logb` can read.
+    mags = [
+        b for b in (af.pos_bound, af.neg_bound)
+        if isinstance(b, RealFloat) and not b.is_zero()
+    ]
+    if not mags:
+        return None     # the zero-only format, whose `logb` is `-inf` alone
     lo, hi = af.exp, max(b.e for b in mags)
 
     # the result represents the integers spanning `[lo, hi]`; `prec` has to cover
