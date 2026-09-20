@@ -1,6 +1,6 @@
 """Pulling an invariant factor out of a reduction."""
 
-from typing import NamedTuple
+from typing import NamedTuple, TypeAlias
 
 from ..analysis import (
     ArraySizeAnalysis,
@@ -19,29 +19,91 @@ from ..analysis import (
 from ..analysis.array_size import ListSize, is_size_eq
 from ..analysis.value_class import is_positive_literal
 from ..ast import *
+from ..number import (
+    REAL,
+    Context,
+    EFloatContext,
+    ExpContext,
+    MPBFixedContext,
+    MPBFloatContext,
+    MPFixedContext,
+    MPFloatContext,
+    MPSFloatContext,
+    OverflowMode,
+)
 from .cursor import Cursor, EditLog
 from .error import TransformDeclined
 from .hoist_invariant import _from_before, _Nodes, _own_exprs
 from .path import walk_blocks
 from .utils import RoundingScopes, SiteRewriter, check_where
 
+_Reduction: TypeAlias = 'Sum | AMax | AMin'
+"""The reductions this rewrite knows.  `sum` accumulates, so its own rounding
+is part of the question; `max` and `min` *select*, so theirs is not -- under
+`fp.FP16`, `max([65600.0])` is `65600.0` where rounding it would give `inf`."""
+
 
 class _Reductions(DefaultVisitor):
-    """Every `sum(...)` in an expression, outermost first."""
+    """Every reduction in an expression, outermost first."""
 
     def __init__(self):
-        self.found: list[Sum] = []
+        self.found: list[_Reduction] = []
 
     def _visit_unaryop(self, e: UnaryOp, ctx: None):
-        if isinstance(e, Sum):
+        if isinstance(e, Sum | AMax | AMin):
             self.found.append(e)
         super()._visit_unaryop(e, ctx)
 
     @staticmethod
-    def of(e: Expr) -> list[Sum]:
+    def of(e: Expr) -> list[_Reduction]:
         inst = _Reductions()
         inst._visit_expr(e, None)
         return inst.found
+
+
+def _not_order_preserving(ctx: 'Context | None') -> 'str | None':
+    """Why rounding under *ctx* may not stand in for one rounding per element,
+    or `None` where it may.
+
+    What a selection needs in place of exactness.  ``max_i round(c * xᵢ)`` is
+    ``round(c * max_i xᵢ)`` only where rounding is monotone and settles the
+    same way every time, since the rewrite turns one rounding per element into
+    one in total.  Every rounding *mode* qualifies -- each picks one of the two
+    bracketing values, and a deterministic bracket rule preserves order.
+
+    A context this does not recognise is refused: not provably order-preserving
+    is the safe answer.
+    """
+    if ctx is None:
+        return 'the scope is not known'
+    if ctx is REAL:
+        return None
+    if ctx.is_stochastic():
+        # the one rounding would draw differently from the many it replaces
+        return 'the scope rounds stochastically'
+
+    match ctx:
+        case MPFloatContext() | MPFixedContext() | MPSFloatContext():
+            # unbounded: nothing overflows, so rounding alone decides, and
+            # every mode of it is monotone
+            return None
+        case EFloatContext() | ExpContext() | MPBFixedContext() | MPBFloatContext():
+            overflow = ctx.overflow
+        case _:
+            return 'the scope is not a kind this rewrite knows'
+
+    match overflow:
+        case OverflowMode.OVERFLOW | OverflowMode.SATURATE:
+            return None
+        case OverflowMode.WRAP:
+            # not monotone at all, and `FixedContext`'s default
+            return 'the scope wraps on overflow, which reorders the elements'
+        case OverflowMode.ASSERT:
+            # the rewrite changes *which* products happen, so it can drop an
+            # abort: `c * min(xs)` may overflow where `c * max(xs)` does not
+            return 'the scope aborts on overflow, and the rewrite changes which products overflow'
+        case _:
+            raise RuntimeError(f'unreachable overflow mode: {overflow}')
 
 
 class _Facts(NamedTuple):
@@ -73,7 +135,7 @@ class _Site(NamedTuple):
     requires -- and there the elements not written are the whole difficulty.
     """
 
-    red: Sum
+    red: _Reduction
     prod: Mul
     """the product to replace with the operand that stays"""
     factor: Expr
@@ -100,7 +162,7 @@ def _targets(comp: ListComp) -> tuple[NamedId, ...]:
     return tuple(out)
 
 
-def _comp_site(red: Sum) -> '_Site | None':
+def _comp_site(red: _Reduction) -> '_Site | None':
     """``sum([c * e for x in xs])``."""
     comp = red.arg
     if not isinstance(comp, ListComp) or not isinstance(comp.elt, Mul):
@@ -146,7 +208,7 @@ def _created_by(stmt: Stmt, name: NamedId, facts: '_Facts') -> 'Definition | Non
     return None
 
 
-def _loop_site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+def _loop_site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     """``sum(ts)`` over a list a loop filled.
 
     The loop is found through the *definition* the reduction reads, not by
@@ -186,7 +248,7 @@ def _loop_site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     )
 
 
-def _site(red: Sum, stmt: Stmt, facts: '_Facts') -> '_Site | None':
+def _site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     """The rewrite's shape at *red*, in whichever form it takes."""
     return _comp_site(red) or _loop_site(red, stmt, facts)
 
@@ -244,8 +306,19 @@ def _varies(site: _Site, facts: '_Facts') -> list[str]:
 
 def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     """Why the factor may not leave *site*'s reduction, or `None` where it may."""
-    if not facts.scopes.is_exact(site.red):
-        return 'the reduction does not round exactly'
+    if isinstance(site.red, Sum):
+        # accumulation: the partial sums round, so the two orders disagree
+        if not facts.scopes.is_exact(site.red):
+            return 'the reduction does not round exactly'
+    else:
+        # selection: the reduction does not round, but the multiply does, and
+        # the rewrite leaves one of it where there were as many as elements
+        scope = facts.scopes.scope_ctx(site.prod)
+        if scope is not facts.scopes.scope_ctx(site.red):
+            return 'the product and the reduction round differently'
+        why = _not_order_preserving(scope)
+        if why is not None:
+            return why
     if not Purity.analyze_expr(site.factor, facts.def_use):
         return 'the factor is not pure'
 
@@ -253,7 +326,10 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     if varies:
         return f'the factor reads {", ".join(f"`{n}`" for n in varies)}, which varies'
 
-    if not facts.classes.is_finite(site.factor):
+    # only accumulation cancels: `sum([c*1, c*-1, c*1])` is a NaN at `c = inf`
+    # where `c * sum(...)` is `+inf`.  A selection returns one element, so an
+    # infinite or NaN factor reaches both sides alike.
+    if isinstance(site.red, Sum) and not facts.classes.is_finite(site.factor):
         return 'the factor may be an infinity or a NaN'
     base = facts.def_use.defining_expr(site.factor)
     if not isinstance(base, Pow) or not is_positive_literal(base.args[0]):
@@ -268,8 +344,9 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     assert site.red_stmt is not None
 
     # deleting the multiply deletes its rounding, which is only harmless where
-    # it rounded exactly
-    if not facts.scopes.is_exact(site.prod):
+    # it rounded exactly.  A selection has had this asked of it already, in the
+    # order-preserving form it needs instead.
+    if isinstance(site.red, Sum) and not facts.scopes.is_exact(site.prod):
         return 'the product does not round exactly'
 
     # the factor is re-emitted at the reduction, so every name it reads must
@@ -329,7 +406,7 @@ class _HoistScale(SiteRewriter):
         self._drop = {}
         self._wrap = {}
 
-    def _claims(self, red: Sum, why: str | None) -> bool:
+    def _claims(self, red: _Reduction, why: str | None) -> bool:
         if why is not None:
             self.refused.append((red, why))
             if self._named_by_cursor(red):
