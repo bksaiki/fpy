@@ -5,6 +5,7 @@ The transform itself is tested in
 how it is aimed, and how it fails when aimed at nothing.
 """
 
+import fpy2 as fp
 import pytest
 
 from fpy2.function import Function
@@ -48,6 +49,22 @@ class TestTheWrapper:
         out = hoist_scale(two_sums)
         assert _hoisted_count(out.ast) == 2
         assert _agrees(two_sums, out)
+
+
+class TestSelections:
+
+    def test_it_reaches_a_max_under_a_rounding_scope(self):
+        """The transform's conditions are tested in
+        ``tests/unit/transform/test_hoist_scale.py``; this is the wrapper path,
+        where `sum` would be refused and `max` is not."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+            return max([(2 ** k) * x for x in xs])
+
+        out = hoist_scale(f)
+        assert '* max([x for x in xs])' in ' '.join(out.format().split())
+        for xs in ([1.0], [1.0, 2.0], [-1.0, -2.0]):
+            assert repr(out(xs, 3.0)) == repr(f(xs, 3.0))
 
 
 class TestAiming:

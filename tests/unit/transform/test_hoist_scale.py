@@ -8,6 +8,8 @@ ones that were once silent miscompiles; each names what stood between the
 loop, the product, the write and the reduction.
 """
 
+import random
+
 import fpy2 as fp
 import fpy2.strategies as st
 import pytest
@@ -114,6 +116,66 @@ def _full_schedule(func):
     """What a user writes, through the strategies."""
     f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(func))))
     return st.simplify(st.hoist_scale(st.hoist_invariant(f)))
+
+
+_STOCHASTIC = fp.IEEEContext(5, 16, fp.RM.RTZ, num_randbits=2, rng=random.Random(0))
+_SATURATING = fp.FixedContext(True, 0, 16, overflow=fp.OverflowMode.SATURATE)
+_WRAPPING = fp.FixedContext(True, 0, 16)          # WRAP is the default
+_ASSERTING = fp.FixedContext(True, 0, 16, overflow=fp.OverflowMode.ASSERT)
+
+
+def _selection(ctx, *, use_min: bool = False):
+    """`max`/`min` of a scaled comprehension, under *ctx*."""
+    if use_min:
+        @fp.fpy(ctx=ctx)
+        def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+            return min([(2 ** k) * x for x in xs])
+    else:
+        @fp.fpy(ctx=ctx)
+        def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+            return max([(2 ** k) * x for x in xs])
+    return f
+
+
+def _accumulation(ctx):
+    """The same shape, summed — which needs an exact scope where a selection
+    does not."""
+    @fp.fpy(ctx=ctx)
+    def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+        return sum([(2 ** k) * x for x in xs])
+    return f
+
+
+_INF, _NAN = fp.Float(isinf=True), fp.Float(isnan=True)
+_NEG_ZERO = fp.Float(s=True, c=0, exp=0)
+
+# lists that straddle ties, cancellation, both infinities, a NaN, and the
+# FP32 boundary; factors that overflow (`2 ** 200`) and underflow it
+_SELECT_LISTS = (
+    [1.0], [1.0, 2.0], [2.0, 1.0], [-1.0, -2.0], [0.0], [_NEG_ZERO],
+    [0.0, _NEG_ZERO], [_INF, 1.0], [_INF, -_INF], [1.0, _NAN],
+    [65600.0, 1e-8], [1e30, 1e-30], [3.4e38, 1.0],
+)
+_SELECT_FACTORS = (3.0, -5.0, 0.0, 200.0, -200.0)
+
+
+def _selection_agrees(func, out) -> list:
+    """Where the rewritten selection disagrees with the original."""
+    g = fp.Function(out, runtime=func.runtime)
+    bad = []
+    for xs in _SELECT_LISTS:
+        for k in _SELECT_FACTORS:
+            try:
+                a = repr(func(xs, k))
+            except Exception as ex:
+                a = type(ex).__name__
+            try:
+                b = repr(g(xs, k))
+            except Exception as ex:
+                b = type(ex).__name__
+            if a != b:
+                bad.append((xs, k, a, b))
+    return bad
 
 
 # ----------------------------------------------------------------------
@@ -446,3 +508,86 @@ class TestSoundness:
         out = fp.Function(HoistScale.apply(func.ast), runtime=func.runtime)
         for a in args:
             assert repr(out(*a)) == repr(func(*a))
+
+
+class TestSelections:
+    """`max` and `min` select rather than accumulate, so the reduction itself
+    does not round — under `fp.FP16`, `max([65600.0])` is `65600.0` where
+    rounding it would give `inf`.  What rounds is the multiply, and the rewrite
+    leaves one of it where there were as many as elements, so the condition is
+    on *that* scope and asks only that it preserve order."""
+
+    @pytest.mark.parametrize('ctx,name', [
+        pytest.param(fp.REAL, 'REAL', id='REAL'),
+        pytest.param(fp.FP32, 'FP32', id='FP32'),
+        pytest.param(fp.FP16, 'FP16', id='FP16'),
+        pytest.param(_SATURATING, 'saturating', id='saturating-fixed'),
+        pytest.param(fp.MPFixedContext(-8), 'unbounded', id='unbounded-fixed'),
+    ])
+    def test_it_hoists_under_any_order_preserving_scope(self, ctx, name):
+        f = _selection(ctx)
+        assert len(HoistScale.sites(f.ast)) == 1, _why(f)
+        out = HoistScale.apply(f.ast)
+        assert '* max([x for x in xs])' in _text(f, out)
+
+    def test_it_hoists_out_of_min_too(self):
+        f = _selection(fp.FP32, use_min=True)
+        out = HoistScale.apply(f.ast)
+        assert '* min([x for x in xs])' in _text(f, out)
+
+    @pytest.mark.parametrize('ctx', [
+        pytest.param(fp.REAL, id='REAL'),
+        pytest.param(fp.FP32, id='FP32'),
+        pytest.param(fp.FP16, id='FP16'),
+        pytest.param(_SATURATING, id='saturating-fixed'),
+    ])
+    def test_the_values_are_unchanged(self, ctx):
+        f = _selection(ctx)
+        assert _selection_agrees(f, HoistScale.apply(f.ast)) == []
+
+    def test_the_finiteness_condition_does_not_apply(self):
+        """Only accumulation cancels: `sum([c*1, c*-1, c*1])` is a NaN at
+        `c = inf` where `c * sum(...)` is `+inf`.  A selection returns one
+        element, so an infinite or NaN factor reaches both sides alike — and
+        the sweep above uses factors that overflow and underflow the format."""
+        f = _selection(fp.FP32)
+        assert 'infinity or a NaN' not in ' '.join(_why(f))
+        assert len(HoistScale.sites(f.ast)) == 1
+
+
+class TestScopesASelectionRefuses:
+
+    @pytest.mark.parametrize('ctx,reason', [
+        pytest.param(_WRAPPING, 'wraps on overflow', id='wrap'),
+        pytest.param(_ASSERTING, 'aborts on overflow', id='assert'),
+        pytest.param(_STOCHASTIC, 'rounds stochastically', id='stochastic'),
+    ])
+    def test_it(self, ctx, reason):
+        f = _selection(ctx)
+        assert HoistScale.sites(f.ast) == []
+        assert reason in _why(f)[0]
+        assert HoistScale.apply(f.ast).is_equiv(f.ast)
+
+    def test_wrapping_really_would_have_been_wrong(self):
+        """`WRAP` is not monotone, and it is `FixedContext`'s default — so
+        this is the refusal that earns its keep.  Eight bits, so that `5 * 40`
+        overflows and wraps to `-56`."""
+        ctx = fp.FixedContext(True, 0, 8)
+
+        @fp.fpy(ctx=ctx)
+        def before(xs: list[fp.Real], c: fp.Real) -> fp.Real:
+            return max([c * x for x in xs])
+
+        @fp.fpy(ctx=ctx)
+        def after(xs: list[fp.Real], c: fp.Real) -> fp.Real:
+            return c * max([x for x in xs])
+
+        assert float(before([10.0, 40.0], 5.0)) == 50.0
+        assert float(after([10.0, 40.0], 5.0)) == -56.0
+
+    def test_an_accumulation_still_needs_an_exact_scope(self):
+        """The distinction the whole class rests on: the same program summed
+        is refused where selected it is taken."""
+        assert HoistScale.sites(_accumulation(fp.FP32).ast) == []
+        assert _why(_accumulation(fp.FP32)) == ['the reduction does not round exactly']
+        assert len(HoistScale.sites(_selection(fp.FP32).ast)) == 1
