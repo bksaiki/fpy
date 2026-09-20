@@ -125,24 +125,33 @@ _ASSERTING = fp.FixedContext(True, 0, 16, overflow=fp.OverflowMode.ASSERT)
 
 
 def _selection(ctx, *, use_min: bool = False):
-    """`max`/`min` of a scaled comprehension, under *ctx*."""
+    """`max`/`min` of a scaled comprehension, under *ctx*.
+
+    `k` is guarded finite, which is what makes `2 ** k` provably non-zero:
+    zero comes only from a `-inf` exponent.
+    """
     if use_min:
         @fp.fpy(ctx=ctx)
         def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-            return min([(2 ** k) * x for x in xs])
+            if fp.isfinite(k):
+                return min([(2 ** k) * x for x in xs])
+            else:
+                return 0.0
     else:
         @fp.fpy(ctx=ctx)
         def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-            return max([(2 ** k) * x for x in xs])
+            if fp.isfinite(k):
+                return max([(2 ** k) * x for x in xs])
+            else:
+                return 0.0
     return f
 
 
-def _accumulation(ctx):
-    """The same shape, summed — which needs an exact scope where a selection
-    does not."""
+def _unguarded_selection(ctx):
+    """The same without the guard, so `2 ** k` may be zero or an infinity."""
     @fp.fpy(ctx=ctx)
     def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-        return sum([(2 ** k) * x for x in xs])
+        return max([(2 ** k) * x for x in xs])
     return f
 
 
@@ -153,28 +162,43 @@ _NEG_ZERO = fp.Float(s=True, c=0, exp=0)
 # FP32 boundary; factors that overflow (`2 ** 200`) and underflow it
 _SELECT_LISTS = (
     [1.0], [1.0, 2.0], [2.0, 1.0], [-1.0, -2.0], [0.0], [_NEG_ZERO],
-    [0.0, _NEG_ZERO], [_INF, 1.0], [_INF, -_INF], [1.0, _NAN],
+    [0.0, _NEG_ZERO], [_INF, 1.0], [-_INF, 1.0], [_INF, -_INF], [1.0, _NAN],
+    [0.0, 1.0], [1.0, 0.0], [0.0, -1.0],
     [65600.0, 1e-8], [1e30, 1e-30], [3.4e38, 1.0],
 )
 _SELECT_FACTORS = (3.0, -5.0, 0.0, 200.0, -200.0)
 
 
 def _selection_agrees(func, out) -> list:
-    """Where the rewritten selection disagrees with the original."""
+    """Where the rewritten selection disagrees with the original.
+
+    An exception is compared by type, so two sides that both raise agree.  That
+    makes it possible for the whole grid to raise and the sweep to come back
+    green having compared no values at all, which is how a `0 * inf` case once
+    slipped through -- so the count of *value* comparisons is asserted here,
+    as `test_value_class.py`'s own sweep does.
+    """
     g = fp.Function(out, runtime=func.runtime)
     bad = []
+    compared = 0
     for xs in _SELECT_LISTS:
         for k in _SELECT_FACTORS:
             try:
-                a = repr(func(xs, k))
+                a, ran = repr(func(xs, k)), True
             except Exception as ex:
-                a = type(ex).__name__
+                a, ran = type(ex).__name__, False
             try:
                 b = repr(g(xs, k))
             except Exception as ex:
                 b = type(ex).__name__
+            compared += ran
             if a != b:
                 bad.append((xs, k, a, b))
+    want = len(_SELECT_LISTS) * len(_SELECT_FACTORS)
+    assert compared == want, (
+        f'{compared} of {want} cases produced a value; the rest raised, so '
+        f'those cases compared nothing'
+    )
     return bad
 
 
@@ -511,83 +535,141 @@ class TestSoundness:
 
 
 class TestSelections:
-    """`max` and `min` select rather than accumulate, so the reduction itself
-    does not round — under `fp.FP16`, `max([65600.0])` is `65600.0` where
-    rounding it would give `inf`.  What rounds is the multiply, and the rewrite
-    leaves one of it where there were as many as elements, so the condition is
-    on *that* scope and asks only that it preserve order."""
+    """`max` and `min` are reductions for this rewrite, under the *same*
+    conditions as `sum` and two more.
 
-    @pytest.mark.parametrize('ctx,name', [
-        pytest.param(fp.REAL, 'REAL', id='REAL'),
-        pytest.param(fp.FP32, 'FP32', id='FP32'),
-        pytest.param(fp.FP16, 'FP16', id='FP16'),
-        pytest.param(_SATURATING, 'saturating', id='saturating-fixed'),
-        pytest.param(fp.MPFixedContext(-8), 'unbounded', id='unbounded-fixed'),
-    ])
-    def test_it_hoists_under_any_order_preserving_scope(self, ctx, name):
-        f = _selection(ctx)
+    An earlier cut let a selection run under a rounding scope, on the argument
+    that it selects rather than accumulates so its own rounding does not
+    matter.  That argument was wrong twice over — see `TestSelectionSoundness`
+    — and the scope condition is now uniform.
+    """
+
+    def test_max_hoists_under_an_exact_scope(self):
+        f = _selection(fp.REAL)
         assert len(HoistScale.sites(f.ast)) == 1, _why(f)
-        out = HoistScale.apply(f.ast)
-        assert '* max([x for x in xs])' in _text(f, out)
+        assert '* max([x for x in xs])' in _text(f, HoistScale.apply(f.ast))
 
-    def test_it_hoists_out_of_min_too(self):
-        f = _selection(fp.FP32, use_min=True)
-        out = HoistScale.apply(f.ast)
-        assert '* min([x for x in xs])' in _text(f, out)
+    def test_min_hoists_too(self):
+        f = _selection(fp.REAL, use_min=True)
+        assert '* min([x for x in xs])' in _text(f, HoistScale.apply(f.ast))
+
+    def test_the_values_are_unchanged(self):
+        for use_min in (False, True):
+            f = _selection(fp.REAL, use_min=use_min)
+            assert _selection_agrees(f, HoistScale.apply(f.ast)) == []
 
     @pytest.mark.parametrize('ctx', [
-        pytest.param(fp.REAL, id='REAL'),
         pytest.param(fp.FP32, id='FP32'),
         pytest.param(fp.FP16, id='FP16'),
         pytest.param(_SATURATING, id='saturating-fixed'),
+        pytest.param(_WRAPPING, id='wrapping-fixed'),
+        pytest.param(_STOCHASTIC, id='stochastic'),
     ])
-    def test_the_values_are_unchanged(self, ctx):
-        f = _selection(ctx)
-        assert _selection_agrees(f, HoistScale.apply(f.ast)) == []
-
-    def test_the_finiteness_condition_does_not_apply(self):
-        """Only accumulation cancels: `sum([c*1, c*-1, c*1])` is a NaN at
-        `c = inf` where `c * sum(...)` is `+inf`.  A selection returns one
-        element, so an infinite or NaN factor reaches both sides alike — and
-        the sweep above uses factors that overflow and underflow the format."""
-        f = _selection(fp.FP32)
-        assert 'infinity or a NaN' not in ' '.join(_why(f))
-        assert len(HoistScale.sites(f.ast)) == 1
-
-
-class TestScopesASelectionRefuses:
-
-    @pytest.mark.parametrize('ctx,reason', [
-        pytest.param(_WRAPPING, 'wraps on overflow', id='wrap'),
-        pytest.param(_ASSERTING, 'aborts on overflow', id='assert'),
-        pytest.param(_STOCHASTIC, 'rounds stochastically', id='stochastic'),
-    ])
-    def test_it(self, ctx, reason):
+    def test_a_rounding_scope_is_refused(self, ctx):
+        """The reversal: a selection needs an exact scope like anything else."""
         f = _selection(ctx)
         assert HoistScale.sites(f.ast) == []
-        assert reason in _why(f)[0]
-        assert HoistScale.apply(f.ast).is_equiv(f.ast)
+        assert _why(f) == ['the reduction does not round exactly']
 
-    def test_wrapping_really_would_have_been_wrong(self):
-        """`WRAP` is not monotone, and it is `FixedContext`'s default — so
-        this is the refusal that earns its keep.  Eight bits, so that `5 * 40`
-        overflows and wraps to `-56`."""
-        ctx = fp.FixedContext(True, 0, 8)
+    def test_a_factor_that_may_be_zero_is_refused(self):
+        """`2 ** k` is zero at `k = -inf`, and `0 * inf` is a NaN that a
+        selection propagates from any element while `c * max(xs)` sees only
+        the selected one.  The guard is what rules it out."""
+        f = _unguarded_selection(fp.REAL)
+        assert HoistScale.sites(f.ast) == []
+        assert 'may be zero' in _why(f)[0] or 'infinity or a NaN' in _why(f)[0]
 
-        @fp.fpy(ctx=ctx)
-        def before(xs: list[fp.Real], c: fp.Real) -> fp.Real:
-            return max([c * x for x in xs])
 
-        @fp.fpy(ctx=ctx)
-        def after(xs: list[fp.Real], c: fp.Real) -> fp.Real:
-            return c * max([x for x in xs])
+_INTEGER_INF = [fp.Float(isinf=True), 1.0]
 
-        assert float(before([10.0, 40.0], 5.0)) == 50.0
-        assert float(after([10.0, 40.0], 5.0)) == -56.0
 
-    def test_an_accumulation_still_needs_an_exact_scope(self):
-        """The distinction the whole class rests on: the same program summed
-        is refused where selected it is taken."""
-        assert HoistScale.sites(_accumulation(fp.FP32).ast) == []
-        assert _why(_accumulation(fp.FP32)) == ['the reduction does not round exactly']
-        assert len(HoistScale.sites(_selection(fp.FP32).ast)) == 1
+@fp.fpy(ctx=fp.MX_E4M3)
+def no_infinities(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """A format without infinities: an overflowing product becomes a NaN,
+    which is unordered, so rounding is not monotone."""
+    if fp.isfinite(k):
+        return min([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.INTEGER)
+def refuses_infinities(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """`fp.INTEGER` raises on an infinity, so the rewrite could delete an
+    abort — the same hazard the `ASSERT` overflow mode has."""
+    if fp.isfinite(k):
+        return min([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.MX_E8M0)
+def unsigned_format(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """An `ExpContext` represents only non-negative values, so every negative
+    product rounds to a NaN."""
+    if fp.isfinite(k):
+        return max([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.FP32)
+def infinite_factor(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """`2 ** 200` is `inf` under FP32, and `inf * 0.0` is a NaN that `max`
+    propagates from an element the hoisted form never multiplies."""
+    if fp.isfinite(k):
+        return max([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+@fp.fpy(ctx=fp.FP32)
+def zero_factor(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """`2 ** -200` is `0` under FP32, and `0 * inf` is the same NaN."""
+    if fp.isfinite(k):
+        return min([(2 ** k) * x for x in xs])
+    else:
+        return 0.0
+
+
+SELECTION_UNSOUND = (
+    (no_infinities, ([100.0, 1.0], 3.0)),
+    (refuses_infinities, (_INTEGER_INF, 0.0)),
+    (unsigned_format, ([1.0, -2.0], 0.0)),
+    (infinite_factor, ([0.0, 1.0], 200.0)),
+    (zero_factor, (_INTEGER_INF, -200.0)),
+)
+
+
+class TestSelectionSoundness:
+    """Each of these was a silent miscompile while a selection was allowed to
+    run under a rounding scope.
+
+    Two mistakes underlay them.  A product can *manufacture* a NaN from ordered
+    operands — `0 * inf` — and a selection propagates it from any element where
+    the hoisted form computes only the selected one; so a selection needs the
+    factor finite *and non-zero*, which is stronger than `sum` needs, not
+    weaker.  And whether rounding preserves order is a property of the
+    **format**, not of the overflow mode alone: a format may lack infinities,
+    substitute for them, refuse them, or represent one sign only.
+    """
+
+    @pytest.mark.parametrize('func,_args', SELECTION_UNSOUND,
+                             ids=lambda v: getattr(v, 'name', ''))
+    def test_it_is_refused(self, func, _args):
+        assert HoistScale.sites(func.ast) == []
+        assert HoistScale.apply(func.ast).is_equiv(func.ast)
+
+    @pytest.mark.parametrize('func,args', SELECTION_UNSOUND,
+                             ids=lambda v: getattr(v, 'name', ''))
+    def test_the_values_would_have_changed(self, func, args):
+        out = fp.Function(HoistScale.apply(func.ast), runtime=func.runtime)
+        try:
+            want = repr(func(*args))
+        except Exception as ex:
+            want = type(ex).__name__
+        try:
+            got = repr(out(*args))
+        except Exception as ex:
+            got = type(ex).__name__
+        assert want == got

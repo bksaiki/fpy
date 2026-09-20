@@ -53,13 +53,16 @@ class TestTheWrapper:
 
 class TestSelections:
 
-    def test_it_reaches_a_max_under_a_rounding_scope(self):
-        """The transform's conditions are tested in
-        ``tests/unit/transform/test_hoist_scale.py``; this is the wrapper path,
-        where `sum` would be refused and `max` is not."""
-        @fp.fpy(ctx=fp.FP32)
+    def test_it_reaches_a_max(self):
+        """`max` and `min` are reductions too.  The conditions are tested in
+        ``tests/unit/transform/test_hoist_scale.py``; this is the wrapper
+        path."""
+        @fp.fpy(ctx=fp.REAL)
         def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-            return max([(2 ** k) * x for x in xs])
+            if fp.isfinite(k):
+                return max([(2 ** k) * x for x in xs])
+            else:
+                return 0.0
 
         out = hoist_scale(f)
         assert '* max([x for x in xs])' in ' '.join(out.format().split())

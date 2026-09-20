@@ -192,23 +192,36 @@ deliberately does not track it (`ZERO` is "either signed zero", `FINITE` is
 negative finite `c`.  `exact_exp2` is already exported and may be the right
 hook for both.  **Resolve this before implementing.**
 
-### 3. `hoist_scale` for monotone selections — `max([c * x …]) -> c * max([x …])`
+### 3. `hoist_scale` over `max` / `min` — **Done, and narrower than planned.**
 
-Rounding is monotone and `max` selects rather than accumulates, so this one may
-hold **outside** `REAL` — the only such rewrite here.  It needs its own proof
-around NaN propagation, signed zero in ties, and `c <= 0` flipping the
-selection.  Not assumed; not started.
+Landed as a widening of `HoistScale`, not a new transform.  `max` and `min` are
+reductions for the rewrite now, but under the *same* exact-scope condition as
+`sum` and one more of their own.
 
-**Reassessed after PR 2, and still worth doing.**  The original argument for
-deferring was that no schedule produces a scaled `max` — `fused_sum`'s
-`max(t7)` is over `logb(x)`, with no factor — and that is still true.  But PR 2
-ships the *comprehension* form, so `max([c * x for x in xs])` is now something
-a person may write directly, which the `sum` case does not cover.
+**The "may hold outside `REAL`" claim above was wrong, and it took a review to
+show it.**  The reasoning was: a selection picks an element rather than
+accumulating, so the reduction does not round, so only the multiply's rounding
+matters, so any order-preserving scope will do.  Each step is true and the
+conclusion does not follow, for two reasons:
 
-Measured, the semantics look favourable: `max` propagates NaN, returns `+0.0`
-for a `±0` mix regardless of order, and selects rather than accumulates.  It
-shares the matcher and the invariance and coverage conditions with `HoistScale`,
-so it belongs in that file — a follow-up commit, not a new transform.
+- **A product can manufacture a NaN from ordered operands.**  `0 * inf` is a
+  NaN, and `max` / `min` propagate one from *any* element while the hoisted
+  `c * max(xs)` computes only the selected one.  Under plain `fp.FP32`,
+  `2 ** k` reaches `inf` at `k = 200` and `0` at `k = -200`:
+  `max([(2 ** 200) * x for x in [0.0, 1.0]])` is `NaN` where the rewrite gives
+  `+inf`.  So a selection needs the factor finite **and non-zero** — *stronger*
+  than `sum` needs, not weaker.
+- **Whether rounding preserves order is a property of the format**, not of the
+  overflow mode.  A format may have no infinities (overflow becomes a NaN —
+  `fp.MX_E4M3`), substitute for them (`nan_value` / `inf_value`), refuse them
+  outright (`fp.INTEGER` raises, so the rewrite deleted an abort), or represent
+  one sign only (`fp.MX_E8M0`, an `ExpContext`, where every negative product is
+  a NaN).  A gate written against `OverflowMode` alone saw none of these.
+
+The scope condition is therefore uniform, and the factor conditions are: finite
+for every reduction, and additionally non-zero for a selection.  `2 ** k` is
+provably non-zero exactly when `k` is guarded finite, which is the same guard
+that makes it finite, so nothing is lost in practice.
 
 ### 4. REAL-gated identity table — `2**a * 2**b -> 2**(a+b)`, `2**k * (2**-k * x) -> x`
 
@@ -285,12 +298,12 @@ What the spike settled, and what shipped:
 Neither #3 nor #4 adds a file under `fpy2/transform`, so neither is a PR of the
 kind above:
 
-- **#3**, the `max` / `min` monotone-selection variant, *widens* `HoistScale` —
-  same producer/consumer matching, different reduction operator and a different
-  proof.  Either fold it into PR 2 or follow up against the same file.
+- **#3**, the `max` / `min` monotone-selection variant, *widened* `HoistScale`
+  as expected — same matching, different reduction operator, its own proof.
+  **Done**, in three commits against that file: transform, tests, docs.
 - **#4**, the REAL-gated identity table, is a change to the existing
   `ConstFold`.
 
 ### Order
 
-PR 1, then PR 2.  The follow-ups are unblocked from the start.
+PR 1, then PR 2, then #3.  Only #4 is left, and it is unblocked.

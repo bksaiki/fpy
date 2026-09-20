@@ -17,20 +17,8 @@ from ..analysis import (
     ValueClassInfer,
 )
 from ..analysis.array_size import ListSize, is_size_eq
-from ..analysis.value_class import is_positive_literal
+from ..analysis.value_class import ValueClass, is_positive_literal
 from ..ast import *
-from ..number import (
-    REAL,
-    Context,
-    EFloatContext,
-    ExpContext,
-    MPBFixedContext,
-    MPBFloatContext,
-    MPFixedContext,
-    MPFloatContext,
-    MPSFloatContext,
-    OverflowMode,
-)
 from .cursor import Cursor, EditLog
 from .error import TransformDeclined
 from .hoist_invariant import _from_before, _Nodes, _own_exprs
@@ -38,9 +26,7 @@ from .path import walk_blocks
 from .utils import RoundingScopes, SiteRewriter, check_where
 
 _Reduction: TypeAlias = 'Sum | AMax | AMin'
-"""The reductions this rewrite knows.  `sum` accumulates, so its own rounding
-is part of the question; `max` and `min` *select*, so theirs is not -- under
-`fp.FP16`, `max([65600.0])` is `65600.0` where rounding it would give `inf`."""
+"""The reductions this rewrite knows."""
 
 
 class _Reductions(DefaultVisitor):
@@ -59,51 +45,6 @@ class _Reductions(DefaultVisitor):
         inst = _Reductions()
         inst._visit_expr(e, None)
         return inst.found
-
-
-def _not_order_preserving(ctx: 'Context | None') -> 'str | None':
-    """Why rounding under *ctx* may not stand in for one rounding per element,
-    or `None` where it may.
-
-    What a selection needs in place of exactness.  ``max_i round(c * xᵢ)`` is
-    ``round(c * max_i xᵢ)`` only where rounding is monotone and settles the
-    same way every time, since the rewrite turns one rounding per element into
-    one in total.  Every rounding *mode* qualifies -- each picks one of the two
-    bracketing values, and a deterministic bracket rule preserves order.
-
-    A context this does not recognise is refused: not provably order-preserving
-    is the safe answer.
-    """
-    if ctx is None:
-        return 'the scope is not known'
-    if ctx is REAL:
-        return None
-    if ctx.is_stochastic():
-        # the one rounding would draw differently from the many it replaces
-        return 'the scope rounds stochastically'
-
-    match ctx:
-        case MPFloatContext() | MPFixedContext() | MPSFloatContext():
-            # unbounded: nothing overflows, so rounding alone decides, and
-            # every mode of it is monotone
-            return None
-        case EFloatContext() | ExpContext() | MPBFixedContext() | MPBFloatContext():
-            overflow = ctx.overflow
-        case _:
-            return 'the scope is not a kind this rewrite knows'
-
-    match overflow:
-        case OverflowMode.OVERFLOW | OverflowMode.SATURATE:
-            return None
-        case OverflowMode.WRAP:
-            # not monotone at all, and `FixedContext`'s default
-            return 'the scope wraps on overflow, which reorders the elements'
-        case OverflowMode.ASSERT:
-            # the rewrite changes *which* products happen, so it can drop an
-            # abort: `c * min(xs)` may overflow where `c * max(xs)` does not
-            return 'the scope aborts on overflow, and the rewrite changes which products overflow'
-        case _:
-            raise RuntimeError(f'unreachable overflow mode: {overflow}')
 
 
 class _Facts(NamedTuple):
@@ -128,11 +69,11 @@ class _Facts(NamedTuple):
 class _Site(NamedTuple):
     """A reduction over scaled elements, in either of the two shapes it takes.
 
-    ``sum([c * e for x in xs])`` is the one a program is written in, and the
-    one this rewrite is really about: a comprehension defines every element, so
-    there is nothing to prove about coverage.  ``sum(ts)`` over a list a loop
-    filled is the same thing after `comp_to_loop`, which `rescale_fixed`
-    requires -- and there the elements not written are the whole difficulty.
+    A comprehension is the one a program is written in, and the one this
+    rewrite is really about: it defines every element, so there is nothing to
+    prove about coverage.  A list a loop filled is the same thing after
+    `comp_to_loop`, which `rescale_fixed` requires -- and there the elements
+    not written are the whole difficulty.
     """
 
     red: _Reduction
@@ -163,7 +104,7 @@ def _targets(comp: ListComp) -> tuple[NamedId, ...]:
 
 
 def _comp_site(red: _Reduction) -> '_Site | None':
-    """``sum([c * e for x in xs])``."""
+    """A reduction over a scaled comprehension."""
     comp = red.arg
     if not isinstance(comp, ListComp) or not isinstance(comp.elt, Mul):
         return None
@@ -209,7 +150,7 @@ def _created_by(stmt: Stmt, name: NamedId, facts: '_Facts') -> 'Definition | Non
 
 
 def _loop_site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
-    """``sum(ts)`` over a list a loop filled.
+    """A reduction over a list a loop above it filled.
 
     The loop is found through the *definition* the reduction reads, not by
     scanning backwards for one that writes the same name: after the loop the
@@ -306,19 +247,8 @@ def _varies(site: _Site, facts: '_Facts') -> list[str]:
 
 def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     """Why the factor may not leave *site*'s reduction, or `None` where it may."""
-    if isinstance(site.red, Sum):
-        # accumulation: the partial sums round, so the two orders disagree
-        if not facts.scopes.is_exact(site.red):
-            return 'the reduction does not round exactly'
-    else:
-        # selection: the reduction does not round, but the multiply does, and
-        # the rewrite leaves one of it where there were as many as elements
-        scope = facts.scopes.scope_ctx(site.prod)
-        if scope is not facts.scopes.scope_ctx(site.red):
-            return 'the product and the reduction round differently'
-        why = _not_order_preserving(scope)
-        if why is not None:
-            return why
+    if not facts.scopes.is_exact(site.red):
+        return 'the reduction does not round exactly'
     if not Purity.analyze_expr(site.factor, facts.def_use):
         return 'the factor is not pure'
 
@@ -326,11 +256,15 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     if varies:
         return f'the factor reads {", ".join(f"`{n}`" for n in varies)}, which varies'
 
-    # only accumulation cancels: `sum([c*1, c*-1, c*1])` is a NaN at `c = inf`
-    # where `c * sum(...)` is `+inf`.  A selection returns one element, so an
-    # infinite or NaN factor reaches both sides alike.
-    if isinstance(site.red, Sum) and not facts.classes.is_finite(site.factor):
+    if not facts.classes.is_finite(site.factor):
         return 'the factor may be an infinity or a NaN'
+    # a selection needs more than `sum` does, not less: `c * x` makes a NaN out
+    # of `0 * inf`, and `max`/`min` propagate a NaN from *any* element where
+    # the hoisted form only computes the selected one
+    if not isinstance(site.red, Sum) and not facts.classes.excludes(
+        site.factor, ValueClass.ZERO
+    ):
+        return 'the factor may be zero, and `0 * inf` is a NaN the selection would propagate'
     base = facts.def_use.defining_expr(site.factor)
     if not isinstance(base, Pow) or not is_positive_literal(base.args[0]):
         return 'the factor is not a power with a positive base, so may be negative'
@@ -344,9 +278,8 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     assert site.red_stmt is not None
 
     # deleting the multiply deletes its rounding, which is only harmless where
-    # it rounded exactly.  A selection has had this asked of it already, in the
-    # order-preserving form it needs instead.
-    if isinstance(site.red, Sum) and not facts.scopes.is_exact(site.prod):
+    # it rounded exactly
+    if not facts.scopes.is_exact(site.prod):
         return 'the product does not round exactly'
 
     # the factor is re-emitted at the reduction, so every name it reads must
@@ -489,13 +422,18 @@ class HoistScale:
 
     Algebra, not relocation, so unlike :class:`HoistInvariant` it needs an
     exact scope -- under a rounding one the partial sums round and the two
-    disagree.  It also needs the factor finite (an infinite `c` turns a
-    cancellation into a survivor), non-negative (a negative one signs a zero
-    the original never signed), invariant across the loop, and the loop to
-    write every element, since an unwritten one would be scaled too.
+    orders disagree.  `sum`, `max` and `min` are all reductions for this
+    purpose and all need it.
 
-    `max` / `min` are not reductions for this purpose: a monotone selection
-    needs its own proof.
+    A selection needs *more* than a sum, not less.  `c * x` makes a NaN out of
+    `0 * inf`, and `max` / `min` propagate a NaN from any element where the
+    hoisted form computes only the selected one -- so the factor must be
+    non-zero as well as finite.
+
+    Both need the factor non-negative -- a negative one reorders a selection
+    and signs a zero a sum never signed -- and pure, and invariant.  Over a
+    list a loop filled, both also need the loop to write every element, since
+    an unwritten one would be scaled too.
     """
 
     @staticmethod

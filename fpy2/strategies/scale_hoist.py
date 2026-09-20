@@ -12,7 +12,8 @@ def hoist_scale(
 ) -> Function:
     """:class:`fpy2.transform.HoistScale` over *func*: where every element of a
     reduction is scaled by the same factor, the scaling becomes one multiply
-    after the reduction instead of one per element.
+    after the reduction instead of one per element.  `sum`, `max` and `min`
+    are all reductions for this purpose, under different conditions.
 
     Two shapes, the same rewrite.  A comprehension is the one a program is
     written in::
@@ -24,22 +25,27 @@ def hoist_scale(
     :func:`fpy2.strategies.rescale_fixed` requires.
 
     Algebra, not relocation, so unlike :func:`fpy2.strategies.hoist_invariant`
-    this needs an **exact** scope: under a rounding one the partial sums round
+    it needs an **exact** scope: under a rounding one the partial sums round
     and the two orders disagree -- `sum([3 * x for x in [1e20, 1.0, -1e20]])`
     is `0` under `fp.FP32` and `6.01226e12` the other way round.  It is a
     per-site question, so one reduction of a function may be rewritten while
     another is refused.
 
-    The factor must also be:
+    A **selection** -- `max` or `min` -- needs that too, and one thing more.
+    It may look as though it should not, since it picks an element rather than
+    accumulating and so does not round.  But the *multiply* rounds, and
+    `c * x` makes a NaN out of `0 * inf`, which a selection propagates from any
+    element while `c * max(xs)` only ever computes the selected one.  So the
+    factor must be **non-zero** as well as finite.
+
+    Whichever the reduction, the factor must be:
 
     - **pure**, since it goes from once per element to once;
     - **invariant** -- it may not read what the comprehension or the loop binds
       per element;
-    - **finite**, since an infinite factor turns a cancellation into a
-      survivor: `sum([c * x for x in [1.0, -1.0, 1.0]])` is a NaN at
-      `c = inf` where `c * sum(...)` is `+inf`;
-    - **non-negative**, since a negative one signs a zero the original never
-      signed: `sum([])` is `+0.0` and `c * sum([])` is `-0.0`.
+    - **non-negative**.  A negative factor reorders a selection outright, and
+      signs a zero a sum never signed: `sum([])` is `+0.0` and `c * sum([])`
+      is `-0.0`.
 
     Sign is established syntactically: the factor must be a power with a
     positive literal base, which is what `rescale_fixed` emits.  A correct
@@ -51,9 +57,6 @@ def hoist_scale(
     unwritten one would be scaled too, and the list must be read by nothing but
     the reduction.  Coverage is decided by the size union-find, so it holds for
     a symbolic length as much as a concrete one.
-
-    `max` / `min` are not reductions for this purpose: a monotone selection
-    needs its own proof around NaN, signed zero and a non-positive factor.
 
     Cursors forward across this pass, except an expression cursor inside a
     statement it rewrote -- the reduction's own statement, and the one binding
