@@ -79,6 +79,8 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.simplify_if
 
+.. autofunction:: fpy2.strategies.single_exit
+
 .. autofunction:: fpy2.strategies.split
 
 .. autofunction:: fpy2.strategies.split_round

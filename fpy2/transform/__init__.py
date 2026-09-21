@@ -46,6 +46,7 @@ from .round_elim import RoundElim
 from .round_insert import RoundInsert
 from .simplify import Simplify
 from .simplify_if import SimplifyIf
+from .single_exit import SingleExit
 from .specialize import Specialize
 from .split_loop import SplitLoop, SplitLoopStrategy
 from .split_round import SplitRound
