@@ -13,10 +13,11 @@ contexts are ordinary values that can be passed around::
 
    import fpy2 as fp
 
-   @fp.fpy
+   @fp.fpy(ctx=fp.REAL)
    def dot(xs: list[fp.Real], ys: list[fp.Real], K: int, block: fp.Context) -> fp.Real:
-      """A blocked dot product: exact products, blocks of `K` summed in `block`."""
-      assert len(xs) == len(ys) and len(xs) % K == 0
+      """A blocked dot product: exact products, blocks of `K` summed in `block`.
+      The length of `xs` must be a multiple of `K`."""
+      assert len(xs) == len(ys)
       acc = 0
       for start in range(0, len(xs), K):
          with block:
@@ -60,9 +61,11 @@ which prints
        32   float32   40.959972      0.000%
 
 Every row runs the same kernel.
-:py:data:`fpy2.REAL` is the context that never rounds, so the products inside
-``dot`` stay exact whatever the accumulator does, and ``dot_ref`` computes the
-true real-number answer to measure against.
+:py:data:`fpy2.REAL` is the context that never rounds: the ``ctx`` argument of
+the decorator starts ``dot`` in it, so the loop's index arithmetic is exact and
+the only rounding is what the ``with`` blocks ask for.
+The products inside ``dot`` stay exact whatever the accumulator does, and
+``dot_ref`` computes the true real-number answer to measure against.
 The table makes the case for blocking: a flat ``float16`` accumulator stalls out
 once the running total is large enough that adding another ``0.1 * 0.1``
 changes nothing, while summing 32 elements at a time keeps the error three

@@ -20,10 +20,11 @@ format, and the running total is `float32`.
 ```python
 import fpy2 as fp
 
-@fp.fpy
+@fp.fpy(ctx=fp.REAL)
 def dot(xs: list[fp.Real], ys: list[fp.Real], K: int, block: fp.Context) -> fp.Real:
-    """A blocked dot product: exact products, blocks of `K` summed in `block`."""
-    assert len(xs) == len(ys) and len(xs) % K == 0
+    """A blocked dot product: exact products, blocks of `K` summed in `block`.
+    The length of `xs` must be a multiple of `K`."""
+    assert len(xs) == len(ys)
     acc = 0
     for start in range(0, len(xs), K):
         with block:
