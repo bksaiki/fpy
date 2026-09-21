@@ -8,8 +8,8 @@ Low-precision hardware rarely picks one format and sticks with it: a dot
 product may multiply exactly, accumulate blocks of 32 elements in a narrow
 format, and keep the running total in ``float32``.
 In FPy that datapath *is* the program.
-Every operation is rounded by the context it appears in, and contexts are
-ordinary values that can be passed around::
+Every operation is correctly rounded by the context it appears in, and
+contexts are ordinary values that can be passed around::
 
    import fpy2 as fp
 
@@ -19,14 +19,14 @@ ordinary values that can be passed around::
       assert len(xs) == len(ys) and len(xs) % K == 0
       acc = 0
       for start in range(0, len(xs), K):
-         with block:                     # the block accumulator
+         with block:
             inner_acc = 0
             for x, y in zip(xs[start:start + K], ys[start:start + K]):
                with fp.REAL:
-                  p = x * y              # products are exact ...
-               inner_acc += p            # ... block sums are not
+                  p = x * y      # every product is exact ...
+               inner_acc += p    # ... but block sums round to `block`
          with fp.FP32:
-            acc += inner_acc             # one fp32 addition per block
+            acc += inner_acc     # one fp32 addition per block
       return acc
 
    @fp.fpy(ctx=fp.REAL)
@@ -38,7 +38,7 @@ The block size and the block format are just arguments, so a Python loop
 can sweep over datapaths and measure each one against the exact answer::
 
    xs = ys = [0.1] * 4096
-   exact = dot_ref(xs, ys).as_rational()   # the true value, as a `Fraction`
+   exact = dot_ref(xs, ys).as_rational()   # the true value, as a Fraction
 
    print(f'{"block":>6} {"format":>9} {"result":>11} {"rel. error":>11}')
    for K, name, ctx in [(4096, 'float16', fp.FP16), (32, 'float16', fp.FP16),
@@ -59,12 +59,12 @@ which prints
        32  bfloat16   40.250000      1.733%
        32   float32   40.959972      0.000%
 
-The kernel is written once.
+Every row runs the same kernel.
 :py:data:`fpy2.REAL` is the context that never rounds, so the products inside
-``dot`` are exact whatever the accumulator does, and ``dot_ref`` computes the
+``dot`` stay exact whatever the accumulator does, and ``dot_ref`` computes the
 true real-number answer to measure against.
-The table is the case for blocking: a flat ``float16`` accumulator stalls out
-once the running total is large enough that adding a product of ``0.1 * 0.1``
+The table makes the case for blocking: a flat ``float16`` accumulator stalls out
+once the running total is large enough that adding another ``0.1 * 0.1``
 changes nothing, while summing 32 elements at a time keeps the error three
 orders of magnitude smaller.
 
@@ -73,10 +73,10 @@ Interoperating with Python
 
 Everything outside the decorated function is ordinary Python.
 An FPy program is a :py:class:`fpy2.Function`, callable like any other Python
-function; it takes Python values as arguments, and the ``ctx`` keyword argument
+function, and it takes Python values as arguments.
+Rounding contexts are ordinary values too: the sweep above keeps them in a list
+and hands one to ``dot`` as a plain argument, while the ``ctx`` keyword argument
 chooses the context that the body starts in.
-Rounding contexts are themselves ordinary values, so they can be stored in a
-list and passed at the call site, as above.
 
 Results come back as :py:class:`fpy2.Float` values, which support the usual
 Python numeric protocol, plus :py:meth:`fpy2.Float.as_rational` for the exact
@@ -87,17 +87,20 @@ value of the number::
    r > 40                                  # True
    r.as_rational()                         # Fraction(1311, 32)
 
-Note that :py:func:`float` refuses a lossy conversion: it raises ``ValueError``
-if the value is not exactly representable as a Python ``float``, as with a
-result under, say, ``fp.MPFloatContext(100)``.
 Under :py:data:`fpy2.REAL` there is no format at all, and a value that is not a
-binary float — anything that came out of a division like ``1 / 3`` — is returned
+binary float — anything that came out of a division like ``1 / 3`` — comes back
 as a plain ``fractions.Fraction`` instead.
 Either way the value is an exact rational, so the error of a rounded run can be
 computed exactly in Python::
 
    err = abs(r.as_rational() - exact) / exact
    float(err)                              # 0.00021362304687488895
+
+Both conversions are strict.
+``float()`` refuses a lossy conversion, raising ``ValueError`` if the value is
+not exactly representable as a Python ``float``, as with a result under, say,
+``fp.MPFloatContext(100)``; and :py:meth:`fpy2.Float.as_rational` raises
+``ValueError`` on an infinity or NaN, which have no rational value.
 
 Contexts may also be used directly from Python, without an FPy program,
 to round a single value::
@@ -106,8 +109,8 @@ to round a single value::
    fp.FP16.round(0.1).as_rational()        # Fraction(819, 8192)
 
 In the other direction, an arbitrary Python function can be made callable
-*from* FPy code with the :py:deco:`fpy2.fpy_primitive` decorator, as long as it
-is fully type annotated::
+*from* FPy code with the :py:deco:`fpy2.fpy_primitive` decorator, as long as
+all of its arguments and its return value are annotated::
 
    @fp.fpy_primitive
    def clamp(x: fp.Real, lo: fp.Real, hi: fp.Real) -> fp.Real:
@@ -199,4 +202,4 @@ Each column runs the same FPy program under a different rounding context.
 The first four are IEEE 754 formats, and more precision only buys more
 iterations before the sequence collapses.
 The last column uses :py:data:`fpy2.REAL`, which computes the real sequence
-exactly, and is the only column that shows what the recurrence actually does.
+exactly, and is the only one that shows what the recurrence actually does.

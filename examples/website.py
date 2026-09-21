@@ -15,14 +15,14 @@ def dot(xs: list[fp.Real], ys: list[fp.Real], K: int, block: fp.Context) -> fp.R
     assert len(xs) == len(ys) and len(xs) % K == 0
     acc = 0
     for start in range(0, len(xs), K):
-        with block:                     # the block accumulator
+        with block:
             inner_acc = 0
             for x, y in zip(xs[start:start + K], ys[start:start + K]):
                 with fp.REAL:
-                    p = x * y           # products are exact ...
-                inner_acc += p          # ... block sums are not
+                    p = x * y       # every product is exact ...
+                inner_acc += p      # ... but block sums round to `block`
         with fp.FP32:
-            acc += inner_acc            # one fp32 addition per block
+            acc += inner_acc        # one fp32 addition per block
     return acc
 
 
@@ -64,7 +64,7 @@ def muller(n: int) -> fp.Real:
 def blocked_dot_table():
     """The mixed-precision dot product table from the README."""
     xs = ys = [0.1] * 4096
-    exact = dot_ref(xs, ys).as_rational()   # the true value, as a `Fraction`
+    exact = dot_ref(xs, ys).as_rational()   # the true value, as a Fraction
 
     print(f'{"block":>6} {"format":>9} {"result":>11} {"rel. error":>11}')
     for K, name, ctx in [(4096, 'float16', fp.FP16), (32, 'float16', fp.FP16),
