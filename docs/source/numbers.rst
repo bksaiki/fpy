@@ -93,6 +93,18 @@ Common Rounding Contexts
 
 FPy provides a number of aliases for common rounding contexts.
 
+Exact Context
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. py:data:: fpy2.REAL
+
+   Alias for exact computation: operations under this context are never
+   rounded, so every value is the exact real result.
+   Values computed under this context have no format: an FPy program
+   returns them as a :py:class:`fpy2.Float` when the exact result is a
+   binary float, and as a ``fractions.Fraction`` otherwise, as after a
+   division such as ``1 / 3``.
+
 Floating-Point Contexts
 ^^^^^^^^^^^^^^^^^^^^^^^^^
 
