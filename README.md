@@ -8,6 +8,68 @@ Important links:
  - GitHub: [fpy](https://github.com/bksaiki/fpy)
  - Guide: [USAGE.md](docs/USAGE.md)
 
+## Example
+
+FPy is Python with explicit control of both the mathematics and
+rounding: every operation is correctly rounded by the *rounding context*
+it appears in, and contexts are ordinary values you can pass around —
+including `fp.REAL`, which never rounds.  Here is a blocked dot product
+with exact products, blocks of `K` elements summed in a narrow format,
+and a `float32` total:
+
+```python
+import fpy2 as fp
+
+@fp.fpy
+def dot(xs: list[fp.Real], ys: list[fp.Real], K: int, block: fp.Context) -> fp.Real:
+    """A blocked dot product: exact products, blocks of `K` summed in `block`."""
+    assert len(xs) == len(ys) and len(xs) % K == 0
+    acc = 0
+    for start in range(0, len(xs), K):
+        with block:                     # the block accumulator
+            inner_acc = 0
+            for x, y in zip(xs[start:start + K], ys[start:start + K]):
+                with fp.REAL:
+                    p = x * y           # products are exact ...
+                inner_acc += p          # ... block sums are not
+        with fp.FP32:
+            acc += inner_acc            # one fp32 addition per block
+    return acc
+
+@fp.fpy(ctx=fp.REAL)
+def dot_ref(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    """The same dot product, with no rounding anywhere."""
+    return sum([x * y for x, y in zip(xs, ys)])
+
+xs = ys = [0.1] * 4096
+exact = dot_ref(xs, ys).as_rational()   # the true value, as a `Fraction`
+
+print(f'{"block":>6} {"format":>9} {"result":>11} {"rel. error":>11}')
+for K, name, ctx in [(4096, 'float16', fp.FP16), (32, 'float16', fp.FP16),
+                     (4096, 'bfloat16', fp.BF16), (32, 'bfloat16', fp.BF16),
+                     (32, 'float32', fp.FP32)]:
+    r = dot(xs, ys, K, ctx)
+    err = abs(r.as_rational() - exact) / exact
+    print(f'{K:>6} {name:>9} {float(r):>11.6f} {float(err):>11.3%}')
+```
+
+which prints
+
+```
+ block    format      result  rel. error
+  4096   float16   32.000000     21.875%
+    32   float16   40.968750      0.021%
+  4096  bfloat16    4.000000     90.234%
+    32  bfloat16   40.250000      1.733%
+    32   float32   40.959972      0.000%
+```
+
+A flat `float16` accumulator stalls out; blocking keeps the error three
+orders of magnitude smaller.  See the [usage guide](docs/USAGE.md) for
+the language and
+[the examples page](https://fpy.readthedocs.io/en/latest/example.html)
+for more.
+
 ## Installation
 
 FPy can be installed from PyPI with either `uv` or `pip`, or built from
