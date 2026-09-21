@@ -28,8 +28,8 @@ def single_exit(func: Function) -> Function:
     **What it refuses.**  A `return` inside a loop -- rewriting one needs a flag
     suppressing the rest of the body and every later iteration, since FPy has no
     `break`.  Such a loop unrolls away where its trip count is known
-    (:func:`fpy2.strategies.unroll_for`), which is the shape that occurs in
-    practice.  A `return` under a `with` whose body only *sometimes* returns is
+    (:func:`fpy2.strategies.unroll_for`), after `Specialize` has fixed the
+    length.  A `return` under a `with` whose body only *sometimes* returns is
     refused too: moving the continuation inside would change its rounding
     context.
 

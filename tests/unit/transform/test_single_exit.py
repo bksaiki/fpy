@@ -1,16 +1,16 @@
 """
 Unit tests for :class:`fpy2.transform.SingleExit`.
 
-An early return becomes an assignment to one result name, and the statements
-that would have followed move into the branch that falls through.  Nothing is
-duplicated: a branch that returns cannot reach what follows.
+The result name comes from ``Gensym``, so a golden AST is brittle.  These
+tests assert:
 
-Consumers that need it -- `FPCoreCompiler` rejects multiple returns,
-`FuncInline` refuses a callee with more than one, `SimplifyIf` refuses a
-`return` in a branch.
-
-A `return` under a loop is refused; such loops unroll away where the trip count
-is known, which is every case in `examples/mmasim`.
+1. **Structural shape** -- exactly one `return` survives, a function that
+   already has one is returned unchanged, and the copies share no nodes.
+2. **The continuation is moved where it can be** -- the tail after an `if`
+   appears once when only one arm falls through.
+3. **Semantic equivalence** via the interpreter, on inputs taking each path.
+4. **Refusals** -- a `return` inside a loop, and a shape the rewrite leaves
+   with several exits.
 """
 
 import pytest
@@ -89,13 +89,13 @@ def returns_in_a_while(x):
     return x
 
 
-_REWRITTEN = [early_return, both_arms_return, nested, returns_in_a_context]
-_ARGS = {
-    'early_return': [(1.0,), (-1.0,), (0.0,)],
-    'both_arms_return': [(1.0,), (-1.0,)],
-    'nested': [(a, b) for a in (1.0, -1.0) for b in (1.0, -1.0)],
-    'returns_in_a_context': [(1.0,), (1000.0,)],
-}
+_CASES = [
+    (early_return, [(1.0,), (-1.0,), (0.0,)]),
+    (both_arms_return, [(1.0,), (-1.0,)]),
+    (nested, [(a, b) for a in (1.0, -1.0) for b in (1.0, -1.0)]),
+    (returns_in_a_context, [(1.0,), (1000.0,)]),
+]
+_REWRITTEN = [f for f, _ in _CASES]
 
 
 class TestOneReturnSurvives:
@@ -113,9 +113,9 @@ class TestOneReturnSurvives:
 
 
 class TestSemanticsArePreserved:
-    @pytest.mark.parametrize('f', _REWRITTEN, ids=lambda f: f.name)
-    def test_agrees_with_the_interpreter(self, f):
-        for args in _ARGS[f.name]:
+    @pytest.mark.parametrize('f,cases', _CASES, ids=lambda v: getattr(v, 'name', None))
+    def test_agrees_with_the_interpreter(self, f, cases):
+        for args in cases:
             _agrees(f, *args)
 
 
@@ -135,14 +135,23 @@ class TestLoopReturnsAreRefused:
             SingleExit.apply(f.ast)
 
 
-class TestUnhandledShapesRefuse:
-    def test_a_shape_that_is_not_moved_declines(self):
-        """The postcondition, not a specific shape: `_sink` handles `if` and a
-        `with` whose body always returns.  Anything else must refuse rather
-        than hand back a function with several exits."""
-        for f in (returns_in_a_for, returns_in_a_while):
-            with pytest.raises(TransformDeclined):
-                SingleExit.apply(f.ast)
+@fp.fpy
+def conditional_return_in_a_context(x):
+    with fp.FP32:
+        if x > 0:
+            return fp.round(x)
+        y = x
+    return y
+
+
+class TestThePostcondition:
+    """A `with` that only sometimes returns is not moved -- the continuation
+    would change rounding context.  `apply` counts what it left rather than
+    handing back a function with several exits."""
+
+    def test_declines(self):
+        with pytest.raises(TransformDeclined, match='returns remain'):
+            SingleExit.apply(conditional_return_in_a_context.ast)
 
 
 @fp.fpy

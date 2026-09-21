@@ -12,7 +12,6 @@ import fpy2 as fp
 from fpy2 import Function
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.module import _RebindCalls
-from fpy2.analysis import Reachability
 from fpy2.strategies import TransformDeclined, inline, simplify_if, single_exit
 
 
@@ -22,14 +21,6 @@ def _early(x: fp.Real) -> fp.Real:
         return 1.0
     y = x * 2
     return y
-
-
-@fp.fpy
-def _in_a_loop(xs: list[fp.Real]) -> fp.Real:
-    for x in xs:
-        if x < 0:
-            return x
-    return 0.0
 
 
 @fp.fpy
@@ -52,24 +43,9 @@ def _calls(ast) -> int:
     return n
 
 
-class TestTheStrategyLayer:
-    def test_returns_a_function(self):
-        assert isinstance(single_exit(_early), Function)
-
-    @pytest.mark.parametrize('x', [1.0, -1.0, 0.0])
-    def test_semantics_are_preserved(self, x):
-        assert repr(single_exit(_early)(x)) == repr(_early(x))
-
-    def test_one_return_remains(self):
-        assert len(Reachability.analyze(single_exit(_early).ast).ret_stmts) == 1
-
-    def test_a_loop_return_declines(self):
-        with pytest.raises(TransformDeclined, match='inside a loop'):
-            single_exit(_in_a_loop)
-
-
 class TestItUnblocksTheConsumers:
-    """The point of the pass: each of these refuses `_early` as written."""
+    """Each consumer declines or skips `_early` as written, and handles it
+    once it has one exit."""
 
     def test_inline_skips_a_multi_return_callee(self):
         """`inline` refuses a callee without exactly one trailing return, and
