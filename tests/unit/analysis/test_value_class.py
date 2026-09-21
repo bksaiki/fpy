@@ -21,7 +21,7 @@ from fpy2.analysis.value_class import (
     TupleClass,
     join_class,
     _ATOMS, _LOGB, _POW_BIG_BASE, _POW_ONE_BASE, _POW_SMALL_BASE,
-    _exact_add, _exact_mul, _exact_select,
+    _exact_add, _exact_mul, _exact_select, _exact_sum,
     _exact_sub, _map,
 )
 from fpy2.ast.fpyast import Expr, Var
@@ -163,6 +163,11 @@ def _pow_one_fp64(a: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.REAL)
+def _sum_list(xs: list[fp.Real]) -> fp.Real:
+    return sum(xs)
+
+
+@fp.fpy(ctx=fp.REAL)
 def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
     return max(a, b)
 
@@ -223,6 +228,42 @@ class TestTransferFunctionsAreSound:
 
     def test_min(self):
         self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2, rows=25)
+
+    def test_sum(self):
+        """`_exact_sum` predicts from what the *elements* are, so this sweeps
+        lists drawn from one atom and from two.  The mixed lists are where the
+        closure earns itself: an infinity and its opposite make a NaN that no
+        element was, and two finites a zero.
+
+        The empty list is in the sweep because it is the one case with no
+        elements to predict from -- it sums to zero whatever the atom says.
+        """
+        bad = []
+        covered = set()
+        for a in _ATOMS:
+            for b in _ATOMS:
+                want = _exact_sum(a | b)
+                for va in _SAMPLES[a][:3]:
+                    for vb in _SAMPLES[b][:3]:
+                        for xs in ([], [va], [va, vb], [va, vb, va]):
+                            try:
+                                got = class_of(_sum_list(xs))
+                            except Exception:   # noqa: BLE001
+                                continue        # no result: says nothing
+                            covered.add((a, b))
+                            if not (got & want):
+                                bad.append(f'sum({xs}): {got} not in {want}')
+        assert not bad, '; '.join(bad[:6])
+        assert len(covered) == len(_ATOMS) ** 2
+
+    def test_a_sum_of_finites_admits_a_zero_and_nothing_else(self):
+        """The row the rule exists for: `ts` holding only finites makes
+        `sum(ts)` finite, where reading the elements' own class off the list
+        would have said nothing at all."""
+        assert _exact_sum(ZERO | FINITE) == ZERO | FINITE
+        assert _exact_sum(FINITE) == ZERO | FINITE
+        assert _exact_sum(INF) == NAN | ZERO | INF
+        assert _exact_sum(ValueClass(0)) == ZERO      # only the empty list
 
     def test_logb(self):
         self._sweep(lambda a: _map(_LOGB, a), _logb, 1, rows=5)

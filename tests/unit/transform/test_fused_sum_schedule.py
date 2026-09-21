@@ -20,7 +20,7 @@ import fpy2 as fp
 import fpy2.strategies as st
 
 from fpy2.analysis import FormatInfer, ValueClass, ValueClassInfer
-from fpy2.ast import Round
+from fpy2.ast import Round, Sum
 from fpy2.backend.cpp.storage import CppScalar, choose_storage
 from fpy2.transform import HoistScale, walk_exprs
 from fpy2.types import ListType, RealType
@@ -82,6 +82,15 @@ def _rounded(func) -> ValueClass:
     return info.classify(rounds[0].arg)
 
 
+def _reduction(func) -> ValueClass:
+    """The class of `sum(ts)` -- the scaled reduction the guard is for, and the
+    function's returned value."""
+    info = ValueClassInfer.analyze(func.ast)
+    red, = [e for _, e in walk_exprs(func.ast)
+            if isinstance(e, Sum) and e.format() == 'sum(ts)']
+    return info.classify(red)
+
+
 # ----------------------------------------------------------------------
 # The grid
 
@@ -121,6 +130,15 @@ class TestFiniteness:
         assert choose_storage(fmt, cls) is CppScalar.S8
         # and so the emitter's `std::isfinite` assertion goes
         assert _rounded(out) == ZERO | FINITE
+
+    def test_the_reduction_is_finite(self, fuse):
+        """A sum of finite elements is finite.  The elements are what the guard
+        proves; carrying that through the reduction is `_exact_sum`, without
+        which the *returned* value stays unknown however much is known about
+        what went into it."""
+        for program in _PROGRAMS.values():
+            out = _sched(program, fuse=fuse, mono=True)
+            assert _reduction(out) == ZERO | FINITE
 
     def test_without_the_clamp_logb_of_zero_survives(self, fuse):
         """`logb(0)` is `-inf` whatever the elements are, and no integer

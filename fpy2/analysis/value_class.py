@@ -323,6 +323,24 @@ def _exact_sub(a: ValueClass, b: ValueClass) -> ValueClass:
     return _exact_add(a, _negate(b))
 
 
+def _exact_sum(elt: ValueClass) -> ValueClass:
+    """``sum(xs)`` for a list whose every element is in *elt*.
+
+    An accumulation, not a selection: how many additions there are is not
+    known, so this is the closure of :func:`_exact_add` over *elt*.  That is
+    wider than *elt* in both directions a single add is -- two finites cancel
+    to a zero, two opposite infinities make a NaN.
+
+    The zero is there whatever the elements are, an empty list summing to one.
+    """
+    out = _ZERO | elt
+    while True:
+        grown = out | _exact_add(out, elt)
+        if grown == out:
+            return out
+        out = grown
+
+
 def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
     if not (a and b):
         return _BOT
@@ -1163,6 +1181,10 @@ class _ValueClassInstance(DefaultVisitor):
             case AMin() | AMax():
                 # the result *is* one element, so it is bounded by them
                 return self._elements_of(e.arg)
+            case Sum():
+                # an accumulation *of* the elements rather than one of them,
+                # so the bound they give has to be closed under adding
+                return self._rounded(e, _exact_sum(self._elements_of(e.arg)))
             case Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
