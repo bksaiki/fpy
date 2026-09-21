@@ -124,6 +124,22 @@ loop functions accepted *after* `unroll_for`.
 
 ### Phase 2 -- strategy wrapper
 
+**Done, and not as planned.**  `fpy2/strategies/exit_single.py`, exported as
+`fpy2.strategies.single_exit`, listed in `docs/source/strategies.rst`;
+9 tests in `tests/unit/strategies/test_single_exit.py`.
+
+**No `where` / `sites` / `refusals`, and no `SiteRewriter`.**  The plan called
+for them by analogy with `simplify_if`, which was wrong: a function has one
+exit structure, not one per return, so normalizing "one return" is not a
+thing a caller could ask for.  `to_hoistable` is the right model and says so
+itself -- *"Takes no `where`: normal form is not a per-site decision."*  The
+wrapper is therefore a plain `Function -> Function`, and nothing is registered
+in the `_SITES` / `_REFUSALS` tables.  `test_wrapper_contract.py` still covers
+it, since that table derives from `__all__`.
+
+Cursors do not forward, as with `to_hoistable`: the function body is rebuilt.
+
+
 `fpy2/strategies/`, re-exported as `fpy2.strategies.single_exit`, with
 `where` / `sites` / `refusals` via `SiteRewriter` and an `EditLog`, matching
 `simplify_if`.  Registered in the `_SITES` / `_REFUSALS` tables, listed in

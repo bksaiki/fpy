@@ -41,6 +41,7 @@ from ..transform import (
 from .anf import to_anf
 from .comp_lower import comp_to_loop
 from .context_lift import lift_context
+from .exit_single import single_exit
 from .fixed_rescale import rescale_fixed
 from .float_lower import float_to_fixed
 from .free_var import close
@@ -93,6 +94,7 @@ __all__ = [
     'rescale_fixed',
     'simplify',
     'simplify_if',
+    'single_exit',
     'sites',
     'split',
     'split_round',
