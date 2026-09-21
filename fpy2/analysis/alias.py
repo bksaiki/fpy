@@ -519,7 +519,7 @@ class AliasAnalysis:
         """The allocations that may live in *region*."""
         return frozenset() if region is None else self._regions.sites_at(region)
 
-    def is_inside(self, region: Region) -> bool:
+    def inside_at(self, region: Region) -> bool:
         """Whether *region* is a place *within* a container — a list's elements,
         a tuple's field — rather than a place a name denotes.
 

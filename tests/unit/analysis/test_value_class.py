@@ -250,13 +250,14 @@ class TestTransferFunctionsAreSound:
                                 got = class_of(_sum_list(xs))
                             except Exception:   # noqa: BLE001
                                 continue        # no result: says nothing
-                            covered.add((a, b))
+                            if xs:
+                                covered.add((a, b))   # `[]` says nothing
                             if not (got & want):
                                 bad.append(f'sum({xs}): {got} not in {want}')
         assert not bad, '; '.join(bad[:6])
         assert len(covered) == len(_ATOMS) ** 2
 
-    def test_a_sum_of_finites_admits_a_zero_and_nothing_else(self):
+    def test_the_rows_the_closure_widens(self):
         """The row the rule exists for: `ts` holding only finites makes
         `sum(ts)` finite, where reading the elements' own class off the list
         would have said nothing at all."""

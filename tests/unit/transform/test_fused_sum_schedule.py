@@ -131,14 +131,14 @@ class TestFiniteness:
         # and so the emitter's `std::isfinite` assertion goes
         assert _rounded(out) == ZERO | FINITE
 
-    def test_the_reduction_is_finite(self, fuse):
+    @pytest.mark.parametrize('program', _PROGRAMS)
+    def test_the_reduction_is_finite(self, program, fuse):
         """A sum of finite elements is finite.  The elements are what the guard
         proves; carrying that through the reduction is `_exact_sum`, without
         which the *returned* value stays unknown however much is known about
         what went into it."""
-        for program in _PROGRAMS.values():
-            out = _sched(program, fuse=fuse, mono=True)
-            assert _reduction(out) == ZERO | FINITE
+        out = _sched(_PROGRAMS[program], fuse=fuse, mono=True)
+        assert _reduction(out) == ZERO | FINITE
 
     def test_without_the_clamp_logb_of_zero_survives(self, fuse):
         """`logb(0)` is `-inf` whatever the elements are, and no integer

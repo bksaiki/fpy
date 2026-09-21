@@ -8,12 +8,12 @@ distinguished from a shared one.
 import fpy2 as fp
 
 from fpy2.analysis import Alias, DefineUse
+from fpy2.ast.fpyast import Var
+from fpy2.transform.path import walk_exprs
 
 
 def _find_var(func: fp.Function, name: str):
     """The first `Var` in *func* that reads *name*."""
-    from fpy2.ast.fpyast import Var
-    from fpy2.transform.path import walk_exprs
     return next(e for _, e in walk_exprs(func.ast)
                 if isinstance(e, Var) and str(e.name) == name)
 
@@ -309,8 +309,8 @@ class TestInside:
         outer = a.region_of_expr(_find_var(f, 'xss'))
         row = a.region_of_expr(_find_var(f, 'row'))
         assert outer is not None and row is not None
-        assert not a.is_inside(outer)
-        assert a.is_inside(row)
+        assert not a.inside_at(outer)
+        assert a.inside_at(row)
 
     def test_two_rows_of_one_matrix_are_one_region(self):
         """Why the query is needed: they share a region *and* a site, so
@@ -327,7 +327,7 @@ class TestInside:
         r1 = a.region_of_expr(_find_var(f, 'r1'))
         assert r0 is not None and r0 is r1
         assert len(a.sites_at(r0)) == 1
-        assert a.is_inside(r0)
+        assert a.inside_at(r0)
 
 
 class TestMayAlias:

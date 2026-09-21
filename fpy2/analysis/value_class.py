@@ -636,12 +636,22 @@ class _ValueClassInstance(DefaultVisitor):
         two.
 
         A count of allocations is not enough on its own: the rows of one
-        nested list share a region *and* a site, so `is_inside` rules out a
+        nested list share a region *and* a site, so `inside_at` rules out a
         region that is a place within a container, which stands for one list
         per element of it.
         """
         return (len(self.alias.sites_at(region)) == 1
-                and not self.alias.is_inside(region))
+                and not self.alias.inside_at(region))
+
+    def _sole_region(self, e: Expr) -> 'Region | None':
+        """*e*'s region, where it abstracts exactly one list.
+
+        Two lists sharing a region means a fact about one says nothing about
+        the other, so a caller refining "every element of *the* list" has
+        nothing to key on.
+        """
+        region = self._region_of(e)
+        return region if region is not None and self._one_list(region) else None
 
     def _elements_of(self, e: Expr) -> ValueClass:
         """What every element of the list *e* names currently is."""
@@ -979,8 +989,8 @@ class _ValueClassInstance(DefaultVisitor):
         clocks = self._scan_clocks.get(loop)
         if clocks is None:
             return []       # the guard sits inside the scan, over a half-filled mask
-        entry, exit = clocks
-        if not self._holds_the_scan(mask, exit):
+        entry, exited = clocks
+        if not self._holds_the_scan(mask, exited):
             return []
         # the mask's last definition must be the store the loop makes, or the
         # value `all` reads is not the one the predicate wrote
@@ -1001,17 +1011,16 @@ class _ValueClassInstance(DefaultVisitor):
             if (region := self._scanned_by(td, loop, entry)) is not None
         ]
 
-    def _holds_the_scan(self, mask: Expr, exit: int) -> bool:
-        """Whether *mask* still holds what the loop wrote into it at *exit*.
+    def _holds_the_scan(self, mask: Expr, exited: int) -> bool:
+        """Whether *mask* still holds what the loop wrote into it, the loop
+        having ended at the clock read *exited*.
 
         A redefinition of the name is caught by reaching defs -- the guard
         would not read the loop's phi at all -- but a store through another
         name for the same list is not, and neither is a callee's.
         """
-        region = self._region_of(mask)
-        if region is None or not self._one_list(region):
-            return False
-        return self._stamp(region) <= exit
+        region = self._sole_region(mask)
+        return region is not None and self._stamp(region) <= exited
 
     def _is_target(self, e: Expr, loop: ForStmt) -> bool:
         """Whether *e* names *loop*'s target."""
@@ -1033,10 +1042,8 @@ class _ValueClassInstance(DefaultVisitor):
             return None
         if not self._is_target(ref.index, loop):
             return None
-        region = self._region_of(ref.value)
-        # a region holding two lists means testing one says nothing about the
-        # other, exactly as in `_implied_universal`
-        if region is None or not self._one_list(region):
+        region = self._sole_region(ref.value)
+        if region is None:
             return None
         # a store since before the scan leaves the elements the predicate
         # tested different from the ones the list holds now
