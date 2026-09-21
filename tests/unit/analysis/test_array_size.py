@@ -13,9 +13,17 @@ from fpy2.analysis import (
     ListSize,
     TupleSize,
 )
-from fpy2.analysis.array_size import ArraySizeBound, concrete_size, is_size_eq
-from fpy2.ast.fpyast import ListSlice
-from fpy2.transform.path import walk_exprs
+from fpy2.analysis.array_size import (
+    ArraySizeBound,
+    concrete_size,
+    is_size_eq,
+    size_eq,
+    trip_count,
+)
+from fpy2.ast.fpyast import ForStmt, ListSlice
+from fpy2.strategies import monomorphize
+from fpy2.transform.path import walk_exprs, walk_stmts
+from fpy2.types import ListType, RealType
 from fpy2.utils import NamedId
 
 
@@ -2079,3 +2087,85 @@ class TestSizeAcrossACall:
 
         info = ArraySizeInfer.analyze(f.ast)
         assert concrete_size(info.ret_size.size) is None
+
+
+class TestTripCount:
+    """`trip_count`: how many times a `for` runs.
+
+    The point of it is that monomorphization rewrites `range(len(xs))` into
+    `range(32)`, and a consumer proving a loop covers a list must get the same
+    answer either side of that.
+    """
+
+    @staticmethod
+    def _count(func: fp.Function):
+        sizes = ArraySizeInfer.analyze(func.ast)
+        loop, = [s for _, s in walk_stmts(func.ast) if isinstance(s, ForStmt)]
+        return trip_count(loop.iterable, sizes)
+
+    @staticmethod
+    def _arg_size(func: fp.Function, name: str):
+        sizes = ArraySizeInfer.analyze(func.ast)
+        d = next(d for d in sizes.by_def if str(getattr(d, 'name', '')) == name)
+        return sizes.by_def[d].size
+
+    def test_over_a_length(self):
+        """Either side of monomorphization the answer is the list's own size:
+        a size variable before, the integer after."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            t = 0.0
+            for i in range(len(xs)):
+                t = t + xs[i]
+            return t
+
+        assert size_eq(self._count(f), self._arg_size(f, 'xs'))
+        assert isinstance(self._count(f), NamedId)
+
+        mono = monomorphize(f, args=[ListType(RealType(fp.FP16), 32)])
+        assert size_eq(self._count(mono), self._arg_size(mono, 'xs'))
+        assert self._count(mono) == 32
+
+    def test_over_a_literal(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            t = 0.0
+            for i in range(32):
+                t = t + i
+            return t
+
+        assert self._count(f) == 32
+
+    def test_a_negative_stop_runs_zero_times(self):
+        @fp.fpy
+        def f() -> fp.Real:
+            t = 0.0
+            for i in range(-3):
+                t = t + i
+            return t
+
+        assert self._count(f) == 0
+
+    def test_an_unknown_stop_is_top(self):
+        @fp.fpy
+        def f(n: fp.Real) -> fp.Real:
+            t = 0.0
+            for i in range(n):
+                t = t + i
+            return t
+
+        assert self._count(f) is None
+
+    def test_a_loop_over_a_list_is_top(self):
+        """Not a `range` at all -- it covers the list, but says so in a
+        spelling nothing asks this."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            t = 0.0
+            for x in xs:
+                t = t + x
+            return t
+
+        assert self._count(f) is None

@@ -20,6 +20,7 @@ from fpy2.ast import IndexedAssign, Pow, Sum, Var
 from fpy2.transform import HoistScale, TransformDeclined, walk_exprs
 from fpy2.transform.hoist_invariant import _from_before, _Nodes
 from fpy2.transform.utils import RoundingScopes
+from fpy2.types import ListType, RealType
 
 from .test_hoist_invariant import (
     _VALUES,
@@ -36,6 +37,14 @@ def _scheduled():
     """The motivating schedule as PR 2 receives it — #307 included, since it is
     what discharges the factor's free variables."""
     f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(fused_sum))))
+    return st.hoist_invariant(f)
+
+
+def _scheduled_mono():
+    """The same schedule after monomorphization, which turns the loops'
+    `range(len(xs))` into `range(32)`."""
+    f = st.monomorphize(fused_sum, args=[ListType(RealType(fp.FP16), 32)])
+    f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(f))))
     return st.hoist_invariant(f)
 
 
@@ -468,6 +477,14 @@ class TestTheLoweredForm:
     def test_the_fp32_branch_is_refused(self):
         """`sum(xs)` reads an argument, not a list a loop filled."""
         assert 'no scaled list write fills the reduction' in _why(_scheduled())
+
+    def test_a_literal_trip_count_covers_the_list(self):
+        """Monomorphization spells the trip count `range(32)` rather than
+        `range(len(xs))`; it is the same proof, and the pass reads both."""
+        out = _scheduled_mono()
+        site, = HoistScale.sites(out.ast)
+        assert site.resolve().format() == 'sum(ts)'
+        assert 'may not write every element' not in ' '.join(_why(out))
 
     def test_a_loop_that_may_not_cover_the_list_is_refused(self):
         assert HoistScale.sites(loop_may_not_cover.ast) == []

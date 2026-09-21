@@ -181,7 +181,7 @@ once the guard is read.  18 tests, all passing before any fix.
 uv run pytest tests/unit/transform/test_fused_sum_schedule.py
 ```
 
-### Phase 2 -- A literal trip count covers a list of known size
+### Phase 2 -- A literal trip count covers a list of known size.  **Done.**
 
 `fpy2/analysis/array_size.py` gains a `trip_count(iterable, def_use, sizes)`
 returning the loop's iteration count as an `ArraySize` -- the size of `v` for
@@ -189,9 +189,19 @@ returning the loop's iteration count as an `ArraySize` -- the size of `v` for
 `HoistScale._covers` becomes `is_size_eq(trip_count(...), <list size>)`.
 
 Separate from Phase 3 because it is a size question, not a class question, and
-because Phase 3 needs the same helper (see the coverage open item).  Flips row 4
-of the Phase 1 grid to 1 site; rows 1 and 2 are unchanged, their refusal being
-raised earlier.
+because Phase 3 needs the same helper.  Flips row 4 of the Phase 1 grid to 1
+site; rows 1 and 2 are unchanged, their refusal being raised earlier.
+
+As written: `trip_count` takes the iterable and an `ArraySizeAnalysis`, which
+already carries the `DefineUseAnalysis` it needs to resolve the stop
+expression.  A negative literal stop answers `0` -- it runs zero times, and so
+covers an empty list -- rather than a negative size nothing is equal to.
+`array_size._size_eq` is now public as `size_eq`, since `_covers` compares two
+*sizes* where it used to compare two whole bounds, which pointlessly required
+the element bounds to agree as well.  Tests: `TestTripCount` in
+`tests/unit/analysis/test_array_size.py` for both spellings and the three tops,
+and `test_a_literal_trip_count_covers_the_list` in `test_hoist_scale.py` for the
+monomorphized lowered form, where the site resolves to `sum(ts)`.
 
 ```
 uv run pytest tests/unit/transform/test_hoist_scale.py \

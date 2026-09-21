@@ -6,8 +6,9 @@ whether `fuse` ran before `comp_to_loop`, and whether the function was
 monomorphized.  Each costs a fact an analysis reads in only one spelling --
 `fuse` decides whether the `isfinite` guard arrives as a fold or as a
 materialised mask, and `monomorphize` whether the scaling loop's trip count is
-`len(xs)` or a literal.  Lose the first and the scale factor is not known
-finite; lose the second and the loop is not known to fill the list it scales.
+`len(xs)` or a literal.  The second no longer costs anything -- `trip_count`
+reads both spellings -- and the `mono` column is pinned so that it stays that
+way.  The first still does: without `fuse` the scale factor is not known finite.
 
 This module pins all four cells, so a phase that closes one of the gaps has to
 say which cell it changed.  See `docs/todos/finiteness-refinement.md`.
@@ -87,7 +88,6 @@ def _rounded(func) -> ValueClass:
 
 _NO_WRITE = 'no scaled list write fills the reduction'
 _NOT_FINITE = 'the factor may be an infinity or a NaN'
-_NOT_COVERED = 'the loop may not write every element of `ts`'
 
 _GRID = {
     # (fuse, mono): sites, every refusal in visit order.  The two `_NO_WRITE`s
@@ -95,7 +95,7 @@ _GRID = {
     (False, False): (0, [_NO_WRITE, _NOT_FINITE, _NO_WRITE]),
     (False, True): (0, [_NO_WRITE, _NOT_FINITE, _NO_WRITE]),
     (True, False): (1, [_NO_WRITE, _NO_WRITE]),
-    (True, True): (0, [_NO_WRITE, _NOT_COVERED, _NO_WRITE]),
+    (True, True): (1, [_NO_WRITE, _NO_WRITE]),
 }
 
 
