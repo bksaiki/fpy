@@ -1300,3 +1300,119 @@ class TestTheLoweredRounding:
         low = self._lowered()
         info = ValueClassInfer.analyze(low.ast)
         assert not info.is_finite(_find(low.ast, 'x >= 65536'))
+
+
+def _amax_unfused(fn, n: int = 4) -> ValueClass:
+    """The class of the ``max(...)`` in *fn*, lowered only as far as
+    :class:`CompToLoop`.
+
+    That leaves the guard as a materialised mask, where :func:`_amax_class`'s
+    full pipeline would have made a fold of it.
+    """
+    from fpy2.ast.fpyast import AMax
+    low = st.comp_to_loop(st.monomorphize(fn, args=_arg_types(n, 1, 0)))
+    info = ValueClassInfer.analyze(low.ast)
+    return next(v for e, v in info.by_expr.items() if isinstance(e, AMax))
+
+
+class TestAMaterialisedGuard:
+    """The same fact as :class:`TestAGuardOverAWholeList`, in the spelling
+    `CompToLoop` leaves when `ReduceFusion` has not run: the predicate lands in
+    a list, and the guard reads `all` of it.
+
+    What has to be proved is the same either way -- the loop covers the list,
+    and nothing has stored into it since.
+    """
+
+    def test_a_mask_reaches_the_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == ZERO | FINITE
+
+    def test_an_existential_mask_reaches_the_arm_it_fails_in(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if any([fp.isnan(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert not (_amax_unfused(f) & NAN)
+
+    def test_the_other_arm_learns_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert _amax_unfused(f) == TOP
+
+    def test_a_mask_written_by_hand(self):
+        """Nothing above is the shape `CompToLoop` mints, and this is not it
+        either -- the predicate is inlined and the mask is allocated here."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == ZERO | FINITE
+
+    def test_a_scan_over_a_prefix_says_nothing(self):
+        """`all(m)` forces every element of the mask, but only the first two
+        say anything about `xs`."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(2):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+
+    def test_a_store_between_the_scan_and_the_guard_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            xs[0] = fp.nan()
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+
+    def test_an_unbound_element_says_nothing(self):
+        """The refinement travels through the definition the predicate reads,
+        and testing the read in place gives it none.  A limitation, not a
+        soundness condition: every lowering binds the element."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                m[i] = fp.isfinite(xs[i])
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP

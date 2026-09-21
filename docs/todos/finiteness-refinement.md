@@ -68,7 +68,10 @@ which the emitter drops exactly when `_is_finite` holds of it.
 | yes | no  | **1** | -- | `ZERO\|FINITE` | (symbolic) | `ZERO\|FINITE` |
 | yes | yes | 0 | the loop may not write every element of `ts` | `ZERO\|FINITE` | **`S8`** | `ZERO\|FINITE` |
 
-Row 3 is the existing unit-test schedule (`tests/unit/transform/test_hoist_scale.py`,
+**That table is the state before Phases 2 and 3.**  After them every cell
+reads like row 3 -- one site -- and the monomorphized ones give `S8` and a
+finite product, so the three symptoms are closed on the schedule that produced
+them.  Row 3 is the existing unit-test schedule (`tests/unit/transform/test_hoist_scale.py`,
 via `fused_sum` in `test_hoist_invariant.py`), which is why none of this was
 caught.  Row 2 is the schedule that produced the listing on `digit-bound`.  The
 target is for row 2 to read like rows 3 and 4 together: 1 site, `S8`, finite
@@ -209,7 +212,7 @@ uv run pytest tests/unit/transform/test_hoist_scale.py \
   tests/unit/transform/test_fused_sum_schedule.py
 ```
 
-### Phase 3 -- Value classes through a materialised mask
+### Phase 3 -- Value classes through a materialised mask.  **Done.**
 
 `ValueClassAnalysis._implied_elements` gains an `AllOf` / `AnyOf` case: resolve
 the scanned list's region, find the `ForStmt` that filled it, require the write
@@ -230,6 +233,38 @@ for.
 Separate because it is the deeper fact and the one that stands alone: it closes
 symptoms 2 and 3 by itself, and with Phase 2 closes symptom 1.  Flips rows 1 and
 2 of the grid to match rows 3 and 4.
+
+As written, with three divergences from the plan:
+
+- **`_scanned` could not be reused.**  It holds the stamp of the list a loop
+  *iterates*, and a mask loop iterates a `range` -- the list being scanned is
+  read inside the body.  So `_entered` records the `_clock` each loop began at
+  instead, and the scanned region's stamp must not exceed it: no store to it
+  during the scan or between the scan and the guard.  That is one condition
+  where the fold has two, and it subsumes both.
+- **Coverage cost value-class analysis a new dependency.**  `trip_count` needs
+  an `ArraySizeAnalysis`, which `ValueClassInfer` did not build.  It is
+  computed lazily, on the first mask a program guards on, so nothing else pays
+  for it.
+- **The element has to be bound.**  The refinement travels through the
+  definition the predicate reads, so `x = xs[i]; m[i] = isfinite(x)` works and
+  `m[i] = isfinite(xs[i])` says nothing.  Every lowering binds it; a
+  hand-written program need not, and `test_an_unbound_element_says_nothing`
+  records that.
+
+Tests: `TestAMaterialisedGuard` in `tests/unit/analysis/test_value_class.py`,
+which mirrors `TestAGuardOverAWholeList` -- the same facts, lowered only as far
+as `CompToLoop` -- plus the prefix scan, the store between, and the unbound
+read.
+
+The grid collapsed further than expected: with both fixes in, all four cells
+hoist, so `fuse` no longer changes the answer either.  One thing the pins make
+explicit that the plan did not: **the clamp is load-bearing for symptom 2 on its
+own.**  `logb(0)` is `-inf` whatever the guard proves about the elements, so the
+unclamped program keeps `NEG_INF` in `e` and stays on `F32` even fused; only
+`max(logb(x), emin)` reaches `S8`.  Since that clamp is inserted by
+`digit-bound`'s `rescale_fixed` and not by this branch's, symptom 2 is only
+fully observable there.
 
 ```
 uv run pytest tests/unit/analysis/test_value_class.py \

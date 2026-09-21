@@ -6,11 +6,11 @@ whether `fuse` ran before `comp_to_loop`, and whether the function was
 monomorphized.  Each costs a fact an analysis reads in only one spelling --
 `fuse` decides whether the `isfinite` guard arrives as a fold or as a
 materialised mask, and `monomorphize` whether the scaling loop's trip count is
-`len(xs)` or a literal.  The second no longer costs anything -- `trip_count`
-reads both spellings -- and the `mono` column is pinned so that it stays that
-way.  The first still does: without `fuse` the scale factor is not known finite.
+`len(xs)` or a literal.  Neither costs anything now -- `trip_count` reads both
+trip counts and `_implied_mask` both guards -- and every cell of the grid gives
+the same answer.
 
-This module pins all four cells, so a phase that closes one of the gaps has to
+This module pins all four, so a change that costs one of the facts again has to
 say which cell it changed.  See `docs/todos/finiteness-refinement.md`.
 """
 
@@ -87,58 +87,47 @@ def _rounded(func) -> ValueClass:
 # The grid
 
 _NO_WRITE = 'no scaled list write fills the reduction'
-_NOT_FINITE = 'the factor may be an infinity or a NaN'
 
-_GRID = {
-    # (fuse, mono): sites, every refusal in visit order.  The two `_NO_WRITE`s
-    # are the program's other reductions and are not what this page is about.
-    (False, False): (0, [_NO_WRITE, _NOT_FINITE, _NO_WRITE]),
-    (False, True): (0, [_NO_WRITE, _NOT_FINITE, _NO_WRITE]),
-    (True, False): (1, [_NO_WRITE, _NO_WRITE]),
-    (True, True): (1, [_NO_WRITE, _NO_WRITE]),
-}
+_CELLS = [(False, False), (False, True), (True, False), (True, True)]
 
 
 @pytest.mark.parametrize('program', _PROGRAMS)
-@pytest.mark.parametrize('fuse, mono', _GRID)
+@pytest.mark.parametrize('fuse, mono', _CELLS)
 class TestGrid:
-    """What `HoistScale` makes of each schedule.  The clamp does not enter into
-    it: both programs refuse in the same places, for the same reasons."""
+    """What `HoistScale` makes of each schedule: one site, in every cell.  The
+    two refusals left are the program's other two reductions, which is a
+    separate question.  The clamp does not enter into it -- both programs
+    refuse in the same places, for the same reasons."""
 
-    def test_sites(self, program, fuse, mono):
+    def test_it_hoists_the_scale(self, program, fuse, mono):
         out = _sched(_PROGRAMS[program], fuse=fuse, mono=mono)
-        assert len(HoistScale.sites(out.ast)) == _GRID[(fuse, mono)][0]
+        site, = HoistScale.sites(out.ast)
+        assert site.resolve().format() == 'sum(ts)'
 
-    def test_refusals(self, program, fuse, mono):
+    def test_the_other_reductions_are_refused(self, program, fuse, mono):
         out = _sched(_PROGRAMS[program], fuse=fuse, mono=mono)
-        assert _why(out) == _GRID[(fuse, mono)][1]
+        assert _why(out) == [_NO_WRITE, _NO_WRITE]
 
 
+@pytest.mark.parametrize('fuse', [False, True])
 class TestFiniteness:
     """What the guard is worth, on the monomorphized schedules -- the only ones
-    where a storage question has an answer."""
+    where a storage question has an answer.  Both spellings of it answer alike,
+    so what is left to see is the clamp."""
 
-    def test_the_mask_refines_nothing(self):
-        """Unfused, the guard is a materialised mask and no element is known
-        finite, so nothing downstream of it is either."""
-        for program in _PROGRAMS.values():
-            out = _sched(program, fuse=False, mono=True)
-            fmt, cls = _exponent(out)
-            assert ValueClass.INF & cls
-            assert choose_storage(fmt, cls) is CppScalar.F32
-            assert _rounded(out) is TOP
-
-    def test_the_fold_refines_the_elements(self):
-        """Fused, the guard is a fold the analysis reads, and the clamp is what
-        turns that into an integer exponent: without it `logb(0)`'s `-inf`
-        survives the max and no integer storage holds `e`."""
-        plain = _sched(fused_sum, fuse=True, mono=True)
-        fmt, cls = _exponent(plain)
-        assert cls == ValueClass.NEG_INF | FINITE
-        assert choose_storage(fmt, cls) is CppScalar.F32
-
-        clamped = _sched(fused_sum_clamped, fuse=True, mono=True)
-        fmt, cls = _exponent(clamped)
+    def test_the_clamped_exponent_is_an_integer(self, fuse):
+        out = _sched(fused_sum_clamped, fuse=fuse, mono=True)
+        fmt, cls = _exponent(out)
         assert cls == FINITE
         assert choose_storage(fmt, cls) is CppScalar.S8
-        assert _rounded(clamped) == FINITE
+        # and so the emitter's `std::isfinite` assertion goes
+        assert _rounded(out) == FINITE
+
+    def test_without_the_clamp_logb_of_zero_survives(self, fuse):
+        """`logb(0)` is `-inf` whatever the elements are, and no integer
+        storage holds one -- so the clamp is load-bearing for the exponent's
+        type, guard or no guard."""
+        out = _sched(fused_sum, fuse=fuse, mono=True)
+        fmt, cls = _exponent(out)
+        assert cls == ValueClass.NEG_INF | FINITE
+        assert choose_storage(fmt, cls) is CppScalar.F32
