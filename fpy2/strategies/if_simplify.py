@@ -20,10 +20,15 @@ def simplify_if(
     change whether -- or which -- value the function produces is declined under
     every mode, raising :class:`~fpy2.transform.TransformDeclined`: `return`,
     `assert`, an effect, a list write, `while`, `for`, `fp.cast`, a call to
-    another FPy function, and any operation under an `ASSERT` overflow
-    context.  The last is keyed on whether an operation consults the rounding
-    context, not on its node class -- all arithmetic does, so `x * x` overflows
-    there exactly as `fp.round(x)` would.
+    another FPy function, any operation under an `ASSERT` overflow context,
+    and, under a context that cannot hold an infinity or NaN, an operation
+    that could produce one -- a guard excluding the bad input is load-bearing
+    there.  That is either an operation with a pole at a finite operand
+    (`fp.logb(0)`, `fp.sqrt(-1)`, `fp.acos(2)`), or, where the format is
+    bounded and rounds an overflow to infinity, any operation at all.  The
+    `ASSERT` case is keyed on whether an operation consults the rounding
+    context, not on its node class, so `x * x` overflows there exactly as
+    `fp.round(x)` would.
 
     ``where`` names one site: an index counting `if` statements in visit
     order, or a cursor or region, which takes the sites at or beneath it.

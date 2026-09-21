@@ -12,6 +12,9 @@ from ..number import (
     IEEEContext,
     MPBFixedContext,
     MPBFloatContext,
+    MPFixedContext,
+    MPFloatContext,
+    MPSFloatContext,
     OverflowMode,
     SMFixedContext,
 )
@@ -25,6 +28,109 @@ from .utils import SiteRewriter, check_where
 
 # Scoped statements (`with`) are absent on purpose: the scan descends into
 # them, since their contents become unconditional too.
+_POLE_OPS: frozenset[type[Expr]] = frozenset({
+    Acos, Acosh, Asin, Atanh, Div, Fmod, Lgamma, Log, Log10, Log1p, Log2,
+    Logb, Mod, Pow, Remainder, Sqrt, Tgamma,
+})
+"""Operations with a pole or branch cut at a finite operand.
+
+IEEE 754 §7.2 (invalid) and §7.3 (divideByZero) give these a case where a
+finite input yields an infinity or NaN whatever the format's range: `logb(0)`,
+`sqrt(-1)`, `acos(2)`.  An operand can never *already* be a special under a
+context that cannot hold one, since producing it would have raised earlier.
+Overflow is the other route and is handled separately -- it turns on the
+context, not the operation.
+"""
+
+
+_MAX_INLINE_GROWTH = 4
+"""How far substituting an arm's temps may grow it before it is hoisted instead.
+
+A name bound in an arm and read twice is duplicated into both readers; this
+bounds the blowup when arms nest.
+"""
+
+
+class _Clone(DefaultTransformVisitor):
+    """Deep copy.  A substituted expression cannot be shared between two
+    occurrences: the analyses key on node identity."""
+
+    def apply(self, e: Expr) -> Expr:
+        return self._visit_expr(e, None)
+
+
+class _Subst(DefaultTransformVisitor):
+    """Replaces names by expressions, one fresh copy per occurrence."""
+
+    def __init__(self, env: dict[NamedId, Expr]):
+        super().__init__()
+        self.env = env
+
+    def _visit_var(self, e: Var, ctx: None):
+        sub = self.env.get(e.name)
+        return Var(e.name, e.loc) if sub is None else _Clone().apply(sub)
+
+    def apply(self, e: Expr) -> Expr:
+        return self._visit_expr(e, None)
+
+
+class _Names(DefaultVisitor):
+    """Names an expression reads."""
+
+    def __init__(self):
+        super().__init__()
+        self.names: set[NamedId] = set()
+
+    def _visit_var(self, e: Var, ctx):
+        self.names.add(e.name)
+
+
+def _reads(e: Expr) -> set[NamedId]:
+    v = _Names()
+    v._visit_expr(e, None)
+    return v.names
+
+
+class _Size(DefaultVisitor):
+    """Expression nodes beneath a node, to bound substitution growth."""
+
+    def __init__(self):
+        super().__init__()
+        self.n = 0
+
+    def _visit_expr(self, e: Expr, ctx):
+        self.n += 1
+        return super()._visit_expr(e, ctx)
+
+
+def _size(nodes) -> int:
+    v = _Size()
+    for n in nodes:
+        v._visit_expr(n, None) if isinstance(n, Expr) else v._visit_statement(n, None)
+    return v.n
+
+
+def _inline_arm(body: StmtBlock) -> dict[NamedId, Expr] | None:
+    """Each name the arm assigns, as an expression over the pre-`if` names --
+    or `None` if the arm cannot be reduced to one.
+
+    An arm expressed this way goes *inside* the `IfExpr`, which is lazy, so it
+    runs only when the guard held, exactly as the `if` statement did.  Hoisting
+    it instead would make it unconditional, which is what the refusals in
+    :class:`_Unhoistable` are about; an arm that inlines needs none of them.
+    """
+    env: dict[NamedId, Expr] = {}
+    for stmt in body.stmts:
+        # anything but a plain assignment -- a loop, a list write, an `if`
+        # left unrewritten -- has no expression form
+        if not isinstance(stmt, Assign) or not isinstance(stmt.target, NamedId):
+            return None
+        env[stmt.target] = _Subst(env).apply(stmt.expr)
+    if _size(env.values()) > _MAX_INLINE_GROWTH * _size(body.stmts):
+        return None
+    return env
+
+
 _UNHOISTABLE: dict[type[Stmt], str] = {
     ReturnStmt: 'a `return` escapes the branch and has no expression form',
     AssertStmt: 'an `assert` would run unconditionally and can abort',
@@ -132,6 +238,29 @@ class _Unhoistable(DefaultVisitor):
                 self._abort(
                     'an operation under an `ASSERT` overflow context can abort'
                 )
+            # such a context raises rather than yield the special, and a
+            # guard is often what keeps the operation from producing one
+            if isinstance(resolved, (
+                MPBFixedContext, MPBFloatContext, MPFixedContext,
+                MPFloatContext, MPSFloatContext,
+            )):
+                if type(e) in _POLE_OPS and not (
+                    resolved.enable_inf and resolved.enable_nan
+                ):
+                    self._abort(
+                        f'`{type(e).__name__.lower()}` can produce an infinity '
+                        'or NaN, which this context cannot hold'
+                    )
+                # IEEE 754 §7.4: overflow rounds to an infinity, and any
+                # rounded operation can overflow a bounded format
+                if isinstance(resolved, (
+                    MPBFixedContext, MPBFloatContext,
+                )) and not resolved.enable_inf \
+                        and resolved.overflow is OverflowMode.OVERFLOW:
+                    self._abort(
+                        'an operation can overflow to an infinity, which this '
+                        'context cannot hold'
+                    )
         else:
             self._cannot_prove(
                 'an operation under an unresolved context may abort on overflow'
@@ -238,15 +367,25 @@ class _SimplifyIfInstance(SiteRewriter):
         ) if iff is not None else []
 
         renames: list[dict[NamedId, NamedId]] = []
+        inlined: list[dict[NamedId, Expr]] = []
         merged: set[NamedId] = set()
         for src, body in zip((ift, iff), bodies):
             if src is None or body is None:
                 renames.append({})
+                inlined.append({})
                 continue
             mutated = sorted(self.def_use.mutated_in(src))
+            merged |= set(mutated) | set(intros)
+            # an arm that reduces to expressions goes inside the `IfExpr`,
+            # which is lazy, so it keeps its guard
+            env = _inline_arm(body)
+            if env is not None:
+                renames.append({})
+                inlined.append(env)
+                continue
             rename = {v: self.gensym.refresh(v) for v in mutated + intros}
             renames.append(rename)
-            merged |= rename.keys()
+            inlined.append({})
             # a mutated name carries its pre-`if` value in; an introduced one
             # has none to carry
             for v in mutated:
@@ -254,15 +393,33 @@ class _SimplifyIfInstance(SiteRewriter):
             stmts.extend(RenameTarget.apply_block(body, rename).stmts)
 
         # Over the union: a name mutated in one arm only still needs a merge,
-        # and takes its pre-`if` name on the other side.
-        for var in sorted(merged):
-            e = IfExpr(
-                cond,
-                Var(renames[0].get(var, var), None),
-                Var(renames[1].get(var, var), None),
-                None,
-            )
-            stmts.append(Assign(var, None, e, None))
+        # and takes its pre-`if` value on the other side.
+        def side(i: int, var: NamedId) -> Expr:
+            """*var* as arm *i* leaves it: the expression an inlined arm
+            reduced it to, else the name the hoisted arm assigned."""
+            e = inlined[i].get(var)
+            if e is None:
+                return Var(renames[i].get(var, var), None)
+            return e
+
+        exprs: dict[NamedId, Expr] = {
+            var: IfExpr(cond, side(0, var), side(1, var), None)
+            for var in sorted(merged)
+        }
+
+        # An inlined arm leaves pre-`if` names in the merges, so a merge can
+        # read one an earlier merge has already overwritten.  Those go through
+        # a temporary: the merges happen at once.
+        reads = {var: _reads(e) for var, e in exprs.items()}
+        shared = {
+            var for var in exprs
+            if any(var in reads[o] for o in exprs if o != var)
+        }
+        tmp = {var: self.gensym.refresh(var) for var in sorted(shared)}
+        for var, e in exprs.items():
+            stmts.append(Assign(tmp.get(var, var), None, e, None))
+        for var in sorted(shared):
+            stmts.append(Assign(var, None, Var(tmp[var], None), None))
         return stmts
 
     def _visit_if1(self, stmt: If1Stmt, ctx: list[Stmt]):
