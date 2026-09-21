@@ -350,6 +350,9 @@ class _Regions:
     def sites_at(self, c: Region) -> frozenset[AllocSite]:
         return frozenset(self._sites.get(self.find(c), ()))
 
+    def is_slot(self, c: Region) -> bool:
+        return self._slots.get(self.find(c), 0) > 0
+
     def referrers(self, c: Region) -> int:
         root = self.find(c)
         return len(self._names.get(root, ())) + self._slots.get(root, 0)
@@ -515,6 +518,17 @@ class AliasAnalysis:
     def sites_at(self, region: Region | None) -> frozenset[AllocSite]:
         """The allocations that may live in *region*."""
         return frozenset() if region is None else self._regions.sites_at(region)
+
+    def inside_at(self, region: Region) -> bool:
+        """Whether *region* is a place *within* a container — a list's elements,
+        a tuple's field — rather than a place a name denotes.
+
+        A container holds many elements, so such a region stands for one list
+        per element of its container, however few allocations reach it.  That
+        is the difference between "may be the same list", which a region
+        answers, and "is exactly one list", which it does not.
+        """
+        return self._regions.is_slot(region)
 
     def is_shared(self, site: AllocSite) -> bool:
         """Whether more than one place may refer to *site*."""

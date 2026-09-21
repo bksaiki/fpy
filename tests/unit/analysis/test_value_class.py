@@ -21,7 +21,7 @@ from fpy2.analysis.value_class import (
     TupleClass,
     join_class,
     _ATOMS, _LOGB, _POW_BIG_BASE, _POW_ONE_BASE, _POW_SMALL_BASE,
-    _exact_add, _exact_mul, _exact_select,
+    _exact_add, _exact_mul, _exact_select, _exact_sum,
     _exact_sub, _map,
 )
 from fpy2.ast.fpyast import Expr, Var
@@ -163,6 +163,11 @@ def _pow_one_fp64(a: fp.Real) -> fp.Real:
 
 
 @fp.fpy(ctx=fp.REAL)
+def _sum_list(xs: list[fp.Real]) -> fp.Real:
+    return sum(xs)
+
+
+@fp.fpy(ctx=fp.REAL)
 def _max2(a: fp.Real, b: fp.Real) -> fp.Real:
     return max(a, b)
 
@@ -223,6 +228,43 @@ class TestTransferFunctionsAreSound:
 
     def test_min(self):
         self._sweep(lambda a, b: _exact_select([a, b], is_max=False), _min2, 2, rows=25)
+
+    def test_sum(self):
+        """`_exact_sum` predicts from what the *elements* are, so this sweeps
+        lists drawn from one atom and from two.  The mixed lists are where the
+        closure earns itself: an infinity and its opposite make a NaN that no
+        element was, and two finites a zero.
+
+        The empty list is in the sweep because it is the one case with no
+        elements to predict from -- it sums to zero whatever the atom says.
+        """
+        bad = []
+        covered = set()
+        for a in _ATOMS:
+            for b in _ATOMS:
+                want = _exact_sum(a | b)
+                for va in _SAMPLES[a][:3]:
+                    for vb in _SAMPLES[b][:3]:
+                        for xs in ([], [va], [va, vb], [va, vb, va]):
+                            try:
+                                got = class_of(_sum_list(xs))
+                            except Exception:   # noqa: BLE001
+                                continue        # no result: says nothing
+                            if xs:
+                                covered.add((a, b))   # `[]` says nothing
+                            if not (got & want):
+                                bad.append(f'sum({xs}): {got} not in {want}')
+        assert not bad, '; '.join(bad[:6])
+        assert len(covered) == len(_ATOMS) ** 2
+
+    def test_the_rows_the_closure_widens(self):
+        """The row the rule exists for: `ts` holding only finites makes
+        `sum(ts)` finite, where reading the elements' own class off the list
+        would have said nothing at all."""
+        assert _exact_sum(ZERO | FINITE) == ZERO | FINITE
+        assert _exact_sum(FINITE) == ZERO | FINITE
+        assert _exact_sum(INF) == NAN | ZERO | INF
+        assert _exact_sum(ValueClass(0)) == ZERO      # only the empty list
 
     def test_logb(self):
         self._sweep(lambda a: _map(_LOGB, a), _logb, 1, rows=5)
@@ -1300,3 +1342,266 @@ class TestTheLoweredRounding:
         low = self._lowered()
         info = ValueClassInfer.analyze(low.ast)
         assert not info.is_finite(_find(low.ast, 'x >= 65536'))
+
+
+def _amax_unfused(fn, n: int = 4, *, arg_types: list | None = None) -> ValueClass:
+    """The class of the ``max(...)`` in *fn*, lowered only as far as
+    :class:`CompToLoop`.
+
+    That leaves the guard as a materialised mask, where :func:`_amax_class`'s
+    full pipeline would have made a fold of it.  A hand-written fold reaches
+    this unchanged, which is what lets the two spellings be compared.
+    """
+    from fpy2.ast.fpyast import AMax
+    args = arg_types if arg_types is not None else _arg_types(n, 1, 0)
+    low = st.comp_to_loop(st.monomorphize(fn, args=args))
+    info = ValueClassInfer.analyze(low.ast)
+    return next(v for e, v in info.by_expr.items() if isinstance(e, AMax))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _clobber_mask(m) -> fp.Real:
+    m[0] = True
+    return 0.0
+
+
+class TestAMaterialisedGuard:
+    """The same fact as :class:`TestAGuardOverAWholeList`, in the spelling
+    `CompToLoop` leaves when `ReduceFusion` has not run: the predicate lands in
+    a list, and the guard reads `all` of it.
+
+    What has to be proved is the same either way -- the loop covers the list,
+    and nothing has stored into it since.  The mask needs the second half too,
+    which the fold does not: it is a *list*, so a store through another name
+    for it is invisible to the reaching def the guard reads.
+    """
+
+    def test_a_mask_reaches_the_elements(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == ZERO | FINITE
+
+    def test_an_existential_mask_reaches_the_arm_it_fails_in(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if any([fp.isnan(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert not (_amax_unfused(f) & NAN)
+
+    def test_the_other_arm_learns_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            if all([fp.isfinite(x) for x in xs]):
+                return 0.0
+            else:
+                return max(xs)
+
+        assert _amax_unfused(f) == TOP
+
+    def test_a_mask_written_by_hand(self):
+        """Nothing above is the shape `CompToLoop` mints, and this is not it
+        either -- the predicate is inlined and the mask is allocated here."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == ZERO | FINITE
+
+    def test_a_scan_over_a_prefix_says_nothing(self):
+        """`all(m)` forces every element of the mask, but only the first two
+        say anything about `xs`."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(2):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+
+    def test_a_store_between_the_scan_and_the_guard_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            xs[0] = fp.nan()
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+
+    def test_an_unbound_element_says_nothing(self):
+        """The refinement travels through the definition the predicate reads,
+        and testing the read in place gives it none.  A limitation, not a
+        soundness condition: every lowering binds the element."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                m[i] = fp.isfinite(xs[i])
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+
+    def test_a_guard_inside_the_scan_says_nothing(self):
+        """`all(m)` on round `i` covers the rounds before it, not the list.
+        The fold bails here because `_scanned` is dropped before the body; the
+        mask needs `_scan_clocks` dropped for the same reason."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for j in range(4):
+                m[j] = True         # so the guard passes on round 0
+            r = 0.0
+            for i in range(4):
+                if all(m):
+                    r = max(xs)
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            return r
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+    def test_a_store_through_another_name_for_the_mask_says_nothing(self):
+        """A direct `m[0] = True` redefines `m`, so the guard no longer reads
+        the loop's phi and this never arises.  Through an alias it does."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            n = m
+            n[0] = True
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+    def test_a_mask_handed_to_a_callee_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            t = _clobber_mask(m)
+            if all(m):
+                return max(xs)
+            else:
+                return t
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+    def test_a_second_write_earlier_in_the_round_says_nothing(self):
+        """Only the mask's last definition in the body is read, so a store
+        before it is invisible -- and one at the top of round `k` undoes round
+        `k - 1`."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                m[0] = True
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+
+_MATRIX = [ListType(ListType(RealType(fp.FP32), 4), 2)]
+
+
+class TestAGuardOverARow:
+    """Both guards rest on `_one_list`, and the rows of one nested list share a
+    region *and* an allocation site -- so counting sites is not what "a single
+    list" means, and a fact proved about one row would land on every other.
+
+    Neither spelling is special here; the predicate is.
+    """
+
+    def test_a_fold_over_a_row_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            r1 = xss[1]
+            ok = True
+            for x in r0:
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(r1)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == TOP
+        assert math.isinf(f([[1.0, 2.0, 3.0, 4.0], [float('inf'), 0.0, 0.0, 0.0]]))
+
+    def test_a_mask_over_a_row_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            r1 = xss[1]
+            m = fp.empty(4)
+            for i in range(4):
+                x = r0[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(r1)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == TOP
+        assert math.isinf(f([[1.0, 2.0, 3.0, 4.0], [float('inf'), 0.0, 0.0, 0.0]]))
+
+    def test_the_row_the_guard_actually_scanned_learns_nothing_either(self):
+        """The conservative half of the trade: `r0` really is all-finite, and
+        this gives that up too.  Separating the rows is a precision question
+        for `AliasAnalysis`, not a soundness one."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            m = fp.empty(4)
+            for i in range(4):
+                x = r0[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(r0)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == TOP

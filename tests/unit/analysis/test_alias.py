@@ -8,6 +8,14 @@ distinguished from a shared one.
 import fpy2 as fp
 
 from fpy2.analysis import Alias, DefineUse
+from fpy2.ast.fpyast import Var
+from fpy2.transform.path import walk_exprs
+
+
+def _find_var(func: fp.Function, name: str):
+    """The first `Var` in *func* that reads *name*."""
+    return next(e for _, e in walk_exprs(func.ast)
+                if isinstance(e, Var) and str(e.name) == name)
 
 
 def _sites(func: fp.Function):
@@ -284,6 +292,42 @@ class TestNesting:
         a, owned, shared = _sites(f)
         assert sorted(s.depth for s in shared) == [1, 2]
         assert [s.depth for s in owned] == [0]
+
+
+class TestInside:
+    """A region that is a place *within* a container stands for one list per
+    element of it, so "one allocation site" does not mean "one list"."""
+
+    def test_a_row_is_inside_its_matrix(self):
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                row = xss[0]
+                return row[0]
+
+        a = Alias.analyze(f.ast)
+        outer = a.region_of_expr(_find_var(f, 'xss'))
+        row = a.region_of_expr(_find_var(f, 'row'))
+        assert outer is not None and row is not None
+        assert not a.inside_at(outer)
+        assert a.inside_at(row)
+
+    def test_two_rows_of_one_matrix_are_one_region(self):
+        """Why the query is needed: they share a region *and* a site, so
+        neither `may_alias` nor a count of sites separates them."""
+        @fp.fpy
+        def f(xss: list[list[fp.Real]]) -> fp.Real:
+            with fp.FP64:
+                r0 = xss[0]
+                r1 = xss[1]
+                return r0[0] + r1[0]
+
+        a = Alias.analyze(f.ast)
+        r0 = a.region_of_expr(_find_var(f, 'r0'))
+        r1 = a.region_of_expr(_find_var(f, 'r1'))
+        assert r0 is not None and r0 is r1
+        assert len(a.sites_at(r0)) == 1
+        assert a.inside_at(r0)
 
 
 class TestMayAlias:

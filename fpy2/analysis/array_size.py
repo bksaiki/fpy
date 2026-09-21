@@ -40,6 +40,8 @@ __all__ = [
     'TupleSize',
     'concrete_size',
     'is_size_eq',
+    'size_eq',
+    'trip_count',
 ]
 
 
@@ -99,9 +101,12 @@ def list_depth(bound: 'ArraySizeBound') -> int:
     return depth
 
 
-def _size_eq(a: ArraySize, b: ArraySize) -> bool:
+def size_eq(a: ArraySize, b: ArraySize) -> bool:
     """Are two (resolved) sizes provably equal — identical and not an
-    untracked unknown (``None`` is never equal, even to itself)?"""
+    untracked unknown (``None`` is never equal, even to itself)?
+
+    One size; :func:`is_size_eq` compares two whole bounds, element bounds and
+    all."""
     return a is not None and a == b
 
 
@@ -149,7 +154,7 @@ def is_size_eq(b1: ArraySizeBound, b2: ArraySizeBound) -> bool:
     at each level as equal."""
     match b1, b2:
         case ListSize(), ListSize():
-            return _size_eq(b1.size, b2.size) and is_size_eq(b1.elt, b2.elt)
+            return size_eq(b1.size, b2.size) and is_size_eq(b1.elt, b2.elt)
         case TupleSize(), TupleSize():
             return (len(b1.elts) == len(b2.elts)
                     and all(is_size_eq(a, b) for a, b in zip(b1.elts, b2.elts)))
@@ -175,6 +180,25 @@ class ArraySizeAnalysis:
     by_def: dict[Definition, ArraySizeBound]
     ret_size: ArraySizeBound
     def_use: DefineUseAnalysis
+
+
+def trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> ArraySize:
+    """How many times a ``for`` over *iterable* runs.
+
+    ``range(len(v))`` gives ``v``'s size and ``range(32)`` the integer, so a
+    consumer asking whether a loop covers a list gets the same answer either
+    side of monomorphization, which rewrites the first spelling into the
+    second.  Top for anything else, and top is never equal to anything.
+    """
+    if not isinstance(iterable, Range1):
+        return None
+    stop = sizes.def_use.defining_expr(iterable.arg)
+    if isinstance(stop, Integer):
+        return max(stop.val, 0)     # a negative stop runs zero times
+    if not isinstance(stop, Len):
+        return None
+    bound = sizes.by_expr.get(stop.arg)
+    return bound.size if isinstance(bound, ListSize) else None
 
 
 #####################################################################

@@ -70,6 +70,13 @@ from ..number import REAL, Context, Float
 from ..number.context.format import Format
 from ..types import RealType, Type
 from .alias import Alias, AliasAnalysis, Region
+from .array_size import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
+    ListSize,
+    size_eq,
+    trip_count,
+)
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
 from .define_use import (
     AssignDef,
@@ -316,6 +323,24 @@ def _exact_sub(a: ValueClass, b: ValueClass) -> ValueClass:
     return _exact_add(a, _negate(b))
 
 
+def _exact_sum(elt: ValueClass) -> ValueClass:
+    """``sum(xs)`` for a list whose every element is in *elt*.
+
+    An accumulation, not a selection: how many additions there are is not
+    known, so this is the closure of :func:`_exact_add` over *elt*.  That is
+    wider than *elt* in both directions a single add is -- two finites cancel
+    to a zero, two opposite infinities make a NaN.
+
+    The zero is there whatever the elements are, an empty list summing to one.
+    """
+    out = _ZERO | elt
+    while True:
+        grown = out | _exact_add(out, elt)
+        if grown == out:
+            return out
+        out = grown
+
+
 def _exact_mul(a: ValueClass, b: ValueClass) -> ValueClass:
     if not (a and b):
         return _BOT
@@ -507,6 +532,17 @@ class _ValueClassInstance(DefaultVisitor):
     :attr:`_touched` stamp at the exit.  Absent means the loop's accumulator
     says nothing; see :meth:`_implied_universal`."""
 
+    _sizes_cache: 'ArraySizeAnalysis | None'
+
+    _scan_clocks: dict[ForStmt, tuple[int, int]]
+    """The :attr:`_clock` each loop began and ended at, for
+    :meth:`_implied_mask`: a list read *inside* a loop is not the one
+    :attr:`_scanned` speaks for, so the entry clock is what says nothing has
+    stored into it since before the scan, and the exit clock the same for the
+    mask the loop filled.  Dropped before the body for the reason
+    :attr:`_scanned` is -- a guard *inside* the scan reads a half-filled
+    mask."""
+
     _stored: dict[Region, ValueClass]
     """Every class ever stored into each region, for a consumer choosing
     storage: a buffer holds what a list *ever* held.  Seeded at bottom only
@@ -541,6 +577,8 @@ class _ValueClassInstance(DefaultVisitor):
         self._clock = 0
         self._touched = {}
         self._scanned = {}
+        self._scan_clocks = {}
+        self._sizes_cache = None
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
@@ -549,6 +587,14 @@ class _ValueClassInstance(DefaultVisitor):
     @property
     def def_use(self) -> DefineUseAnalysis:
         return self.type_info.def_use
+
+    @property
+    def sizes(self) -> ArraySizeAnalysis:
+        """Array sizes, computed on first use.  Only :meth:`_implied_mask` wants
+        them, and only a program that guards on a mask reaches it."""
+        if self._sizes_cache is None:
+            self._sizes_cache = ArraySizeInfer.analyze(self.func)
+        return self._sizes_cache
 
     def _by_elt(self) -> dict[Definition, ValueClass]:
         """:attr:`ValueClassAnalysis.by_elt`, per definition rather than per
@@ -588,8 +634,24 @@ class _ValueClassInstance(DefaultVisitor):
         then "every element of *the* list" names neither of them.  Only a count
         answers it, and a region with no site is as unanswerable as one with
         two.
+
+        A count of allocations is not enough on its own: the rows of one
+        nested list share a region *and* a site, so `inside_at` rules out a
+        region that is a place within a container, which stands for one list
+        per element of it.
         """
-        return len(self.alias.sites_at(region)) == 1
+        return (len(self.alias.sites_at(region)) == 1
+                and not self.alias.inside_at(region))
+
+    def _sole_region(self, e: Expr) -> 'Region | None':
+        """*e*'s region, where it abstracts exactly one list.
+
+        Two lists sharing a region means a fact about one says nothing about
+        the other, so a caller refining "every element of *the* list" has
+        nothing to key on.
+        """
+        region = self._region_of(e)
+        return region if region is not None and self._one_list(region) else None
 
     def _elements_of(self, e: Expr) -> ValueClass:
         """What every element of the list *e* names currently is."""
@@ -800,6 +862,10 @@ class _ValueClassInstance(DefaultVisitor):
             case Or() if not truth:
                 return [i for a in cond.args
                         for i in self._implied_elements(a, False)]
+            case AllOf() if truth:
+                return self._implied_mask(cond.arg, True)
+            case AnyOf() if not truth:
+                return self._implied_mask(cond.arg, False)
             case Var():
                 src = self.def_use.defining_expr(cond)
                 if src is not cond:
@@ -886,6 +952,110 @@ class _ValueClassInstance(DefaultVisitor):
         if len(rest) == len(fold.args):
             return []
         return [i for a in rest for i in self._implied(a, truth)]
+
+    def _implied_mask(
+        self, mask: Expr, truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """What a *materialised* ``all`` / ``any`` being *truth* says about the
+        list the mask was computed from.
+
+        :class:`~fpy2.transform.CompToLoop` leaves the predicate in a list
+        rather than in a fold, which :meth:`_implied_universal` cannot match:
+
+        .. code-block:: python
+
+            m = fp.empty(32)            # `all([isfinite(x) for x in xs])`
+            for i in range(32):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m): ...
+
+        ``all(m)`` true forces every element of ``m``, and the loop wrote
+        ``p(xs[i])`` into element ``i`` -- so where it ran once per element of
+        ``xs``, what ``p`` says about the element it bound it says about every
+        one.  Dually for ``any``, which speaks when it is false.
+
+        Nothing here names what the lowering minted: a hand-written loop over
+        a mask matches too, so long as it *binds* the element -- the
+        refinement travels through the definition the predicate reads, and
+        `m[i] = isfinite(xs[i])` gives it none.
+        """
+        if not isinstance(mask, Var):
+            return []
+        d = self.def_use.use_to_def.get(mask)
+        if not isinstance(d, PhiDef) or not isinstance(d.site, ForStmt):
+            return []
+        loop = d.site
+        clocks = self._scan_clocks.get(loop)
+        if clocks is None:
+            return []       # the guard sits inside the scan, over a half-filled mask
+        entry, exited = clocks
+        if not self._holds_the_scan(mask, exited):
+            return []
+        # the mask's last definition must be the store the loop makes, or the
+        # value `all` reads is not the one the predicate wrote
+        write = self.def_use.defs[d.rhs]
+        if not isinstance(write, AssignDef) or not isinstance(write.site, IndexedAssign):
+            return []
+        # and that store must read what the loop carried in: an earlier store in
+        # the same round leaves an element no later round rewrites
+        idx = self.def_use.def_to_idx.get(d)
+        if idx is None or write.prev != idx:
+            return []
+        store = write.site
+        if len(store.indices) != 1 or not self._is_target(store.indices[0], loop):
+            return []
+        return [
+            (region, cls)
+            for td, cls in self._implied(store.expr, truth)
+            if (region := self._scanned_by(td, loop, entry)) is not None
+        ]
+
+    def _holds_the_scan(self, mask: Expr, exited: int) -> bool:
+        """Whether *mask* still holds what the loop wrote into it, the loop
+        having ended at the clock read *exited*.
+
+        A redefinition of the name is caught by reaching defs -- the guard
+        would not read the loop's phi at all -- but a store through another
+        name for the same list is not, and neither is a callee's.
+        """
+        region = self._sole_region(mask)
+        return region is not None and self._stamp(region) <= exited
+
+    def _is_target(self, e: Expr, loop: ForStmt) -> bool:
+        """Whether *e* names *loop*'s target."""
+        if not isinstance(e, Var) or not isinstance(loop.target, NamedId):
+            return False
+        target = self.def_use.find_def_from_site(loop.target, loop)
+        return self.def_use.use_to_def.get(e) == target
+
+    def _scanned_by(
+        self, d: Definition, loop: ForStmt, entry: int
+    ) -> 'Region | None':
+        """The region *d* reads an element of, where *loop* covers it and
+        nothing has stored into it since the clock read *entry*.  ``None``
+        where *d* is not such a read, or where any of that is unproven."""
+        if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+            return None
+        ref = d.site.expr
+        if not isinstance(ref, ListRef) or not isinstance(ref.value, Var):
+            return None
+        if not self._is_target(ref.index, loop):
+            return None
+        region = self._sole_region(ref.value)
+        if region is None:
+            return None
+        # a store since before the scan leaves the elements the predicate
+        # tested different from the ones the list holds now
+        if self._stamp(region) > entry:
+            return None
+        # and the loop must have run once per element, not over a prefix
+        size = self.sizes.by_def.get(self.def_use.find_def_from_use(ref.value))
+        if not isinstance(size, ListSize):
+            return None
+        if not size_eq(trip_count(loop.iterable, self.sizes), size.size):
+            return None
+        return region
 
     def _implied_compare(
         self, cond: Compare, truth: bool
@@ -1018,6 +1188,10 @@ class _ValueClassInstance(DefaultVisitor):
             case AMin() | AMax():
                 # the result *is* one element, so it is bounded by them
                 return self._elements_of(e.arg)
+            case Sum():
+                # an accumulation *of* the elements rather than one of them,
+                # so the bound they give has to be closed under adding
+                return self._rounded(e, _exact_sum(self._elements_of(e.arg)))
             case Fst() | Snd():
                 return _TOP          # passes an operand through; see `_rounded`
             case _:
@@ -1167,7 +1341,10 @@ class _ValueClassInstance(DefaultVisitor):
         # scanned so far -- an entry left from the previous walk would speak
         # for the whole list
         self._scanned.pop(stmt, None)
+        self._scan_clocks.pop(stmt, None)
+        entry = self._clock
         self._fixpoint(stmt, body)
+        self._scan_clocks[stmt] = (entry, self._clock)
         if region is not None and self._stamp(region) == before:
             self._scanned[stmt] = before
 

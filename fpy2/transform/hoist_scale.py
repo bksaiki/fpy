@@ -16,7 +16,7 @@ from ..analysis import (
     ValueClassAnalysis,
     ValueClassInfer,
 )
-from ..analysis.array_size import ListSize, is_size_eq
+from ..analysis.array_size import ListSize, size_eq, trip_count
 from ..analysis.value_class import ValueClass, is_positive_literal
 from ..ast import *
 from .cursor import Cursor, EditLog
@@ -194,41 +194,38 @@ def _site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     return _comp_site(red) or _loop_site(red, stmt, facts)
 
 
-def _indexed_by_target(site: _Site) -> bool:
+def _indexed_by_target(site: _Site, facts: '_Facts') -> bool:
     """Whether the write's index is exactly the loop's own target.
 
     Without this a loop of the right trip count may still write one slot over
-    and over, leaving the rest to be scaled unwritten.
+    and over, leaving the rest to be scaled unwritten.  The *definition* the
+    index reaches, not the name: a body that rebinds the target writes one slot
+    under a name that still reads as the target.
     """
     assert site.loop is not None and site.write is not None
     target = site.loop.target
     if not isinstance(target, NamedId) or len(site.write.indices) != 1:
         return False
     index = site.write.indices[0]
-    return isinstance(index, Var) and index.name == target
+    if not isinstance(index, Var):
+        return False
+    return (facts.def_use.use_to_def.get(index)
+            == facts.def_use.find_def_from_site(target, site.loop))
 
 
 def _covers(site: _Site, facts: '_Facts') -> bool:
-    """Whether the loop writes every element of the list it fills.
+    """Whether the loop writes every element of the list it fills: as many
+    iterations as the list has elements.
 
-    The trip count is ``range(len(v))`` and the list is the same size as *v*.
-    Both sizes must be *known*: `is_size_eq` answers `True` for two unknowns,
-    which would read as coverage rather than ignorance.
+    Both sizes must be *known*: `size_eq` answers `False` for an unknown, so
+    ignorance never reads as coverage.
     """
     assert site.loop is not None and site.write is not None
-    it = site.loop.iterable
-    if not isinstance(it, Range1):
-        return False
-    stop = facts.def_use.defining_expr(it.arg)
-    if not isinstance(stop, Len):
-        return False
     d = facts.def_use.find_def_from_use(site.write)
-    a, b = facts.sizes.by_expr.get(stop.arg), facts.sizes.by_def.get(d)
-    if not isinstance(a, ListSize) or not isinstance(b, ListSize):
+    filled = facts.sizes.by_def.get(d)
+    if not isinstance(filled, ListSize):
         return False
-    if a.size is None or b.size is None:
-        return False
-    return is_size_eq(a, b)
+    return size_eq(trip_count(site.loop.iterable, facts.sizes), filled.size)
 
 
 def _varies(site: _Site, facts: '_Facts') -> list[str]:
@@ -312,7 +309,7 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     if _all_writes(site.loop, site.write.var) != 1:
         return f'`{site.write.var}` is written more than once in the body'
 
-    if not _indexed_by_target(site):
+    if not _indexed_by_target(site, facts):
         return f'`{site.write.var}` is not written at the loop index'
     if not _covers(site, facts):
         return f'the loop may not write every element of `{site.write.var}`'

@@ -20,6 +20,7 @@ from fpy2.ast import IndexedAssign, Pow, Sum, Var
 from fpy2.transform import HoistScale, TransformDeclined, walk_exprs
 from fpy2.transform.hoist_invariant import _from_before, _Nodes
 from fpy2.transform.utils import RoundingScopes
+from fpy2.types import ListType, RealType
 
 from .test_hoist_invariant import (
     _VALUES,
@@ -32,10 +33,14 @@ from .test_hoist_invariant import (
 )
 
 
-def _scheduled():
+def _scheduled(*, mono: bool = False):
     """The motivating schedule as PR 2 receives it — #307 included, since it is
-    what discharges the factor's free variables."""
-    f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(fused_sum))))
+    what discharges the factor's free variables.  *mono* monomorphizes first,
+    which turns the loops' `range(len(xs))` into `range(32)`."""
+    f = fused_sum
+    if mono:
+        f = st.monomorphize(f, args=[ListType(RealType(fp.FP16), 32)])
+    f = st.simplify(st.rescale_fixed(st.comp_to_loop(st.fuse(f))))
     return st.hoist_invariant(f)
 
 
@@ -308,7 +313,24 @@ def product_rounds(xs: list[fp.Real], k: fp.Real) -> fp.Real:
         return 0.0
 
 
+@fp.fpy(ctx=fp.REAL)
+def index_rebound_in_the_body(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    """`writes_one_slot` under the loop's own name: the write reads as
+    indexed by the target, and the trip count really does match the list, but
+    every round writes slot zero."""
+    if fp.isfinite(k):
+        ts = [1.0, 1.0, 1.0, 1.0]
+        for i in range(4):
+            i = 0
+            t = (2 ** k) * xs[i]
+            ts[i] = t
+        return sum(ts)
+    else:
+        return 0.0
+
+
 UNSOUND = (
+    (index_rebound_in_the_body, [([5.0, 2.0, 3.0, 4.0], 2.0)]),
     (list_rebound_after_the_loop, [([1.0, 2.0], [3.0, 4.0], 1.0)]),
     (factor_rebound_before_the_reduction, [([1.0, 2.0], 1.0)]),
     (writes_one_slot, [([1.0, 2.0, 4.0], 1.0)]),
@@ -468,6 +490,14 @@ class TestTheLoweredForm:
     def test_the_fp32_branch_is_refused(self):
         """`sum(xs)` reads an argument, not a list a loop filled."""
         assert 'no scaled list write fills the reduction' in _why(_scheduled())
+
+    def test_a_literal_trip_count_covers_the_list(self):
+        """Monomorphization spells the trip count `range(32)` rather than
+        `range(len(xs))`; it is the same proof, and the pass reads both."""
+        out = _scheduled(mono=True)
+        site, = HoistScale.sites(out.ast)
+        assert site.resolve().format() == 'sum(ts)'
+        assert 'may not write every element' not in ' '.join(_why(out))
 
     def test_a_loop_that_may_not_cover_the_list_is_refused(self):
         assert HoistScale.sites(loop_may_not_cover.ast) == []
