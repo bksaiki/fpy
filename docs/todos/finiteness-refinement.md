@@ -271,6 +271,20 @@ loop's target rather than its definition; Phase 2's literal trip count made it
 newly reachable, so it is fixed here and `index_rebound_in_the_body` joins
 `UNSOUND`.
 
+The same pass found one more, older than either: **`_one_list` counted
+allocation sites where its own docstring promised "abstracts a single list"**.
+The rows of one nested list share a region *and* a site, so a fact proved
+about one row landed on every other -- in the fold path as much as the mask
+path.  Fixed in the predicate rather than at its two call sites, since the
+predicate was what was wrong: `AliasAnalysis` gains `is_inside`, reading the
+`slot` flag that `_Regions.part` already sets on an element region, and
+`_one_list` asks it.  It costs nothing measurable -- the unit suite, the
+corpus and the C++ run are unchanged, the last byte-identical -- though it
+does give up the true fact about the row that *was* scanned, and it narrows a
+strong update elsewhere in the file that no corpus program reaches.
+Separating rows properly is index-sensitivity, which `alias.py` drops on
+purpose; soundness does not need it.
+
 The grid collapsed further than expected: with both fixes in, all four cells
 hoist, so `fuse` no longer changes the answer either.  One thing the pins make
 explicit that the plan did not: **the clamp is load-bearing for symptom 2 on its
@@ -339,38 +353,14 @@ nobody would write.  All were read off `digit-bound`'s listing.
 
 ## Open items
 
-The four questions this plan opened were all settled before Phase 1 -- the
+None.  The four questions this plan opened were settled before Phase 1 -- the
 analysis learns the mask, coverage is proved via `trip_count`, the C++
 end-to-end regression is a follow-up on `digit-bound`, and the
-format-inference work stays out of scope -- and each is recorded where it
-applies, above.  Review opened one more.
+format-inference work stays out of scope.  Review opened a fifth, whether
+`_one_list` has to separate the rows of a nested list; it does, and it now
+does.  Each is recorded where it applies, above.
 
-### Does `_one_list` have to separate the rows of a nested list?
-
-It does not today, and that is unsound:
-
-```python
-r0 = xss[0]
-r1 = xss[1]                     # one region, one allocation site
-ok = all([fp.isfinite(x) for x in r0])
-if ok:
-    return max(r1)              # inferred `ZERO|FINITE`; returns `+inf`
-```
-
-`_one_list` counts allocation sites, and two rows of one 2-D list share
-theirs, so a fact proved about one row lands on every other.  **The fold
-spelling is wrong in exactly the same way**, so this is pre-existing in
-`_implied_universal` rather than introduced by `_implied_mask`, which inherits
-it by using the same predicate.
-
-At stake: the cheap fix is to make `_one_list` refuse a region reached through
-another list's element slot, which costs nothing this repo's programs rely on
-but is a guess at the right condition; the real fix is for `AliasAnalysis` to
-give rows distinct regions, which is larger and touches every consumer.  Doing
-neither leaves a known-unsound refinement in two places.
-
-Provisional: left as it stands, because it is pre-existing and because
-tightening `_one_list` by hand risks silently costing the refinement this page
-exists for.  It should be reopened before anything ships that trusts element
-classes on a nested list -- nothing here does, every program on this page
-scanning a flat one.
+One thing to carry forward rather than reopen: **a region answers "may be the
+same list", never "is exactly one list"**, and three of the six bugs review
+found came from reading it as the second.  A consumer that wants the second
+has to say so.

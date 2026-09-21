@@ -617,12 +617,13 @@ class _ValueClassInstance(DefaultVisitor):
         answers it, and a region with no site is as unanswerable as one with
         two.
 
-        **This does not separate the rows of one nested list**, which share a
-        region *and* an allocation site, so a fact proved about one row lands
-        on every other.  A known unsoundness in both callers; see
-        ``docs/todos/finiteness-refinement.md``.
+        A count of allocations is not enough on its own: the rows of one
+        nested list share a region *and* a site, so `is_inside` rules out a
+        region that is a place within a container, which stands for one list
+        per element of it.
         """
-        return len(self.alias.sites_at(region)) == 1
+        return (len(self.alias.sites_at(region)) == 1
+                and not self.alias.is_inside(region))
 
     def _elements_of(self, e: Expr) -> ValueClass:
         """What every element of the list *e* names currently is."""

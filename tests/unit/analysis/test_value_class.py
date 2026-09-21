@@ -1302,15 +1302,17 @@ class TestTheLoweredRounding:
         assert not info.is_finite(_find(low.ast, 'x >= 65536'))
 
 
-def _amax_unfused(fn, n: int = 4) -> ValueClass:
+def _amax_unfused(fn, n: int = 4, *, arg_types: list | None = None) -> ValueClass:
     """The class of the ``max(...)`` in *fn*, lowered only as far as
     :class:`CompToLoop`.
 
     That leaves the guard as a materialised mask, where :func:`_amax_class`'s
-    full pipeline would have made a fold of it.
+    full pipeline would have made a fold of it.  A hand-written fold reaches
+    this unchanged, which is what lets the two spellings be compared.
     """
     from fpy2.ast.fpyast import AMax
-    low = st.comp_to_loop(st.monomorphize(fn, args=_arg_types(n, 1, 0)))
+    args = arg_types if arg_types is not None else _arg_types(n, 1, 0)
+    low = st.comp_to_loop(st.monomorphize(fn, args=args))
     info = ValueClassInfer.analyze(low.ast)
     return next(v for e, v in info.by_expr.items() if isinstance(e, AMax))
 
@@ -1498,3 +1500,66 @@ class TestAMaterialisedGuard:
 
         assert _amax_unfused(f) == TOP
         assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+
+_MATRIX = [ListType(ListType(RealType(fp.FP32), 4), 2)]
+
+
+class TestAGuardOverARow:
+    """Both guards rest on `_one_list`, and the rows of one nested list share a
+    region *and* an allocation site -- so counting sites is not what "a single
+    list" means, and a fact proved about one row would land on every other.
+
+    Neither spelling is special here; the predicate is.
+    """
+
+    def test_a_fold_over_a_row_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            r1 = xss[1]
+            ok = True
+            for x in r0:
+                ok = ok and fp.isfinite(x)
+            if ok:
+                return max(r1)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == TOP
+        assert math.isinf(f([[1.0, 2.0, 3.0, 4.0], [float('inf'), 0.0, 0.0, 0.0]]))
+
+    def test_a_mask_over_a_row_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            r1 = xss[1]
+            m = fp.empty(4)
+            for i in range(4):
+                x = r0[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(r1)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == TOP
+        assert math.isinf(f([[1.0, 2.0, 3.0, 4.0], [float('inf'), 0.0, 0.0, 0.0]]))
+
+    def test_the_row_the_guard_actually_scanned_learns_nothing_either(self):
+        """The conservative half of the trade: `r0` really is all-finite, and
+        this gives that up too.  Separating the rows is a precision question
+        for `AliasAnalysis`, not a soundness one."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            m = fp.empty(4)
+            for i in range(4):
+                x = r0[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(r0)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == TOP
