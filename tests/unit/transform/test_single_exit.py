@@ -18,6 +18,7 @@ import pytest
 import fpy2 as fp
 from fpy2 import Function
 from fpy2.analysis import Reachability
+from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import SingleExit, TransformDeclined
 
 
@@ -142,3 +143,60 @@ class TestUnhandledShapesRefuse:
         for f in (returns_in_a_for, returns_in_a_while):
             with pytest.raises(TransformDeclined):
                 SingleExit.apply(f.ast)
+
+
+@fp.fpy
+def both_arms_fall_through(p, q):
+    if p > 0:
+        if q > 0:
+            return 1.0
+        z = 2.0
+    else:
+        z = 3.0
+    return z
+
+
+@fp.fpy
+def one_armed_inner(x, y):
+    z = 0.0
+    if x > 0:
+        if y > 0:
+            return 1.0
+        z = 2.0
+    return z
+
+
+class TestBothArmsFallThrough:
+    """A guard nested inside a guard: neither arm of the outer `if` returns
+    unconditionally, yet one contains a `return`.
+
+    The continuation goes into *both* arms here, since no single place is
+    reachable from exactly the non-returning paths.  The copy must be a fresh
+    one -- the analyses key on node identity, and sharing raises from
+    `DefineUse` rather than returning a wrong answer.
+    """
+
+    @pytest.mark.parametrize('f', [both_arms_fall_through, one_armed_inner],
+                             ids=lambda f: f.name)
+    def test_one_return_remains(self, f):
+        assert _returns(SingleExit.apply(f.ast)) == 1
+
+    @pytest.mark.parametrize('f', [both_arms_fall_through, one_armed_inner],
+                             ids=lambda f: f.name)
+    @pytest.mark.parametrize('p', [1.0, -1.0])
+    @pytest.mark.parametrize('q', [1.0, -1.0])
+    def test_agrees_with_the_interpreter(self, f, p, q):
+        _agrees(f, p, q)
+
+    def test_the_copies_share_no_nodes(self):
+        """Sharing passes a shallow structural check but breaks def-use."""
+        out = SingleExit.apply(both_arms_fall_through.ast)
+        seen: set[int] = set()
+
+        class _V(DefaultVisitor):
+            def _visit_statement(self, stmt, ctx):
+                assert id(stmt) not in seen, 'a statement node appears twice'
+                seen.add(id(stmt))
+                return super()._visit_statement(stmt, ctx)
+
+        _V()._visit_function(out, None)
