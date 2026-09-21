@@ -103,7 +103,10 @@ def list_depth(bound: 'ArraySizeBound') -> int:
 
 def size_eq(a: ArraySize, b: ArraySize) -> bool:
     """Are two (resolved) sizes provably equal — identical and not an
-    untracked unknown (``None`` is never equal, even to itself)?"""
+    untracked unknown (``None`` is never equal, even to itself)?
+
+    One size; :func:`is_size_eq` compares two whole bounds, element bounds and
+    all."""
     return a is not None and a == b
 
 

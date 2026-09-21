@@ -516,10 +516,14 @@ class _ValueClassInstance(DefaultVisitor):
 
     _sizes_cache: 'ArraySizeAnalysis | None'
 
-    _entered: dict[ForStmt, int]
-    """The :attr:`_clock` each loop began at.  A list read *inside* a loop is
-    not the one :attr:`_scanned` speaks for, so this is what says nothing has
-    stored into it since before the scan; see :meth:`_implied_mask`."""
+    _scan_clocks: dict[ForStmt, tuple[int, int]]
+    """The :attr:`_clock` each loop began and ended at, for
+    :meth:`_implied_mask`: a list read *inside* a loop is not the one
+    :attr:`_scanned` speaks for, so the entry clock is what says nothing has
+    stored into it since before the scan, and the exit clock the same for the
+    mask the loop filled.  Dropped before the body for the reason
+    :attr:`_scanned` is -- a guard *inside* the scan reads a half-filled
+    mask."""
 
     _stored: dict[Region, ValueClass]
     """Every class ever stored into each region, for a consumer choosing
@@ -555,7 +559,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._clock = 0
         self._touched = {}
         self._scanned = {}
-        self._entered = {}
+        self._scan_clocks = {}
         self._sizes_cache = None
         self.by_def = {}
         self.by_expr = {}
@@ -612,6 +616,11 @@ class _ValueClassInstance(DefaultVisitor):
         then "every element of *the* list" names neither of them.  Only a count
         answers it, and a region with no site is as unanswerable as one with
         two.
+
+        **This does not separate the rows of one nested list**, which share a
+        region *and* an allocation site, so a fact proved about one row lands
+        on every other.  A known unsoundness in both callers; see
+        ``docs/todos/finiteness-refinement.md``.
         """
         return len(self.alias.sites_at(region)) == 1
 
@@ -948,10 +957,21 @@ class _ValueClassInstance(DefaultVisitor):
         if not isinstance(d, PhiDef) or not isinstance(d.site, ForStmt):
             return []
         loop = d.site
+        clocks = self._scan_clocks.get(loop)
+        if clocks is None:
+            return []       # the guard sits inside the scan, over a half-filled mask
+        entry, exit = clocks
+        if not self._holds_the_scan(mask, exit):
+            return []
         # the mask's last definition must be the store the loop makes, or the
         # value `all` reads is not the one the predicate wrote
         write = self.def_use.defs[d.rhs]
         if not isinstance(write, AssignDef) or not isinstance(write.site, IndexedAssign):
+            return []
+        # and that store must read what the loop carried in: an earlier store in
+        # the same round leaves an element no later round rewrites
+        idx = self.def_use.def_to_idx.get(d)
+        if idx is None or write.prev != idx:
             return []
         store = write.site
         if len(store.indices) != 1 or not self._is_target(store.indices[0], loop):
@@ -959,8 +979,20 @@ class _ValueClassInstance(DefaultVisitor):
         return [
             (region, cls)
             for td, cls in self._implied(store.expr, truth)
-            if (region := self._scanned_by(td, loop)) is not None
+            if (region := self._scanned_by(td, loop, entry)) is not None
         ]
+
+    def _holds_the_scan(self, mask: Expr, exit: int) -> bool:
+        """Whether *mask* still holds what the loop wrote into it at *exit*.
+
+        A redefinition of the name is caught by reaching defs -- the guard
+        would not read the loop's phi at all -- but a store through another
+        name for the same list is not, and neither is a callee's.
+        """
+        region = self._region_of(mask)
+        if region is None or not self._one_list(region):
+            return False
+        return self._stamp(region) <= exit
 
     def _is_target(self, e: Expr, loop: ForStmt) -> bool:
         """Whether *e* names *loop*'s target."""
@@ -969,10 +1001,12 @@ class _ValueClassInstance(DefaultVisitor):
         target = self.def_use.find_def_from_site(loop.target, loop)
         return self.def_use.use_to_def.get(e) == target
 
-    def _scanned_by(self, d: Definition, loop: ForStmt) -> 'Region | None':
+    def _scanned_by(
+        self, d: Definition, loop: ForStmt, entry: int
+    ) -> 'Region | None':
         """The region *d* reads an element of, where *loop* covers it and
-        nothing has stored into it since.  ``None`` where *d* is not such a
-        read, or where any of that is unproven."""
+        nothing has stored into it since the clock read *entry*.  ``None``
+        where *d* is not such a read, or where any of that is unproven."""
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return None
         ref = d.site.expr
@@ -985,9 +1019,9 @@ class _ValueClassInstance(DefaultVisitor):
         # other, exactly as in `_implied_universal`
         if region is None or not self._one_list(region):
             return None
-        # a store since before the scan, and the elements tested are not the
-        # ones the list holds now
-        if self._stamp(region) > self._entered.get(loop, -1):
+        # a store since before the scan leaves the elements the predicate
+        # tested different from the ones the list holds now
+        if self._stamp(region) > entry:
             return None
         # and the loop must have run once per element, not over a prefix
         size = self.sizes.by_def.get(self.def_use.find_def_from_use(ref.value))
@@ -1277,8 +1311,10 @@ class _ValueClassInstance(DefaultVisitor):
         # scanned so far -- an entry left from the previous walk would speak
         # for the whole list
         self._scanned.pop(stmt, None)
-        self._entered[stmt] = self._clock
+        self._scan_clocks.pop(stmt, None)
+        entry = self._clock
         self._fixpoint(stmt, body)
+        self._scan_clocks[stmt] = (entry, self._clock)
         if region is not None and self._stamp(region) == before:
             self._scanned[stmt] = before
 

@@ -31,8 +31,7 @@ K = 32
 EMIN = fp.FP16.emin
 _ARGS = [ListType(RealType(fp.FP16), K)]
 
-TOP = ValueClass.TOP
-FINITE = ValueClass.ZERO | ValueClass.FINITE
+ZERO, FINITE = ValueClass.ZERO, ValueClass.FINITE
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -118,10 +117,10 @@ class TestFiniteness:
     def test_the_clamped_exponent_is_an_integer(self, fuse):
         out = _sched(fused_sum_clamped, fuse=fuse, mono=True)
         fmt, cls = _exponent(out)
-        assert cls == FINITE
+        assert cls == ZERO | FINITE
         assert choose_storage(fmt, cls) is CppScalar.S8
         # and so the emitter's `std::isfinite` assertion goes
-        assert _rounded(out) == FINITE
+        assert _rounded(out) == ZERO | FINITE
 
     def test_without_the_clamp_logb_of_zero_survives(self, fuse):
         """`logb(0)` is `-inf` whatever the elements are, and no integer
@@ -129,5 +128,5 @@ class TestFiniteness:
         type, guard or no guard."""
         out = _sched(fused_sum, fuse=fuse, mono=True)
         fmt, cls = _exponent(out)
-        assert cls == ValueClass.NEG_INF | FINITE
+        assert cls == ValueClass.NEG_INF | ZERO | FINITE
         assert choose_storage(fmt, cls) is CppScalar.F32

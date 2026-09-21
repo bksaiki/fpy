@@ -257,6 +257,20 @@ which mirrors `TestAGuardOverAWholeList` -- the same facts, lowered only as far
 as `CompToLoop` -- plus the prefix scan, the store between, and the unbound
 read.
 
+A review pass afterwards found four unsound cases in the first cut of this,
+all now guarded and each with a test: a guard *inside* the scan reading a
+half-filled mask (`_scan_clocks` is dropped before the body, exactly as
+`_scanned` is); a store through a second name for the mask; a mask handed to a
+callee; and a second write to the mask earlier in the same round, which the
+last-definition check alone did not see.  The first cut checked the *scanned*
+list thoroughly and the mask not at all -- the asymmetry to remember is that
+the fold's accumulator is a scalar, so it cannot be aliased, and a mask is a
+list, so it can.  The same pass found a pre-existing miscompile in
+`HoistScale._indexed_by_target`, which compared the index's *name* to the
+loop's target rather than its definition; Phase 2's literal trip count made it
+newly reachable, so it is fixed here and `index_rebound_in_the_body` joins
+`UNSOUND`.
+
 The grid collapsed further than expected: with both fixes in, all four cells
 hoist, so `fuse` no longer changes the answer either.  One thing the pins make
 explicit that the plan did not: **the clamp is load-bearing for symptom 2 on its
@@ -325,7 +339,38 @@ nobody would write.  All were read off `digit-bound`'s listing.
 
 ## Open items
 
-None.  All four questions this plan opened were settled before Phase 1: the
+The four questions this plan opened were all settled before Phase 1 -- the
 analysis learns the mask, coverage is proved via `trip_count`, the C++
-end-to-end regression is a follow-up on `digit-bound`, and the format-inference
-work stays out of scope.  Each is recorded where it applies, above.
+end-to-end regression is a follow-up on `digit-bound`, and the
+format-inference work stays out of scope -- and each is recorded where it
+applies, above.  Review opened one more.
+
+### Does `_one_list` have to separate the rows of a nested list?
+
+It does not today, and that is unsound:
+
+```python
+r0 = xss[0]
+r1 = xss[1]                     # one region, one allocation site
+ok = all([fp.isfinite(x) for x in r0])
+if ok:
+    return max(r1)              # inferred `ZERO|FINITE`; returns `+inf`
+```
+
+`_one_list` counts allocation sites, and two rows of one 2-D list share
+theirs, so a fact proved about one row lands on every other.  **The fold
+spelling is wrong in exactly the same way**, so this is pre-existing in
+`_implied_universal` rather than introduced by `_implied_mask`, which inherits
+it by using the same predicate.
+
+At stake: the cheap fix is to make `_one_list` refuse a region reached through
+another list's element slot, which costs nothing this repo's programs rely on
+but is a guess at the right condition; the real fix is for `AliasAnalysis` to
+give rows distinct regions, which is larger and touches every consumer.  Doing
+neither leaves a known-unsound refinement in two places.
+
+Provisional: left as it stands, because it is pre-existing and because
+tightening `_one_list` by hand risks silently costing the refinement this page
+exists for.  It should be reopened before anything ships that trusts element
+classes on a nested list -- nothing here does, every program on this page
+scanning a flat one.

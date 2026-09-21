@@ -1315,13 +1315,21 @@ def _amax_unfused(fn, n: int = 4) -> ValueClass:
     return next(v for e, v in info.by_expr.items() if isinstance(e, AMax))
 
 
+@fp.fpy(ctx=fp.REAL)
+def _clobber_mask(m) -> fp.Real:
+    m[0] = True
+    return 0.0
+
+
 class TestAMaterialisedGuard:
     """The same fact as :class:`TestAGuardOverAWholeList`, in the spelling
     `CompToLoop` leaves when `ReduceFusion` has not run: the predicate lands in
     a list, and the guard reads `all` of it.
 
     What has to be proved is the same either way -- the loop covers the list,
-    and nothing has stored into it since.
+    and nothing has stored into it since.  The mask needs the second half too,
+    which the fold does not: it is a *list*, so a store through another name
+    for it is invisible to the reaching def the guard reads.
     """
 
     def test_a_mask_reaches_the_elements(self):
@@ -1416,3 +1424,77 @@ class TestAMaterialisedGuard:
                 return 0.0
 
         assert _amax_unfused(f) == TOP
+
+    def test_a_guard_inside_the_scan_says_nothing(self):
+        """`all(m)` on round `i` covers the rounds before it, not the list.
+        The fold bails here because `_scanned` is dropped before the body; the
+        mask needs `_scan_clocks` dropped for the same reason."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for j in range(4):
+                m[j] = True         # so the guard passes on round 0
+            r = 0.0
+            for i in range(4):
+                if all(m):
+                    r = max(xs)
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            return r
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+    def test_a_store_through_another_name_for_the_mask_says_nothing(self):
+        """A direct `m[0] = True` redefines `m`, so the guard no longer reads
+        the loop's phi and this never arises.  Through an alias it does."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            n = m
+            n[0] = True
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+    def test_a_mask_handed_to_a_callee_says_nothing(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            t = _clobber_mask(m)
+            if all(m):
+                return max(xs)
+            else:
+                return t
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))
+
+    def test_a_second_write_earlier_in_the_round_says_nothing(self):
+        """Only the mask's last definition in the body is read, so a store
+        before it is invisible -- and one at the top of round `k` undoes round
+        `k - 1`."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            m = fp.empty(4)
+            for i in range(4):
+                m[0] = True
+                x = xs[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                return max(xs)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f) == TOP
+        assert math.isinf(f([float('inf'), 1.0, 1.0, 1.0]))

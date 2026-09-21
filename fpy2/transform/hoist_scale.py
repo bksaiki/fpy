@@ -194,18 +194,23 @@ def _site(red: _Reduction, stmt: Stmt, facts: '_Facts') -> '_Site | None':
     return _comp_site(red) or _loop_site(red, stmt, facts)
 
 
-def _indexed_by_target(site: _Site) -> bool:
+def _indexed_by_target(site: _Site, facts: '_Facts') -> bool:
     """Whether the write's index is exactly the loop's own target.
 
     Without this a loop of the right trip count may still write one slot over
-    and over, leaving the rest to be scaled unwritten.
+    and over, leaving the rest to be scaled unwritten.  The *definition* the
+    index reaches, not the name: a body that rebinds the target writes one slot
+    under a name that still reads as the target.
     """
     assert site.loop is not None and site.write is not None
     target = site.loop.target
     if not isinstance(target, NamedId) or len(site.write.indices) != 1:
         return False
     index = site.write.indices[0]
-    return isinstance(index, Var) and index.name == target
+    if not isinstance(index, Var):
+        return False
+    return (facts.def_use.use_to_def.get(index)
+            == facts.def_use.find_def_from_site(target, site.loop))
 
 
 def _covers(site: _Site, facts: '_Facts') -> bool:
@@ -304,7 +309,7 @@ def _why_not(site: _Site, facts: '_Facts') -> 'str | None':
     if _all_writes(site.loop, site.write.var) != 1:
         return f'`{site.write.var}` is written more than once in the body'
 
-    if not _indexed_by_target(site):
+    if not _indexed_by_target(site, facts):
         return f'`{site.write.var}` is not written at the loop index'
     if not _covers(site, facts):
         return f'the loop may not write every element of `{site.write.var}`'
