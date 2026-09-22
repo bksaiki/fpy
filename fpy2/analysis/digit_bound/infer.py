@@ -240,6 +240,23 @@ class _DigitBoundInferInstance(DefaultVisitor):
     which the solver answers as unbounded.
     """
 
+    _loop_index: dict[Definition, int]
+    _partial: dict[Definition, list[Terms] | None]
+    _fields: dict[Definition, tuple[Terms | None, ...]]
+    _elt_expr: dict[Definition, Expr]
+    _covered_write: set[Definition]
+    _elt_depth: int
+    _elt_depth_of: dict[Expr, int]
+    _elt_vars: set[int]
+    _anchored: set[int]
+    _lsb_vars: set[int]
+    _index_sets: dict[tuple, _IndexSet]
+    _gather: tuple[tuple, Definition] | None
+    _gathered: set[Expr]
+    _non_finite_path: int
+    _seen_return: bool
+    _vacuous_used: list[tuple[Term, list[Term]]]
+
     def __init__(
         self,
         func: FuncDef,
@@ -257,19 +274,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self.array_size = view.array_size
         self.scopes = view.scopes
         self.out = DigitBoundAnalysis(store, args)
-        self._loop_index: dict[Definition, int] = {}
-        self._partial: dict[Definition, list[Terms] | None] = {}
-        self._fields: dict[Definition, tuple[Terms | None, ...]] = {}
-        self._elt_expr: dict[Definition, Expr] = {}
-        self._covered_write: set[Definition] = set()
+        self._loop_index = {}
+        self._partial = {}
+        self._fields = {}
+        self._elt_expr = {}
+        self._covered_write = set()
         self._elt_depth = 0
-        self._elt_vars: set[int] = set()
-        self._index_sets: dict[tuple, _IndexSet] = {}
-        self._gather: tuple[tuple, Definition] | None = None
-        self._gathered: set[Expr] = set()
+        self._elt_depth_of = {}
+        self._elt_vars = set()
+        self._anchored = set()
+        self._lsb_vars = set()
+        self._index_sets = {}
+        self._gather = None
+        self._gathered = set()
         self._non_finite_path = 0
         self._seen_return = False
-        self._vacuous_used: list[tuple[Term, list[Term]]] = []
+        self._vacuous_used = []
 
     def analyze(self) -> DigitBoundAnalysis:
         # positional, so params that do not match the signature would bind
@@ -319,6 +339,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         lo, hi = self.view.logb_range(of)
         terms.msb = self._var(f'msb{tag}')
         terms.lsb = self._var(f'lsb{tag}')
+        self._lsb_vars.update(v.index for v, _ in terms.lsb.coeffs)
         self._mark_elt(of, terms.msb, terms.lsb)
         if hi is not None:
             self.store.le(terms.msb, hi)
@@ -355,7 +376,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         dst = self.out.by_def.setdefault(d, Terms())
         dst.msb = dst.msb if dst.msb is not None else src.msb
-        dst.lsb = dst.lsb if dst.lsb is not None else src.lsb
+        dst.lsb = dst.lsb if dst.lsb is not None else self._elt_lsb(d, src)
         dst.value = dst.value if dst.value is not None else src.value
 
     def _join(self, d: Definition, srcs: list[Terms] | None) -> None:
@@ -368,11 +389,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return
         terms = self._def(d)
         msbs = [s.msb for s in srcs if s.msb is not None]
-        lsbs = [s.lsb for s in srcs if s.lsb is not None]
+        lsbs = [t for s in srcs if (t := self._elt_lsb(d, s)) is not None]
         if terms.msb is not None and len(msbs) == len(srcs):
             self.store.le_max(terms.msb, msbs)
         if terms.lsb is not None and len(lsbs) == len(srcs):
-            self.store.ge_min(terms.lsb, lsbs)
+            self._grid_ge(terms.lsb, *lsbs)
 
     def _type_of(self, of: Expr | Definition) -> Any:
         return (self.type_info.by_def if isinstance(of, Definition)
@@ -403,6 +424,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     # -- emission ------------------------------------------------------
 
     def _visit_expr(self, e: Expr, ctx):
+        self._elt_depth_of[e] = self._elt_depth
         super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType | ListType):
             return
@@ -435,12 +457,54 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case _:
                 src = None
         if src is not None:
-            terms.msb, terms.lsb = src.msb, src.lsb
+            terms.msb, terms.lsb = src.msb, self._elt_lsb(e, src)
             return
 
         logb, grid = self._fresh_interval(terms, e, f'e{len(self.out.by_expr)}')
         self._emit_logb(e, self._active(e, logb, grid))
         self._emit_grid(e, grid)
+
+    def _grid_ge(self, grid: Term, *ts: Term) -> None:
+        """Bound *grid* below by the least of *ts*, noting what that costs.
+
+        Every such bound is true of the value in hand.  It stays true of a
+        whole *list* only where each term bounds every element from below;
+        one built from a per-element `logb`, or from a position that varies
+        with the index, holds for the element in hand and not for the
+        smallest.  Such a bound *anchors* the grid: see :meth:`_elt_lsb`.
+        """
+        self.store.ge_min(grid, ts)
+        if not all(self._downward(t) for t in ts):
+            self._anchored.update(v.index for v, _ in grid.coeffs)
+
+    def _downward(self, t: Term) -> bool:
+        """Whether *t* bounds every element of a list from below.
+
+        Anything the walk built outside a loop does, being one value for all
+        of them.  So does a list's own grid, which is already at or below
+        every element's -- unless it is anchored, or enters negated, which
+        turns a floor into a ceiling.
+        """
+        return all(
+            v.index not in self._elt_vars
+            or (c > 0 and v.index in self._lsb_vars
+                and v.index not in self._anchored)
+            for v, c in t.coeffs
+        )
+
+    def _elt_lsb(self, of: Expr | Definition, src: Terms) -> Term | None:
+        """*src*'s grid, as *of*'s -- dropped where *of* is a list and the
+        grid is anchored.
+
+        A list's summary is read as uniform: at or below *every* element's
+        grid.  An anchored grid is at or below one element's, and reading it
+        uniformly would claim the smallest element sits as high as the
+        widest.  No grid at all is the weaker, true reading.
+        """
+        if (src.lsb is not None and isinstance(self._type_of(of), ListType)
+                and any(v.index in self._anchored for v, _ in src.lsb.coeffs)):
+            return None
+        return src.lsb
 
     def _active(self, e: Expr, logb: Term, grid: Term) -> Term:
         """Account for the context *e* is evaluated under, and return the term
@@ -468,7 +532,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if found is None:
             return self._active_float(e, logb, grid)
         pos, rm = found
-        self.store.ge(grid, pos + 1)
+        self._grid_ge(grid, pos + 1)
         if not _round_will_carry(rm):
             return logb
         exact = self._var(f'X{len(self.out.by_expr)}')
@@ -488,7 +552,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         pmax = getattr(ctx, 'pmax', None)
         if not isinstance(pmax, int):
             return logb
-        self.store.ge(grid, logb - (pmax - 1))
+        self._grid_ge(grid, logb - (pmax - 1))
         rm = getattr(ctx, 'rm', None)
         if not _round_will_carry(rm if isinstance(rm, RoundingMode) else None):
             return logb
@@ -578,24 +642,23 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _emit_grid(self, e: Expr, g: Term) -> None:
         """Bound *e*'s least significant digit from its operands'."""
-        store = self.store
         match e:
             # `Add`/`Sub` take the finer of the two, which aligned summands share
             case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
                   | Add() | Sub() | Sum()):
                 if (gs := self._lsbs(*self._operands(e))) is not None:
-                    store.ge_min(g, gs)
+                    self._grid_ge(g, *gs)
             case Mul():
                 lhs, rhs = self._lsb_of(e.first), self._lsb_of(e.second)
                 if lhs is not None and rhs is not None:
-                    store.ge(g, lhs + rhs)
+                    self._grid_ge(g, lhs + rhs)
             case Round() | Cast():
                 # the result is a multiple of the quantum it rounded at
                 found = self._rounding(e)
                 if found is not None:
-                    store.ge(g, found[0] + 1)
+                    self._grid_ge(g, found[0] + 1)
             case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
-                store.ge(g, k)   # one digit, at position `k`
+                self._grid_ge(g, k)   # one digit, at position `k`
 
     # -- the value channel ---------------------------------------------
     #
@@ -611,7 +674,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         terms = self.out.by_expr.setdefault(e, Terms())
         if terms.value is None:
+            # Under the depth *e* sits at, not the one that happened to ask
+            # first: a value is minted once and memoized, and a position
+            # built outside a loop is no less shared for being demanded
+            # inside one.
+            outer = self._elt_depth
+            self._elt_depth = self._elt_depth_of.get(e, outer)
             terms.value = self._value_uncached(e)
+            self._elt_depth = outer
         return terms.value
 
     def _value_uncached(self, e: Expr) -> Term | None:
@@ -1281,7 +1351,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 if terms.msb is not None and src.msb is not None:
                     self.store.le(terms.msb, src.msb)
                 if terms.lsb is not None and src.lsb is not None:
-                    self.store.ge(terms.lsb, src.lsb)
+                    self._grid_ge(terms.lsb, src.lsb)
                 terms.value = terms.value if terms.value is not None else src.value
 
     def _zip_fields(self, d: Definition) -> tuple[Terms | None, ...] | None:
@@ -1378,7 +1448,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             self.store.le_max(merged.msb, [prev.msb, now.msb])
         if prev.lsb is not None and now.lsb is not None:
             merged.lsb = self.store.var(f'lsbR{len(self.out.by_expr)}')
-            self.store.ge_min(merged.lsb, [prev.lsb, now.lsb])
+            self._lsb_vars.update(v.index for v, _ in merged.lsb.coeffs)
+            self._grid_ge(merged.lsb, prev.lsb, now.lsb)
         return merged
 
     def _visit_call(self, e: Call, ctx):

@@ -2689,6 +2689,22 @@ class TestAlignedSumPrecision:
         total = sum((y.as_rational() for y in ys), start=0)
         assert abs(int(total / 2 ** (e - 11))).bit_length() == 18
 
+    def test_a_per_element_position_is_not_a_shared_grid(self):
+        """The counterweight for the relation: each term rounds at *its own*
+        exponent, so the grid is one element's rather than one they share, and
+        reading it as shared would claim the smallest term sits as high as the
+        widest."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = fp.empty(len(xs))
+            for i in range(len(xs)):
+                e = fp.logb(xs[i])
+                with fp.MPFixedContext(e - 12):
+                    ys[i] = fp.round(xs[i])
+            return sum(ys)
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
         alignment to exploit, and the answer stays the non-relational one."""
