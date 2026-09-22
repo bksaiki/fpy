@@ -237,6 +237,51 @@ list-writing loops and buys soundness outright; the alternative is
 reimplementing Banerjee or Omega, and if that is ever wanted the concepts
 should come from ISL rather than be grown here.
 
+### Tiling — `tile_loops`, `SplitLoopStrategy.MASK`
+
+`tile_loops(func, width)` splits every loop `why_not_tileable` accepts, using
+`MASK`, and leaves a refused one sequential.  Composed with the normal form it
+holds on the corpus: 20 functions reach `normalize` → tileable → split, and
+**19 of 19** checkable ones agree with the original on sampled inputs.
+
+**The innermost tileable loop carries the tile**, and the ones enclosing it
+are left as loops.  Both idioms take that shape: the fused softmax makes the
+row the program instance and the columns the tile, and the matmul takes its
+block indices from the program id and loops over tiles of `K`.  So `out[i][j]`
+comes out as an untouched `for i` around a tiled `j`, not a nest of tiles.
+
+Of the 29 tileable corpus loops, 20 are innermost and 9 enclose another; those
+9 are the ones this leaves for the emitter to map to a program id or a
+sequential loop.
+
+
+
+`split` had two remainder policies and neither fit: `PEEL` emits a *second*
+copy of the body as a residual loop, and `STRICT` demands the length divide the
+factor. `MASK` chunks the whole length so the last chunk over-runs, and guards
+the body with `j < n`:
+
+```python
+for i in range(0, n, f):       # runtime trip count
+    for j in range(i, i + f):  # constant width
+        if j < n:              # the mask
+```
+
+That is idiom 2 from *How a loop lowers*, which is the requirement: the trip
+count is a runtime value, so one compiled kernel serves every length.
+
+**It synthesizes no remainder, and that is load-bearing rather than tidy.**
+The first draft padded the length up to a multiple of the factor, which needs
+one — and this op table has neither `Fmod` nor `Mod`, only `Div`, with integer
+`Div` omitted because FPy truncates where Triton's `//` floors. So the padded
+form could not have been lowered here at all. It is also unnecessary:
+`range(0, n, f)` already yields `ceil(n / f)` chunks. What remains uses only
+`len`, `+` and `<`.
+
+`PEEL` and `STRICT` still do synthesize a remainder, and take a `use_fmod` flag
+so a caller picks the spelling its backend can lower. Neither spelling helps
+here, which is why `MASK` having none is the point.
+
 ### Target description — `fpy2/backend/triton/`
 
 `types.py`, `storage.py`, `target.py`; 37 tests, no emitter. `StorageInfer` runs
@@ -439,20 +484,33 @@ should leave standing.**
 
 ### 2. Split and vectorize
 
-The decision is built (see *Tileability*); the rewrite is not.
+The decision is built (see *Tileability*), the rewrite is built, and the
+policy is settled: the innermost tileable loop carries the tile.  What remains
+is the emitter's half -- turning a tiled loop into `tl.arange` plus a masked
+load, and an enclosing one into a program id or a loop over tiles.
 
-`split` exists and is semantics-preserving: `for i in range(n)` into outer x
-inner of width B evaluates the body in exactly the same order. What remains is
-to consume `why_not_tileable` — emit idiom 1 or 2 from *How a loop lowers* for
-a tileable body, and keep a refused one sequential per lane.
+`split` is semantics-preserving — `for i in range(n)` into outer x inner of
+width B evaluates the body in exactly the same order — and now has the
+remainder policy this target needs, `MASK` (see *Masked tails*). What remains
+is to consume `why_not_tileable`: emit idiom 1 or 2 from *How a loop lowers*
+for a tileable body, and keep a refused one sequential per lane.
+
+**Split runs after the normal form, not before.** A masked body is a guarded
+`IndexedAssign`, and `SimplifyIf` refuses to hoist a list write — correctly,
+since hoisting would make the out-of-range store unconditional. So a masked
+loop does not reduce to an `if` expression, and normalizing *after* splitting
+would reject this pipeline's own output. Running it second also avoids
+splitting loops inside callees that are about to be inlined away. No exemption
+to item 1's "a remaining `IfStmt` is an error" is needed, provided the order
+holds.
 
 The running example stays sequential: accumulating in FP32 is the point, so
 the adds round and `rounds_exactly` is false. That still parallelizes, across
 the batch — one lane per dot product, which is what the hand-written kernels
 do. See item 5.
 
-Tails are a `mask`, not a generated tail loop. That is simpler than the
-`specialize`-based tail generation [scheduling-language.md](scheduling-language.md)
+Tails are a `mask`, not a generated tail loop — which `MASK` now provides.
+That is simpler than the `specialize`-based tail generation [scheduling-language.md](scheduling-language.md)
 §7 points at, and it is one of the few places this target is *easier* than a CPU
 one.
 

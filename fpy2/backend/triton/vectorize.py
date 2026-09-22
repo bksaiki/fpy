@@ -55,8 +55,9 @@ from ...ast import (
     Var,
 )
 from ...number import Context
+from ...transform import SplitLoop, SplitLoopStrategy
 
-__all__ = ['why_not_tileable']
+__all__ = ['tile_loops', 'why_not_tileable']
 
 
 _SELECTS: tuple[type[Expr], ...] = (Max, Min, And, Or)
@@ -248,3 +249,72 @@ def why_not_tileable(
         if why is not None:
             return why
     return None
+
+
+class _ForLoops(DefaultVisitor):
+    """Every `for` in visit order, outermost first."""
+
+    def __init__(self):
+        super().__init__()
+        self.out: list[ForStmt] = []
+
+    def _visit_for(self, stmt: ForStmt, ctx):
+        self.out.append(stmt)
+        return super()._visit_for(stmt, ctx)
+
+
+def _for_loops(func: FuncDef) -> list[ForStmt]:
+    v = _ForLoops()
+    v._visit_function(func, None)
+    return v.out
+
+
+def _encloses_tileable(stmt: ForStmt, func: FuncDef) -> bool:
+    """Whether a tileable loop sits beneath *stmt*."""
+    v = _ForLoops()
+    v._visit_block(stmt.body, None)
+    return any(why_not_tileable(c, func) is None for c in v.out)
+
+
+def tile_loops(func: FuncDef, width: int) -> FuncDef:
+    """*func* with each *innermost* tileable loop split into chunks of *width*.
+
+    **The innermost loop of a nest carries the tile**, and the ones enclosing
+    it are left as loops.  That is the shape both Triton idioms take: a fused
+    softmax makes the row dimension the program instance and the columns the
+    tile, and a matmul takes its block indices from the program id and loops
+    over tiles of `K`.  Tiling an enclosing loop as well would give a nest of
+    tiles where the target wants one tiled dimension.
+
+    A loop :func:`why_not_tileable` refuses is left alone: it stays sequential,
+    which is still parallel across whatever encloses it.
+
+    ``MASK`` is the remainder policy because a tile has to be a compile-time
+    constant width -- ``PEEL`` would emit a second, narrower body for the tail
+    and ``STRICT`` would refuse a length the factor does not divide.
+
+    Splitting rewrites the loop into a nest, so the indices of everything after
+    it shift; the scan therefore resumes past the pair it just created rather
+    than restarting.
+    """
+    if not isinstance(func, FuncDef):
+        raise TypeError(f"Expected a 'FuncDef', got {func}")
+    if not isinstance(width, int) or width < 1:
+        raise ValueError(f'Expected a positive width, got {width}')
+
+    factor = Integer(width, None)
+    i = 0
+    while True:
+        loops = _for_loops(func)
+        if i >= len(loops):
+            return func
+        stmt = loops[i]
+        if (why_not_tileable(stmt, func) is not None
+                or _encloses_tileable(stmt, func)):
+            i += 1
+            continue
+        func = SplitLoop.apply(
+            func, factor, i, strategy=SplitLoopStrategy.MASK,
+        )
+        # the split left an outer/inner pair where one loop was
+        i += 2
