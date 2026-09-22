@@ -5,6 +5,8 @@ Unit tests for loop unrolling.
 import re
 from collections import Counter
 
+import pytest
+
 import fpy2 as fp
 
 from fpy2.transform import ForUnroll, ForUnrollStrategy, TransformReferenceError
@@ -408,3 +410,47 @@ class TestForUnroll():
         h = fp.transform.ConstFold.apply(h, enable_op=False)
         e = fp.transform.ConstFold.apply(test_expect.ast, enable_op=False)
         assert h.is_equiv(e), f'expect:\n{e.format()}\nactual:\n{h.format()}'
+
+
+# ----------------------------------------------------------------------
+# `use_fmod`
+
+
+@fp.fpy
+def _sum_for_fmod(xs: list[fp.Real]) -> fp.Real:
+    acc = 0.0
+    for x in xs:
+        acc = acc + x
+    return acc
+
+
+class TestUseFmod:
+    """Which remainder node is emitted is the caller's choice.  It mirrors
+    `SplitLoop`'s flag: a pipeline running both must not emit a mix, since a
+    program spelling a remainder two ways can be lowered by neither backend."""
+
+    @pytest.mark.parametrize('strategy', (ForUnrollStrategy.STRICT,
+                                          ForUnrollStrategy.PEEL))
+    def test_default_is_fmod(self, strategy):
+        src = ForUnroll.apply(_sum_for_fmod.ast, times=1,
+                              strategy=strategy).format()
+        assert 'fp.fmod(' in src
+        assert '%' not in src
+
+    @pytest.mark.parametrize('strategy', (ForUnrollStrategy.STRICT,
+                                          ForUnrollStrategy.PEEL))
+    def test_use_fmod_false_emits_percent(self, strategy):
+        src = ForUnroll.apply(_sum_for_fmod.ast, times=1, strategy=strategy,
+                              use_fmod=False).format()
+        assert '%' in src
+        assert 'fp.fmod(' not in src
+
+    @pytest.mark.parametrize('n', (0, 1, 4, 7))
+    def test_the_spelling_does_not_change_the_answer(self, n):
+        xs = [float(k + 1) for k in range(n)]
+        want = repr(_sum_for_fmod(xs))
+        for use_fmod in (True, False):
+            ast = ForUnroll.apply(_sum_for_fmod.ast, times=1,
+                                  strategy=ForUnrollStrategy.PEEL,
+                                  use_fmod=use_fmod)
+            assert repr(_sum_for_fmod.with_ast(ast)(xs)) == want, (n, use_fmod)

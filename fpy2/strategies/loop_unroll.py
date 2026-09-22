@@ -73,6 +73,7 @@ def unroll_for(
     times: int = 1,
     *,
     strategy: ForUnrollStrategy = ForUnrollStrategy.PEEL,
+    use_fmod: bool = True,
     temp_id: str = 't',
     len_id: str = 'n',
     idx_id: str = 'i'
@@ -89,6 +90,13 @@ def unroll_for(
     times : int
         The number of times to unroll the loop; the rewritten loop
         consumes ``times + 1`` consecutive elements per iteration.
+    use_fmod : bool
+        Spell the synthesized remainder with ``fp.fmod`` (the default)
+        rather than ``%``.  The two agree on every value emitted here,
+        so the choice is which one the consuming backend can lower.
+        Matches :func:`split`'s flag of the same name — a pipeline
+        running both should pass the same value, since a program that
+        spells a remainder two ways can be lowered by neither backend.
 
     Raises
     ------
@@ -139,7 +147,8 @@ def unroll_for(
 
     log = ForUnroll.apply_with_edits(
          func.ast, func.rebase(where), times, strategy,
-         temp_id=NamedId(temp_id), len_id=NamedId(len_id), idx_id=NamedId(idx_id)
+         temp_id=NamedId(temp_id), len_id=NamedId(len_id),
+         idx_id=NamedId(idx_id), use_fmod=use_fmod
     )
 
     return func.with_edits(log)

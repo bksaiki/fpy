@@ -132,6 +132,7 @@ class _ForUnroll(SiteRewriter):
     # Static list sizes of iterables; enables discharging the remainder
     # check at compile time (used by the static-size specialization).
     array_size: ArraySizeAnalysis | None
+    use_fmod: bool
 
     def __init__(
         self,
@@ -143,7 +144,8 @@ class _ForUnroll(SiteRewriter):
         temp_id: NamedId,
         len_id: NamedId,
         idx_id: NamedId,
-        array_size: ArraySizeAnalysis | None
+        array_size: ArraySizeAnalysis | None,
+        use_fmod: bool = True
     ):
         super().__init__()
         self.func = func
@@ -155,6 +157,19 @@ class _ForUnroll(SiteRewriter):
         self.len_id = len_id
         self.idx_id = idx_id
         self.array_size = array_size
+        self.use_fmod = use_fmod
+
+    def _rem(self, a: Expr, b: Expr) -> Expr:
+        """``a`` remainder ``b``, spelled as the caller asked.
+
+        The two differ on a negative dividend and every dividend here is a
+        length, so they agree; which one a backend can lower is what differs,
+        and that is the caller's to know.  Mirrors ``SplitLoop._rem`` -- a
+        pipeline running both must not emit a mix, since a program spelling a
+        remainder two ways can be lowered by neither backend."""
+        if self.use_fmod:
+            return _fmod(a, b)
+        return Mod(a, b, None)
 
     def _body_copy(
         self,
@@ -300,7 +315,7 @@ class _ForUnroll(SiteRewriter):
             n = self.gensym.refresh(self.len_id)
             emitted.append(integer_ctx([
                 _assign(n, _len(_var(t))),
-                AssertStmt(_eq(_fmod(_var(n), _int(k)), _int(0)), None, None),
+                AssertStmt(_eq(self._rem(_var(n), _int(k)), _int(0)), None, None),
             ], stmt.loc))
             emitted.append(self._main_loop(t, _var(n), k, stmt.target, body, stmt.loc, nested_gen))
 
@@ -332,7 +347,7 @@ class _ForUnroll(SiteRewriter):
             m = self.gensym.fresh('m')
             emitted.append(integer_ctx([
                 _assign(n, _len(_var(t))),
-                _assign(m, _sub(_var(n), _fmod(_var(n), _int(k)))),
+                _assign(m, _sub(_var(n), self._rem(_var(n), _int(k)))),
             ], stmt.loc))
             emitted.append(self._main_loop(t, _var(m), k, stmt.target, body, stmt.loc, nested_gen))
 
@@ -353,7 +368,10 @@ class _ForUnroll(SiteRewriter):
 def _lister(
     func: FuncDef, times: int, strategy: ForUnrollStrategy
 ) -> '_ForUnroll':
-    """The pass instance a listing walks `func` with."""
+    """The pass instance a listing walks `func` with.
+
+    `use_fmod` is absent on purpose: it changes which node a remainder is
+    spelled with, never whether a loop is a site."""
     return _ForUnroll(
         func, None, times, strategy, ReachingDefs.analyze(func),
         NamedId('t'), NamedId('n'), NamedId('i'), infer_array_size(func),
@@ -410,7 +428,8 @@ class ForUnroll:
         array_size: ArraySizeAnalysis | None = None,
         temp_id: NamedId | None = None,
         len_id: NamedId | None = None,
-        idx_id: NamedId | None = None
+        idx_id: NamedId | None = None,
+        use_fmod: bool = True
     ) -> FuncDef:
         """
         Apply the transformation.
@@ -435,6 +454,12 @@ class ForUnroll:
         array_size : ArraySizeAnalysis | None
             Pre-computed array-size analysis, used to discharge the
             remainder check when an iterable's length is statically known.
+        use_fmod : bool
+            Spell the synthesized remainder with ``fp.fmod`` (the default)
+            rather than ``%``.  The two agree on every value emitted here, so
+            the choice is which one the consuming backend can lower; it
+            mirrors :meth:`fpy2.transform.SplitLoop.apply`'s flag, and a
+            pipeline running both should pass the same value.
         """
         return ForUnroll.apply_with_edits(
             func,
@@ -446,6 +471,7 @@ class ForUnroll:
             temp_id=temp_id,
             len_id=len_id,
             idx_id=idx_id,
+            use_fmod=use_fmod,
         ).result
 
     @staticmethod
@@ -458,7 +484,8 @@ class ForUnroll:
         array_size: ArraySizeAnalysis | None = None,
         temp_id: NamedId | None = None,
         len_id: NamedId | None = None,
-        idx_id: NamedId | None = None
+        idx_id: NamedId | None = None,
+        use_fmod: bool = True
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
@@ -482,7 +509,7 @@ class ForUnroll:
 
         unroller = _ForUnroll(
             func, where, times, strategy, reaching_defs,
-            temp_id, len_id, idx_id, array_size
+            temp_id, len_id, idx_id, array_size, use_fmod
         )
         out = unroller.apply()
         # `site_idx` is the true loop count: generated loops are never re-visited
