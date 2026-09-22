@@ -17,7 +17,7 @@ from fpy2.backend.triton.emitter import (
     emit_expr,
 )
 from fpy2.transform import Specialize
-from fpy2.types import RealType
+from fpy2.types import ListType, RealType
 
 FP16 = fp.IEEEContext(5, 16)
 
@@ -242,3 +242,112 @@ class TestContextStatements:
             'p = (x.to(tl.float32) * y.to(tl.float32))\n'
             'return (p + p)'
         )
+
+
+_R32 = RealType(fp.FP32)
+_INT = RealType(fp.INTEGER)
+
+
+def _emit(func, argt, ctx=fp.FP32):
+    m = Module()
+    m.add(func, ctx=ctx, arg_types=argt)
+    g = Specialize.apply(m, size_key=True).get(func.name).func
+    return emit_block(g.ast.body, g.ast)
+
+
+class TestMemory:
+    def test_a_flat_load(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], i: fp.Real):
+            return xs[i]
+
+        assert _emit(f, [ListType(_R32, 8), _INT]) == 'return tl.load(xs_ptr + i)'
+
+    def test_a_nested_subscript_flattens_row_major(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xss: list[list[fp.Real]], r: fp.Real, k: fp.Real):
+            return xss[r][k]
+
+        out = _emit(f, [ListType(ListType(_R32, 8), 4), _INT, _INT])
+        assert out == 'return tl.load(xss_ptr + r * 8 + k)'
+
+    @pytest.mark.parametrize('rows,cols', [(4, 8), (3, 5), (1, 2), (7, 1)])
+    def test_the_offset_agrees_with_row_major_flattening(self, rows, cols):
+        """The differential for the indexing: evaluate the emitted offset for
+        every cell and compare against the flat index."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xss: list[list[fp.Real]], r: fp.Real, k: fp.Real):
+            return xss[r][k]
+
+        out = _emit(f, [ListType(ListType(_R32, cols), rows), _INT, _INT])
+        expr = out[out.index('xss_ptr + ') + len('xss_ptr + '):].rstrip(')')
+        for r in range(rows):
+            for k in range(cols):
+                got = eval(expr, {}, {'r': r, 'k': k})
+                assert got == r * cols + k, (r, k, expr)
+
+    def test_a_store(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], i: fp.Real):
+            out[i] = xs[i]
+            return out
+
+        emitted = _emit(f, [ListType(_R32, 8), ListType(_R32, 8), _INT])
+        assert emitted.splitlines()[0] == \
+            'tl.store(out_ptr + i, tl.load(xs_ptr + i))'
+
+    def test_an_unproven_length_is_refused(self):
+        """A kernel argument is a flat pointer, so an unproven length has no
+        offset arithmetic to emit."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], i: fp.Real):
+            return xs[i]
+
+        with pytest.raises(TritonEmitError, match='no proven length'):
+            _emit(f, [ListType(_R32), _INT])
+
+
+class TestMask:
+    def test_a_guard_becomes_the_mask_on_both_ends(self):
+        """`tile_loops` emits `if j < n` around an element write.  That is not
+        a branch: it is the `mask=` of every access under it."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            if j < n:
+                out[j] = xs[j]
+            return out
+
+        emitted = _emit(
+            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT])
+        first = emitted.splitlines()[0]
+        assert 'if' not in emitted
+        assert first == (
+            'tl.store(out_ptr + j, '
+            'tl.load(xs_ptr + j, mask=(j < n), other=0.0), mask=(j < n))'
+        )
+
+
+class TestLiteralCast:
+    def test_a_numeric_literal_is_parenthesized(self):
+        """`2.to(...)` lexes as `2.` then `to` -- a different program."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], i: fp.Real):
+            return xs[i] * 2
+
+        out = _emit(f, [ListType(_R32, 8), _INT])
+        assert '(2).to(tl.float32)' in out
+        assert '2.to(' not in out
+
+    def test_everything_emitted_is_parseable_python(self):
+        """The emitter's output has to lex, whatever else it is."""
+        import ast as pyast
+
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            if j < n:
+                out[j] = xs[j] * 2 + xs[j]
+            return out
+
+        emitted = _emit(
+            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT])
+        pyast.parse(emitted)

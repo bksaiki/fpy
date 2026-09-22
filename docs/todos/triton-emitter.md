@@ -151,7 +151,36 @@ against a hand-written kernel.
 Tests: the `for k in range(K)` body emits `dot_exact`'s loop; an unproven trip
 count is refused.
 
+### Phase 3b — port the dispatch onto `Visitor`
+
+Phase 3 dispatched with a hand-rolled `match` over node types.  Replace it
+with `Visitor`, as `CppEmitter` does.
+
+Two reasons, and the weaker one is not the one it looks like.  Dispatch walks
+the *MRO* -- `UnaryOp` maps to `_visit_unaryop` and there is no `Round` entry
+-- so the standard visitor does not separate `Round` from arithmetic by
+itself; that isinstance check just moves inside one method instead of riding
+on the order of `match` arms.  What it does buy is **exhaustiveness**: 35
+abstract methods mean a node this backend cannot spell has a *named* refusal,
+and a new AST node breaks the build rather than falling into a `case _`.
+
 ### Phase 3 — memory
+
+**Done.**  Three things worth recording.
+
+A numeric literal cannot take `.to(...)` directly: `2.to(tl.float32)` lexes as
+`2.` followed by `to`, which is a different program.  `_explicit_cast`
+parenthesizes anything that is not a name or a call, so `dot_exact`'s bare
+`x.to(tl.float32)` is unchanged.
+
+Comparisons and the boolean connectives needed spellings of their own.
+Neither is in the op table, correctly -- they round nothing -- but a chain
+joins with `&` rather than `and`, because Python's keyword short-circuits and
+returns an operand rather than a tile.
+
+`other=0.0` on a masked load is *safe* rather than meaningful: a masked-off
+lane's value feeds only that lane, and the store that would commit it carries
+the same mask.
 
 `tl.load` / `tl.store` at the loop boundary, with the mask from the enclosing
 guard and `other=` from the operation's identity.  Subscript chains

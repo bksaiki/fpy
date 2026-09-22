@@ -29,13 +29,16 @@ from ...analysis import (
     FormatAnalysis,
     FormatInfer,
 )
-from ...analysis.array_size import trip_count
+from ...analysis.array_size import ListSize, trip_count
 from ...analysis.format_infer import rounds_exactly
 from ...ast import (
+    And,
     Assign,
     BinaryOp,
     BoolVal,
     Cast,
+    Compare,
+    CompareOp,
     ContextStmt,
     Decnum,
     Expr,
@@ -43,9 +46,14 @@ from ...ast import (
     FuncDef,
     Hexnum,
     Id,
+    If1Stmt,
     IfExpr,
+    IndexedAssign,
     Integer,
+    ListRef,
     NamedId,
+    Not,
+    Or,
     Rational,
     ReturnStmt,
     Round,
@@ -66,6 +74,16 @@ __all__ = ['TritonEmitError', 'emit_block', 'emit_expr']
 
 class TritonEmitError(CompileError):
     """A program this backend declines to emit."""
+
+
+_COMPARE: dict[CompareOp, str] = {
+    CompareOp.LT: '<',
+    CompareOp.LE: '<=',
+    CompareOp.GT: '>',
+    CompareOp.GE: '>=',
+    CompareOp.EQ: '==',
+    CompareOp.NE: '!=',
+}
 
 
 class _IndentedWriter:
@@ -96,12 +114,21 @@ class _ExprEmitter:
         func: FuncDef,
         format_info: FormatAnalysis,
         ctx_use: ContextUseAnalysis,
+        sizes: ArraySizeAnalysis,
         op_table: ScalarOpTable,
     ):
         self.func = func
         self.format_info = format_info
         self.ctx_use = ctx_use
+        self.sizes = sizes
         self.op_table = op_table
+        self.mask: str | None = None
+        """The guard in force, as a Triton predicate.
+
+        A `tile_loops` mask is not a branch: its body runs for every lane and
+        the guard becomes the `mask=` of each load and store.  `None` where
+        nothing encloses the access.
+        """
 
     # -- storage and context -------------------------------------------
 
@@ -149,6 +176,15 @@ class _ExprEmitter:
         return self._explicit_cast(code, want)
 
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
+        """*code* cast to *want*.
+
+        A numeric literal is parenthesized first: `2.to(...)` lexes as `2.`
+        followed by `to`, which is a different program and usually a syntax
+        error.  A name or a call needs no parentheses, and `dot_exact` spells
+        it bare.
+        """
+        if not (code.isidentifier() or code.endswith(')')):
+            code = f'({code})'
         return f'{code}.to({want.format()})'
 
     # -- dispatch ------------------------------------------------------
@@ -240,6 +276,75 @@ class _ExprEmitter:
                 return sig.in_tys[0]
         return None
 
+    # -- memory --------------------------------------------------------
+
+    def _flatten(self, e: ListRef) -> tuple[NamedId, list[Expr]]:
+        """A subscript chain as its base and indices, outermost first."""
+        indices: list[Expr] = []
+        cur: Expr = e
+        while isinstance(cur, ListRef):
+            indices.append(cur.index)
+            cur = cur.value
+        if not isinstance(cur, Var):
+            raise TritonEmitError(
+                'a subscript of something other than a name has no Triton '
+                'spelling'
+            )
+        indices.reverse()
+        return cur.name, indices
+
+    def _strides(self, base: NamedId, rank: int) -> list[int]:
+        """Row-major strides for *base*, from its proven shape.
+
+        A kernel argument is a flat pointer, so an unproven length has no
+        offset arithmetic to emit -- which is why this backend stores no list
+        whose length it cannot prove.
+        """
+        bound = next(
+            (b for defn, b in self.sizes.by_def.items() if defn.name == base),
+            None,
+        )
+        dims: list[int] = []
+        while isinstance(bound, ListSize):
+            if not isinstance(bound.size, int):
+                raise TritonEmitError(
+                    f'`{base}` has no proven length, so its offsets cannot be '
+                    'computed'
+                )
+            dims.append(bound.size)
+            bound = bound.elt
+        if len(dims) < rank:
+            raise TritonEmitError(
+                f'`{base}` is subscripted {rank} deep but only {len(dims)} '
+                'dimensions are proven'
+            )
+        strides = [1] * rank
+        for i in range(rank - 2, -1, -1):
+            strides[i] = strides[i + 1] * dims[i + 1]
+        return strides
+
+    def _offset(self, base: NamedId, indices: list[Expr]) -> str:
+        """The flat element offset, row-major."""
+        strides = self._strides(base, len(indices))
+        terms = [
+            self.emit(idx) if st == 1 else f'{self.emit(idx)} * {st}'
+            for idx, st in zip(indices, strides)
+        ]
+        return ' + '.join(terms)
+
+    def _emit_load(self, e: ListRef) -> str:
+        """`tl.load`, masked by whatever guard is in force.
+
+        ``other=0.0`` is safe rather than meaningful: a masked-off lane's
+        value feeds only that lane's arithmetic, and the store that would
+        commit it carries the same mask, so it is discarded.
+        """
+        base, indices = self._flatten(e)
+        addr = f'{base}_ptr + {self._offset(base, indices)}'
+        if self.mask is None:
+            return f'tl.load({addr})'
+        return f'tl.load({addr}, mask={self.mask}, other=0.0)'
+
     def _emit_round(self, e: Round | Cast) -> str:
         """An explicit `fp.round` / `fp.cast`, which is a *cast*, not an
         operation the table dispatches.
@@ -260,6 +365,32 @@ class _ExprEmitter:
                 'conversion, so it has no cast spelling'
             )
         return self._explicit_cast(arg, self._storage(e))
+
+    def _emit_compare(self, e: Compare) -> str:
+        """A comparison, which rounds nothing and so is not in the op table.
+
+        FPy chains like Python does, and a chain is the conjunction of its
+        links -- but `and` short-circuits and has no elementwise meaning on a
+        tile, so the links join with `&`.  Each operand is emitted once per
+        link it appears in; they are names by the time the normal form is
+        done, so nothing is recomputed.
+        """
+        codes = [self.emit(a) for a in e.args]
+        links = [
+            f'({codes[i]} {_COMPARE[op]} {codes[i + 1]})'
+            for i, op in enumerate(e.ops)
+        ]
+        return links[0] if len(links) == 1 else '(' + ' & '.join(links) + ')'
+
+    def _emit_connective(self, e: And | Or) -> str:
+        """`and` / `or`, spelled elementwise.
+
+        Python's keywords short-circuit and return an operand rather than a
+        tile, so a lane-wise connective has to be `&` / `|`.  Both arms are
+        evaluated, which is sound for the same reason `tl.where` is.
+        """
+        op = '&' if isinstance(e, And) else '|'
+        return '(' + f' {op} '.join(self.emit(a) for a in e.args) + ')'
 
     def _emit_where(self, e: IfExpr) -> str:
         """``tl.where``, with both arms in the result's storage.
@@ -296,6 +427,14 @@ class _ExprEmitter:
                 )
             case Round() | Cast():
                 return self._emit_round(e)
+            case Compare():
+                return self._emit_compare(e)
+            case And() | Or():
+                return self._emit_connective(e)
+            case Not():
+                return f'(~{self.emit(e.arg)})'
+            case ListRef():
+                return self._emit_load(e)
             case IfExpr():
                 return self._emit_where(e)
             case UnaryOp():
@@ -317,25 +456,6 @@ class _ExprEmitter:
                 raise TritonEmitError(
                     f'no Triton spelling for `{type(e).__name__}`'
                 )
-
-
-def emit_expr(e: Expr, func: FuncDef) -> str:
-    """*e*, as Triton source.
-
-    *func* is the function it belongs to; its analyses decide the storage each
-    operand is held in and the context the operation rounds under.
-    """
-    if not isinstance(e, Expr):
-        raise TypeError(f"Expected an 'Expr', got {e}")
-    if not isinstance(func, FuncDef):
-        raise TypeError(f"Expected a 'FuncDef', got {func}")
-    def_use = DefineUse.analyze(func)
-    return _ExprEmitter(
-        func,
-        FormatInfer.analyze(func),
-        ContextUse.analyze(func, def_use=def_use),
-        make_op_table(),
-    ).emit(e)
 
 
 def _static_count(stmt: ForStmt, sizes: ArraySizeAnalysis) -> int:
@@ -362,7 +482,7 @@ def _emit_stmts(
     sizes: ArraySizeAnalysis,
     out: _IndentedWriter,
 ) -> None:
-    """Statements, less the ones that touch memory or the launch grid.
+    """Statements, less the ones that touch the launch grid.
 
     A `with` emits nothing of its own: a context change is a change of
     *storage*, which the dispatch already reads per expression.
@@ -377,6 +497,19 @@ def _emit_stmts(
                 out.add_line(f'{stmt.target} = {emitter.emit(stmt.expr)}')
             case ReturnStmt():
                 out.add_line(f'return {emitter.emit(stmt.expr)}')
+            case IndexedAssign():
+                addr = (f'{stmt.var}_ptr + '
+                        f'{emitter._offset(stmt.var, list(stmt.indices))}')
+                val = emitter.emit(stmt.expr)
+                mask = '' if emitter.mask is None else f', mask={emitter.mask}'
+                out.add_line(f'tl.store({addr}, {val}{mask})')
+            case If1Stmt():
+                # a `tile_loops` guard is a mask, not a branch: the body runs
+                # for every lane and the predicate rides on each access
+                prev = emitter.mask
+                emitter.mask = emitter.emit(stmt.cond)
+                _emit_stmts(stmt.body, emitter, sizes, out)
+                emitter.mask = prev
             case ContextStmt():
                 _emit_stmts(stmt.body, emitter, sizes, out)
             case ForStmt():
@@ -395,6 +528,26 @@ def _emit_stmts(
                 )
 
 
+def emit_expr(e: Expr, func: FuncDef) -> str:
+    """*e*, as Triton source.
+
+    *func* is the function it belongs to; its analyses decide the storage each
+    operand is held in and the context the operation rounds under.
+    """
+    if not isinstance(e, Expr):
+        raise TypeError(f"Expected an 'Expr', got {e}")
+    if not isinstance(func, FuncDef):
+        raise TypeError(f"Expected a 'FuncDef', got {func}")
+    def_use = DefineUse.analyze(func)
+    return _ExprEmitter(
+        func,
+        FormatInfer.analyze(func),
+        ContextUse.analyze(func, def_use=def_use),
+        ArraySizeInfer.analyze(func),
+        make_op_table(),
+    ).emit(e)
+
+
 def emit_block(block: StmtBlock, func: FuncDef) -> str:
     """*block*, as Triton source, for a block of straight-line statements."""
     if not isinstance(block, StmtBlock):
@@ -402,12 +555,14 @@ def emit_block(block: StmtBlock, func: FuncDef) -> str:
     if not isinstance(func, FuncDef):
         raise TypeError(f"Expected a 'FuncDef', got {func}")
     def_use = DefineUse.analyze(func)
+    sizes = ArraySizeInfer.analyze(func)
     emitter = _ExprEmitter(
         func,
         FormatInfer.analyze(func),
         ContextUse.analyze(func, def_use=def_use),
+        sizes,
         make_op_table(),
     )
     out = _IndentedWriter()
-    _emit_stmts(block, emitter, ArraySizeInfer.analyze(func), out)
+    _emit_stmts(block, emitter, sizes, out)
     return out.render()
