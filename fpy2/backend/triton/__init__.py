@@ -10,6 +10,7 @@ hold it: if compilation succeeds, the emitted kernel must behave as the FPy
 interpreter does.  A refusal is always acceptable; a different answer is not.
 """
 
+from .compiler import TritonCompiler
 from .emitter import (
     KernelSource,
     TritonEmitError,
@@ -27,6 +28,7 @@ __all__ = [
     'KernelSource',
     'ScalarOpTable',
     'TileResult',
+    'TritonCompiler',
     'TritonEmitError',
     'TritonNormalizeError',
     'TritonOp',

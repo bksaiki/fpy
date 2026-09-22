@@ -282,6 +282,32 @@ form could not have been lowered here at all. It is also unnecessary:
 so a caller picks the spelling its backend can lower. Neither spelling helps
 here, which is why `MASK` having none is the point.
 
+### The compiler — `fp.TritonCompiler`
+
+`TritonCompiler().compile(func, ctx=..., arg_types=...)` returns a
+`KernelSource`: the `@triton.jit` text, its parameters, and the derived
+`enable_fp_fusion`.  `compile_module` does every public entry.
+
+**What it is for is the order.**  Three of the steps' orderings are not
+obvious and were each found by hitting them:
+
+- `Specialize` first — a kernel argument is a bare pointer, so the only length
+  available for offset arithmetic is the one specialization proved.
+- `ConstFold` before emitting — `tl.static_range` needs its trip count as a
+  constant, and a `range(K)` naming a *foreign* constant arrives as a free
+  variable, since `Specialize` monomorphizes contexts and types, not closure
+  values.
+- Tiling *after* the normal form — a masked body is a guarded element write,
+  which `SimplifyIf` refuses to hoist, so normalizing after tiling would
+  reject this pipeline's own output.
+
+**And what the ABI asks of the program.**  A kernel writes through pointers
+its launcher owns and returns nothing, and its tile width is a compile-time
+parameter — so a compiled function takes its output as an argument and its
+tile width as one too.  Both are the principle *Not recommended* states for
+the batch dimension: say it in the program rather than invent a convention.
+A missing tile-width parameter is a refusal, not a guess.
+
 ### Target description — `fpy2/backend/triton/`
 
 `types.py`, `storage.py`, `target.py`; 37 tests, no emitter. `StorageInfer` runs
