@@ -2,19 +2,19 @@
 Module-level specialization.
 
 Expands a :class:`~fpy2.Module` into a new ``Module`` where every function is
-fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-types)``
-spec.  Each unique spec becomes one entry; cross-function calls are rewired
-to the appropriate spec.
+fully monomorphized at one ``(FuncDef, _Instance)`` spec.  Each unique spec
+becomes one entry; cross-function calls are rewired to the appropriate spec.
 
-A spec is keyed on two axes.  The refined argument *types* say what each
-argument may be -- a public entry supplies them directly, a callee gets them
-from FormatInfer's per-call-site ``arg_fmts`` and the caller-proven lengths.
-The pinned argument *values* say which value it is, for the contexts and
-rounding modes partial evaluation resolved at the call site; those are
-substituted into the body rather than annotated, since a value is not a type.
-Both axes are exactly what ``Monomorphize`` is given, so one fingerprint means
-one body.  An argument that pins nothing contributes nothing, leaving
-polymorphic specs unchanged.
+:class:`_Instance` names the axes a spec is keyed on.  The refined argument
+*types* say what each argument may be -- a public entry supplies them
+directly, a callee gets them from FormatInfer's per-call-site ``arg_fmts``
+and the caller-proven lengths.  The pinned argument *values* say which value
+it is, for the contexts and rounding modes partial evaluation resolved at the
+call site; those are substituted into the body rather than annotated, since a
+value is not a type.  The derived *bounds* say what the caller's digit-bound
+analysis proved inside the callee.  Types and values are exactly what
+``Monomorphize`` is given, so one key means one body.  An argument that pins
+nothing contributes nothing, leaving polymorphic specs unchanged.
 """
 
 import hashlib
@@ -29,7 +29,7 @@ from ..analysis.array_size import (
     concrete_size,
 )
 from ..analysis.define_use import AssignDef, DefineUse
-from ..analysis.digit_bound import DigitBoundParams, DigitBoundStore, Terms
+from ..analysis.digit_bound import DigitBoundParams
 from ..analysis.format_infer import (
     FormatAnalysis,
     FormatBound,
@@ -161,11 +161,10 @@ class _Instance(NamedTuple):
     """How a function is instantiated -- everything about a spec except
     which function it is.
 
-    Structural: every field is a value with its own equality, so two
-    instantiations agree exactly when they describe the same thing.  That is
-    what lets :meth:`Specialize.apply` compare a round's whole output
-    against the one before it without going through a name, and
-    :func:`_mangle_private` is the only place any of it becomes text.
+    Every field has its own equality, which is what lets
+    :meth:`Specialize.apply` compare a round's output against the one before
+    it without going through a name.  :func:`_mangle_private` is the only
+    place any of it becomes text.
     """
     ctx: Context | None
 
@@ -191,9 +190,9 @@ _Shape: TypeAlias = 'frozenset[tuple[_Instance, int]]'
 """How many specs of each instantiation one expansion produced.
 
 What :meth:`Specialize.apply` compares to decide it has reached a fixpoint.
-The names would nearly do -- a private's is a digest of its instantiation --
-except that a *public* keeps its entry name, so its instantiation would be
-invisible to the comparison however much it sharpened.
+The names would nearly do, except that a *public* keeps its entry name, so
+its instantiation would be invisible to the comparison however much it
+sharpened.
 """
 
 
@@ -245,27 +244,20 @@ def _is_trivial_bound(f: FormatBound) -> bool:
 def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
     """What a caller's analysis derives *inside* a callee, as a set.
 
-    A relation between arguments -- ``n`` is ``xs``'s greatest exponent less
-    twelve -- lives in a constraint system over shared variables, so it
-    reduces to no per-argument format and cannot be keyed directly.  What it
-    yields can be: two callers that bound a callee differently derive
-    different bounds here and so take separate specs.  Sharing one would let
-    whichever caller was analyzed first decide the other's storage.
+    A relation between arguments cannot be keyed directly (see
+    :class:`DigitBoundParams`), but what it yields can: two callers that
+    bound a callee differently derive different bounds here and so take
+    separate specs.  Sharing one would let whichever caller was analyzed
+    first decide the other's storage.
 
-    Over the *expressions* as well as the definitions.  A callee that assigns
+    Over the *expressions* as well as the definitions: a callee that assigns
     nothing -- ``with ctx: return round(x)`` -- has only its parameters in
-    ``by_def``, so two callers deriving different bounds inside it would key
-    the same and share a spec, which is the sharing this exists to prevent.
-    The two maps together are also what the backend reads, so specs agreeing
-    on both emit the same code.
+    ``by_def``, so two callers would key the same.  The two maps together are
+    also what the backend reads.
 
-    A set, because both maps enumerate through dicts keyed on AST nodes,
-    whose order is an artefact of the walk rather than of the bounds.
-    ``by_def`` carries its name, which is nearly free and disambiguates;
-    ``by_expr`` contributes its bounds without keys -- rendering every
-    expression to key them costs more than the sharper key is worth -- so
-    how *many* times a bound occurs is what is left to tell two callers
-    apart.
+    A set, because both maps enumerate in AST-node order, an artefact of the
+    walk.  ``by_def`` carries its name; ``by_expr`` contributes bounds
+    without keys, so an occurrence *count* is what tells two callers apart.
     """
     bounds = (*sub.by_def.values(), *sub.by_expr.values())
     if all(_is_trivial_bound(f) for f in bounds):
@@ -310,7 +302,7 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
     concrete survives at any level.
 
     Size *variables* (``NamedId``) are per-analysis gensyms: letting one into a
-    fingerprint would make spec keys and mangled names differ from run to run.
+    key would make spec keys and mangled names differ from run to run.
     So only ``int`` lengths survive, and the structure around them is kept only
     where one does, so that nested and tuple-carried lengths line up
     positionally.
@@ -326,17 +318,15 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
             if all(e is None for e in elts):
                 return None
             return TupleSize(elts)
-        case None:
+        case _:
             return None
 
 
 def _digest(x: object) -> str:
     """A short, reproducible digest of *x*'s structure.
 
-    ``repr`` is the rendering, which every value a key holds defines
-    structurally.  A `frozenset` is sorted first: it enumerates in hash
-    order, which does not survive across processes, and this reaches
-    generated code.
+    A `frozenset` is sorted first: it enumerates in hash order, which does
+    not survive across processes, and this reaches generated code.
     """
     raw = repr(sorted(map(repr, x))) if isinstance(x, frozenset) else repr(x)
     return hashlib.sha1(raw.encode()).hexdigest()[:8]
@@ -347,7 +337,7 @@ def _mangle_private(base: str, inst: _Instance) -> str:
     distinguishable in the emitted code.
 
     The key decides identity; this only has to label it, uniquely and
-    reproducibly -- which is why it is the only place a key becomes text.
+    reproducibly.
 
     *base* is the unmangled name, which the caller tracks: specialization
     re-reads its own output, and recovering the base by stripping the suffix
@@ -556,11 +546,11 @@ class Specialize:
     """Module → Module pass that expands public entries into a flat set
     of fully-monomorphized specializations.
 
-    Each ``(FuncDef, calling-ctx, arg-types-fingerprint)`` triple becomes
-    one entry; cross-function calls are rewired to the appropriate spec.
-    Public entries' user-given names are preserved; transitively-reached
-    private specs get a stable mangled name combining the original name
-    with the ctx and arg-types fingerprints.
+    Each ``(FuncDef, _Instance)`` pair becomes one entry; cross-function
+    calls are rewired to the appropriate spec.  Public entries' user-given
+    names are preserved; transitively-reached private specs get a stable
+    mangled name combining the original name with a digest of the
+    instantiation.
 
     The output is assembled by registering only the public specs with
     :meth:`Module.add`; private specs surface through ``add``'s eager
@@ -645,10 +635,9 @@ class Specialize:
         economics as the ctx and format axes.  ``False`` keeps keys and mangled
         names identical to a size-blind run.
 
-        *bound_params* is filled, by spec name, with the constraint store and argument
-        terms each callee's caller bound it to.  Analyzing a spec on its own
-        loses any relation *between* its arguments, which no per-argument
-        format can carry; replaying them recovers it.
+        *bound_params* is filled, by spec name, with the constraint store
+        and argument terms each callee's caller bound it to; replaying them
+        recovers what a spec analyzed on its own would lose.
         """
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
@@ -760,7 +749,7 @@ class Specialize:
             _post_order(k)
 
         # --- 3. Name each spec: a public keeps its entry name, a private
-        #        is mangled from the fingerprints.
+        #        is mangled from its instantiation.
         spec_to_public_name: dict[_SpecKey, str] = {}
         for entry_name, k in public_keys:
             spec_to_public_name.setdefault(k, entry_name)
@@ -796,7 +785,5 @@ class Specialize:
         out = Module(module.name)
         for entry_name, k in public_keys:
             out.add(new_funcs[k], name=entry_name)
-        # ... and what it instantiated, so the caller can tell one round's
-        # output from the next without reading a name off it
         shape = frozenset(Counter(k.inst for k in monos).items())
         return out, shape

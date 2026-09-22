@@ -564,9 +564,9 @@ class CppCompiler(Backend):
         def_use = DefineUse.analyze(ast)
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
         array_size = ArraySizeInfer.analyze(ast)
-        # `use_digit_bounds`: storage selection is the one consumer of the relational
-        # bounds -- they are what puts a rescaled rounding in an `int16_t`
-        # rather than nothing at all.
+        # `use_digit_bounds`: storage selection is the one consumer of the
+        # relational bounds, which are what put a rescaled rounding in an
+        # `int16_t`.
         format_info = FormatInfer.analyze(
             ast,
             def_use=def_use,

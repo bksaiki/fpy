@@ -16,8 +16,6 @@ import z3
 from ...utils import Unionfind
 
 _Z3Solver: TypeAlias = 'z3.Solver | z3.Optimize'
-"""Either z3 engine: both take assertions and answer ``check``, and which one
-a query runs on is :attr:`Z3Solver.bisect`'s business."""
 
 __all__ = [
     'Constraint',
@@ -120,8 +118,7 @@ class Solver(Protocol):
     """Backend interface, kept small so the store is not tied to z3.
 
     Incremental: the store states each constraint once, as it is made, and
-    asks many objectives against the accumulated system.  Re-stating the whole
-    system per query is what a shared store makes expensive.
+    asks many objectives against the accumulated system.
     """
 
     def assume(self, constraint: Constraint) -> None:
@@ -133,15 +130,13 @@ class Solver(Protocol):
         what was assumed -- every caller may use the answer as one.
 
         ``math.inf`` when unbounded **or** undecided: a backend that cannot
-        answer must degrade rather than raise, since unbounded is the answer
-        the analysis gives without a store at all.  ``-math.inf`` when the
+        answer must degrade rather than raise.  ``-math.inf`` when the
         constraints are unsatisfiable.
 
         *cutoff*, where given, says the caller will not distinguish anything
-        at or above it, so the backend may stop as soon as it knows the
-        maximum gets there and answer ``inf``.  That turns a search into one
-        refutation; ignoring it is correct, since the exact maximum is an
-        upper bound whatever the caller asked for.
+        at or above it, so the backend may answer ``inf`` as soon as it knows
+        the maximum gets there -- one refutation instead of a search.
+        Ignoring it is correct.
         """
         ...
 
@@ -160,15 +155,9 @@ class Z3Solver:
     """Find the maximum by refuting ``objective >= k`` rather than by asking
     z3 to optimize.
 
-    On, because the component's plain solver is already built: a capped
-    :meth:`maximize` asks satisfiability questions of it, so refutation
-    reuses a solver that has been encoded once and has been learning ever
-    since, where `Optimize` is a second encoding of the same constraints and
-    its search costs more than the dozen checks refutation spends.
-
-    Never off in production.  The `Optimize` path stays reachable so that
-    `test_both_backends_agree` can check the two against each other, which is
-    the only thing that would catch `_bisect` drifting from it.
+    Refutation reuses the plain solver already built for the component,
+    where `Optimize` is a second encoding of the same constraints.  Off only
+    so `test_both_backends_agree` can check the two against each other.
     """
 
     _env: dict[_Var, z3.ArithRef]
@@ -182,15 +171,12 @@ class Z3Solver:
     """Constraints by component root, kept unencoded until asked for."""
 
     _built: dict[tuple[int, bool], _Z3Solver]
-    """A component's solvers, by root and by whether it optimizes.  A `check`
-    does not need `Optimize`'s machinery and is markedly faster without it,
-    and both are cheap to keep: each is encoded once and then learns
-    incrementally."""
+    """A component's solvers, by root and by whether it optimizes.  Each is
+    encoded once and then learns incrementally."""
 
     _encoded: dict[Term, z3.ArithRef]
-    """Each term's z3 form, built once.  The same terms recur across the
-    constraints of one store far more often than not, and rebuilding the
-    expression costs more than the check that follows it."""
+    """Each term's z3 form, built once: the same terms recur across one
+    store's constraints."""
 
     _span: int
     """Total magnitude of the constants assumed so far."""
@@ -199,13 +185,10 @@ class Z3Solver:
     """Largest coefficient magnitude assumed so far.
 
     With :attr:`_span` this says how far a bound the system implies can
-    reach: its constants scaled by the widest coefficient over them.  Past
-    that nothing is holding the objective down, which is where the upward
-    probe stops and answers ``inf``.  Only an upper cutoff, and crossing it
-    merely loosens the answer -- so a ceiling set too low costs precision,
-    never soundness.  There is no matching floor: a satisfiable system has
-    some solution, so the downward probe always terminates, and stopping it
-    early would report a finite maximum as something below it.
+    reach, which is where the upward probe stops and answers ``inf``.
+    Crossing it only loosens the answer, so a ceiling set too low costs
+    precision, never soundness.  There is no matching floor: a satisfiable
+    system has some solution, so the downward probe always terminates.
     """
 
     def __init__(self, timeout_ms: int = 10_000, bisect: bool = True):
@@ -232,20 +215,14 @@ class Z3Solver:
         self._encoded[term] = acc
         return acc
 
-    def _find(self, v: int) -> int:
-        """*v*'s component, which it joins as a singleton if it has none."""
-        return self._components.add(v)
-
     def _union(self, vs: set[int]) -> int:
         """Merge every component the variables *vs* touch into one, and
         return the root it now has.
 
-        The side holding the most constraints survives, so the fewest of
-        them move, and it keeps its live solvers -- which simply learn what
-        moved in, where rebuilding would throw away everything z3 has
-        inferred.
+        The side holding the most constraints survives, so the fewest move
+        and its live solvers just learn what moved in.
         """
-        roots = {self._find(v) for v in vs}
+        roots = {self._components.add(v) for v in vs}
         root = max(roots, key=lambda r: len(self._group.get(r, ())))
         for other in roots - {root}:
             self._components.union(root, other)   # *root* stays the leader
@@ -301,15 +278,12 @@ class Z3Solver:
         leaving it out is exact, not an approximation -- and most of them
         reach nothing, so most never need encoding at all.
         """
-        roots = {self._find(v) for v in named} if named else set()
+        roots = {self._components.add(v) for v in named} if named else set()
         if len(roots) > 1:
             # An objective spanning several components names no single one,
-            # so its solver would be built from scratch every time.  Merge
-            # them instead: what is asked together will be asked together
-            # again -- an `msb` and the `lsb` beside it are related by nothing
-            # but the question -- and a constraint sharing no variable with
-            # the objective cannot move its bound, so the answer is the same
-            # either way.
+            # so its solver would be built from scratch every time.  What is
+            # asked together will be asked together again, and merging does
+            # not change any answer.
             roots = {self._union(named)}
         key = (min(roots, default=-1), optimize)
         cached = self._built.get(key)
@@ -368,13 +342,11 @@ class Z3Solver:
     ) -> int | float:
         """The maximum by refutation: ``max >= k`` is one satisfiability
         question, and monotone in *k*, so a bracket and a bisection inside it
-        settle it in a handful of cheap checks -- where asking z3 to optimize
-        costs far more for the same answer.
+        settle it in a handful of cheap checks.
 
-        The first check also carries a model, and the objective's value there
-        is one it genuinely attains, so the bracket starts from a real lower
-        bound instead of from zero.  Widening it by doubling keeps the search
-        logarithmic; stepping through attained values one at a time would not.
+        The first check carries a model, and the objective's value there is
+        one it genuinely attains, so the bracket starts from a real lower
+        bound; doubling to widen keeps the search logarithmic.
 
         Sound because ``unsat`` is never spurious: every ``k`` it rules out is
         a genuine upper bound, so the answer is never below the true maximum.
@@ -397,8 +369,6 @@ class Z3Solver:
         # not have to be walked to from zero
         found = solver.model().eval(e, model_completion=True)
         lo = found.as_long() if z3.is_int_value(found) else 0
-        if not self._reaches(solver, e, lo):
-            lo = 0          # the model said nothing usable; fall back
 
         # widen upward by doubling the gap until the objective cannot reach
         step, hi = 1, lo + 1

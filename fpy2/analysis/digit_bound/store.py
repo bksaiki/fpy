@@ -1,13 +1,10 @@
 """
 A relational store over integer exponents.
 
-Linear constraints over integer variables, and one query: the precision two of
-them bracket.  Everything stays in *exponent* space, which is what keeps
-``2**x`` out of the constraints and the whole store decidable.
-
-What the variables mean is :mod:`fpy2.analysis.digit_bound.infer`'s business;
-nothing here walks an AST.  How a question is answered is
-:mod:`fpy2.analysis.digit_bound.solver`'s.
+Linear constraints over integer variables, and one query: the precision two
+of them bracket.  Everything stays in *exponent* space, which keeps ``2**x``
+out of the constraints and the store decidable.  What the variables mean is
+:mod:`infer`'s business, and how a question is answered is :mod:`solver`'s.
 """
 
 import math
@@ -78,13 +75,12 @@ class DigitBoundStore:
         """Replay every constraint over *elementwise* variables alone, from
         *mark* on, with each variable renamed by *subst*.  Returns a new mark.
 
-        Such a constraint holds at every index of the lists it is about, so it
-        holds at an index drawn from any subset of them -- which is what a
-        copy over fresh variables says, and is how a part of a list gets the
-        facts the whole one has without *sharing* a variable with it.  One
-        naming a variable outside *elementwise* may be an aggregate over the
-        whole list (``logb(sum xs) <= msb(xs) + k``), true of the list and false
-        of a part, so it is left alone.
+        Such a constraint holds at every index of the lists it is about, so
+        it holds at an index drawn from any subset -- which is how a part of
+        a list gets the facts the whole one has without *sharing* a variable
+        with it.  One naming a variable outside *elementwise* may be an
+        aggregate (``logb(sum xs) <= msb(xs) + k``), true of the list and
+        false of a part, so it is left alone.
 
         *subst* grows in place: a second call for the same index set reuses
         the renaming, which is what relates two parts taken over one range.
@@ -101,7 +97,9 @@ class DigitBoundStore:
                 c.lhs.rename(subst), c.op,
                 tuple(t.rename(subst) for t in c.rhs),
             ))
-        return end
+        # past the copies too: they are elementwise themselves, so a mark of
+        # *end* would replay them again on the next call for this key
+        return len(self._constraints)
 
     def le(self, lhs: Term, rhs: Term | int) -> None:
         """``lhs <= rhs``."""
@@ -112,7 +110,8 @@ class DigitBoundStore:
         self.le(_as_term(rhs), lhs)
 
     def eq(self, lhs: Term, rhs: Term | int) -> None:
-        """``lhs == rhs``, the shape a definitional equality takes."""
+        """``lhs == rhs``.  The walk states one-directional bounds and never
+        reaches for this; it is here for a constraint set built by hand."""
         self._add(Constraint(lhs, '==', (_as_term(rhs),)))
 
     def le_max(self, lhs: Term, rhs: Iterable[Term | int]) -> None:
@@ -164,9 +163,14 @@ class DigitBoundStore:
             self._decisions[key] = answer
         return answer
 
+    def _free(self, term: Term) -> bool:
+        """Whether *term* names a variable no constraint mentions, which runs
+        to both infinities and so leaves *term* unbounded either way."""
+        return any(v.index not in self._constrained for v, _ in term.coeffs)
+
     def _at_least(self, term: Term, k: int) -> bool:
         """Can *term* reach *k*?  A free variable reaches anything."""
-        if any(v.index not in self._constrained for v, _ in term.coeffs):
+        if self._free(term):
             return True
         return self._solver.maximize(term, k) >= k
 
@@ -174,12 +178,10 @@ class DigitBoundStore:
         """*term*'s greatest value, asking the solver only where the answer
         is not already settled.
 
-        A variable no constraint mentions is free, so any term naming one is
-        unbounded above -- with either sign, since a free variable runs to
-        both infinities.  Saying so costs a set lookup where a solver would
-        have to search.
+        A free term is unbounded above, which a set lookup settles where the
+        solver would have to search.
         """
-        if any(v.index not in self._constrained for v, _ in term.coeffs):
+        if self._free(term):
             return math.inf
         return self._solver.maximize(term)
 
@@ -190,15 +192,13 @@ class DigitBoundStore:
         *value* and whose least significant digit sits at *grid* -- the count
         of significant digits, ``msb - lsb + 1``.
 
-        A count of digits is never negative, so this floors at zero.  ``msb -
-        lsb + 1`` goes negative when the grid is coarser than the value's whole
-        reach, and how far below is not a precision: every value there rounds
-        either to zero or to one quantum, and *which* is the rounding mode's
-        business, not the store's.
+        Floors at zero: ``msb - lsb + 1`` goes negative where the grid is
+        coarser than the value's whole reach, and how far below is not a
+        precision.
 
         Zero means *no* significant digits, i.e. only zero is representable.
-        That is below what a :class:`Format` admits -- formats guarantee ``prec
-        >= 1`` -- so a caller materializing one has to handle it.
+        That is below what a :class:`Format` admits, so a caller
+        materializing one has to handle it.
         """
         return max(self.maximum(value - _as_term(grid) + 1), 0)
 

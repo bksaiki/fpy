@@ -2,9 +2,9 @@
 Unit tests for module-level specialization.
 
 A spec is identified by its function, its calling context, its refined
-argument *types*, and the argument *values* the caller pinned.  The last two
-are separate axes: a type says what a value may be, a pin says which value it
-is.
+argument *types*, the argument *values* the caller pinned, and the bounds the
+caller's analysis derived inside it.  Types and values are separate axes: a
+type says what a value may be, a pin says which value it is.
 """
 
 import os
@@ -96,7 +96,7 @@ class TestPinnedValues:
 
 class TestArgumentTypes:
     """The refined argument types are the other axis, and are exactly what
-    `Monomorphize` is given -- so one fingerprint means one body."""
+    `Monomorphize` is given -- so one key means one body."""
 
     def test_two_formats_are_two_specs(self):
         @fp.fpy(ctx=fp.REAL)
@@ -267,7 +267,7 @@ class TestDerivedBounds:
         specs = _specs(_module((caller, [l8, l8])))
         assert len([n for n in specs if n.startswith('rnd')]) == 1
 
-    def test_trivial_bounds_add_no_fingerprint(self):
+    def test_trivial_bounds_add_no_key_segment(self):
         """A callee the caller bounds at nothing is named as it was before the
         axis existed -- here one segment, for the calling context alone."""
         @fp.fpy(ctx=fp.REAL)

@@ -186,8 +186,8 @@ class TestSpecializationNameCollisions:
         m.add(call_mat, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
         out = cc.compile_module(m)
 
-        # A callee name is mangled as the source name plus one fingerprint
-        # per spec axis.  Two distinct FuncDefs sharing the source name must
+        # A callee name is mangled as the source name plus a digest per
+        # spec axis.  Two distinct FuncDefs sharing the source name must
         # produce two distinct mangled names, or the C++ compiler rejects the
         # unit with an ODR redefinition error.  Match definitions by
         # ``<name>(`` rather than ``<ret> <name>(`` since the two

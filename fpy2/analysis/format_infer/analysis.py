@@ -183,8 +183,6 @@ from ..digit_bound import (
     DigitBoundAnalysis,
     DigitBoundInfer,
     DigitBoundParams,
-    DigitBoundStore,
-    Terms,
 )
 from ..partial_eval import PartialEval, PartialEvalInfo, base_env
 from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
@@ -1634,9 +1632,9 @@ class FormatAnalysis:
     pins from it."""
 
     digit_bound: 'DigitBoundAnalysis | None'
-    """The digit-bound inference this instantiation used, exposed so ``Specialize``
-    can replay a call site's constraints onto the callee's specialized copy --
-    which a per-argument format cannot carry."""
+    """The digit-bound inference this instantiation used, exposed so
+    ``Specialize`` can replay a call site's constraints onto the callee's
+    specialized copy; see :class:`DigitBoundParams`."""
 
     scopes: dict[ContextScope, 'Context | PartialContext']
     """Each context scope's resolved context, with call-site-pinned arguments
@@ -1665,9 +1663,8 @@ class FormatAnalysis:
 
     # -- the view digit-bound inference reads -------------------------------
     #
-    # Three readings of a format, plus what that pass would otherwise have to
-    # recompute.  Declared as a protocol there, satisfied structurally here, so
-    # neither module imports the other's analysis.
+    # Declared as a protocol there, satisfied structurally here, so neither
+    # module imports the other's analysis.
 
     def logb_range(self, of: 'Expr | Definition') -> tuple[int | None, int | None]:
         """``logb``'s least and greatest value over *of*'s format."""
@@ -2269,11 +2266,9 @@ class _FormatInferInstance(Visitor):
         Tighter means *contained in*, not merely fewer digits: a smaller
         precision over a wider range is a worse description, not a better one.
 
-        *arg_fmt*, where given, is a rounding's operand.  Rounding never raises
-        precision -- ``x = c * 2**n`` with ``c < 2**p`` rounds to
-        ``round(c / 2**(m-n))``, and a finer quantum returns ``x`` unchanged --
-        which is what makes the answer saturate rather than grow with the
-        position.
+        *arg_fmt*, where given, is a rounding's operand.  Rounding never
+        raises precision, so the answer saturates rather than growing with
+        the position.
         """
         if self._digit_bound is None:
             return fmt
@@ -2284,8 +2279,8 @@ class _FormatInferInstance(Visitor):
             _mag_cap(cur),
         ):
             # *fmt* cannot contain what the store says, whatever the
-            # precision works out to.  Deciding that is one satisfiability
-            # question; `bounds` below is three optimisations.
+            # precision works out to -- one satisfiability question, where
+            # `bounds` below is three optimisations.
             return fmt
         bounds = self._digit_bound.bounds(e)
         if bounds is None:
@@ -2310,15 +2305,15 @@ class _FormatInferInstance(Visitor):
             return SetFormat(frozenset(zero))
         # Digit-bound inference bounds a *finite* magnitude and says nothing about
         # the special values, so `alt` keeps whichever ones *fmt* admits
-        # rather than clearing them -- a bound claiming no negative zero is
-        # what keeps a value off the integer rungs of the C++ ladder.
+        # rather than clearing them.
         specials = cur if cur is not None else _to_abstract(REAL_FORMAT)
+        assert specials is not None, 'REAL_FORMAT is abstractable'
         alt = AbstractFormat(
             prec, bounds.exp, RealFloat(exp=bounds.mag + 1, c=1),
-            has_pos_inf=specials is not None and specials.has_pos_inf,
-            has_neg_inf=specials is not None and specials.has_neg_inf,
-            has_nan=specials is not None and specials.has_nan,
-            has_neg_zero=specials is not None and specials.has_neg_zero,
+            has_pos_inf=specials.has_pos_inf,
+            has_neg_inf=specials.has_neg_inf,
+            has_nan=specials.has_nan,
+            has_neg_zero=specials.has_neg_zero,
         )
         if fmt == REAL_FORMAT:
             return alt.format()
@@ -2615,9 +2610,7 @@ class _FormatInferInstance(Visitor):
                 # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
                 # fast path (REAL_FORMAT contains everything).
                 #
-                # Tightened for the reason `Sum` is: adding over *formats*
-                # drops the shared grid the summands were rounded onto, and
-                # the store still has it.
+                # Tightened for the reason `Sum` is; see there.
                 fitted = self._bound_if_fits(
                     e, exact_binop(lhs, rhs, operator.add, cap=self._set_format_threshold),
                 )
@@ -3349,9 +3342,7 @@ class FormatInfer:
                 it.
             digit_bound_params:
                 A caller's constraint store and the terms it bound *func*'s
-                parameters to.  Continues that system rather than starting a
-                fresh one, which is how a relation *between* two arguments
-                reaches a separately analyzed copy of *func*.
+                parameters to; see :class:`DigitBoundParams`.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -3397,13 +3388,11 @@ class FormatInfer:
                 digit_bound=digit_bound,
             ).analyze()
 
-        # The first pass is sound alone, and the seeds it supplies are the
-        # ones digit-bound inference never tightens, so the split costs
-        # no precision.
+        # A reduced product: the second pass seeds digit-bound inference
+        # from the ranges the first derived and consumes the precisions it
+        # derives.  The first is sound alone, and supplies exactly the seeds
+        # digit-bound inference never tightens, so the split costs nothing.
         first = pass_(None)
         if not use_digit_bounds:
             return first
-        # A reduced product: digit-bound inference seeds from the ranges
-        # the first pass derives, and the second consumes the precisions
-        # it derives.
         return pass_(DigitBoundInfer.analyze(func, first, digit_bound_params))

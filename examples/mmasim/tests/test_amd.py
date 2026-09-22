@@ -24,7 +24,7 @@ import os
 import random
 import sys
 
-# `amd.py` lives in the same directory
+# the parent for `models`, this directory for `common`
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

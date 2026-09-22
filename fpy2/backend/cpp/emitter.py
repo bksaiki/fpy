@@ -2078,10 +2078,7 @@ class CppEmitter(Visitor):
         already *is* ``result_ty``, then those needing the downcast.  Each is
         tried on types before values: :func:`scalar_fits_in` first, so every
         signature the table used to pick it still picks, and
-        :meth:`_value_fits` only where nothing qualified -- a rescaled
-        rounding hands the scale-out an ``int64_t`` holding 29 significand
-        bits, which no float slot accepts by type and every one accepts by
-        value.
+        :meth:`_value_fits` only where nothing qualified.
 
         A class narrows both ``result_ty`` and the operand storages, so it
         decides which signature is reached.  What keeps a possibly-infinite

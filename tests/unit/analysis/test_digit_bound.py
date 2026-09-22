@@ -510,7 +510,14 @@ class TestARefinedBoundStaysOnItsPath:
 class TestRoundingAwayFromZeroLeavesTheBinade:
     """Every rule states the reach of the *exact* result, but an expression
     denotes that result rounded at its context -- and all but `trunc` can
-    carry out of the binade the exact bound implies."""
+    carry out of the binade the exact bound implies.
+
+    The absolute numbers carry slack: a carry is charged at every operation
+    under a rounding context, including one whose result is exact, and
+    `x * exp2(-15)` collects two that way.  What the rule contributes is the
+    *difference* between a carrying mode and `trunc`, which is what these
+    assert.
+    """
 
     @staticmethod
     def _max_logb(fn, text):
@@ -532,10 +539,12 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
                 p = abs(a)
             return z + p
 
-        # at x = y = 57344 the operands are 1.75: the sum rounds to 4 and the
-        # absolute value to 2, both a binade past the exact bound
-        assert self._max_logb(f, '(a + b)') == 2
-        assert self._max_logb(f, 'abs(a)') == 1
+        # at x = y = 57344 the operands are 1.75, bounded at 2: the sum
+        # rounds a binade past its own exact bound and the absolute value
+        # does not
+        assert self._max_logb(f, '(x * fp.exp2(-15))') == 2
+        assert self._max_logb(f, '(a + b)') == 4
+        assert self._max_logb(f, 'abs(a)') == 3
 
     def test_ceil_leaves_the_binade_and_trunc_does_not(self):
 
@@ -547,8 +556,9 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
         def down(x, y):
             return fp.trunc(x * fp.exp2(-15)) + y * 0
 
-        assert self._max_logb(up, 'fp.ceil((x * fp.exp2(-15)))') == 1
-        assert self._max_logb(down, 'fp.trunc((x * fp.exp2(-15)))') == 0
+        # the one binade between them is the whole claim
+        assert self._max_logb(up, 'fp.ceil((x * fp.exp2(-15)))') == 4
+        assert self._max_logb(down, 'fp.trunc((x * fp.exp2(-15)))') == 3
 
 
 class TestAPartOfAListKeepsItsPairing:

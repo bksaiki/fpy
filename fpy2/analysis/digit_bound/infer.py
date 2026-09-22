@@ -19,17 +19,17 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Protocol, TypeAlias
+from typing import Any, Protocol
 
 from ...ast.fpyast import *
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...interpret.value import unwrap_foreign
-from ...number import RoundingMode
+from ...number import Context, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import ListType, RealType
 from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
-from ..context_use import ContextUseAnalysis, PartialContext
+from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
 from ..reaching_defs import Definition, PhiDef
 from ..type_infer import TypeAnalysis
 from .store import DigitBoundStore, Term
@@ -38,6 +38,7 @@ __all__ = [
     'Bounds',
     'DigitBoundAnalysis',
     'DigitBoundInfer',
+    'DigitBoundParams',
     'FormatView',
     'Terms',
 ]
@@ -90,11 +91,11 @@ class DigitBoundParams:
     """A callee's parameters as a caller bound them: the constraint system,
     and one term per parameter in it.
 
-    The digit-bound analogue of :attr:`FunctionFormat.arg_fmts`, and it cannot
-    take that shape.  A relation *between* two arguments -- ``n`` is ``xs``'s
-    greatest exponent less twelve -- lives in the store and reduces to no
-    per-argument bound, so the terms travel with the system that gives them
-    meaning and a spec analyzed on its own cannot see it.
+    The digit-bound analogue of :attr:`FunctionFormat.arg_fmts`, and it
+    cannot take that shape: a relation *between* two arguments -- ``n`` is
+    ``xs``'s greatest exponent less twelve -- lives in the store and reduces
+    to no per-argument bound, so the terms travel with the system that gives
+    them meaning.
     """
 
     store: DigitBoundStore
@@ -176,7 +177,7 @@ class FormatView(Protocol):
         """``logb``'s least and greatest value, where each is finite."""
         ...
 
-    scopes: dict
+    scopes: dict[ContextScope, Context | PartialContext]
     """Each context scope's resolved context, concrete or partial."""
 
     def has_finite(self, of: Expr | Definition) -> bool:
@@ -201,11 +202,8 @@ def _round_will_carry(rm: RoundingMode | None) -> bool:
 
     Only ``RTZ`` never increases a magnitude; every other mode carries on at
     least one sign, and this domain does not track sign.  An unresolved mode
-    -- including a stochastic context, whose effective direction is not its
-    ``rm`` -- has to be assumed to carry.
-
-    ``RTO`` is not excepted: at precision zero the candidates are zero and one
-    quantum, and *one* is odd.  See ``TestRoundCarry``.
+    has to be assumed to carry.  ``RTO`` is not excepted; see
+    ``TestRoundCarry``.
     """
     return rm is not RoundingMode.RTZ
 
@@ -369,10 +367,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         claim than `_join`'s one-directional bracket.
 
         A field *d* already has is kept and *src*'s dropped, leaving the two
-        unrelated: an opportunity, not a guarantee.  That is why the lookup
-        mints nothing -- `_fresh_interval` would seed a `logb` and the share
-        could never fire -- and why anything reaching *d* first takes the
-        opportunity away.
+        unrelated -- so the lookup mints nothing, since `_fresh_interval`
+        would seed a `logb` and the share could never fire.
         """
         dst = self.out.by_def.setdefault(d, Terms())
         dst.msb = dst.msb if dst.msb is not None else src.msb
@@ -486,9 +482,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         turns a floor into a ceiling.
         """
         return all(
-            v.index not in self._elt_vars
-            or (c > 0 and v.index in self._lsb_vars
-                and v.index not in self._anchored)
+            v.index not in self._anchored
+            and (v.index not in self._elt_vars
+                 or (c > 0 and v.index in self._lsb_vars))
             for v, c in t.coeffs
         )
 
@@ -502,7 +498,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         widest.  No grid at all is the weaker, true reading.
         """
         if (src.lsb is not None and isinstance(self._type_of(of), ListType)
-                and any(v.index in self._anchored for v, _ in src.lsb.coeffs)):
+                and not self._downward(src.lsb)):
             return None
         return src.lsb
 
@@ -510,21 +506,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """Account for the context *e* is evaluated under, and return the term
         the exact rules should bound.
 
-        Every rule below states the reach of the *exact* result, but an
-        expression denotes that result **rounded at the active context**, and
-        rounding away from zero carries out of the binade the exact bound
-        implies.  So where the context resolves and its mode can carry, the
-        rules bound a fresh term and the expression reaches one further.
+        The rules below bound the *exact* result, but an expression denotes
+        it rounded at the active context, and a carrying mode reaches one
+        binade further -- so the rules bound a fresh term and the expression
+        reaches past it.  The same context floors the grid: a rounded value
+        is a multiple of the quantum, which is what pays for the carry.
 
-        The same context puts a floor under the grid: a rounded value is a
-        multiple of the quantum, so it has no digit below it.  That is a
-        tightening, and it is what pays for the carry.
-
-        `Round` and `Cast` name that context as their own operation and model
-        it themselves; applying it here too would count it twice.  A selection
-        or a projection hands an operand back untouched -- it resolves a
-        context without rounding at it -- so the floor would claim a quantum
-        its result never sat on.
+        `Round`/`Cast` model that context themselves, and a selection or a
+        projection hands an operand back unrounded, so both are excluded.
         """
         if isinstance(e, Round | Cast | Min | Max | AMin | AMax | Fst | Snd):
             return logb
@@ -639,6 +628,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                         store.le(t, src)
             case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
                 store.le(t, k)
+            case _:
+                pass    # no rule: the term keeps whatever its seed gave it
 
     def _emit_grid(self, e: Expr, g: Term) -> None:
         """Bound *e*'s least significant digit from its operands'."""
@@ -659,6 +650,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     self._grid_ge(g, found[0] + 1)
             case Exp2() | Pow() if (k := self._exp2_arg(e)) is not None:
                 self._grid_ge(g, k)   # one digit, at position `k`
+            case _:
+                pass    # no rule: the grid keeps whatever its seed gave it
 
     # -- the value channel ---------------------------------------------
     #
@@ -791,30 +784,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
         Such a disjunct stands in for "the `then` arm carries no magnitude",
         and is worth stating only while the store admits it there.  It need
-        not: `value_of(Logb)` floors a `logb`'s term at its argument's minimum
-        exponent on the precondition that the argument is non-zero, and that
-        lands on every path -- including one where the program itself supplies
-        a position for the zero case.  Offering one then pushes the merge up to
-        that floor, and a value rounded at the `then` arm's own position loses
+        not: `value_of(Logb)` floors a `logb`'s term on *every* path, since
+        "x is non-zero here" has no term of its own to sit on.  A program
+        that supplies its own position for the zero case pushes the merge up
+        to that floor, and a value rounded at the `then` arm's position loses
         every digit below it.
 
-        Skipping is sound: a disjunct only ever tightens, so dropping one costs
-        precision.  Read off the store as it stands, which is why
-        :meth:`_check_vacuous` re-asks once the walk is over.
-
-        Why the check lives here and not at the floor.  `logb(x)` *is*
-        `msb(x)` -- the read denotes no new quantity -- so "x is non-zero on
-        the path through this read" has no term of its own to sit on, and a
-        store with no notion of path states it about every path or not at all.
-        Dropping it instead is not an option either: it is what anchors a
-        position absolutely, and without it self-anchored rounding, anchors
-        across a call, and the guarded-exponent shape all go (measured: the
-        corpus still reaches 14/16, and 30 unit tests do not).  So the floor
-        stays, stated too widely, and the one place its overreach is
-        *detectable* -- a merge that hands the zero path a position of its own,
-        which is the program saying the floor's premise does not hold there --
-        refuses to build on it.  Making it localisable instead needs a
-        path-sensitive store; see `docs/todos/digit-bound-inference.md`.
+        Skipping is sound -- a disjunct only ever tightens.  Read off the
+        store as it stands, which is why :meth:`_check_vacuous` re-asks.
+        Localising the floor instead needs a path-sensitive store; see
+        `docs/todos/digit-bound-inference.md`.
         """
         keep = self._floor(ift)
         return any(self._floor(t) <= keep for t in vacuous)
@@ -827,12 +806,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """:meth:`_usable` reads the store mid-walk, so a `ge` stated *after* a
         merge could floor a disjunct that was free when it was taken -- and the
         constraint it justified is already in the store, where nothing can
-        retract it.
-
-        Every one of them on the corpus is admissible at both points, so this has
-        never fired; it is here because the alternative to noticing is a
-        silently over-narrow integer.  Deferring the whole emission instead
-        costs a design, the mid-walk queries wanting the constraint.
+        retract it.  The alternative to noticing is a silently over-narrow
+        integer.
         """
         for ift, vacuous in self._vacuous_used:
             if not self._usable(vacuous, ift):
@@ -915,7 +890,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return self._universal_zeros_of(
                     self.def_use.find_def_from_use(cond)
                 )
-        return set()
+            case _:
+                return set()
 
     def _universal_zeros_of(self, d: Definition) -> set[Term]:
         """:meth:`_universal_zeros`, reached through a definition."""
@@ -940,6 +916,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     if self.view.int_value(value) == 0:
                         t = self._msb_of(other)
                         return None if t is None else [{t}]
+                return None
             case Or():
                 # `And` is the dual and is not handled
                 return self._zero_paths_all(cond.args)
@@ -952,7 +929,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return None if elt is None else self._zero_paths(elt)
             case Var():
                 return self._zero_paths_of(self.def_use.find_def_from_use(cond))
-        return None
+            case _:
+                return None
 
     def _zero_paths_of(self, d: Definition) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""
@@ -1120,13 +1098,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
     #
     # A list has one set of terms -- its *summary* -- describing an arbitrary
     # element, so a fact stated about it is a claim about every element.  Two
-    # comprehensions over the same list may share that summary, which is what
-    # lets `max([logb(x) for x in xs])` bound a rounding in a later
-    # `[... for x in xs]`: sharing makes the two the same variable, and the
-    # relation cancels.
-    #
-    # Sound only while both range over the *same* elements, so every rule below
-    # checks that, and a subset gets its own terms and no relation.
+    # comprehensions over the same list may share that summary; sound only
+    # while both range over the *same* elements, so every rule below checks
+    # that, and a subset gets its own terms and no relation.
     #
     def _len_of(self, e: Expr) -> int | None:
         return _size(self.array_size.by_expr.get(e))
@@ -1173,15 +1147,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """*lst*'s element summary restricted to the range the enclosing loop
         runs over, or ``None`` where there is no such range.
 
-        ``for i in range(a, b, s)`` visits *part* of a list, so ``xs[i]`` is an
-        element of that part; a bound the part goes on to build -- a ``max``
-        over it -- says nothing about the rest, which is why sharing the
-        whole list's variables here would be unsound.  The part gets variables
-        of its own and the store replays onto them every fact that holds at
-        every index.  Two parts are related exactly when the two loops run
-        over the same range, which is what the key is for: one renaming per
-        index set, so ``es`` and ``prods`` gathered over the evens keep the
-        pairing they had.
+        A bound the part builds -- a ``max`` over it -- says nothing about
+        the rest, so the part gets variables of its own and the store replays
+        onto them every fact that holds at every index.  Two parts are
+        related exactly when their loops run over the same range, which is
+        what the key is for: one renaming per index set, so ``es`` and
+        ``prods`` gathered over the evens keep their pairing.
         """
         if self._gather is None:
             return None
@@ -1205,7 +1176,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             inst = self._index_sets[key] = _IndexSet(f'@{len(self._index_sets)}')
         for v in names:
             if v.index not in inst.subst:
-                inst.subst[v.index] = self.store.var(v.name + inst.tag)
+                inst.subst[v.index] = self._var(v.name + inst.tag)
         inst.mark = self.store.instance(
             self._elt_vars, inst.subst, inst.mark, inst.tag
         )
@@ -1256,6 +1227,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 key = self._range_key(iterable)
                 if key is not None:
                     self._gather = (key, self.def_use.find_def_from_site(target, site))
+            case _:
+                pass    # anything else binds the target to nothing
 
     def _visit_list_comp(self, e: ListComp, ctx):
         outer = self._gather
@@ -1444,10 +1417,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         value = prev.value if prev.value is not None and prev.value == now.value else None
         merged = Terms(value=value)
         if prev.msb is not None and now.msb is not None:
-            merged.msb = self.store.var(f'msbR{len(self.out.by_expr)}')
+            merged.msb = self._var(f'msbR{len(self.out.by_expr)}')
             self.store.le_max(merged.msb, [prev.msb, now.msb])
         if prev.lsb is not None and now.lsb is not None:
-            merged.lsb = self.store.var(f'lsbR{len(self.out.by_expr)}')
+            merged.lsb = self._var(f'lsbR{len(self.out.by_expr)}')
             self._lsb_vars.update(v.index for v, _ in merged.lsb.coeffs)
             self._grid_ge(merged.lsb, prev.lsb, now.lsb)
         return merged
@@ -1503,11 +1476,8 @@ class DigitBoundInfer:
     ) -> DigitBoundAnalysis:
         """Infer digit-bound relations for *func*, seeded from *view*.
 
-        *params* continues a caller's constraint system instead of starting a
-        fresh one, binding *func*'s parameters to the terms the caller passed.
-        A relation between two arguments lives in that system and reduces to no
-        per-argument format, so replaying it is the only way a separately
-        analyzed copy of *func* can see it.
+        *params* continues a caller's constraint system instead of starting
+        a fresh one; see :class:`DigitBoundParams`.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')

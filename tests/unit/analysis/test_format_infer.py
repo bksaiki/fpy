@@ -2705,6 +2705,37 @@ class TestAlignedSumPrecision:
 
         assert self._sum_bound(f, [self.L32]) > 200
 
+    def test_a_gathered_part_is_no_more_shared(self):
+        """The same, over a part of the list: the terms an index set copies
+        describe an element of that part, so a grid built from them is one
+        element's however it was minted."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            n = len(xs)
+            ys = fp.empty(n)
+            for i in range(0, n, 2):
+                e = fp.logb(xs[i])
+                with fp.MPFixedContext(e - 12):
+                    ys[i] = fp.round(xs[i])
+            return sum(ys)
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
+    def test_a_callee_rounding_per_element_is_no_more_shared(self):
+        """... and through a call, where the callee sees a scalar and cannot
+        know its argument varies with the index.  The comprehension feeds the
+        list summary directly, so the check cannot live at the assignment."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(fp.logb(x) - 12):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return sum([g(x) for x in xs])
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
         alignment to exploit, and the answer stays the non-relational one."""
