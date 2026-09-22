@@ -54,6 +54,9 @@ from ...ast import (
     IfExpr,
     IndexedAssign,
     Integer,
+    IsFinite,
+    IsInf,
+    IsNan,
     Len,
     ListRef,
     ListTypeAnn,
@@ -69,6 +72,7 @@ from ...ast import (
     Rational,
     ReturnStmt,
     Round,
+    Signbit,
     Stmt,
     StmtBlock,
     TernaryOp,
@@ -506,6 +510,34 @@ class _Emitter(Visitor):
         op = '&' if isinstance(e, And) else '|'
         return '(' + f' {op} '.join(self.emit(a) for a in e.args) + ')'
 
+    def _emit_predicate(self, e: UnaryOp) -> str:
+        """A classification predicate, spelled from comparisons.
+
+        Triton has no `isnan`, `isinf` or `isfinite`, so each is written out.
+        All three are exact -- they read the value rather than computing one
+        -- and each relies on a NaN comparing unequal to everything, which is
+        what makes the spellings fall out:
+
+        - `isnan(x)`    is `x != x`
+        - `isinf(x)`    is `|x| == inf`, false for a NaN because the
+          comparison is
+        - `isfinite(x)` is `|x| < inf`, false for a NaN for the same reason
+
+        `signbit` is the exception: it must distinguish `-0.0` from `0.0`,
+        which no comparison does, so it is refused rather than approximated.
+        """
+        arg = self.emit(e.arg)
+        if isinstance(e, IsNan):
+            return f'({arg} != {arg})'
+        if isinstance(e, IsInf):
+            return f"(tl.abs({arg}) == float('inf'))"
+        if isinstance(e, IsFinite):
+            return f"(tl.abs({arg}) < float('inf'))"
+        raise TritonEmitError(
+            '`signbit` cannot be spelled from comparisons: it has to separate '
+            '`-0.0` from `0.0`, which no comparison does'
+        )
+
     def _emit_select_op(self, e: Max | Min) -> str:
         """`max` / `min`, folded pairwise and made NaN-propagating.
 
@@ -624,6 +656,8 @@ class _Emitter(Visitor):
             return f'(~{self.emit(e.arg)})'
         if isinstance(e, Len):
             return self._emit_len(e)
+        if isinstance(e, (IsNan, IsInf, IsFinite, Signbit)):
+            return self._emit_predicate(e)
         return self._dispatch(
             e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
         )

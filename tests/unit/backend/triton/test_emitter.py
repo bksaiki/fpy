@@ -669,3 +669,53 @@ class TestLoopBinding:
 
         with pytest.raises(TritonEmitError, match='binds an element'):
             _emit(f, [ListType(_R32, 4)])
+
+
+class TestPredicates:
+    """Triton has no `isnan`, `isinf` or `isfinite`, so each is written from
+    comparisons.  All three are exact -- they read the value rather than
+    computing one -- and each turns on a NaN comparing unequal to everything."""
+
+    def test_isnan(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return fp.isnan(x)
+
+        assert _emit(f, [_R32]) == 'return (x != x)'
+
+    def test_isinf_is_false_for_nan(self):
+        """`|nan| == inf` is false because the comparison is, which is the
+        answer FPy gives."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return fp.isinf(x)
+
+        assert _emit(f, [_R32]) == "return (tl.abs(x) == float('inf'))"
+
+    def test_isfinite_is_false_for_nan(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return fp.isfinite(x)
+
+        assert _emit(f, [_R32]) == "return (tl.abs(x) < float('inf'))"
+
+    def test_signbit_is_refused(self):
+        """It has to separate `-0.0` from `0.0`, which no comparison does."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return fp.signbit(x)
+
+        with pytest.raises(TritonEmitError, match='signbit'):
+            _emit(f, [_R32])
+
+    def test_logb_stays_refused(self):
+        """No correctly-rounded primitive exists: `tl.log2` is a
+        transcendental, which the op table excludes by design.  An exact route
+        through `tl.cast(..., bitcast=True)` is available but needs four
+        special cases, so it is its own piece of work rather than a gap."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return fp.logb(x)
+
+        with pytest.raises(TritonEmitError, match='no signatures for op: Logb'):
+            _emit(f, [_R32])
