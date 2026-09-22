@@ -106,7 +106,7 @@ def _bound_to_type(
 
 def _arg_fmts_to_arg_types(
     arg_fmts: tuple[FormatBound, ...] | None,
-    arg_sizes: 'tuple[ArraySizeBound, ...] | None' = None,
+    arg_sizes: tuple[ArraySizeBound, ...] | None = None,
 ) -> tuple[Type | None, ...] | None:
     """Per-argument ``FormatBound → Type`` for ``Monomorphize``."""
     if arg_fmts is None:
@@ -130,7 +130,7 @@ class _TuplePin:
     elts: 'tuple[_Pin | None, ...]'
 
 
-_Pin: TypeAlias = 'FormatBound | _ListPin | _TuplePin'
+_Pin: TypeAlias = FormatBound | _ListPin | _TuplePin
 """What one argument's type pins, or ``None`` where it pins nothing."""
 
 
@@ -138,7 +138,7 @@ _Pin: TypeAlias = 'FormatBound | _ListPin | _TuplePin'
 class _DefBound:
     """A bound the caller derived for one named definition in the callee."""
     name: NamedId
-    fmt: 'FormatBound'
+    fmt: FormatBound
 
 
 @dataclass(frozen=True)
@@ -147,13 +147,13 @@ class _ExprBound:
 
     Unkeyed; see :func:`_bounds_key`.
     """
-    fmt: 'FormatBound'
+    fmt: FormatBound
     count: int
 
 
-_Bound: TypeAlias = '_DefBound | _ExprBound'
+_Bound: TypeAlias = _DefBound | _ExprBound
 
-_PinnedValue: TypeAlias = 'Context | RoundingMode | None'
+_PinnedValue: TypeAlias = Context | RoundingMode | None
 """A value a call site may pin into a callee -- see :data:`_PINNABLE`."""
 
 
@@ -169,14 +169,14 @@ class _Instance(NamedTuple):
     """
     ctx: Context | None
 
-    arg_types: 'tuple[_Pin | None, ...]' = ()
+    arg_types: tuple[_Pin | None, ...] = ()
     """What :class:`Monomorphize` is given, shaped by :func:`_type_pin`;
     empty when the argument types constrain nothing."""
 
-    arg_vals: 'tuple[_PinnedValue, ...]' = ()
+    arg_vals: tuple[_PinnedValue, ...] = ()
     """The values a call site pins into the callee; empty when none are."""
 
-    bounds: 'frozenset[_Bound]' = frozenset()
+    bounds: frozenset[_Bound] = frozenset()
     """What the caller's analysis derived *inside* the callee; empty for a
     public entry, which has no caller."""
 
@@ -197,14 +197,14 @@ invisible to the comparison however much it sharpened.
 """
 
 
-def _is_trivial_fmt(f: 'FormatBound') -> bool:
+def _is_trivial_fmt(f: FormatBound) -> bool:
     """A :class:`FormatBound` that conveys no specialization information:
     ``None`` (non-numeric) or ``REAL_FORMAT`` (the polymorphic scalar
     top)."""
     return f is None or f is REAL_FORMAT or f == REAL_FORMAT
 
 
-def _type_pin(t: Type | None, size_key: bool) -> '_Pin | None':
+def _type_pin(t: Type | None, size_key: bool) -> _Pin | None:
     """What *t* pins, or ``None`` when it pins nothing.
 
     The format of a real, the shape of an aggregate, and the length of a list
@@ -242,7 +242,7 @@ def _is_trivial_bound(f: FormatBound) -> bool:
             return _is_trivial_fmt(f)
 
 
-def _bounds_key(sub: FormatAnalysis) -> 'frozenset[_Bound]':
+def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
     """What a caller's analysis derives *inside* a callee, as a set.
 
     A relation between arguments -- ``n`` is ``xs``'s greatest exponent less
@@ -276,8 +276,8 @@ def _bounds_key(sub: FormatAnalysis) -> 'frozenset[_Bound]':
 
 
 def _arg_vals_key(
-    vals: 'tuple[_PinnedValue, ...] | None',
-) -> 'tuple[_PinnedValue, ...]':
+    vals: tuple[_PinnedValue, ...] | None,
+) -> tuple[_PinnedValue, ...]:
     """The argument values a call pins.
 
     A *separate* axis from :func:`_arg_types_key`: a format or a length
@@ -291,8 +291,8 @@ def _arg_vals_key(
 
 
 def _arg_types_key(
-    atypes: 'tuple[Type | None, ...] | None', size_key: bool,
-) -> 'tuple[_Pin | None, ...]':
+    atypes: tuple[Type | None, ...] | None, size_key: bool,
+) -> tuple[_Pin | None, ...]:
     """The refined argument types, as :func:`_type_pin` shapes them.
 
     Empty when nothing is pinned, so a polymorphic spec passes through
@@ -342,7 +342,7 @@ def _digest(x: object) -> str:
     return hashlib.sha1(raw.encode()).hexdigest()[:8]
 
 
-def _mangle_private(base: str, inst: '_Instance') -> str:
+def _mangle_private(base: str, inst: _Instance) -> str:
     """A name for a private spec, so two specs of one function are
     distinguishable in the emitted code.
 
@@ -376,7 +376,7 @@ travel as types, and pinning every constant would multiply specs for no gain.
 """
 
 
-def _pinned_value(v: object) -> '_PinnedValue':
+def _pinned_value(v: object) -> _PinnedValue:
     """*v* if a call site may pin it, else ``None``.
 
     Partial evaluation wraps a value FPy cannot compute on in a ``Foreign``,
@@ -389,7 +389,7 @@ def _pinned_value(v: object) -> '_PinnedValue':
 
 def _pinnable_args(
     callee: FuncDef, args: tuple[Expr, ...], pe: PartialEvalInfo,
-) -> 'tuple[_PinnedValue, ...]':
+) -> tuple[_PinnedValue, ...]:
     """The value each of *args* pins in *callee*, or ``None`` where it pins
     nothing.
 
@@ -479,7 +479,7 @@ class _DropCallArgs(DefaultTransformVisitor):
 
 def _drop_dead_args(
     module: Module,
-    bound_params: 'dict[str, DigitBoundParams] | None' = None,
+    bound_params: dict[str, DigitBoundParams] | None = None,
 ) -> Module:
     """Drop parameters no private spec's body uses any more.
 
@@ -583,7 +583,7 @@ class Specialize:
         module: Module,
         *,
         size_key: bool = False,
-        bound_params: 'dict[str, DigitBoundParams] | None' = None,
+        bound_params: dict[str, DigitBoundParams] | None = None,
     ) -> Module:
         """Specialize *module*, to a fixpoint.
 
@@ -631,9 +631,9 @@ class Specialize:
         module: Module,
         *,
         size_key: bool = False,
-        bases: 'dict[str, str] | None' = None,
-        bound_params: 'dict[str, DigitBoundParams] | None' = None,
-    ) -> 'tuple[Module, _Shape]':
+        bases: dict[str, str] | None = None,
+        bound_params: dict[str, DigitBoundParams] | None = None,
+    ) -> tuple[Module, _Shape]:
         """One expansion of *module*, and the shape of what it produced.
 
         *size_key* additionally keys each spec on its arguments' concrete

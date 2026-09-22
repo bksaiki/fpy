@@ -1105,22 +1105,6 @@ def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
     return int(af.neg_bound), int(af.pos_bound)
 
 
-def _int_bounds_of(fmt: 'FormatBound') -> tuple[int, int] | None:
-    """*fmt*'s least and greatest values, when it holds only integers."""
-    if not isinstance(fmt, AbstractableFormatBound):
-        return None
-    af = _to_abstract(fmt)
-    return None if af is None else _int_bounds(af)
-
-
-def _int_singleton(fmt: 'FormatBound') -> int | None:
-    """*fmt*'s value when it is exactly one integer."""
-    if not isinstance(fmt, SetFormat) or len(fmt.values) != 1:
-        return None
-    (v,) = fmt.values
-    return int(v) if isinstance(v, Fraction) and v.denominator == 1 else None
-
-
 def _mag_cap(fmt: 'AbstractFormat') -> int | None:
     """The largest ``m`` with ``2 ** (m + 1)`` inside *fmt*'s finite bounds,
     or ``None`` where either side is unbounded and nothing caps it."""
@@ -1696,11 +1680,19 @@ class FormatAnalysis:
     def int_range(self, of: 'Expr | Definition') -> tuple[int, int] | None:
         """*of*'s least and greatest values, when its format holds only
         integers."""
-        return _int_bounds_of(self._bound(of))
+        fmt = self._bound(of)
+        if not isinstance(fmt, AbstractableFormatBound):
+            return None
+        af = _to_abstract(fmt)
+        return None if af is None else _int_bounds(af)
 
     def int_value(self, of: 'Expr | Definition') -> int | None:
         """*of*'s value, when its format is exactly one integer."""
-        return _int_singleton(self._bound(of))
+        fmt = self._bound(of)
+        if not isinstance(fmt, SetFormat) or len(fmt.values) != 1:
+            return None
+        (v,) = fmt.values
+        return int(v) if isinstance(v, Fraction) and v.denominator == 1 else None
 
     def view_of_call(self, e: Call) -> 'FormatAnalysis | None':
         """The sub-analysis for *e*'s callee at this call site."""

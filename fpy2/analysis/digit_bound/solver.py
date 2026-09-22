@@ -181,9 +181,6 @@ class Z3Solver:
     _group: dict[int, list[Constraint]]
     """Constraints by component root, kept unencoded until asked for."""
 
-    _loose: list[Constraint]
-    """Constraints naming no variable; they bear on every component."""
-
     _built: dict[tuple[int, bool], _Z3Solver]
     """A component's solvers, by root and by whether it optimizes.  A `check`
     does not need `Optimize`'s machinery and is markedly faster without it,
@@ -217,7 +214,6 @@ class Z3Solver:
         self._env = {}
         self._components = Unionfind()
         self._group = {}
-        self._loose = []
         self._built = {}
         self._encoded = {}
         self._span = 0
@@ -276,12 +272,9 @@ class Z3Solver:
             for _, k in t.coeffs:
                 self._scale = max(self._scale, abs(k))
         named = self._vars(constraint)
-        if not named:
-            # it bears on every component, so every live solver hears it
-            self._loose.append(constraint)
-            for live in self._built.values():
-                self._encode(live, constraint)
-            return
+        # every constraint the store builds names at least one variable: each
+        # of `le`/`ge`/`eq`/`le_max` takes a term the store minted
+        assert named, f'constraint over no variable: {constraint}'
         root = self._union(named)
         self._group.setdefault(root, []).append(constraint)
         # z3 is incremental: state it into the live solvers rather than
@@ -324,8 +317,6 @@ class Z3Solver:
             return cached
         s = z3.Optimize() if optimize else z3.Solver()
         s.set('timeout', self.timeout_ms)
-        for c in self._loose:
-            self._encode(s, c)
         for r in roots:
             for c in self._group.get(r, ()):
                 self._encode(s, c)

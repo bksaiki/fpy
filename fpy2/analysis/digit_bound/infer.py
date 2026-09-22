@@ -17,7 +17,7 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeAlias
 
@@ -28,7 +28,7 @@ from ...interpret.value import unwrap_foreign
 from ...number import RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import ListType, RealType
-from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize
+from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
 from ..context_use import ContextUseAnalysis, PartialContext
 from ..reaching_defs import Definition, PhiDef
 from ..type_infer import TypeAnalysis
@@ -172,22 +172,22 @@ class FormatView(Protocol):
     ctx_use: ContextUseAnalysis
     array_size: ArraySizeAnalysis
 
-    def logb_range(self, of: 'Expr | Definition') -> tuple[int | None, int | None]:
+    def logb_range(self, of: Expr | Definition) -> tuple[int | None, int | None]:
         """``logb``'s least and greatest value, where each is finite."""
         ...
 
     scopes: dict
     """Each context scope's resolved context, concrete or partial."""
 
-    def has_finite(self, of: 'Expr | Definition') -> bool:
+    def has_finite(self, of: Expr | Definition) -> bool:
         """Does *of*'s format hold any finite value?"""
         ...
 
-    def int_range(self, of: 'Expr | Definition') -> tuple[int, int] | None:
+    def int_range(self, of: Expr | Definition) -> tuple[int, int] | None:
         """The least and greatest values, when only integers are held."""
         ...
 
-    def int_value(self, of: 'Expr | Definition') -> int | None:
+    def int_value(self, of: Expr | Definition) -> int | None:
         """The value, when it is exactly one integer."""
         ...
 
@@ -215,9 +215,19 @@ def _is_empty_alloc(d: Definition) -> bool:
     return isinstance(d.site, Assign) and isinstance(d.site.expr, Empty)
 
 
+def _all(ts: Iterable[Term | None]) -> list[Term] | None:
+    """*ts* as a list, or `None` if any is missing."""
+    out: list[Term] = []
+    for t in ts:
+        if t is None:
+            return None
+        out.append(t)
+    return out
+
+
 def _size(bound: ArraySizeBound) -> int | None:
     """*bound*'s length, when it is statically known."""
-    return bound.size if isinstance(bound, ListSize) and isinstance(bound.size, int) else None
+    return concrete_size(bound.size) if isinstance(bound, ListSize) else None
 
 
 class _DigitBoundInferInstance(DefaultVisitor):
@@ -291,7 +301,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             self._elt_vars.update(v.index for v, _ in t.coeffs)
         return t
 
-    def _mark_elt(self, of: 'Expr | Definition', *ts: 'Term | None') -> None:
+    def _mark_elt(self, of: Expr | Definition, *ts: Term | None) -> None:
         """Record *ts* as per-element where *of* is a list, whoever minted
         them: a list's summary describes an element wherever it came from."""
         if isinstance(self._type_of(of), ListType):
@@ -299,7 +309,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 v.index for t in ts if t is not None for v, _ in t.coeffs
             )
 
-    def _fresh_interval(self, terms: Terms, of: 'Expr | Definition', tag: str) -> tuple[Term, Term]:
+    def _fresh_interval(self, terms: Terms, of: Expr | Definition, tag: str) -> tuple[Term, Term]:
         """Give *terms* a bracketing pair, seeded from *of*'s inferred range.
 
         ``logb`` gets no lower seed: it bounds a magnitude from above, and a
@@ -364,7 +374,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if terms.lsb is not None and len(lsbs) == len(srcs):
             self.store.ge_min(terms.lsb, lsbs)
 
-    def _type_of(self, of: 'Expr | Definition') -> Any:
+    def _type_of(self, of: Expr | Definition) -> Any:
         return (self.type_info.by_def if isinstance(of, Definition)
                 else self.type_info.by_expr).get(of)  # type: ignore[arg-type]
 
@@ -376,31 +386,19 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms = self.out.by_expr.get(e)
         return terms.lsb if terms is not None else None
 
-    def _msbs(self, *es: Expr) -> 'list[Term] | None':
+    def _msbs(self, *es: Expr) -> list[Term] | None:
         """Every operand's `logb`, or `None` where any lacks one.
 
         All-or-nothing, as `_join` is: a bound over a strict subset of the
         operands is one the dropped operand never had to satisfy.  No
         operands at all is a list of none, which the store reads as no claim.
         """
-        out: list[Term] = []
-        for e in es:
-            t = self._msb_of(e)
-            if t is None:
-                return None
-            out.append(t)
-        return out
+        return _all(self._msb_of(e) for e in es)
 
-    def _lsbs(self, *es: Expr) -> 'list[Term] | None':
+    def _lsbs(self, *es: Expr) -> list[Term] | None:
         """Every operand's grid, or `None` where any lacks one; see
         :meth:`_msbs`."""
-        out: list[Term] = []
-        for e in es:
-            t = self._lsb_of(e)
-            if t is None:
-                return None
-            out.append(t)
-        return out
+        return _all(self._lsb_of(e) for e in es)
 
     # -- emission ------------------------------------------------------
 
@@ -477,16 +475,35 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self.store.le_max(logb, [exact + 1, pos + 1])
         return exact
 
+    def _operands(self, e: Expr) -> tuple[Expr, ...]:
+        """The operands *e*'s own bound is taken over, for the rules that
+        just take a bound over all of them."""
+        match e:
+            case Neg() | Abs() | AMin() | AMax() | Sum():
+                return (e.arg,)
+            case Copysign():
+                return (e.first,)   # magnitude from the first, sign from the second
+            case Mod() | Fmod() | Remainder():
+                return (e.second,)  # a remainder is smaller than its divisor
+            case Add() | Sub():
+                return (e.first, e.second)
+            case IfExpr():
+                return tuple(self._live_arms(e))
+            case ListExpr():
+                return tuple(e.elts)
+            case Min() | Max():
+                return tuple(e.args)
+            case _:
+                return ()
+
     def _emit_logb(self, e: Expr, t: Term) -> None:
         """Bound ``logb(e)`` from its operands'."""
         store = self.store
         match e:
-            case Neg() | Abs():
-                if (ts := self._msbs(e.arg)) is not None:
-                    store.le_max(t, ts)
-            case Copysign():
-                # magnitude from the first operand, sign from the second
-                if (ts := self._msbs(e.first)) is not None:
+            case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
+                  | Min() | Max() | AMin() | AMax()
+                  | Mod() | Fmod() | Remainder()):
+                if (ts := self._msbs(*self._operands(e))) is not None:
                     store.le_max(t, ts)
             case Mul():
                 lhs, rhs = self._msb_of(e.first), self._msb_of(e.second)
@@ -502,22 +519,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # exponent space addition loses only the *lower* bound.
                 if (ts := self._msbs(e.first, e.second)) is not None:
                     store.le_max(t, [v + 1 for v in ts])
-            case IfExpr():
-                if (ts := self._msbs(*self._live_arms(e))) is not None:
-                    store.le_max(t, ts)
-            case ListExpr():
-                if (ts := self._msbs(*e.elts)) is not None:
-                    store.le_max(t, ts)
-            case Min() | Max():
-                if (ts := self._msbs(*e.args)) is not None:
-                    store.le_max(t, ts)
-            case AMin() | AMax():
-                if (ts := self._msbs(e.arg)) is not None:
-                    store.le_max(t, ts)
-            case Mod() | Fmod() | Remainder():
-                # a remainder is smaller than what it was taken against
-                if (ts := self._msbs(e.second)) is not None:
-                    store.le_max(t, ts)
             case Trunc():
                 # toward zero, so the binade cannot grow; a magnitude below
                 # one lands at one
@@ -551,29 +552,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """Bound *e*'s least significant digit from its operands'."""
         store = self.store
         match e:
-            case Neg() | Abs():
-                if (gs := self._lsbs(e.arg)) is not None:
-                    store.ge_min(g, gs)
-            case Copysign():
-                if (gs := self._lsbs(e.first)) is not None:
+            # `Add`/`Sub` take the finer of the two, which aligned summands share
+            case (Neg() | Abs() | Copysign() | IfExpr() | ListExpr()
+                  | Add() | Sub() | Sum()):
+                if (gs := self._lsbs(*self._operands(e))) is not None:
                     store.ge_min(g, gs)
             case Mul():
                 lhs, rhs = self._lsb_of(e.first), self._lsb_of(e.second)
                 if lhs is not None and rhs is not None:
                     store.ge(g, lhs + rhs)
-            case IfExpr():
-                if (gs := self._lsbs(*self._live_arms(e))) is not None:
-                    store.ge_min(g, gs)
-            case ListExpr():
-                if (gs := self._lsbs(*e.elts)) is not None:
-                    store.ge_min(g, gs)
-            case Add() | Sub():
-                # the finer of the two lsbs, which aligned summands share
-                if (gs := self._lsbs(e.first, e.second)) is not None:
-                    store.ge_min(g, gs)
-            case Sum():
-                if (gs := self._lsbs(e.arg)) is not None:
-                    store.ge_min(g, gs)
             case Round() | Cast():
                 # the result is a multiple of the quantum it rounded at
                 found = self._rounding(e)
@@ -701,7 +688,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             self._vacuous_used.append((ift, vacuous))
         return m
 
-    def _usable(self, vacuous: 'list[Term]', ift: Term) -> bool:
+    def _usable(self, vacuous: list[Term], ift: Term) -> bool:
         """Whether any vacuous disjunct can still sit at or below the `then` arm.
 
         Such a disjunct stands in for "the `then` arm carries no magnitude",
@@ -756,7 +743,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     f'after the merge that used it, in `{self.func.name}`'
                 )
 
-    def _vacuous(self, cond: Expr) -> 'list[Term] | None':
+    def _vacuous(self, cond: Expr) -> list[Term] | None:
         """`logb`s that every path into the arm *cond* guards leaves free.
 
         The store satisfies a `ge_min` one way, so a disjunct naming a value
@@ -842,7 +829,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return (self._universal_zeros(d.site.expr)
                 if isinstance(d.site, Assign) else set())
 
-    def _zero_paths(self, cond: Expr) -> 'list[set[Term]] | None':
+    def _zero_paths(self, cond: Expr) -> list[set[Term]] | None:
         """One set of zeroed `logb`s per path making *cond* true.
 
         ``None`` where some path zeroes nothing.  Lowering leaves `a or b` as a
@@ -869,7 +856,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return self._zero_paths_of(self.def_use.find_def_from_use(cond))
         return None
 
-    def _zero_paths_of(self, d: Definition) -> 'list[set[Term]] | None':
+    def _zero_paths_of(self, d: Definition) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""
         if isinstance(d, PhiDef):
             if d.is_loop:
@@ -880,8 +867,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return self._zero_paths(d.site.expr) if isinstance(d.site, Assign) else None
 
     def _zero_paths_all(
-        self, branches: 'Sequence[Expr] | Sequence[Definition]'
-    ) -> 'list[set[Term]] | None':
+        self, branches: Sequence[Expr] | Sequence[Definition]
+    ) -> list[set[Term]] | None:
         """Every branch's paths together, or `None` if any branch has none."""
         found: list[set[Term]] = []
         for b in branches:
@@ -1059,7 +1046,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return False
         return self._loop_index.get(self.def_use.find_def_from_use(index)) == length
 
-    def _range_key(self, e: Expr) -> 'tuple | None':
+    def _range_key(self, e: Expr) -> tuple | None:
         """An identity for a range, so two loops over the same one land on
         the same index set.  Structural: a literal by its value, a variable by
         its definition.
@@ -1126,7 +1113,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         )
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
-    def _carried(self, d: Definition) -> 'list[Terms] | None':
+    def _carried(self, d: Definition) -> list[Terms] | None:
         """What bounds an arbitrary element of the list *d*, if anything does.
 
         A partial write leaves the rest of a list alone, so the reach of the
@@ -1145,29 +1132,44 @@ class _DigitBoundInferInstance(DefaultVisitor):
         d_src = self.def_use.find_def_from_use(source)
         self._share(self.def_use.find_def_from_site(target, site), self._def(d_src))
 
+    def _bind_iter(self, target: Id | TupleBinding, iterable: Expr, site) -> None:
+        """What iterating *iterable* as *target* binds, at *site*.
+
+        Shared by the comprehension and the loop it lowers to, which is where
+        the two forms of every rule here have drifted apart before.
+        """
+        if not isinstance(target, NamedId):
+            return
+        match iterable:
+            case Var():
+                # iterating a list directly binds the target to its element
+                self._bind_elt(target, site, iterable)
+            case Range1():
+                # ... while `range(len(xs))` makes the target an index.  Only
+                # `Range1`: a range with a start or a step does not visit
+                # every index from zero, and covering is the claim that it
+                # does ...
+                n = self._len_of(iterable)
+                if n is not None:
+                    self._loop_index[self.def_use.find_def_from_site(target, site)] = n
+            case Range2() | Range3():
+                # ... it visits a *part*, which `_at_index_set` gives
+                # variables of its own.
+                key = self._range_key(iterable)
+                if key is not None:
+                    self._gather = (key, self.def_use.find_def_from_site(target, site))
+
     def _visit_list_comp(self, e: ListComp, ctx):
         outer = self._gather
         for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
-            match target, iterable:
-                case NamedId(), Var():
-                    self._bind_elt(target, e, iterable)
-                case TupleBinding(), Zip():
-                    for sub, part in zip(target.elts, iterable.args):
-                        if isinstance(sub, NamedId) and isinstance(part, Var):
-                            self._bind_elt(sub, e, part)
-                case NamedId(), Range1():
-                    # the same two readings of a range `_visit_for` gives,
-                    # since a comprehension is what lowers to one: from zero
-                    # it covers the list ...
-                    n = self._len_of(iterable)
-                    if n is not None:
-                        self._loop_index[self.def_use.find_def_from_site(target, e)] = n
-                case NamedId(), Range2() | Range3() if (
-                    (key := self._range_key(iterable)) is not None
-                ):
-                    # ... and with a start or a step it gathers a part.
-                    self._gather = (key, self.def_use.find_def_from_site(target, e))
+            # a `zip` has no counterpart in the lowered loop, so it stays here
+            if isinstance(target, TupleBinding) and isinstance(iterable, Zip):
+                for sub, part in zip(target.elts, iterable.args):
+                    if isinstance(sub, NamedId) and isinstance(part, Var):
+                        self._bind_elt(sub, e, part)
+            else:
+                self._bind_iter(target, iterable, e)
         self._elt_depth += 1
         self._visit_expr(e.elt, ctx)
         self._elt_depth -= 1
@@ -1175,25 +1177,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_for(self, stmt: ForStmt, ctx):
         self._visit_expr(stmt.iterable, ctx)
-        target = stmt.target
         outer = self._gather
-        match stmt.iterable:
-            case Var() as src if isinstance(target, NamedId):
-                # iterating a list directly binds the target to its element
-                self._bind_elt(target, stmt, src)
-            case Range1() if isinstance(target, NamedId):
-                # ... while `for i in range(len(xs))` makes `i` an index.  Only
-                # `Range1`: a range with a start or a step does not visit every
-                # index from zero, and covering is the claim that it does.
-                n = self._len_of(stmt.iterable)
-                if n is not None:
-                    self._loop_index[self.def_use.find_def_from_site(target, stmt)] = n
-            case Range2() | Range3() if isinstance(target, NamedId):
-                # ... and one with a start or a step visits a *part*, which
-                # `_at_index_set` gives variables of its own.
-                key = self._range_key(stmt.iterable)
-                if key is not None:
-                    self._gather = (key, self.def_use.find_def_from_site(target, stmt))
+        self._bind_iter(stmt.target, stmt.iterable, stmt)
         # A list the body fills enters the loop holding whatever it already
         # does, which a partial write leaves in place.
         for phi in self.def_use.phis[stmt]:
@@ -1271,7 +1256,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     self.store.ge(terms.lsb, src.lsb)
                 terms.value = terms.value if terms.value is not None else src.value
 
-    def _zip_fields(self, d: Definition) -> 'tuple[Terms | None, ...] | None':
+    def _zip_fields(self, d: Definition) -> tuple[Terms | None, ...] | None:
         """A `zip`'s element field by field, each an element of one operand.
 
         The same list reaches the walk both as a `zip` and, once comprehension
@@ -1415,7 +1400,7 @@ class DigitBoundInfer:
     def analyze(
         func: FuncDef,
         view: FormatView,
-        params: 'DigitBoundParams | None' = None,
+        params: DigitBoundParams | None = None,
     ) -> DigitBoundAnalysis:
         """Infer digit-bound relations for *func*, seeded from *view*.
 

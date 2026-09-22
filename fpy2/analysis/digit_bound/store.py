@@ -70,8 +70,8 @@ class DigitBoundStore:
 
     def instance(
         self,
-        elementwise: 'set[int]',
-        subst: 'dict[int, Term]',
+        elementwise: set[int],
+        subst: dict[int, Term],
         mark: int,
         tag: str,
     ) -> int:
@@ -115,7 +115,7 @@ class DigitBoundStore:
         """``lhs == rhs``, the shape a definitional equality takes."""
         self._add(Constraint(lhs, '==', (_as_term(rhs),)))
 
-    def le_max(self, lhs: Term, rhs: 'Iterable[Term | int]') -> None:
+    def le_max(self, lhs: Term, rhs: Iterable[Term | int]) -> None:
         """``lhs <= max(rhs)``.
 
         Every upper bound that goes through a `max` takes this shape, and none
@@ -128,7 +128,7 @@ class DigitBoundStore:
         elif terms:
             self._add(Constraint(lhs, '<=max', terms))
 
-    def ge_min(self, lhs: Term, rhs: 'Iterable[Term | int]') -> None:
+    def ge_min(self, lhs: Term, rhs: Iterable[Term | int]) -> None:
         """``lhs >= min(rhs)`` -- :meth:`le_max` with every sign flipped."""
         self.le_max(-lhs, [-_as_term(r) for r in rhs])
 
@@ -144,7 +144,7 @@ class DigitBoundStore:
             self._answers[term] = answer
         return answer
 
-    def reaches(self, bounds: 'Sequence[tuple[Term, int]]') -> bool:
+    def reaches(self, bounds: Sequence[tuple[Term, int]]) -> bool:
         """Can any ``term >= k`` hold?
 
         A decision, where :meth:`maximum` is an optimisation -- the question
@@ -185,7 +185,7 @@ class DigitBoundStore:
 
     # -- the query -------------------------------------------------------
 
-    def prec(self, value: Term, grid: Term | int, *, carry: bool = False) -> int | float:
+    def prec(self, value: Term, grid: Term | int) -> int | float:
         """Precision of a value whose most significant digit is bounded by
         *value* and whose least significant digit sits at *grid* -- the count
         of significant digits, ``msb - lsb + 1``.
@@ -199,21 +199,8 @@ class DigitBoundStore:
         Zero means *no* significant digits, i.e. only zero is representable.
         That is below what a :class:`Format` admits -- formats guarantee ``prec
         >= 1`` -- so a caller materializing one has to handle it.
-
-        *carry* says whether the rounding mode can round away from zero out of
-        the top binade, which costs one more digit.  The emission rules model
-        the carry themselves, so only the tests pass it.
         """
-        return max(self.maximum(value - _as_term(grid) + 1), 0) + int(carry)
-
-    def prec_at(self, value: Term, position: Term | int, *, carry: bool = False) -> int | float:
-        """Precision of ``round(value)`` at a quantum of ``2**(position+1)``.
-
-        The same query as :meth:`prec`; a context states the digit *below* its
-        least significant one, so the grid is one higher.  Used by the tests;
-        the analysis states the ``+ 1`` where it builds the term.
-        """
-        return self.prec(value, _as_term(position) + 1, carry=carry)
+        return max(self.maximum(value - _as_term(grid) + 1), 0)
 
 
 def _as_term(x: Term | int) -> Term:

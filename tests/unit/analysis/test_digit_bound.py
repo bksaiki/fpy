@@ -7,10 +7,19 @@ the later ones run :class:`DigitBoundInfer` over an AST.
 
 import math
 
-import fpy2 as _fp
 import pytest
 
-from fpy2.analysis.digit_bound import DigitBoundStore, Term, Z3Solver
+import fpy2 as fp
+from fpy2.analysis import FormatInfer
+from fpy2.analysis.digit_bound import (
+    DigitBoundInfer,
+    DigitBoundStore,
+    Term,
+    Z3Solver,
+)
+from fpy2.strategies import monomorphize
+from fpy2.transform import CompToLoop
+from fpy2.types import ListType, RealType
 
 
 class TestTerm:
@@ -86,22 +95,22 @@ class TestFusedSum:
 
     def test_product_summand_is_F_plus_2(self):
         s, v = self._store(F=24)
-        assert s.prec_at(v['lp'], v['n']) == 26
+        assert s.prec(v['lp'], v['n'] + 1) == 26
 
     def test_the_accumulator_is_F_plus_1(self):
         """`c` is bounded by its own `e_c <= e_max`, so it reaches one binade
         less far than a product does."""
         s, v = self._store(F=24)
-        assert s.prec_at(v['lc'], v['n']) == 25
+        assert s.prec(v['lc'], v['n'] + 1) == 25
 
     def test_the_rounding_mode_decides_the_carry(self):
         s, v = self._store(F=24)
-        assert s.prec_at(v['lp'], v['n'], carry=True) == 27
+        assert (s.prec(v['lp'], v['n'] + 1) + 1) == 27
 
     def test_F_is_symbolic_to_the_store(self):
         for F in (13, 24, 35):
             s, v = self._store(F)
-            assert s.prec_at(v['lp'], v['n']) == F + 2
+            assert s.prec(v['lp'], v['n'] + 1) == F + 2
 
     def test_dropping_the_max_ordering_loses_everything(self):
         """The two `max` facts are the whole content: without them every other
@@ -115,7 +124,7 @@ class TestFusedSum:
         s.le(v['lp'], v['la'] + v['lb'] + 1)
         s.eq(v['es'], v['ea'] + v['eb'])
         s.eq(v['n'], v['e_max'] - 24 - 1)
-        assert s.prec_at(v['lp'], v['n']) == math.inf
+        assert s.prec(v['lp'], v['n'] + 1) == math.inf
 
 
 class TestSelfAnchored:
@@ -132,8 +141,8 @@ class TestSelfAnchored:
         s.le(lx, 127)
         s.eq(e, lx)                 # e = logb(x) names x's own exponent
         s.eq(n, e - k)
-        assert s.prec_at(lx, n) == k
-        assert s.prec_at(lx, n, carry=True) == k + 1
+        assert s.prec(lx, n + 1) == k
+        assert (s.prec(lx, n + 1) + 1) == k + 1
 
 
 class TestPrecIsNeverNegative:
@@ -154,18 +163,19 @@ class TestPrecIsNeverNegative:
     def test_a_coarse_grid_floors_at_zero(self):
         for k in (0, -1, -5, -100):
             s, l, n = self._store(k)
-            assert s.prec_at(l, n) == 0, k
+            assert s.prec(l, n + 1) == 0, k
 
     def test_the_carry_still_applies_below_zero(self):
         """A mode that rounds away from zero reaches one quantum however
         coarse the grid is, so it keeps its digit."""
         for k in (0, -1, -5, -100):
             s, l, n = self._store(k)
-            assert s.prec_at(l, n, carry=True) == 1, k
+            assert (s.prec(l, n + 1) + 1) == 1, k
 
 
 class TestPrecAndPrecAt:
-    """``prec_at`` is ``prec`` against the grid a context implies.
+    """A context states the digit *below* its least significant one,
+    so its grid is one higher.
 
     A context names the first *un*representable digit, so its grid sits one
     position higher -- an off-by-one worth having in exactly one place.
@@ -176,7 +186,7 @@ class TestPrecAndPrecAt:
         l, n = s.var('l'), s.var('n')
         s.le(l, 100)
         s.eq(n, l - 7)
-        assert s.prec_at(l, n) == s.prec(l, n + 1) == 7
+        assert s.prec(l, n + 1) == s.prec(l, n + 1) == 7
 
 
 class TestDisjunctiveBounds:
@@ -408,11 +418,6 @@ class TestALoopCarriedScalarIsNotItsBody:
     body's terms claims neither."""
 
     def test_the_pre_loop_value_survives(self):
-        import fpy2 as fp
-        from fpy2.analysis import FormatInfer
-        from fpy2.analysis.digit_bound import DigitBoundInfer
-        from fpy2.strategies import monomorphize
-        from fpy2.types import ListType, RealType
 
         @fp.fpy(ctx=fp.REAL)
         def f(c, xs):
@@ -436,11 +441,6 @@ class TestAZeroArmStatesNoMagnitude:
     own seed, which spans the operand's whole reach."""
 
     def test_an_if_expression_takes_the_other_arm(self):
-        import fpy2 as fp
-        from fpy2.analysis import FormatInfer
-        from fpy2.analysis.digit_bound import DigitBoundInfer
-        from fpy2.strategies import monomorphize
-        from fpy2.types import RealType
 
         @fp.fpy(ctx=fp.REAL)
         def f(x):
@@ -460,8 +460,8 @@ class TestAZeroArmStatesNoMagnitude:
         assert got == {'(0 if x == 0 else r)': 12, '(y + r)': 13}
 
 
-@_fp.fpy(ctx=_fp.FP64)
-def _ident(x: _fp.Real) -> _fp.Real:
+@fp.fpy(ctx=fp.FP64)
+def _ident(x: fp.Real) -> fp.Real:
     """A callee that hands back the caller's own term."""
     return x
 
@@ -473,11 +473,6 @@ class TestARefinedBoundStaysOnItsPath:
 
     @staticmethod
     def _max_logb_of_x(fn):
-        import fpy2 as fp
-        from fpy2.analysis import FormatInfer
-        from fpy2.analysis.digit_bound import DigitBoundInfer
-        from fpy2.strategies import monomorphize
-        from fpy2.types import RealType
 
         g = monomorphize(fn, args=[RealType(fp.FP64)])
         b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
@@ -486,7 +481,6 @@ class TestARefinedBoundStaysOnItsPath:
         return b.store.maximum(logb)
 
     def test_an_assignment_does_not_export_the_guard(self):
-        import fpy2 as fp
 
         @fp.fpy(ctx=fp.FP64)
         def f(x):
@@ -499,7 +493,6 @@ class TestARefinedBoundStaysOnItsPath:
         assert self._max_logb_of_x(f) == 1023   # x is an unrestricted FP64
 
     def test_a_call_returning_its_argument_does_not_either(self):
-        import fpy2 as fp
 
         ident = _ident
 
@@ -521,11 +514,6 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
 
     @staticmethod
     def _max_logb(fn, text):
-        import fpy2 as fp
-        from fpy2.analysis import FormatInfer
-        from fpy2.analysis.digit_bound import DigitBoundInfer
-        from fpy2.strategies import monomorphize
-        from fpy2.types import ListType, RealType  # noqa: F401
 
         g = monomorphize(fn, args=[RealType(fp.FP16), RealType(fp.FP16)])
         b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
@@ -534,7 +522,6 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
         return b.store.maximum(t.msb)
 
     def test_arithmetic_under_a_coarse_context_carries(self):
-        import fpy2 as fp
 
         @fp.fpy(ctx=fp.FP64)
         def f(x, y):
@@ -551,7 +538,6 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
         assert self._max_logb(f, 'abs(a)') == 1
 
     def test_ceil_leaves_the_binade_and_trunc_does_not(self):
-        import fpy2 as fp
 
         @fp.fpy(ctx=fp.FP64)
         def up(x, y):
@@ -573,12 +559,6 @@ class TestAPartOfAListKeepsItsPairing:
 
     @staticmethod
     def _precs(fn):
-        import fpy2 as fp
-        from fpy2.analysis import FormatInfer
-        from fpy2.analysis.digit_bound import DigitBoundInfer
-        from fpy2.strategies import monomorphize
-        from fpy2.transform import CompToLoop
-        from fpy2.types import ListType, RealType
 
         g = monomorphize(fn, args=[ListType(RealType(fp.FP32), 8)])
         # both forms: the comprehension and the gather loop it lowers to
@@ -593,7 +573,6 @@ class TestAPartOfAListKeepsItsPairing:
         return out
 
     def test_a_max_over_the_evens_places_the_evens(self):
-        import fpy2 as fp
 
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
@@ -607,7 +586,6 @@ class TestAPartOfAListKeepsItsPairing:
         assert self._precs(f) == [12, 12]
 
     def test_and_says_nothing_about_the_odds(self):
-        import fpy2 as fp
 
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
@@ -643,50 +621,50 @@ class TestReplayingAtAnIndexSet:
         assert s.maximum(total - part) == math.inf   # the aggregate stayed put
 
 
-@_fp.fpy(ctx=_fp.REAL)
+@fp.fpy(ctx=fp.REAL)
 def _exponent0(x, emin):
     """`exponent`, with the early return the AMD models spell."""
-    if not _fp.isfinite(x):
+    if not fp.isfinite(x):
         return -1
-    return max(_fp.logb(x), emin)
+    return max(fp.logb(x), emin)
 
 
-@_fp.fpy(ctx=_fp.REAL)
+@fp.fpy(ctx=fp.REAL)
 def _exponent0_else(x, emin):
-    if _fp.isfinite(x):
-        return max(_fp.logb(x), emin)
+    if fp.isfinite(x):
+        return max(fp.logb(x), emin)
     else:
         return -1
 
 
-@_fp.fpy(ctx=_fp.REAL)
+@fp.fpy(ctx=fp.REAL)
 def _exponent0_zero(x, emin):
     if x == 0:
         return -1
-    return max(_fp.logb(x), emin)
+    return max(fp.logb(x), emin)
 
 
-@_fp.fpy(ctx=_fp.REAL)
+@fp.fpy(ctx=fp.REAL)
 def _exponent0_hoisted(x, emin):
     """The shape lowering leaves: the test in a temporary."""
-    t = not _fp.isfinite(x)
+    t = not fp.isfinite(x)
     if t:
         return -1
-    return max(_fp.logb(x), emin)
+    return max(fp.logb(x), emin)
 
 
-@_fp.fpy(ctx=_fp.REAL)
+@fp.fpy(ctx=fp.REAL)
 def _exponent0_or(x, emin):
-    if _fp.isnan(x) or _fp.isinf(x):
+    if fp.isnan(x) or fp.isinf(x):
         return -1
-    return max(_fp.logb(x), emin)
+    return max(fp.logb(x), emin)
 
 
-@_fp.fpy(ctx=_fp.REAL)
+@fp.fpy(ctx=fp.REAL)
 def _exponent0_and(x, emin):
-    if _fp.isnan(x) and emin < 0:
+    if fp.isnan(x) and emin < 0:
         return -1
-    return max(_fp.logb(x), emin)
+    return max(fp.logb(x), emin)
 
 
 class TestAPathOnlyANonFiniteValueReaches:
@@ -697,11 +675,6 @@ class TestAPathOnlyANonFiniteValueReaches:
 
     @staticmethod
     def _round_prec(callee):
-        import fpy2 as fp
-        from fpy2.analysis import FormatInfer
-        from fpy2.analysis.digit_bound import DigitBoundInfer
-        from fpy2.strategies import monomorphize
-        from fpy2.types import RealType
 
         @fp.fpy(ctx=fp.REAL)
         def f(x):
