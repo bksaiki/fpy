@@ -453,8 +453,17 @@ class TestMask:
         assert _count_fors(ast) == 2
         assert _count_if1s(ast) == 1
         assert 'assert' in ast.format()          # the `f >= 1` guard stays
-        assert 'fp.fmod(t' in ast.format()       # ... but not on divisibility
-        assert '== 0' not in ast.format()
+        assert '== 0' not in ast.format()        # ... but not on divisibility
+
+    def test_no_remainder_is_synthesized(self):
+        """`range(0, n, f)` already runs ceil(n / f) times, so there is
+        nothing to pad and no remainder to compute.  That is what lets a
+        target with no integer remainder lower this."""
+        for use_fmod in (True, False):
+            src = _split(_total, 4, strategy=SplitLoopStrategy.MASK,
+                         use_fmod=use_fmod).format()
+            assert 'fp.fmod(' not in src
+            assert '%' not in src
 
     @pytest.mark.parametrize('n', list(range(0, 10)))
     def test_agrees_on_every_remainder(self, n):
@@ -497,19 +506,19 @@ class TestMask:
 
 class TestUseFmod:
     """Which remainder node is emitted is the caller's choice; the two agree
-    on every value emitted here, and differ only in what a backend can lower."""
+    on every value emitted here, and differ only in what a backend can lower.
+
+    ``MASK`` is absent: it synthesizes no remainder at all."""
 
     @pytest.mark.parametrize('strategy', (SplitLoopStrategy.STRICT,
-                                          SplitLoopStrategy.PEEL,
-                                          SplitLoopStrategy.MASK))
+                                          SplitLoopStrategy.PEEL))
     def test_default_is_fmod(self, strategy):
         src = _split(_total, 4, strategy=strategy).format()
         assert 'fp.fmod(' in src
         assert '%' not in src
 
     @pytest.mark.parametrize('strategy', (SplitLoopStrategy.STRICT,
-                                          SplitLoopStrategy.PEEL,
-                                          SplitLoopStrategy.MASK))
+                                          SplitLoopStrategy.PEEL))
     def test_use_fmod_false_emits_percent(self, strategy):
         src = _split(_total, 4, strategy=strategy, use_fmod=False).format()
         assert '%' in src
@@ -520,6 +529,6 @@ class TestUseFmod:
         xs = [float(k + 1) for k in range(n)]
         want = repr(_total(xs))
         for use_fmod in (True, False):
-            ast = _split(_total, 4, strategy=SplitLoopStrategy.MASK,
+            ast = _split(_total, 4, strategy=SplitLoopStrategy.PEEL,
                          use_fmod=use_fmod)
             assert repr(_run(ast, _total, xs)) == want, (n, use_fmod)

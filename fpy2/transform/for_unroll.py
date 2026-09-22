@@ -164,9 +164,7 @@ class _ForUnroll(SiteRewriter):
 
         The two differ on a negative dividend and every dividend here is a
         length, so they agree; which one a backend can lower is what differs,
-        and that is the caller's to know.  Mirrors ``SplitLoop._rem`` -- a
-        pipeline running both must not emit a mix, since a program spelling a
-        remainder two ways can be lowered by neither backend."""
+        and that is the caller's to know."""
         if self.use_fmod:
             return _fmod(a, b)
         return Mod(a, b, None)

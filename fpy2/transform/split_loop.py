@@ -57,11 +57,14 @@ class SplitLoopStrategy(enum.Enum):
     Correct for any length."""
 
     MASK = 2
-    """Chunk a length rounded *up* to a multiple of the factor, so every
-    chunk is a full ``f`` wide, and guard the body with ``j < n`` so the
-    over-run iterations do nothing.  Correct for any length, and unlike
-    ``PEEL`` it emits the body once -- the tail is a predicate rather than a
-    second loop, which is the shape a SIMD target masks directly."""
+    """Chunk the whole length, so the last chunk over-runs it, and guard the
+    body with ``j < n`` so the over-run iterations do nothing.  Every chunk is
+    a full ``f`` wide.  Correct for any length, and unlike ``PEEL`` it emits
+    the body once -- the tail is a predicate rather than a second loop, which
+    is the shape a SIMD target masks directly.
+
+    It synthesizes no remainder, so ``use_fmod`` does not reach it: the trip
+    count is ``range(0, n, f)``, which already runs ``ceil(n / f)`` times."""
 
 
 class _SplitLoop(SiteRewriter):
@@ -168,13 +171,13 @@ class _SplitLoop(SiteRewriter):
         target: Id | TupleBinding,
         body: StmtBlock,
         loc: Location | None,
-        mask: NamedId | int | None = None
+        limit: NamedId | int | None = None
     ) -> ForStmt:
         """The chunked loop over ``range(0, bound, f)``; each chunk runs
         an inner loop whose target is reassigned per element, so every
         read stays adjacent to its body (see the module docstring).
 
-        With *mask*, the inner body is guarded by ``j < mask``.  The guard
+        With *limit*, the inner body is guarded by ``j < limit``.  The guard
         wraps the element read as well as the body: reading ``t[j]`` past the
         end is the access it exists to prevent."""
         outer = self.gensym.refresh(self.outer_id)
@@ -191,11 +194,11 @@ class _SplitLoop(SiteRewriter):
             Assign(copy_target(target), None, ListRef(Var(t, None), Var(inner, None), None), None),
             *body.stmts
         ])
-        if mask is None:
+        if limit is None:
             inner_body = guarded
         else:
             inner_body = StmtBlock([If1Stmt(
-                Compare([CompareOp.LT], [Var(inner, None), self._ref(mask)], None),
+                Compare([CompareOp.LT], [Var(inner, None), self._ref(limit)], None),
                 guarded,
                 None
             )])
@@ -328,42 +331,30 @@ class _SplitLoop(SiteRewriter):
         return emitted
 
     def _build_mask(self, stmt: ForStmt, iterable: Expr, factor: Expr, body: StmtBlock) -> list[Stmt]:
-        # MASK: chunk a length rounded up to a multiple of `f`, so every
-        # chunk is full width, and guard the body so the over-run does
-        # nothing.  One copy of the body, and the tail is a predicate.
+        # MASK: see `SplitLoopStrategy.MASK`.
         t = self.gensym.refresh(self.temp_id)
         emitted: list[Stmt] = [Assign(t, None, iterable, None)]   # ambient materialize
 
+        # `range(0, n, f)` already yields ceil(n / f) chunks, so the bound is
+        # the length itself -- no padding, and no remainder to compute.  The
+        # inner loop runs a full `f` regardless and the guard drops the
+        # over-run, so the chunks still cover `[0, n)` exactly once, in order.
         size = static_size(self.array_size, stmt.iterable)
         fval = self._static_factor()
         if size is not None and fval is not None:
-            # Statically-known length and factor: the padded bound is a
-            # compile-time constant, and where `f` divides the length the
-            # guard can never fail, so it is not emitted at all.
-            padded = -(-size // fval) * fval
-            if padded > 0:
+            # where `f` divides the length the guard can never fail, so it is
+            # not emitted at all
+            if size > 0:
                 emitted.append(self._chunk_loop(
-                    t, fval, padded, stmt.target, body, stmt.loc,
-                    mask=None if size % fval == 0 else size,
+                    t, fval, size, stmt.target, body, stmt.loc,
+                    limit=None if size % fval == 0 else size,
                 ))
         else:
             f = self.gensym.refresh(self.temp_id)
             n = self.gensym.refresh(self.temp_id)
-            p_id = self.gensym.refresh(self.temp_id)
-            # padded = n + rem(f - rem(n, f), f); every intermediate is an
-            # exact integer, so nothing here depends on the rounding mode
-            emitted.append(self._dynamic_prelude(t, f, n, factor, [
-                Assign(p_id, None, Add(
-                    Var(n, None),
-                    self._rem(
-                        Sub(Var(f, None), self._rem(Var(n, None), Var(f, None)), None),
-                        Var(f, None),
-                    ),
-                    None
-                ), None),
-            ], stmt.loc))
+            emitted.append(self._dynamic_prelude(t, f, n, factor, [], stmt.loc))
             emitted.append(self._chunk_loop(
-                t, f, p_id, stmt.target, body, stmt.loc, mask=n,
+                t, f, n, stmt.target, body, stmt.loc, limit=n,
             ))
 
         return emitted
@@ -456,14 +447,14 @@ class SplitLoop:
             x1, ..., xk = t[j2]
             BODY[x1, ..., xk]
 
-    ``STRICT`` instead chunks the whole length, guarded by a runtime
-    ``assert fmod(n, f) == 0``, and emits no residual loop.  ``MASK`` chunks a
-    length rounded *up* to a multiple of the factor and guards the body with
-    ``j < n``, so every chunk is full width and the body is emitted once.
+    ``STRICT`` instead chunks the whole length, guarded by a runtime assert
+    that the factor divides it, and emits no residual loop.  ``MASK`` chunks the whole
+    length and guards the body with ``j < n``, so every chunk is full width,
+    the last one over-runs, and the body is emitted once.
 
     When the array-size analysis proves the iterable's length and the factor is
-    a literal, the remainder handling is resolved at compile time: no
-    ``len``/``fmod``, empty regions are dropped, and ``MASK`` emits no guard
+    a literal, the remainder handling is resolved at compile time: no ``len``
+    and no remainder, empty regions are dropped, and ``MASK`` emits no guard
     where the factor divides the length.
     """
 

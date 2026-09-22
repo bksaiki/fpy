@@ -111,8 +111,7 @@ def split(
                 t3 = 2
                 assert t3 >= 1
                 t4 = len(t)
-                t5 = (t4 + fp.fmod((t3 - fp.fmod(t4, t3)), t3))
-            for i in range(0, t5, t3):
+            for i in range(0, t4, t3):
                 with fp.INTEGER:
                     t6 = (i + t3)
                 for j in range(i, t6, 1):

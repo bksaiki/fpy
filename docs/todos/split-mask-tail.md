@@ -50,8 +50,8 @@ body is emitted once and the tail costs a predicate rather than a second loop.
 Every chunk is a full factor wide; the tail is a guard.
 
 ```python
-for b in range(0, padded, f):        # padded = n rounded up to a multiple of f
-    for j in range(b, b + f, 1):
+for b in range(0, n, f):             # already runs ceil(n / f) times
+    for j in range(b, b + f, 1):     # always a full f wide
         if j < n:                    # the mask
             i = t[j]
             <body>
@@ -85,21 +85,20 @@ same `match` in `_visit_for`.  Three smaller points:
   factor are both known and the length divides, `MASK` emits exactly what
   `STRICT` does, with no predicate and no assert.
 
-`padded` is computed as `n + rem(f - rem(n, f), f)` under `fp.INTEGER`,
-checked against `ceil(n / f) * f` over every `n` in `[0, 40)` at
-`f = 1, 2, 4, 8, 16, 128`.
+**No padded bound, and so no remainder.**  The first draft rounded the length
+up to a multiple of the factor and chunked *that*, which needed a remainder to
+compute.  It is unnecessary: `range(0, n, f)` already yields `ceil(n / f)`
+chunks, so the bound is the length itself and the last chunk simply over-runs
+it -- which the guard was already there to handle.  Checked for every `n < 25`
+at `f` in 1..8: the chunk count matches `ceil(n / f)`, and the guarded inner
+loops visit `[0, n)` exactly once, in order.
 
-A division form `((n + f - 1) / f) * f` is the same four operations, and is
-correct only under a mode that rounds down: over the same grid it is wrong in
-59 cases under `RNE` and 122 under `RTP`, where the remainder form holds under
-all four because every intermediate is an exactly representable integer.
+That is what makes `MASK` lowerable by a target with no integer remainder, so
+it is a correctness property of this design rather than a tidy-up.
 
-**The `f >= 1` assert is load-bearing, and its position matters.**  A remainder
-by zero is NaN, and `fp.INTEGER` cannot hold one, so it raises rather than
-producing it.  What keeps the remainder away from that pole is the assert
-`_dynamic_prelude` already emits — and it is emitted *before* it, inside the
-same `with fp.INTEGER` block.  Any reordering of that prelude breaks the
-guarantee.
+**The `f >= 1` assert is still load-bearing.**  `range(0, n, f)` with a
+non-positive `f` is empty, silently skipping every iteration, which is why
+`_dynamic_prelude` rejects it loudly.
 
 ## `rem` is the caller's choice: a `use_fmod` flag
 
@@ -130,6 +129,11 @@ pretend to resolve it.
 
 ### Phase 1 — the `MASK` strategy
 
+**Done.**  `use_fmod` ended up transform-wide rather than `MASK`-only, as
+planned; `_lister` deliberately does not take it, since it changes which node
+spells a remainder and never whether a loop is a site.
+
+
 `fpy2/transform/split_loop.py`: add `SplitLoopStrategy.MASK`, `_build_mask`,
 the optional mask bound on `_chunk_loop`, and the `match` arm in `_visit_for`.
 
@@ -157,6 +161,12 @@ Tests, new in `tests/unit/transform/test_split_loop.py`:
 
 ### Phase 2 — fold `MASK` into the shared contract
 
+**Done.**  `_BOTH` became `_ALL`.  The four `MASK` cases added to
+`TestRemainder` are not copies of the `PEEL` ones: `test_mask_mutation_keeps_its_order`
+pins a *different* property, since `PEEL` has to carry a mutation across the
+residual boundary and `MASK` has no boundary to cross.
+
+
 The suite parameterizes 27 tests over `_BOTH = (STRICT, PEEL)`.  Extend that to
 `MASK` wherever the property is strategy-independent — cursor forwarding,
 `sites`/`refusals` agreement, nested loops, the `with fp.INTEGER` wrapping of
@@ -171,6 +181,13 @@ suite is unambiguous about which change caused it.
 ```
 
 ### Phase 3 — `use_fmod` on `ForUnroll`
+
+**Done.**  One bug worth recording: `ForUnroll.apply` took the flag and
+dropped it, forwarding to `apply_with_edits` without it, so `use_fmod=False`
+silently kept emitting `fmod`.  Caught by the test asserting `%` appears, not
+by the equivalence test -- which passed either way, because both spellings
+compute the same value.  The shape assertion is what has teeth here.
+
 
 `fpy2/transform/for_unroll.py` is the only other transform that synthesizes a
 remainder: a module-level `_fmod` helper with two call sites, both inside
@@ -208,6 +225,40 @@ Tests, in `tests/unit/transform/test_for_unroll.py`:
 .venv/bin/python -m pytest tests/unit -q -n 8
 .venv/bin/mypy fpy2 && .venv/bin/ruff check fpy2
 ```
+
+## Fitness for the Triton backend
+
+Checked against the roadmap on `triton-compiler`, not assumed.
+
+Its *How a loop lowers* requires idiom 2 for the general case: "the trip count
+is a *runtime* value and the body is tile-shaped, so one compiled kernel serves
+every `K`.  This is what item 2's `split` produces."  A compile-time trip count
+is the fallback it explicitly argues against -- one kernel per input length.
+
+So the path that matters is the **dynamic** one, and the first draft failed it:
+that path computed a padded bound with a remainder, and the Triton op table has
+neither `Fmod` nor `Mod` -- only `Div`, with integer `Div` deliberately omitted
+because FPy truncates where Triton's `//` floors.
+
+Dropping the padded bound fixes it.  The dynamic path now emits:
+
+```
+for i in range(0, t4, t3):     # runtime trip count
+    for j in range(i, t5, 1):  # constant width
+        if j < t4:             # the mask
+```
+
+which needs only `len`, `+` and `<`, all of which that table has.  Measured
+across the three paths:
+
+| | remainder | `len()` | guard |
+|---|---|---|---|
+| static, divisible (8 / 4) | 0 | 0 | 0 |
+| static, indivisible (10 / 4) | 0 | 0 | 1 |
+| dynamic length | 0 | 1 | 1 |
+
+`use_fmod` therefore does not reach `MASK` at all.  It remains necessary for
+`PEEL` and `STRICT`, which do synthesize a remainder.
 
 ## Open items
 
