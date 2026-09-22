@@ -153,6 +153,12 @@ count is refused.
 
 ### Phase 3b — port the dispatch onto `Visitor`
 
+**Done.**  Behaviour-preserving: all 91 triton tests passed unchanged across
+the port, which is what a port should look like.  35 `_visit_` methods against
+`Visitor`'s 35 abstract ones, and a test asserts the class has no abstract
+methods left -- so a node kind added to the AST breaks this backend's build
+rather than reaching a catch-all.
+
 Phase 3 dispatched with a hand-rolled `match` over node types.  Replace it
 with `Visitor`, as `CppEmitter` does.
 

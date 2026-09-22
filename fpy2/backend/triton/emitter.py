@@ -52,6 +52,7 @@ from ...ast import (
     Integer,
     ListRef,
     NamedId,
+    NaryOp,
     Not,
     Or,
     Rational,
@@ -63,6 +64,7 @@ from ...ast import (
     UnaryOp,
     Var,
 )
+from ...ast.visitor import Visitor
 from ...number import REAL, Context
 from ..backend import CompileError
 from .storage import choose_storage_scalar, scalar_fits_in
@@ -106,8 +108,17 @@ class _IndentedWriter:
         return '\n'.join(self._lines)
 
 
-class _ExprEmitter:
-    """Emits one scalar expression."""
+class _Emitter(Visitor):
+    """Produces Triton source.
+
+    Dispatch is the framework's, not a `match` of its own: every node this
+    backend cannot spell then has a *named* refusal, and a new AST node is a
+    build error rather than something a catch-all absorbs.
+
+    Dispatch walks the MRO, so `Round` -- a `NamedUnaryOp` -- arrives at
+    :meth:`_visit_unaryop` rather than at an entry of its own; separating a
+    cast from a table operation is an explicit test there.
+    """
 
     def __init__(
         self,
@@ -412,50 +423,182 @@ class _ExprEmitter:
     # -- expressions ---------------------------------------------------
 
     def emit(self, e: Expr) -> str:
-        match e:
-            case Var():
-                return str(e.name)
-            case BoolVal():
-                return 'True' if e.val else 'False'
-            case Integer():
-                return str(e.val)
-            case Decnum() | Hexnum():
-                return str(e.val)
-            case Rational():
-                raise TritonEmitError(
-                    'a rational literal has no Triton spelling; round it first'
-                )
-            case Round() | Cast():
-                return self._emit_round(e)
-            case Compare():
-                return self._emit_compare(e)
-            case And() | Or():
-                return self._emit_connective(e)
-            case Not():
-                return f'(~{self.emit(e.arg)})'
-            case ListRef():
-                return self._emit_load(e)
-            case IfExpr():
-                return self._emit_where(e)
-            case UnaryOp():
-                return self._dispatch(
-                    e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
-                )
-            case BinaryOp():
-                return self._dispatch(e, self.op_table.binary, [
-                    (self.emit(e.first), e.first),
-                    (self.emit(e.second), e.second),
-                ])
-            case TernaryOp():
-                return self._dispatch(e, self.op_table.ternary, [
-                    (self.emit(e.first), e.first),
-                    (self.emit(e.second), e.second),
-                    (self.emit(e.third), e.third),
-                ])
-            case _:
-                raise TritonEmitError(
-                    f'no Triton spelling for `{type(e).__name__}`'
-                )
+        """*e* as Triton source."""
+        return self._visit_expr(e, None)
+
+    # -- expressions ---------------------------------------------------
+
+    def _visit_var(self, e: Var, ctx) -> str:
+        return str(e.name)
+
+    def _visit_bool(self, e: BoolVal, ctx) -> str:
+        return 'True' if e.val else 'False'
+
+    def _visit_integer(self, e: Integer, ctx) -> str:
+        return str(e.val)
+
+    def _visit_decnum(self, e: Decnum, ctx) -> str:
+        return str(e.val)
+
+    def _visit_hexnum(self, e: Hexnum, ctx) -> str:
+        return str(e.val)
+
+    def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
+        # `Round` and `Cast` are casts, not table operations, and they arrive
+        # here because dispatch walks the MRO
+        if isinstance(e, (Round, Cast)):
+            return self._emit_round(e)
+        if isinstance(e, Not):
+            return f'(~{self.emit(e.arg)})'
+        return self._dispatch(
+            e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
+        )
+
+    def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
+        return self._dispatch(e, self.op_table.binary, [
+            (self.emit(e.first), e.first),
+            (self.emit(e.second), e.second),
+        ])
+
+    def _visit_ternaryop(self, e: TernaryOp, ctx) -> str:
+        return self._dispatch(e, self.op_table.ternary, [
+            (self.emit(e.first), e.first),
+            (self.emit(e.second), e.second),
+            (self.emit(e.third), e.third),
+        ])
+
+    def _visit_naryop(self, e: NaryOp, ctx) -> str:
+        if isinstance(e, (And, Or)):
+            return self._emit_connective(e)
+        raise TritonEmitError(f'no Triton spelling for `{type(e).__name__}`')
+
+    def _visit_compare(self, e: Compare, ctx) -> str:
+        return self._emit_compare(e)
+
+    def _visit_list_ref(self, e: ListRef, ctx) -> str:
+        return self._emit_load(e)
+
+    def _visit_if_expr(self, e: IfExpr, ctx) -> str:
+        return self._emit_where(e)
+
+    # -- expressions with no Triton spelling ---------------------------
+
+    def _visit_rational(self, e: Rational, ctx):
+        raise TritonEmitError(
+            'a rational literal has no Triton spelling; round it first'
+        )
+
+    def _visit_digits(self, e, ctx):
+        raise TritonEmitError(
+            'a `digits` literal has no Triton spelling; round it first'
+        )
+
+    def _visit_foreign(self, e, ctx):
+        raise TritonEmitError(
+            'a foreign value is not a Triton value; fold it first'
+        )
+
+    def _visit_nullaryop(self, e, ctx):
+        raise TritonEmitError(
+            f'`{type(e).__name__.lower()}` is not in the op table'
+        )
+
+    def _visit_call(self, e, ctx):
+        raise TritonEmitError(
+            'a call survives only if inlining failed; this backend inlines '
+            'everything'
+        )
+
+    def _visit_tuple_expr(self, e, ctx):
+        raise TritonEmitError('a tuple has no Triton storage')
+
+    def _visit_list_expr(self, e, ctx):
+        raise TritonEmitError(
+            'a list literal has no Triton storage; a list lives in memory a '
+            'kernel argument points at'
+        )
+
+    def _visit_list_comp(self, e, ctx):
+        raise TritonEmitError(
+            'a comprehension has no Triton spelling; lower it to a loop first'
+        )
+
+    def _visit_list_slice(self, e, ctx):
+        raise TritonEmitError('a slice has no Triton spelling')
+
+    def _visit_attribute(self, e, ctx):
+        raise TritonEmitError('an attribute has no Triton spelling')
+
+    # -- statements ----------------------------------------------------
+
+    def _visit_assign(self, stmt: Assign, ctx: _IndentedWriter):
+        if not isinstance(stmt.target, NamedId):
+            raise TritonEmitError(
+                'a destructuring assignment has no Triton spelling'
+            )
+        ctx.add_line(f'{stmt.target} = {self.emit(stmt.expr)}')
+
+    def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
+        addr = f'{stmt.var}_ptr + {self._offset(stmt.var, list(stmt.indices))}'
+        val = self.emit(stmt.expr)
+        mask = '' if self.mask is None else f', mask={self.mask}'
+        ctx.add_line(f'tl.store({addr}, {val}{mask})')
+
+    def _visit_return(self, stmt: ReturnStmt, ctx: _IndentedWriter):
+        ctx.add_line(f'return {self.emit(stmt.expr)}')
+
+    def _visit_context(self, stmt: ContextStmt, ctx: _IndentedWriter):
+        # a context change is a change of *storage*, which the dispatch reads
+        # per expression; it has no statement of its own
+        self._visit_block(stmt.body, ctx)
+
+    def _visit_if1(self, stmt: If1Stmt, ctx: _IndentedWriter):
+        # a `tile_loops` guard is a mask, not a branch: the body runs for
+        # every lane and the predicate rides on each access
+        prev = self.mask
+        self.mask = self.emit(stmt.cond)
+        self._visit_block(stmt.body, ctx)
+        self.mask = prev
+
+    def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter):
+        if not isinstance(stmt.target, Id):
+            raise TritonEmitError(
+                'a destructuring loop target has no Triton spelling'
+            )
+        n = _static_count(stmt, self.sizes)
+        ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
+        ctx.indent()
+        self._visit_block(stmt.body, ctx)
+        ctx.dedent()
+
+    def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter):
+        for stmt in block.stmts:
+            self._visit_statement(stmt, ctx)
+
+    # -- statements with no Triton spelling ----------------------------
+
+    def _visit_if(self, stmt, ctx):
+        raise TritonEmitError(
+            'an `if` statement remains; the normal form makes them `if` '
+            'expressions'
+        )
+
+    def _visit_while(self, stmt, ctx):
+        raise TritonEmitError('a `while` has no Triton spelling')
+
+    def _visit_assert(self, stmt, ctx):
+        raise TritonEmitError(
+            'an `assert` has no Triton spelling; a kernel cannot raise'
+        )
+
+    def _visit_effect(self, stmt, ctx):
+        raise TritonEmitError('an effect has no Triton spelling')
+
+    def _visit_pass(self, stmt, ctx):
+        pass
+
+    def _visit_function(self, func: FuncDef, ctx):
+        raise TritonEmitError('emitting a whole kernel is not implemented yet')
 
 
 def _static_count(stmt: ForStmt, sizes: ArraySizeAnalysis) -> int:
@@ -476,57 +619,6 @@ def _static_count(stmt: ForStmt, sizes: ArraySizeAnalysis) -> int:
     return n
 
 
-def _emit_stmts(
-    block: StmtBlock,
-    emitter: _ExprEmitter,
-    sizes: ArraySizeAnalysis,
-    out: _IndentedWriter,
-) -> None:
-    """Statements, less the ones that touch the launch grid.
-
-    A `with` emits nothing of its own: a context change is a change of
-    *storage*, which the dispatch already reads per expression.
-    """
-    for stmt in block.stmts:
-        match stmt:
-            case Assign():
-                if not isinstance(stmt.target, NamedId):
-                    raise TritonEmitError(
-                        'a destructuring assignment has no Triton spelling'
-                    )
-                out.add_line(f'{stmt.target} = {emitter.emit(stmt.expr)}')
-            case ReturnStmt():
-                out.add_line(f'return {emitter.emit(stmt.expr)}')
-            case IndexedAssign():
-                addr = (f'{stmt.var}_ptr + '
-                        f'{emitter._offset(stmt.var, list(stmt.indices))}')
-                val = emitter.emit(stmt.expr)
-                mask = '' if emitter.mask is None else f', mask={emitter.mask}'
-                out.add_line(f'tl.store({addr}, {val}{mask})')
-            case If1Stmt():
-                # a `tile_loops` guard is a mask, not a branch: the body runs
-                # for every lane and the predicate rides on each access
-                prev = emitter.mask
-                emitter.mask = emitter.emit(stmt.cond)
-                _emit_stmts(stmt.body, emitter, sizes, out)
-                emitter.mask = prev
-            case ContextStmt():
-                _emit_stmts(stmt.body, emitter, sizes, out)
-            case ForStmt():
-                if not isinstance(stmt.target, Id):
-                    raise TritonEmitError(
-                        'a destructuring loop target has no Triton spelling'
-                    )
-                n = _static_count(stmt, sizes)
-                out.add_line(f'for {stmt.target} in tl.static_range({n}):')
-                out.indent()
-                _emit_stmts(stmt.body, emitter, sizes, out)
-                out.dedent()
-            case _:
-                raise TritonEmitError(
-                    f'no Triton spelling for `{type(stmt).__name__}`'
-                )
-
 
 def emit_expr(e: Expr, func: FuncDef) -> str:
     """*e*, as Triton source.
@@ -539,7 +631,7 @@ def emit_expr(e: Expr, func: FuncDef) -> str:
     if not isinstance(func, FuncDef):
         raise TypeError(f"Expected a 'FuncDef', got {func}")
     def_use = DefineUse.analyze(func)
-    return _ExprEmitter(
+    return _Emitter(
         func,
         FormatInfer.analyze(func),
         ContextUse.analyze(func, def_use=def_use),
@@ -556,7 +648,7 @@ def emit_block(block: StmtBlock, func: FuncDef) -> str:
         raise TypeError(f"Expected a 'FuncDef', got {func}")
     def_use = DefineUse.analyze(func)
     sizes = ArraySizeInfer.analyze(func)
-    emitter = _ExprEmitter(
+    emitter = _Emitter(
         func,
         FormatInfer.analyze(func),
         ContextUse.analyze(func, def_use=def_use),
@@ -564,5 +656,5 @@ def emit_block(block: StmtBlock, func: FuncDef) -> str:
         make_op_table(),
     )
     out = _IndentedWriter()
-    _emit_stmts(block, emitter, sizes, out)
+    emitter._visit_block(block, out)
     return out.render()

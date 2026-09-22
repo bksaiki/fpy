@@ -351,3 +351,49 @@ class TestLiteralCast:
         emitted = _emit(
             f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT])
         pyast.parse(emitted)
+
+
+class TestNamedRefusals:
+    """Dispatch is `Visitor`'s, so a node this backend cannot spell has its
+    own refusal naming the construct -- not a catch-all."""
+
+    def test_a_comprehension_names_itself(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            return [x * 2 for x in xs]
+
+        with pytest.raises(TritonEmitError, match='comprehension'):
+            _emit(f, [ListType(_R32, 8)])
+
+    def test_a_tuple_names_itself(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return (x, x)
+
+        with pytest.raises(TritonEmitError, match='tuple'):
+            _emit(f, [_R32])
+
+    def test_an_assert_names_itself(self):
+        """A kernel cannot raise."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            assert x > 0, 'positive'
+            return x
+
+        with pytest.raises(TritonEmitError, match='cannot raise'):
+            _emit(f, [_R32])
+
+    def test_every_abstract_visit_method_is_implemented(self):
+        """`Visitor` is an ABC, so a node kind added to the AST breaks this
+        backend's build rather than falling into a catch-all."""
+        import inspect
+        from fpy2.ast.visitor import Visitor
+        from fpy2.backend.triton.emitter import _Emitter
+
+        abstract = {
+            n for n, m in inspect.getmembers(Visitor, inspect.isfunction)
+            if getattr(m, '__isabstractmethod__', False)
+        }
+        assert abstract, 'expected Visitor to declare abstract methods'
+        assert not (abstract - set(dir(_Emitter)))
+        assert not getattr(_Emitter, '__abstractmethods__', frozenset())
