@@ -39,6 +39,7 @@ from ..transform import (
     TransformReferenceError,
 )
 from .anf import to_anf
+from .assert_elim import drop_asserts
 from .comp_lower import comp_to_loop
 from .context_lift import lift_context
 from .exit_single import single_exit
@@ -80,6 +81,7 @@ __all__ = [
     'TransformReferenceError',
     'close',
     'comp_to_loop',
+    'drop_asserts',
     'elim_iter',
     'elim_round',
     'float_to_fixed',
