@@ -56,6 +56,18 @@ class SplitLoopStrategy(enum.Enum):
     run the remaining ``len % f`` iterations in a residual loop.
     Correct for any length."""
 
+    MASK = 2
+    """Chunk the whole length, so the last chunk over-runs it, and guard the
+    body with ``j < n`` so the over-run iterations do nothing.  Every chunk is
+    a full ``f`` wide.  Correct for any length, and unlike ``PEEL`` it emits
+    the body once -- the tail is a predicate rather than a second loop, which
+    is the shape a SIMD target masks directly.  Clamping the inner bound to
+    ``min(b + f, n)`` would avoid the predicate but vary the chunk width, and a
+    constant width is the property this exists to provide.
+
+    It synthesizes no remainder, so ``use_fmod`` does not reach it: the trip
+    count is ``range(0, n, f)``, which already runs ``ceil(n / f)`` times."""
+
 
 class _SplitLoop(SiteRewriter):
     """
@@ -74,6 +86,7 @@ class _SplitLoop(SiteRewriter):
     # Static list sizes of iterables; with a literal factor, enables
     # discharging the remainder handling at compile time.
     array_size: ArraySizeAnalysis | None
+    use_fmod: bool
 
     def __init__(
         self,
@@ -85,7 +98,8 @@ class _SplitLoop(SiteRewriter):
         temp_id: NamedId,
         outer_id: NamedId,
         inner_id: NamedId,
-        array_size: ArraySizeAnalysis | None
+        array_size: ArraySizeAnalysis | None,
+        use_fmod: bool = True
     ):
         super().__init__()
         self.func = func
@@ -96,6 +110,7 @@ class _SplitLoop(SiteRewriter):
         self.outer_id = outer_id
         self.inner_id = inner_id
         self.array_size = array_size
+        self.use_fmod = use_fmod
 
         self.gensym = Gensym(reaching_defs.names())
 
@@ -104,6 +119,17 @@ class _SplitLoop(SiteRewriter):
         if isinstance(self.factor, Integer) and self.factor.val >= 1:
             return self.factor.val
         return None
+
+    def _rem(self, a: Expr, b: Expr) -> Expr:
+        """``a`` remainder ``b``, spelled as the caller asked.
+
+        The two differ on a negative dividend (`-5 fmod 4 = -1`, `-5 % 4 = 3`)
+        and every dividend here is a length or a value in ``[0, f)``, so they
+        agree; which one a backend can emit is what differs, and that is the
+        caller's to know."""
+        if self.use_fmod:
+            return Fmod(None, a, b, None)
+        return Mod(a, b, None)
 
     @staticmethod
     def _ref(x: NamedId | int) -> Expr:
@@ -123,9 +149,13 @@ class _SplitLoop(SiteRewriter):
         extra: list[Stmt],
         loc: Location | None
     ) -> ContextStmt:
-        """The loop-control bindings shared by both dynamic paths.
+        """The loop-control bindings shared by every dynamic path.
         A non-positive runtime factor would silently skip iterations
-        (``range(0, n, f)`` is empty), so it is rejected loudly."""
+        (``range(0, n, f)`` is empty), so it is rejected loudly.
+
+        *extra* is spliced after that assert, which is what keeps a caller's
+        remainder off its pole: a remainder by zero is NaN, and ``fp.INTEGER``
+        cannot hold one, so it would raise rather than produce it."""
         return integer_ctx([
             # `factor` is an arbitrary caller Expr feeding `range`/`fmod`,
             # so it is evaluated exactly (unlike the iterable, kept ambient)
@@ -146,11 +176,16 @@ class _SplitLoop(SiteRewriter):
         bound: NamedId | int,
         target: Id | TupleBinding,
         body: StmtBlock,
-        loc: Location | None
+        loc: Location | None,
+        limit: NamedId | int | None = None
     ) -> ForStmt:
         """The chunked loop over ``range(0, bound, f)``; each chunk runs
         an inner loop whose target is reassigned per element, so every
-        read stays adjacent to its body (see the module docstring)."""
+        read stays adjacent to its body (see the module docstring).
+
+        With *limit*, the inner body is guarded by ``j < limit``.  The guard
+        wraps the element read as well as the body: reading ``t[j]`` past the
+        end is the access it exists to prevent."""
         outer = self.gensym.refresh(self.outer_id)
         inner = self.gensym.refresh(self.inner_id)
         hi = self.gensym.refresh(self.temp_id)
@@ -161,10 +196,18 @@ class _SplitLoop(SiteRewriter):
             Assign(hi, None, Add(Var(outer, None), self._ref(f), None), None)
         ], None)
 
-        inner_body = StmtBlock([
+        guarded = StmtBlock([
             Assign(copy_target(target), None, ListRef(Var(t, None), Var(inner, None), None), None),
             *body.stmts
         ])
+        if limit is None:
+            inner_body = guarded
+        else:
+            inner_body = StmtBlock([If1Stmt(
+                Compare([CompareOp.LT], [Var(inner, None), self._ref(limit)], None),
+                guarded,
+                None
+            )])
         inner_loop = ForStmt(
             inner,
             Range3(None, Var(outer, None), Var(hi, None), Integer(1, None), None),
@@ -246,7 +289,7 @@ class _SplitLoop(SiteRewriter):
                     Compare(
                         [CompareOp.EQ],
                         [
-                            Fmod(None, Var(n, None), Var(f, None), None),
+                            self._rem(Var(n, None), Var(f, None)),
                             Integer(0, None)
                         ],
                         None
@@ -284,12 +327,41 @@ class _SplitLoop(SiteRewriter):
             emitted.append(self._dynamic_prelude(t, f, n, factor, [
                 Assign(m_id, None, Sub(
                     Var(n, None),
-                    Fmod(None, Var(n, None), Var(f, None), None),
+                    self._rem(Var(n, None), Var(f, None)),
                     None
                 ), None),
             ], stmt.loc))
             emitted.append(self._chunk_loop(t, f, m_id, stmt.target, body, stmt.loc))
             emitted.append(self._residual_loop(t, m_id, n, stmt.target, body, stmt.loc))
+
+        return emitted
+
+    def _build_mask(self, stmt: ForStmt, iterable: Expr, factor: Expr, body: StmtBlock) -> list[Stmt]:
+        # MASK: see `SplitLoopStrategy.MASK`.
+        t = self.gensym.refresh(self.temp_id)
+        emitted: list[Stmt] = [Assign(t, None, iterable, None)]   # ambient materialize
+
+        # `range(0, n, f)` already yields ceil(n / f) chunks, so the bound is
+        # the length itself -- no padding, and no remainder to compute.  The
+        # inner loop runs a full `f` regardless and the guard drops the
+        # over-run, so the chunks still cover `[0, n)` exactly once, in order.
+        size = static_size(self.array_size, stmt.iterable)
+        fval = self._static_factor()
+        if size is not None and fval is not None:
+            # where `f` divides the length the guard can never fail, so it is
+            # not emitted at all
+            if size > 0:
+                emitted.append(self._chunk_loop(
+                    t, fval, size, stmt.target, body, stmt.loc,
+                    limit=None if size % fval == 0 else size,
+                ))
+        else:
+            f = self.gensym.refresh(self.temp_id)
+            n = self.gensym.refresh(self.temp_id)
+            emitted.append(self._dynamic_prelude(t, f, n, factor, [], stmt.loc))
+            emitted.append(self._chunk_loop(
+                t, f, n, stmt.target, body, stmt.loc, limit=n,
+            ))
 
         return emitted
 
@@ -321,6 +393,8 @@ class _SplitLoop(SiteRewriter):
                 emitted = self._build_strict(stmt, iterable, factor, body)
             case SplitLoopStrategy.PEEL:
                 emitted = self._build_peel(stmt, iterable, factor, body)
+            case SplitLoopStrategy.MASK:
+                emitted = self._build_mask(stmt, iterable, factor, body)
             case _:
                 raise RuntimeError(f'unknown strategy `{self.strategy}`')
 
@@ -337,7 +411,10 @@ class _SplitLoop(SiteRewriter):
 def _lister(
     func: FuncDef, factor: 'Expr | None', strategy: SplitLoopStrategy
 ) -> '_SplitLoop':
-    """The pass instance a listing walks `func` with."""
+    """The pass instance a listing walks `func` with.
+
+    `use_fmod` is absent on purpose: it changes which node a remainder is
+    spelled with, never whether a loop is a site."""
     return _SplitLoop(
         func,
         Integer(1, None) if factor is None else factor,
@@ -376,11 +453,15 @@ class SplitLoop:
             x1, ..., xk = t[j2]
             BODY[x1, ..., xk]
 
-    ``STRICT`` instead chunks the whole length, guarded by a runtime
-    ``assert fmod(n, f) == 0``, and emits no residual loop.  When the
-    array-size analysis proves the iterable's length and the factor is
-    a literal, the remainder handling is resolved at compile time: no
-    ``len``/``fmod``, and empty regions are dropped.
+    ``STRICT`` instead chunks the whole length, guarded by a runtime assert
+    that the factor divides it, and emits no residual loop.  ``MASK`` chunks the whole
+    length and guards the body with ``j < n``, so every chunk is full width,
+    the last one over-runs, and the body is emitted once.
+
+    When the array-size analysis proves the iterable's length and the factor is
+    a literal, the remainder handling is resolved at compile time: no ``len``
+    and no remainder, empty regions are dropped, and ``MASK`` emits no guard
+    where the factor divides the length.
     """
 
     @staticmethod
@@ -422,7 +503,8 @@ class SplitLoop:
         array_size: ArraySizeAnalysis | None = None,
         temp_id: NamedId | None = None,
         outer_id: NamedId | None = None,
-        inner_id: NamedId | None = None
+        inner_id: NamedId | None = None,
+        use_fmod: bool = True
     ) -> FuncDef:
         """
         Apply the transformation.
@@ -448,6 +530,10 @@ class SplitLoop:
             Pre-computed array-size analysis, used to discharge the
             remainder handling when an iterable's length is statically
             known.
+        use_fmod : bool
+            Spell the remainder with ``fp.fmod`` (the default) rather than
+            ``%``.  The two agree on every value this emits, so the choice is
+            which one the consuming backend can lower.
         """
         return SplitLoop.apply_with_edits(
             func,
@@ -459,6 +545,7 @@ class SplitLoop:
             temp_id=temp_id,
             outer_id=outer_id,
             inner_id=inner_id,
+            use_fmod=use_fmod,
         ).result
 
     @staticmethod
@@ -471,7 +558,8 @@ class SplitLoop:
         array_size: ArraySizeAnalysis | None = None,
         temp_id: NamedId | None = None,
         outer_id: NamedId | None = None,
-        inner_id: NamedId | None = None
+        inner_id: NamedId | None = None,
+        use_fmod: bool = True
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced."""
         if not isinstance(func, FuncDef):
@@ -495,7 +583,7 @@ class SplitLoop:
 
         vtor = _SplitLoop(
             func, factor, where, strategy, reaching_defs,
-            temp_id, outer_id, inner_id, array_size
+            temp_id, outer_id, inner_id, array_size, use_fmod
         )
         out = vtor.apply()
         # `site_idx` is the true loop count: generated loops are never re-visited
