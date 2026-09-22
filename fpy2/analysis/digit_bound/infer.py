@@ -439,10 +439,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return
 
         logb, grid = self._fresh_interval(terms, e, f'e{len(self.out.by_expr)}')
-        self._emit_logb(e, self._ambient(e, logb, grid))
+        self._emit_logb(e, self._active(e, logb, grid))
         self._emit_grid(e, grid)
 
-    def _ambient(self, e: Expr, logb: Term, grid: Term) -> Term:
+    def _active(self, e: Expr, logb: Term, grid: Term) -> Term:
         """Account for the context *e* is evaluated under, and return the term
         the exact rules should bound.
 
@@ -466,7 +466,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return logb
         found = self._rounding(e)
         if found is None:
-            return logb
+            return self._active_float(e, logb, grid)
         pos, rm = found
         self.store.ge(grid, pos + 1)
         if not _round_will_carry(rm):
@@ -474,6 +474,34 @@ class _DigitBoundInferInstance(DefaultVisitor):
         exact = self._var(f'X{len(self.out.by_expr)}')
         self.store.le_max(logb, [exact + 1, pos + 1])
         return exact
+
+    def _active_float(self, e: Expr, logb: Term, grid: Term) -> Term:
+        """:meth:`_active` for a context with no absolute position.
+
+        A floating-point context rounds too, so the carry applies just the
+        same; what it has instead of a position is a *precision*, which puts
+        the floor under the grid relative to the result rather than at a
+        fixed digit.  Both are sound for a subnormal, where the true grid is
+        coarser still.
+        """
+        ctx = self._active_ctx(e)
+        pmax = getattr(ctx, 'pmax', None)
+        if not isinstance(pmax, int):
+            return logb
+        self.store.ge(grid, logb - (pmax - 1))
+        rm = getattr(ctx, 'rm', None)
+        if not _round_will_carry(rm if isinstance(rm, RoundingMode) else None):
+            return logb
+        exact = self._var(f'X{len(self.out.by_expr)}')
+        self.store.le(logb, exact + 1)
+        return exact
+
+    def _active_ctx(self, e: Expr) -> object:
+        """The context *e* is evaluated under, resolved, or `None`."""
+        if e not in self.ctx_use.use_to_scope:
+            return None
+        scope = self.ctx_use.find_scope_from_use(e)
+        return self.scopes.get(scope, scope.ctx)
 
     def _operands(self, e: Expr) -> tuple[Expr, ...]:
         """The operands *e*'s own bound is taken over, for the rules that
@@ -988,7 +1016,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         is entirely of that shape.
 
         ``None`` for an expression that uses no context at all -- a bare
-        literal, say -- which `_ambient` asks about as readily as a rounding.
+        literal, say -- which `_active` asks about as readily as a rounding.
         """
         if e not in self.ctx_use.use_to_scope:
             return None

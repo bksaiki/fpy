@@ -919,14 +919,14 @@ evidence only.
       precision, not the least -- so the honest options were "carry" or a
       mid-walk query that makes the rule depend on emission order.  Dropping
       the query also removes that order dependence.
-- [x] **Every magnitude rule ignores the ambient rounding context.**  `Add`,
+- [x] **Every magnitude rule ignores the active rounding context.**  `Add`,
       `Abs`, `Mul` and the rest state the bound for the *exact* result; in FPy
       the expression denotes the result rounded at the enclosing context, which
       can carry out of that binade.  `Round`/`Cast` are the only cases that
       model a carry.  Systemic rather than per-rule, and it bites hardest in
       the target setting -- arithmetic inside a coarse `MPFixedContext`.
       (reported; the largest item here)
-      *Fixed:* `_ambient` applies the active context once, centrally -- the
+      *Fixed:* `_active` applies the active context once, centrally -- the
       rules bound a fresh term and the expression reaches one binade further
       -- and puts the quantum under the grid, since a rounded value has no
       digit below it.  The grid floor pays for the carry: the corpus is
