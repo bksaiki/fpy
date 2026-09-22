@@ -328,15 +328,20 @@ class TestMask:
 
 
 class TestLiteralCast:
-    def test_a_numeric_literal_is_parenthesized(self):
-        """`2.to(...)` lexes as `2.` then `to` -- a different program."""
+    def test_a_numeric_literal_is_retyped_not_cast(self):
+        """Two traps in one.  `2.to(...)` lexes as `2.` then `to`, and
+        parenthesizing it to `(2).to(...)` only moves the problem: that is
+        valid Python and Triton rejects it, because a Python scalar is a
+        `constexpr` rather than a tile -- *"'int' object has no attribute
+        'to'"*.  Writing the literal in the target's own spelling avoids the
+        conversion entirely."""
         @fp.fpy(ctx=fp.FP32)
         def f(xs: list[fp.Real], i: fp.Real):
             return xs[i] * 2
 
         out = _emit(f, [ListType(_R32, 8), _INT])
-        assert '(2).to(tl.float32)' in out
-        assert '2.to(' not in out
+        assert '2.0' in out
+        assert '.to(' not in out
 
     def test_everything_emitted_is_parseable_python(self):
         """The emitter's output has to lex, whatever else it is."""
@@ -516,3 +521,42 @@ class TestKernel:
         may not, and the flag has to say so without being told."""
         assert self._kernel(fp.REAL, fp.IEEEContext(5, 16)).enable_fp_fusion
         assert not self._kernel(fp.FP32, fp.FP32).enable_fp_fusion
+
+
+
+class TestSelectOps:
+    """`max` and `min` were absent from the op table, and that absence was
+    protective rather than an oversight."""
+
+    def test_max_propagates_nan(self):
+        """FPy follows IEEE 754-2019 `maximum`, where a NaN operand
+        propagates; `tl.maximum` follows `maximumNumber` and returns the
+        *other* operand.  Measured on hardware: FPy gives `nan` for
+        `max(nan, 1.0)`, `tl.maximum` gives `1.0`.  So the bare instruction
+        would be a miscompile on any input containing a NaN."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            return max(x, y)
+
+        out = _emit(f, [_R32, _R32])
+        assert 'tl.maximum(' in out
+        assert "float('nan')" in out, 'the NaN guard is missing'
+        assert '(x != x)' in out and '(y != y)' in out
+
+    def test_min_too(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            return min(x, y)
+
+        out = _emit(f, [_R32, _R32])
+        assert 'tl.minimum(' in out and "float('nan')" in out
+
+    def test_an_nary_max_folds_pairwise(self):
+        """Sound because `max` is associative *and* exact -- it returns an
+        operand rather than computing one, so no grouping rounds
+        differently."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real, z: fp.Real):
+            return max(x, y, z)
+
+        assert _emit(f, [_R32, _R32, _R32]).count('tl.maximum(') == 2

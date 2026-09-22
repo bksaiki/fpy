@@ -54,6 +54,8 @@ from ...ast import (
     Len,
     ListRef,
     ListTypeAnn,
+    Max,
+    Min,
     Mul,
     NamedId,
     NaryOp,
@@ -92,6 +94,14 @@ _COMPARE: dict[CompareOp, str] = {
     CompareOp.EQ: '==',
     CompareOp.NE: '!=',
 }
+
+
+def _as_literal(code: str) -> float | None:
+    """*code* as a number, if that is all it is."""
+    try:
+        return float(code)
+    except ValueError:
+        return None
 
 
 class _IndentedWriter:
@@ -236,13 +246,16 @@ class _Emitter(Visitor):
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
         """*code* cast to *want*.
 
-        A numeric literal is parenthesized first: `2.to(...)` lexes as `2.`
-        followed by `to`, which is a different program and usually a syntax
-        error.  A name or a call needs no parentheses, and `dot_exact` spells
-        it bare.
+        **A literal is retyped, not cast.**  `2.to(...)` lexes as `2.` then
+        `to`, and parenthesizing it to `(2).to(...)` only moves the problem:
+        it is valid Python, and Triton rejects it with *"'int' object has no
+        attribute 'to'"* because a Python scalar is a `constexpr`, not a
+        tile.  Writing the literal in the target's own spelling avoids the
+        conversion entirely.
         """
-        if not (code.isidentifier() or code.endswith(')')):
-            code = f'({code})'
+        literal = _as_literal(code)
+        if literal is not None:
+            return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
         return f'{code}.to({want.format()})'
 
     # -- dispatch ------------------------------------------------------
@@ -481,6 +494,53 @@ class _Emitter(Visitor):
         op = '&' if isinstance(e, And) else '|'
         return '(' + f' {op} '.join(self.emit(a) for a in e.args) + ')'
 
+    def _emit_select_op(self, e: Max | Min) -> str:
+        """`max` / `min`, folded pairwise and made NaN-propagating.
+
+        **`tl.maximum` is the wrong operation on its own.**  FPy follows IEEE
+        754-2019 `maximum`, where a NaN operand propagates; Triton's
+        `tl.maximum` follows `maximumNumber`, which returns the *other*
+        operand.  Checked on hardware: FPy gives `nan` for `max(nan, 1.0)`
+        and `tl.maximum` gives `1.0`.  Emitting it bare would be a miscompile
+        on any input containing a NaN.
+
+        So the fold is guarded *once*, over every operand: if any is a NaN the
+        result is a NaN, else the chain of hardware selects.  `x != x` is the
+        NaN test.  Guarding each step instead would put the accumulator inside
+        its own test and grow the expression exponentially in the number of
+        operands.
+
+        **The guard repeats its operands**, which is free for a name and two
+        extra loads for a subscript.  They are pure and identically masked, so
+        it is correct either way and a CSE pass should collapse them -- but
+        that is unverified here.  The principled fix is not a cleverer
+        expansion: it is to drop the guard where a NaN cannot arise, which a
+        context with `enable_nan=False` already states and `ValueClassInfer`
+        could prove more widely.
+
+        Folding pairwise is sound because both are associative *and* exact:
+        they return an operand rather than computing one, so no grouping
+        rounds differently.
+        """
+        name = 'tl.maximum' if isinstance(e, Max) else 'tl.minimum'
+        want = self._storage(e)
+        args = [
+            self._maybe_cast(self.emit(a), self._storage(a), want)
+            for a in e.args
+        ]
+        if not args:
+            raise TritonEmitError(f'`{name}` needs at least one operand')
+        acc = args[0]
+        for rhs in args[1:]:
+            acc = f'{name}({acc}, {rhs})'
+        if len(args) == 1:
+            return acc
+        # one NaN test over all the operands, not one per fold step: guarding
+        # each step would put the accumulator inside its own test and grow
+        # the expression exponentially in the number of operands
+        nan = ' | '.join(f'({a} != {a})' for a in args)
+        return f"tl.where({nan}, float('nan'), {acc})"
+
     def _emit_where(self, e: IfExpr) -> str:
         """``tl.where``, with both arms in the result's storage.
 
@@ -550,6 +610,8 @@ class _Emitter(Visitor):
     def _visit_naryop(self, e: NaryOp, ctx) -> str:
         if isinstance(e, (And, Or)):
             return self._emit_connective(e)
+        if isinstance(e, (Max, Min)):
+            return self._emit_select_op(e)
         raise TritonEmitError(f'no Triton spelling for `{type(e).__name__}`')
 
     def _visit_compare(self, e: Compare, ctx) -> str:

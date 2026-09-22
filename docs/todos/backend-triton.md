@@ -660,18 +660,27 @@ The ordering is the useful content.
 | 4. Launcher + harness | built, differential passing; CI checks the text, not the run |
 | 5. `tl.dot` | blocked; see the item |
 
+**A literal is retyped, not cast.**  `2.to(...)` lexes as `2.` then `to`, and
+parenthesizing to `(2).to(...)` only moves the problem: that is valid Python
+and Triton rejects it, because a Python scalar is a `constexpr` rather than a
+tile.  The first fix was syntactic and did not survive contact with the
+compiler.
+
 **The gap is coverage, not capability.**  The pipeline compiles the running
 example end to end and agrees with the interpreter bit-for-bit, but it has
 only ever been driven on that program and a one-line map.  Running the corpus
 through the emitter -- unspecialized, so several failures are the measurement's
 fault rather than the emitter's -- surfaces three real holes:
 
-- **`Max` and `Min` are absent from the op table**, and they are exactly the
-  combines `why_not_tileable` calls *exact*: 17 of 29 tileable corpus loops
-  reduce with one.  So the analysis names them the prime tile-reduction target
-  and the emitter cannot spell them.  `tl.maximum` and `tl.minimum` exist and
-  select an operand rather than rounding, so this reads as an oversight rather
-  than one of the table's deliberate refusals.
+- **`Max` and `Min`** — now emitted, and the reason they were missing turned
+  out to matter.  `tl.maximum` is *not* FPy's `max`: FPy follows IEEE 754-2019
+  `maximum`, where a NaN operand propagates, while `tl.maximum` follows
+  `maximumNumber` and returns the other operand.  Measured on the card — FPy
+  gives `nan` for `max(nan, 1.0)` and `tl.maximum` gives `1.0` — so emitting
+  the bare instruction would have miscompiled every input containing a NaN.
+  Their absence was the op table's refuse-by-default discipline working, not
+  an oversight.  They now emit as a NaN-guarded fold, checked against the
+  interpreter on hardware with NaN inputs.
 - **A comprehension has no spelling**, and item 1 deliberately *keeps*
   `ListComp` for the vectorizer.  Two halves of this design disagree: 24
   corpus functions hit it.
