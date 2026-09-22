@@ -10,6 +10,8 @@ empty non-correctly-rounded exclusion list -- the op table omits every
 transcendental -- so every function it compiles it can check bit-for-bit.
 """
 
+import os
+
 import pytest
 
 import fpy2 as fp
@@ -17,6 +19,22 @@ from fpy2.backend.triton import TritonCompiler, launch, unavailable
 from fpy2.types import ListType, RealType
 
 _WHY = unavailable()
+
+_REQUIRE = os.environ.get('FPY_REQUIRE_GPU') not in (None, '', '0')
+"""Turn a skip into a failure.
+
+Without a GPU these tests skip, and a skip is indistinguishable from a pass in
+a summary line -- so a broken install looks exactly like a machine with no
+card, and this backend looks tested when nothing ran.  CI cannot fix that by
+acquiring hardware, so anyone who *has* a card sets this and the skip becomes
+an error instead.
+"""
+
+if _REQUIRE and _WHY is not None:
+    raise RuntimeError(
+        f'FPY_REQUIRE_GPU is set but the Triton runtime is unusable: {_WHY}'
+    )
+
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 FP16 = fp.IEEEContext(5, 16)
@@ -101,7 +119,14 @@ class TestLauncher:
 
 
 @pytest.mark.skipif(False, reason='')
-def test_unavailable_reports_a_reason_or_none():
-    """Callable with or without hardware -- it is the guard itself."""
+def test_the_guard_reports_a_reason(capsys):
+    """Runs with or without hardware: it *is* the guard.
+
+    It prints the reason so a CI log says why the rest did not run.  A silent
+    skip is the failure mode that matters here -- the suite passes, the
+    backend is untested, and nothing says so.
+    """
     why = unavailable()
+    with capsys.disabled():
+        print(f'\n  [triton] {"runnable" if why is None else f"skipped: {why}"}')
     assert why is None or isinstance(why, str)

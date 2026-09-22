@@ -315,6 +315,20 @@ A missing tile-width parameter is a refusal, not a guess.
 card — checked at `n` of 1, 6, 8 and 9 against a `BLOCK` of 4 and 8, so a
 full tile, several tiles, and three different partial tiles all ran.
 
+**CI checks the emitted source, not the execution.**  GitHub's GPU runners
+are paid and not free for public repositories, so the differential cannot run
+in CI.  What can is an expect test over the *text*: the whole kernel is
+pinned, so an emitter change shows as a diff on any machine.  That covers the
+compiler end to end without hardware, and leaves execution as a manual check
+here.
+
+Pinning the whole text rather than fragments is deliberate -- the trap this
+backend exists to avoid is a cast on the wrong side of a multiply, which is a
+change of one token's position and not of any substring worth grepping for.
+
+`FPY_REQUIRE_GPU=1` turns the skip into an error, so a machine that *has* a
+card enforces the differential instead of quietly passing.
+
 **Triton has no CPU target.**  Mainline builds `amd` and `nvidia` only, and a
 CPU tensor fails with *"Pointer argument cannot be accessed from Triton"*.  So
 `triton` importing is not enough to run anything: `unavailable()` checks torch,
@@ -641,10 +655,27 @@ The ordering is the useful content.
 | Item | Sketch |
 |---|---|
 | 1. Triton normal form | built, less the 8 loop-shaped refusals |
-| 2. Split and vectorize | built, less the emitter's half |
-| 3. Emitter | 4–6 weeks |
-| 4. Launcher + harness | launcher built and differential passing; CI wiring remains |
+| 2. Split and vectorize | built |
+| 3. Emitter | built; coverage is one program wide |
+| 4. Launcher + harness | built, differential passing; CI checks the text, not the run |
 | 5. `tl.dot` | blocked; see the item |
+
+**The gap is coverage, not capability.**  The pipeline compiles the running
+example end to end and agrees with the interpreter bit-for-bit, but it has
+only ever been driven on that program and a one-line map.  Running the corpus
+through the emitter -- unspecialized, so several failures are the measurement's
+fault rather than the emitter's -- surfaces three real holes:
+
+- **`Max` and `Min` are absent from the op table**, and they are exactly the
+  combines `why_not_tileable` calls *exact*: 17 of 29 tileable corpus loops
+  reduce with one.  So the analysis names them the prime tile-reduction target
+  and the emitter cannot spell them.  `tl.maximum` and `tl.minimum` exist and
+  select an operand rather than rounding, so this reads as an oversight rather
+  than one of the table's deliberate refusals.
+- **A comprehension has no spelling**, and item 1 deliberately *keeps*
+  `ListComp` for the vectorizer.  Two halves of this design disagree: 24
+  corpus functions hit it.
+- **Destructuring assignment has no spelling** -- 17 corpus functions.
 
 Items 1–2 are all interpreter-testable, so they parallelize with each other and
 need no hardware.
