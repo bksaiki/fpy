@@ -305,10 +305,47 @@ _REFUSED = [
     (effect_in_branch, 'effect would run unconditionally'),
     (writes_in_branch, 'list write would run unconditionally'),
     (while_in_branch, '`while` would run unconditionally'),
-    (for_in_branch, '`for` would run unconditionally'),
     (cast_in_branch, 'asserts its result is exact'),
     (nested_unhoistable, '`assert` would run unconditionally'),
 ]
+
+
+class TestAForIsHoisted:
+    """A `for` is the case the hoist route exists for.
+
+    It cannot go inside an `IfExpr` -- only plain assignments reduce to
+    expressions -- so it is hoisted, computing into renamed names that the
+    merge discards on the side the guard did not take.  That is sound because
+    a `for` *terminates*: it runs an iterable, which is finite.  A `while` may
+    not, which is the whole difference between them.
+    """
+
+    def test_it_rewrites(self):
+        _no_if_statements(for_in_branch)
+
+    @pytest.mark.parametrize('args', [(1.0, 3), (-1.0, 3), (1.0, 0), (-1.0, 0)])
+    def test_it_agrees(self, args):
+        _agrees(for_in_branch, *args)
+
+    def test_the_loop_survives(self):
+        """Hoisted, not unrolled or deleted, and the merge discards it."""
+        out = Function(SimplifyIf.apply(for_in_branch.ast), runtime=None).format()
+        assert out.count('for _i in range(n)') == 1
+        assert 'if cond else' in out
+
+    def test_a_refusal_inside_the_body_still_bites(self):
+        """The recursion checks the body: what it holds is what decides."""
+        @fp.fpy
+        def assert_in_loop(c: bool, xs: list[fp.Real]):
+            s = 0.0
+            if c:
+                for x in xs:
+                    assert x > 0.0, 'positive'
+                    s = s + x
+            return s
+
+        with pytest.raises(TransformDeclined, match='`assert` would run'):
+            SimplifyIf.apply(assert_in_loop.ast)
 
 
 class TestUnconditionalRefusals:

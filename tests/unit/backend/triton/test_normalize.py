@@ -107,11 +107,12 @@ class TestReachesTheForm:
         assert 'for' in src
 
 
-class TestRejects:
-    def test_a_guarded_loop_declines(self):
-        """A `for` under an `if` would run unconditionally once hoisted.  The
-        pass's own `TransformDeclined` propagates rather than being rewrapped:
-        it already names the construct."""
+class TestAGuardedLoopIsHoisted:
+    """`SimplifyIf` hoists a `for` out of an arm: it terminates, and the
+    merge discards what it computed on the side the guard did not take.  So
+    the normal form is reached rather than refused."""
+
+    def test_it_normalizes(self):
         @fp.fpy(ctx=fp.FP64)
         def guarded(c: bool, xs: list[fp.Real]):
             total = fp.round(0)
@@ -120,7 +121,30 @@ class TestRejects:
                     total = total + x
             return total
 
-        with pytest.raises(TransformDeclined, match='`for` would run'):
+        out = normalize(guarded.ast)
+        _is_normal(out)
+        g = Function(out, runtime=guarded.runtime)
+        for c in (True, False):
+            assert repr(g(c, [1.0, 2.0])) == repr(guarded(c, [1.0, 2.0]))
+
+
+class TestRejects:
+    def test_an_assert_under_a_guard_declines(self):
+        """Hoisting it would make it run unconditionally, and it can abort.
+
+        The pass's own `TransformDeclined` propagates rather than being
+        rewrapped: it already names the construct.
+        """
+        @fp.fpy(ctx=fp.FP64)
+        def guarded(c: bool, xs: list[fp.Real]):
+            total = fp.round(0)
+            if c:
+                for x in xs:
+                    assert x > 0, 'positive'
+                    total = total + x
+            return total
+
+        with pytest.raises(TransformDeclined, match='`assert` would run'):
             normalize(guarded.ast)
 
     def test_a_varying_while_condition_is_not_normal(self):

@@ -17,16 +17,21 @@ def simplify_if(
 
     An arm whose statements are all plain assignments is reduced to one
     expression per name and placed *inside* the `IfExpr`, which is lazy, so it
-    keeps its guard.  An arm that cannot be reduced -- a loop, a list write, a
-    nested `if` left unrewritten by ``where`` -- is hoisted into the enclosing
-    block and runs unconditionally.
+    keeps its guard.  An arm that cannot be reduced -- a `for`, a nested `if`
+    left unrewritten by ``where`` -- is hoisted into the enclosing block and
+    runs unconditionally, which is sound where the body has nothing the list
+    above declines: it computes into renamed names and the `IfExpr` discards
+    them on the side the guard did not take.
+
+    A `for` is hoistable because it *terminates*: it runs an iterable, which is
+    finite.  A `while` is not, which is the difference between the two.
 
     Refusals are judged on the arm as written, before it is known to inline, so
     an arm that would have inlined can still be declined.  A construct that
     could change which value the function produces, or that aborts where the
     program asked to, is declined under every mode, raising
     :class:`~fpy2.transform.TransformDeclined`: `return`, `assert`, an effect,
-    a list write, `while`, `for`, `fp.cast`, a call to another FPy function,
+    a list write, `while`, `fp.cast`, a call to another FPy function,
     and any operation under an `ASSERT` overflow context.  That last is keyed
     on whether an operation consults the rounding context, not on its node
     class, so `x * x` overflows there exactly as `fp.round(x)` would.
