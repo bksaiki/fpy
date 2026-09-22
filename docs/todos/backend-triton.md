@@ -507,7 +507,7 @@ holds.
 The running example stays sequential: accumulating in FP32 is the point, so
 the adds round and `rounds_exactly` is false. That still parallelizes, across
 the batch — one lane per dot product, which is what the hand-written kernels
-do. See item 5.
+do, and it is bit-exact where a tile reduction is not.
 
 Tails are a `mask`, not a generated tail loop — which `MASK` now provides.
 That is simpler than the `specialize`-based tail generation [scheduling-language.md](scheduling-language.md)
@@ -519,6 +519,30 @@ one.
 `fpy2/backend/triton/emitter.py`. Its input is a program already normalized,
 split and vectorized, so its job is spelling plus `tl.load` / `tl.store` at the
 loop boundary and `tl.where` for an `IfExpr`.
+
+**The input shape is settled, and it matches the hand-written kernel.**  Run
+the batched dot product -- the batch as a *user-written* loop, per *Not
+recommended* -- through `normalize` then `tile_loops`, and the structure that
+comes out corresponds one-to-one with `kernels.dot_exact`:
+
+| pipeline output | `dot_exact` |
+|---|---|
+| `for i in range(0, n, B)` | `tl.program_id(0) * BLOCK` |
+| `for j in range(i, i + B)` | `tl.arange(0, BLOCK)` |
+| `if j < n` | `mask = row < n_rows` |
+| `r = t[j]` | `row` |
+| `for k in range(K)` — refused, so sequential | `tl.static_range(K)` |
+| `acc + xss[r][k] * yss[r][k]` under FP32 | `acc + x.to(tl.float32) * y.to(tl.float32)` |
+| `out[r] = acc` | `tl.store(out_ptr + row, acc, mask=mask)` |
+
+The refusal is load-bearing in that table: `why_not_tileable` declines the `K`
+loop because the accumulation rounds, which is exactly why `dot_exact` keeps it
+sequential per lane.  The parallelism is the batch, and the batch is a loop the
+user wrote.
+
+So the emitter is a structural mapping with both sides written down, not a
+port of the cpp emitter's 4291 lines -- most of which is `std::vector`,
+`std::shared_ptr`, unboxing and aliasing that this input cannot contain.
 
 Ports nearly verbatim from the cpp emitter: `_IndentedWriter`, visitor
 dispatch, `_emit_at`'s merge reconciliation, `_dispatch`, and the cast
@@ -541,21 +565,17 @@ every function it compiles it can also check bit-for-bit.
 
 Items 1–4 are a working, testable, torch-callable backend.
 
-### 5. Reductions
+### 5. `tl.dot`
 
-`tl.sum` and friends, opt-in per reduction, gated on the precondition item 2
-states. Worth doing after there is something to measure: batch-lifting already
-reaches full parallelism bit-exactly for batched work, so this buys throughput
-on a single large reduction and costs the left-fold order.
+**Blocked by the same finding that retired reductions.** A tensor-core matmul
+reassociates its `K` accumulation, so it is available exactly where a tile
+reduction is — which the measurement below says is nowhere that wants it. The
+running example is a dot product whose accumulation must stay a left fold, so
+`tl.dot` cannot serve even the program this backend was designed around.
 
-FPy's `sum` is a left fold seeded with the first element unrounded, n−1
-additions, empty list an exact `+0` — the interpreter's `_eval_sum`, language
-semantics rather than convention. Anything here is measured against that.
-
-### 6. `tl.dot`
-
-Only once item 5 exists and a program appears that should *use* a tensor core.
-Nothing before it can express an operand.
+Revisit only if a program appears whose accumulation is provably exact *and*
+large enough to want a tensor core. Nothing before that can express an
+operand.
 
 ## Effort
 
@@ -566,11 +586,10 @@ The ordering is the useful content.
 | Item | Sketch |
 |---|---|
 | 1. Triton normal form | built, less the 8 loop-shaped refusals |
-| 2. Split and vectorize | decision built; the rewrite remains |
+| 2. Split and vectorize | built, less the emitter's half |
 | 3. Emitter | 4–6 weeks |
 | 4. Launcher + harness | 2–3 weeks; needs a GPU in CI |
-| 5. Reductions | unscoped; opt-in |
-| 6. `tl.dot` | unscoped |
+| 5. `tl.dot` | blocked; see the item |
 
 Items 1–2 are all interpreter-testable, so they parallelize with each other and
 need no hardware.
@@ -592,4 +611,21 @@ need no hardware.
   it. `DOUBLE_ROUND` covers the same ground within the existing machinery.
 - **A global fast-math escape hatch.** There is no single Triton knob, and the
   per-op spellings in the target description are more precise than one would be.
+- **Tile reductions (`tl.sum` and friends).** Retired from the work, and
+  measured rather than argued. `tl.sum` reassociates, so it is sound only
+  where every accumulation step is exact; `rounds_exactly` decides that, and
+  the control confirms it sees through a loop — a loop-carried integer add
+  answers `True`, the same add at FP32 answers `False`. On this corpus **0 of
+  7** arithmetic folds qualify.
+
+  The two conditions oppose each other: `tl.sum` buys throughput only on a
+  *single large* reduction, and the larger a floating-point accumulation is
+  the more certainly it rounds. What does qualify is integer accumulation
+  under an unbounded context, which is exactly where nobody needs the
+  throughput. Batch-lifting meanwhile reaches full parallelism *bit-exactly*
+  for batched work, which is the shape the running example has.
+
+  The residue, if a program ever needs it: `tl.sum` over an integer
+  accumulation, gated on `rounds_exactly`. A note, not a work item.
+
 - **Autograd.** These are numerical models, not layers.
