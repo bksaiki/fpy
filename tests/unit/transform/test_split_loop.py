@@ -27,7 +27,9 @@ from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import INTEGER
 from fpy2.transform import SplitLoop, SplitLoopStrategy, TransformReferenceError
 
-_BOTH = (SplitLoopStrategy.STRICT, SplitLoopStrategy.PEEL)
+_ALL = (SplitLoopStrategy.STRICT, SplitLoopStrategy.PEEL, SplitLoopStrategy.MASK)
+"""Every strategy.  A test parameterized over this asserts a property none of
+them may break; one that is about a particular remainder policy names it."""
 
 
 # ----------------------------------------------------------------------
@@ -155,24 +157,27 @@ _XS4 = [1.0, 2.0, 3.0, 4.0]
 
 class TestShape:
 
-    @pytest.mark.parametrize('strategy', _BOTH)
+    @pytest.mark.parametrize('strategy', _ALL)
     def test_no_slice(self, strategy):
         out = _split(_total, strategy=strategy)
         assert not _has_node(out, ListSlice)
 
-    @pytest.mark.parametrize('strategy', _BOTH)
+    @pytest.mark.parametrize('strategy', _ALL)
     def test_integer_blocks(self, strategy):
-        # one prelude (factor/len/check), one chunk bound; the PEEL
-        # residual loop indexes with plain variables and needs none
+        # one prelude (factor/len/check), one chunk bound.  Neither the PEEL
+        # residual nor the MASK guard adds one: both index with plain
+        # variables already bound exactly
         out = _split(_total, strategy=strategy)
         assert _count_integer_blocks(out) == 2
 
     def test_nested_loops(self):
-        # STRICT: chunk loop + inner; PEEL adds the residual loop
+        # STRICT: chunk loop + inner; PEEL adds the residual loop; MASK has
+        # none, which is the point of it -- the tail is a guard instead
         assert _count_fors(_split(_total, strategy=SplitLoopStrategy.STRICT)) == 2
         assert _count_fors(_split(_total, strategy=SplitLoopStrategy.PEEL)) == 3
+        assert _count_fors(_split(_total, strategy=SplitLoopStrategy.MASK)) == 2
 
-    @pytest.mark.parametrize('strategy', _BOTH)
+    @pytest.mark.parametrize('strategy', _ALL)
     def test_materialized_once(self, strategy):
         # user's `acc`, then the single materialize Assign, then the
         # INTEGER prelude
@@ -189,7 +194,7 @@ class TestShape:
 # Semantic equivalence
 
 
-@pytest.mark.parametrize('strategy', _BOTH)
+@pytest.mark.parametrize('strategy', _ALL)
 class TestEquivalence:
 
     def test_divisible_lengths(self, strategy):
@@ -242,6 +247,29 @@ class TestRemainder:
     def test_peel_tuple_target(self):
         # the residual loop rebuilds its own copy of the tuple binding
         out = _split(_pairs, strategy=SplitLoopStrategy.PEEL)
+        ps = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]
+        assert _pairs(ps) == _run(out, _pairs, ps)
+
+    def test_mask_any_length(self):
+        out = _split(_total, strategy=SplitLoopStrategy.MASK)
+        for xs in ([], [1.0], [1.0, 2.0, 3.0], [0.5] * 7):
+            assert _total(xs) == _run(out, _total, xs)
+
+    def test_mask_factor_exceeds_length(self):
+        # one chunk, most of it masked off
+        out = _split(_total, 8, strategy=SplitLoopStrategy.MASK)
+        assert _total(_XS4) == _run(out, _total, _XS4)
+
+    def test_mask_mutation_keeps_its_order(self):
+        # `xs[2]` is written in an early chunk and read in a later one.
+        # PEEL has to get this right across the residual boundary; MASK has
+        # no boundary, so the guarded tail reads what the prefix wrote
+        out = _split(_mutates_late, strategy=SplitLoopStrategy.MASK)
+        for xs in ([1.0, 2.0, 3.0], _XS4):
+            assert _mutates_late(list(xs)) == _run(out, _mutates_late, list(xs))
+
+    def test_mask_tuple_target(self):
+        out = _split(_pairs, strategy=SplitLoopStrategy.MASK)
         ps = [(1.0, 2.0), (3.0, 4.0), (5.0, 6.0)]
         assert _pairs(ps) == _run(out, _pairs, ps)
 
@@ -384,7 +412,7 @@ class TestFactorValidation:
             with pytest.raises(ValueError):
                 _split(_total, bad)
 
-    @pytest.mark.parametrize('strategy', _BOTH)
+    @pytest.mark.parametrize('strategy', _ALL)
     def test_non_positive_runtime_factor_asserts(self, strategy):
         # a runtime factor < 1 would silently skip iterations
         # (`range(0, n, f)` is empty) — the emitted assert rejects it

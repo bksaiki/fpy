@@ -170,6 +170,38 @@ suite is unambiguous about which change caused it.
 .venv/bin/python -m pytest tests/unit/transform/test_split_loop.py tests/unit/strategies -q
 ```
 
+### Phase 3 — `use_fmod` on `ForUnroll`
+
+`fpy2/transform/for_unroll.py` is the only other transform that synthesizes a
+remainder: a module-level `_fmod` helper with two call sites, both inside
+`_ForUnroll` methods — the `STRICT` divisibility assert and the `PEEL` prefix
+bound.  Make it a method honouring the flag, and thread `use_fmod` through
+`ForUnroll.apply`, `apply_with_edits`, `sites`, `refusals`, `_lister` and the
+`fpy2.strategies.unroll_for` wrapper.  The same surgery as Phase 1, on a
+smaller surface.
+
+**Why this is not optional, and not scope creep.**  Today the codebase is
+*consistent*: every synthesized remainder is an `Fmod`.  Phase 1 is what
+introduces the possibility of a program that mixes the two — a pipeline
+running `split(use_fmod=False)` alongside `unroll_for`, which hardcodes
+`Fmod`, emits both spellings and can be lowered by neither backend.  That is
+strictly worse than either choice alone, so Phase 3 finishes what Phase 1
+starts rather than extending it.
+
+The route these two share is real, not hypothetical: `Specialize` →
+`unroll_for` → `single_exit` is how a loop-carried `return` is removed, and
+`split` runs over the same programs.
+
+Tests, in `tests/unit/transform/test_for_unroll.py`:
+
+- `use_fmod` selects the node for both strategies, defaulting to `Fmod`;
+- the spelling does not change the answer, over the same lengths the existing
+  equivalence tests use.
+
+```
+.venv/bin/python -m pytest tests/unit/transform/test_for_unroll.py tests/unit/strategies -q
+```
+
 ### After the last phase
 
 ```
