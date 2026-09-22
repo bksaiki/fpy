@@ -798,6 +798,45 @@ Not evidence the check is wrong — evidence the storages agree by the time
 anything asks. A witness needs a slot whose element storage is fixed by
 something outside the store: a parameter's ABI, or a callee's return.
 
+### No integer remainder compiles
+
+Neither spelling of a remainder survives codegen under an integer context, so a
+program that computes one cannot be compiled at all:
+
+```
+n % f        -> no signatures for op: Mod
+fp.fmod(n,f) -> no matching signature for Fmod under MPFixedContext(...): ['int64_t', 'int64_t']
+```
+
+`_make_binary_table` builds `Add` / `Sub` / `Mul` / `Div` as operators, which
+get integer *and* float signatures, and everything in `_BINARY_CMATH` — `Fmod`
+among them — through `_fp_binary`, which is floating-point only.  `Mod` has no
+entry at all.  The only spelling that compiles today is `n - (n / f) * f`,
+which is correct but obscure and leans on `/` truncating.
+
+**This is reachable from a transform, not just from hand-written source.**
+`SplitLoop`'s dynamic path emits `Fmod` under `fp.INTEGER` for both `PEEL` and
+`STRICT`, so a split over a list whose length is not statically known does not
+compile.  It is latent because the static path computes the remainder in Python
+and emits no `fmod`, so it only bites when the length is unknown — which is the
+case a real kernel has.  `docs/todos/split-mask-tail.md` adds a `use_fmod` flag
+so the caller picks the spelling its backend wants; that defers the policy but
+does not close this, since neither choice compiles here.
+
+Two fixes, independent:
+
+- **`Fmod` for integers** — a signature emitting `%`, correct because both
+  truncate.  Small, and it is what unblocks `SplitLoop`.
+- **`Mod`** — floored, so C++'s `%` is wrong on negatives; it needs a runtime
+  helper (`((p % q) + q) % q`) mapped as a `CALL`.  An optimization is
+  available where both operands are provably non-negative, but nothing proves
+  that today: `ValueClass` does not track sign (`FINITE` is "either sign"), and
+  `FormatInfer` discards it — `Len` with an unknown size returns
+  `_INTEGER_FORMAT`, so even `len(xs)` comes back `neg_bound=-inf`.  Giving
+  `Len` a non-negative bound would be one rule and would cover the loop
+  transforms, at the cost of re-measuring everything that consumes those
+  bounds.
+
 ### `fpy2/backend/cpp/README.md`
 
 A short package README pointing at this file and listing the public surface

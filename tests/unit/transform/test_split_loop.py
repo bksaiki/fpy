@@ -396,3 +396,102 @@ class TestFactorValidation:
         for bad in (0.0, -2.0):
             with pytest.raises(AssertionError):
                 _run(out, _total_k, _XS4, bad)
+
+
+# ----------------------------------------------------------------------
+# MASK
+
+
+def _count_if1s(ast) -> int:
+    from fpy2.ast import If1Stmt
+    n = [0]
+
+    class _C(DefaultVisitor):
+        def _visit_if1(self, s, ctx):
+            n[0] += 1
+            super()._visit_if1(s, ctx)
+
+    _C()._visit_function(ast, None)
+    return n[0]
+
+
+class TestMask:
+    """Every chunk is a full factor wide and the tail is a guard, so the body
+    is emitted once -- the shape a SIMD target masks directly."""
+
+    def test_one_loop_nest_and_no_divisibility_assert(self):
+        ast = _split(_total, 4, strategy=SplitLoopStrategy.MASK)
+        # PEEL would add a residual loop; STRICT would add the assert
+        assert _count_fors(ast) == 2
+        assert _count_if1s(ast) == 1
+        assert 'assert' in ast.format()          # the `f >= 1` guard stays
+        assert 'fp.fmod(t' in ast.format()       # ... but not on divisibility
+        assert '== 0' not in ast.format()
+
+    @pytest.mark.parametrize('n', list(range(0, 10)))
+    def test_agrees_on_every_remainder(self, n):
+        """Including the empty list and the exactly-divisible length."""
+        xs = [float(k + 1) for k in range(n)]
+        ast = _split(_total, 4, strategy=SplitLoopStrategy.MASK)
+        assert repr(_run(ast, _total, xs)) == repr(_total(xs))
+
+    def test_a_static_divisible_length_emits_no_guard(self):
+        """The guard could never fail, so it is not emitted."""
+        @fp.fpy
+        def fixed(xs: list[fp.Real]) -> fp.Real:
+            acc = fp.round(0)
+            for i in range(8):
+                acc = acc + xs[i]
+            return acc
+
+        ast = _split(fixed, 4, strategy=SplitLoopStrategy.MASK)
+        assert _count_if1s(ast) == 0
+        assert _has_node(ast, Integer)
+
+    def test_a_static_indivisible_length_keeps_the_guard(self):
+        @fp.fpy
+        def fixed(xs: list[fp.Real]) -> fp.Real:
+            acc = fp.round(0)
+            for i in range(10):
+                acc = acc + xs[i]
+            return acc
+
+        ast = _split(fixed, 4, strategy=SplitLoopStrategy.MASK)
+        assert _count_if1s(ast) == 1
+
+    def test_mask_refuses_nothing(self):
+        """Like PEEL, it is correct for any length, so every loop is a site."""
+        assert SplitLoop.refusals(
+            _total.ast, strategy=SplitLoopStrategy.MASK) == []
+        assert len(SplitLoop.sites(
+            _total.ast, strategy=SplitLoopStrategy.MASK)) == 1
+
+
+class TestUseFmod:
+    """Which remainder node is emitted is the caller's choice; the two agree
+    on every value emitted here, and differ only in what a backend can lower."""
+
+    @pytest.mark.parametrize('strategy', (SplitLoopStrategy.STRICT,
+                                          SplitLoopStrategy.PEEL,
+                                          SplitLoopStrategy.MASK))
+    def test_default_is_fmod(self, strategy):
+        src = _split(_total, 4, strategy=strategy).format()
+        assert 'fp.fmod(' in src
+        assert '%' not in src
+
+    @pytest.mark.parametrize('strategy', (SplitLoopStrategy.STRICT,
+                                          SplitLoopStrategy.PEEL,
+                                          SplitLoopStrategy.MASK))
+    def test_use_fmod_false_emits_percent(self, strategy):
+        src = _split(_total, 4, strategy=strategy, use_fmod=False).format()
+        assert '%' in src
+        assert 'fp.fmod(' not in src
+
+    @pytest.mark.parametrize('n', (0, 7, 8, 9))
+    def test_the_spelling_does_not_change_the_answer(self, n):
+        xs = [float(k + 1) for k in range(n)]
+        want = repr(_total(xs))
+        for use_fmod in (True, False):
+            ast = _split(_total, 4, strategy=SplitLoopStrategy.MASK,
+                         use_fmod=use_fmod)
+            assert repr(_run(ast, _total, xs)) == want, (n, use_fmod)
