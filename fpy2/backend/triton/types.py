@@ -4,7 +4,6 @@ triton backend: Triton storage types.
 A *storage type* is the Triton dtype a value is held in at runtime.  As in the
 cpp backend it is distinct from the *rounding format*: storage shapes the
 value's declaration, rounding shapes which arithmetic the result respects.
-See ``docs/todos/backend-triton.md``.
 
 The ladder is narrower than the cpp backend's in one direction and wider in
 another: it gains ``fp16``, which C++ cannot spell, and it deliberately
@@ -106,7 +105,7 @@ There is no list type on purpose.  A Triton value is a scalar or a tile, and an
 FPy list is neither: a list of *proven* length unrolls into one value per
 element (`ArraySizeInfer` + `Specialize(size_key=True)` + `ForUnroll`), and one
 of unproven length is refused until the tensorization work of
-``docs/todos/backend-triton.md`` §8.
+the op table in :mod:`.target`.
 """
 
 

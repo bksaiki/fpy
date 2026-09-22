@@ -4,7 +4,7 @@ This is what the target description is *for*, and the roadmap's claim that §2
 is testable on its own: given the ladder, the real analyses decide what holds
 each value, and the answers are checkable without generating a line of Triton.
 
-The program is `docs/todos/backend-triton.md`'s running example.
+The program is the backend's running example: a batched dot product.
 """
 
 import pytest

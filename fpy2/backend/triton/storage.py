@@ -100,7 +100,7 @@ def scalar_fits_in(a: TritonScalar, b: TritonScalar) -> bool:
     observable: contraction is unobservable exactly where the product's format
     fits the storage chosen for it, since "round the product then round the
     sum" and "round the sum of the exact product" then agree.  See
-    ``docs/todos/backend-triton.md`` §1, where it is measured.
+    measured against hardware in ``exploration/triton/``.
     """
     if a is TritonScalar.BOOL or b is TritonScalar.BOOL:
         return a is b
@@ -160,7 +160,7 @@ def to_triton(storage: FormatBound) -> TritonType:
     A ``ListFormat`` is refused rather than spelled.  Triton has no list: a
     proven-length list unrolls into one value per element before reaching here,
     and an unproven-length one is out of scope until §8 of
-    ``docs/todos/backend-triton.md``.  Refusing names the reason; spelling it as
+    Refusing names the reason; spelling it as
     a tile would silently change what the program means.
     """
     if storage is None:

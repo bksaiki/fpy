@@ -113,105 +113,71 @@ so that kernel cannot consume an fp16 buffer. And the emitted loop is
 
 ## What is implemented
 
-Not TODOs. Recorded because the rest builds on them.
+Not TODOs. Kept because each states a constraint the rest still has to honor.
 
-### Findings — `exploration/triton/`
+### Numerics, measured on hardware — `exploration/triton/`
 
 Hand-written kernels for the running example, bit-compared against the
-interpreter on an sm_70 card at n=2000. Every prediction held.
+interpreter on an sm_70 card at n=2000.
 
-**`enable_fp_fusion` is derivable, not a global pin.** Contracting
-`acc + x * y` into an `fma` rounds once over an exact product; the unfused form
-rounds the product then the sum — the same operation wherever the product is
-already exact. Predicted from FPy's semantics alone (each program beside its
-`fp.fma` twin, no GPU), then confirmed against the flag: the FP16-in program is
-unchanged by fusion (0/2000 either way), an all-FP32 program differs under it
-(590/2000) and matches without it (0/2000). So fusion is safe exactly where
-`scalar_fits_in(product_format, product_storage)` holds, which the pipeline
-already computes. Derive it per kernel rather than pin it off and pay the
-reported ~30% cost of `--fmad=false` everywhere.
+**`enable_fp_fusion` is derivable, not a global pin.** Contracting `acc + x*y`
+into an `fma` rounds once over an exact product, so it is the same operation
+wherever the product is already exact: the FP16-in program is unchanged by
+fusion (0/2000 either way), an all-FP32 program differs under it (590/2000) and
+matches without it. Safe exactly where `scalar_fits_in(product_format,
+product_storage)` holds, which the pipeline already computes — derive it per
+kernel rather than pin it off and pay `--fmad=false` everywhere.
 
 **The fp16 cast trap is total.** `x.to(tl.float32) * y.to(tl.float32)` matches
-the interpreter (0/2000 differ); the naive `(x * y).to(tl.float32)` differs on
+the interpreter (0/2000 differ); `(x * y).to(tl.float32)` differs on
 **2000/2000**, because Triton types `fp16 op fp16` as fp16. The casts come from
 `StorageInfer`; nothing in Triton asks for them.
 
-**A batch-lifted kernel is bit-exact** — one lane per dot product, fold
-sequential within a lane.
-
-Open, and untestable below sm_100: whether `enable_fp_fusion=False` reaches the
-packed `mul.rn.f32x2` / `add.rn.f32x2` emitted on Blackwell. Narrower than it
-was, since the flag is only needed where the product rounds, but it would be a
+**Open, untestable below sm_100:** whether `enable_fp_fusion=False` reaches the
+packed `mul.rn.f32x2` / `add.rn.f32x2` emitted on Blackwell. It would be a
 silent bit-exactness hole rather than a refusal.
 
-### Single-exit normalization — `fpy2/transform/single_exit.py`
+### Normal form — `fpy2/backend/triton/normalize.py`
 
-Merged (#313), wrapped as `fpy2.strategies.single_exit`.  An early return
-becomes an assignment to one result name; the statements that would have
-followed go into each arm that falls through.
+`normalize` / `normalize_module`, built on `FuncInline`, `SingleExit` (#313)
+and `SimplifyIf` (#303, #314). Reaches the form on **86 of 94** corpus
+functions; the other 8 are loop-shaped and are item 2's input.
 
-**It copies the continuation where both arms fall through**, which the design
-first tried to avoid.  FPy requires the result be assigned on every path and
-has no undefined value, so a `done` flag would need a typed dummy — and every
-formulation that avoids the copy collapses into it.  Bounded by nesting depth
-(3 in this corpus, refused past 8).
+**The order is `SingleExit` → `FuncInline` → `SimplifyIf`, and leaves-first
+across the call graph.** `FuncInline` refuses a callee with more than one
+return, so a function must be single-exit before anyone can inline it;
+`Module.map` supplies the order and rebinds each caller's `Call.fn` to the
+transformed callee. `SimplifyIf` runs last because sinking a `return` *creates*
+the `if`s it consumes. A per-function `normalize` cannot fix a callee, which is
+why the module-level entry point exists.
 
-**A `return` inside a loop is still refused**: FPy has no `break`.  The route is
-`Specialize` → `unroll_for` → `single_exit`, and the order matters — unrolling
-alone fails, because these functions iterate list *arguments* whose length is
-only fixed by specialization.  That gets all seven multi-return mmasim
-functions through, checked against the interpreter with infinities and NaN in
-the inputs.
+**Refusals that still bind:**
 
-Also refused: a `return` under a `with` that only *sometimes* returns, since
-moving the continuation inside would change its rounding context.
+- A `return` inside a loop — FPy has no `break`. `Specialize` → `unroll_for` →
+  `single_exit` gets all seven multi-return mmasim functions through, but see
+  *How a loop lowers* before reaching for it as a general answer.
+- A `return` under a `with` that only *sometimes* returns: moving the
+  continuation inside would change its rounding context.
+- A call in a branch, until inlining removes it — a callee's body is not
+  scanned, so an `assert` or an overflowing rounding inside one would reach the
+  hoist unseen.
+- `SingleExit` copies the continuation where both arms fall through, so its
+  cost is exponential in nesting depth (3 here, refused past 8). FPy has no
+  undefined value, so every formulation avoiding the copy needs a typed dummy
+  and collapses back into it.
 
-### The `if`-to-expression normalization — `fpy2/transform/simplify_if.py`
+**`SimplifyIf` runs in the default mode, not `strict`.** A guarded subscript is
+the common shape and lowers well to a mask. `strict` would additionally refuse
+out-of-range subscripts, unresolved contexts, and an operation whose context
+cannot hold an infinity or NaN it might produce — and it over-refuses, since
+refusals are judged on the arm as written, before it is known to inline.
 
-Merged (#303, #314).  `SimplifyIf` gained refusal conditions, a `strict`
-keyword, `where` / `sites` / `refusals`, and an `EditLog` so cursors forward.
-`fpy2.strategies.simplify_if` wraps it.  #314 added arm inlining: an arm whose
-statements are all plain assignments is reduced to one expression per name and
-placed *inside* the `IfExpr` rather than hoisted, so it keeps its guard.  On
-this corpus 14 arms inline and 3 hoist.
-
-**Two constraints this pipeline inherits from what the review of it found.**
-
-*A call in a branch declines until it is inlined.*  A callee's body is not
-scanned, so an `assert` or an overflowing rounding inside one would reach the
-hoist unseen; the pass refuses a call to another FPy function rather than
-analyzing interprocedurally.  Inlining first is what removes it; see
-*Single-exit normalization* above for what had to land before inlining could.
-
-*`strict` is affordable here, and was not expected to be.*  It declines any
-operation whose context cannot be shown not to overflow — which, in a function
-with no `ctx=`, is all arithmetic.  This pipeline runs after `Specialize`,
-where contexts are concrete, so what `strict` still refuses is out-of-range
-subscripts, genuine `ASSERT`-overflow contexts, and an operation whose context
-cannot hold an infinity or NaN it might produce — a pole at a finite operand
-(`logb(0)`, `sqrt(-1)`, `acos(2)`), or, under a bounded format that rounds an
-overflow to infinity, any operation at all.
-
-Take the **default** anyway, for two reasons.  A guarded subscript is the
-common shape, and it is the shape a mask lowers well.  And `strict` refuses
-more than it needs to: refusals are judged on the arm as written, before it is
-known to inline, so an arm that inlines — and therefore never hoists anything
-— can still be declined.  `core.max_e` is exactly that case.
-
-*On evaluation order.*  An earlier draft argued the default from the fact that
-`tl.where` evaluates both arms while a lazy consumer would not, then retracted
-it on the grounds that the pass hoists a partial operation into an
-unconditional statement before any `IfExpr` sees it.  Since #314 the retraction
-is itself wrong: an inlined arm puts the operation inside the `IfExpr`, and the
-interpreter's laziness does recover the guard.  The original argument was half
-right — wrong about `tl.where`, right about the interpreter.
-
-This does not cost the contract.  `tl.where` evaluates both arms, but the GPU
-does not trap where the interpreter would: `logb(0)` is `-inf` in hardware, and
-`tl.where` discards it.  Lazy interpreter and strict GPU agree on the value,
-which is what the contract asks for.  It does mean that under `strict=False`
-correctness for these shapes rests on inlining rather than on refusal, so arm
-coverage — not the refusal list — is the thing to watch.
+**On evaluation order.** An `if` arm that reduces to expressions is placed
+*inside* the `IfExpr`, which the interpreter evaluates lazily. `tl.where`
+evaluates both arms, but the GPU does not trap where the interpreter would —
+`logb(0)` is `-inf` in hardware and `tl.where` discards it — so the two agree
+on the value. The consequence is that correctness for these shapes rests on
+inlining rather than on refusal, so arm coverage is what to watch.
 
 ### Target description — `fpy2/backend/triton/`
 
@@ -222,22 +188,19 @@ without generating a line of Triton.
 Ladder: `u8, s8, u16, s16, f16, u32, s32, f32, u64, s64, f64`. `F16` after `S16`
 is the one real decision — it must follow the 8-bit integers, which nest in it,
 and against the 16-bit ones it is incomparable, so placing it later means
-"integers in [0, 2000]" takes `u16`. Same reasoning as the cpp ladder putting
-`F32` after `S32`.
+"integers in [0, 2000]" takes `u16`.
 
 `is_native_ctx` is a predicate on the **context**, not on `(op, context)`. The
 two readings the cpp backend can conflate come apart here — `Add` at FP16
 dispatches and `Div` at FP16 does not — and the *cast* reading must survive,
-since `x.to(tl.float16)` is FP16's round-to-nearest-even and answering `False`
-would send a native `fp.round` through an integer lowering. The cost is a worse
-diagnostic, not a worse outcome.
+since `x.to(tl.float16)` is FP16's round-to-nearest-even.
 
 Every omission in the op table is a refusal: all transcendentals (none
 correctly rounded — which makes the differential check's exclusion list
-*empty*), `Div` at FP16 (computed in fp32, so a double rounding), integer `Div`
+*empty*), `Div` at FP16 (computed in fp32, a double rounding), integer `Div`
 (FPy truncates, `//` floors), `/` and `tl.sqrt` (fast variants), every rounding
 mode but RNE. No list storage — a proven-length list unrolls into registers,
-and an unproven-length one is refused.
+an unproven-length one is refused.
 
 ## The pipeline inlines everything
 
@@ -294,6 +257,79 @@ estimation rather than a reversal of it: FPy decides the shape of the schedule,
 and borrows a tuner for the number it has no basis to choose. `split` already
 accepts a non-literal factor, so a specialized free variable works today.
 
+## How a loop lowers
+
+Checked against the Triton tutorials and `exploration/triton/kernels.py` before
+committing to a plan, because the obvious plan was wrong.  Triton kernels write
+loops three ways, and only one of them is a loop over scalars.
+
+**1. No loop — the dimension becomes a tile.**  The per-row work in the fused
+softmax tutorial:
+
+```python
+col  = tl.arange(0, BLOCK_SIZE)          # BLOCK_SIZE = next_pow2(n_cols)
+mask = col < n_cols
+row  = tl.load(ptr + col, mask=mask, other=-float('inf'))
+m    = tl.max(row, axis=0)
+den  = tl.sum(tl.exp(row - m), axis=0)
+```
+
+The iteration is implicit in the tile, and the reduction is one `tl.sum`.  Fast,
+and it **reassociates** — so it is available to a map, and to a fold only where
+the reassociation is discharged.
+
+**2. A runtime loop over tiles — the workhorse.**  The matmul tutorial's `K`
+loop:
+
+```python
+for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+    a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
+    b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
+    accumulator = tl.dot(a, b, accumulator)
+    a_ptrs += BLOCK_SIZE_K * stride_ak
+```
+
+The trip count is a *runtime* value and the body is tile-shaped, so one compiled
+kernel serves every `K`.  This is what item 2's `split` produces.
+
+**3. `tl.static_range` — unrolled at compile time.**  What `dot_exact` uses:
+
+```python
+for k in tl.static_range(K):             # K must be tl.constexpr
+    x = tl.load(xs_ptr + row * K + k, mask=mask, other=0.0)
+    acc = acc + x.to(tl.float32) * y.to(tl.float32)
+```
+
+**Unrolling is a fallback, not the general lowering.**  `tl.static_range`
+requires the count as `constexpr`, which means one compiled kernel per input
+length and the body replicated that many times — at a realistic `K` that is a
+compile-time bomb and it wrecks the instruction cache.  `dot_exact` pays it
+deliberately and only because `K` is small: batch-lifting one dot product per
+lane is what keeps FPy's left fold exactly, where a `tl.sum` over the tile would
+reassociate.  That is a semantics choice, not a performance one.
+
+**So the normal form must not pre-unroll.**  This is why item 1 keeps
+`ListComp`, `Sum`, `Zip` and `Enumerate`: unrolling deletes the iteration that
+item 2 needs in order to choose between idiom 1 and idiom 2.  A `for` under an
+`if` wants a **mask**, which is idiom 1 and 2's native shape, not an unroll.
+
+**What was measured while establishing this**, so it is not re-derived:
+
+- `trip_count` in `fpy2/analysis/array_size.py` already answers the count, but
+  only models `Range1`.  Of 59 corpus loops, 51 are `Range1`, and the other 8
+  (`Var` 3, `ListSlice` 3, `Zip` 2) return `None`.  Nothing proves a count until
+  `Specialize` runs with concrete `arg_types`; after it, `matrix.is_diagonal`'s
+  two loops report `[3, 3]`.
+- `ForUnroll.sites` must be queried with the `times` the rewrite will get.
+  Asking with the default on a length-3 loop returns *zero* sites, because
+  `STRICT` refuses a `k` that does not divide the length — the count has to be
+  computed first and fed to both calls.
+- Unrolling multiplies `SingleExit`'s continuation copying.  One user-written
+  `assert` in `utils.dpa_special_values` became **27** after unroll plus
+  single-exit; the duplication is exponential in nesting depth and unrolling is
+  what creates the depth.  A disable-asserts flag would remove both that and the
+  `SimplifyIf` refusal it then hits.
+
 ## This pipeline runs backwards for this target
 
 `CppCompiler.specialize()` normalizes *toward statements*, because the C++
@@ -323,42 +359,25 @@ than on any item below.
 
 ## The work
 
-### 1. A Triton normal form
+### 1. A Triton normal form — built, one piece left
 
-The replacement for `_to_statement_form`: `inline` everything, keep `ListComp`,
-`Sum`, `Zip` and `Enumerate`, run `SimplifyIf` instead of `Hoistable`, and
-reach a fixpoint.
-
-Inlining first is what leaves `SimplifyIf` no call to refuse.  Whether it
-should stay unconditional is a question for when kernels get large — Triton's
-own `noinline` exists because a big enough one spills registers — but there is
-no reason to model calls before something needs them.
-
-**The stated obstacle turned out not to be one, and this is measured.**  The
-concern was that `Hoistable` and `CompToLoop` are mutually dependent —
-`CompToLoop` declines a comprehension in a ternary arm or a `while` condition
-for want of a statement slot, and `Hoistable` makes the slot — so dropping both
-would leave those positions unanswered.  Running `inline` → `SingleExit` →
-`SimplifyIf` with neither pass over the 94-function corpus reaches expression
-form on **86**, and **not one** of the 8 refusals is a missing statement slot:
+`fpy2/backend/triton/normalize.py`; see *What is implemented*. The stated
+obstacle turned out not to be one: `Hoistable` and `CompToLoop` were thought to
+be mutually dependent in a way that dropping both would leave unanswered, but
+`SimplifyIf` removes the statement/expression distinction that created the
+problem, and **not one** of the 8 refusals is a missing statement slot.
 
 | | |
 |---|---|
-| 86 | expression form |
+| 86 | normal form |
 | 4 | a `for` would run unconditionally |
 | 4 | a `return` inside a loop |
 
-`SimplifyIf` removes the statement/expression distinction that created the
-problem, so the positions `Hoistable` existed to serve stop being special.
-
-What is left is loop-shaped, and neither half is a `SimplifyIf` question.  The
-route for the returns is the one *Single-exit normalization* gives: `Specialize`
-→ `unroll_for` → `single_exit`.  The unconditional-`for` refusals want the same
-specialization.  That is the remaining work in this item, and it is where the
-unknowns are.
-
-A remaining `IfStmt` after normalization is an error, per the rejection
-principle. So is a `while` whose condition varies.
+Both refusal groups are loop-shaped and neither is a `SimplifyIf` question.
+Unrolling clears them on paper, but *How a loop lowers* says why that is the
+wrong default — pre-unrolling deletes the iteration item 2 needs, and a guarded
+loop wants a mask. **Settle item 2 first and let it say what the normal form
+should leave standing.**
 
 ### 2. Split and vectorize
 
@@ -432,7 +451,7 @@ The ordering is the useful content.
 
 | Item | Sketch |
 |---|---|
-| 1. Triton normal form | 2–4 weeks; no GPU; the `Hoistable` gate is measured away |
+| 1. Triton normal form | built, less the 8 loop-shaped refusals |
 | 2. Split and vectorize | 3–5 weeks; no GPU |
 | 3. Emitter | 4–6 weeks |
 | 4. Launcher + harness | 2–3 weeks; needs a GPU in CI |

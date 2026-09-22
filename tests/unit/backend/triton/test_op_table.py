@@ -1,6 +1,6 @@
 """The op table's omissions are the design, so they are pinned.
 
-`docs/todos/backend-triton.md` states the contract: if compilation succeeds,
+The contract: if compilation succeeds,
 the emitted kernel must behave as the FPy interpreter does.  On a target whose
 defaults trade numerical agreement for throughput, holding that means declining
 to name an operation whose Triton spelling is not the one FPy specifies.  Every

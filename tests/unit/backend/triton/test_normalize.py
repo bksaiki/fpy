@@ -1,8 +1,8 @@
 """The Triton normal form: `fpy2.backend.triton.normalize`.
 
-Item 1 of `docs/todos/backend-triton.md`.  The form is calls inlined away, one
-exit, and every `if` a value; comprehensions and derived iterables stay, since
-item 2 wants the iteration written down.
+The form is calls inlined away, one exit, and every `if` a value;
+comprehensions and derived iterables stay, since the vectorizer wants the
+iteration written down.
 """
 
 import pytest

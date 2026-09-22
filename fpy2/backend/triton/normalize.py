@@ -8,7 +8,7 @@ dependent branch has to become ``tl.where`` over a value -- there is no
 per-lane statement to branch into.  This one therefore drives the program
 toward *expressions*: calls inlined away, one exit, and every ``if`` a value.
 
-``docs/todos/backend-triton.md`` item 1 states the form.  Comprehensions,
+Comprehensions,
 ``Sum``, ``Zip`` and ``Enumerate`` are deliberately kept: the vectorizer in
 item 2 wants the iteration written down, and lowering them to loops here would
 only make it reconstruct them.
@@ -21,9 +21,12 @@ from ...analysis import DefineUse, Reachability
 from ...ast import (
     Call,
     DefaultVisitor,
+    Expr,
     FuncDef,
     If1Stmt,
     IfStmt,
+    NamedId,
+    Var,
     WhileStmt,
 )
 from ...function import Function
@@ -81,16 +84,21 @@ class _NotNormal(DefaultVisitor):
         return self.reasons
 
 
-def _reads(e):
+class _Reads(DefaultVisitor):
     """Names an expression reads."""
-    out = set()
 
-    class _V(DefaultVisitor):
-        def _visit_var(self, v, ctx):
-            out.add(v.name)
+    def __init__(self):
+        super().__init__()
+        self.names: set[NamedId] = set()
 
-    _V()._visit_expr(e, None)
-    return out
+    def _visit_var(self, v: Var, ctx):
+        self.names.add(v.name)
+
+
+def _reads(e: Expr) -> set[NamedId]:
+    v = _Reads()
+    v._visit_expr(e, None)
+    return v.names
 
 
 def normalize(func: FuncDef) -> FuncDef:

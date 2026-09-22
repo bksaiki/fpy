@@ -8,8 +8,8 @@ the cpp ones are parameterized by ``CppScalar`` and spell C++.  Unifying them
 is a refactor of the cpp backend, not of this one.
 
 **The table is deliberately small**, and every omission is a refusal rather
-than a fallback.  ``docs/todos/backend-triton.md`` states the contract: if the
-compiler succeeds, the emitted code must behave as the interpreter does.  On a
+than a fallback.  The contract is that if the compiler succeeds, the emitted
+code must behave as the interpreter does.  On a
 target whose defaults trade numerical agreement for throughput, holding that
 means declining to name an operation whose Triton spelling is not the one FPy
 specifies.  What is left out, and why:
