@@ -102,9 +102,8 @@ from ..analysis.format_infer import (
     FormatAnalysis,
     FormatInfer,
     SetFormat,
-    exact_binop,
-    exact_unop,
     round_is_identity,
+    unrounded_format,
 )
 from ..ast.fpyast import (
     Abs,
@@ -209,60 +208,9 @@ class _RoundElimInstance(DefaultTransformVisitor):
         return self.outer_ctx
 
     def _unrounded_format(self, e: Expr):
-        """Return the unrounded value-set ``F`` for a rounded op, or
-        ``None`` for ops we don't handle.  Pulls the children's
-        stored (post-round) bounds from :attr:`format_info.by_expr`
-        and applies the corresponding ``exact_binop`` / ``exact_unop``
-        primitive.  For ``Round`` / ``Cast``, the
-        unrounded value *is* the argument."""
-        match e:
-            case Add():
-                return exact_binop(
-                    self.format_info.by_expr.get(e.first),
-                    self.format_info.by_expr.get(e.second),
-                    operator.add,
-                )
-            case Sub():
-                return exact_binop(
-                    self.format_info.by_expr.get(e.first),
-                    self.format_info.by_expr.get(e.second),
-                    operator.sub,
-                )
-            case Mul():
-                return exact_binop(
-                    self.format_info.by_expr.get(e.first),
-                    self.format_info.by_expr.get(e.second),
-                    operator.mul,
-                )
-            case Abs():
-                return exact_unop(
-                    self.format_info.by_expr.get(e.arg), abs,
-                )
-            case Neg():
-                return exact_unop(
-                    self.format_info.by_expr.get(e.arg), operator.neg,
-                )
-            case Round() | Cast():
-                # The unrounded "value" of an explicit round node is
-                # the argument itself — the argument's post-round
-                # bound is the right input here because the explicit
-                # Round operates on whatever the arg evaluates to.
-                # ``round_is_identity(arg's bound, this Round's
-                # target ctx)`` then answers exactly "is this Round
-                # the identity over the value the arg produces?".
-                # Stored bounds may be a ``Format`` (e.g.,
-                # ``IEEEFormat`` when the arg's post-round bound
-                # widened to the scope's format); lift to
-                # ``AbstractFormat`` so the result fits
-                # ``round_is_identity``'s expected input shape.
-                arg_fmt = self.format_info.by_expr.get(e.arg)
-                if isinstance(arg_fmt, SetFormat):
-                    return arg_fmt
-                if isinstance(arg_fmt, AbstractableFormat):
-                    return AbstractFormat.from_format(arg_fmt)
-                return None
-            case _:
-                return None
+        """The unrounded value-set ``F`` for a rounded op; see
+        :func:`fpy2.analysis.format_infer.unrounded_format`."""
+        return unrounded_format(e, self.format_info.by_expr)
 
     def _is_eliminable(self, e: Expr) -> bool:
         """True when the implicit round on *e* is the identity under

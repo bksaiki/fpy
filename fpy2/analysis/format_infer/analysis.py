@@ -1319,6 +1319,64 @@ def round_is_identity(
     return unrounded <= AbstractFormat.from_format(ctx_fmt)
 
 
+def unrounded_format(
+    e: Expr, by_expr: 'dict[Expr, FormatBound]',
+) -> 'SetFormat | AbstractFormat | None':
+    """The exact, unrounded result of a rounded operation.
+
+    Pulls each child's stored post-round bound from *by_expr* and applies the
+    matching :func:`exact_binop` / :func:`exact_unop` primitive.  ``None`` for
+    an expression that carries no context-driven round, where the question is
+    ill-posed.
+
+    For an explicit ``Round`` / ``Cast`` the unrounded value *is* the
+    argument, so the argument's post-round bound is the right input: pairing
+    it with :func:`round_is_identity` then asks whether that node is the
+    identity over the value its argument produces.
+    """
+    match e:
+        case Add():
+            return exact_binop(
+                by_expr.get(e.first), by_expr.get(e.second), operator.add,
+            )
+        case Sub():
+            return exact_binop(
+                by_expr.get(e.first), by_expr.get(e.second), operator.sub,
+            )
+        case Mul():
+            return exact_binop(
+                by_expr.get(e.first), by_expr.get(e.second), operator.mul,
+            )
+        case Abs():
+            return exact_unop(by_expr.get(e.arg), abs)
+        case Neg():
+            return exact_unop(by_expr.get(e.arg), operator.neg)
+        case Round() | Cast():
+            arg_fmt = by_expr.get(e.arg)
+            if isinstance(arg_fmt, SetFormat):
+                return arg_fmt
+            if isinstance(arg_fmt, AbstractableFormat):
+                return AbstractFormat.from_format(arg_fmt)
+            return None
+        case _:
+            return None
+
+
+def rounds_exactly(
+    e: Expr, by_expr: 'dict[Expr, FormatBound]', ctx: Context | None,
+) -> bool:
+    """Whether *e*'s implicit round under *ctx* changes nothing.
+
+    The soundness half of what :class:`fpy2.transform.RoundElim` asks -- that
+    pass adds a "strictly tighter" guard on top, which is about whether its
+    rewrite is *worthwhile*, not whether it is *correct*.  A caller reasoning
+    about reassociation wants only this half: an accumulation whose every step
+    rounds exactly may be regrouped bit-for-bit, which is what lets a fold
+    become a tile reduction.
+    """
+    return round_is_identity(unrounded_format(e, by_expr), ctx)
+
+
 def _join_set_and_format(
     s: SetFormat, fmt: Format, widen: bool = False,
 ) -> FormatBound:
