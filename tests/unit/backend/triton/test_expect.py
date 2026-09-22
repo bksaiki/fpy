@@ -219,3 +219,79 @@ def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
         y = tl.load(ys_ptr + _i, mask=(j < t10), other=0.0)
         acc = (acc + (x * y))
     tl.store(out_ptr + i, acc, mask=(j < t10))'''
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_bound(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+               out: list[fp.Real], BLOCK: fp.Real):
+    """The rows bound to names, which is what inlining a call produces."""
+    for r in range(len(out)):
+        xs = xss[r]
+        ys = yss[r]
+        acc = fp.round(0)
+        for k in range(K):
+            with fp.FP32:
+                acc = acc + xs[k] * ys[k]
+        out[r] = acc
+    return out
+
+
+def test_a_row_bound_to_a_name_flattens_to_one_load():
+    """`xs = xss[r]` names a sub-list, which Triton has no value for.
+
+    The binding is not emitted: it records that `xs` is `xss` at a prefix, so
+    `xs[k]` is one load off `xss_ptr` rather than a load of a load.  Emitting
+    it as a scalar `tl.load` produced `tl.load(xs_ptr + k)`, and `xs_ptr` is
+    not a parameter -- checked on the card as `NameError: xs_ptr is not
+    defined` at JIT time.
+
+    Byte-identical to `_DOT`, which writes `xss[r][k]` inline, up to the name
+    the temporaries got.
+    """
+    src = TritonCompiler(drop_asserts=True).compile(
+        _row_bound, ctx=fp.REAL, arg_types=[
+            ListType(ListType(RealType(FP16), K), 4),
+            ListType(ListType(RealType(FP16), K), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert src.source == '''\
+@triton.jit
+def _row_bound(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
+    t9 = BLOCK
+    t10 = 4
+    i = tl.program_id(0) * BLOCK
+    j = i + tl.arange(0, BLOCK)
+    r = j
+    acc = 0
+    for k in tl.static_range(8):
+        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32)))
+    tl.store(out_ptr + r, acc, mask=(j < t10))'''
+
+
+@fp.fpy(ctx=fp.FP32)
+def _store_row(xss: list[list[fp.Real]], oss: list[list[fp.Real]],
+               BLOCK: fp.Real):
+    """A row bound to a name and then *stored* through."""
+    for r in range(len(oss)):
+        o = oss[r]
+        xs = xss[r]
+        for k in range(4):
+            o[k] = xs[k] * 2.0
+    return oss
+
+
+def test_a_store_through_a_row_resolves_the_same_way():
+    """A store went straight to `{var}_ptr`, bypassing the row resolution.
+
+    Load and store go through one resolver, so naming a row works the same
+    either side of the assignment; before, the load beside it was already
+    correct while the store emitted `o_ptr`.
+    """
+    src = TritonCompiler(drop_asserts=True).compile(
+        _store_row, ctx=fp.FP32, arg_types=[
+            ListType(ListType(RealType(fp.FP32), 4), 4),
+            ListType(ListType(RealType(fp.FP32), 4), 4),
+            RealType(fp.INTEGER)])
+    assert src.source.splitlines()[-1] == (
+        '        tl.store(oss_ptr + r * 4 + k, (tl.load(xss_ptr + r * 4 + k, '
+        'mask=(j < t8), other=0.0) * 2.0), mask=(j < t8))')

@@ -210,6 +210,16 @@ class _Emitter(Visitor):
         `constexpr`, and a plain variable holding one is not.  So a tile's
         width is resolved back to the name it came from.
         """
+        self.rows: dict[NamedId, tuple[NamedId, list[Expr]]] = {}
+        """Names bound to a *row* of a pointer-backed list, as (base, prefix).
+
+        `A = Ass[r]` names a sub-list, which is neither a value Triton has nor
+        a sequence that can scalarize -- the row lives behind a pointer.  So
+        the binding is not emitted at all: it records that `A` is `Ass` at a
+        prefix, and `A[i]` flattens back to one load off `Ass_ptr`.  That
+        keeps the loop rolled, where scalarizing the row would unroll every
+        load in it.
+        """
         self.seqs: dict[NamedId, list[str]] = {}
         """Names holding a *scalarized* sequence, as one code per element.
 
@@ -381,8 +391,17 @@ class _Emitter(Visitor):
 
     # -- memory --------------------------------------------------------
 
+    def _is_list(self, e: Expr) -> bool:
+        """Whether *e* is a sequence rather than a scalar."""
+        return isinstance(self.sizes.by_expr.get(e), ListSize)
+
     def _flatten(self, e: ListRef) -> tuple[NamedId, list[Expr]]:
-        """A subscript chain as its base and indices, outermost first."""
+        """A subscript chain as its base and indices, outermost first.
+
+        A base bound to a row resolves through to the pointer it came from,
+        so `A = Ass[r]; A[i]` gives `Ass` at `[r, i]` -- one load, not a load
+        of a load.
+        """
         indices: list[Expr] = []
         cur: Expr = e
         while isinstance(cur, ListRef):
@@ -394,7 +413,32 @@ class _Emitter(Visitor):
                 'spelling'
             )
         indices.reverse()
-        return cur.name, indices
+        return self._resolve(cur.name, indices)
+
+    def _resolve(
+        self, name: NamedId, indices: list[Expr],
+    ) -> tuple[NamedId, list[Expr]]:
+        """*name* followed through the rows that bound it, and its indices.
+
+        Both a load and a store go through here, so naming a row works the
+        same either side of the assignment.
+        """
+        seen: set[NamedId] = set()
+        while name in self.rows and name not in seen:
+            seen.add(name)
+            name, prefix = self.rows[name]
+            indices = prefix + indices
+        root = self._root(str(name))
+        # every other list has stopped existing by here -- scalarized, or
+        # resolved as a row -- so anything else would emit a `_ptr` that is
+        # not a parameter
+        if not any(str(a.name) == root and isinstance(a.type, ListTypeAnn)
+                   for a in self.func.args):
+            raise TritonEmitError(
+                f'`{name}` is subscripted but is not a kernel argument, so '
+                'there is no pointer to load from'
+            )
+        return name, indices
 
     def _strides(self, base: NamedId, rank: int) -> list[int]:
         """Row-major strides for *base*, from its proven shape.
@@ -950,6 +994,10 @@ class _Emitter(Visitor):
                 names.append(name)
             self.seqs[stmt.target] = names
             return
+        if isinstance(stmt.expr, ListRef) and self._is_list(stmt.expr):
+            base, indices = self._flatten(stmt.expr)
+            self.rows[stmt.target] = (base, indices)
+            return
         match stmt.expr:
             case Range1():
                 self.ranges[stmt.target] = ('0', '1')
@@ -1013,7 +1061,8 @@ class _Emitter(Visitor):
             ctx.add_line(f'{name} = {code}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
-        addr = f'{stmt.var}_ptr + {self._offset(stmt.var, list(stmt.indices))}'
+        base, indices = self._resolve(stmt.var, list(stmt.indices))
+        addr = f'{base}_ptr + {self._offset(base, indices)}'
         val = self.emit(stmt.expr)
         mask = '' if self.mask is None else f', mask={self.mask}'
         ctx.add_line(f'tl.store({addr}, {val}{mask})')

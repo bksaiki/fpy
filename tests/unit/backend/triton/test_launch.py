@@ -130,3 +130,69 @@ def test_the_guard_reports_a_reason(capsys):
     with capsys.disabled():
         print(f'\n  [triton] {"runnable" if why is None else f"skipped: {why}"}')
     assert why is None or isinstance(why, str)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _row_bound(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+               out: list[fp.Real], BLOCK: fp.Real):
+    """`_batched_dot` with the rows bound to names first.
+
+    What inlining a call produces: a design takes its vector as a parameter,
+    so the wrapper's `design(Ass[r], ...)` becomes `A = Ass[r]`.
+    """
+    for r in range(len(xss)):
+        xs = xss[r]
+        ys = yss[r]
+        acc = fp.round(0)
+        for k in range(K):
+            with fp.FP32:
+                acc = acc + xs[k] * ys[k]
+        out[r] = acc
+    return out
+
+
+class TestRowBinding:
+    """A row bound to a name used to emit a `_ptr` that was not a parameter.
+
+    The kernel failed to JIT at all -- `NameError: xs_ptr is not defined` --
+    so this is the regression net for it actually running.
+    """
+
+    @pytest.mark.parametrize('n,block', [(8, 8), (6, 4), (1, 4), (9, 4)])
+    def test_it_agrees_with_the_interpreter(self, n, block):
+        import torch
+
+        src = TritonCompiler(drop_asserts=True).compile(
+            _row_bound, ctx=fp.REAL, arg_types=[
+                ListType(ListType(RealType(FP16), K), n),
+                ListType(ListType(RealType(FP16), K), n),
+                ListType(RealType(fp.FP32), n),
+                RealType(fp.INTEGER)])
+        torch.manual_seed(0)
+        xt = (torch.randn(n, K) * 4).half().cuda()
+        yt = (torch.randn(n, K) * 4).half().cuda()
+        ot = torch.zeros(n, dtype=torch.float32).cuda()
+        launch(src, [xt, yt, ot], block=block)
+
+        xs = [[float(v) for v in row] for row in xt.cpu().tolist()]
+        ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
+        want = [float(v) for v in _row_bound(xs, ys, [0.0] * n, block)]
+        assert ot.cpu().tolist() == want, f'n={n} block={block}'
+
+    def test_it_matches_the_inline_form(self):
+        """Naming the row changes nothing: same loads, same order."""
+        _, got_inline = _run(8, 4)
+        import torch
+
+        src = TritonCompiler(drop_asserts=True).compile(
+            _row_bound, ctx=fp.REAL, arg_types=[
+                ListType(ListType(RealType(FP16), K), 8),
+                ListType(ListType(RealType(FP16), K), 8),
+                ListType(RealType(fp.FP32), 8),
+                RealType(fp.INTEGER)])
+        torch.manual_seed(0)
+        xt = (torch.randn(8, K) * 4).half().cuda()
+        yt = (torch.randn(8, K) * 4).half().cuda()
+        ot = torch.zeros(8, dtype=torch.float32).cuda()
+        launch(src, [xt, yt, ot], block=4)
+        assert ot.cpu().tolist() == got_inline
