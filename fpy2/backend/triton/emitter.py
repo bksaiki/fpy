@@ -19,6 +19,7 @@ fallback.
 """
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from ...analysis import (
     ArraySizeAnalysis,
@@ -50,11 +51,16 @@ from ...ast import (
     IfExpr,
     IndexedAssign,
     Integer,
+    Len,
     ListRef,
+    ListTypeAnn,
+    Mul,
     NamedId,
     NaryOp,
     Not,
     Or,
+    Range1,
+    Range3,
     Rational,
     ReturnStmt,
     Round,
@@ -64,14 +70,14 @@ from ...ast import (
     UnaryOp,
     Var,
 )
-from ...ast.visitor import Visitor
+from ...ast.visitor import DefaultVisitor, Visitor
 from ...number import REAL, Context
 from ..backend import CompileError
 from .storage import choose_storage_scalar, scalar_fits_in
 from .target import ScalarOpTable, TritonOp, is_native_ctx, make_op_table
 from .types import TritonScalar
 
-__all__ = ['TritonEmitError', 'emit_block', 'emit_expr']
+__all__ = ['KernelSource', 'TritonEmitError', 'emit_block', 'emit_expr', 'emit_kernel']
 
 
 class TritonEmitError(CompileError):
@@ -127,12 +133,37 @@ class _Emitter(Visitor):
         ctx_use: ContextUseAnalysis,
         sizes: ArraySizeAnalysis,
         op_table: ScalarOpTable,
+        tiled: Sequence[ForStmt] = (),
+        drop_asserts: bool = False,
     ):
         self.func = func
         self.format_info = format_info
         self.ctx_use = ctx_use
         self.sizes = sizes
         self.op_table = op_table
+        self.tiled = tiled
+        """The loops carrying a tile, as `tile_loops` reported them.
+
+        Identity, not shape: recognizing a tiled loop by what it looks like
+        would be pattern-matching another pass's output.
+        """
+        self.ranges: dict[NamedId, tuple[str, str]] = {}
+        """Names bound to a `range`, as (start, step).
+
+        `SplitLoop` materializes the iterable it splits -- `t = range(n)` --
+        and then indexes it.  A range holds no memory: `t[j]` is arithmetic,
+        `start + j * step`, so neither the binding nor the subscript is an
+        access.
+        """
+        self.drop_asserts = drop_asserts
+        """Whether an `assert` is dropped rather than refused.
+
+        A kernel cannot raise, so an assert has no spelling either way; the
+        flag is which of the two answers the caller wants.  Dropping one is a
+        *semantic* change -- the program said to abort and the kernel will
+        not -- so it is opt-in, and a launcher that wants the check runs it
+        host-side.
+        """
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
 
@@ -343,6 +374,18 @@ class _Emitter(Visitor):
         ]
         return ' + '.join(terms)
 
+    def _range_index(self, e: ListRef) -> str | None:
+        """*e* as index arithmetic, if it subscripts a `range`."""
+        if not isinstance(e.value, Var):
+            return None
+        bounds = self.ranges.get(e.value.name)
+        if bounds is None:
+            return None
+        start, step = bounds
+        idx = self.emit(e.index)
+        term = idx if step == '1' else f'{idx} * {step}'
+        return term if start == '0' else f'({start} + {term})'
+
     def _emit_load(self, e: ListRef) -> str:
         """`tl.load`, masked by whatever guard is in force.
 
@@ -350,11 +393,30 @@ class _Emitter(Visitor):
         value feeds only that lane's arithmetic, and the store that would
         commit it carries the same mask, so it is discarded.
         """
+        direct = self._range_index(e)
+        if direct is not None:
+            return direct
         base, indices = self._flatten(e)
         addr = f'{base}_ptr + {self._offset(base, indices)}'
         if self.mask is None:
             return f'tl.load({addr})'
         return f'tl.load({addr}, mask={self.mask}, other=0.0)'
+
+    def _emit_len(self, e: Len) -> str:
+        """A length, as the constant the pipeline proved it to be.
+
+        A kernel argument is a bare pointer and carries no length, so the only
+        length available is the proven one.  That makes the kernel specific to
+        the shape it was compiled for -- which `Specialize` has already made
+        it, since a proven length is what lets any of this be emitted at all.
+        """
+        bound = self.sizes.by_expr.get(e.arg)
+        if not isinstance(bound, ListSize) or not isinstance(bound.size, int):
+            raise TritonEmitError(
+                'a length this backend cannot prove has no Triton spelling; '
+                'a kernel argument is a pointer and carries no length'
+            )
+        return str(bound.size)
 
     def _emit_round(self, e: Round | Cast) -> str:
         """An explicit `fp.round` / `fp.cast`, which is a *cast*, not an
@@ -450,6 +512,8 @@ class _Emitter(Visitor):
             return self._emit_round(e)
         if isinstance(e, Not):
             return f'(~{self.emit(e.arg)})'
+        if isinstance(e, Len):
+            return self._emit_len(e)
         return self._dispatch(
             e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
         )
@@ -536,6 +600,15 @@ class _Emitter(Visitor):
             raise TritonEmitError(
                 'a destructuring assignment has no Triton spelling'
             )
+        match stmt.expr:
+            case Range1():
+                self.ranges[stmt.target] = ('0', '1')
+                return
+            case Range3():
+                self.ranges[stmt.target] = (
+                    self.emit(stmt.expr.first), self.emit(stmt.expr.third),
+                )
+                return
         ctx.add_line(f'{stmt.target} = {self.emit(stmt.expr)}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
@@ -561,6 +634,8 @@ class _Emitter(Visitor):
         self.mask = prev
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter):
+        if any(stmt is t for t in self.tiled):
+            return self._emit_tile(stmt, ctx)
         if not isinstance(stmt.target, Id):
             raise TritonEmitError(
                 'a destructuring loop target has no Triton spelling'
@@ -570,6 +645,38 @@ class _Emitter(Visitor):
         ctx.indent()
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
+
+    def _emit_tile(self, stmt: ForStmt, ctx: _IndentedWriter):
+        """A tiled loop is not a loop: it is the launch grid plus a tile.
+
+        `tile_loops` leaves `for i in range(0, n, B)` around
+        `for j in range(i, i + B)`, and the chunk index becomes the program
+        instance while the inner index becomes the lane vector::
+
+            i = tl.program_id(0) * B
+            j = i + tl.arange(0, B)
+
+        The guard inside is already a mask, so nothing here emits a branch.
+        The shape is destructured rather than assumed: a mismatch is a
+        refusal, since the only thing that produces it is `tile_loops`.
+        """
+        outer = stmt.target
+        it = stmt.iterable
+        if not isinstance(it, Range3) or not isinstance(outer, NamedId):
+            raise TritonEmitError(
+                'a tiled loop should iterate a three-argument `range`'
+            )
+        width = self.emit(it.third)
+        inner = next(
+            (s for s in stmt.body.stmts if isinstance(s, ForStmt)), None,
+        )
+        if inner is None or not isinstance(inner.target, NamedId):
+            raise TritonEmitError(
+                'a tiled loop should hold the tile loop it was split into'
+            )
+        ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
+        ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
+        self._visit_block(inner.body, ctx)
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter):
         for stmt in block.stmts:
@@ -587,8 +694,11 @@ class _Emitter(Visitor):
         raise TritonEmitError('a `while` has no Triton spelling')
 
     def _visit_assert(self, stmt, ctx):
+        if self.drop_asserts:
+            return
         raise TritonEmitError(
-            'an `assert` has no Triton spelling; a kernel cannot raise'
+            'an `assert` has no Triton spelling; a kernel cannot raise. '
+            'Pass `drop_asserts` to skip it instead'
         )
 
     def _visit_effect(self, stmt, ctx):
@@ -640,8 +750,18 @@ def emit_expr(e: Expr, func: FuncDef) -> str:
     ).emit(e)
 
 
-def emit_block(block: StmtBlock, func: FuncDef) -> str:
-    """*block*, as Triton source, for a block of straight-line statements."""
+def emit_block(
+    block: StmtBlock,
+    func: FuncDef,
+    tiled: Sequence[ForStmt] = (),
+    *,
+    drop_asserts: bool = False,
+) -> str:
+    """*block*, as Triton source.
+
+    *tiled* names the loops carrying a tile, as `tile_loops` reported them.
+    *drop_asserts* skips an `assert` rather than refusing it.
+    """
     if not isinstance(block, StmtBlock):
         raise TypeError(f"Expected a 'StmtBlock', got {block}")
     if not isinstance(func, FuncDef):
@@ -654,7 +774,110 @@ def emit_block(block: StmtBlock, func: FuncDef) -> str:
         ContextUse.analyze(func, def_use=def_use),
         sizes,
         make_op_table(),
+        tiled,
+        drop_asserts,
     )
     out = _IndentedWriter()
     emitter._visit_block(block, out)
     return out.render()
+
+
+@dataclass
+class KernelSource:
+    """An emitted kernel, and what the launcher has to know to run it."""
+
+    name: str
+    source: str
+    """The `@triton.jit` function, as text."""
+
+    params: tuple[str, ...]
+    """Its parameters in order, `_ptr`-suffixed where the argument is a list."""
+
+    enable_fp_fusion: bool
+    """Whether contracting a multiply-add is unobservable here.
+
+    Not part of the source: Triton takes it at the *launch*, so it is derived
+    and handed over rather than emitted.  Contracting `acc + x * y` rounds
+    once over an exact product where the unfused form rounds twice, so the two
+    agree exactly where every product is already exact -- and differ where one
+    is not.  Measured: an FP16-in kernel is unchanged by fusion, an all-FP32
+    one differs on 590 of 2000 inputs.
+    """
+
+
+def _products_are_exact(func: FuncDef, emitter: _Emitter) -> bool:
+    """Whether every product in *func* is exact, so fusion cannot be seen."""
+    found: list[bool] = []
+
+    class _V(DefaultVisitor):
+        def _visit_binaryop(self, e, ctx):
+            if isinstance(e, Mul):
+                try:
+                    ctx_at = emitter._active_ctx(e)
+                except TritonEmitError:
+                    found.append(False)
+                else:
+                    found.append(rounds_exactly(
+                        e, emitter.format_info.by_expr, ctx_at,
+                    ))
+            return super()._visit_binaryop(e, ctx)
+
+    _V()._visit_function(func, None)
+    return all(found)
+
+
+def emit_kernel(
+    func: FuncDef,
+    tiled: Sequence[ForStmt] = (),
+    *,
+    block: str | None = None,
+    drop_asserts: bool = False,
+) -> KernelSource:
+    """*func* as a ``@triton.jit`` kernel.
+
+    A list argument becomes a pointer, *block* becomes a ``tl.constexpr``, and
+    a trailing `return` is dropped -- a kernel writes through its pointers and
+    returns nothing, which is why the program it is emitted from takes its
+    output as an argument.
+    """
+    if not isinstance(func, FuncDef):
+        raise TypeError(f"Expected a 'FuncDef', got {func}")
+    def_use = DefineUse.analyze(func)
+    sizes = ArraySizeInfer.analyze(func)
+    emitter = _Emitter(
+        func,
+        FormatInfer.analyze(func),
+        ContextUse.analyze(func, def_use=def_use),
+        sizes,
+        make_op_table(),
+        tiled,
+        drop_asserts,
+    )
+
+    params: list[str] = []
+    for arg in func.args:
+        name = str(arg.name)
+        if name == block:
+            params.append(f'{name}: tl.constexpr')
+        elif isinstance(arg.type, ListTypeAnn):
+            params.append(f'{name}_ptr')
+        else:
+            params.append(name)
+
+    body = StmtBlock([
+        stmt for stmt in func.body.stmts
+        if not isinstance(stmt, ReturnStmt)
+    ])
+    out = _IndentedWriter()
+    out.add_line('@triton.jit')
+    out.add_line(f'def {func.name}({", ".join(params)}):')
+    out.indent()
+    emitter._visit_block(body, out)
+    out.dedent()
+
+    return KernelSource(
+        name=func.name,
+        source=out.render(),
+        params=tuple(params),
+        enable_fp_fusion=_products_are_exact(func, emitter),
+    )

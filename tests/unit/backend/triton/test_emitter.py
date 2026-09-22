@@ -397,3 +397,122 @@ class TestNamedRefusals:
         assert abstract, 'expected Visitor to declare abstract methods'
         assert not (abstract - set(dir(_Emitter)))
         assert not getattr(_Emitter, '__abstractmethods__', frozenset())
+
+
+class TestKernelBody:
+    """End to end: the batched dot product, through the whole pipeline, comes
+    out shaped like `exploration/triton/kernels.py`'s `dot_exact`."""
+
+    @staticmethod
+    def _pipeline():
+        from fpy2.backend.triton import normalize_module, tile_loops
+        FP16 = fp.IEEEContext(5, 16)
+
+        @fp.fpy(ctx=fp.REAL)
+        def batched_dot(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+                        out: list[fp.Real], BLOCK: fp.Real):
+            for r in range(len(xss)):
+                acc = fp.round(0)
+                for k in range(8):
+                    with fp.FP32:
+                        acc = acc + xss[r][k] * yss[r][k]
+                out[r] = acc
+            return out
+
+        m = Module()
+        m.add(batched_dot, ctx=fp.REAL, arg_types=[
+            ListType(ListType(RealType(FP16), 8), 4),
+            ListType(ListType(RealType(FP16), 8), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+        g = Specialize.apply(m, size_key=True).get('batched_dot').func
+        m2 = Module()
+        m2.add(g)
+        n = normalize_module(m2).get(g.name).func
+        r = tile_loops(n.ast, 'BLOCK')
+        return emit_block(r.func.body, r.func, r.tiled, drop_asserts=True)
+
+    def test_the_grid_and_tile(self):
+        out = self._pipeline()
+        assert 'tl.program_id(0) * ' in out
+        assert 'tl.arange(0, ' in out
+
+    def test_the_refused_fold_stays_sequential(self):
+        """`why_not_tileable` declines the `K` loop because the accumulation
+        rounds, which is why `dot_exact` keeps it per-lane."""
+        assert 'tl.static_range(8)' in self._pipeline()
+
+    def test_both_operands_are_widened_before_the_product(self):
+        """The trap, measured at 2000/2000: an fp16 product must not be
+        computed in fp16 and widened after."""
+        out = self._pipeline()
+        assert out.count('.to(tl.float32)') == 2
+        assert ').to(tl.float32) * ' not in out.replace(
+            'other=0.0).to(tl.float32) * ', '')
+
+    def test_the_mask_reaches_every_access(self):
+        out = self._pipeline()
+        assert out.count('mask=') == 3       # two loads and the store
+        assert 'if ' not in out
+
+    def test_it_parses(self):
+        import ast as pyast
+        pyast.parse(self._pipeline())
+
+
+class TestKernel:
+    """The whole `@triton.jit` function."""
+
+    @staticmethod
+    def _kernel(ctx, elt):
+        from fpy2.backend.triton import (
+            emit_kernel, normalize_module, tile_loops,
+        )
+
+        @fp.fpy(ctx=ctx)
+        def dot(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+                out: list[fp.Real], BLOCK: fp.Real):
+            for r in range(len(xss)):
+                acc = fp.round(0)
+                for k in range(8):
+                    with fp.FP32:
+                        acc = acc + xss[r][k] * yss[r][k]
+                out[r] = acc
+            return out
+
+        m = Module()
+        m.add(dot, ctx=ctx, arg_types=[
+            ListType(ListType(RealType(elt), 8), 4),
+            ListType(ListType(RealType(elt), 8), 4),
+            ListType(RealType(fp.FP32), 4), RealType(fp.INTEGER)])
+        g = Specialize.apply(m, size_key=True).get('dot').func
+        m2 = Module()
+        m2.add(g)
+        n = normalize_module(m2).get(g.name).func
+        r = tile_loops(n.ast, 'BLOCK')
+        return emit_kernel(r.func, r.tiled, block='BLOCK', drop_asserts=True)
+
+    def test_the_signature(self):
+        """A list becomes a pointer, the tile width a `constexpr`."""
+        k = self._kernel(fp.REAL, fp.IEEEContext(5, 16))
+        assert k.params == (
+            'xss_ptr', 'yss_ptr', 'out_ptr', 'BLOCK: tl.constexpr')
+        assert k.source.startswith('@triton.jit\ndef dot(')
+
+    def test_a_kernel_does_not_return(self):
+        """It writes through its pointers, which is why the program it comes
+        from takes its output as an argument."""
+        k = self._kernel(fp.REAL, fp.IEEEContext(5, 16))
+        assert 'return' not in k.source
+
+    def test_it_parses(self):
+        import ast as pyast
+        pyast.parse(self._kernel(fp.REAL, fp.IEEEContext(5, 16)).source)
+
+    def test_fusion_is_derived_not_pinned(self):
+        """Against the hardware audit in `exploration/triton/`: an FP16-in
+        program is unchanged by fusion (0/2000 either way), an all-FP32 one
+        differs under it (590/2000).  So the first may fuse and the second
+        may not, and the flag has to say so without being told."""
+        assert self._kernel(fp.REAL, fp.IEEEContext(5, 16)).enable_fp_fusion
+        assert not self._kernel(fp.FP32, fp.FP32).enable_fp_fusion

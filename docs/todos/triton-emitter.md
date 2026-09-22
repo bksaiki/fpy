@@ -198,6 +198,47 @@ kernel wrapper.
 
 ### Phase 4 — the kernel wrapper
 
+**Done.**  `emit_kernel` produces the `@triton.jit` function: a list argument
+becomes a pointer, the tile width a `tl.constexpr`, and a trailing `return` is
+dropped.
+
+**`enable_fp_fusion` is not in the source.**  Triton takes it at the *launch*,
+not the definition, so the emitter derives it and hands it over in
+`KernelSource` rather than emitting it.  Checked against the hardware audit
+both ways: the FP16-in program, whose products are exact, derives `True` --
+and the audit measured it unchanged by fusion, 0 of 2000 either way.  The
+all-FP32 program derives `False`, and the audit measured it differing on 590
+of 2000.  The predicate agrees with the card.
+
+Left as cosmetic differences from the hand-written kernel: `acc = 0` where
+`dot_exact` writes `tl.zeros((BLOCK,), dtype=tl.float32)` -- Triton
+broadcasts, so it is the same tile -- and the proven length inlined as `4`
+where the hand-written one takes `n_rows` at runtime.
+
+**Earlier in the phase; the body.**  Four things the kernel ABI decided,
+each found by emitting the running example rather than by design:
+
+- **The output is a parameter, not a value.**  A kernel writes through a
+  pointer the launcher owns and returns nothing, so `out = [... for ...]` --
+  an allocation -- has no spelling.  The FPy program that maps to a kernel
+  takes `out` as an argument.  That is the ABI shaping the program, and it is
+  the same reasoning *Not recommended* uses for the batch: state it in the
+  program rather than invent a convention.
+- **A proven length emits as its constant.**  A kernel argument is a bare
+  pointer and carries no length, so the only length available is the one
+  `Specialize` proved.  The kernel is therefore specific to the shape it was
+  compiled for -- which it already was, since a proven length is what lets
+  any of this be emitted.  `dot_exact` instead takes `n_rows` at runtime; that
+  is the same question `BLOCK` raised and has the same answer if wanted, a
+  free variable.
+- **A materialized `range` is arithmetic, not memory.**  `SplitLoop` binds
+  `t = range(n)` and indexes it; a range holds nothing, so `t[j]` is
+  `start + j * step` and neither the binding nor the subscript is an access.
+- **`drop_asserts` is opt-in.**  A kernel cannot raise, so an `assert` has no
+  spelling either way -- the flag picks which answer.  Dropping one is a
+  *semantic* change, so the caller asks for it; a launcher wanting the check
+  runs it host-side.
+
 **Prerequisites done.**  `tile_loops` takes `int | str` -- a name makes the
 width a free variable, which is what becomes the `tl.constexpr` -- and returns
 a `TileResult` carrying which loops it tiled.
