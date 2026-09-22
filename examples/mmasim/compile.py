@@ -4,10 +4,10 @@ Compiles every MMA-Sim design to C++, reporting where each one stops.
 A roadmap tracker rather than a test: most designs do not compile yet, and
 the point is to see *which* refusal each one hits and how the count moves.
 
-    python examples/mmasim/compile_all.py           # one line per design
-    python examples/mmasim/compile_all.py -v        # full error text
-    python examples/mmasim/compile_all.py -e cdna2  # print the C++ of a design
-    python examples/mmasim/compile_all.py -o out/   # write each one to out/
+    python examples/mmasim/compile.py           # one line per design
+    python examples/mmasim/compile.py -v        # full error text
+    python examples/mmasim/compile.py -e cdna2  # print the C++ of a design
+    python examples/mmasim/compile.py -o out/   # write each one to out/
 """
 
 import argparse
@@ -16,10 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import amd
-import nv
-from nv import RZ_E8M13, RZ_FP32
-from utils import make_fma_dpa
+from models import amd, nv
+from models.nv import RZ_E8M13, RZ_FP32
+from models.utils import make_fma_dpa
 
 import fpy2 as fp
 import fpy2.strategies as st

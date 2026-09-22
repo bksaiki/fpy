@@ -43,7 +43,7 @@ Notes:
 
 import fpy2 as fp
 
-from utils import (exponent, fused_sum, join, make_fma_dpa,
+from .utils import (exponent, fused_sum, join, make_fma_dpa,
                    round_down_at, sum_special_values)
 
 RNE_FP32 = fp.FP32

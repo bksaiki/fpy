@@ -1,6 +1,6 @@
 """
-Shared helpers for the differential sweeps in `validate_nv.py` and
-`validate_amd.py`: the five input distributions and the bit-exact
+Shared helpers for the differential sweeps in `test_nv.py` and
+`test_amd.py`: the five input distributions and the bit-exact
 output comparison.
 
 Importing this module requires `torch` (see requirements.txt); the
@@ -14,7 +14,7 @@ import random
 import torch  # type: ignore[import-not-found]
 
 import fpy2 as fp
-import utils
+from models import utils
 
 # formats with no infinity encoding
 NO_INF = (torch.float8_e4m3fn, torch.float8_e4m3fnuz, torch.float8_e5m2fnuz)

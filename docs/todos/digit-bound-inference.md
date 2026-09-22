@@ -1,6 +1,6 @@
 # Digit-bound inference: fixed-point precision for `fused_sum`
 
-**In progress.** `examples/mmasim/utils.py:28` aligns every summand at a
+**In progress.** `examples/mmasim/models/utils.py:28` aligns every summand at a
 run-time position and sums them exactly. The rounded summands have precision
 `F + 2` and the sum `F + 2 + ceil(log2 L)`; `FormatInfer` alone reports
 `RealFormat()` for both, so no storage can be selected and the models do not
@@ -786,14 +786,14 @@ Unexercised, and so unproven:
   that defined `empty`'s contents would need the tiling proof after all.
 - **The corpus is the only real net.** `_vacuous` fires 127 times compiling
   the 16 designs and twice across the whole 5028-test unit suite, and
-  `compile_all.py` is in no test target and not in the `Makefile` -- it is a
+  `compile.py` is in no test target and not in the `Makefile` -- it is a
   tracker, as it says. The path that takes the corpus from 3/16 to 14/16 is
   therefore covered almost entirely by a script nobody runs automatically,
   which is how the unsoundness above survived three audits.
 
 ## The mmasim corpus
 
-`examples/mmasim/compile_all.py` compiles all 16 designs and reports where each
+`examples/mmasim/compile.py` compiles all 16 designs and reports where each
 one stops.  A roadmap tracker, not a test.  **14/16**, all fourteen clean under
 `g++ -std=c++20 -fsyntax-only`.
 
