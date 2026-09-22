@@ -203,6 +203,40 @@ evaluates both arms, but the GPU does not trap where the interpreter would —
 on the value. The consequence is that correctness for these shapes rests on
 inlining rather than on refusal, so arm coverage is what to watch.
 
+### Tileability — `fpy2/backend/triton/vectorize.py`
+
+`why_not_tileable(stmt, func)` returns the reason a loop body cannot be
+evaluated as a tile, or `None`. **37 of 59 corpus loops are tileable.**
+
+**Map versus fold is the wrong axis** — the measurement says so. A
+list-building loop still carries its output list, so by a carried-variable
+test every real loop is a fold. What decides is the *combine*, per carried
+variable:
+
+| | |
+|---|---|
+| `max`, `min`, `and`, `or` | select an operand — any grouping agrees |
+| the same literal written repeatedly | idempotent, so the order stops mattering |
+| `+`, `-`, `*` | round — regrouping agrees only where every step is exact |
+| anything else | refused |
+
+The third row is the one worth having. `rounds_exactly` decides it from
+inferred formats, so a tile reduction is admitted only when it is
+*bit-identical* — where LLVM's vectorizer takes a `reassoc` flag from the user
+and calls an `FAdd` reduction ordered otherwise. Same taxonomy as
+`RecurrenceDescriptor`; the difference is deciding it by proof.
+
+**The idempotent row is not an optimization.** `if p(x): ok = False` is an
+`and`-fold that does not look like one, and it is 8 corpus loops plus three of
+the four guarded-`for` refusals blocking item 1.
+
+**A list write must be at the loop's own index** — every subscript the loop
+variable or invariant across the loop. `out[i % 2]`, `out[k]`, `out[i + 1]`
+are refused rather than sent to a dependence test. That costs 6 of 30
+list-writing loops and buys soundness outright; the alternative is
+reimplementing Banerjee or Omega, and if that is ever wanted the concepts
+should come from ISL rather than be grown here.
+
 ### Target description — `fpy2/backend/triton/`
 
 `types.py`, `storage.py`, `target.py`; 37 tests, no emitter. `StorageInfer` runs
@@ -405,19 +439,17 @@ should leave standing.**
 
 ### 2. Split and vectorize
 
-`split` exists and is semantics-preserving: `for i in range(n)` into outer ×
-inner of width B evaluates the body in exactly the same order. **Vectorizing
-the inner body is what can change the answer**, and only for a fold:
+The decision is built (see *Tileability*); the rewrite is not.
 
-- a **map** body vectorizes freely — the elements are independent;
-- a **fold** body does not. Turning `acc = acc + p` into a tile accumulator
-  plus a cross-lane combine reassociates the addition, which is sound when the
-  additions are exact and unsound otherwise.
+`split` exists and is semantics-preserving: `for i in range(n)` into outer x
+inner of width B evaluates the body in exactly the same order. What remains is
+to consume `why_not_tileable` — emit idiom 1 or 2 from *How a loop lowers* for
+a tileable body, and keep a refused one sequential per lane.
 
-The running example is exactly the unsound case: accumulating in FP32 is the
-point, so the adds round, and `ValueClassInfer` cannot discharge it because the
-precondition is false. Refuse, and keep the fold sequential per lane — which
-still parallelizes, across the batch. See item 5.
+The running example stays sequential: accumulating in FP32 is the point, so
+the adds round and `rounds_exactly` is false. That still parallelizes, across
+the batch — one lane per dot product, which is what the hand-written kernels
+do. See item 5.
 
 Tails are a `mask`, not a generated tail loop. That is simpler than the
 `specialize`-based tail generation [scheduling-language.md](scheduling-language.md)
@@ -476,7 +508,7 @@ The ordering is the useful content.
 | Item | Sketch |
 |---|---|
 | 1. Triton normal form | built, less the 8 loop-shaped refusals |
-| 2. Split and vectorize | 3–5 weeks; no GPU |
+| 2. Split and vectorize | decision built; the rewrite remains |
 | 3. Emitter | 4–6 weeks |
 | 4. Launcher + harness | 2–3 weeks; needs a GPU in CI |
 | 5. Reductions | unscoped; opt-in |
