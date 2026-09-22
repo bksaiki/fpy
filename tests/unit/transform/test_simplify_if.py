@@ -21,6 +21,7 @@ import fpy2 as fp
 from fpy2 import Function
 from fpy2.ast.fpyast import Assign, BinaryOp, If1Stmt, IfExpr, IfStmt, ReturnStmt
 from fpy2.ast.visitor import DefaultVisitor
+from fpy2.number import OverflowMode, RealFloat
 from fpy2.transform.cursor import expr_sites, stmt_sites
 from fpy2.transform import (
     BlockCursor,
@@ -754,3 +755,167 @@ class TestAbortsNotReachedThroughRound:
         reasons = [w for _c, w in
                    SimplifyIf.refusals(arithmetic_under_assert_overflow.ast)]
         assert not any('foreign' in w for w in reasons)
+
+
+# ----------------------------------------------------------------------
+# A context that cannot hold what an operation produces
+
+
+@fp.fpy(ctx=fp.INTEGER)
+def logb_guarded_from_zero(xs: list[fp.Real]):
+    largest = fp.round(0)
+    for x in xs:
+        if x != 0:
+            largest = max(largest, fp.logb(x))
+    return largest
+
+
+class TestUnrepresentableResults:
+    """`fp.logb(0)` is an infinity for a finite operand, and `INTEGER` holds
+    no infinity -- so *hoisting* it past `x != 0` would turn a returning
+    program into a raising one.
+
+    Two things keep that from happening.  The arm inlines, so `fp.logb` stays
+    inside the lazy `IfExpr` and never runs on the input the guard excluded --
+    which is why the default mode rewrites these and still agrees.  Where an
+    arm cannot inline, `strict` declines: the trap is the format having
+    nowhere to put the result, not an abort the program asked for, so it is
+    `unproven` rather than `aborts`.
+
+    The condition is representability in the active context, not the operator
+    -- the same `fp.logb` under FP64 yields `-inf` and is fine.
+    """
+
+    def test_strict_declines(self):
+        with pytest.raises(TransformDeclined, match='infinity or NaN'):
+            SimplifyIf.apply(logb_guarded_from_zero.ast, strict=True)
+
+    def test_the_default_rewrites_and_agrees(self):
+        """Including on `0`, the input the guard excluded."""
+        _no_if_statements(logb_guarded_from_zero)
+        for xs in ([], [0.0], [0.0, 4.0], [8.0, 0.0, 2.0]):
+            _agrees(logb_guarded_from_zero, xs)
+
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_arithmetic_under_the_same_context_is_accepted(self, strict):
+        """Only an operation that can *produce* a special is refused.  `x + y`
+        under `INTEGER` cannot -- the context is unbounded, so there is no
+        overflow either -- and the guard there is not load-bearing."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def adds(xs: list[fp.Real]):
+            total = fp.round(0)
+            for x in xs:
+                if x != 0:
+                    total = total + x
+            return total
+
+        SimplifyIf.apply(adds.ast, strict=strict)
+
+    def test_strict_declines_an_inverse_trig_pole(self):
+        """`acos` is a pole op by IEEE 754 §7.2: `acos(2)` is NaN."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def guarded(x: fp.Real):
+            y = fp.round(0)
+            if x <= 1:
+                y = fp.acos(x)
+            return y
+
+        with pytest.raises(TransformDeclined, match='infinity or NaN'):
+            SimplifyIf.apply(guarded.ast, strict=True)
+
+    def test_strict_declines_overflow_under_a_bounded_context(self):
+        """The other route to a special is IEEE 754 §7.4 overflow, which turns
+        on the context rather than the operation: under a bounded format that
+        rounds an overflow to infinity, even `x * y` needs its guard."""
+        small = fp.MPBFloatContext(4, -6, RealFloat(m=15, exp=4),
+                                   enable_inf=False, enable_nan=False)
+
+        @fp.fpy(ctx=small)
+        def guarded(x: fp.Real, y: fp.Real):
+            z = fp.round(1)
+            if x < 10:
+                z = x * y
+            return z
+
+        with pytest.raises(TransformDeclined, match='overflow to an infinity'):
+            SimplifyIf.apply(guarded.ast, strict=True)
+
+    @pytest.mark.parametrize('strict', [False, True])
+    def test_a_saturating_context_is_accepted(self, strict):
+        """`SATURATE` clamps instead of rounding to infinity, so the same
+        program has nothing to raise."""
+        small = fp.MPBFloatContext(4, -6, RealFloat(m=15, exp=4),
+                                   overflow=OverflowMode.SATURATE,
+                                   enable_inf=False, enable_nan=False)
+
+        @fp.fpy(ctx=small)
+        def guarded(x: fp.Real, y: fp.Real):
+            z = fp.round(1)
+            if x < 10:
+                z = x * y
+            return z
+
+        SimplifyIf.apply(guarded.ast, strict=strict)
+
+    def test_the_same_shape_under_fp64_is_accepted(self):
+        """The refusal is about the context, not the operation."""
+        @fp.fpy(ctx=fp.FP64)
+        def under_fp64(xs: list[fp.Real]):
+            largest = fp.round(0)
+            for x in xs:
+                if x != 0:
+                    largest = max(largest, fp.logb(x))
+            return largest
+
+        SimplifyIf.apply(under_fp64.ast, strict=True)
+
+
+class TestArmInlining:
+    """An arm that reduces to expressions goes inside the `IfExpr`, which is
+    lazy, so it keeps its guard instead of being hoisted."""
+
+    def test_the_operation_stays_in_the_arm(self):
+        @fp.fpy(ctx=fp.FP64)
+        def guarded(x: fp.Real):
+            y = fp.round(0)
+            if x != 0:
+                y = fp.logb(x)
+            return y
+
+        src = SimplifyIf.apply(guarded.ast).format()
+        # `fp.logb` appears only as an `IfExpr` arm, never on its own line
+        assert 'fp.logb(x) if' in src
+        assert not re.search(r'=\s*fp\.logb\(x\)\s*$', src, re.M)
+
+    def test_merges_happen_at_once(self):
+        """A merge reads pre-`if` names, so one merge must not see a name an
+        earlier merge already overwrote."""
+        @fp.fpy(ctx=fp.FP64)
+        def two(c: bool, p: fp.Real, q: fp.Real):
+            if c:
+                q = p + 1
+                p = q * 2
+            return (p, q)
+
+        for c in (True, False):
+            for p, q in [(1.0, 0.0), (-2.5, 7.0), (0.0, 0.0)]:
+                _agrees(two, c, p, q)
+
+    def test_a_nested_arm_inlines_through(self):
+        """The `max_e` shape: an inner `if` becomes expressions, which lets the
+        outer arm inline too, so `fp.logb` never leaves its guard."""
+        @fp.fpy(ctx=fp.FP64)
+        def max_e(xs: list[fp.Real]):
+            largest_e = fp.round(0)
+            any_non_zero: bool = False
+            for x in xs:
+                if fp.isfinite(x) and x != 0:
+                    if any_non_zero:
+                        largest_e = max(largest_e, fp.logb(x))
+                    else:
+                        largest_e = fp.logb(x)
+                        any_non_zero = True
+            return (largest_e, any_non_zero)
+
+        for xs in ([], [0.0], [0.0, 2.0], [4.0, 0.0, 16.0], [1.0, 1.0]):
+            _agrees(max_e, xs)

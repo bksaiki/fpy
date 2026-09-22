@@ -13,17 +13,23 @@ def simplify_if(
     strict: bool = False,
 ) -> Function:
     """:class:`fpy2.transform.SimplifyIf` over *func*: every `if` statement
-    becomes an `if` expression, with both branch bodies hoisted and each merged
-    variable made explicit.
+    becomes an `if` expression, with each merged variable made explicit.
 
-    Hoisting makes a branch body unconditional, so a construct that could
-    change whether -- or which -- value the function produces is declined under
-    every mode, raising :class:`~fpy2.transform.TransformDeclined`: `return`,
-    `assert`, an effect, a list write, `while`, `for`, `fp.cast`, a call to
-    another FPy function, and any operation under an `ASSERT` overflow
-    context.  The last is keyed on whether an operation consults the rounding
-    context, not on its node class -- all arithmetic does, so `x * x` overflows
-    there exactly as `fp.round(x)` would.
+    An arm whose statements are all plain assignments is reduced to one
+    expression per name and placed *inside* the `IfExpr`, which is lazy, so it
+    keeps its guard.  An arm that cannot be reduced -- a loop, a list write, a
+    nested `if` left unrewritten by ``where`` -- is hoisted into the enclosing
+    block and runs unconditionally.
+
+    Refusals are judged on the arm as written, before it is known to inline, so
+    an arm that would have inlined can still be declined.  A construct that
+    could change which value the function produces, or that aborts where the
+    program asked to, is declined under every mode, raising
+    :class:`~fpy2.transform.TransformDeclined`: `return`, `assert`, an effect,
+    a list write, `while`, `for`, `fp.cast`, a call to another FPy function,
+    and any operation under an `ASSERT` overflow context.  That last is keyed
+    on whether an operation consults the rounding context, not on its node
+    class, so `x * x` overflows there exactly as `fp.round(x)` would.
 
     ``where`` names one site: an index counting `if` statements in visit
     order, or a cursor or region, which takes the sites at or beneath it.
@@ -32,13 +38,12 @@ def simplify_if(
     refusals, so the value it computes is discarded by the enclosing
     `IfExpr`.
 
-    ``strict`` governs what is left: operations whose value is preserved but
-    whose observable effects cannot be shown to be.  The default hoists them --
-    an out-of-range subscript is behavior FPy already leaves undefined, and a
-    function with no ``ctx=`` inherits its caller's context, so no operation in
-    it can be shown not to overflow.  ``strict=True`` declines them.  It is
-    therefore conservative in an unannotated function and most useful after
-    :func:`monomorphize`, which makes contexts concrete.
+    ``strict`` also declines what cannot be *shown* to be preserved: an
+    out-of-range subscript, an operation under an unresolved context, and one
+    whose context cannot hold an infinity or NaN it might produce
+    (`fp.logb(0)` under `fp.INTEGER`).  The default admits all three, so
+    ``strict`` is conservative in an unannotated function and most useful
+    after :func:`monomorphize`, which makes contexts concrete.
 
     Cursors forward across this pass.  A rewritten `if` forwards to the region
     that replaced it; a cursor naming a statement *inside* a branch does not,
@@ -61,9 +66,7 @@ def simplify_if(
         @fp.fpy
         def f(x):
             cond = x > 0
-            y2 = (x * 2)
-            y3 = -x
-            y = (y2 if cond else y3)
+            y = ((x * 2) if cond else -x)
             return y
     """
     if not isinstance(func, Function):
