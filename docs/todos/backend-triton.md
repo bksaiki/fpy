@@ -6,13 +6,12 @@ Compile an FPy function to a `@triton.jit` kernel that runs on torch tensors,
 so an FPy numerical model is callable from PyTorch with no build step.
 
 The deliverable is the integration, not the code generation. A CUDA backend
-would be *cheaper to implement* — a CUDA thread runs the scalar program, so
-SIMT is free and §5–§7 below disappear — but it ships as an `nvcc` dependency,
-a build system and an extension ABI. Triton emits **Python source text**: the
-backend `exec`s a string, Triton JITs it at first call, and the result takes
-`torch.Tensor` arguments directly. That is strictly less machinery than the C++
-backend already carries, and it is the whole reason to prefer the harder
-codegen target.
+would be cheaper to implement — a CUDA thread runs the scalar program, so SIMT
+is free — but it ships as an `nvcc` dependency, a build system and an extension
+ABI. Triton emits **Python source text**: the backend `exec`s a string, Triton
+JITs it at first call, and the result takes `torch.Tensor` arguments directly.
+That is less machinery than the C++ backend already carries, and it is the
+reason to prefer the harder codegen target.
 
 ## The contract: semantics-preserving, floating-point included
 
@@ -21,70 +20,65 @@ codegen target.
 does wherever FPy's semantics are defined.* A refusal is always acceptable; a
 different answer is not.
 
-**Holding that criterion on a GPU is the unusual part.** Compilation to GPUs
-normally treats floating-point semantics as approximately preserved, and the
+**Holding that on a GPU is the unusual part.** Compilation to GPUs normally
+treats floating-point semantics as approximately preserved, and the
 approximation is not considered a defect: fast-math is on, fp32 matmul inputs
 are silently substituted with TF32, reductions are reassociated into trees
 because that is how a parallel reduction works, multiply-add is contracted,
-transcendentals are a few ULP off, and denormals may flush. Every one of those
-is a deliberate trade of numerical agreement for throughput, and for the
-workloads GPUs are usually compiled for it is the right trade.
+transcendentals are a few ULP off, denormals may flush. Each is a deliberate
+trade of numerical agreement for throughput, and for the workloads GPUs are
+usually compiled for it is the right trade.
 
 It is the wrong trade here. The object being compiled is a *model of an
 arithmetic*, and a model that disagrees with itself under compilation has
-stopped being one. So this backend takes the opposite default everywhere the
-two conflict:
+stopped being one. So this backend takes the opposite default wherever the two
+conflict:
 
 | Where the GPU default trades accuracy | What this backend does |
 |---|---|
 | `default_dot_input_precision = "tf32"` | pin `input_precision='ieee'` |
-| contract multiply-add freely | contract only where the analysis proves the product exact (§1) |
-| implicit fp16 arithmetic on fp16 operands | cast per `StorageInfer`, which is what makes the product exact (§1) |
-| tree-reduce a fold | keep FPy's left fold unless `ValueClassInfer` discharges reassociation (§8) |
+| contract multiply-add freely | contract only where the analysis proves the product exact |
+| implicit fp16 arithmetic on fp16 operands | cast per `StorageInfer` |
+| tree-reduce a fold | keep FPy's left fold unless reassociation is discharged |
 | approximate transcendentals | do not emit them at all |
 | `/` and `tl.sqrt` | `div_rn` and `sqrt_rn` |
 
 The point is not that the fast paths are wrong. It is that choosing between
-them is a *semantic* decision, and this compiler is the thing that holds enough
-information to make it — which is why §1's fusion result generalizes: the
-question "is this optimization observable?" has an answer in `FormatInfer` and
-`ValueClassInfer`, and a target that cannot ask it has to assume the worst or
-ignore the problem. Traditional GPU compilation ignores it. This one asks.
+them is a *semantic* decision, and this compiler holds enough information to
+make it: "is this optimization observable?" has an answer in `FormatInfer` and
+`ValueClassInfer`. A target that cannot ask has to assume the worst or ignore
+the problem. Traditional GPU compilation ignores it. This one asks.
+
+**And where it cannot ask, it refuses.** Rejecting what it does not like is
+the mechanism FPy gets the most mileage from, and it is what keeps the contract
+affordable — every open question below has a refusal as its fallback answer.
 
 ## Scope: float storage is FP16 and wider
 
 The float storage ladder is `fp16`, `fp32`, `fp64`, plus the integer rungs.
-**FP8 and narrower are not storage types, and neither is `bf16`.** They remain perfectly
-usable as *rounding targets* — an `S1E4M3` or `MX_E5M2` value is held in a
-wider rung and its rounding is lowered by `unfold_round` — which is the
-storage-contains-a-format rule from [backend-cpp.md](backend-cpp.md) applied
-deliberately rather than by omission.
+**FP8 and narrower are not storage types, and neither is `bf16`.** They remain
+usable as *rounding targets* — held in a wider rung, with the rounding lowered
+by `unfold_round` — which is the storage-contains-a-format rule from
+[backend-cpp.md](backend-cpp.md) applied deliberately rather than by omission.
 
-Three things follow, and they are why the restriction is worth stating up front
-rather than discovering later:
+Dropping `bf16` makes the float ladder a **chain**: prec 11 ⊂ 24 ⊂ 53. bf16
+(es 8, prec 8) and fp16 (es 5, prec 11) are mutually incomparable, and ordering
+them was the one genuinely open decision in the target description. It is
+closed by scope. `TF32` goes with it — never a storage type, only a `tl.dot`
+input precision, so `input_precision` is a value to pin rather than a choice.
 
-- The fnuz-versus-IEEE fp8 question disappears. `S1E4M3` is `float8e4b8` and
-  not `float8e4nv`, a distinction that is a correctness trap when fp8 is a
-  native storage type and a non-question when it is not.
-- `supported_fp8_dtypes` and its per-architecture variation stop mattering, so
-  the target description does not have to be arch-conditional.
-- The sub-fp16 formats reach the same lowering path as every other non-native
-  format, so there is one mechanism rather than two.
+The ladder is still a strict superset of the C++ backend's, which has no `fp16`.
 
-**Dropping `bf16` makes the float ladder a chain**: prec 11 ⊂ prec 24 ⊂ prec 53,
-each containing the last. That was not true with `bf16` in it — bf16 (es 8,
-prec 8) and fp16 (es 5, prec 11) are mutually incomparable, and §2 billed
-choosing between them as the hardest open decision in the target description.
-It is now closed by scope rather than by analysis. `TF32` goes with it: it was
-never a storage type, only a `tl.dot` input precision, so `input_precision` is
-a value to pin rather than a decision to make.
-
-Both remain reachable as *rounding targets* on the same footing as fp8, so a
-program that rounds to `BF16` or `TF32` still compiles. What is given up is
-holding one in its own width across a kernel boundary.
-
-Even so this ladder is a strict superset of the C++ backend's, which has no
-`fp16`.
+**What makes "rounding target" a real answer rather than a deferral**: per
+[native-lowering-roadmap.md](native-lowering-roadmap.md), `unfold_special →
+unfold_overflow → float_to_fixed → rescale_fixed` rewrites a float rounding
+into arithmetic that is bit-exact against the interpreter across all eight FPy
+rounding modes and fourteen target formats, needing no support library at all —
+`CPP_HELPERS` is empty. That property was bought for C++ and is worth more on a
+GPU, which has no support library to link even in principle. It is also what
+carries every non-RNE mode: Triton exposes no per-instruction rounding
+modifier, so a non-RNE context reaches codegen through that sequence or not at
+all.
 
 ## The running example
 
@@ -99,483 +93,354 @@ def dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     return acc
 ```
 
-compiled with `arg_types=[ListType(RealType(FP16), K)] * 2`. FP16 arguments,
-exact products, FP32 accumulation. It is small enough to reason about
-completely and it exercises every mechanism this backend depends on.
+with `arg_types=[ListType(RealType(FP16), K)] * 2`. FP16 arguments, exact
+products, FP32 accumulation — small enough to reason about completely, and it
+exercises every mechanism here, including the ones that *fail*.
 
-`x * y` is exact in fp32 and the pipeline knows it: FP16 carries prec 11, so
-the product needs 22 bits against fp32's 24, and the exponent range is
-comfortable. `FormatInfer` bounds the product, `StorageInfer` picks the
-smallest rung containing that bound, and the result is checkable today —
-the C++ backend emits `float p = (x * y);` for FP16 arguments and, for FP32
-arguments, where the product needs prec 48:
+`x * y` is exact in fp32 and the pipeline knows it: FP16 carries prec 11, so the
+product needs 22 bits against fp32's 24. `FormatInfer` bounds it, `StorageInfer`
+picks the smallest containing rung. Checkable today — the C++ backend emits
+`float p = (x * y);` here, and for FP32 arguments, where the product needs prec
+48, `double p = (static_cast<double>(x) * static_cast<double>(y));`. Those
+widening casts are the whole mechanism; the Triton emitter spells them
+`.to(tl.float32)`.
 
-```c++
-double p = (static_cast<double>(x) * static_cast<double>(y));
-```
+Two things the example shows that the prose cannot. The C++ signature is
+`std::array<float, 8>` — with no fp16 rung the parameters widen at the boundary,
+so that kernel cannot consume an fp16 buffer. And the emitted loop is
+`for (int8_t _i = 0; ...)` with `x` and `y` read by subscript: `ZipElim` and
+`CompToLoop` deleted the lockstep fact before any emitter saw it.
 
-Those explicit widening casts are the whole mechanism, and they are what the
-Triton emitter will spell as `.to(tl.float32)`.
+## What is implemented
 
-**What C++ cannot do with it, and Triton can.** The C++ signature is
-`std::array<float, 8>`: with no fp16 rung the parameters widen at the boundary,
-so the kernel cannot consume an fp16 buffer and the caller pays double the
-memory. The emitted arithmetic is still *correct* — the values remain
-FP16-bounded and their product is exact either way — but the ABI is wrong for
-the use case. An fp16 rung fixes exactly that, which is the concrete argument
-for §2's ladder.
+Not TODOs. Recorded because the rest builds on them.
 
-**And the `zip` is already gone.** The emitted loop is
-`for (int8_t _i = 0; _i < xs.size(); ++_i)` with `x` and `y` read by
-subscript — `ZipElim` and `CompToLoop` between them have deleted the lockstep
-fact before any emitter saw it. See *Tensorization*.
+### Findings — `exploration/triton/`
 
-## What the path rests on
+Hand-written kernels for the running example, bit-compared against the
+interpreter on an sm_70 card at n=2000. Every prediction held.
 
-**Triton has no rounding-mode control.** PTX carries rounding modifiers per
-instruction; Triton exposes none of them outside `tl.inline_asm_elementwise`
-and `fp_downcast_rounding` on casts. So the op table dispatches natively on RNE
-and nothing else. Every non-RNE rounding is lowered by
-`UnfoldMode.ROUNDINGS`; arithmetic *under* a non-RNE context is refused, or
-handled by `DOUBLE_ROUND` where the double-rounding rules permit it.
+**`enable_fp_fusion` is derivable, not a global pin.** Contracting
+`acc + x * y` into an `fma` rounds once over an exact product; the unfused form
+rounds the product then the sum — the same operation wherever the product is
+already exact. Predicted from FPy's semantics alone (each program beside its
+`fp.fma` twin, no GPU), then confirmed against the flag: the FP16-in program is
+unchanged by fusion (0/2000 either way), an all-FP32 program differs under it
+(590/2000) and matches without it (0/2000). So fusion is safe exactly where
+`scalar_fits_in(product_format, product_storage)` holds, which the pipeline
+already computes. Derive it per kernel rather than pin it off and pay the
+reported ~30% cost of `--fmad=false` everywhere.
 
-That is a real restriction and it should be sized honestly rather than
-explained away. It costs nothing for a program whose arithmetic is exact — the
-mode is unobservable when no rounding occurs, and storage only has to hold the
-exact result — and it costs a refusal for a program that computes under, say,
-an RTZ context. `DOUBLE_ROUND` is the escape hatch and it is a stronger claim
-than `ROUNDINGS`, so it stays opt-in.
+**The fp16 cast trap is total.** `x.to(tl.float32) * y.to(tl.float32)` matches
+the interpreter (0/2000 differ); the naive `(x * y).to(tl.float32)` differs on
+**2000/2000**, because Triton types `fp16 op fp16` as fp16. The casts come from
+`StorageInfer`; nothing in Triton asks for them.
 
-**The unfolded roundings need no runtime.** Per
-[native-lowering-roadmap.md](native-lowering-roadmap.md), `unfold_special →
-unfold_overflow → float_to_fixed → rescale_fixed` is bit-exact against the
-interpreter across all eight FPy rounding modes and fourteen target formats,
-and `CPP_HELPERS` is empty. That property was bought for C++ and is worth more
-on a GPU, where there is no support library to link.
+**A batch-lifted kernel is bit-exact** — one lane per dot product, fold
+sequential within a lane.
 
-**Transcendentals are out of scope**, which closes Triton's one gap with no
-knob: there is no `exp_rn`, `tl.exp` goes through libdevice `__nv_expf`, and
-`tl.exp2` may lower to `ex2.approx.f32`. The C++ backend has the same exposure
-and handles it by exclusion — `_NON_CR_OPS` in `tests/infra/backend/cpp.py`
-lists 27 operators that disqualify a function from the bit-exact differential
-check. Emitting none of them makes that set empty, so **every** compiled
-function becomes eligible for bit-exact comparison. This backend gets a
-stronger validation gate than the C++ one, not a weaker one.
+Open, and untestable below sm_100: whether `enable_fp_fusion=False` reaches the
+packed `mul.rn.f32x2` / `add.rn.f32x2` emitted on Blackwell. Narrower than it
+was, since the flag is only needed where the product rounds, but it would be a
+silent bit-exactness hole rather than a refusal.
 
-## The fp16 trap
+### Single-exit normalization — `fpy2/transform/single_exit.py`
 
-The scope decision above puts the ladder's weight on `fp16`, and Triton's type
-rules there are not uniform. Measured against
-`python/triton/language/semantic.py`:
+Merged (#313), wrapped as `fpy2.strategies.single_exit`.  An early return
+becomes an assignment to one result name; the statements that would have
+followed go into each arm that falls through.
 
-| Expression | Triton's computation type |
+**It copies the continuation where both arms fall through**, which the design
+first tried to avoid.  FPy requires the result be assigned on every path and
+has no undefined value, so a `done` flag would need a typed dummy — and every
+formulation that avoids the copy collapses into it.  Bounded by nesting depth
+(3 in this corpus, refused past 8).
+
+**A `return` inside a loop is still refused**: FPy has no `break`.  The route is
+`Specialize` → `unroll_for` → `single_exit`, and the order matters — unrolling
+alone fails, because these functions iterate list *arguments* whose length is
+only fixed by specialization.  That gets all seven multi-return mmasim
+functions through, checked against the interpreter with infinities and NaN in
+the inputs.
+
+Also refused: a `return` under a `with` that only *sometimes* returns, since
+moving the continuation inside would change its rounding context.
+
+### The `if`-to-expression normalization — `fpy2/transform/simplify_if.py`
+
+Merged (#303, #314).  `SimplifyIf` gained refusal conditions, a `strict`
+keyword, `where` / `sites` / `refusals`, and an `EditLog` so cursors forward.
+`fpy2.strategies.simplify_if` wraps it.  #314 added arm inlining: an arm whose
+statements are all plain assignments is reduced to one expression per name and
+placed *inside* the `IfExpr` rather than hoisted, so it keeps its guard.  On
+this corpus 14 arms inline and 3 hoist.
+
+**Two constraints this pipeline inherits from what the review of it found.**
+
+*A call in a branch declines until it is inlined.*  A callee's body is not
+scanned, so an `assert` or an overflowing rounding inside one would reach the
+hoist unseen; the pass refuses a call to another FPy function rather than
+analyzing interprocedurally.  This is the visible half of a larger problem —
+see *Early returns block the normal form* below.
+
+*`strict` is affordable here, and was not expected to be.*  It declines any
+operation whose context cannot be shown not to overflow — which, in a function
+with no `ctx=`, is all arithmetic.  This pipeline runs after `Specialize`,
+where contexts are concrete, so what `strict` still refuses is out-of-range
+subscripts, genuine `ASSERT`-overflow contexts, and an operation whose context
+cannot hold an infinity or NaN it might produce — a pole at a finite operand
+(`logb(0)`, `sqrt(-1)`, `acos(2)`), or, under a bounded format that rounds an
+overflow to infinity, any operation at all.
+
+Take the **default** anyway, for two reasons.  A guarded subscript is the
+common shape, and it is the shape a mask lowers well.  And `strict` refuses
+more than it needs to: refusals are judged on the arm as written, before it is
+known to inline, so an arm that inlines — and therefore never hoists anything
+— can still be declined.  `core.max_e` is exactly that case.
+
+*On evaluation order.*  An earlier draft argued the default from the fact that
+`tl.where` evaluates both arms while a lazy consumer would not, then retracted
+it on the grounds that the pass hoists a partial operation into an
+unconditional statement before any `IfExpr` sees it.  Since #314 the retraction
+is itself wrong: an inlined arm puts the operation inside the `IfExpr`, and the
+interpreter's laziness does recover the guard.  The original argument was half
+right — wrong about `tl.where`, right about the interpreter.
+
+This does not cost the contract.  `tl.where` evaluates both arms, but the GPU
+does not trap where the interpreter would: `logb(0)` is `-inf` in hardware, and
+`tl.where` discards it.  Lazy interpreter and strict GPU agree on the value,
+which is what the contract asks for.  It does mean that under `strict=False`
+correctness for these shapes rests on inlining rather than on refusal, so arm
+coverage — not the refusal list — is the thing to watch.
+
+### Target description — `fpy2/backend/triton/`
+
+`types.py`, `storage.py`, `target.py`; 37 tests, no emitter. `StorageInfer` runs
+against the domain directly, so the running example's storage is checkable
+without generating a line of Triton.
+
+Ladder: `u8, s8, u16, s16, f16, u32, s32, f32, u64, s64, f64`. `F16` after `S16`
+is the one real decision — it must follow the 8-bit integers, which nest in it,
+and against the 16-bit ones it is incomparable, so placing it later means
+"integers in [0, 2000]" takes `u16`. Same reasoning as the cpp ladder putting
+`F32` after `S32`.
+
+`is_native_ctx` is a predicate on the **context**, not on `(op, context)`. The
+two readings the cpp backend can conflate come apart here — `Add` at FP16
+dispatches and `Div` at FP16 does not — and the *cast* reading must survive,
+since `x.to(tl.float16)` is FP16's round-to-nearest-even and answering `False`
+would send a native `fp.round` through an integer lowering. The cost is a worse
+diagnostic, not a worse outcome.
+
+Every omission in the op table is a refusal: all transcendentals (none
+correctly rounded — which makes the differential check's exclusion list
+*empty*), `Div` at FP16 (computed in fp32, so a double rounding), integer `Div`
+(FPy truncates, `//` floors), `/` and `tl.sqrt` (fast variants), every rounding
+mode but RNE. No list storage — a proven-length list unrolls into registers,
+and an unproven-length one is refused.
+
+## The pipeline inlines everything
+
+`triton.jit` takes `noinline` as an *opt-in*, so Triton inlines by default and
+an emitted device call buys nothing at runtime; FPy forbids recursion, so
+inlining always terminates.  Inlining is therefore the policy, and it leaves
+`SimplifyIf` no call to refuse and the emitter no call ABI to define.
+
+It was gated on single-exit normalization, since `inline` declines a callee
+with more than one return — 7 of 20 mmasim functions, against 0 of 74 in
+`fpy2/libraries`, because the reference algorithms cascade early exits for NaN,
+infinity and zero.  That gate is lifted (#313).
+
+One trap: `inline` with `where=None` *silently skips* a call it refuses, so a
+pipeline does not fail there.  It fails later, at `SimplifyIf`, naming the
+callee — which reads as a `SimplifyIf` problem when it is an inlining one.
+
+## The shape of the compiler
+
+**Tiling is a program transformation, not an emitter feature.** The top-level
+loop is written by the user; a pass splits it into an outer loop and an inner
+one whose extent is the tile width, and the inner body vectorizes. Almost
+nothing that decides is a target fact:
+
+| Decision | Where |
 |---|---|
-| `fp16 op fp16` (non-div) | fp16 |
-| `fp16 / fp16` | **fp32** — no hardware div below 32 bits |
-| `fp16` with anything wider | fp16 |
+| rewrite `if` statements to `if` expressions | transform — `SimplifyIf`, **done** |
+| reject what will not rewrite | transform |
+| split a loop into outer × inner of width B | transform — `split`, exists |
+| unroll | transform — `unroll_for`, exists |
+| may this fold be reassociated? | `ValueClassInfer` + exactness |
+| is B a legal tile width | target |
+| spell it `tl.where` / `tl.sum` / `tl.load` | emitter |
 
-(The `bf16` rows — division, and min/max, both promoting to fp32 — are out of
-scope with `bf16` itself, but they are the same shape and would return with
-it.)
+Everything above the line is a rewrite from FPy source to FPy source, so a
+tiled program is still an FPy program and **the interpreter is its oracle**.
+The whole tiling layer can be developed and tested with no GPU, which is
+[backend-independence.md](backend-independence.md)'s criterion (2) applied to
+the one part of this project that would otherwise need hardware to test at all.
+It also keeps the emitter thin: it receives a program already split, already
+vectorized, already if-expression-only, and spells it.
 
-The running example is a live instance, not a hypothetical: `x * y` on two
-fp16 operands computes **in fp16** under these rules, rounding the product that
-the program requires to be exact. What saves it is that `StorageInfer` gives
-the product fp32 storage and the emitter therefore casts both operands in —
-the same discipline that already produces `static_cast<double>(x)` in C++. The
-cast is mandatory and nothing in Triton will ask for it.
+**Uniformity needs no analysis.** The split point *is* the boundary — outside
+the inner loop is scalar, inside is tile — and Triton broadcasts a scalar
+against a tile, so a loop-invariant value inside the body needs no special
+handling. What is needed is "derived from the inner index", a forward
+propagation, not a dataflow analysis. An earlier draft of this roadmap budgeted
+a divergence analysis here; the explicit-loop formulation removes it.
 
-This is precisely the storage-versus-rounding trap that
-[backend-cpp.md](backend-cpp.md) records three miscompiles for: `a / b` under
-an `FP16` context computed in fp32 and narrowed is a *double rounding*, and it
-is not FP16's division. Nothing announces the promotion.
+**`BLOCK` is the one number FPy should not pick.** Emit it as a `tl.constexpr`
+and let `triton.autotune` choose. Consistent with
+[scheduling-language.md](scheduling-language.md)'s rejection of cost
+estimation rather than a reversal of it: FPy decides the shape of the schedule,
+and borrows a tuner for the number it has no basis to choose. `split` already
+accepts a non-literal factor, so a specialized free variable works today.
 
-**The architecture already answers it.** The op table is keyed by
-`(op type, operand types, output context)`, so the target description simply
-does not contain a `Div` signature at FP16.
-Ordinary dispatch then falls back to the fp32 signature, and `_maybe_cast`
-refuses the lossy narrowing with the message telling the user to write
-`fp.round(...)` — which is the correct outcome, since writing the rounding is
-exactly what makes the double rounding explicit and intended.
+## This pipeline runs backwards for this target
 
-One consequence for §2 survives the scope cut: C++'s `is_native_ctx` is a
-predicate on a *context*, because `<cmath>` is uniform over a context's ops.
-Triton's is honestly a predicate on `(op, context)`, since `Div` at FP16 is not
-native while `Add` at FP16 is. `unfold_round` consumes `is_native_ctx`, so
-either it is widened or the Triton target supplies the conservative
-context-level answer and accepts some unnecessary lowering. Decide in §2, not
-later.
+`CppCompiler.specialize()` normalizes *toward statements*, because the C++
+emitter wants statements. This backend wants expressions. Three passes are
+actively destructive here, and all three are already in the pipeline:
+
+| Pass | Destroys | Wanted instead |
+|---|---|---|
+| `Hoistable` | ternaries → `IfStmt` | the exact inverse of `SimplifyIf` |
+| `CompToLoop` | comprehensions → indexed loops | the comprehension *is* the map |
+| `ZipElim` / `UnfoldZip` | `zip` → subscripts | `zip` *is* the lockstep fact |
+
+This is not an incidental mismatch, it is the structural one: most of the
+tiling work is **declining to run passes that erase the idioms**, not
+recovering the idioms afterwards. The corollary is that this backend needs its
+own normal form rather than a tweak to `_to_statement_form`.
 
 ## The shared-pipeline prerequisite
 
 `StorageInfer` refuses a definition whose `FormatInfer` bound came back
 `REAL_FORMAT` — *"cannot store an unconstrained real value in any storage
-format"*. **No storage ladder contains `REAL`**, so a wider ladder fixes none
-of those and a new emitter fixes none of them. It is the dominant refusal on
-programs that round at a format computed at runtime.
+format"*. No storage ladder contains `REAL`, so a wider ladder fixes none of
+those and a new emitter fixes none of them. It is the dominant refusal on
+programs that round at a format computed at runtime. Shared-pipeline precision
+work, tracked separately, and a gate on how much this backend accepts rather
+than on any item below.
 
-This is shared-pipeline precision work, tracked separately, and it is **not a
-gate on §1–§4**. It is a gate on how much this backend accepts.
+## The work
 
-## Tensorization: compiler, or transformations?
+### 1. A Triton normal form
 
-The open question, and the answer decides how big this backend is. Two axes get
-conflated; they are independent.
+The replacement for `_to_statement_form`: `inline` everything, keep `ListComp`,
+`Sum`, `Zip` and `Enumerate`, run `SimplifyIf` instead of `Hoistable`, and
+reach a fixpoint.
 
-**Lifting** — one FPy function per lane, N instances across a tile. The tile is
-over the batch and the function's own values stay scalar. This is §5–§7.
+Inlining first is what leaves `SimplifyIf` no call to refuse.  Whether it
+should stay unconditional is a question for when kernels get large — Triton's
+own `noinline` exists because a big enough one spills registers — but there is
+no reason to model calls before something needs them.
 
-**Tensorization** — the function's *own* arrays become tiles: a length-K list
-is a `(K,)` tile rather than K unrolled registers, and a fold over it is a tile
-reduction. Combined with lifting this is a `(BATCH, K)` tile reducing along
-axis 1, which Triton expresses directly.
+The obstacle is that `Hoistable` and `CompToLoop` are mutually dependent —
+`CompToLoop` declines a comprehension in a ternary arm or a `while` condition
+for want of a statement slot, and `Hoistable` makes the slot. Dropping both
+means those positions need a different answer, and `SimplifyIf` supplies part
+of it by removing the statement/expression distinction that created the problem.
+Settle this before item 2; everything downstream assumes a stable input form.
 
-### It is a scheduling problem, and FPy already has a scheduling language
+A remaining `IfStmt` after normalization is an error, per the rejection
+principle. So is a `while` whose condition varies.
 
-The instinct is to put tensorization in the backend, because the output is
-`tl.sum` and `tl.where`. That is the wrong cut. Almost nothing tensorization
-*decides* is a target fact:
+### 2. Split and vectorize
 
-| Decision | Kind | Where it belongs |
-|---|---|---|
-| Is this loop a map / reduce / scan? | program | keep the idiom — do not run `CompToLoop` |
-| May this reduction be reassociated? | program | `ValueClassInfer` |
-| Split a loop into outer × inner of width B | program | `strategies.split` — **exists** |
-| Unroll the inner loop | program | `strategies.unroll_for` — **exists** |
-| If-convert `IfStmt` → merge via `IfExpr` | program | a transform; FPy has ternary |
-| Which values vary across lanes | program | §5, parameterized by which params vary |
-| Is B a legal tile width? | **target** | target description |
-| Spell it `tl.sum` / `tl.where` / `tl.load` | **target** | emitter |
+`split` exists and is semantics-preserving: `for i in range(n)` into outer ×
+inner of width B evaluates the body in exactly the same order. **Vectorizing
+the inner body is what can change the answer**, and only for a fold:
 
-Everything above the line is a rewrite from FPy source to FPy source.
-`strategies.split` is already Halide's split, taking a factor and a cursor;
-`unroll_for` already exists; cursors already forward across passes; the failure
-contract is already `TransformDeclined` versus `TransformReferenceError`. This
-is [scheduling-language.md](scheduling-language.md) §7 — Exo 2's
-`optimize_level_1`: one entry point taking the function, a location and a
-**target descriptor**, built by composing public operators.
+- a **map** body vectorizes freely — the elements are independent;
+- a **fold** body does not. Turning `acc = acc + p` into a tile accumulator
+  plus a cross-lane combine reassociates the addition, which is sound when the
+  additions are exact and unsound otherwise.
 
-A tile is representable in FPy, which is what makes this work at all: a
-fixed-length list whose length `ArraySizeInfer` proves. A tiled program is
-`for i in range(0, n, B): block = xs[i:i+B]; ...` with elementwise work as
-comprehensions over `block` — ordinary FPy, which the **interpreter can run**.
+The running example is exactly the unsound case: accumulating in FP32 is the
+point, so the adds round, and `ValueClassInfer` cannot discharge it because the
+precondition is false. Refuse, and keep the fold sequential per lane — which
+still parallelizes, across the batch. See item 5.
 
-### That is the decisive argument
+Tails are a `mask`, not a generated tail loop. That is simpler than the
+`specialize`-based tail generation [scheduling-language.md](scheduling-language.md)
+§7 points at, and it is one of the few places this target is *easier* than a CPU
+one.
 
-A backend-independent tiling pass is validated by running the interpreter on
-the tiled program and checking it agrees with the untiled one. No GPU, no
-Triton, no torch. All of tensorization can be developed and tested with zero
-GPU access, and it is
-[backend-independence.md](backend-independence.md)'s criterion (2) —
-"decisions became testable without a C++ string" — applied to the one part of
-this project that would otherwise need hardware to test at all.
+### 3. The emitter
 
-It also means the emitter stays thin. It receives a program already tiled and
-already if-converted, and its job is spelling.
+`fpy2/backend/triton/emitter.py`. Its input is a program already normalized,
+split and vectorized, so its job is spelling plus `tl.load` / `tl.store` at the
+loop boundary and `tl.where` for an `IfExpr`.
 
-### What Triton decides, and what it will never ask about
-
-Triton is smart *below* the tile abstraction and deliberately absent *above*
-it. Given a tile and an index expression it does layout assignment, memory
-coalescing and load vectorization (via its divisibility/contiguity analysis),
-software pipelining of loops (`num_stages`), shared-memory allocation and sync
-insertion. That is the work that is miserable in CUDA, and it is the reason to
-target Triton at all.
-
-It does not choose the block size, the tiled axis, the loop order, or whether a
-loop is a map or a reduction. Those are inputs. Write scalar code and you get
-scalar code.
-
-Take `def f(xs, ys): ... for x, y in zip(xs, ys): ... return ...`. Every
-choice is above the line:
-
-- **Which axis is the tile?** If `f` runs on one pair of vectors, the loop is
-  the only parallelism and the tile is the zip axis. If `f` is batch-lifted
-  over N pairs, the tile can be the batch and the loop stays sequential per
-  lane. Different kernels, same FPy source.
-- **Map or reduction?** A body that builds a list is a map; a body that
-  accumulates into a value carried past the loop is a reduction, and lowers to
-  per-lane partials plus a cross-lane combine.
-- **What is `BLOCK`?** See below.
-
-And `zip` is the *signal*, which this pipeline currently discards twice:
-`ZipElim` rewrites it to an indexed comprehension in `specialize()`, then
-`CompToLoop` rewrites that to an `IndexedAssign` loop. `zip(xs, ys)` says
-"these two arrays are indexed in lockstep over a common axis" — the exact fact
-a tile lowering needs, deleted by two passes before the emitter sees it. That
-is the §8 thesis in miniature.
-
-**The one thing that cannot be delegated — and the running example fails it.**
-A fold tensorizes to per-lane partials plus a tree reduction, and that
-reassociates the addition. Triton will do it without comment. But FPy's `sum`
-is a *left fold seeded with the first element unrounded*, performing n−1
-additions, with the empty list an exact `+0` — that is the interpreter's
-`_eval_sum`, and it is language semantics, not a convention.
-
-Reassociating is sound when the additions are exact. In `dot` they are
-**deliberately not**: accumulating in FP32 is the entire point, and an FP32
-sum of exact fp32 products rounds at every step. `ValueClassInfer` cannot
-discharge the precondition here because the precondition is false. Tensorizing
-this fold produces a different number — defensibly, even preferably, for a
-performance workload, but not the number FPy specifies.
-
-**Which reorders §7 against §8.** Batch-lifting N independent `dot` calls —
-tile over the batch, each lane running its own sequential fold — is *both*
-fully parallel *and* bit-exact. Tensorizing the fold inside one `dot` is
-neither. So for the workload this backend exists to serve, checking a numerical
-model against hardware, §7 delivers the exactness FPy's objective names and §8
-does not. §8 buys throughput on workloads that accept reassociation, and it
-should be sequenced and justified as such rather than as the natural
-continuation of §7.
-
-The map half is unaffected: `x * y` over the zip axis is exact and tensorizes
-freely. A program can therefore want a tile for its products and a sequential
-fold for its accumulator, which is a scheduling decision and exactly the kind
-the operators in [scheduling-language.md](scheduling-language.md) express.
-
-**`BLOCK` is the one number FPy should not pick.** Emit it as a `tl.constexpr`
-and let `triton.autotune` choose. This is consistent with
-[scheduling-language.md](scheduling-language.md)'s *Not recommended* entry on
-cost estimation — FPy's objective is exactness first and code shape second,
-which is not a scalar — rather than a reversal of it. FPy decides the shape of
-the schedule; Triton's autotuner supplies the number FPy has no basis to
-choose.
-
-### What this does not make free
-
-- **`Hoistable` and `CompToLoop` are entangled.** Each supplies what the other
-  lacks: `CompToLoop` declines a comprehension in a ternary arm or a `while`
-  condition for want of a slot, and `Hoistable` makes the slot. Running
-  `Hoistable` without `CompToLoop` may not reach a fixpoint. Decide this first;
-  it gates the rest.
-- **Tails.** `split` carries STRICT-divisibility `ValueError`s that
-  [scheduling-language.md](scheduling-language.md) §1 flags as declined-shaped
-  but uncatchable. Exo 2 generates tail cases from `specialize` plus
-  simplification; FPy has `Specialize`, so the route exists but is unwalked.
-- **Tiles are values; FPy lists are references.** A tiled program must stay in
-  the subset `Alias` / `unbox` prove value-like. Already analyzed, not yet
-  stated as a precondition anywhere.
-
-A loop with a genuine loop-carried dependence stays a `for` over tiles, one
-tile per iteration. That is the blocked form a hand-written kernel would use,
-and it needs nothing new.
-
-## The items, in the order they pay off
-
-### 1. Flag audit and a hand-written witness
-
-**Largely done — `exploration/triton/`**, on an sm_70 card at n=2000, every
-prediction holding. What it settled:
-
-**`enable_fp_fusion` is derivable, not a global pin.** This section used to say
-to pin it off. Contracting `acc + x * y` into an `fma` rounds once over an
-exact product, where the unfused form rounds the product and then the sum —
-the same operation wherever the product is *already* exact. Predicted from
-FPy's semantics alone (each program beside its `fp.fma` twin, no GPU), then
-confirmed against the flag: the FP16-in/FP32-accumulate program is unchanged
-by fusion (0/2000 either way), and an all-FP32 program differs under it
-(590/2000) and matches without it (0/2000).
-
-So fusion is safe exactly where `scalar_fits_in(product_format,
-product_storage)` holds — a predicate the pipeline already computes. The target
-description should *derive* the flag per kernel rather than pin it off and pay
-the reported ~30% cost of `--fmad=false` everywhere. First concrete case of
-this backend knowing something Triton never asks about.
-
-**The fp16 cast trap is total.** `x.to(tl.float32) * y.to(tl.float32)` matches
-the interpreter on 0/2000 differ; the naive `(x * y).to(tl.float32)` differs on
-**2000/2000**. The casts come from `StorageInfer`, not from Triton.
-
-**A hand-written batch-lifted kernel is bit-exact.** One lane per dot product,
-fold sequential within a lane — full parallelism with FPy's left-fold order
-intact, which is §7's argument over §8.
-
-Still to pin: `input_precision='ieee'` is now a value to set rather than a
-decision, `bf16` having left the scope with TF32. The one open question is
-whether `enable_fp_fusion=False` reaches the packed `mul.rn.f32x2` /
-`add.rn.f32x2` emitted on Blackwell — narrower than it was, since finding 1
-means the flag is only needed where the product rounds, but still a silent
-bit-exactness hole rather than a refusal, and untestable below sm_100.
-
-The point of §1 was that it could invalidate §2–§9 for a week's cost. It did
-not; it revised one of its own instructions and confirmed the rest.
-
-### 2. Target description
-
-**Done — `fpy2/backend/triton/{types,storage,target}.py`**, 37 tests in
-`tests/unit/backend/triton/`, no emitter. `StorageInfer` runs against the
-domain directly and the running example's storage is checkable without
-generating a line of Triton: fp16 arguments stay fp16, the exact product lands
-on fp32 and not fp64, and fp32 arguments push the product to fp64 — the
-contrast that shows the first two measured something.
-
-**The ladder.** `u8, s8, u16, s16, f16, u32, s32, f32, u64, s64, f64`.
-
-With `bf16` out of scope the **float rungs are a chain**, so the open question
-this section was written around — how to order two mutually incomparable float
-rungs — never arises. The ladder as a whole is still not a lattice, since the
-integer rungs stay incomparable with each other exactly as in C++, so the
-sequence is still the tie-break.
-
-`F16` after `S16` is the one real decision. It must follow `u8`/`s8`, which
-nest in it; against the 16-bit integers it is incomparable, so the placement is
-free, and putting it later means a bound like "integers in [0, 2000]" takes
-`u16` rather than `f16` even though fp16 holds every such value exactly. Same
-reasoning as the cpp ladder putting `F32` after `S32`: a count is not a float.
-
-**`is_native_ctx` stays a predicate on the context**, not on `(op, context)`.
-The two readings the cpp backend can conflate come apart here — `Add` at FP16
-dispatches and `Div` at FP16 does not — and the *cast* reading is the one that
-must survive, because `x.to(tl.float16)` really is FP16's round-to-nearest-even
-and answering `False` would send a native `fp.round` through `unfold_round`'s
-integer lowering. The cost is confined to a diagnostic: an operation the table
-lacks under an otherwise-native context refuses with "no matching signature"
-and without the `DOUBLE_ROUND` advice. That message is accurate — no amount of
-double rounding recovers an operation the target cannot perform.
-
-**The table is small, and every omission is a refusal.** This is where the
-contract stops being a slogan:
-
-| Omitted | Because |
-|---|---|
-| every transcendental | no correctly-rounded `exp`/`log`/`sin`/`erf` exists; omitting them makes the differential check's exclusion list *empty* |
-| `Div` at FP16 | Triton computes `fp16 / fp16` in fp32, so the result is a double rounding |
-| integer `Div` | FPy's integer contexts truncate; Triton's `//` floors |
-| `/`, `tl.sqrt` | the fast variants; the table names `tl.div_rn` and `tl.sqrt_rn` |
-| every mode but RNE | no per-instruction rounding modifier exists |
-
-**No list storage.** `to_triton` refuses a `ListFormat` rather than spelling it:
-a proven-length list unrolls into registers before reaching here, and an
-unproven-length one is §8's problem. Refusing names the reason; spelling it as
-a tile would silently change what the program means.
-
-One piece of debt: `TritonOp` / `ScalarOpTable` parallel the cpp shapes in
-`backend/cpp/ops.py` rather than sharing them, because those are parameterized
-by `CppScalar` and spell C++. Unifying is a refactor of the cpp backend, not of
-this one, and it belongs to
-[backend-independence.md](backend-independence.md) if it is worth doing at all.
-
-### 3. Scalar emitter
-
-`backend/triton/emitter.py`, emitting a `@triton.jit` device function over
-scalars. Reuses `CppCompiler`'s pipeline unchanged — every analysis, plus
-`unfold_round` once §2 supplies `is_native_ctx` and `make_op_table`, which
-`backend/cpp/unfold_round.py` already documents as the backend's contribution.
-
-Ports nearly verbatim from the C++ emitter: `_IndentedWriter`, visitor
+Ports nearly verbatim from the cpp emitter: `_IndentedWriter`, visitor
 dispatch, `_emit_at`'s merge reconciliation, `_dispatch`, and the cast
 discipline — `_maybe_cast` rejecting lossy implicit conversions,
-`_explicit_cast` for user casts. Triton needs that discipline *more* than C++
-does; the promotion table above is exactly the kind of silent narrowing it
-exists to catch.
+`_explicit_cast` for user casts. That discipline matters *more* here: the fp16
+trap is a silent narrowing of exactly the kind it exists to catch.
 
-Deleted outright: the `fesetround` boundary (`_fenv_scope`,
-`_validate_context_rm`, `_current_rm`) and everything spelling a
-`std::shared_ptr` or `std::vector`.
+Nothing to port for `fesetround` or for `std::shared_ptr` / `std::vector`.
 
-### 4. Torch launcher and the differential harness
+`enable_fp_fusion` is emitted per kernel from `scalar_fits_in`, not pinned.
+
+### 4. Launcher and differential harness
 
 A generated Python launcher taking `torch.Tensor` arguments, and the GPU
 counterpart of `tests/infra/backend/cpp.py`. Budget it honestly: that file is
 2,469 lines and `tests/unit/backend/cpp/` is 11,505 more, and between them they
 are why the C++ backend is trusted. This one needs a GPU in CI and a torch
-dependency, and it gets an empty `_NON_CR_OPS` — so unlike the C++ harness,
+dependency, and it gets an **empty** `_NON_CR_OPS` — so unlike the C++ harness,
 every function it compiles it can also check bit-for-bit.
 
-§1–§4 is a working, testable, torch-callable backend. Everything below makes it
-fast.
+Items 1–4 are a working, testable, torch-callable backend.
 
-### 5. Uniformity analysis
+### 5. Reductions
 
-Which values are tile-invariant and which vary across lanes. A forward dataflow
-over `DefineUse`, seeded by which parameters are lifted — shaped like the
-existing passes in `fpy2/analysis/`, and backend-independent: any SIMD target
-needs it, which is the right frame per
-[backend-independence.md](backend-independence.md).
+`tl.sum` and friends, opt-in per reduction, gated on the precondition item 2
+states. Worth doing after there is something to measure: batch-lifting already
+reaches full parallelism bit-exactly for batched work, so this buys throughput
+on a single large reduction and costs the left-fold order.
 
-### 6. If-conversion
+FPy's `sum` is a left fold seeded with the first element unrounded, n−1
+additions, empty list an exact `+0` — the interpreter's `_eval_sum`, language
+semantics rather than convention. Anything here is measured against that.
 
-An `IfStmt` under a varying condition becomes a merge through `IfExpr`, which
-the emitter spells `tl.where`. Targeting FPy's own ternary rather than a Triton
-primitive is what keeps the pass backend-independent and interpreter-testable.
-The AST carries explicit merge structure — `VariableAlloc`'s `is_intro` phis
-and the `hoists_before` classification are where the pass hangs;
-`transform/simplify_if.py` and `transform/if_bundling.py` are the neighbours.
+### 6. `tl.dot`
 
-The subtlety, and the one that will cost time: a branch that *guards* an
-undefined operation cannot be freely predicated. `fpy2/analysis/value_class.py`
-is what says when the guard was load-bearing, and it is already consulted for
-exactly this reason in `_undefined_guard`.
-
-Note the interaction with the unfolded roundings: they are branch-heavy by
-construction — the FP16 example in
-[native-lowering-roadmap.md](native-lowering-roadmap.md) is some thirty lines
-with five data-dependent branches — and predicated over a tile, every lane
-executes every path. That is the standing cost of choosing Triton over CUDA,
-and it is a throughput cost, never a correctness one.
-
-### 7. Lifting and the kernel ABI
-
-`tl.program_id` / `tl.arange` / masked `tl.load` prologue, masked `tl.store`
-epilogue, and a convention for what a lifted parameter is. FPy has no pointer
-type, so this is an ABI decision rather than a language change.
-`Specialize(size_key=True)` already models compile-time constant
-specialization, which is `tl.constexpr` — that much is free.
-
-### 8. Tensorization, as scheduling operators
-
-Per the section above, this is not backend work. It is: a Triton-specific
-`_to_statement_form` that keeps `ListComp`, `Sum`, `Zip` and `Enumerate`; tile
-lowerings for each in the emitter; and — the substantial part — the
-[scheduling-language.md](scheduling-language.md) §7 recipe, composing `split`,
-`unroll_for` and if-conversion against a target descriptor. Resolve the
-`Hoistable` / `CompToLoop` entanglement before starting.
-
-Sequence it *after* §7 and treat it as opt-in per reduction, not as a default:
-per *The one thing that cannot be delegated*, tensorizing an inexact fold
-changes the answer, and §7 already reaches full parallelism bit-exactly for
-batched work. Develop it against the interpreter, not the GPU — it is the one
-item here with no hardware dependency, so it parallelizes with everything
-else.
-
-Until §8, static-length lists unroll to registers — `ArraySizeInfer` +
-`Specialize(size_key=True)` + `ForUnroll` already do this. Dynamic-length lists
-are refused in §1–§7; a refusal is always acceptable under the criterion in
-[backend-cpp.md](backend-cpp.md).
-
-### 9. `tl.dot`
-
-Only once §8 exists and a program appears that should *use* a tensor core.
-Nothing before §8 can express an operand to it.
+Only once item 5 exists and a program appears that should *use* a tensor core.
+Nothing before it can express an operand.
 
 ## Effort
 
-Measured where it says measured; everything else is an estimate, and
-[backend-independence.md](backend-independence.md) is on record that estimates
-framed as line counts misled every prediction made under them. Treat the
-ordering as the useful content and the numbers as a sketch.
+Estimates, and [backend-independence.md](backend-independence.md) is on record
+that estimates framed as line counts misled every prediction made under them.
+The ordering is the useful content.
 
-| § | Work | Sketch |
-|---|---|---|
-| 1 | Flag audit, hand-written witness | ~1 week |
-| 2 | Target description | 2 weeks |
-| 3 | Scalar emitter | 4–8 weeks |
-| 4 | Launcher + GPU differential harness | 2–3 weeks |
-| 5–7 | Uniformity, if-conversion, lifting | 6–10 weeks |
-| 8 | Tensorization (scheduling layer) | unscoped; opt-in per reduction; gated on the `Hoistable` decision; no GPU needed |
+| Item | Sketch |
+|---|---|
+| 1. Triton normal form | 2–4 weeks; no GPU; gated on the `Hoistable` question |
+| 2. Split and vectorize | 3–5 weeks; no GPU |
+| 3. Emitter | 4–6 weeks |
+| 4. Launcher + harness | 2–3 weeks; needs a GPU in CI |
+| 5. Reductions | unscoped; opt-in |
+| 6. `tl.dot` | unscoped |
+
+Items 1–2 are all interpreter-testable, so they parallelize with each other and
+need no hardware.
 
 ## Not recommended
 
-- **FP8 and narrower as storage types.** See *Scope*. Revisit only if a program
-  needs an fp8 value to cross the kernel boundary in its own width, which is an
-  ABI question and not an arithmetic one.
-- **Inline PTX for non-RNE arithmetic.** `tl.inline_asm_elementwise` could
-  reach `add.rz.f32`, at the cost of opting out of every Triton optimization
-  around it. `DOUBLE_ROUND` covers the same ground within the existing
-  machinery; reach for asm only if it demonstrably does not.
+- **A divergence/uniformity analysis.** The explicit-loop formulation makes the
+  split point the boundary; an analysis would rediscover what the syntax states.
+- **Implicit whole-program lifting.** Treating every scalar as a tile and
+  inventing an ABI for which parameters are lifted. The loop says what is
+  iterated, and a user-written loop is inspectable where an ABI convention is not.
+- **Predicating everything.** The cheap version of if-conversion is unsound
+  exactly where a branch guards an undefined operation, which is the case that
+  matters. Refuse instead.
+- **FP8 and narrower as storage.** Revisit only if a value must cross the kernel
+  boundary in its own width — an ABI question, not an arithmetic one.
+- **Inline PTX for non-RNE arithmetic.** `tl.inline_asm_elementwise` could reach
+  `add.rz.f32`, at the cost of opting out of every Triton optimization around
+  it. `DOUBLE_ROUND` covers the same ground within the existing machinery.
 - **A global fast-math escape hatch.** There is no single Triton knob, and the
-  per-op spellings in §2 are more precise than one would be anyway.
+  per-op spellings in the target description are more precise than one would be.
 - **Autograd.** These are numerical models, not layers.
-- **Waiting on `REAL_FORMAT` precision before starting.** §1–§4 are testable
-  against the unit corpus, and §2's ladder question is answerable with no
-  whole-program compile at all.
