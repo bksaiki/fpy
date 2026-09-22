@@ -35,6 +35,8 @@ from ...analysis import (
 from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import rounds_exactly
 from ...ast import (
+    AMax,
+    AMin,
     And,
     Assign,
     BinaryOp,
@@ -78,6 +80,7 @@ from ...ast import (
     Signbit,
     Stmt,
     StmtBlock,
+    Sum,
     TernaryOp,
     TupleBinding,
     TupleExpr,
@@ -695,33 +698,61 @@ class _Emitter(Visitor):
             '`-0.0` from `0.0`, which no comparison does'
         )
 
+    def _emit_reduction(self, e: UnaryOp) -> str:
+        """`max`, `min` or `sum` over a sequence, folded over its elements.
+
+        The sequence has already stopped existing, so a reduction is a fold
+        over values -- which is also what keeps `sum` exact: FPy's is a *left*
+        fold seeded with the first element unrounded, and folding the
+        scalarized elements left to right is that, not an approximation of it.
+
+        A tile reduction would be the alternative and is not available: it
+        reassociates, which `sum` does not permit and which the roadmap
+        retired tile reductions over.
+        """
+        elems = self._source_elements(e.arg)
+        if elems is None:
+            raise TritonEmitError(
+                f'`{type(e).__name__.lower()}` needs a sequence of proven '
+                'length to fold over'
+            )
+        name = 'tl.maximum' if isinstance(e, AMax) else 'tl.minimum'
+        if isinstance(e, Sum):
+            if not elems:
+                # FPy's empty sum is an exact `+0`; as a literal it retypes
+                # where it is used, like any other, and broadcasts over a tile
+                return self._emit_numeric_literal(Fraction(0))
+            acc = elems[0]
+            for rhs in elems[1:]:
+                acc = f'({acc} + {rhs})'
+            return acc
+        if not elems:
+            # FPy raises `ValueError` here, so there is nothing to emit
+            raise TritonEmitError(
+                f'`{name}` of an empty sequence has no value'
+            )
+        return self._fold_select(name, elems)
+
+    def _fold_select(self, name: str, args: list[str]) -> str:
+        """A `max`/`min` fold.
+
+        Pairwise is sound because both are associative *and* exact: they
+        return an operand rather than computing one, so no grouping rounds
+        differently.
+        """
+        acc = args[0]
+        for rhs in args[1:]:
+            acc = f'{name}({acc}, {rhs}, propagate_nan=tl.PropagateNan.ALL)'
+        return acc
+
     def _emit_select_op(self, e: Max | Min) -> str:
-        """`max` / `min`, folded pairwise and made NaN-propagating.
+        """`max` / `min`, folded pairwise.
 
-        **`tl.maximum` is the wrong operation on its own.**  FPy follows IEEE
-        754-2019 `maximum`, where a NaN operand propagates; Triton's
-        `tl.maximum` follows `maximumNumber`, which returns the *other*
+        `propagate_nan` is not optional.  FPy follows IEEE 754-2019
+        `maximum`, where a NaN operand propagates; Triton's default is
+        `PropagateNan.NONE`, which is `maximumNumber` and returns the *other*
         operand.  Checked on hardware: FPy gives `nan` for `max(nan, 1.0)`
-        and `tl.maximum` gives `1.0`.  Emitting it bare would be a miscompile
-        on any input containing a NaN.
-
-        So the fold is guarded *once*, over every operand: if any is a NaN the
-        result is a NaN, else the chain of hardware selects.  `x != x` is the
-        NaN test.  Guarding each step instead would put the accumulator inside
-        its own test and grow the expression exponentially in the number of
-        operands.
-
-        **The guard repeats its operands**, which is free for a name and two
-        extra loads for a subscript.  They are pure and identically masked, so
-        it is correct either way and a CSE pass should collapse them -- but
-        that is unverified here.  The principled fix is not a cleverer
-        expansion: it is to drop the guard where a NaN cannot arise, which a
-        context with `enable_nan=False` already states and `ValueClassInfer`
-        could prove more widely.
-
-        Folding pairwise is sound because both are associative *and* exact:
-        they return an operand rather than computing one, so no grouping
-        rounds differently.
+        and a bare `tl.maximum` gives `1.0`.
         """
         name = 'tl.maximum' if isinstance(e, Max) else 'tl.minimum'
         want = self._storage(e)
@@ -731,16 +762,7 @@ class _Emitter(Visitor):
         ]
         if not args:
             raise TritonEmitError(f'`{name}` needs at least one operand')
-        acc = args[0]
-        for rhs in args[1:]:
-            acc = f'{name}({acc}, {rhs})'
-        if len(args) == 1:
-            return acc
-        # one NaN test over all the operands, not one per fold step: guarding
-        # each step would put the accumulator inside its own test and grow
-        # the expression exponentially in the number of operands
-        nan = ' | '.join(f'({a} != {a})' for a in args)
-        return f"tl.where({nan}, float('nan'), {acc})"
+        return self._fold_select(name, args)
 
     def _emit_where(self, e: IfExpr) -> str:
         """``tl.where``, with both arms in the result's storage.
@@ -826,6 +848,8 @@ class _Emitter(Visitor):
             return self._emit_len(e)
         if isinstance(e, (IsNan, IsInf, IsFinite, Signbit)):
             return self._emit_predicate(e)
+        if isinstance(e, (AMax, AMin, Sum)):
+            return self._emit_reduction(e)
         return self._dispatch(
             e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
         )

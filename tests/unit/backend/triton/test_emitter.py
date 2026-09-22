@@ -531,26 +531,26 @@ class TestSelectOps:
 
     def test_max_propagates_nan(self):
         """FPy follows IEEE 754-2019 `maximum`, where a NaN operand
-        propagates; `tl.maximum` follows `maximumNumber` and returns the
-        *other* operand.  Measured on hardware: FPy gives `nan` for
-        `max(nan, 1.0)`, `tl.maximum` gives `1.0`.  So the bare instruction
-        would be a miscompile on any input containing a NaN."""
+        propagates; Triton's default is `PropagateNan.NONE`, which is
+        `maximumNumber` and returns the *other* operand.  Measured on
+        hardware: FPy gives `nan` for `max(nan, 1.0)`, a bare `tl.maximum`
+        gives `1.0`.  So the keyword is not optional."""
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real, y: fp.Real):
             return max(x, y)
 
-        out = _emit(f, [_R32, _R32])
-        assert 'tl.maximum(' in out
-        assert "float('nan')" in out, 'the NaN guard is missing'
-        assert '(x != x)' in out and '(y != y)' in out
+        assert _emit(f, [_R32, _R32]) == (
+            'return tl.maximum(x, y, propagate_nan=tl.PropagateNan.ALL)'
+        )
 
     def test_min_too(self):
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real, y: fp.Real):
             return min(x, y)
 
-        out = _emit(f, [_R32, _R32])
-        assert 'tl.minimum(' in out and "float('nan')" in out
+        assert _emit(f, [_R32, _R32]) == (
+            'return tl.minimum(x, y, propagate_nan=tl.PropagateNan.ALL)'
+        )
 
     def test_an_nary_max_folds_pairwise(self):
         """Sound because `max` is associative *and* exact -- it returns an

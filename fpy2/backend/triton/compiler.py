@@ -36,7 +36,13 @@ from ...ast import FuncDef
 from ...function import Function
 from ...module import Module
 from ...number import Context
-from ...transform import ConstFold, FreeVarElim, Simplify, Specialize
+from ...transform import (
+    ConstFold,
+    FreeVarElim,
+    Simplify,
+    Specialize,
+    ZipElim,
+)
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import KernelSource, emit_kernel
@@ -123,15 +129,20 @@ class TritonCompiler(Backend):
 
     @staticmethod
     def _specialize(module: Module) -> Module:
-        """`FreeVarElim` first, then `Specialize`.
+        """`FreeVarElim` and `ZipElim`, then `Specialize`.
 
         A kernel is executed from a generated file whose namespace holds only
         `triton` and `tl`, so it cannot reference a closure at all -- which is
         the case `FreeVarElim` exists for, and why the cpp backend runs it
         unconditionally too.  Before `Specialize`, so a captured value is a
         binding the analyses can see rather than a free name.
+
+        `ZipElim` because a `zip` has no Triton spelling either way: it binds
+        a tuple, and the emitter has no tuple storage.  Rewritten to an
+        indexed loop it becomes ordinary subscripts, which is also what lets
+        a comprehension over a `zip` scalarize.
         """
-        module = module.map(lambda _m, fd: FreeVarElim.apply(fd))
+        module = module.map(lambda _m, fd: ZipElim.apply(FreeVarElim.apply(fd)))
         return Specialize.apply(module, size_key=True)
 
     def _compile_one(self, spec: Module, name: str) -> KernelSource:
