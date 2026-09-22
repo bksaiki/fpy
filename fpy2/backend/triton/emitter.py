@@ -18,6 +18,7 @@ operation with no signature under the active context is an error, not a
 fallback.
 """
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -69,7 +70,10 @@ from ...ast import (
     Stmt,
     StmtBlock,
     TernaryOp,
+    TupleBinding,
+    TupleExpr,
     UnaryOp,
+    UnderscoreId,
     Var,
 )
 from ...ast.visitor import DefaultVisitor, Visitor
@@ -94,6 +98,11 @@ _COMPARE: dict[CompareOp, str] = {
     CompareOp.EQ: '==',
     CompareOp.NE: '!=',
 }
+
+
+def _reads_name(code: str, names: set[str]) -> bool:
+    """Whether *code* mentions any of *names* as an identifier."""
+    return any(re.search(rf'\b{re.escape(n)}\b', code) for n in names)
 
 
 def _as_literal(code: str) -> float | None:
@@ -189,6 +198,7 @@ class _Emitter(Visitor):
         `constexpr`, and a plain variable holding one is not.  So a tile's
         width is resolved back to the name it came from.
         """
+        self._next_tmp = 0
         self.grid_extent: int | None = None
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
@@ -674,9 +684,12 @@ class _Emitter(Visitor):
     # -- statements ----------------------------------------------------
 
     def _visit_assign(self, stmt: Assign, ctx: _IndentedWriter):
+        if isinstance(stmt.target, TupleBinding):
+            return self._emit_destructure(stmt, ctx)
         if not isinstance(stmt.target, NamedId):
             raise TritonEmitError(
-                'a destructuring assignment has no Triton spelling'
+                f'a `{type(stmt.target).__name__}` assignment target has no '
+                'Triton spelling'
             )
         match stmt.expr:
             case Range1():
@@ -693,6 +706,52 @@ class _Emitter(Visitor):
         elif isinstance(stmt.expr, Var):
             self.copies[str(stmt.target)] = self._root(code)
         ctx.add_line(f'{stmt.target} = {code}')
+
+    def _emit_destructure(self, stmt: Assign, ctx: _IndentedWriter):
+        """`a, b = (x, y)`, as one assignment per element.
+
+        Triton has no tuple *value* to bind, so the binding has to come apart.
+        Only a literal tuple does: a name holding one would need this emitter
+        to track components it never built, and a primitive returning one
+        needs that primitive in the op table first.
+
+        **The elements are simultaneous, and sequential assignment is not.**
+        `a, b = (b, a)` is a swap, which `a = b; b = a` turns into a copy.
+        Where a target is read by the right-hand side, the values go through
+        temporaries first.
+        """
+        target = stmt.target
+        assert isinstance(target, TupleBinding)
+        names = [elt for elt in target.elts]
+        if not all(isinstance(n, (NamedId, UnderscoreId)) for n in names):
+            raise TritonEmitError(
+                'a nested destructuring target has no Triton spelling'
+            )
+        if not isinstance(stmt.expr, TupleExpr):
+            raise TritonEmitError(
+                f'destructuring a `{type(stmt.expr).__name__}` has no Triton '
+                'spelling; only a literal tuple comes apart here'
+            )
+        if len(names) != len(stmt.expr.elts):
+            raise TritonEmitError(
+                f'destructuring {len(names)} names from '
+                f'{len(stmt.expr.elts)} elements'
+            )
+
+        codes = [self.emit(e) for e in stmt.expr.elts]
+        bound = {str(n) for n in names if isinstance(n, NamedId)}
+        if any(_reads_name(code, bound) for code in codes):
+            tmps = []
+            for code in codes:
+                tmp = f'_t{self._next_tmp}'
+                self._next_tmp += 1
+                ctx.add_line(f'{tmp} = {code}')
+                tmps.append(tmp)
+            codes = tmps
+        for name, code in zip(names, codes):
+            if isinstance(name, UnderscoreId):
+                continue
+            ctx.add_line(f'{name} = {code}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
         addr = f'{stmt.var}_ptr + {self._offset(stmt.var, list(stmt.indices))}'

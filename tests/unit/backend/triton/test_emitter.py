@@ -560,3 +560,70 @@ class TestSelectOps:
             return max(x, y, z)
 
         assert _emit(f, [_R32, _R32, _R32]).count('tl.maximum(') == 2
+
+
+class TestDestructuring:
+    """`a, b = (x, y)`.  Triton has no tuple *value* to bind, so the binding
+    comes apart into one assignment per element."""
+
+    def test_a_literal_tuple_comes_apart(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            a, b = (x + y, x - y)
+            return a * b
+
+        assert _emit(f, [_R32, _R32]) == (
+            'a = (x + y)\n'
+            'b = (x - y)\n'
+            'return (a * b)'
+        )
+
+    def test_a_swap_goes_through_temporaries(self):
+        """The elements are simultaneous and sequential assignment is not:
+        `a = b; b = a` turns a swap into a copy."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            a, b = (x, y)
+            a, b = (b, a)
+            return a - b
+
+        out = _emit(f, [_R32, _R32])
+        assert out == (
+            'a = x\n'
+            'b = y\n'
+            '_t0 = b\n'
+            '_t1 = a\n'
+            'a = _t0\n'
+            'b = _t1\n'
+            'return (a - b)'
+        )
+
+    def test_no_temporaries_when_nothing_is_read_back(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            a, b = (x, y)
+            return a + b
+
+        assert '_t' not in _emit(f, [_R32, _R32])
+
+    def test_an_underscore_binds_nothing(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            _, b = (x, y)
+            return b
+
+        out = _emit(f, [_R32, _R32])
+        assert out == 'b = y\nreturn b'
+
+    def test_binding_a_tuple_to_a_name_is_refused_first(self):
+        """Destructuring a *name* never arises: binding the tuple fails
+        first, because a tuple has no storage to hold it.  So the only
+        destructuring that reaches this emitter is of a literal."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            t = (x, y)
+            a, b = t
+            return a + b
+
+        with pytest.raises(TritonEmitError, match='tuple has no Triton storage'):
+            _emit(f, [_R32, _R32])

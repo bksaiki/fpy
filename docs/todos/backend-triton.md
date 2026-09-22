@@ -666,11 +666,45 @@ and Triton rejects it, because a Python scalar is a `constexpr` rather than a
 tile.  The first fix was syntactic and did not survive contact with the
 compiler.
 
-**The gap is coverage, not capability.**  The pipeline compiles the running
-example end to end and agrees with the interpreter bit-for-bit, but it has
-only ever been driven on that program and a one-line map.  Running the corpus
-through the emitter -- unspecialized, so several failures are the measurement's
-fault rather than the emitter's -- surfaces three real holes:
+**The gap is coverage, and most of it is shape rather than capability.**
+Measured properly -- specialized, const-folded, normalized -- **5 of 94**
+corpus functions emit.  That number is less damning than it looks, and the
+reason is worth stating before anyone optimizes against it.
+
+**A kernel cannot allocate.**  It writes through pointers its launcher owns
+and returns nothing, so a function that returns a *new* list is not
+kernel-shaped until it is rewritten to take its output as an argument.  **30
+of 94** return a list.  That is a change to the *program*, not the compiler,
+and it is the same ABI constraint the running example already showed.
+
+Lowering comprehensions makes this visible rather than fixing it: running
+`Hoistable`/`CompToLoop` first takes the comprehension refusals from 25 to 5
+and raises `Empty` -- the allocation `CompToLoop` emits -- from 5 to 20.  The
+blocker moves, it does not go away.
+
+**So keeping `ListComp` costs less than it appeared.**  Item 1 keeps it
+"because the vectorizer wants the iteration written down", and that reason
+does not hold as stated -- `tile_loops` only ever inspects a `ForStmt`, so a
+comprehension is never tiled either way.  But lowering it does not help until
+the allocation question is settled, so the decision stands on different
+grounds than the ones recorded.
+
+What is left that *is* the emitter's:
+
+- **Destructuring assignment** -- done.  `a, b = (x, y)` comes apart into one
+  assignment per element, with temporaries where a target is read by the
+  right-hand side, since `a, b = (b, a)` is a swap and `a = b; b = a` is a
+  copy.  Only a *literal* tuple reaches it: binding a tuple to a name fails
+  earlier, because a tuple has no storage.
+
+  **It moved no function into `EMITS`.**  The count of emitting functions
+  stayed at 5 while `Empty` went 5 to 13 and unproven trip counts 4 to 11 --
+  those functions had a second blocker behind the first.  The "18 functions"
+  figure counted *first* failures, not functions one fix away, and the same
+  caveat applies to every number in this list.
+- **`Logb`** (4), **`IsNan`** (3) and friends, absent from the op table.  Each
+  needs the `max`/`min` treatment: check the semantics agree before emitting,
+  since that is where the NaN trap was.
 
 - **`Max` and `Min`** — now emitted, and the reason they were missing turned
   out to matter.  `tl.maximum` is *not* FPy's `max`: FPy follows IEEE 754-2019
@@ -681,10 +715,7 @@ fault rather than the emitter's -- surfaces three real holes:
   Their absence was the op table's refuse-by-default discipline working, not
   an oversight.  They now emit as a NaN-guarded fold, checked against the
   interpreter on hardware with NaN inputs.
-- **A comprehension has no spelling**, and item 1 deliberately *keeps*
-  `ListComp` for the vectorizer.  Two halves of this design disagree: 24
-  corpus functions hit it.
-- **Destructuring assignment has no spelling** -- 17 corpus functions.
+
 
 Items 1–2 are all interpreter-testable, so they parallelize with each other and
 need no hardware.
