@@ -301,6 +301,17 @@ obvious and were each found by hitting them:
   which `SimplifyIf` refuses to hoist, so normalizing after tiling would
   reject this pipeline's own output.
 
+**`optimize` gates `ConstFold` and `Simplify`**, as the cpp flag of the same
+name gates its optimizing transforms, and with the same caveat that
+`FreeVarElim`, `Specialize`, the normal form and tiling run regardless.
+
+One difference from cpp worth knowing: these are not only cleanup, they
+**widen what compiles**.  Over the library corpus, 30 functions emit with both
+and 27 with neither, and the two interact -- `ConstFold` alone buys nothing,
+but removing it without `Simplify` costs two.  Folding a constant is sometimes
+what makes a trip count provable or a literal representable.  So `optimize=
+False` is sound but strictly narrower.
+
 **And what the ABI asks of the program.**  A kernel writes through pointers
 its launcher owns and returns nothing, and its tile width is a compile-time
 parameter — so a compiled function takes its output as an argument and its
@@ -702,6 +713,25 @@ What is left that *is* the emitter's:
   those functions had a second blocker behind the first.  The "18 functions"
   figure counted *first* failures, not functions one fix away, and the same
   caveat applies to every number in this list.
+- **Unproven trip counts** -- done, and it is the first fix that moved the
+  count: **5 to 11** emitting.  `static_trip_count` sits beside `trip_count`
+  rather than widening it, because that one's callers ask *"does this loop
+  cover exactly that list?"* and rely on top comparing unequal.  The new one
+  asks only whether the count is constant, and falls back to the iterable's
+  inferred length.
+
+  **It first read 14, and three of those were miscompiles.**
+  `tl.static_range` yields an *index*, which is what the loop variable means
+  only over a `range`; over a list it binds an *element*, so `for x in xs`
+  emitted a fold against 0, 1, 2 instead of the values.  A proven trip count
+  is not on its own enough to emit a loop, and the rising number was what
+  disguised it.  Element-binding loops are now refused.
+
+  Two tests had to be corrected rather than updated: `ArraySizeInfer` proves
+  a foreign constant's length directly, so the case that supposedly needed
+  `ConstFold` never did, and the test claiming to prove the driver runs it
+  was proving nothing.
+
 - **`Logb`** (4), **`IsNan`** (3) and friends, absent from the op table.  Each
   needs the `max`/`min` treatment: check the semantics agree before emitting,
   since that is where the NaN trap was.

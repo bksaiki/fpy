@@ -179,9 +179,10 @@ class TestSequentialLoops:
             'return acc'
         )
 
-    def test_an_unproven_count_is_refused(self):
-        """A foreign constant is not folded until `ConstFold` runs, and
-        `tl.static_range` needs the count as a `constexpr`."""
+    def test_a_foreign_constant_is_resolved_by_the_size_analysis(self):
+        """`trip_count` answers `None` here -- it models only the shape of the
+        `range` -- but `ArraySizeInfer` has already proved the iterable's
+        length, and `static_trip_count` asks it."""
         width = 8
 
         @fp.fpy(ctx=fp.FP32)
@@ -192,24 +193,24 @@ class TestSequentialLoops:
             return acc
 
         g = _spec(fold, fp.FP32, ctx=fp.FP32)
-        with pytest.raises(TritonEmitError, match='compile-time trip count'):
+        assert 'tl.static_range(8)' in emit_block(g.ast.body, g.ast)
+
+    def test_a_runtime_count_is_refused(self):
+        """A bound that is genuinely not a constant: `tl.static_range` needs
+        a `constexpr`, and an argument is not one."""
+        @fp.fpy(ctx=fp.FP32)
+        def fold(x: fp.Real, n: fp.Real):
+            acc = fp.round(0)
+            for k in range(n):
+                acc = acc + x
+            return acc
+
+        m = Module()
+        m.add(fold, ctx=fp.FP32,
+              arg_types=[RealType(fp.FP32), RealType(fp.INTEGER)])
+        g = Specialize.apply(m, size_key=True).get('fold').func
+        with pytest.raises(TritonEmitError, match='no proven length'):
             emit_block(g.ast.body, g.ast)
-
-    def test_const_folding_makes_it_emittable(self):
-        """The refusal is the pipeline's to fix, not the emitter's."""
-        from fpy2.transform import ConstFold
-        width = 8
-
-        @fp.fpy(ctx=fp.FP32)
-        def fold(x: fp.Real):
-            acc = fp.round(0)
-            for k in range(width):
-                acc = acc + x
-            return acc
-
-        g = _spec(fold, fp.FP32, ctx=fp.FP32)
-        folded = ConstFold.apply(g.ast)
-        assert 'tl.static_range(8)' in emit_block(folded.body, folded)
 
 
 class TestSelect:
@@ -627,3 +628,44 @@ class TestDestructuring:
 
         with pytest.raises(TritonEmitError, match='tuple has no Triton storage'):
             _emit(f, [_R32, _R32])
+
+
+class TestLoopBinding:
+    """`tl.static_range` yields an *index*.  That is what the loop variable
+    means only when the iterable is a `range`."""
+
+    def test_a_range_binds_the_index(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            acc = fp.round(0)
+            for i in range(4):
+                acc = acc + xs[i]
+            return acc
+
+        assert 'for i in tl.static_range(4):' in _emit(f, [ListType(_R32, 4)])
+
+    def test_iterating_a_list_is_refused(self):
+        """`for x in xs` binds an *element*, and emitting the index in its
+        place maxes against 0, 1, 2 rather than against the values -- a silent
+        miscompile, and the reason a proven trip count is not on its own
+        enough to emit a loop."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            acc = fp.round(0)
+            for x in xs:
+                acc = acc + x
+            return acc
+
+        with pytest.raises(TritonEmitError, match='binds an element'):
+            _emit(f, [ListType(_R32, 4)])
+
+    def test_iterating_a_slice_is_refused(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            acc = fp.round(0)
+            for x in xs[1:]:
+                acc = acc + x
+            return acc
+
+        with pytest.raises(TritonEmitError, match='binds an element'):
+            _emit(f, [ListType(_R32, 4)])

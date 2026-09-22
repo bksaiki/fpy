@@ -47,15 +47,15 @@ def _scale(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
 _DOT = '''\
 @triton.jit
 def _batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
-    t9 = BLOCK
-    t10 = 4
+    t7 = BLOCK
+    t8 = 4
     i = tl.program_id(0) * BLOCK
     j = i + tl.arange(0, BLOCK)
     r = j
     acc = 0
     for k in tl.static_range(8):
-        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32)))
-    tl.store(out_ptr + r, acc, mask=(j < t10))'''
+        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t8), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t8), other=0.0).to(tl.float32)))
+    tl.store(out_ptr + r, acc, mask=(j < t8))'''
 
 
 def test_the_batched_dot_product():

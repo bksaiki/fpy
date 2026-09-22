@@ -21,6 +21,7 @@ fallback.
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from fractions import Fraction
 
 from ...analysis import (
     ArraySizeAnalysis,
@@ -31,7 +32,7 @@ from ...analysis import (
     FormatAnalysis,
     FormatInfer,
 )
-from ...analysis.array_size import ListSize, trip_count
+from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import rounds_exactly
 from ...ast import (
     And,
@@ -43,6 +44,7 @@ from ...ast import (
     CompareOp,
     ContextStmt,
     Decnum,
+    Digits,
     Expr,
     ForStmt,
     FuncDef,
@@ -583,13 +585,35 @@ class _Emitter(Visitor):
         return 'True' if e.val else 'False'
 
     def _visit_integer(self, e: Integer, ctx) -> str:
-        return str(e.val)
+        return self._emit_numeric_literal(e.as_rational())
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
-        return str(e.val)
+        return self._emit_numeric_literal(e.as_rational())
 
     def _visit_hexnum(self, e: Hexnum, ctx) -> str:
-        return str(e.val)
+        return self._emit_numeric_literal(e.as_rational())
+
+    def _emit_numeric_literal(self, v: Fraction) -> str:
+        """A literal, as Triton source.
+
+        An FPy literal is an exact rational rounded where it is *used*, which
+        Triton has no spelling for -- so a value the target holds exactly
+        prints as itself, and one it cannot is refused rather than emitted as
+        `num / denom`, which would be an *operation* where FPy has a constant.
+
+        Ported from the cpp emitter's `_emit_numeric_literal`, which had
+        already answered this: the question is whether the target holds the
+        value, not what context surrounds it, so no scope lookup is involved.
+        """
+        if v.denominator == 1:
+            return str(v.numerator)
+        exact = float(v)
+        if Fraction(exact) == v:
+            return repr(exact)
+        raise TritonEmitError(
+            f'`{v.numerator}/{v.denominator}` is not representable here; '
+            'wrap it in `fp.round(...)` to round it to a format that is'
+        )
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:
         # `Round` and `Cast` are casts, not table operations, and they arrive
@@ -635,15 +659,13 @@ class _Emitter(Visitor):
 
     # -- expressions with no Triton spelling ---------------------------
 
-    def _visit_rational(self, e: Rational, ctx):
-        raise TritonEmitError(
-            'a rational literal has no Triton spelling; round it first'
-        )
+    def _visit_rational(self, e: Rational, ctx) -> str:
+        """`FreeVarElim` materializes a captured `2.5` as `fp.rational(5, 2)`,
+        so refusing every rational would refuse every captured non-integer."""
+        return self._emit_numeric_literal(e.as_rational())
 
-    def _visit_digits(self, e, ctx):
-        raise TritonEmitError(
-            'a `digits` literal has no Triton spelling; round it first'
-        )
+    def _visit_digits(self, e: Digits, ctx) -> str:
+        return self._emit_numeric_literal(e.as_rational())
 
     def _visit_foreign(self, e, ctx):
         raise TritonEmitError(
@@ -782,6 +804,19 @@ class _Emitter(Visitor):
             raise TritonEmitError(
                 'a destructuring loop target has no Triton spelling'
             )
+        # `tl.static_range` yields *indices*.  That is what the loop
+        # variable means only when the iterable is a `range`; over a list it
+        # binds an element, and emitting the index in its place is a silent
+        # miscompile -- `for xi in xs` would max against 0, 1, 2 rather than
+        # against the values.  Loading the element instead needs the
+        # iterable's base and stride, which a slice or a `zip` does not
+        # supply, so this refuses rather than guesses.
+        if not isinstance(stmt.iterable, (Range1, Range3)):
+            raise TritonEmitError(
+                f'a `for` over a `{type(stmt.iterable).__name__}` binds an '
+                'element, and `tl.static_range` yields an index; iterate a '
+                '`range` and subscript instead'
+            )
         n = _static_count(stmt, self.sizes)
         ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
         ctx.indent()
@@ -869,16 +904,16 @@ def _static_count(stmt: ForStmt, sizes: ArraySizeAnalysis) -> int:
     """How many times *stmt* runs, as a compile-time constant.
 
     ``tl.static_range`` needs the count as a ``constexpr``, so an unproven one
-    is refused.  The limit is `trip_count`'s modeling rather than the
-    program's: it answers only for a `range`, so a `zip` or a bare list is
-    declined even where `ArraySizeInfer` knows the length.
+    is refused.  `static_trip_count` falls back to the iterable's inferred
+    length, so a `zip` or a bare list answers where a `range` would --
+    provided the size analysis proved it, which specialization is what makes
+    true.
     """
-    n = trip_count(stmt.iterable, sizes)
+    n = static_trip_count(stmt.iterable, sizes)
     if not isinstance(n, int):
         raise TritonEmitError(
             f'`tl.static_range` needs a compile-time trip count, and this '
-            f'`{type(stmt.iterable).__name__}` has none that `trip_count` '
-            'models'
+            f'`{type(stmt.iterable).__name__}` has no proven length'
         )
     return n
 

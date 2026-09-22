@@ -54,9 +54,10 @@ class TestPipeline:
             'xss_ptr', 'yss_ptr', 'out_ptr', 'BLOCK: tl.constexpr')
         pyast.parse(k.source)
 
-    def test_a_foreign_constant_is_folded(self):
-        """`range(K)` names a closure value, which only `ConstFold` resolves
-        -- and `tl.static_range` needs the count as a constant."""
+    def test_a_foreign_constant_reaches_a_static_range(self):
+        """`range(K)` names a closure value.  `ArraySizeInfer` proves the
+        length anyway, so this no longer depends on `ConstFold` -- which the
+        driver still runs, for the cases that do."""
         assert 'tl.static_range(8)' in _compile().source
 
     def test_the_tile_and_the_sequential_fold_are_distinguished(self):
@@ -120,3 +121,36 @@ class TestModule:
         out = TritonCompiler(drop_asserts=True).compile_module(m)
         assert len(out) == 1
         assert out[0].name == 'batched_dot'
+
+
+class TestOptimize:
+    """`optimize` gates `ConstFold` and `Simplify`, as the cpp backend's flag
+    of the same name gates its optimizing transforms."""
+
+    def test_both_settings_compile_this_program(self):
+        for optimize in (True, False):
+            k = TritonCompiler(drop_asserts=True, optimize=optimize).compile(
+                batched_dot, ctx=fp.REAL, arg_types=_ARGS)
+            pyast.parse(k.source)
+
+    def test_optimizing_removes_the_debris(self):
+        """`FreeVarElim` materializes a captured value and `ConstFold` then
+        inlines past it, leaving a binding nothing reads."""
+        SCALE = 2.5
+
+        @fp.fpy(ctx=fp.FP32)
+        def scaled(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+            for i in range(len(xs)):
+                out[i] = xs[i] * SCALE
+            return out
+
+        argt = [ListType(RealType(fp.FP32), 4),
+                ListType(RealType(fp.FP32), 4), RealType(fp.INTEGER)]
+        on = TritonCompiler(drop_asserts=True).compile(
+            scaled, ctx=fp.FP32, arg_types=argt).source
+        off = TritonCompiler(drop_asserts=True, optimize=False).compile(
+            scaled, ctx=fp.FP32, arg_types=argt).source
+        assert 'SCALE' not in on
+        assert 'SCALE = 2.5' in off
+        # the value still reaches the multiply either way
+        assert '2.5' in on and '2.5' in off
