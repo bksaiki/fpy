@@ -10,6 +10,7 @@ type says what a value may be, a pin says which value it is.
 import os
 import subprocess
 import sys
+import tempfile
 import textwrap
 
 import fpy2 as fp
@@ -167,13 +168,19 @@ class TestStability:
             mod.add(caller, arg_types=[ListType(RealType(fp.FP16), 8)] * 2)
             print(sorted(f.name for f in Specialize.apply(mod).functions()))
         """)
-        runs = {
-            subprocess.run(
-                [sys.executable, '-c', prog], capture_output=True, text=True,
-                check=True, env={**os.environ, 'PYTHONHASHSEED': seed},
-            ).stdout
-            for seed in ('0', '1', '12345')
-        }
+        # from a file, not `python -c`: the decorator reads the function's
+        # source, which only 3.13 keeps for a `-c` command
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, 'prog.py')
+            with open(path, 'w') as f:
+                f.write(prog)
+            runs = {
+                subprocess.run(
+                    [sys.executable, path], capture_output=True, text=True,
+                    check=True, env={**os.environ, 'PYTHONHASHSEED': seed},
+                ).stdout
+                for seed in ('0', '1', '12345')
+            }
         assert len(runs) == 1, runs
 
     def test_names_are_stable_across_runs(self):
