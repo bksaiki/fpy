@@ -24,7 +24,7 @@ def _falls_through(stmts: list[Stmt]) -> bool:
 
 def _sink(
     result: NamedId, stmts: list[Stmt], cont: list[Stmt], depth: int = 0,
-    *, gensym: Gensym | None = None, flag: NamedId | None = None,
+    *, done: NamedId | None = None, flag: NamedId | None = None,
 ) -> list[Stmt]:
     """*stmts* then *cont*, with every `return` rewritten to an assignment.
 
@@ -35,6 +35,9 @@ def _sink(
 
     *flag* is set inside a loop body, where a `return` cannot move the
     continuation -- it has to be recorded and tested after the loop instead.
+    *done* is the one flag name the whole function shares: a `return` in a
+    nested loop has to stop every loop enclosing it, and a flag per loop stops
+    only the innermost.
     """
     for i, stmt in enumerate(stmts):
         rest = list(stmts[i + 1:]) + cont
@@ -69,50 +72,65 @@ def _sink(
                 return list(stmts[:i]) + [IfStmt(
                     stmt.cond,
                     StmtBlock(_sink(result, ift, rest if ift_out else [],
-                                    depth, gensym=gensym, flag=flag)),
+                                    depth, done=done, flag=flag)),
                     StmtBlock(_sink(result, iff, iff_cont if iff_out else [],
-                                    depth, gensym=gensym, flag=flag)),
+                                    depth, done=done, flag=flag)),
                     stmt.loc,
                 )]
-            case ForStmt():
+            case ForStmt() | WhileStmt():
                 body = list(stmt.body.stmts)
-                if not _has_return(body) or gensym is None:
+                if not _has_return(body) or done is None:
                     continue
                 # a `return` here cannot move the continuation the way one in
                 # an `if` can: the statements after the loop are reachable
                 # from the loop's *own* exit as well.  So it is recorded in a
                 # flag and the continuation is tested against it.
-                #
-                # The guard wraps the **whole** body, not just the return:
-                # these loops carry state across iterations, and guarding only
-                # the return would keep mutating past the exit.
-                done = gensym.fresh('done')
-                # the result is loop-carried and assigned conditionally, so
-                # it needs an incoming value the way a phi node does -- FPy
-                # requires definite assignment and cannot see that the flag
-                # makes every path cover it.  The seed is dead: `done` being
-                # set implies the loop assigned it, and the tail assigns it
-                # otherwise.
-                seed = Assign(result, None, Decnum('0', stmt.loc), stmt.loc)
-                inner = _sink(result, body, [], depth,
-                              gensym=gensym, flag=done)
-                tail = _sink(result, rest, [], depth,
-                             gensym=gensym, flag=flag)
-                unset = Not(Var(done, stmt.loc), stmt.loc)
-                return list(stmts[:i]) + [
-                    seed,
-                    Assign(done, None, BoolVal(False, stmt.loc), stmt.loc),
-                    ForStmt(
+                inner = _sink(result, body, [], depth, done=done, flag=done)
+                loop: Stmt
+                if isinstance(stmt, WhileStmt):
+                    # folding the flag into the condition stops the loop
+                    # rather than idling it, which is what keeps termination:
+                    # predicating the body alone would spin forever, since a
+                    # dead body never makes `cond` false.  `and` short-circuits
+                    # (it lowers to Python's), so `cond` is not evaluated after
+                    # the return -- it would not have been in the original.
+                    loop = WhileStmt(
+                        And([Not(Var(done, stmt.loc), stmt.loc), stmt.cond],
+                            stmt.loc),
+                        StmtBlock(inner), stmt.loc,
+                    )
+                else:
+                    # a `for` has no condition to fold into, so the body is
+                    # guarded instead -- and the guard wraps *all* of it: with
+                    # `r` assigned once a later iteration cannot overwrite it,
+                    # so only a side effect makes the difference visible, and
+                    # a store after the returning `if` is exactly that.
+                    loop = ForStmt(
                         stmt.target, stmt.iterable,
                         StmtBlock([If1Stmt(
-                            unset, StmtBlock(inner), stmt.loc,
+                            Not(Var(done, stmt.loc), stmt.loc),
+                            StmtBlock(inner), stmt.loc,
                         )]),
                         stmt.loc,
-                    ),
-                    If1Stmt(
-                        Not(Var(done, stmt.loc), stmt.loc),
-                        StmtBlock(tail), stmt.loc,
-                    ),
+                    )
+                tail = _sink(result, rest, [], depth, done=done, flag=flag)
+                # an inner loop can have nothing after it, and an `if` with an
+                # empty body is not a statement the interpreter accepts
+                guarded = [If1Stmt(
+                    Not(Var(done, stmt.loc), stmt.loc),
+                    StmtBlock(tail), stmt.loc,
+                )] if tail else []
+                return list(stmts[:i]) + [
+                    # the result is loop-carried and assigned conditionally,
+                    # so it needs an incoming value the way a phi node does --
+                    # FPy requires definite assignment and cannot see that the
+                    # flag makes every path cover it.  The seed is dead.
+                    Assign(result, None, Decnum('0', stmt.loc), stmt.loc),
+                    # re-initializing a shared flag is harmless: this point is
+                    # reachable only when it is already clear
+                    Assign(done, None, BoolVal(False, stmt.loc), stmt.loc),
+                    loop,
+                    *guarded,
                 ]
             case ContextStmt():
                 body = list(stmt.body.stmts)
@@ -123,7 +141,7 @@ def _sink(
                 return list(stmts[:i]) + [ContextStmt(
                     stmt.target, stmt.ctx,
                     StmtBlock(_sink(result, body, [], depth,
-                                    gensym=gensym, flag=flag)),
+                                    done=done, flag=flag)),
                     stmt.loc,
                 )]
     if not cont:
@@ -131,7 +149,7 @@ def _sink(
         # so this only comes up for a loop body, which falls through.
         return list(stmts)
     return list(stmts) + _sink(result, cont, [], depth,
-                               gensym=gensym, flag=flag)
+                               done=done, flag=flag)
 
 
 class SingleExit:
@@ -157,7 +175,8 @@ class SingleExit:
 
         gensym = Gensym(reserved=DefineUse.analyze(func).names())
         result = gensym.fresh('r')
-        stmts = _sink(result, list(func.body.stmts), [], gensym=gensym)
+        stmts = _sink(result, list(func.body.stmts), [],
+                      done=gensym.fresh('done'))
         stmts.append(ReturnStmt(Var(result, None), None))
         ast = FuncDef(func.name, func.args, StmtBlock(stmts), func.meta,
                       loc=func.loc)
@@ -166,8 +185,7 @@ class SingleExit:
         if left != 1:
             raise TransformDeclined(
                 f'cannot give `{func.name}` a single exit: {left} returns '
-                'remain -- a `return` inside a `while` (whose early exit may '
-                'be its only one), or under a `with` that only sometimes '
+                'remain -- a `return` under a `with` that only sometimes '
                 'returns'
             )
         SyntaxCheck.check(ast, ignore_unknown=True)
