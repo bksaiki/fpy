@@ -1,8 +1,15 @@
 """
 Triton backend: emitting kernel source.
 
-This module holds the scalar half -- expressions, and the straight-line
-statements that bind them.  Loops, memory and the kernel wrapper come later.
+**This module transliterates; it does not rewrite.**  Control flow is
+`normalize`'s job, so an `if` statement arriving here is a bug in the normal
+form, not a case to handle -- predicating one here would duplicate a decision
+`SimplifyIf` and `_emit_where` already make between them.
+
+What it decides is what has no expression in the FPy AST: storage and casts,
+the `mask=` on an access, how a literal is spelled, which op-table signature
+applies.  What it cannot spell it refuses -- never a fallback, and never
+source that fails at `triton.jit`, since a refusal at least names its cause.
 
 **The cast discipline is the point.**  Triton types `fp16 op fp16` as fp16, so
 spelling a product of two fp16 operands as `x * y` computes it *in fp16* and

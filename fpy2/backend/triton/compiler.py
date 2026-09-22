@@ -37,6 +37,7 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import (
+    AssertElim,
     ConstFold,
     FreeVarElim,
     Simplify,
@@ -127,9 +128,9 @@ class TritonCompiler(Backend):
         spec = self._specialize(module)
         return [self._compile_one(spec, entry.name) for entry in spec]
 
-    @staticmethod
-    def _specialize(module: Module) -> Module:
-        """`FreeVarElim` and `ZipElim`, then `Specialize`.
+    def _specialize(self, module: Module) -> Module:
+        """`AssertElim` where asked, then `FreeVarElim` and `ZipElim`, then
+        `Specialize`.
 
         A kernel is executed from a generated file whose namespace holds only
         `triton` and `tl`, so it cannot reference a closure at all -- which is
@@ -142,6 +143,12 @@ class TritonCompiler(Backend):
         indexed loop it becomes ordinary subscripts, which is also what lets
         a comprehension over a `zip` scalarize.
         """
+        if self.drop_asserts:
+            # before the passes, not at emission: an `assert` the caller has
+            # already said to discard would otherwise stop `SimplifyIf`
+            # hoisting the arm that holds it.  Module-wide, since the one that
+            # matters is usually in a callee waiting to be inlined.
+            module = module.map(lambda _m, fd: AssertElim.apply(fd))
         module = module.map(lambda _m, fd: ZipElim.apply(FreeVarElim.apply(fd)))
         return Specialize.apply(module, size_key=True)
 
