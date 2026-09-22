@@ -144,9 +144,16 @@ _UNHOISTABLE: dict[type[Stmt], str] = {
 class _Unhoistable(DefaultVisitor):
     """Why a branch body cannot be hoisted, in two categories.
 
-    ``aborts`` can change whether, or which, value the function produces, so no
-    mode admits it.  ``unproven`` is preserved in value but not in observable
-    effect, which is what ``strict`` governs.
+    ``aborts`` can change which value the function produces, or aborts where
+    the program asked to -- an `assert`, an `fp.cast`, an `ASSERT` overflow.
+    No mode admits it.
+
+    ``unproven`` is what ``strict`` governs: an observable effect that may
+    differ, and a trap the program did not ask for -- a context with nowhere
+    to put an infinity raises, but that is the format's limit, not a
+    requested abort.  The default admits these; :func:`_inline_arm` is what
+    keeps most of them from arising, since an arm it reduces to expressions
+    keeps its guard and is never hoisted.
     """
 
     def __init__(self, ctx_use: ContextUseAnalysis):
@@ -238,8 +245,10 @@ class _Unhoistable(DefaultVisitor):
                 self._abort(
                     'an operation under an `ASSERT` overflow context can abort'
                 )
-            # such a context raises rather than yield the special, and a
-            # guard is often what keeps the operation from producing one
+            # Such a context raises rather than yield the special.  Nobody
+            # asked it to -- unlike `assert`, `fp.cast` or `ASSERT`, the trap
+            # is the context having nowhere to put the result -- so this is
+            # `strict`'s to decline, not an abort.
             if isinstance(resolved, (
                 MPBFixedContext, MPBFloatContext, MPFixedContext,
                 MPFloatContext, MPSFloatContext,
@@ -247,7 +256,7 @@ class _Unhoistable(DefaultVisitor):
                 if type(e) in _POLE_OPS and not (
                     resolved.enable_inf and resolved.enable_nan
                 ):
-                    self._abort(
+                    self._cannot_prove(
                         f'`{type(e).__name__.lower()}` can produce an infinity '
                         'or NaN, which this context cannot hold'
                     )
@@ -257,7 +266,7 @@ class _Unhoistable(DefaultVisitor):
                     MPBFixedContext, MPBFloatContext,
                 )) and not resolved.enable_inf \
                         and resolved.overflow is OverflowMode.OVERFLOW:
-                    self._abort(
+                    self._cannot_prove(
                         'an operation can overflow to an infinity, which this '
                         'context cannot hold'
                     )

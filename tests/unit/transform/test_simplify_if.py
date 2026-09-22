@@ -772,19 +772,29 @@ def logb_guarded_from_zero(xs: list[fp.Real]):
 
 class TestUnrepresentableResults:
     """`fp.logb(0)` is an infinity for a finite operand, and `INTEGER` holds
-    no infinity -- so hoisting it past `x != 0` turns a returning program into
-    a raising one.
+    no infinity -- so *hoisting* it past `x != 0` would turn a returning
+    program into a raising one.
 
-    Refused under *both* modes: this changes whether a value comes out at all,
-    which is the `aborts` category, not the effects-may-differ one.  The
-    condition is representability in the active context, not the operator --
-    the same `fp.logb` under FP64 yields `-inf` and is fine.
+    Two things keep that from happening.  The arm inlines, so `fp.logb` stays
+    inside the lazy `IfExpr` and never runs on the input the guard excluded --
+    which is why the default mode rewrites these and still agrees.  Where an
+    arm cannot inline, `strict` declines: the trap is the format having
+    nowhere to put the result, not an abort the program asked for, so it is
+    `unproven` rather than `aborts`.
+
+    The condition is representability in the active context, not the operator
+    -- the same `fp.logb` under FP64 yields `-inf` and is fine.
     """
 
-    @pytest.mark.parametrize('strict', [False, True])
-    def test_declines(self, strict):
+    def test_strict_declines(self):
         with pytest.raises(TransformDeclined, match='infinity or NaN'):
-            SimplifyIf.apply(logb_guarded_from_zero.ast, strict=strict)
+            SimplifyIf.apply(logb_guarded_from_zero.ast, strict=True)
+
+    def test_the_default_rewrites_and_agrees(self):
+        """Including on `0`, the input the guard excluded."""
+        _no_if_statements(logb_guarded_from_zero)
+        for xs in ([], [0.0], [0.0, 4.0], [8.0, 0.0, 2.0]):
+            _agrees(logb_guarded_from_zero, xs)
 
     @pytest.mark.parametrize('strict', [False, True])
     def test_arithmetic_under_the_same_context_is_accepted(self, strict):
@@ -801,8 +811,7 @@ class TestUnrepresentableResults:
 
         SimplifyIf.apply(adds.ast, strict=strict)
 
-    @pytest.mark.parametrize('strict', [False, True])
-    def test_declines_an_inverse_trig_pole(self, strict):
+    def test_strict_declines_an_inverse_trig_pole(self):
         """`acos` is a pole op by IEEE 754 §7.2: `acos(2)` is NaN."""
         @fp.fpy(ctx=fp.INTEGER)
         def guarded(x: fp.Real):
@@ -812,10 +821,9 @@ class TestUnrepresentableResults:
             return y
 
         with pytest.raises(TransformDeclined, match='infinity or NaN'):
-            SimplifyIf.apply(guarded.ast, strict=strict)
+            SimplifyIf.apply(guarded.ast, strict=True)
 
-    @pytest.mark.parametrize('strict', [False, True])
-    def test_declines_overflow_under_a_bounded_context(self, strict):
+    def test_strict_declines_overflow_under_a_bounded_context(self):
         """The other route to a special is IEEE 754 §7.4 overflow, which turns
         on the context rather than the operation: under a bounded format that
         rounds an overflow to infinity, even `x * y` needs its guard."""
@@ -830,7 +838,7 @@ class TestUnrepresentableResults:
             return z
 
         with pytest.raises(TransformDeclined, match='overflow to an infinity'):
-            SimplifyIf.apply(guarded.ast, strict=strict)
+            SimplifyIf.apply(guarded.ast, strict=True)
 
     @pytest.mark.parametrize('strict', [False, True])
     def test_a_saturating_context_is_accepted(self, strict):

@@ -16,19 +16,20 @@ def simplify_if(
     becomes an `if` expression, with both branch bodies hoisted and each merged
     variable made explicit.
 
+    An arm whose statements are all plain assignments is reduced to one
+    expression per name and placed *inside* the `IfExpr`, which is lazy, so it
+    keeps its guard.  Only an arm that cannot be reduced -- a loop, a list
+    write, a nested `if` left unrewritten by ``where`` -- is hoisted, and only
+    a hoisted arm can be refused.
+
     Hoisting makes a branch body unconditional, so a construct that could
-    change whether -- or which -- value the function produces is declined under
-    every mode, raising :class:`~fpy2.transform.TransformDeclined`: `return`,
-    `assert`, an effect, a list write, `while`, `for`, `fp.cast`, a call to
-    another FPy function, any operation under an `ASSERT` overflow context,
-    and, under a context that cannot hold an infinity or NaN, an operation
-    that could produce one -- a guard excluding the bad input is load-bearing
-    there.  That is either an operation with a pole at a finite operand
-    (`fp.logb(0)`, `fp.sqrt(-1)`, `fp.acos(2)`), or, where the format is
-    bounded and rounds an overflow to infinity, any operation at all.  The
-    `ASSERT` case is keyed on whether an operation consults the rounding
-    context, not on its node class, so `x * x` overflows there exactly as
-    `fp.round(x)` would.
+    change which value the function produces, or that aborts where the program
+    asked to, is declined under every mode, raising
+    :class:`~fpy2.transform.TransformDeclined`: `return`, `assert`, an effect,
+    a list write, `while`, `for`, `fp.cast`, a call to another FPy function,
+    and any operation under an `ASSERT` overflow context.  That last is keyed
+    on whether an operation consults the rounding context, not on its node
+    class, so `x * x` overflows there exactly as `fp.round(x)` would.
 
     ``where`` names one site: an index counting `if` statements in visit
     order, or a cursor or region, which takes the sites at or beneath it.
@@ -37,11 +38,16 @@ def simplify_if(
     refusals, so the value it computes is discarded by the enclosing
     `IfExpr`.
 
-    ``strict`` governs what is left: operations whose value is preserved but
-    whose observable effects cannot be shown to be.  The default hoists them --
-    an out-of-range subscript is behavior FPy already leaves undefined, and a
-    function with no ``ctx=`` inherits its caller's context, so no operation in
-    it can be shown not to overflow.  ``strict=True`` declines them.  It is
+    ``strict`` governs what is left: an observable effect that cannot be shown
+    to be preserved, and a trap the program did not ask for.  The default
+    hoists them -- an out-of-range subscript is behavior FPy already leaves
+    undefined; a function with no ``ctx=`` inherits its caller's context, so no
+    operation in it can be shown not to overflow; and a context that cannot
+    hold an infinity raises where a wider one would return, which is the
+    format's limit rather than a requested abort.  That last covers an
+    operation with a pole at a finite operand (`fp.logb(0)`, `fp.sqrt(-1)`,
+    `fp.acos(2)`) and, where the format is bounded and rounds an overflow to
+    infinity, any operation at all.  ``strict=True`` declines them.  It is
     therefore conservative in an unannotated function and most useful after
     :func:`monomorphize`, which makes contexts concrete.
 
