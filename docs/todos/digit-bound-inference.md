@@ -1,14 +1,14 @@
 # Digit-bound inference: fixed-point precision for `fused_sum`
 
-**In progress.** `examples/mmasim/models/utils.py:28` aligns every summand at a
+**Landed.** `examples/mmasim/models/utils.py:28` aligns every summand at a
 run-time position and sums them exactly. The rounded summands have precision
 `F + 2` and the sum `F + 2 + ceil(log2 L)`; `FormatInfer` alone reports
-`RealFormat()` for both, so no storage can be selected and the models do not
-lower. This page is about deriving those two numbers.
+`RealFormat()` for both, so no storage could be selected and the models did
+not lower. This page is why those two numbers are derivable, and what the
+derivation still cannot do.
 
-[What landed](#what-landed) has the analysis; [What is left](#what-is-left) is
-the remaining distance to a compiled program. Measurements are at `12fdef0c`
-with this branch applied.
+[What is left](#what-is-left) is the remaining distance; the corpus is at
+**14/16**.
 
 ## The shape
 
@@ -362,7 +362,10 @@ integers, decreasing, and bounded below by the truth — but it should be capped
 the way `loop_iter_limit` caps the existing one, and it is not worth building
 until a program needs it.
 
-### Use z3's `Optimize`
+### What the store holds
+
+The backend now answers by bisection (`Z3Solver.bisect`); `Optimize` is kept
+only for the differential test.
 
 The whole store for `make_t_fdpa(FP16, FP16, FP32, F=24)`:
 
@@ -657,122 +660,16 @@ verification ones.
 
 ## What landed
 
-Measured at `d8e836b5` with `fpy2/` and `examples/` carrying this branch.
+`fpy2/analysis/digit_bound/` — an affine constraint store over integer
+exponents (`store.py`, `solver.py`) and a walk that states the constraints
+(`infer.py`), read by `FormatInfer` under `use_digit_bounds` as a reduced
+product: the non-relational pass supplies the seeds, the relational one the
+precisions. `Specialize` keys a spec on the bounds its caller derived, so a
+callee analyzed for two callers does not share one answer.
 
-- **Contexts keep their shape.** A `with` whose expression does not reduce
-  becomes a `PartialContext` — constructor known, arguments filled where they
-  evaluated — instead of a bare symbolic variable. This also fixed a soundness
-  bug: `_resolve_active_ctx` substituted the *caller's* context for any
-  unresolved scope, so an inner `with fp.MPFixedContext(n):` read as the
-  caller's and the rounding looked like the identity.
-- **Call sites pin what they know.** `FunctionFormat` carries argument values
-  and store terms in both directions, so a callee's rounding cancels against a
-  position its caller built.
-- **The store.** `fpy2/analysis/digit_bound/store.py` — affine `Term`s, linear
-  constraints including a disjunctive `le_max`/`ge_min`, and one query, backed
-  by z3's `Optimize`.
-- **The pass.** `fpy2/analysis/digit_bound/infer.py` — `DigitBoundInfer.analyze(func,
-  view)` returning the constraint system and what names it. A reduced product
-  with `FormatInfer`, which runs it between two passes of its own.
-- **Rules** for the operators in the cancelling tier, element-wise summaries on
-  both the comprehension and the desugared loop form, and the `lsb` field that
-  lets an aligned sum keep its summands' grid.
-- **Partial writes.** A loop that fills only part of a list still bounds it:
-  every element a read can reach was written by one of the writes, because an
-  element no write reaches is uninitialized and reading it is undefined. That
-  removes the tiling proof `join` would otherwise need, and the bound is
-  stated once per loop — per iteration it would name the loop-carried value on
-  both sides of a `<=max` and say nothing.
-- **One level of guard sensitivity.** `e_zero if p == 0 else exponent(a) +
-  exponent(b)` is reached with `e_zero` only where `p` is zero, whose `logb` is
-  below every bound. `ge_min(m, [iff, logb(subject) - 1])` states exactly
-  that — either `iff` is the answer, or nothing the subject's magnitude bounds
-  has to hold — and it is what ties `e_max` back to the products. It cost the
-  `logb` lower seed, which now sits on the `logb` *expression*, where the
-  argument may be taken as non-zero: pinning every `msb` above a format's least
-  non-zero value made a zero's own reading contradictory, and an unsatisfiable
-  store reads as `-inf`.
-- **A guard no path names.** `all([p == 0 for p in group]) or scale == 0`
-  zeroes `sum(group) * scale`, one annihilation step from either disjunct.
-  The store satisfies a `ge_min` *once*, so a disjunct naming a value only one
-  path zeroes lets it drive the merge down while the value the bound is about
-  stays high; what is usable is the intersection over paths, closed under what
-  annihilates.  It is stated *beside* the plain arm merge rather than instead
-  of it -- the vacuity disjunction alone leaves the merge free below, and an
-  absolute position is as necessary as a relative one.
-- **Two returns.** A function returning on two paths used to keep a term only
-  where both named the *same* one, which is what a callee's rounding needs to
-  cancel against its caller's position -- but it threw away everything else.
-  The paths join now, and a path returning nothing but infinities and NaNs is
-  skipped outright: `logb` bounds the finite values and that path has none.
-  A call's result also picks up the bound its *site* knows, which is where a
-  branch the caller refined away gets stated.  `amd.py`'s `overflow_inf` is
-  the shape, and it was the whole of CDNA3's `fused_sum`: `msb(xs) - n` went
-  from 84 to 26 against a target of 25.
-- **A binary `Add` consults the store.** It ran for `Sum` and `Round`/`Cast`
-  only, and the reason `Sum` gives holds just as well one add at a time:
-  adding over *formats* drops the shared grid the summands were rounded onto.
-  Two values aligned at a run-time position span whatever that position
-  reaches, where their difference is the handful of digits the alignment
-  left -- 249 bits against the store's 39, for CDNA3's `t + cr`.
-- **Tuple and `zip` elements.** A `zip`'s fields are the operands' elements,
-  whether the walk meets it as a `Zip` or as a list a loop materialized —
-  comprehension elimination leaves one form, `_to_statement_form` the other.
-- **Upstream, on `main`.** #295 gave `join` a known length; #296 exempted
-  `Empty` from the operators needing a resolvable context and had an unbounded
-  fixed-point context take its storage from the value's inferred format; #297
-  fixed the last emitter path still asking the context. Together they removed
-  every compile blocker this doc listed.
-
-Against the interpreter, adversarially:
-
-| | inferred | actual |
-|---|---|---|
-| `max([logb(x) for x in xs])`, round at `e-12` | 13 | 13 |
-| the same over `x * y`, aligned at `max(logb x + logb y)` | 14 | 14 |
-| `sum` of 32 such terms | 18 | 18 |
-| a rescaled rounding at `logb(x) - k`, `k = 12` | 12 | 12 |
-
-Equal on the comprehension and desugared forms alike.
-
-### A program compiles
-
-The pipeline that gets furthest:
-
-```python
-st.simplify(st.rescale_fixed(st.comp_to_loop(f)))
-```
-
-`comp_to_loop` first is what makes `rescale_fixed` apply: a rounding inside a
-comprehension has no statement-level position for the scale-in and scale-out
-statements the rewrite emits, and lowering the comprehension gives it one. The
-other order declines silently, leaving the emitter to refuse the untouched
-`MPFixedContext(e - 12)` as symbolic.
-
-The context must also name `RM.RTZ`: integer storage rounds by the cast, and
-C++ integer conversion truncates. It then compiles to the code the models
-want:
-
-```cpp
-assert((std::fabs(std::trunc(_t)) <= 4096) && "fpy: overflow occurred so rounding is undefined");
-int16_t _tmp7 = static_cast<int16_t>(_t);
-```
-
-`4096` is `2 ** 12`, which the store derives. #296 made an unbounded
-fixed-point context take its storage and its bound from the rounded value's
-inferred format rather than from itself, and #297 fixed the last emitter path
-still asking the context. Before that, `float_to_fixed` stated such a bound as
-a claim with `OverflowMode.ASSERT`, which only helped the output those
-transforms generated.
-
-**This analysis is what makes it compile at all**, not merely what makes it
-narrow. Without the branch the rescaled rounding's format spans the operand's
-whole reach:
-
-| | inferred format | storage |
-|---|---|---|
-| `1f493b6a` alone | `nmin=-37`, `maxval ~ 2**73` | none — storage selection fails |
-| with this branch | `pmax=12, emin=11` | `int16_t`, bound `4096` |
+Contexts keep their shape across a call (`PartialContext`), and a call site
+pins what it knows in both directions, which is what lets a callee's rounding
+cancel against a position its caller built.
 
 ## What is left
 
@@ -866,168 +763,19 @@ it is the other route.
 
 ## Audit findings
 
-Three audits, after the corpus was brought to 13/16 by following one blocker at
-a time.  The worry that prompted them -- that the result is a pile of special
-cases rather than a design -- is borne out in one specific way: **the same
-concept is repeatedly implemented in one of the two places it occurs**, because
-FPy lowers programs and only the lowered form was ever exercised.
-
-Each item says who confirmed it.  "verified here" means reproduced
-independently of the audit that raised it; "reported" means the audit's
-evidence only.
-
-### Unsound
-
-- [x] **Seed misalignment across a dropped parameter.**  `_drop_dead_args`
-      rebuilds a spec with fewer parameters *after* `_expand` captured its
-      seed, and `analyze` binds terms positionally with `zip`, which truncates
-      in silence.  **19 misaligned seeds on the corpus today** (verified here);
-      they survive only because every dropped parameter happens to be the last,
-      so the truncation is harmless.  Drop any earlier one and every following
-      parameter inherits the previous argument's terms.
-      *Fixed:* `_drop_dead_args` takes `seeds` and reindexes alongside the
-      parameters it drops, and `analyze` raises on an arity mismatch rather
-      than letting `zip` truncate.  19 -> 0 on the corpus.
-- [x] **One spec, two seeds.**  `_bounds_fingerprint` hashes only `by_def`, so
-      two call sites whose *relational* context differs share a spec, and the
-      seed is whichever `_expand` reached first.  Verified here: a callee with
-      no assignments, called once with its rounding position tied to the value
-      rounded and once untied, yields a single spec with one name.
-      *Fixed:* `_bounds_fingerprint` covers `by_expr` as well -- the two maps
-      together are what the backend reads, so specs agreeing on both emit the
-      same code.  `by_expr` contributes its bounds without their keys:
-      rendering every expression to key them cost 40% of compile time and
-      what separates two callers is the bounds either way.
-- [x] **A zero-trip loop takes the body's element.**  `_visit_for` gives a
-      *list* phi the body's terms unconditionally.  That is vacuous when the
-      pre-loop value is an `Empty`, which is the case `_carried` was written
-      for -- but wrong when it is a real list.  The scalar branch beside it
-      already joins with `pre`; the list branch skips it.  (reported)
-      *Fixed:* shares only where zero trips really is vacuous -- an `empty`
-      has no element, and a *covering* write runs as many times as the list is
-      long -- and joins with `pre` otherwise.
-- [x] **Floor/Ceil/RoundInt/NearbyInt are off by one.**  The rule is
-      `logb(round_to_int(a)) <= max(logb a, 0)`, but only `Trunc` rounds toward
-      zero: `ceil(1.75) = 2` has `logb 1` where the rule claims `0`.  True by
-      arithmetic.  *Fixed:* `Trunc` keeps the old rule, the rest carry.
-- [x] **`_round_will_carry`'s RTO test proves the wrong direction.**  It asks
-      whether the value *always* truncates to zero, where the no-carry branch
-      needs *never*.  When neither is provable it takes no-carry and states
-      `le(t, src)`, false whenever the value falls below one quantum.  (reported)
-      *Fixed:* `RTO` carries with the rest.  Taking the exception needs proof
-      the value *never* truncates, and the store answers the greatest
-      precision, not the least -- so the honest options were "carry" or a
-      mid-walk query that makes the rule depend on emission order.  Dropping
-      the query also removes that order dependence.
-- [x] **Every magnitude rule ignores the active rounding context.**  `Add`,
-      `Abs`, `Mul` and the rest state the bound for the *exact* result; in FPy
-      the expression denotes the result rounded at the enclosing context, which
-      can carry out of that binade.  `Round`/`Cast` are the only cases that
-      model a carry.  Systemic rather than per-rule, and it bites hardest in
-      the target setting -- arithmetic inside a coarse `MPFixedContext`.
-      (reported; the largest item here)
-      *Fixed:* `_active` applies the active context once, centrally -- the
-      rules bound a fresh term and the expression reaches one binade further
-      -- and puts the quantum under the grid, since a rounded value has no
-      digit below it.  The grid floor pays for the carry: the corpus is
-      unchanged at 13/16.
-- [x] **A refined bound escapes the path it holds on.**  `_visit_call`
-      emits `le(sub.ret.logb, hi)` from the call site's own range, but for a
-      callee that returns an argument verbatim `sub.ret.logb` *is* the caller's
-      variable for that argument, and `hi` may be branch-refined.  (reported;
-      the attribution was wrong, and diagnosing it found a *second*, larger
-      leak of the same shape.)
-      *Diagnosed:* `_visit_assign` bound a definition to its expression with
-      an **equality**, so the definition's own seed -- which branch
-      refinement narrows to the path the assignment sits on -- was stated
-      about the expression, whose term every use shares.  `y = x` under
-      `if x < 1 and x > -1` pinned `x` to `|x| <= 1` *everywhere*: reported
-      `max logb(x) = 0` against FP64's 1023.  That masked the `_visit_call`
-      one, which is real and separate.
-      *Fixed:* the assignment states a one-directional bound, and the call
-      site states its bound only on a term the callee minted -- not on one it
-      was handed.
-- [x] **Stochastic rounding is not modelled.**  `_round_will_carry` decides on
-      `rm` alone; stochastic `RTZ` rounds *away* from zero.
-      `MPFixedContext.is_stochastic()` exists and neither analysis calls it.
-      (reported; no corpus design uses one)
-      *Fixed:* `_rounding` reports no mode for a stochastic context, and an
-      unresolved mode is already assumed to carry.
-- [x] **`_tighter` drops the special values.**  `alt` is built with the
-      infinities, NaN and negative zero cleared, and containment accepts it.
-      All 1610 takes on the corpus drop at least `has_neg_zero`, which is what
-      keeps a value off the integer rungs of the C++ ladder.  `has_finite`
-      exists but is consulted only at `_visit_return`.  (reported; no exploit
-      built)  *Fixed:* `alt` keeps whichever specials the incoming format
-      admits instead of clearing them.
-- [x] **`_forced_zero` reads a single-element test as a whole-list fact**, and
-      **`_vacuous` sweeps expressions from other iterations and branches**.
-      (reported, reasoning only)
-      *Fixed (the first):* a `Sum` is zero only where the atom is zero on
-      *that* path **and** came from an `all(...)` over the whole list --
-      `xs[i] == 0` says nothing about the other summands.  Getting the
-      per-path half wrong cost a design until caught, which is the argument
-      for both halves.
-      *Fixed (the second), and not as reported:* the **sweep is inert**.
-      `ge_min` is a disjunction, so a disjunct accepted from another branch or
-      iteration only ever weakens it and can never falsify the constraint --
-      a dominance filter would have closed nothing.  What breaks is the
-      *base case*, the guard's own subject, against `value_of(Logb)`: that
-      rule floors a `logb`'s term at its argument's minimum exponent
-      **path-insensitively**, so reading `logb(x)` in the sibling arm floors
-      `msb(x)` on the very path where `x` is zero and has no exponent.
-      `_vacuous` then offers `msb(x) - 1` as a disjunct and the merge is pushed up
-      to that floor.  Two rules, each right alone, contradicting each other.
-      Verified end to end: a kernel guarding `x == 0` with a sentinel
-      exponent and rounding an *unrelated* value emitted `float` where
-      `double` was needed and returned `65536` for `65535.999999940395`.
-      The corpus escaped by numeric accident -- `nv.py:157` is the same
-      shape and survives only because its `e_zero` sits above that disjunct's
-      floor.  `_usable` now states such a disjunct only while the store admits it at
-      or below the `then` arm, and `_check_vacuous` re-asks once the walk is
-      over, the mid-walk read being the one thing that could go stale
-      (never does on the corpus; deferring the emission instead costs a
-      design).  13/16 -> 14/16 unchanged; regression test
-      `test_the_sentinel_stands_when_another_value_is_rounded`.
-      **The root is not localisable in this domain**, which is why the
-      check sits at the merge rather than at the floor.  `logb(x)` *is*
-      `msb(x)`: the read denotes no new quantity, so "x is non-zero on the
-      path through this read" has no term of its own, and a store with no
-      notion of path states it about every path or not at all.  Minting a
-      per-read term does not help -- tie it below and the floor leaks
-      through anyway, tie it above and the position is overstated, which
-      understates precision.  Nor can the floor simply go: measured, the
-      corpus still reaches 14/16 without it, but 30 unit tests do not, and
-      they are the core capability (`TestSelfAnchoredRounding`,
-      `TestAnchorsAcrossACall`, the guarded-exponent anchor).  A real fix is
-      a path-sensitive store, which is the same redesign
-      [symbolic-exponent-inference.md](symbolic-exponent-inference.md)
-      contemplates for the relational half.  Until then the floor stays
-      stated too widely and the one place its overreach is detectable
-      refuses to build on it.
-
-### Latent
-
-- [x] **`_logbs`/`_grids` drop operands where `_join` refuses to.**  A
-      `le_max` over a strict subset of operands is unsound; `_join` guards
-      all-or-nothing and the emitters do not.  Instrumented over 2850 tests:
-      every drop was all-or-nothing and non-real, so no live bug -- but the
-      guard is missing and the `Floor` family's `+ [0]` already turns an
-      all-drop into a bound rather than silence.
-      *Fixed:* both are all-or-nothing now, as `_join` is.
+Three audits, after the corpus was brought to 13/16 by following one blocker
+at a time. The worry that prompted them -- that the result is a pile of
+special cases rather than a design -- is borne out in one specific way: **the
+same concept is repeatedly implemented in one of the two places it occurs**,
+because FPy lowers programs and only the lowered form was ever exercised.
+Everything the audits found is fixed except the holes below, which lose
+precision but are sound.
 
 ### Capability holes -- the same concept in one of two places
 
 **Out of scope for now** -- these lose precision but are sound, so they are
 left for a later pass.
 
-- [x] **`Range1` in a comprehension.**  `_visit_for` registers `for i in
-      range(len(xs))` as covering; `_visit_list_comp` had no such case.
-      Verified here: the identical computation gives **prec 9** as a loop or as
-      `[f(x) for x in xs]`, and **285** as `[f(xs[i]) for i in range(len(xs))]`
-      -- which is the form `ZipElim` itself emits.
-      *Fixed* along with index-set instantiation, which needs the same two
-      readings of a range in both places to hold of the comprehension form.
 - [ ] **`zip` in a loop.**  The exact dual: `_visit_list_comp` handles
       `(TupleBinding, Zip)`, `_visit_for` does not.  `for a, b in zip(A, B)`
       appears in the corpus source.
@@ -1047,160 +795,45 @@ left for a later pass.
       `_partial`/`_fields`/`_elt_expr` propagation; `WhileStmt` gets none.
       Sound, and mmasim has no `while`.
 
-### Comments and dead code
+## The floor under `logb` is stated too widely
 
-- [x] **The index-set comment is false.**  It says `xs[i]` "always *inherits*
-      the summary's bounds whatever `i` is"; the code gates inheritance on
-      `_covers` too.  Verified here: covering **9**, non-covering **285**.  The
-      comment describes a design that was measured, found to buy nothing on the
-      corpus, and reverted -- then written up as if it shipped.
-- [x] Two more stale comments: the zero-arm comment credits `_merge_returns`
-      with a drop that lives in `_visit_return`, and `_merge_returns`' own
-      docstring describes a fast path that never runs.
-- [x] **Dead arms.**  Re-measured after the fixes, over the corpus *and*
-      `tests/unit/{analysis,transform,backend}`: **17 unhit executable lines
-      of 471**, and the audit's list had gone stale -- `Copysign`,
-      `Mod|Fmod|Remainder` and the `Floor` arm are all reached once the
-      backend tests are included, and `Exp2` in `_exp2_arg` is reached by the
-      new rounding tests.  What is still unhit is defensive: `bounds()`'
-      open-value guards, the seed-arity raise, the public entry's type check.
-      Those are soundness guards and stay -- untested is not unreachable.
+`value_of(Logb)` floors a `logb`'s term at its argument's minimum exponent on
+the precondition that the argument is non-zero -- and states it on *every*
+path, so reading `logb(x)` in one arm floors `msb(x)` on the sibling arm where
+`x` is zero and has no exponent.  `_vacuous` then offers `msb(x) - 1` as a
+disjunct and the merge is pushed up to that floor.  Two rules, each right
+alone, contradicting each other: it emitted `float` where `double` was needed
+and returned `65536` for `65535.999999940395`.
 
-      Removed: `_merge_returns`' same-term path, a redundant phi branch in
-      `_universal_zeros`, and `format_infer`'s own `_round_will_carry` -- 36
-      lines with **no call site at all**, carrying the RTO argument this
-      audit has since disproved.  Also `store.prec_at` lost its only caller
-      when RTO was fixed; it is still exercised by `test_digit_bound.py` and left
-      as store API.
+**The root is not localisable in this domain.**  `logb(x)` *is* `msb(x)` -- the
+read denotes no new quantity -- so "x is non-zero on the path through this
+read" has no term of its own to sit on, and a store with no notion of path
+states it about every path or not at all.  Minting a per-read term does not
+help: tie it below and the floor leaks through anyway, tie it above and the
+position is overstated, which understates precision.  Nor can the floor simply
+go -- the corpus still reaches 14/16 without it, but 30 unit tests do not, and
+they are the core capability (`TestSelfAnchoredRounding`,
+`TestAnchorsAcrossACall`, the guarded-exponent anchor).
 
-      Worth knowing: the **symbolic-rounding-position path is dead on the
-      corpus** -- `RescaleFixed` turns it into a `Pow(2, k)` scale -- so the
-      branch this analysis is named for is kept alive by unit tests alone.
-- [x] **`Or`/`AllOf` in `_zero_paths` serve one source line** (`gst_fdpa`'s
-      guard, 8 firings corpus-wide).  Not wrong; should say so.
+So the floor stays, stated too widely, and the one place its overreach is
+*detectable* refuses to build on it: `_usable` states a vacuous disjunct only
+while the store admits it at or below the `then` arm, and `_check_vacuous`
+re-asks once the walk is over, the mid-walk read being the one thing that
+could go stale.  A real fix is a path-sensitive store.
 
-### Performance -- after the above
+## Still open from the performance work
 
-**74s to 20s on the corpus**, a 73% cut, and **5,672 z3 invocations to
-3,138**.  Half the remaining time went to a change that touches no solver at
-all -- see *A spec key is a value*, below.  The starting point is itself above the 81.7s measured before the
-audit: the non-finite-path rule leaves more bounds finite, so `_tighter` has
-more to ask about -- 14,996 asks against 8,229.
+The corpus went 74s -> 20s and 5,672 z3 invocations -> 3,138, almost entirely
+by asking the solver less often rather than by making it faster.
 
-Every win came from *which question is asked, and when*.  Nothing that made
-the solver itself faster survived measurement.
-
-- [x] **A spec key is a value, not a string.**  36s -> 20s, and no solver
-      call changed.  `_SpecKey` held SHA-1s of rendered formats, so every
-      callee at every fixpoint round paid to `repr` each of its bounds and
-      sort them.  The fields are now the values themselves -- `_Pin` for what
-      an argument type pins, a `frozenset` of `_DefBound`/`_ExprBound` for
-      what the caller derived inside -- so equality is structural, exact, and
-      order-independent by construction.  A string survives only in
-      `_mangle_private`, which labels the emitted symbol and is the one place
-      a key becomes text.
-- [x] **Run the relational half only where it is read.**  40s -> 36s.
-      `FormatInfer.analyze` takes `digit_bounds`, **off by default**: a caller that
-      reads a relational bound asks for it.  Only two do -- `Specialize`,
-      whose spec key carries those bounds so two callers with different
-      context do not share a spec, and the emitter, where storage selection
-      is the one consumer.  `RoundElim` and the rounding rewrites in
-      `transform/utils.py` do not: eliminability is a question about a
-      rounding's *operand*, which the non-relational pass settles alone.
-      Verified byte-for-byte -- with the hash seed pinned, the emitted C++ is
-      identical either way.
-- [x] **Ask a decision question before an optimisation.**  The biggest one,
-      74s -> 59s.  But not in the form proposed here: the condition suggested
-      was `alt.prec <= cur.prec`, and measured over the corpus that settles
-      only **4.8%** of the asks.  Containment fails on the *quantum* or the
-      *bound* far more often -- 32.5%, against 10% that are used at all.
-      `DigitBoundAnalysis.escapes` asks those two before `bounds` costs three
-      optimisations.  Verified exact rather than argued: every call was run
-      both ways over the corpus, **5,641 skips, zero disagreements**.
-- [x] **Ask the disjunct that settles it first.**  46s -> 40s, and 5,672 z3
-      invocations -> 3,925, from reordering two lines.  `escapes` stops at
-      the first question that reaches -- and the magnitude settles **1,747**
-      of the 1,778 skips against the grid's **31**, so asking the grid first
-      bought a wasted solver call almost every time.
-- [x] **Give a component a plain solver beside its `Optimize`.**  57s -> 54s.
-      A `check` does not need `Optimize`'s machinery and is markedly faster
-      without it -- 6.5ms to 3.8ms per decision.
-- [x] **Merge components that are asked about together.**  59s -> 57s.  Over
-      half the queries named two components -- an `msb` and the `lsb` beside it
-      are related by nothing but the question -- and an objective spanning
-      several matched no cache, so its solver was rebuilt every time.
-- [x] **Bisection, which now wins.**  54s -> 46s, **all 1,305 answers
-      identical** to `Optimize`'s.  This *reverses* the earlier reading here.
-      Not the engines but the encoding: refutation reuses the plain solver
-      the decision questions already built, where `Optimize` is a second
-      encoding of the same component.
-- [x] ~~Dedupe `le_max`'s disjuncts~~ -- **zero** of the corpus's 7,306
-      `<=max` constraints have a repeated arm now.
-
-Measured and **rejected**, each with the number that killed it:
-
-- `smt.arith.solver=2`: 53s -> 49s on the `Optimize` path, **nothing** over
-  bisection (43.5s against 43.3s).
-- **Bounding the integers** so branch-and-bound is finite: **no gain** (44.5s
-  -> 44.1s at a box of `2**40`, *slower* at `2**20`).
-- **All three of `bounds`' objectives in one box-mode `Optimize`**: **61s
-  against 39s**.
-- **`mag - exp + 1` instead of the third query**: **3/16**.  The three maxima
-  really are independent, and the precision is the one that is load-bearing.
-- **A precision disjunct in `escapes`**: it *would* be exact -- the escape
-  clause for a value inside the format's subnormal region needs `mag - exp +
-  1 <= prec`, and `bounds` already caps its answer there, so the clause
-  cannot fire on `alt`.  But it is a wash: **3,161 calls against 3,138**,
-  trading 45 optimisations for 68 checks.  Not worth the code.
-- **Interval propagation as a pre-filter**: sound where it fires and settles
-  **488** of 2,620 threshold questions -- but only negative ones, and an
-  over-approximation cannot prove a value *reaches* a threshold, which is
-  1,778 of them.
-- **Memoising the analyses**: 645 calls over 176 functions, only **75 exact
-  repeats**.  The query memo already earns its keep -- clearing it on every
-  one of 79,145 constraints costs nothing, because **no answer is ever
-  recomputed after a clear**: the walk states its constraints and asks
-  afterwards.
-
-Two things learned that are not performance matters:
-
-- **The emitted code was not reproducible across runs**, which made a
-  byte-comparison of two builds useless until the seed was pinned.  A spec's
-  mangled name is a digest of its bounds, and `SetFormat`'s dataclass `repr`
-  rendered a `frozenset` -- whose order follows element hashes, and a
-  `Special`'s hash is salted per process.  `SetFormat.__repr__` sorts now.
-  Bodies were always identical; only the names moved.
-- **Specialization runs to a fixpoint, not a fixed number of rounds** --
-  two or three on the corpus, capped at eight.  The second round always
-  renames without changing how many specs there are (`+N -N`, every design),
-  which looks like churn and is not: stopping after the first gives
-  **3/16**.  Round one specializes, round two re-derives each callee's
-  bounds now that it has a spec of its own, round three confirms.
-
-  What a round is compared *by* is now the `_Instance`s it produced rather
-  than the names it gave them.  A name would nearly do, being a digest of
-  the instantiation -- but a public entry keeps its own name, so however
-  much its instantiation sharpened the comparison could not see it, and the
-  loop could stop a round early.  Same two-or-three rounds on the corpus,
-  and the same output; one fewer thing decided by a string.
-
-Where the remaining 36s sits: 3,138 solver calls, 1,068 full optimisations
-from `bounds` and 2,070 capped decisions, together about half the time.  The
-other half is the two analyses walking the program.
-
-`Solver` keeps exactly two methods.  The decision question is *not* a third:
-`maximize` takes a `cutoff`, which says the caller will not distinguish
-anything at or above it, so the backend may stop at one refutation and answer
-`inf`.  Every answer stays an upper bound, so a backend that ignores the
-cutoff is still correct -- which keeps the interface honest rather than a z3
-feature leaking through a `getattr`.
-
-Still open: **87% of the binade runs that remain change nothing** -- 447 of
-511 produce formats identical to the first pass alone.  Neither cheap
-predictor tried separates them: "the first pass left a `RealFormat`" misses
-61 of the 64 that matter, and "the function computes a context at run time"
-misses 31.  A predictor would be worth more than anything left on the solver
-side.
+- **87% of the runs that remain change nothing**: 447 of 511 produce formats
+  identical to the first pass alone. Neither cheap predictor tried separates
+  them -- "the first pass left a `RealFormat`" misses 61 of the 64 that
+  matter, and "the function computes a context at run time" misses 31. A
+  predictor would be worth more than anything left on the solver side.
+- The **symbolic-rounding-position path is dead on the corpus** --
+  `RescaleFixed` turns it into a `Pow(2, k)` scale -- so the branch this
+  analysis is named for is kept alive by unit tests alone.
 
 ## Open questions
 

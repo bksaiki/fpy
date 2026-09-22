@@ -11,7 +11,7 @@ trip counts and `_implied_mask` both guards -- and every cell of the grid gives
 the same answer.
 
 This module pins all four, so a change that costs one of the facts again has to
-say which cell it changed.  See `docs/todos/finiteness-refinement.md`.
+say which cell it changed.
 """
 
 import pytest
