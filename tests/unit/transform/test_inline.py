@@ -124,3 +124,44 @@ class TestFuncInline():
         inlined_fn = Function(inlined)
         for xv in (0.0, 1.5, -3.25, 10.0):
             assert a(xv) == inlined_fn(xv)
+
+    def test_a_call_inside_a_comprehension_is_refused(self):
+        """Splicing the body would put it outside the comprehension.
+
+        The callee's statements go into the *enclosing block*, where the
+        comprehension's targets are not bound -- so inlining here used to
+        emit a reference to an unbound name and raise `FPySyntaxError` from
+        the pass's own `SyntaxCheck`.  Left in place instead, so the refusal
+        is a call that remains rather than a crash.
+        """
+        @fp.fpy
+        def twice(x: fp.Real) -> fp.Real:
+            t = x * 2
+            return t
+
+        @fp.fpy
+        def uses_comp(xs: list[fp.Real]) -> fp.Real:
+            ys = [twice(xs[i]) for i in range(len(xs))]
+            return ys[0]
+
+        inlined = fp.transform.FuncInline.apply(uses_comp.ast, recursive=True)
+        assert _count_fpy_calls(inlined) == 1, 'the call should be left alone'
+        fn = uses_comp.with_ast(inlined)
+        assert repr(fn([1.0, 2.0])) == repr(uses_comp([1.0, 2.0]))
+
+    def test_a_call_outside_the_comprehension_still_inlines(self):
+        """The iterables are expressions of the enclosing block, so a call
+        there is in an ordinary position and is inlined as usual."""
+        @fp.fpy
+        def pick(xs: list[fp.Real]) -> fp.Real:
+            t = xs[0]
+            return t
+
+        @fp.fpy
+        def uses_comp(xs: list[fp.Real]) -> fp.Real:
+            ys = [x * pick(xs) for x in xs]
+            return ys[0]
+
+        inlined = fp.transform.FuncInline.apply(uses_comp.ast, recursive=True)
+        fn = uses_comp.with_ast(inlined)
+        assert repr(fn([2.0, 3.0])) == repr(uses_comp([2.0, 3.0]))
