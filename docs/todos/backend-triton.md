@@ -308,6 +308,35 @@ tile width as one too.  Both are the principle *Not recommended* states for
 the batch dimension: say it in the program rather than invent a convention.
 A missing tile-width parameter is a refusal, not a guess.
 
+### Launching — `fpy2/backend/triton/launcher.py`
+
+`launch(src, args, block=...)` runs an emitted kernel on torch tensors, and
+**the emitted kernel agrees with the interpreter bit-for-bit** on an sm_70
+card — checked at `n` of 1, 6, 8 and 9 against a `BLOCK` of 4 and 8, so a
+full tile, several tiles, and three different partial tiles all ran.
+
+**Triton has no CPU target.**  Mainline builds `amd` and `nvidia` only, and a
+CPU tensor fails with *"Pointer argument cannot be accessed from Triton"*.  So
+`triton` importing is not enough to run anything: `unavailable()` checks torch,
+triton *and* a device, and the tests skip on its answer.
+
+Two constraints the hardware taught, neither guessable from the source:
+
+- **A `@triton.jit` function must live in a file.**  It reads its own source
+  back with `inspect.getsourcelines`, so `exec` into a namespace fails with
+  *"@jit functions should be defined in a Python file"* — the same constraint
+  `@fp.fpy` has, for the same reason.  The launcher writes the kernel out and
+  imports it.
+- **A `tl.constexpr` does not survive a copy.**  `SplitLoop` binds the factor
+  to a temporary, and `tl.arange`'s arguments must be `constexpr`, so a tile's
+  width has to reach `arange` as the parameter itself.  The emitter resolves
+  it back through the copies that bound it.
+
+`enable_fp_fusion` is read off the `KernelSource` rather than taken from the
+caller: whether contracting a multiply-add is observable is a property of the
+program, and letting a launcher override it would make the answer depend on
+who ran the kernel.
+
 ### Target description — `fpy2/backend/triton/`
 
 `types.py`, `storage.py`, `target.py`; 37 tests, no emitter. `StorageInfer` runs
@@ -614,7 +643,7 @@ The ordering is the useful content.
 | 1. Triton normal form | built, less the 8 loop-shaped refusals |
 | 2. Split and vectorize | built, less the emitter's half |
 | 3. Emitter | 4–6 weeks |
-| 4. Launcher + harness | 2–3 weeks; needs a GPU in CI |
+| 4. Launcher + harness | launcher built and differential passing; CI wiring remains |
 | 5. `tl.dot` | blocked; see the item |
 
 Items 1–2 are all interpreter-testable, so they parallelize with each other and

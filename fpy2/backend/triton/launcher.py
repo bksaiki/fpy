@@ -1,0 +1,124 @@
+"""
+Triton backend: running an emitted kernel.
+
+Everything here needs hardware.  Triton compiles for `amd` and `nvidia` only
+-- there is no CPU target in mainline, and handing a kernel a CPU tensor fails
+with *"Pointer argument cannot be accessed from Triton"* -- so importing
+`triton` successfully is not enough to run anything.  :func:`unavailable`
+answers all three questions at once, and every entry point here checks it.
+"""
+
+from collections.abc import Sequence
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from tempfile import mkdtemp
+from typing import Any
+
+from ..backend import CompileError
+from .emitter import KernelSource
+
+__all__ = ['launch', 'load_kernel', 'unavailable']
+
+
+def unavailable() -> str | None:
+    """Why an emitted kernel cannot be run here, or ``None`` if it can.
+
+    Three separate requirements, and the third is the one that surprises:
+    `triton` imports fine on a machine with no GPU, and only fails at launch.
+    """
+    # Broad on purpose: the question is whether it *works*, and a broken
+    # install raises well outside `ImportError` -- `OSError` for a missing
+    # shared object, `RuntimeError` for a driver mismatch.  Narrowing here
+    # would turn "unavailable" into a crash.
+    try:
+        import torch
+    except Exception as e:  # noqa: BLE001
+        return f'torch does not import: {type(e).__name__}: {e}'
+    try:
+        import triton
+    except Exception as e:  # noqa: BLE001
+        return f'triton does not import: {type(e).__name__}: {e}'
+    if not torch.cuda.is_available():
+        return 'no GPU: triton has no CPU target, so a kernel cannot run'
+    return None
+
+
+_MODULE_PREAMBLE = 'import triton\nimport triton.language as tl\n\n\n'
+
+_LOADED: dict[str, Any] = {}
+"""Kernels already written and imported, keyed by source.
+
+Triton compiles on first launch and caches against the file, so loading the
+same source twice would pay for it twice.  Keyed by text rather than by
+`KernelSource`, which is a mutable dataclass and so unhashable.
+"""
+
+
+def load_kernel(src: KernelSource) -> Any:
+    """*src* compiled to a callable ``triton.jit`` kernel.
+
+    **Written to a file, not `exec`ed.**  `@triton.jit` reads its function's
+    source back with `inspect.getsourcelines` to compile it, so a function
+    defined in a bare namespace fails with *"@jit functions should be defined
+    in a Python file"*.  The same constraint `@fp.fpy` has, for the same
+    reason.
+
+    The file outlives this call deliberately: Triton re-reads it while
+    compiling, and cached results key on it.
+    """
+    why = unavailable()
+    if why is not None:
+        raise CompileError(f'cannot load a Triton kernel: {why}')
+    cached = _LOADED.get(src.source)
+    if cached is not None:
+        return cached
+
+    path = Path(mkdtemp(prefix='fpy-triton-')) / f'{src.name}.py'
+    path.write_text(_MODULE_PREAMBLE + src.source + '\n')
+
+    spec = spec_from_file_location(f'fpy_triton_{src.name}', path)
+    if spec is None or spec.loader is None:
+        raise CompileError(f'cannot load the emitted kernel at `{path}`')
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    kernel = getattr(module, src.name)
+    _LOADED[src.source] = kernel
+    return kernel
+
+
+def launch(
+    src: KernelSource,
+    args: Sequence[Any],
+    *,
+    block: int,
+    grid: int | None = None,
+) -> None:
+    """Run *src* over *args*, which are `torch.Tensor`s and scalars.
+
+    *grid* defaults to covering :attr:`KernelSource.grid_extent` in tiles of
+    *block*, which is what the emitted mask expects: the last instance runs a
+    full tile and the over-run lanes are masked off.
+
+    ``enable_fp_fusion`` is taken from *src* rather than from the caller.  It
+    is a property of the program -- whether contracting a multiply-add is
+    observable -- and the compiler derived it; letting a launcher override it
+    would make the answer depend on who ran the kernel.
+    """
+    why = unavailable()
+    if why is not None:
+        raise CompileError(f'cannot launch a Triton kernel: {why}')
+    import triton
+
+    # the grid before the kernel: deriving it is cheap and compiling is not,
+    # so a missing extent should not cost a compile to discover
+    if grid is None:
+        if src.grid_extent is None:
+            raise CompileError(
+                'this kernel tiled nothing, so its grid has no extent to '
+                'derive; pass `grid` explicitly'
+            )
+        grid = triton.cdiv(src.grid_extent, block)
+    kernel = load_kernel(src)
+    kernel[(grid,)](
+        *args, block, enable_fp_fusion=src.enable_fp_fusion,
+    )

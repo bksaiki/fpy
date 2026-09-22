@@ -18,6 +18,7 @@ from .emitter import (
     emit_expr,
     emit_kernel,
 )
+from .launcher import launch, load_kernel, unavailable
 from .normalize import TritonNormalizeError, normalize, normalize_module
 from .storage import TritonStorageDomain, choose_storage, choose_storage_scalar
 from .target import ScalarOpTable, TritonOp, TritonOpStyle, is_native_ctx, make_op_table
@@ -43,9 +44,12 @@ __all__ = [
     'emit_expr',
     'emit_kernel',
     'is_native_ctx',
+    'launch',
+    'load_kernel',
     'make_op_table',
     'normalize',
     'normalize_module',
     'tile_loops',
+    'unavailable',
     'why_not_tileable',
 ]

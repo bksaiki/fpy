@@ -164,6 +164,22 @@ class _Emitter(Visitor):
         not -- so it is opt-in, and a launcher that wants the check runs it
         host-side.
         """
+        self.consts: dict[str, int] = {}
+        """Names this kernel binds to an integer constant.
+
+        The tiled loop's bound is a proven length, but it reaches the source
+        through a temporary -- `t10 = 4` -- so the launcher's grid extent has
+        to be read back from the binding rather than from the expression.
+        """
+        self.copies: dict[str, str] = {}
+        """Names bound to another name.
+
+        `SplitLoop` binds the factor to a temporary, and a `tl.constexpr`
+        does not survive the copy -- `tl.arange`'s arguments must be
+        `constexpr`, and a plain variable holding one is not.  So a tile's
+        width is resolved back to the name it came from.
+        """
+        self.grid_extent: int | None = None
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
 
@@ -609,7 +625,12 @@ class _Emitter(Visitor):
                     self.emit(stmt.expr.first), self.emit(stmt.expr.third),
                 )
                 return
-        ctx.add_line(f'{stmt.target} = {self.emit(stmt.expr)}')
+        code = self.emit(stmt.expr)
+        if code.isdigit():
+            self.consts[str(stmt.target)] = int(code)
+        elif isinstance(stmt.expr, Var):
+            self.copies[str(stmt.target)] = self._root(code)
+        ctx.add_line(f'{stmt.target} = {code}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
         addr = f'{stmt.var}_ptr + {self._offset(stmt.var, list(stmt.indices))}'
@@ -646,6 +667,14 @@ class _Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
 
+    def _root(self, name: str) -> str:
+        """*name* followed through the copies that bound it."""
+        seen: set[str] = set()
+        while name in self.copies and name not in seen:
+            seen.add(name)
+            name = self.copies[name]
+        return name
+
     def _emit_tile(self, stmt: ForStmt, ctx: _IndentedWriter):
         """A tiled loop is not a loop: it is the launch grid plus a tile.
 
@@ -666,7 +695,7 @@ class _Emitter(Visitor):
             raise TritonEmitError(
                 'a tiled loop should iterate a three-argument `range`'
             )
-        width = self.emit(it.third)
+        width = self._root(self.emit(it.third))
         inner = next(
             (s for s in stmt.body.stmts if isinstance(s, ForStmt)), None,
         )
@@ -674,6 +703,10 @@ class _Emitter(Visitor):
             raise TritonEmitError(
                 'a tiled loop should hold the tile loop it was split into'
             )
+        bound = self.emit(it.second)
+        self.grid_extent = (
+            int(bound) if bound.isdigit() else self.consts.get(bound)
+        )
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
         ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
         self._visit_block(inner.body, ctx)
@@ -793,6 +826,14 @@ class KernelSource:
     params: tuple[str, ...]
     """Its parameters in order, `_ptr`-suffixed where the argument is a list."""
 
+    grid_extent: int | None
+    """How many elements the tiled dimension covers, if one was tiled.
+
+    The launcher needs it to size the grid -- ``cdiv(extent, BLOCK)`` program
+    instances -- and it is the proven length the kernel was compiled for, not
+    a runtime value.  ``None`` where nothing was tiled.
+    """
+
     enable_fp_fusion: bool
     """Whether contracting a multiply-add is unobservable here.
 
@@ -879,5 +920,6 @@ def emit_kernel(
         name=func.name,
         source=out.render(),
         params=tuple(params),
+        grid_extent=emitter.grid_extent,
         enable_fp_fusion=_products_are_exact(func, emitter),
     )

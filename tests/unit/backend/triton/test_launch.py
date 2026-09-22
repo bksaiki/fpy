@@ -1,0 +1,107 @@
+"""Running an emitted kernel, and checking it against the interpreter.
+
+**Everything here needs a GPU.**  Triton compiles for `amd` and `nvidia` only
+-- there is no CPU target in mainline -- so `triton` importing is not enough;
+`unavailable()` also checks for a device, and these skip without one.
+
+The contract this closes: *if the compiler succeeds, the emitted code must
+behave as the FPy interpreter does*.  Unlike the C++ harness, this one has an
+empty non-correctly-rounded exclusion list -- the op table omits every
+transcendental -- so every function it compiles it can check bit-for-bit.
+"""
+
+import pytest
+
+import fpy2 as fp
+from fpy2.backend.triton import TritonCompiler, launch, unavailable
+from fpy2.types import ListType, RealType
+
+_WHY = unavailable()
+pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
+
+FP16 = fp.IEEEContext(5, 16)
+K = 8
+
+
+@fp.fpy(ctx=fp.REAL)
+def _batched_dot(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+                 out: list[fp.Real], BLOCK: fp.Real):
+    """FP16 in, exact products, FP32 accumulation -- the running example."""
+    for r in range(len(xss)):
+        acc = fp.round(0)
+        for k in range(K):
+            with fp.FP32:
+                acc = acc + xss[r][k] * yss[r][k]
+        out[r] = acc
+    return out
+
+
+def _compile(n: int):
+    return TritonCompiler(drop_asserts=True).compile(
+        _batched_dot, ctx=fp.REAL, arg_types=[
+            ListType(ListType(RealType(FP16), K), n),
+            ListType(ListType(RealType(FP16), K), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+
+
+def _run(n: int, block: int, seed: int = 0):
+    """The emitted kernel and the interpreter, on the same inputs."""
+    import torch
+
+    src = _compile(n)
+    torch.manual_seed(seed)
+    xt = (torch.randn(n, K) * 4).half().cuda()
+    yt = (torch.randn(n, K) * 4).half().cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, yt, ot], block=block)
+
+    xs = [[float(v) for v in row] for row in xt.cpu().tolist()]
+    ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
+    want = _batched_dot(xs, ys, [0.0] * n, block)
+    return [float(v) for v in want], ot.cpu().tolist()
+
+
+class TestDifferential:
+    @pytest.mark.parametrize('n,block', [
+        (8, 8),      # exactly one full tile
+        (8, 4),      # two full tiles
+        (6, 4),      # a partial tile: the mask does the work
+        (1, 4),      # one element, most of the tile masked off
+        (9, 4),      # two full tiles and a remainder of one
+    ])
+    def test_it_agrees_bit_for_bit(self, n, block):
+        want, got = _run(n, block)
+        assert got == want, f'n={n} block={block}'
+
+    @pytest.mark.parametrize('seed', [0, 1, 2, 3])
+    def test_it_agrees_across_inputs(self, seed):
+        want, got = _run(6, 4, seed=seed)
+        assert got == want
+
+
+class TestLauncher:
+    def test_the_grid_is_derived_from_the_proven_extent(self):
+        assert _compile(6).grid_extent == 6
+
+    def test_fusion_is_taken_from_the_kernel_not_the_caller(self):
+        """Whether contracting a multiply-add is observable is a property of
+        the program, so the launcher does not get to choose."""
+        assert _compile(6).enable_fp_fusion
+
+    def test_a_kernel_with_no_tile_needs_an_explicit_grid(self):
+        from fpy2.backend.backend import CompileError
+        from fpy2.backend.triton.emitter import KernelSource
+
+        src = KernelSource(
+            name='nothing', source='', params=(),
+            grid_extent=None, enable_fp_fusion=False)
+        with pytest.raises(CompileError, match='no extent'):
+            launch(src, [], block=4)
+
+
+@pytest.mark.skipif(False, reason='')
+def test_unavailable_reports_a_reason_or_none():
+    """Callable with or without hardware -- it is the guard itself."""
+    why = unavailable()
+    assert why is None or isinstance(why, str)
