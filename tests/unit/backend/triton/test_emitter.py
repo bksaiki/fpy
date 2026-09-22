@@ -719,3 +719,85 @@ class TestPredicates:
 
         with pytest.raises(TritonEmitError, match='no signatures for op: Logb'):
             _emit(f, [_R32])
+
+
+class TestScalarization:
+    """A sequence of proven length stops existing: it becomes that many
+    values.  Triton has no list -- a tile is not scalar-indexable and a Python
+    list is compile-time metaprogramming -- so this is the only lowering."""
+
+    def test_a_literal_list(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            t = [x, y, x + y]
+            return t[2] - t[0]
+
+        assert _emit(f, [_R32, _R32]) == (
+            't_0 = x\n'
+            't_1 = y\n'
+            't_2 = (x + y)\n'
+            'return (t_2 - t_0)'
+        )
+
+    def test_a_comprehension_unrolls(self):
+        """The element expression is emitted once per index with the target
+        bound to that index's code."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(A: list[fp.Real]):
+            p = [a * a for a in A]
+            return p[0] + p[3]
+
+        out = _emit(f, [ListType(_R32, 4)])
+        assert out.count('p_') == 6      # four bindings, two uses
+        assert 'p_0 = (tl.load(A_ptr + 0) * tl.load(A_ptr + 0))' in out
+        assert 'return (p_0 + p_3)' in out
+
+    def test_a_slice_takes_its_window(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(A: list[fp.Real]):
+            w = A[1:3]
+            return w[0] + w[1]
+
+        out = _emit(f, [ListType(_R32, 4)])
+        assert 'w_0 = tl.load(A_ptr + 1)' in out
+        assert 'w_1 = tl.load(A_ptr + 1 + 1)' in out
+
+    def test_len_of_a_scalarized_sequence(self):
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(A: list[fp.Real]):
+            p = [a for a in A]
+            return fp.round(len(p))
+
+        assert 'return 4' in _emit(f, [ListType(RealType(fp.INTEGER), 4)],
+                                   ctx=fp.INTEGER)
+
+    def test_a_dynamic_index_is_refused(self):
+        """There is no addressable local array to index into."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(A: list[fp.Real], i: fp.Real):
+            p = [a * a for a in A]
+            return p[i]
+
+        with pytest.raises(TritonEmitError, match='compile-time constant'):
+            _emit(f, [ListType(_R32, 4), _INT])
+
+    def test_aliasing_a_sequence_copies_its_elements(self):
+        """There is no sequence to point at, so `q = p` re-binds the values."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(A: list[fp.Real]):
+            p = [a * a for a in A]
+            q = p
+            return q[0]
+
+        out = _emit(f, [ListType(_R32, 4)])
+        assert 'q_0 = p_0' in out
+        assert 'return q_0' in out
+
+    def test_an_out_of_range_constant_index_is_refused(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            t = [x, x]
+            return t[5]
+
+        with pytest.raises(TritonEmitError, match='outside a sequence'):
+            _emit(f, [_R32])

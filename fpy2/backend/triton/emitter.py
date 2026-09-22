@@ -58,7 +58,10 @@ from ...ast import (
     IsInf,
     IsNan,
     Len,
+    ListComp,
+    ListExpr,
     ListRef,
+    ListSlice,
     ListTypeAnn,
     Max,
     Min,
@@ -204,6 +207,16 @@ class _Emitter(Visitor):
         `constexpr`, and a plain variable holding one is not.  So a tile's
         width is resolved back to the name it came from.
         """
+        self.seqs: dict[NamedId, list[str]] = {}
+        """Names holding a *scalarized* sequence, as one code per element.
+
+        Triton has no list value: a tile is not scalar-indexable and a Python
+        list is compile-time metaprogramming.  A sequence of proven length
+        therefore stops existing -- it becomes that many ordinary values, and
+        every access is resolved here rather than emitted.
+        """
+        self.subst: dict[NamedId, str] = {}
+        """Names bound to a code while a comprehension is unrolled."""
         self._next_tmp = 0
         self.grid_extent: int | None = None
         self.mask: str | None = None
@@ -431,6 +444,134 @@ class _Emitter(Visitor):
         term = idx if step == '1' else f'{idx} * {step}'
         return term if start == '0' else f'({start} + {term})'
 
+    def _elements(self, e: Expr) -> list[str] | None:
+        """*e* as one code per element, or `None` if it is not a sequence this
+        backend can take apart."""
+        match e:
+            case Var() if e.name in self.seqs:
+                return list(self.seqs[e.name])
+
+            case ListExpr():
+                return [self.emit(elt) for elt in e.elts]
+            case ListSlice():
+                return self._slice_elements(e)
+            case ListComp():
+                return self._comp_elements(e)
+        return None
+
+    def _range_elements(self, e: Expr) -> list[str] | None:
+        """A `range`, as its index values.
+
+        Unrolling a comprehension means substituting each index in turn, so
+        the range has to come apart the same way a list does -- its elements
+        are the indices themselves.
+        """
+        lo: int | None
+        hi: int | None
+        step: int | None
+        if isinstance(e, Range1):
+            lo, hi, step = 0, self._const_index(e.arg), 1
+        elif isinstance(e, Range3):
+            lo = self._const_index(e.first)
+            hi = self._const_index(e.second)
+            step = self._const_index(e.third)
+        else:
+            return None
+        if lo is None or hi is None or step is None or step == 0:
+            return None
+        return [str(i) for i in range(lo, hi, step)]
+
+    def _source_elements(self, e: Expr) -> list[str] | None:
+        """*e* as elements, where it is being *consumed* as a sequence.
+
+        Wider than :meth:`_elements` by one case: a pointer-backed list, whose
+        elements are that many loads.  Kept separate because expanding one is
+        only wanted where a sequence is taken apart -- iterated or sliced --
+        and never for `t = xs`, which is a copy of a pointer rather than a
+        request for its contents.
+        """
+        elems = self._elements(e)
+        if elems is not None:
+            return elems
+        # a `range` expands only where a comprehension consumes it: bound to
+        # a name it stays a range, which is index arithmetic rather than
+        # values
+        if isinstance(e, (Range1, Range3)):
+            return self._range_elements(e)
+        if not isinstance(e, Var):
+            return None
+        bound = self.sizes.by_expr.get(e)
+        if isinstance(bound, ListSize) and isinstance(bound.size, int):
+            return [self._load_at(e.name, str(i)) for i in range(bound.size)]
+        return None
+
+    def _slice_elements(self, e: ListSlice) -> list[str] | None:
+        """A slice, as its elements.
+
+        The length comes from the size analysis, which cancels a common base:
+        `xs[k:k + L]` is `L` whatever `k` is, provided the index arithmetic is
+        exact.  The *offsets* are then `start + 0 .. start + n - 1`.
+        """
+        bound = self.sizes.by_expr.get(e)
+        if not isinstance(bound, ListSize) or not isinstance(bound.size, int):
+            return None
+        inner = self._elements(e.value)
+        start = 0 if e.start is None else self._const_index(e.start)
+        if inner is not None:
+            if start is None:
+                return None
+            return inner[start:start + bound.size]
+        # a pointer-backed list: the slice is that many loads
+        if not isinstance(e.value, Var):
+            return None
+        base = self.emit(e.start) if e.start is not None else '0'
+        return [
+            self._load_at(e.value.name, base if i == 0 else f'{base} + {i}')
+            for i in range(bound.size)
+        ]
+
+    def _comp_elements(self, e: ListComp) -> list[str] | None:
+        """A comprehension, unrolled.
+
+        Each source is taken apart first, then the element expression is
+        emitted once per index with the targets bound to that index's codes.
+        Binding rather than assigning keeps the unrolled copies from needing
+        names of their own.
+        """
+        if len(e.iterables) != len(e.targets):
+            return None
+        sources = [self._source_elements(it) for it in e.iterables]
+        if any(src is None for src in sources):
+            return None
+        n = min(len(src) for src in sources if src is not None)
+        out: list[str] = []
+        saved = dict(self.subst)
+        try:
+            for i in range(n):
+                for target, src in zip(e.targets, sources):
+                    assert src is not None
+                    if not isinstance(target, NamedId):
+                        return None
+                    self.subst[target] = src[i]
+                out.append(self.emit(e.elt))
+        finally:
+            self.subst = saved
+        return out
+
+    def _const_index(self, e: Expr) -> int | None:
+        """*e* as a compile-time index, or `None`."""
+        code = self.emit(e)
+        try:
+            return int(code)
+        except ValueError:
+            return None
+
+    def _load_at(self, base: NamedId, offset: str) -> str:
+        addr = f'{base}_ptr + {offset}'
+        if self.mask is None:
+            return f'tl.load({addr})'
+        return f'tl.load({addr}, mask={self.mask}, other=0.0)'
+
     def _emit_load(self, e: ListRef) -> str:
         """`tl.load`, masked by whatever guard is in force.
 
@@ -441,6 +582,20 @@ class _Emitter(Visitor):
         direct = self._range_index(e)
         if direct is not None:
             return direct
+        elems = self._elements(e.value)
+        if elems is not None:
+            i = self._const_index(e.index)
+            if i is None:
+                raise TritonEmitError(
+                    'a scalarized sequence can only be indexed by a '
+                    'compile-time constant; Triton has no addressable local '
+                    'array'
+                )
+            if not 0 <= i < len(elems):
+                raise TritonEmitError(
+                    f'index {i} is outside a sequence of {len(elems)}'
+                )
+            return elems[i]
         base, indices = self._flatten(e)
         addr = f'{base}_ptr + {self._offset(base, indices)}'
         if self.mask is None:
@@ -455,6 +610,8 @@ class _Emitter(Visitor):
         the shape it was compiled for -- which `Specialize` has already made
         it, since a proven length is what lets any of this be emitted at all.
         """
+        if isinstance(e.arg, Var) and e.arg.name in self.seqs:
+            return str(len(self.seqs[e.arg.name]))
         bound = self.sizes.by_expr.get(e.arg)
         if not isinstance(bound, ListSize) or not isinstance(bound.size, int):
             raise TritonEmitError(
@@ -611,6 +768,17 @@ class _Emitter(Visitor):
     # -- expressions ---------------------------------------------------
 
     def _visit_var(self, e: Var, ctx) -> str:
+        bound = self.subst.get(e.name)
+        if bound is not None:
+            return bound
+        if e.name in self.seqs:
+            # unreachable from well-typed source -- `TypeInfer` rejects a
+            # sequence in a scalar position first -- so this guards against an
+            # internal slip rather than a user program
+            raise TritonEmitError(
+                f'`{e.name}` is a sequence, which has no Triton value; it can '
+                'only be indexed, sliced, measured or copied'
+            )
         return str(e.name)
 
     def _visit_bool(self, e: BoolVal, ctx) -> str:
@@ -747,6 +915,17 @@ class _Emitter(Visitor):
                 f'a `{type(stmt.target).__name__}` assignment target has no '
                 'Triton spelling'
             )
+        elems = self._elements(stmt.expr)
+        if elems is not None:
+            # the sequence stops existing: each element becomes a value of
+            # its own, and every later access resolves against them
+            names = []
+            for i, code in enumerate(elems):
+                name = f'{stmt.target}_{i}'
+                ctx.add_line(f'{name} = {code}')
+                names.append(name)
+            self.seqs[stmt.target] = names
+            return
         match stmt.expr:
             case Range1():
                 self.ranges[stmt.target] = ('0', '1')
