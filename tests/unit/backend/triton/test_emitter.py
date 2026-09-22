@@ -158,9 +158,77 @@ class TestBlock:
             'return b'
         )
 
-    def test_a_with_is_not_a_statement(self):
+
+class TestSequentialLoops:
+    """A loop `why_not_tileable` declined stays sequential per lane, which is
+    `tl.static_range` -- the shape `kernels.dot_exact` uses for its fold."""
+
+    def test_a_proven_count_emits_static_range(self):
+        @fp.fpy(ctx=fp.FP32)
+        def fold(x: fp.Real):
+            acc = fp.round(0)
+            for k in range(8):
+                acc = acc + x
+            return acc
+
+        g = _spec(fold, fp.FP32, ctx=fp.FP32)
+        assert emit_block(g.ast.body, g.ast) == (
+            'acc = 0\n'
+            'for k in tl.static_range(8):\n'
+            '    acc = (acc + x)\n'
+            'return acc'
+        )
+
+    def test_an_unproven_count_is_refused(self):
+        """A foreign constant is not folded until `ConstFold` runs, and
+        `tl.static_range` needs the count as a `constexpr`."""
+        width = 8
+
+        @fp.fpy(ctx=fp.FP32)
+        def fold(x: fp.Real):
+            acc = fp.round(0)
+            for k in range(width):
+                acc = acc + x
+            return acc
+
+        g = _spec(fold, fp.FP32, ctx=fp.FP32)
+        with pytest.raises(TritonEmitError, match='compile-time trip count'):
+            emit_block(g.ast.body, g.ast)
+
+    def test_const_folding_makes_it_emittable(self):
+        """The refusal is the pipeline's to fix, not the emitter's."""
+        from fpy2.transform import ConstFold
+        width = 8
+
+        @fp.fpy(ctx=fp.FP32)
+        def fold(x: fp.Real):
+            acc = fp.round(0)
+            for k in range(width):
+                acc = acc + x
+            return acc
+
+        g = _spec(fold, fp.FP32, ctx=fp.FP32)
+        folded = ConstFold.apply(g.ast)
+        assert 'tl.static_range(8)' in emit_block(folded.body, folded)
+
+
+class TestSelect:
+    def test_if_expr_is_tl_where(self):
+        @fp.fpy(ctx=fp.FP32)
+        def sel(c: bool, x: fp.Real, y: fp.Real):
+            return x if c else y
+
+        m = Module()
+        m.add(sel, ctx=fp.FP32,
+              arg_types=[None, RealType(fp.FP32), RealType(fp.FP32)])
+        g = Specialize.apply(m, size_key=True).get('sel').func
+        assert emit_block(g.ast.body, g.ast) == 'return tl.where(c, x, y)'
+
+
+class TestContextStatements:
+    def test_a_with_emits_nothing_of_its_own(self):
         """A context change is a change of storage, which the dispatch reads
-        per expression -- it has no Triton spelling of its own."""
+        per expression."""
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real, y: fp.Real):
             p = x * y
@@ -168,5 +236,9 @@ class TestBlock:
                 return p + p
 
         g = _spec(f, FP16, FP16, ctx=fp.REAL)
-        with pytest.raises(TritonEmitError, match='ContextStmt'):
-            emit_block(g.ast.body, g.ast)
+        out = emit_block(g.ast.body, g.ast)
+        assert 'with' not in out
+        assert out == (
+            'p = (x.to(tl.float32) * y.to(tl.float32))\n'
+            'return (p + p)'
+        )

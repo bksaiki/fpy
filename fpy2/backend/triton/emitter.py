@@ -21,24 +21,34 @@ fallback.
 from collections.abc import Sequence
 
 from ...analysis import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
     ContextUse,
     ContextUseAnalysis,
     DefineUse,
     FormatAnalysis,
     FormatInfer,
 )
+from ...analysis.array_size import trip_count
+from ...analysis.format_infer import rounds_exactly
 from ...ast import (
     Assign,
     BinaryOp,
     BoolVal,
+    Cast,
+    ContextStmt,
     Decnum,
     Expr,
+    ForStmt,
     FuncDef,
     Hexnum,
+    Id,
+    IfExpr,
     Integer,
     NamedId,
     Rational,
     ReturnStmt,
+    Round,
     Stmt,
     StmtBlock,
     TernaryOp,
@@ -48,7 +58,7 @@ from ...ast import (
 from ...number import REAL, Context
 from ..backend import CompileError
 from .storage import choose_storage_scalar, scalar_fits_in
-from .target import ScalarOpTable, TritonOp, make_op_table
+from .target import ScalarOpTable, TritonOp, is_native_ctx, make_op_table
 from .types import TritonScalar
 
 __all__ = ['TritonEmitError', 'emit_block', 'emit_expr']
@@ -230,6 +240,44 @@ class _ExprEmitter:
                 return sig.in_tys[0]
         return None
 
+    def _emit_round(self, e: Round | Cast) -> str:
+        """An explicit `fp.round` / `fp.cast`, which is a *cast*, not an
+        operation the table dispatches.
+
+        Where the round changes nothing it emits nothing -- a literal already
+        representable in the target needs no `.to`, and Triton has no spelling
+        for casting one.  Otherwise it is a cast, which is sound only under a
+        context whose `round` *is* the hardware conversion; `is_native_ctx`
+        answers exactly that question.
+        """
+        arg = self.emit(e.arg)
+        ctx = self._active_ctx(e)
+        if rounds_exactly(e, self.format_info.by_expr, ctx):
+            return arg
+        if not is_native_ctx(ctx):
+            raise TritonEmitError(
+                f'`{type(e).__name__.lower()}` to `{ctx}` is not a hardware '
+                'conversion, so it has no cast spelling'
+            )
+        return self._explicit_cast(arg, self._storage(e))
+
+    def _emit_where(self, e: IfExpr) -> str:
+        """``tl.where``, with both arms in the result's storage.
+
+        **`tl.where` evaluates both arms where the interpreter evaluates one.**
+        That does not cost the contract: the arms are effect-free by
+        `SimplifyIf`'s own refusals, and the GPU does not trap where the
+        interpreter would -- `logb(0)` is `-inf` in hardware and `tl.where`
+        discards it -- so the two agree on the value, which is what the
+        contract asks.
+        """
+        want = self._storage(e)
+        arms = [
+            self._maybe_cast(self.emit(a), self._storage(a), want)
+            for a in (e.ift, e.iff)
+        ]
+        return f'tl.where({self.emit(e.cond)}, {arms[0]}, {arms[1]})'
+
     # -- expressions ---------------------------------------------------
 
     def emit(self, e: Expr) -> str:
@@ -246,6 +294,10 @@ class _ExprEmitter:
                 raise TritonEmitError(
                     'a rational literal has no Triton spelling; round it first'
                 )
+            case Round() | Cast():
+                return self._emit_round(e)
+            case IfExpr():
+                return self._emit_where(e)
             case UnaryOp():
                 return self._dispatch(
                     e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
@@ -286,14 +338,34 @@ def emit_expr(e: Expr, func: FuncDef) -> str:
     ).emit(e)
 
 
-def _emit_stmts(
-    block: StmtBlock, emitter: _ExprEmitter, out: _IndentedWriter,
-) -> None:
-    """Straight-line statements only.
+def _static_count(stmt: ForStmt, sizes: ArraySizeAnalysis) -> int:
+    """How many times *stmt* runs, as a compile-time constant.
 
-    A `with` is absent on purpose: a context change is a change of *storage*,
-    which the dispatch already reads per expression, not a statement with a
-    Triton spelling.  Loops and guards are the next phase.
+    ``tl.static_range`` needs the count as a ``constexpr``, so an unproven one
+    is refused.  The limit is `trip_count`'s modeling rather than the
+    program's: it answers only for a `range`, so a `zip` or a bare list is
+    declined even where `ArraySizeInfer` knows the length.
+    """
+    n = trip_count(stmt.iterable, sizes)
+    if not isinstance(n, int):
+        raise TritonEmitError(
+            f'`tl.static_range` needs a compile-time trip count, and this '
+            f'`{type(stmt.iterable).__name__}` has none that `trip_count` '
+            'models'
+        )
+    return n
+
+
+def _emit_stmts(
+    block: StmtBlock,
+    emitter: _ExprEmitter,
+    sizes: ArraySizeAnalysis,
+    out: _IndentedWriter,
+) -> None:
+    """Statements, less the ones that touch memory or the launch grid.
+
+    A `with` emits nothing of its own: a context change is a change of
+    *storage*, which the dispatch already reads per expression.
     """
     for stmt in block.stmts:
         match stmt:
@@ -305,6 +377,18 @@ def _emit_stmts(
                 out.add_line(f'{stmt.target} = {emitter.emit(stmt.expr)}')
             case ReturnStmt():
                 out.add_line(f'return {emitter.emit(stmt.expr)}')
+            case ContextStmt():
+                _emit_stmts(stmt.body, emitter, sizes, out)
+            case ForStmt():
+                if not isinstance(stmt.target, Id):
+                    raise TritonEmitError(
+                        'a destructuring loop target has no Triton spelling'
+                    )
+                n = _static_count(stmt, sizes)
+                out.add_line(f'for {stmt.target} in tl.static_range({n}):')
+                out.indent()
+                _emit_stmts(stmt.body, emitter, sizes, out)
+                out.dedent()
             case _:
                 raise TritonEmitError(
                     f'no Triton spelling for `{type(stmt).__name__}`'
@@ -325,5 +409,5 @@ def emit_block(block: StmtBlock, func: FuncDef) -> str:
         make_op_table(),
     )
     out = _IndentedWriter()
-    _emit_stmts(block, emitter, out)
+    _emit_stmts(block, emitter, ArraySizeInfer.analyze(func), out)
     return out.render()

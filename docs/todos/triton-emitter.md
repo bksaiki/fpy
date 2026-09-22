@@ -126,6 +126,20 @@ comment.
 
 ### Phase 2 — statements and sequential loops
 
+**Done.**  Two things the plan did not anticipate.
+
+`fp.round` is a *cast*, not an op the table dispatches, so Phase 1's cast
+discipline was half-built: `_explicit_cast` existed but nothing reached it.
+A `Round` now emits nothing where `rounds_exactly` says the round changes
+nothing, a `.to(...)` where the context's round *is* the hardware conversion
+(`is_native_ctx`), and a refusal otherwise.
+
+`trip_count` declines `range(K)` for a *foreign* constant -- `K` arrives as
+`Var(SourceId('K'))` resolved from the closure, and `Specialize` monomorphizes
+contexts and types, not foreign values.  `ConstFold` resolves it, and then the
+count is 8.  So the refusal is the pipeline's to fix rather than the
+emitter's, and a test pins that ordering.
+
 Assignment, `with` (a context change is a storage change, not a statement),
 `IfExpr` → `tl.where`, and a refused `for` → `tl.static_range` where the trip
 count is proven, refused where it is not.
