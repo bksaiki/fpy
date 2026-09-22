@@ -111,6 +111,30 @@ so that kernel cannot consume an fp16 buffer. And the emitted loop is
 `for (int8_t _i = 0; ...)` with `x` and `y` read by subscript: `ZipElim` and
 `CompToLoop` deleted the lockstep fact before any emitter saw it.
 
+## Examples
+
+Every count in this document comes from the same corpus, so the numbers are
+comparable across items. It is 94 `Function`s:
+
+| Source | What it contributes |
+|---|---|
+| `fpy2.libraries.core` | scalar primitives — `logb`, `max_e`, `tree_sum` |
+| `fpy2.libraries.vector` | 1-D maps and reductions — `max_element`, dot products |
+| `fpy2.libraries.matrix` | 2-D nested loops writing `out[i][j]` — `add`, `is_diagonal` |
+| `fpy2.libraries.eft` | error-free transforms, where exactness is the point |
+| `fpy2.libraries.metrics` | comparisons and error measures |
+| `examples/mmasim` (`utils`, `nv`, `amd`) | the hardware models — multi-return, `zip`, special-value handling |
+
+`exploration/triton/programs.py` holds the running example on its own: a
+batched dot product in three storage variants, which is what the hand-written
+kernels are compared against.
+
+The mmasim functions are the demanding half. They are the ones with early
+returns inside loops, they iterate list *arguments* whose length nothing fixes
+until specialization, and they carry the user-written asserts — so they set the
+refusal boundary for most items here, while the library functions establish
+what the common shape is.
+
 ## What is implemented
 
 Not TODOs. Kept because each states a constraint the rest still has to honor.
