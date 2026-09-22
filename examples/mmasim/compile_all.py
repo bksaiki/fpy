@@ -64,9 +64,9 @@ DESIGNS = [
         _vecs(fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 32)
         + [_R(fp.MX_E8M0), _R(fp.MX_E8M0)])),
     ('nv.blackwell.nvfp4', lambda: (
-        nv.make_gst_fdpa(16, fp.MX_E8M0, 35, RZ_FP32),
-        _vecs(fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 64)
-        + [_L(_R(fp.MX_E8M0), 4), _L(_R(fp.MX_E8M0), 4)])),
+        nv.make_gst_fdpa(16, fp.MX_E4M3, 35, RZ_FP32),
+        _vecs(fp.MX_E2M1, fp.MX_E2M1, fp.FP32, 64)
+        + [_L(_R(fp.MX_E4M3), 4), _L(_R(fp.MX_E4M3), 4)])),
     ('amd.cdna1.bf16', lambda: (
         amd.make_e_fdpa(2), _vecs(fp.BF16, fp.BF16, fp.FP32, 4))),
     ('amd.cdna1.f16', lambda: (

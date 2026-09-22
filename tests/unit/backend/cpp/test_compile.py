@@ -186,14 +186,13 @@ class TestSpecializationNameCollisions:
         m.add(call_mat, ctx=fp.FP64, arg_types=[RealType(fp.INTEGER)])
         out = cc.compile_module(m)
 
-        # After the ``Specialize`` integration, callee names are
-        # mangled as ``zeros__<ctx_sha1>__<args_sha1>``.  Two distinct
-        # FuncDefs sharing the source name must produce two distinct
-        # mangled names (otherwise the C++ compiler rejects the unit
-        # with an ODR redefinition error).  Match definitions by
+        # A callee name is mangled as the source name plus one fingerprint
+        # per spec axis.  Two distinct FuncDefs sharing the source name must
+        # produce two distinct mangled names, or the C++ compiler rejects the
+        # unit with an ODR redefinition error.  Match definitions by
         # ``<name>(`` rather than ``<ret> <name>(`` since the two
         # specializations have different return types.
-        zeros_pat = re.compile(r'\bzeros__[0-9a-f]{8}__[0-9a-f]{8}\(')
+        zeros_pat = re.compile(r'\bzeros(?:__[a-z]?[0-9a-f]{8})+\(')
         occurrences = zeros_pat.findall(out)
         # Each distinct spec appears exactly twice (one definition
         # site + one call site).  Two specs → four occurrences total

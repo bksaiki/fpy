@@ -30,7 +30,6 @@ __all__ = [
     'ContextUseSite',
     'PartialContext',
     'ScopeContext',
-    'base_env',
 ]
 
 ContextScopeSite: TypeAlias = FuncDef | ContextStmt
@@ -55,9 +54,9 @@ class PartialContext:
 
     Each entry of :attr:`args` / :attr:`kwargs` is the argument's partially
     evaluated *value* when it reduced, and the :class:`Expr` itself otherwise.
-    Those leftover expressions are the context's **holes**.  This is a record,
-    not a resolver: filling holes needs to know what a caller pinned, so it
-    lives with the analysis that knows (``FormatInfer._resolve_partial_ctx``).
+    Those leftover expressions are the context's **holes**; filling them needs
+    to know what a caller pinned, so a resolver lives with the analysis that
+    does.
     """
 
     cls: type[Context]
@@ -77,12 +76,6 @@ class PartialContext:
         """The arguments that did not reduce, in positional-then-keyword order."""
         vals = [*self.args, *(v for _, v in self.kwargs)]
         return tuple(v for v in vals if isinstance(v, Expr))
-
-
-def base_env(func: FuncDef) -> dict[NamedId, object]:
-    """The free-variable environment needed to replay an expression of *func*
-    through the interpreter."""
-    return {d: func.env[str(d)] for d in func.free_vars}
 
 
 ScopeContext: TypeAlias = ContextParam | PartialContext

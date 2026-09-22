@@ -74,7 +74,7 @@ explicitly, per the table above; GST-FDPA defaults to -139.
 
 import fpy2 as fp
 
-from utils import RZ_TF32, dpa_special_values, exponent, fused_sum, join, make_fma_dpa
+from utils import dpa_special_values, exponent, fused_sum, join, make_fma_dpa
 
 ###########################################################
 # Rounding contexts

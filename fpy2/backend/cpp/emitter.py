@@ -2008,7 +2008,7 @@ class CppEmitter(Visitor):
 
         # (3) widen, only under REAL
         if active is REAL:
-            widened = self._try_widen(e, sigs, list(zip(codes, storages)))
+            widened = self._try_widen(e, sigs, list(zip(codes, storages, srcs)))
             if widened is not None:
                 return widened
 
@@ -2065,7 +2065,7 @@ class CppEmitter(Visitor):
         self,
         e: Expr,
         sigs: Sequence[CppOp],
-        operands: Sequence[tuple[str, CppScalar]],
+        operands: "Sequence[tuple[str, CppScalar, Expr | None]]",
     ) -> str | None:
         """Pick a signature whose output context contains the exact unrounded
         result of *e* -- so the op under that signature is the identity -- and
@@ -2075,7 +2075,13 @@ class CppEmitter(Visitor):
         selection.  ``None`` when no signature qualifies.
 
         Two passes, to prefer a narrower signature: first those whose output
-        already *is* ``result_ty``, then those needing the downcast.
+        already *is* ``result_ty``, then those needing the downcast.  Each is
+        tried on types before values: :func:`scalar_fits_in` first, so every
+        signature the table used to pick it still picks, and
+        :meth:`_value_fits` only where nothing qualified -- a rescaled
+        rounding hands the scale-out an ``int64_t`` holding 29 significand
+        bits, which no float slot accepts by type and every one accepts by
+        value.
 
         A class narrows both ``result_ty`` and the operand storages, so it
         decides which signature is reached.  What keeps a possibly-infinite
@@ -2097,7 +2103,7 @@ class CppEmitter(Visitor):
                 # off the ladder, so it ranks widest; `_try` declines it anyway
                 return ladder_rank(CppScalar.BOOL)
 
-        def _try(sig, *, exact_out: bool) -> str | None:
+        def _try(sig, *, exact_out: bool, by_value: bool) -> str | None:
             try:
                 sig_out_ty = self._scalar_for_ctx(sig.out_ctx)
             except CppEmitError:
@@ -2106,8 +2112,9 @@ class CppEmitter(Visitor):
                 return None
             slots = sig.in_tys
             if not all(
-                scalar_fits_in(have, want)
-                for (_, have), want in zip(operands, slots)
+                self._value_fits(self._bound_of(src), have, want) if by_value
+                else scalar_fits_in(have, want)
+                for (_, have, src), want in zip(operands, slots)
             ):
                 return None
             if not self._result_fits_ctx(e, sig.out_ctx):
@@ -2115,8 +2122,8 @@ class CppEmitter(Visitor):
             # the slot check above is `_maybe_cast`'s own test, so no cast
             # here can refuse
             casts = [
-                self._maybe_cast(code, have, want, at=e)
-                for (code, have), want in zip(operands, slots)
+                self._maybe_cast(code, have, want, at=e, bound_of=src)
+                for (code, have, src), want in zip(operands, slots)
             ]
             out = sig.format(*casts)
             if sig_out_ty is not result_ty:
@@ -2129,11 +2136,12 @@ class CppEmitter(Visitor):
         # storage selection itself walks; table order would spell integer
         # arithmetic as `float` for no reason.
         ordered = sorted(sigs, key=_rank)
-        for exact_out in (True, False):
-            for sig in ordered:
-                emitted = _try(sig, exact_out=exact_out)
-                if emitted is not None:
-                    return emitted
+        for by_value in (False, True):
+            for exact_out in (True, False):
+                for sig in ordered:
+                    emitted = _try(sig, exact_out=exact_out, by_value=by_value)
+                    if emitted is not None:
+                        return emitted
         return None
 
     def _visit_unaryop(self, e: UnaryOp, ctx) -> str:

@@ -19,7 +19,8 @@ requires-python = ">=3.11"
 dependencies = [
   "titanfp==0.1.2",
   "gmpy2==2.3.1",
-  "matplotlib"
+  "matplotlib",
+  "z3-solver>=4.13"
 ]
 
 # ``dev`` deps are listed twice on purpose: ``[project.optional-dependencies]``

@@ -50,9 +50,16 @@ RNE_FP32 = fp.FP32
 
 EMIN_FP32 = fp.FP32.emin
 
-# exponent of a zero product: below any real product exponent, so
-# unlike T-FDPA a zero never raises the alignment maximum
-E_ZERO_TR = -999
+def _default_e_zero_tr(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext) -> int:
+    """The exponent a zero product reads at, so that unlike T-FDPA a zero
+    never raises the alignment maximum.
+
+    One below the smallest subnormal *product*, `2 ** (expmin_a + expmin_b)`.
+    The slack in a larger sentinel is not free: the alignment position becomes
+    a scale exponent once the rounding is rescaled, so a far-below sentinel
+    asks for a `2 ** 1023` nobody can store.
+    """
+    return a_ctx.expmin + b_ctx.expmin - 1
 
 ###########################################################
 # Helpers
@@ -180,7 +187,8 @@ def make_ftz_addmul(a_ctx: fp.EFloatContext, P: int):
     return ftz_addmul
 
 def make_tr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
-                 F: int = 24, F2: int = 31, rho: fp.Context = RNE_FP32):
+                 F: int = 24, F2: int = 31, rho: fp.Context = RNE_FP32,
+                 *, e_zero: int | None = None):
     """
     Builds a Phi_TR-FDPA dot-product-accumulate (Algorithm 10),
     chained `L` elements at a time; CDNA3 TF32 (L = 4)
@@ -192,7 +200,10 @@ def make_tr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     """
     emin_a = a_ctx.emin
     emin_b = b_ctx.emin
-    assert emin_a + emin_b > E_ZERO_TR, 'zero products must read below any real product'
+    if e_zero is None:
+        e_zero = _default_e_zero_tr(a_ctx, b_ctx)
+    assert e_zero < emin_a + emin_b, \
+        'a zero product must read below any real product'
 
     @fp.fpy(ctx=fp.REAL)
     def tr_fdpa_block(A, B, c):
@@ -204,7 +215,7 @@ def make_tr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
 
         # Step 2: truncated fused sum of the L products (without c);
         # all products are finite past the guard, so `exponent` suffices
-        es = [E_ZERO_TR if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
+        es = [e_zero if p == 0 else exponent(a, emin_a) + exponent(b, emin_b)
               for p, a, b in zip(prods, A, B)]
         e_dot = max(es)
         t = fused_sum(prods, e_dot - F - 1, fp.RM.RTZ)
@@ -238,7 +249,8 @@ def make_tr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     return tr_fdpa
 
 def make_gtr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
-                  F: int = 24, F2: int = 31, rho: fp.Context = RNE_FP32):
+                  F: int = 24, F2: int = 31, rho: fp.Context = RNE_FP32,
+                  *, e_zero: int | None = None):
     """
     Builds a Phi_GTR-FDPA dot-product-accumulate (Algorithm 11),
     chained `L` elements at a time; CDNA3 FP8 (L = 16,
@@ -252,7 +264,10 @@ def make_gtr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     """
     emin_a = a_ctx.emin
     emin_b = b_ctx.emin
-    assert emin_a + emin_b > E_ZERO_TR, 'zero products must read below any real product'
+    if e_zero is None:
+        e_zero = _default_e_zero_tr(a_ctx, b_ctx)
+    assert e_zero < emin_a + emin_b, \
+        'a zero product must read below any real product'
 
     @fp.fpy(ctx=fp.REAL)
     def gtr_fdpa_block(A, B, c):
@@ -260,7 +275,7 @@ def make_gtr_fdpa(L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
         # Step 1: exact products and their exponent-field sums
         # (a NaN or infinite factor reads exponent -1, via `exponent0`)
         prods = [a * b for a, b in zip(A, B)]
-        es = [E_ZERO_TR if p == 0 else exponent0(a, emin_a) + exponent0(b, emin_b)
+        es = [e_zero if p == 0 else exponent0(a, emin_a) + exponent0(b, emin_b)
               for p, a, b in zip(prods, A, B)]
         L = len(A)
         e_even = max([es[i] for i in range(0, L, 2)])

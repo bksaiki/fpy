@@ -1,23 +1,20 @@
 # Finiteness refinement: what is left, on `digit-bound`
 
-The analysis work is done and lives on `todo-finiteness` (`3eef977a..5a2539d9`):
-value-class analysis now reads an `isfinite` guard through a materialised mask
-as well as through a fold, and `HoistScale` proves loop coverage from a literal
-trip count as well as from `len(xs)`.  Together those closed the three things
-wrong with the code `digit-bound` emitted for `fused_sum` -- the scale is
-hoisted, the exponent is an integer, and the dead `isfinite` assertion is gone.
-The plan that produced them, with its measurements and phase records, is in the
-history of this file.
+The analysis work landed on `main` in #311: value-class analysis reads an
+`isfinite` guard through a materialised mask as well as through a fold, and
+`HoistScale` proves loop coverage from a literal trip count as well as from
+`len(xs)`.  Together those closed the three things wrong with the code
+`digit-bound` emitted for `fused_sum` -- the scale is hoisted, the exponent is
+an integer, and the dead `isfinite` assertion is gone.
 
 What follows is what did *not* close, and only reproduces here: every listing
-below is from `digit-bound` rebased onto `todo-finiteness`, at
-`list[Real[FP16]]` of 32.
+below is from `digit-bound` rebased onto `main`, at `list[Real[FP16]]` of 32.
 
 ## The regression test this work still owes
 
-- [ ] **A golden listing for `fused_sum`.**  The net on `todo-finiteness`
+- [ ] **A golden listing for `fused_sum`.**  The net on `main`
       (`tests/unit/transform/test_fused_sum_schedule.py`) stops at the
-      analyses, because `fused_sum` does not compile on that branch at all:
+      analyses, because `fused_sum` does not compile there at all:
       storage selection refuses the return value (`no storage format contains
       MPBFloatFormat(pmax=89, emin=62, ...)`), which only digit-bound inference
       narrows.  So the two symptoms that are *facts about emitted code* -- the
