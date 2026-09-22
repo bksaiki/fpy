@@ -15,10 +15,11 @@ from .normalize import TritonNormalizeError, normalize, normalize_module
 from .storage import TritonStorageDomain, choose_storage, choose_storage_scalar
 from .target import ScalarOpTable, TritonOp, TritonOpStyle, is_native_ctx, make_op_table
 from .types import TritonScalar, TritonTuple, TritonType
-from .vectorize import tile_loops, why_not_tileable
+from .vectorize import TileResult, tile_loops, why_not_tileable
 
 __all__ = [
     'ScalarOpTable',
+    'TileResult',
     'TritonEmitError',
     'TritonNormalizeError',
     'TritonOp',

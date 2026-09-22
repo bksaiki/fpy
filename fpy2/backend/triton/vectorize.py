@@ -23,6 +23,8 @@ fallback:
   wrote last is exactly what a tile does not preserve.
 """
 
+from dataclasses import dataclass
+
 from ...analysis import (
     ContextUse,
     ContextUseAnalysis,
@@ -57,7 +59,7 @@ from ...ast import (
 from ...number import Context
 from ...transform import SplitLoop, SplitLoopStrategy
 
-__all__ = ['tile_loops', 'why_not_tileable']
+__all__ = ['TileResult', 'tile_loops', 'why_not_tileable']
 
 
 _SELECTS: tuple[type[Expr], ...] = (Max, Min, And, Or)
@@ -276,8 +278,25 @@ def _encloses_tileable(stmt: ForStmt, func: FuncDef) -> bool:
     return any(why_not_tileable(c, func) is None for c in v.out)
 
 
-def tile_loops(func: FuncDef, width: int) -> FuncDef:
-    """*func* with each *innermost* tileable loop split into chunks of *width*.
+@dataclass
+class TileResult:
+    """What :func:`tile_loops` did."""
+
+    func: FuncDef
+    """The rewritten function."""
+
+    tiled: list[ForStmt]
+    """The outer chunk loop of each tile, in visit order.
+
+    The emitter needs to know which loop carries a tile, and recognizing one
+    by its *shape* would be pattern-matching this pass's output -- brittle,
+    and wrong the moment the shape changes.  This pass knows, so it says.
+    """
+
+
+def tile_loops(func: FuncDef, width: int | str) -> TileResult:
+    """*func* with each *innermost* tileable loop split into chunks of
+    *width*.
 
     **The innermost loop of a nest carries the tile**, and the ones enclosing
     it are left as loops.  That is the shape both Triton idioms take: a fused
@@ -286,12 +305,19 @@ def tile_loops(func: FuncDef, width: int) -> FuncDef:
     over tiles of `K`.  Tiling an enclosing loop as well would give a nest of
     tiles where the target wants one tiled dimension.
 
+    *width* is a literal, or the **name of a free variable** holding it.  The
+    name is what a target wants: a tile's width is a compile-time constant
+    parameter of the kernel, chosen by the launcher rather than fixed in the
+    program.  A literal keeps the loop runnable against the interpreter, and a
+    free one does too -- the interpreter simply takes a value for it, so a
+    differential can vary the width instead of pinning one.
+
     A loop :func:`why_not_tileable` refuses is left alone: it stays sequential,
     which is still parallel across whatever encloses it.
 
-    ``MASK`` is the remainder policy because a tile has to be a compile-time
-    constant width -- ``PEEL`` would emit a second, narrower body for the tail
-    and ``STRICT`` would refuse a length the factor does not divide.
+    ``MASK`` is the remainder policy because a tile has to be a constant width
+    -- ``PEEL`` would emit a second, narrower body for the tail and ``STRICT``
+    would refuse a length the factor does not divide.
 
     Splitting rewrites the loop into a nest, so the indices of everything after
     it shift; the scan therefore resumes past the pair it just created rather
@@ -299,15 +325,26 @@ def tile_loops(func: FuncDef, width: int) -> FuncDef:
     """
     if not isinstance(func, FuncDef):
         raise TypeError(f"Expected a 'FuncDef', got {func}")
-    if not isinstance(width, int) or width < 1:
-        raise ValueError(f'Expected a positive width, got {width}')
+    match width:
+        case int() if width >= 1:
+            factor: Expr = Integer(width, None)
+        case int():
+            raise ValueError(f'Expected a positive width, got {width}')
+        case str():
+            factor = Var(NamedId(width), None)
+        case _:
+            raise TypeError(f"Expected an 'int' or 'str' width, got {width}")
 
-    factor = Integer(width, None)
+    # Positions, not nodes: each split rebuilds the AST, so a node captured
+    # after one is not in the function after the next.  An index survives --
+    # a split at `i` leaves the outer loop at `i` and only shifts what
+    # follows, and the scan never returns below `i`.
+    tiled: list[int] = []
     i = 0
     while True:
         loops = _for_loops(func)
         if i >= len(loops):
-            return func
+            return TileResult(func, [_for_loops(func)[k] for k in tiled])
         stmt = loops[i]
         if (why_not_tileable(stmt, func) is not None
                 or _encloses_tileable(stmt, func)):
@@ -316,5 +353,7 @@ def tile_loops(func: FuncDef, width: int) -> FuncDef:
         func = SplitLoop.apply(
             func, factor, i, strategy=SplitLoopStrategy.MASK,
         )
-        # the split left an outer/inner pair where one loop was
+        # the split left an outer/inner pair where one loop was; the outer is
+        # the one that carries the tile
+        tiled.append(i)
         i += 2

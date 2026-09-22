@@ -198,6 +198,18 @@ kernel wrapper.
 
 ### Phase 4 — the kernel wrapper
 
+**Prerequisites done.**  `tile_loops` takes `int | str` -- a name makes the
+width a free variable, which is what becomes the `tl.constexpr` -- and returns
+a `TileResult` carrying which loops it tiled.
+
+One correction along the way: the first version returned the `ForStmt` nodes
+themselves, and they go stale.  Each `SplitLoop.apply` rebuilds the AST, so a
+node captured after one split is not in the function after the next.  It
+records *positions* instead and resolves them against the final function: a
+split at `i` leaves the outer loop at `i` and shifts only what follows, and
+the scan never returns below `i`, so an index stays valid where a node does
+not.
+
 `tl.program_id`, `tl.arange`, the `tl.constexpr` parameters, and
 `enable_fp_fusion` emitted per kernel from `scalar_fits_in` rather than pinned.
 This is the phase that turns the outer chunk loop into a launch dimension.

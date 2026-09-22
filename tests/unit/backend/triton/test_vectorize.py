@@ -197,7 +197,7 @@ class TestTileLoops:
                 m = max(m, x)
             return (acc, m)
 
-        out = tile_loops(mixed.ast, 4)
+        out = tile_loops(mixed.ast, 4).func
         src = out.format()
         assert 'for x in xs:' in src, 'the refused loop was rewritten'
         assert _count(out, IfStmt, If1Stmt) == 1, 'exactly one mask'
@@ -210,7 +210,7 @@ class TestTileLoops:
                 m = max(m, x)
             return m
 
-        out = tile_loops(largest.ast, 4)
+        out = tile_loops(largest.ast, 4).func
         assert _count(out, ForStmt) == 2
         assert _count(out, IfStmt, If1Stmt) == 1
 
@@ -222,7 +222,7 @@ class TestTileLoops:
                 m = max(m, x)
             return m
 
-        tiled = Function(tile_loops(largest.ast, 4), runtime=largest.runtime)
+        tiled = Function(tile_loops(largest.ast, 4).func, runtime=largest.runtime)
         for n in range(0, 10):
             xs = [float(k) - 4 for k in range(n)]
             assert repr(tiled(xs)) == repr(largest(xs)), n
@@ -232,7 +232,7 @@ class TestTileLoops:
         def plain(x: fp.Real):
             return x * 2
 
-        assert _count(tile_loops(plain.ast, 4), ForStmt) == 0
+        assert _count(tile_loops(plain.ast, 4).func, ForStmt) == 0
 
     def test_width_must_be_positive(self):
         @fp.fpy(ctx=fp.FP64)
@@ -241,7 +241,7 @@ class TestTileLoops:
 
         for bad in (0, -2):
             with pytest.raises(ValueError, match='positive width'):
-                tile_loops(f.ast, bad)
+                tile_loops(f.ast, bad).func
 
     def test_a_non_funcdef_is_a_type_error(self):
         with pytest.raises(TypeError, match='FuncDef'):
@@ -259,7 +259,7 @@ class TestTileLoops:
             return out
 
         assert why_not_tileable(_innermost(nested), nested.ast) is None
-        out = tile_loops(nested.ast, 4)
+        out = tile_loops(nested.ast, 4).func
         # outer left alone + the inner split into a pair
         assert _count(out, ForStmt) == 3
         assert _count(out, IfStmt, If1Stmt) == 1
@@ -273,7 +273,59 @@ class TestTileLoops:
                     out[i][j] = A[i][j] * 2
             return out
 
-        tiled = Function(tile_loops(nested.ast, 4), runtime=nested.runtime)
+        tiled = Function(tile_loops(nested.ast, 4).func, runtime=nested.runtime)
         for rows, cols in ((1, 1), (2, 3), (3, 5), (2, 8)):
             A = [[float(r * cols + c) for c in range(cols)] for r in range(rows)]
             assert repr(tiled(A)) == repr(nested(A)), (rows, cols)
+
+    def test_it_reports_which_loops_it_tiled(self):
+        """The emitter has to know which loop carries a tile; recognizing one
+        by shape would be pattern-matching this pass's output."""
+        @fp.fpy(ctx=fp.FP64)
+        def two(xs: list[fp.Real], ys: list[fp.Real]):
+            m = fp.round(0)
+            for x in xs:
+                m = max(m, x)
+            n = fp.round(0)
+            for y in ys:
+                n = max(n, y)
+            return (m, n)
+
+        r = tile_loops(two.ast, 4)
+        assert len(r.tiled) == 2
+        # each reported loop is an outer chunk loop of the rewritten function
+        all_loops = []
+
+        class _V(DefaultVisitor):
+            def _visit_for(self, s, ctx):
+                all_loops.append(s)
+                return super()._visit_for(s, ctx)
+
+        _V()._visit_function(r.func, None)
+        assert all(any(t is loop for loop in all_loops) for t in r.tiled)
+
+    def test_a_symbolic_width_is_a_free_variable(self):
+        """A tile's width is a compile-time parameter of the kernel, chosen by
+        the launcher -- so the name, not a literal."""
+        @fp.fpy(ctx=fp.FP64)
+        def largest(xs: list[fp.Real], BLOCK: fp.Real):
+            m = fp.round(0)
+            for x in xs:
+                m = max(m, x)
+            return m
+
+        r = tile_loops(largest.ast, 'BLOCK')
+        assert 'BLOCK' in r.func.format()
+        tiled = Function(r.func, runtime=largest.runtime)
+        for n in (0, 1, 5, 8, 9):
+            xs = [float(k) - 3 for k in range(n)]
+            for b in (1, 4, 8):
+                assert repr(tiled(xs, b)) == repr(largest(xs, b)), (n, b)
+
+    def test_a_bad_width_is_rejected(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real):
+            return x
+
+        with pytest.raises(TypeError, match='int.*str'):
+            tile_loops(f.ast, 1.5)
