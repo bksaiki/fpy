@@ -61,7 +61,9 @@ class SplitLoopStrategy(enum.Enum):
     body with ``j < n`` so the over-run iterations do nothing.  Every chunk is
     a full ``f`` wide.  Correct for any length, and unlike ``PEEL`` it emits
     the body once -- the tail is a predicate rather than a second loop, which
-    is the shape a SIMD target masks directly.
+    is the shape a SIMD target masks directly.  Clamping the inner bound to
+    ``min(b + f, n)`` would avoid the predicate but vary the chunk width, and a
+    constant width is the property this exists to provide.
 
     It synthesizes no remainder, so ``use_fmod`` does not reach it: the trip
     count is ``range(0, n, f)``, which already runs ``ceil(n / f)`` times."""
@@ -147,9 +149,13 @@ class _SplitLoop(SiteRewriter):
         extra: list[Stmt],
         loc: Location | None
     ) -> ContextStmt:
-        """The loop-control bindings shared by both dynamic paths.
+        """The loop-control bindings shared by every dynamic path.
         A non-positive runtime factor would silently skip iterations
-        (``range(0, n, f)`` is empty), so it is rejected loudly."""
+        (``range(0, n, f)`` is empty), so it is rejected loudly.
+
+        *extra* is spliced after that assert, which is what keeps a caller's
+        remainder off its pole: a remainder by zero is NaN, and ``fp.INTEGER``
+        cannot hold one, so it would raise rather than produce it."""
         return integer_ctx([
             # `factor` is an arbitrary caller Expr feeding `range`/`fmod`,
             # so it is evaluated exactly (unlike the iterable, kept ambient)
