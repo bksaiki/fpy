@@ -180,8 +180,8 @@ this corpus 14 arms inline and 3 hoist.
 *A call in a branch declines until it is inlined.*  A callee's body is not
 scanned, so an `assert` or an overflowing rounding inside one would reach the
 hoist unseen; the pass refuses a call to another FPy function rather than
-analyzing interprocedurally.  This is the visible half of a larger problem —
-see *Early returns block the normal form* below.
+analyzing interprocedurally.  Inlining first is what removes it; see
+*Single-exit normalization* above for what had to land before inlining could.
 
 *`strict` is affordable here, and was not expected to be.*  It declines any
 operation whose context cannot be shown not to overflow — which, in a function
@@ -334,12 +334,28 @@ should stay unconditional is a question for when kernels get large — Triton's
 own `noinline` exists because a big enough one spills registers — but there is
 no reason to model calls before something needs them.
 
-The obstacle is that `Hoistable` and `CompToLoop` are mutually dependent —
+**The stated obstacle turned out not to be one, and this is measured.**  The
+concern was that `Hoistable` and `CompToLoop` are mutually dependent —
 `CompToLoop` declines a comprehension in a ternary arm or a `while` condition
-for want of a statement slot, and `Hoistable` makes the slot. Dropping both
-means those positions need a different answer, and `SimplifyIf` supplies part
-of it by removing the statement/expression distinction that created the problem.
-Settle this before item 2; everything downstream assumes a stable input form.
+for want of a statement slot, and `Hoistable` makes the slot — so dropping both
+would leave those positions unanswered.  Running `inline` → `SingleExit` →
+`SimplifyIf` with neither pass over the 94-function corpus reaches expression
+form on **86**, and **not one** of the 8 refusals is a missing statement slot:
+
+| | |
+|---|---|
+| 86 | expression form |
+| 4 | a `for` would run unconditionally |
+| 4 | a `return` inside a loop |
+
+`SimplifyIf` removes the statement/expression distinction that created the
+problem, so the positions `Hoistable` existed to serve stop being special.
+
+What is left is loop-shaped, and neither half is a `SimplifyIf` question.  The
+route for the returns is the one *Single-exit normalization* gives: `Specialize`
+→ `unroll_for` → `single_exit`.  The unconditional-`for` refusals want the same
+specialization.  That is the remaining work in this item, and it is where the
+unknowns are.
 
 A remaining `IfStmt` after normalization is an error, per the rejection
 principle. So is a `while` whose condition varies.
@@ -416,7 +432,7 @@ The ordering is the useful content.
 
 | Item | Sketch |
 |---|---|
-| 1. Triton normal form | 2–4 weeks; no GPU; gated on the `Hoistable` question |
+| 1. Triton normal form | 2–4 weeks; no GPU; the `Hoistable` gate is measured away |
 | 2. Split and vectorize | 3–5 weeks; no GPU |
 | 3. Emitter | 4–6 weeks |
 | 4. Launcher + harness | 2–3 weeks; needs a GPU in CI |
