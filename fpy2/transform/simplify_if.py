@@ -1,5 +1,7 @@
 """Transformation pass to rewrite if statements to if expressions."""
 
+from collections.abc import Iterable
+
 from ..analysis import ContextUse, DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..analysis.context_use import ContextUseAnalysis
 from ..ast import *
@@ -51,12 +53,10 @@ bounds the blowup when arms nest.
 """
 
 
-class _Clone(DefaultTransformVisitor):
-    """Deep copy.  A substituted expression cannot be shared between two
-    occurrences: the analyses key on node identity."""
-
-    def apply(self, e: Expr) -> Expr:
-        return self._visit_expr(e, None)
+def _clone(e: Expr) -> Expr:
+    """A substituted expression cannot be shared between two occurrences: the
+    analyses key on node identity."""
+    return DefaultTransformVisitor()._visit_expr(e, None)
 
 
 class _Subst(DefaultTransformVisitor):
@@ -68,7 +68,7 @@ class _Subst(DefaultTransformVisitor):
 
     def _visit_var(self, e: Var, ctx: None):
         sub = self.env.get(e.name)
-        return Var(e.name, e.loc) if sub is None else _Clone().apply(sub)
+        return Var(e.name, e.loc) if sub is None else _clone(sub)
 
     def apply(self, e: Expr) -> Expr:
         return self._visit_expr(e, None)
@@ -103,10 +103,13 @@ class _Size(DefaultVisitor):
         return super()._visit_expr(e, ctx)
 
 
-def _size(nodes) -> int:
+def _size(nodes: Iterable[Expr | Stmt]) -> int:
     v = _Size()
     for n in nodes:
-        v._visit_expr(n, None) if isinstance(n, Expr) else v._visit_statement(n, None)
+        if isinstance(n, Expr):
+            v._visit_expr(n, None)
+        else:
+            v._visit_statement(n, None)
     return v.n
 
 
@@ -151,9 +154,7 @@ class _Unhoistable(DefaultVisitor):
     ``unproven`` is what ``strict`` governs: an observable effect that may
     differ, and a trap the program did not ask for -- a context with nowhere
     to put an infinity raises, but that is the format's limit, not a
-    requested abort.  The default admits these; :func:`_inline_arm` is what
-    keeps most of them from arising, since an arm it reduces to expressions
-    keeps its guard and is never hoisted.
+    requested abort.
     """
 
     def __init__(self, ctx_use: ContextUseAnalysis):
@@ -245,10 +246,7 @@ class _Unhoistable(DefaultVisitor):
                 self._abort(
                     'an operation under an `ASSERT` overflow context can abort'
                 )
-            # Such a context raises rather than yield the special.  Nobody
-            # asked it to -- unlike `assert`, `fp.cast` or `ASSERT`, the trap
-            # is the context having nowhere to put the result -- so this is
-            # `strict`'s to decline, not an abort.
+            # a trap the program did not ask for -- see the class docstring
             if isinstance(resolved, (
                 MPBFixedContext, MPBFloatContext, MPFixedContext,
                 MPFloatContext, MPSFloatContext,
@@ -385,8 +383,6 @@ class _SimplifyIfInstance(SiteRewriter):
                 continue
             mutated = sorted(self.def_use.mutated_in(src))
             merged |= set(mutated) | set(intros)
-            # an arm that reduces to expressions goes inside the `IfExpr`,
-            # which is lazy, so it keeps its guard
             env = _inline_arm(body)
             if env is not None:
                 renames.append({})
@@ -401,8 +397,6 @@ class _SimplifyIfInstance(SiteRewriter):
                 stmts.append(Assign(rename[v], None, Var(v, None), None))
             stmts.extend(RenameTarget.apply_block(body, rename).stmts)
 
-        # Over the union: a name mutated in one arm only still needs a merge,
-        # and takes its pre-`if` value on the other side.
         def side(i: int, var: NamedId) -> Expr:
             """*var* as arm *i* leaves it: the expression an inlined arm
             reduced it to, else the name the hoisted arm assigned."""
@@ -411,6 +405,8 @@ class _SimplifyIfInstance(SiteRewriter):
                 return Var(renames[i].get(var, var), None)
             return e
 
+        # Over the union: a name mutated in one arm only still needs a merge,
+        # and takes its pre-`if` value on the other side.
         exprs: dict[NamedId, Expr] = {
             var: IfExpr(cond, side(0, var), side(1, var), None)
             for var in sorted(merged)
