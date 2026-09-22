@@ -13,18 +13,18 @@ def simplify_if(
     strict: bool = False,
 ) -> Function:
     """:class:`fpy2.transform.SimplifyIf` over *func*: every `if` statement
-    becomes an `if` expression, with both branch bodies hoisted and each merged
-    variable made explicit.
+    becomes an `if` expression, with each merged variable made explicit.
 
     An arm whose statements are all plain assignments is reduced to one
     expression per name and placed *inside* the `IfExpr`, which is lazy, so it
-    keeps its guard.  Only an arm that cannot be reduced -- a loop, a list
-    write, a nested `if` left unrewritten by ``where`` -- is hoisted, and only
-    a hoisted arm can be refused.
+    keeps its guard.  An arm that cannot be reduced -- a loop, a list write, a
+    nested `if` left unrewritten by ``where`` -- is hoisted into the enclosing
+    block and runs unconditionally.
 
-    Hoisting makes a branch body unconditional, so a construct that could
-    change which value the function produces, or that aborts where the program
-    asked to, is declined under every mode, raising
+    Refusals are judged on the arm as written, before it is known to inline, so
+    an arm that would have inlined can still be declined.  A construct that
+    could change which value the function produces, or that aborts where the
+    program asked to, is declined under every mode, raising
     :class:`~fpy2.transform.TransformDeclined`: `return`, `assert`, an effect,
     a list write, `while`, `for`, `fp.cast`, a call to another FPy function,
     and any operation under an `ASSERT` overflow context.  That last is keyed
@@ -38,18 +38,12 @@ def simplify_if(
     refusals, so the value it computes is discarded by the enclosing
     `IfExpr`.
 
-    ``strict`` governs what is left: an observable effect that cannot be shown
-    to be preserved, and a trap the program did not ask for.  The default
-    hoists them -- an out-of-range subscript is behavior FPy already leaves
-    undefined; a function with no ``ctx=`` inherits its caller's context, so no
-    operation in it can be shown not to overflow; and a context that cannot
-    hold an infinity raises where a wider one would return, which is the
-    format's limit rather than a requested abort.  That last covers an
-    operation with a pole at a finite operand (`fp.logb(0)`, `fp.sqrt(-1)`,
-    `fp.acos(2)`) and, where the format is bounded and rounds an overflow to
-    infinity, any operation at all.  ``strict=True`` declines them.  It is
-    therefore conservative in an unannotated function and most useful after
-    :func:`monomorphize`, which makes contexts concrete.
+    ``strict`` also declines what cannot be *shown* to be preserved: an
+    out-of-range subscript, an operation under an unresolved context, and one
+    whose context cannot hold an infinity or NaN it might produce
+    (`fp.logb(0)` under `fp.INTEGER`).  The default admits all three, so
+    ``strict`` is conservative in an unannotated function and most useful
+    after :func:`monomorphize`, which makes contexts concrete.
 
     Cursors forward across this pass.  A rewritten `if` forwards to the region
     that replaced it; a cursor naming a statement *inside* a branch does not,
@@ -72,9 +66,7 @@ def simplify_if(
         @fp.fpy
         def f(x):
             cond = x > 0
-            y2 = (x * 2)
-            y3 = -x
-            y = (y2 if cond else y3)
+            y = ((x * 2) if cond else -x)
             return y
     """
     if not isinstance(func, Function):
