@@ -6,7 +6,7 @@ Two tiers:
 1. Directed checks (need only `fpy2`): the paper's Eq. 10 / Table 8
    example, special values, FTZ flushing semantics, and the CDNA3
    round-down behavior. (The shared FMA chain is checked by
-   `validate_nv.py`.)
+   `test_nv.py`.)
 
 2. A randomized differential sweep against the MMA-Sim reference
    implementation (https://github.com/microsoft/MMA-Sim), comparing
@@ -16,7 +16,7 @@ Two tiers:
    needs the `mmasim` package (see requirements.txt):
 
        pip install -r requirements.txt
-       python validate_amd.py [--trials N]
+       python tests/test_amd.py [--trials N]
 """
 
 import argparse
@@ -24,11 +24,12 @@ import os
 import random
 import sys
 
-# `amd.py` lives in the same directory
+# the parent for `models`, this directory for `common`
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import fpy2 as fp
-import amd
+from models import amd
 
 FAILURES = 0
 
@@ -85,7 +86,7 @@ def check_directed():
 def run_sweep(trials):
     import torch  # type: ignore[import-not-found]
     from mmasim.arithmetic import fdpa, ftz_mul_add  # type: ignore[import-not-found]
-    import validate_common as vc
+    import common as vc
 
     torch.manual_seed(0)
 
@@ -130,6 +131,20 @@ def run_sweep(trials):
                amd.make_gtr_fdpa(16, fp.S1E5M2, fp.S1E5M2), torch.float8_e5m2fnuz, 32)
 
 ###########################################################
+
+def test_directed_checks():
+    """The torch-free checks, so `pytest` runs them too.
+
+    `main` adds the differential sweep against the reference implementation,
+    which needs `requirements.txt` and so cannot be a plain test.
+    """
+    global FAILURES
+    FAILURES = 0
+    random.seed(0)
+    check_table8()
+    check_directed()
+    assert not FAILURES, f'{FAILURES} check(s) failed'
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

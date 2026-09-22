@@ -37,6 +37,12 @@ _TOP: _TopType = _TopType()
 _Lattice: TypeAlias = Value | _TopType
 
 
+def base_env(func: FuncDef) -> dict[NamedId, object]:
+    """The free-variable environment an expression of *func* needs to be
+    evaluated through the interpreter."""
+    return {d: func.env[str(d)] for d in func.free_vars}
+
+
 @dataclass
 class PartialEvalInfo:
     by_def: dict[Definition, Value]
@@ -75,12 +81,6 @@ class _PartialEvalInstance(DefaultVisitor):
             d: v for d, v in self.by_def.items() if not isinstance(v, _TopType)
         }
         return PartialEvalInfo(public_by_def, self.by_expr, self.def_use)
-
-    def _base_env(self) -> dict[NamedId, object]:
-        return {
-            d: self.func.env[str(d)]
-            for d in self.func.free_vars
-        }
 
     def _is_value(self, e: Expr) -> bool:
         return e in self.by_expr
@@ -154,7 +154,7 @@ class _PartialEvalInstance(DefaultVisitor):
         """Evaluate via the interpreter; return ``None`` on any
         exception (PE is best-effort)."""
         try:
-            return to_value(self.rt.eval_expr(e_eval, self._base_env(), ctx))
+            return to_value(self.rt.eval_expr(e_eval, base_env(self.func), ctx))
         except Exception:  # noqa: BLE001 -- partial eval is best-effort
             return None
 

@@ -50,7 +50,9 @@ class TestFormatInfer:
 
     @staticmethod
     def _run(func: fp.Function):
-        return FormatInfer.analyze(func.ast)
+        # the whole reduced product: `use_digit_bounds` is off by default, and these
+        # tests are about what the two passes together infer
+        return FormatInfer.analyze(func.ast, use_digit_bounds=True)
 
     # ------------------------------------------------------------------
     # Simple cases – no explicit rounding context
@@ -2432,6 +2434,525 @@ class TestPinnedArgumentsCloseAContext:
         assert self._round_bound(FormatInfer.analyze(mono)) == REAL_FORMAT
 
 
+class TestSelfAnchoredRounding:
+    """``with fp.MPFixedContext(logb(x) - k): y = fp.round(x)``.
+
+    The position is a run-time value, so the scope never resolves -- but it is
+    derived from the exponent of the very value being rounded, and the two
+    cancel.  Expected widths are ``min(k + carry, prec_x)``.
+    """
+
+    @staticmethod
+    def _round_bound(k, rm):
+        from fpy2.ast.fpyast import Round
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            e = fp.logb(x)
+            with fp.MPFixedContext(e - k, rm):
+                return fp.round(x)
+
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32)])
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Round))
+
+    @pytest.mark.parametrize(('k', 'prec'), [(1, 1), (5, 5), (12, 12), (23, 23)])
+    def test_truncating_width_is_k(self, k, prec):
+        assert self._round_bound(k, fp.RM.RTZ).pmax == prec
+
+    @pytest.mark.parametrize(('k', 'prec'), [(1, 2), (5, 6), (12, 13)])
+    def test_nearest_costs_one_more_bit(self, k, prec):
+        """`RNE` can carry out of the top binade onto `2 ** (e + 1)`."""
+        assert self._round_bound(k, fp.RM.RNE).pmax == prec
+
+    def test_the_width_saturates_at_the_operand(self):
+        """Rounding never adds significand bits, so a quantum finer than the
+        operand's own grid stops buying width."""
+        assert self._round_bound(30, fp.RM.RTZ).pmax == 24
+
+    def test_a_quantum_past_the_value_leaves_only_zero(self):
+        """At `k = 0` the quantum is `2 ** (logb(x) + 1)`, which every value
+        truncates below -- to `-0.0` where it was negative, which the set has
+        to keep."""
+        assert self._round_bound(0, fp.RM.RTZ) == SetFormat(
+            frozenset({Fraction(0), NEG_ZERO}))
+
+    @pytest.mark.parametrize('k', [0, -1, -5])
+    def test_a_grid_past_the_value_keeps_the_away_modes_honest(self, k):
+        """`RAZ` reaches one quantum however coarse the grid is, so the result
+        is not zero -- and the quantum, not the operand, sets its magnitude."""
+        bound = self._round_bound(k, fp.RM.RAZ)
+        x = fp.FP32.round(1.5)
+        actual = fp.MPFixedContext(int(fp.logb(x)) - k, fp.RM.RAZ).round(x)
+        assert bound.pmax == 1
+        assert bound.representable_in(actual), (k, bound)
+
+    def test_an_unrelated_position_stays_unbounded(self):
+        """The counterweight: without the `logb` tie there is nothing to
+        cancel, and the answer is the one this analysis always gave."""
+        from fpy2.ast.fpyast import Round
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTZ):
+                return fp.round(x)
+
+        mono = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP32), RealType(fp.INTEGER)]
+        )
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        bound = next(b for e, b in info.by_expr.items() if isinstance(e, Round))
+        assert bound == REAL_FORMAT
+
+
+class TestElementWiseFrames:
+    """``max([logb(x) for x in xs])`` bounds a rounding in a *later*
+    comprehension over the same ``xs``.
+
+    A list has one element term, and a fact about it is a claim about every
+    element -- which is what lets two comprehensions share it.  Precisions are
+    measured against the interpreter in ``docs/todos/digit-bound-inference.md``.
+    """
+
+    L32 = ListType(RealType(fp.FP32), 32)
+
+    @staticmethod
+    def _round_bound(fn, arg_types):
+        from fpy2.ast.fpyast import Round
+        from fpy2.transform import Monomorphize
+
+        mono = Monomorphize.apply(fn.ast, fp.REAL, arg_types)
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Round))
+
+    def test_max_over_a_list_bounds_a_later_comprehension(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            e = max([fp.logb(x) for x in xs])
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        # 12 for the binade, plus the carry the default `RM.RNE` allows
+        assert self._round_bound(f, [self.L32]).pmax == 13
+
+    def test_a_product_spans_one_more_binade(self):
+        """Two `logb`s cancel against the `max` of their sum, and `m_x * m_y`
+        reaches 4 where a single mantissa reaches 2."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(xs, ys):
+            ps = [x * y for x, y in zip(xs, ys)]
+            e = max([fp.logb(x) + fp.logb(y) for x, y in zip(xs, ys)])
+            with fp.MPFixedContext(e - 12):
+                zs = [fp.round(p) for p in ps]
+            return sum(zs)
+
+        assert self._round_bound(g, [self.L32, self.L32]).pmax == 14
+
+    def test_a_subset_shares_nothing(self):
+        """Soundness: a `max` over *some* elements says nothing about the rest.
+
+        A slice is not a whole list, so its comprehension target gets a term of
+        its own and the ordering never reaches the rounding.  What is left is
+        the non-relational answer -- the operand's own precision -- which is far
+        looser than the 13 the whole-list version gives, and has to be, because
+        the elements the `max` never saw can be arbitrarily larger.
+        """
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            e = max([fp.logb(x) for x in xs[0:16]])
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        assert self._round_bound(f, [self.L32]).pmax == 24
+
+    def test_the_subset_bound_really_is_needed(self):
+        """The counterweight: elements outside the `max` push the true
+        precision past what the whole-list rule would have claimed."""
+        xs = [fp.FP32.round(2.0 ** -60)] * 16 + [fp.FP32.round(1.5 * 2 ** 60)] * 16
+        e = max(int(fp.logb(x)) for x in xs[0:16])
+        ys = [fp.MPFixedContext(e - 12).round(x) for x in xs]
+        assert max(y.c.bit_length() for y in ys) > 13
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: the inferred precisions are reached."""
+        xs = [fp.FP32.round((2 - 2 ** -20) * 2 ** 5) for _ in range(32)]
+        e = max(int(fp.logb(x)) for x in xs)
+        ys = [fp.MPFixedContext(e - 12).round(x) for x in xs]
+        assert max(y.c.bit_length() for y in ys) == 13   # 12, plus the carry
+
+        ps = [fp.REAL.round(x.as_rational() * x.as_rational()) for x in xs]
+        e = max(2 * int(fp.logb(x)) for x in xs)
+        zs = [fp.MPFixedContext(e - 12).round(p) for p in ps]
+        assert max(z.c.bit_length() for z in zs) == 14
+
+
+class TestFramesOnDesugaredLoops:
+    """The same frames, on the form the C++ backend analyzes.
+
+    Comprehension elimination rewrites a comprehension into ``fp.empty`` plus an
+    indexed ``for``, and storage selection runs on *that*.  These pin that the
+    precisions survive the rewrite -- without it the analysis is a checker the
+    backend never sees.
+    """
+
+    L32 = ListType(RealType(fp.FP32), 32)
+
+    @staticmethod
+    def _desugared_round(fn, arg_types, name):
+        from fpy2.ast.fpyast import Round
+
+        mod = fp.Module()
+        mod.add(fn, arg_types=arg_types)
+        spec = next(f for f in fp.CppCompiler().specialize(mod)
+                    if f.name.startswith(name))
+        info = FormatInfer.analyze(spec.ast, use_digit_bounds=True)
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Round))
+
+    def test_an_indexed_loop_is_the_same_frame(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            e = max([fp.logb(x) for x in xs])
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        assert self._desugared_round(f, [self.L32], 'f').pmax == 13
+
+    def test_a_zip_survives_its_materialized_range(self):
+        """`zip` desugars to `_i = t[j]` over `t = range(len(xs))`.  Since
+        `range(n)[i] == i`, `_i` is a full index too."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(xs, ys):
+            ps = [x * y for x, y in zip(xs, ys)]
+            e = max([fp.logb(x) + fp.logb(y) for x, y in zip(xs, ys)])
+            with fp.MPFixedContext(e - 12):
+                zs = [fp.round(p) for p in ps]
+            return sum(zs)
+
+        assert self._desugared_round(g, [self.L32, self.L32], 'g').pmax == 14
+
+    def test_a_subset_still_shares_nothing(self):
+        """Soundness survives the rewrite too: a slice is not a whole list."""
+        @fp.fpy(ctx=fp.REAL)
+        def h(xs):
+            e = max([fp.logb(x) for x in xs[0:16]])
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        assert self._desugared_round(h, [self.L32], 'h').pmax == 24
+
+
+class TestAlignedSumPrecision:
+    """An exact sum of aligned terms keeps its summands' grid.
+
+    ``_sum_bound`` simulates pairwise additions over the element *format*, which
+    is sound but drops what makes the answer small -- every summand sits on one
+    grid, so the sum does too.  Tracking ``lsb`` is what states that, and the
+    store answers the sum directly rather than re-deriving it from a
+    materialized format.
+    """
+
+    L32 = ListType(RealType(fp.FP32), 32)
+
+    @staticmethod
+    def _sum_bound(fn, arg_types):
+        from fpy2.ast.fpyast import Sum
+        from fpy2.transform import Monomorphize
+
+        mono = Monomorphize.apply(fn.ast, fp.REAL, arg_types)
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        fmt = next(b for e, b in info.by_expr.items() if isinstance(e, Sum))
+        return AbstractFormat.from_format(fmt).prec
+
+    def test_the_sum_keeps_the_alignment(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            e = max([fp.logb(x) for x in xs])
+            with fp.MPFixedContext(e - 12):
+                ys = [fp.round(x) for x in xs]
+            return sum(ys)
+
+        # 13 per term, plus ceil(log2 32) for summing 32 of them
+        assert self._sum_bound(f, [self.L32]) == 18
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: 32 aligned terms reach exactly 18 digits, so the
+        bound is attained and not an artifact."""
+        xs = [fp.FP32.round((2 - 2 ** -20) * 2 ** 5) for _ in range(32)]
+        e = max(int(fp.logb(x)) for x in xs)
+        ys = [fp.MPFixedContext(e - 12).round(x) for x in xs]
+        total = sum((y.as_rational() for y in ys), start=0)
+        assert abs(int(total / 2 ** (e - 11))).bit_length() == 18
+
+    def test_a_per_element_position_is_not_a_shared_grid(self):
+        """The counterweight for the relation: each term rounds at *its own*
+        exponent, so the grid is one element's rather than one they share, and
+        reading it as shared would claim the smallest term sits as high as the
+        widest."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            ys = fp.empty(len(xs))
+            for i in range(len(xs)):
+                e = fp.logb(xs[i])
+                with fp.MPFixedContext(e - 12):
+                    ys[i] = fp.round(xs[i])
+            return sum(ys)
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
+    def test_a_gathered_part_is_no_more_shared(self):
+        """The same, over a part of the list: the terms an index set copies
+        describe an element of that part, so a grid built from them is one
+        element's however it was minted."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            n = len(xs)
+            ys = fp.empty(n)
+            for i in range(0, n, 2):
+                e = fp.logb(xs[i])
+                with fp.MPFixedContext(e - 12):
+                    ys[i] = fp.round(xs[i])
+            return sum(ys)
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
+    def test_a_callee_rounding_per_element_is_no_more_shared(self):
+        """... and through a call, where the callee sees a scalar and cannot
+        know its argument varies with the index.  The comprehension feeds the
+        list summary directly, so the check cannot live at the assignment."""
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            with fp.MPFixedContext(fp.logb(x) - 12):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return sum([g(x) for x in xs])
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
+    def test_an_unaligned_sum_gets_nothing(self):
+        """The counterweight for soundness: without a shared grid there is no
+        alignment to exploit, and the answer stays the non-relational one."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            return sum(xs)
+
+        assert self._sum_bound(f, [self.L32]) > 200
+
+
+class TestAnchorsAcrossACall:
+    """A callee's rounding cancels against a position its *caller* built.
+
+    ``_analyze_callee`` re-instantiates per call site, so the callee shares the
+    caller's store and its parameters carry the caller's terms.  This is the
+    shape ``examples/mmasim``'s ``round_down_at`` takes, which the self-anchored
+    rule cannot reach because the ``logb`` and the rounding sit in different
+    functions.
+    """
+
+    @staticmethod
+    def _bounds(caller):
+        from fpy2.ast.fpyast import Call, Round
+        from fpy2.transform import Monomorphize
+
+        mono = Monomorphize.apply(caller.ast, fp.REAL, [RealType(fp.FP32)])
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        sub = next(iter(info.by_call.values()))
+        inner = next(b for e, b in sub.by_expr.items() if isinstance(e, Round))
+        outer = next(b for e, b in info.by_expr.items() if isinstance(e, Call))
+        return inner, outer
+
+    def test_the_position_crosses_the_edge(self):
+        @fp.fpy(ctx=fp.REAL)
+        def round_at(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTZ):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def caller(x):
+            return round_at(x, fp.logb(x) - 12)
+
+        inner, outer = self._bounds(caller)
+        assert inner.pmax == 12
+        # and the callee's answer comes back out
+        assert outer.pmax == 12
+
+    def test_an_unrelated_position_still_says_nothing(self):
+        """The counterweight: crossing the edge carries terms, not licence.
+        A position the caller did not build from the argument cancels with
+        nothing."""
+        @fp.fpy(ctx=fp.REAL)
+        def round_at(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTZ):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def caller(x):
+            return round_at(x, fp.logb(x * 3.0) - 12)
+
+        inner, _ = self._bounds(caller)
+        assert inner.pmax == 24     # the operand's own precision, no relation
+
+
+class TestRescaledRounding:
+    """A rounding `rescale_fixed` moved to digit position zero.
+
+    That is how a run-time position reaches the backend: scale in under `REAL`,
+    round at a *concrete* position, scale back.  The precision has to survive
+    the rewrite, which needs the scale to cancel against the `logb` it was
+    built from.
+    """
+
+    @staticmethod
+    def _round_bound(k):
+        import fpy2.strategies as st
+        from fpy2.ast.fpyast import Round
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def direct(x):
+            with fp.MPFixedContext(fp.logb(x) - k, fp.RM.RTZ):
+                return fp.round(x)
+
+        r = st.simplify(st.rescale_fixed(direct))
+        mono = Monomorphize.apply(r.ast, fp.REAL, [RealType(fp.FP32)])
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Round))
+
+    @pytest.mark.parametrize('k', [5, 12, 23])
+    def test_the_precision_survives_the_rescale(self, k):
+        assert self._round_bound(k).pmax == k
+
+    def test_the_interpreter_agrees(self):
+        """The counterweight: the rescaled program really does reach `k`."""
+        from fractions import Fraction
+
+        k, x = 12, fp.FP32.round(1.9375 * 2 ** 7)
+        scale = int(fp.logb(x)) - k + 1
+        t = fp.REAL.round(x.as_rational() * Fraction(2) ** -scale)
+        y = fp.MPFixedContext(-1, fp.RM.RTZ).round(t)
+        assert y.c.bit_length() == k
+
+    def test_a_power_of_two_costs_no_binade(self):
+        """Why the answer is `k` and not `k + 1`: two mantissas in `[1, 2)`
+        multiply below 4, but a power of two's is exactly 1."""
+        from fpy2.ast.fpyast import Mul
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.REAL:
+                return (2 ** fp.logb(x)) * x
+
+        mono = Monomorphize.apply(f.ast, fp.REAL, [RealType(fp.FP32)])
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        bound = next(b for e, b in info.by_expr.items() if isinstance(e, Mul))
+        # |2**logb(x) * x| < 2**(2*logb(x)+1), so one binade, not two
+        assert AbstractFormat.from_format(bound).prec <= 24
+
+
+class TestBoundsThroughAMax:
+    """Operators whose upper bound goes through a `max`."""
+
+    @staticmethod
+    def _prec(fn):
+        from fpy2.ast.fpyast import Round
+        from fpy2.transform import Monomorphize
+
+        mono = Monomorphize.apply(fn.ast, fp.REAL, [RealType(fp.FP32)])
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        return next(b for e, b in info.by_expr.items() if isinstance(e, Round)).pmax
+
+    def test_a_sum_reaches_one_binade_past(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(fp.logb(x) - 12, fp.RM.RTZ):
+                return fp.round(x + x)
+
+        assert self._prec(f) == 13
+
+    def test_a_max_is_one_of_its_operands(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(fp.logb(x) - 12, fp.RM.RTZ):
+                return fp.round(max(x, x))
+
+        assert self._prec(f) == 12
+
+    def test_hypot_behaves_like_a_sum(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(fp.logb(x) - 12, fp.RM.RTZ):
+                return fp.round(fp.hypot(x, x))
+
+        assert self._prec(f) == 13
+
+    def test_the_baseline_is_unchanged(self):
+        """The counterweight: the extra binade is the operator's, not noise."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x):
+            with fp.MPFixedContext(fp.logb(x) - 12, fp.RM.RTZ):
+                return fp.round(x)
+
+        assert self._prec(f) == 12
+
+
+class TestRoundCarry:
+    """Which rounding modes can carry out of the top binade.
+
+    Only `RTZ` never increases a magnitude; every other mode carries on at
+    least one sign, and this domain bounds a magnitude without tracking sign.
+
+    `RTO` looks like a second exception -- carrying out lands on a power of
+    two, whose significand is even, and round-to-odd never produces one --
+    but that fails exactly where the value truncates away entirely, since the
+    candidates are then zero and one quantum and *one* is odd.  Taking the
+    exception needs proof the value **never** truncates, which the store
+    cannot give (it answers the greatest precision, not the least), so `RTO`
+    carries with the rest.
+    """
+
+    def test_the_only_mode_that_cannot_carry(self):
+        assert TestSelfAnchoredRounding._round_bound(5, fp.RM.RTZ).pmax == 5
+
+    @pytest.mark.parametrize(
+        'rm',
+        [fp.RM.RNE, fp.RM.RNA, fp.RM.RAZ, fp.RM.RTP, fp.RM.RTN, fp.RM.RTE,
+         fp.RM.RTO],
+    )
+    def test_modes_that_can(self, rm):
+        assert TestSelfAnchoredRounding._round_bound(5, rm).pmax == 6
+
+    def test_round_to_odd_carries_at_precision_zero(self):
+        """The case that rules `RTO` out: at precision 0 the carried count is
+        1, which is odd, so `RTO` takes it and the result is not zero."""
+        assert TestSelfAnchoredRounding._round_bound(0, fp.RM.RTO).pmax == 1
+        assert TestSelfAnchoredRounding._round_bound(0, fp.RM.RTZ) == \
+            SetFormat(frozenset({Fraction(0), NEG_ZERO}))
+
+    def test_the_interpreter_agrees_at_precision_zero(self):
+        """The counterweight, at a quantum one binade above the value."""
+        x = fp.FP32.round(1.75 * 2 ** 10)
+        assert float(fp.MPFixedContext(10, fp.RM.RTO).round(x)) == 2 ** 11
+        assert fp.MPFixedContext(10, fp.RM.RTZ).round(x).is_zero()
+
+    @pytest.mark.parametrize('rm', [fp.RM.RTP, fp.RM.RTN])
+    def test_the_interpreter_agrees_on_the_directed_modes(self, rm):
+        """The counterweight: each really does carry, on one sign."""
+        x = [fp.FP32.round(s * 1.75 * 2 ** 10) for s in (1, -1)]
+        carried = [
+            abs(int(fp.MPFixedContext(9, rm).round(v).as_rational() / 2 ** 10)) > 1
+            for v in x
+        ]
+        assert any(carried) and not all(carried)
+
+
 class TestSpecialSentinels:
     """The ``Special`` members of ``SetValue``.  Nothing produces them yet --
     these pin the value domain itself."""
@@ -3418,3 +3939,107 @@ class TestMinMaxOverKnownValues:
         fi = FormatInfer.analyze(g.ast)
         fmt = _fmt_of(fi, 'max(z, 0)')
         assert isinstance(fmt, SetFormat) and NEG_ZERO in fmt.values
+
+
+class TestPartialFramesBoundAFilledList:
+    """A loop that fills only part of a list still bounds it: an element no
+    write reaches is uninitialized, so no bound has to cover it."""
+
+    def test_a_concatenation_carries_its_operands_reach(self):
+        """`zs` holds `xs` twice, so a rounding ten binades below the widest
+        element leaves ten digits.  Only the relation says so -- the absolute
+        positions alone leave room for 52."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            k = max([fp.logb(x) for x in xs])
+            n = len(xs)
+            zs = fp.empty(n + n)
+            for i in range(n):
+                zs[i] = xs[i]
+            for i in range(n):
+                zs[n + i] = xs[i]
+            with fp.MPFixedContext(k - 10, fp.RM.RTZ):
+                ts = [fp.round(z) for z in zs]
+            return sum(ts)
+
+        g = monomorphize(f, args=[ListType(RealType(fp.FP16), 4)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'sum(ts)')
+        # ten digits per term, and eight of them reach three binades higher
+        assert fmt.pmax == 13
+
+
+class TestAZeroGuardDischargesABranch:
+    """A branch guarded by `x == 0` is reached only where `x` is zero, and a
+    zero's `logb` is below every bound -- so the other arm is what relates a
+    rounding position back to the value being rounded."""
+
+    def test_an_exponent_behind_a_zero_test_still_anchors(self):
+        """`e` is `logb(c)` wherever `c` has one, so rounding ten binades
+        below it leaves ten digits.  Taking `-200` as the lesser disjunct instead would
+        put the grid 200 binades down and say nothing."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(c):
+            if c == 0:
+                e = -200
+            else:
+                e = fp.logb(c)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(c)
+
+        g = monomorphize(f, args=[RealType(fp.FP16)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(c)')
+        assert fmt.pmax == 11
+
+    def test_the_sentinel_stands_when_another_value_is_rounded(self):
+        """The same shape, rounding a value the guard says nothing about.
+
+        Reading `logb(c)` in the sibling arm floors `L(c)` at `c`'s minimum
+        exponent *on every path*, this one included -- where `c` is zero and
+        has no exponent at all.  Offering that floor as the merge's lesser disjunct
+        would size the round for `expmin(c) - 1` instead of for the `-20` the
+        arm carries, and `z` needs every one of the 40 digits between `-25`
+        and its own top binade.  Sized for 22, the emitted C++ rounds
+        `65535.999999940395` to `65536`.
+        """
+        small = fp.IEEEContext(2, 4)        # expmin -1
+        wide = fp.IEEEContext(5, 58)        # emax 15, 53 bits
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(c, z):
+            if c == 0:
+                e = -20
+            else:
+                e = fp.logb(c)
+            with fp.MPFixedContext(e - 5, fp.RM.RTZ):
+                return fp.round(z)
+
+        g = monomorphize(f, args=[RealType(small), RealType(wide)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(z)')
+        assert fmt.pmax == 40
+
+
+class TestAZeroGuardNoPathNames:
+    """`all(...) or scale == 0` zeroes `sum(xs) * scale` on both paths, though
+    neither disjunct names it -- one annihilation step from either."""
+
+    def test_a_guard_reached_two_ways_still_anchors(self):
+        """The store satisfies a disjunction *once*, so a term only one path
+        zeroes lets it drive the merge down while the value the bound is about
+        stays high.  What is usable is the term every path zeroes."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, scale, c):
+            t = sum(xs) * scale
+            if all([x == 0 for x in xs]) or scale == 0:
+                e = -200
+            else:
+                e = fp.logb(scale)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(t) + fp.round(c)
+
+        g = monomorphize(f, args=[ListType(RealType(fp.FP16), 4),
+                                  RealType(fp.FP16), RealType(fp.FP16)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(t)')
+        assert fmt.pmax == 28

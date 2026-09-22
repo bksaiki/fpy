@@ -486,6 +486,9 @@ class RoundElim:
             raise TypeError(f"expected a 'FuncDef', got `{func}`")
         def_use = DefineUse.analyze(func)
         ctx_use = ContextUse.analyze(func, def_use=def_use)
+        # No `use_digit_bounds`: eliminability asks whether the operand's
+        # format survives the rounding, which the non-relational pass
+        # settles on its own.
         format_info = FormatInfer.analyze(
             func, def_use=def_use, ctx_use=ctx_use,
         )

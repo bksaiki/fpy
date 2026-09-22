@@ -15,7 +15,7 @@ Two tiers:
    needs the `mmasim` package (see requirements.txt):
 
        pip install -r requirements.txt
-       python validate_nv.py [--trials N]
+       python tests/test_nv.py [--trials N]
 """
 
 import argparse
@@ -25,11 +25,12 @@ import random
 import struct
 import sys
 
-# `nv.py` lives in the same directory
+# the parent for `models`, this directory for `common`
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import fpy2 as fp
-import nv
+from models import nv
 
 FAILURES = 0
 
@@ -105,7 +106,7 @@ def run_sweep(trials):
     import torch  # type: ignore[import-not-found]
     from mmasim.arithmetic import fdpa  # type: ignore[import-not-found]
     from mmasim.arithmetic.helper import truncate_e4m3_to_ue4m3  # type: ignore[import-not-found]
-    import validate_common as vc
+    import common as vc
 
     torch.manual_seed(0)
 
@@ -209,6 +210,21 @@ def run_sweep(trials):
     run_gst_fdpa('mxfp4 (e8m0)    K64 G16', torch.float8_e8m0fnu, 64, 32, 16, 35, 'RZ-FP32', -139)
 
 ###########################################################
+
+def test_directed_checks():
+    """The torch-free checks, so `pytest` runs them too.
+
+    `main` adds the differential sweep against the reference implementation,
+    which needs `requirements.txt` and so cannot be a plain test.
+    """
+    global FAILURES
+    FAILURES = 0
+    random.seed(0)
+    check_table8()
+    check_directed()
+    check_fma(1000)
+    assert not FAILURES, f'{FAILURES} check(s) failed'
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

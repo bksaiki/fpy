@@ -2,23 +2,25 @@
 Module-level specialization.
 
 Expands a :class:`~fpy2.Module` into a new ``Module`` where every function is
-fully monomorphized at a specific ``(FuncDef, calling-ctx, argument-types)``
-spec.  Each unique spec becomes one entry; cross-function calls are rewired
-to the appropriate spec.
+fully monomorphized at one ``(FuncDef, _Instance)`` spec.  Each unique spec
+becomes one entry; cross-function calls are rewired to the appropriate spec.
 
-A spec is keyed on two axes.  The refined argument *types* say what each
-argument may be -- a public entry supplies them directly, a callee gets them
-from FormatInfer's per-call-site ``arg_fmts`` and the caller-proven lengths.
-The pinned argument *values* say which value it is, for the contexts and
-rounding modes partial evaluation resolved at the call site; those are
-substituted into the body rather than annotated, since a value is not a type.
-Both axes are exactly what ``Monomorphize`` is given, so one fingerprint means
-one body.  An argument that pins nothing contributes nothing, leaving
-polymorphic specs unchanged.
+:class:`_Instance` names the axes a spec is keyed on.  The refined argument
+*types* say what each argument may be -- a public entry supplies them
+directly, a callee gets them from FormatInfer's per-call-site ``arg_fmts``
+and the caller-proven lengths.  The pinned argument *values* say which value
+it is, for the contexts and rounding modes partial evaluation resolved at the
+call site; those are substituted into the body rather than annotated, since a
+value is not a type.  The derived *bounds* say what the caller's digit-bound
+analysis proved inside the callee.  Types and values are exactly what
+``Monomorphize`` is given, so one key means one body.  An argument that pins
+nothing contributes nothing, leaving polymorphic specs unchanged.
 """
 
 import hashlib
-from typing import NamedTuple
+from collections import Counter
+from dataclasses import dataclass
+from typing import NamedTuple, TypeAlias
 
 from ..analysis.array_size import (
     ArraySizeBound,
@@ -27,7 +29,9 @@ from ..analysis.array_size import (
     concrete_size,
 )
 from ..analysis.define_use import AssignDef, DefineUse
+from ..analysis.digit_bound import DigitBoundParams
 from ..analysis.format_infer import (
+    FormatAnalysis,
     FormatBound,
     FormatInfer,
     ListFormat,
@@ -102,7 +106,7 @@ def _bound_to_type(
 
 def _arg_fmts_to_arg_types(
     arg_fmts: tuple[FormatBound, ...] | None,
-    arg_sizes: 'tuple[ArraySizeBound, ...] | None' = None,
+    arg_sizes: tuple[ArraySizeBound, ...] | None = None,
 ) -> tuple[Type | None, ...] | None:
     """Per-argument ``FormatBound → Type`` for ``Monomorphize``."""
     if arg_fmts is None:
@@ -112,86 +116,185 @@ def _arg_fmts_to_arg_types(
     return tuple(_bound_to_type(b, s) for b, s in zip(arg_fmts, arg_sizes))
 
 
-class _SpecKey(NamedTuple):
-    """A specialization is identified by the original ``FuncDef``, the calling
-    (outer) context, and a stable fingerprint of the refined argument types --
-    which are exactly what :class:`Monomorphize` is given."""
-    fdef: FuncDef
+@dataclass(frozen=True)
+class _ListPin:
+    """What a list argument pins: its element's pin and, where the key is
+    size-sensitive, its length."""
+    elt: '_Pin | None'
+    length: int | None
+
+
+@dataclass(frozen=True)
+class _TuplePin:
+    """What a tuple argument pins: one pin per field."""
+    elts: 'tuple[_Pin | None, ...]'
+
+
+_Pin: TypeAlias = FormatBound | _ListPin | _TuplePin
+"""What one argument's type pins, or ``None`` where it pins nothing."""
+
+
+@dataclass(frozen=True)
+class _DefBound:
+    """A bound the caller derived for one named definition in the callee."""
+    name: NamedId
+    fmt: FormatBound
+
+
+@dataclass(frozen=True)
+class _ExprBound:
+    """A bound the caller derived for *count* of the callee's expressions.
+
+    Unkeyed; see :func:`_bounds_key`.
+    """
+    fmt: FormatBound
+    count: int
+
+
+_Bound: TypeAlias = _DefBound | _ExprBound
+
+_PinnedValue: TypeAlias = Context | RoundingMode | None
+"""A value a call site may pin into a callee -- see :data:`_PINNABLE`."""
+
+
+class _Instance(NamedTuple):
+    """How a function is instantiated -- everything about a spec except
+    which function it is.
+
+    Every field has its own equality, which is what lets
+    :meth:`Specialize.apply` compare a round's output against the one before
+    it without going through a name.  :func:`_mangle_private` is the only
+    place any of it becomes text.
+    """
     ctx: Context | None
-    arg_types_fp: str  # '' when the argument types constrain nothing
-    arg_vals_fp: str = ''  # '' when no argument is pinned to a value
+
+    arg_types: tuple[_Pin | None, ...] = ()
+    """What :class:`Monomorphize` is given, shaped by :func:`_type_pin`;
+    empty when the argument types constrain nothing."""
+
+    arg_vals: tuple[_PinnedValue, ...] = ()
+    """The values a call site pins into the callee; empty when none are."""
+
+    bounds: frozenset[_Bound] = frozenset()
+    """What the caller's analysis derived *inside* the callee; empty for a
+    public entry, which has no caller."""
 
 
-def _ctx_fingerprint(ctx: Context) -> str:
-    """A short, stable, identifier-safe fingerprint for a context.  Used
-    in mangled private-spec names *and* in the spec key.  Matches cpp's
-    ``_ctx_fingerprint`` in shape (SHA-1 of ``str(ctx)`` truncated to 8
-    hex chars) so the two layers can eventually share a mangling scheme."""
-    return hashlib.sha1(str(ctx).encode()).hexdigest()[:8]
+class _SpecKey(NamedTuple):
+    """Which function, instantiated how."""
+    fdef: FuncDef
+    inst: _Instance
 
 
-def _is_trivial_fmt(f: 'FormatBound') -> bool:
+_Shape: TypeAlias = 'frozenset[tuple[_Instance, int]]'
+"""How many specs of each instantiation one expansion produced.
+
+What :meth:`Specialize.apply` compares to decide it has reached a fixpoint.
+The names would nearly do, except that a *public* keeps its entry name, so
+its instantiation would be invisible to the comparison however much it
+sharpened.
+"""
+
+
+def _is_trivial_fmt(f: FormatBound) -> bool:
     """A :class:`FormatBound` that conveys no specialization information:
     ``None`` (non-numeric) or ``REAL_FORMAT`` (the polymorphic scalar
     top)."""
     return f is None or f is REAL_FORMAT or f == REAL_FORMAT
 
 
-def _type_pin(t: Type | None, size_key: bool) -> str | None:
-    """What *t* pins, as a canonical string, or ``None`` when it pins nothing.
+def _type_pin(t: Type | None, size_key: bool) -> _Pin | None:
+    """What *t* pins, or ``None`` when it pins nothing.
 
     The format of a real, the shape of an aggregate, and the length of a list
     all distinguish one spec from another.  *size_key* off drops lengths,
-    keeping keys byte-identical to a size-blind run.
+    keeping keys identical to a size-blind run.
     """
     match t:
         case RealType():
-            return None if _is_trivial_fmt(t.fmt) else f'r{t.fmt!r}'
+            return None if _is_trivial_fmt(t.fmt) else t.fmt
         case ListType():
             # the shape pins even when the leaves do not: a spec whose argument
             # is known to be a list differs from one where nothing is known
-            elt = _type_pin(t.elt, size_key)
-            # a symbolic length is a per-run gensym and must never be keyed on
-            n = concrete_size(t.length) if size_key else None
-            return f'l[{elt or "_"};{"_" if n is None else n}]'
+            # ... and a symbolic length is a per-run gensym, never keyed on
+            return _ListPin(
+                _type_pin(t.elt, size_key),
+                concrete_size(t.length) if size_key else None,
+            )
         case TupleType():
-            return 't[' + ';'.join(
-                _type_pin(e, size_key) or '_' for e in t.elts
-            ) + ']'
+            return _TuplePin(tuple(_type_pin(e, size_key) for e in t.elts))
         case _:
             return None
 
 
-def _arg_vals_fingerprint(vals: tuple[object, ...] | None) -> str:
-    """A short fingerprint of the argument values a call pins.
+def _is_trivial_bound(f: FormatBound) -> bool:
+    """*f* constrains nothing, at any depth -- so a callee whose bounds are all
+    trivial keys and names exactly as it did before it had any."""
+    match f:
+        case ListFormat():
+            return _is_trivial_bound(f.elt)
+        case TupleFormat():
+            return all(_is_trivial_bound(e) for e in f.elts)
+        case VarFormat():
+            return True
+        case _:
+            return _is_trivial_fmt(f)
 
-    A *separate* axis from :func:`_arg_types_fingerprint`: a format or a length
+
+def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
+    """What a caller's analysis derives *inside* a callee, as a set.
+
+    A relation between arguments cannot be keyed directly (see
+    :class:`DigitBoundParams`), but what it yields can: two callers that
+    bound a callee differently derive different bounds here and so take
+    separate specs.  Sharing one would let whichever caller was analyzed
+    first decide the other's storage.
+
+    Over the *expressions* as well as the definitions: a callee that assigns
+    nothing -- ``with ctx: return round(x)`` -- has only its parameters in
+    ``by_def``, so two callers would key the same.  The two maps together are
+    also what the backend reads.
+
+    A set, because both maps enumerate in AST-node order, an artefact of the
+    walk.  ``by_def`` carries its name; ``by_expr`` contributes bounds
+    without keys, so an occurrence *count* is what tells two callers apart.
+    """
+    bounds = (*sub.by_def.values(), *sub.by_expr.values())
+    if all(_is_trivial_bound(f) for f in bounds):
+        return frozenset()
+    named: set[_Bound] = {_DefBound(d.name, fmt) for d, fmt in sub.by_def.items()}
+    counted = Counter(sub.by_expr.values())
+    return frozenset(named | {_ExprBound(f, n) for f, n in counted.items()})
+
+
+def _arg_vals_key(
+    vals: tuple[_PinnedValue, ...] | None,
+) -> tuple[_PinnedValue, ...]:
+    """The argument values a call pins.
+
+    A *separate* axis from :func:`_arg_types_key`: a format or a length
     constrains what a value may be, while a pin says which value it is.  That
     is partial evaluation, not typing, so it keys on its own and is applied by
     substitution rather than by an annotation.
     """
     if vals is None or all(v is None for v in vals):
-        return ''
-    raw = '|'.join('X' if v is None else f'{type(v).__name__}:{v}' for v in vals)
-    return hashlib.sha1(raw.encode()).hexdigest()[:8]
+        return ()
+    return tuple(vals)
 
 
-def _arg_types_fingerprint(
-    atypes: 'tuple[Type | None, ...] | None', size_key: bool,
-) -> str:
-    """A short fingerprint of the refined argument types.
+def _arg_types_key(
+    atypes: tuple[Type | None, ...] | None, size_key: bool,
+) -> tuple[_Pin | None, ...]:
+    """The refined argument types, as :func:`_type_pin` shapes them.
 
-    ``''`` when nothing is pinned, so a polymorphic spec passes through
+    Empty when nothing is pinned, so a polymorphic spec passes through
     unchanged.  These types are exactly what :class:`Monomorphize` is given,
-    so two specs with the same fingerprint have identical bodies.
+    so two specs with the same key have identical bodies.
     """
     if atypes is None:
-        return ''
-    pins = [_type_pin(t, size_key) for t in atypes]
-    if all(p is None for p in pins):
-        return ''
-    raw = '|'.join(p if p is not None else 'X' for p in pins)
-    return hashlib.sha1(raw.encode()).hexdigest()[:8]
+        return ()
+    pins = tuple(_type_pin(t, size_key) for t in atypes)
+    return () if all(p is None for p in pins) else pins
 
 
 def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
@@ -199,7 +302,7 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
     concrete survives at any level.
 
     Size *variables* (``NamedId``) are per-analysis gensyms: letting one into a
-    fingerprint would make spec keys and mangled names differ from run to run.
+    key would make spec keys and mangled names differ from run to run.
     So only ``int`` lengths survive, and the structure around them is kept only
     where one does, so that nested and tuple-carried lengths line up
     positionally.
@@ -215,16 +318,26 @@ def _sanitize_size(b: ArraySizeBound) -> ArraySizeBound:
             if all(e is None for e in elts):
                 return None
             return TupleSize(elts)
-        case None:
+        case _:
             return None
 
 
-def _mangle_private(
-    base: str, ctx: Context | None, arg_types_fp: str, arg_vals_fp: str = '',
-) -> str:
-    """Build a stable name for a private spec, from the ctx, argument-type and
-    pinned-value fingerprints, so two specs of the same function are
-    distinguishable.
+def _digest(x: object) -> str:
+    """A short, reproducible digest of *x*'s structure.
+
+    A `frozenset` is sorted first: it enumerates in hash order, which does
+    not survive across processes, and this reaches generated code.
+    """
+    raw = repr(sorted(map(repr, x))) if isinstance(x, frozenset) else repr(x)
+    return hashlib.sha1(raw.encode()).hexdigest()[:8]
+
+
+def _mangle_private(base: str, inst: _Instance) -> str:
+    """A name for a private spec, so two specs of one function are
+    distinguishable in the emitted code.
+
+    The key decides identity; this only has to label it, uniquely and
+    reproducibly.
 
     *base* is the unmangled name, which the caller tracks: specialization
     re-reads its own output, and recovering the base by stripping the suffix
@@ -232,13 +345,15 @@ def _mangle_private(
     beside it.
     """
     parts = [base]
-    if ctx is not None:
-        parts.append(_ctx_fingerprint(ctx))
-    if arg_types_fp:
-        parts.append(arg_types_fp)
-    if arg_vals_fp:
-        # `v`-tagged so a type and a value fingerprint cannot collide
-        parts.append(f'v{arg_vals_fp}')
+    if inst.ctx is not None:
+        parts.append(_digest(inst.ctx))
+    if inst.arg_types:
+        parts.append(_digest(inst.arg_types))
+    # tagged so two digests of different kinds cannot collide
+    if inst.arg_vals:
+        parts.append('v' + _digest(inst.arg_vals))
+    if inst.bounds:
+        parts.append('b' + _digest(inst.bounds))
     return '__'.join(parts)
 
 
@@ -251,7 +366,7 @@ travel as types, and pinning every constant would multiply specs for no gain.
 """
 
 
-def _pinned_value(v: object) -> object | None:
+def _pinned_value(v: object) -> _PinnedValue:
     """*v* if a call site may pin it, else ``None``.
 
     Partial evaluation wraps a value FPy cannot compute on in a ``Foreign``,
@@ -264,7 +379,7 @@ def _pinned_value(v: object) -> object | None:
 
 def _pinnable_args(
     callee: FuncDef, args: tuple[Expr, ...], pe: PartialEvalInfo,
-) -> tuple[object, ...]:
+) -> tuple[_PinnedValue, ...]:
     """The value each of *args* pins in *callee*, or ``None`` where it pins
     nothing.
 
@@ -272,7 +387,7 @@ def _pinnable_args(
     only split one spec into identical copies.  An unused *named* parameter
     still splits, which costs a duplicate body rather than a wrong one.
     """
-    out: list[object] = []
+    out: list[_PinnedValue] = []
     for i, a in enumerate(args):
         param = callee.args[i].name if i < len(callee.args) else None
         val = _pinned_value(pe.by_expr.get(a))
@@ -352,7 +467,10 @@ class _DropCallArgs(DefaultTransformVisitor):
         return self._visit_function(func, None)
 
 
-def _drop_dead_args(module: Module) -> Module:
+def _drop_dead_args(
+    module: Module,
+    bound_params: dict[str, DigitBoundParams] | None = None,
+) -> Module:
     """Drop parameters no private spec's body uses any more.
 
     Pinning substitutes a value into every use of a parameter, leaving the
@@ -367,6 +485,10 @@ def _drop_dead_args(module: Module) -> Module:
     a dead one is no longer evaluated.  That is a change in what runs -- an
     out-of-range index there stops raising -- and is sound only because FPy
     leaves such a read undefined.
+
+    *bound_params* is reindexed alongside: its terms are bound to parameters by
+    position, so dropping a parameter without dropping its term hands every
+    later parameter the one before it.
     """
     public = {f.ast.name for f in module.call_graph().publics}
     dropped: dict[FuncDef, tuple[int, ...]] = {}
@@ -377,9 +499,17 @@ def _drop_dead_args(module: Module) -> Module:
         gone = () if func.name in public else _dead_args(func)
         if not gone:
             return func
-        kept = [a for i, a in enumerate(func.args) if i not in set(gone)]
+        gone_set = set(gone)
+        kept = [a for i, a in enumerate(func.args) if i not in gone_set]
         out = FuncDef(func.name, kept, func.body, func.meta, loc=func.loc)
         dropped[out] = gone
+        params = bound_params.get(func.name) if bound_params is not None else None
+        if params is not None:
+            bound_params[func.name] = DigitBoundParams(  # type: ignore[index]
+                params.store,
+                tuple(a for i, a in enumerate(params.args)
+                      if i not in gone_set),
+            )
         return out
 
     return module.map(step)
@@ -416,11 +546,11 @@ class Specialize:
     """Module → Module pass that expands public entries into a flat set
     of fully-monomorphized specializations.
 
-    Each ``(FuncDef, calling-ctx, arg-types-fingerprint)`` triple becomes
-    one entry; cross-function calls are rewired to the appropriate spec.
-    Public entries' user-given names are preserved; transitively-reached
-    private specs get a stable mangled name combining the original name
-    with the ctx and arg-types fingerprints.
+    Each ``(FuncDef, _Instance)`` pair becomes one entry; cross-function
+    calls are rewired to the appropriate spec.  Public entries' user-given
+    names are preserved; transitively-reached private specs get a stable
+    mangled name combining the original name with a digest of the
+    instantiation.
 
     The output is assembled by registering only the public specs with
     :meth:`Module.add`; private specs surface through ``add``'s eager
@@ -439,28 +569,39 @@ class Specialize:
     not a budget to raise."""
 
     @staticmethod
-    def apply(module: Module, *, size_key: bool = False) -> Module:
+    def apply(
+        module: Module,
+        *,
+        size_key: bool = False,
+        bound_params: dict[str, DigitBoundParams] | None = None,
+    ) -> Module:
         """Specialize *module*, to a fixpoint.
 
         One expansion is not enough where a callee's argument comes back from
         the call: a loop-carried accumulator only takes its format once the
         callee's return is known, and the callee is specialized from that
         argument.  Expanding again feeds each spec the sharper annotations the
-        round before it derived, and the specs stop changing once nothing more
-        is learned.
+        round before it derived, and the specs stop changing once nothing
+        more is learned.  A round is compared to the last by the
+        instantiations it produced; see :class:`_Shape`.
+
+        *bound_params* is filled as :meth:`_expand` describes.
         """
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
 
-        previous: frozenset[str] | None = None
+        previous: _Shape | None = None
         # every name this pass has coined, and the name it was coined from
         bases: dict[str, str] = {}
         for _ in range(Specialize._MAX_ROUNDS):
-            out = Specialize._expand(module, size_key=size_key, bases=bases)
-            names = frozenset(f.name for f in out.functions())
-            if names == previous:
-                return _drop_dead_args(out)
-            previous = names
+            if bound_params is not None:
+                bound_params.clear()   # only the final round's bound_params describe the output
+            out, shape = Specialize._expand(
+                module, size_key=size_key, bases=bases, bound_params=bound_params,
+            )
+            if shape == previous:
+                return _drop_dead_args(out, bound_params)
+            previous = shape
             # re-registered as they were, since a public entry's name, context
             # and argument types are the caller's and not the spec's
             module = Module(out.name)
@@ -480,9 +621,10 @@ class Specialize:
         module: Module,
         *,
         size_key: bool = False,
-        bases: 'dict[str, str] | None' = None,
-    ) -> Module:
-        """One expansion of *module*.
+        bases: dict[str, str] | None = None,
+        bound_params: dict[str, DigitBoundParams] | None = None,
+    ) -> tuple[Module, _Shape]:
+        """One expansion of *module*, and the shape of what it produced.
 
         *size_key* additionally keys each spec on its arguments' concrete
         lengths, so a function called with 3- and 5-element lists compiles
@@ -491,7 +633,11 @@ class Specialize:
         text (literals, ``empty(K)``, ``range(K)``, annotations), so the
         worklist stays finite; the cost is the same template-instantiation
         economics as the ctx and format axes.  ``False`` keeps keys and mangled
-        names byte-identical to a size-blind run.
+        names identical to a size-blind run.
+
+        *bound_params* is filled, by spec name, with the constraint store
+        and argument terms each callee's caller bound it to; replaying them
+        recovers what a spec analyzed on its own would lose.
         """
         if not isinstance(module, Module):
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
@@ -505,18 +651,19 @@ class Specialize:
         # `arg_types`, or a callee's derived from the call site.
         arg_types_for: dict[_SpecKey, tuple[Type | None, ...] | None] = {}
         # Per-spec argument values the caller pinned, applied by substitution.
-        arg_vals_for: dict[_SpecKey, tuple[object, ...] | None] = {}
+        arg_vals_for: dict[_SpecKey, tuple[_PinnedValue, ...] | None] = {}
+        # Per-spec digit-bound params, from the caller that first reached it.
+        params_for: dict[_SpecKey, DigitBoundParams] = {}
 
         public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
 
         worklist: list[_SpecKey] = []
         for entry in module:
             atypes = entry.arg_types
-            key = _SpecKey(
-                fdef=entry.func.ast,
+            key = _SpecKey(entry.func.ast, _Instance(
                 ctx=entry.ctx,
-                arg_types_fp=_arg_types_fingerprint(atypes, size_key),
-            )
+                arg_types=_arg_types_key(atypes, size_key),
+            ))
             public_keys.append((entry.name, key))
             if key not in orig_func:
                 orig_func[key] = entry.func
@@ -527,11 +674,14 @@ class Specialize:
         while worklist:
             key = worklist.pop(0)
             atypes = arg_types_for.get(key)
-            mono = Monomorphize.apply(key.fdef, key.ctx, atypes)
+            mono = Monomorphize.apply(key.fdef, key.inst.ctx, atypes)
             mono = _pin_arg_values(mono, arg_vals_for.get(key))
             monos[key] = mono
 
-            fa = FormatInfer.analyze(mono)
+            # `use_digit_bounds`: the spec key carries the relational bounds, so two
+            # callers whose context differs must not share a spec -- and the
+            # params this captures are what carry that context into the emit.
+            fa = FormatInfer.analyze(mono, use_digit_bounds=True)
             pe = fa.partial_eval
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
@@ -558,12 +708,12 @@ class Specialize:
                 # a `Context` makes a callee's `with` resolvable; a rounding
                 # mode reaches one through a context constructor
                 callee_arg_vals = _pinnable_args(callee_fn.ast, call.args, pe)
-                callee_key = _SpecKey(
-                    fdef=callee_fn.ast,
+                callee_key = _SpecKey(callee_fn.ast, _Instance(
                     ctx=callee_ctx,
-                    arg_types_fp=_arg_types_fingerprint(callee_atypes, size_key),
-                    arg_vals_fp=_arg_vals_fingerprint(callee_arg_vals),
-                )
+                    arg_types=_arg_types_key(callee_atypes, size_key),
+                    arg_vals=_arg_vals_key(callee_arg_vals),
+                    bounds=_bounds_key(sub_fa),
+                ))
 
                 site_map[call] = callee_key
                 if callee_key not in local_seen:
@@ -574,6 +724,10 @@ class Specialize:
                     orig_func[callee_key] = callee_fn
                     arg_types_for[callee_key] = callee_atypes
                     arg_vals_for[callee_key] = callee_arg_vals
+                    if fa.digit_bound is not None and call in fa.digit_bound.by_call:
+                        params_for[callee_key] = DigitBoundParams(
+                            fa.digit_bound.store, fa.digit_bound.by_call[call].args,
+                        )
                     worklist.append(callee_key)
 
             call_targets[key] = site_map
@@ -595,7 +749,7 @@ class Specialize:
             _post_order(k)
 
         # --- 3. Name each spec: a public keeps its entry name, a private
-        #        is mangled from the fingerprints.
+        #        is mangled from its instantiation.
         spec_to_public_name: dict[_SpecKey, str] = {}
         for entry_name, k in public_keys:
             spec_to_public_name.setdefault(k, entry_name)
@@ -607,9 +761,7 @@ class Specialize:
             else:
                 name = orig_func[k].name
                 base = name if bases is None else bases.get(name, name)
-                names[k] = _mangle_private(
-                    base, k.ctx, k.arg_types_fp, k.arg_vals_fp,
-                )
+                names[k] = _mangle_private(base, k.inst)
                 if bases is not None:
                     bases[names[k]] = base
 
@@ -626,7 +778,12 @@ class Specialize:
 
         # --- 5. Re-add the publics; `add` discovers the privates through
         #        the rewired `Call.fn` references.
+        if bound_params is not None:
+            for k, params in params_for.items():
+                bound_params[names[k]] = params
+
         out = Module(module.name)
         for entry_name, k in public_keys:
             out.add(new_funcs[k], name=entry_name)
-        return out
+        shape = frozenset(Counter(k.inst for k in monos).items())
+        return out, shape

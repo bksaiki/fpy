@@ -177,10 +177,14 @@ from ..context_use import (
     ContextUseAnalysis,
     ContextUseSite,
     PartialContext,
-    base_env,
 )
 from ..define_use import DefineUse, DefineUseAnalysis
-from ..partial_eval import PartialEval, PartialEvalInfo
+from ..digit_bound import (
+    DigitBoundAnalysis,
+    DigitBoundInfer,
+    DigitBoundParams,
+)
+from ..partial_eval import PartialEval, PartialEvalInfo, base_env
 from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
 from .format import AbstractableFormat, AbstractFormat, round_bound_out
@@ -352,6 +356,13 @@ class SetFormat:
     producers, which is what it replaced.
     """
     values: frozenset[SetValue]
+
+    def __repr__(self) -> str:
+        # Sorted: a `frozenset` enumerates in hash order and a `Special`'s
+        # hash is salted per process, and this repr reaches a spec's mangled
+        # name, which has to be reproducible.
+        inner = ', '.join(sorted(map(repr, self.values)))
+        return f'SetFormat(values=frozenset({{{inner}}}))'
 
     @staticmethod
     def from_value(x: SetValue):
@@ -1092,6 +1103,54 @@ def _int_bounds(af: AbstractFormat) -> tuple[int, int] | None:
     return int(af.neg_bound), int(af.pos_bound)
 
 
+def _mag_cap(fmt: 'AbstractFormat') -> int | None:
+    """The largest ``m`` with ``2 ** (m + 1)`` inside *fmt*'s finite bounds,
+    or ``None`` where either side is unbounded and nothing caps it."""
+    es = [b.e for b in (fmt.pos_bound, fmt.neg_bound) if isinstance(b, RealFloat)]
+    return min(es) - 1 if len(es) == 2 else None
+
+
+def _has_finite(fmt: 'FormatBound') -> bool:
+    """Does *fmt* hold any finite value?
+
+    Only an exhaustive set can fail to: every :class:`Format` holds a zero at
+    least.  Unknown reads as ``True``, which claims nothing.
+    """
+    while isinstance(fmt, ListFormat):
+        fmt = fmt.elt
+    if isinstance(fmt, SetFormat):
+        return any(not isinstance(v, Special) for v in fmt.values)
+    return True
+
+
+def _logb_range(fmt: 'FormatBound') -> tuple[int | None, int | None]:
+    """``logb``'s least and greatest value over *fmt*, where each is finite.
+
+    The smallest non-zero magnitude a format holds is ``2 ** exp`` and the
+    largest is its bound, so these are ``exp`` and the bound's own exponent.
+    Unlike :func:`exact_logb` neither is clamped to zero: this describes the
+    range itself, not a format that has to contain it.
+    """
+    # a list's term describes an arbitrary element, so its range is the
+    # element format's
+    while isinstance(fmt, ListFormat):
+        fmt = fmt.elt
+    if not isinstance(fmt, AbstractableFormatBound):
+        return None, None
+    af = _to_abstract(fmt)
+    if af is None:
+        return None, None
+    # a one-signed format bounds nothing on the other side, and a zero bound
+    # is that absence rather than a magnitude
+    mags = [
+        b for b in (af.pos_bound, af.neg_bound)
+        if isinstance(b, RealFloat) and not b.is_zero()
+    ]
+    hi = max((b.e for b in mags), default=None)
+    lo = af.exp if isinstance(af.exp, int) else None
+    return lo, hi
+
+
 def exact_logb(arg: 'FormatBound') -> 'AbstractFormat | None':
     """The exact format of ``logb(x)`` for ``x`` in *arg*.
 
@@ -1572,6 +1631,16 @@ class FormatAnalysis:
     reason as :attr:`array_size`: ``Specialize`` reads the values a call site
     pins from it."""
 
+    digit_bound: 'DigitBoundAnalysis | None'
+    """The digit-bound inference this instantiation used, exposed so
+    ``Specialize`` can replay a call site's constraints onto the callee's
+    specialized copy; see :class:`DigitBoundParams`."""
+
+    scopes: dict[ContextScope, 'Context | PartialContext']
+    """Each context scope's resolved context, with call-site-pinned arguments
+    filled in.  A scope absent here never resolved past what
+    :class:`ContextUse` gave."""
+
     by_call: dict[Call, 'FormatAnalysis']
     """
     Per-call-site sub-analyses — the :class:`FormatAnalysis` graph
@@ -1591,6 +1660,43 @@ class FormatAnalysis:
     analysis; the caller is expected to rule them out with a separate
     pre-check.
     """
+
+    # -- the view digit-bound inference reads -------------------------------
+    #
+    # Declared as a protocol there, satisfied structurally here, so neither
+    # module imports the other's analysis.
+
+    def logb_range(self, of: 'Expr | Definition') -> tuple[int | None, int | None]:
+        """``logb``'s least and greatest value over *of*'s format."""
+        return _logb_range(self._bound(of))
+
+    def has_finite(self, of: 'Expr | Definition') -> bool:
+        """Does *of*'s format hold any finite value?"""
+        return _has_finite(self._bound(of))
+
+    def int_range(self, of: 'Expr | Definition') -> tuple[int, int] | None:
+        """*of*'s least and greatest values, when its format holds only
+        integers."""
+        fmt = self._bound(of)
+        if not isinstance(fmt, AbstractableFormatBound):
+            return None
+        af = _to_abstract(fmt)
+        return None if af is None else _int_bounds(af)
+
+    def int_value(self, of: 'Expr | Definition') -> int | None:
+        """*of*'s value, when its format is exactly one integer."""
+        fmt = self._bound(of)
+        if not isinstance(fmt, SetFormat) or len(fmt.values) != 1:
+            return None
+        (v,) = fmt.values
+        return int(v) if isinstance(v, Fraction) and v.denominator == 1 else None
+
+    def view_of_call(self, e: Call) -> 'FormatAnalysis | None':
+        """The sub-analysis for *e*'s callee at this call site."""
+        return self.by_call.get(e)
+
+    def _bound(self, of: 'Expr | Definition') -> FormatBound:
+        return self.by_expr.get(of) if isinstance(of, Expr) else self.by_def.get(of)
 
 
 #####################################################################
@@ -1633,6 +1739,7 @@ class _FormatInferInstance(Visitor):
         loop_iter_limit: int,
         range_set_threshold: int,
         set_format_threshold: int,
+        digit_bound: 'DigitBoundAnalysis | None' = None,
     ):
         self.func = func
         self.type_info = pre.type_info
@@ -1650,11 +1757,13 @@ class _FormatInferInstance(Visitor):
         self.by_call = {}
         self._pre_cache = pre_cache
         self.pre = pre
-        # Statically-known values for parameters the call site pinned, and a
-        # memo for the `PartialContext` resolution they feed (which replays a
-        # call through the interpreter, so it should happen once per scope).
+        # Values the call site pinned for parameters, and a memo for the
+        # `PartialContext` resolution they feed -- which replays a call through
+        # the interpreter, so it happens once per scope.
         self._def_values: dict[Definition, object] = {}
         self._scope_ctx_cache: dict[ContextScope, Context | PartialContext] = {}
+        # Digit-bound inference's answers, when a prior pass supplied them.
+        self._digit_bound: DigitBoundAnalysis | None = digit_bound
         # The instantiation signature the caller pinned.  ``None``
         # means "no substitution" — the function is analyzed
         # standalone, with declared parameter types and any symbolic
@@ -2147,6 +2256,73 @@ class _FormatInferInstance(Visitor):
     # ------------------------------------------------------------------
     # Expression visitors — return the inferred FormatBound for *e*
 
+    # -- consuming digit-bound inference --------------------------------------
+
+    def _tighter(
+        self, e: Expr, fmt: FormatBound, arg_fmt: FormatBound = None,
+    ) -> FormatBound:
+        """*fmt*, or what digit-bound inference says when that is strictly tighter.
+
+        Tighter means *contained in*, not merely fewer digits: a smaller
+        precision over a wider range is a worse description, not a better one.
+
+        *arg_fmt*, where given, is a rounding's operand.  Rounding never
+        raises precision, so the answer saturates rather than growing with
+        the position.
+        """
+        if self._digit_bound is None:
+            return fmt
+        cur = to_abstract(fmt)
+        if cur is not None and fmt != REAL_FORMAT and self._digit_bound.escapes(
+            e,
+            cur.exp if isinstance(cur.exp, int) else None,
+            _mag_cap(cur),
+        ):
+            # *fmt* cannot contain what the store says, whatever the
+            # precision works out to -- one satisfiability question, where
+            # `bounds` below is three optimisations.
+            return fmt
+        bounds = self._digit_bound.bounds(e)
+        if bounds is None:
+            return fmt
+        prec: int | float = bounds.prec
+        arg_af = to_abstract(arg_fmt) if arg_fmt is not None else None
+        if arg_af is not None:
+            prec = min(prec, arg_af.prec)
+        if not isinstance(prec, int):
+            return fmt
+        if prec <= 0:
+            # The quantum is at least as coarse as the value's own reach, so
+            # every value rounds to *a* zero -- but rounding a negative one
+            # toward zero gives `-0.0`, so a bare `{+0}` would drop a value
+            # the context produces, and a negative zero is what keeps a bound
+            # off the integer rungs of the C++ ladder.  The infinities and the
+            # NaN are not added: a context that has no result for them
+            # describes no execution that reaches here.
+            zero: set = {Fraction(0)}
+            if cur is not None and cur.has_neg_zero:
+                zero.add(NEG_ZERO)
+            return SetFormat(frozenset(zero))
+        # Digit-bound inference bounds a *finite* magnitude and says nothing about
+        # the special values, so `alt` keeps whichever ones *fmt* admits
+        # rather than clearing them.
+        specials = cur if cur is not None else _to_abstract(REAL_FORMAT)
+        assert specials is not None, 'REAL_FORMAT is abstractable'
+        alt = AbstractFormat(
+            prec, bounds.exp, RealFloat(exp=bounds.mag + 1, c=1),
+            has_pos_inf=specials.has_pos_inf,
+            has_neg_inf=specials.has_neg_inf,
+            has_nan=specials.has_nan,
+            has_neg_zero=specials.has_neg_zero,
+        )
+        if fmt == REAL_FORMAT:
+            return alt.format()
+        return alt.format() if cur is not None and alt <= cur else fmt
+
+    def _callee_digit_bound(self, e: Call) -> 'DigitBoundAnalysis | None':
+        """Digit-bound inference's sub-result for *e*'s callee, if a pass ran."""
+        return self._digit_bound.by_call.get(e) if self._digit_bound is not None else None
+
     def _visit_expr(self, e: Expr, ctx: None) -> FormatBound:  # type: ignore[override]
         """Dispatch, record in ``by_expr``, and return the inferred format."""
         fmt: FormatBound = super()._visit_expr(e, ctx)
@@ -2246,7 +2422,10 @@ class _FormatInferInstance(Visitor):
                 return rest[0] if len(rest) == 1 else TupleFormat(rest)
             case Sum():
                 assert isinstance(arg_fmt, ListFormat), f'expected ListFormat for argument of Sum, got {arg_fmt!r}'
-                return self._sum_bound(e, arg_fmt)
+                # `_sum_bound` simulates pairwise adds over the element
+                # *format*, which drops the shared grid the summands were
+                # rounded onto.  The store still has it.
+                return self._tighter(e, self._sum_bound(e, arg_fmt))
             case AMin() | AMax():
                 # ``min(xs)`` / ``max(xs)`` selects one element of ``xs``
                 # exactly — no rounding.  Result format is the list's
@@ -2271,8 +2450,13 @@ class _FormatInferInstance(Visitor):
                     )
                 else:
                     fitted = None
-                if fitted is not None:
-                    return fitted
+                # Digit-bound inference may beat the scope even when the scope
+                # resolves: a fixed-point context is unbounded above, so what
+                # limits the result is the operand's own reach relative to the
+                # position, clipped by the precision rounding can never raise.
+                return self._tighter(
+                    e, fitted if fitted is not None else self._op_bound(e), arg_fmt,
+                )
             case Abs():
                 # abs: precision-preserving.  Use the unrounded result
                 # whenever the active scope's format contains it; see
@@ -2425,17 +2609,19 @@ class _FormatInferInstance(Visitor):
                 # the active scope's format contains it; see
                 # :meth:`_bound_if_fits`.  Subsumes the legacy REAL-only
                 # fast path (REAL_FORMAT contains everything).
+                #
+                # Tightened for the reason `Sum` is; see there.
                 fitted = self._bound_if_fits(
                     e, exact_binop(lhs, rhs, operator.add, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
-                    return fitted
+                    return self._tighter(e, fitted)
             case Sub():
                 fitted = self._bound_if_fits(
                     e, exact_binop(lhs, rhs, operator.sub, cap=self._set_format_threshold),
                 )
                 if fitted is not None:
-                    return fitted
+                    return self._tighter(e, fitted)
             case Mul():
                 fitted = self._bound_if_fits(
                     e, exact_binop(lhs, rhs, operator.mul, cap=self._set_format_threshold),
@@ -2587,6 +2773,7 @@ class _FormatInferInstance(Visitor):
             loop_iter_limit=self._loop_iter_limit,
             range_set_threshold=self._range_set_threshold,
             set_format_threshold=self._set_format_threshold,
+            digit_bound=self._callee_digit_bound(e),
         ).analyze()
 
     # Comparison: produces a bool, so no numeric format
@@ -2971,6 +3158,8 @@ class _FormatInferInstance(Visitor):
             by_expr=self.by_expr,
             array_size=self.array_size,
             partial_eval=self.pre.partial_eval,
+            digit_bound=self._digit_bound,
+            scopes=self._scope_ctx_cache,
             by_call=self.by_call,
         )
 
@@ -3074,6 +3263,8 @@ class FormatInfer:
         array_size: ArraySizeAnalysis | None = None,
         pre_cache: PreAnalysisCache | None = None,
         fn_fmt: FunctionFormat | None = None,
+        digit_bound_params: 'DigitBoundParams | None' = None,
+        use_digit_bounds: bool = False,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
         range_set_threshold: int = DEFAULT_RANGE_SET_THRESHOLD,
         set_format_threshold: int = DEFAULT_SET_FORMAT_THRESHOLD,
@@ -3145,6 +3336,13 @@ class FormatInfer:
                 arithmetic or joins before it collapses to the covering
                 bounded :class:`AbstractFormat`.  Bounds the combinatorial
                 growth of repeated set operations.
+            use_digit_bounds:
+                Run digit-bound inference alongside, and tighten each format
+                with what it proves.  *digit_bound_params* is ignored without
+                it.
+            digit_bound_params:
+                A caller's constraint store and the terms it bound *func*'s
+                parameters to; see :class:`DigitBoundParams`.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -3178,13 +3376,23 @@ class FormatInfer:
             array_size=array_size,
         )
 
-        inst = _FormatInferInstance(
-            func,
-            pre=pre,
-            pre_cache=pre_cache,
-            fn_fmt=fn_fmt,
-            loop_iter_limit=loop_iter_limit,
-            range_set_threshold=range_set_threshold,
-            set_format_threshold=set_format_threshold,
-        )
-        return inst.analyze()
+        def pass_(digit_bound: DigitBoundAnalysis | None) -> FormatAnalysis:
+            return _FormatInferInstance(
+                func,
+                pre=pre,
+                pre_cache=pre_cache,
+                fn_fmt=fn_fmt,
+                loop_iter_limit=loop_iter_limit,
+                range_set_threshold=range_set_threshold,
+                set_format_threshold=set_format_threshold,
+                digit_bound=digit_bound,
+            ).analyze()
+
+        # A reduced product: the second pass seeds digit-bound inference
+        # from the ranges the first derived and consumes the precisions it
+        # derives.  The first is sound alone, and supplies exactly the seeds
+        # digit-bound inference never tightens, so the split costs nothing.
+        first = pass_(None)
+        if not use_digit_bounds:
+            return first
+        return pass_(DigitBoundInfer.analyze(func, first, digit_bound_params))

@@ -19,13 +19,13 @@ from ...analysis import (
     DefineUse,
     Escape,
     FormatInfer,
-    ValueClass,
     ValueClassAnalysis,
     ValueClassInfer,
 )
 from ...analysis.alias import AliasAnalysis
 from ...analysis.context_use import ContextUseAnalysis
 from ...analysis.define_use import DefineUseAnalysis
+from ...analysis.digit_bound import DigitBoundParams
 from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
 from ...analysis.storage_infer import StorageInfer
@@ -448,11 +448,12 @@ class CppCompiler(Backend):
         return other
 
     def _compile_module(self, module: Module) -> str:
-        specs = self.specialize(module)
+        bound_params: dict[str, DigitBoundParams] = {}
+        specs = self.specialize(module, bound_params)
         params: dict[FuncDef, CalleeAbi] = {}
         return '\n\n'.join(
             self._emit(f, a, params)
-            for f, a in self._analyze_all(specs, params)
+            for f, a in self._analyze_all(specs, params, bound_params=bound_params)
         )
 
     def _analyze_all(
@@ -460,6 +461,7 @@ class CppCompiler(Backend):
         specs: list[Function],
         params: dict[FuncDef, CalleeAbi],
         only: set[int] | None = None,
+        bound_params: dict[str, DigitBoundParams] | None = None,
     ):
         """Analyze every spec leaves-first, filling *params* as it goes.
 
@@ -480,12 +482,15 @@ class CppCompiler(Backend):
             a = self.analyze(
                 f, is_called=id(f.ast) in called, summaries=summaries,
                 callee_abis=params,
+                digit_bound_params=None if bound_params is None else bound_params.get(f.name),
             )
             yield f, a
             summaries[f.ast] = a.summary
             params[f.ast] = _callee_abi(a)
 
-    def specialize(self, module: Module) -> list[Function]:
+    def specialize(
+        self, module: Module, bound_params: dict[str, DigitBoundParams] | None = None,
+    ) -> list[Function]:
         """Steps 1-3 of the pipeline: the fully-specialized functions, in
         leaves-first emission order."""
         if not isinstance(module, Module):
@@ -508,7 +513,9 @@ class CppCompiler(Backend):
         # `RuntimeError`, which callers iterating over candidates cannot catch
         # uniformly.
         try:
-            specialized = Specialize.apply(module, size_key=self._arrays)
+            specialized = Specialize.apply(
+                module, size_key=self._arrays, bound_params=bound_params,
+            )
         except RuntimeError as e:
             raise CppCompileError(f'specialization failed: {e}') from e
 
@@ -544,6 +551,7 @@ class CppCompiler(Backend):
         is_called: bool = False,
         summaries: dict[FuncDef, EscapeSummary] | None = None,
         callee_abis: dict[FuncDef, CalleeAbi] | None = None,
+        digit_bound_params: DigitBoundParams | None = None,
     ) -> SpecAnalyses:
         """The per-spec analyses one fully-specialized function is emitted
         from."""
@@ -556,11 +564,16 @@ class CppCompiler(Backend):
         def_use = DefineUse.analyze(ast)
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
         array_size = ArraySizeInfer.analyze(ast)
+        # `use_digit_bounds`: storage selection is the one consumer of the
+        # relational bounds, which are what put a rescaled rounding in an
+        # `int16_t`.
         format_info = FormatInfer.analyze(
             ast,
             def_use=def_use,
             ctx_use=ctx_use,
             array_size=array_size,
+            digit_bound_params=digit_bound_params,
+            use_digit_bounds=True,
         )
         # before the value classes, which read it: without the summaries every
         # list handed to a call reads as escaping and loses its element facts
@@ -669,7 +682,8 @@ class CppCompiler(Backend):
         if module is None:
             module = Module()
             module.add(func, ctx=ctx, arg_types=arg_types)
-        specs = self.specialize(module)
+        bound_params: dict[str, DigitBoundParams] = {}
+        specs = self.specialize(module, bound_params)
         entry = _find_spec(specs, func)
         emitted: dict[FuncDef, CalleeAbi] = {}
         # Only the entry's call path: an unrelated spec's failure (routine
@@ -677,7 +691,7 @@ class CppCompiler(Backend):
         # whether the entry has a signature.
         a = next(
             an for f, an in self._analyze_all(
-                specs, emitted, only=_reachable_asts(entry),
+                specs, emitted, only=_reachable_asts(entry), bound_params=bound_params,
             ) if f is entry
         )
 

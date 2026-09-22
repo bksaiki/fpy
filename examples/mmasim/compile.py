@@ -4,10 +4,10 @@ Compiles every MMA-Sim design to C++, reporting where each one stops.
 A roadmap tracker rather than a test: most designs do not compile yet, and
 the point is to see *which* refusal each one hits and how the count moves.
 
-    python examples/mmasim/compile_all.py           # one line per design
-    python examples/mmasim/compile_all.py -v        # full error text
-    python examples/mmasim/compile_all.py -e cdna2  # print the C++ of a design
-    python examples/mmasim/compile_all.py -o out/   # write each one to out/
+    python examples/mmasim/compile.py           # one line per design
+    python examples/mmasim/compile.py -v        # full error text
+    python examples/mmasim/compile.py -e cdna2  # print the C++ of a design
+    python examples/mmasim/compile.py -o out/   # write each one to out/
 """
 
 import argparse
@@ -16,10 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import amd
-import nv
-from nv import RZ_E8M13, RZ_FP32
-from utils import make_fma_dpa
+from models import amd, nv
+from models.nv import RZ_E8M13, RZ_FP32
+from models.utils import make_fma_dpa
 
 import fpy2 as fp
 import fpy2.strategies as st
@@ -64,9 +63,9 @@ DESIGNS = [
         _vecs(fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 32)
         + [_R(fp.MX_E8M0), _R(fp.MX_E8M0)])),
     ('nv.blackwell.nvfp4', lambda: (
-        nv.make_gst_fdpa(16, fp.MX_E8M0, 35, RZ_FP32),
-        _vecs(fp.MX_E5M2, fp.MX_E5M2, fp.FP32, 64)
-        + [_L(_R(fp.MX_E8M0), 4), _L(_R(fp.MX_E8M0), 4)])),
+        nv.make_gst_fdpa(16, fp.MX_E4M3, 35, RZ_FP32),
+        _vecs(fp.MX_E2M1, fp.MX_E2M1, fp.FP32, 64)
+        + [_L(_R(fp.MX_E4M3), 4), _L(_R(fp.MX_E4M3), 4)])),
     ('amd.cdna1.bf16', lambda: (
         amd.make_e_fdpa(2), _vecs(fp.BF16, fp.BF16, fp.FP32, 4))),
     ('amd.cdna1.f16', lambda: (
