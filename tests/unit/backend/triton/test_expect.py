@@ -355,3 +355,48 @@ def test_the_emitter_still_expands_what_the_pass_declines():
             RealType(fp.INTEGER)])
     assert 'tl.where' in src.source
     assert src.source.count('tl.maximum') == 2, 'the comprehension was folded'
+
+
+@fp.fpy(ctx=fp.FP32)
+def _any_all(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    for r in range(len(out)):
+        flags = [xss[r][k] > 0.0 for k in range(3)]
+        out[r] = 2.0 if all(flags) else (1.0 if any(flags) else 0.0)
+    return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def _empty_any(out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        flags = []
+        out[i] = 1.0 if any(flags) else 0.0
+    return out
+
+
+def test_any_and_all_fold_with_bitwise_connectives():
+    """`&` / `|`, not Python's keywords, which short-circuit and return an
+    operand rather than a tile -- the same reason `and` / `or` are spelled
+    that way."""
+    src = TritonCompiler(drop_asserts=True).compile(
+        _any_all, ctx=fp.FP32, arg_types=[
+            ListType(ListType(RealType(fp.FP32), 3), 6),
+            ListType(RealType(fp.FP32), 6),
+            RealType(fp.INTEGER)])
+    assert '(flags_0 & flags_1 & flags_2)' in src.source
+    assert '(flags_0 | flags_1 | flags_2)' in src.source
+
+
+def test_an_empty_any_is_its_identity():
+    """`any([])` is False and `all([])` is True, as the interpreter gives.
+
+    With `optimize`, `ConstFold` settles the whole expression before the
+    emitter sees it, so the fold itself is checked with it off.
+    """
+    args = [ListType(RealType(fp.FP32), 4), RealType(fp.INTEGER)]
+    raw = TritonCompiler(drop_asserts=True, optimize=False).compile(
+        _empty_any, ctx=fp.FP32, arg_types=args)
+    assert 'tl.where(False,' in raw.source
+    folded = TritonCompiler(drop_asserts=True).compile(
+        _empty_any, ctx=fp.FP32, arg_types=args)
+    assert folded.source.splitlines()[-1].endswith(
+        'tl.store(out_ptr + i, 0, mask=(j < t4))')

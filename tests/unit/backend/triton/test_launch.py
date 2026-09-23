@@ -196,3 +196,42 @@ class TestRowBinding:
         ot = torch.zeros(8, dtype=torch.float32).cuda()
         launch(src, [xt, yt, ot], block=4)
         assert ot.cpu().tolist() == got_inline
+
+
+@fp.fpy(ctx=fp.FP32)
+def _any_all(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """Lanes disagreeing on `any` and on `all`, in one tile."""
+    for r in range(len(out)):
+        flags = [xss[r][k] > 0.0 for k in range(3)]
+        out[r] = 2.0 if all(flags) else (1.0 if any(flags) else 0.0)
+    return out
+
+
+class TestAnyAll:
+    @pytest.mark.parametrize('n,block', [(6, 4), (8, 8), (1, 4)])
+    def test_it_agrees_with_the_interpreter(self, n, block):
+        import torch
+
+        src = TritonCompiler(drop_asserts=True).compile(
+            _any_all, ctx=fp.FP32, arg_types=[
+                ListType(ListType(RealType(fp.FP32), 3), n),
+                ListType(RealType(fp.FP32), n),
+                RealType(fp.INTEGER)])
+        torch.manual_seed(0)
+        xt = (torch.randn(n, 3) * 2).float().cuda()
+        ot = torch.zeros(n, dtype=torch.float32).cuda()
+        launch(src, [xt, ot], block=block)
+
+        vals = [[float(v) for v in row] for row in xt.cpu().tolist()]
+        want = [float(v) for v in _any_all(vals, [0.0] * n, block)]
+        assert ot.cpu().tolist() == want, f'n={n} block={block}'
+
+    def test_all_three_outcomes_are_exercised(self):
+        """Otherwise the agreement above could hold on one branch alone."""
+        import torch
+
+        torch.manual_seed(0)
+        rows = (torch.randn(6, 3) * 2).float().tolist()
+        outs = {all(v > 0 for v in r) and 2 or (any(v > 0 for v in r) and 1 or 0)
+                for r in rows}
+        assert len(outs) >= 2

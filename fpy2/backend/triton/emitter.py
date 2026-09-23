@@ -43,9 +43,11 @@ from ...analysis import (
 from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import rounds_exactly
 from ...ast import (
+    AllOf,
     AMax,
     AMin,
     And,
+    AnyOf,
     Assign,
     BinaryOp,
     BoolVal,
@@ -768,6 +770,15 @@ class _Emitter(Visitor):
                 f'`{type(e).__name__.lower()}` needs a sequence of proven '
                 'length to fold over'
             )
+        if isinstance(e, (AnyOf, AllOf)):
+            # `&` / `|` rather than Python's keywords, which short-circuit and
+            # return an operand rather than a tile -- the same reason
+            # `_emit_connective` spells `and` / `or` that way.  The empty fold
+            # is each one's identity, which is what FPy gives.
+            if not elems:
+                return 'False' if isinstance(e, AnyOf) else 'True'
+            op = '|' if isinstance(e, AnyOf) else '&'
+            return '(' + f' {op} '.join(elems) + ')'
         name = 'tl.maximum' if isinstance(e, AMax) else 'tl.minimum'
         if isinstance(e, Sum):
             if not elems:
@@ -900,7 +911,7 @@ class _Emitter(Visitor):
             return self._emit_len(e)
         if isinstance(e, (IsNan, IsInf, IsFinite, Signbit)):
             return self._emit_predicate(e)
-        if isinstance(e, (AMax, AMin, Sum)):
+        if isinstance(e, (AMax, AMin, Sum, AnyOf, AllOf)):
             return self._emit_reduction(e)
         return self._dispatch(
             e, self.op_table.unary, [(self.emit(e.arg), e.arg)],
