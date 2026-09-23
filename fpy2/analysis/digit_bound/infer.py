@@ -246,7 +246,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _elt_depth: int
     _elt_depth_of: dict[Expr, int]
     _elt_vars: set[int]
-    _anchored: set[int]
+    _var_level: dict[int, int]
+    """the loop nesting each variable takes a new value at"""
+    _anchor_level: dict[int, int]
+    """... and the nesting the bounds *on* it were built at"""
     _lsb_vars: set[int]
     _index_sets: dict[tuple, _IndexSet]
     _gather: tuple[tuple, Definition] | None
@@ -280,7 +283,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._elt_depth = 0
         self._elt_depth_of = {}
         self._elt_vars = set()
-        self._anchored = set()
+        self._var_level = {}
+        self._anchor_level = {}
         self._lsb_vars = set()
         self._index_sets = {}
         self._gather = None
@@ -305,7 +309,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # the caller minted these, and `_share` skips the seeding
                 # `_fresh_interval` does -- but a list is a list in both
                 # frames, so its summary describes an element here too
-                self._mark_elt(d, src.msb, src.lsb, src.value)
+                self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
         self._check_vacuous()
         return self.out
@@ -317,15 +321,27 @@ class _DigitBoundInferInstance(DefaultVisitor):
         t = self.store.var(name)
         if self._elt_depth:
             self._elt_vars.update(v.index for v, _ in t.coeffs)
+            for v, _ in t.coeffs:
+                self._var_level[v.index] = self._elt_depth
         return t
 
-    def _mark_elt(self, of: Expr | Definition, *ts: Term | None) -> None:
+    def _mark_elt(
+        self, of: Expr | Definition, *ts: Term | None, lsb: Term | None = None,
+    ) -> None:
         """Record *ts* as per-element where *of* is a list, whoever minted
-        them: a list's summary describes an element wherever it came from."""
-        if isinstance(self._type_of(of), ListType):
-            self._elt_vars.update(
-                v.index for t in ts if t is not None for v, _ in t.coeffs
-            )
+        them: a list's summary describes an element wherever it came from, so
+        it moves with that list's index -- one nesting in from where the list
+        itself sits.  An *lsb* is the exception, being already at or below
+        every element's."""
+        if not isinstance(self._type_of(of), ListType):
+            return
+        for t in (*ts, lsb):
+            if t is not None:
+                self._elt_vars.update(v.index for v, _ in t.coeffs)
+        for t in ts:
+            if t is not None:
+                for v, _ in t.coeffs:
+                    self._raise_anchor(v.index, self._elt_depth + 1)
 
     def _fresh_interval(self, terms: Terms, of: Expr | Definition, tag: str) -> tuple[Term, Term]:
         """Give *terms* a bracketing pair, seeded from *of*'s inferred range.
@@ -338,7 +354,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms.msb = self._var(f'msb{tag}')
         terms.lsb = self._var(f'lsb{tag}')
         self._lsb_vars.update(v.index for v, _ in terms.lsb.coeffs)
-        self._mark_elt(of, terms.msb, terms.lsb)
+        self._mark_elt(of, terms.msb, lsb=terms.lsb)
         if hi is not None:
             self.store.le(terms.msb, hi)
         if lo is not None:
@@ -464,41 +480,52 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """Bound *grid* below by the least of *ts*, noting what that costs.
 
         Every such bound is true of the value in hand.  It stays true of a
-        whole *list* only where each term bounds every element from below;
-        one built from a per-element `logb`, or from a position that varies
-        with the index, holds for the element in hand and not for the
-        smallest.  Such a bound *anchors* the grid: see :meth:`_elt_lsb`.
+        whole *list* only while nothing it was built from moves with that
+        list's index, so *grid* inherits the deepest nesting its bounds came
+        from: see :meth:`_elt_lsb`.
         """
         self.store.ge_min(grid, ts)
-        if not all(self._downward(t) for t in ts):
-            self._anchored.update(v.index for v, _ in grid.coeffs)
+        level = max((self._term_level(t) for t in ts), default=0)
+        for v, _ in grid.coeffs:
+            self._raise_anchor(v.index, level)
 
-    def _downward(self, t: Term) -> bool:
-        """Whether *t* bounds every element of a list from below.
+    def _raise_anchor(self, index: int, level: int) -> None:
+        if level > self._anchor_level.get(index, 0):
+            self._anchor_level[index] = level
 
-        Anything the walk built outside a loop does, being one value for all
-        of them.  So does a list's own grid, which is already at or below
-        every element's -- unless it is anchored, or enters negated, which
-        turns a floor into a ceiling.
+    def _moves_at(self, index: int, c: int) -> int:
+        """The nesting a variable moves with, entering a bound with
+        coefficient *c*.
+
+        Where it was minted, and where whatever bounds it was -- except that
+        an lsb of its own is already at or below every element's, so only
+        what bounds it counts.  Negated it is a ceiling, not a floor, and
+        that exception lapses.
         """
-        return all(
-            v.index not in self._anchored
-            and (v.index not in self._elt_vars
-                 or (c > 0 and v.index in self._lsb_vars))
-            for v, c in t.coeffs
-        )
+        level = self._anchor_level.get(index, 0)
+        if c > 0 and index in self._lsb_vars:
+            return level
+        return max(level, self._var_level.get(index, 0))
+
+    def _term_level(self, t: Term) -> int:
+        return max((self._moves_at(v.index, c) for v, c in t.coeffs), default=0)
+
+    def _uniform(self, t: Term, level: int) -> bool:
+        """Whether *t* bounds from below every element of a list whose
+        elements move with *level*."""
+        return self._term_level(t) < level
 
     def _elt_lsb(self, of: Expr | Definition, src: Terms) -> Term | None:
         """*src*'s grid, as *of*'s -- dropped where *of* is a list and the
-        grid is anchored.
+        grid moves with its index.
 
         A list's summary is read as uniform: at or below *every* element's
-        grid.  An anchored grid is at or below one element's, and reading it
-        uniformly would claim the smallest element sits as high as the
-        widest.  No grid at all is the weaker, true reading.
+        grid.  One that moves with the index is at or below one element's,
+        and reading it uniformly would claim the smallest element sits as
+        high as the widest.  No grid at all is the weaker, true reading.
         """
         if (src.lsb is not None and isinstance(self._type_of(of), ListType)
-                and not self._downward(src.lsb)):
+                and not self._uniform(src.lsb, self._elt_depth + 1)):
             return None
         return src.lsb
 
@@ -1445,6 +1472,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if self._elt_depth:
             # called once per element, so everything it minted is per-element
             self._elt_vars.update(range(before, self.store.n_vars))
+            for i in range(before, self.store.n_vars):
+                self._raise_anchor(i, self._elt_depth)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows

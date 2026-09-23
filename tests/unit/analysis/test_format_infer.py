@@ -2669,6 +2669,19 @@ class TestAlignedSumPrecision:
         fmt = next(b for e, b in info.by_expr.items() if isinstance(e, Sum))
         return AbstractFormat.from_format(fmt).prec
 
+    @staticmethod
+    def _sum_bounds(fn, arg_types):
+        """Each `sum`'s precision, by the name of what it sums."""
+        from fpy2.ast.fpyast import Sum
+        from fpy2.transform import Monomorphize
+
+        mono = Monomorphize.apply(fn.ast, fp.REAL, arg_types)
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        return {
+            e.arg.format(): AbstractFormat.from_format(b).prec
+            for e, b in info.by_expr.items() if isinstance(e, Sum)
+        }
+
     def test_the_sum_keeps_the_alignment(self):
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
@@ -2735,6 +2748,26 @@ class TestAlignedSumPrecision:
             return sum([g(x) for x in xs])
 
         assert self._sum_bound(f, [self.L32]) > 200
+
+    def test_an_outer_loop_does_not_share_an_inner_grid(self):
+        """A position uniform over the list it rounds is still one element's
+        to the list *outside* it.  Every `ws` shares a grid, so the inner sum
+        may exploit it; each `ys[i]` sits on a grid of its own, so the outer
+        sum may not."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            ys = fp.empty(len(xss))
+            for i in range(len(xss)):
+                xs = xss[i]
+                e = max([fp.logb(x) for x in xs])
+                with fp.MPFixedContext(e - 12):
+                    ws = [fp.round(x) for x in xs]
+                ys[i] = sum(ws)
+            return sum(ys)
+
+        bounds = self._sum_bounds(f, [ListType(self.L32, 4)])
+        assert bounds['ws'] == 18    # the position is one value for all of `xs`
+        assert bounds['ys'] > 200    # ... and a different one for each `i`
 
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
