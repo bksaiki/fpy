@@ -61,6 +61,7 @@ from .reduce_fusion import fuse
 from .round_elim import elim_round
 from .round_insert import insert_round
 from .round_split import split_round
+from .scalarize import unroll_seqs
 from .scale_hoist import hoist_scale
 from .simple import simplify
 from .sites import refusals, sites
@@ -108,5 +109,6 @@ __all__ = [
     'unfold_special',
     'unfold_zip',
     'unroll_for',
+    'unroll_seqs',
     'unroll_while',
 ]

@@ -99,4 +99,6 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.unroll_for
 
+.. autofunction:: fpy2.strategies.unroll_seqs
+
 .. autofunction:: fpy2.strategies.unroll_while
