@@ -1547,7 +1547,7 @@ def emit_expr(e: Expr, func: FuncDef) -> str:
     def_use = DefineUse.analyze(func)
     return _Emitter(
         func,
-        FormatInfer.analyze(func),
+        FormatInfer.analyze(func, use_digit_bounds=True),
         TypeInfer.check(func),
         ContextUse.analyze(func, def_use=def_use),
         ArraySizeInfer.analyze(func),
@@ -1575,7 +1575,7 @@ def emit_block(
     sizes = ArraySizeInfer.analyze(func)
     emitter = _Emitter(
         func,
-        FormatInfer.analyze(func),
+        FormatInfer.analyze(func, use_digit_bounds=True),
         TypeInfer.check(func),
         ContextUse.analyze(func, def_use=def_use),
         sizes,
@@ -1660,7 +1660,7 @@ def emit_kernel(
     sizes = ArraySizeInfer.analyze(func)
     emitter = _Emitter(
         func,
-        FormatInfer.analyze(func),
+        FormatInfer.analyze(func, use_digit_bounds=True),
         TypeInfer.check(func),
         ContextUse.analyze(func, def_use=def_use),
         sizes,
