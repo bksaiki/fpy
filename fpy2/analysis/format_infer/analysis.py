@@ -1950,6 +1950,14 @@ class _FormatInferInstance(Visitor):
                 return [i for a in cond.args for i in self._implied(a, False)]
             case Compare() if len(cond.ops) == 1:
                 return self._implied_compare(cond, truth)
+            case Var():
+                # a named condition says what its definition said: the
+                # variables it tests are keyed by definition, so a later
+                # reassignment of one is not refined
+                d = self.def_use.find_def_from_use(cond)
+                if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+                    return self._implied(d.site.expr, truth)
+                return []
             case _:
                 return []
 

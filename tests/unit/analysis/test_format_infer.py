@@ -3573,6 +3573,67 @@ class TestBranchRefinement:
         assert float(af.pos_bound) == 65536.0
         assert float(af.neg_bound) == -65536.0
 
+    def test_a_named_condition_refines_as_its_definition(self):
+        """`SimplifyIf` binds every condition to a name, so reading only a
+        literal comparison would see nothing in its output."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = abs(x) < 65536
+            if c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert float(af.pos_bound) == 65536.0
+        assert float(af.neg_bound) == -65536.0
+
+    def test_a_named_condition_negates(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = x >= 65536
+            if not c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        assert self._pos(self._defs(f)['y']) == 65536.0
+
+    def test_a_named_condition_does_not_refine_a_reassigned_operand(self):
+        """The fact is about the `x` the condition read, not the one after."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = abs(x) < 65536
+            with fp.REAL:
+                x = x * 2 ** 20
+            if c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert af.pos_bound.as_rational() > 2 ** 1000
+
+    def test_a_reassigned_condition_refines_by_the_reaching_definition(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = abs(x) < 65536
+            c = x != 0
+            if c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        assert self._pos(self._defs(f)['y']) > 1e300
+
     def test_the_refinement_does_not_escape_the_arm(self):
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
