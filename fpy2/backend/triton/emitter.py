@@ -867,6 +867,13 @@ class _Emitter(Visitor):
         ctx = self._active_ctx(e)
         if rounds_exactly(e, self.format_info.by_expr, ctx):
             return arg
+        if isinstance(e, Cast) and not self.drop_asserts:
+            # the cpp backend checks the claim at runtime; a kernel cannot
+            raise TritonEmitError(
+                '`fp.cast` asserts its result is exact, which is not proven '
+                'here and a kernel cannot check.  Pass `drop_asserts` to round '
+                'without the check'
+            )
         integral = _integral_round(ctx)
         if integral is not None:
             return f'{integral}({arg})'

@@ -971,3 +971,30 @@ class TestBranch:
 
         with pytest.raises(TritonEmitError, match='list chosen by a branch'):
             _emit(f, [_R32])
+
+
+@fp.fpy(ctx=fp.REAL)
+def _narrow(x: fp.Real):
+    with FP16:
+        y = fp.cast(x)
+    return y
+
+
+class TestExactCast:
+    """`fp.cast` asserts its result is exact.  The cpp backend checks that at
+    runtime; a kernel cannot, so it is treated as an `assert` is."""
+
+    def test_an_unproven_cast_is_refused(self):
+        with pytest.raises(TritonEmitError, match='asserts its result is exact'):
+            _emit(_narrow, [_R32], ctx=fp.REAL)
+
+    def test_a_proven_cast_emits_nothing(self):
+        assert _emit(_narrow, [RealType(FP16)], ctx=fp.REAL) == (
+            'y = x\nreturn y')
+
+    def test_dropping_asserts_drops_the_check(self):
+        m = Module()
+        m.add(_narrow, ctx=fp.REAL, arg_types=[_R32])
+        g = Specialize.apply(m, size_key=True).get(_narrow.name).func
+        assert 'x.to(tl.float16)' in emit_block(
+            g.ast.body, g.ast, drop_asserts=True)
