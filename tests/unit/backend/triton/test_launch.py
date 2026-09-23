@@ -508,3 +508,45 @@ def test_a_flattened_branch_agrees(seed):
     launch(src, [xt, ot], block=16)
     want = _branchy([float(v) for v in xt.cpu().tolist()], [0.0] * n, 16)
     assert ot.cpu().tolist() == [float(v) for v in want]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _all_nonneg(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    ok = True
+    for i in range(len(xs)):
+        if xs[i] < 0:
+            ok = False
+    out[0] = 1 if ok else 0
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def _largest(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    with fp.FP32:
+        m = fp.round(0)
+        for i in range(len(xs)):
+            m = max(m, xs[i])
+        out[0] = m
+    return out
+
+
+@pytest.mark.parametrize('f', [_all_nonneg, _largest], ids=['search', 'max'])
+@pytest.mark.parametrize('seed', [0, 1])
+def test_a_reduction_stays_sequential_and_agrees(f, seed):
+    """No reduction across a tile is lowered, so the loop is not tiled."""
+    import torch
+
+    n = 37
+    src = TritonCompiler(drop_asserts=True).compile(
+        f, ctx=fp.REAL, arg_types=[
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.FP32), 1),
+            RealType(fp.INTEGER)])
+    assert 'tl.static_range(37)' in src.source
+
+    torch.manual_seed(seed)
+    xt = (torch.randn(n) * 4).float().cuda()
+    ot = torch.zeros(1, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=16, grid=1)
+    want = f([float(v) for v in xt.cpu().tolist()], [0.0], 16)
+    assert ot.cpu().tolist() == [float(v) for v in want]

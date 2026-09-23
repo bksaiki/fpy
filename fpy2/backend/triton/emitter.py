@@ -126,6 +126,7 @@ from .target import (
     make_op_table,
 )
 from .types import TritonScalar
+from .vectorize import carried_scalars
 
 __all__ = ['KernelSource', 'TritonEmitError', 'emit_block', 'emit_expr', 'emit_kernel']
 
@@ -1602,6 +1603,11 @@ class _Emitter(Visitor):
         The shape is destructured rather than assumed: a mismatch is a
         refusal, since the only thing that produces it is `tile_loops`.
         """
+        if carried := carried_scalars(stmt, self.def_use):
+            raise TritonEmitError(
+                f'a tiled loop carrying `{min(carried)}` needs a reduction '
+                "across the tile's lanes, which this backend does not lower"
+            )
         outer = stmt.target
         it = stmt.iterable
         if not isinstance(it, Range3) or not isinstance(outer, NamedId):

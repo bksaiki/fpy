@@ -200,7 +200,8 @@ class TritonCompiler(Backend):
             # then inlined, a copy of a bound nothing reads again
             ready = ready.with_ast(Simplify.apply(ready.ast))
 
-        tiles = tile_loops(ready.ast, self.block)
+        # the emitter has no reduction across a tile's lanes
+        tiles = tile_loops(ready.ast, self.block, reductions=False)
         return emit_kernel(
             tiles.func,
             tiles.tiled,

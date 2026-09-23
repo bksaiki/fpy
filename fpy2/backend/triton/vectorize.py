@@ -60,7 +60,7 @@ from ...ast import (
 from ...number import Context
 from ...transform import SplitLoop, SplitLoopStrategy
 
-__all__ = ['TileResult', 'tile_loops', 'why_not_tileable']
+__all__ = ['TileResult', 'carried_scalars', 'tile_loops', 'why_not_tileable']
 
 
 _SELECTS: tuple[type[Expr], ...] = (Max, Min, And, Or)
@@ -286,11 +286,26 @@ def _guard(inner: ForStmt) -> If1Stmt | None:
     return stmts[0] if inner.target in _reads(stmts[0].cond) else None
 
 
-def _encloses_tileable(stmt: ForStmt, func: FuncDef) -> bool:
+def carried_scalars(stmt: ForStmt, def_use: DefineUseAnalysis) -> set[NamedId]:
+    """The names *stmt*'s body writes whole and carries to the next iteration:
+    what tiling it turns into a reduction across the tile's lanes."""
+    carried = def_use.mutated_in(stmt.body)
+    body = _Body(carried)
+    body._visit_block(stmt.body, None)
+    return {name for name in carried if body.scalar[name]}
+
+
+def _tileable(stmt: ForStmt, func: FuncDef, reductions: bool) -> bool:
+    if why_not_tileable(stmt, func) is not None:
+        return False
+    return reductions or not carried_scalars(stmt, DefineUse.analyze(func))
+
+
+def _encloses_tileable(stmt: ForStmt, func: FuncDef, reductions: bool) -> bool:
     """Whether a tileable loop sits beneath *stmt*."""
     v = _ForLoops()
     v._visit_block(stmt.body, None)
-    return any(why_not_tileable(c, func) is None for c in v.out)
+    return any(_tileable(c, func, reductions) for c in v.out)
 
 
 @dataclass
@@ -314,7 +329,9 @@ class TileResult:
     tile's mask, and any other `if` as a branch."""
 
 
-def tile_loops(func: FuncDef, width: int | str) -> TileResult:
+def tile_loops(
+    func: FuncDef, width: int | str, *, reductions: bool = True,
+) -> TileResult:
     """*func* with each *innermost* tileable loop split into chunks of
     *width*.
 
@@ -333,7 +350,9 @@ def tile_loops(func: FuncDef, width: int | str) -> TileResult:
     differential can vary the width instead of pinning one.
 
     A loop :func:`why_not_tileable` refuses is left alone: it stays sequential,
-    which is still parallel across whatever encloses it.
+    which is still parallel across whatever encloses it.  So is one carrying
+    a scalar, where *reductions* is false -- for a target with no lowering of
+    a reduction across the tile.
 
     ``MASK`` is the remainder policy because a tile has to be a constant width
     -- ``PEEL`` would emit a second, narrower body for the tail and ``STRICT``
@@ -367,8 +386,8 @@ def tile_loops(func: FuncDef, width: int | str) -> TileResult:
             guards = [g for k in tiled if (g := _guard(loops[k + 1]))]
             return TileResult(func, [loops[k] for k in tiled], guards)
         stmt = loops[i]
-        if (why_not_tileable(stmt, func) is not None
-                or _encloses_tileable(stmt, func)):
+        if (not _tileable(stmt, func, reductions)
+                or _encloses_tileable(stmt, func, reductions)):
             i += 1
             continue
         func = SplitLoop.apply(

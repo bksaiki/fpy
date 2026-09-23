@@ -998,3 +998,27 @@ class TestExactCast:
         g = Specialize.apply(m, size_key=True).get(_narrow.name).func
         assert 'x.to(tl.float16)' in emit_block(
             g.ast.body, g.ast, drop_asserts=True)
+
+
+def test_a_tiled_reduction_is_refused():
+    """`tile_loops` tiles a carried `max` by default, and this emitter has no
+    reduction across the lanes -- so a refusal, not an invalid kernel."""
+    from fpy2.backend.triton import emit_kernel, tile_loops
+
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        with fp.FP32:
+            m = fp.round(0)
+            for i in range(len(xs)):
+                m = max(m, xs[i])
+            out[0] = m
+        return out
+
+    m = Module()
+    m.add(f, ctx=fp.REAL, arg_types=[
+        ListType(_R32, 8), ListType(_R32, 1), _INT])
+    g = Specialize.apply(m, size_key=True).get(f.name).func
+    r = tile_loops(g.ast, 'BLOCK')
+    with pytest.raises(TritonEmitError, match='carrying `m` needs a reduction'):
+        emit_kernel(r.func, r.tiled, block='BLOCK', drop_asserts=True,
+                    guards=r.guards)

@@ -375,3 +375,32 @@ class TestGuards:
         # the program's own `if1` is all that is left, and it is no guard
         assert len(self._if1s(r.func)) == 1
         assert r.guards == []
+
+
+class TestReductionsOption:
+    """A target with no lowering of a reduction across the tile asks for the
+    loops carrying a scalar to stay sequential."""
+
+    def test_a_carried_scalar_is_tiled_by_default(self):
+        assert len(tile_loops(_largest_for_tiling.ast, 4).tiled) == 1
+
+    def test_it_stays_sequential_without_reductions(self):
+        r = tile_loops(_largest_for_tiling.ast, 4, reductions=False)
+        assert r.tiled == []
+
+    def test_a_loop_carrying_only_writes_by_element_still_tiles(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], out: list[fp.Real]):
+            for i in range(len(xs)):
+                out[i] = xs[i]
+            return out
+
+        assert len(tile_loops(f.ast, 4, reductions=False).tiled) == 1
+
+
+@fp.fpy(ctx=fp.FP64)
+def _largest_for_tiling(xs: list[fp.Real]):
+    m = fp.round(0)
+    for x in xs:
+        m = max(m, x)
+    return m
