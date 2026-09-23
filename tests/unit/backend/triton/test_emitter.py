@@ -1051,3 +1051,43 @@ def test_a_float_held_exponent_is_cast_for_ldexp():
         return 2 ** -e * x
 
     assert '.to(tl.int32))' in _emit(f, [RealType(fp.FP64)], ctx=fp.REAL)
+
+
+class TestLoopCarried:
+    def test_a_range_keeps_its_start_and_step(self):
+        """`tl.static_range` counts from zero, so the target is where the
+        count lands: `range(0, 8, 4)` is 0 and 4, not 0 and 1."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            acc = fp.round(0)
+            for i in range(2, 8, 4):
+                acc = acc + xs[i]
+            return acc
+
+        out = _emit(f, [ListType(_R32, 8)])
+        assert 'in tl.static_range(2):' in out
+        assert 'i = 2 + __t0 * 4' in out
+
+    def test_a_carried_value_enters_in_its_phis_storage(self):
+        """Triton declares nothing, so a value narrower than the phi joining
+        it with what each iteration leaves is widened before the loop."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(c: fp.Real):
+            d = c
+            for _ in range(4):
+                with fp.REAL:
+                    d = 2 ** -64 * d
+            return d
+
+        out = _emit(f, [_R32], ctx=fp.REAL)
+        assert out.index('d = d.to(tl.float64)') < out.index('static_range')
+
+
+def test_an_ldexp_scales_in_the_products_storage():
+    """`ldexp` computes in its argument's type, and `2 ** -200 * x` needs a
+    wider one than `x`'s."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real):
+        return 2 ** -200 * x
+
+    assert 'libdevice.ldexp(x.to(tl.float64), ' in _emit(f, [_R32], ctx=fp.REAL)

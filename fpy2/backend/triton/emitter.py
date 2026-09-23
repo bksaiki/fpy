@@ -41,11 +41,13 @@ from ...analysis import (
     Definition,
     FormatAnalysis,
     FormatInfer,
+    PhiDef,
     TypeAnalysis,
     TypeInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import FormatBound, rounds_exactly, to_abstract
+from ...analysis.storage_infer import StorageSelectionError
 from ...ast import (
     AllOf,
     AMax,
@@ -1018,7 +1020,18 @@ class _Emitter(Visitor):
                 ):
                     return None
                 n = f'{n}.to(tl.int32)'
-            return f'libdevice.ldexp({self.emit(value)}, {n})'
+            # in the product's storage, which may be wider than the operand's:
+            # `ldexp` computes in its argument's type.  An unbounded product
+            # has none, and stays in the operand's.
+            v = self.emit(value)
+            have = self._storage(value)
+            try:
+                want = self._storage(e)
+            except StorageSelectionError:
+                want = have
+            v = self._maybe_cast(
+                v, have, want, self.format_info.by_expr.get(value))
+            return f'libdevice.ldexp({v}, {n})'
         return None
 
     def _emit_logb(self, e: Logb) -> str:
@@ -1597,10 +1610,42 @@ class _Emitter(Visitor):
                 '`range` and subscript instead'
             )
         n = _static_count(stmt, self.sizes)
-        ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
-        ctx.indent()
+        # a carried name is held in its phi's storage, which joins what enters
+        # the loop and what each iteration leaves: Triton declares nothing, so
+        # both are widened into it explicitly
+        phis = [p for p in self.def_use.phis[stmt]
+                if not isinstance(self.types.by_def.get(p), ListType)]
+        for p in phis:
+            self._widen_into(p, p.lhs, ctx)
+        if isinstance(stmt.iterable, Range1):
+            ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
+            ctx.indent()
+        else:
+            # `static_range` counts from zero: the target is where the
+            # count lands in `range(start, stop, step)`
+            k = f'__t{self._next_tmp}'
+            self._next_tmp += 1
+            start = self.emit(stmt.iterable.first)
+            step = self.emit(stmt.iterable.third)
+            ctx.add_line(f'for {k} in tl.static_range({n}):')
+            ctx.indent()
+            ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
+        for p in phis:
+            self._widen_into(p, p.rhs, ctx)
         ctx.dedent()
+
+    def _widen_into(self, phi: PhiDef, i: int, ctx: _IndentedWriter):
+        """*phi*'s name, holding its definition *i*, in *phi*'s storage."""
+        # a Python literal is weakly typed, and takes the other operand's
+        if str(phi.name) in self.consts:
+            return
+        d = self.def_use.defs[i]
+        have, want = self._def_storage(d), self._def_storage(phi)
+        if have != want:
+            code = self._maybe_cast(
+                str(phi.name), have, want, self.format_info.by_def.get(d))
+            ctx.add_line(f'{phi.name} = {code}')
 
     def _root(self, name: str) -> str:
         """*name* followed through the copies that bound it."""
