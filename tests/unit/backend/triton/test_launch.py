@@ -269,3 +269,36 @@ def test_signbit_agrees_including_both_zeros():
         [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 8)]
     assert ot.cpu().tolist() == want
     assert want[0] == 0.0 and want[1] == 1.0, 'both zeros were exercised'
+
+
+@fp.fpy(ctx=fp.FP32)
+def _nan_inf(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        v = fp.nan() if xs[i] > 1.0 else (
+            fp.inf() if xs[i] > 0.0 else -fp.inf())
+        out[i] = v
+    return out
+
+
+def test_nan_and_inf_agree_with_the_interpreter():
+    import math
+
+    import torch
+
+    vals = [2.0, 0.5, -1.0, 3.0, 0.1, -0.0]
+    n = len(vals)
+    src = TritonCompiler(drop_asserts=True).compile(
+        _nan_inf, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+    xt = torch.tensor(vals, dtype=torch.float32).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=4)
+
+    want = [float(v) for v in _nan_inf(
+        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 4)]
+    got = ot.cpu().tolist()
+    assert all((math.isnan(a) and math.isnan(b)) or a == b
+               for a, b in zip(got, want)), f'{got} vs {want}'
+    assert any(math.isnan(v) for v in got) and float('-inf') in got

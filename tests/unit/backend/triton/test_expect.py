@@ -447,3 +447,43 @@ def test_a_boolean_merge_has_bool_storage():
     assert 'tl.where' in src.source
     # the merged boolean needs no cast: `bool` is its own storage
     assert '.to(tl.int1' not in src.source
+
+
+@fp.fpy(ctx=fp.FP32)
+def _nan_inf(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        v = fp.nan() if xs[i] > 1.0 else (
+            fp.inf() if xs[i] > 0.0 else -fp.inf())
+        out[i] = v
+    return out
+
+
+def test_nan_and_inf_are_literals():
+    """Values, not operations, so they are spelled and retyped where used."""
+    src = TritonCompiler(drop_asserts=True).compile(
+        _nan_inf, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert "float('nan')" in src.source
+    assert "float('inf')" in src.source
+    # negated, not a second constant
+    assert "-float('inf')" in src.source or "(-float('inf'))" in src.source
+
+
+@fp.fpy(ctx=fp.INTEGER)
+def _int_nan(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        out[i] = fp.nan()
+    return out
+
+
+def test_nan_is_refused_where_the_context_cannot_hold_one():
+    """`fp.nan()` is `C.round(nan)`, and `fp.INTEGER.round(nan)` raises --
+    as `1 / 0` there does.  A kernel cannot raise, so this is declined."""
+    with pytest.raises(TritonEmitError, match='cannot hold one'):
+        TritonCompiler(drop_asserts=True).compile(
+            _int_nan, ctx=fp.INTEGER, arg_types=[
+                ListType(RealType(fp.INTEGER), 4),
+                ListType(RealType(fp.INTEGER), 4),
+                RealType(fp.INTEGER)])

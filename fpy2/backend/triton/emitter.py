@@ -56,6 +56,8 @@ from ...ast import (
     Cast,
     Compare,
     CompareOp,
+    ConstInf,
+    ConstNan,
     ContextStmt,
     Decnum,
     Digits,
@@ -1011,7 +1013,36 @@ class _Emitter(Visitor):
             'a foreign value is not a Triton value; fold it first'
         )
 
-    def _visit_nullaryop(self, e, ctx):
+    def _visit_nullaryop(self, e, ctx) -> str:
+        """`nan` and `inf`, which are *values* rather than operations.
+
+        So they are spelled like any other literal and retyped where used,
+        not cast -- `float('nan')` is a Python float and Triton types it in
+        context.
+
+        **`fp.nan()` means `C.round(nan)`**, so a context that cannot hold one
+        makes it an abort rather than a value: `fp.INTEGER.round(nan)` raises
+        *"Cannot round NaN under this context"*, as `1 / 0` there does.  A
+        kernel cannot raise, so this is refused.
+
+        The rest of the table is transcendental (`pi`, `e`, `log2(e)`, ...),
+        which this backend excludes by design: there is no correctly-rounded
+        constant to emit, and a rounded one is a different program.
+        """
+        if isinstance(e, (ConstNan, ConstInf)):
+            what = 'NaN' if isinstance(e, ConstNan) else 'infinity'
+            ctx_ = self._active_ctx(e)
+            ok = getattr(
+                ctx_, 'enable_nan' if isinstance(e, ConstNan) else 'enable_inf',
+                True,
+            )
+            if not ok:
+                raise TritonEmitError(
+                    f'`{type(e).__name__.lower()}` is `round({what.lower()})` '
+                    f'under this context, which cannot hold one -- the '
+                    f'program aborts there and a kernel cannot'
+                )
+            return "float('nan')" if isinstance(e, ConstNan) else "float('inf')"
         raise TritonEmitError(
             f'`{type(e).__name__.lower()}` is not in the op table'
         )
