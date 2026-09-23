@@ -43,7 +43,7 @@ from ...analysis import (
     TypeInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
-from ...analysis.format_infer import rounds_exactly
+from ...analysis.format_infer import FormatBound, rounds_exactly
 from ...ast import (
     AllOf,
     AMax,
@@ -107,7 +107,11 @@ from ...ast.visitor import DefaultVisitor, Visitor
 from ...number import REAL, Context
 from ...types import BoolType, RealType
 from ..backend import CompileError
-from .storage import choose_storage_scalar, scalar_fits_in
+from .storage import (
+    bound_fits_in_scalar,
+    choose_storage_scalar,
+    scalar_fits_in,
+)
 from .target import ScalarOpTable, TritonOp, is_native_ctx, make_op_table
 from .types import TritonScalar
 
@@ -334,20 +338,35 @@ class _Emitter(Visitor):
 
     def _maybe_cast(
         self, code: str, have: TritonScalar, want: TritonScalar,
+        bound: FormatBound = None,
     ) -> str:
         """*code*, in *want*'s storage, or a refusal.
 
         An implicit narrowing is the fp16 trap, so it is never emitted; a
         program that needs one has to say so with `fp.cast`.
+
+        *bound* is what format inference proved about the value, and it is
+        the question soundness actually turns on -- the cpp backend's
+        `_value_fits` says it best: `scalar_fits_in` asks whether the two
+        *types* nest, where a conversion only needs the *values* to.  They
+        come apart wherever storage is wider than the bound it was chosen to
+        hold: an `e_zero = -132` reports `int16`, which no `float16` holds in
+        general, and which this one holds exactly.
         """
         if have == want:
             return code
-        if not scalar_fits_in(have, want):
+        if not self._value_fits(bound, have, want):
             raise TritonEmitError(
                 f'emitting this would narrow {have.format()} to '
                 f'{want.format()} implicitly, which rounds'
             )
         return self._explicit_cast(code, want)
+
+    def _value_fits(
+        self, bound: FormatBound, have: TritonScalar, want: TritonScalar,
+    ) -> bool:
+        """Can a value bounded by *bound*, held as *have*, live in *want*?"""
+        return scalar_fits_in(have, want) or bound_fits_in_scalar(bound, want)
 
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
         """*code* cast to *want*.
@@ -387,6 +406,7 @@ class _Emitter(Visitor):
             )
         codes = [code for code, _ in operands]
         storages = tuple(self._storage(src) for _, src in operands)
+        bounds = [self.format_info.by_expr.get(src) for _, src in operands]
         active = self._active_ctx(e)
 
         for sig in sigs:
@@ -399,12 +419,12 @@ class _Emitter(Visitor):
             for sig in sigs:
                 if sig.in_tys == want and sig.out_ctx == active:
                     return sig.format(*[
-                        self._maybe_cast(code, have, target)
-                        for code, have in zip(codes, storages)
+                        self._maybe_cast(code, have, target, bound)
+                        for code, have, bound in zip(codes, storages, bounds)
                     ])
 
         if active is REAL:
-            widened = self._try_widen(e, sigs, codes, storages)
+            widened = self._try_widen(e, sigs, codes, storages, bounds)
             if widened is not None:
                 return widened
 
@@ -419,6 +439,7 @@ class _Emitter(Visitor):
         sigs: list[TritonOp],
         codes: list[str],
         storages: tuple[TritonScalar, ...],
+        bounds: list[FormatBound],
     ) -> str | None:
         """Under ``REAL``, compute at the width that holds the exact result.
 
@@ -436,8 +457,8 @@ class _Emitter(Visitor):
         for sig in sigs:
             if sig.in_tys == want:
                 return sig.format(*[
-                    self._maybe_cast(code, have, target)
-                    for code, have in zip(codes, storages)
+                    self._maybe_cast(code, have, target, bound)
+                    for code, have, bound in zip(codes, storages, bounds)
                 ])
         return None
 
@@ -989,7 +1010,8 @@ class _Emitter(Visitor):
         name = 'tl.maximum' if isinstance(e, Max) else 'tl.minimum'
         want = self._storage(e)
         args = [
-            self._maybe_cast(self.emit(a), self._storage(a), want)
+            self._maybe_cast(self.emit(a), self._storage(a), want,
+                             self.format_info.by_expr.get(a))
             for a in e.args
         ]
         if not args:
@@ -1008,7 +1030,8 @@ class _Emitter(Visitor):
         """
         want = self._storage(e)
         arms = [
-            self._maybe_cast(self.emit(a), self._storage(a), want)
+            self._maybe_cast(self.emit(a), self._storage(a), want,
+                              self.format_info.by_expr.get(a))
             for a in (e.ift, e.iff)
         ]
         return f'tl.where({self.emit(e.cond)}, {arms[0]}, {arms[1]})'

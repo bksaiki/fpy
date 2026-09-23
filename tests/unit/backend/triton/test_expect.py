@@ -540,3 +540,30 @@ def test_logb_reads_the_exponent_field():
     assert "float('nan')" in src.source    # at a NaN
     # a subnormal is scaled into range, not counted
     assert '16777216.0' in src.source
+
+
+@fp.fpy(ctx=fp.FP16)
+def _small_const(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """A small integer constant merged with a float value.
+
+    `-132` is held as `int16`, which no `float16` holds *in general* -- and
+    which this one holds exactly.
+    """
+    e_zero = -132
+    for i in range(len(out)):
+        out[i] = max(xs[i], e_zero)
+    return out
+
+
+def test_a_cast_asks_about_values_not_only_types():
+    """`scalar_fits_in` asks whether the two *types* nest; a conversion only
+    needs the *values* to.  They come apart wherever storage is wider than
+    the bound it was chosen to hold -- which the cpp backend already knew,
+    as `_value_fits`.
+    """
+    src = TritonCompiler(drop_asserts=True).compile(
+        _small_const, ctx=fp.FP16, arg_types=[
+            ListType(RealType(fp.FP16), 4),
+            ListType(RealType(fp.FP16), 4),
+            RealType(fp.INTEGER)])
+    assert 'tl.maximum' in src.source
