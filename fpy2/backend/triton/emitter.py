@@ -115,7 +115,13 @@ from .storage import (
     choose_storage_scalar,
     scalar_fits_in,
 )
-from .target import ScalarOpTable, TritonOp, is_native_ctx, make_op_table
+from .target import (
+    ScalarOpTable,
+    TritonOp,
+    downcast_rounding,
+    is_native_ctx,
+    make_op_table,
+)
 from .types import TritonScalar
 
 __all__ = ['KernelSource', 'TritonEmitError', 'emit_block', 'emit_expr', 'emit_kernel']
@@ -850,11 +856,28 @@ class _Emitter(Visitor):
         if integral is not None:
             return f'{integral}({arg})'
         if not is_native_ctx(ctx):
+            return self._emit_downcast(e, arg, ctx)
+        return self._explicit_cast(arg, self._storage(e))
+
+    def _emit_downcast(self, e: Round | Cast, arg: str, ctx: Context) -> str:
+        """A `round` Triton spells as a narrowing cast under a rounding mode.
+
+        `tl.cast` takes an `fp_downcast_rounding` that reaches one context
+        more than `is_native_ctx`: `x.to(tl.float16,
+        fp_downcast_rounding="rtz")` **is** FP16's round-toward-zero.  Which
+        conversions it covers is `downcast_rounding`'s to say.  A literal is
+        excluded for the reason `_explicit_cast` gives -- it would be retyped
+        rather than cast, and retyping rounds to nearest whatever mode is
+        asked for.
+        """
+        want = self._storage(e)
+        rm = downcast_rounding(ctx, self._storage(e.arg))
+        if rm is None or _as_literal(arg) is not None:
             raise TritonEmitError(
                 f'`{type(e).__name__.lower()}` to `{ctx}` is not a hardware '
                 'conversion, so it has no cast spelling'
             )
-        return self._explicit_cast(arg, self._storage(e))
+        return f'{arg}.to({want.format()}, fp_downcast_rounding="{rm}")'
 
     def _emit_compare(self, e: Compare) -> str:
         """A comparison, which rounds nothing and so is not in the op table.

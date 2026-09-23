@@ -47,7 +47,10 @@ from ...transform import (
 from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import KernelSource, emit_kernel
-from .normalize import normalize_module
+from .normalize import normalize, normalize_module
+from .unfold_round import UnfoldMode, unfold
+
+_UnfoldMode = UnfoldMode
 from .vectorize import tile_loops
 
 __all__ = ['TritonCompiler']
@@ -86,12 +89,22 @@ class TritonCompiler(Backend):
             left alone and takes the ordinary loop path, so this costs an
             unrolling rather than the compile.  Default ``256`` -- four times
             the widest real MMA instruction.
+        unfold:
+            An :class:`~fpy2.backend.triton.unfold_round.UnfoldMode`, as for
+            the cpp backend.  ``ROUNDINGS`` lowers a rounding Triton cannot
+            spell -- round-toward-zero to FP32, say -- into integer
+            arithmetic instead of refusing it; ``DOUBLE_ROUND`` also computes
+            arithmetic under such a context at a native intermediate and
+            re-rounds.  Default ``NONE``.
     """
+
+    UnfoldMode = _UnfoldMode
 
     block: str
     drop_asserts: bool
     optimize: bool
     scalarize_cap: int
+    unfold: _UnfoldMode
 
     def __init__(
         self,
@@ -100,11 +113,13 @@ class TritonCompiler(Backend):
         drop_asserts: bool = False,
         optimize: bool = True,
         scalarize_cap: int = 256,
+        unfold: _UnfoldMode = _UnfoldMode.NONE,
     ):
         self.block = block
         self.drop_asserts = drop_asserts
         self.optimize = optimize
         self.scalarize_cap = scalarize_cap
+        self.unfold = unfold
 
     def compile(
         self,
@@ -174,6 +189,14 @@ class TritonCompiler(Backend):
         ready = normalize_module(
             normalized, cap=self.scalarize_cap,
         ).get(folded.name).func
+
+        if self.unfold is not _UnfoldMode.NONE:
+            # after the normal form, so the callees' roundings are inlined
+            # where it can see them, and re-normalized after: the lowering
+            # emits branches of its own
+            ready = ready.with_ast(normalize(
+                unfold(ready.ast, self.unfold), cap=self.scalarize_cap,
+            ))
 
         if self.optimize:
             # last, as the cpp backend does: the lowerings above leave debris

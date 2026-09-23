@@ -74,6 +74,7 @@ __all__ = [
     'ScalarOpTable',
     'TritonOp',
     'TritonOpStyle',
+    'downcast_rounding',
     'is_native_ctx',
     'make_op_table',
 ]
@@ -144,8 +145,37 @@ _DIV_SHAPES = ((8, 32), (11, 64))
 
 def _fp_ctxs(shapes=_FP_SHAPES) -> list[Context]:
     """The float contexts this backend dispatches on: round-to-nearest-even
-    only, because Triton exposes no other mode."""
+    only, because Triton computes in no other mode.  A *cast* has one more;
+    see :func:`downcast_rounding`."""
     return [IEEEContext(es, nbits, RM.RNE) for (es, nbits) in shapes]
+
+
+_RTZ_DOWNCASTS = frozenset({(TritonScalar.F32, TritonScalar.F16)})
+"""``(source, target)`` pairs Triton lowers under round-toward-zero.
+
+``tl.cast`` accepts ``fp_downcast_rounding`` on any narrowing float-to-float
+conversion, but the NVIDIA backend then rejects an ``f64`` source --
+*"Unsupported rounding mode for conversion"* -- although PTX has
+``cvt.rz.f32.f64`` and ``rtne`` from ``f64`` lowers fine.  A gap in the
+lowering rather than the hardware, and measured rather than assumed.
+"""
+
+
+def downcast_rounding(ctx: Context, src: TritonScalar) -> str | None:
+    """The ``fp_downcast_rounding`` under which a cast from *src* into *ctx*
+    **is** its ``round``, or ``None`` where no cast is.
+
+    Round-to-nearest is not an answer here: it needs no mode, so a context
+    that rounds that way is already native.  Overflow is the other half of the
+    question -- these are the hardware conversions, which reach infinity
+    rather than the largest finite value, so a context asking for anything
+    else is not one of them.
+    """
+    if not isinstance(ctx, IEEEContext) or (ctx.es, ctx.nbits) not in _FP_SHAPES:
+        return None
+    if ctx.rm is not RM.RTZ or ctx != IEEEContext(ctx.es, ctx.nbits, ctx.rm):
+        return None
+    return 'rtz' if (src, _ty_of(ctx)) in _RTZ_DOWNCASTS else None
 
 
 def _int_ctxs() -> list[Context]:

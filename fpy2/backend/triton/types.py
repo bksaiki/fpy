@@ -53,6 +53,11 @@ class TritonScalar(enum.Enum):
         non-integer."""
         return _INT_BITS.get(self)
 
+    def float_bits(self) -> int | None:
+        """Width of a float type, or ``None`` for a non-float.  Orders the
+        float types, which is what says whether a conversion narrows."""
+        return _FLOAT_BITS.get(self)
+
     def format(self) -> str:
         """The `triton.language` dtype that spells this storage."""
         return _SPELLING[self]
@@ -126,3 +131,8 @@ _INT_BITS: dict[TritonScalar, int] = {
     TritonScalar.S32: 32, TritonScalar.S64: 64,
 }
 """Value width of each integer type; see :meth:`TritonScalar.int_bits`."""
+
+_FLOAT_BITS: dict[TritonScalar, int] = {
+    TritonScalar.F16: 16, TritonScalar.F32: 32, TritonScalar.F64: 64,
+}
+"""Width of each float type; see :meth:`TritonScalar.float_bits`."""
