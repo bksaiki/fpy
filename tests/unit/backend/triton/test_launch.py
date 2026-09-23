@@ -412,11 +412,12 @@ def test_ldexp_agrees_with_a_per_lane_exponent():
     src = TritonCompiler(drop_asserts=True).compile(
         _scaled, ctx=fp.REAL, arg_types=[
             ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.INTEGER), n),
+            # bounded, so the product has a storage: an unbounded one has none
+            ListType(RealType(fp.SINT8), n),
             ListType(RealType(fp.FP32), n),
             RealType(fp.INTEGER)])
     xt = torch.tensor(vals, dtype=torch.float32).cuda()
-    nt = torch.tensor(exps, dtype=torch.int32).cuda()
+    nt = torch.tensor(exps, dtype=torch.int8).cuda()
     ot = torch.zeros(n, dtype=torch.float32).cuda()
     launch(src, [xt, nt, ot], block=8, grid=1)
 

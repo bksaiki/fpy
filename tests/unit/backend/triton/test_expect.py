@@ -54,7 +54,7 @@ def _batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     i = tl.program_id(0) * BLOCK
     j = i + tl.arange(0, BLOCK)
     r = j
-    acc = 0
+    acc = 0.0
     for k in tl.static_range(8):
         acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t8), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t8), other=0.0).to(tl.float32)))
     tl.store(out_ptr + r, acc, mask=(j < t8))'''
@@ -213,7 +213,7 @@ def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
     i11 = tl.program_id(0) * BLOCK
     j = i11 + tl.arange(0, BLOCK)
     i = j
-    acc = 0
+    acc = 0.0
     for _i in tl.static_range(8):
         x = tl.load(xs_ptr + _i + tl.zeros_like(j), mask=(j < t10), other=0.0)
         y = tl.load(ys_ptr + _i + tl.zeros_like(j), mask=(j < t10), other=0.0)
@@ -262,7 +262,7 @@ def _row_bound(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     i = tl.program_id(0) * BLOCK
     j = i + tl.arange(0, BLOCK)
     r = j
-    acc = 0
+    acc = 0.0
     for k in tl.static_range(8):
         acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32)))
     tl.store(out_ptr + r, acc, mask=(j < t10))'''
@@ -591,7 +591,8 @@ def _scaled_rounding(xs: list[fp.Real], ns: list[fp.Real],
 
 _SCALE_ARGS = [
     ListType(RealType(fp.FP32), 4),
-    ListType(RealType(fp.INTEGER), 4),
+    # bounded, so the product has a storage: an unbounded exponent has none
+    ListType(RealType(fp.SINT8), 4),
     ListType(RealType(fp.FP32), 4),
     RealType(fp.INTEGER),
 ]
@@ -660,3 +661,14 @@ def test_a_mode_with_no_c_function_is_refused():
     rounded differently."""
     with pytest.raises(TritonEmitError, match='not a hardware conversion'):
         _round_to_int('RTO')
+
+
+def test_a_name_no_storage_holds_is_refused():
+    """With an unbounded exponent `t` can be any real.  Emitted anyway it was
+    computed in its operand's `f32`, as the cpp backend refuses to.  The
+    exponent, which `ldexp` takes as an `int32`, is refused first."""
+    with pytest.raises(TritonEmitError, match='narrow|no storage holds'):
+        TritonCompiler(drop_asserts=True).compile(
+            _scaled, ctx=fp.REAL, arg_types=[
+                _SCALE_ARGS[0], ListType(RealType(fp.INTEGER), 4),
+                *_SCALE_ARGS[2:]])

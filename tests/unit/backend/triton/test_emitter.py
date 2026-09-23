@@ -173,7 +173,7 @@ class TestSequentialLoops:
 
         g = _spec(fold, fp.FP32, ctx=fp.FP32)
         assert emit_block(g.ast.body, g.ast) == (
-            'acc = 0\n'
+            'acc = 0.0\n'
             'for k in tl.static_range(8):\n'
             '    acc = (acc + x)\n'
             'return acc'
@@ -938,7 +938,9 @@ class TestBranch:
         assert 'tl.load(xs_ptr + i, mask=__t0, other=0.0)' in _emit(
             f, [ListType(_R32, 8), _INT])
 
-    def test_a_narrower_arm_is_widened_at_the_merge(self):
+    def test_a_narrower_arm_is_widened_where_it_is_assigned(self):
+        """Into the storage of the name's class, as a C++ declaration would,
+        so the merge itself needs no cast."""
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real):
             if x < 0:
@@ -948,8 +950,9 @@ class TestBranch:
                 y = x
             return y
 
-        assert 'tl.where(__t0, __t1.to(tl.float32), y)' in _emit(
-            f, [_R32], ctx=fp.REAL)
+        out = _emit(f, [_R32], ctx=fp.REAL)
+        assert 'y = x.to(tl.float16).to(tl.float32)' in out
+        assert 'y = tl.where(__t0, __t1, y)' in out
 
     def test_a_return_in_an_arm_is_refused(self):
         @fp.fpy(ctx=fp.FP32)
@@ -1068,9 +1071,9 @@ class TestLoopCarried:
         assert 'in tl.static_range(2):' in out
         assert 'i = 2 + __t0 * 4' in out
 
-    def test_a_carried_value_enters_in_its_phis_storage(self):
+    def test_a_carried_value_is_held_in_its_class(self):
         """Triton declares nothing, so a value narrower than the phi joining
-        it with what each iteration leaves is widened before the loop."""
+        it with what each iteration leaves is widened where it is assigned."""
         @fp.fpy(ctx=fp.REAL)
         def f(c: fp.Real):
             d = c
@@ -1080,7 +1083,7 @@ class TestLoopCarried:
             return d
 
         out = _emit(f, [_R32], ctx=fp.REAL)
-        assert out.index('d = d.to(tl.float64)') < out.index('static_range')
+        assert 'd = c.to(tl.float64)' in out
 
 
 def test_an_ldexp_scales_in_the_products_storage():
@@ -1108,3 +1111,66 @@ def test_a_lane_address_is_not_broadcast():
     ).source
     assert src.count('tl.zeros_like(') == 1
     assert 'tl.load(xs_ptr + 0 + tl.zeros_like(j)' in src
+
+
+class TestTryWiden:
+    """Under `REAL`, any width holding the operands and the exact result will
+    do; the result's own need not hold an operand."""
+
+    def test_a_result_narrower_than_an_operand(self):
+        """`z * 0` is ±0, stored `f16`; `z` is a 22-bit `f32`."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real):
+            with fp.FP32:
+                z = a * b
+            with fp.REAL:
+                y = z * 0
+            return y
+
+        out = _emit(f, [RealType(FP16), RealType(FP16)], ctx=fp.REAL)
+        assert '(z * 0.0).to(tl.float16)' in out
+
+    def test_a_literal_wider_than_the_result(self):
+        """The branch bounds `2^139 * t` to `f32`, where the literal needs
+        `f64`: computed at `f64`, then narrowed exactly."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(t: fp.Real):
+            y = t
+            if abs(t) < fp.rational(1, 85070591730234615865843651857942052864):
+                with fp.REAL:
+                    y = 696898287454081973172991196020261297061888 * t
+            return y
+
+        out = _emit(f, [_R32], ctx=fp.REAL)
+        assert 'tl.float64' in out and '.to(tl.float32)' in out
+
+
+def test_an_exact_sum_no_storage_holds_is_refused():
+    """`sum([x, y])` over two `f64`s needs about 2100 bits exactly.  A name
+    has one storage, as a declaration has one type, so it is refused rather
+    than computed in the operands' and rounded."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real, y: fp.Real):
+        with fp.REAL:
+            s = sum([x, y])
+        with fp.FP64:
+            t = fp.round(s)
+        return t
+
+    with pytest.raises(TritonEmitError, match='no storage holds every value'):
+        _emit(f, [RealType(fp.FP64), RealType(fp.FP64)], ctx=fp.REAL)
+
+
+def test_an_exact_sum_folds_in_its_own_storage():
+    """Two `f16`s sum exactly in about 41 bits: every partial sum is in the
+    sum's `f64`, and folding in the elements' own `f16` would round."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real, y: fp.Real):
+        with fp.REAL:
+            s = sum([x, y])
+        with fp.FP64:
+            t = fp.round(s)
+        return t
+
+    out = _emit(f, [RealType(FP16), RealType(FP16)], ctx=fp.REAL)
+    assert '(x.to(tl.float64) + y.to(tl.float64))' in out

@@ -27,6 +27,7 @@ fallback.
 """
 
 import re
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
@@ -46,8 +47,15 @@ from ...analysis import (
     TypeInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
-from ...analysis.format_infer import FormatBound, rounds_exactly, to_abstract
-from ...analysis.storage_infer import StorageSelectionError
+from ...analysis.format_infer import (
+    FormatBound,
+    ListFormat,
+    is_bottom,
+    rounds_exactly,
+    to_abstract,
+)
+from ...analysis.reaching_defs import same_object_defs
+from ...analysis.storage_infer import StorageSelectionError, join, of_bound
 from ...ast import (
     AllOf,
     AMax,
@@ -114,11 +122,14 @@ from ...ast.visitor import DefaultVisitor, Visitor
 from ...number import REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import BoolType, ListType, RealType
+from ...utils import Unionfind
 from ..backend import CompileError
 from .storage import (
+    TritonStorageDomain,
     bound_fits_in_scalar,
     choose_storage_scalar,
     scalar_fits_in,
+    to_triton,
 )
 from .target import (
     ScalarOpTable,
@@ -150,6 +161,10 @@ _COMPARE: dict[CompareOp, str] = {
 def _reads_name(code: str, names: set[str]) -> bool:
     """Whether *code* mentions any of *names* as an identifier."""
     return any(re.search(rf'\b{re.escape(n)}\b', code) for n in names)
+
+
+_SPECIALS = frozenset({"float('nan')", "float('inf')", "(-float('inf'))"})
+"""How `fp.nan()` and `fp.inf()` are spelled: Python floats, so weakly typed."""
 
 
 def _as_literal(code: str) -> float | None:
@@ -285,6 +300,21 @@ class _Emitter(Visitor):
         """The tiles' `j < n` guards, as `tile_loops` reported them: a mask on
         the tile, where any other `if` is a branch."""
         self.def_use = def_use or DefineUse.analyze(func)
+        # the classes `StorageInfer` coalesces: the definitions a phi joins
+        defs = self.def_use.defs
+        uf: Unionfind[Definition] = Unionfind(defs)
+        for d in defs:
+            for i in same_object_defs(d):
+                uf.union(d, defs[i])
+        self._class_of = {d: uf.find(d) for d in defs}
+        self._members: dict[Definition, list[Definition]] = defaultdict(list)
+        for d, c in self._class_of.items():
+            self._members[c].append(d)
+        self._class_ty: dict[Definition, TritonScalar | None] = {}
+        """One storage per class, as the cpp backend declares a name: every
+        read of a scalar name is in it and every assignment is cast into it,
+        so a merge or a loop needs no cast.  Chosen per class on demand, since
+        a class no read needs may have none."""
         self.ranges: dict[NamedId, tuple[str, str]] = {}
         """Names bound to a `range`, as (start, step).
 
@@ -387,6 +417,12 @@ class _Emitter(Visitor):
                 f'a `{type(ty).__name__ if ty else "?"}` has no Triton '
                 f'storage, so `{type(e).__name__}` cannot be held'
             )
+        if isinstance(e, Var) and (d := self.def_use.use_to_def.get(e)):
+            # what the name holds, not what it can be here -- a read under a
+            # branch is refined, where the storage is the class's
+            held = self._class_storage(d)
+            if held is not None:
+                return held
         bound = self.format_info.by_expr.get(e)
         if bound is None:
             raise TritonEmitError(
@@ -453,6 +489,8 @@ class _Emitter(Visitor):
         tile.  Writing the literal in the target's own spelling avoids the
         conversion entirely.
         """
+        if code in _SPECIALS:
+            return code     # a Python float, typed where it is used
         literal = _as_literal(code)
         if literal is not None:
             return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
@@ -526,15 +564,35 @@ class _Emitter(Visitor):
         This is what the running example turns on: an fp16 product needs 22
         bits and fp32 carries 24, so `x.to(tl.float32) * y.to(tl.float32)` is
         exact where `x * y` on fp16 operands is not.
+
+        The result's width need not hold an operand -- `z * 0` is ±0, `2^139 *
+        t` can fit `f32` -- so any width holding the operands and the result
+        will do, the narrowest first, and the exact result is then cast down,
+        as the cpp backend's `_try_widen` does.
         """
         target = self._storage(e)
-        want = (target,) * len(codes)
-        for sig in sigs:
-            if sig.in_tys == want:
-                return sig.format(*[
-                    self._maybe_cast(code, have, target, bound)
-                    for code, have, bound in zip(codes, storages, bounds)
-                ])
+        result = self.format_info.by_expr.get(e)
+
+        def fits(have: TritonScalar, bound: FormatBound, slot: TritonScalar):
+            return self._value_fits(bound, have, slot)
+
+        slots = sorted(
+            {sig.in_tys[0] for sig in sigs
+             if len(sig.in_tys) == len(codes) and len(set(sig.in_tys)) == 1},
+            # the result's own first: it needs no cast back
+            key=lambda t: (t != target, t.float_bits() or t.int_bits() or 0),
+        )
+        for slot in slots:
+            if slot != target and not fits(target, result, slot):
+                continue
+            if not all(fits(h, b, slot) for h, b in zip(storages, bounds)):
+                continue
+            sig = next(g for g in sigs if g.in_tys == (slot,) * len(codes))
+            out = sig.format(*[
+                self._maybe_cast(code, have, slot, bound)
+                for code, have, bound in zip(codes, storages, bounds)
+            ])
+            return out if slot == target else self._explicit_cast(out, target)
         return None
 
     @staticmethod
@@ -1041,7 +1099,12 @@ class _Emitter(Visitor):
             ):
                 return None
             n = self.emit(exp)
-            if self._storage(exp).is_float():
+            held = self._storage(exp)
+            if held.is_integer() and held != TritonScalar.S32:
+                n = self._maybe_cast(
+                    n, held, TritonScalar.S32,
+                    self.format_info.by_expr.get(exp))
+            elif held.is_float():
                 # `ldexp` takes an `int32`: exact where every finite value
                 # is an integer it holds; a special one is on a dead lane
                 af = to_abstract(self.format_info.by_expr.get(exp))
@@ -1150,6 +1213,19 @@ class _Emitter(Visitor):
                 # FPy's empty sum is an exact `+0`; as a literal it retypes
                 # where it is used, like any other, and broadcasts over a tile
                 return self._emit_numeric_literal(Fraction(0))
+            if self._active_ctx(e) is REAL:
+                # every partial sum lies in the sum's own format, so its
+                # storage holds each exactly -- where every element fits it.
+                # A sum with none is refused where it is assigned.
+                try:
+                    want = self._storage(e)
+                except StorageSelectionError:
+                    want = None
+                seq = self.format_info.by_expr.get(e.arg)
+                if want is not None and isinstance(seq, ListFormat) and (
+                    bound_fits_in_scalar(seq.elt, want)
+                ):
+                    elems = [self._explicit_cast(c, want) for c in elems]
             acc = elems[0]
             for rhs in elems[1:]:
                 acc = f'({acc} + {rhs})'
@@ -1447,12 +1523,29 @@ class _Emitter(Visitor):
                     self.emit(stmt.expr.first), self.emit(stmt.expr.third),
                 )
                 return
-        code = self.emit(stmt.expr)
+        code = self._into_class(stmt, self.emit(stmt.expr))
         if code.isdigit():
             self.consts[str(stmt.target)] = int(code)
         elif isinstance(stmt.expr, Var):
             self.copies[str(stmt.target)] = self._root(code)
         ctx.add_line(f'{stmt.target} = {code}')
+
+    def _into_class(self, stmt: Assign, code: str) -> str:
+        """*code*, the value *stmt* assigns, in its target's class storage."""
+        assert isinstance(stmt.target, NamedId)
+        d = self.def_use.find_def_from_site(stmt.target, stmt)
+        if not isinstance(self.types.by_def.get(d), RealType):
+            return code
+        want = self._class_storage(d)
+        if want is None:
+            # a name is held in one storage, as a declaration has one type
+            raise TritonEmitError(
+                f'no storage holds every value `{stmt.target}` is assigned'
+            )
+        return self._maybe_cast(
+            code, self._storage(stmt.expr), want,
+            self.format_info.by_expr.get(stmt.expr),
+        )
 
     def _emit_destructure(self, stmt: Assign, ctx: _IndentedWriter):
         """`a, b = (x, y)`, as one assignment per element.
@@ -1539,16 +1632,23 @@ class _Emitter(Visitor):
         ctx.add_line(f'{name} = {code}')
         return name
 
-    def _def_storage(self, d: Definition) -> TritonScalar:
-        ty = self.types.by_def.get(d)
-        if isinstance(ty, BoolType):
+    def _class_storage(self, d: Definition) -> TritonScalar | None:
+        """The storage of *d*'s class, or `None` where it holds no scalar or
+        no storage holds it."""
+        if isinstance(self.types.by_def.get(d), BoolType):
             return TritonScalar.BOOL
-        bound = self.format_info.by_def.get(d)
-        if not isinstance(ty, RealType) or bound is None:
-            raise TritonEmitError(
-                f'`{d.name}` merges out of a branch, and only a scalar can'
-            )
-        return choose_storage_scalar(bound)
+        c = self._class_of[d]
+        if c not in self._class_ty:
+            # `StorageInfer`'s join: an empty list's bottom constrains nothing
+            bounds = [self.format_info.by_def.get(m) for m in self._members[c]]
+            kept = [b for b in bounds if not is_bottom(b)] or bounds
+            dom = TritonStorageDomain()
+            try:
+                ty = to_triton(join(dom, [of_bound(dom, b) for b in kept]))
+            except StorageSelectionError:
+                ty = None
+            self._class_ty[c] = ty if isinstance(ty, TritonScalar) else None
+        return self._class_ty[c]
 
     def _emit_branch(
         self, stmt: IfStmt | If1Stmt, ift: StmtBlock, iff: StmtBlock | None,
@@ -1606,18 +1706,9 @@ class _Emitter(Visitor):
         self._branches -= 1
         self.mask = outer
 
+        # a phi's sides share its class, so they are in one storage already
         for p in phis:
-            # an `if1`'s phi reads the value before it first
-            t, f = (p.lhs, p.rhs) if iff is not None else (p.rhs, p.lhs)
-            want = self._def_storage(p)
-            sides = [
-                self._maybe_cast(
-                    code, self._def_storage(self.def_use.defs[i]), want,
-                    self.format_info.by_def.get(self.def_use.defs[i]),
-                )
-                for code, i in ((taken[p.name], t), (str(p.name), f))
-            ]
-            ctx.add_line(f'{p.name} = tl.where({cond}, {sides[0]}, {sides[1]})')
+            ctx.add_line(f'{p.name} = tl.where({cond}, {taken[p.name]}, {p.name})')
         restore(merged)
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter):
@@ -1641,13 +1732,6 @@ class _Emitter(Visitor):
                 '`range` and subscript instead'
             )
         n = _static_count(stmt, self.sizes)
-        # a carried name is held in its phi's storage, which joins what enters
-        # the loop and what each iteration leaves: Triton declares nothing, so
-        # both are widened into it explicitly
-        phis = [p for p in self.def_use.phis[stmt]
-                if not isinstance(self.types.by_def.get(p), ListType)]
-        for p in phis:
-            self._widen_into(p, p.lhs, ctx)
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
@@ -1662,21 +1746,7 @@ class _Emitter(Visitor):
             ctx.indent()
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
-        for p in phis:
-            self._widen_into(p, p.rhs, ctx)
         ctx.dedent()
-
-    def _widen_into(self, phi: PhiDef, i: int, ctx: _IndentedWriter):
-        """*phi*'s name, holding its definition *i*, in *phi*'s storage."""
-        # a Python literal is weakly typed, and takes the other operand's
-        if str(phi.name) in self.consts:
-            return
-        d = self.def_use.defs[i]
-        have, want = self._def_storage(d), self._def_storage(phi)
-        if have != want:
-            code = self._maybe_cast(
-                str(phi.name), have, want, self.format_info.by_def.get(d))
-            ctx.add_line(f'{phi.name} = {code}')
 
     def _root(self, name: str) -> str:
         """*name* followed through the copies that bound it."""
