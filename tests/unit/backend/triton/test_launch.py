@@ -550,3 +550,50 @@ def test_a_reduction_stays_sequential_and_agrees(f, seed):
     launch(src, [xt, ot], block=16, grid=1)
     want = f([float(v) for v in xt.cpu().tolist()], [0.0], 16)
     assert ot.cpu().tolist() == [float(v) for v in want]
+
+
+_RZ_FP32 = fp.IEEEContext(8, 32, fp.RM.RTZ)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _rz(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(xs)):
+        with _RZ_FP32:
+            out[i] = fp.round(xs[i])
+    return out
+
+
+def test_round_toward_zero_fp32_agrees_bit_for_bit():
+    """Lowered through `unfold`: Triton rounds toward zero from `f32` only.
+    The inputs are the edges -- subnormals, the overflow boundary, the zeros,
+    the specials -- and values needing more than 24 bits."""
+    import math
+    import struct
+
+    import torch
+
+    f32max = struct.unpack('f', struct.pack('I', 0x7f7fffff))[0]
+    vals = [
+        0.0, -0.0, 1.0, -1.0, 1 / 3, -1 / 3, 3.0000001, 16777217.0,
+        -16777217.0, 1e-40, -1e-40, 1.4e-45, 7e-46, 3e-46, 1e-50, 2 ** -149,
+        2 ** -126, 2 ** -126 * (1 - 2 ** -30), 5e-324, f32max, -f32max,
+        f32max * (1 + 2 ** -30), 2.0 ** 128, -2.0 ** 128, 1e300, -1e300,
+        math.inf, -math.inf, math.nan,
+    ]
+    n = len(vals)
+    src = TritonCompiler(
+        drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
+    ).compile(_rz, ctx=fp.REAL, arg_types=[
+        ListType(RealType(fp.FP64), n),
+        ListType(RealType(fp.FP32), n),
+        RealType(fp.INTEGER)])
+    xt = torch.tensor(vals, dtype=torch.float64).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=16)
+
+    def bits(v):
+        return struct.unpack('I', struct.pack('f', v))[0]
+
+    want = [float(v) for v in _rz(vals, [0.0] * n, 16)]
+    for x, w, g in zip(vals, want, ot.cpu().tolist()):
+        assert bits(w) == bits(g) or (math.isnan(w) and math.isnan(g)), x

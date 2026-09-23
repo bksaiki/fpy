@@ -45,7 +45,7 @@ from ...analysis import (
     TypeInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
-from ...analysis.format_infer import FormatBound, rounds_exactly
+from ...analysis.format_infer import FormatBound, rounds_exactly, to_abstract
 from ...ast import (
     AllOf,
     AMax,
@@ -109,7 +109,7 @@ from ...ast import (
     Var,
 )
 from ...ast.visitor import DefaultVisitor, Visitor
-from ...number import REAL, Context, RoundingMode
+from ...number import REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import BoolType, ListType, RealType
 from ..backend import CompileError
@@ -1007,7 +1007,18 @@ class _Emitter(Visitor):
                 e, self.format_info.by_expr, active,
             ):
                 return None
-            return f'libdevice.ldexp({self.emit(value)}, {self.emit(exp)})'
+            n = self.emit(exp)
+            if self._storage(exp).is_float():
+                # `ldexp` takes an `int32`: exact where every finite value
+                # is an integer it holds; a special one is on a dead lane
+                af = to_abstract(self.format_info.by_expr.get(exp))
+                if af is None or af.exp < 0 or not all(
+                    isinstance(b, RealFloat) and abs(b) < 2 ** 31
+                    for b in (af.pos_bound, af.neg_bound)
+                ):
+                    return None
+                n = f'{n}.to(tl.int32)'
+            return f'libdevice.ldexp({self.emit(value)}, {n})'
         return None
 
     def _emit_logb(self, e: Logb) -> str:
@@ -1185,10 +1196,19 @@ class _Emitter(Visitor):
         return self._emit_numeric_literal(e.as_rational())
 
     def _visit_decnum(self, e: Decnum, ctx) -> str:
-        return self._emit_numeric_literal(e.as_rational())
+        return self._emit_real_literal(e)
 
     def _visit_hexnum(self, e: Hexnum, ctx) -> str:
-        return self._emit_numeric_literal(e.as_rational())
+        return self._emit_real_literal(e)
+
+    def _emit_real_literal(self, e: Decnum | Hexnum) -> str:
+        """A negative zero, which no `Fraction` holds, is a `Float`.  Triton
+        folds a `-0.0` constant to `+0.0` -- even through `tl.full` -- so it is
+        a negated zero tile, which is not folded."""
+        r = e.as_real()
+        if isinstance(r, Float):
+            return f'(-tl.zeros((), {self._storage(e).format()}))'
+        return self._emit_numeric_literal(r)
 
     def _emit_numeric_literal(self, v: Fraction) -> str:
         """A literal, as Triton source.
@@ -1202,7 +1222,8 @@ class _Emitter(Visitor):
         already answered this: the question is whether the target holds the
         value, not what context surrounds it, so no scope lookup is involved.
         """
-        if v.denominator == 1:
+        # Triton refuses an integer literal no `int64` holds
+        if v.denominator == 1 and -2 ** 63 <= v.numerator < 2 ** 63:
             return str(v.numerator)
         exact = float(v)
         if Fraction(exact) == v:

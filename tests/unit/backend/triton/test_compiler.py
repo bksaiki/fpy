@@ -154,3 +154,34 @@ class TestOptimize:
         assert 'SCALE = 2.5' in off
         # the value still reaches the multiply either way
         assert '2.5' in on and '2.5' in off
+
+
+RZ_FP32 = fp.IEEEContext(8, 32, fp.RM.RTZ)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _rz(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(xs)):
+        with RZ_FP32:
+            out[i] = fp.round(xs[i])
+    return out
+
+
+class TestUnfold:
+    """A rounding Triton cannot spell -- round-toward-zero from `f64` -- is
+    lowered to integer arithmetic where `unfold` asks for it."""
+
+    _ARGT = [ListType(RealType(fp.FP64), 8), ListType(RealType(fp.FP32), 8),
+             RealType(fp.INTEGER)]
+
+    def test_without_it_the_rounding_is_refused(self):
+        with pytest.raises(CompileError, match='no cast spelling'):
+            TritonCompiler(drop_asserts=True).compile(
+                _rz, ctx=fp.REAL, arg_types=self._ARGT)
+
+    def test_with_it_the_rounding_compiles(self):
+        k = TritonCompiler(
+            drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
+        ).compile(_rz, ctx=fp.REAL, arg_types=self._ARGT)
+        assert 'libdevice.trunc' in k.source
+        pyast.parse(k.source)

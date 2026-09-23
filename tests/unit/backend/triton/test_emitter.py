@@ -1022,3 +1022,32 @@ def test_a_tiled_reduction_is_refused():
     with pytest.raises(TritonEmitError, match='carrying `m` needs a reduction'):
         emit_kernel(r.func, r.tiled, block='BLOCK', drop_asserts=True,
                     guards=r.guards)
+
+
+class TestLiteralSpelling:
+    def test_an_integer_past_int64_is_spelled_as_a_float(self):
+        """Triton refuses an integer literal no `int64` holds."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(x: fp.Real):
+            return x < 340282366920938463463374607431768211456
+
+        assert '3.402823669209385e+38' in _emit(f, [RealType(fp.FP64)])
+
+    def test_a_negative_zero_keeps_its_sign(self):
+        """Triton folds a `-0.0` constant to `+0.0`."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            return -0.0 if x < 0 else x
+
+        assert '(-tl.zeros((), ' in _emit(f, [_R32])
+
+
+def test_a_float_held_exponent_is_cast_for_ldexp():
+    """`libdevice.ldexp` takes an `int32`; a `logb` result is held as a float
+    for its specials, and every finite value of it is an integer."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(x: fp.Real):
+        e = fp.logb(x)
+        return 2 ** -e * x
+
+    assert '.to(tl.int32))' in _emit(f, [RealType(fp.FP64)], ctx=fp.REAL)
