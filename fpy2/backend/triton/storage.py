@@ -157,6 +157,11 @@ _SPELLING: dict[AbstractableFormat, TritonScalar] = {fmt: ty for ty, fmt in _SIG
 def to_triton(storage: FormatBound) -> TritonType:
     """A storage the analysis chose, as the Triton type that spells it.
 
+    ``None`` means **not real-valued**: format inference covers real-valued
+    expressions and structures of them, and gives no format for anything else.
+    A boolean is spelled; the other case is a rounding context, which is a
+    foreign value the emitter refuses rather than storing.
+
     A ``ListFormat`` is refused rather than spelled.  Triton has no list: a
     proven-length list unrolls into one value per element before reaching here,
     and an unproven-length one is out of scope until §8 of

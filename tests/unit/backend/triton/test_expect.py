@@ -418,3 +418,32 @@ def test_signbit_reads_the_sign_bit():
             ListType(RealType(fp.FP32), 8),
             RealType(fp.INTEGER)])
     assert '.to(tl.int32, bitcast=True) < 0' in src.source
+
+
+@fp.fpy(ctx=fp.FP32)
+def _bool_merge(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """A merge of two *booleans*, which has no number format."""
+    for i in range(len(out)):
+        flag = xs[i] > 0.0
+        if xs[i] > 1.0:
+            flag = True
+        out[i] = 1.0 if flag else 0.0
+    return out
+
+
+def test_a_boolean_merge_has_bool_storage():
+    """The *type* says boolean; the *format* is only asked about reals.
+
+    Format inference is defined over real-valued expressions, so reading
+    "no format" as "must be a boolean" would infer a type from the absence
+    of one -- and be wrong for a rounding context or any other foreign value,
+    which have no format either.
+    """
+    src = TritonCompiler(drop_asserts=True).compile(
+        _bool_merge, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert 'tl.where' in src.source
+    # the merged boolean needs no cast: `bool` is its own storage
+    assert '.to(tl.int1' not in src.source

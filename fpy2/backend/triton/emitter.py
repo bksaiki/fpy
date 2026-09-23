@@ -39,6 +39,8 @@ from ...analysis import (
     DefineUse,
     FormatAnalysis,
     FormatInfer,
+    TypeAnalysis,
+    TypeInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import rounds_exactly
@@ -100,6 +102,7 @@ from ...ast import (
 )
 from ...ast.visitor import DefaultVisitor, Visitor
 from ...number import REAL, Context
+from ...types import BoolType, RealType
 from ..backend import CompileError
 from .storage import choose_storage_scalar, scalar_fits_in
 from .target import ScalarOpTable, TritonOp, is_native_ctx, make_op_table
@@ -179,6 +182,7 @@ class _Emitter(Visitor):
         self,
         func: FuncDef,
         format_info: FormatAnalysis,
+        types: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
         sizes: ArraySizeAnalysis,
         op_table: ScalarOpTable,
@@ -187,6 +191,7 @@ class _Emitter(Visitor):
     ):
         self.func = func
         self.format_info = format_info
+        self.types = types
         self.ctx_use = ctx_use
         self.sizes = sizes
         self.op_table = op_table
@@ -261,7 +266,24 @@ class _Emitter(Visitor):
     # -- storage and context -------------------------------------------
 
     def _storage(self, e: Expr) -> TritonScalar:
-        """The scalar storage the pipeline chose for *e*."""
+        """The scalar storage the pipeline chose for *e*.
+
+        Two analyses, each asked what it is for: the **type** says whether
+        this is a boolean or a real, and only for a real does the **format**
+        say which width.  Format inference is defined over real-valued
+        expressions and structures of them, so reading "no format" as "must
+        be a boolean" would be inferring a type from the absence of one --
+        and wrong for the other things with no format, a rounding context or
+        any other foreign value.
+        """
+        ty = self.types.by_expr.get(e)
+        if isinstance(ty, BoolType):
+            return TritonScalar.BOOL
+        if not isinstance(ty, RealType):
+            raise TritonEmitError(
+                f'a `{type(ty).__name__ if ty else "?"}` has no Triton '
+                f'storage, so `{type(e).__name__}` cannot be held'
+            )
         bound = self.format_info.by_expr.get(e)
         if bound is None:
             raise TritonEmitError(
@@ -1266,6 +1288,7 @@ def emit_expr(e: Expr, func: FuncDef) -> str:
     return _Emitter(
         func,
         FormatInfer.analyze(func),
+        TypeInfer.check(func),
         ContextUse.analyze(func, def_use=def_use),
         ArraySizeInfer.analyze(func),
         make_op_table(),
@@ -1293,6 +1316,7 @@ def emit_block(
     emitter = _Emitter(
         func,
         FormatInfer.analyze(func),
+        TypeInfer.check(func),
         ContextUse.analyze(func, def_use=def_use),
         sizes,
         make_op_table(),
@@ -1377,6 +1401,7 @@ def emit_kernel(
     emitter = _Emitter(
         func,
         FormatInfer.analyze(func),
+        TypeInfer.check(func),
         ContextUse.analyze(func, def_use=def_use),
         sizes,
         make_op_table(),
