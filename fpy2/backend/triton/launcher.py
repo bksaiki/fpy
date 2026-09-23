@@ -43,7 +43,13 @@ def unavailable() -> str | None:
     return None
 
 
-_MODULE_PREAMBLE = 'import triton\nimport triton.language as tl\n\n\n'
+_MODULE_PREAMBLE = (
+    'import triton\n'
+    'import triton.language as tl\n'
+    # `ldexp` is IEEE 754's `scaleB`, which only libdevice exposes.  It is
+    # not a transcendental, so the op table's exclusion does not reach it.
+    'from triton.language.extra import libdevice\n\n\n'
+)
 
 _LOADED: dict[str, Any] = {}
 """Kernels already written and imported, keyed by source.

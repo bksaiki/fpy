@@ -87,9 +87,11 @@ from ...ast import (
     NaryOp,
     Not,
     Or,
+    Pow,
     Range1,
     Range3,
     Rational,
+    RationalVal,
     ReturnStmt,
     Round,
     Signbit,
@@ -890,6 +892,40 @@ class _Emitter(Visitor):
             f'no Triton spelling for `{type(e).__name__}`'
         )
 
+    def _emit_ldexp(self, e: Mul) -> str | None:
+        """``2 ** n * v`` as ``libdevice.ldexp(v, n)``, or `None`.
+
+        `ldexp` is IEEE 754's `scaleB`: multiplication by an integral power of
+        two, exact but for overflow and underflow.  The product it replaces
+        rounds twice and rests on `exp2` returning `2 ** n` exactly, which
+        IEEE only *recommends* -- so a library within one ulp would give a
+        scale that is not the power.  This is the shape `RescaleFixed` emits
+        for every rounding it moves, so it is how a fixed-point context with a
+        *runtime* scale reaches this backend at all: the data dependence moves
+        out of the context, which becomes concrete, and into this arithmetic.
+
+        Because `ldexp` computes the *exact* product, it stands in for the
+        multiply only where the context would not round it -- otherwise it
+        would skip a rounding the program asked for.  Taken from the cpp
+        backend's `_ldexp`, which draws the same line.
+        """
+        for scale, value in ((e.first, e.second), (e.second, e.first)):
+            if not isinstance(scale, Pow) or len(scale.args) != 2:
+                continue
+            base, exp = scale.args
+            if not (isinstance(base, RationalVal)
+                    and base.as_rational() == 2):
+                continue
+            # only where the context does not round: `ldexp` is exact, and
+            # standing in for a rounded product would drop the rounding
+            active = self._active_ctx(e)
+            if active is not REAL and not rounds_exactly(
+                e, self.format_info.by_expr, active,
+            ):
+                return None
+            return f'libdevice.ldexp({self.emit(value)}, {self.emit(exp)})'
+        return None
+
     def _emit_logb(self, e: Logb) -> str:
         """IEEE 754 `logB`: the exponent of *x*, read from its bits.
 
@@ -1112,6 +1148,10 @@ class _Emitter(Visitor):
         )
 
     def _visit_binaryop(self, e: BinaryOp, ctx) -> str:
+        if isinstance(e, Mul):
+            scaled = self._emit_ldexp(e)
+            if scaled is not None:
+                return scaled
         return self._dispatch(e, self.op_table.binary, [
             (self.emit(e.first), e.first),
             (self.emit(e.second), e.second),

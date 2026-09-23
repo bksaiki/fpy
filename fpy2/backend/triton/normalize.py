@@ -31,7 +31,14 @@ from ...ast import (
 )
 from ...function import Function
 from ...module import Module
-from ...transform import FuncInline, Scalarize, SimplifyIf, SingleExit
+from ...transform import (
+    FuncInline,
+    RescaleFixed,
+    Scalarize,
+    SimplifyIf,
+    SingleExit,
+    TransformDeclined,
+)
 from ..backend import CompileError
 
 __all__ = ['TritonNormalizeError', 'normalize', 'normalize_module']
@@ -139,6 +146,14 @@ def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
         func = Scalarize.apply(func, cap=cap)
         func = FuncInline.apply(func, recursive=True)
         func = Scalarize.apply(func, cap=cap)
+        # after the unroll, because it emits the scale-in and scale-out as
+        # *statements* and a rounding inside a comprehension has no slot for
+        # them -- the same precondition `comp_to_loop` meets for the cpp
+        # backend, met here by the unrolling instead
+        try:
+            func = RescaleFixed.apply(func)
+        except TransformDeclined:
+            pass  # nothing to move is not a failure
         func = SimplifyIf.apply(func)
         reasons = _NotNormal(func).check()
         if not reasons:

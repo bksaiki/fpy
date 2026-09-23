@@ -388,3 +388,38 @@ def test_logb_agrees_over_every_exponent_and_random_bits():
     assert not bad, f'{len(bad)} differ, first: {bad[:3]}'
     # the subnormal range really was covered
     assert any(w < -126 and math.isfinite(w) for w in want)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scaled(xs: list[fp.Real], ns: list[fp.Real], out: list[fp.Real],
+            BLOCK: fp.Real):
+    for i in range(len(out)):
+        with fp.REAL:
+            t = (2 ** ns[i]) * xs[i]
+        out[i] = t
+    return out
+
+
+def test_ldexp_agrees_with_a_per_lane_exponent():
+    """A *runtime* scale is how a fixed-point context with a data-dependent
+    grid reaches this backend at all: `RescaleFixed` moves the dependence out
+    of the context and into this product."""
+    import torch
+
+    vals = [1.0, 3.0, -2.5, 0.5, 7.0, -1.0]
+    exps = [0, 2, -3, 4, 1, -1]
+    n = len(vals)
+    src = TritonCompiler(drop_asserts=True).compile(
+        _scaled, ctx=fp.REAL, arg_types=[
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.INTEGER), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+    xt = torch.tensor(vals, dtype=torch.float32).cuda()
+    nt = torch.tensor(exps, dtype=torch.int32).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, nt, ot], block=8, grid=1)
+
+    want = [v * 2.0 ** k for v, k in zip(vals, exps)]
+    assert ot.cpu().tolist() == want
+    assert len(set(exps)) > 1, 'the lanes really do disagree'

@@ -567,3 +567,48 @@ def test_a_cast_asks_about_values_not_only_types():
             ListType(RealType(fp.FP16), 4),
             RealType(fp.INTEGER)])
     assert 'tl.maximum' in src.source
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scaled(xs: list[fp.Real], ns: list[fp.Real], out: list[fp.Real],
+            BLOCK: fp.Real):
+    """`2 ** n * x` with a per-lane `n` -- what `RescaleFixed` emits."""
+    for i in range(len(out)):
+        with fp.REAL:
+            t = (2 ** ns[i]) * xs[i]
+        out[i] = t
+    return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def _scaled_rounding(xs: list[fp.Real], ns: list[fp.Real],
+                     out: list[fp.Real], BLOCK: fp.Real):
+    """The same product where the context *rounds* it."""
+    for i in range(len(out)):
+        out[i] = (2 ** ns[i]) * xs[i]
+    return out
+
+
+_SCALE_ARGS = [
+    ListType(RealType(fp.FP32), 4),
+    ListType(RealType(fp.INTEGER), 4),
+    ListType(RealType(fp.FP32), 4),
+    RealType(fp.INTEGER),
+]
+
+
+def test_a_power_of_two_product_is_ldexp():
+    """`ldexp` is `scaleB`: exact, where the product would round twice and
+    rest on `exp2` returning the power exactly, which nothing guarantees."""
+    src = TritonCompiler(drop_asserts=True).compile(
+        _scaled, ctx=fp.REAL, arg_types=_SCALE_ARGS)
+    assert 'libdevice.ldexp(' in src.source
+    assert '**' not in src.source
+
+
+def test_ldexp_is_refused_where_the_context_would_round():
+    """It stands in for the multiply only where the context would not round
+    it -- otherwise it would skip a rounding the program asked for."""
+    with pytest.raises(TritonEmitError, match='no signatures for op: Pow'):
+        TritonCompiler(drop_asserts=True).compile(
+            _scaled_rounding, ctx=fp.FP32, arg_types=_SCALE_ARGS)
