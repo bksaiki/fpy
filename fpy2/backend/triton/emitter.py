@@ -8,7 +8,8 @@ form, not a case to handle -- predicating one here would duplicate a decision
 
 What it decides is what has no expression in the FPy AST: storage and casts,
 the `mask=` on an access, how a literal is spelled, which op-table signature
-applies.  What it cannot spell it refuses -- never a fallback, and never
+applies, and how a *sequence* is spelled at all -- Triton has no list value,
+so one is expanded into its elements here whatever `Scalarize` left behind.  What it cannot spell it refuses -- never a fallback, and never
 source that fails at `triton.jit`, since a refusal at least names its cause.
 
 **The cast discipline is the point.**  Triton types `fp16 op fp16` as fp16, so

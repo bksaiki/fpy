@@ -44,13 +44,25 @@ class _Subst(DefaultTransformVisitor):
         return self._visit_expr(e, None)
 
 
-def _int_of(e: Expr) -> int | None:
+def _int_of(e: Expr, env: dict[NamedId, int] | None = None) -> int | None:
     """*e* as a compile-time integer, or `None`."""
     if isinstance(e, Integer):
         return e.val
     if isinstance(e, RationalVal):
         v = e.as_rational()
         return v.numerator if v.denominator == 1 else None
+    if env is not None:
+        if isinstance(e, Var):
+            return env.get(e.name)
+        if isinstance(e, Add):
+            a, b = (_int_of(x, env) for x in e.args)
+            return None if a is None or b is None else a + b
+        if isinstance(e, Sub):
+            a, b = (_int_of(x, env) for x in e.args)
+            return None if a is None or b is None else a - b
+        if isinstance(e, Mul):
+            a, b = (_int_of(x, env) for x in e.args)
+            return None if a is None or b is None else a * b
     return None
 
 
@@ -71,10 +83,34 @@ class _Scalarize(DefaultTransformVisitor):
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.pending: list[Stmt] = []
         self.changed = False
+        self.consts: dict[NamedId, int] = {}
+        """Names bound to an integer constant, so an index like `n + i`
+        resolves.  `Simplify` would propagate these, but it runs *after* the
+        normal form, and `optimize=False` skips it entirely."""
         self.lazy = False
         """Whether the expression being visited is only conditionally
         evaluated.  Hoisting out of an `IfExpr` arm would make it
         unconditional, which is the hazard `SimplifyIf` refuses over."""
+
+    def _const(self, e: Expr) -> int | None:
+        """*e* as a compile-time integer.
+
+        Wider than :func:`_int_of` by `len(xs)`, which the size analysis
+        answers.  Inlining binds a callee's `n = len(xs)` to a fresh name, so
+        by the time a fill group is examined the length is a `Len` rather
+        than the literal `ConstFold` would have produced.
+        """
+        if isinstance(e, Len):
+            return self._size(e.arg)
+        if isinstance(e, Var) and e.name in self.consts:
+            return self.consts[e.name]
+        if isinstance(e, (Add, Sub, Mul)) and len(e.args) == 2:
+            a, b = (self._const(x) for x in e.args)
+            if a is None or b is None:
+                return None
+            return a + b if isinstance(e, Add) else (
+                a - b if isinstance(e, Sub) else a * b)
+        return _int_of(e)
 
     def _size(self, e: Expr) -> int | None:
         bound = self.sizes.by_expr.get(e)
@@ -93,7 +129,7 @@ class _Scalarize(DefaultTransformVisitor):
             case Range1():
                 return [Integer(i, e.loc) for i in range(n)]
             case Range3():
-                lo, step = _int_of(e.first), _int_of(e.third)
+                lo, step = self._const(e.first), self._const(e.third)
                 if lo is None or step is None:
                     return None
                 return [Integer(lo + i * step, e.loc) for i in range(n)]
@@ -148,13 +184,140 @@ class _Scalarize(DefaultTransformVisitor):
         self.lazy = prev
         return IfExpr(cond, ift, iff, e.loc)
 
+    def _reads(self, e: Expr, name: NamedId) -> bool:
+        """Whether *e* mentions *name* at all."""
+        found = False
+
+        class _R(DefaultVisitor):
+            def _visit_var(self, v: Var, _c):
+                nonlocal found
+                if v.name == name:
+                    found = True
+
+        _R()._visit_expr(e, None)
+        return found
+
+    def _writes(self, stmt: Stmt, zs: NamedId) -> list[tuple[int, Expr]] | None:
+        """*stmt* as the (index, value) pairs it stores into *zs*.
+
+        An empty list means it stores nothing there; `None` means it is not
+        a store this can account for, and the group has to stop.
+        """
+        match stmt:
+            case IndexedAssign() if stmt.var == zs:
+                if len(stmt.indices) != 1:
+                    return None
+                i = self._const(stmt.indices[0])
+                if i is None or self._reads(stmt.expr, zs):
+                    return None
+                return [(i, stmt.expr)]
+            case ForStmt():
+                body = stmt.body.stmts
+                if len(body) != 1 or not isinstance(body[0], IndexedAssign):
+                    return None
+                inner = body[0]
+                if inner.var != zs or len(inner.indices) != 1:
+                    return None
+                if not isinstance(stmt.target, NamedId):
+                    return None
+                idxs = self._elements(stmt.iterable)
+                if idxs is None:
+                    return None
+                out: list[tuple[int, Expr]] = []
+                for v in idxs:
+                    env = {stmt.target: v}
+                    at = self._const(
+                        _Subst(env).apply(_clone(inner.indices[0])))
+                    value = _Subst(env).apply(_clone(inner.expr))
+                    if at is None or self._reads(value, zs):
+                        return None
+                    out.append((at, value))
+                return out
+            case _:
+                # anything else may read `zs`, so the group ends here
+                return None if self._touches(stmt, zs) else []
+        return None
+
+    def _touches(self, stmt: Stmt, zs: NamedId) -> bool:
+        found = False
+
+        class _R(DefaultVisitor):
+            def _visit_var(self, v: Var, _c):
+                nonlocal found
+                if v.name == zs:
+                    found = True
+
+        _R()._visit_statement(stmt, None)
+        return found
+
+    def _fill_group(
+        self, stmts: list[Stmt], j: int,
+    ) -> tuple[list[Stmt], int] | None:
+        """`zs = empty(n)` and the stores that fill it, as plain values.
+
+        Sound only when all four hold, so each is checked: the length is a
+        constant within the cap, every store is at a constant index in range,
+        each index is written exactly once, and nothing reads the list before
+        the last store.  `join` in `examples/mmasim` satisfies them; a general
+        rule cannot assume it.
+        """
+        alloc = stmts[j]
+        if not isinstance(alloc, Assign) or not isinstance(alloc.target, NamedId):
+            return None
+        if not isinstance(alloc.expr, Empty) or len(alloc.expr.args) != 1:
+            return None
+        n = self._const(alloc.expr.args[0])
+        if n is None or n <= 0 or n > self.cap:
+            return None
+
+        zs = alloc.target
+        filled: dict[int, Expr] = {}
+        k = j + 1
+        while k < len(stmts) and len(filled) < n:
+            pairs = self._writes(stmts[k], zs)
+            if pairs is None or not pairs:
+                return None
+            for at, value in pairs:
+                if not 0 <= at < n or at in filled:
+                    return None  # out of range, or written twice
+                filled[at] = value
+            k += 1
+        if len(filled) != n:
+            return None
+
+        names = [self.gensym.fresh(str(zs)) for _ in range(n)]
+        out: list[Stmt] = [
+            Assign(name, None, filled[i], alloc.loc)
+            for i, name in enumerate(names)
+        ]
+        out.append(Assign(
+            zs, None,
+            ListExpr([Var(nm, alloc.loc) for nm in names], alloc.loc),
+            alloc.loc,
+        ))
+        return out, k - j
+
     def _visit_block(self, block: StmtBlock, ctx):
         outer, stmts = self.pending, []
-        for stmt in block.stmts:
+        src, j = block.stmts, 0
+        while j < len(src):
+            group = self._fill_group(list(src), j)
+            if group is not None:
+                rewritten, used = group
+                self.changed = True
+                src = list(src[:j]) + rewritten + list(src[j + used:])
+                continue
+            stmt = src[j]
             self.pending = []
-            s, ctx = self._visit_statement(stmt, ctx)
+            out, ctx = self._visit_statement(stmt, ctx)
             stmts.extend(self.pending)
-            stmts.append(s)
+            stmts.append(out)
+            # an integer binding, so a later index like `n + i` resolves
+            if isinstance(stmt, Assign) and isinstance(stmt.target, NamedId):
+                v = self._const(stmt.expr)
+                if v is not None:
+                    self.consts[stmt.target] = v
+            j += 1
         self.pending = outer
         return StmtBlock(stmts), ctx
 

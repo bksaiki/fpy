@@ -326,3 +326,32 @@ def test_a_comprehension_of_calls_compiles():
     assert 'tl.store' in src.source
     # three loads, one per unrolled element, each scaled before the sum
     assert src.source.count('* 3.0') == 3
+
+
+@fp.fpy(ctx=fp.FP32)
+def _lazy_comp(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A comprehension in an `if` expression's arm."""
+    for r in range(len(out)):
+        out[r] = max([xss[r][k] for k in range(3)]) if xss[r][0] > 0.0 else 0.0
+    return out
+
+
+def test_the_emitter_still_expands_what_the_pass_declines():
+    """`Scalarize` and the emitter are not two copies of one decision.
+
+    The pass unrolls *early*, so `FuncInline` can reach a call inside a
+    comprehension -- but it must not touch a lazily evaluated position, since
+    hoisting out of an `IfExpr` arm would make it unconditional.  The emitter
+    expands whatever is left, where eager evaluation is already the rule
+    (`_emit_where`).
+
+    So this program reaches the emitter holding a comprehension, and stops
+    compiling if the emitter's expansion is removed as dead.
+    """
+    src = TritonCompiler(drop_asserts=True).compile(
+        _lazy_comp, ctx=fp.FP32, arg_types=[
+            ListType(ListType(RealType(fp.FP32), 3), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert 'tl.where' in src.source
+    assert src.source.count('tl.maximum') == 2, 'the comprehension was folded'

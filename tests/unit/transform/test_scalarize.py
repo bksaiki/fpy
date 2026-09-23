@@ -161,3 +161,67 @@ class TestTheInterface:
             return x * 2
 
         assert Scalarize.apply(plain.ast).is_equiv(plain.ast)
+
+
+@fp.fpy(ctx=fp.FP32)
+def _join(xs: list[fp.Real], ys: list[fp.Real]):
+    """Allocate-and-fill: how FPy builds a list of computed length, since it
+    has no concatenation.  Taken from `examples/mmasim/models/utils.py`."""
+    n = len(xs)
+    m = len(ys)
+    zs = fp.empty(n + m)
+    for i in range(n):
+        zs[i] = xs[i]
+    for i in range(m):
+        zs[n + i] = ys[i]
+    return zs[0] + zs[3]
+
+
+class TestAllocateAndFill:
+    """`fp.empty(n)` plus the stores that fill it becomes plain values.
+
+    Sound only under four conditions, so each is checked rather than
+    assumed: the length is a constant within the cap, every store is at a
+    constant index in range, each index is written exactly once, and nothing
+    reads the list before the last store.
+    """
+
+    def test_it_unrolls(self):
+        g = _sized(_join, 2, 3)
+        out = Scalarize.apply(g.ast)
+        assert 'fp.empty' not in Function(out, runtime=None).format()
+        args = ([1.0, 2.0], [3.0, 4.0, 5.0])
+        assert repr(g.with_ast(out)(*args)) == repr(g(*args))
+
+    def test_the_length_may_come_from_len(self):
+        """Inlining binds `n = len(xs)`, so the length is a `Len` rather than
+        the literal `ConstFold` would have left."""
+        g = _sized(_join, 2, 3)
+        assert 'zs = [' in Function(Scalarize.apply(g.ast), runtime=None).format()
+
+    def test_a_partial_fill_is_left_alone(self):
+        @fp.fpy(ctx=fp.FP32)
+        def partial(xs: list[fp.Real]):
+            zs = fp.empty(3)
+            zs[0] = xs[0]
+            zs[1] = xs[1]
+            return zs[0]
+
+        out = Scalarize.apply(_sized(partial, 2).ast)
+        assert 'fp.empty' in Function(out, runtime=None).format()
+
+    def test_a_read_before_the_last_store_is_left_alone(self):
+        @fp.fpy(ctx=fp.FP32)
+        def reads_early(xs: list[fp.Real]):
+            zs = fp.empty(2)
+            zs[0] = xs[0]
+            zs[1] = zs[0] + 1.0
+            return zs[1]
+
+        out = Scalarize.apply(_sized(reads_early, 2).ast)
+        assert 'fp.empty' in Function(out, runtime=None).format()
+
+    def test_over_the_cap_is_left_alone(self):
+        g = _sized(_join, 2, 3)
+        assert 'fp.empty' in Function(
+            Scalarize.apply(g.ast, cap=4), runtime=None).format()
