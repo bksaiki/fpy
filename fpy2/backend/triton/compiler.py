@@ -208,6 +208,7 @@ class TritonCompiler(Backend):
         return emit_kernel(
             tiles.func,
             tiles.tiled,
+            guards=tiles.guards,
             block=self.block,
             drop_asserts=self.drop_asserts,
         )

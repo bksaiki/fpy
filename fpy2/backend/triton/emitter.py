@@ -37,6 +37,8 @@ from ...analysis import (
     ContextUse,
     ContextUseAnalysis,
     DefineUse,
+    DefineUseAnalysis,
+    Definition,
     FormatAnalysis,
     FormatInfer,
     TypeAnalysis,
@@ -68,6 +70,7 @@ from ...ast import (
     Id,
     If1Stmt,
     IfExpr,
+    IfStmt,
     IndexedAssign,
     Integer,
     IsFinite,
@@ -108,7 +111,7 @@ from ...ast import (
 from ...ast.visitor import DefaultVisitor, Visitor
 from ...number import REAL, Context, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
-from ...types import BoolType, RealType
+from ...types import BoolType, ListType, RealType
 from ..backend import CompileError
 from .storage import (
     bound_fits_in_scalar,
@@ -243,6 +246,8 @@ class _Emitter(Visitor):
         op_table: ScalarOpTable,
         tiled: Sequence[ForStmt] = (),
         drop_asserts: bool = False,
+        guards: Sequence[If1Stmt] = (),
+        def_use: DefineUseAnalysis | None = None,
     ):
         self.func = func
         self.format_info = format_info
@@ -256,6 +261,10 @@ class _Emitter(Visitor):
         Identity, not shape: recognizing a tiled loop by what it looks like
         would be pattern-matching another pass's output.
         """
+        self.guards = guards
+        """The tiles' `j < n` guards, as `tile_loops` reported them: a mask on
+        the tile, where any other `if` is a branch."""
+        self.def_use = def_use or DefineUse.analyze(func)
         self.ranges: dict[NamedId, tuple[str, str]] = {}
         """Names bound to a `range`, as (start, step).
 
@@ -322,10 +331,16 @@ class _Emitter(Visitor):
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
 
-        A `tile_loops` mask is not a branch: its body runs for every lane and
-        the guard becomes the `mask=` of each load and store.  `None` where
-        nothing encloses the access.
+        Code under a guard runs on every lane, and the guard becomes the
+        `mask=` of each load and store.  So **an inactive lane may compute
+        garbage**, provided it is masked off before it is observed: by the
+        mask on an access, or by the `tl.where` that merges a branch.  A format
+        bounds what an *active* lane computes.  Nothing emitted under a mask
+        may trap or be undefined on garbage -- float overflow is `inf`, and
+        integers wrap.  `None` where nothing encloses the access.
         """
+        self._branches = 0
+        """How many flattened branches enclose the statement being emitted."""
 
     # -- storage and context -------------------------------------------
 
@@ -1420,6 +1435,11 @@ class _Emitter(Visitor):
         ctx.add_line(f'tl.store({addr}, {val}{mask})')
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _IndentedWriter):
+        if self._branches:
+            raise TritonEmitError(
+                'a `return` in a branch has no Triton spelling; a flattened '
+                'branch runs on every lane'
+            )
         ctx.add_line(f'return {self.emit(stmt.expr)}')
 
     def _visit_context(self, stmt: ContextStmt, ctx: _IndentedWriter):
@@ -1428,12 +1448,104 @@ class _Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: _IndentedWriter):
-        # a `tile_loops` guard is a mask, not a branch: the body runs for
-        # every lane and the predicate rides on each access
+        if not any(stmt is g for g in self.guards):
+            return self._emit_branch(stmt, stmt.body, None, ctx)
+        # a tile's guard only drops the over-run: nothing merges out of it
         prev = self.mask
         self.mask = self.emit(stmt.cond)
         self._visit_block(stmt.body, ctx)
         self.mask = prev
+
+    def _visit_if(self, stmt: IfStmt, ctx: _IndentedWriter):
+        self._emit_branch(stmt, stmt.ift, stmt.iff, ctx)
+
+    def _bind(self, code: str, ctx: _IndentedWriter) -> str:
+        """*code*, evaluated once into a temporary."""
+        name = f'__t{self._next_tmp}'
+        self._next_tmp += 1
+        ctx.add_line(f'{name} = {code}')
+        return name
+
+    def _def_storage(self, d: Definition) -> TritonScalar:
+        ty = self.types.by_def.get(d)
+        if isinstance(ty, BoolType):
+            return TritonScalar.BOOL
+        bound = self.format_info.by_def.get(d)
+        if not isinstance(ty, RealType) or bound is None:
+            raise TritonEmitError(
+                f'`{d.name}` merges out of a branch, and only a scalar can'
+            )
+        return choose_storage_scalar(bound)
+
+    def _emit_branch(
+        self, stmt: IfStmt | If1Stmt, ift: StmtBlock, iff: StmtBlock | None,
+        ctx: _IndentedWriter,
+    ):
+        """An `if`, flattened.
+
+        Each arm runs on every lane, under the enclosing mask and its guard;
+        each name the `if` merges is then chosen by `tl.where`.  The arms are
+        emitted with their own names -- the analyses key on nodes, so the AST
+        is not renamed -- and a name the first arm overwrites is saved before
+        it and restored after, for the second arm and the merge to read.
+        """
+        # a list behind a pointer merges by its masked stores alone
+        phis = []
+        for p in self.def_use.phis[stmt]:
+            if not isinstance(self.types.by_def.get(p), ListType):
+                phis.append(p)
+            elif p.name in self.seqs:
+                raise TritonEmitError(
+                    f'`{p.name}` is a list chosen by a branch, which has no '
+                    'Triton value'
+                )
+        merged = {p.name for p in phis}
+        named: tuple[dict, ...] = (self.consts, self.copies, self.ranges,
+                                   self.rows, self.slices, self.seqs)
+        saved_named = [dict(m) for m in named]
+
+        def restore(drop: set[NamedId]):
+            # what an arm bound is gone, and a merged name is no constant
+            for m, prev in zip(named, saved_named):
+                m.clear()
+                m.update(prev)
+                for v in drop:
+                    m.pop(v, None)
+                    m.pop(str(v), None)
+
+        outer = self.mask
+
+        cond = self._bind(self.emit(stmt.cond), ctx)
+        saved = {
+            v: self._bind(str(v), ctx)
+            for v in sorted(self.def_use.mutated_in(ift)) if v in merged
+        }
+        self._branches += 1
+        self.mask = cond if outer is None else f'({outer} & {cond})'
+        self._visit_block(ift, ctx)
+        taken = {p.name: self._bind(str(p.name), ctx) for p in phis}
+        for v, code in saved.items():
+            ctx.add_line(f'{v} = {code}')
+        restore(set())
+        if iff is not None:
+            self.mask = f'(~{cond})' if outer is None else f'({outer} & ~{cond})'
+            self._visit_block(iff, ctx)
+        self._branches -= 1
+        self.mask = outer
+
+        for p in phis:
+            # an `if1`'s phi reads the value before it first
+            t, f = (p.lhs, p.rhs) if iff is not None else (p.rhs, p.lhs)
+            want = self._def_storage(p)
+            sides = [
+                self._maybe_cast(
+                    code, self._def_storage(self.def_use.defs[i]), want,
+                    self.format_info.by_def.get(self.def_use.defs[i]),
+                )
+                for code, i in ((taken[p.name], t), (str(p.name), f))
+            ]
+            ctx.add_line(f'{p.name} = tl.where({cond}, {sides[0]}, {sides[1]})')
+        restore(merged)
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter):
         if any(stmt is t for t in self.tiled):
@@ -1511,12 +1623,6 @@ class _Emitter(Visitor):
 
     # -- statements with no Triton spelling ----------------------------
 
-    def _visit_if(self, stmt, ctx):
-        raise TritonEmitError(
-            'an `if` statement remains; the normal form makes them `if` '
-            'expressions'
-        )
-
     def _visit_while(self, stmt, ctx):
         raise TritonEmitError('a `while` has no Triton spelling')
 
@@ -1584,11 +1690,13 @@ def emit_block(
     tiled: Sequence[ForStmt] = (),
     *,
     drop_asserts: bool = False,
+    guards: Sequence[If1Stmt] = (),
 ) -> str:
     """*block*, as Triton source.
 
-    *tiled* names the loops carrying a tile, as `tile_loops` reported them.
-    *drop_asserts* skips an `assert` rather than refusing it.
+    *tiled* and *guards* name the loops carrying a tile and the guards on
+    them, as `tile_loops` reported them.  *drop_asserts* skips an `assert`
+    rather than refusing it.
     """
     if not isinstance(block, StmtBlock):
         raise TypeError(f"Expected a 'StmtBlock', got {block}")
@@ -1605,6 +1713,8 @@ def emit_block(
         make_op_table(),
         tiled,
         drop_asserts,
+        guards,
+        def_use,
     )
     out = _IndentedWriter()
     emitter._visit_block(block, out)
@@ -1669,6 +1779,7 @@ def emit_kernel(
     *,
     block: str | None = None,
     drop_asserts: bool = False,
+    guards: Sequence[If1Stmt] = (),
 ) -> KernelSource:
     """*func* as a ``@triton.jit`` kernel.
 
@@ -1690,6 +1801,8 @@ def emit_kernel(
         make_op_table(),
         tiled,
         drop_asserts,
+        guards,
+        def_use,
     )
 
     params: list[str] = []

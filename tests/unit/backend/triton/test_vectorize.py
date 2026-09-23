@@ -329,3 +329,49 @@ class TestTileLoops:
 
         with pytest.raises(TypeError, match='int.*str'):
             tile_loops(f.ast, 1.5)
+
+
+class TestGuards:
+    """`tile_loops` names the guard `SplitLoop` put on each tile, so the
+    emitter can tell the tile's mask from a branch of the program's own."""
+
+    @staticmethod
+    def _if1s(func) -> list[If1Stmt]:
+        out: list[If1Stmt] = []
+
+        class _V(DefaultVisitor):
+            def _visit_if1(self, s, ctx):
+                out.append(s)
+                return super()._visit_if1(s, ctx)
+
+        _V()._visit_function(func, None)
+        return out
+
+    def test_a_symbolic_width_is_guarded(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+            for i in range(len(xs)):
+                out[i] = xs[i]
+            return out
+
+        r = tile_loops(f.ast, 'BLOCK')
+        assert len(r.guards) == 1
+        assert any(g is r.guards[0] for g in self._if1s(r.func))
+
+    def test_a_dividing_literal_width_is_not_guarded(self):
+        from fpy2.transform import Monomorphize
+        from fpy2.types import ListType, RealType
+
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], out: list[fp.Real]):
+            for i in range(len(xs)):
+                if xs[i] < 0:
+                    out[i] = xs[i]
+            return out
+
+        lt = ListType(RealType(fp.FP64), 8)
+        r = tile_loops(Monomorphize.apply(f.ast, None, [lt, lt]), 4)
+        assert len(r.tiled) == 1
+        # the program's own `if1` is all that is left, and it is no guard
+        assert len(self._if1s(r.func)) == 1
+        assert r.guards == []

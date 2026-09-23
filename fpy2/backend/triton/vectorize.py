@@ -44,6 +44,7 @@ from ...ast import (
     ForStmt,
     FuncDef,
     Id,
+    If1Stmt,
     IndexedAssign,
     Integer,
     Max,
@@ -271,6 +272,20 @@ def _for_loops(func: FuncDef) -> list[ForStmt]:
     return v.out
 
 
+def _guard(inner: ForStmt) -> If1Stmt | None:
+    """The guard `SplitLoop` wrapped the tile loop *inner*'s body in, if any.
+
+    Exact rather than a shape match: the tile index is fresh, and only the
+    guard `SplitLoop` emits reads it -- the loop's own target is bound from it.
+    """
+    stmts = inner.body.stmts
+    if len(stmts) != 1 or not isinstance(stmts[0], If1Stmt):
+        return None
+    if not isinstance(inner.target, NamedId):
+        return None
+    return stmts[0] if inner.target in _reads(stmts[0].cond) else None
+
+
 def _encloses_tileable(stmt: ForStmt, func: FuncDef) -> bool:
     """Whether a tileable loop sits beneath *stmt*."""
     v = _ForLoops()
@@ -292,6 +307,11 @@ class TileResult:
     by its *shape* would be pattern-matching this pass's output -- brittle,
     and wrong the moment the shape changes.  This pass knows, so it says.
     """
+
+    guards: list[If1Stmt]
+    """The `j < n` guard `SplitLoop` put around each tile's body, where it
+    emitted one.  Named for the same reason: the emitter lowers a guard as the
+    tile's mask, and any other `if` as a branch."""
 
 
 def tile_loops(func: FuncDef, width: int | str) -> TileResult:
@@ -344,7 +364,8 @@ def tile_loops(func: FuncDef, width: int | str) -> TileResult:
     while True:
         loops = _for_loops(func)
         if i >= len(loops):
-            return TileResult(func, [_for_loops(func)[k] for k in tiled])
+            guards = [g for k in tiled if (g := _guard(loops[k + 1]))]
+            return TileResult(func, [loops[k] for k in tiled], guards)
         stmt = loops[i]
         if (why_not_tileable(stmt, func) is not None
                 or _encloses_tileable(stmt, func)):

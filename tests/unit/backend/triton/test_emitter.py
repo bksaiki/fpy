@@ -9,7 +9,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Module
-from fpy2.ast.fpyast import Add, BinaryOp, Div, Mul, Sqrt, UnaryOp
+from fpy2.ast.fpyast import Add, BinaryOp, Div, If1Stmt, Mul, Sqrt, UnaryOp
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.backend.triton.emitter import (
     TritonEmitError,
@@ -249,11 +249,13 @@ _R32 = RealType(fp.FP32)
 _INT = RealType(fp.INTEGER)
 
 
-def _emit(func, argt, ctx=fp.FP32):
+def _emit(func, argt, ctx=fp.FP32, *, guard=False):
+    """*guard* names the body's top-level `if1`s as tile guards."""
     m = Module()
     m.add(func, ctx=ctx, arg_types=argt)
     g = Specialize.apply(m, size_key=True).get(func.name).func
-    return emit_block(g.ast.body, g.ast)
+    guards = [s for s in g.ast.body.stmts if isinstance(s, If1Stmt)]
+    return emit_block(g.ast.body, g.ast, guards=guards if guard else ())
 
 
 class TestMemory:
@@ -319,7 +321,7 @@ class TestMask:
             return out
 
         emitted = _emit(
-            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT])
+            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
         first = emitted.splitlines()[0]
         assert 'if' not in emitted
         assert first == (
@@ -846,4 +848,126 @@ class TestScalarization:
             return t[5]
 
         with pytest.raises(TritonEmitError, match='outside a sequence'):
+            _emit(f, [_R32])
+
+
+class TestBranch:
+    """An `if` that is not a tile guard is flattened: each arm runs on every
+    lane under its mask, and what it merges is chosen by `tl.where`."""
+
+    def test_two_arms_merge_by_where(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            if x < 0:
+                y = -x
+            else:
+                y = x * 2
+            return y
+
+        assert _emit(f, [_R32]) == (
+            '__t0 = (x < 0)\n'
+            'y = (-x)\n'
+            '__t1 = y\n'
+            'y = (x * 2.0)\n'
+            'y = tl.where(__t0, __t1, y)\n'
+            'return y'
+        )
+
+    def test_one_arm_merges_with_the_value_before(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            y = x
+            if x < 0:
+                y = -x
+            return y
+
+        out = _emit(f, [_R32]).splitlines()
+        assert out[-2] == 'y = tl.where(__t0, __t2, y)'
+        # restored before the merge reads it
+        assert out[-3] == 'y = __t1'
+
+    def test_the_second_arm_reads_what_the_first_overwrote(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, z: fp.Real):
+            y = x
+            if x < 0:
+                y = z
+                w = y * 2
+            else:
+                w = y * 3
+            return w
+
+        out = _emit(f, [_R32, _R32])
+        assert out.index('y = __t1') < out.index('w = (y * 3.0)')
+
+    def test_nested_branches_compose_the_mask(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            if j < n:
+                if xs[j] < 0:
+                    out[j] = xs[j]
+            return out
+
+        out = _emit(
+            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
+        assert 'mask=((j < n) & __t0)' in out
+
+    def test_a_store_in_an_arm_carries_its_mask(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(out: list[fp.Real], x: fp.Real):
+            if x < 0:
+                out[0] = x
+            else:
+                out[0] = -x
+            return out
+
+        out = _emit(f, [ListType(_R32, 8), _R32])
+        assert 'tl.store(out_ptr + 0, x, mask=__t0)' in out
+        assert 'tl.store(out_ptr + 0, (-x), mask=(~__t0))' in out
+        # the list behind the pointer merges by its stores alone
+        assert 'tl.where' not in out
+
+    def test_a_load_in_an_arm_carries_its_mask(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], i: fp.Real):
+            y = 0
+            if i < 8:
+                y = xs[i]
+            return y
+
+        assert 'tl.load(xs_ptr + i, mask=__t0, other=0.0)' in _emit(
+            f, [ListType(_R32, 8), _INT])
+
+    def test_a_narrower_arm_is_widened_at_the_merge(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real):
+            if x < 0:
+                with FP16:
+                    y = fp.round(x)
+            else:
+                y = x
+            return y
+
+        assert 'tl.where(__t0, __t1.to(tl.float32), y)' in _emit(
+            f, [_R32], ctx=fp.REAL)
+
+    def test_a_return_in_an_arm_is_refused(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            if x < 0:
+                return -x
+            return x
+
+        with pytest.raises(TritonEmitError, match='`return` in a branch'):
+            _emit(f, [_R32])
+
+    def test_a_scalarized_list_chosen_by_a_branch_is_refused(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real):
+            ys = [x, x]
+            if x < 0:
+                ys[0] = -x
+            return ys[0]
+
+        with pytest.raises(TritonEmitError, match='list chosen by a branch'):
             _emit(f, [_R32])

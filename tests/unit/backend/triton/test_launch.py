@@ -463,3 +463,48 @@ def test_integral_rounding_agrees_including_ties(f):
     want = [float(v) for v in f(
         [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 32)]
     assert ot.cpu().tolist() == want
+
+
+@fp.fpy(ctx=fp.REAL)
+def _branchy(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(xs)):
+        x = xs[i]
+        with fp.FP32:
+            y = x
+            if x < 0:
+                y = x * -3
+            if abs(y) > 4:
+                out[i] = y + 1
+            else:
+                z = y * 0.5
+                out[i] = z
+    return out
+
+
+@pytest.mark.parametrize('seed', [0, 1])
+def test_a_flattened_branch_agrees(seed):
+    """Emitted from the branchy program directly: the normal form would
+    if-convert it first."""
+    import torch
+
+    from fpy2 import Module
+    from fpy2.backend.triton import emit_kernel, tile_loops
+    from fpy2.transform import Specialize
+
+    n = 37      # a partial last tile at any power-of-two width
+    m = Module()
+    m.add(_branchy, ctx=fp.REAL, arg_types=[
+        ListType(RealType(fp.FP32), n),
+        ListType(RealType(fp.FP32), n),
+        RealType(fp.INTEGER)])
+    g = Specialize.apply(m, size_key=True).get(_branchy.name).func
+    r = tile_loops(g.ast, 'BLOCK')
+    src = emit_kernel(
+        r.func, r.tiled, block='BLOCK', drop_asserts=True, guards=r.guards)
+
+    torch.manual_seed(seed)
+    xt = (torch.randn(n) * 4).float().cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=16)
+    want = _branchy([float(v) for v in xt.cpu().tolist()], [0.0] * n, 16)
+    assert ot.cpu().tolist() == [float(v) for v in want]
