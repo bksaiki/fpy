@@ -21,6 +21,7 @@ dependencies = [
   "gmpy2==2.3.1",
   "matplotlib",
   "z3-solver>=4.13"
+  "torch>=2.14.0",
 ]
 
 # ``dev`` deps are listed twice on purpose: ``[project.optional-dependencies]``
