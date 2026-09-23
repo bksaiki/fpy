@@ -155,6 +155,14 @@ class _IndentedWriter:
         return '\n'.join(self._lines)
 
 
+_SIGN_BITS: dict[TritonScalar, str] = {
+    TritonScalar.F16: 'tl.int16',
+    TritonScalar.F32: 'tl.int32',
+    TritonScalar.F64: 'tl.int64',
+}
+"""The integer a float is bitcast to so its sign bit can be read."""
+
+
 class _Emitter(Visitor):
     """Produces Triton source.
 
@@ -737,8 +745,18 @@ class _Emitter(Visitor):
           comparison is
         - `isfinite(x)` is `|x| < inf`, false for a NaN for the same reason
 
-        `signbit` is the exception: it must distinguish `-0.0` from `0.0`,
-        which no comparison does, so it is refused rather than approximated.
+        `signbit` is not one of them: it has to separate `-0.0` from `0.0`,
+        which no *float* comparison does.  It reads the sign bit instead --
+        a bitcast to the same-width integer, tested for negative -- checked
+        on the card against the interpreter over both zeros, both infinities
+        and finite values of each sign.  For an integer there is no `-0`, so
+        the test is direct.
+
+        **A NaN's sign is not among them.**  FPy does not distinguish one:
+        rounding normalizes it away, so there is no signed NaN for this to
+        agree or disagree with.  What the hardware reports for one is
+        therefore unspecified rather than wrong, and nothing here should rely
+        on it.
         """
         arg = self.emit(e.arg)
         if isinstance(e, IsNan):
@@ -747,9 +765,19 @@ class _Emitter(Visitor):
             return f"(tl.abs({arg}) == float('inf'))"
         if isinstance(e, IsFinite):
             return f"(tl.abs({arg}) < float('inf'))"
+        if isinstance(e, Signbit):
+            have = self._storage(e.arg)
+            if have.is_integer():
+                return f'({arg} < 0)'
+            bits = _SIGN_BITS.get(have)
+            if bits is None:
+                raise TritonEmitError(
+                    f'`signbit` needs an integer the width of {have.format()} '
+                    'to read the sign bit from, and there is none'
+                )
+            return f'({arg}.to({bits}, bitcast=True) < 0)'
         raise TritonEmitError(
-            '`signbit` cannot be spelled from comparisons: it has to separate '
-            '`-0.0` from `0.0`, which no comparison does'
+            f'no Triton spelling for `{type(e).__name__}`'
         )
 
     def _emit_reduction(self, e: UnaryOp) -> str:

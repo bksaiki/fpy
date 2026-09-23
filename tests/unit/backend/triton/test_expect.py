@@ -400,3 +400,21 @@ def test_an_empty_any_is_its_identity():
         _empty_any, ctx=fp.FP32, arg_types=args)
     assert folded.source.splitlines()[-1].endswith(
         'tl.store(out_ptr + i, 0, mask=(j < t4))')
+
+
+@fp.fpy(ctx=fp.FP32)
+def _signbit(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        out[i] = 1.0 if fp.signbit(xs[i]) else 0.0
+    return out
+
+
+def test_signbit_reads_the_sign_bit():
+    """No float comparison separates `-0.0` from `0.0`, so this bitcasts to
+    the same-width integer and tests for negative."""
+    src = TritonCompiler(drop_asserts=True).compile(
+        _signbit, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), 8),
+            ListType(RealType(fp.FP32), 8),
+            RealType(fp.INTEGER)])
+    assert '.to(tl.int32, bitcast=True) < 0' in src.source

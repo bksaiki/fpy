@@ -235,3 +235,37 @@ class TestAnyAll:
         outs = {all(v > 0 for v in r) and 2 or (any(v > 0 for v in r) and 1 or 0)
                 for r in rows}
         assert len(outs) >= 2
+
+
+@fp.fpy(ctx=fp.FP32)
+def _signbit(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        out[i] = 1.0 if fp.signbit(xs[i]) else 0.0
+    return out
+
+
+def test_signbit_agrees_including_both_zeros():
+    """`-0.0` is the case no float comparison reaches.
+
+    A NaN is deliberately absent: FPy does not distinguish a NaN's sign --
+    rounding normalizes it away -- so there is nothing for the hardware's
+    answer to agree with.
+    """
+    import torch
+
+    vals = [0.0, -0.0, 1.0, -1.0, 2.5, -2.5,
+            float('inf'), float('-inf')]
+    n = len(vals)
+    src = TritonCompiler(drop_asserts=True).compile(
+        _signbit, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+    xt = torch.tensor(vals, dtype=torch.float32).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=8)
+
+    want = [float(v) for v in _signbit(
+        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 8)]
+    assert ot.cpu().tolist() == want
+    assert want[0] == 0.0 and want[1] == 1.0, 'both zeros were exercised'

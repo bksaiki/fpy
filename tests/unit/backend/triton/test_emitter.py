@@ -699,14 +699,22 @@ class TestPredicates:
 
         assert _emit(f, [_R32]) == "return (tl.abs(x) < float('inf'))"
 
-    def test_signbit_is_refused(self):
-        """It has to separate `-0.0` from `0.0`, which no comparison does."""
+    def test_signbit_reads_the_sign_bit(self):
+        """No *float* comparison separates `-0.0` from `0.0`, so this reads
+        the bit: a bitcast to the same-width integer, tested for negative."""
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real):
             return fp.signbit(x)
 
-        with pytest.raises(TritonEmitError, match='signbit'):
-            _emit(f, [_R32])
+        assert _emit(f, [_R32]) == 'return (x.to(tl.int32, bitcast=True) < 0)'
+
+    def test_signbit_of_an_integer_is_direct(self):
+        """There is no `-0` in an integer, so nothing to bitcast around."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real):
+            return fp.signbit(x)
+
+        assert _emit(f, [RealType(fp.INTEGER)]) == 'return (x < 0)'
 
     def test_logb_stays_refused(self):
         """No correctly-rounded primitive exists: `tl.log2` is a
