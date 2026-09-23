@@ -231,6 +231,11 @@ def compile_design(build: Build) -> str:
     mod = mod.map(_prepare)
     return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS).compile_module(mod)
 
+def _namespace(name: str) -> str:
+    """Return a unique C++ namespace for a design name."""
+    chars = [c if c.isalnum() else "_" for c in name]
+    words = filter(None, "".join(chars).split("_"))
+    return "model_" + "_".join(words)
 
 def in_processes(fn: Callable, items: Iterable, jobs: int) -> Iterator:
     """*fn* of each of *items*, in order: in *jobs* processes if more than one.
