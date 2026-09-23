@@ -228,6 +228,76 @@ class TestAllocateAndFill:
 
 
 @fp.fpy(ctx=fp.FP32)
+def _groups(xs: list[fp.Real]):
+    """`gst_fdpa`'s shape: two lists filled by one loop, one of them in both
+    arms of an `if`."""
+    ts = fp.empty(2)
+    es = fp.empty(2)
+    for g in range(2):
+        s = xs[2 * g] + xs[2 * g + 1]
+        ts[g] = s
+        if s == 0:
+            es[g] = -1.0
+        else:
+            es[g] = s * 2.0
+    return ts[0] + ts[1] + es[0] + es[1]
+
+
+class TestAFillingLoop:
+    """A `range` loop that fills an `fp.empty` list unrolls, so its stores are
+    at constant indices and the fill becomes values in place."""
+
+    @pytest.mark.parametrize('xs', [[1.0, 2.0, 3.0, 4.0], [1.0, -1.0, 0.0, 0.0],
+                                    [0.0, 0.0, 2.0, 5.0]])
+    def test_it_fills(self, xs):
+        g = _sized(_groups, 4)
+        out = _agrees(g, xs)
+        assert 'fp.empty' not in Function(out, runtime=None).format()
+
+    def test_a_statement_between_stores_keeps_its_place(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            zs = fp.empty(2)
+            zs[0] = xs[0]
+            t = xs[0] * 2.0
+            zs[1] = t
+            return zs[1]
+
+        out = _agrees(_sized(f, 1), [3.0])
+        assert 'fp.empty' not in Function(out, runtime=None).format()
+
+    def test_arms_filling_different_indices_are_left_alone(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            zs = fp.empty(2)
+            if xs[0] > 0:
+                zs[0] = xs[0]
+            else:
+                zs[1] = xs[0]
+            zs[1] = xs[0]
+            return zs[1]
+
+        out = Scalarize.apply(_sized(f, 1).ast)
+        assert 'fp.empty' in Function(out, runtime=None).format()
+
+    def test_a_store_in_a_one_armed_if_is_not_skipped(self):
+        """Taken as untouched, it would be dropped from the list."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real]):
+            zs = fp.empty(2)
+            zs[0] = xs[0]
+            if xs[0] > 0:
+                zs[0] = 5.0
+            zs[1] = xs[0]
+            return zs[0]
+
+        g = _sized(f, 1)
+        for xs in ([1.0], [-1.0]):
+            out = _agrees(g, xs)
+        assert 'fp.empty' in Function(out, runtime=None).format()
+
+
+@fp.fpy(ctx=fp.FP32)
 def _loop_over_values(xs: list[fp.Real]):
     ps = [xs[i] * 2 for i in range(3)]
     s = fp.round(0)

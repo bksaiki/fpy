@@ -97,6 +97,10 @@ class _Scalarize(DefaultTransformVisitor):
         """Names bound to an integer constant, so an index like `n + i`
         resolves.  `Simplify` would propagate these, but it runs *after* the
         normal form, and `optimize=False` skips it entirely."""
+        self.empties: set[NamedId] = set()
+        """Names bound to `empty(n)` with `n` a constant within the cap: a
+        local list, which a target with no addressable local array can only
+        hold as values once every store to it is at a constant index."""
         self.lazy = False
         """Whether the expression being visited is only conditionally
         evaluated.  Hoisting out of an `IfExpr` arm would make it
@@ -249,6 +253,7 @@ class _Scalarize(DefaultTransformVisitor):
         return None
 
     def _touches(self, stmt: Stmt, zs: NamedId) -> bool:
+        """Whether *stmt* reads *zs* or stores into it."""
         found = False
 
         class _R(DefaultVisitor):
@@ -257,8 +262,71 @@ class _Scalarize(DefaultTransformVisitor):
                 if v.name == zs:
                     found = True
 
+            def _visit_indexed_assign(self, s: IndexedAssign, c):
+                nonlocal found
+                if s.var == zs:
+                    found = True
+                return super()._visit_indexed_assign(s, c)
+
         _R()._visit_statement(stmt, None)
         return found
+
+    def _fill(
+        self, stmt: Stmt, zs: NamedId, n: int,
+        names: dict[int, NamedId], reuse: dict[int, NamedId],
+    ) -> list[Stmt] | None:
+        """*stmt* with each store into *zs* as an assignment to the name for
+        its index, recorded in *names*; `None` where a store is not at a
+        constant index written once, or *zs* is read.
+
+        *reuse* holds the names an index may take instead of a fresh one: an
+        `if` fills in both arms or neither, so the second arm stores each
+        index the first did, to the same name, and the merge after it is an
+        ordinary one.
+        """
+        if isinstance(stmt, IfStmt) and self._touches(stmt, zs):
+            if self._reads(stmt.cond, zs):
+                return None
+            first, second = dict(names), dict(names)
+            ift = self._fill_block(stmt.ift, zs, n, first, dict(reuse))
+            new = {i: first[i] for i in first if i not in names}
+            iff = self._fill_block(stmt.iff, zs, n, second, {**reuse, **new})
+            if ift is None or iff is None or first != second:
+                return None     # an index one arm leaves unset
+            names.update(first)
+            for i in new:
+                reuse.pop(i, None)
+            return [IfStmt(stmt.cond, ift, iff, stmt.loc)]
+        pairs = self._writes(stmt, zs)
+        if pairs is None:
+            return None
+        if not pairs:
+            return [stmt]
+        out: list[Stmt] = []
+        for at, value in pairs:
+            if not 0 <= at < n:
+                return None
+            if at in reuse:
+                name = reuse.pop(at)
+            elif at in names:
+                return None     # written twice
+            else:
+                name = self.gensym.fresh(str(zs))
+            names[at] = name
+            out.append(Assign(name, None, value, stmt.loc))
+        return out
+
+    def _fill_block(
+        self, block: StmtBlock, zs: NamedId, n: int,
+        names: dict[int, NamedId], reuse: dict[int, NamedId],
+    ) -> StmtBlock | None:
+        out: list[Stmt] = []
+        for stmt in block.stmts:
+            got = self._fill(stmt, zs, n, names, reuse)
+            if got is None:
+                return None
+            out.extend(got)
+        return StmtBlock(out)
 
     def _fill_group(
         self, stmts: list[Stmt], j: int,
@@ -268,8 +336,8 @@ class _Scalarize(DefaultTransformVisitor):
         Sound only when all four hold, so each is checked: the length is a
         constant within the cap, every store is at a constant index in range,
         each index is written exactly once, and nothing reads the list before
-        the last store.  `join` in `examples/mmasim` satisfies them; a general
-        rule cannot assume it.
+        the last store.  Each store becomes an assignment where it stands, so
+        a statement between two of them keeps its place.
         """
         alloc = stmts[j]
         if not isinstance(alloc, Assign) or not isinstance(alloc.target, NamedId):
@@ -281,31 +349,38 @@ class _Scalarize(DefaultTransformVisitor):
             return None
 
         zs = alloc.target
-        filled: dict[int, Expr] = {}
+        names: dict[int, NamedId] = {}
+        out: list[Stmt] = []
+        consts = dict(self.consts)
         k = j + 1
-        while k < len(stmts) and len(filled) < n:
-            pairs = self._writes(stmts[k], zs)
-            if pairs is None or not pairs:
-                return None
-            for at, value in pairs:
-                if not 0 <= at < n or at in filled:
-                    return None  # out of range, or written twice
-                filled[at] = value
-            k += 1
-        if len(filled) != n:
+        try:
+            while k < len(stmts) and len(names) < n:
+                got = self._fill(stmts[k], zs, n, names, {})
+                if got is None:
+                    return None
+                out.extend(got)
+                self._note_const(stmts[k])
+                k += 1
+        finally:
+            # the scan reads ahead; the walk that follows sets them in order
+            self.consts = consts
+        if len(names) != n:
             return None
-
-        names = [self.gensym.fresh(str(zs)) for _ in range(n)]
-        out: list[Stmt] = [
-            Assign(name, None, filled[i], alloc.loc)
-            for i, name in enumerate(names)
-        ]
         out.append(Assign(
             zs, None,
-            ListExpr([Var(nm, alloc.loc) for nm in names], alloc.loc),
+            ListExpr([Var(names[i], alloc.loc) for i in range(n)], alloc.loc),
             alloc.loc,
         ))
         return out, k - j
+
+    def _note_const(self, stmt: Stmt) -> None:
+        """Track an integer binding, so a later index like `n + i` resolves."""
+        if isinstance(stmt, Assign) and isinstance(stmt.target, NamedId):
+            v = self._const(stmt.expr)
+            if v is None:
+                self.consts.pop(stmt.target, None)
+            else:
+                self.consts[stmt.target] = v
 
     def _unroll_for(self, stmt: ForStmt) -> list[Stmt] | None:
         """A `for` over a list of values, as its iterations.
@@ -322,6 +397,12 @@ class _Scalarize(DefaultTransformVisitor):
             elts = list(stmt.iterable.elts)
         elif isinstance(stmt.iterable, Var):
             elts = self.value_lists.get(stmt.iterable.name)
+        elif isinstance(stmt.iterable, (Range1, Range3)) and any(
+            self._touches(stmt, zs) for zs in self.empties
+        ):
+            # a loop filling a local list: unrolled, its stores are at
+            # constant indices, and the list can become values
+            elts = self._elements(stmt.iterable)
         if elts is None or len(elts) > self.cap:
             return None
         out: list[Stmt] = []
@@ -358,6 +439,10 @@ class _Scalarize(DefaultTransformVisitor):
                 v = self._const(stmt.expr)
                 if v is not None:
                     self.consts[stmt.target] = v
+                if isinstance(stmt.expr, Empty) and len(stmt.expr.args) == 1:
+                    size = self._const(stmt.expr.args[0])
+                    if size is not None and 0 < size <= self.cap:
+                        self.empties.add(stmt.target)
                 if isinstance(out, Assign):
                     # a literal, or a copy of one: inlining binds a callee's
                     # parameter to the caller's list by name, so the loop it
