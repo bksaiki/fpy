@@ -350,3 +350,72 @@ class TestLoopsOverValues:
     def test_over_the_cap_is_left_alone(self):
         assert 'for p in ps' in Function(
             Scalarize.apply(_loop_over_values.ast, cap=2), runtime=None).format()
+
+
+def _reads(ast) -> int:
+    n = 0
+
+    class _C(DefaultVisitor):
+        def _visit_list_ref(self, e, ctx):
+            nonlocal n
+            n += 1
+            super()._visit_list_ref(e, ctx)
+
+    _C()._visit_function(ast, None)
+    return n
+
+
+class TestAReadOfALiteral:
+    """`ys[k]` of a list literal is that element: read through the list it is
+    the list's summary to an analysis, which loses what it knew of this one."""
+
+    def test_it_reads_the_element(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            ys = [x, y]
+            return ys[1] * 2.0
+
+        out = _agrees(f, 1.5, 2.5)
+        assert _reads(out) == 0
+
+    def test_through_a_copy(self):
+        """Inlining binds a callee's parameter to the caller's list by name."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            ys = [x, y]
+            zs = ys
+            return zs[0] * 2.0
+
+        assert _reads(_agrees(f, 1.5, 2.5)) == 0
+
+    def test_not_after_a_store(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            ys = [x, y]
+            ys[0] = 5.0
+            return ys[0]
+
+        assert _reads(_agrees(f, 1.5, 2.5)) == 1
+
+    def test_not_through_a_copy_stored_into(self):
+        """The copy and the list are one object: a store through either
+        reaches the other, so a name defined twice anywhere on the way stops
+        the rewrite."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            ys = [x, y]
+            zs = ys
+            ys[0] = 5.0
+            return zs[0]
+
+        assert _reads(_agrees(f, 1.5, 2.5)) == 1
+
+    def test_not_an_element_reassigned(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            a = x
+            ys = [a, y]
+            a = y
+            return ys[0] + a
+
+        assert _reads(_agrees(f, 1.5, 2.5)) == 1

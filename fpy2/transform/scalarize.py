@@ -2,6 +2,7 @@
 
 from ..analysis import ArraySizeAnalysis, ArraySizeInfer, DefineUse, SyntaxCheck
 from ..analysis.array_size import ListSize
+from ..analysis.reaching_defs import AssignDef
 from ..ast import *
 from ..utils import Gensym
 from .utils import clone_block
@@ -81,7 +82,8 @@ class _Scalarize(DefaultTransformVisitor):
         super().__init__()
         self.sizes = sizes
         self.cap = cap
-        self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
+        self.def_use = DefineUse.analyze(func)
+        self.gensym = Gensym(reserved=self.def_use.names())
         self.pending: list[Stmt] = []
         self.changed = False
         self.value_lists: dict[NamedId, list[Expr]] = {}
@@ -189,6 +191,45 @@ class _Scalarize(DefaultTransformVisitor):
             names.append(name)
         self.changed = True
         return ListExpr([Var(n, e.loc) for n in names], e.loc)
+
+    def _visit_list_ref(self, e: ListRef, ctx):
+        elt = self._literal_element(e)
+        if elt is None:
+            return super()._visit_list_ref(e, ctx)
+        self.changed = True
+        return _clone(elt)
+
+    def _literal_element(self, e: ListRef) -> Expr | None:
+        """The element `xs[k]` reads, where `xs` is a list literal and `k` a
+        constant.  Read through the list it is the list's *summary* to an
+        analysis -- true of any element -- and what was known of this one is
+        lost.
+
+        Sound where the element still holds its value: every name from the
+        read back to the literal -- through copies, which inlining makes of a
+        parameter -- is defined once, so nothing stores into the list through
+        any of them, and the element is a literal or a name defined once.
+        """
+        k = self._const(e.index)
+        src: Expr = e.value
+        while isinstance(src, Var):
+            d = self.def_use.use_to_def.get(src)
+            if not self._once(src.name) or not isinstance(d, AssignDef):
+                return None
+            if not isinstance(d.site, Assign):
+                return None
+            src = d.site.expr
+        if k is None or not isinstance(src, ListExpr):
+            return None
+        if not 0 <= k < len(src.elts):
+            return None
+        elt = src.elts[k]
+        if isinstance(elt, Var):
+            return elt if self._once(elt.name) else None
+        return elt if isinstance(elt, (Integer, RationalVal, BoolVal)) else None
+
+    def _once(self, name: NamedId) -> bool:
+        return len(self.def_use.name_to_defs.get(name, ())) == 1
 
     def _visit_if_expr(self, e: IfExpr, ctx):
         cond = self._visit_expr(e.cond, ctx)
