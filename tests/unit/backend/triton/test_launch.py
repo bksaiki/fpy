@@ -597,3 +597,37 @@ def test_round_toward_zero_fp32_agrees_bit_for_bit():
     want = [float(v) for v in _rz(vals, [0.0] * n, 16)]
     for x, w, g in zip(vals, want, ot.cpu().tolist()):
         assert bits(w) == bits(g) or (math.isnan(w) and math.isnan(g)), x
+
+
+@fp.fpy(ctx=fp.REAL)
+def _prefix_plus(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real],
+                 BLOCK: fp.Real):
+    for r in range(len(out)):
+        with fp.FP32:
+            s = fp.round(0)
+            for j in range(4):
+                s = s + xs[j]
+            out[r] = s + ys[r]
+    return out
+
+
+def test_a_scalar_address_under_the_tile_mask():
+    """`xs[j]` is one address for every lane; Triton rejects a tile of a
+    mask on it, so it is broadcast to the tile."""
+    import torch
+
+    n = 8
+    src = TritonCompiler(drop_asserts=True).compile(
+        _prefix_plus, ctx=fp.REAL, arg_types=[
+            ListType(RealType(fp.FP32), 4),
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+    assert 'tl.zeros_like(' in src.source
+    torch.manual_seed(0)
+    xs = torch.randn(4).cuda()
+    ys = torch.randn(n).cuda()
+    ot = torch.zeros(n).cuda()
+    launch(src, [xs, ys, ot], block=4)
+    want = _prefix_plus(xs.cpu().tolist(), ys.cpu().tolist(), [0.0] * n, 4)
+    assert ot.cpu().tolist() == [float(v) for v in want]

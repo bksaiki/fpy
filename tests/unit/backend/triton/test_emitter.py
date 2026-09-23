@@ -1091,3 +1091,20 @@ def test_an_ldexp_scales_in_the_products_storage():
         return 2 ** -200 * x
 
     assert 'libdevice.ldexp(x.to(tl.float64), ' in _emit(f, [_R32], ctx=fp.REAL)
+
+
+def test_a_lane_address_is_not_broadcast():
+    """Only an address the same on every lane needs it."""
+    from fpy2.backend.triton import TritonCompiler
+
+    @fp.fpy(ctx=fp.FP32)
+    def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for i in range(len(xs)):
+            out[i] = xs[i] + xs[0]
+        return out
+
+    src = TritonCompiler(drop_asserts=True).compile(
+        f, ctx=fp.FP32, arg_types=[ListType(_R32, 8), ListType(_R32, 8), _INT],
+    ).source
+    assert src.count('tl.zeros_like(') == 1
+    assert 'tl.load(xs_ptr + 0 + tl.zeros_like(j)' in src

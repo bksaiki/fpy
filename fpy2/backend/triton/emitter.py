@@ -160,15 +160,32 @@ def _as_literal(code: str) -> float | None:
         return None
 
 
+_ASSIGN = re.compile(r'(\w+) = (.*)')
+_IDENT = re.compile(r'\b\w+\b')
+
+
 class _IndentedWriter:
     """Line-oriented Triton source builder."""
 
     def __init__(self):
         self._lines: list[str] = []
         self._depth = 0
+        self.lanes: set[str] = set()
+        """The names holding a tile rather than a scalar.
+
+        Read off the emitted lines, since every runtime value is a name one
+        of them binds: a name is a tile where its line reads `tl.arange` or
+        another tile.  Taken to be a scalar in error, an address is only
+        broadcast where it did not need to be."""
 
     def add_line(self, line: str = ''):
         self._lines.append('    ' * self._depth + line if line else '')
+        if (m := _ASSIGN.fullmatch(line)) is not None:
+            name, code = m.groups()
+            if 'tl.arange(' in code or self.lanes & set(_IDENT.findall(code)):
+                self.lanes.add(name)
+            else:
+                self.lanes.discard(name)
 
     def indent(self):
         self._depth += 1
@@ -344,6 +361,10 @@ class _Emitter(Visitor):
         """
         self._branches = 0
         """How many flattened branches enclose the statement being emitted."""
+        self._lanes: set[str] = set()
+        """The writer's `lanes`, bound when emission starts."""
+        self._tile: str | None = None
+        """The tile's index, while its body is emitted."""
 
     # -- storage and context -------------------------------------------
 
@@ -796,9 +817,21 @@ class _Emitter(Visitor):
             return None
 
     def _load_at(self, base: NamedId, offset: str) -> str:
-        addr = f'{base}_ptr + {offset}'
+        return self._masked_load(f'{base}_ptr + {offset}')
+
+    def _masked_load(self, addr: str) -> str:
+        """`tl.load` at *addr*, under whatever guard is in force.
+
+        Triton rejects a tile of a mask on a scalar address, so a scalar one
+        under a tile is broadcast to the tile rather than unmasked: a branch
+        can guard an address on every lane at once.
+        """
         if self.mask is None:
             return f'tl.load({addr})'
+        if self._tile is not None and not (
+            self._lanes & set(_IDENT.findall(addr))
+        ):
+            addr = f'{addr} + tl.zeros_like({self._tile})'
         return f'tl.load({addr}, mask={self.mask}, other=0.0)'
 
     def _emit_load(self, e: ListRef) -> str:
@@ -826,10 +859,8 @@ class _Emitter(Visitor):
                 )
             return elems[i]
         base, indices, extra = self._flatten(e)
-        addr = f'{base}_ptr + {self._offset(base, indices, extra)}'
-        if self.mask is None:
-            return f'tl.load({addr})'
-        return f'tl.load({addr}, mask={self.mask}, other=0.0)'
+        return self._masked_load(
+            f'{base}_ptr + {self._offset(base, indices, extra)}')
 
     def _emit_len(self, e: Len) -> str:
         """A length, as the constant the pipeline proved it to be.
@@ -1694,7 +1725,9 @@ class _Emitter(Visitor):
         )
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
         ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
+        prev, self._tile = self._tile, str(inner.target)
         self._visit_block(inner.body, ctx)
+        self._tile = prev
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter):
         for stmt in block.stmts:
@@ -1796,6 +1829,7 @@ def emit_block(
         def_use,
     )
     out = _IndentedWriter()
+    emitter._lanes = out.lanes
     emitter._visit_block(block, out)
     return out.render()
 
@@ -1899,6 +1933,7 @@ def emit_kernel(
         if not isinstance(stmt, ReturnStmt)
     ])
     out = _IndentedWriter()
+    emitter._lanes = out.lanes
     out.add_line('@triton.jit')
     out.add_line(f'def {func.name}({", ".join(params)}):')
     out.indent()
