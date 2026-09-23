@@ -4161,3 +4161,64 @@ class TestAZeroGuardNoPathNames:
                                   RealType(fp.FP16), RealType(fp.FP16)])
         fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(t)')
         assert fmt.pmax == 28
+
+
+class TestFinitenessSentinel:
+    """`exponent0` reads a non-finite value's exponent as `-1`.  Inlined, its
+    merge must keep the sentinel wherever the sentinel is reached, and
+    `digit-bound-finiteness.md` is what drops it where it is not."""
+
+    def test_the_sentinel_path_is_in_the_bound(self):
+        """At `x = inf` the position is `-1 - 10`, and `c` keeps digits to
+        `2 ** -10`.  A merge that forgot the sentinel would take `r >= 5` and
+        put `t` on a `2 ** -4` grid, which does not hold `341 / 1024`."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, c):
+            if not fp.isfinite(x):
+                r = -1
+            else:
+                r = max(fp.logb(x), 5)
+            with fp.MPFixedContext(r - 10, fp.RM.RTZ):
+                t = fp.round(c)
+            return t
+
+        ast = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP16), RealType(fp.FP32)])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 't')
+        v = f(fp.Float(isinf=True), fp.FP32.round(1 / 3))
+        assert v == fp.Float.from_float(341 / 1024)
+        assert bound.representable_in(v)
+
+    @pytest.mark.xfail(strict=True, reason='digit-bound-finiteness Phase 6')
+    def test_the_sentinel_costs_the_fused_sum_nothing(self):
+        """`bf8`'s shape: a product's exponent through `exponent0`.  27 bits
+        written directly; 59 through the statement."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            p0 = A[0] * B[0]
+            p2 = A[2] * B[2]
+            x = A[0]
+            if not fp.isfinite(x):
+                r1 = -1
+            else:
+                r1 = max(fp.logb(x), -15)
+            y = B[0]
+            if not fp.isfinite(y):
+                r2 = -1
+            else:
+                r2 = max(fp.logb(y), -15)
+            e0 = (-35 if p0 == 0 else r1 + r2)
+            e2 = (-35 if p2 == 0 else
+                  max(fp.logb(A[2]), -15) + max(fp.logb(B[2]), -15))
+            e = max([e0, e2])
+            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                t0 = fp.round(p0)
+                t1 = fp.round(p2)
+            ts = [t0, t1]
+            return sum(ts)
+
+        L = ListType(RealType(fp.S1E5M2), 4)
+        assert TestAlignedSumPrecision._sum_bounds(f, [L, L])['ts'] <= 27

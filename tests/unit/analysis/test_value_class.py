@@ -1605,3 +1605,47 @@ class TestAGuardOverARow:
                 return 0.0
 
         assert _amax_unfused(f, arg_types=_MATRIX) == TOP
+
+
+#####################################################################
+# Finiteness facts `digit-bound-finiteness.md` needs; each flips in its phase
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scalarized_guard(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+    p0 = a * b
+    t0 = not fp.isfinite(p0)
+    if any([t0]) or not fp.isfinite(c):
+        r = 0
+    else:
+        r = p0 * 3
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _backward_guard(a: fp.Real, b: fp.Real) -> fp.Real:
+    p0 = a * b
+    if not fp.isfinite(p0):
+        r = 0
+    else:
+        r = a * 3
+    return r
+
+
+class TestFinitenessFacts:
+    """What the scalarized special-value check of `gtr_fdpa` has to establish
+    for the fused sum after it."""
+
+    @pytest.mark.xfail(strict=True, reason='Phase 3: any([...]) over a literal')
+    def test_a_scalarized_any_guard_refines_what_it_tests(self):
+        """`Scalarize` leaves `any([not isfinite(p) for p in prods])` as
+        `any([t0, ...])` over names."""
+        info = ValueClassInfer.analyze(_scalarized_guard.ast)
+        read = _find(_scalarized_guard.ast, '(p0 * 3)').first
+        assert info.classify(read) & (NAN | INF) == ValueClass(0)
+
+    @pytest.mark.xfail(strict=True, reason='Phase 4: backward refinement')
+    def test_a_finite_product_has_finite_factors(self):
+        info = ValueClassInfer.analyze(_backward_guard.ast)
+        read = _find(_backward_guard.ast, '(a * 3)').first
+        assert info.classify(read) & (NAN | INF) == ValueClass(0)
