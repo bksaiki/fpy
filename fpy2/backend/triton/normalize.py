@@ -31,7 +31,7 @@ from ...ast import (
 )
 from ...function import Function
 from ...module import Module
-from ...transform import FuncInline, SimplifyIf, SingleExit
+from ...transform import FuncInline, Scalarize, SimplifyIf, SingleExit
 from ..backend import CompileError
 
 __all__ = ['TritonNormalizeError', 'normalize', 'normalize_module']
@@ -40,6 +40,9 @@ __all__ = ['TritonNormalizeError', 'normalize', 'normalize_module']
 class TritonNormalizeError(CompileError):
     """A program that does not reach the Triton normal form."""
 
+
+_DEFAULT_CAP = 256
+"""How long a sequence may be and still unroll; see `Scalarize`."""
 
 _MAX_ROUNDS = 4
 """Cap on the rounds below.
@@ -101,7 +104,7 @@ def _reads(e: Expr) -> set[NamedId]:
     return v.names
 
 
-def normalize(func: FuncDef) -> FuncDef:
+def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
     """*func* in the Triton normal form, assuming its callees already are.
 
     ``SingleExit`` runs **first**, not last: ``FuncInline`` refuses a callee
@@ -110,6 +113,13 @@ def normalize(func: FuncDef) -> FuncDef:
     which is what :func:`normalize_module` is for -- this function alone cannot
     fix a callee, since it only holds the caller.  ``SimplifyIf`` runs last
     because sinking a `return` *creates* the `if` statements it consumes.
+
+    ``Scalarize`` runs **before the inline**, and that ordering is the point:
+    `FuncInline` splices a callee's body into the enclosing *statement* list,
+    so it cannot take a call sitting inside a comprehension.  Unrolling the
+    comprehension first puts each call in a statement of its own.  *cap* is
+    how long a sequence may be and still unroll; over it the sequence is left
+    alone, which costs an unrolling rather than the compile.
 
     Raises :class:`TritonNormalizeError` if the form is not reached; the
     passes' own :class:`~fpy2.transform.TransformDeclined` propagates as-is,
@@ -120,18 +130,23 @@ def normalize(func: FuncDef) -> FuncDef:
 
     for _ in range(_MAX_ROUNDS):
         func = SingleExit.apply(func)
+        func = Scalarize.apply(func, cap=cap)
         func = FuncInline.apply(func, recursive=True)
         func = SimplifyIf.apply(func)
         reasons = _NotNormal(func).check()
         if not reasons:
             return func
+    # the loop is meant to converge -- inlining is bounded by an acyclic call
+    # graph, unrolling by that, and neither creates work for the other without
+    # consuming some.  Reaching the bound means one of those is false.
     raise TritonNormalizeError(
-        f'`{func.name}` does not reach the Triton normal form: '
-        + '; '.join(sorted(set(reasons)))
+        f'`{func.name}` did not converge in {_MAX_ROUNDS} rounds, which is a '
+        f'bug in the normal form rather than a program it declines; what '
+        f'remains: ' + '; '.join(sorted(set(reasons)))
     )
 
 
-def normalize_module(module: Module) -> Module:
+def normalize_module(module: Module, *, cap: int = _DEFAULT_CAP) -> Module:
     """Every function in *module* in the Triton normal form.
 
     :meth:`Module.map` walks leaves-first and rebinds each caller's ``Call.fn``
@@ -141,4 +156,4 @@ def normalize_module(module: Module) -> Module:
     """
     if not isinstance(module, Module):
         raise TypeError(f"Expected a 'Module', got {module}")
-    return module.map(lambda _m, fd: normalize(fd))
+    return module.map(lambda _m, fd: normalize(fd, cap=cap))

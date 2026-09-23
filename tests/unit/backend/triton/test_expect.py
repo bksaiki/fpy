@@ -295,3 +295,34 @@ def test_a_store_through_a_row_resolves_the_same_way():
     assert src.source.splitlines()[-1] == (
         '        tl.store(oss_ptr + r * 4 + k, (tl.load(xss_ptr + r * 4 + k, '
         'mask=(j < t8), other=0.0) * 2.0), mask=(j < t8))')
+
+
+@fp.fpy(ctx=fp.FP32)
+def _scaled(x: fp.Real) -> fp.Real:
+    """A callee, so the comprehension below holds a call."""
+    t = x * 3.0
+    return t
+
+
+@fp.fpy(ctx=fp.FP32)
+def _comp_of_calls(xss: list[list[fp.Real]], out: list[fp.Real],
+                   BLOCK: fp.Real):
+    """A comprehension whose elements are calls -- what `Scalarize` is for."""
+    for r in range(len(out)):
+        ys = [_scaled(xss[r][k]) for k in range(3)]
+        out[r] = ys[0] + ys[1] + ys[2]
+    return out
+
+
+def test_a_comprehension_of_calls_compiles():
+    """`FuncInline` cannot reach a call inside a comprehension, so without
+    `Scalarize` ahead of it in the loop the call survives and the normal form
+    is never reached.  Unrolled first, each call is its own statement."""
+    src = TritonCompiler(drop_asserts=True).compile(
+        _comp_of_calls, ctx=fp.FP32, arg_types=[
+            ListType(ListType(RealType(fp.FP32), 3), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert 'tl.store' in src.source
+    # three loads, one per unrolled element, each scaled before the sum
+    assert src.source.count('* 3.0') == 3

@@ -79,11 +79,19 @@ class TritonCompiler(Backend):
             what makes a trip count provable or a literal representable.
             Measured over the library corpus: 30 emit with both, 27 with
             neither.  Default ``True``.
+        scalarize_cap:
+            How long a sequence may be and still be unrolled into one value
+            per element, which is what puts a call inside a comprehension
+            where ``FuncInline`` can reach it.  Over the cap the sequence is
+            left alone and takes the ordinary loop path, so this costs an
+            unrolling rather than the compile.  Default ``256`` -- four times
+            the widest real MMA instruction.
     """
 
     block: str
     drop_asserts: bool
     optimize: bool
+    scalarize_cap: int
 
     def __init__(
         self,
@@ -91,10 +99,12 @@ class TritonCompiler(Backend):
         block: str = 'BLOCK',
         drop_asserts: bool = False,
         optimize: bool = True,
+        scalarize_cap: int = 256,
     ):
         self.block = block
         self.drop_asserts = drop_asserts
         self.optimize = optimize
+        self.scalarize_cap = scalarize_cap
 
     def compile(
         self,
@@ -161,7 +171,9 @@ class TritonCompiler(Backend):
 
         normalized = Module()
         normalized.add(folded)
-        ready = normalize_module(normalized).get(folded.name).func
+        ready = normalize_module(
+            normalized, cap=self.scalarize_cap,
+        ).get(folded.name).func
 
         if self.optimize:
             # last, as the cpp backend does: the lowerings above leave debris

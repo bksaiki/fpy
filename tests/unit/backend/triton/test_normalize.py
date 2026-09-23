@@ -172,3 +172,42 @@ class TestRejects:
     def test_a_non_funcdef_is_a_type_error(self):
         with pytest.raises(TypeError, match='FuncDef'):
             normalize(_caller)
+
+
+class TestScalarizeRunsBeforeTheInline:
+    """`FuncInline` splices a callee's body into the enclosing *statement*
+    list, so it cannot take a call inside a comprehension.  Unrolling first
+    puts each call in a statement of its own, which is why `Scalarize` is in
+    the loop ahead of it."""
+
+    def test_a_call_inside_a_comprehension_is_inlined(self):
+        @fp.fpy(ctx=fp.FP64)
+        def bump(x: fp.Real) -> fp.Real:
+            t = x + 1
+            return t
+
+        @fp.fpy(ctx=fp.FP64)
+        def uses(xs: list[fp.Real]):
+            ys = [bump(xs[i]) for i in range(3)]
+            return ys[0] + ys[2]
+
+        out = normalize(uses.ast)
+        _is_normal(out)
+        args = [1.0, 2.0, 3.0]
+        assert repr(Function(out, runtime=uses.runtime)(args)) == repr(uses(args))
+
+    def test_over_the_cap_it_is_left_alone(self):
+        """Declining to unroll is not a refusal; the call simply remains, and
+        the normal form then reports *that*."""
+        @fp.fpy(ctx=fp.FP64)
+        def bump(x: fp.Real) -> fp.Real:
+            t = x + 1
+            return t
+
+        @fp.fpy(ctx=fp.FP64)
+        def uses(xs: list[fp.Real]):
+            ys = [bump(xs[i]) for i in range(3)]
+            return ys[0]
+
+        with pytest.raises(TritonNormalizeError, match='call to `bump` remains'):
+            normalize(uses.ast, cap=2)
