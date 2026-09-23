@@ -423,3 +423,43 @@ def test_ldexp_agrees_with_a_per_lane_exponent():
     want = [v * 2.0 ** k for v, k in zip(vals, exps)]
     assert ot.cpu().tolist() == want
     assert len(set(exps)) > 1, 'the lanes really do disagree'
+
+
+@fp.fpy(ctx=fp.REAL)
+def _trunc(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        with fp.MPFixedContext(-1, fp.RoundingMode.RTZ):
+            t = fp.round(xs[i])
+        out[i] = t
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def _rne(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        with fp.MPFixedContext(-1, fp.RoundingMode.RNE):
+            t = fp.round(xs[i])
+        out[i] = t
+    return out
+
+
+@pytest.mark.parametrize('f', [_trunc, _rne], ids=['RTZ', 'RNE'])
+def test_integral_rounding_agrees_including_ties(f):
+    """The ties are what separate the modes, so they are in the inputs."""
+    import torch
+
+    vals = [2.7, -2.7, 2.5, -2.5, 3.5, -3.5, 0.5, -0.5,
+            0.0, -0.0, 1.0, -1.0, 4.5, -4.5, 100.25, -100.25]
+    n = len(vals)
+    src = TritonCompiler(drop_asserts=True).compile(
+        f, ctx=fp.REAL, arg_types=[
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+    xt = torch.tensor(vals, dtype=torch.float32).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=32, grid=1)
+
+    want = [float(v) for v in f(
+        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 32)]
+    assert ot.cpu().tolist() == want

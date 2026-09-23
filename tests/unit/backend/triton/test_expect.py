@@ -612,3 +612,51 @@ def test_ldexp_is_refused_where_the_context_would_round():
     with pytest.raises(TritonEmitError, match='no signatures for op: Pow'):
         TritonCompiler(drop_asserts=True).compile(
             _scaled_rounding, ctx=fp.FP32, arg_types=_SCALE_ARGS)
+
+
+def _round_to_int(mode: str):
+    """A kernel rounding to the integers under *mode*."""
+    src = (
+        'import fpy2 as fp\n'
+        '@fp.fpy(ctx=fp.REAL)\n'
+        'def k(xs, out, BLOCK):\n'
+        '    for i in range(len(out)):\n'
+        f'        with fp.MPFixedContext(-1, fp.RoundingMode.{mode}):\n'
+        '            t = fp.round(xs[i])\n'
+        '        out[i] = t\n'
+        '    return out\n'
+    )
+    import importlib.util
+    import pathlib
+    import sys
+    import tempfile
+    d = pathlib.Path(tempfile.mkdtemp())
+    path = d / f'ir_{mode}.py'
+    path.write_text(src)
+    spec = importlib.util.spec_from_file_location(f'ir_{mode}', path)
+    m = importlib.util.module_from_spec(spec)
+    sys.modules[f'ir_{mode}'] = m
+    spec.loader.exec_module(m)
+    return TritonCompiler(drop_asserts=True).compile(
+        m.k, ctx=fp.REAL, arg_types=[
+            ListType(RealType(fp.FP32), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)]).source
+
+
+@pytest.mark.parametrize('mode,fn', [
+    ('RTZ', 'trunc'), ('RTN', 'floor'), ('RTP', 'ceil'),
+    ('RNE', 'nearbyint'), ('RNA', 'round'),
+])
+def test_rounding_to_the_integers(mode, fn):
+    """A fixed-point context at position zero holds the integers, so its
+    round is a C integral rounding rather than a conversion.  `nearbyint` is
+    ties-to-even and `round` is ties-away, which separates RNE from RNA."""
+    assert f'libdevice.{fn}(' in _round_to_int(mode)
+
+
+def test_a_mode_with_no_c_function_is_refused():
+    """`RTO` rounds to odd, which no C function does -- refused rather than
+    rounded differently."""
+    with pytest.raises(TritonEmitError, match='not a hardware conversion'):
+        _round_to_int('RTO')

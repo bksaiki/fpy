@@ -106,7 +106,8 @@ from ...ast import (
     Var,
 )
 from ...ast.visitor import DefaultVisitor, Visitor
-from ...number import REAL, Context
+from ...number import REAL, Context, RoundingMode
+from ...number.context.mp_fixed import MPFixedContext
 from ...types import BoolType, RealType
 from ..backend import CompileError
 from .storage import (
@@ -173,6 +174,33 @@ _SIGN_BITS: dict[TritonScalar, str] = {
     TritonScalar.F64: 'tl.int64',
 }
 """The integer a float is bitcast to so its sign bit can be read."""
+
+_INT_ROUND: dict[RoundingMode, str] = {
+    RoundingMode.RTZ: 'libdevice.trunc',
+    RoundingMode.RTN: 'libdevice.floor',
+    RoundingMode.RTP: 'libdevice.ceil',
+    RoundingMode.RNE: 'libdevice.nearbyint',
+    RoundingMode.RNA: 'libdevice.round',
+}
+"""Rounding to the integers, by mode.
+
+`nearbyint` is ties-to-even and C's `round` is ties-away, which is what
+separates ``RNE`` from ``RNA``.  The modes with no C function -- ``RAZ``,
+``RTO``, ``RTE`` -- are absent, so they refuse rather than round differently.
+"""
+
+
+def _integral_round(ctx: Context) -> str | None:
+    """How to round to *ctx*, where it is the integers, or `None`.
+
+    A bounded fixed-point context is deliberately not matched: it can
+    overflow, and the check C++ emits for that is an `assert`, which a kernel
+    cannot raise.
+    """
+    if not isinstance(ctx, MPFixedContext) or ctx.nmin != -1:
+        return None
+    return _INT_ROUND.get(ctx.rm)
+
 
 _LOGB: dict[TritonScalar, tuple[int, int, int, float, int, str]] = {
     TritonScalar.F16: (15, 10, 0x1F, 2.0 ** -14, 11, 'tl.int16'),
@@ -806,11 +834,21 @@ class _Emitter(Visitor):
         for casting one.  Otherwise it is a cast, which is sound only under a
         context whose `round` *is* the hardware conversion; `is_native_ctx`
         answers exactly that question.
+
+        A fixed-point context sitting at position zero is the exception: its
+        values are the integers, so the round is one of the C integral
+        roundings rather than a conversion.  That is the form `RescaleFixed`
+        leaves behind, and it is how a fixed-point grid whose position is
+        computed at *runtime* is spelled at all -- the scale moves into
+        `ldexp` either side, and what is left rounds to a concrete context.
         """
         arg = self.emit(e.arg)
         ctx = self._active_ctx(e)
         if rounds_exactly(e, self.format_info.by_expr, ctx):
             return arg
+        integral = _integral_round(ctx)
+        if integral is not None:
+            return f'{integral}({arg})'
         if not is_native_ctx(ctx):
             raise TritonEmitError(
                 f'`{type(e).__name__.lower()}` to `{ctx}` is not a hardware '
