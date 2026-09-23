@@ -1026,9 +1026,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # lowers the grid: it states nothing and is dropped rather than
             # joined, the way `_visit_return` drops a path that returns only
             # infinities.  Joining it instead leaves the merge at its own seed.
+            # An arm holding only infinities and NaN states nothing either: a
+            # digit bound describes the finite values, and it has none.
             live = [
                 self.out.by_def.get(d)
-                for d in (ift, iff) if self.view.int_value(d) != 0
+                for d in (ift, iff)
+                if self.view.int_value(d) != 0 and self.view.has_finite(d)
             ]
             if live and all(t is not None for t in live):
                 self._join(phi, live)  # type: ignore[arg-type]

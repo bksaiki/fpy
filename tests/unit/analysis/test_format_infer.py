@@ -2769,6 +2769,30 @@ class TestAlignedSumPrecision:
         assert bounds['ws'] == 18    # the position is one value for all of `xs`
         assert bounds['ys'] > 200    # ... and a different one for each `i`
 
+    def test_an_arm_holding_only_infinities_is_not_joined(self):
+        """`overflow_inf` inlined: an arm that is `inf` states no digits, as a
+        zero arm states none, so it must not cost the product its exponent."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            p0 = A[0] * B[0]
+            if abs(p0) >= 340282366920938463463374607431768211456:
+                r0 = fp.inf()
+            else:
+                r0 = p0
+            p1 = A[1] * B[1]
+            p2 = A[2] * B[2]
+            p3 = A[3] * B[3]
+            prods = [r0, p1, p2, p3]
+            es = [max(fp.logb(A[k]), -14) + max(fp.logb(B[k]), -14)
+                  for k in range(4)]
+            e = max(es)
+            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                ts = [fp.round(p) for p in prods]
+            return sum(ts)
+
+        L16 = ListType(RealType(fp.FP16), 4)
+        assert self._sum_bounds(f, [L16, L16])['ts'] <= 28
+
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
         alignment to exploit, and the answer stays the non-relational one."""
