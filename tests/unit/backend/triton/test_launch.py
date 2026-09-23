@@ -302,3 +302,44 @@ def test_nan_and_inf_agree_with_the_interpreter():
     assert all((math.isnan(a) and math.isnan(b)) or a == b
                for a, b in zip(got, want)), f'{got} vs {want}'
     assert any(math.isnan(v) for v in got) and float('-inf') in got
+
+
+@fp.fpy(ctx=fp.FP32)
+def _row_slice(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A slice of a row, indexed by a loop variable."""
+    for r in range(len(out)):
+        w = xss[r][2:6]
+        s = fp.round(0)
+        for j in range(4):
+            s = s + w[j]
+        out[r] = s
+    return out
+
+
+class TestSliceIsAnAddress:
+    """A slice of something in memory is the same list at an offset.
+
+    Scalarizing it into that many loads threw the address away, and a
+    subscript by anything but a constant then had nothing to resolve
+    against.  As an offset the loop stays rolled and composes with the
+    row's own stride.
+    """
+
+    @pytest.mark.parametrize('n,block', [(6, 4), (8, 8), (1, 4)])
+    def test_it_agrees_with_the_interpreter(self, n, block):
+        import torch
+
+        src = TritonCompiler(drop_asserts=True).compile(
+            _row_slice, ctx=fp.FP32, arg_types=[
+                ListType(ListType(RealType(fp.FP32), 8), n),
+                ListType(RealType(fp.FP32), n),
+                RealType(fp.INTEGER)])
+        assert 'tl.load(xss_ptr + r * 8 + j + 2' in src.source
+        torch.manual_seed(0)
+        xt = torch.randn(n, 8).float().cuda()
+        ot = torch.zeros(n, dtype=torch.float32).cuda()
+        launch(src, [xt, ot], block=block)
+
+        vals = [[float(v) for v in row] for row in xt.cpu().tolist()]
+        want = [float(v) for v in _row_slice(vals, [0.0] * n, block)]
+        assert ot.cpu().tolist() == want, f'n={n} block={block}'

@@ -245,6 +245,15 @@ class _Emitter(Visitor):
         keeps the loop rolled, where scalarizing the row would unroll every
         load in it.
         """
+        self.slices: dict[NamedId, tuple[NamedId, list[Expr], str]] = {}
+        """Names bound to a *slice* of a pointer-backed list, as
+        (base, prefix, start).
+
+        A slice of something in memory is still in memory -- the same list at
+        an offset -- so like a row it is an address rather than a value.
+        Scalarizing it into that many loads throws the fact away, and then a
+        subscript by anything but a constant has nothing to resolve against.
+        """
         self.seqs: dict[NamedId, list[str]] = {}
         """Names holding a *scalarized* sequence, as one code per element.
 
@@ -437,7 +446,7 @@ class _Emitter(Visitor):
         """Whether *e* is a sequence rather than a scalar."""
         return isinstance(self.sizes.by_expr.get(e), ListSize)
 
-    def _flatten(self, e: ListRef) -> tuple[NamedId, list[Expr]]:
+    def _flatten(self, e: ListRef) -> tuple[NamedId, list[Expr], str | None]:
         """A subscript chain as its base and indices, outermost first.
 
         A base bound to a row resolves through to the pointer it came from,
@@ -459,17 +468,30 @@ class _Emitter(Visitor):
 
     def _resolve(
         self, name: NamedId, indices: list[Expr],
-    ) -> tuple[NamedId, list[Expr]]:
-        """*name* followed through the rows that bound it, and its indices.
+    ) -> tuple[NamedId, list[Expr], str | None]:
+        """*name* followed through the rows and slices that bound it.
 
-        Both a load and a store go through here, so naming a row works the
-        same either side of the assignment.
+        Returns the base, its indices, and any constant offset a slice
+        contributed -- kept as *code* rather than an expression, because it is
+        address arithmetic rather than a program operation and has no business
+        going through the op table.
+
+        Both a load and a store go through here, so naming a sub-sequence
+        works the same either side of the assignment.
         """
         seen: set[NamedId] = set()
-        while name in self.rows and name not in seen:
+        extra: list[str] = []
+        while name not in seen:
             seen.add(name)
-            name, prefix = self.rows[name]
-            indices = prefix + indices
+            if name in self.rows:
+                name, prefix = self.rows[name]
+                indices = prefix + indices
+            elif name in self.slices:
+                name, prefix, start = self.slices[name]
+                indices = prefix + indices
+                extra.append(start)
+            else:
+                break
         root = self._root(str(name))
         # every other list has stopped existing by here -- scalarized, or
         # resolved as a row -- so anything else would emit a `_ptr` that is
@@ -480,7 +502,31 @@ class _Emitter(Visitor):
                 f'`{name}` is subscripted but is not a kernel argument, so '
                 'there is no pointer to load from'
             )
-        return name, indices
+        return name, indices, ' + '.join(extra) if extra else None
+
+    def _slice_base(
+        self, e: ListSlice,
+    ) -> tuple[NamedId, list[Expr], str] | None:
+        """*e* as (base, prefix, start) where it slices something in memory.
+
+        `None` where it does not -- a slice of a local sequence of computed
+        values has no address, and scalarizing it is right.  What provenance
+        decides is which of the two a list is; it is not a choice.
+        """
+        if not isinstance(e.value, (Var, ListRef)):
+            return None
+        try:
+            if isinstance(e.value, Var):
+                base, prefix, extra = self._resolve(e.value.name, [])
+            else:
+                base, prefix, extra = self._flatten(e.value)
+        except TritonEmitError:
+            return None
+        if extra is not None:
+            # a slice of a slice: one offset is all this carries for now
+            return None
+        start = '0' if e.start is None else self.emit(e.start)
+        return base, prefix, start
 
     def _strides(self, base: NamedId, rank: int) -> list[int]:
         """Row-major strides for *base*, from its proven shape.
@@ -512,14 +558,20 @@ class _Emitter(Visitor):
             strides[i] = strides[i + 1] * dims[i + 1]
         return strides
 
-    def _offset(self, base: NamedId, indices: list[Expr]) -> str:
-        """The flat element offset, row-major."""
+    def _offset(
+        self, base: NamedId, indices: list[Expr], extra: str | None = None,
+    ) -> str:
+        """The flat element offset, row-major, plus any slice start."""
         strides = self._strides(base, len(indices))
         terms = [
             self.emit(idx) if st == 1 else f'{self.emit(idx)} * {st}'
             for idx, st in zip(indices, strides)
         ]
-        return ' + '.join(terms)
+        if extra is not None:
+            terms.append(extra)
+        # a zero term is address arithmetic noise, not a value
+        terms = [t for t in terms if t != '0']
+        return ' + '.join(terms) if terms else '0'
 
     def _range_index(self, e: ListRef) -> str | None:
         """*e* as index arithmetic, if it subscripts a `range`."""
@@ -685,8 +737,8 @@ class _Emitter(Visitor):
                     f'index {i} is outside a sequence of {len(elems)}'
                 )
             return elems[i]
-        base, indices = self._flatten(e)
-        addr = f'{base}_ptr + {self._offset(base, indices)}'
+        base, indices, extra = self._flatten(e)
+        addr = f'{base}_ptr + {self._offset(base, indices, extra)}'
         if self.mask is None:
             return f'tl.load({addr})'
         return f'tl.load({addr}, mask={self.mask}, other=0.0)'
@@ -1083,6 +1135,13 @@ class _Emitter(Visitor):
                 f'a `{type(stmt.target).__name__}` assignment target has no '
                 'Triton spelling'
             )
+        # ahead of scalarizing: a slice of something in memory is an
+        # address, and taking it apart into loads loses that
+        if isinstance(stmt.expr, ListSlice):
+            bound = self._slice_base(stmt.expr)
+            if bound is not None:
+                self.slices[stmt.target] = bound
+                return
         elems = self._elements(stmt.expr)
         if elems is not None:
             # the sequence stops existing: each element becomes a value of
@@ -1095,7 +1154,9 @@ class _Emitter(Visitor):
             self.seqs[stmt.target] = names
             return
         if isinstance(stmt.expr, ListRef) and self._is_list(stmt.expr):
-            base, indices = self._flatten(stmt.expr)
+            base, indices, extra = self._flatten(stmt.expr)
+            if extra is not None:
+                return  # a row of a slice: no place to keep the offset yet
             self.rows[stmt.target] = (base, indices)
             return
         match stmt.expr:
@@ -1161,8 +1222,8 @@ class _Emitter(Visitor):
             ctx.add_line(f'{name} = {code}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
-        base, indices = self._resolve(stmt.var, list(stmt.indices))
-        addr = f'{base}_ptr + {self._offset(base, indices)}'
+        base, indices, extra = self._resolve(stmt.var, list(stmt.indices))
+        addr = f'{base}_ptr + {self._offset(base, indices, extra)}'
         val = self.emit(stmt.expr)
         mask = '' if self.mask is None else f', mask={self.mask}'
         ctx.add_line(f'tl.store({addr}, {val}{mask})')

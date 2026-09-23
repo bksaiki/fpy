@@ -760,15 +760,35 @@ class TestScalarization:
         assert 'p_0 = (tl.load(A_ptr + 0) * tl.load(A_ptr + 0))' in out
         assert 'return (p_0 + p_3)' in out
 
-    def test_a_slice_takes_its_window(self):
+    def test_a_slice_of_memory_is_an_address_not_values(self):
+        """A slice of something in memory is the same list at an offset.
+
+        It used to scalarize into that many loads, which threw the address
+        away -- and then a subscript by anything but a constant had nothing
+        to resolve against.  Bound as an offset, the window is just added in.
+        """
         @fp.fpy(ctx=fp.FP32)
         def f(A: list[fp.Real]):
             w = A[1:3]
             return w[0] + w[1]
 
         out = _emit(f, [ListType(_R32, 4)])
-        assert 'w_0 = tl.load(A_ptr + 1)' in out
-        assert 'w_1 = tl.load(A_ptr + 1 + 1)' in out
+        assert out == 'return (tl.load(A_ptr + 1) + tl.load(A_ptr + 1 + 1))'
+
+    def test_a_slice_survives_a_dynamic_index(self):
+        """The point: the loop stays rolled and the index need not be
+        constant, because there is an address to add it to."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(A: list[fp.Real]):
+            w = A[1:5]
+            s = fp.round(0)
+            for j in range(4):
+                s = s + w[j]
+            return s
+
+        out = _emit(f, [ListType(_R32, 8)])
+        assert 'for j in tl.static_range(4):' in out
+        assert 'tl.load(A_ptr + j + 1)' in out
 
     def test_len_of_a_scalarized_sequence(self):
         @fp.fpy(ctx=fp.INTEGER)
