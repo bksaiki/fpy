@@ -19,10 +19,8 @@ rather than left for a caller to rediscover:
 - **`Simplify` last**, under ``optimize``.  The lowerings above leave debris
   only a later pass can see, which the cpp backend says of its own pipeline
   too.
-- **Tiling after the normal form, never before.**  A masked body is a guarded
-  element write, which `SimplifyIf` refuses to hoist -- correctly, since
-  hoisting would make the out-of-range store unconditional.  Normalizing after
-  tiling would therefore reject this pipeline's own output.
+- **Tiling after the normal form, never before.**  The loops to tile include
+  the ones inlining brings in.
 
 **What the ABI asks of the program.**  A Triton kernel writes through pointers
 its launcher owns and returns nothing, and its tile width is a compile-time
@@ -169,10 +167,8 @@ class TritonCompiler(Backend):
         a comprehension over a `zip` scalarize.
         """
         if self.drop_asserts:
-            # before the passes, not at emission: an `assert` the caller has
-            # already said to discard would otherwise stop `SimplifyIf`
-            # hoisting the arm that holds it.  Module-wide, since the one that
-            # matters is usually in a callee waiting to be inlined.
+            # module-wide, since the one that matters is usually in a callee
+            # waiting to be inlined
             module = module.map(lambda _m, fd: AssertElim.apply(fd))
         module = module.map(lambda _m, fd: ZipElim.apply(FreeVarElim.apply(fd)))
         return Specialize.apply(module, size_key=True)

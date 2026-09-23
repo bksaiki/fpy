@@ -1,12 +1,12 @@
 """
 Triton backend: the normal form.
 
-The counterpart of the cpp backend's ``_to_statement_form``, and its opposite.
-That one drives a program *toward* statements, because C++ has a statement for
-every construct.  A Triton kernel is elementwise code over tiles, so a data
-dependent branch has to become ``tl.where`` over a value -- there is no
-per-lane statement to branch into.  This one therefore drives the program
-toward *expressions*: calls inlined away, one exit, and every ``if`` a value.
+The counterpart of the cpp backend's ``_to_statement_form``: calls inlined
+away and one exit.  An ``if`` statement is kept.  A kernel has no per-lane
+branch, so the emitter flattens it under a mask -- but after the analyses,
+which read its guard: if-converting here would run each arm on every input
+*in the program*, and format inference would rightly bound it over all of
+them.
 
 Comprehensions,
 ``Sum``, ``Zip`` and ``Enumerate`` are deliberately kept: the vectorizer in
@@ -23,8 +23,6 @@ from ...ast import (
     DefaultVisitor,
     Expr,
     FuncDef,
-    If1Stmt,
-    IfStmt,
     NamedId,
     Var,
     WhileStmt,
@@ -35,7 +33,6 @@ from ...transform import (
     FuncInline,
     RescaleFixed,
     Scalarize,
-    SimplifyIf,
     SingleExit,
     TransformDeclined,
 )
@@ -71,8 +68,6 @@ class _NotNormal(DefaultVisitor):
 
     def _visit_statement(self, stmt, ctx):
         match stmt:
-            case IfStmt() | If1Stmt():
-                self.reasons.append('an `if` statement remains')
             case WhileStmt():
                 # a tile-wide loop must run a fixed number of times; a
                 # condition the body moves makes the count per-lane
@@ -118,8 +113,7 @@ def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
     with more than one return, so a function must be single-exit before anyone
     can inline it.  That makes the order across a call graph leaves-first,
     which is what :func:`normalize_module` is for -- this function alone cannot
-    fix a callee, since it only holds the caller.  ``SimplifyIf`` runs last
-    because sinking a `return` *creates* the `if` statements it consumes.
+    fix a callee, since it only holds the caller.
 
     ``Scalarize`` runs **either side of the inline**, and that ordering is the
     point:
@@ -154,7 +148,6 @@ def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
             func = RescaleFixed.apply(func)
         except TransformDeclined:
             pass  # nothing to move is not a failure
-        func = SimplifyIf.apply(func)
         reasons = _NotNormal(func).check()
         if not reasons:
             return func

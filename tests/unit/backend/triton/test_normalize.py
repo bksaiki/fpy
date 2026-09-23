@@ -1,15 +1,15 @@
 """The Triton normal form: `fpy2.backend.triton.normalize`.
 
-The form is calls inlined away, one exit, and every `if` a value;
-comprehensions and derived iterables stay, since the vectorizer wants the
-iteration written down.
+The form is calls inlined away and one exit.  An `if` statement stays, for the
+emitter to flatten after the analyses have read its guard; comprehensions and
+derived iterables stay, since the vectorizer wants the iteration written down.
 """
 
 import pytest
 
 import fpy2 as fp
 from fpy2 import Function
-from fpy2.ast.fpyast import Call, If1Stmt, IfStmt, ReturnStmt
+from fpy2.ast.fpyast import AssertStmt, Call, If1Stmt, IfStmt, ReturnStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2 import Module
 from fpy2.backend.triton import (
@@ -41,7 +41,6 @@ def _count(ast, *types) -> int:
 
 
 def _is_normal(ast) -> None:
-    assert _count(ast, IfStmt, If1Stmt) == 0, 'an `if` statement remains'
     assert _count(ast, ReturnStmt) == 1, 'not a single exit'
     assert _count(ast, Call) == 0, 'a call remains'
 
@@ -107,12 +106,14 @@ class TestReachesTheForm:
         assert 'for' in src
 
 
-class TestAGuardedLoopIsHoisted:
-    """`SimplifyIf` hoists a `for` out of an arm: it terminates, and the
-    merge discards what it computed on the side the guard did not take.  So
-    the normal form is reached rather than refused."""
+class TestAnIfIsKept:
+    """The emitter flattens an `if`; the normal form leaves it for the
+    analyses to read its guard first."""
 
-    def test_it_normalizes(self):
+    def test_the_callees_exits_become_an_if(self):
+        assert _count(_normalized(_caller).ast, IfStmt, If1Stmt) == 2
+
+    def test_a_guarded_loop_stays_guarded(self):
         @fp.fpy(ctx=fp.FP64)
         def guarded(c: bool, xs: list[fp.Real]):
             total = fp.round(0)
@@ -123,18 +124,16 @@ class TestAGuardedLoopIsHoisted:
 
         out = normalize(guarded.ast)
         _is_normal(out)
+        assert _count(out, If1Stmt) == 1
         g = Function(out, runtime=guarded.runtime)
         for c in (True, False):
             assert repr(g(c, [1.0, 2.0])) == repr(guarded(c, [1.0, 2.0]))
 
 
 class TestRejects:
-    def test_an_assert_under_a_guard_declines(self):
-        """Hoisting it would make it run unconditionally, and it can abort.
-
-        The pass's own `TransformDeclined` propagates rather than being
-        rewrapped: it already names the construct.
-        """
+    def test_an_assert_under_a_guard_is_left_to_the_emitter(self):
+        """Nothing is hoisted, so it runs only where the guard held; whether a
+        kernel can spell it is `drop_asserts`'s question, at emission."""
         @fp.fpy(ctx=fp.FP64)
         def guarded(c: bool, xs: list[fp.Real]):
             total = fp.round(0)
@@ -144,8 +143,7 @@ class TestRejects:
                     total = total + x
             return total
 
-        with pytest.raises(TransformDeclined, match='`assert` would run'):
-            normalize(guarded.ast)
+        assert _count(normalize(guarded.ast), AssertStmt) == 1
 
     def test_a_varying_while_condition_is_not_normal(self):
         """A tile-wide loop runs a fixed number of times; a condition the body
