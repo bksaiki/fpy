@@ -487,3 +487,30 @@ def test_nan_is_refused_where_the_context_cannot_hold_one():
                 ListType(RealType(fp.INTEGER), 4),
                 ListType(RealType(fp.INTEGER), 4),
                 RealType(fp.INTEGER)])
+
+
+@fp.fpy(ctx=fp.FP32)
+def _tile_reduction(xss: list[list[fp.Real]], out: list[fp.Real],
+                    BLOCK: fp.Real):
+    """A reduction over a *pointer-backed* row: must stay a rolled loop."""
+    for r in range(len(out)):
+        acc = fp.round(0)
+        for k in range(8):
+            acc = acc + xss[r][k]
+        out[r] = acc
+    return out
+
+
+def test_a_reduction_over_memory_stays_rolled():
+    """Unrolling is for lists of values, which have no iteration to perform.
+
+    A loop over something in memory does, and this is the shape the backend
+    is built around -- unrolling it would rewrite every kernel.
+    """
+    src = TritonCompiler(drop_asserts=True).compile(
+        _tile_reduction, ctx=fp.FP32, arg_types=[
+            ListType(ListType(RealType(fp.FP32), 8), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert 'for k in tl.static_range(8):' in src.source
+    assert src.source.count('tl.load(xss_ptr') == 1, 'one load, not eight'

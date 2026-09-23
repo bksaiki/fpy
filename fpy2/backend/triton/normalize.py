@@ -114,7 +114,8 @@ def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
     fix a callee, since it only holds the caller.  ``SimplifyIf`` runs last
     because sinking a `return` *creates* the `if` statements it consumes.
 
-    ``Scalarize`` runs **before the inline**, and that ordering is the point:
+    ``Scalarize`` runs **either side of the inline**, and that ordering is the
+    point:
     `FuncInline` splices a callee's body into the enclosing *statement* list,
     so it cannot take a call sitting inside a comprehension.  Unrolling the
     comprehension first puts each call in a statement of its own.  *cap* is
@@ -130,8 +131,14 @@ def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
 
     for _ in range(_MAX_ROUNDS):
         func = SingleExit.apply(func)
+        # either side of the inline, because it goes both ways: unrolling a
+        # comprehension puts a call where `FuncInline` can reach it, and
+        # inlining brings in the callee's own sequences to unroll.  Running
+        # it only before would leave a just-inlined body untouched, since the
+        # form is normal by then and the loop exits.
         func = Scalarize.apply(func, cap=cap)
         func = FuncInline.apply(func, recursive=True)
+        func = Scalarize.apply(func, cap=cap)
         func = SimplifyIf.apply(func)
         reasons = _NotNormal(func).check()
         if not reasons:

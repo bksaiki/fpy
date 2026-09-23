@@ -4,6 +4,7 @@ from ..analysis import ArraySizeAnalysis, ArraySizeInfer, DefineUse, SyntaxCheck
 from ..analysis.array_size import ListSize
 from ..ast import *
 from ..utils import Gensym
+from .utils import clone_block
 
 __all__ = ['Scalarize']
 
@@ -83,6 +84,15 @@ class _Scalarize(DefaultTransformVisitor):
         self.gensym = Gensym(reserved=DefineUse.analyze(func).names())
         self.pending: list[Stmt] = []
         self.changed = False
+        self.value_lists: dict[NamedId, list[Expr]] = {}
+        """Names bound to a list of *values* -- a literal, with nothing in
+        memory behind it.
+
+        A loop over one has no runtime iteration to perform: there is no
+        object to step through, only that many values.  A loop over something
+        in *memory* is a different thing and stays a loop, which is why this
+        tracks provenance rather than just a proven length.
+        """
         self.consts: dict[NamedId, int] = {}
         """Names bound to an integer constant, so an index like `n + i`
         resolves.  `Simplify` would propagate these, but it runs *after* the
@@ -297,10 +307,41 @@ class _Scalarize(DefaultTransformVisitor):
         ))
         return out, k - j
 
+    def _unroll_for(self, stmt: ForStmt) -> list[Stmt] | None:
+        """A `for` over a list of values, as its iterations.
+
+        Only over *values*: a loop over a range or over something in memory
+        has an iteration to perform and stays a loop.  Unrolling those would
+        rewrite every kernel that reduces over a tile, which is the shape
+        this backend is built around.
+        """
+        if not isinstance(stmt.target, NamedId):
+            return None  # a tuple binding is `ZipElim`'s business
+        elts: list[Expr] | None = None
+        if isinstance(stmt.iterable, ListExpr):
+            elts = list(stmt.iterable.elts)
+        elif isinstance(stmt.iterable, Var):
+            elts = self.value_lists.get(stmt.iterable.name)
+        if elts is None or len(elts) > self.cap:
+            return None
+        out: list[Stmt] = []
+        for elt in elts:
+            # cloned per copy: the analyses key on node identity
+            out.append(Assign(stmt.target, None, _clone(elt), stmt.loc))
+            out.extend(clone_block(stmt.body).stmts)
+        return out
+
     def _visit_block(self, block: StmtBlock, ctx):
         outer, stmts = self.pending, []
         src, j = block.stmts, 0
         while j < len(src):
+            here = src[j]
+            if isinstance(here, ForStmt):
+                unrolled = self._unroll_for(here)
+                if unrolled is not None:
+                    self.changed = True
+                    src = list(src[:j]) + unrolled + list(src[j + 1:])
+                    continue
             group = self._fill_group(list(src), j)
             if group is not None:
                 rewritten, used = group
@@ -317,6 +358,16 @@ class _Scalarize(DefaultTransformVisitor):
                 v = self._const(stmt.expr)
                 if v is not None:
                     self.consts[stmt.target] = v
+                if isinstance(out, Assign):
+                    # a literal, or a copy of one: inlining binds a callee's
+                    # parameter to the caller's list by name, so the loop it
+                    # came with sees the copy rather than the literal
+                    if isinstance(out.expr, ListExpr):
+                        self.value_lists[stmt.target] = list(out.expr.elts)
+                    elif isinstance(out.expr, Var):
+                        src_elts = self.value_lists.get(out.expr.name)
+                        if src_elts is not None:
+                            self.value_lists[stmt.target] = src_elts
             j += 1
         self.pending = outer
         return StmtBlock(stmts), ctx

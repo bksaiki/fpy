@@ -225,3 +225,58 @@ class TestAllocateAndFill:
         g = _sized(_join, 2, 3)
         assert 'fp.empty' in Function(
             Scalarize.apply(g.ast, cap=4), runtime=None).format()
+
+
+@fp.fpy(ctx=fp.FP32)
+def _loop_over_values(xs: list[fp.Real]):
+    ps = [xs[i] * 2 for i in range(3)]
+    s = fp.round(0)
+    for p in ps:
+        s = s + p
+    return s
+
+
+@fp.fpy(ctx=fp.FP32)
+def _loop_over_memory(xs: list[fp.Real]):
+    s = fp.round(0)
+    for x in xs:
+        s = s + x
+    return s
+
+
+class TestLoopsOverValues:
+    """A loop over a list of *values* has no iteration to perform: there is
+    no object to step through, only that many values.  A loop over something
+    in *memory* does, and stays a loop -- which is what keeps a reduction
+    over a tile rolled.
+    """
+
+    def test_a_loop_over_values_unrolls(self):
+        out = _agrees(_loop_over_values, [1.0, 2.0, 3.0])
+        assert 'for ' not in Function(out, runtime=None).format()
+
+    def test_a_loop_over_memory_is_left_alone(self):
+        g = _sized(_loop_over_memory, 4)
+        out = Scalarize.apply(g.ast)
+        assert 'for x in xs' in Function(out, runtime=None).format()
+        args = [1.0, 2.0, 3.0, 4.0]
+        assert repr(g.with_ast(out)(args)) == repr(g(args))
+
+    def test_a_copy_of_a_value_list_still_unrolls(self):
+        """Inlining binds a callee's parameter to the caller's list by name,
+        so the loop it came with sees a copy rather than the literal."""
+        @fp.fpy(ctx=fp.FP32)
+        def via_copy(xs: list[fp.Real]):
+            ps = [xs[i] * 2 for i in range(3)]
+            qs = ps
+            s = fp.round(0)
+            for q in qs:
+                s = s + q
+            return s
+
+        out = _agrees(via_copy, [1.0, 2.0, 3.0])
+        assert 'for ' not in Function(out, runtime=None).format()
+
+    def test_over_the_cap_is_left_alone(self):
+        assert 'for p in ps' in Function(
+            Scalarize.apply(_loop_over_values.ast, cap=2), runtime=None).format()
