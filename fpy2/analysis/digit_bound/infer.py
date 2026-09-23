@@ -30,7 +30,7 @@ from ...number.context.mp_fixed import MPFixedContext
 from ...types import ListType, RealType
 from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
 from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
-from ..reaching_defs import Definition, PhiDef
+from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
 from .store import DigitBoundStore, Term
 
@@ -226,6 +226,11 @@ def _all(ts: Iterable[Term | None]) -> list[Term] | None:
 def _size(bound: ArraySizeBound) -> int | None:
     """*bound*'s length, when it is statically known."""
     return concrete_size(bound.size) if isinstance(bound, ListSize) else None
+
+
+_MAX_ZERO_PATHS = 64
+"""How many paths a conjunction of disjunctions may expand to before its
+zeros are given up on -- which only costs precision."""
 
 
 class _DigitBoundInferInstance(DefaultVisitor):
@@ -924,11 +929,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
         `all(...)`.  A bare `xs[i] == 0` names the same term and is not here.
         """
         match cond:
-            case Or() | And():
+            case Or():
                 out: set[Term] = set()
                 for a in cond.args:
                     out |= self._universal_zeros(a)
                 return out
+            case And():
+                out = self._covered_zeros(cond.args)
+                for a in cond.args:
+                    out |= self._universal_zeros(a)
+                return out
+            case AllOf(arg=ListExpr() as lit):
+                return self._covered_zeros(lit.elts)
+            case AllOf(arg=Var() as xs) if (named := self._literal(xs)) is not None:
+                return self._covered_zeros(named.elts)
             case AllOf():
                 # `_zero_paths` already reads both shapes an `all` takes --
                 # over a comprehension, and over the list a loop filled
@@ -939,6 +953,57 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 )
             case _:
                 return set()
+
+    def _covered_zeros(self, tests: Sequence[Expr]) -> set[Term]:
+        """The list summaries a conjunction of *tests* zeroes for every
+        element: `xs[k] == 0` for every index of one definition of `xs`.
+
+        What `all(x == 0 for x in xs)` says, spelled out element by element --
+        which is how it arrives once scalarized.  Short of every index it
+        says nothing of the others, as a single `xs[k] == 0` does not.
+        """
+        seen: dict[Definition, tuple[Term, int | None, set[int]]] = {}
+        for t in tests:
+            ref = self._zero_tested(t)
+            if ref is None or not isinstance(ref.value, Var):
+                continue
+            k = self.view.int_value(ref.index)
+            msb = self._msb_of(ref)
+            if k is None or msb is None:
+                continue
+            d = self.def_use.find_def_from_use(ref.value)
+            term, _, ks = seen.setdefault(
+                d, (msb, self._len_of(ref.value), set()))
+            if term is msb:
+                ks.add(k)
+        return {
+            term for term, n, ks in seen.values()
+            if n is not None and ks >= set(range(n))
+        }
+
+    def _zero_tested(self, test: Expr) -> ListRef | None:
+        """The `xs[k]` *test* compares against zero, through a name."""
+        match test:
+            case Var():
+                d = self.def_use.find_def_from_use(test)
+                if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+                    return self._zero_tested(d.site.expr)
+            case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
+                for value, other in ((rhs, lhs), (lhs, rhs)):
+                    if self.view.int_value(value) == 0:
+                        return self._one_element(other)
+        return None
+
+    def _one_element(self, e: Expr) -> ListRef | None:
+        """The constant-index read *e* is, directly or through a name."""
+        match e:
+            case ListRef() if self.view.int_value(e.index) is not None:
+                return e
+            case Var():
+                d = self.def_use.find_def_from_use(e)
+                if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+                    return self._one_element(d.site.expr)
+        return None
 
     def _universal_zeros_of(self, d: Definition) -> set[Term]:
         """:meth:`_universal_zeros`, reached through a definition."""
@@ -961,12 +1026,24 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
                 for value, other in ((rhs, lhs), (lhs, rhs)):
                     if self.view.int_value(value) == 0:
+                        # an element read at a constant index has its list's
+                        # summary, which speaks for every element: one zero
+                        # element is not that, so only a conjunction covering
+                        # the list zeroes it -- see `_zero_paths_conj`
+                        if self._one_element(other) is not None:
+                            return None
                         t = self._msb_of(other)
                         return None if t is None else [{t}]
                 return None
             case Or():
-                # `And` is the dual and is not handled
                 return self._zero_paths_all(cond.args)
+            case And():
+                return self._zero_paths_conj(cond.args)
+            case AllOf(arg=ListExpr() as lit):
+                # the comprehension below, once scalarized
+                return self._zero_paths_conj(lit.elts)
+            case AllOf(arg=Var() as xs) if (named := self._literal(xs)) is not None:
+                return self._zero_paths_conj(named.elts)
             case AllOf(arg=ListComp() as comp):
                 # every element true, so whatever the element tests is zero
                 return self._zero_paths(comp.elt)
@@ -978,6 +1055,28 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return self._zero_paths_of(self.def_use.find_def_from_use(cond))
             case _:
                 return None
+
+    def _zero_paths_conj(self, args: Sequence[Expr]) -> list[set[Term]] | None:
+        """The paths making every one of *args* true: each zeroes what one
+        path of every conjunct does.  A conjunct zeroing nothing leaves the
+        others' zeros standing."""
+        covered = self._covered_zeros(args)
+        paths: list[set[Term]] = [set(covered)]
+        for a in args:
+            part = self._zero_paths(a)
+            if part is None:
+                continue
+            paths = [p | q for p in paths for q in part]
+            if len(paths) > _MAX_ZERO_PATHS:
+                return None
+        return paths if any(paths) else None
+
+    def _literal(self, xs: Var) -> ListExpr | None:
+        """The list literal *xs* was bound to, if it was."""
+        d = self.def_use.find_def_from_use(xs)
+        if isinstance(d.site, Assign) and isinstance(d.site.expr, ListExpr):
+            return d.site.expr
+        return None
 
     def _zero_paths_of(self, d: Definition) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""
