@@ -1368,6 +1368,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     ]
                 else:
                     self._share(d, self._def(d_src))
+            case ListRef(value=Var() as lst, index=idx) if self._in_range(
+                idx, self._len_of(lst)
+            ):
+                self._share(d, self._def(self.def_use.find_def_from_use(lst)))
             case _:
                 src = self.out.by_expr.get(stmt.expr)
                 if src is None:
