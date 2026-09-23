@@ -79,6 +79,7 @@ from ...ast import (
     ListRef,
     ListSlice,
     ListTypeAnn,
+    Logb,
     Max,
     Min,
     Mul,
@@ -166,6 +167,18 @@ _SIGN_BITS: dict[TritonScalar, str] = {
     TritonScalar.F64: 'tl.int64',
 }
 """The integer a float is bitcast to so its sign bit can be read."""
+
+_LOGB: dict[TritonScalar, tuple[int, int, int, float, int, str]] = {
+    TritonScalar.F16: (15, 10, 0x1F, 2.0 ** -14, 11, 'tl.int16'),
+    TritonScalar.F32: (127, 23, 0xFF, 2.0 ** -126, 24, 'tl.int32'),
+    TritonScalar.F64: (1023, 52, 0x7FF, 2.0 ** -1022, 53, 'tl.int64'),
+}
+"""Per format: (bias, mantissa bits, exponent mask, smallest normal, the
+power of two a subnormal is scaled by, the integer to bitcast through).
+
+The scale is chosen so the *smallest* subnormal becomes normal: fp32's is
+`2**-149`, and `2**-149 * 2**24` is `2**-125`.
+"""
 
 
 class _Emitter(Visitor):
@@ -856,6 +869,58 @@ class _Emitter(Visitor):
             f'no Triton spelling for `{type(e).__name__}`'
         )
 
+    def _emit_logb(self, e: Logb) -> str:
+        """IEEE 754 `logB`: the exponent of *x*, read from its bits.
+
+        There is no correctly-rounded primitive to call -- `tl.log2` is a
+        transcendental, which the op table excludes by design -- so the
+        exponent field is taken directly.  Exact, because it reads the value
+        rather than computing one.
+
+        **A subnormal is scaled into range rather than counted.**  Its
+        exponent field is zero and its true exponent depends on where the
+        leading one sits, which would want a count-leading-zeros; multiplying
+        by `2**k` makes it normal and the `k` comes back off afterwards.  The
+        multiply is exact -- it only moves the exponent -- and `k` is chosen
+        so the smallest subnormal lands on a normal.
+
+        The three specials are `logB`'s own: `+/-0` is `-inf`, `+/-inf` is
+        `+inf`, a NaN is a NaN.  Checked against the interpreter on the card
+        over every fp32 exponent boundary of both signs and 3000 random bit
+        patterns.
+
+        The operand is repeated, which is free for a name and a load for a
+        subscript.  It is pure and identically masked, so a CSE pass should
+        collapse the copies -- unverified here, as for the `max` fold.
+        """
+        have = self._storage(e.arg)
+        spec = _LOGB.get(have)
+        if spec is None:
+            raise TritonEmitError(
+                f'`logb` reads an exponent field, and {have.format()} has '
+                'none to read'
+            )
+        want = self._storage(e)
+        if want.is_integer():
+            # `logb(0)` is `-inf`, which an integer cannot hold: the program
+            # aborts there and a kernel cannot
+            raise TritonEmitError(
+                f'`logb` gives `-inf` at zero, which {want.format()} cannot '
+                'hold'
+            )
+        bias, mant, mask, min_normal, scale, ity = spec
+        x = self.emit(e.arg)
+        fty = want.format()
+        sub = f'(tl.abs({x}) < {min_normal!r})'
+        scaled = f'tl.where({sub}, {x} * {float(2 ** scale)!r}, {x})'
+        bits = f'({scaled}).to({ity}, bitcast=True)'
+        exp = f'((({bits} >> {mant}) & {mask}) - {bias})'
+        adj = f'tl.where({sub}, {exp} - {scale}, {exp}).to({fty})'
+        at_zero = f"tl.where(tl.abs({x}) == 0.0, float('-inf'), {adj})"
+        at_inf = (f"tl.where(tl.abs({x}) == float('inf'), float('inf'), "
+                  f'{at_zero})')
+        return f"tl.where({x} != {x}, float('nan'), {at_inf})"
+
     def _emit_reduction(self, e: UnaryOp) -> str:
         """`max`, `min` or `sum` over a sequence, folded over its elements.
 
@@ -1015,6 +1080,8 @@ class _Emitter(Visitor):
             return self._emit_len(e)
         if isinstance(e, (IsNan, IsInf, IsFinite, Signbit)):
             return self._emit_predicate(e)
+        if isinstance(e, Logb):
+            return self._emit_logb(e)
         if isinstance(e, (AMax, AMin, Sum, AnyOf, AllOf)):
             return self._emit_reduction(e)
         return self._dispatch(

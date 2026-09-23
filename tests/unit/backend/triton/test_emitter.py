@@ -716,17 +716,35 @@ class TestPredicates:
 
         assert _emit(f, [RealType(fp.INTEGER)]) == 'return (x < 0)'
 
-    def test_logb_stays_refused(self):
-        """No correctly-rounded primitive exists: `tl.log2` is a
-        transcendental, which the op table excludes by design.  An exact route
-        through `tl.cast(..., bitcast=True)` is available but needs four
-        special cases, so it is its own piece of work rather than a gap."""
+    def test_logb_reads_the_exponent_field(self):
+        """No correctly-rounded primitive exists -- `tl.log2` is a
+        transcendental, which the op table excludes by design -- so the
+        exponent is read from the bits, which is exact rather than rounded.
+
+        A subnormal is *scaled into range* rather than counted: its exponent
+        field is zero, and finding the leading one would want a
+        count-leading-zeros.  The multiply only moves the exponent, so it is
+        exact, and the scale comes back off afterwards.
+        """
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real):
             return fp.logb(x)
 
-        with pytest.raises(TritonEmitError, match='no signatures for op: Logb'):
-            _emit(f, [_R32])
+        out = _emit(f, [_R32])
+        assert '.to(tl.int32, bitcast=True)' in out
+        assert '>> 23' in out and '& 255' in out
+        assert '16777216.0' in out, 'the subnormal scale'
+
+    def test_logb_of_an_integer_is_refused(self):
+        """There is no exponent field to read.  The result is guarded too --
+        `logb(0)` is `-inf`, which an integer cannot hold -- but the operand
+        is what an integer context reaches first."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(x: fp.Real):
+            return fp.logb(x)
+
+        with pytest.raises(TritonEmitError, match='has none to read'):
+            _emit(f, [RealType(fp.INTEGER)])
 
 
 class TestScalarization:

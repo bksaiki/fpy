@@ -514,3 +514,29 @@ def test_a_reduction_over_memory_stays_rolled():
             RealType(fp.INTEGER)])
     assert 'for k in tl.static_range(8):' in src.source
     assert src.source.count('tl.load(xss_ptr') == 1, 'one load, not eight'
+
+
+@fp.fpy(ctx=fp.FP32)
+def _logb(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        out[i] = fp.logb(xs[i])
+    return out
+
+
+def test_logb_reads_the_exponent_field():
+    """No correctly-rounded primitive exists -- `tl.log2` is a
+    transcendental, which the op table excludes -- so the exponent is read
+    from the bits, which is exact."""
+    src = TritonCompiler(drop_asserts=True).compile(
+        _logb, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), 4),
+            ListType(RealType(fp.FP32), 4),
+            RealType(fp.INTEGER)])
+    assert '.to(tl.int32, bitcast=True)' in src.source
+    assert '>> 23' in src.source and '& 255' in src.source
+    # the three specials `logB` names
+    assert "float('-inf')" in src.source   # at zero
+    assert "float('inf')" in src.source    # at an infinity
+    assert "float('nan')" in src.source    # at a NaN
+    # a subnormal is scaled into range, not counted
+    assert '16777216.0' in src.source

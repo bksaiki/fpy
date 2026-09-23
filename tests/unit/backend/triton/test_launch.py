@@ -343,3 +343,48 @@ class TestSliceIsAnAddress:
         vals = [[float(v) for v in row] for row in xt.cpu().tolist()]
         want = [float(v) for v in _row_slice(vals, [0.0] * n, block)]
         assert ot.cpu().tolist() == want, f'n={n} block={block}'
+
+
+@fp.fpy(ctx=fp.FP32)
+def _logb(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    for i in range(len(out)):
+        out[i] = fp.logb(xs[i])
+    return out
+
+
+def test_logb_agrees_over_every_exponent_and_random_bits():
+    """Exhaustive where it can be: every fp32 exponent boundary of both
+    signs -- which is where subnormals, the scaling and the specials all
+    live -- plus random bit patterns, which land anywhere at all."""
+    import math
+    import random
+    import struct
+
+    import torch
+
+    random.seed(0)
+    vals = [1.0, 2.0, 3.0, 0.5, -4.0, 0.0, -0.0,
+            float('inf'), float('-inf'), float('nan')]
+    for e in range(-149, 128):
+        vals += [2.0 ** e, -(2.0 ** e)]
+    for _ in range(2000):
+        vals.append(
+            struct.unpack('<f', struct.pack('<I', random.getrandbits(32)))[0])
+    n = len(vals)
+
+    src = TritonCompiler(drop_asserts=True).compile(
+        _logb, ctx=fp.FP32, arg_types=[
+            ListType(RealType(fp.FP32), n),
+            ListType(RealType(fp.FP32), n),
+            RealType(fp.INTEGER)])
+    xt = torch.tensor(vals, dtype=torch.float32).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    launch(src, [xt, ot], block=256)
+
+    want = [float(v) for v in _logb(
+        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 256)]
+    bad = [(v, g, w) for v, g, w in zip(vals, ot.cpu().tolist(), want)
+           if not ((math.isnan(g) and math.isnan(w)) or g == w)]
+    assert not bad, f'{len(bad)} differ, first: {bad[:3]}'
+    # the subnormal range really was covered
+    assert any(w < -126 and math.isfinite(w) for w in want)
