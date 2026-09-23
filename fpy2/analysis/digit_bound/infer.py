@@ -453,7 +453,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 src = self._def(self.def_use.find_def_from_use(e))
             case ListRef(value=Var() as lst, index=idx) if self._covers(
                 idx, self._len_of(lst)
-            ):
+            ) or self._in_range(idx, self._len_of(lst)):
                 src = self._def(self.def_use.find_def_from_use(lst))
             case ListRef(value=Var() as lst, index=Var() as idx) if (
                 inst := self._at_index_set(lst, idx)
@@ -751,7 +751,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # itself is never needed.  An operand with no term contributes
                 # none, and the ordering still holds for the rest.
                 m = self._fresh_value(e)
-                operands = [e.arg] if isinstance(e, AMax | AMin) else list(e.args)
+                operands = (
+                    self._elements(e.arg) or [e.arg] if isinstance(e, AMax | AMin)
+                    else list(e.args)
+                )
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
@@ -769,6 +772,23 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # No rule, but a range still keeps a `max` over it bounded --
                 # enough for a position built from it to materialize.
                 return self._fresh_value(e) if self.view.int_range(e) else None
+
+    def _elements(self, e: Expr) -> list[Expr] | None:
+        """*e*'s elements where it is a literal list, following a variable to
+        its definition.
+
+        A list built any other way has only its summary, which speaks for an
+        arbitrary element rather than for each -- enough to bound a `max` from
+        above, but not to place it above every element.
+        """
+        match e:
+            case ListExpr():
+                return list(e.elts)
+            case Var():
+                d = self.def_use.find_def_from_use(e)
+                if isinstance(d.site, Assign) and isinstance(d.site.expr, ListExpr):
+                    return list(d.site.expr.elts)
+        return None
 
     def _live_arms(self, e: IfExpr) -> list[Expr]:
         """The arms of *e* that state a magnitude.
@@ -1131,6 +1151,18 @@ class _DigitBoundInferInstance(DefaultVisitor):
     #
     def _len_of(self, e: Expr) -> int | None:
         return _size(self.array_size.by_expr.get(e))
+
+    def _in_range(self, index: Expr, length: int | None) -> bool:
+        """Is *index* a constant naming an element of a list of *length*?
+
+        A list's summary describes an arbitrary element, so one element
+        satisfies it -- for a *read*.  A write at a constant index reaches
+        only that element, which is why this is not :meth:`_covers`.
+        """
+        if length is None:
+            return False
+        k = self.view.int_value(index)
+        return k is not None and 0 <= k < length
 
     def _covers(self, index: Expr, length: int | None) -> bool:
         """Does *index* run over every element of a list of *length*?
