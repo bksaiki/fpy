@@ -3,7 +3,7 @@ Function inlining.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..analysis import (
     AssignDef,
@@ -43,13 +43,14 @@ class _Ctx:
     stmts: list[Stmt]
     is_ctx_expr: bool
     in_while_cond: bool = False
+    in_comp: bool = False
 
     @staticmethod
     def default():
         return _Ctx(stmts=[], is_ctx_expr=False)
 
 
-def _refuses(e: Call, *, in_while_cond: bool) -> str | None:
+def _refuses(e: Call, *, in_while_cond: bool, in_comp: bool) -> str | None:
     """Why the call *e* cannot be inlined, or `None` where it can.
 
     Decided from the call and the callee alone, so a listing and the rewrite
@@ -60,6 +61,12 @@ def _refuses(e: Call, *, in_while_cond: bool) -> str | None:
         return (
             f'inlining `{e.fn.name}` here would splice its body before the '
             f'loop, where a `while` condition is evaluated every iteration'
+        )
+    if in_comp:
+        return (
+            f'inlining `{e.fn.name}` here would splice its body outside the '
+            f'comprehension, where its targets are not bound; lower the '
+            f'comprehension to a loop first'
         )
     # inlining rewrites the trailing return into an assignment to a temp (see
     # `_replace_ret`): none leaves nothing to rewrite, and several would emit
@@ -124,7 +131,9 @@ class _FuncInline(SiteRewriter):
             return super()._visit_call(e, ctx)
 
         # a refusal is not a site, so it takes no index
-        reason = _refuses(e, in_while_cond=ctx.in_while_cond)
+        reason = _refuses(
+            e, in_while_cond=ctx.in_while_cond, in_comp=ctx.in_comp,
+        )
         if reason is not None:
             self.refused.append((e, reason))
             if self._named_by_cursor(e):
@@ -205,6 +214,18 @@ class _FuncInline(SiteRewriter):
         # return the bound value
         return Var(t, e.loc)
 
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> ListComp:
+        """The element expression is evaluated with the targets bound.
+
+        Splicing a callee's body into the enclosing block would put it where
+        they are not, so a call there is refused rather than inlined into an
+        unbound name.  The iterables are ordinary expressions of the
+        enclosing block and take the unchanged context.
+        """
+        targets = [self._visit_binding(t, ctx) for t in e.targets]
+        iterables = [self._visit_expr(i, ctx) for i in e.iterables]
+        elt = self._visit_expr(e.elt, replace(ctx, in_comp=True))
+        return ListComp(targets, iterables, elt, e.loc)
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, _Ctx(ctx.stmts, False, in_while_cond=True))

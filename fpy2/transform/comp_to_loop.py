@@ -368,6 +368,15 @@ class _CompToLoopInstance(SiteRewriter):
             ))
             return Var(acc, loc)
 
+        if (len(e.targets) == 1 and isinstance(e.targets[0], NamedId)
+                and isinstance(iters[0], Range1)):
+            # `range(n)` counts from 0 by 1, so its target is the write index
+            target = copy_target(e.targets[0])
+            assert isinstance(target, NamedId)
+            body = StmtBlock([IndexedAssign(acc, place(Var(target, loc)), elt, loc)])
+            out.append(ForStmt(target, clone(iters[0]), body, loc))
+            return Var(acc, loc)
+
         # Several clauses, or one whose iterable is not indexed: nest loops
         # over the original targets and carry a write index.
         j_id = self.gensym.refresh(self.temp_id)

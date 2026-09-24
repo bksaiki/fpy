@@ -34,12 +34,16 @@ class Gensym:
         self._generated = set()
         self._rename_hook = rename_hook
 
-    def _copy_id(self, id: NamedId) -> NamedId:
+    def _copy_id(self, id: NamedId, count: int | None = None) -> NamedId:
+        """*id* with *count*, built rather than mutated: `NamedId` caches its
+        hash."""
+        if count is None:
+            count = id.count
         match id:
             case SourceId():
-                return SourceId(id.base, id.loc, id.count)
+                return SourceId(id.base, id.loc, count)
             case NamedId():
-                return NamedId(id.base, id.count)
+                return NamedId(id.base, count)
 
     def reserve(self, *idents: NamedId):
         """Reserves a set of identifiers. Does not add to `self.generated`."""
@@ -52,7 +56,7 @@ class Gensym:
         """Generates a unique identifier for an existing identifier."""
         ident = self._copy_id(ident)
         while ident in self._idents:
-            ident.count = self._counter
+            ident = self._copy_id(ident, self._counter)
             self._counter += 1
 
         self._idents.add(ident)

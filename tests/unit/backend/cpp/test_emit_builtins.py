@@ -6,7 +6,7 @@ format inference.
 
 ``enumerate`` and ``zip`` no longer reach the emitter at all: `UnfoldEnumerate`
 and `UnfoldZip` state each as the comprehension `derived-semantics.rst` defines
-it to be, inside `_to_statement_form`'s fixpoint, and `CompToLoop` lowers that.
+it to be, inside `StatementForm`'s fixpoint, and `CompToLoop` lowers that.
 So the tuple list they used to build is now built by the comprehension's own
 fill loop — same object, one fewer emitter case.
 
@@ -18,16 +18,15 @@ import contextlib
 import pytest
 
 import fpy2 as fp
-import fpy2.backend.cpp.compiler as _compiler
 from fpy2.backend.cpp import CppCompileError, CppCompiler
 from fpy2.backend.cpp.emitter import CppEmitter
-from fpy2.transform import CompToLoop, Hoistable
+from fpy2.transform import CompToLoop, Hoistable, StatementForm
 from fpy2.types import ListType, RealType
 
 
 @contextlib.contextmanager
 def _no_unfold():
-    """`_to_statement_form` without the unfolds, which is how a `zip` reaches
+    """`StatementForm` without the unfolds, which is how a `zip` reaches
     the emitter at all."""
     def plain(fd):
         while True:
@@ -37,12 +36,12 @@ def _no_unfold():
                 return fd
             fd = log.result
 
-    original = _compiler._to_statement_form
-    _compiler._to_statement_form = plain
+    original = StatementForm.apply
+    StatementForm.apply = staticmethod(plain)
     try:
         yield
     finally:
-        _compiler._to_statement_form = original
+        StatementForm.apply = original
 
 
 class TestSum:
@@ -265,7 +264,7 @@ class TestZip:
 
 
 class TestTheEmitterNoLongerHasThem:
-    """`_emit_zip` and `_emit_enumerate` are gone: `_to_statement_form` unfolds
+    """`_emit_zip` and `_emit_enumerate` are gone: `StatementForm` unfolds
     both, so a node reaching the emitter is a backend bug.
 
     Measured over the corpus: the two fired 6 and 3 times before the unfolds

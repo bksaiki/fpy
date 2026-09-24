@@ -3,6 +3,7 @@ This module defines compiler transforms over FPy IR.
 """
 
 from .anf import ANF
+from .assert_elim import AssertElim
 from .comp_to_loop import CompToLoop
 from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate
@@ -50,6 +51,7 @@ from .single_exit import SingleExit
 from .specialize import Specialize
 from .split_loop import SplitLoop, SplitLoopStrategy
 from .split_round import SplitRound
+from .statement_form import StatementForm
 from .subst_var import SubstVar
 from .unfold_iter import UnfoldEnumerate, UnfoldZip
 from .unfold_neg_zero import UnfoldNegZero

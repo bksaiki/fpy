@@ -36,16 +36,13 @@ from ...function import Function
 from ...module import Module
 from ...number import Context
 from ...transform import (
-    CompToLoop,
     EnumerateElim,
     FreeVarElim,
-    Hoistable,
     ReduceFusion,
     RoundElim,
     Simplify,
     Specialize,
-    UnfoldEnumerate,
-    UnfoldZip,
+    StatementForm,
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
@@ -112,38 +109,6 @@ class SpecAnalyses:
 
 # ---------------------------------------------------------------------
 # Compiler
-
-
-def _to_statement_form(fd: FuncDef) -> FuncDef:
-    """Hoistable form, with every comprehension and derived iterable lowered.
-
-    No pass here is a fixpoint alone and each supplies what the others lack.
-    ``Hoistable`` seals a comprehension's element -- it runs once per iteration,
-    so the slot before the enclosing statement is no place for its temporaries --
-    and ``CompToLoop`` makes the loop that *is* that slot; ``CompToLoop``
-    declines a comprehension in a ternary arm or a ``while`` condition for want
-    of a slot, and ``Hoistable`` gives it one.  The unfolds need a slot too, and
-    a ``zip`` inside a comprehension only gets one once ``CompToLoop`` has
-    opened it.
-
-    Iterating terminates without a cap, though not because the comprehension
-    count falls -- lowering a dependent clause list *raises* it, peeling one
-    comprehension into a row comprehension plus a nested one.  What falls is the
-    clause count of the dependent one, by one per peel, and a single-clause
-    comprehension cannot be dependent.  The unfolds lower the count of `Zip` and
-    `Enumerate` nodes, which nothing here creates.  Everything else lowers
-    outright, and ``Hoistable`` is idempotent over its own output.
-    """
-    while True:
-        fd = Hoistable.apply(fd)
-        # after `Hoistable`, which gives each a slot for the binding it needs,
-        # and before `CompToLoop`, which lowers the comprehension it leaves
-        fd = UnfoldEnumerate.apply(fd)
-        fd = UnfoldZip.apply(fd)
-        log = CompToLoop.apply_with_edits(fd)
-        if not log.edits:
-            return fd
-        fd = log.result
 
 
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
@@ -302,7 +267,7 @@ class CppCompiler(Backend):
             Run the optimizing transforms listed in :meth:`specialize`.  Sound
             either way; ``False`` skips them.  It does *not* mean the surface AST
             reaches the emitter untouched: ``FreeVarElim`` and
-            :func:`_to_statement_form` run regardless.  Default ``True``.
+            :class:`~fpy2.transform.StatementForm` run regardless.  Default ``True``.
         unbox:
             An :class:`~fpy2.backend.cpp.unbox.UnboxMode` (also reachable as
             ``CppCompiler.UnboxMode``).  ``ALLOW`` drops the handle where
@@ -521,7 +486,7 @@ class CppCompiler(Backend):
 
         # Before `RoundElim`, whose hoist is suppressed in two of the positions
         # this gives a slot.
-        specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
+        specialized = specialized.map(lambda _m, fd: StatementForm.apply(fd))
 
         if self._optimize:
             specialized = specialized.map(lambda _m, fd: RoundElim.apply(fd))
@@ -534,7 +499,7 @@ class CppCompiler(Backend):
             fenv = self._enable_fenv
             specialized = specialized.map(
                 lambda _m, fd: unfold_round(fd, mode, enable_fenv=fenv))
-            specialized = specialized.map(lambda _m, fd: _to_statement_form(fd))
+            specialized = specialized.map(lambda _m, fd: StatementForm.apply(fd))
 
         if self._optimize:
             # Last, and after everything that names: the lowerings above leave

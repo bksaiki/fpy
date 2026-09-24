@@ -249,6 +249,17 @@ class TestCompToLoop:
         assert 'range(5)' in src
         assert _agree(f)
 
+    def test_a_range_from_zero_is_its_own_write_index(self):
+        """`range(n)` counts from 0 by 1, so the target indexes the write and
+        no counter is carried: each iteration writes its own element."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return [xs[i] * 2.0 for i in range(3)]
+
+        src = CompToLoop.apply(f.ast).format()
+        assert re.search(r'for i in range\(3\):\n\s+\w+\[i\] = ', src)
+        assert _agree(f, [1.0, 2.0, 3.0])
+
     def test_a_non_range_iterable_still_binds(self):
         """The temp evaluates an iterable once and keeps the loop bound out of
         reach of the source name; only a `range` over atoms needs neither."""

@@ -53,6 +53,8 @@ The available strategies are found in the :mod:`fpy2.strategies` module:
 
 .. autofunction:: fpy2.strategies.comp_to_loop
 
+.. autofunction:: fpy2.strategies.drop_asserts
+
 .. autofunction:: fpy2.strategies.elim_iter
 
 .. autofunction:: fpy2.strategies.elim_round
