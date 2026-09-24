@@ -425,6 +425,8 @@ class _Emitter(Visitor):
         self._next_tmp = 0
         self.grid_extent: int | str | None = None
         self.grid_outer: int | str | None = None
+        self.written: set[str] = set()
+        """The pointer parameters a store goes through."""
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
 
@@ -1927,6 +1929,7 @@ class _Emitter(Visitor):
         val = self.emit(stmt.expr)
         mask = '' if self.mask is None else f', mask={self.mask}'
         ctx.add_line(f'tl.store({addr}, {val}{mask})')
+        self.written.add(f'{self._root(str(base))}_ptr')
 
     def _assign_element(
         self, tile: NamedId, stmt: IndexedAssign, ctx: _IndentedWriter,
@@ -2368,6 +2371,13 @@ class KernelSource:
     the loop around the tile, as :attr:`grid_extent` is spelled; ``None``
     where the grid has one axis."""
 
+    block: str | None = None
+    """The tile width's parameter, a `tl.constexpr` the launcher picks."""
+
+    writes: tuple[str, ...] = ()
+    """The pointer parameters the kernel stores through, which tuning runs
+    it on more than once and so has to restore."""
+
 
 def _times(a: str, b: str) -> str:
     """``a * b`` as code, folded where both are constants."""
@@ -2472,6 +2482,8 @@ def emit_kernel(
         params=tuple(params),
         grid_extent=emitter.grid_extent,
         grid_outer=emitter.grid_outer,
+        block=block,
+        writes=tuple(p for p in params if p in emitter.written),
         enable_fp_fusion=_products_are_exact(func, emitter),
         sizes=tuple(size_params),
     )

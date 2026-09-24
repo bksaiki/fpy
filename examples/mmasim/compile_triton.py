@@ -15,6 +15,8 @@ Asserts are dropped: a kernel cannot raise.
     python examples/mmasim/compile_triton.py -r 64        # also launch 64 draws and
                                                           # compare with the interpreter
     python examples/mmasim/compile_triton.py -m 4 -n 4 -r 1   # a 4 x 4 matmul
+    python examples/mmasim/compile_triton.py -r 8 --autotune  # the launch picks
+                                                          # its block and warps
 """
 
 import argparse
@@ -36,7 +38,7 @@ from fpy2.utils import NamedId
 _L = fp.types.ListType
 _R = fp.types.RealType
 
-_BLOCK = 16
+_BLOCK = 64
 
 _PREAMBLE = (
     'import triton\n'
@@ -144,7 +146,8 @@ def _row(t, rng):
     return _sample(t.fmt, rng)
 
 
-def run_matmul(kernel, design, arg_types, m: int, n: int, trials: int, seed: int) -> int:
+def run_matmul(kernel, design, arg_types, m: int, n: int, trials: int, seed: int,
+               block: int | None = _BLOCK) -> int:
     """How many of the *m* x *n* outputs, over *trials* draws, the kernel gets
     bit for bit."""
     import torch
@@ -161,7 +164,7 @@ def run_matmul(kernel, design, arg_types, m: int, n: int, trials: int, seed: int
         out = torch.zeros(m, n, dtype=dtype).cuda()
         launch(kernel, [_tensor(A, a), _tensor(BT, b), _tensor(C, c),
                         *(_tensor(s, t) for s, t in zip(S, scales)), out],
-               block=_BLOCK)
+               block=block)
         want = [
             float(design(A[i], BT[j], C[i][j], *((S[0][i], S[1][j]) if S else ())))
             for i in range(m) for j in range(n)
@@ -203,6 +206,9 @@ def main(argv: list[str]) -> int:
                          'bit for bit, with the interpreter')
     ap.add_argument('-s', '--seed', type=int, default=0,
                     help='seed for the inputs --run draws')
+    ap.add_argument('--autotune', action='store_true',
+                    help=f'let each launch pick its block and warps by timing '
+                         f'them, rather than a block of {_BLOCK}')
     dest = ap.add_mutually_exclusive_group()
     dest.add_argument('-e', '--emit', action='store_true',
                       help='print the kernel of each design that compiles')
@@ -228,7 +234,8 @@ def main(argv: list[str]) -> int:
         try:
             kernel, design, arg_types = compile_matmul(build, args.k)
             ran = (run_matmul(kernel, design, arg_types, args.m, args.n,
-                              args.run, args.seed)
+                              args.run, args.seed,
+                              None if args.autotune else _BLOCK)
                    if args.run else None)
         except Exception as ex:  # noqa: BLE001 -- any refusal is a result
             detail = str(ex) if args.verbose else str(ex).split('\n')[0][:110]

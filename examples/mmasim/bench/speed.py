@@ -70,8 +70,10 @@ def main(argv: list[str]) -> int:
                     help='the dot product length, rounded down to a multiple of '
                          "the design's; a design taking scales keeps its own "
                          '(default 256)')
-    ap.add_argument('--blocks', type=int, nargs='+', default=[16, 32, 64, 128],
+    ap.add_argument('--blocks', type=int, nargs='*', default=[16, 32, 64, 128],
                     help='block sizes to time (default 16 32 64 128)')
+    ap.add_argument('--autotune', action='store_true',
+                    help='also time the launch that picks its own block and warps')
     ap.add_argument('--reps', type=int, default=20, help='launches per timing')
     args = ap.parse_args(argv)
     if (why := unavailable()) is not None:
@@ -91,9 +93,10 @@ def main(argv: list[str]) -> int:
         a, _, _, *scales = arg_types
         k = a.length if scales else max(args.k // a.length, 1) * a.length
         tensors = _inputs(arg_types, m, n, k)
-        for block in args.blocks:
+        for block in [*args.blocks, *([None] if args.autotune else [])]:
             t = _timed(partial(launch, kernel, tensors, block=block), args.reps)
-            print(f'{name:22} {k:5} {block:5} {t * 1e3:9.3f} {2 * m * n * k / t / 1e9:9.1f}')
+            label = 'auto' if block is None else block
+            print(f'{name:22} {k:5} {label:>5} {t * 1e3:9.3f} {2 * m * n * k / t / 1e9:9.1f}')
 
     torch.backends.cuda.matmul.allow_tf32 = False
     for dtype in (torch.float16, torch.float32):

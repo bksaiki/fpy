@@ -92,14 +92,48 @@ def load_kernel(src: KernelSource) -> Any:
     return kernel
 
 
+TUNING: tuple[tuple[int, int], ...] = (
+    (16, 4), (32, 2), (32, 8), (64, 4), (64, 8), (128, 4), (128, 8),
+)
+"""The (block, warps) pairs :func:`launch` tries when it picks the block.
+
+Measured over the mmasim matmuls at 1024 x 1024 (`examples/mmasim/bench`):
+no one pair is best for every design, and these seven hold every design's
+best within about 2%.  The best moves with the design -- 32 by 1 for volta,
+64 by 8 for mxfp8 -- and a fixed 16 by 4 was up to 7x slower."""
+
+_TUNED: dict[str, Any] = {}
+"""Kernels wrapped in `triton.autotune`, keyed by source as `_LOADED` is."""
+
+
+def _tuned(src: KernelSource) -> Any:
+    """*src* under `triton.autotune`: each of `TUNING` timed on the first
+    launch at each shape, keyed on the sizes the kernel takes, and every
+    argument it stores through restored between configs, since each one is
+    run more than once."""
+    import triton
+    cached = _TUNED.get(src.source)
+    if cached is None:
+        configs = [triton.Config({src.block: b}, num_warps=w) for b, w in TUNING]
+        cached = _TUNED[src.source] = triton.autotune(
+            configs, key=[name for name, _, _ in src.sizes],
+            restore_value=list(src.writes),
+        )(load_kernel(src))
+    return cached
+
+
 def launch(
     src: KernelSource,
     args: Sequence[Any],
     *,
-    block: int,
+    block: int | None = None,
     grid: int | None = None,
 ) -> None:
     """Run *src* over *args*, which are `torch.Tensor`s and scalars.
+
+    *block* is the tile width; left out, the launch picks it, and the number
+    of warps with it, from `TUNING` by timing each on the first launch at a
+    shape.
 
     *grid* defaults to covering :attr:`KernelSource.grid_extent` in tiles of
     *block*, which is what the emitted mask expects: the last instance runs a
@@ -120,23 +154,33 @@ def launch(
     sizes = {name: args[pos].shape[depth] for name, pos, depth in src.sizes}
     # the grid before the kernel: deriving it is cheap and compiling is not,
     # so a missing extent should not cost a compile to discover
-    if grid is None:
-        if src.grid_extent is None:
-            raise CompileError(
-                'this kernel tiled nothing, so its grid has no extent to '
-                'derive; pass `grid` explicitly'
-            )
-        grid = triton.cdiv(_extent(src.grid_extent, sizes), block)
-    dims = (grid,) if src.grid_outer is None else (
-        grid, _extent(src.grid_outer, sizes))
-    if 0 in dims:
+    if grid is None and src.grid_extent is None:
+        raise CompileError(
+            'this kernel tiled nothing, so its grid has no extent to derive; '
+            'pass `grid` explicitly'
+        )
+    outer = () if src.grid_outer is None else (_extent(src.grid_outer, sizes),)
+    if 0 in outer or (grid is None and _extent(src.grid_extent, sizes) == 0):
         return  # nothing to compute, and no grid to launch it on
-    kernel = load_kernel(src)
-    kernel[dims](
-        *args, block, *sizes.values(), enable_fp_fusion=src.enable_fp_fusion,
+
+    def dims(width: int) -> tuple[int, ...]:
+        n = triton.cdiv(_extent(src.grid_extent, sizes), width) if grid is None else grid
+        return (n, *outer)
+
+    if block is not None:
+        load_kernel(src)[dims(block)](
+            *args, block, *sizes.values(), enable_fp_fusion=src.enable_fp_fusion,
+        )
+        return
+    if not TUNING or src.block is None:
+        raise CompileError('there is nothing to tune over; pass `block`')
+    # the sizes by name: the block they follow is the config's to pass
+    _tuned(src)[lambda meta: dims(meta[src.block])](
+        *args, **sizes, enable_fp_fusion=src.enable_fp_fusion,
     )
 
 
-def _extent(extent: int | str, sizes: dict[str, int]) -> int:
+def _extent(extent: int | str | None, sizes: dict[str, int]) -> int:
     """A grid extent: a proven length, or the size parameter holding one."""
+    assert extent is not None
     return sizes[extent] if isinstance(extent, str) else extent

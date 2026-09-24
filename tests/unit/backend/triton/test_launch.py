@@ -957,3 +957,29 @@ def test_both_output_dimensions_are_program_ids():
         want = _matmul(at.cpu().tolist(), bt.cpu().tolist(),
                        [[0.0] * cols for _ in range(rows)], 4)
         assert ot.cpu().tolist() == [[float(v) for v in r] for r in want], (rows, cols)
+
+
+class TestTuning:
+    """Left without a block, a launch times each of `TUNING` and runs the
+    fastest -- over the arguments it is given, so what it writes is put back
+    between configs."""
+
+    @pytest.fixture(autouse=True)
+    def _two_configs(self, monkeypatch):
+        from fpy2.backend.triton import launcher
+        monkeypatch.setattr(launcher, 'TUNING', ((16, 4), (32, 2)))
+
+    def test_it_agrees_with_the_interpreter(self):
+        import torch
+        from fpy2.utils import NamedId
+
+        rows = NamedId('rows')
+        src = _lanes(_twice_plus_one, [
+            ListType(ListType(RealType(fp.FP32), 5), rows),
+            ListType(ListType(RealType(fp.FP32), 5), rows), RealType(fp.INTEGER)])
+        assert src.writes == ('out_ptr',)
+        xt = torch.randn(37, 5).cuda()
+        ot = torch.zeros(37, 5).cuda()
+        launch(src, [xt, ot])
+        want = _twice_plus_one(xt.cpu().tolist(), [[0.0] * 5 for _ in range(37)], 4)
+        assert ot.cpu().tolist() == [[float(v) for v in r] for r in want]
