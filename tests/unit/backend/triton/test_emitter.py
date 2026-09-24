@@ -1278,3 +1278,20 @@ def test_a_rounding_sum_over_wider_elements_is_refused():
 
     with pytest.raises(TritonEmitError, match='rounds each partial sum'):
         _emit(f, [ListType(RealType(fp.IEEEContext(5, 16)), 4)])
+
+
+def test_an_unaligned_slice_of_a_tile_is_refused():
+    """A slice becomes a row of the reshaped tile only at a multiple of its
+    width; anything else would need a gather."""
+    from fpy2.backend.triton import TritonCompiler
+
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        ys = [x * 2 for x in xs]
+        zs = ys[1:3]
+        out[0] = zs[0]
+        return out
+
+    with pytest.raises(TritonEmitError, match='starts at a multiple'):
+        TritonCompiler(lanes=True, drop_asserts=True).compile(
+            f, ctx=fp.REAL, arg_types=[ListType(_R32, 8), ListType(_R32, 1), _INT])

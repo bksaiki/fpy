@@ -841,3 +841,41 @@ class TestReductionsAcrossLanes:
                         [[0.0] * 6 for _ in range(8)], 4)
         for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
             assert [repr(float(v)) for v in w] == [repr(v) for v in g], r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _grouped(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        ys = [x * 2 for x in xs]
+        for g in range(4):
+            group = ys[g * 2:(g + 1) * 2]
+            row[g] = sum(group)
+            row[4 + g] = 1.0 if all([y == 0 for y in group]) else 0.0
+    return out
+
+
+def test_an_aligned_slice_of_a_tile_is_a_tile():
+    """nvfp4's groups: row `g` of the tile reshaped to the group's width."""
+    import torch
+    from fpy2.utils import NamedId
+
+    rows = NamedId('rows')
+    src = _lanes(_grouped, [
+        ListType(ListType(RealType(FP16), 8), rows),
+        ListType(ListType(RealType(fp.FP64), 8), rows),
+        RealType(fp.INTEGER)])
+    assert 'tl.reshape(ys, (BLOCK, 4, 2))' in src.source
+    torch.manual_seed(0)
+    xt = (torch.randn(6, 8) * 100).half()
+    xt[0, :2] = 0.0
+    xt[1, 2], xt[1, 3] = -0.0, -0.0
+    xt[2, 5] = float('nan')
+    xt = xt.cuda()
+    ot = torch.zeros(6, 8, dtype=torch.float64).cuda()
+    launch(src, [xt, ot], block=4)
+    want = _grouped([[float(v) for v in r] for r in xt.cpu().tolist()],
+                    [[0.0] * 8 for _ in range(6)], 4)
+    for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
+        assert [repr(float(v)) for v in w] == [repr(v) for v in g], r

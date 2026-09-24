@@ -931,6 +931,51 @@ class _Emitter(Visitor):
         for j in range(n - width):
             ctx.add_line(f'{stmt.target}_t{j} = {zero}')
 
+    def _aligned_block(self, start: Expr | None, width: int) -> str | None:
+        """*start* as `k` where it is `k * width`, else `None`."""
+        if start is None:
+            return '0'
+        if isinstance(start, Integer):
+            return str(start.val // width) if start.val % width == 0 else None
+        if isinstance(start, Mul):
+            for c, k in ((start.first, start.second), (start.second, start.first)):
+                if isinstance(c, Integer) and c.val % width == 0:
+                    scale = c.val // width
+                    code = self.emit(k)
+                    return code if scale == 1 else f'({code} * {scale})'
+        return None
+
+    def _slice_tile(self, stmt: Assign, tile: NamedId, ctx: _IndentedWriter):
+        """`xs[k * W:(k + 1) * W]` of a tile, as a tile of its own: row `k` of
+        the tile reshaped to `W` wide.  Selected like an extract, by a sum
+        whose other rows are `-0.0`."""
+        assert isinstance(stmt.target, NamedId) and isinstance(stmt.expr, ListSlice)
+        width, _, elt = self.tiles[tile]
+        bound = self.sizes.by_expr.get(stmt.expr)
+        w = bound.size if isinstance(bound, ListSize) else None
+        k = None
+        if isinstance(w, int) and w > 0 and width % w == 0:
+            k = self._aligned_block(stmt.expr.start, w)
+        if k is None or not isinstance(w, int):
+            raise TritonEmitError(
+                f'a slice of `{tile}` is a tile only where it is a power of two '
+                'wide and starts at a multiple of that'
+            )
+        if w == width:
+            self.tile_alias[stmt.target] = tile
+            return
+        self.tiles[stmt.target] = (w, 0, elt)
+        rows = width // w
+        shape = f'({self._row_width}, {rows}, {w})'
+        blocks = f'tl.reshape({tile}, {shape})'
+        at = f'(tl.arange(0, {rows})[None, :, None] == {k})'
+        if elt is TritonScalar.BOOL:
+            code = f'(tl.max(tl.where({at}, {blocks}, False).to(tl.int32), axis=1) != 0)'
+        else:
+            zero = f'(-tl.zeros({shape}, dtype={elt.format()}))' if elt.is_float() else '0'
+            code = f'tl.sum(tl.where({at}, {blocks}, {zero}), axis=1).to({elt.format()})'
+        ctx.add_line(f'{stmt.target} = {code}', 'wide')
+
     def _emit_lanes(self, stmt: ForStmt, ctx: _IndentedWriter):
         """A lane loop: its body once across the lanes of a tile, then once
         per element of the tail, each at its own index."""
@@ -1792,6 +1837,10 @@ class _Emitter(Visitor):
         if (tile := self._tile_of(stmt.expr)) is not None:
             self.tile_alias[stmt.target] = tile
             return
+        if isinstance(stmt.expr, ListSlice) and (
+            tile := self._tile_of(stmt.expr.value)
+        ) is not None:
+            return self._slice_tile(stmt, tile, ctx)
         # ahead of scalarizing: a slice of something in memory is an
         # address, and taking it apart into loads loses that
         if isinstance(stmt.expr, ListSlice):
