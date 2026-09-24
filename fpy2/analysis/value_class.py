@@ -4,7 +4,8 @@ Path-sensitive value-class analysis.
 One question per expression: can this value be a NaN, an infinity of either
 sign, a zero, or a finite non-zero?  The five atoms form a finite lattice —
 union is the join, intersection the meet, so no widening is needed — and it is
-*refined* at every branch that tests a value's class.
+*refined* at every ``if`` statement that tests a value's class.  Not at an
+``IfExpr``, as format inference does not: a backend may evaluate both arms.
 
 Format inference cannot answer this, and this is deliberately not a fourth flag
 on :class:`~fpy2.analysis.format_infer.AbstractFormat`, which already carries
@@ -1242,12 +1243,9 @@ class _ValueClassInstance(DefaultVisitor):
         return _TOP
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> ValueClass:
+        # arms unrefined: a backend may evaluate both on every input
         self._visit_expr(e.cond, ctx)
-        with self._refined(e.cond, True):
-            ift = self._operand(e.ift, ctx)
-        with self._refined(e.cond, False):
-            iff = self._operand(e.iff, ctx)
-        return ift | iff
+        return self._operand(e.ift, ctx) | self._operand(e.iff, ctx)
 
     # ------------------------------------------------------------------
     # Statements

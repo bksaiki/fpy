@@ -1937,9 +1937,10 @@ class _FormatInferInstance(Visitor):
         comparison against a numeric literal, and only the direction
         :func:`_magnitude_constraint` can state.
 
-        Read at ``if``/``if1`` only.  A loop condition and an ``IfExpr`` carry
-        the same facts and are simply not read yet; a missed refinement costs
-        precision, never soundness.
+        Read at ``if``/``if1`` only.  Never at an ``IfExpr``, whose arms a
+        backend may evaluate both of -- `ValueClassInfer` keeps the same rule.
+        A loop condition carries the same facts and is simply not read yet; a
+        missed refinement costs precision, never soundness.
         """
         match cond:
             case Not():

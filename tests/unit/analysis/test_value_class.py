@@ -558,13 +558,19 @@ class TestRefinement:
 
         assert _cls(f, 'abs(x)') == FINITE
 
-    def test_an_inline_conditional_refines_its_branches(self):
+    def test_an_inline_conditional_does_not_refine_its_branches(self):
+        """A backend may evaluate both arms on every input, as format
+        inference assumes too."""
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
             return fp.logb(x) if fp.isinf(x) else fp.fabs(x)
 
-        assert _cls(f, 'logb(x)') == POS_INF
-        assert _cls(f, 'abs(x)') == NAN | ZERO | FINITE
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            return fp.logb(x) + fp.fabs(x)
+
+        assert _cls(f, 'logb(x)') == _cls(g, 'logb(x)')
+        assert _cls(f, 'abs(x)') == _cls(g, 'abs(x)')
 
 
 class TestALoweredChain:
