@@ -1871,3 +1871,69 @@ class TestEitherDisjunct:
             return r
 
         assert _cls(f, '(x * 3)') & (ZERO | FINITE) == ValueClass(0)
+
+
+def _typed_cls(f, text: str, arg_types) -> ValueClass:
+    from fpy2.transform import Monomorphize
+    ast = Monomorphize.apply(f.ast, fp.REAL, arg_types)
+    return ValueClassInfer.analyze(ast).classify(_find(ast, text))
+
+
+_L4 = ListType(RealType(fp.FP32), 4)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _after_an_early_return(x):
+    if not fp.isfinite(x):
+        return 0
+    return x * 3
+
+
+@fp.fpy(ctx=fp.REAL)
+def _a_mask_through_a_ladder(prods, c):
+    m = fp.empty(4)
+    for i in range(4):
+        m[i] = not fp.isfinite(prods[i])
+    t = any(m)
+    if not t:
+        t = not fp.isfinite(c)
+    if t:
+        r = 0
+    else:
+        r = prods[1] * 3
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _back_through_a_fill(A, B):
+    prods = fp.empty(4)
+    for i in range(4):
+        prods[i] = A[i] * B[i]
+    m = fp.empty(4)
+    for i in range(4):
+        m[i] = not fp.isfinite(prods[i])
+    if any(m):
+        r = 0
+    else:
+        r = A[1] * 3
+    return r
+
+
+class TestTheCheckInCppShape:
+    """What `docs/todos/cpp-finiteness.md` needs of `ValueClassInfer`, one link
+    per test.  A mask read in a plain `else` is already refined."""
+
+    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 3')
+    def test_after_an_early_return(self):
+        assert _typed_cls(_after_an_early_return, '(x * 3)',
+                          [RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)
+
+    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 4')
+    def test_a_mask_through_a_lowered_or(self):
+        assert _typed_cls(_a_mask_through_a_ladder, '(prods[1] * 3)',
+                          [_L4, RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)
+
+    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 5')
+    def test_back_through_a_fill(self):
+        assert _typed_cls(_back_through_a_fill, '(A[1] * 3)',
+                          [_L4, _L4]) & (NAN | INF) == ValueClass(0)

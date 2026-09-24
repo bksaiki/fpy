@@ -546,6 +546,8 @@ class _ValueClassInstance(DefaultVisitor):
 
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
+    arm_facts: dict[Stmt, tuple[list[tuple[Definition, ValueClass]], ...]]
+    refine_at: dict[Expr, dict[Definition, ValueClass]]
 
     alias: AliasAnalysis
 

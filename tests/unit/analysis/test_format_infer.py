@@ -4344,3 +4344,97 @@ class TestFinitenessSentinel:
             return s
 
         self._holds(f, self._LOOP_TYPES, self._LOOP_ARGS, 's')
+
+
+@fp.fpy(ctx=fp.REAL)
+def _cpp_exponent0(x, emin):
+    if not fp.isfinite(x):
+        return -1
+    return max(fp.logb(x), emin)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _cpp_exponent(x, emin):
+    return max(fp.logb(x), emin)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _cpp_fused_sum(xs, n):
+    ts = fp.empty(4)
+    for i in range(4):
+        with fp.MPFixedContext(n, fp.RM.RTZ):
+            ts[i] = fp.round(xs[i])
+    return sum(ts)
+
+
+def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
+    """`gtr_fdpa_block` as the C++ backend keeps it: loops, a call per
+    element, the check an early return, and the fused sum in a callee.
+    *checked* is how many products the check covers."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(A, B):
+        prods = fp.empty(4)
+        for i in range(4):
+            prods[i] = A[i] * B[i]
+        es = fp.empty(4)
+        for i in range(4):
+            if prods[i] == 0:
+                t = -35
+            else:
+                t = exponent(A[i], -15) + exponent(B[i], -15)
+            es[i] = t
+        e = max(es)
+        m = fp.empty(checked)
+        for i in range(checked):
+            m[i] = not fp.isfinite(prods[i])
+        if not check_first:
+            s = _cpp_fused_sum(prods, e - 25)
+            if any(m):
+                return 0
+            return s
+        if any(m):
+            return 0
+        return _cpp_fused_sum(prods, e - 25)
+    return f
+
+
+class TestTheCheckInCppShape:
+    """`docs/todos/cpp-finiteness.md`: C++ keeps `exponent0` a call and the
+    fused sum a callee, so the finiteness `bf8` needs sits on list elements,
+    past an early return, and across a call.  28 bits with the exponents
+    written directly; 60 through `exponent0` -- `bf8` itself is 61."""
+
+    _L = ListType(RealType(fp.S1E5M2), 4)
+
+    @classmethod
+    def _fused_prec(cls, f) -> int:
+        """The fused sum's precision in its own specialization, analyzed with
+        the params its caller bound it to, as the C++ backend does."""
+        from fpy2.ast.fpyast import Sum
+        from fpy2.module import Module
+        from fpy2.transform import Specialize
+
+        mod = Module()
+        mod.add(f, ctx=fp.REAL, arg_types=[cls._L, cls._L])
+        params: dict = {}
+        out = Specialize.apply(mod, size_key=True, bound_params=params)
+        spec = next(g for g in out.functions() if g.name.startswith('_cpp_fused_sum'))
+        info = FormatInfer.analyze(
+            spec.ast, use_digit_bounds=True, digit_bound_params=params.get(spec.name))
+        return next(AbstractFormat.from_format(b).prec
+                    for e, b in info.by_expr.items() if isinstance(e, Sum))
+
+    def test_written_directly(self):
+        assert self._fused_prec(_cpp_block(_cpp_exponent)) <= 28
+
+    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 7')
+    def test_through_the_sentinel(self):
+        assert self._fused_prec(_cpp_block(_cpp_exponent0)) <= 28
+
+    def test_not_where_the_check_comes_after(self):
+        f = _cpp_block(_cpp_exponent0, check_first=False)
+        assert self._fused_prec(f) > 28
+
+    def test_not_where_the_check_misses_an_element(self):
+        f = _cpp_block(_cpp_exponent0, checked=3)
+        assert self._fused_prec(f) > 28
