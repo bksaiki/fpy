@@ -1360,6 +1360,16 @@ def unrounded_format(
             return None
 
 
+
+def rounds_exactly(
+    e: Expr, by_expr: 'dict[Expr, FormatBound]', ctx: Context | None,
+) -> bool:
+    """Whether *e*'s implicit round under *ctx* changes nothing: the soundness
+    half of :class:`fpy2.transform.RoundElim`'s test, without its
+    profitability guard."""
+    return round_is_identity(unrounded_format(e, by_expr), ctx)
+
+
 def _join_set_and_format(
     s: SetFormat, fmt: Format, widen: bool = False,
 ) -> FormatBound:

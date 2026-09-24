@@ -1,8 +1,69 @@
-"""`unrounded_format`: the exact result of a rounded operation."""
+"""`rounds_exactly`: does an operation's implicit round change anything?"""
+
+import pytest
 
 import fpy2 as fp
-from fpy2.analysis import FormatInfer
-from fpy2.analysis.format_infer import unrounded_format
+from fpy2.analysis import ContextUse, FormatInfer
+from fpy2.analysis.format_infer import rounds_exactly, unrounded_format
+from fpy2.ast.fpyast import Add, BinaryOp, Expr
+from fpy2.ast.visitor import DefaultVisitor
+from fpy2.number import Context
+
+
+class _Adds(DefaultVisitor):
+    def __init__(self):
+        super().__init__()
+        self.found: list[Add] = []
+
+    def _visit_binaryop(self, e: BinaryOp, ctx):
+        if isinstance(e, Add):
+            self.found.append(e)
+        return super()._visit_binaryop(e, ctx)
+
+
+def _only_add(func) -> tuple[Expr, Context | None, dict]:
+    v = _Adds()
+    v._visit_function(func.ast, None)
+    assert len(v.found) == 1, f'expected one add, got {len(v.found)}'
+    e = v.found[0]
+    fmt = FormatInfer.analyze(func.ast)
+    scope = ContextUse.analyze(func.ast).find_scope_from_use(e)
+    c = scope.ctx if isinstance(scope.ctx, Context) else None
+    return e, c, fmt.by_expr
+
+
+class TestExact:
+    def test_integers_accumulate_exactly(self):
+        """`INTEGER` is unbounded, so a sum of two integers never rounds."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(a: fp.Real, b: fp.Real):
+            x = fp.round(a)
+            y = fp.round(b)
+            return x + y
+
+        e, c, by_expr = _only_add(f)
+        assert rounds_exactly(e, by_expr, c)
+
+    def test_unconstrained_operands_are_not_exact(self):
+        """The operands must be *known* integers.  Two arbitrary reals under
+        `INTEGER` round on the way in, so the sum is not exact."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(a: fp.Real, b: fp.Real):
+            return a + b
+
+        e, c, by_expr = _only_add(f)
+        assert not rounds_exactly(e, by_expr, c)
+
+
+class TestRounds:
+    def test_a_float_sum_of_unknown_values_rounds(self):
+        """Nothing bounds the operands, so the exact sum need not fit FP32."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(a: fp.Real, b: fp.Real):
+            return a + b
+
+        e, c, by_expr = _only_add(f)
+        assert not rounds_exactly(e, by_expr, c)
 
 
 class TestIllPosed:
@@ -15,3 +76,15 @@ class TestIllPosed:
         fmt = FormatInfer.analyze(f.ast)
         ret = f.ast.body.stmts[-1]
         assert unrounded_format(ret.expr, fmt.by_expr) is None
+
+    def test_an_unresolved_context_is_not_exact(self):
+        """Without a concrete target there is nothing to claim identity
+        against."""
+        @fp.fpy(ctx=fp.INTEGER)
+        def f(a: fp.Real, b: fp.Real):
+            x = fp.round(a)
+            y = fp.round(b)
+            return x + y
+
+        e, _c, by_expr = _only_add(f)
+        assert not rounds_exactly(e, by_expr, None)

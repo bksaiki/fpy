@@ -2769,6 +2769,30 @@ class TestAlignedSumPrecision:
         assert bounds['ws'] == 18    # the position is one value for all of `xs`
         assert bounds['ys'] > 200    # ... and a different one for each `i`
 
+    def test_an_arm_holding_only_infinities_is_not_joined(self):
+        """An arm that is `inf` has no digits, as a zero arm has none, so it
+        must not widen the products the guard later proves finite."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, c):
+            prods = fp.empty(len(A))
+            for k in range(len(A)):
+                p = A[k] * B[k]
+                if abs(p) >= 340282366920938463463374607431768211456:
+                    t = fp.inf()
+                else:
+                    t = p
+                prods[k] = t
+            if any([not fp.isfinite(p) for p in prods]) or not fp.isfinite(c):
+                return c
+            e = max([max(fp.logb(a), -14) + max(fp.logb(b), -14)
+                     for a, b in zip(A, B)])
+            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                ts = [fp.round(p) for p in prods]
+            return sum(ts)
+
+        L16 = ListType(RealType(fp.FP16), 8)
+        assert self._sum_bounds(f, [L16, L16, RealType(fp.FP32)])['ts'] <= 29
+
     def test_a_zero_test_on_one_element_zeroes_that_element(self):
         """`c = cs[0]` has terms of its own, so `c == 0` zeroes `c` alone --
         and the guard aligns as it does for a scalar."""
