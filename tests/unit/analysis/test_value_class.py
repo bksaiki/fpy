@@ -1893,7 +1893,8 @@ def _after_an_early_return(x):
 def _a_mask_through_a_ladder(prods, c):
     m = fp.empty(4)
     for i in range(4):
-        m[i] = not fp.isfinite(prods[i])
+        p = prods[i]
+        m[i] = not fp.isfinite(p)
     t = any(m)
     if not t:
         t = not fp.isfinite(c)
@@ -1911,7 +1912,8 @@ def _back_through_a_fill(A, B):
         prods[i] = A[i] * B[i]
     m = fp.empty(4)
     for i in range(4):
-        m[i] = not fp.isfinite(prods[i])
+        p = prods[i]
+        m[i] = not fp.isfinite(p)
     if any(m):
         r = 0
     else:
@@ -1965,7 +1967,6 @@ class TestTheCheckInCppShape:
         assert _typed_cls(f, '(c * 3)', [L, R]) & (NAN | INF) == ValueClass(0)
         assert _typed_cls(f, '(c * 5)', [L, R]) & NAN
 
-    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 4')
     def test_a_mask_through_a_lowered_or(self):
         assert _typed_cls(_a_mask_through_a_ladder, '(prods[1] * 3)',
                           [_L4, RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)

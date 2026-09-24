@@ -4386,7 +4386,8 @@ def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
         e = max(es)
         m = fp.empty(checked)
         for i in range(checked):
-            m[i] = not fp.isfinite(prods[i])
+            p = prods[i]
+            m[i] = not fp.isfinite(p)
         if not check_first:
             s = _cpp_fused_sum(prods, e - 25)
             if any(m):

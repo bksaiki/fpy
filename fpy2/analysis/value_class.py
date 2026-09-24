@@ -856,7 +856,13 @@ class _ValueClassInstance(DefaultVisitor):
     def _implied_ladder(
         self, d: 'Definition | None', truth: bool
     ) -> list[tuple[Definition, ValueClass]]:
-        """What a *lowered* ``and``/``or`` being *truth* says.
+        """What a *lowered* ``and``/``or`` being *truth* says; see
+        :meth:`_ladder_rungs`."""
+        return [i for r in self._ladder_rungs(d, truth) for i in self._implied_at(r, truth)]
+
+    def _ladder_rungs(self, d: 'Definition | None', truth: bool) -> list[Definition]:
+        """The definitions a *lowered* ``and``/``or`` being *truth* makes
+        *truth* too.
 
         :class:`~fpy2.transform.Hoistable` rewrites a chain whose tail needs a
         statement into a flat ladder of guarded assignments, which the ``And``
@@ -895,10 +901,7 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         if truth is negated:      # `and` speaks when true, `or` when false
             return []
-        return [
-            i for idx in (d.lhs, d.rhs)
-            for i in self._implied_at(self.def_use.defs[idx], truth)
-        ]
+        return [self.def_use.defs[idx] for idx in (d.lhs, d.rhs)]
 
     def _implied_at(
         self, d: Definition, truth: bool
@@ -934,11 +937,22 @@ class _ValueClassInstance(DefaultVisitor):
                 src = self.def_use.defining_expr(cond)
                 if src is not cond:
                     return self._implied_elements(src, truth)
-                return self._implied_universal(
-                    self.def_use.use_to_def.get(cond), truth,
-                )
+                d = self.def_use.use_to_def.get(cond)
+                return self._implied_universal(d, truth) or [
+                    i for r in self._ladder_rungs(d, truth)
+                    for i in self._implied_elements_at(r, truth)
+                ]
             case _:
                 return []
+
+    def _implied_elements_at(
+        self, d: Definition, truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """:meth:`_implied_at`, for the elements of a list."""
+        if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+            return self._implied_elements(d.site.expr, truth)
+        return [i for r in self._ladder_rungs(d, truth)
+                for i in self._implied_elements_at(r, truth)]
 
     def _implied_universal(
         self, d: 'Definition | None', truth: bool
