@@ -264,9 +264,9 @@ def _facts_by_def(
 
 @functools.cache
 def keeps_non_finite(ctx: Context) -> bool:
-    """Whether rounding under *ctx* gives a NaN or an infinity back as one,
-    so a finite result came from a finite exact one.  ``MX_E2M1`` saturates
-    both; a fixed-point context refuses them, which a backend need not."""
+    """Whether rounding under *ctx* keeps a NaN or infinity non-finite, so a
+    finite result had a finite exact value.  Not a saturating format
+    (``MX_E2M1``) or fixed point."""
     return all(_rounded_class(ctx, x) & (_NAN | _INF) for x in _PROBES)
 
 
@@ -735,7 +735,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._clock += 1
         self._touched[region] = self._clock
 
-    def _retouch(self, clock: int):
+    def _retouch(self, clock: int) -> None:
         """Touch every region stored into since *clock* again: past a join,
         those stores only may have happened."""
         for region in [r for r, t in self._touched.items() if t > clock]:
@@ -846,8 +846,7 @@ class _ValueClassInstance(DefaultVisitor):
             case Or() | And():
                 return self._implied_either(
                     [self._implied(a, truth) for a in cond.args])
-            # over a literal, the `and` / `or` of its elements: the shape
-            # `Scalarize` leaves a comprehension in
+            # over a literal, the `and` / `or` of its elements
             case AllOf(arg=ListExpr() as lit) if truth:
                 return [i for a in lit.elts for i in self._implied(a, True)]
             case AnyOf(arg=ListExpr() as lit) if not truth:
@@ -1260,10 +1259,10 @@ class _ValueClassInstance(DefaultVisitor):
         return operands
 
     def _filled_from(self, region: Region) -> 'list[Region]':
-        """The lists *region*'s elements being finite makes finite: where one
-        loop covering the list is the only store into it, and stores an exact
-        operation of reads at its own index of lists it covers too, untouched
-        since it began."""
+        """Lists whose elements are finite wherever *region*'s are: *region*'s
+        only store is in one loop covering it, storing an exact op of
+        same-index reads of lists that loop also covers and that were
+        unchanged when it began."""
         sites = self._fill_sites().get(region, [])
         if len(sites) != 1:
             return []
@@ -1306,7 +1305,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _is_index(self, e: Expr, loop: ForStmt) -> bool:
         """Whether *e* is *loop*'s index: its target, or ``range(n)[target]``,
-        which is what `ZipElim` reads through."""
+        as `ZipElim` emits."""
         if self._is_target(e, loop):
             return True
         if not isinstance(e, Var):
@@ -1327,7 +1326,7 @@ class _ValueClassInstance(DefaultVisitor):
         if self._fills_cache is None:
             out: dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] = {}
 
-            def walk(block: StmtBlock, loop: ForStmt | None):
+            def walk(block: StmtBlock, loop: ForStmt | None) -> None:
                 for stmt in block.stmts:
                     match stmt:
                         case IndexedAssign():
@@ -1540,10 +1539,10 @@ class _ValueClassInstance(DefaultVisitor):
                 self._region_of_def(stmt.var, stmt, above), _TOP,
             )
 
-    def _visit_block(self, block: StmtBlock, ctx: None):
+    def _visit_block(self, block: StmtBlock, ctx: None) -> None:
         self._visit_stmts(block.stmts, ctx)
 
-    def _visit_stmts(self, stmts: Sequence[Stmt], ctx: None):
+    def _visit_stmts(self, stmts: Sequence[Stmt], ctx: None) -> None:
         for i, stmt in enumerate(stmts):
             self._visit_statement(stmt, ctx)
             rest = stmts[i + 1:]

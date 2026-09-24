@@ -41,7 +41,6 @@ __all__ = [
     'concrete_size',
     'is_size_eq',
     'size_eq',
-    'static_trip_count',
     'trip_count',
 ]
 
@@ -200,31 +199,6 @@ def trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> ArraySize:
         return None
     bound = sizes.by_expr.get(stop.arg)
     return bound.size if isinstance(bound, ListSize) else None
-
-
-def static_trip_count(
-    iterable: Expr, sizes: ArraySizeAnalysis,
-) -> int | None:
-    """How many times a ``for`` over *iterable* runs, as a constant.
-
-    Distinct from :func:`trip_count`, which answers a different question and
-    must keep answering it: its callers ask *"does this loop cover exactly
-    that list?"* and rely on top comparing unequal, so widening it would
-    silently change them.  This one asks only whether the count is a
-    compile-time constant, which is what a consumer needing a ``constexpr``
-    wants.
-
-    It models what `trip_count` does, and then falls back to the iterable's
-    own inferred length -- so a `zip`, a bare list or a slice answers where
-    `trip_count` returns top, provided the size analysis proved the length.
-    """
-    n = trip_count(iterable, sizes)
-    if isinstance(n, int):
-        return n
-    bound = sizes.by_expr.get(iterable)
-    if isinstance(bound, ListSize) and isinstance(bound.size, int):
-        return bound.size
-    return None
 
 
 #####################################################################

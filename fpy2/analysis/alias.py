@@ -53,9 +53,7 @@ Equality rather than inclusion is deliberate.  Each place denotes exactly one
 region and distinct regions are disjoint — Steensgaard-style, where a
 subset-based solver would give each place an overlapping points-to *set* — so
 different regions never alias and the same region may.  That over-approximates,
-the safe direction for every consumer, and it is adequate here: measured over the
-test corpus, only three merges anywhere lose precision against a subset-based
-solver.
+the safe direction for every consumer, and it is adequate here.
 
 An expression kind not in the table is handled conservatively: it gets its own
 allocation site, and every list-carrying variable inside it is marked shared

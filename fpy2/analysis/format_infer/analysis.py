@@ -1330,10 +1330,7 @@ def unrounded_format(
     an expression that carries no context-driven round, where the question is
     ill-posed.
 
-    For an explicit ``Round`` / ``Cast`` the unrounded value *is* the
-    argument, so the argument's post-round bound is the right input: pairing
-    it with :func:`round_is_identity` then asks whether that node is the
-    identity over the value its argument produces.
+    For an explicit ``Round`` / ``Cast``, the argument's bound.
     """
     match e:
         case Add():
@@ -1361,21 +1358,6 @@ def unrounded_format(
             return None
         case _:
             return None
-
-
-def rounds_exactly(
-    e: Expr, by_expr: 'dict[Expr, FormatBound]', ctx: Context | None,
-) -> bool:
-    """Whether *e*'s implicit round under *ctx* changes nothing.
-
-    The soundness half of what :class:`fpy2.transform.RoundElim` asks -- that
-    pass adds a "strictly tighter" guard on top, which is about whether its
-    rewrite is *worthwhile*, not whether it is *correct*.  A caller reasoning
-    about reassociation wants only this half: an accumulation whose every step
-    rounds exactly may be regrouped bit-for-bit, which is what lets a fold
-    become a tile reduction.
-    """
-    return round_is_identity(unrounded_format(e, by_expr), ctx)
 
 
 def _join_set_and_format(

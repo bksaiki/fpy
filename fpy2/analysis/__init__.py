@@ -9,7 +9,6 @@ from .array_size import (
     ListSize,
     TupleSize,
     concrete_size,
-    static_trip_count,
 )
 from .call_graph import CallGraph, CallGraphAnalysis, CallGraphError
 from .context_use import (

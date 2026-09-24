@@ -85,7 +85,6 @@ the time it arrives, so the hoist suppressed above is no longer suppressed there
 """
 
 import dataclasses
-import operator
 from typing import Any
 
 from ..analysis import (
@@ -207,11 +206,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
             return scope.ctx
         return self.outer_ctx
 
-    def _unrounded_format(self, e: Expr):
-        """The unrounded value-set ``F`` for a rounded op; see
-        :func:`fpy2.analysis.format_infer.unrounded_format`."""
-        return unrounded_format(e, self.format_info.by_expr)
-
     def _is_eliminable(self, e: Expr) -> bool:
         """True when the implicit round on *e* is the identity under
         its active scope AND the unrounded format is *strictly
@@ -243,7 +237,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
             # No round to eliminate (REAL is the trivial identity)
             # or unresolvable symbolic scope.  Either way: skip.
             return False
-        unrounded = self._unrounded_format(e)
+        unrounded = unrounded_format(e, self.format_info.by_expr)
         if not round_is_identity(unrounded, ctx):
             return False
         # Strictly-tighter guard.

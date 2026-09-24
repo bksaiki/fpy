@@ -29,6 +29,7 @@ from ..analysis.array_size import (
     TupleSize,
     concrete_size,
 )
+from ..analysis.call_graph import CallGraph
 from ..analysis.define_use import AssignDef, DefineUse
 from ..analysis.digit_bound import DigitBoundParams
 from ..analysis.escape import Escape, EscapeSummary
@@ -46,7 +47,7 @@ from ..analysis.partial_eval import PartialEvalInfo
 from ..analysis.type_infer import TypeInferError
 from ..analysis.value_class import ValueClassInfer
 from ..ast import Call, Expr, ForeignVal, FuncDef
-from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
+from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..interpret.value import Foreign
 from ..module import Module
@@ -56,6 +57,7 @@ from ..number.context.real import REAL_FORMAT
 from ..types import ListType, RealType, TupleType, Type
 from ..utils import NamedId
 from .monomorphize import Monomorphize
+from .path import walk_exprs
 from .subst_var import SubstVar
 
 
@@ -67,18 +69,8 @@ def _escape_summaries(
     From each callee's own body, leaves first.  One that does not type on its
     own is left out, which reads as retaining everything.
     """
-    callees: list[FuncDef] = []
-
-    class _Calls(DefaultVisitor):
-        def _visit_call(self, e: Call, ctx):
-            if isinstance(e.fn, Function):
-                callees.append(e.fn.ast)
-            super()._visit_call(e, ctx)
-
-    _Calls()._visit_function(fd, None)
-    for callee in callees:
-        if callee not in memo:
-            _escape_summaries(callee, memo)
+    for callee in CallGraph.analyze(fd).order:
+        if callee is not fd and callee not in memo:
             try:
                 memo[callee] = Escape.analyze(callee, memo)
             except TypeInferError:
@@ -286,10 +278,9 @@ def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
     also what the backend reads.
 
     A set, because both maps enumerate in the order the analysis walked.  A
-    definition is keyed by its name and an expression by its position in the
-    callee, which every call site walks alike: keyed by format alone, two
-    callers that bound *different* expressions tightly would share a spec,
-    and the first would decide the other's storage.
+    definition is keyed by its name.  An expression is keyed by its preorder
+    position, the same at every call site; by format alone, two callers
+    bounding different expressions would share a spec.
     """
     bounds = (*sub.by_def.values(), *sub.by_expr.values())
     if all(_is_trivial_bound(f) for f in bounds):
@@ -302,15 +293,7 @@ def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
 def _positions(func: FuncDef) -> dict[int, int]:
     """Each expression of *func*, by identity, to its place in a preorder
     walk."""
-    out: dict[int, int] = {}
-
-    class _Walk(DefaultVisitor):
-        def _visit_expr(self, e: Expr, ctx):
-            out.setdefault(id(e), len(out))
-            super()._visit_expr(e, ctx)
-
-    _Walk()._visit_function(func, None)
-    return out
+    return {id(e): i for i, (_, e) in enumerate(walk_exprs(func))}
 
 
 def _arg_vals_key(
@@ -551,12 +534,8 @@ def _drop_dead_args(
         dropped[out] = gone
         params = bound_params.get(func.name) if bound_params is not None else None
         if params is not None:
-            bound_params[func.name] = DigitBoundParams(  # type: ignore[index]
-                params.store,
-                tuple(a for i, a in enumerate(params.args)
-                      if i not in gone_set),
-                params.assume,
-            )
+            bound_params[func.name] = replace(  # type: ignore[index]
+                params, args=tuple(a for i, a in enumerate(params.args) if i not in gone_set))
         return out
 
     return module.map(step)

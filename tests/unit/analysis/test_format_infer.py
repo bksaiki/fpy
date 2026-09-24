@@ -2771,8 +2771,7 @@ class TestAlignedSumPrecision:
 
     def test_a_zero_test_on_one_element_zeroes_that_element(self):
         """`c = cs[0]` has terms of its own, so `c == 0` zeroes `c` alone --
-        and the guard aligns as it does for a scalar.  A batch of one row made
-        every row index `0`, and `nvfp4` lost its accumulator's alignment."""
+        and the guard aligns as it does for a scalar."""
         @fp.fpy(ctx=fp.REAL)
         def f(cs, x):
             c = cs[0]
@@ -2788,9 +2787,8 @@ class TestAlignedSumPrecision:
         assert self._sum_bounds(f, [ListType(R, 1), R])['ts'] <= 26
 
     def test_one_elements_exponent_does_not_bound_another(self):
-        """A constant read is one element, not the list's summary.  Read as
-        the summary, `logb(A[0])` bounded `A[1] * B[1]`, and `t` was bounded
-        at 6 bits, where `1001000.25` has 20."""
+        """A constant read is one element, not the list's summary: `logb(A[0])`
+        must not bound `A[1] * B[1]`."""
         from fpy2.transform import Monomorphize
 
         @fp.fpy(ctx=fp.REAL)
@@ -4205,9 +4203,8 @@ class TestAZeroGuardNoPathNames:
 
 
 class TestFinitenessSentinel:
-    """`exponent0` reads a non-finite value's exponent as `-1`.  Inlined, its
-    merge must keep the sentinel wherever the sentinel is reached, and
-    `digit-bound-finiteness.md` is what drops it where it is not."""
+    """`exponent0` reads a non-finite exponent as `-1`; a merge keeps it
+    wherever it is reached."""
 
     def test_the_sentinel_path_is_in_the_bound(self):
         """At `x = inf` the position is `-1 - 10`, and `c` keeps digits to
@@ -4234,9 +4231,7 @@ class TestFinitenessSentinel:
         assert bound.representable_in(v)
 
     def test_the_sentinel_path_is_in_the_bound_across_a_call(self):
-        """The same, with the sentinel returned by a callee -- the shape the
-        C++ backend keeps, and where a return only a non-finite argument
-        reaches used to be dropped."""
+        """The same, with the sentinel returned by a callee."""
         from fpy2.transform import Monomorphize
 
         @fp.fpy(ctx=fp.REAL)
@@ -4261,8 +4256,8 @@ class TestFinitenessSentinel:
         assert bound.representable_in(v)
 
     def test_not_where_the_check_does_not_reach(self):
-        """The same sum outside the check: nothing says the sentinel arm was
-        not taken, so the merge stays a merge."""
+        """Without a finiteness check around the sum, nothing says the
+        sentinel arm was not taken, so the merge stays a merge."""
         @fp.fpy(ctx=fp.REAL)
         def f(A, B):
             a0 = A[0]
@@ -4349,8 +4344,8 @@ def _cpp_fused_sum(xs, n):
 
 
 def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
-    """`gtr_fdpa_block` as the C++ backend keeps it: loops, a call per
-    element, the check an early return, and the fused sum in a callee.
+    """A block dot product in the shape the C++ backend keeps: loops, a call
+    per element, the check an early return, and the fused sum in a callee.
     *checked* is how many products the check covers."""
     @fp.fpy(ctx=fp.REAL)
     def checked_first(A, B):
@@ -4428,17 +4423,16 @@ def _cpp_block_inline(exponent, *, checked: int = 4):
 
 
 class TestTheCheckInCppShape:
-    """`docs/todos/cpp-finiteness.md`: C++ keeps `exponent0` a call and the
-    fused sum a callee, so the finiteness `bf8` needs sits on list elements,
-    past an early return, and across a call.  28 bits with the exponents
-    written directly; 60 through `exponent0` -- `bf8` itself is 61."""
+    """C++ keeps `exponent0` a call and the fused sum a callee, so the
+    finiteness the sum needs sits on list elements, past an early return, and
+    across a call."""
 
     _L = ListType(RealType(fp.S1E5M2), 4)
 
     @classmethod
     def _fused_prec(cls, f) -> int:
-        """The fused sum's precision in its own specialization, analyzed with
-        the params its caller bound it to, as the C++ backend does."""
+        """The widest fused-sum precision over its specializations, each
+        analyzed with its caller's params."""
         return max(cls._fused_precs(f))
 
     @classmethod

@@ -9,22 +9,10 @@ out of the constraints and the store decidable.  What the variables mean is
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
 
 from .solver import Constraint, Solver, Term, Z3Solver, _Var
 
 __all__ = ['DigitBoundStore']
-
-
-@dataclass
-class _Instance:
-    elementwise: set[int]
-    subst: dict[int, Term]
-    tag: str
-    done: set[int] = field(default_factory=set)
-    """constraints replayed onto it"""
-    grown: set[int] = field(default_factory=set)
-    """variables in *subst* whose constraints have been replayed"""
 
 
 class DigitBoundStore:
@@ -51,19 +39,6 @@ class DigitBoundStore:
     """Variables some constraint names; the rest are free, and a term naming
     one is unbounded by inspection."""
 
-    _each: set[int]
-    """Constraints, by position, that hold at every index of the per-element
-    variables they name although they name others too."""
-
-    _instances: dict[int, _Instance]
-    """Every :meth:`instance`, by its renaming's identity."""
-
-    _copies: set[int]
-    """Constraints, by position, that are replays, so never replayed again."""
-
-    _by_var: dict[int, list[int]]
-    """Constraints, by position, naming each variable; replays excepted."""
-
     _n_lits: int
     """How many guard literals exist."""
 
@@ -78,34 +53,16 @@ class DigitBoundStore:
         self._answers = {}
         self._decisions = {}
         self._constrained = set()
-        self._each = set()
-        self._instances = {}
-        self._copies = set()
-        self._by_var = {}
         self._n_lits = 0
         self._universal = set()
 
-    def _add(self, c: Constraint, each: bool = False, copy: bool = False) -> None:
-        i = len(self._constraints)
-        if each:
-            self._each.add(i)
-        if copy:
-            self._copies.add(i)
+    def _add(self, c: Constraint) -> None:
         self._constraints.append(c)
         for t in (c.lhs, *c.rhs):
             self._constrained.update(v.index for v, _ in t.coeffs)
         self._solver.assume(c)
         self._answers.clear()
         self._decisions.clear()
-        if copy:
-            return
-        vs = {v.index for t in (c.lhs, *c.rhs) for v, _ in t.coeffs}
-        for v in vs:
-            self._by_var.setdefault(v, []).append(i)
-        for inst in self._instances.values():
-            if not vs.isdisjoint(inst.subst):
-                self._replay(i, inst)
-                self._grow(inst)
 
     @property
     def n_vars(self) -> int:
@@ -119,59 +76,45 @@ class DigitBoundStore:
         return Term(((v, 1),), 0)
 
     def instance(
-        self, elementwise: set[int], subst: dict[int, Term], tag: str,
-    ) -> None:
-        """Replay every constraint over *elementwise* variables alone, with
-        each variable renamed by *subst* -- those stated so far and those
-        stated later.
+        self,
+        elementwise: set[int],
+        subst: dict[int, Term],
+        mark: int,
+        tag: str,
+    ) -> int:
+        """Replay every constraint over *elementwise* variables alone, from
+        *mark* on, with each variable renamed by *subst*.  Returns a new mark.
 
         Such a constraint holds at every index of the lists it is about, so
         it holds at an index drawn from any subset -- which is how a part of
         a list gets the facts the whole one has without *sharing* a variable
         with it.  One naming a variable outside *elementwise* may be an
         aggregate (``logb(sum xs) <= msb(xs) + k``), true of the list and
-        false of a part, so it is left alone -- unless stated *each*, as
-        ``max(xs) >= xs`` is, and then only its per-element variables move.
+        false of a part, so it is left alone.  A guarded one is replayed
+        under its guard, and only where every literal in it is universal.
 
-        *subst* grows in place, and is the caller's to keep: one renaming per
-        index set is what relates two parts taken over one range.  Only what
-        is connected to *subst* is replayed -- the rest would bind variables
-        nothing names -- so a caller adding to it calls again.
+        *subst* grows in place: a second call for the same index set reuses
+        the renaming, which is what relates two parts taken over one range.
         """
-        inst = self._instances.get(id(subst))
-        if inst is None:
-            inst = self._instances[id(subst)] = _Instance(elementwise, subst, tag)
-        self._grow(inst)
-
-    def _grow(self, inst: _Instance) -> None:
-        """Replay what names a variable *inst* renames, to a fixpoint."""
-        while new := [v for v in inst.subst if v not in inst.grown]:
-            for v in new:
-                inst.grown.add(v)
-                for i in list(self._by_var.get(v, ())):
-                    self._replay(i, inst)
-
-    def _replay(self, i: int, inst: _Instance) -> None:
-        if i in inst.done or i in self._copies:
-            return
-        inst.done.add(i)
-        c = self._constraints[i]
-        if not self._universal.issuperset(c.guard):
-            # a literal naming one definition is one value per index
-            return
-        vs = [v for t in (c.lhs, *c.rhs) for v, _ in t.coeffs]
-        moved = [v for v in vs if v.index in inst.elementwise]
-        if not moved or (len(moved) < len(vs) and i not in self._each):
-            return
-        for v in moved:
-            if v.index not in inst.subst:
-                inst.subst[v.index] = self.var(v.name + inst.tag)
-        # under the same guard: a universal literal speaks for every index,
-        # this one's included, but holds only where it holds
-        self._add(Constraint(
-            c.lhs.rename(inst.subst), c.op,
-            tuple(t.rename(inst.subst) for t in c.rhs), c.guard,
-        ), copy=True)
+        end = len(self._constraints)
+        for c in self._constraints[mark:end]:
+            vs = [v for t in (c.lhs, *c.rhs) for v, _ in t.coeffs]
+            if not vs or any(v.index not in elementwise for v in vs):
+                continue
+            if not self._universal.issuperset(c.guard):
+                # a non-universal literal need not hold at every index
+                continue
+            for v in vs:
+                if v.index not in subst:
+                    subst[v.index] = self.var(v.name + tag)
+            # keep the guard
+            self._add(Constraint(
+                c.lhs.rename(subst), c.op,
+                tuple(t.rename(subst) for t in c.rhs), c.guard,
+            ))
+        # past the copies too: they are elementwise themselves, so a mark of
+        # *end* would replay them again on the next call for this key
+        return len(self._constraints)
 
     def literal(self, *, universal: bool = False) -> int:
         """A fresh guard literal, for a constraint that holds only where it
@@ -182,20 +125,13 @@ class DigitBoundStore:
             self._universal.add(self._n_lits)
         return self._n_lits
 
-    def le(
-        self, lhs: Term, rhs: Term | int, *,
-        each: bool = False, guard: tuple[int, ...] = (),
-    ) -> None:
-        """``lhs <= rhs``; *each* where it holds at every index, see
-        :meth:`instance`, and only where every literal in *guard* holds."""
-        self._add(Constraint(lhs, '<=', (_as_term(rhs),), guard), each)
+    def le(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
+        """``lhs <= rhs``, only where every literal in *guard* holds."""
+        self._add(Constraint(lhs, '<=', (_as_term(rhs),), guard))
 
-    def ge(
-        self, lhs: Term, rhs: Term | int, *,
-        each: bool = False, guard: tuple[int, ...] = (),
-    ) -> None:
+    def ge(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs >= rhs``."""
-        self.le(_as_term(rhs), lhs, each=each, guard=guard)
+        self.le(_as_term(rhs), lhs, guard=guard)
 
     def eq(self, lhs: Term, rhs: Term | int) -> None:
         """``lhs == rhs``.  The walk states one-directional bounds and never

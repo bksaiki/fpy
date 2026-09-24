@@ -1614,11 +1614,11 @@ class TestAGuardOverARow:
 
 
 #####################################################################
-# Finiteness facts `digit-bound-finiteness.md` needs; each flips in its phase
+# Finiteness facts
 
 
 @fp.fpy(ctx=fp.REAL)
-def _scalarized_guard(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+def _literal_any_guard(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
     p0 = a * b
     t0 = not fp.isfinite(p0)
     if any([t0]) or not fp.isfinite(c):
@@ -1639,14 +1639,12 @@ def _backward_guard(a: fp.Real, b: fp.Real) -> fp.Real:
 
 
 class TestFinitenessFacts:
-    """What the scalarized special-value check of `gtr_fdpa` has to establish
-    for the fused sum after it."""
+    """A finiteness guard refines what it tests, and a finite product its factors."""
 
-    def test_a_scalarized_any_guard_refines_what_it_tests(self):
-        """`Scalarize` leaves `any([not isfinite(p) for p in prods])` as
-        `any([t0, ...])` over names."""
-        info = ValueClassInfer.analyze(_scalarized_guard.ast)
-        read = _find(_scalarized_guard.ast, '(p0 * 3)').first
+    def test_a_literal_any_guard_refines_what_it_tests(self):
+        """`any` over a literal of named tests."""
+        info = ValueClassInfer.analyze(_literal_any_guard.ast)
+        read = _find(_literal_any_guard.ast, '(p0 * 3)').first
         assert info.classify(read) & (NAN | INF) == ValueClass(0)
 
     def test_a_finite_product_has_finite_factors(self):
@@ -1921,9 +1919,8 @@ def _back_through_a_fill(A, B):
     return r
 
 
-class TestTheCheckInCppShape:
-    """What `docs/todos/cpp-finiteness.md` needs of `ValueClassInfer`, one link
-    per test.  A mask read in a plain `else` is already refined."""
+class TestEarlyExitAndMasks:
+    """Refinement past an early exit, and through a mask a loop fills."""
 
     def test_after_an_early_return(self):
         assert _typed_cls(_after_an_early_return, '(x * 3)',

@@ -363,9 +363,8 @@ class TestCallersThatBoundACalleeDifferentlyDoNotShare:
 
     def test_the_same_bounds_on_different_expressions_are_two_specs(self):
         """Each call ties one rounding tight and leaves the other loose, so
-        the formats match as a multiset but not expression by expression.
-        Shared, the second call's `rnd(a, n)` -- at `a = 1 + 2 ** -10`,
-        `n = -13`, 11 bits -- was bounded at 3 from the first's terms."""
+        the formats match as a multiset but not expression by expression; one
+        spec would bound one call by the other's terms."""
         @fp.fpy(ctx=fp.REAL)
         def rnd(x, n):
             with fp.MPFixedContext(n, fp.RM.RTZ):

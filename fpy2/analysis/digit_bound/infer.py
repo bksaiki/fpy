@@ -18,7 +18,7 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 
 import math
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from ...ast.fpyast import *
@@ -52,6 +52,7 @@ class _IndexSet:
 
     tag: str
     subst: dict[int, Term] = field(default_factory=dict)
+    mark: int = 0
 
 
 @dataclass
@@ -250,6 +251,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
     which the solver answers as unbounded.
     """
 
+    outer: Callable[[], frozenset[int]] | None
+    """The literals holding wherever this body runs: its call site's."""
+    arg_lit: Callable[[int], int | None] | None
+    """The caller's literal for "argument *i* is finite", which is this
+    parameter's too."""
     _loop_index: dict[Definition, int]
     _partial: dict[Definition, list[Terms] | None]
     _fields: dict[Definition, tuple[Terms | None, ...]]
@@ -291,10 +297,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     ):
         self.func = func
         self.outer = outer
-        """The literals holding wherever this body runs: its call site's."""
         self.arg_lit = arg_lit
-        """The caller's literal for "argument *i* is finite", which is this
-        parameter's too."""
         self.view = view
         self.store = store
         self.args = args
@@ -548,11 +551,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _term_level(self, t: Term) -> int:
         return max((self._moves_at(v.index, c) for v, c in t.coeffs), default=0)
 
-    def _uniform(self, t: Term, level: int) -> bool:
-        """Whether *t* bounds from below every element of a list whose
-        elements move with *level*."""
-        return self._term_level(t) < level
-
     def _elt_lsb(self, of: Expr | Definition, src: Terms) -> Term | None:
         """*src*'s grid, as *of*'s -- dropped where *of* is a list and the
         grid moves with its index.
@@ -563,7 +561,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         high as the widest.  No grid at all is the weaker, true reading.
         """
         if (src.lsb is not None and isinstance(self._type_of(of), ListType)
-                and not self._uniform(src.lsb, self._elt_depth + 1)):
+                and self._term_level(src.lsb) > self._elt_depth):
             return None
         return src.lsb
 
@@ -789,16 +787,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # itself is never needed.  An operand with no term contributes
                 # none, and the ordering still holds for the rest.
                 m = self._fresh_value(e)
-                # over a summary, the ordering holds at every index
-                each = isinstance(e, AMax | AMin)
                 operands = [e.arg] if isinstance(e, AMax | AMin) else list(e.args)
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
                     if isinstance(e, AMax | Max):
-                        store.ge(m, t, each=each)
+                        store.ge(m, t)
                     else:
-                        store.le(m, t, each=each)
+                        store.le(m, t)
                 return m
             case ListComp():
                 return self.value_of(e.elt)
@@ -1039,7 +1035,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         phis = self.def_use.phis[stmt]
         then_lits = self._arm_non_finite(stmt, 0) if phis else []
         else_lits = self._arm_non_finite(stmt, 1) if phis else []
-        for phi in self.def_use.phis[stmt]:
+        for phi in phis:
             # `lhs` is the `then` arm of an `if`/`else`, but the *untaken*
             # path of a one-armed `if`, where the body is `rhs`.
             ift, iff = self.def_use.defs[phi.rhs], self.def_use.defs[phi.lhs]
@@ -1051,8 +1047,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # infinities.  Joining it instead leaves the merge at its own seed.
             live = [
                 self.out.by_def.get(d)
-                for d in (ift, iff)
-                if self.view.int_value(d) != 0
+                for d in (ift, iff) if self.view.int_value(d) != 0
             ]
             if live and all(t is not None for t in live):
                 self._join(phi, live)  # type: ignore[arg-type]
@@ -1079,10 +1074,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return out
 
     def _finite_lits(self, d: Definition) -> list[int]:
-        """Literals each implying "*d* is finite": its own, and for an element
-        read over the whole of a list, "every element of it is finite" too --
-        the one a part of the list can carry (:meth:`_instance`), since it
-        speaks for every index."""
+        """Literals each implying "*d* is finite": its own, and where *d*
+        reads an element over the whole list, "every element is finite"."""
         out = [self._lit(d)]
         if isinstance(d, AssignDef) and isinstance(d.site, Assign) and (
             isinstance(ref := d.site.expr, ListRef)
@@ -1179,11 +1172,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # a loop's own target and phis take a value per iteration of it
         return (*loops, site) if isinstance(site, ForStmt | WhileStmt) else loops
 
-    def _visit_statement(self, stmt: Stmt, ctx):
+    def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         self._loops_of_stmt[stmt] = self._loops
         return super()._visit_statement(stmt, ctx)
 
-    def _visit_while(self, stmt: WhileStmt, ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: Any) -> None:
         loops, self._loops = self._loops, (*self._loops, stmt)
         super()._visit_while(stmt, ctx)
         self._loops = loops
@@ -1322,11 +1315,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         key, index = self._gather
         if self.def_use.find_def_from_use(idx) is not index:
             return None
-        return self._instance(key, self.def_use.find_def_from_use(lst))
-
-    def _instance(self, key: tuple, d_lst: Definition) -> Terms | None:
-        """*d_lst*'s element summary on variables of its own, one renaming
-        per *key*, or ``None`` where it has a variable not per-element."""
+        d_lst = self.def_use.find_def_from_use(lst)
         src = self._def(d_lst)
         if src.value is None:
             # the part is what a rounding position is built from, and the
@@ -1344,7 +1333,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         for v in names:
             if v.index not in inst.subst:
                 inst.subst[v.index] = self._var(v.name + inst.tag)
-        self.store.instance(self._elt_vars, inst.subst, inst.tag)
+        inst.mark = self.store.instance(
+            self._elt_vars, inst.subst, inst.mark, inst.tag
+        )
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
     def _carried(self, d: Definition) -> list[Terms] | None:
@@ -1568,13 +1559,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _merge_returns(self) -> Terms:
         """The result is one of the returns: as far as the widest reaches, no
         finer than the coarsest, and valued as one of them.  A return reached
-        only where some `d` is non-finite is not taken where it is finite, so
-        the rest bound the result there too."""
+        only where some definition is non-finite is not taken where it is
+        finite, so the rest bound the result there too."""
         if len(self._returns) <= 1:
-            return Terms() if not self._returns else Terms(
-                self._returns[0][1].msb, self._returns[0][1].lsb,
-                self._returns[0][1].value,
-            )
+            return replace(self._returns[0][1]) if self._returns else Terms()
         tag = len(self.out.by_expr)
         terms = [t for _, t in self._returns]
         merged = Terms()
