@@ -2808,6 +2808,32 @@ class TestAlignedSumPrecision:
         assert v == fp.Float.from_float(1001000.25)
         assert bound.representable_in(v)
 
+    def test_a_list_of_tests_changed_through_an_alias(self):
+        """`all(bs)` reads `bs` as it is, not as the literal it was bound to."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, scale):
+            t = sum(xs) * scale
+            bs = [scale == 0]
+            ys = bs
+            ys[0] = True
+            if all(bs):
+                e = -200
+            else:
+                e = fp.logb(scale)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                r = fp.round(t)
+            return r
+
+        H = RealType(fp.FP16)
+        ast = Monomorphize.apply(f.ast, fp.REAL, [ListType(H, 4), H])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 'r')
+        F = fp.Float.from_float
+        v = f([F(2.0 ** 15), F(2.0 ** -24), F(0.0), F(0.0)], F(1 + 2 ** -10))
+        assert bound.representable_in(v)
+
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
         alignment to exploit, and the answer stays the non-relational one."""

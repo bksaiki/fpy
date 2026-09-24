@@ -240,11 +240,6 @@ def _size(bound: ArraySizeBound) -> int | None:
     return concrete_size(bound.size) if isinstance(bound, ListSize) else None
 
 
-_MAX_ZERO_PATHS = 64
-"""How many paths a conjunction of disjunctions may expand to before its
-zeros are given up on -- which only costs precision."""
-
-
 class _DigitBoundInferInstance(DefaultVisitor):
     """One function, instantiated at one call site's terms.
 
@@ -949,21 +944,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         `all(...)`.  A bare `xs[i] == 0` names the same term and is not here.
         """
         match cond:
-            case Or():
+            case Or() | And():
                 out: set[Term] = set()
                 for a in cond.args:
                     out |= self._universal_zeros(a)
                 return out
-            case And():
-                out = set()
-                for a in cond.args:
-                    out |= self._universal_zeros(a)
-                return out
-            case AllOf(arg=ListExpr()):
-                # element by element, which says nothing of a whole list
-                return set()
-            case AllOf(arg=Var() as xs) if self._literal(xs) is not None:
-                return set()
             case AllOf():
                 # `_zero_paths` already reads both shapes an `all` takes --
                 # over a comprehension, and over the list a loop filled
@@ -996,20 +981,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
                 for value, other in ((rhs, lhs), (lhs, rhs)):
                     if self.view.int_value(value) == 0:
-                        # a constant-index read has terms of its own, so a
-                        # zero element zeroes only itself
                         t = self._msb_of(other)
                         return None if t is None else [{t}]
                 return None
             case Or():
+                # `And` is the dual and is not handled
                 return self._zero_paths_all(cond.args)
-            case And():
-                return self._zero_paths_conj(cond.args)
-            case AllOf(arg=ListExpr() as lit):
-                # the comprehension below, once scalarized
-                return self._zero_paths_conj(lit.elts)
-            case AllOf(arg=Var() as xs) if (named := self._literal(xs)) is not None:
-                return self._zero_paths_conj(named.elts)
             case AllOf(arg=ListComp() as comp):
                 # every element true, so whatever the element tests is zero
                 return self._zero_paths(comp.elt)
@@ -1021,27 +998,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return self._zero_paths_of(self.def_use.find_def_from_use(cond))
             case _:
                 return None
-
-    def _zero_paths_conj(self, args: Sequence[Expr]) -> list[set[Term]] | None:
-        """The paths making every one of *args* true: each zeroes what one
-        path of every conjunct does.  A conjunct zeroing nothing leaves the
-        others' zeros standing."""
-        paths: list[set[Term]] = [set()]
-        for a in args:
-            part = self._zero_paths(a)
-            if part is None:
-                continue
-            paths = [p | q for p in paths for q in part]
-            if len(paths) > _MAX_ZERO_PATHS:
-                return None
-        return paths if any(paths) else None
-
-    def _literal(self, xs: Var) -> ListExpr | None:
-        """The list literal *xs* was bound to, if it was."""
-        d = self.def_use.find_def_from_use(xs)
-        if isinstance(d.site, Assign) and isinstance(d.site.expr, ListExpr):
-            return d.site.expr
-        return None
 
     def _zero_paths_of(self, d: Definition) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""

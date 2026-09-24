@@ -2039,6 +2039,63 @@ class TestBackThroughAFill:
 
         assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF
 
+    def test_not_a_fill_that_may_not_run(self):
+        @fp.fpy(ctx=fp.REAL)
+        def under_if(A, B, c):
+            prods = [0.0, 0.0, 0.0, 0.0]
+            if c > 0:
+                for i in range(4):
+                    prods[i] = A[i] * B[i]
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        @fp.fpy(ctx=fp.REAL)
+        def under_loop(A, B, k):
+            prods = [0.0, 0.0, 0.0, 0.0]
+            for _ in range(k):
+                for i in range(4):
+                    prods[i] = A[i] * B[i]
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        for f in (under_if, under_loop):
+            assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF
+
+    def test_a_fill_per_iteration(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, k):
+            r = 0.0
+            for _ in range(k):
+                prods = fp.empty(4)
+                for i in range(4):
+                    prods[i] = A[i] * B[i]
+                m = fp.empty(4)
+                for i in range(4):
+                    p = prods[i]
+                    m[i] = not fp.isfinite(p)
+                if any(m):
+                    r = 0
+                else:
+                    r = A[1] * 3
+            return r
+
+        cls = _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)])
+        assert cls & (NAN | INF) == ValueClass(0)
+
     def test_not_a_second_store(self):
         """Inside the fill, so the stamp at its exit does not show it."""
         @fp.fpy(ctx=fp.REAL)

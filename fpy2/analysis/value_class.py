@@ -735,6 +735,12 @@ class _ValueClassInstance(DefaultVisitor):
         self._clock += 1
         self._touched[region] = self._clock
 
+    def _retouch(self, clock: int):
+        """Touch every region stored into since *clock* again: past a join,
+        those stores only may have happened."""
+        for region in [r for r, t in self._touched.items() if t > clock]:
+            self._touch(region)
+
     def _mask_of(self, region: Region) -> ValueClass:
         """What the enclosing branches imply about *region*'s elements, or the
         top class once a store has landed since that was taken."""
@@ -1570,24 +1576,26 @@ class _ValueClassInstance(DefaultVisitor):
         self._visit_expr(stmt.cond, ctx)
         self.arm_facts[stmt] = (
             self._implied(stmt.cond, True), self._implied(stmt.cond, False))
-        entry = dict(self._elt)
+        entry, clock = dict(self._elt), self._clock
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
         # the body may not have run, so its stores only *may* have happened
         self._elt = self._join_elements(entry, self._elt)
+        self._retouch(clock)
         self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
         self.arm_facts[stmt] = (
             self._implied(stmt.cond, True), self._implied(stmt.cond, False))
-        entry = dict(self._elt)
+        entry, clock = dict(self._elt), self._clock
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)
         taken, self._elt = self._elt, entry
         with self._refined(stmt.cond, False):
             self._visit_block(stmt.iff, ctx)
         self._elt = self._join_elements(taken, self._elt)
+        self._retouch(clock)
         self._merge_phis(stmt)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
@@ -1596,7 +1604,9 @@ class _ValueClassInstance(DefaultVisitor):
             with self._refined(stmt.cond, True):
                 self._visit_block(stmt.body, ctx)
 
+        clock = self._clock
         self._fixpoint(stmt, body)
+        self._retouch(clock)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
@@ -1616,6 +1626,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._scan_clocks.pop(stmt, None)
         entry = self._clock
         self._fixpoint(stmt, body)
+        self._retouch(entry)
         self._scan_clocks[stmt] = (entry, self._clock)
         if region is not None and self._stamp(region) == before:
             self._scanned[stmt] = before
