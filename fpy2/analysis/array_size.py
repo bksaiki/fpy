@@ -464,7 +464,8 @@ class _ArraySizeInferInstance(DefaultVisitor):
                 n = self._const_int(e.arg)
                 if n is not None:
                     return ListSize(None, max(0, n))
-                return ListSize(None, None)
+                # ``range(len(xs))`` is as long as ``xs``, known or not
+                return ListSize(None, self._len_size(e.arg))
             case Enumerate():
                 assert isinstance(ty, ListSize)
                 return ListSize(TupleSize((None, ty.elt)), ty.size)

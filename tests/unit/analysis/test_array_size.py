@@ -832,14 +832,15 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size == 5
 
-    def test_range1_len_of_unknown_list_is_unknown(self):
-        """``range(len(xs))`` for an unknown-size ``xs`` stays unknown."""
+    def test_range1_len_of_unknown_list_is_its_size(self):
+        """``range(len(xs))`` for an unknown-size ``xs`` is as long as
+        ``xs``: the parameter's size variable, not unknown."""
 
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
             return [0.0 for _ in range(len(xs))]
 
-        assert self._range_bound(f, 'Range1').size is None
+        assert isinstance(self._range_bound(f, 'Range1').size, NamedId)
 
     def test_range1_dim_is_known_structurally(self):
         """``dim(xs)`` is the nesting depth — known even when sizes aren't,
@@ -2169,3 +2170,22 @@ class TestTripCount:
             return t
 
         assert self._count(f) is None
+
+
+class TestARangeOverALength:
+    """`range(len(xs))` is as long as `xs`, whether or not that is known."""
+
+    def test_directly_and_through_a_name(self):
+        @fp.fpy
+        def f(xs):
+            n = len(xs)
+            a = range(len(xs))
+            b = range(n)
+            return a, b
+
+        from fpy2.transform import Monomorphize
+        ast = Monomorphize.apply(f.ast, None, [ListType(RealType(fp.FP32), NamedId('k'))])
+        sizes = ArraySizeInfer.analyze(ast)
+        by_name = {str(d.name): b for d, b in sizes.by_def.items()}
+        assert by_name['a'].size == NamedId('k')
+        assert by_name['b'].size == NamedId('k')
