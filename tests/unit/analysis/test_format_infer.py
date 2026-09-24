@@ -2793,6 +2793,27 @@ class TestAlignedSumPrecision:
         L16 = ListType(RealType(fp.FP16), 4)
         assert self._sum_bounds(f, [L16, L16])['ts'] <= 28
 
+    def test_one_elements_exponent_does_not_bound_another(self):
+        """A constant read is one element, not the list's summary.  Read as
+        the summary, `logb(A[0])` bounded `A[1] * B[1]`, and `t` was bounded
+        at 6 bits, where `1001000.25` has 20."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            e = fp.logb(A[0]) + fp.logb(B[0])
+            with fp.MPFixedContext(e - 5, fp.RM.RTZ):
+                t = fp.round(A[1] * B[1])
+            return t
+
+        L = ListType(RealType(fp.FP16), 2)
+        ast = Monomorphize.apply(f.ast, fp.REAL, [L, L])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 't')
+        v = f([2.0 ** -10, 1000.5], [1.0, 1000.5])
+        assert v == fp.Float.from_float(1001000.25)
+        assert bound.representable_in(v)
+
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
         alignment to exploit, and the answer stays the non-relational one."""

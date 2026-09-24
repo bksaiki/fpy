@@ -50,7 +50,6 @@ class _IndexSet:
 
     tag: str
     subst: dict[int, Term] = field(default_factory=dict)
-    mark: int = 0
 
 
 @dataclass
@@ -458,8 +457,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 src = self._def(self.def_use.find_def_from_use(e))
             case ListRef(value=Var() as lst, index=idx) if self._covers(
                 idx, self._len_of(lst)
-            ) or self._in_range(idx, self._len_of(lst)):
+            ):
                 src = self._def(self.def_use.find_def_from_use(lst))
+            case ListRef(value=Var() as lst) if (
+                inst := self._at_const(e, lst)
+            ) is not None:
+                terms.msb, terms.lsb, terms.value = inst.msb, inst.lsb, inst.value
+                return
             case ListRef(value=Var() as lst, index=Var() as idx) if (
                 inst := self._at_index_set(lst, idx)
             ) is not None:
@@ -756,17 +760,19 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # itself is never needed.  An operand with no term contributes
                 # none, and the ordering still holds for the rest.
                 m = self._fresh_value(e)
+                elts = self._elements(e.arg) if isinstance(e, AMax | AMin) else None
                 operands = (
-                    self._elements(e.arg) or [e.arg] if isinstance(e, AMax | AMin)
-                    else list(e.args)
+                    elts or [e.arg] if isinstance(e, AMax | AMin) else list(e.args)
                 )
+                # over a summary, the ordering holds at every index
+                each = isinstance(e, AMax | AMin) and not elts
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
                     if isinstance(e, AMax | Max):
-                        store.ge(m, t)
+                        store.ge(m, t, each=each)
                     else:
-                        store.le(m, t)
+                        store.le(m, t, each=each)
                 return m
             case ListComp():
                 return self.value_of(e.elt)
@@ -962,23 +968,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
         which is how it arrives once scalarized.  Short of every index it
         says nothing of the others, as a single `xs[k] == 0` does not.
         """
-        seen: dict[Definition, tuple[Term, int | None, set[int]]] = {}
+        seen: dict[Definition, tuple[int | None, set[int]]] = {}
         for t in tests:
             ref = self._zero_tested(t)
             if ref is None or not isinstance(ref.value, Var):
                 continue
             k = self.view.int_value(ref.index)
-            msb = self._msb_of(ref)
-            if k is None or msb is None:
+            if k is None:
                 continue
             d = self.def_use.find_def_from_use(ref.value)
-            term, _, ks = seen.setdefault(
-                d, (msb, self._len_of(ref.value), set()))
-            if term is msb:
-                ks.add(k)
+            seen.setdefault(d, (self._len_of(ref.value), set()))[1].add(k)
         return {
-            term for term, n, ks in seen.values()
+            msb for d, (n, ks) in seen.items()
             if n is not None and ks >= set(range(n))
+            and (msb := self._def(d).msb) is not None
         }
 
     def _zero_tested(self, test: Expr) -> ListRef | None:
@@ -1026,10 +1029,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
                 for value, other in ((rhs, lhs), (lhs, rhs)):
                     if self.view.int_value(value) == 0:
-                        # an element read at a constant index has its list's
-                        # summary, which speaks for every element: one zero
-                        # element is not that, so only a conjunction covering
-                        # the list zeroes it -- see `_zero_paths_conj`
+                        # one zero element is not a zero list, so only a
+                        # conjunction covering the list zeroes it -- see
+                        # `_zero_paths_conj`
                         if self._one_element(other) is not None:
                             return None
                         t = self._msb_of(other)
@@ -1320,7 +1322,35 @@ class _DigitBoundInferInstance(DefaultVisitor):
         key, index = self._gather
         if self.def_use.find_def_from_use(idx) is not index:
             return None
+        return self._instance(key, self.def_use.find_def_from_use(lst))
+
+    def _at_const(self, e: ListRef, lst: Var) -> Terms | None:
+        """``lst[k]`` for a constant ``k`` in range: the summary at ``k``.
+
+        The summary itself would make every constant read one element, so a
+        ``logb`` of ``xs[0]`` would bound ``xs[1]``.  One renaming per index
+        keeps two reads of ``xs[0]`` one, and ``xs[0]`` paired with ``ys[0]``.
+        A row, whose own elements the renaming would take for uniform, and a
+        summary that cannot be renamed get fresh terms bracketed by it.
+        """
+        if not self._in_range(e.index, self._len_of(lst)):
+            return None
         d_lst = self.def_use.find_def_from_use(lst)
+        if not isinstance(self._type_of(e), ListType):
+            inst = self._instance(('k', self.view.int_value(e.index)), d_lst)
+            if inst is not None:
+                return inst
+        src, terms = self._def(d_lst), Terms()
+        msb, lsb = self._fresh_interval(terms, e, f'e{len(self.out.by_expr)}')
+        if src.msb is not None:
+            self.store.le(msb, src.msb)
+        if (src_lsb := self._elt_lsb(e, src)) is not None:
+            self._grid_ge(lsb, src_lsb)
+        return terms
+
+    def _instance(self, key: tuple, d_lst: Definition) -> Terms | None:
+        """*d_lst*'s element summary on variables of its own, one renaming
+        per *key*, or ``None`` where it has a variable not per-element."""
         src = self._def(d_lst)
         if src.value is None:
             # the part is what a rounding position is built from, and the
@@ -1338,9 +1368,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         for v in names:
             if v.index not in inst.subst:
                 inst.subst[v.index] = self._var(v.name + inst.tag)
-        inst.mark = self.store.instance(
-            self._elt_vars, inst.subst, inst.mark, inst.tag
-        )
+        self.store.instance(self._elt_vars, inst.subst, inst.tag)
         return Terms(*(None if t is None else t.rename(inst.subst) for t in fields))
 
     def _carried(self, d: Definition) -> list[Terms] | None:
@@ -1473,7 +1501,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case ListRef(value=Var() as lst, index=idx) if self._in_range(
                 idx, self._len_of(lst)
             ):
-                self._share(d, self._def(self.def_use.find_def_from_use(lst)))
+                self._share(d, self.out.by_expr[stmt.expr])
             case _:
                 src = self.out.by_expr.get(stmt.expr)
                 if src is None:

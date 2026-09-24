@@ -610,6 +610,11 @@ class TestAPartOfAListKeepsItsPairing:
         assert self._precs(f) == [288, 288]
 
 
+def _seed(s: DigitBoundStore, elt: Term) -> dict[int, Term]:
+    """A renaming of *elt*, as `_instance` starts one."""
+    return {v.index: s.var(v.name + '@0') for v, _ in elt.coeffs}
+
+
 class TestReplayingAtAnIndexSet:
     """`instance` copies the facts that hold at every index onto fresh
     variables.  One naming anything else may be an aggregate over the whole
@@ -622,13 +627,43 @@ class TestReplayingAtAnIndexSet:
         s.le(total, elt + 2)         # an aggregate: `sum` over the list
         s.le(other, 7)
 
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, 0, '@0')
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, '@0')
         part = elt.rename(subst)
 
         assert part != elt                       # a copy, not the same variable
         assert s.maximum(part) == 8              # `elt <= other + 1 <= 8`
         assert s.maximum(total - part) == math.inf   # the aggregate stayed put
+
+    def test_a_later_fact_is_copied_too(self):
+        """An instance taken before a fact is stated still gets it."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in elt.coeffs}, subst, '@0')
+        s.le(elt, 3)
+        assert s.maximum(elt.rename(subst)) == 3
+
+    def test_an_unconnected_fact_is_not_copied(self):
+        """A fact naming nothing the renaming reaches binds only fresh
+        variables, so it is skipped."""
+        s = DigitBoundStore()
+        elt, other = s.var('elt'), s.var('other')
+        s.le(other, 3)
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in (*elt.coeffs, *other.coeffs)}, subst, '@0')
+        assert len(subst) == 1
+
+    def test_a_fact_stated_each_is_copied_at_the_index(self):
+        """`max(xs) >= xs` holds at every index, so it holds of a part; the
+        aggregate side stays the same variable."""
+        s = DigitBoundStore()
+        elt, top = s.var('elt'), s.var('top')
+        s.le(top, 5)
+        s.ge(top, elt, each=True)
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in elt.coeffs}, subst, '@0')
+        assert s.maximum(elt.rename(subst)) == 5
 
 
 @fp.fpy(ctx=fp.REAL)

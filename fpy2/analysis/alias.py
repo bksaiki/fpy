@@ -405,6 +405,8 @@ class AliasAnalysis:
     Attributes:
         sites:            every list allocation, plus one per nested parameter list.
         written_regions:  regions an ``xs[i] = e`` here stores into.
+        stored_regions:   regions whose cells a store here replaces:
+                          ``xss[i][j] = e`` replaces a row's, not ``xss``'s.
         slot_replaced:    element regions an ``xss[i] = <list>`` replaces.
         returned_levels:  regions the ``return``s hand back, by depth.
         consumed_defs:    per region, definitions whose value *moves* into a
@@ -417,6 +419,7 @@ class AliasAnalysis:
     _by_expr: dict[Expr, Region]
     _site_region: dict[AllocSite, Region]
     written_regions: set[Region] = field(default_factory=set)
+    stored_regions: set[Region] = field(default_factory=set)
     slot_replaced: set[Region] = field(default_factory=set)
     returned_levels: list[set[Region]] = field(default_factory=list)
     consumed_defs: dict[Region, set[Definition]] = field(default_factory=dict)
@@ -590,6 +593,12 @@ class AliasAnalysis:
             return False
         return self._regions.find(ca) is self._regions.find(cb)
 
+    def may_change(self, d: Definition) -> bool:
+        """Whether the list *d* names may have an element replaced, through
+        any name here or by a call it is handed to."""
+        r = self.region_of(d)
+        return r is None or r in self.stored_regions or self.escapes_at(r)
+
 
 class _EscapeVars(DefaultVisitor):
     """Marks every list-carrying variable inside an expression as shared outward.
@@ -647,6 +656,7 @@ class _Builder(DefaultVisitor):
         facts = _RegionFacts(alias, self.def_use)
         facts._visit_function(self.func, None)
         alias.written_regions = facts.written
+        alias.stored_regions = facts.stored
         alias.slot_replaced = facts.slot_replaced
         alias.returned_levels = facts.returned_levels
         alias.consumed_defs = facts.consumed
@@ -943,6 +953,7 @@ class _RegionFacts(DefaultVisitor):
         self.alias = alias
         self.def_use = def_use
         self.written: set[Region] = set()
+        self.stored: set[Region] = set()
         self.slot_replaced: set[Region] = set()
         self.returned_levels: list[set[Region]] = []
         self.consumed: dict[Region, set[Definition]] = {}
@@ -961,6 +972,9 @@ class _RegionFacts(DefaultVisitor):
             if isinstance(d, AssignDef) and isinstance(d.site, IndexedAssign):
                 if (r := alias.region_of(d)) is not None:
                     self.written.add(r)
+                depth = len(d.site.indices) - 1
+                if (r := alias.region_of(d, depth)) is not None:
+                    self.stored.add(r)
 
     def _visit_block(self, block: StmtBlock, ctx):
         outer, self._siblings = self._siblings, set(block.stmts)
