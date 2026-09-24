@@ -767,6 +767,12 @@ class _ValueClassInstance(DefaultVisitor):
                 return [i for a in cond.args for i in self._implied(a, True)]
             case Or() if not truth:
                 return [i for a in cond.args for i in self._implied(a, False)]
+            # over a literal, the `and` / `or` of its elements: the shape
+            # `Scalarize` leaves a comprehension in
+            case AllOf(arg=ListExpr() as lit) if truth:
+                return [i for a in lit.elts for i in self._implied(a, True)]
+            case AnyOf(arg=ListExpr() as lit) if not truth:
+                return [i for a in lit.elts for i in self._implied(a, False)]
             case IsNan():
                 return self._at(cond.arg, _NAN if truth else _INF | _ZERO | _FINITE)
             case IsInf():

@@ -1642,7 +1642,6 @@ class TestFinitenessFacts:
     """What the scalarized special-value check of `gtr_fdpa` has to establish
     for the fused sum after it."""
 
-    @pytest.mark.xfail(strict=True, reason='Phase 3: any([...]) over a literal')
     def test_a_scalarized_any_guard_refines_what_it_tests(self):
         """`Scalarize` leaves `any([not isfinite(p) for p in prods])` as
         `any([t0, ...])` over names."""
@@ -1655,3 +1654,70 @@ class TestFinitenessFacts:
         info = ValueClassInfer.analyze(_backward_guard.ast)
         read = _find(_backward_guard.ast, '(a * 3)').first
         assert info.classify(read) & (NAN | INF) == ValueClass(0)
+
+
+class TestALiteralGuard:
+    """`all` / `any` over a literal is the `and` / `or` of its elements."""
+
+    def test_all_true_refines_each(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            if all([fp.isfinite(a), fp.isfinite(b)]):
+                r = a * b
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(a * b)') & (NAN | INF) == ValueClass(0)
+
+    def test_any_true_refines_nothing(self):
+        """A disjunction: either test may be the one that held."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            if any([fp.isnan(a), fp.isnan(b)]):
+                r = a * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(a * 3)') & NAN
+
+    def test_all_over_some_says_nothing_of_the_rest(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            if all([fp.isfinite(a)]):
+                r = b * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(b * 3)') & NAN
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guard_all(xs, c):
+    if all([fp.isfinite(x) for x in xs]):
+        r = xs[0] * 3
+    else:
+        r = 0
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guard_any(xs, c):
+    if any([not fp.isfinite(x) for x in xs]) or not fp.isfinite(c):
+        r = 0
+    else:
+        r = xs[0] * c
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guard_not_any(xs, c):
+    if not any([fp.isnan(x) for x in xs]):
+        r = xs[1] * 3
+    else:
+        r = 0
+    return r
+
+
