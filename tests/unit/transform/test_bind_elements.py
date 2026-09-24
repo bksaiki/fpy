@@ -104,3 +104,33 @@ class TestBindElements:
 
         out = _bound(f, _L2, fp.types.RealType(fp.INTEGER), args=([1.5, 2.5], 1))
         assert _reads(out) == 2
+
+    def test_an_index_a_name_holds(self):
+        """An unrolled loop leaves its index as a name each copy assigns."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs):
+            g = 1
+            a = xs[g]
+            b = xs[1]
+            return a * b
+
+        assert _reads(_bound(f, _L2, args=([1.5, 2.5],))) == 1
+
+    def test_through_a_copy(self):
+        """Inlining binds a callee's parameter to the caller's list by name."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs):
+            ys = xs
+            return xs[0] * ys[0]
+
+        assert _reads(_bound(f, _L2, args=([1.5, 2.5],))) == 1
+
+    def test_not_a_store_through_the_copy(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs):
+            ys = xs
+            a = xs[0]
+            ys[0] = 5.0
+            return a + ys[0]
+
+        assert _reads(_bound(f, _L2, args=([1.5, 2.5],))) == 2

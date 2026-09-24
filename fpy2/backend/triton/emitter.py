@@ -395,6 +395,9 @@ class _Emitter(Visitor):
         """The writer's `lanes`, bound when emission starts."""
         self._tile: str | None = None
         """The tile's index, while its body is emitted."""
+        self._guard_mask: str | None = None
+        """The mask of the tile's own guard while inside it: lanes past the
+        end, and no branch."""
 
     # -- storage and context -------------------------------------------
 
@@ -881,14 +884,20 @@ class _Emitter(Visitor):
         """`tl.load` at *addr*, under whatever guard is in force.
 
         Triton rejects a tile of a mask on a scalar address, so a scalar one
-        under a tile is broadcast to the tile rather than unmasked: a branch
-        can guard an address on every lane at once.
+        under a branch is broadcast to the tile rather than unmasked: a branch
+        can guard an address on every lane at once.  Under the tile's own
+        guard alone it is a scalar load.
         """
         if self.mask is None:
             return f'tl.load({addr})'
         if self._tile is not None and not (
             self._lanes & set(_IDENT.findall(addr))
         ):
+            if self.mask == self._guard_mask:
+                # every launched program has a live lane, which reads it:
+                # one scalar load, where a vector one costs Triton's
+                # coalescing superlinearly
+                return f'tl.load({addr})'
             addr = f'{addr} + tl.zeros_like({self._tile})'
         return f'tl.load({addr}, mask={self.mask}, other=0.0)'
 
@@ -1617,10 +1626,10 @@ class _Emitter(Visitor):
         if not any(stmt is g for g in self.guards):
             return self._emit_branch(stmt, stmt.body, None, ctx)
         # a tile's guard only drops the over-run: nothing merges out of it
-        prev = self.mask
-        self.mask = self.emit(stmt.cond)
+        prev, prev_guard = self.mask, self._guard_mask
+        self.mask = self._guard_mask = self.emit(stmt.cond)
         self._visit_block(stmt.body, ctx)
-        self.mask = prev
+        self.mask, self._guard_mask = prev, prev_guard
 
     def _visit_if(self, stmt: IfStmt, ctx: _IndentedWriter):
         self._emit_branch(stmt, stmt.ift, stmt.iff, ctx)

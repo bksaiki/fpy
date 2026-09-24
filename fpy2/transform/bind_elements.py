@@ -18,7 +18,8 @@ __all__ = ['BindElements']
 
 
 class _Reads(DefaultVisitor):
-    """Every `xs[k]` of a scalar at a constant `k` in range, by `(def, k)`."""
+    """Every `xs[k]` of a scalar at a constant `k` in range, by the list
+    `xs` names and `k`."""
 
     def __init__(self, func: FuncDef):
         super().__init__()
@@ -29,17 +30,35 @@ class _Reads(DefaultVisitor):
 
     def _visit_list_ref(self, e: ListRef, ctx):
         super()._visit_list_ref(e, ctx)
-        if not isinstance(e.value, Var) or not isinstance(e.index, Integer):
+        k = self._const(e.index)
+        if not isinstance(e.value, Var) or k is None:
             return
         if isinstance(self.types.by_expr.get(e), ListType | TupleType):
             return
         size = self.sizes.by_expr.get(e.value)
-        k = e.index.val
         if not isinstance(size, ListSize) or not isinstance(size.size, int):
             return
         if 0 <= k < size.size:
-            d = self.def_use.find_def_from_use(e.value)
+            d = self._root(self.def_use.find_def_from_use(e.value))
             self.reads.setdefault((d, k), []).append(e)
+
+    def _root(self, d: Definition) -> Definition:
+        """The list *d* names, through copies: inlining binds a callee's
+        parameter to the caller's list by name."""
+        while (isinstance(d, AssignDef) and isinstance(d.site, Assign)
+               and isinstance(d.site.expr, Var)):
+            d = self.def_use.find_def_from_use(d.site.expr)
+        return d
+
+
+    def _const(self, e: Expr) -> int | None:
+        """*e* as an integer, directly or through the definition reaching it:
+        an unrolled loop leaves its index as a name each copy assigns."""
+        if isinstance(e, Var):
+            d = self.def_use.use_to_def.get(e)
+            if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+                e = d.site.expr
+        return e.val if isinstance(e, Integer) else None
 
 
 class _Bind(DefaultTransformVisitor):

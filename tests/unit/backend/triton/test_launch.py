@@ -613,8 +613,8 @@ def _prefix_plus(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real],
 
 
 def test_a_scalar_address_under_the_tile_mask():
-    """`xs[j]` is one address for every lane; Triton rejects a tile of a
-    mask on it, so it is broadcast to the tile."""
+    """`xs[j]` is one address for every lane; under the tile's guard alone it
+    is one scalar load, which Triton broadcasts where it meets the tile."""
     import torch
 
     n = 8
@@ -624,7 +624,7 @@ def test_a_scalar_address_under_the_tile_mask():
             ListType(RealType(fp.FP32), n),
             ListType(RealType(fp.FP32), n),
             RealType(fp.INTEGER)])
-    assert 'tl.zeros_like(' in src.source
+    assert 'tl.zeros_like(' not in src.source
     torch.manual_seed(0)
     xs = torch.randn(4).cuda()
     ys = torch.randn(n).cuda()

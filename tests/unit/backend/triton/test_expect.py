@@ -209,8 +209,8 @@ def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
     i = j
     acc = 0.0
     for _i in tl.static_range(8):
-        x = tl.load(xs_ptr + _i + tl.zeros_like(j), mask=(j < 4), other=0.0)
-        y = tl.load(ys_ptr + _i + tl.zeros_like(j), mask=(j < 4), other=0.0)
+        x = tl.load(xs_ptr + _i)
+        y = tl.load(ys_ptr + _i)
         acc = (acc + (x * y))
     tl.store(out_ptr + i, acc, mask=(j < 4))'''
 

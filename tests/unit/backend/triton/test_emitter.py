@@ -1096,8 +1096,9 @@ def test_an_ldexp_scales_in_the_products_storage():
     assert 'libdevice.ldexp(x.to(tl.float64), ' in _emit(f, [_R32], ctx=fp.REAL)
 
 
-def test_a_lane_address_is_not_broadcast():
-    """Only an address the same on every lane needs it."""
+def test_a_lane_invariant_address_is_one_scalar_load():
+    """Under the tile's guard alone, an address the same on every lane is one
+    scalar load; a lane's own is a vector load."""
     from fpy2.backend.triton import TritonCompiler
 
     @fp.fpy(ctx=fp.FP32)
@@ -1109,8 +1110,30 @@ def test_a_lane_address_is_not_broadcast():
     src = TritonCompiler(drop_asserts=True).compile(
         f, ctx=fp.FP32, arg_types=[ListType(_R32, 8), ListType(_R32, 8), _INT],
     ).source
-    assert src.count('tl.zeros_like(') == 1
-    assert 'tl.load(xs_ptr + 0 + tl.zeros_like(j)' in src
+    assert 'tl.zeros_like(' not in src
+    assert 'tl.load(xs_ptr + 0)' in src
+    assert 'tl.load(xs_ptr + i, mask=' in src
+
+
+def test_a_lane_invariant_address_under_a_branch_is_broadcast():
+    """A branch can guard an address on every lane at once, so under one the
+    load keeps the branch's mask, broadcast to the tile."""
+    from fpy2.backend.triton import TritonCompiler
+
+    @fp.fpy(ctx=fp.FP32)
+    def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for i in range(len(xs)):
+            if xs[i] > 0:
+                y = xs[0]
+            else:
+                y = xs[i]
+            out[i] = y
+        return out
+
+    src = TritonCompiler(drop_asserts=True).compile(
+        f, ctx=fp.FP32, arg_types=[ListType(_R32, 8), ListType(_R32, 8), _INT],
+    ).source
+    assert 'tl.load(xs_ptr + 0 + tl.zeros_like(j), mask=' in src
 
 
 class TestTryWiden:
