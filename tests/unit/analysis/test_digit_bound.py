@@ -439,6 +439,17 @@ class TestAGuardedConstraint:
         s.instance({v.index for v, _ in elt.coeffs}, subst, '@0')
         assert s.maximum(elt.rename(subst), frozenset({g})) == 3
 
+    def test_the_copy_keeps_its_guard(self):
+        """It holds at every index -- where it holds at all."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        g = s.literal(universal=True)
+        s.le(elt, 3, guard=(g,))
+        s.le(elt, 9)
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in elt.coeffs}, subst, '@0')
+        assert s.maximum(elt.rename(subst)) == 9
+
     def test_an_instance_does_not_copy_it(self):
         """A literal names one definition, not one per index."""
         s = DigitBoundStore()

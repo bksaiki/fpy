@@ -166,9 +166,11 @@ class DigitBoundStore:
         for v in moved:
             if v.index not in inst.subst:
                 inst.subst[v.index] = self.var(v.name + inst.tag)
+        # under the same guard: a universal literal speaks for every index,
+        # this one's included, but holds only where it holds
         self._add(Constraint(
             c.lhs.rename(inst.subst), c.op,
-            tuple(t.rename(inst.subst) for t in c.rhs),
+            tuple(t.rename(inst.subst) for t in c.rhs), c.guard,
         ), copy=True)
 
     def literal(self, *, universal: bool = False) -> int:

@@ -1204,9 +1204,24 @@ class _DigitBoundInferInstance(DefaultVisitor):
         out: list[int] = []
         for d, cls in self._classes.arm_facts.get(stmt, ((), ()))[arm]:
             if not cls & (ValueClass.ZERO | ValueClass.FINITE):
-                lit = self._lit(d)
-                if lit not in out:
-                    out.append(lit)
+                for lit in self._finite_lits(d):
+                    if lit not in out:
+                        out.append(lit)
+        return out
+
+    def _finite_lits(self, d: Definition) -> list[int]:
+        """Literals each implying "*d* is finite": its own, and for an element
+        read over the whole of a list, "every element of it is finite" too --
+        the one a part of the list can carry (:meth:`_instance`), since it
+        speaks for every index."""
+        out = [self._lit(d)]
+        if isinstance(d, AssignDef) and isinstance(d.site, Assign) and (
+            isinstance(ref := d.site.expr, ListRef)
+            and isinstance(ref.value, Var)
+            and self._covers(ref.index, self._len_of(ref.value))
+            and (lit := self._lit_of(ref)) is not None
+        ):
+            out.append(lit)
         return out
 
     def _lit(self, d: Definition) -> int:
@@ -1751,7 +1766,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             taken = [t for e, t in self._returns
                      if self._classes.class_at(d, e) & (ValueClass.ZERO | ValueClass.FINITE)]
             if taken and len(taken) < len(terms):
-                self._untaken_returns(merged, taken, (self._lit(d),))
+                for lit in self._finite_lits(d):
+                    self._untaken_returns(merged, taken, (lit,))
         return merged
 
     def _non_finite_defs(self) -> list[Definition]:
