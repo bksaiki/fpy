@@ -175,12 +175,10 @@ class _DefBound:
 
 @dataclass(frozen=True)
 class _ExprBound:
-    """A bound the caller derived for *count* of the callee's expressions.
-
-    Unkeyed; see :func:`_bounds_key`.
-    """
+    """A bound the caller derived for one of the callee's expressions, by its
+    position in a walk of the callee; see :func:`_bounds_key`."""
+    at: int
     fmt: FormatBound
-    count: int
 
 
 _Bound: TypeAlias = _DefBound | _ExprBound
@@ -287,16 +285,32 @@ def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
     ``by_def``, so two callers would key the same.  The two maps together are
     also what the backend reads.
 
-    A set, because both maps enumerate in AST-node order, an artefact of the
-    walk.  ``by_def`` carries its name; ``by_expr`` contributes bounds
-    without keys, so an occurrence *count* is what tells two callers apart.
+    A set, because both maps enumerate in the order the analysis walked.  A
+    definition is keyed by its name and an expression by its position in the
+    callee, which every call site walks alike: keyed by format alone, two
+    callers that bound *different* expressions tightly would share a spec,
+    and the first would decide the other's storage.
     """
     bounds = (*sub.by_def.values(), *sub.by_expr.values())
     if all(_is_trivial_bound(f) for f in bounds):
         return frozenset()
     named: set[_Bound] = {_DefBound(d.name, fmt) for d, fmt in sub.by_def.items()}
-    counted = Counter(sub.by_expr.values())
-    return frozenset(named | {_ExprBound(f, n) for f, n in counted.items()})
+    at = _positions(sub.func)
+    return frozenset(named | {_ExprBound(at[id(e)], f) for e, f in sub.by_expr.items()})
+
+
+def _positions(func: FuncDef) -> dict[int, int]:
+    """Each expression of *func*, by identity, to its place in a preorder
+    walk."""
+    out: dict[int, int] = {}
+
+    class _Walk(DefaultVisitor):
+        def _visit_expr(self, e: Expr, ctx):
+            out.setdefault(id(e), len(out))
+            super()._visit_expr(e, ctx)
+
+    _Walk()._visit_function(func, None)
+    return out
 
 
 def _arg_vals_key(
