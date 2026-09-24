@@ -1,6 +1,13 @@
 """Unrolling proven-length sequences into one value per element."""
 
-from ..analysis import ArraySizeAnalysis, ArraySizeInfer, DefineUse, SyntaxCheck
+from ..analysis import (
+    Alias,
+    AliasAnalysis,
+    ArraySizeAnalysis,
+    ArraySizeInfer,
+    DefineUse,
+    SyntaxCheck,
+)
 from ..analysis.array_size import ListSize
 from ..analysis.reaching_defs import AssignDef
 from ..ast import *
@@ -80,9 +87,11 @@ class _Scalarize(DefaultTransformVisitor):
 
     def __init__(self, func: FuncDef, sizes: ArraySizeAnalysis, cap: int):
         super().__init__()
+        self.func = func
         self.sizes = sizes
         self.cap = cap
         self.def_use = DefineUse.analyze(func)
+        self._alias: AliasAnalysis | None = None
         self.gensym = Gensym(reserved=self.def_use.names())
         self.pending: list[Stmt] = []
         self.changed = False
@@ -207,11 +216,12 @@ class _Scalarize(DefaultTransformVisitor):
 
         Sound where the element still holds its value: every name from the
         read back to the literal -- through copies, which inlining makes of a
-        parameter -- is defined once, so nothing stores into the list through
-        any of them, and the element is a literal or a name defined once.
+        parameter -- is defined once, nothing stores into the list through
+        any name, and the element is a literal or a name defined once.
         """
         k = self._const(e.index)
         src: Expr = e.value
+        d: AssignDef | None = None
         while isinstance(src, Var):
             d = self.def_use.use_to_def.get(src)
             if not self._once(src.name) or not isinstance(d, AssignDef):
@@ -221,12 +231,20 @@ class _Scalarize(DefaultTransformVisitor):
             src = d.site.expr
         if k is None or not isinstance(src, ListExpr):
             return None
+        if d is not None and self.alias.may_change(d):
+            return None
         if not 0 <= k < len(src.elts):
             return None
         elt = src.elts[k]
         if isinstance(elt, Var):
             return elt if self._once(elt.name) else None
         return elt if isinstance(elt, (Integer, RationalVal, BoolVal)) else None
+
+    @property
+    def alias(self) -> AliasAnalysis:
+        if self._alias is None:
+            self._alias = Alias.analyze(self.func, def_use=self.def_use)
+        return self._alias
 
     def _once(self, name: NamedId) -> bool:
         return len(self.def_use.name_to_defs.get(name, ())) == 1

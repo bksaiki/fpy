@@ -30,6 +30,7 @@ from ...ast import (
 from ...function import Function
 from ...module import Module
 from ...transform import (
+    BindElements,
     FuncInline,
     RescaleFixed,
     Scalarize,
@@ -150,7 +151,9 @@ def normalize(func: FuncDef, *, cap: int = _DEFAULT_CAP) -> FuncDef:
             pass  # nothing to move is not a failure
         reasons = _NotNormal(func).check()
         if not reasons:
-            return func
+            # one element, one name, for the analyses to relate what the
+            # unrolling and the inlining read of it separately
+            return BindElements.apply(func)
     # the loop is meant to converge -- inlining is bounded by an acyclic call
     # graph, unrolling by that, and neither creates work for the other without
     # consuming some.  Reaching the bound means one of those is false.

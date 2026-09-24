@@ -4,6 +4,7 @@ This module defines compiler transforms over FPy IR.
 
 from .anf import ANF
 from .assert_elim import AssertElim
+from .bind_elements import BindElements
 from .comp_to_loop import CompToLoop
 from .const_fold import ConstFold
 from .copy_propagate import CopyPropagate

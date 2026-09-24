@@ -410,6 +410,18 @@ class TestAReadOfALiteral:
 
         assert _reads(_agrees(f, 1.5, 2.5)) == 1
 
+    def test_not_under_a_store_through_a_copy(self):
+        """... nor a store through a name the read never passes: every name
+        on the way from `ys[0]` is defined once, yet `zs[0] = 5` reaches it."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(x: fp.Real, y: fp.Real):
+            ys = [x, y]
+            zs = ys
+            zs[0] = 5.0
+            return ys[0]
+
+        assert _reads(_agrees(f, 1.5, 2.5)) == 1
+
     def test_not_an_element_reassigned(self):
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real, y: fp.Real):
