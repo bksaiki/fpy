@@ -344,6 +344,8 @@ class _Emitter(Visitor):
         """The rows a tile holds: the row tile's width, inside one."""
         self._out = _IndentedWriter()
         """The writer, for a value an expression has to bind first."""
+        self._carried: dict[NamedId, TritonScalar] = {}
+        """The names a runtime loop in a row tile carries, held as rows."""
         self.def_use = def_use or DefineUse.analyze(func)
         # the classes `StorageInfer` coalesces: the definitions a phi joins
         defs = self.def_use.defs
@@ -1840,6 +1842,9 @@ class _Emitter(Visitor):
                 )
                 return
         code = self._into_class(stmt, self.emit(stmt.expr))
+        if stmt.target in self._carried:
+            ctx.add_line(f'{stmt.target} = {self._as_row(code, self._carried[stmt.target])}', 'row')
+            return
         if code.isdigit():
             self.consts[str(stmt.target)] = int(code)
         elif isinstance(stmt.expr, Var):
@@ -2078,23 +2083,7 @@ class _Emitter(Visitor):
             )
         n = static_trip_count(stmt.iterable, self.sizes)
         if not isinstance(n, int):
-            # a length the kernel takes as a parameter: a loop at runtime,
-            # which Triton needs to carry each value at one type -- where
-            # `tl.static_range`, unrolled while tracing, did not
-            if carried := carried_scalars(stmt, self.def_use):
-                raise TritonEmitError(
-                    f'a loop with a runtime count carries `{min(carried)}`, '
-                    'which Triton needs at one type on every iteration; this '
-                    'backend does not yet arrange that'
-                )
-            it = stmt.iterable
-            args = ([self.emit(it.arg)] if isinstance(it, Range1)
-                    else [self.emit(a) for a in (it.first, it.second, it.third)])
-            ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
-            ctx.indent()
-            self._visit_block(stmt.body, ctx)
-            ctx.dedent()
-            return
+            return self._emit_runtime_loop(stmt, ctx)
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
@@ -2110,6 +2099,44 @@ class _Emitter(Visitor):
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
+
+    def _emit_runtime_loop(self, stmt: ForStmt, ctx: _IndentedWriter):
+        """A loop whose count the kernel takes as a parameter.
+
+        Triton carries each value at one type on every iteration, where
+        `tl.static_range`, unrolled while tracing, did not.  The storage is
+        one already, the class's; the shape is held to a row wherever the
+        loop sits in a row tile, since a value the body computes from the row
+        is one, at entry and at every assignment in the body.
+        """
+        carried = carried_scalars(stmt, self.def_use)
+        prev = self._carried
+        if self._tile is not None and carried:
+            self._carried = {}
+            for p in self.def_use.phis.get(stmt, ()):
+                if p.name not in carried:
+                    continue
+                held = self._class_storage(p)
+                if held is None:
+                    raise TritonEmitError(
+                        f'no storage holds every value `{p.name}` carries'
+                    )
+                self._carried[p.name] = held
+                ctx.add_line(f'{p.name} = {self._as_row(str(p.name), held)}', 'row')
+        it = stmt.iterable
+        assert isinstance(it, (Range1, Range3))
+        args = ([self.emit(it.arg)] if isinstance(it, Range1)
+                else [self.emit(a) for a in (it.first, it.second, it.third)])
+        ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
+        ctx.indent()
+        self._visit_block(stmt.body, ctx)
+        ctx.dedent()
+        self._carried = prev
+
+    def _as_row(self, code: str, held: TritonScalar) -> str:
+        """*code*, broadcast across the row tile's rows."""
+        zeros = f'tl.zeros(({self._row_width},), dtype={held.format()})'
+        return f'({code} | {zeros})' if held is TritonScalar.BOOL else f'({code} + {zeros})'
 
     def _iterate_tile(self, stmt: ForStmt, tile: NamedId, ctx: _IndentedWriter):
         """`for x in xs` over a tile: in order, each element extracted."""

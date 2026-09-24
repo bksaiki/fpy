@@ -879,3 +879,47 @@ def test_an_aligned_slice_of_a_tile_is_a_tile():
                     [[0.0] * 8 for _ in range(6)], 4)
     for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
         assert [repr(float(v)) for v in w] == [repr(v) for v in g], r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _chain(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
+           out: list[fp.Real], BLOCK: fp.Real):
+    """A T-FDPA chain's shape: blocks of four, a block sum, and an
+    accumulator carried from block to block."""
+    for j in range(len(out)):
+        xs = xss[j]
+        ys = yss[j]
+        with fp.FP32:
+            d = fp.round(0)
+        for i in range(0, len(xs), 4):
+            xb = xs[i:i + 4]
+            yb = ys[i:i + 4]
+            with fp.FP32:
+                ps = [a * b for a, b in zip(xb, yb)]
+                d = d + sum(ps)
+        out[j] = d
+    return out
+
+
+def test_one_kernel_at_every_depth():
+    """`K` a kernel argument: the loop over its blocks runs at runtime, and
+    the accumulator it carries is a row at entry and at every assignment."""
+    import torch
+    from fpy2.utils import NamedId
+
+    rows, k = NamedId('rows'), NamedId('k')
+    src = TritonCompiler(drop_asserts=True).compile(_chain, ctx=fp.REAL, arg_types=[
+        ListType(ListType(RealType(FP16), k), rows),
+        ListType(ListType(RealType(FP16), k), rows),
+        ListType(RealType(fp.FP32), rows), RealType(fp.INTEGER)])
+    assert 'in range(0, ' in src.source
+    for depth in (4, 8, 20):
+        torch.manual_seed(depth)
+        xt = (torch.randn(6, depth) * 8).half().cuda()
+        yt = (torch.randn(6, depth) * 8).half().cuda()
+        ot = torch.zeros(6, dtype=torch.float32).cuda()
+        launch(src, [xt, yt, ot], block=4)
+        xs = [[float(v) for v in r] for r in xt.cpu().tolist()]
+        ys = [[float(v) for v in r] for r in yt.cpu().tolist()]
+        want = _chain(xs, ys, [0.0] * 6, 4)
+        assert ot.cpu().tolist() == [float(v) for v in want], depth

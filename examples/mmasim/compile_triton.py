@@ -4,8 +4,8 @@ Compiles every MMA-Sim design to a Triton kernel, reporting where each one stops
 A design is one dot product, which has no loop to tile, so each is wrapped in
 a matmul: an `m x k` by `n x k` product, `B` given transposed so that a column
 is a row, with `out[i][j]` one call.  `m = n = 1` is the dot product itself.
-`m` and `n` are kernel arguments, so one kernel runs at any; `k` is compiled
-in.
+`m`, `n` and `k` are kernel arguments, so one kernel runs at any; `k` is
+compiled in for a design taking scales, which are one per call.
 Asserts are dropped: a kernel cannot raise.
 
     python examples/mmasim/compile_triton.py              # one line per design
@@ -88,12 +88,15 @@ def _at_depth(arg_types, k: int | None):
 
 def compile_matmul(build, k: int | None):
     """The kernel for one design as a matmul over *k*, the design, and its
-    argument types; raises whatever refused it.  `m` and `n` are the kernel's
-    to be told, so one kernel runs at any."""
+    argument types; raises whatever refused it.  The sizes are the kernel's
+    to be told, so one kernel runs at any -- but for a design's scales, whose
+    number fixes `k`."""
     design, arg_types = build()
     arg_types = _at_depth(arg_types, k)
     a, b, c, *scales = arg_types
     m, n = NamedId('m'), NamedId('n')
+    if not scales:
+        a, b = _L(a.elt, NamedId('k')), _L(b.elt, NamedId('k'))
     square = _L(_L(c, n), m)
     kernel = TritonCompiler(
         drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,

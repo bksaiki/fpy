@@ -195,10 +195,9 @@ class TestSequentialLoops:
         g = _spec(fold, fp.FP32, ctx=fp.FP32)
         assert 'tl.static_range(8)' in emit_block(g.ast.body, g.ast)
 
-    def test_a_runtime_count_carrying_a_scalar_is_refused(self):
-        """A loop at runtime carries each value at one type, and `acc` starts
-        as a literal; `tl.static_range`, unrolled while tracing, never had to
-        care."""
+    def test_a_runtime_count_carrying_a_scalar(self):
+        """A loop at runtime carries each value at one type.  Outside a row
+        tile a literal start is one: Triton types it by the body."""
         @fp.fpy(ctx=fp.FP32)
         def fold(x: fp.Real, n: fp.Real):
             acc = fp.round(0)
@@ -210,8 +209,9 @@ class TestSequentialLoops:
         m.add(fold, ctx=fp.FP32,
               arg_types=[RealType(fp.FP32), RealType(fp.INTEGER)])
         g = Specialize.apply(m, size_key=True).get('fold').func
-        with pytest.raises(TritonEmitError, match='runtime count carries `acc`'):
-            emit_block(g.ast.body, g.ast)
+        out = emit_block(g.ast.body, g.ast)
+        assert 'for k in range(n):' in out
+        assert 'acc = (acc + x)' in out
 
 
 class TestSelect:
