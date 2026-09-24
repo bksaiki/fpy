@@ -314,3 +314,59 @@ class TestLanes:
         _is_normal(out.ast)
         for xs in ([1.0, -2.0, 3.0], [-1.0, 2.0], [0.0]):
             assert repr(out(xs)) == repr(uses(xs))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _exponent0(x, emin):
+    if not fp.isfinite(x):
+        return -1
+    return max(fp.logb(x), emin)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _fused_sum(xs, n):
+    with fp.MPFixedContext(n, fp.RM.RTZ):
+        ts = [fp.round(x) for x in xs]
+    return sum(ts)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _evens(A: list[fp.Real], B: list[fp.Real]):
+    """cdna3.bf8's shape: a truncated sum over the even-index products,
+    aligned at the even exponents' greatest, past a finiteness guard."""
+    prods = [a * b for a, b in zip(A, B)]
+    es = [-40 if p == 0 else _exponent0(a, -15) + _exponent0(b, -15)
+          for p, a, b in zip(prods, A, B)]
+    if any([not fp.isfinite(p) for p in prods]):
+        return 0.0
+    e = max([es[i] for i in range(0, 8, 2)])
+    return _fused_sum([prods[i] for i in range(0, 8, 2)], e - 25)
+
+
+def test_a_gathered_sum_keeps_its_bound_past_a_guard():
+    """The guard is stated on each element as it is read, and the evens are
+    a part of the list: the part needs "every element is finite" to carry
+    the bound, which is what makes the sum fit a `double`."""
+    from fpy2.ast.fpyast import Sum
+    from fpy2.backend.triton.storage import bound_fits_in_scalar
+    from fpy2.backend.triton.types import TritonScalar
+    from fpy2.transform import FreeVarElim, Specialize, ZipElim
+    from fpy2.types import ListType, RealType
+
+    fp16 = RealType(fp.IEEEContext(5, 16))
+    m = Module()
+    m.add(_evens, arg_types=[ListType(fp16, 8), ListType(fp16, 8)])
+    m = m.map(lambda _m, fd: ZipElim.apply(FreeVarElim.apply(fd)))
+    ast = normalize_module(Specialize.apply(m, size_key=True), lanes=True).get(
+        '_evens').func.ast
+    fmt = FormatInfer.analyze(ast, use_digit_bounds=True)
+    sums = []
+
+    class _V(DefaultVisitor):
+        def _visit_unaryop(self, e, ctx):
+            if isinstance(e, Sum):
+                sums.append(fmt.by_expr.get(e))
+            return super()._visit_unaryop(e, ctx)
+
+    _V()._visit_function(ast, None)
+    assert sums and all(bound_fits_in_scalar(b, TritonScalar.F64) for b in sums)
