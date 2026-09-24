@@ -2669,6 +2669,19 @@ class TestAlignedSumPrecision:
         fmt = next(b for e, b in info.by_expr.items() if isinstance(e, Sum))
         return AbstractFormat.from_format(fmt).prec
 
+    @staticmethod
+    def _sum_bounds(fn, arg_types):
+        """Each `sum`'s precision, by the name of what it sums."""
+        from fpy2.ast.fpyast import Sum
+        from fpy2.transform import Monomorphize
+
+        mono = Monomorphize.apply(fn.ast, fp.REAL, arg_types)
+        info = FormatInfer.analyze(mono, use_digit_bounds=True)
+        return {
+            e.arg.format(): AbstractFormat.from_format(b).prec
+            for e, b in info.by_expr.items() if isinstance(e, Sum)
+        }
+
     def test_the_sum_keeps_the_alignment(self):
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
@@ -2735,6 +2748,89 @@ class TestAlignedSumPrecision:
             return sum([g(x) for x in xs])
 
         assert self._sum_bound(f, [self.L32]) > 200
+
+    def test_an_outer_loop_does_not_share_an_inner_grid(self):
+        """A position uniform over the list it rounds is still one element's
+        to the list *outside* it.  Every `ws` shares a grid, so the inner sum
+        may exploit it; each `ys[i]` sits on a grid of its own, so the outer
+        sum may not."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            ys = fp.empty(len(xss))
+            for i in range(len(xss)):
+                xs = xss[i]
+                e = max([fp.logb(x) for x in xs])
+                with fp.MPFixedContext(e - 12):
+                    ws = [fp.round(x) for x in xs]
+                ys[i] = sum(ws)
+            return sum(ys)
+
+        bounds = self._sum_bounds(f, [ListType(self.L32, 4)])
+        assert bounds['ws'] == 18    # the position is one value for all of `xs`
+        assert bounds['ys'] > 200    # ... and a different one for each `i`
+
+    def test_a_zero_test_on_one_element_zeroes_that_element(self):
+        """`c = cs[0]` has terms of its own, so `c == 0` zeroes `c` alone --
+        and the guard aligns as it does for a scalar."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(cs, x):
+            c = cs[0]
+            e = (-139 if c == 0 else max(fp.logb(c), -126))
+            e2 = max(e, max(fp.logb(x), -126))
+            with fp.MPFixedContext(e2 - 24, fp.RM.RTZ):
+                t0 = fp.round(c)
+                t1 = fp.round(x)
+            ts = [t0, t1]
+            return sum(ts)
+
+        R = RealType(fp.FP32)
+        assert self._sum_bounds(f, [ListType(R, 1), R])['ts'] <= 26
+
+    def test_one_elements_exponent_does_not_bound_another(self):
+        """A constant read is one element, not the list's summary: `logb(A[0])`
+        must not bound `A[1] * B[1]`."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            e = fp.logb(A[0]) + fp.logb(B[0])
+            with fp.MPFixedContext(e - 5, fp.RM.RTZ):
+                t = fp.round(A[1] * B[1])
+            return t
+
+        L = ListType(RealType(fp.FP16), 2)
+        ast = Monomorphize.apply(f.ast, fp.REAL, [L, L])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 't')
+        v = f([2.0 ** -10, 1000.5], [1.0, 1000.5])
+        assert v == fp.Float.from_float(1001000.25)
+        assert bound.representable_in(v)
+
+    def test_a_list_of_tests_changed_through_an_alias(self):
+        """`all(bs)` reads `bs` as it is, not as the literal it was bound to."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, scale):
+            t = sum(xs) * scale
+            bs = [scale == 0]
+            ys = bs
+            ys[0] = True
+            if all(bs):
+                e = -200
+            else:
+                e = fp.logb(scale)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                r = fp.round(t)
+            return r
+
+        H = RealType(fp.FP16)
+        ast = Monomorphize.apply(f.ast, fp.REAL, [ListType(H, 4), H])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 'r')
+        F = fp.Float.from_float
+        v = f([F(2.0 ** 15), F(2.0 ** -24), F(0.0), F(0.0)], F(1 + 2 ** -10))
+        assert bound.representable_in(v)
 
     def test_an_unaligned_sum_gets_nothing(self):
         """The counterweight for soundness: without a shared grid there is no
@@ -3540,6 +3636,67 @@ class TestBranchRefinement:
         assert float(af.pos_bound) == 65536.0
         assert float(af.neg_bound) == -65536.0
 
+    def test_a_named_condition_refines_as_its_definition(self):
+        """`SimplifyIf` binds every condition to a name, so reading only a
+        literal comparison would see nothing in its output."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = abs(x) < 65536
+            if c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert float(af.pos_bound) == 65536.0
+        assert float(af.neg_bound) == -65536.0
+
+    def test_a_named_condition_negates(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = x >= 65536
+            if not c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        assert self._pos(self._defs(f)['y']) == 65536.0
+
+    def test_a_named_condition_does_not_refine_a_reassigned_operand(self):
+        """The fact is about the `x` the condition read, not the one after."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = abs(x) < 65536
+            with fp.REAL:
+                x = x * 2 ** 20
+            if c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        af = AbstractFormat.from_format(self._defs(f)['y'])
+        assert af.pos_bound.as_rational() > 2 ** 1000
+
+    def test_a_reassigned_condition_refines_by_the_reaching_definition(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            c = abs(x) < 65536
+            c = x != 0
+            if c:
+                with fp.REAL:
+                    y = x * 1
+            else:
+                y = 0
+            return y
+
+        assert self._pos(self._defs(f)['y']) > 1e300
+
     def test_the_refinement_does_not_escape_the_arm(self):
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
@@ -4043,3 +4200,326 @@ class TestAZeroGuardNoPathNames:
                                   RealType(fp.FP16), RealType(fp.FP16)])
         fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(t)')
         assert fmt.pmax == 28
+
+
+class TestFinitenessSentinel:
+    """`exponent0` reads a non-finite exponent as `-1`; a merge keeps it
+    wherever it is reached."""
+
+    def test_the_sentinel_path_is_in_the_bound(self):
+        """At `x = inf` the position is `-1 - 10`, and `c` keeps digits to
+        `2 ** -10`.  A merge that forgot the sentinel would take `r >= 5` and
+        put `t` on a `2 ** -4` grid, which does not hold `341 / 1024`."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, c):
+            if not fp.isfinite(x):
+                r = -1
+            else:
+                r = max(fp.logb(x), 5)
+            with fp.MPFixedContext(r - 10, fp.RM.RTZ):
+                t = fp.round(c)
+            return t
+
+        ast = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP16), RealType(fp.FP32)])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 't')
+        v = f(fp.Float(isinf=True), fp.FP32.round(1 / 3))
+        assert v == fp.Float.from_float(341 / 1024)
+        assert bound.representable_in(v)
+
+    def test_the_sentinel_path_is_in_the_bound_across_a_call(self):
+        """The same, with the sentinel returned by a callee."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def exp0(x):
+            if not fp.isfinite(x):
+                return -1
+            return max(fp.logb(x), 5)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, c):
+            r = exp0(x)
+            with fp.MPFixedContext(r - 10, fp.RM.RTZ):
+                t = fp.round(c)
+            return t
+
+        ast = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP16), RealType(fp.FP32)])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 't')
+        v = f(fp.Float(isinf=True), fp.FP32.round(1 / 3))
+        assert v == fp.Float.from_float(341 / 1024)
+        assert bound.representable_in(v)
+
+    def test_not_where_the_check_does_not_reach(self):
+        """Without a finiteness check around the sum, nothing says the
+        sentinel arm was not taken, so the merge stays a merge."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            a0 = A[0]
+            b0 = B[0]
+            p0 = a0 * b0
+            p2 = A[2] * B[2]
+            if not fp.isfinite(a0):
+                r1 = -1
+            else:
+                r1 = max(fp.logb(a0), -15)
+            if not fp.isfinite(b0):
+                r2 = -1
+            else:
+                r2 = max(fp.logb(b0), -15)
+            e0 = (-35 if p0 == 0 else r1 + r2)
+            e2 = (-35 if p2 == 0 else
+                  max(fp.logb(A[2]), -15) + max(fp.logb(B[2]), -15))
+            e = max([e0, e2])
+            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                t0 = fp.round(p0)
+                t1 = fp.round(p2)
+            ts = [t0, t1]
+            return sum(ts)
+
+        L = ListType(RealType(fp.S1E5M2), 4)
+        assert TestAlignedSumPrecision._sum_bounds(f, [L, L])['ts'] > 27
+
+    @staticmethod
+    def _holds(f, arg_types, args, name: str) -> None:
+        """Every bound on *name* holds *f(*args)*."""
+        from fpy2.transform import Monomorphize
+        ast = Monomorphize.apply(f.ast, fp.REAL, arg_types)
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        v = f(*args)
+        for d, b in info.by_def.items():
+            if str(d.name) == name and hasattr(b, 'representable_in'):
+                assert b.representable_in(v), (d, b, v)
+
+    _LOOP_TYPES = [ListType(RealType(fp.FP16), 2), RealType(fp.FP32)]
+    _LOOP_ARGS = ([fp.Float(isinf=True), fp.Float.from_float(64.0)],
+                  fp.FP32.round(1 / 3))
+
+    def test_an_earlier_iterations_sentinel_is_kept(self):
+        """In the second iteration `x` is finite, but `ys[0]` was rounded in
+        the first, at the sentinel's position."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c):
+            ys = fp.empty(2)
+            s = 0
+            for i in range(2):
+                x = xs[i]
+                if not fp.isfinite(x):
+                    r = -1
+                else:
+                    r = max(fp.logb(x), 5)
+                with fp.MPFixedContext(r - 10, fp.RM.RTZ):
+                    ys[i] = fp.round(c)
+                if fp.isfinite(x):
+                    s = ys[0] + ys[1]
+            return s
+
+        self._holds(f, self._LOOP_TYPES, self._LOOP_ARGS, 's')
+
+
+@fp.fpy(ctx=fp.REAL)
+def _cpp_exponent0(x, emin):
+    if not fp.isfinite(x):
+        return -1
+    return max(fp.logb(x), emin)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _cpp_exponent(x, emin):
+    return max(fp.logb(x), emin)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _cpp_fused_sum(xs, n):
+    ts = fp.empty(4)
+    for i in range(4):
+        with fp.MPFixedContext(n, fp.RM.RTZ):
+            ts[i] = fp.round(xs[i])
+    return sum(ts)
+
+
+def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
+    """A block dot product in the shape the C++ backend keeps: loops, a call
+    per element, the check an early return, and the fused sum in a callee.
+    *checked* is how many products the check covers."""
+    @fp.fpy(ctx=fp.REAL)
+    def checked_first(A, B):
+        prods = fp.empty(4)
+        for i in range(4):
+            prods[i] = A[i] * B[i]
+        es = fp.empty(4)
+        for i in range(4):
+            if prods[i] == 0:
+                t = -35
+            else:
+                t = exponent(A[i], -15) + exponent(B[i], -15)
+            es[i] = t
+        e = max(es)
+        m = fp.empty(checked)
+        for i in range(checked):
+            p = prods[i]
+            m[i] = not fp.isfinite(p)
+        if any(m):
+            return 0
+        return _cpp_fused_sum(prods, e - 25)
+
+    @fp.fpy(ctx=fp.REAL)
+    def checked_after(A, B):
+        prods = fp.empty(4)
+        for i in range(4):
+            prods[i] = A[i] * B[i]
+        es = fp.empty(4)
+        for i in range(4):
+            if prods[i] == 0:
+                t = -35
+            else:
+                t = exponent(A[i], -15) + exponent(B[i], -15)
+            es[i] = t
+        e = max(es)
+        m = fp.empty(checked)
+        for i in range(checked):
+            p = prods[i]
+            m[i] = not fp.isfinite(p)
+        s = _cpp_fused_sum(prods, e - 25)
+        if any(m):
+            return 0
+        return s
+
+    return checked_first if check_first else checked_after
+
+
+def _cpp_block_inline(exponent, *, checked: int = 4):
+    """:func:`_cpp_block` with the fused sum written in the caller."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(A, B):
+        prods = fp.empty(4)
+        for i in range(4):
+            prods[i] = A[i] * B[i]
+        es = fp.empty(4)
+        for i in range(4):
+            if prods[i] == 0:
+                t = -35
+            else:
+                t = exponent(A[i], -15) + exponent(B[i], -15)
+            es[i] = t
+        e = max(es)
+        m = fp.empty(checked)
+        for i in range(checked):
+            p = prods[i]
+            m[i] = not fp.isfinite(p)
+        if any(m):
+            return 0
+        ts = fp.empty(4)
+        for i in range(4):
+            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                ts[i] = fp.round(prods[i])
+        return sum(ts)
+    return f
+
+
+class TestTheCheckInCppShape:
+    """C++ keeps `exponent0` a call and the fused sum a callee, so the
+    finiteness the sum needs sits on list elements, past an early return, and
+    across a call."""
+
+    _L = ListType(RealType(fp.S1E5M2), 4)
+
+    @classmethod
+    def _fused_prec(cls, f) -> int:
+        """The widest fused-sum precision over its specializations, each
+        analyzed with its caller's params."""
+        return max(cls._fused_precs(f))
+
+    @classmethod
+    def _fused_precs(cls, f) -> list[int]:
+        """... in each of its specializations."""
+        from fpy2.ast.fpyast import Sum
+        from fpy2.module import Module
+        from fpy2.transform import ConstFold, FreeVarElim, Specialize
+
+        mod = Module()
+        mod.add(f, ctx=fp.REAL, arg_types=[cls._L, cls._L])
+        # `checked` is a closure value, where a design's bounds are literals
+        mod = mod.map(lambda _m, fd: ConstFold.apply(FreeVarElim.apply(fd)))
+        params: dict = {}
+        out = Specialize.apply(mod, size_key=True, bound_params=params)
+        out_precs = []
+        for spec in out.functions():
+            if spec.name.startswith('_cpp_fused_sum'):
+                info = FormatInfer.analyze(
+                    spec.ast, use_digit_bounds=True,
+                    digit_bound_params=params.get(spec.name))
+                out_precs += [AbstractFormat.from_format(b).prec
+                              for e, b in info.by_expr.items() if isinstance(e, Sum)]
+        return out_precs
+
+    def test_written_directly(self):
+        assert self._fused_prec(_cpp_block(_cpp_exponent)) <= 28
+
+    def test_through_the_sentinel(self):
+        assert self._fused_prec(_cpp_block(_cpp_exponent0)) <= 28
+
+    @classmethod
+    def _inline_prec(cls, f) -> int:
+        from fpy2.transform import ConstFold, FreeVarElim, Monomorphize
+        ast = Monomorphize.apply(f.ast, fp.REAL, [cls._L, cls._L])
+        ast = ConstFold.apply(FreeVarElim.apply(ast))
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        from fpy2.ast.fpyast import Sum
+        return next(AbstractFormat.from_format(b).prec
+                    for e, b in info.by_expr.items() if isinstance(e, Sum))
+
+    def test_inline_written_directly(self):
+        assert self._inline_prec(_cpp_block_inline(_cpp_exponent)) <= 28
+
+    def test_inline_through_the_sentinel(self):
+        """Every element of `A` and `B` is finite past the check, and each
+        `exponent0` call reads one, so its guarded return resolves."""
+        assert self._inline_prec(_cpp_block_inline(_cpp_exponent0)) <= 28
+
+    def test_inline_not_where_the_check_misses_an_element(self):
+        f = _cpp_block_inline(_cpp_exponent0, checked=3)
+        assert self._inline_prec(f) > 28
+
+    def test_not_where_one_call_is_unchecked(self):
+        """The two calls take a specialization each -- the key holds the
+        bounds, which the assumption changes -- and only the checked one
+        is aligned."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            prods = fp.empty(4)
+            for i in range(4):
+                prods[i] = A[i] * B[i]
+            es = fp.empty(4)
+            for i in range(4):
+                if prods[i] == 0:
+                    t = -35
+                else:
+                    t = _cpp_exponent0(A[i], -15) + _cpp_exponent0(B[i], -15)
+                es[i] = t
+            e = max(es)
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if not any(m):
+                s = _cpp_fused_sum(prods, e - 25)
+            else:
+                s = _cpp_fused_sum(prods, e - 25)
+            return s
+
+        precs = self._fused_precs(f)
+        assert min(precs) <= 28 < max(precs)
+
+    def test_not_where_the_check_comes_after(self):
+        f = _cpp_block(_cpp_exponent0, check_first=False)
+        assert self._fused_prec(f) > 28
+
+    def test_not_where_the_check_misses_an_element(self):
+        f = _cpp_block(_cpp_exponent0, checked=3)
+        assert self._fused_prec(f) > 28

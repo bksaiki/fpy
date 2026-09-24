@@ -17,8 +17,8 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 """
 
 import math
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 from ...ast.fpyast import *
@@ -28,10 +28,12 @@ from ...interpret.value import unwrap_foreign
 from ...number import Context, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import ListType, RealType
+from ..alias import Region
 from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
 from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
-from ..reaching_defs import Definition, PhiDef
+from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
+from ..value_class import ValueClass, ValueClassAnalysis, ValueClassInfer
 from .store import DigitBoundStore, Term
 
 __all__ = [
@@ -100,6 +102,9 @@ class DigitBoundParams:
 
     store: DigitBoundStore
     args: tuple[Terms, ...]
+    assume: frozenset[int] = frozenset()
+    """The literals every call reaching the callee proved, which hold
+    wherever its body runs."""
 
 
 @dataclass
@@ -114,6 +119,8 @@ class DigitBoundAnalysis:
     by_def: dict[Definition, Terms] = field(default_factory=dict)
     by_call: dict[Call, 'DigitBoundAnalysis'] = field(default_factory=dict)
     ret: Terms = field(default_factory=Terms)
+    assume_at: Callable[[Expr], frozenset[int]] = lambda _e: frozenset()
+    """The guard literals that hold wherever an expression is evaluated."""
 
     def escapes(self, e: Expr, exp: int | None, mag: int | None) -> bool:
         """Can *e* sit below digit position *exp*, or reach past ``2 ** (mag
@@ -134,7 +141,7 @@ class DigitBoundAnalysis:
             asks.append((terms.msb, mag + 1))
         if exp is not None:
             asks.append((-terms.lsb, 1 - exp))
-        return self.store.reaches(asks)
+        return self.store.reaches(asks, self.assume_at(e))
 
     def bounds(self, e: Expr) -> Bounds | None:
         """*e*'s precision, digit position and magnitude.
@@ -146,13 +153,14 @@ class DigitBoundAnalysis:
             return None
         # One open value discards all three, so each is asked only once the
         # one before it came back closed -- every query costs a solve.
-        prec = self.store.prec(terms.msb, terms.lsb)
+        at = self.assume_at(e)
+        prec = self.store.prec(terms.msb, terms.lsb, at)
         if not isinstance(prec, int):
             return None
-        exp = -self.store.maximum(-terms.lsb)
+        exp = -self.store.maximum(-terms.lsb, at)
         if not isinstance(exp, int):
             return None
-        mag = self.store.maximum(terms.msb)
+        mag = self.store.maximum(terms.msb, at)
         if not isinstance(mag, int):
             return None
         # The three are independent maxima and need not be attained together,
@@ -213,6 +221,11 @@ def _is_empty_alloc(d: Definition) -> bool:
     return isinstance(d.site, Assign) and isinstance(d.site.expr, Empty)
 
 
+def _encloses(outer: tuple[Stmt, ...] | None, inner: tuple[Stmt, ...]) -> bool:
+    """Whether the loops *outer* are the outermost of *inner*."""
+    return outer is not None and inner[:len(outer)] == outer
+
+
 def _all(ts: Iterable[Term | None]) -> list[Term] | None:
     """*ts* as a list, or `None` if any is missing."""
     out: list[Term] = []
@@ -238,6 +251,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
     which the solver answers as unbounded.
     """
 
+    outer: Callable[[], frozenset[int]] | None
+    """The literals holding wherever this body runs: its call site's."""
+    arg_lit: Callable[[int], int | None] | None
+    """The caller's literal for "argument *i* is finite", which is this
+    parameter's too."""
     _loop_index: dict[Definition, int]
     _partial: dict[Definition, list[Terms] | None]
     _fields: dict[Definition, tuple[Terms | None, ...]]
@@ -246,14 +264,26 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _elt_depth: int
     _elt_depth_of: dict[Expr, int]
     _elt_vars: set[int]
-    _anchored: set[int]
+    _var_level: dict[int, int]
+    """the loop nesting each variable takes a new value at"""
+    _anchor_level: dict[int, int]
+    """... and the nesting the bounds *on* it were built at"""
     _lsb_vars: set[int]
     _index_sets: dict[tuple, _IndexSet]
     _gather: tuple[tuple, Definition] | None
     _gathered: set[Expr]
-    _non_finite_path: int
-    _seen_return: bool
+    _returns: list[tuple[Expr, Terms]]
     _vacuous_used: list[tuple[Term, list[Term]]]
+    _classes_cache: ValueClassAnalysis | None
+    _guards: dict[Definition, int]
+    """The literal "this definition is finite", for each one a guard names."""
+    _elt_guards: dict[Region, int]
+    """The literal "every element of this list is finite", for each list whose
+    elements a guard names."""
+    _loops: tuple[Stmt, ...]
+    """The loops enclosing the walk, outermost first."""
+    _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
+    _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
 
     def __init__(
         self,
@@ -261,8 +291,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
         view: FormatView,
         store: DigitBoundStore,
         args: tuple[Terms, ...] = (),
+        arg_lit: Callable[[int], int | None] | None = None,
+        classes: ValueClassAnalysis | None = None,
+        outer: Callable[[], frozenset[int]] | None = None,
     ):
         self.func = func
+        self.outer = outer
+        self.arg_lit = arg_lit
         self.view = view
         self.store = store
         self.args = args
@@ -280,14 +315,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._elt_depth = 0
         self._elt_depth_of = {}
         self._elt_vars = set()
-        self._anchored = set()
+        self._var_level = {}
+        self._anchor_level = {}
         self._lsb_vars = set()
         self._index_sets = {}
         self._gather = None
         self._gathered = set()
-        self._non_finite_path = 0
-        self._seen_return = False
+        self._returns = []
         self._vacuous_used = []
+        self._classes_cache = classes
+        self._guards = {}
+        self._elt_guards = {}
+        self._loops = ()
+        self._loops_of_stmt = {}
+        self._loops_of_expr = {}
 
     def analyze(self) -> DigitBoundAnalysis:
         # positional, so params that do not match the signature would bind
@@ -305,9 +346,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # the caller minted these, and `_share` skips the seeding
                 # `_fresh_interval` does -- but a list is a list in both
                 # frames, so its summary describes an element here too
-                self._mark_elt(d, src.msb, src.lsb, src.value)
+                self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
+        self.out.ret = self._merge_returns()
         self._check_vacuous()
+        if self._guards or self._elt_guards or self.outer is not None:
+            self.out.assume_at = self._assumed
         return self.out
 
     # -- terms ---------------------------------------------------------
@@ -317,15 +361,27 @@ class _DigitBoundInferInstance(DefaultVisitor):
         t = self.store.var(name)
         if self._elt_depth:
             self._elt_vars.update(v.index for v, _ in t.coeffs)
+            for v, _ in t.coeffs:
+                self._var_level[v.index] = self._elt_depth
         return t
 
-    def _mark_elt(self, of: Expr | Definition, *ts: Term | None) -> None:
+    def _mark_elt(
+        self, of: Expr | Definition, *ts: Term | None, lsb: Term | None = None,
+    ) -> None:
         """Record *ts* as per-element where *of* is a list, whoever minted
-        them: a list's summary describes an element wherever it came from."""
-        if isinstance(self._type_of(of), ListType):
-            self._elt_vars.update(
-                v.index for t in ts if t is not None for v, _ in t.coeffs
-            )
+        them: a list's summary describes an element wherever it came from, so
+        it moves with that list's index -- one nesting in from where the list
+        itself sits.  An *lsb* is the exception, being already at or below
+        every element's."""
+        if not isinstance(self._type_of(of), ListType):
+            return
+        for t in (*ts, lsb):
+            if t is not None:
+                self._elt_vars.update(v.index for v, _ in t.coeffs)
+        for t in ts:
+            if t is not None:
+                for v, _ in t.coeffs:
+                    self._raise_anchor(v.index, self._elt_depth + 1)
 
     def _fresh_interval(self, terms: Terms, of: Expr | Definition, tag: str) -> tuple[Term, Term]:
         """Give *terms* a bracketing pair, seeded from *of*'s inferred range.
@@ -338,7 +394,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         terms.msb = self._var(f'msb{tag}')
         terms.lsb = self._var(f'lsb{tag}')
         self._lsb_vars.update(v.index for v, _ in terms.lsb.coeffs)
-        self._mark_elt(of, terms.msb, terms.lsb)
+        self._mark_elt(of, terms.msb, lsb=terms.lsb)
         if hi is not None:
             self.store.le(terms.msb, hi)
         if lo is not None:
@@ -421,6 +477,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_expr(self, e: Expr, ctx):
         self._elt_depth_of[e] = self._elt_depth
+        self._loops_of_expr[e] = self._loops
         super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType | ListType):
             return
@@ -464,41 +521,47 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """Bound *grid* below by the least of *ts*, noting what that costs.
 
         Every such bound is true of the value in hand.  It stays true of a
-        whole *list* only where each term bounds every element from below;
-        one built from a per-element `logb`, or from a position that varies
-        with the index, holds for the element in hand and not for the
-        smallest.  Such a bound *anchors* the grid: see :meth:`_elt_lsb`.
+        whole *list* only while nothing it was built from moves with that
+        list's index, so *grid* inherits the deepest nesting its bounds came
+        from: see :meth:`_elt_lsb`.
         """
         self.store.ge_min(grid, ts)
-        if not all(self._downward(t) for t in ts):
-            self._anchored.update(v.index for v, _ in grid.coeffs)
+        level = max((self._term_level(t) for t in ts), default=0)
+        for v, _ in grid.coeffs:
+            self._raise_anchor(v.index, level)
 
-    def _downward(self, t: Term) -> bool:
-        """Whether *t* bounds every element of a list from below.
+    def _raise_anchor(self, index: int, level: int) -> None:
+        if level > self._anchor_level.get(index, 0):
+            self._anchor_level[index] = level
 
-        Anything the walk built outside a loop does, being one value for all
-        of them.  So does a list's own grid, which is already at or below
-        every element's -- unless it is anchored, or enters negated, which
-        turns a floor into a ceiling.
+    def _moves_at(self, index: int, c: int) -> int:
+        """The nesting a variable moves with, entering a bound with
+        coefficient *c*.
+
+        Where it was minted, and where whatever bounds it was -- except that
+        an lsb of its own is already at or below every element's, so only
+        what bounds it counts.  Negated it is a ceiling, not a floor, and
+        that exception lapses.
         """
-        return all(
-            v.index not in self._anchored
-            and (v.index not in self._elt_vars
-                 or (c > 0 and v.index in self._lsb_vars))
-            for v, c in t.coeffs
-        )
+        level = self._anchor_level.get(index, 0)
+        if c > 0 and index in self._lsb_vars:
+            return level
+        return max(level, self._var_level.get(index, 0))
+
+    def _term_level(self, t: Term) -> int:
+        return max((self._moves_at(v.index, c) for v, c in t.coeffs), default=0)
 
     def _elt_lsb(self, of: Expr | Definition, src: Terms) -> Term | None:
         """*src*'s grid, as *of*'s -- dropped where *of* is a list and the
-        grid is anchored.
+        grid moves with its index.
 
         A list's summary is read as uniform: at or below *every* element's
-        grid.  An anchored grid is at or below one element's, and reading it
-        uniformly would claim the smallest element sits as high as the
-        widest.  No grid at all is the weaker, true reading.
+        grid.  One that moves with the index is at or below one element's,
+        and reading it uniformly would claim the smallest element sits as
+        high as the widest.  No grid at all is the weaker, true reading.
         """
         if (src.lsb is not None and isinstance(self._type_of(of), ListType)
-                and not self._downward(src.lsb)):
+                and self._term_level(src.lsb) > self._elt_depth):
             return None
         return src.lsb
 
@@ -969,7 +1032,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_branches(self, stmt: If1Stmt | IfStmt, cond: Expr) -> None:
         """Merge what the two paths through *stmt* leave behind."""
-        for phi in self.def_use.phis[stmt]:
+        phis = self.def_use.phis[stmt]
+        then_lits = self._arm_non_finite(stmt, 0) if phis else []
+        else_lits = self._arm_non_finite(stmt, 1) if phis else []
+        for phi in phis:
             # `lhs` is the `then` arm of an `if`/`else`, but the *untaken*
             # path of a one-armed `if`, where the body is `rhs`.
             ift, iff = self.def_use.defs[phi.rhs], self.def_use.defs[phi.lhs]
@@ -991,49 +1057,139 @@ class _DigitBoundInferInstance(DefaultVisitor):
             )
             if value is not None:
                 self.out.by_def.setdefault(phi, Terms()).value = value
+            for lit in then_lits:
+                self._untaken(phi, iff, (lit,))
+            for lit in else_lits:
+                self._untaken(phi, ift, (lit,))
 
-    def _only_non_finite(self, cond: Expr, negated: bool) -> bool:
-        """Does *cond*, read *negated* or not, hold only where some value is
-        non-finite?
-        """
-        match cond:
-            case Not():
-                return self._only_non_finite(cond.arg, not negated)
-            case IsFinite():
-                return negated
-            case IsInf() | IsNan():
-                return not negated
-            case Or() | And():
-                # `or` needs every disjunct to say so where `and` needs only
-                # one, and a negation swaps which: `not (a and b)` is
-                # `not a or not b`.  A stronger hypothesis must not do worse.
-                parts = [self._only_non_finite(a, negated) for a in cond.args]
-                return any(parts) if isinstance(cond, And) != negated else all(parts)
+    def _arm_non_finite(self, stmt: If1Stmt | IfStmt, arm: int) -> list[int]:
+        """A literal for each definition *arm* of *stmt* (`then`, `else`) is
+        reached only where it is non-finite: where one holds, it is not."""
+        out: list[int] = []
+        for d, cls in self._classes.arm_facts.get(stmt, ((), ()))[arm]:
+            if not cls & (ValueClass.ZERO | ValueClass.FINITE):
+                for lit in self._finite_lits(d):
+                    if lit not in out:
+                        out.append(lit)
+        return out
+
+    def _finite_lits(self, d: Definition) -> list[int]:
+        """Literals each implying "*d* is finite": its own, and where *d*
+        reads an element over the whole list, "every element is finite"."""
+        out = [self._lit(d)]
+        if isinstance(d, AssignDef) and isinstance(d.site, Assign) and (
+            isinstance(ref := d.site.expr, ListRef)
+            and isinstance(ref.value, Var)
+            and self._covers(ref.index, self._len_of(ref.value))
+            and (lit := self._lit_of(ref)) is not None
+        ):
+            out.append(lit)
+        return out
+
+    def _lit(self, d: Definition) -> int:
+        """The literal "*d* is finite"; a parameter's is its argument's."""
+        lit = self._guards.get(d)
+        if lit is None:
+            if self.arg_lit is not None and isinstance(d.site, Argument):
+                i = next(i for i, a in enumerate(self.func.args) if a is d.site)
+                lit = self.arg_lit(i)
+            if lit is None:
+                lit = self.store.literal()
+            self._guards[d] = lit
+        return lit
+
+    def _lit_of(self, e: Expr) -> int | None:
+        """The literal "*e* is finite", where *e* names a definition or reads
+        an element of a list nothing changes -- then every element being
+        finite covers it, at whatever index and in whatever iteration."""
+        if not isinstance(self._type_of(e), RealType):
+            return None
+        match e:
             case Var():
-                # lowering hoists a condition into a temporary, and a rule
-                # that reads the syntax would silently switch off
-                d = self.def_use.find_def_from_use(cond)
-                return (isinstance(d.site, Assign)
-                        and self._only_non_finite(d.site.expr, negated))
-            case _:
-                return False
+                return self._lit(self.def_use.find_def_from_use(e))
+            case ListRef(value=Var() as lst):
+                d = self.def_use.find_def_from_use(lst)
+                region = self._classes.alias.region_of(d)
+                if region is None or self._classes.alias.may_change(d):
+                    return None
+                lit = self._elt_guards.get(region)
+                if lit is None:
+                    lit = self._elt_guards[region] = self.store.literal(universal=True)
+                return lit
+        return None
 
-    def _guarded(self, block: StmtBlock, cond: Expr, negated: bool, ctx) -> None:
-        """Walk *block*, noting a path only a non-finite value reaches."""
-        off = self._only_non_finite(cond, negated)
-        self._non_finite_path += off
-        self._visit_block(block, ctx)
-        self._non_finite_path -= off
+    def _untaken(self, phi: Definition, other: Definition, guard: tuple[int, ...]) -> None:
+        """*phi* is *other* wherever *guard* holds, the arm untaken."""
+        src = self.out.by_def.get(other)
+        if src is None:
+            return
+        dst = self._def(phi)
+        if dst.msb is not None and src.msb is not None:
+            self.store.le(dst.msb, src.msb, guard=guard)
+        if dst.lsb is not None and src.lsb is not None:
+            self.store.ge(dst.lsb, src.lsb, guard=guard)
+        value = self._def_value(other)
+        if dst.value is not None and value is not None:
+            self.store.le(dst.value, value, guard=guard)
+            self.store.ge(dst.value, value, guard=guard)
+
+    @property
+    def _classes(self) -> ValueClassAnalysis:
+        if self._classes_cache is None:
+            self._classes_cache = ValueClassInfer.analyze(
+                self.func, def_use=self.def_use, type_info=self.type_info,
+                ctx_use=self.ctx_use,
+            )
+        return self._classes_cache
+
+    def _assumed(self, e: Expr) -> frozenset[int]:
+        """The guard literals *e* may assume: each definition
+        `ValueClassInfer` proves finite where *e* is evaluated, and only where
+        that definition is one value for every evaluation of *e* -- a
+        definition in a loop *e* is outside of is one per iteration."""
+        outer = self.outer() if self.outer is not None else frozenset()
+        at = self._loops_of_expr.get(e)
+        if at is None:
+            return outer
+        non_finite = ValueClass.NAN | ValueClass.INF
+        return outer | frozenset(
+            lit for d, lit in self._guards.items()
+            if _encloses(self._loops_of_def(d), at)
+            and not self._classes.class_at(d, e) & non_finite
+        ) | frozenset(
+            lit for region, lit in self._elt_guards.items()
+            if not self._classes.elements_at(region, e) & non_finite
+        )
+
+    def _loops_of_def(self, d: Definition) -> tuple[Stmt, ...] | None:
+        """The loops *d* takes a value in, or ``None`` where not known."""
+        site = d.site
+        if isinstance(site, Argument):
+            return ()
+        loops = self._loops_of_stmt.get(site) if isinstance(site, Stmt) else None
+        if loops is None:
+            return None
+        # a loop's own target and phis take a value per iteration of it
+        return (*loops, site) if isinstance(site, ForStmt | WhileStmt) else loops
+
+    def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
+        self._loops_of_stmt[stmt] = self._loops
+        return super()._visit_statement(stmt, ctx)
+
+    def _visit_while(self, stmt: WhileStmt, ctx: Any) -> None:
+        loops, self._loops = self._loops, (*self._loops, stmt)
+        super()._visit_while(stmt, ctx)
+        self._loops = loops
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
         self._visit_expr(stmt.cond, ctx)
-        self._guarded(stmt.body, stmt.cond, False, ctx)
+        self._visit_block(stmt.body, ctx)
         self._visit_branches(stmt, stmt.cond)
 
     def _visit_if(self, stmt: IfStmt, ctx):
         self._visit_expr(stmt.cond, ctx)
-        self._guarded(stmt.ift, stmt.cond, False, ctx)
-        self._guarded(stmt.iff, stmt.cond, True, ctx)
+        self._visit_block(stmt.ift, ctx)
+        self._visit_block(stmt.iff, ctx)
         self._visit_branches(stmt, stmt.cond)
 
     def _fresh_value(self, e: Expr) -> Term:
@@ -1255,7 +1411,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         for phi in self.def_use.phis[stmt]:
             self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
         self._elt_depth += 1
+        loops, self._loops = self._loops, (*self._loops, stmt)
         self._visit_block(stmt.body, ctx)
+        self._loops = loops
         self._elt_depth -= 1
         self._gather = outer
         for phi in self.def_use.phis[stmt]:
@@ -1395,35 +1553,63 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self.value_of(stmt.expr)
         # A path returning nothing but infinities and NaNs states no
         # magnitude: `logb` bounds the finite values, and this one has none.
-        # Nor does a path only a non-finite *argument* reaches, whatever it
-        # returns -- no assignment describes that call, so a sentinel returned
-        # there must not join the exponent the other return states.
-        if not self.view.has_finite(stmt.expr) or self._non_finite_path:
-            return
-        now = self.out.by_expr.get(stmt.expr) or Terms()
-        if not self._seen_return:
-            self._seen_return = True
-            self.out.ret = Terms(now.msb, now.lsb, now.value)
-            return
-        self.out.ret = self._merge_returns(self.out.ret, now)
+        if self.view.has_finite(stmt.expr):
+            self._returns.append((stmt.expr, self.out.by_expr.get(stmt.expr) or Terms()))
 
-    def _merge_returns(self, prev: Terms, now: Terms) -> Terms:
-        """Two returns describe two values, so the result reaches as far as
-        the wider of them and is no finer than the coarser.
-
-        An exact value survives only where both agree: a join of two values is
-        not one.
-        """
-        value = prev.value if prev.value is not None and prev.value == now.value else None
-        merged = Terms(value=value)
-        if prev.msb is not None and now.msb is not None:
-            merged.msb = self._var(f'msbR{len(self.out.by_expr)}')
-            self.store.le_max(merged.msb, [prev.msb, now.msb])
-        if prev.lsb is not None and now.lsb is not None:
-            merged.lsb = self._var(f'lsbR{len(self.out.by_expr)}')
+    def _merge_returns(self) -> Terms:
+        """The result is one of the returns: as far as the widest reaches, no
+        finer than the coarsest, and valued as one of them.  A return reached
+        only where some definition is non-finite is not taken where it is
+        finite, so the rest bound the result there too."""
+        if len(self._returns) <= 1:
+            return replace(self._returns[0][1]) if self._returns else Terms()
+        tag = len(self.out.by_expr)
+        terms = [t for _, t in self._returns]
+        merged = Terms()
+        msbs, lsbs, values = (
+            _all(getattr(t, f) for t in terms) for f in ('msb', 'lsb', 'value'))
+        if msbs is not None:
+            merged.msb = self._var(f'msbR{tag}')
+            self.store.le_max(merged.msb, msbs)
+        if lsbs is not None:
+            merged.lsb = self._var(f'lsbR{tag}')
             self._lsb_vars.update(v.index for v, _ in merged.lsb.coeffs)
-            self._grid_ge(merged.lsb, prev.lsb, now.lsb)
+            self._grid_ge(merged.lsb, *lsbs)
+        if values is not None:
+            merged.value = self._var(f'VR{tag}')
+            self.store.le_max(merged.value, values)
+            self.store.ge_min(merged.value, values)
+        for d in self._non_finite_defs():
+            taken = [t for e, t in self._returns
+                     if self._classes.class_at(d, e) & (ValueClass.ZERO | ValueClass.FINITE)]
+            if taken and len(taken) < len(terms):
+                for lit in self._finite_lits(d):
+                    self._untaken_returns(merged, taken, (lit,))
         return merged
+
+    def _non_finite_defs(self) -> list[Definition]:
+        """Every definition some arm is reached only where it is non-finite."""
+        if not any(isinstance(s, If1Stmt | IfStmt) for s in self._loops_of_stmt):
+            return []
+        return list(dict.fromkeys(
+            d for arms in self._classes.arm_facts.values()
+            for facts in arms for d, cls in facts
+            if not cls & (ValueClass.ZERO | ValueClass.FINITE)
+        ))
+
+    def _untaken_returns(
+        self, merged: Terms, taken: list[Terms], guard: tuple[int, ...],
+    ) -> None:
+        """*merged* is one of *taken* wherever *guard* holds."""
+        msbs, lsbs, values = (
+            _all(getattr(t, f) for t in taken) for f in ('msb', 'lsb', 'value'))
+        if merged.msb is not None and msbs is not None:
+            self.store.le_max(merged.msb, msbs, guard=guard)
+        if merged.lsb is not None and lsbs is not None:
+            self.store.ge_min(merged.lsb, lsbs, guard=guard)
+        if merged.value is not None and values is not None:
+            self.store.le_max(merged.value, values, guard=guard)
+            self.store.ge_min(merged.value, values, guard=guard)
 
     def _visit_call(self, e: Call, ctx):
         for arg in e.args:
@@ -1441,10 +1627,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
             for a in e.args
         )
         before = self.store.n_vars
-        sub = _DigitBoundInferInstance(e.fn.ast, view, self.store, args).analyze()
+        sub = _DigitBoundInferInstance(
+            e.fn.ast, view, self.store, args,
+            lambda i: self._lit_of(e.args[i]),
+            outer=lambda: self._assumed(e),
+        ).analyze()
         if self._elt_depth:
             # called once per element, so everything it minted is per-element
             self._elt_vars.update(range(before, self.store.n_vars))
+            for i in range(before, self.store.n_vars):
+                self._raise_anchor(i, self._elt_depth)
         self.out.by_call[e] = sub
         if sub.ret.msb is not None or sub.ret.value is not None:
             # The result's terms are the callee's, so a bound this site knows
@@ -1473,16 +1665,21 @@ class DigitBoundInfer:
         func: FuncDef,
         view: FormatView,
         params: DigitBoundParams | None = None,
+        classes: ValueClassAnalysis | None = None,
     ) -> DigitBoundAnalysis:
         """Infer digit-bound relations for *func*, seeded from *view*.
 
         *params* continues a caller's constraint system instead of starting
-        a fresh one; see :class:`DigitBoundParams`.
+        a fresh one; see :class:`DigitBoundParams`.  *classes* is *func*'s
+        value classes, where the caller has them with escape summaries --
+        without, a list handed to a call has no element facts.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
         if params is None:
             params = DigitBoundParams(DigitBoundStore(), ())
+        assume = params.assume
         return _DigitBoundInferInstance(
-            func, view, params.store, params.args
+            func, view, params.store, params.args, classes=classes,
+            outer=(lambda: assume) if assume else None,
         ).analyze()

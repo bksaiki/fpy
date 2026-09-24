@@ -187,6 +187,7 @@ from ..digit_bound import (
 from ..partial_eval import PartialEval, PartialEvalInfo, base_env
 from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
+from ..value_class import ValueClassAnalysis
 from .format import AbstractableFormat, AbstractFormat, round_bound_out
 
 __all__ = [
@@ -1319,6 +1320,46 @@ def round_is_identity(
     return unrounded <= AbstractFormat.from_format(ctx_fmt)
 
 
+def unrounded_format(
+    e: Expr, by_expr: 'dict[Expr, FormatBound]',
+) -> 'SetFormat | AbstractFormat | None':
+    """The exact, unrounded result of a rounded operation.
+
+    Pulls each child's stored post-round bound from *by_expr* and applies the
+    matching :func:`exact_binop` / :func:`exact_unop` primitive.  ``None`` for
+    an expression that carries no context-driven round, where the question is
+    ill-posed.
+
+    For an explicit ``Round`` / ``Cast``, the argument's bound.
+    """
+    match e:
+        case Add():
+            return exact_binop(
+                by_expr.get(e.first), by_expr.get(e.second), operator.add,
+            )
+        case Sub():
+            return exact_binop(
+                by_expr.get(e.first), by_expr.get(e.second), operator.sub,
+            )
+        case Mul():
+            return exact_binop(
+                by_expr.get(e.first), by_expr.get(e.second), operator.mul,
+            )
+        case Abs():
+            return exact_unop(by_expr.get(e.arg), abs)
+        case Neg():
+            return exact_unop(by_expr.get(e.arg), operator.neg)
+        case Round() | Cast():
+            arg_fmt = by_expr.get(e.arg)
+            if isinstance(arg_fmt, SetFormat):
+                return arg_fmt
+            if isinstance(arg_fmt, AbstractableFormat):
+                return AbstractFormat.from_format(arg_fmt)
+            return None
+        case _:
+            return None
+
+
 def _join_set_and_format(
     s: SetFormat, fmt: Format, widen: bool = False,
 ) -> FormatBound:
@@ -1879,9 +1920,10 @@ class _FormatInferInstance(Visitor):
         comparison against a numeric literal, and only the direction
         :func:`_magnitude_constraint` can state.
 
-        Read at ``if``/``if1`` only.  A loop condition and an ``IfExpr`` carry
-        the same facts and are simply not read yet; a missed refinement costs
-        precision, never soundness.
+        Read at ``if``/``if1`` only.  Never at an ``IfExpr``, whose arms a
+        backend may evaluate both of -- `ValueClassInfer` keeps the same rule.
+        A loop condition carries the same facts and is simply not read yet; a
+        missed refinement costs precision, never soundness.
         """
         match cond:
             case Not():
@@ -1892,6 +1934,14 @@ class _FormatInferInstance(Visitor):
                 return [i for a in cond.args for i in self._implied(a, False)]
             case Compare() if len(cond.ops) == 1:
                 return self._implied_compare(cond, truth)
+            case Var():
+                # a named condition says what its definition said: the
+                # variables it tests are keyed by definition, so a later
+                # reassignment of one is not refined
+                d = self.def_use.find_def_from_use(cond)
+                if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+                    return self._implied(d.site.expr, truth)
+                return []
             case _:
                 return []
 
@@ -3265,6 +3315,7 @@ class FormatInfer:
         fn_fmt: FunctionFormat | None = None,
         digit_bound_params: 'DigitBoundParams | None' = None,
         use_digit_bounds: bool = False,
+        value_classes: ValueClassAnalysis | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
         range_set_threshold: int = DEFAULT_RANGE_SET_THRESHOLD,
         set_format_threshold: int = DEFAULT_SET_FORMAT_THRESHOLD,
@@ -3343,6 +3394,9 @@ class FormatInfer:
             digit_bound_params:
                 A caller's constraint store and the terms it bound *func*'s
                 parameters to; see :class:`DigitBoundParams`.
+            value_classes:
+                *func*'s value classes, for digit-bound inference to assume
+                what they prove; computed there when absent.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -3395,4 +3449,5 @@ class FormatInfer:
         first = pass_(None)
         if not use_digit_bounds:
             return first
-        return pass_(DigitBoundInfer.analyze(func, first, digit_bound_params))
+        return pass_(DigitBoundInfer.analyze(
+            func, first, digit_bound_params, value_classes))

@@ -19,17 +19,20 @@ nothing contributes nothing, leaving polymorphic specs unchanged.
 
 import hashlib
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import NamedTuple, TypeAlias
 
+from ..analysis.alias import Alias
 from ..analysis.array_size import (
     ArraySizeBound,
     ListSize,
     TupleSize,
     concrete_size,
 )
+from ..analysis.call_graph import CallGraph
 from ..analysis.define_use import AssignDef, DefineUse
 from ..analysis.digit_bound import DigitBoundParams
+from ..analysis.escape import Escape, EscapeSummary
 from ..analysis.format_infer import (
     FormatAnalysis,
     FormatBound,
@@ -41,6 +44,8 @@ from ..analysis.format_infer import (
     to_abstract,
 )
 from ..analysis.partial_eval import PartialEvalInfo
+from ..analysis.type_infer import TypeInferError
+from ..analysis.value_class import ValueClassInfer
 from ..ast import Call, Expr, ForeignVal, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
@@ -52,7 +57,26 @@ from ..number.context.real import REAL_FORMAT
 from ..types import ListType, RealType, TupleType, Type
 from ..utils import NamedId
 from .monomorphize import Monomorphize
+from .path import walk_exprs
 from .subst_var import SubstVar
+
+
+def _escape_summaries(
+    fd: FuncDef, memo: dict[FuncDef, EscapeSummary],
+) -> dict[FuncDef, EscapeSummary]:
+    """*memo*, holding a summary for every function *fd* calls, transitively.
+
+    From each callee's own body, leaves first.  One that does not type on its
+    own is left out, which reads as retaining everything.
+    """
+    for callee in CallGraph.analyze(fd).order:
+        if callee is not fd and callee not in memo:
+            try:
+                memo[callee] = Escape.analyze(callee, memo)
+            except TypeInferError:
+                pass
+    return memo
+
 
 # ----------------------------------------------------------------------
 # FormatBound -> Type conversion, used only to feed `Monomorphize` at
@@ -143,12 +167,10 @@ class _DefBound:
 
 @dataclass(frozen=True)
 class _ExprBound:
-    """A bound the caller derived for *count* of the callee's expressions.
-
-    Unkeyed; see :func:`_bounds_key`.
-    """
+    """A bound the caller derived for one of the callee's expressions, by its
+    position in a walk of the callee; see :func:`_bounds_key`."""
+    at: int
     fmt: FormatBound
-    count: int
 
 
 _Bound: TypeAlias = _DefBound | _ExprBound
@@ -255,16 +277,23 @@ def _bounds_key(sub: FormatAnalysis) -> frozenset[_Bound]:
     ``by_def``, so two callers would key the same.  The two maps together are
     also what the backend reads.
 
-    A set, because both maps enumerate in AST-node order, an artefact of the
-    walk.  ``by_def`` carries its name; ``by_expr`` contributes bounds
-    without keys, so an occurrence *count* is what tells two callers apart.
+    A set, because both maps enumerate in the order the analysis walked.  A
+    definition is keyed by its name.  An expression is keyed by its preorder
+    position, the same at every call site; by format alone, two callers
+    bounding different expressions would share a spec.
     """
     bounds = (*sub.by_def.values(), *sub.by_expr.values())
     if all(_is_trivial_bound(f) for f in bounds):
         return frozenset()
     named: set[_Bound] = {_DefBound(d.name, fmt) for d, fmt in sub.by_def.items()}
-    counted = Counter(sub.by_expr.values())
-    return frozenset(named | {_ExprBound(f, n) for f, n in counted.items()})
+    at = _positions(sub.func)
+    return frozenset(named | {_ExprBound(at[id(e)], f) for e, f in sub.by_expr.items()})
+
+
+def _positions(func: FuncDef) -> dict[int, int]:
+    """Each expression of *func*, by identity, to its place in a preorder
+    walk."""
+    return {id(e): i for i, (_, e) in enumerate(walk_exprs(func))}
 
 
 def _arg_vals_key(
@@ -505,11 +534,8 @@ def _drop_dead_args(
         dropped[out] = gone
         params = bound_params.get(func.name) if bound_params is not None else None
         if params is not None:
-            bound_params[func.name] = DigitBoundParams(  # type: ignore[index]
-                params.store,
-                tuple(a for i, a in enumerate(params.args)
-                      if i not in gone_set),
-            )
+            bound_params[func.name] = replace(  # type: ignore[index]
+                params, args=tuple(a for i, a in enumerate(params.args) if i not in gone_set))
         return out
 
     return module.map(step)
@@ -654,6 +680,7 @@ class Specialize:
         arg_vals_for: dict[_SpecKey, tuple[_PinnedValue, ...] | None] = {}
         # Per-spec digit-bound params, from the caller that first reached it.
         params_for: dict[_SpecKey, DigitBoundParams] = {}
+        escapes: dict[FuncDef, EscapeSummary] = {}
 
         public_keys: list[tuple[str, _SpecKey]] = []   # (entry_name, key) per public
 
@@ -681,7 +708,11 @@ class Specialize:
             # `use_digit_bounds`: the spec key carries the relational bounds, so two
             # callers whose context differs must not share a spec -- and the
             # params this captures are what carry that context into the emit.
-            fa = FormatInfer.analyze(mono, use_digit_bounds=True)
+            # With the callees' escape summaries, so a list handed to one keeps
+            # the element facts a callee's params assume.
+            classes = ValueClassInfer.analyze(
+                mono, alias=Alias.analyze(mono, summaries=_escape_summaries(mono, escapes)))
+            fa = FormatInfer.analyze(mono, use_digit_bounds=True, value_classes=classes)
             pe = fa.partial_eval
             site_map: dict[Call, _SpecKey] = {}
             local_callees: list[_SpecKey] = []
@@ -719,16 +750,24 @@ class Specialize:
                 if callee_key not in local_seen:
                     local_seen.add(callee_key)
                     local_callees.append(callee_key)
+                db = fa.digit_bound
                 if callee_key not in seen:
                     seen.add(callee_key)
                     orig_func[callee_key] = callee_fn
                     arg_types_for[callee_key] = callee_atypes
                     arg_vals_for[callee_key] = callee_arg_vals
-                    if fa.digit_bound is not None and call in fa.digit_bound.by_call:
+                    if db is not None and call in db.by_call:
                         params_for[callee_key] = DigitBoundParams(
-                            fa.digit_bound.store, fa.digit_bound.by_call[call].args,
+                            db.store, db.by_call[call].args, db.assume_at(call),
                         )
                     worklist.append(callee_key)
+                elif (params := params_for.get(callee_key)) is not None and params.assume:
+                    # the spec runs wherever any of its calls does, so it
+                    # assumes only what all of them prove -- and a literal
+                    # names something only in the store that minted it
+                    also = (db.assume_at(call) if db is not None and db.store is params.store
+                            else frozenset())
+                    params_for[callee_key] = replace(params, assume=params.assume & also)
 
             call_targets[key] = site_map
             callees_of[key] = local_callees

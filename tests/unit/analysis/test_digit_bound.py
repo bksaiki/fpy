@@ -235,7 +235,7 @@ class TestBackendIsReplaceable:
     def test_a_stub_solver_is_honoured(self):
         class Stub:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 return 5
 
         s = DigitBoundStore(solver=Stub())
@@ -248,7 +248,7 @@ class TestBackendIsReplaceable:
         analysis reports without a store at all -- never an exception."""
         class Undecided:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 return math.inf
 
         s = DigitBoundStore(solver=Undecided())
@@ -261,7 +261,7 @@ class TestBackendIsReplaceable:
         a solver could only reach the same answer more slowly."""
         class Exploding:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 raise AssertionError('should not have been asked')
 
         s = DigitBoundStore(solver=Exploding())
@@ -280,7 +280,7 @@ class TestBackendIsReplaceable:
         class Recording:
             def assume(self, constraint):
                 seen.append(constraint)
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 return 0
 
         s = DigitBoundStore(solver=Recording())
@@ -297,7 +297,7 @@ class TestBackendIsReplaceable:
 
         class Exact:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 asked.append(cutoff)
                 return 3
 
@@ -339,7 +339,7 @@ class TestReachesIsADecision:
     def test_a_free_variable_reaches_anything(self):
         class Exploding:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 raise AssertionError('should not have been asked')
 
         s = DigitBoundStore(solver=Exploding())
@@ -410,6 +410,56 @@ class TestBisectionMatchesOptimization:
             _, obj = build(s, x, y)
             answers.append(s.maximum(obj))
         assert answers[0] == answers[1], f'{name}: {answers}'
+
+
+class TestAGuardedConstraint:
+    """A constraint holding only where its literals do, and a query that says
+    which it assumes."""
+
+    @pytest.mark.parametrize('bisect', [True, False])
+    def test_it_binds_only_when_assumed(self, bisect):
+        s = DigitBoundStore(solver=Z3Solver(bisect=bisect))
+        x = s.var('x')
+        s.le(x, 10)
+        g = s.literal()
+        s.le(x, 3, guard=(g,))
+        assert s.maximum(x) == 10
+        assert s.maximum(x, frozenset({g})) == 3
+        assert s.reaches([(x, 4)])
+        assert not s.reaches([(x, 4)], frozenset({g}))
+
+    def test_an_instance_copies_a_universal_one(self):
+        """"Every element of `xs` is finite" holds at every index or none."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        g = s.literal(universal=True)
+        s.le(elt, 3, guard=(g,))
+        s.le(elt, 9)
+        subst: dict[int, Term] = {}
+        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        assert s.maximum(elt.rename(subst), frozenset({g})) == 3
+
+    def test_the_copy_keeps_its_guard(self):
+        """It holds at every index -- where it holds at all."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        g = s.literal(universal=True)
+        s.le(elt, 3, guard=(g,))
+        s.le(elt, 9)
+        subst: dict[int, Term] = {}
+        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        assert s.maximum(elt.rename(subst)) == 9
+
+    def test_an_instance_does_not_copy_it(self):
+        """A literal names one definition, not one per index."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        g = s.literal()
+        s.le(elt, 3, guard=(g,))
+        s.le(elt, 9)
+        subst: dict[int, Term] = {}
+        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
+        assert s.maximum(elt.rename(subst), frozenset({g})) == 9
 
 
 class TestALoopCarriedScalarIsNotItsBody:
@@ -678,28 +728,42 @@ def _exponent0_and(x, emin):
 
 
 class TestAPathOnlyANonFiniteValueReaches:
-    """`logb` bounds the finite values, so no assignment describes a state
-    holding a non-finite one.  A return only such a state reaches therefore
-    states nothing -- the same reading `has_finite` already gives a return
-    whose *value* has no finite values, applied to the guard instead."""
+    """A return reached only where `x` is non-finite is not taken where it is
+    finite -- which the callee says of its result, and a caller that knows `x`
+    finite resolves.  A caller that does not keeps the sentinel: `exponent0`'s
+    `-1` is a finite value, and a position built from it is a real one."""
 
     @staticmethod
-    def _round_prec(callee):
+    def _round_prec(callee, guarded: bool = True):
 
         @fp.fpy(ctx=fp.REAL)
-        def f(x):
+        def checked(x):
+            if fp.isfinite(x):
+                e = callee(x, -126)
+                with fp.MPFixedContext(e - 12, fp.RM.RTZ):
+                    t = fp.round(x)
+            else:
+                t = 0
+            return t
+
+        @fp.fpy(ctx=fp.REAL)
+        def unchecked(x):
             e = callee(x, -126)
             with fp.MPFixedContext(e - 12, fp.RM.RTZ):
                 return fp.round(x)
 
-        g = monomorphize(f, args=[RealType(fp.FP32)])
+        g = monomorphize(checked if guarded else unchecked, args=[RealType(fp.FP32)])
         b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
-        t = next(t for e, t in b.by_expr.items() if e.format() == 'fp.round(x)')
-        return b.store.prec(t.msb, t.lsb)
+        e = next(e for e in b.by_expr if e.format() == 'fp.round(x)')
+        t = b.by_expr[e]
+        return b.store.prec(t.msb, t.lsb, b.assume_at(e))
 
     def test_the_early_return_does_not_join_the_exponent(self):
         # `e >= logb(x)` survives the merge, so the round spans one binade
         assert self._round_prec(_exponent0) == 12
+
+    def test_not_where_the_caller_does_not_know(self):
+        assert self._round_prec(_exponent0, guarded=False) > 12
 
     def test_either_polarity(self):
         """The `else` of `if isfinite(x)` is the same path."""
@@ -707,7 +771,7 @@ class TestAPathOnlyANonFiniteValueReaches:
 
     def test_a_zero_guard_is_not_one(self):
         """A zero *is* a state the store describes, so its arm still joins."""
-        assert self._round_prec(_exponent0_zero) == 265
+        assert self._round_prec(_exponent0_zero) > 12
 
     def test_the_test_is_read_through_a_temporary(self):
         """Lowering hoists a condition, and a rule reading only the syntax

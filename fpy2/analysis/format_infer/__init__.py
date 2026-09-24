@@ -20,6 +20,7 @@ from .analysis import (
     is_bottom,
     round_is_identity,
     to_abstract,
+    unrounded_format,
 )
 from .double_round import (
     DoubleRoundOp,
@@ -55,4 +56,5 @@ __all__ = [
     'is_bottom',
     'round_is_identity',
     'to_abstract',
+    'unrounded_format',
 ]

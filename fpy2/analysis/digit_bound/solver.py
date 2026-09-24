@@ -107,11 +107,15 @@ class Constraint:
     ``op`` is ``'<='``, ``'=='``, or ``'<=max'`` -- the last meaning
     ``lhs <= max(rhs)``, which is a disjunction rather than anything affine and
     the shape every upper bound through a ``max`` takes.
+
+    A *guard* makes it conditional: it holds where every literal named does,
+    and a query says which literals it assumes.
     """
 
     lhs: Term
     op: str
     rhs: tuple[Term, ...]
+    guard: tuple[int, ...] = ()
 
 
 class Solver(Protocol):
@@ -125,9 +129,13 @@ class Solver(Protocol):
         """State *constraint*.  Constraints only ever narrow."""
         ...
 
-    def maximize(self, objective: Term, cutoff: int | None = None) -> int | float:
+    def maximize(
+        self, objective: Term, cutoff: int | None = None,
+        assuming: frozenset[int] = frozenset(),
+    ) -> int | float:
         """An upper bound on the greatest value *objective* can take under
-        what was assumed -- every caller may use the answer as one.
+        what was assumed, and the literals *assuming* -- every caller may use
+        the answer as one.
 
         ``math.inf`` when unbounded **or** undecided: a backend that cannot
         answer must degrade rather than raise.  ``-math.inf`` when the
@@ -178,6 +186,9 @@ class Z3Solver:
     """Each term's z3 form, built once: the same terms recur across one
     store's constraints."""
 
+    _lits: dict[int, z3.BoolRef]
+    """Each guard literal's z3 form."""
+
     _span: int
     """Total magnitude of the constants assumed so far."""
 
@@ -199,6 +210,7 @@ class Z3Solver:
         self._group = {}
         self._built = {}
         self._encoded = {}
+        self._lits = {}
         self._span = 0
         self._scale = 1
 
@@ -261,15 +273,24 @@ class Z3Solver:
             if live is not None:
                 self._encode(live, constraint)
 
+    def _lit(self, i: int) -> z3.BoolRef:
+        lit = self._lits.get(i)
+        if lit is None:
+            lit = self._lits[i] = z3.Bool(f'g#{i}')
+        return lit
+
     def _encode(self, into: _Z3Solver, constraint: Constraint) -> None:
         lhs = self._to_z3(constraint.lhs)
         rhs = [self._to_z3(r) for r in constraint.rhs]
         if constraint.op == '==':
-            into.add(lhs == rhs[0])
+            rel = lhs == rhs[0]
         elif constraint.op == '<=':
-            into.add(lhs <= rhs[0])
+            rel = lhs <= rhs[0]
         else:
-            into.add(z3.Or([lhs <= r for r in rhs]))
+            rel = z3.Or([lhs <= r for r in rhs])
+        if constraint.guard:
+            rel = z3.Implies(z3.And([self._lit(g) for g in constraint.guard]), rel)
+        into.add(rel)
 
     def _solver_for_vars(self, named: set[int], *, optimize: bool) -> _Z3Solver:
         """A solver holding just what can bear on the variables *named*.
@@ -297,28 +318,34 @@ class Z3Solver:
         self._built[key] = s
         return s
 
-    def maximize(self, objective: Term, cutoff: int | None = None) -> int | float:
+    def maximize(
+        self, objective: Term, cutoff: int | None = None,
+        assuming: frozenset[int] = frozenset(),
+    ) -> int | float:
         e = self._to_z3(objective)
         named = {v.index for v, _ in objective.coeffs}
+        lits = [self._lit(g) for g in sorted(assuming)]
         if cutoff is not None:
             # one refutation settles it: reaching the cutoff answers `inf`,
             # and failing to reach it puts the maximum at `cutoff - 1` or
             # below.  Both are upper bounds, so the answer stays usable as
             # one, and `Optimize` is not needed for a `check`.
             solver = self._solver_for_vars(named, optimize=False)
-            return math.inf if self._reaches(solver, e, cutoff) else cutoff - 1
+            return math.inf if self._reaches(solver, e, cutoff, lits) else cutoff - 1
         solver = self._solver_for_vars(named, optimize=not self.bisect)
         if self.bisect:
-            return self._bisect(solver, e, objective)
+            return self._bisect(solver, e, objective, lits)
         else:
-            return self._optimize(solver, e)
+            return self._optimize(solver, e, lits)
 
-    def _optimize(self, solver: _Z3Solver, e: z3.ArithRef) -> int | float:
+    def _optimize(
+        self, solver: _Z3Solver, e: z3.ArithRef, lits: list[z3.BoolRef],
+    ) -> int | float:
         """The maximum from ``Optimize``: one search, run by z3."""
         solver.push()
         try:
             handle = solver.maximize(e)
-            status = solver.check()
+            status = solver.check(*lits)
             if status == z3.unsat:
                 return -math.inf
             if status != z3.sat:
@@ -329,16 +356,20 @@ class Z3Solver:
         finally:
             solver.pop()
 
-    def _reaches(self, solver: _Z3Solver, e: z3.ArithRef, k: int) -> bool:
+    def _reaches(
+        self, solver: _Z3Solver, e: z3.ArithRef, k: int,
+        lits: list[z3.BoolRef],
+    ) -> bool:
         """Can the objective reach *k*?
 
         An undecided check reads as ``True``, which widens the bracket and
         so the answer -- the direction a backend that cannot answer must
         fail in."""
-        return solver.check(e >= k) != z3.unsat
+        return solver.check(e >= k, *lits) != z3.unsat
 
     def _bisect(
         self, solver: _Z3Solver, e: z3.ArithRef, objective: Term,
+        lits: list[z3.BoolRef],
     ) -> int | float:
         """The maximum by refutation: ``max >= k`` is one satisfiability
         question, and monotone in *k*, so a bracket and a bisection inside it
@@ -352,7 +383,7 @@ class Z3Solver:
         a genuine upper bound, so the answer is never below the true maximum.
         """
 
-        status = solver.check()
+        status = solver.check(*lits)
         if status == z3.unsat:
             return -math.inf
         if status != z3.sat:
@@ -372,7 +403,7 @@ class Z3Solver:
 
         # widen upward by doubling the gap until the objective cannot reach
         step, hi = 1, lo + 1
-        while self._reaches(solver, e, hi):
+        while self._reaches(solver, e, hi, lits):
             lo, step = hi, step * 2
             hi = lo + step
             if lo > ceiling:
@@ -381,7 +412,7 @@ class Z3Solver:
         # invariant: reaches(lo), not reaches(hi); the maximum is in [lo, hi)
         while hi - lo > 1:
             mid = lo + (hi - lo) // 2
-            if self._reaches(solver, e, mid):
+            if self._reaches(solver, e, mid, lits):
                 lo = mid
             else:
                 hi = mid

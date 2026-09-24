@@ -558,13 +558,19 @@ class TestRefinement:
 
         assert _cls(f, 'abs(x)') == FINITE
 
-    def test_an_inline_conditional_refines_its_branches(self):
+    def test_an_inline_conditional_does_not_refine_its_branches(self):
+        """A backend may evaluate both arms on every input, as format
+        inference assumes too."""
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
             return fp.logb(x) if fp.isinf(x) else fp.fabs(x)
 
-        assert _cls(f, 'logb(x)') == POS_INF
-        assert _cls(f, 'abs(x)') == NAN | ZERO | FINITE
+        @fp.fpy(ctx=fp.REAL)
+        def g(x: fp.Real) -> fp.Real:
+            return fp.logb(x) + fp.fabs(x)
+
+        assert _cls(f, 'logb(x)') == _cls(g, 'logb(x)')
+        assert _cls(f, 'abs(x)') == _cls(g, 'abs(x)')
 
 
 class TestALoweredChain:
@@ -1605,3 +1611,504 @@ class TestAGuardOverARow:
                 return 0.0
 
         assert _amax_unfused(f, arg_types=_MATRIX) == TOP
+
+
+#####################################################################
+# Finiteness facts
+
+
+@fp.fpy(ctx=fp.REAL)
+def _literal_any_guard(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+    p0 = a * b
+    t0 = not fp.isfinite(p0)
+    if any([t0]) or not fp.isfinite(c):
+        r = 0
+    else:
+        r = p0 * 3
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _backward_guard(a: fp.Real, b: fp.Real) -> fp.Real:
+    p0 = a * b
+    if not fp.isfinite(p0):
+        r = 0
+    else:
+        r = a * 3
+    return r
+
+
+class TestFinitenessFacts:
+    """A finiteness guard refines what it tests, and a finite product its factors."""
+
+    def test_a_literal_any_guard_refines_what_it_tests(self):
+        """`any` over a literal of named tests."""
+        info = ValueClassInfer.analyze(_literal_any_guard.ast)
+        read = _find(_literal_any_guard.ast, '(p0 * 3)').first
+        assert info.classify(read) & (NAN | INF) == ValueClass(0)
+
+    def test_a_finite_product_has_finite_factors(self):
+        info = ValueClassInfer.analyze(_backward_guard.ast)
+        read = _find(_backward_guard.ast, '(a * 3)').first
+        assert info.classify(read) & (NAN | INF) == ValueClass(0)
+
+
+class TestALiteralGuard:
+    """`all` / `any` over a literal is the `and` / `or` of its elements."""
+
+    def test_all_true_refines_each(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            if all([fp.isfinite(a), fp.isfinite(b)]):
+                r = a * b
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(a * b)') & (NAN | INF) == ValueClass(0)
+
+    def test_any_true_refines_nothing(self):
+        """A disjunction: either test may be the one that held."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            if any([fp.isnan(a), fp.isnan(b)]):
+                r = a * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(a * 3)') & NAN
+
+    def test_all_over_some_says_nothing_of_the_rest(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            if all([fp.isfinite(a)]):
+                r = b * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(b * 3)') & NAN
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guard_all(xs, c):
+    if all([fp.isfinite(x) for x in xs]):
+        r = xs[0] * 3
+    else:
+        r = 0
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guard_any(xs, c):
+    if any([not fp.isfinite(x) for x in xs]) or not fp.isfinite(c):
+        r = 0
+    else:
+        r = xs[0] * c
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guard_not_any(xs, c):
+    if not any([fp.isnan(x) for x in xs]):
+        r = xs[1] * 3
+    else:
+        r = 0
+    return r
+
+
+_FIN = ZERO | FINITE
+
+
+def _finite_after(p_of, ctx=fp.REAL):
+    """The class of `a` where `p_of(a, b, c)`, computed under *ctx*, is
+    known finite."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+        with ctx:
+            p = p_of(a, b, c)
+        if fp.isfinite(p):
+            r = a * 3
+        else:
+            r = 0
+        return r
+
+    from fpy2.transform import FuncInline
+    ast = FuncInline.apply(f.ast)
+    info = ValueClassInfer.analyze(ast)
+    return info.classify(_find(ast, '(a * 3)').first)
+
+
+@fp.fpy
+def _p_add(a, b, c):
+    return a + b
+
+
+@fp.fpy
+def _p_sub(a, b, c):
+    return b - a
+
+
+@fp.fpy
+def _p_mul(a, b, c):
+    return a * b
+
+
+@fp.fpy
+def _p_neg(a, b, c):
+    return -a
+
+
+@fp.fpy
+def _p_abs(a, b, c):
+    return abs(a)
+
+
+@fp.fpy
+def _p_fma(a, b, c):
+    return fp.fma(b, c, a)
+
+
+@fp.fpy
+def _p_num(a, b, c):
+    return a / b
+
+
+@fp.fpy
+def _p_den(a, b, c):
+    return b / a
+
+
+@fp.fpy
+def _p_round(a, b, c):
+    return fp.round(a)
+
+
+@fp.fpy
+def _p_chain(a, b, c):
+    q = a * b
+    return q + c
+
+
+class TestBackwardRefinement:
+    """A finite result says its operands were finite, through the names they
+    were computed from."""
+
+    @pytest.mark.parametrize(
+        'p_of', [_p_add, _p_sub, _p_mul, _p_neg, _p_abs, _p_fma, _p_num,
+                 _p_round, _p_chain], ids=lambda f: f.name)
+    def test_an_exact_operation(self, p_of):
+        assert _finite_after(p_of) & (NAN | INF) == ValueClass(0)
+
+    def test_not_a_denominator(self):
+        """`b / inf` is zero."""
+        assert _finite_after(_p_den) & INF
+
+    def test_through_a_rounding_that_keeps_infinities(self):
+        assert _finite_after(_p_mul, fp.FP32) & (NAN | INF) == ValueClass(0)
+
+    def test_not_through_one_that_saturates(self):
+        """`MX_E2M1` rounds an infinity, and a NaN, to 6."""
+        assert _finite_after(_p_mul, fp.MX_E2M1) & INF
+
+    def test_not_from_a_non_finite_result(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            p = a * b
+            if fp.isinf(p):
+                r = a * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(a * 3)') & NAN
+
+    def test_which_contexts_keep_a_non_finite_value(self):
+        from fpy2.analysis.value_class import keeps_non_finite
+        assert keeps_non_finite(fp.FP32)
+        assert keeps_non_finite(fp.MX_E4M3)      # an infinity becomes a NaN
+        assert not keeps_non_finite(fp.MX_E2M1)  # saturates
+        assert not keeps_non_finite(fp.SINT8)    # refuses
+
+
+class TestEitherDisjunct:
+    """One of several tests holding says something of a definition all of
+    them test: it is in the union of what they say."""
+
+    def test_an_or_of_one_value(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(x):
+                r = x * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(x * 3)') & (ZERO | FINITE) == ValueClass(0)
+
+    def test_not_an_or_of_two(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(y):
+                r = x * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(x * 3)') & FINITE
+
+    def test_an_and_that_fails(self):
+        """Either conjunct is false, and each says `x` is not finite."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isfinite(x) and not fp.isinf(x):
+                r = 0
+            else:
+                r = x * 3
+            return r
+
+        assert _cls(f, '(x * 3)') & (ZERO | FINITE) == ValueClass(0)
+
+
+def _typed_cls(f, text: str, arg_types) -> ValueClass:
+    from fpy2.transform import Monomorphize
+    ast = Monomorphize.apply(f.ast, fp.REAL, arg_types)
+    return ValueClassInfer.analyze(ast).classify(_find(ast, text))
+
+
+_L4 = ListType(RealType(fp.FP32), 4)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _after_an_early_return(x):
+    if not fp.isfinite(x):
+        return 0
+    return x * 3
+
+
+@fp.fpy(ctx=fp.REAL)
+def _a_mask_through_a_ladder(prods, c):
+    m = fp.empty(4)
+    for i in range(4):
+        p = prods[i]
+        m[i] = not fp.isfinite(p)
+    t = any(m)
+    if not t:
+        t = not fp.isfinite(c)
+    if t:
+        r = 0
+    else:
+        r = prods[1] * 3
+    return r
+
+
+@fp.fpy(ctx=fp.REAL)
+def _back_through_a_fill(A, B):
+    prods = fp.empty(4)
+    for i in range(4):
+        prods[i] = A[i] * B[i]
+    m = fp.empty(4)
+    for i in range(4):
+        p = prods[i]
+        m[i] = not fp.isfinite(p)
+    if any(m):
+        r = 0
+    else:
+        r = A[1] * 3
+    return r
+
+
+class TestEarlyExitAndMasks:
+    """Refinement past an early exit, and through a mask a loop fills."""
+
+    def test_after_an_early_return(self):
+        assert _typed_cls(_after_an_early_return, '(x * 3)',
+                          [RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)
+
+    def test_after_an_else_that_returns(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isfinite(x):
+                y = x
+            else:
+                return 0
+            return x * 3
+
+        assert _cls(f, '(x * 3)') & (NAN | INF) == ValueClass(0)
+
+    def test_not_an_arm_that_returns_on_one_path(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, c: fp.Real) -> fp.Real:
+            if not fp.isfinite(x):
+                if c > 0:
+                    return 0
+            return x * 3
+
+        assert _cls(f, '(x * 3)') & NAN
+
+    def test_only_the_rest_of_its_block(self):
+        """Inside a loop the return ends the call, but the refinement is read
+        within the block; what follows the loop is not refined."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c):
+            s = 0
+            for x in xs:
+                if not fp.isfinite(c):
+                    return 0
+                s = c * 3
+            return c * 5
+
+        L = ListType(RealType(fp.FP32), 2)
+        R = RealType(fp.FP32)
+        assert _typed_cls(f, '(c * 3)', [L, R]) & (NAN | INF) == ValueClass(0)
+        assert _typed_cls(f, '(c * 5)', [L, R]) & NAN
+
+    def test_a_mask_through_a_lowered_or(self):
+        assert _typed_cls(_a_mask_through_a_ladder, '(prods[1] * 3)',
+                          [_L4, RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)
+
+    def test_back_through_a_fill(self):
+        assert _typed_cls(_back_through_a_fill, '(A[1] * 3)',
+                          [_L4, _L4]) & (NAN | INF) == ValueClass(0)
+
+
+class TestBackThroughAFill:
+    """Every element of a list finite, where one covering loop stored an exact
+    operation of reads at its index, makes every element of those lists
+    finite."""
+
+    @staticmethod
+    def _class_of_a(fill, *, n: int = 4, ctx=fp.REAL) -> ValueClass:
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            prods = fp.empty(4)
+            for i in range(n):
+                with ctx:
+                    prods[i] = fill(A[i], B[i], 0)
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        from fpy2.transform import ConstFold, FreeVarElim, FuncInline, Monomorphize
+        # as the backends do: `n` and `ctx` are closure values
+        ast = Monomorphize.apply(f.ast, fp.REAL, [_L4, _L4])
+        ast = FuncInline.apply(ConstFold.apply(FreeVarElim.apply(ast)))
+        return ValueClassInfer.analyze(ast).classify(_find(ast, '(A[1] * 3)'))
+
+    def test_a_sum(self):
+        assert self._class_of_a(_p_add) & (NAN | INF) == ValueClass(0)
+
+    def test_a_rounded_product(self):
+        assert self._class_of_a(_p_mul, ctx=fp.FP32) & (NAN | INF) == ValueClass(0)
+
+    def test_not_one_that_saturates(self):
+        assert self._class_of_a(_p_mul, ctx=fp.MX_E2M1) & INF
+
+    def test_not_a_denominator(self):
+        assert self._class_of_a(_p_den) & INF
+
+    def test_not_a_partial_fill(self):
+        assert self._class_of_a(_p_mul, n=3) & INF
+
+    def test_not_after_a_store_into_the_source(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, c):
+            prods = fp.empty(4)
+            for i in range(4):
+                prods[i] = A[i] * B[i]
+            A[1] = c
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF
+
+    def test_not_a_fill_that_may_not_run(self):
+        @fp.fpy(ctx=fp.REAL)
+        def under_if(A, B, c):
+            prods = [0.0, 0.0, 0.0, 0.0]
+            if c > 0:
+                for i in range(4):
+                    prods[i] = A[i] * B[i]
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        @fp.fpy(ctx=fp.REAL)
+        def under_loop(A, B, k):
+            prods = [0.0, 0.0, 0.0, 0.0]
+            for _ in range(k):
+                for i in range(4):
+                    prods[i] = A[i] * B[i]
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        for f in (under_if, under_loop):
+            assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF
+
+    def test_a_fill_per_iteration(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, k):
+            r = 0.0
+            for _ in range(k):
+                prods = fp.empty(4)
+                for i in range(4):
+                    prods[i] = A[i] * B[i]
+                m = fp.empty(4)
+                for i in range(4):
+                    p = prods[i]
+                    m[i] = not fp.isfinite(p)
+                if any(m):
+                    r = 0
+                else:
+                    r = A[1] * 3
+            return r
+
+        cls = _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)])
+        assert cls & (NAN | INF) == ValueClass(0)
+
+    def test_not_a_second_store(self):
+        """Inside the fill, so the stamp at its exit does not show it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, c):
+            prods = fp.empty(4)
+            for i in range(4):
+                prods[i] = A[i] * B[i]
+                prods[0] = c
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF

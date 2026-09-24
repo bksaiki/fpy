@@ -19,6 +19,7 @@ from ...analysis import (
     DefineUse,
     Escape,
     FormatInfer,
+    TypeInfer,
     ValueClassAnalysis,
     ValueClassInfer,
 )
@@ -529,23 +530,25 @@ class CppCompiler(Backend):
         def_use = DefineUse.analyze(ast)
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
         array_size = ArraySizeInfer.analyze(ast)
+        type_info = TypeInfer.check(ast, def_use=def_use)
+        # before the value classes, which read it: without the summaries every
+        # list handed to a call reads as escaping and loses its element facts
+        alias = Alias.analyze(ast, def_use=def_use, type_info=type_info, summaries=summaries)
+        class_info = ValueClassInfer.analyze(
+            ast, def_use=def_use, type_info=type_info, ctx_use=ctx_use, alias=alias,
+        )
         # `use_digit_bounds`: storage selection is the one consumer of the
         # relational bounds, which are what put a rescaled rounding in an
-        # `int16_t`.
+        # `int16_t`.  They assume what the value classes prove.
         format_info = FormatInfer.analyze(
             ast,
             def_use=def_use,
+            type_info=type_info,
             ctx_use=ctx_use,
             array_size=array_size,
             digit_bound_params=digit_bound_params,
             use_digit_bounds=True,
-        )
-        # before the value classes, which read it: without the summaries every
-        # list handed to a call reads as escaping and loses its element facts
-        alias = Alias.analyze(ast, def_use=def_use, summaries=summaries)
-        class_info = ValueClassInfer.analyze(
-            ast, def_use=def_use, type_info=format_info.type_info,
-            ctx_use=ctx_use, alias=alias,
+            value_classes=class_info,
         )
 
         try:

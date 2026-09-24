@@ -4,7 +4,8 @@ Path-sensitive value-class analysis.
 One question per expression: can this value be a NaN, an infinity of either
 sign, a zero, or a finite non-zero?  The five atoms form a finite lattice —
 union is the join, intersection the meet, so no widening is needed — and it is
-*refined* at every branch that tests a value's class.
+*refined* at every ``if`` statement that tests a value's class.  Not at an
+``IfExpr``, as format inference does not: a backend may evaluate both arms.
 
 Format inference cannot answer this, and this is deliberately not a fourth flag
 on :class:`~fpy2.analysis.format_infer.AbstractFormat`, which already carries
@@ -51,13 +52,14 @@ top class.
 
 Not yet taught: the sign of a zero, which would let ``signbit`` refine;
 magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
-refinement; the class of a numeric free variable; a ``for`` target over
-``range``; and the code after an early return, since :meth:`_visit_if1` refines
-only its body.
+refinement; the class of a numeric free variable; and a ``for`` target over
+``range``.  After an early return only the rest of its own block is refined,
+not what follows the statement enclosing it.
 """
 
 import enum
 import functools
+import operator
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -86,6 +88,7 @@ from .define_use import (
     DefSite,
     PhiDef,
 )
+from .reachability import Reachability, ReachabilityAnalysis
 from .type_infer import TypeAnalysis, TypeInfer
 
 __all__ = [
@@ -247,6 +250,24 @@ def _rounded_class(ctx: Context, x: Float) -> ValueClass:
         return class_of(ctx.round(x))
     except Exception:  # noqa: BLE001 -- a refusal is not a representable class
         return _BOT
+
+
+def _facts_by_def(
+    facts: list[tuple[Definition, ValueClass]],
+) -> dict[Definition, ValueClass]:
+    """*facts* with each definition's classes intersected."""
+    out: dict[Definition, ValueClass] = {}
+    for d, cls in facts:
+        out[d] = out.get(d, _TOP) & cls
+    return out
+
+
+@functools.cache
+def keeps_non_finite(ctx: Context) -> bool:
+    """Whether rounding under *ctx* keeps a NaN or infinity non-finite, so a
+    finite result had a finite exact value.  Not a saturating format
+    (``MX_E2M1``) or fixed point."""
+    return all(_rounded_class(ctx, x) & (_NAN | _INF) for x in _PROBES)
 
 
 #####################################################################
@@ -458,6 +479,26 @@ class ValueClassAnalysis:
     ctx_use: ContextUseAnalysis
     """Underlying context-use analysis, which supplies each operation's context."""
 
+    arm_facts: dict[Stmt, tuple[list[tuple[Definition, ValueClass]], ...]]
+    """What each ``if``'s condition being true, then false, says of the
+    definitions it tests -- the refinement each arm starts from."""
+
+    refine_at: dict[Expr, dict[Definition, ValueClass]]
+    """The refinement each expression was read under."""
+
+    elements_seen: dict[Expr, dict[Region, ValueClass]]
+    """What every element of each list is, wherever each expression is read."""
+
+    def class_at(self, d: Definition, e: Expr) -> ValueClass:
+        """*d*'s class wherever *e* is evaluated."""
+        cls = self.by_def.get(d)
+        base = cls if isinstance(cls, ValueClass) else _TOP
+        return base & self.refine_at.get(e, {}).get(d, _TOP)
+
+    def elements_at(self, region: Region, e: Expr) -> ValueClass:
+        """What every element of *region* is wherever *e* is evaluated."""
+        return self.elements_seen.get(e, {}).get(region, _TOP)
+
     def element_region(self, e: Expr) -> 'Region | None':
         """The region whose elements a fact about the list *e* belongs to, or
         ``None`` where no fact may be recorded.
@@ -513,6 +554,10 @@ class _ValueClassInstance(DefaultVisitor):
 
     by_def: dict[Definition, ValueClass | None]
     by_expr: dict[Expr, ValueClass | None]
+    arm_facts: dict[Stmt, tuple[list[tuple[Definition, ValueClass]], ...]]
+    refine_at: dict[Expr, dict[Definition, ValueClass]]
+    elements_seen: dict[Expr, dict[Region, ValueClass]]
+    _elements_now: tuple[dict, dict, int, dict[Region, ValueClass]] | None
 
     alias: AliasAnalysis
 
@@ -533,6 +578,8 @@ class _ValueClassInstance(DefaultVisitor):
     says nothing; see :meth:`_implied_universal`."""
 
     _sizes_cache: 'ArraySizeAnalysis | None'
+    _reach_cache: 'ReachabilityAnalysis | None'
+    _fills_cache: 'dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] | None'
 
     _scan_clocks: dict[ForStmt, tuple[int, int]]
     """The :attr:`_clock` each loop began and ended at, for
@@ -579,10 +626,16 @@ class _ValueClassInstance(DefaultVisitor):
         self._scanned = {}
         self._scan_clocks = {}
         self._sizes_cache = None
+        self._reach_cache = None
+        self._fills_cache = None
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
         self._refine_elt = {}
+        self.arm_facts = {}
+        self.refine_at = {}
+        self.elements_seen = {}
+        self._elements_now = None
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -618,6 +671,9 @@ class _ValueClassInstance(DefaultVisitor):
             alias=self.alias,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
+            arm_facts=self.arm_facts,
+            refine_at=self.refine_at,
+            elements_seen=self.elements_seen,
         )
 
     # ------------------------------------------------------------------
@@ -660,6 +716,17 @@ class _ValueClassInstance(DefaultVisitor):
             return _TOP
         return self._elt.get(region, _TOP) & self._mask_of(region)
 
+    def _elements_here(self) -> dict[Region, ValueClass]:
+        """:meth:`_elements_of` for every region with a fact, shared until a
+        store, a refinement or a join changes one."""
+        now = self._elements_now
+        if (now is None or now[0] is not self._elt
+                or now[1] is not self._refine_elt or now[2] != self._clock):
+            regions = {*self._elt, *self._refine_elt}
+            now = self._elements_now = (self._elt, self._refine_elt, self._clock, {
+                r: self._elt.get(r, _TOP) & self._mask_of(r) for r in regions})
+        return now[3]
+
     def _stamp(self, region: Region) -> int:
         return self._touched.get(region, 0)
 
@@ -667,6 +734,12 @@ class _ValueClassInstance(DefaultVisitor):
         """Record that *region*'s elements changed."""
         self._clock += 1
         self._touched[region] = self._clock
+
+    def _retouch(self, clock: int) -> None:
+        """Touch every region stored into since *clock* again: past a join,
+        those stores only may have happened."""
+        for region in [r for r, t in self._touched.items() if t > clock]:
+            self._touch(region)
 
     def _mask_of(self, region: Region) -> ValueClass:
         """What the enclosing branches imply about *region*'s elements, or the
@@ -748,9 +821,13 @@ class _ValueClassInstance(DefaultVisitor):
         # re-stamped, so an entry a store has already invalidated reads as the
         # top class here rather than coming back as this arm's starting point
         out_elt = {r: (self._mask_of(r), self._stamp(r)) for r in saved_elt}
-        for region, cls in self._implied_elements(cond, truth):
+        todo = self._implied_elements(cond, truth)
+        while todo:
+            region, cls = todo.pop()
             prev, _ = out_elt.get(region, (_TOP, 0))
             out_elt[region] = (prev & cls, self._stamp(region))
+            if not cls & (_NAN | _INF):
+                todo.extend((src, _ZERO | _FINITE) for src in self._filled_from(region))
         self._refine, self._refine_elt = out, out_elt
         try:
             yield
@@ -766,6 +843,14 @@ class _ValueClassInstance(DefaultVisitor):
                 return [i for a in cond.args for i in self._implied(a, True)]
             case Or() if not truth:
                 return [i for a in cond.args for i in self._implied(a, False)]
+            case Or() | And():
+                return self._implied_either(
+                    [self._implied(a, truth) for a in cond.args])
+            # over a literal, the `and` / `or` of its elements
+            case AllOf(arg=ListExpr() as lit) if truth:
+                return [i for a in lit.elts for i in self._implied(a, True)]
+            case AnyOf(arg=ListExpr() as lit) if not truth:
+                return [i for a in lit.elts for i in self._implied(a, False)]
             case IsNan():
                 return self._at(cond.arg, _NAN if truth else _INF | _ZERO | _FINITE)
             case IsInf():
@@ -789,10 +874,29 @@ class _ValueClassInstance(DefaultVisitor):
             case _:
                 return []
 
+    @staticmethod
+    def _implied_either(
+        parts: list[list[tuple[Definition, ValueClass]]],
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What one of *parts* holding says: a definition every part refines
+        is in the union of what they refine it to."""
+        each = [_facts_by_def(p) for p in parts]
+        if not each:
+            return []
+        common = set(each[0]).intersection(*each[1:])
+        return [(d, functools.reduce(operator.or_, (m[d] for m in each)))
+                for d in each[0] if d in common]
+
     def _implied_ladder(
         self, d: 'Definition | None', truth: bool
     ) -> list[tuple[Definition, ValueClass]]:
-        """What a *lowered* ``and``/``or`` being *truth* says.
+        """What a *lowered* ``and``/``or`` being *truth* says; see
+        :meth:`_ladder_rungs`."""
+        return [i for r in self._ladder_rungs(d, truth) for i in self._implied_at(r, truth)]
+
+    def _ladder_rungs(self, d: 'Definition | None', truth: bool) -> list[Definition]:
+        """The definitions a *lowered* ``and``/``or`` being *truth* makes
+        *truth* too.
 
         :class:`~fpy2.transform.Hoistable` rewrites a chain whose tail needs a
         statement into a flat ladder of guarded assignments, which the ``And``
@@ -831,10 +935,7 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         if truth is negated:      # `and` speaks when true, `or` when false
             return []
-        return [
-            i for idx in (d.lhs, d.rhs)
-            for i in self._implied_at(self.def_use.defs[idx], truth)
-        ]
+        return [self.def_use.defs[idx] for idx in (d.lhs, d.rhs)]
 
     def _implied_at(
         self, d: Definition, truth: bool
@@ -870,11 +971,22 @@ class _ValueClassInstance(DefaultVisitor):
                 src = self.def_use.defining_expr(cond)
                 if src is not cond:
                     return self._implied_elements(src, truth)
-                return self._implied_universal(
-                    self.def_use.use_to_def.get(cond), truth,
-                )
+                d = self.def_use.use_to_def.get(cond)
+                return self._implied_universal(d, truth) or [
+                    i for r in self._ladder_rungs(d, truth)
+                    for i in self._implied_elements_at(r, truth)
+                ]
             case _:
                 return []
+
+    def _implied_elements_at(
+        self, d: Definition, truth: bool
+    ) -> 'list[tuple[Region, ValueClass]]':
+        """:meth:`_implied_at`, for the elements of a list."""
+        if isinstance(d, AssignDef) and isinstance(d.site, Assign):
+            return self._implied_elements(d.site.expr, truth)
+        return [i for r in self._ladder_rungs(d, truth)
+                for i in self._implied_elements_at(r, truth)]
 
     def _implied_universal(
         self, d: 'Definition | None', truth: bool
@@ -1099,17 +1211,149 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _at(self, e: Expr, cls: ValueClass) -> list[tuple[Definition, ValueClass]]:
         """*cls*, against the definition *e* names -- nothing unless *e* is a
-        real-valued variable, since only a definition can be refined."""
+        real-valued variable, since only a definition can be refined -- and,
+        where *cls* is finite, against what that definition was computed from.
+        """
         if not isinstance(e, Var):
             return []
         if not isinstance(self.type_info.by_expr.get(e), RealType):
             return []
-        return [(self.def_use.find_def_from_use(e), cls)]
+        d = self.def_use.find_def_from_use(e)
+        out = [(d, cls)]
+        if not cls & (_NAN | _INF):
+            out += self._finite_operands(d)
+        return out
+
+    def _finite_operands(self, d: Definition) -> list[tuple[Definition, ValueClass]]:
+        """What *d* being finite says of its operands: a non-finite operand of
+        an exact ``+``, ``-``, ``*``, ``fma``, negation or ``abs`` makes it
+        non-finite, and so does a non-finite numerator -- not denominator,
+        since ``x / inf`` is zero.  Through a rounding only where the context
+        keeps a non-finite value non-finite."""
+        if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+            return []
+        e = d.site.expr
+        if isinstance(e, Var):
+            return self._at(e, _ZERO | _FINITE)
+        return [i for a in self._exact_operands(e) for i in self._at(a, _ZERO | _FINITE)]
+
+    def _exact_operands(self, e: Expr) -> list[Expr]:
+        """The operands *e* being finite makes finite; see
+        :meth:`_finite_operands`."""
+        match e:
+            case Neg() | Abs() | Round() | Cast():
+                operands = [e.arg]
+            case Add() | Sub() | Mul():
+                operands = [e.first, e.second]
+            case Div():
+                operands = [e.first]
+            case Fma():
+                operands = [e.first, e.second, e.third]
+            case _:
+                return []
+        scope = self.ctx_use.use_to_scope.get(e)
+        if scope is None or not isinstance(scope.ctx, Context):
+            return []
+        if scope.ctx is not REAL and not keeps_non_finite(scope.ctx):
+            return []
+        return operands
+
+    def _filled_from(self, region: Region) -> 'list[Region]':
+        """Lists whose elements are finite wherever *region*'s are: *region*'s
+        only store is in one loop covering it, storing an exact op of
+        same-index reads of lists that loop also covers and that were
+        unchanged when it began."""
+        sites = self._fill_sites().get(region, [])
+        if len(sites) != 1:
+            return []
+        store, loop = sites[0]
+        if loop is None:
+            return []
+        clocks = self._scan_clocks.get(loop)
+        if clocks is None or len(store.indices) != 1 or not self._is_target(store.indices[0], loop):
+            return []
+        entry, exited = clocks
+        if self._stamp(region) > exited or not self._covers(loop, store):
+            return []
+        out: list[Region] = []
+        for a in self._exact_operands(self._through_names(store.expr)):
+            a = self._through_names(a)
+            if not isinstance(a, ListRef) or not isinstance(a.value, Var):
+                continue
+            src = self._sole_region(a.value)
+            if (src is not None and self._is_index(a.index, loop)
+                    and self._stamp(src) <= entry
+                    and self._covers(loop, a.value)):
+                out.append(src)
+        return out
+
+    def _through_names(self, e: Expr) -> Expr:
+        """*e*, or the expression the name *e* was assigned: what inlining
+        leaves between a store and the operation it stores."""
+        while isinstance(e, Var):
+            d = self.def_use.use_to_def.get(e)
+            if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+                break
+            e = d.site.expr
+        return e
+
+    def _covers(self, loop: ForStmt, at: 'Var | IndexedAssign') -> bool:
+        """Whether *loop* runs once per element of the list *at* reads."""
+        size = self.sizes.by_def.get(self.def_use.find_def_from_use(at))
+        return isinstance(size, ListSize) and size_eq(
+            trip_count(loop.iterable, self.sizes), size.size)
+
+    def _is_index(self, e: Expr, loop: ForStmt) -> bool:
+        """Whether *e* is *loop*'s index: its target, or ``range(n)[target]``,
+        as `ZipElim` emits."""
+        if self._is_target(e, loop):
+            return True
+        if not isinstance(e, Var):
+            return False
+        d = self.def_use.use_to_def.get(e)
+        if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+            return False
+        ref = d.site.expr
+        if not isinstance(ref, ListRef) or not isinstance(ref.value, Var):
+            return False
+        r = self.def_use.use_to_def.get(ref.value)
+        return (isinstance(r, AssignDef) and isinstance(r.site, Assign)
+                and isinstance(r.site.expr, Range1) and self._is_target(ref.index, loop))
+
+    def _fill_sites(self) -> 'dict[Region, list[tuple[IndexedAssign, ForStmt | None]]]':
+        """Every store into each region, with the loop it is directly in the
+        body of."""
+        if self._fills_cache is None:
+            out: dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] = {}
+
+            def walk(block: StmtBlock, loop: ForStmt | None) -> None:
+                for stmt in block.stmts:
+                    match stmt:
+                        case IndexedAssign():
+                            region = self._region_of_def(
+                                stmt.var, stmt, len(stmt.indices) - 1)
+                            if region is not None:
+                                out.setdefault(region, []).append((stmt, loop))
+                        case ForStmt():
+                            walk(stmt.body, stmt)
+                        case ContextStmt():
+                            walk(stmt.body, loop)      # runs every iteration
+                        case If1Stmt() | WhileStmt():
+                            walk(stmt.body, None)
+                        case IfStmt():
+                            walk(stmt.ift, None)
+                            walk(stmt.iff, None)
+
+            walk(self.func.body, None)
+            self._fills_cache = out
+        return self._fills_cache
 
     # ------------------------------------------------------------------
     # Expressions
 
     def _visit_expr(self, e: Expr, ctx: None) -> ValueClass | None:  # type: ignore[override]
+        self.refine_at[e] = self._refine
+        self.elements_seen[e] = self._elements_here()
         cls = super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType):
             cls = None
@@ -1242,12 +1486,9 @@ class _ValueClassInstance(DefaultVisitor):
         return _TOP
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> ValueClass:
+        # arms unrefined: a backend may evaluate both on every input
         self._visit_expr(e.cond, ctx)
-        with self._refined(e.cond, True):
-            ift = self._operand(e.ift, ctx)
-        with self._refined(e.cond, False):
-            iff = self._operand(e.iff, ctx)
-        return ift | iff
+        return self._operand(e.ift, ctx) | self._operand(e.iff, ctx)
 
     # ------------------------------------------------------------------
     # Statements
@@ -1298,24 +1539,62 @@ class _ValueClassInstance(DefaultVisitor):
                 self._region_of_def(stmt.var, stmt, above), _TOP,
             )
 
+    def _visit_block(self, block: StmtBlock, ctx: None) -> None:
+        self._visit_stmts(block.stmts, ctx)
+
+    def _visit_stmts(self, stmts: Sequence[Stmt], ctx: None) -> None:
+        for i, stmt in enumerate(stmts):
+            self._visit_statement(stmt, ctx)
+            rest = stmts[i + 1:]
+            exit = self._early_exit(stmt) if rest else None
+            if exit is not None:
+                # the rest runs only where the arm that cannot fall through
+                # was not taken
+                with self._refined(*exit):
+                    self._visit_stmts(rest, ctx)
+                return
+
+    def _early_exit(self, stmt: Stmt) -> tuple[Expr, bool] | None:
+        """What *stmt*'s condition is wherever control passes it, where one
+        of its arms cannot fall through."""
+        match stmt:
+            case If1Stmt() if not self._falls_through(stmt.body):
+                return stmt.cond, False
+            case IfStmt():
+                ift, iff = self._falls_through(stmt.ift), self._falls_through(stmt.iff)
+                if ift != iff:
+                    return stmt.cond, ift
+        return None
+
+    def _falls_through(self, block: StmtBlock) -> bool:
+        if self._reach_cache is None:
+            self._reach_cache = Reachability.analyze(self.func)
+        return not block.stmts or self._reach_cache.has_exit.get(block.stmts[-1], True)
+
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        entry = dict(self._elt)
+        self.arm_facts[stmt] = (
+            self._implied(stmt.cond, True), self._implied(stmt.cond, False))
+        entry, clock = dict(self._elt), self._clock
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
         # the body may not have run, so its stores only *may* have happened
         self._elt = self._join_elements(entry, self._elt)
+        self._retouch(clock)
         self._merge_phis(stmt)
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        entry = dict(self._elt)
+        self.arm_facts[stmt] = (
+            self._implied(stmt.cond, True), self._implied(stmt.cond, False))
+        entry, clock = dict(self._elt), self._clock
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)
         taken, self._elt = self._elt, entry
         with self._refined(stmt.cond, False):
             self._visit_block(stmt.iff, ctx)
         self._elt = self._join_elements(taken, self._elt)
+        self._retouch(clock)
         self._merge_phis(stmt)
 
     def _visit_while(self, stmt: WhileStmt, ctx: None):
@@ -1324,7 +1603,9 @@ class _ValueClassInstance(DefaultVisitor):
             with self._refined(stmt.cond, True):
                 self._visit_block(stmt.body, ctx)
 
+        clock = self._clock
         self._fixpoint(stmt, body)
+        self._retouch(clock)
 
     def _visit_for(self, stmt: ForStmt, ctx: None):
         self._visit_expr(stmt.iterable, ctx)
@@ -1344,6 +1625,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._scan_clocks.pop(stmt, None)
         entry = self._clock
         self._fixpoint(stmt, body)
+        self._retouch(entry)
         self._scan_clocks[stmt] = (entry, self._clock)
         if region is not None and self._stamp(region) == before:
             self._scanned[stmt] = before

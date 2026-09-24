@@ -361,6 +361,30 @@ class TestCallersThatBoundACalleeDifferentlyDoNotShare:
         # ... and which caller came first must not decide the outcome
         assert first == self._rnd_specs(untied_first)
 
+    def test_the_same_bounds_on_different_expressions_are_two_specs(self):
+        """Each call ties one rounding tight and leaves the other loose, so
+        the formats match as a multiset but not expression by expression; one
+        spec would bound one call by the other's terms."""
+        @fp.fpy(ctx=fp.REAL)
+        def rnd(x, n):
+            with fp.MPFixedContext(n, fp.RM.RTZ):
+                return fp.round(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def both(x, y, p, q):
+            return rnd(x, p) + rnd(y, q)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b, c):
+            s = both(a, b, fp.logb(a) - 3, fp.logb(c) - 3)
+            t = both(a, b, fp.logb(c) - 3, fp.logb(b) - 3)
+            return s + t
+
+        mod = _module((f, [RealType(fp.FP32)] * 3))
+        out = Specialize.apply(mod, size_key=True, bound_params={})
+        names = [g.name for g in out.functions() if g.name.startswith('both')]
+        assert len(names) == 2, names
+
 
 class TestAUserNameIsNotUnmangled:
     """Specialization re-reads its own output, so it has to recover a spec's

@@ -614,7 +614,7 @@ class TestRegression:
     def test_hoist_inside_nested_with_blocks(self):
         """Hoist should fire correctly inside an inner ``with`` block.
         The active scope at the eliminable op is the innermost
-        ``with``; ``_resolved_ctx`` and ``_unrounded_format`` must
+        ``with``; ``_resolved_ctx`` and ``unrounded_format`` must
         consult that scope, not the outer one."""
 
         @fp.fpy
