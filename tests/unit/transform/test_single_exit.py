@@ -16,7 +16,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
-from fpy2.analysis import Reachability
+from fpy2.analysis import Reachability, TypeInfer
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import SingleExit, TransformDeclined
 
@@ -381,3 +381,45 @@ class TestBothArmsFallThrough:
                 return super()._visit_statement(stmt, ctx)
 
         _V()._visit_function(out, None)
+
+
+@fp.fpy
+def any_negative(xs: list[fp.Real]) -> bool:
+    for x in xs:
+        if x < 0:
+            return True
+    return False
+
+
+@fp.fpy
+def first_negative_row(xss: list[list[fp.Real]]) -> list[fp.Real]:
+    for xs in xss:
+        if xs[0] < 0:
+            return xs
+    return xss[0]
+
+
+@fp.fpy
+def first_negative_pair(xs: list[fp.Real]) -> tuple[fp.Real, bool]:
+    for x in xs:
+        if x < 0:
+            return (x, True)
+    return (fp.round(0), False)
+
+
+class TestThePlaceholderHasTheReturnType:
+    """A `return` in a loop gives the result a placeholder before the loop,
+    which has to have the function's return type or the rewrite does not type
+    check: `0` against a `bool` fails to unify."""
+
+    @pytest.mark.parametrize('f, cases', [
+        (any_negative, [[1.0, -2.0], [1.0, 2.0]]),
+        (first_negative_row, [[[1.0], [-2.0]], [[1.0], [2.0]]]),
+        (first_negative_pair, [[1.0, -2.0], [1.0, 2.0]]),
+    ])
+    def test_it_type_checks_and_agrees(self, f, cases):
+        out = SingleExit.apply(f.ast)
+        TypeInfer.check(out)
+        g = Function(out, runtime=f.runtime)
+        for xs in cases:
+            assert repr(g(xs)) == repr(f(xs))

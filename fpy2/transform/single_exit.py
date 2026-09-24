@@ -1,7 +1,11 @@
 """Transformation pass to give a function a single trailing return."""
 
-from ..analysis import DefineUse, Reachability, SyntaxCheck
+from collections.abc import Callable
+
+from ..analysis import DefineUse, Reachability, SyntaxCheck, TypeInfer
+from ..analysis.type_infer import TypeInferError
 from ..ast import *
+from ..types import BoolType, ListType, RealType, TupleType, Type, VarType
 from ..utils import Gensym
 from .error import TransformDeclined
 from .utils import clone_block
@@ -22,9 +26,31 @@ def _falls_through(stmts: list[Stmt]) -> bool:
     return Reachability.analyze(StmtBlock(stmts)).has_fallthrough
 
 
+_Placeholder = Callable[[Location | None], Expr]
+"""A fresh expression of the function's return type, at a location."""
+
+
+def _placeholder_of(ty: Type) -> _Placeholder | None:
+    """A value of type *ty*, or `None` where there is none to write."""
+    match ty:
+        case RealType() | VarType():
+            return lambda loc: Decnum('0', loc)
+        case BoolType():
+            return lambda loc: BoolVal(False, loc)
+        case ListType():
+            return lambda loc: ListExpr([], loc)
+        case TupleType():
+            elts = [_placeholder_of(t) for t in ty.elts]
+            if any(e is None for e in elts):
+                return None
+            return lambda loc: TupleExpr([e(loc) for e in elts if e is not None], loc)
+    return None
+
+
 def _sink(
     result: NamedId, stmts: list[Stmt], cont: list[Stmt], depth: int = 0,
     *, done: NamedId | None = None, flag: NamedId | None = None,
+    placeholder: _Placeholder | None = None,
 ) -> list[Stmt]:
     """*stmts* then *cont*, with every `return` rewritten to an assignment.
 
@@ -72,20 +98,28 @@ def _sink(
                 return list(stmts[:i]) + [IfStmt(
                     stmt.cond,
                     StmtBlock(_sink(result, ift, rest if ift_out else [],
-                                    depth, done=done, flag=flag)),
+                                    depth, done=done, flag=flag,
+                                    placeholder=placeholder)),
                     StmtBlock(_sink(result, iff, iff_cont if iff_out else [],
-                                    depth, done=done, flag=flag)),
+                                    depth, done=done, flag=flag,
+                                    placeholder=placeholder)),
                     stmt.loc,
                 )]
             case ForStmt() | WhileStmt():
                 body = list(stmt.body.stmts)
                 if not _has_return(body) or done is None:
                     continue
+                if placeholder is None:
+                    raise TransformDeclined(
+                        'a `return` inside a loop needs a placeholder of the '
+                        'return type for the result, and this type has none'
+                    )
                 # a `return` here cannot move the continuation the way one in
                 # an `if` can: the statements after the loop are reachable
                 # from the loop's *own* exit as well.  So it is recorded in a
                 # flag and the continuation is tested against it.
-                inner = _sink(result, body, [], depth, done=done, flag=done)
+                inner = _sink(result, body, [], depth, done=done, flag=done,
+                              placeholder=placeholder)
                 loop: Stmt
                 if isinstance(stmt, WhileStmt):
                     # folding the flag into the condition stops the loop
@@ -113,7 +147,8 @@ def _sink(
                         )]),
                         stmt.loc,
                     )
-                tail = _sink(result, rest, [], depth, done=done, flag=flag)
+                tail = _sink(result, rest, [], depth, done=done, flag=flag,
+                             placeholder=placeholder)
                 # an inner loop can have nothing after it, and an `if` with an
                 # empty body is not a statement the interpreter accepts
                 guarded = [If1Stmt(
@@ -124,8 +159,8 @@ def _sink(
                     # the result is loop-carried and assigned conditionally,
                     # so it needs an incoming value the way a phi node does --
                     # FPy requires definite assignment and cannot see that the
-                    # flag makes every path cover it.  The seed is dead.
-                    Assign(result, None, Decnum('0', stmt.loc), stmt.loc),
+                    # flag makes every path cover it.  The placeholder is dead.
+                    Assign(result, None, placeholder(stmt.loc), stmt.loc),
                     # re-initializing a shared flag is harmless: this point is
                     # reachable only when it is already clear
                     Assign(done, None, BoolVal(False, stmt.loc), stmt.loc),
@@ -141,7 +176,7 @@ def _sink(
                 return list(stmts[:i]) + [ContextStmt(
                     stmt.target, stmt.ctx,
                     StmtBlock(_sink(result, body, [], depth,
-                                    done=done, flag=flag)),
+                                    done=done, flag=flag, placeholder=placeholder)),
                     stmt.loc,
                 )]
     if not cont:
@@ -149,7 +184,17 @@ def _sink(
         # so this only comes up for a loop body, which falls through.
         return list(stmts)
     return list(stmts) + _sink(result, cont, [], depth,
-                               done=done, flag=flag)
+                               done=done, flag=flag, placeholder=placeholder)
+
+
+def _return_placeholder(func: FuncDef) -> _Placeholder | None:
+    """A value of *func*'s return type, where it has one.  A function that
+    does not type-check keeps the real placeholder it always had."""
+    try:
+        ty = TypeInfer.check(func).fn_type.return_type
+    except TypeInferError:
+        return _placeholder_of(RealType())
+    return _placeholder_of(ty)
 
 
 class SingleExit:
@@ -176,7 +221,8 @@ class SingleExit:
         gensym = Gensym(reserved=DefineUse.analyze(func).names())
         result = gensym.fresh('r')
         stmts = _sink(result, list(func.body.stmts), [],
-                      done=gensym.fresh('done'))
+                      done=gensym.fresh('done'),
+                      placeholder=_return_placeholder(func))
         stmts.append(ReturnStmt(Var(result, None), None))
         ast = FuncDef(func.name, func.args, StmtBlock(stmts), func.meta,
                       loc=func.loc)
