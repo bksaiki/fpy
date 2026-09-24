@@ -7,10 +7,16 @@ what can change the answer, and only through the loop-carried variables.
 import pytest
 
 import fpy2 as fp
+from fpy2 import Function, Module
 from fpy2.ast.fpyast import ForStmt, If1Stmt, IfStmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2 import Function
-from fpy2.backend.triton import tile_loops, why_not_tileable
+from fpy2.backend.triton import normalize_module, tile_loops, why_not_tileable
+from fpy2.transform import Simplify, Specialize, ZipElim
+from fpy2.types import ListType, RealType
+from fpy2.utils import NamedId
+
+_R = RealType(fp.FP64)
+_M, _N = NamedId('m'), NamedId('n')
 
 
 class _Loops(DefaultVisitor):
@@ -21,6 +27,12 @@ class _Loops(DefaultVisitor):
     def _visit_for(self, s: ForStmt, ctx):
         self.out.append(s)
         return super()._visit_for(s, ctx)
+
+    @staticmethod
+    def of(ast) -> list[ForStmt]:
+        v = _Loops()
+        v._visit_function(ast, None)
+        return v.out
 
 
 def _count(ast, *types) -> int:
@@ -404,3 +416,134 @@ def _largest_for_tiling(xs: list[fp.Real]):
     for x in xs:
         m = max(m, x)
     return m
+
+
+class TestLanes:
+    """With `lanes`, the rows are the outputs and the loops of static count
+    beneath that write only their own elements run across a tile's lanes."""
+
+    @staticmethod
+    def _normal(func, arg_types) -> 'fp.ast.FuncDef':
+        m = Module()
+        m.add(func, arg_types=arg_types)
+        m = m.map(lambda _m, fd: ZipElim.apply(fd))
+        spec = Specialize.apply(m, size_key=True)
+        return normalize_module(spec, lanes=True).get(func.name).func.ast
+
+    @staticmethod
+    def _targets(loops) -> list[str]:
+        return [str(s.target) for s in loops]
+
+    @staticmethod
+    def _tile(result) -> str:
+        """The target the tile loop binds, which is the row loop's."""
+        loop = next(s for s in result.tiled[0].body.stmts if isinstance(s, ForStmt))
+        guard = loop.body.stmts[0]
+        return str(guard.body.stmts[0].target)
+
+    def _matmul(self, rows, cols, k=4):
+        @fp.fpy(ctx=fp.FP64)
+        def dot(A: list[fp.Real], B: list[fp.Real]) -> fp.Real:
+            prods = [a * b for a, b in zip(A, B)]
+            return max(prods)
+
+        @fp.fpy(ctx=fp.FP64)
+        def mm(A, BT, out):
+            for i in range(len(out)):
+                row = out[i]
+                for j in range(len(row)):
+                    row[j] = dot(A[i], BT[j])
+            return out
+
+        return mm, self._normal(mm, [
+            ListType(ListType(_R, k), rows), ListType(ListType(_R, k), cols),
+            ListType(ListType(_R, cols), rows),
+        ])
+
+    def test_a_matmul_tiles_its_columns_across_a_comprehension(self):
+        mm, ast = self._matmul(_M, _N)
+        out = tile_loops(ast, 4, lanes=True)
+        assert self._tile(out) == 'j'
+        assert len(out.lanes) == 1
+        f = Function(out.func, runtime=mm.runtime)
+        A, BT = [[1.0, -2.0, 3.0, 0.5]] * 3, [[2.0, 1.0, -1.0, 4.0]] * 5
+        want = mm(A, BT, [[0.0] * 5 for _ in range(3)])
+        assert repr(f(A, BT, [[0.0] * 5 for _ in range(3)])) == repr(want)
+
+    def test_without_lanes_nothing_is_reported(self):
+        _, ast = self._matmul(_M, _N)
+        assert tile_loops(ast, 4).lanes is None
+
+    def test_a_row_can_be_named(self):
+        """The choice is an input: `i` as the row, whose body holds `j`, a
+        loop and so not a lane."""
+        _, ast = self._matmul(_M, _N)
+        i = _Loops.of(ast)[0]
+        out = tile_loops(ast, 4, lanes=True, rows=[i])
+        assert self._tile(out) == 'i'
+        assert len(out.lanes) == 1
+
+    def test_rows_may_not_nest(self):
+        _, ast = self._matmul(_M, _N)
+        i, j = _Loops.of(ast)[:2]
+        with pytest.raises(ValueError, match='encloses another'):
+            tile_loops(ast, 4, lanes=True, rows=[i, j])
+
+    def test_with_no_runtime_count_the_outermost_is_the_row(self):
+        _, ast = self._matmul(3, 5)
+        out = tile_loops(ast, 4, lanes=True)
+        assert self._tile(out) == 'i'
+
+    def test_a_runtime_count_is_a_row_not_a_lane(self):
+        """A comprehension over a list of runtime length is the grid's."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs, out):
+            ys = [x * 2 for x in xs]
+            for k in range(len(out)):
+                out[k] = ys[k]
+            return out
+
+        ast = self._normal(f, [ListType(_R, _N), ListType(_R, _N)])
+        out = tile_loops(ast, 4, lanes=True)
+        assert out.lanes == []
+
+    def test_a_carried_value_is_not_a_lane(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss, out):
+            for j in range(len(out)):
+                acc = fp.round(0)
+                for x in xss[j]:
+                    acc = acc + x
+                out[j] = acc
+            return out
+
+        ast = self._normal(f, [ListType(ListType(_R, 4), _N), ListType(_R, _N)])
+        out = tile_loops(ast, 4, reductions=False, lanes=True)
+        assert self._tile(out) == 'j'
+        assert out.lanes == []
+
+    def test_a_loop_holding_a_lane_is_sequential(self):
+        """nvfp4's group loop: each group's comprehension runs across the
+        lanes, so the loop over groups cannot as well.  Under `REAL`, as
+        nvfp4 is, so the slice's length is proven."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss, out):
+            for j in range(len(out)):
+                xs = xss[j]
+                ms = fp.empty(2)
+                for g in range(2):
+                    ms[g] = max([x * 2 for x in xs[g * 2:g * 2 + 2]])
+                out[j] = ms[0] + ms[1]
+            return out
+
+        ast = self._normal(f, [ListType(ListType(_R, 4), _N), ListType(_R, _N)])
+        out = tile_loops(ast, 4, lanes=True)
+        assert self._tile(out) == 'j'
+        assert 'g' not in self._targets(out.lanes)
+        assert len(out.lanes) == 1
+
+    def test_a_rewrite_finds_the_lanes_again(self):
+        _, ast = self._matmul(_M, _N)
+        out = tile_loops(ast, 4, lanes=True)
+        again = out.rewritten(Simplify.apply(out.func))
+        assert self._targets(again.lanes) == self._targets(out.lanes)

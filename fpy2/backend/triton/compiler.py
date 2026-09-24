@@ -210,7 +210,9 @@ class TritonCompiler(Backend):
             ready = ready.with_ast(Simplify.apply(ready.ast))
 
         # the emitter has no reduction across a tile's lanes
-        tiles = tile_loops(ready.ast, self.block, reductions=False)
+        tiles = tile_loops(
+            ready.ast, self.block, reductions=False, lanes=self.lanes,
+        )
         if self.optimize:
             # and after tiling, which leaves bounds and copies of its own
             tiles = tiles.rewritten(Simplify.apply(tiles.func))

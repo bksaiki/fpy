@@ -23,9 +23,13 @@ fallback:
   wrote last is exactly what a tile does not preserve.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 from ...analysis import (
+    ArraySizeAnalysis,
+    ArraySizeInfer,
     ContextUse,
     ContextUseAnalysis,
     DefineUse,
@@ -33,6 +37,7 @@ from ...analysis import (
     FormatAnalysis,
     FormatInfer,
 )
+from ...analysis.array_size import static_trip_count
 from ...analysis.format_infer import rounds_exactly
 from ...ast import (
     Add,
@@ -303,17 +308,98 @@ def carried_scalars(stmt: ForStmt, def_use: DefineUseAnalysis) -> set[NamedId]:
     return {name for name in carried if body.scalar[name]}
 
 
-def _tileable(stmt: ForStmt, func: FuncDef, reductions: bool) -> bool:
-    if why_not_tileable(stmt, func) is not None:
-        return False
-    return reductions or not carried_scalars(stmt, DefineUse.analyze(func))
+class _Loops:
+    """Every `for` of one function, outermost first, and what tiling asks of
+    each.  The analyses run once per function rather than once per loop."""
+
+    def __init__(self, func: FuncDef, reductions: bool):
+        self.func = func
+        self.reductions = reductions
+        self.all = _for_loops(func)
+        self.def_use = DefineUse.analyze(func)
+        self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.fmt = FormatInfer.analyze(func)
+
+    @cached_property
+    def sizes(self) -> ArraySizeAnalysis:
+        return ArraySizeInfer.analyze(self.func)
+
+    def tileable(self, stmt: ForStmt, *, reductions: bool | None = None) -> bool:
+        if why_not_tileable(
+            stmt, self.func,
+            def_use=self.def_use, ctx_use=self.ctx_use, fmt=self.fmt,
+        ) is not None:
+            return False
+        if self.reductions if reductions is None else reductions:
+            return True
+        return not carried_scalars(stmt, self.def_use)
+
+    def static(self, stmt: ForStmt) -> bool:
+        return static_trip_count(stmt.iterable, self.sizes) is not None
+
+    def lane(self, stmt: ForStmt) -> bool:
+        """Whether *stmt* runs across a tile's lanes: a static count, a body
+        holding no loop, and each iteration writing only its own elements."""
+        return (
+            self.static(stmt)
+            and not _has_loop(stmt)
+            and self.tileable(stmt, reductions=False)
+        )
+
+    def beneath(self, stmt: ForStmt) -> list[ForStmt]:
+        v = _ForLoops()
+        v._visit_block(stmt.body, None)
+        return v.out
+
+    def within(self, a: ForStmt, b: ForStmt) -> bool:
+        return any(a is c for c in self.beneath(b))
+
+    def innermost(self, picks: list[ForStmt]) -> list[ForStmt]:
+        """The picks enclosing no other pick."""
+        return [p for p in picks if not any(self.within(q, p) for q in picks)]
+
+    def outermost(self, picks: list[ForStmt]) -> list[ForStmt]:
+        """The picks no other pick encloses."""
+        return [p for p in picks if not any(self.within(p, q) for q in picks)]
 
 
-def _encloses_tileable(stmt: ForStmt, func: FuncDef, reductions: bool) -> bool:
-    """Whether a tileable loop sits beneath *stmt*."""
-    v = _ForLoops()
+class _HasLoop(DefaultVisitor):
+    def __init__(self):
+        super().__init__()
+        self.found = False
+
+    def _visit_for(self, stmt, ctx):
+        self.found = True
+
+    def _visit_while(self, stmt, ctx):
+        self.found = True
+
+
+def _has_loop(stmt: ForStmt) -> bool:
+    v = _HasLoop()
     v._visit_block(stmt.body, None)
-    return any(_tileable(c, func, reductions) for c in v.out)
+    return v.found
+
+
+def _rows(loops: _Loops, lanes: bool) -> list[ForStmt]:
+    """The loops to tile, by default.
+
+    Without *lanes*, the innermost tileable loops.  With it, the innermost
+    tileable ones of runtime count, since Triton's grid runs over sizes the
+    kernel takes as arguments; failing any, the outermost tileable ones.  The
+    loops of static count beneath are a row's lanes, or sequential.
+    """
+    tileable = [s for s in loops.all if loops.tileable(s)]
+    if not lanes:
+        return loops.innermost(tileable)
+    runtime = [s for s in tileable if not loops.static(s)]
+    return loops.innermost(runtime) if runtime else loops.outermost(tileable)
+
+
+def _lanes(func: FuncDef, tiled: list[ForStmt]) -> list[ForStmt]:
+    """The lane loops beneath each tile, in visit order."""
+    loops = _Loops(func, reductions=False)
+    return [s for t in tiled for s in loops.beneath(t) if loops.lane(s)]
 
 
 @dataclass
@@ -336,11 +422,16 @@ class TileResult:
     emitted one.  Named for the same reason: the emitter lowers a guard as the
     tile's mask, and any other `if` as a branch."""
 
+    lanes: list[ForStmt] | None = None
+    """The loops beneath the tiles that run across a tile's lanes, unsplit;
+    `None` where lanes were not asked for."""
+
     def rewritten(self, func: FuncDef) -> 'TileResult':
         """This result for *func*, a rewrite of :attr:`func` that preserves
         what it computes.  A rewrite rebuilds the nodes, so each tile is found
         again by its outer loop's target, a name this pass minted and no
-        cleanup renames, and its guard as the split left it."""
+        cleanup renames, and its guard as the split left it.  Lanes are found
+        again by the rule that found them."""
         names = [t.target for t in self.tiled]
         by_name = {
             loop.target: loop for loop in _for_loops(func)
@@ -351,11 +442,17 @@ class TileResult:
             raise RuntimeError(f'a rewrite lost the tiled loop over {", ".join(missing)}')
         tiled = [by_name[n] for n in names]
         guards = [g for t in tiled if (g := _guard(_tile_loop(t))) is not None]
-        return TileResult(func, tiled, guards)
+        lanes = None if self.lanes is None else _lanes(func, tiled)
+        return TileResult(func, tiled, guards, lanes)
 
 
 def tile_loops(
-    func: FuncDef, width: int | str, *, reductions: bool = True,
+    func: FuncDef,
+    width: int | str,
+    *,
+    reductions: bool = True,
+    lanes: bool = False,
+    rows: Sequence[ForStmt] | None = None,
 ) -> TileResult:
     """*func* with each *innermost* tileable loop split into chunks of
     *width*.
@@ -366,6 +463,12 @@ def tile_loops(
     tile, and a matmul takes its block indices from the program id and loops
     over tiles of `K`.  Tiling an enclosing loop as well would give a nest of
     tiles where the target wants one tiled dimension.
+
+    With *lanes*, a tile's rows are its outputs and the loops of static count
+    beneath it that write only their own elements are its **lanes**, left
+    unsplit and reported in :attr:`TileResult.lanes`; see :func:`_rows` for
+    which loops are rows then.  *rows* overrides that choice with loops of
+    *func*.
 
     *width* is a literal, or the **name of a free variable** holding it.  The
     name is what a target wants: a tile's width is a compile-time constant
@@ -382,10 +485,6 @@ def tile_loops(
     ``MASK`` is the remainder policy because a tile has to be a constant width
     -- ``PEEL`` would emit a second, narrower body for the tail and ``STRICT``
     would refuse a length the factor does not divide.
-
-    Splitting rewrites the loop into a nest, so the indices of everything after
-    it shift; the scan therefore resumes past the pair it just created rather
-    than restarting.
     """
     if not isinstance(func, FuncDef):
         raise TypeError(f"Expected a 'FuncDef', got {func}")
@@ -399,26 +498,24 @@ def tile_loops(
         case _:
             raise TypeError(f"Expected an 'int' or 'str' width, got {width}")
 
-    # Positions, not nodes: each split rebuilds the AST, so a node captured
-    # after one is not in the function after the next.  An index survives --
-    # a split at `i` leaves the outer loop at `i` and only shifts what
-    # follows, and the scan never returns below `i`.
+    loops = _Loops(func, reductions)
+    picks = _rows(loops, lanes) if rows is None else list(rows)
+    if any(not any(p is s for s in loops.all) for p in picks):
+        raise ValueError('a row is not a loop of this function')
+    if len(loops.innermost(picks)) != len(picks):
+        raise ValueError('a row encloses another; one axis tiles at a time')
+
+    # Positions, not nodes: each split rebuilds the AST.  A split at `i`
+    # leaves the outer loop at `i` and its tile loop at `i + 1`, shifting what
+    # follows by one; no pick lies inside another, so none moves otherwise.
+    at = sorted(next(k for k, s in enumerate(loops.all) if s is p) for p in picks)
     tiled: list[int] = []
-    i = 0
-    while True:
-        loops = _for_loops(func)
-        if i >= len(loops):
-            guards = [g for k in tiled if (g := _guard(loops[k + 1]))]
-            return TileResult(func, [loops[k] for k in tiled], guards)
-        stmt = loops[i]
-        if (not _tileable(stmt, func, reductions)
-                or _encloses_tileable(stmt, func, reductions)):
-            i += 1
-            continue
+    for shift, i in enumerate(at):
         func = SplitLoop.apply(
-            func, factor, i, strategy=SplitLoopStrategy.MASK,
+            func, factor, i + shift, strategy=SplitLoopStrategy.MASK,
         )
-        # the split left an outer/inner pair where one loop was; the outer is
-        # the one that carries the tile
-        tiled.append(i)
-        i += 2
+        tiled.append(i + shift)
+    final = _for_loops(func)
+    outers = [final[k] for k in tiled]
+    guards = [g for k in tiled if (g := _guard(final[k + 1]))]
+    return TileResult(func, outers, guards, _lanes(func, outers) if lanes else None)
