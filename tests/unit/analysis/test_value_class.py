@@ -1971,7 +1971,90 @@ class TestTheCheckInCppShape:
         assert _typed_cls(_a_mask_through_a_ladder, '(prods[1] * 3)',
                           [_L4, RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)
 
-    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 5')
     def test_back_through_a_fill(self):
         assert _typed_cls(_back_through_a_fill, '(A[1] * 3)',
                           [_L4, _L4]) & (NAN | INF) == ValueClass(0)
+
+
+class TestBackThroughAFill:
+    """Every element of a list finite, where one covering loop stored an exact
+    operation of reads at its index, makes every element of those lists
+    finite."""
+
+    @staticmethod
+    def _class_of_a(fill, *, n: int = 4, ctx=fp.REAL) -> ValueClass:
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            prods = fp.empty(4)
+            for i in range(n):
+                with ctx:
+                    prods[i] = fill(A[i], B[i], 0)
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        from fpy2.transform import ConstFold, FreeVarElim, FuncInline, Monomorphize
+        # as the backends do: `n` and `ctx` are closure values
+        ast = Monomorphize.apply(f.ast, fp.REAL, [_L4, _L4])
+        ast = FuncInline.apply(ConstFold.apply(FreeVarElim.apply(ast)))
+        return ValueClassInfer.analyze(ast).classify(_find(ast, '(A[1] * 3)'))
+
+    def test_a_sum(self):
+        assert self._class_of_a(_p_add) & (NAN | INF) == ValueClass(0)
+
+    def test_a_rounded_product(self):
+        assert self._class_of_a(_p_mul, ctx=fp.FP32) & (NAN | INF) == ValueClass(0)
+
+    def test_not_one_that_saturates(self):
+        assert self._class_of_a(_p_mul, ctx=fp.MX_E2M1) & INF
+
+    def test_not_a_denominator(self):
+        assert self._class_of_a(_p_den) & INF
+
+    def test_not_a_partial_fill(self):
+        assert self._class_of_a(_p_mul, n=3) & INF
+
+    def test_not_after_a_store_into_the_source(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, c):
+            prods = fp.empty(4)
+            for i in range(4):
+                prods[i] = A[i] * B[i]
+            A[1] = c
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF
+
+    def test_not_a_second_store(self):
+        """Inside the fill, so the stamp at its exit does not show it."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B, c):
+            prods = fp.empty(4)
+            for i in range(4):
+                prods[i] = A[i] * B[i]
+                prods[0] = c
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if any(m):
+                r = 0
+            else:
+                r = A[1] * 3
+            return r
+
+        assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF

@@ -570,6 +570,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     _sizes_cache: 'ArraySizeAnalysis | None'
     _reach_cache: 'ReachabilityAnalysis | None'
+    _fills_cache: 'dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] | None'
 
     _scan_clocks: dict[ForStmt, tuple[int, int]]
     """The :attr:`_clock` each loop began and ended at, for
@@ -617,6 +618,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._scan_clocks = {}
         self._sizes_cache = None
         self._reach_cache = None
+        self._fills_cache = None
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
@@ -790,9 +792,13 @@ class _ValueClassInstance(DefaultVisitor):
         # re-stamped, so an entry a store has already invalidated reads as the
         # top class here rather than coming back as this arm's starting point
         out_elt = {r: (self._mask_of(r), self._stamp(r)) for r in saved_elt}
-        for region, cls in self._implied_elements(cond, truth):
+        todo = self._implied_elements(cond, truth)
+        while todo:
+            region, cls = todo.pop()
             prev, _ = out_elt.get(region, (_TOP, 0))
             out_elt[region] = (prev & cls, self._stamp(region))
+            if not cls & (_NAN | _INF):
+                todo.extend((src, _ZERO | _FINITE) for src in self._filled_from(region))
         self._refine, self._refine_elt = out, out_elt
         try:
             yield
@@ -1199,9 +1205,14 @@ class _ValueClassInstance(DefaultVisitor):
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return []
         e = d.site.expr
+        if isinstance(e, Var):
+            return self._at(e, _ZERO | _FINITE)
+        return [i for a in self._exact_operands(e) for i in self._at(a, _ZERO | _FINITE)]
+
+    def _exact_operands(self, e: Expr) -> list[Expr]:
+        """The operands *e* being finite makes finite; see
+        :meth:`_finite_operands`."""
         match e:
-            case Var():
-                return self._at(e, _ZERO | _FINITE)
             case Neg() | Abs() | Round() | Cast():
                 operands = [e.arg]
             case Add() | Sub() | Mul():
@@ -1217,7 +1228,97 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         if scope.ctx is not REAL and not keeps_non_finite(scope.ctx):
             return []
-        return [i for a in operands for i in self._at(a, _ZERO | _FINITE)]
+        return operands
+
+    def _filled_from(self, region: Region) -> 'list[Region]':
+        """The lists *region*'s elements being finite makes finite: where one
+        loop covering the list is the only store into it, and stores an exact
+        operation of reads at its own index of lists it covers too, untouched
+        since it began."""
+        sites = self._fill_sites().get(region, [])
+        if len(sites) != 1:
+            return []
+        store, loop = sites[0]
+        if loop is None:
+            return []
+        clocks = self._scan_clocks.get(loop)
+        if clocks is None or len(store.indices) != 1 or not self._is_target(store.indices[0], loop):
+            return []
+        entry, exited = clocks
+        if self._stamp(region) > exited or not self._covers(loop, store):
+            return []
+        out: list[Region] = []
+        for a in self._exact_operands(self._through_names(store.expr)):
+            a = self._through_names(a)
+            if not isinstance(a, ListRef) or not isinstance(a.value, Var):
+                continue
+            src = self._sole_region(a.value)
+            if (src is not None and self._is_index(a.index, loop)
+                    and self._stamp(src) <= entry
+                    and self._covers(loop, a.value)):
+                out.append(src)
+        return out
+
+    def _through_names(self, e: Expr) -> Expr:
+        """*e*, or the expression the name *e* was assigned: what inlining
+        leaves between a store and the operation it stores."""
+        while isinstance(e, Var):
+            d = self.def_use.use_to_def.get(e)
+            if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+                break
+            e = d.site.expr
+        return e
+
+    def _covers(self, loop: ForStmt, at: 'Var | IndexedAssign') -> bool:
+        """Whether *loop* runs once per element of the list *at* reads."""
+        size = self.sizes.by_def.get(self.def_use.find_def_from_use(at))
+        return isinstance(size, ListSize) and size_eq(
+            trip_count(loop.iterable, self.sizes), size.size)
+
+    def _is_index(self, e: Expr, loop: ForStmt) -> bool:
+        """Whether *e* is *loop*'s index: its target, or ``range(n)[target]``,
+        which is what `ZipElim` reads through."""
+        if self._is_target(e, loop):
+            return True
+        if not isinstance(e, Var):
+            return False
+        d = self.def_use.use_to_def.get(e)
+        if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+            return False
+        ref = d.site.expr
+        if not isinstance(ref, ListRef) or not isinstance(ref.value, Var):
+            return False
+        r = self.def_use.use_to_def.get(ref.value)
+        return (isinstance(r, AssignDef) and isinstance(r.site, Assign)
+                and isinstance(r.site.expr, Range1) and self._is_target(ref.index, loop))
+
+    def _fill_sites(self) -> 'dict[Region, list[tuple[IndexedAssign, ForStmt | None]]]':
+        """Every store into each region, with the loop it is directly in the
+        body of."""
+        if self._fills_cache is None:
+            out: dict[Region, list[tuple[IndexedAssign, ForStmt | None]]] = {}
+
+            def walk(block: StmtBlock, loop: ForStmt | None):
+                for stmt in block.stmts:
+                    match stmt:
+                        case IndexedAssign():
+                            region = self._region_of_def(
+                                stmt.var, stmt, len(stmt.indices) - 1)
+                            if region is not None:
+                                out.setdefault(region, []).append((stmt, loop))
+                        case ForStmt():
+                            walk(stmt.body, stmt)
+                        case ContextStmt():
+                            walk(stmt.body, loop)      # runs every iteration
+                        case If1Stmt() | WhileStmt():
+                            walk(stmt.body, None)
+                        case IfStmt():
+                            walk(stmt.ift, None)
+                            walk(stmt.iff, None)
+
+            walk(self.func.body, None)
+            self._fills_cache = out
+        return self._fills_cache
 
     # ------------------------------------------------------------------
     # Expressions
