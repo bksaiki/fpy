@@ -9,7 +9,16 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
-from fpy2.ast.fpyast import AssertStmt, Call, If1Stmt, IfStmt, ReturnStmt
+from fpy2.analysis import ArraySizeInfer, FormatInfer
+from fpy2.ast.fpyast import (
+    AssertStmt,
+    Call,
+    ForStmt,
+    If1Stmt,
+    IfStmt,
+    ListComp,
+    ReturnStmt,
+)
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2 import Module
 from fpy2.backend.triton import (
@@ -209,3 +218,99 @@ class TestScalarizeRunsBeforeTheInline:
 
         with pytest.raises(TritonNormalizeError, match='call to `bump` remains'):
             normalize(uses.ast, cap=2)
+
+
+class TestLanes:
+    """With `lanes`, a comprehension becomes a loop instead of unrolling, which
+    gives a call in one a statement just as well."""
+
+    @staticmethod
+    def _lanes(func: Function) -> Function:
+        m = Module()
+        m.add(func)
+        return normalize_module(m, lanes=True).get(func.name).func
+
+    @staticmethod
+    def _loops(ast) -> int:
+        n = 0
+
+        class _V(DefaultVisitor):
+            def _visit_for(self, stmt, ctx):
+                nonlocal n
+                n += 1
+                super()._visit_for(stmt, ctx)
+
+            def _visit_list_comp(self, e, ctx):
+                raise AssertionError('a comprehension remains')
+
+        _V()._visit_function(ast, None)
+        return n
+
+    def test_a_call_inside_a_comprehension_is_inlined(self):
+        @fp.fpy(ctx=fp.FP64)
+        def bump(x: fp.Real) -> fp.Real:
+            t = x + 1
+            return t
+
+        @fp.fpy(ctx=fp.FP64)
+        def uses(xs: list[fp.Real]):
+            ys = [bump(x) for x in xs]
+            return ys[0] + ys[2]
+
+        out = self._lanes(uses)
+        _is_normal(out.ast)
+        assert self._loops(out.ast) == 1
+        args = [1.0, 2.0, 3.0]
+        assert repr(out(args)) == repr(uses(args))
+
+    def test_a_fused_sum_of_a_join(self):
+        """The shape every T-FDPA ends in: products and an accumulator joined,
+        each term truncated at one position, and summed.  The analyses read it
+        without refusing."""
+        @fp.fpy(ctx=fp.REAL)
+        def join(xs, ys):
+            n = len(xs)
+            m = len(ys)
+            zs = fp.empty(n + m)
+            for i in range(n):
+                zs[i] = xs[i]
+            for i in range(m):
+                zs[n + i] = ys[i]
+            return zs
+
+        @fp.fpy(ctx=fp.REAL)
+        def fused(xs, n):
+            with fp.MPFixedContext(n, fp.RM.RTZ):
+                ts = [fp.round(x) for x in xs]
+            return sum(ts)
+
+        @fp.fpy(ctx=fp.REAL)
+        def dpa(A: list[fp.Real], B: list[fp.Real], c: fp.Real):
+            prods = [a * b for a, b in zip(A, B)]
+            return fused(join(prods, [c]), -30)
+
+        out = self._lanes(dpa)
+        _is_normal(out.ast)
+        ArraySizeInfer.analyze(out.ast)
+        FormatInfer.analyze(out.ast, use_digit_bounds=True)
+        args = ([1.5, -2.25, 3.0], [0.5, 4.0, -1.0], 0.125)
+        assert repr(out(*args)) == repr(dpa(*args))
+
+    def test_an_early_return_scan(self):
+        """A loop that returns from inside stays a loop, its exits flags."""
+        @fp.fpy(ctx=fp.FP64)
+        def first_neg(xs: list[fp.Real]) -> fp.Real:
+            for x in xs:
+                if x < 0:
+                    return x
+            return 0.0
+
+        @fp.fpy(ctx=fp.FP64)
+        def uses(xs: list[fp.Real]):
+            neg = [-x for x in xs]
+            return first_neg(neg)
+
+        out = self._lanes(uses)
+        _is_normal(out.ast)
+        for xs in ([1.0, -2.0, 3.0], [-1.0, 2.0], [0.0]):
+            assert repr(out(xs)) == repr(uses(xs))

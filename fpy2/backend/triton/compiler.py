@@ -88,6 +88,9 @@ class TritonCompiler(Backend):
             left alone and takes the ordinary loop path, so this costs an
             unrolling rather than the compile.  Default ``256`` -- four times
             the widest real MMA instruction.
+        lanes:
+            Lower a comprehension to a loop rather than unroll it, for the
+            emitter to run across a tile's lanes.  Default ``False``.
         unfold:
             An :class:`~fpy2.backend.triton.unfold_round.UnfoldMode`, as for
             the cpp backend.  ``ROUNDINGS`` lowers a rounding Triton cannot
@@ -101,6 +104,7 @@ class TritonCompiler(Backend):
 
     block: str
     drop_asserts: bool
+    lanes: bool
     optimize: bool
     scalarize_cap: int
     unfold: _UnfoldMode
@@ -110,12 +114,14 @@ class TritonCompiler(Backend):
         *,
         block: str = 'BLOCK',
         drop_asserts: bool = False,
+        lanes: bool = False,
         optimize: bool = True,
         scalarize_cap: int = 256,
         unfold: _UnfoldMode = _UnfoldMode.NONE,
     ):
         self.block = block
         self.drop_asserts = drop_asserts
+        self.lanes = lanes
         self.optimize = optimize
         self.scalarize_cap = scalarize_cap
         self.unfold = unfold
@@ -185,7 +191,7 @@ class TritonCompiler(Backend):
         normalized = Module()
         normalized.add(folded)
         ready = normalize_module(
-            normalized, cap=self.scalarize_cap,
+            normalized, cap=self.scalarize_cap, lanes=self.lanes,
         ).get(folded.name).func
 
         if self.unfold is not _UnfoldMode.NONE:
@@ -194,6 +200,7 @@ class TritonCompiler(Backend):
             # emits branches of its own
             ready = ready.with_ast(normalize(
                 unfold(ready.ast, self.unfold), cap=self.scalarize_cap,
+                lanes=self.lanes,
             ))
 
         if self.optimize:
