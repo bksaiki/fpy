@@ -11,6 +11,7 @@ transcendental -- so every function it compiles it can check bit-for-bit.
 """
 
 import os
+import re
 
 import pytest
 
@@ -790,3 +791,53 @@ class TestLanesOverAList:
     @pytest.mark.parametrize('n', [4, 6])
     def test_elements_one_at_a_time(self, n):
         _agree_rows(_picked, n, 3)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _reduced(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        ys = [x * 2 for x in xs]
+        row[0] = max(ys)
+        row[1] = min(ys)
+        row[2] = 1.0 if any([y > 0 for y in ys]) else 0.0
+        row[3] = 1.0 if all([y > 0 for y in ys]) else 0.0
+        row[4] = sum(ys)
+        with fp.FP16:
+            zs = [x + 1 for x in xs]
+            row[5] = sum(zs)
+    return out
+
+
+class TestReductionsAcrossLanes:
+    """`max`, `min`, `any`, `all` across a tile's lanes and then its tail; a
+    `sum` there only where no grouping can be seen, else left to right."""
+
+    @pytest.mark.parametrize('n', [4, 5, 6])
+    def test_they_agree_with_the_interpreter(self, n):
+        import torch
+        from fpy2.utils import NamedId
+
+        rows = NamedId('rows')
+        src = _lanes(_reduced, [
+            ListType(ListType(RealType(FP16), n), rows),
+            ListType(ListType(RealType(fp.FP64), 6), rows),
+            RealType(fp.INTEGER)])
+        # the `REAL` sum across the lanes; the `FP16` one left to right
+        assert re.search(r'tl\.sum\((?!tl\.where)', src.source)
+        torch.manual_seed(n)
+        xt = (torch.randn(8, n) * 1000).half()
+        xt[0] = -0.0                                   # a sum of `-0.0` alone
+        xt[1, 0], xt[1, -1] = float('inf'), -float('inf')
+        xt[2, 1] = float('nan')
+        xt[3] = torch.tensor([0.0, -0.0] * n)[:n]      # both zeros
+        xt[4, -1] = 60000.0                            # an FP16 sum overflows
+        xt[4, 0] = 60000.0
+        xt = xt.cuda()
+        ot = torch.zeros(8, 6, dtype=torch.float64).cuda()
+        launch(src, [xt, ot], block=4)
+        want = _reduced([[float(v) for v in r] for r in xt.cpu().tolist()],
+                        [[0.0] * 6 for _ in range(8)], 4)
+        for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
+            assert [repr(float(v)) for v in w] == [repr(v) for v in g], r

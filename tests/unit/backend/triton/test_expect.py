@@ -138,7 +138,8 @@ def test_reductions_fold_over_the_scalarized_elements():
 
     `propagate_nan` carries FPy's IEEE 754-2019 `maximum`; Triton's default
     is `maximumNumber`, which returns the *other* operand.  `sum` folds left
-    because FPy's does, and a tile reduction would reassociate.
+    because FPy's does, in the storage of its context, whose add is its
+    rounding.
 
     Verified against the interpreter on hardware at 8/8 inputs, NaN and
     infinite rows included.
@@ -154,8 +155,8 @@ def test_reductions_fold_over_the_scalarized_elements():
         'propagate_nan=tl.PropagateNan.ALL), row_2, '
         'propagate_nan=tl.PropagateNan.ALL) - tl.minimum(tl.minimum(row_0, '
         'row_1, propagate_nan=tl.PropagateNan.ALL), row_2, '
-        'propagate_nan=tl.PropagateNan.ALL)) + ((row_0 + row_1) + row_2)), '
-        'mask=(j < 8))')
+        'propagate_nan=tl.PropagateNan.ALL)) + ((row_0.to(tl.float32) + '
+        'row_1.to(tl.float32)) + row_2.to(tl.float32))), mask=(j < 8))')
 
 
 def test_an_empty_sum_is_the_literal_zero():

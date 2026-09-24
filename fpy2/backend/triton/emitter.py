@@ -843,7 +843,8 @@ class _Emitter(Visitor):
 
         One lane, selected by a reduction whose other lanes are the identity:
         `-0.0` for a float, since `x + -0.0` is `x` for every `x`, `-0.0`
-        itself included.
+        itself included.  A negated zero tile, since Triton folds a `-0.0`
+        literal to `+0.0`.
         """
         width, tail, elt = self.tiles[tile]
         k = _literal_int(idx)
@@ -854,7 +855,7 @@ class _Emitter(Visitor):
             code = (f'(tl.max(tl.where({at}, {tile}, False).to(tl.int32), '
                     'axis=1) != 0)')
         else:
-            zero = '-0.0' if elt.is_float() else '0'
+            zero = f'(-tl.zeros_like({tile}))' if elt.is_float() else '0'
             code = (f'tl.sum(tl.where({at}, {tile}, {zero}), axis=1)'
                     f'.to({elt.format()})')
         code = self._bind(code, 'row')
@@ -1411,23 +1412,23 @@ class _Emitter(Visitor):
         return f"tl.where({x} != {x}, float('nan'), {at_inf})"
 
     def _emit_reduction(self, e: UnaryOp) -> str:
-        """`max`, `min` or `sum` over a sequence, folded over its elements.
+        """`max`, `min`, `any`, `all` or `sum` over a sequence.
 
-        The sequence has already stopped existing, so a reduction is a fold
-        over values -- which is also what keeps `sum` exact: FPy's is a *left*
-        fold seeded with the first element unrounded, and folding the
-        scalarized elements left to right is that, not an approximation of it.
-
-        A tile reduction would be the alternative and is not available: it
-        reassociates, which `sum` does not permit and which the roadmap
-        retired tile reductions over.
+        Over a tile, a reduction across its lanes and then its tail, where
+        the grouping cannot be seen (:meth:`_reduce_tile`).  Otherwise a fold
+        over the elements -- which is also what keeps `sum` exact: FPy's is a
+        *left* fold seeded with the first element unrounded, and folding the
+        elements left to right is that, not an approximation of it.
         """
-        if self._tile_of(e.arg) is not None:
-            raise TritonEmitError(
-                f'`{type(e).__name__.lower()}` of a list held in registers '
-                "needs a reduction across the tile's lanes, not yet emitted"
-            )
-        elems = self._source_elements(e.arg)
+        elems: list[str] | None
+        if (tile := self._tile_of(e.arg)) is not None:
+            reduced = self._reduce_tile(e, tile)
+            if reduced is not None:
+                return reduced
+            width, tail, _ = self.tiles[tile]
+            elems = [self._extract(tile, str(k)) for k in range(width + tail)]
+        else:
+            elems = self._source_elements(e.arg)
         if elems is None:
             raise TritonEmitError(
                 f'`{type(e).__name__.lower()}` needs a sequence of proven '
@@ -1448,19 +1449,28 @@ class _Emitter(Visitor):
                 # FPy's empty sum is an exact `+0`; as a literal it retypes
                 # where it is used, like any other, and broadcasts over a tile
                 return self._emit_numeric_literal(Fraction(0))
-            if self._active_ctx(e) is REAL:
-                # every partial sum lies in the sum's own format, so its
-                # storage holds each exactly -- where every element fits it.
-                # A sum with none is refused where it is assigned.
-                try:
-                    want = self._storage(e)
-                except StorageSelectionError:
-                    want = None
-                seq = self.format_info.by_expr.get(e.arg)
-                if want is not None and isinstance(seq, ListFormat) and (
-                    bound_fits_in_scalar(seq.elt, want)
-                ):
+            ctx = self._active_ctx(e)
+            try:
+                want: TritonScalar | None = self._storage(e)
+            except StorageSelectionError:
+                want = None
+            seq = self.format_info.by_expr.get(e.arg)
+            fits = want is not None and isinstance(seq, ListFormat) and (
+                bound_fits_in_scalar(seq.elt, want))
+            if fits:
+                # under `REAL`, every partial sum lies in the sum's own format,
+                # so its storage holds each exactly; under a native context,
+                # an add in its storage is its rounding
+                assert want is not None
+                if ctx is not REAL and not is_native_ctx(ctx):
+                    fits = False
+                else:
                     elems = [self._explicit_cast(c, want) for c in elems]
+            if not fits and ctx is not REAL:
+                raise TritonEmitError(
+                    f'`sum` under `{ctx}` rounds each partial sum, which needs '
+                    "every element held exactly in that context's storage"
+                )
             acc = elems[0]
             for rhs in elems[1:]:
                 acc = f'({acc} + {rhs})'
@@ -1471,6 +1481,51 @@ class _Emitter(Visitor):
                 f'`{name}` of an empty sequence has no value'
             )
         return self._fold_select(name, elems)
+
+    def _reduce_tile(self, e: UnaryOp, tile: NamedId) -> str | None:
+        """*e* across *tile*'s lanes, then its tail in order; `None` for a
+        `sum` whose grouping could be seen.
+
+        `tl.max` and `tl.min` order `-0.0` below `+0.0` in any grouping, as
+        the pairwise fold does, and differ from it only in dropping a NaN,
+        which is tested for apart.  A `sum` regroups only under `REAL`, in a
+        storage holding its elements and its result: `_sum_bound` covers every
+        partial sum, and any sub-sum lies within it too.
+        """
+        _, tail, elt = self.tiles[tile]
+        tails = [f'{tile}_t{j}' for j in range(tail)]
+        if isinstance(e, (AnyOf, AllOf)):
+            red, op = ('tl.max', '|') if isinstance(e, AnyOf) else ('tl.min', '&')
+            code = self._bind(
+                f'({red}({tile}.to(tl.int32), axis=1) != 0)', 'row')
+            return code if not tails else '(' + f' {op} '.join([code, *tails]) + ')'
+        if isinstance(e, (AMax, AMin)):
+            red, name = (('tl.max', 'tl.maximum') if isinstance(e, AMax)
+                         else ('tl.min', 'tl.minimum'))
+            code = f'{red}({tile}, axis=1)'
+            if elt.is_float():
+                nan = f'(tl.max(({tile} != {tile}).to(tl.int32), axis=1) != 0)'
+                code = f"tl.where({nan}, float('nan'), {code})"
+            return self._fold_select(name, [self._bind(code, 'row'), *tails])
+        if not isinstance(e, Sum):
+            return None
+        try:
+            want = self._storage(e)
+        except StorageSelectionError:
+            return None
+        seq = self.format_info.by_expr.get(e.arg)
+        if not (self._active_ctx(e) is REAL
+                and isinstance(seq, ListFormat)
+                and bound_fits_in_scalar(seq.elt, want)
+                and bound_fits_in_scalar(self.format_info.by_expr.get(e), want)):
+            return None
+        def cast(code: str) -> str:
+            return self._maybe_cast(code, elt, want, seq.elt)
+
+        acc = self._bind(f'tl.sum({cast(str(tile))}, axis=1)', 'row')
+        for t in tails:
+            acc = f'({acc} + {cast(t)})'
+        return acc
 
     def _fold_select(self, name: str, args: list[str]) -> str:
         """A `max`/`min` fold.
@@ -1999,6 +2054,8 @@ class _Emitter(Visitor):
         # against the values.  Loading the element instead needs the
         # iterable's base and stride, which a slice or a `zip` does not
         # supply, so this refuses rather than guesses.
+        if (tile := self._tile_of(stmt.iterable)) is not None:
+            return self._iterate_tile(stmt, tile, ctx)
         if not isinstance(stmt.iterable, (Range1, Range3)):
             raise TritonEmitError(
                 f'a `for` over a `{type(stmt.iterable).__name__}` binds an '
@@ -2037,6 +2094,24 @@ class _Emitter(Visitor):
             ctx.add_line(f'for {k} in tl.static_range({n}):')
             ctx.indent()
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
+        self._visit_block(stmt.body, ctx)
+        ctx.dedent()
+
+    def _iterate_tile(self, stmt: ForStmt, tile: NamedId, ctx: _IndentedWriter):
+        """`for x in xs` over a tile: in order, each element extracted."""
+        target = stmt.target
+        if not isinstance(target, NamedId):
+            raise TritonEmitError('a loop over a tile binds one name')
+        width, tail, elt = self.tiles[tile]
+        k = f'__t{self._next_tmp}'
+        self._next_tmp += 1
+        ctx.add_line(f'for {k} in tl.static_range({width + tail}):')
+        ctx.indent()
+        d = self.def_use.find_def_from_site(target, stmt)
+        want = self._class_storage(d) or elt
+        code = self._maybe_cast(self._extract(tile, k), elt, want,
+                                self.format_info.by_def.get(d))
+        ctx.add_line(f'{target} = {code}')
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
 

@@ -1265,3 +1265,16 @@ class TestLanes:
         src = self._source(9)
         assert src.count('tl.load(') == 2
         assert 'ys_t0 = ' in src
+
+
+def test_a_rounding_sum_over_wider_elements_is_refused():
+    """Each partial sum rounds under `FP16`, which an add in the elements'
+    wider storage does not do; it gave `240006` where FPy gives `inf`."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real]):
+        ys = [x * 2 for x in xs]
+        with fp.FP16:
+            return sum(ys)
+
+    with pytest.raises(TritonEmitError, match='rounds each partial sum'):
+        _emit(f, [ListType(RealType(fp.IEEEContext(5, 16)), 4)])
