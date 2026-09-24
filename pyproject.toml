@@ -20,7 +20,7 @@ dependencies = [
   "titanfp==0.1.2",
   "gmpy2==2.3.1",
   "matplotlib",
-  "z3-solver>=4.13"
+  "z3-solver>=4.13",
   "torch>=2.14.0",
 ]
 
