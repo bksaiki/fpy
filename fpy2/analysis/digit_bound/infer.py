@@ -28,6 +28,7 @@ from ...interpret.value import unwrap_foreign
 from ...number import Context, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import ListType, RealType
+from ..alias import Region
 from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_size
 from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
 from ..reaching_defs import AssignDef, Definition, PhiDef
@@ -272,6 +273,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _classes_cache: ValueClassAnalysis | None
     _guards: dict[Definition, int]
     """The literal "this definition is finite", for each one a guard names."""
+    _elt_guards: dict[Region, int]
+    """The literal "every element of this list is finite", for each list whose
+    elements a guard names."""
     _loops: tuple[Stmt, ...]
     """The loops enclosing the walk, outermost first."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
@@ -284,6 +288,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         store: DigitBoundStore,
         args: tuple[Terms, ...] = (),
         arg_lit: Callable[[int], int | None] | None = None,
+        classes: ValueClassAnalysis | None = None,
     ):
         self.func = func
         self.arg_lit = arg_lit
@@ -314,8 +319,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._gathered = set()
         self._returns = []
         self._vacuous_used = []
-        self._classes_cache = None
+        self._classes_cache = classes
         self._guards = {}
+        self._elt_guards = {}
         self._loops = ()
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
@@ -340,7 +346,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_block(self.func.body, None)
         self.out.ret = self._merge_returns()
         self._check_vacuous()
-        if self._guards:
+        if self._guards or self._elt_guards:
             self.out.assume_at = self._assumed
         return self.out
 
@@ -1201,10 +1207,24 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return lit
 
     def _lit_of(self, e: Expr) -> int | None:
-        """The literal "*e* is finite", where *e* names a definition."""
-        if not isinstance(e, Var) or not isinstance(self._type_of(e), RealType):
+        """The literal "*e* is finite", where *e* names a definition or reads
+        an element of a list nothing changes -- then every element being
+        finite covers it, at whatever index and in whatever iteration."""
+        if not isinstance(self._type_of(e), RealType):
             return None
-        return self._lit(self.def_use.find_def_from_use(e))
+        match e:
+            case Var():
+                return self._lit(self.def_use.find_def_from_use(e))
+            case ListRef(value=Var() as lst):
+                d = self.def_use.find_def_from_use(lst)
+                region = self._classes.alias.region_of(d)
+                if region is None or self._classes.alias.may_change(d):
+                    return None
+                lit = self._elt_guards.get(region)
+                if lit is None:
+                    lit = self._elt_guards[region] = self.store.literal()
+                return lit
+        return None
 
     def _untaken(self, phi: Definition, other: Definition, guard: tuple[int, ...]) -> None:
         """*phi* is *other* wherever *guard* holds, the arm untaken."""
@@ -1238,10 +1258,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         at = self._loops_of_expr.get(e)
         if at is None:
             return frozenset()
+        non_finite = ValueClass.NAN | ValueClass.INF
         return frozenset(
             lit for d, lit in self._guards.items()
             if _encloses(self._loops_of_def(d), at)
-            and not self._classes.class_at(d, e) & (ValueClass.NAN | ValueClass.INF)
+            and not self._classes.class_at(d, e) & non_finite
+        ) | frozenset(
+            lit for region, lit in self._elt_guards.items()
+            if not self._classes.elements_at(region, e) & non_finite
         )
 
     def _loops_of_def(self, d: Definition) -> tuple[Stmt, ...] | None:
@@ -1791,16 +1815,19 @@ class DigitBoundInfer:
         func: FuncDef,
         view: FormatView,
         params: DigitBoundParams | None = None,
+        classes: ValueClassAnalysis | None = None,
     ) -> DigitBoundAnalysis:
         """Infer digit-bound relations for *func*, seeded from *view*.
 
         *params* continues a caller's constraint system instead of starting
-        a fresh one; see :class:`DigitBoundParams`.
+        a fresh one; see :class:`DigitBoundParams`.  *classes* is *func*'s
+        value classes, where the caller has them with escape summaries --
+        without, a list handed to a call has no element facts.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
         if params is None:
             params = DigitBoundParams(DigitBoundStore(), ())
         return _DigitBoundInferInstance(
-            func, view, params.store, params.args
+            func, view, params.store, params.args, classes=classes,
         ).analyze()

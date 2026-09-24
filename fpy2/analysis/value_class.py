@@ -486,11 +486,18 @@ class ValueClassAnalysis:
     refine_at: dict[Expr, dict[Definition, ValueClass]]
     """The refinement each expression was read under."""
 
+    elements_seen: dict[Expr, dict[Region, ValueClass]]
+    """What every element of each list is, wherever each expression is read."""
+
     def class_at(self, d: Definition, e: Expr) -> ValueClass:
         """*d*'s class wherever *e* is evaluated."""
         cls = self.by_def.get(d)
         base = cls if isinstance(cls, ValueClass) else _TOP
         return base & self.refine_at.get(e, {}).get(d, _TOP)
+
+    def elements_at(self, region: Region, e: Expr) -> ValueClass:
+        """What every element of *region* is wherever *e* is evaluated."""
+        return self.elements_seen.get(e, {}).get(region, _TOP)
 
     def element_region(self, e: Expr) -> 'Region | None':
         """The region whose elements a fact about the list *e* belongs to, or
@@ -549,6 +556,8 @@ class _ValueClassInstance(DefaultVisitor):
     by_expr: dict[Expr, ValueClass | None]
     arm_facts: dict[Stmt, tuple[list[tuple[Definition, ValueClass]], ...]]
     refine_at: dict[Expr, dict[Definition, ValueClass]]
+    elements_seen: dict[Expr, dict[Region, ValueClass]]
+    _elements_now: tuple[dict, dict, int, dict[Region, ValueClass]] | None
 
     alias: AliasAnalysis
 
@@ -625,6 +634,8 @@ class _ValueClassInstance(DefaultVisitor):
         self._refine_elt = {}
         self.arm_facts = {}
         self.refine_at = {}
+        self.elements_seen = {}
+        self._elements_now = None
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -662,6 +673,7 @@ class _ValueClassInstance(DefaultVisitor):
             ctx_use=self.ctx_use,
             arm_facts=self.arm_facts,
             refine_at=self.refine_at,
+            elements_seen=self.elements_seen,
         )
 
     # ------------------------------------------------------------------
@@ -703,6 +715,17 @@ class _ValueClassInstance(DefaultVisitor):
         if region is None:
             return _TOP
         return self._elt.get(region, _TOP) & self._mask_of(region)
+
+    def _elements_here(self) -> dict[Region, ValueClass]:
+        """:meth:`_elements_of` for every region with a fact, shared until a
+        store, a refinement or a join changes one."""
+        now = self._elements_now
+        if (now is None or now[0] is not self._elt
+                or now[1] is not self._refine_elt or now[2] != self._clock):
+            regions = {*self._elt, *self._refine_elt}
+            now = self._elements_now = (self._elt, self._refine_elt, self._clock, {
+                r: self._elt.get(r, _TOP) & self._mask_of(r) for r in regions})
+        return now[3]
 
     def _stamp(self, region: Region) -> int:
         return self._touched.get(region, 0)
@@ -1325,6 +1348,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_expr(self, e: Expr, ctx: None) -> ValueClass | None:  # type: ignore[override]
         self.refine_at[e] = self._refine
+        self.elements_seen[e] = self._elements_here()
         cls = super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType):
             cls = None

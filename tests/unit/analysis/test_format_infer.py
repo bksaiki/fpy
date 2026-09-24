@@ -4399,6 +4399,35 @@ def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
     return f
 
 
+def _cpp_block_inline(exponent, *, checked: int = 4):
+    """:func:`_cpp_block` with the fused sum written in the caller."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(A, B):
+        prods = fp.empty(4)
+        for i in range(4):
+            prods[i] = A[i] * B[i]
+        es = fp.empty(4)
+        for i in range(4):
+            if prods[i] == 0:
+                t = -35
+            else:
+                t = exponent(A[i], -15) + exponent(B[i], -15)
+            es[i] = t
+        e = max(es)
+        m = fp.empty(checked)
+        for i in range(checked):
+            p = prods[i]
+            m[i] = not fp.isfinite(p)
+        if any(m):
+            return 0
+        ts = fp.empty(4)
+        for i in range(4):
+            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                ts[i] = fp.round(prods[i])
+        return sum(ts)
+    return f
+
+
 class TestTheCheckInCppShape:
     """`docs/todos/cpp-finiteness.md`: C++ keeps `exponent0` a call and the
     fused sum a callee, so the finiteness `bf8` needs sits on list elements,
@@ -4431,6 +4460,28 @@ class TestTheCheckInCppShape:
     @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 7')
     def test_through_the_sentinel(self):
         assert self._fused_prec(_cpp_block(_cpp_exponent0)) <= 28
+
+    @classmethod
+    def _inline_prec(cls, f) -> int:
+        from fpy2.transform import ConstFold, FreeVarElim, Monomorphize
+        ast = Monomorphize.apply(f.ast, fp.REAL, [cls._L, cls._L])
+        ast = ConstFold.apply(FreeVarElim.apply(ast))
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        from fpy2.ast.fpyast import Sum
+        return next(AbstractFormat.from_format(b).prec
+                    for e, b in info.by_expr.items() if isinstance(e, Sum))
+
+    def test_inline_written_directly(self):
+        assert self._inline_prec(_cpp_block_inline(_cpp_exponent)) <= 28
+
+    def test_inline_through_the_sentinel(self):
+        """Every element of `A` and `B` is finite past the check, and each
+        `exponent0` call reads one, so its guarded return resolves."""
+        assert self._inline_prec(_cpp_block_inline(_cpp_exponent0)) <= 28
+
+    def test_inline_not_where_the_check_misses_an_element(self):
+        f = _cpp_block_inline(_cpp_exponent0, checked=3)
+        assert self._inline_prec(f) > 28
 
     def test_not_where_the_check_comes_after(self):
         f = _cpp_block(_cpp_exponent0, check_first=False)

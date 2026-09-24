@@ -187,6 +187,7 @@ from ..digit_bound import (
 from ..partial_eval import PartialEval, PartialEvalInfo, base_env
 from ..reaching_defs import AssignDef, Definition, DefSite, PhiDef
 from ..type_infer import TypeAnalysis, TypeInfer
+from ..value_class import ValueClassAnalysis
 from .format import AbstractableFormat, AbstractFormat, round_bound_out
 
 __all__ = [
@@ -3332,6 +3333,7 @@ class FormatInfer:
         fn_fmt: FunctionFormat | None = None,
         digit_bound_params: 'DigitBoundParams | None' = None,
         use_digit_bounds: bool = False,
+        value_classes: ValueClassAnalysis | None = None,
         loop_iter_limit: int = DEFAULT_LOOP_ITER_LIMIT,
         range_set_threshold: int = DEFAULT_RANGE_SET_THRESHOLD,
         set_format_threshold: int = DEFAULT_SET_FORMAT_THRESHOLD,
@@ -3410,6 +3412,9 @@ class FormatInfer:
             digit_bound_params:
                 A caller's constraint store and the terms it bound *func*'s
                 parameters to; see :class:`DigitBoundParams`.
+            value_classes:
+                *func*'s value classes, for digit-bound inference to assume
+                what they prove; computed there when absent.
 
         Returns:
             A :class:`FormatAnalysis` whose ``by_def``, ``by_expr``,
@@ -3462,4 +3467,5 @@ class FormatInfer:
         first = pass_(None)
         if not use_digit_bounds:
             return first
-        return pass_(DigitBoundInfer.analyze(func, first, digit_bound_params))
+        return pass_(DigitBoundInfer.analyze(
+            func, first, digit_bound_params, value_classes))
