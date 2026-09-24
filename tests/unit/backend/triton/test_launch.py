@@ -923,3 +923,37 @@ def test_one_kernel_at_every_depth():
         ys = [[float(v) for v in r] for r in yt.cpu().tolist()]
         want = _chain(xs, ys, [0.0] * 6, 4)
         assert ot.cpu().tolist() == [float(v) for v in want], depth
+
+
+@fp.fpy(ctx=fp.REAL)
+def _matmul(A: list[list[fp.Real]], BT: list[list[fp.Real]],
+            out: list[list[fp.Real]], BLOCK: fp.Real):
+    for i in range(len(out)):
+        row = out[i]
+        for j in range(len(row)):
+            with fp.FP32:
+                ps = [a * b for a, b in zip(A[i], BT[j])]
+                row[j] = sum(ps)
+    return out
+
+
+def test_both_output_dimensions_are_program_ids():
+    """`i` is `program_id(1)`, one program per row of the output, and `j`
+    the tile: `m` and `n` both larger than a block."""
+    import torch
+    from fpy2.utils import NamedId
+
+    m, n = NamedId('m'), NamedId('n')
+    f32 = RealType(fp.FP32)
+    src = _lanes(_matmul, [ListType(ListType(f32, 8), m),
+                           ListType(ListType(f32, 8), n),
+                           ListType(ListType(f32, n), m), RealType(fp.INTEGER)])
+    assert 'i = tl.program_id(1)' in src.source and src.grid_outer is not None
+    for rows, cols in ((5, 9), (1, 3), (6, 4)):
+        torch.manual_seed(rows * cols)
+        at, bt = torch.randn(rows, 8).cuda(), torch.randn(cols, 8).cuda()
+        ot = torch.zeros(rows, cols).cuda()
+        launch(src, [at, bt, ot], block=4)
+        want = _matmul(at.cpu().tolist(), bt.cpu().tolist(),
+                       [[0.0] * cols for _ in range(rows)], 4)
+        assert ot.cpu().tolist() == [[float(v) for v in r] for r in want], (rows, cols)

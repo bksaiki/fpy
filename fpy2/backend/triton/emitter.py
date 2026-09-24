@@ -308,6 +308,7 @@ class _Emitter(Visitor):
         guards: Sequence[If1Stmt] = (),
         def_use: DefineUseAnalysis | None = None,
         lanes: Sequence[ForStmt] = (),
+        grid: Sequence[ForStmt] = (),
     ):
         self.func = func
         self.format_info = format_info
@@ -327,6 +328,9 @@ class _Emitter(Visitor):
         self.lane_loops = lanes
         """The loops running across a tile's lanes, as `tile_loops` reported
         them."""
+        self.grid_loops = grid
+        """The loop the grid's second axis takes, as `tile_loops` reported
+        it."""
         self.tiles: dict[NamedId, tuple[int, int, TritonScalar]] = {}
         """Local lists of static length, as (width, tail length, element
         storage).
@@ -420,6 +424,7 @@ class _Emitter(Visitor):
         """Names bound to a code while a comprehension is unrolled."""
         self._next_tmp = 0
         self.grid_extent: int | str | None = None
+        self.grid_outer: int | str | None = None
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
 
@@ -2062,6 +2067,8 @@ class _Emitter(Visitor):
             return self._emit_tile(stmt, ctx)
         if any(stmt is t for t in self.lane_loops):
             return self._emit_lanes(stmt, ctx)
+        if any(stmt is t for t in self.grid_loops):
+            return self._emit_grid(stmt, ctx)
         if not isinstance(stmt.target, Id):
             raise TritonEmitError(
                 'a destructuring loop target has no Triton spelling'
@@ -2197,25 +2204,40 @@ class _Emitter(Visitor):
             raise TritonEmitError(
                 'a tiled loop should hold the tile loop it was split into'
             )
-        stop = it.second
-        if isinstance(stop, Var):
-            # the split bound the length to a name; the grid wants the length
-            d = self.def_use.find_def_from_use(stop)
-            if (isinstance(d, AssignDef) and isinstance(d.site, Assign)
-                    and isinstance(d.site.expr, Len)):
-                stop = d.site.expr
-        bound = self._root(self.emit(stop))
-        self.grid_extent = (
-            int(bound) if bound.isdigit()
-            else bound if bound in self.size_params.values()
-            else self.consts.get(bound)
-        )
+        self.grid_extent = self._extent(it.second)
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
         ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
         prev = self._tile, self._row_width
         self._tile, self._row_width = str(inner.target), width
         self._visit_block(inner.body, ctx)
         self._tile, self._row_width = prev
+
+    def _extent(self, stop: Expr) -> int | str | None:
+        """How far a grid axis runs: a proven length, or the size parameter
+        holding one."""
+        if isinstance(stop, Var):
+            # a split binds the length to a name; the grid wants the length
+            d = self.def_use.find_def_from_use(stop)
+            if (isinstance(d, AssignDef) and isinstance(d.site, Assign)
+                    and isinstance(d.site.expr, Len)):
+                stop = d.site.expr
+        bound = self._root(self.emit(stop))
+        return (
+            int(bound) if bound.isdigit()
+            else bound if bound in self.size_params.values()
+            else self.consts.get(bound)
+        )
+
+    def _emit_grid(self, stmt: ForStmt, ctx: _IndentedWriter):
+        """A loop the grid's second axis takes: one iteration per program."""
+        it = stmt.iterable
+        if not isinstance(it, Range1) or not isinstance(stmt.target, NamedId):
+            raise TritonEmitError('a grid axis should count a `range`')
+        self.grid_outer = self._extent(it.arg)
+        if self.grid_outer is None:
+            raise TritonEmitError('a grid axis needs a length the launcher knows')
+        ctx.add_line(f'{stmt.target} = tl.program_id(1)')
+        self._visit_block(stmt.body, ctx)
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter):
         for stmt in block.stmts:
@@ -2341,6 +2363,11 @@ class KernelSource:
     """Each size parameter, after the arguments: its name, and the argument
     position and dimension whose length it is."""
 
+    grid_outer: int | str | None = None
+    """How many programs the grid's second axis runs, one per iteration of
+    the loop around the tile, as :attr:`grid_extent` is spelled; ``None``
+    where the grid has one axis."""
+
 
 def _times(a: str, b: str) -> str:
     """``a * b`` as code, folded where both are constants."""
@@ -2378,6 +2405,7 @@ def emit_kernel(
     drop_asserts: bool = False,
     guards: Sequence[If1Stmt] = (),
     lanes: Sequence[ForStmt] = (),
+    grid: Sequence[ForStmt] = (),
 ) -> KernelSource:
     """*func* as a ``@triton.jit`` kernel.
 
@@ -2402,6 +2430,7 @@ def emit_kernel(
         guards,
         def_use,
         lanes,
+        grid,
     )
 
     params: list[str] = []
@@ -2442,6 +2471,7 @@ def emit_kernel(
         source=out.render(),
         params=tuple(params),
         grid_extent=emitter.grid_extent,
+        grid_outer=emitter.grid_outer,
         enable_fp_fusion=_products_are_exact(func, emitter),
         sizes=tuple(size_params),
     )

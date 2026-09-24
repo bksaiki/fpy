@@ -547,3 +547,32 @@ class TestLanes:
         out = tile_loops(ast, 4, lanes=True)
         again = out.rewritten(Simplify.apply(out.func))
         assert self._targets(again.lanes) == self._targets(out.lanes)
+
+
+class TestTheGridsSecondAxis:
+    """The loop directly around a lone tile, carrying nothing and inside no
+    other, is one program per iteration."""
+
+    def test_a_matmul_takes_its_rows(self):
+        _, ast = TestLanes()._matmul(_M, _N)
+        out = tile_loops(ast, 4, lanes=True)
+        assert [str(s.target) for s in out.grid] == ['i']
+        again = out.rewritten(Simplify.apply(out.func))
+        assert [str(s.target) for s in again.grid] == ['i']
+
+    def test_a_carrying_loop_is_not_one(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xss, out):
+            acc = fp.round(0)
+            for i in range(len(xss)):
+                acc = acc + xss[i][0]
+                for j in range(len(out)):
+                    out[j] = xss[i][j] * 2
+            return out
+
+        ast = TestLanes._normal(f, [ListType(ListType(_R, _N), _M), ListType(_R, _N)])
+        assert tile_loops(ast, 4, reductions=False, lanes=True).grid == []
+
+    def test_without_lanes_there_is_none(self):
+        _, ast = TestLanes()._matmul(_M, _N)
+        assert tile_loops(ast, 4).grid == []

@@ -24,7 +24,7 @@ fallback:
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cached_property
 
 from ...analysis import (
@@ -402,6 +402,17 @@ def _lanes(func: FuncDef, tiled: list[ForStmt]) -> list[ForStmt]:
     return [s for t in tiled for s in loops.beneath(t) if loops.lane(s)]
 
 
+def _grid(func: FuncDef, tiled: list[ForStmt]) -> list[ForStmt]:
+    """The loop directly around a lone tile, where nothing encloses it and it
+    carries nothing: its iterations are the grid's second axis, as a matmul's
+    rows are."""
+    if len(tiled) != 1:
+        return []
+    loops = _Loops(func, reductions=False)
+    around = [s for s in loops.all if loops.within(tiled[0], s)]
+    return around if len(around) == 1 and loops.tileable(around[0]) else []
+
+
 @dataclass
 class TileResult:
     """What :func:`tile_loops` did."""
@@ -426,6 +437,10 @@ class TileResult:
     """The loops beneath the tiles that run across a tile's lanes, unsplit;
     `None` where lanes were not asked for."""
 
+    grid: list[ForStmt] = field(default_factory=list)
+    """The loop the grid's second axis takes, one iteration per program,
+    where there is one (:func:`_grid`)."""
+
     def rewritten(self, func: FuncDef) -> 'TileResult':
         """This result for *func*, a rewrite of :attr:`func` that preserves
         what it computes.  A rewrite rebuilds the nodes, so each tile is found
@@ -443,7 +458,8 @@ class TileResult:
         tiled = [by_name[n] for n in names]
         guards = [g for t in tiled if (g := _guard(_tile_loop(t))) is not None]
         lanes = None if self.lanes is None else _lanes(func, tiled)
-        return TileResult(func, tiled, guards, lanes)
+        grid = _grid(func, tiled) if self.grid else []
+        return TileResult(func, tiled, guards, lanes, grid)
 
 
 def tile_loops(
@@ -518,4 +534,6 @@ def tile_loops(
     final = _for_loops(func)
     outers = [final[k] for k in tiled]
     guards = [g for k in tiled if (g := _guard(final[k + 1]))]
-    return TileResult(func, outers, guards, _lanes(func, outers) if lanes else None)
+    if not lanes:
+        return TileResult(func, outers, guards)
+    return TileResult(func, outers, guards, _lanes(func, outers), _grid(func, outers))

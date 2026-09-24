@@ -1207,8 +1207,8 @@ def test_an_unproven_length_is_a_parameter():
     )
     assert src.params[-2:] == ('xss_n0', 'xss_n1')
     assert src.sizes == (('xss_n0', 0, 0), ('xss_n1', 0, 1))
-    assert src.grid_extent == 'xss_n1'
-    assert 'for i in range(xss_n0):' in src.source
+    assert (src.grid_extent, src.grid_outer) == ('xss_n1', 'xss_n0')
+    assert 'i = tl.program_id(1)' in src.source
     assert 'xss_ptr + i * xss_n1 + j' in src.source
 
 

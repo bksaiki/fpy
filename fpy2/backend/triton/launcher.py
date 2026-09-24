@@ -103,7 +103,8 @@ def launch(
 
     *grid* defaults to covering :attr:`KernelSource.grid_extent` in tiles of
     *block*, which is what the emitted mask expects: the last instance runs a
-    full tile and the over-run lanes are masked off.
+    full tile and the over-run lanes are masked off.  A second axis, where
+    there is one, runs :attr:`KernelSource.grid_outer` programs.
 
     ``enable_fp_fusion`` is taken from *src* rather than from the caller.  It
     is a property of the program -- whether contracting a multiply-add is
@@ -125,10 +126,17 @@ def launch(
                 'this kernel tiled nothing, so its grid has no extent to '
                 'derive; pass `grid` explicitly'
             )
-        extent = (sizes[src.grid_extent] if isinstance(src.grid_extent, str)
-                  else src.grid_extent)
-        grid = triton.cdiv(extent, block)
+        grid = triton.cdiv(_extent(src.grid_extent, sizes), block)
+    dims = (grid,) if src.grid_outer is None else (
+        grid, _extent(src.grid_outer, sizes))
+    if 0 in dims:
+        return  # nothing to compute, and no grid to launch it on
     kernel = load_kernel(src)
-    kernel[(grid,)](
+    kernel[dims](
         *args, block, *sizes.values(), enable_fp_fusion=src.enable_fp_fusion,
     )
+
+
+def _extent(extent: int | str, sizes: dict[str, int]) -> int:
+    """A grid extent: a proven length, or the size parameter holding one."""
+    return sizes[extent] if isinstance(extent, str) else extent
