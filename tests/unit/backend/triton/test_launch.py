@@ -660,3 +660,133 @@ class TestARuntimeLength:
             ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
             want = _batched_dot(xs, ys, [0.0] * rows, 4)
             assert ot.cpu().tolist() == [float(v) for v in want], rows
+
+
+# -- lanes over a list ----------------------------------------------------
+
+_ROWS = 7
+
+
+def _lanes(func, arg_types):
+    return TritonCompiler(lanes=True, drop_asserts=True).compile(
+        func, ctx=fp.REAL, arg_types=arg_types)
+
+
+def _agree_rows(func, n_in: int, n_out: int, *, seed: int = 0) -> None:
+    """*func*, compiled with `lanes`, against the interpreter: a row of
+    *n_in* in and of *n_out* out per output, over `_ROWS` of them."""
+    import torch
+    from fpy2.utils import NamedId
+
+    rows = NamedId('rows')
+    f32 = RealType(fp.FP32)
+    src = _lanes(func, [ListType(ListType(f32, n_in), rows),
+                        ListType(ListType(f32, n_out), rows),
+                        RealType(fp.INTEGER)])
+    torch.manual_seed(seed)
+    xt = (torch.randn(_ROWS, n_in) * 4).cuda()
+    xt[0, 0], xt[1, -1] = -0.0, float('inf')
+    ot = torch.zeros(_ROWS, n_out).cuda()
+    launch(src, [xt, ot], block=4)
+    want = func(xt.cpu().tolist(), [[0.0] * n_out for _ in range(_ROWS)], 4)
+    got = ot.cpu().tolist()
+    for r in range(_ROWS):
+        for k in range(n_out):
+            w, g = float(want[r][k]), got[r][k]
+            assert repr(w) == repr(g), (r, k, w, g)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _twice_plus_one(xss: list[list[fp.Real]], out: list[list[fp.Real]],
+                    BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        with fp.FP32:
+            ys = [x * 2 + 1 for x in xs]
+        for k in range(len(row)):
+            row[k] = ys[k]
+    return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def _magnitude(x: fp.Real) -> fp.Real:
+    if x < 0:
+        return -x
+    return x
+
+
+@fp.fpy(ctx=fp.REAL)
+def _called(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        ys = [_magnitude(x) for x in xs]
+        for k in range(len(row)):
+            row[k] = ys[k]
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def _join(xs, ys):
+    n = len(xs)
+    m = len(ys)
+    zs = fp.empty(n + m)
+    for i in range(n):
+        zs[i] = xs[i]
+    for i in range(m):
+        zs[n + i] = ys[i]
+    return zs
+
+
+@fp.fpy(ctx=fp.REAL)
+def _joined(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        with fp.FP32:
+            ps = [x * x for x in xs]
+        zs = _join(ps, [xs[0]])
+        for k in range(len(row)):
+            row[k] = zs[k]
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def _picked(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    """Elements read and written one at a time, outside a lane loop."""
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        with fp.FP32:
+            ys = [x + 1 for x in xs]
+            ys[1] = ys[0] * 3
+        acc = ys[0]
+        for k in range(len(ys)):
+            acc = max(acc, ys[k])
+        row[0] = acc
+        row[1] = ys[1]
+        row[2] = ys[len(ys) - 1]
+    return out
+
+
+class TestLanesOverAList:
+    """A local list is a `[rows, P]` tile and a tail past the largest power
+    of two in its length; a lane loop runs its body across the tile and then
+    once per tail element."""
+
+    @pytest.mark.parametrize('n', [1, 3, 4, 5, 8])
+    def test_an_elementwise_comprehension_at_every_index(self, n):
+        _agree_rows(_twice_plus_one, n, n)
+
+    def test_a_call_inside_a_comprehension(self):
+        """`_magnitude` branches, so its lanes take a mask of their own."""
+        _agree_rows(_called, 5, 5)
+
+    def test_join_is_a_tile_and_a_tail(self):
+        """`L + 1` long: the products' tile, and the accumulator its tail."""
+        _agree_rows(_joined, 4, 5)
+
+    @pytest.mark.parametrize('n', [4, 6])
+    def test_elements_one_at_a_time(self, n):
+        _agree_rows(_picked, n, 3)

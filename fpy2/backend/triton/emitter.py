@@ -74,6 +74,7 @@ from ...ast import (
     ContextStmt,
     Decnum,
     Digits,
+    Empty,
     Expr,
     ForStmt,
     FuncDef,
@@ -176,6 +177,14 @@ def _as_literal(code: str) -> float | None:
         return None
 
 
+def _literal_int(code: str) -> int | None:
+    """*code* as an integer, if that is all it is."""
+    try:
+        return int(code)
+    except ValueError:
+        return None
+
+
 _ASSIGN = re.compile(r'(\w+) = (.*)')
 _IDENT = re.compile(r'\b\w+\b')
 
@@ -193,15 +202,28 @@ class _IndentedWriter:
         of them binds: a name is a tile where its line reads `tl.arange` or
         another tile.  Taken to be a scalar in error, an address is only
         broadcast where it did not need to be."""
+        self.wide: set[str] = set()
+        """The names holding a `[rows, lanes]` tile: a line reading one, or
+        broadcasting across the lanes."""
 
-    def add_line(self, line: str = ''):
+    def add_line(self, line: str = '', shape: str | None = None):
+        """*line*; *shape* ('wide', 'row' or 'scalar') says what it binds
+        where reading it off the line would not."""
         self._lines.append('    ' * self._depth + line if line else '')
         if (m := _ASSIGN.fullmatch(line)) is not None:
             name, code = m.groups()
-            if 'tl.arange(' in code or self.lanes & set(_IDENT.findall(code)):
+            idents = set(_IDENT.findall(code))
+            if shape is None:
+                if '[None, :]' in code or '[:, None]' in code or self.wide & idents:
+                    shape = 'wide'
+                elif 'tl.arange(' in code or self.lanes & idents:
+                    shape = 'row'
+            self.wide.discard(name)
+            self.lanes.discard(name)
+            if shape == 'wide':
+                self.wide.add(name)
+            elif shape == 'row':
                 self.lanes.add(name)
-            else:
-                self.lanes.discard(name)
 
     def indent(self):
         self._depth += 1
@@ -284,6 +306,7 @@ class _Emitter(Visitor):
         drop_asserts: bool = False,
         guards: Sequence[If1Stmt] = (),
         def_use: DefineUseAnalysis | None = None,
+        lanes: Sequence[ForStmt] = (),
     ):
         self.func = func
         self.format_info = format_info
@@ -300,6 +323,26 @@ class _Emitter(Visitor):
         self.guards = guards
         """The tiles' `j < n` guards, as `tile_loops` reported them: a mask on
         the tile, where any other `if` is a branch."""
+        self.lane_loops = lanes
+        """The loops running across a tile's lanes, as `tile_loops` reported
+        them."""
+        self.tiles: dict[NamedId, tuple[int, int, TritonScalar]] = {}
+        """Local lists of static length, as (width, tail length, element
+        storage).
+
+        A list of `N` is a `[rows, P]` tile, `P` the largest power of two in
+        `N`, and a *tail* of the `N - P` elements past it, each a row value
+        named `{list}_t{k}`.  Assigning a tile rebinds its name: a tile is a
+        value, so a write is a select into a new one.
+        """
+        self.tile_alias: dict[NamedId, NamedId] = {}
+        """Names bound to a local list, to the list: one list, two names."""
+        self._lane: tuple[NamedId, int] | None = None
+        """The lane loop's target and width, while its tile is emitted."""
+        self._row_width = '1'
+        """The rows a tile holds: the row tile's width, inside one."""
+        self._out = _IndentedWriter()
+        """The writer, for a value an expression has to bind first."""
         self.def_use = def_use or DefineUse.analyze(func)
         # the classes `StorageInfer` coalesces: the definitions a phi joins
         defs = self.def_use.defs
@@ -394,6 +437,8 @@ class _Emitter(Visitor):
         """How many flattened branches enclose the statement being emitted."""
         self._lanes: set[str] = set()
         """The writer's `lanes`, bound when emission starts."""
+        self._wide: set[str] = set()
+        """The writer's `wide`, likewise."""
         self._tile: str | None = None
         """The tile's index, while its body is emitted."""
         self._guard_mask: str | None = None
@@ -424,6 +469,8 @@ class _Emitter(Visitor):
                 f'a `{type(ty).__name__ if ty else "?"}` has no Triton '
                 f'storage, so `{type(e).__name__}` cannot be held'
             )
+        if isinstance(e, ListRef) and (tile := self._tile_of(e.value)):
+            return self.tiles[tile][2]
         if isinstance(e, Var) and (d := self.def_use.use_to_def.get(e)):
             # what the name holds, not what it can be here -- a read under a
             # branch is refined, where the storage is the class's
@@ -756,6 +803,159 @@ class _Emitter(Visitor):
         terms = [t for t in terms if t != '0']
         return ' + '.join(terms) if terms else '0'
 
+    # -- tiles ---------------------------------------------------------
+
+    def _tile_of(self, e: Expr) -> NamedId | None:
+        """The local list *e* names, through its aliases, or `None`."""
+        if not isinstance(e, Var):
+            return None
+        name = e.name
+        while name in self.tile_alias:
+            name = self.tile_alias[name]
+        return name if name in self.tiles else None
+
+    def _as_col(self, code: str) -> str:
+        """*code* broadcastable against a tile: a row value as a column."""
+        if not _IDENT.fullmatch(code):
+            code = self._bind(code)
+        return f'{code}[:, None]' if code in self._lanes else code
+
+    @staticmethod
+    def _lane_vec(width: int) -> str:
+        return f'tl.arange(0, {width})[None, :]'
+
+    def _at_lane(self, tile: NamedId, idx: Expr) -> bool:
+        """Whether *idx* is the lane loop's own index, into a tile its
+        width."""
+        if self._lane is None or not (
+            isinstance(idx, Var) and idx.name == self._lane[0]
+        ):
+            return False
+        if self.tiles[tile][0] != self._lane[1]:
+            raise TritonEmitError(
+                f'`{tile}` is {self.tiles[tile][0]} lanes wide and its loop '
+                f'{self._lane[1]}; tiles of different widths do not combine'
+            )
+        return True
+
+    def _extract(self, tile: NamedId, idx: str) -> str:
+        """Element *idx* of *tile*, a row value.
+
+        One lane, selected by a reduction whose other lanes are the identity:
+        `-0.0` for a float, since `x + -0.0` is `x` for every `x`, `-0.0`
+        itself included.
+        """
+        width, tail, elt = self.tiles[tile]
+        k = _literal_int(idx)
+        if k is not None and k >= width:
+            return f'{tile}_t{k - width}'
+        at = f'({self._lane_vec(width)} == {self._as_col(idx)})'
+        if elt is TritonScalar.BOOL:
+            code = (f'(tl.max(tl.where({at}, {tile}, False).to(tl.int32), '
+                    'axis=1) != 0)')
+        else:
+            zero = '-0.0' if elt.is_float() else '0'
+            code = (f'tl.sum(tl.where({at}, {tile}, {zero}), axis=1)'
+                    f'.to({elt.format()})')
+        code = self._bind(code, 'row')
+        if k is None:
+            for j in reversed(range(tail)):
+                code = f'tl.where({idx} == {width + j}, {tile}_t{j}, {code})'
+        return code
+
+    def _insert(self, tile: NamedId, idx: str, v: str):
+        """*tile* with element *idx* set to *v*, under any branch."""
+        width, tail, _ = self.tiles[tile]
+        mask = self.mask if self._branches else None
+        k = _literal_int(idx)
+        if k is None or k < width:
+            at = f'({self._lane_vec(width)} == {self._as_col(idx)})'
+            if mask is not None:
+                at = f'({at} & {self._as_col(mask)})'
+            self._out.add_line(
+                f'{tile} = tl.where({at}, {self._as_col(v)}, {tile})', 'wide')
+        for j in range(tail):
+            if k is not None and k != width + j:
+                continue
+            name = f'{tile}_t{j}'
+            cond = None if k is not None else f'({idx} == {width + j})'
+            if mask is not None:
+                cond = mask if cond is None else f'({cond} & {mask})'
+            self._out.add_line(
+                f'{name} = {v}' if cond is None
+                else f'{name} = tl.where({cond}, {v}, {name})')
+
+    def _elt_storage(self, stmt: Assign) -> TritonScalar:
+        """The storage every element of the list *stmt* allocates is held
+        in: its class's elements, joined."""
+        assert isinstance(stmt.target, NamedId)
+        d = self.def_use.find_def_from_site(stmt.target, stmt)
+        ty = self.types.by_def.get(d)
+        if isinstance(ty, ListType) and isinstance(ty.elt, BoolType):
+            return TritonScalar.BOOL
+        bounds = [
+            b.elt for m in self._members[self._class_of[d]]
+            if isinstance(b := self.format_info.by_def.get(m), ListFormat)
+        ]
+        kept = [b for b in bounds if not is_bottom(b)] or bounds
+        dom = TritonStorageDomain()
+        try:
+            held = to_triton(join(dom, [of_bound(dom, b) for b in kept]))
+        except StorageSelectionError:
+            held = None
+        if not isinstance(held, TritonScalar):
+            raise TritonEmitError(
+                f'no storage holds every element `{stmt.target}` is assigned'
+            )
+        return held
+
+    def _allocate(self, stmt: Assign, ctx: _IndentedWriter):
+        """`fp.empty(n)` of a static length, as a tile and its tail."""
+        assert isinstance(stmt.target, NamedId)
+        bound = self.sizes.by_expr.get(stmt.expr)
+        if not (isinstance(bound, ListSize) and isinstance(bound.size, int)
+                and bound.size > 0 and not isinstance(bound.elt, ListSize)):
+            raise TritonEmitError(
+                'a local list needs one dimension of static, nonzero length '
+                'to be held in registers'
+            )
+        n = bound.size
+        width = 1 << (n.bit_length() - 1)
+        elt = self._elt_storage(stmt)
+        self.tiles[stmt.target] = (width, n - width, elt)
+        ctx.add_line(
+            f'{stmt.target} = tl.zeros(({self._row_width}, {width}), '
+            f'dtype={elt.format()})', 'wide')
+        zero = 'False' if elt is TritonScalar.BOOL else '0.0' if elt.is_float() else '0'
+        for j in range(n - width):
+            ctx.add_line(f'{stmt.target}_t{j} = {zero}')
+
+    def _emit_lanes(self, stmt: ForStmt, ctx: _IndentedWriter):
+        """A lane loop: its body once across the lanes of a tile, then once
+        per element of the tail, each at its own index."""
+        n = static_trip_count(stmt.iterable, self.sizes)
+        target = stmt.target
+        if not (isinstance(stmt.iterable, Range1) and isinstance(n, int)
+                and n > 0 and isinstance(target, NamedId)):
+            raise TritonEmitError(
+                'a lane loop should count a static, nonzero `range`'
+            )
+        width = 1 << (n.bit_length() - 1)
+        prev = (self.mask, self._guard_mask, self._lane)
+        if self.mask is not None:
+            col = self._as_col(self.mask)
+            if self._guard_mask == self.mask:
+                self._guard_mask = col
+            self.mask = col
+        self._lane = (target, width)
+        ctx.add_line(f'{target} = {self._lane_vec(width)}', 'wide')
+        self._visit_block(stmt.body, ctx)
+        self.mask, self._guard_mask, self._lane = prev
+        for k in range(width, n):
+            self.subst[target] = str(k)
+            self._visit_block(stmt.body, ctx)
+            del self.subst[target]
+
     def _range_index(self, e: ListRef) -> str | None:
         """*e* as index arithmetic, if it subscripts a `range`."""
         if not isinstance(e.value, Var):
@@ -822,7 +1022,7 @@ class _Emitter(Visitor):
         # values
         if isinstance(e, (Range1, Range3)):
             return self._range_elements(e)
-        if not isinstance(e, Var):
+        if not isinstance(e, Var) or self._tile_of(e) is not None:
             return None
         bound = self.sizes.by_expr.get(e)
         if isinstance(bound, ListSize) and isinstance(bound.size, int):
@@ -846,7 +1046,7 @@ class _Emitter(Visitor):
                 return None
             return inner[start:start + bound.size]
         # a pointer-backed list: the slice is that many loads
-        if not isinstance(e.value, Var):
+        if not isinstance(e.value, Var) or self._tile_of(e.value) is not None:
             return None
         base = self.emit(e.start) if e.start is not None else '0'
         return [
@@ -904,7 +1104,7 @@ class _Emitter(Visitor):
         if self.mask is None:
             return f'tl.load({addr})'
         if self._tile is not None and not (
-            self._lanes & set(_IDENT.findall(addr))
+            (self._lanes | self._wide) & set(_IDENT.findall(addr))
         ):
             if self.mask == self._guard_mask:
                 # every launched program has a live lane, which reads it:
@@ -924,15 +1124,22 @@ class _Emitter(Visitor):
         direct = self._range_index(e)
         if direct is not None:
             return direct
+        if (tile := self._tile_of(e.value)) is not None:
+            if self._at_lane(tile, e.index):
+                return str(tile)
+            code = self._extract(tile, self.emit(e.index))
+            return code if self._lane is None else self._as_col(code)
         elems = self._elements(e.value)
         if elems is not None:
             i = self._const_index(e.index)
             if i is None:
-                raise TritonEmitError(
-                    'a scalarized sequence can only be indexed by a '
-                    'compile-time constant; Triton has no addressable local '
-                    'array'
-                )
+                # an index the trace fixes, as a `static_range` target is:
+                # the element it selects
+                idx = self.emit(e.index)
+                code = elems[-1]
+                for j in reversed(range(len(elems) - 1)):
+                    code = f'tl.where({idx} == {j}, {elems[j]}, {code})'
+                return code
             if not 0 <= i < len(elems):
                 raise TritonEmitError(
                     f'index {i} is outside a sequence of {len(elems)}'
@@ -1215,6 +1422,11 @@ class _Emitter(Visitor):
         reassociates, which `sum` does not permit and which the roadmap
         retired tile reductions over.
         """
+        if self._tile_of(e.arg) is not None:
+            raise TritonEmitError(
+                f'`{type(e).__name__.lower()}` of a list held in registers '
+                "needs a reduction across the tile's lanes, not yet emitted"
+            )
         elems = self._source_elements(e.arg)
         if elems is None:
             raise TritonEmitError(
@@ -1322,6 +1534,13 @@ class _Emitter(Visitor):
         bound = self.subst.get(e.name)
         if bound is not None:
             return bound
+        if self._tile_of(e) is not None:
+            raise TritonEmitError(
+                f'`{e.name}` is a list held in registers, which has a value '
+                'only element by element'
+            )
+        if self._lane is not None and str(e.name) in self._lanes:
+            return f'{e.name}[:, None]'
         if e.name in self.seqs:
             # unreachable from well-typed source -- `TypeInfer` rejects a
             # sequence in a scalar position first -- so this guards against an
@@ -1513,6 +1732,11 @@ class _Emitter(Visitor):
                 f'a `{type(stmt.target).__name__}` assignment target has no '
                 'Triton spelling'
             )
+        if isinstance(stmt.expr, Empty):
+            return self._allocate(stmt, ctx)
+        if (tile := self._tile_of(stmt.expr)) is not None:
+            self.tile_alias[stmt.target] = tile
+            return
         # ahead of scalarizing: a slice of something in memory is an
         # address, and taking it apart into loads loses that
         if isinstance(stmt.expr, ListSlice):
@@ -1617,11 +1841,35 @@ class _Emitter(Visitor):
             ctx.add_line(f'{name} = {code}')
 
     def _visit_indexed_assign(self, stmt: IndexedAssign, ctx: _IndentedWriter):
+        if (tile := self._tile_of(Var(stmt.var, None))) is not None:
+            return self._assign_element(tile, stmt, ctx)
         base, indices, extra = self._resolve(stmt.var, list(stmt.indices))
         addr = f'{base}_ptr + {self._offset(base, indices, extra)}'
         val = self.emit(stmt.expr)
         mask = '' if self.mask is None else f', mask={self.mask}'
         ctx.add_line(f'tl.store({addr}, {val}{mask})')
+
+    def _assign_element(
+        self, tile: NamedId, stmt: IndexedAssign, ctx: _IndentedWriter,
+    ):
+        """An element of a local list, set: across the lanes at the lane
+        loop's own index, else one element selected."""
+        if len(stmt.indices) != 1:
+            raise TritonEmitError(f'`{tile}` has one dimension')
+        idx = stmt.indices[0]
+        val = self._maybe_cast(
+            self.emit(stmt.expr), self._storage(stmt.expr), self.tiles[tile][2],
+            self.format_info.by_expr.get(stmt.expr),
+        )
+        if self._at_lane(tile, idx):
+            mask = self.mask if self._branches else 'True'
+            ctx.add_line(f'{tile} = tl.where({mask}, {val}, {tile})', 'wide')
+        elif self._lane is not None:
+            raise TritonEmitError(
+                f'a lane loop writes `{tile}` other than at its own index'
+            )
+        else:
+            self._insert(tile, self.emit(idx), val)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _IndentedWriter):
         if self._branches:
@@ -1648,11 +1896,12 @@ class _Emitter(Visitor):
     def _visit_if(self, stmt: IfStmt, ctx: _IndentedWriter):
         self._emit_branch(stmt, stmt.ift, stmt.iff, ctx)
 
-    def _bind(self, code: str, ctx: _IndentedWriter) -> str:
-        """*code*, evaluated once into a temporary."""
+    def _bind(self, code: str, shape: str | None = None) -> str:
+        """*code*, evaluated once into a temporary ahead of the line being
+        built; *shape* as for `add_line`."""
         name = f'__t{self._next_tmp}'
         self._next_tmp += 1
-        ctx.add_line(f'{name} = {code}')
+        self._out.add_line(f'{name} = {code}', shape)
         return name
 
     def _class_storage(self, d: Definition) -> TritonScalar | None:
@@ -1711,15 +1960,15 @@ class _Emitter(Visitor):
 
         outer = self.mask
 
-        cond = self._bind(self.emit(stmt.cond), ctx)
+        cond = self._bind(self.emit(stmt.cond))
         saved = {
-            v: self._bind(str(v), ctx)
+            v: self._bind(str(v))
             for v in sorted(self.def_use.mutated_in(ift)) if v in merged
         }
         self._branches += 1
         self.mask = cond if outer is None else f'({outer} & {cond})'
         self._visit_block(ift, ctx)
-        taken = {p.name: self._bind(str(p.name), ctx) for p in phis}
+        taken = {p.name: self._bind(str(p.name)) for p in phis}
         for v, code in saved.items():
             ctx.add_line(f'{v} = {code}')
         restore(set())
@@ -1737,6 +1986,8 @@ class _Emitter(Visitor):
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter):
         if any(stmt is t for t in self.tiled):
             return self._emit_tile(stmt, ctx)
+        if any(stmt is t for t in self.lane_loops):
+            return self._emit_lanes(stmt, ctx)
         if not isinstance(stmt.target, Id):
             raise TritonEmitError(
                 'a destructuring loop target has no Triton spelling'
@@ -1845,9 +2096,10 @@ class _Emitter(Visitor):
         )
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
         ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
-        prev, self._tile = self._tile, str(inner.target)
+        prev = self._tile, self._row_width
+        self._tile, self._row_width = str(inner.target), width
         self._visit_block(inner.body, ctx)
-        self._tile = prev
+        self._tile, self._row_width = prev
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter):
         for stmt in block.stmts:
@@ -1905,12 +2157,13 @@ def emit_block(
     *,
     drop_asserts: bool = False,
     guards: Sequence[If1Stmt] = (),
+    lanes: Sequence[ForStmt] = (),
 ) -> str:
     """*block*, as Triton source.
 
-    *tiled* and *guards* name the loops carrying a tile and the guards on
-    them, as `tile_loops` reported them.  *drop_asserts* skips an `assert`
-    rather than refusing it.
+    *tiled*, *guards* and *lanes* name the loops carrying a tile, the guards
+    on them and the loops across its lanes, as `tile_loops` reported them.
+    *drop_asserts* skips an `assert` rather than refusing it.
     """
     if not isinstance(block, StmtBlock):
         raise TypeError(f"Expected a 'StmtBlock', got {block}")
@@ -1929,9 +2182,10 @@ def emit_block(
         drop_asserts,
         guards,
         def_use,
+        lanes,
     )
     out = _IndentedWriter()
-    emitter._lanes = out.lanes
+    emitter._out, emitter._lanes, emitter._wide = out, out.lanes, out.wide
     emitter._visit_block(block, out)
     return out.render()
 
@@ -2007,6 +2261,7 @@ def emit_kernel(
     block: str | None = None,
     drop_asserts: bool = False,
     guards: Sequence[If1Stmt] = (),
+    lanes: Sequence[ForStmt] = (),
 ) -> KernelSource:
     """*func* as a ``@triton.jit`` kernel.
 
@@ -2030,6 +2285,7 @@ def emit_kernel(
         drop_asserts,
         guards,
         def_use,
+        lanes,
     )
 
     params: list[str] = []
@@ -2058,7 +2314,7 @@ def emit_kernel(
         if not isinstance(stmt, ReturnStmt)
     ])
     out = _IndentedWriter()
-    emitter._lanes = out.lanes
+    emitter._out, emitter._lanes, emitter._wide = out, out.lanes, out.wide
     out.add_line('@triton.jit')
     out.add_line(f'def {func.name}({", ".join(params)}):')
     out.indent()

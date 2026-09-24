@@ -820,15 +820,16 @@ class TestScalarization:
         assert 'return 4' in _emit(f, [ListType(RealType(fp.INTEGER), 4)],
                                    ctx=fp.INTEGER)
 
-    def test_a_dynamic_index_is_refused(self):
-        """There is no addressable local array to index into."""
+    def test_a_dynamic_index_selects(self):
+        """There is no addressable local array, so the index picks among the
+        elements; like a load, it is taken to be in range."""
         @fp.fpy(ctx=fp.FP32)
         def f(A: list[fp.Real], i: fp.Real):
             p = [a * a for a in A]
             return p[i]
 
-        with pytest.raises(TritonEmitError, match='compile-time constant'):
-            _emit(f, [ListType(_R32, 4), _INT])
+        src = _emit(f, [ListType(_R32, 4), _INT])
+        assert 'tl.where(i == 0, p_0, tl.where(i == 1, p_1, ' in src
 
     def test_aliasing_a_sequence_copies_its_elements(self):
         """There is no sequence to point at, so `q = p` re-binds the values."""
@@ -1224,3 +1225,43 @@ def test_an_unproven_length_is_a_parameter():
     assert src.grid_extent == 'xss_n1'
     assert 'for i in range(xss_n0):' in src.source
     assert 'xss_ptr + i * xss_n1 + j' in src.source
+
+
+class TestLanes:
+    """Under `lanes`, a loop over a list's elements is one `[rows, lanes]`
+    operation, not one per element."""
+
+    @staticmethod
+    def _source(n: int) -> str:
+        from fpy2.backend.triton import TritonCompiler
+        from fpy2.utils import NamedId
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+            for j in range(len(out)):
+                xs = xss[j]
+                row = out[j]
+                with fp.FP32:
+                    ys = [x * 2 for x in xs]
+                for k in range(len(row)):
+                    row[k] = ys[k]
+            return out
+
+        rows = NamedId('rows')
+        return TritonCompiler(lanes=True, drop_asserts=True).compile(
+            f, ctx=fp.REAL, arg_types=[
+                ListType(ListType(_R32, n), rows),
+                ListType(ListType(_R32, n), rows), _INT,
+            ]).source
+
+    def test_one_load_and_one_store_across_the_lanes(self):
+        src = self._source(8)
+        assert src.count('tl.load(') == 1
+        assert src.count('tl.store(') == 1
+        assert 'tl.arange(0, 8)[None, :]' in src
+        assert 'xss_ptr + j[:, None] * 8 + ' in src
+
+    def test_a_tail_is_one_more_per_element(self):
+        src = self._source(9)
+        assert src.count('tl.load(') == 2
+        assert 'ys_t0 = ' in src

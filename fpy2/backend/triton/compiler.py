@@ -222,6 +222,7 @@ class TritonCompiler(Backend):
             tiles.func,
             tiles.tiled,
             guards=tiles.guards,
+            lanes=tiles.lanes or (),
             block=self.block,
             drop_asserts=self.drop_asserts,
         )
