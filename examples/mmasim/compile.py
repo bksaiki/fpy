@@ -23,7 +23,7 @@ from models.utils import make_fma_dpa
 import fpy2 as fp
 import fpy2.strategies as st
 from fpy2.strategies import TransformDeclined
-from fpy2.transform import CompToLoop, RescaleFixed, Simplify
+from fpy2.transform import CompToLoop, RescaleFixed, Simplify, ZipElim
 from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 
 _L = fp.types.ListType
@@ -91,12 +91,14 @@ DESIGNS = [
 def _prepare(_module, func):
     """Put one function in the shape the backend needs.
 
+    `zip_elim` precedes `comp_to_loop`, as it does in the backend: lowered
+    first, a `zip` becomes a list of tuples, which no analysis reads through.
     `comp_to_loop` precedes `rescale_fixed`: the latter emits the scale-in and
     scale-out as statements, which a rounding inside a comprehension has no
     slot for.  A transform with nothing to do declines, which is not a
     failure.
     """
-    for step in (CompToLoop.apply, RescaleFixed.apply, Simplify.apply):
+    for step in (ZipElim.apply, CompToLoop.apply, RescaleFixed.apply, Simplify.apply):
         try:
             func = step(func)
         except TransformDeclined:
