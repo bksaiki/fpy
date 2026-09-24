@@ -4,19 +4,15 @@ from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CppExtension
 
 ROOT = Path(__file__).resolve().parent
-CSRC = ROOT / "cpp_extension" / "csrc"
-SOURCES = [
-    CSRC / "torch_ops.cpp",
-    CSRC / "fp64_fma.cpp",
-    CSRC / "amd.cdna2.bf16.cpp",
-    CSRC / "amd.cdna2.f16.cpp",
-]
+CSRC = ROOT / "fpy2_models" / "csrc"
+SOURCES = [CSRC / "torch_ops.cpp"] + sorted(
+    path for path in CSRC.glob("*.cpp") if path.name != "torch_ops.cpp"
+)
 
 setup(
     name="fpy2-cpp-extension",
     version="0.1.0",
     packages=["fpy2_models"],
-    package_dir={"fpy2_models": "cpp_extension"},
     install_requires=["torch>=2.10"],
     ext_modules=[
         CppExtension(
