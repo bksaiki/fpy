@@ -81,16 +81,6 @@ class TritonCompiler(Backend):
             what makes a trip count provable or a literal representable.
             Measured over the library corpus: 30 emit with both, 27 with
             neither.  Default ``True``.
-        scalarize_cap:
-            How long a sequence may be and still be unrolled into one value
-            per element, which is what puts a call inside a comprehension
-            where ``FuncInline`` can reach it.  Over the cap the sequence is
-            left alone and takes the ordinary loop path, so this costs an
-            unrolling rather than the compile.  Default ``256`` -- four times
-            the widest real MMA instruction.
-        lanes:
-            Lower a comprehension to a loop rather than unroll it, for the
-            emitter to run across a tile's lanes.  Default ``False``.
         unfold:
             An :class:`~fpy2.backend.triton.unfold_round.UnfoldMode`, as for
             the cpp backend.  ``ROUNDINGS`` lowers a rounding Triton cannot
@@ -104,9 +94,7 @@ class TritonCompiler(Backend):
 
     block: str
     drop_asserts: bool
-    lanes: bool
     optimize: bool
-    scalarize_cap: int
     unfold: _UnfoldMode
 
     def __init__(
@@ -114,16 +102,12 @@ class TritonCompiler(Backend):
         *,
         block: str = 'BLOCK',
         drop_asserts: bool = False,
-        lanes: bool = False,
         optimize: bool = True,
-        scalarize_cap: int = 256,
         unfold: _UnfoldMode = _UnfoldMode.NONE,
     ):
         self.block = block
         self.drop_asserts = drop_asserts
-        self.lanes = lanes
         self.optimize = optimize
-        self.scalarize_cap = scalarize_cap
         self.unfold = unfold
 
     def compile(
@@ -170,8 +154,8 @@ class TritonCompiler(Backend):
 
         `ZipElim` because a `zip` has no Triton spelling either way: it binds
         a tuple, and the emitter has no tuple storage.  Rewritten to an
-        indexed loop it becomes ordinary subscripts, which is also what lets
-        a comprehension over a `zip` scalarize.
+        indexed loop it becomes ordinary subscripts, which a lane loop reads
+        at its own index.
         """
         if self.drop_asserts:
             # module-wide, since the one that matters is usually in a callee
@@ -190,18 +174,13 @@ class TritonCompiler(Backend):
 
         normalized = Module()
         normalized.add(folded)
-        ready = normalize_module(
-            normalized, cap=self.scalarize_cap, lanes=self.lanes,
-        ).get(folded.name).func
+        ready = normalize_module(normalized).get(folded.name).func
 
         if self.unfold is not _UnfoldMode.NONE:
             # after the normal form, so the callees' roundings are inlined
             # where it can see them, and re-normalized after: the lowering
             # emits branches of its own
-            ready = ready.with_ast(normalize(
-                unfold(ready.ast, self.unfold), cap=self.scalarize_cap,
-                lanes=self.lanes,
-            ))
+            ready = ready.with_ast(normalize(unfold(ready.ast, self.unfold)))
 
         if self.optimize:
             # before tiling, as the cpp backend does last: the lowerings above leave debris
@@ -209,10 +188,8 @@ class TritonCompiler(Backend):
             # then inlined, a copy of a bound nothing reads again
             ready = ready.with_ast(Simplify.apply(ready.ast))
 
-        # the emitter has no reduction across a tile's lanes
-        tiles = tile_loops(
-            ready.ast, self.block, reductions=False, lanes=self.lanes,
-        )
+        # the emitter reduces across a tile's lanes, not its rows
+        tiles = tile_loops(ready.ast, self.block, reductions=False, lanes=True)
         if self.optimize:
             # and after tiling, which leaves bounds and copies of its own
             tiles = tiles.rewritten(Simplify.apply(tiles.func))

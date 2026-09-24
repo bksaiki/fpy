@@ -286,8 +286,9 @@ def test_a_store_through_a_row_resolves_the_same_way():
             ListType(ListType(RealType(fp.FP32), 4), 4),
             RealType(fp.INTEGER)])
     assert src.source.splitlines()[-1] == (
-        '        tl.store(oss_ptr + r * 4 + k, (tl.load(xss_ptr + r * 4 + k, '
-        'mask=(j < 4), other=0.0) * 2.0), mask=(j < 4))')
+        '    tl.store(oss_ptr + r[:, None] * 4 + k, (tl.load(xss_ptr + '
+        'r[:, None] * 4 + k, mask=__t0[:, None], other=0.0) * 2.0), '
+        'mask=__t0[:, None])')
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -300,7 +301,7 @@ def _scaled(x: fp.Real) -> fp.Real:
 @fp.fpy(ctx=fp.FP32)
 def _comp_of_calls(xss: list[list[fp.Real]], out: list[fp.Real],
                    BLOCK: fp.Real):
-    """A comprehension whose elements are calls -- what `Scalarize` is for."""
+    """A comprehension whose elements are calls."""
     for r in range(len(out)):
         ys = [_scaled(xss[r][k]) for k in range(3)]
         out[r] = ys[0] + ys[1] + ys[2]
@@ -309,16 +310,16 @@ def _comp_of_calls(xss: list[list[fp.Real]], out: list[fp.Real],
 
 def test_a_comprehension_of_calls_compiles():
     """`FuncInline` cannot reach a call inside a comprehension, so without
-    `Scalarize` ahead of it in the loop the call survives and the normal form
-    is never reached.  Unrolled first, each call is its own statement."""
+    `StatementForm` ahead of it the call survives and the normal form is never
+    reached.  As a loop, the call is a statement of its own."""
     src = TritonCompiler(drop_asserts=True).compile(
         _comp_of_calls, ctx=fp.FP32, arg_types=[
             ListType(ListType(RealType(fp.FP32), 3), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
     assert 'tl.store' in src.source
-    # three loads, one per unrolled element, each scaled before the sum
-    assert src.source.count('* 3.0') == 3
+    # the callee's body once across a tile of two, once for the tail
+    assert src.source.count('* 3.0') == 2
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -329,25 +330,16 @@ def _lazy_comp(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
     return out
 
 
-def test_the_emitter_still_expands_what_the_pass_declines():
-    """`Scalarize` and the emitter are not two copies of one decision.
-
-    The pass unrolls *early*, so `FuncInline` can reach a call inside a
-    comprehension -- but it must not touch a lazily evaluated position, since
-    hoisting out of an `IfExpr` arm would make it unconditional.  The emitter
-    expands whatever is left, where eager evaluation is already the rule
-    (`_emit_where`).
-
-    So this program reaches the emitter holding a comprehension, and stops
-    compiling if the emitter's expansion is removed as dead.
-    """
+def test_a_comprehension_in_a_lazy_position_is_a_loop_too():
+    """`Hoistable` turns the `IfExpr` into a statement, which gives the
+    comprehension in its arm a slot, and the loop runs under the arm's mask."""
     src = TritonCompiler(drop_asserts=True).compile(
         _lazy_comp, ctx=fp.FP32, arg_types=[
             ListType(ListType(RealType(fp.FP32), 3), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
-    assert 'tl.where' in src.source
-    assert src.source.count('tl.maximum') == 2, 'the comprehension was folded'
+    assert 'tl.max(t6, axis=1)' in src.source
+    assert src.source.count('tl.maximum') == 1, 'the tail folds in once'
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -375,8 +367,9 @@ def test_any_and_all_fold_with_bitwise_connectives():
             ListType(ListType(RealType(fp.FP32), 3), 6),
             ListType(RealType(fp.FP32), 6),
             RealType(fp.INTEGER)])
-    assert '(flags_0 & flags_1 & flags_2)' in src.source
-    assert '(flags_0 | flags_1 | flags_2)' in src.source
+    # across the tile's lanes, then its tail
+    assert '& flags_t0)' in src.source
+    assert '| flags_t0)' in src.source
 
 
 def test_an_empty_any_is_its_identity():

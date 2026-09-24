@@ -428,7 +428,7 @@ class TestLanes:
         m.add(func, arg_types=arg_types)
         m = m.map(lambda _m, fd: ZipElim.apply(fd))
         spec = Specialize.apply(m, size_key=True)
-        return normalize_module(spec, lanes=True).get(func.name).func.ast
+        return normalize_module(spec).get(func.name).func.ast
 
     @staticmethod
     def _targets(loops) -> list[str]:

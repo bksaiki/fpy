@@ -1,17 +1,13 @@
 """
 Triton backend: the normal form.
 
-The counterpart of the cpp backend's ``StatementForm``: calls inlined
-away and one exit.  An ``if`` statement is kept.  A kernel has no per-lane
-branch, so the emitter flattens it under a mask -- but after the analyses,
-which read its guard: if-converting here would run each arm on every input
-*in the program*, and format inference would rightly bound it over all of
-them.
+The cpp backend's ``StatementForm``, with calls inlined away and one exit.
+An ``if`` statement is kept.  A kernel has no per-lane branch, so the emitter
+flattens it under a mask -- but after the analyses, which read its guard:
+if-converting here would run each arm on every input *in the program*, and
+format inference would rightly bound it over all of them.
 
-Comprehensions,
-``Sum``, ``Zip`` and ``Enumerate`` are deliberately kept: the vectorizer in
-item 2 wants the iteration written down, and lowering them to loops here would
-only make it reconstruct them.
+A comprehension becomes a loop, which the emitter runs across a tile's lanes.
 
 What survives normalization and should not is an error, per the contract's
 rejection principle -- a refusal is acceptable, a different answer is not.
@@ -33,7 +29,6 @@ from ...transform import (
     BindElements,
     FuncInline,
     RescaleFixed,
-    Scalarize,
     SingleExit,
     StatementForm,
     TransformDeclined,
@@ -46,9 +41,6 @@ __all__ = ['TritonNormalizeError', 'normalize', 'normalize_module']
 class TritonNormalizeError(CompileError):
     """A program that does not reach the Triton normal form."""
 
-
-_DEFAULT_CAP = 256
-"""How long a sequence may be and still unroll; see `Scalarize`."""
 
 _MAX_ROUNDS = 4
 """Cap on the rounds below.
@@ -108,9 +100,7 @@ def _reads(e: Expr) -> set[NamedId]:
     return v.names
 
 
-def normalize(
-    func: FuncDef, *, cap: int = _DEFAULT_CAP, lanes: bool = False,
-) -> FuncDef:
+def normalize(func: FuncDef) -> FuncDef:
     """*func* in the Triton normal form, assuming its callees already are.
 
     ``SingleExit`` runs **first**, not last: ``FuncInline`` refuses a callee
@@ -119,17 +109,10 @@ def normalize(
     which is what :func:`normalize_module` is for -- this function alone cannot
     fix a callee, since it only holds the caller.
 
-    ``Scalarize`` runs **either side of the inline**, and that ordering is the
-    point:
-    `FuncInline` splices a callee's body into the enclosing *statement* list,
-    so it cannot take a call sitting inside a comprehension.  Unrolling the
-    comprehension first puts each call in a statement of its own.  *cap* is
-    how long a sequence may be and still unroll; over it the sequence is left
-    alone, which costs an unrolling rather than the compile.
-
-    With *lanes*, a comprehension becomes a loop instead (`StatementForm`),
-    which gives a call inside one a statement just as well, and keeps the
-    loop for the emitter to run across a tile's lanes.
+    ``StatementForm`` runs **either side of the inline**: `FuncInline`
+    splices a callee's body into the enclosing *statement* list, so it cannot
+    take a call inside a comprehension until that is a loop, and a callee
+    brings comprehensions of its own.
 
     Raises :class:`TritonNormalizeError` if the form is not reached; the
     passes' own :class:`~fpy2.transform.TransformDeclined` propagates as-is,
@@ -140,18 +123,11 @@ def normalize(
 
     for _ in range(_MAX_ROUNDS):
         func = SingleExit.apply(func)
-        # either side of the inline, because it goes both ways: unrolling a
-        # comprehension puts a call where `FuncInline` can reach it, and
-        # inlining brings in the callee's own sequences to unroll.  Running
-        # it only before would leave a just-inlined body untouched, since the
-        # form is normal by then and the loop exits.
-        func = _open(func, cap, lanes)
+        func = StatementForm.apply(func)
         func = FuncInline.apply(func, recursive=True)
-        func = _open(func, cap, lanes)
-        # after the unroll, because it emits the scale-in and scale-out as
-        # *statements* and a rounding inside a comprehension has no slot for
-        # them -- the same precondition `comp_to_loop` meets for the cpp
-        # backend, met here by the unrolling instead
+        func = StatementForm.apply(func)
+        # after the statement form: it emits the scale-in and scale-out as
+        # statements, which a rounding inside a comprehension has no slot for
         try:
             func = RescaleFixed.apply(func)
         except TransformDeclined:
@@ -159,11 +135,11 @@ def normalize(
         reasons = _NotNormal(func).check()
         if not reasons:
             # one element, one name, for the analyses to relate what the
-            # unrolling and the inlining read of it separately
+            # loops and the inlining read of it separately
             return BindElements.apply(func)
     # the loop is meant to converge -- inlining is bounded by an acyclic call
-    # graph, unrolling by that, and neither creates work for the other without
-    # consuming some.  Reaching the bound means one of those is false.
+    # graph, and lowering creates no work for it.  Reaching the bound means
+    # one of those is false.
     raise TritonNormalizeError(
         f'`{func.name}` did not converge in {_MAX_ROUNDS} rounds, which is a '
         f'bug in the normal form rather than a program it declines; what '
@@ -171,14 +147,7 @@ def normalize(
     )
 
 
-def _open(func: FuncDef, cap: int, lanes: bool) -> FuncDef:
-    """*func* with each comprehension opened into statements."""
-    return StatementForm.apply(func) if lanes else Scalarize.apply(func, cap=cap)
-
-
-def normalize_module(
-    module: Module, *, cap: int = _DEFAULT_CAP, lanes: bool = False,
-) -> Module:
+def normalize_module(module: Module) -> Module:
     """Every function in *module* in the Triton normal form.
 
     :meth:`Module.map` walks leaves-first and rebinds each caller's ``Call.fn``
@@ -188,4 +157,4 @@ def normalize_module(
     """
     if not isinstance(module, Module):
         raise TypeError(f"Expected a 'Module', got {module}")
-    return module.map(lambda _m, fd: normalize(fd, cap=cap, lanes=lanes))
+    return module.map(lambda _m, fd: normalize(fd))

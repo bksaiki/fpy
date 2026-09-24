@@ -9,8 +9,9 @@ form, not a case to handle -- predicating one here would duplicate a decision
 What it decides is what has no expression in the FPy AST: storage and casts,
 the `mask=` on an access, how a literal is spelled, which op-table signature
 applies, and how a *sequence* is spelled at all -- Triton has no list value,
-so one is expanded into its elements here whatever `Scalarize` left behind.  What it cannot spell it refuses -- never a fallback, and never
-source that fails at `triton.jit`, since a refusal at least names its cause.
+so a local list is a register tile, and a list literal its elements.  What it
+cannot spell it refuses -- never a fallback, and never source that fails at
+`triton.jit`, since a refusal at least names its cause.
 
 **The cast discipline is the point.**  Triton types `fp16 op fp16` as fp16, so
 spelling a product of two fp16 operands as `x * y` computes it *in fp16* and
@@ -411,13 +412,8 @@ class _Emitter(Visitor):
         subscript by anything but a constant has nothing to resolve against.
         """
         self.seqs: dict[NamedId, list[str]] = {}
-        """Names holding a *scalarized* sequence, as one code per element.
-
-        Triton has no list value: a tile is not scalar-indexable and a Python
-        list is compile-time metaprogramming.  A sequence of proven length
-        therefore stops existing -- it becomes that many ordinary values, and
-        every access is resolved here rather than emitted.
-        """
+        """Names holding a list literal, as one code per element: it stops
+        existing, and every access is resolved here rather than emitted."""
         self.subst: dict[NamedId, str] = {}
         """Names bound to a code while a comprehension is unrolled."""
         self._next_tmp = 0
@@ -714,9 +710,8 @@ class _Emitter(Visitor):
             else:
                 break
         root = self._root(str(name))
-        # every other list has stopped existing by here -- scalarized, or
-        # resolved as a row -- so anything else would emit a `_ptr` that is
-        # not a parameter
+        # every other list is a tile, a literal's elements, or a row by now,
+        # so anything else would emit a `_ptr` that is not a parameter
         if not any(str(a.name) == root and isinstance(a.type, ListTypeAnn)
                    for a in self.func.args):
             raise TritonEmitError(
@@ -1025,8 +1020,6 @@ class _Emitter(Visitor):
                 return [self.emit(elt) for elt in e.elts]
             case ListSlice():
                 return self._slice_elements(e)
-            case ListComp():
-                return self._comp_elements(e)
         return None
 
     def _range_elements(self, e: Expr) -> list[str] | None:
@@ -1099,34 +1092,6 @@ class _Emitter(Visitor):
             self._load_at(e.value.name, base if i == 0 else f'{base} + {i}')
             for i in range(bound.size)
         ]
-
-    def _comp_elements(self, e: ListComp) -> list[str] | None:
-        """A comprehension, unrolled.
-
-        Each source is taken apart first, then the element expression is
-        emitted once per index with the targets bound to that index's codes.
-        Binding rather than assigning keeps the unrolled copies from needing
-        names of their own.
-        """
-        if len(e.iterables) != len(e.targets):
-            return None
-        sources = [self._source_elements(it) for it in e.iterables]
-        if any(src is None for src in sources):
-            return None
-        n = min(len(src) for src in sources if src is not None)
-        out: list[str] = []
-        saved = dict(self.subst)
-        try:
-            for i in range(n):
-                for target, src in zip(e.targets, sources):
-                    assert src is not None
-                    if not isinstance(target, NamedId):
-                        return None
-                    self.subst[target] = src[i]
-                out.append(self.emit(e.elt))
-        finally:
-            self.subst = saved
-        return out
 
     def _const_index(self, e: Expr) -> int | None:
         """*e* as a compile-time index, or `None`."""

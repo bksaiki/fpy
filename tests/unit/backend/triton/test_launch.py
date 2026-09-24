@@ -669,12 +669,12 @@ _ROWS = 7
 
 
 def _lanes(func, arg_types):
-    return TritonCompiler(lanes=True, drop_asserts=True).compile(
+    return TritonCompiler(drop_asserts=True).compile(
         func, ctx=fp.REAL, arg_types=arg_types)
 
 
 def _agree_rows(func, n_in: int, n_out: int, *, seed: int = 0) -> None:
-    """*func*, compiled with `lanes`, against the interpreter: a row of
+    """*func*, compiled, against the interpreter: a row of
     *n_in* in and of *n_out* out per output, over `_ROWS` of them."""
     import torch
     from fpy2.utils import NamedId

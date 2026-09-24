@@ -1,8 +1,8 @@
 """The Triton normal form: `fpy2.backend.triton.normalize`.
 
 The form is calls inlined away and one exit.  An `if` statement stays, for the
-emitter to flatten after the analyses have read its guard; comprehensions and
-derived iterables stay, since the vectorizer wants the iteration written down.
+emitter to flatten after the analyses have read its guard; a comprehension
+becomes a loop, for the lanes.
 """
 
 import pytest
@@ -105,8 +105,7 @@ class TestReachesTheForm:
         _is_normal(out.ast)
         assert repr(out(3.0)) == repr(plain(3.0))
 
-    def test_a_comprehension_is_kept(self):
-        """Item 2 wants the iteration written down, so nothing lowers it."""
+    def test_a_comprehension_is_a_loop(self):
         @fp.fpy(ctx=fp.FP64)
         def comp(xs: list[fp.Real]):
             return [x * 2 for x in xs]
@@ -181,11 +180,10 @@ class TestRejects:
             normalize(_caller)
 
 
-class TestScalarizeRunsBeforeTheInline:
+class TestAComprehensionOpensBeforeTheInline:
     """`FuncInline` splices a callee's body into the enclosing *statement*
-    list, so it cannot take a call inside a comprehension.  Unrolling first
-    puts each call in a statement of its own, which is why `Scalarize` is in
-    the loop ahead of it."""
+    list, so it cannot take a call inside a comprehension.  Lowered to a loop
+    first, the call is a statement of its own."""
 
     def test_a_call_inside_a_comprehension_is_inlined(self):
         @fp.fpy(ctx=fp.FP64)
@@ -203,32 +201,16 @@ class TestScalarizeRunsBeforeTheInline:
         args = [1.0, 2.0, 3.0]
         assert repr(Function(out, runtime=uses.runtime)(args)) == repr(uses(args))
 
-    def test_over_the_cap_it_is_left_alone(self):
-        """Declining to unroll is not a refusal; the call simply remains, and
-        the normal form then reports *that*."""
-        @fp.fpy(ctx=fp.FP64)
-        def bump(x: fp.Real) -> fp.Real:
-            t = x + 1
-            return t
-
-        @fp.fpy(ctx=fp.FP64)
-        def uses(xs: list[fp.Real]):
-            ys = [bump(xs[i]) for i in range(3)]
-            return ys[0]
-
-        with pytest.raises(TritonNormalizeError, match='call to `bump` remains'):
-            normalize(uses.ast, cap=2)
-
 
 class TestLanes:
-    """With `lanes`, a comprehension becomes a loop instead of unrolling, which
-    gives a call in one a statement just as well."""
+    """A comprehension becomes a loop, which gives a call in one a statement
+    and keeps the iteration for the lanes."""
 
     @staticmethod
     def _lanes(func: Function) -> Function:
         m = Module()
         m.add(func)
-        return normalize_module(m, lanes=True).get(func.name).func
+        return normalize_module(m).get(func.name).func
 
     @staticmethod
     def _loops(ast) -> int:
@@ -357,7 +339,7 @@ def test_a_gathered_sum_keeps_its_bound_past_a_guard():
     m = Module()
     m.add(_evens, arg_types=[ListType(fp16, 8), ListType(fp16, 8)])
     m = m.map(lambda _m, fd: ZipElim.apply(FreeVarElim.apply(fd)))
-    ast = normalize_module(Specialize.apply(m, size_key=True), lanes=True).get(
+    ast = normalize_module(Specialize.apply(m, size_key=True)).get(
         '_evens').func.ast
     fmt = FormatInfer.analyze(ast, use_digit_bounds=True)
     sums = []

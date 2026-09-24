@@ -751,9 +751,8 @@ class TestPredicates:
 
 
 class TestScalarization:
-    """A sequence of proven length stops existing: it becomes that many
-    values.  Triton has no list -- a tile is not scalar-indexable and a Python
-    list is compile-time metaprogramming -- so this is the only lowering."""
+    """A list literal stops existing: it becomes that many values.  A list the
+    program fills is a tile instead (`TestLanes`)."""
 
     def test_a_literal_list(self):
         @fp.fpy(ctx=fp.FP32)
@@ -767,19 +766,6 @@ class TestScalarization:
             't_2 = (x + y)\n'
             'return (t_2 - t_0)'
         )
-
-    def test_a_comprehension_unrolls(self):
-        """The element expression is emitted once per index with the target
-        bound to that index's code."""
-        @fp.fpy(ctx=fp.FP32)
-        def f(A: list[fp.Real]):
-            p = [a * a for a in A]
-            return p[0] + p[3]
-
-        out = _emit(f, [ListType(_R32, 4)])
-        assert out.count('p_') == 6      # four bindings, two uses
-        assert 'p_0 = (tl.load(A_ptr + 0) * tl.load(A_ptr + 0))' in out
-        assert 'return (p_0 + p_3)' in out
 
     def test_a_slice_of_memory_is_an_address_not_values(self):
         """A slice of something in memory is the same list at an offset.
@@ -813,33 +799,32 @@ class TestScalarization:
 
     def test_len_of_a_scalarized_sequence(self):
         @fp.fpy(ctx=fp.INTEGER)
-        def f(A: list[fp.Real]):
-            p = [a for a in A]
+        def f(x: fp.Real):
+            p = [x, x, x]
             return fp.round(len(p))
 
-        assert 'return 4' in _emit(f, [ListType(RealType(fp.INTEGER), 4)],
-                                   ctx=fp.INTEGER)
+        assert 'return 3' in _emit(f, [RealType(fp.INTEGER)], ctx=fp.INTEGER)
 
     def test_a_dynamic_index_selects(self):
         """There is no addressable local array, so the index picks among the
         elements; like a load, it is taken to be in range."""
         @fp.fpy(ctx=fp.FP32)
-        def f(A: list[fp.Real], i: fp.Real):
-            p = [a * a for a in A]
+        def f(x: fp.Real, y: fp.Real, i: fp.Real):
+            p = [x, y, x + y]
             return p[i]
 
-        src = _emit(f, [ListType(_R32, 4), _INT])
-        assert 'tl.where(i == 0, p_0, tl.where(i == 1, p_1, ' in src
+        src = _emit(f, [_R32, _R32, _INT])
+        assert 'tl.where(i == 0, p_0, tl.where(i == 1, p_1, p_2))' in src
 
     def test_aliasing_a_sequence_copies_its_elements(self):
         """There is no sequence to point at, so `q = p` re-binds the values."""
         @fp.fpy(ctx=fp.FP32)
-        def f(A: list[fp.Real]):
-            p = [a * a for a in A]
+        def f(x: fp.Real, y: fp.Real):
+            p = [x * x, y]
             q = p
             return q[0]
 
-        out = _emit(f, [ListType(_R32, 4)])
+        out = _emit(f, [_R32, _R32])
         assert 'q_0 = p_0' in out
         assert 'return q_0' in out
 
@@ -1248,7 +1233,7 @@ class TestLanes:
             return out
 
         rows = NamedId('rows')
-        return TritonCompiler(lanes=True, drop_asserts=True).compile(
+        return TritonCompiler(drop_asserts=True).compile(
             f, ctx=fp.REAL, arg_types=[
                 ListType(ListType(_R32, n), rows),
                 ListType(ListType(_R32, n), rows), _INT,
@@ -1271,13 +1256,14 @@ def test_a_rounding_sum_over_wider_elements_is_refused():
     """Each partial sum rounds under `FP16`, which an add in the elements'
     wider storage does not do; it gave `240006` where FPy gives `inf`."""
     @fp.fpy(ctx=fp.REAL)
-    def f(xs: list[fp.Real]):
-        ys = [x * 2 for x in xs]
+    def f(x: fp.Real, y: fp.Real):
+        ys = [x * 2, y * 2]
         with fp.FP16:
             return sum(ys)
 
+    fp16 = RealType(fp.IEEEContext(5, 16))
     with pytest.raises(TritonEmitError, match='rounds each partial sum'):
-        _emit(f, [ListType(RealType(fp.IEEEContext(5, 16)), 4)])
+        _emit(f, [fp16, fp16])
 
 
 def test_an_unaligned_slice_of_a_tile_is_refused():
@@ -1293,5 +1279,5 @@ def test_an_unaligned_slice_of_a_tile_is_refused():
         return out
 
     with pytest.raises(TritonEmitError, match='starts at a multiple'):
-        TritonCompiler(lanes=True, drop_asserts=True).compile(
+        TritonCompiler(drop_asserts=True).compile(
             f, ctx=fp.REAL, arg_types=[ListType(_R32, 8), ListType(_R32, 1), _INT])
