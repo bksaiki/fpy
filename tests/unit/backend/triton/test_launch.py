@@ -983,3 +983,54 @@ class TestTuning:
         launch(src, [xt, ot])
         want = _twice_plus_one(xt.cpu().tolist(), [[0.0] * 5 for _ in range(37)], 4)
         assert ot.cpu().tolist() == [[float(v) for v in r] for r in want]
+
+
+class TestLayout:
+    """The kernel addresses each list row major from the shape it was compiled
+    for, so a tensor laid out any other way is refused rather than read and
+    written in the wrong places."""
+
+    @pytest.fixture(scope='class')
+    def src(self):
+        from fpy2.utils import NamedId
+        m, n = NamedId('m'), NamedId('n')
+        f32 = RealType(fp.FP32)
+        return _lanes(_matmul, [ListType(ListType(f32, 8), m),
+                                ListType(ListType(f32, 8), n),
+                                ListType(ListType(f32, n), m), RealType(fp.INTEGER)])
+
+    @staticmethod
+    def _args(m=3, n=5, k=8):
+        import torch
+        return [torch.randn(m, k).cuda(), torch.randn(n, k).cuda(),
+                torch.zeros(m, n).cuda()]
+
+    def test_a_strided_view_is_refused(self, src):
+        import torch
+        a, bt, _ = self._args()
+        out = torch.zeros(3, 10).cuda()[:, :5]
+        with pytest.raises(ValueError, match='`out_ptr` is not contiguous'):
+            launch(src, [a, bt, out], block=4)
+
+    def test_a_proven_length_must_match(self, src):
+        a, bt, out = self._args(k=16)
+        with pytest.raises(ValueError, match='compiled for 8'):
+            launch(src, [a, bt, out], block=4)
+
+    def test_a_shared_length_must_agree(self, src):
+        """`out`'s rows are `A`'s, one parameter read off `A`."""
+        a, bt, _ = self._args()
+        import torch
+        with pytest.raises(ValueError, match='where the kernel has one length'):
+            launch(src, [a, bt, torch.zeros(4, 5).cuda()], block=4)
+
+    def test_the_rank_must_match(self, src):
+        a, bt, _ = self._args()
+        import torch
+        with pytest.raises(ValueError, match='has 1 dimensions, not 2'):
+            launch(src, [a, bt, torch.zeros(15).cuda()], block=4)
+
+    def test_a_list_takes_a_tensor(self, src):
+        _, bt, out = self._args()
+        with pytest.raises(TypeError, match='takes a tensor'):
+            launch(src, [[[0.0] * 8] * 3, bt, out], block=4)

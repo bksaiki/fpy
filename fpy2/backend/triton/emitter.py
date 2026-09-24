@@ -2378,6 +2378,10 @@ class KernelSource:
     """The pointer parameters the kernel stores through, which tuning runs
     it on more than once and so has to restore."""
 
+    shapes: tuple[tuple[int, tuple[int | str | None, ...]], ...] = ()
+    """Each list argument's position and the shape its offsets assume, row
+    major: a proven length, the size parameter holding one, or ``None``."""
+
 
 def _times(a: str, b: str) -> str:
     """``a * b`` as code, folded where both are constants."""
@@ -2445,6 +2449,7 @@ def emit_kernel(
 
     params: list[str] = []
     size_params: list[tuple[str, int, int]] = []
+    shapes: list[tuple[int, tuple[int | str | None, ...]]] = []
     for pos, arg in enumerate(func.args):
         name = str(arg.name)
         if name == block:
@@ -2455,11 +2460,14 @@ def emit_kernel(
             # own kernels take theirs
             bound = sizes.by_def.get(def_use.find_def_from_site(arg.name, arg))
             depth = 0
+            dims: list[str | None] = []
             while isinstance(bound, ListSize):
                 if isinstance(bound.size, NamedId) and bound.size not in emitter.size_params:
                     emitter.size_params[bound.size] = f'{name}_n{depth}'
                     size_params.append((f'{name}_n{depth}', pos, depth))
+                dims.append(emitter._size_code(bound.size) if bound.size is not None else None)
                 bound, depth = bound.elt, depth + 1
+            shapes.append((pos, tuple(int(d) if d is not None and d.isdigit() else d for d in dims)))
         else:
             params.append(name)
     params.extend(name for name, _, _ in size_params)
@@ -2484,6 +2492,7 @@ def emit_kernel(
         grid_outer=emitter.grid_outer,
         block=block,
         writes=tuple(p for p in params if p in emitter.written),
+        shapes=tuple(shapes),
         enable_fp_fusion=_products_are_exact(func, emitter),
         sizes=tuple(size_params),
     )

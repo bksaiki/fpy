@@ -150,6 +150,7 @@ def launch(
         raise CompileError(f'cannot launch a Triton kernel: {why}')
     import triton
 
+    _check_layout(src, args)
     # an unproven length is read off the tensor that has it
     sizes = {name: args[pos].shape[depth] for name, pos, depth in src.sizes}
     # the grid before the kernel: deriving it is cheap and compiling is not,
@@ -178,6 +179,40 @@ def launch(
     _tuned(src)[lambda meta: dims(meta[src.block])](
         *args, **sizes, enable_fp_fusion=src.enable_fp_fusion,
     )
+
+
+def _check_layout(src: KernelSource, args: Sequence[Any]) -> None:
+    """Refuse a tensor the kernel's offsets do not describe.
+
+    The kernel computes row-major offsets from the shape it was compiled for,
+    so a strided view, a different rank, a length other than a proven one, or
+    two tensors disagreeing on a length they share would each be read and
+    written at the wrong places, silently.  Copying to fix a layout is the
+    caller's call: a copy of an output takes the writes with it.
+    """
+    import torch
+    lengths: dict[str, tuple[str, int]] = {}
+    for pos, dims in src.shapes:
+        name, t = src.params[pos], args[pos]
+        if not isinstance(t, torch.Tensor):
+            raise TypeError(f'`{name}` is a list, so it takes a tensor, not {type(t).__name__}')
+        if not t.is_contiguous():
+            raise ValueError(
+                f'`{name}` is not contiguous; the kernel addresses it row '
+                'major from its shape')
+        if t.dim() != len(dims):
+            raise ValueError(f'`{name}` has {t.dim()} dimensions, not {len(dims)}')
+        for depth, (want, have) in enumerate(zip(dims, t.shape)):
+            if isinstance(want, int) and want != have:
+                raise ValueError(
+                    f'`{name}` is {have} long at dimension {depth}; the kernel '
+                    f'was compiled for {want}')
+            if isinstance(want, str):
+                first, n = lengths.setdefault(want, (name, have))
+                if n != have:
+                    raise ValueError(
+                        f'`{name}` is {have} long at dimension {depth} and '
+                        f'`{first}` {n}, where the kernel has one length')
 
 
 def _extent(extent: int | str | None, sizes: dict[str, int]) -> int:
