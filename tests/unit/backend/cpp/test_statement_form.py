@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 import fpy2 as fp
-from fpy2.backend.cpp import compiler as _compiler
+from fpy2.transform import statement_form as _statement_form
 from fpy2.backend.cpp.compiler import CppCompileError, CppCompiler
 from fpy2.types import RealType
 
@@ -119,7 +119,7 @@ def hoistable_disabled(monkeypatch):
         def apply(func):
             return func
 
-    monkeypatch.setattr(_compiler, 'Hoistable', _Identity)
+    monkeypatch.setattr(_statement_form, 'Hoistable', _Identity)
 
 
 class TestTheNet:
