@@ -140,9 +140,7 @@ _UNHOISTABLE: dict[type[Stmt], str] = {
     EffectStmt: 'an effect would run unconditionally',
     IndexedAssign: 'a list write would run unconditionally',
     WhileStmt: 'a `while` would run unconditionally and may not terminate',
-    # a `for` is *not* here: it runs an iterable, so it terminates, and its
-    # body is checked by the recursion like any other.  Hoisting it is what
-    # this pass's own documentation describes for an arm that cannot inline.
+    ForStmt: 'a `for` would run unconditionally',
 }
 
 

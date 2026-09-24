@@ -136,19 +136,7 @@ the rewritten program, and forwarding does not carry them (see item 3).
 
 ## 7. The recipe as a parameterized function
 
-Gap 2 of [native-lowering-roadmap.md](native-lowering-roadmap.md), and now
-also *The shape of the compiler* in
-[backend-triton.md](backend-triton.md), which argues that tensorization is this
-item rather than backend work: the tiling decisions are rewrites from FPy
-source to FPy source (`split`, `unroll_for` and `SimplifyIf` all already
-exist), only tile-shape legality and the spellings are target facts, and a
-tiled program stays interpretable — so the whole layer is testable without a
-GPU. `SimplifyIf` (#303) is the first operator built to **item 1 above** from
-the outside: it had no refusal conditions, and giving it some meant deciding
-what a branch it cannot turn into an expression should do. Declining with a
-reason, rather than rewriting into something that means something else, is
-what that item buys — and the review of it found three shapes that were
-silently miscompiling until the contract was written down. Exo 2's
+Gap 2 of [native-lowering-roadmap.md](native-lowering-roadmap.md). Exo 2's
 `optimize_level_1` is the model: one entry point taking the function, a
 location, and a target descriptor object, built by composing the public
 operators, with deviations as hooks rather than policy baked into transforms.
@@ -170,10 +158,6 @@ needs a second import from the transform layer.
   patterns already provide that language for free.
 - **Cost estimation and autotuning.** The objective here (exactness, then
   code shape) is not a scalar; Roly-poly also found cost hints double-edged —
-  users follow them blindly. Unchanged by
-  [backend-triton.md](backend-triton.md), which reaches the same conclusion
-  from the other side: a tile width is a number FPy has no basis to choose, so
-  it emits one as a `tl.constexpr` and lets `triton.autotune` pick it. Borrow
-  a target's tuner; do not build one.
+  users follow them blindly.
 - **A GUI.** Items 1 and 2 are the textual versions of the two things its
   study showed actually helped.

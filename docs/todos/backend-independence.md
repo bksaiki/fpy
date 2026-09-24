@@ -27,20 +27,6 @@ in order of how much it was worth:
    see.
 3. **Reuse by a second backend** — genuine, but contingent on a second backend
    existing. Do not let it justify work on its own.
-   [backend-triton.md](backend-triton.md) is the first candidate, and what it
-   found is worth recording because it cuts against the obvious expectation.
-   An early draft budgeted two new backend-independent passes for it, a
-   divergence analysis and an if-conversion. The divergence analysis was
-   designed away — making the tile boundary an explicit loop split states
-   syntactically what the analysis would have inferred — and the
-   if-conversion turned out to **already exist**, as `SimplifyIf`, exported
-   and never used. So did `split` and `unroll_for`.
-
-   The lesson is not that a second backend needs nothing from this pipeline.
-   It is that its whole tiling layer is FPy-to-FPy rewrites, which makes it
-   interpreter-testable and puts it here rather than in a backend — and that
-   the passes were mostly already written, unexercised, because no consumer
-   had asked. That is criterion (2) paying off in a way (3) was expected to.
 
 Judge a candidate section by (1) and (2). A section that only promises (3) can
 wait.

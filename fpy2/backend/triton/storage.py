@@ -99,8 +99,7 @@ def scalar_fits_in(a: TritonScalar, b: TritonScalar) -> bool:
     This is also the predicate that decides whether fused multiply-add is
     observable: contraction is unobservable exactly where the product's format
     fits the storage chosen for it, since "round the product then round the
-    sum" and "round the sum of the exact product" then agree.  See
-    measured against hardware in ``exploration/triton/``.
+    sum" and "round the sum of the exact product" then agree.
     """
     if a is TritonScalar.BOOL or b is TritonScalar.BOOL:
         return a is b

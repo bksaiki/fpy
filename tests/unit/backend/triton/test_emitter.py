@@ -53,8 +53,6 @@ def _spec(func, *ctxs, ctx=None):
 
 
 class TestCastDiscipline:
-    """`exploration/triton/kernels.py` measured the trap at 2000/2000."""
-
     def test_an_exact_product_widens_its_operands(self):
         """The `dot_exact` spelling: cast *then* multiply."""
         @fp.fpy(ctx=fp.REAL)
@@ -409,8 +407,7 @@ class TestNamedRefusals:
 
 
 class TestKernelBody:
-    """End to end: the batched dot product, through the whole pipeline, comes
-    out shaped like `exploration/triton/kernels.py`'s `dot_exact`."""
+    """End to end: the batched dot product, through the whole pipeline."""
 
     @staticmethod
     def _pipeline():
@@ -519,10 +516,8 @@ class TestKernel:
         pyast.parse(self._kernel(fp.REAL, fp.IEEEContext(5, 16)).source)
 
     def test_fusion_is_derived_not_pinned(self):
-        """Against the hardware audit in `exploration/triton/`: an FP16-in
-        program is unchanged by fusion (0/2000 either way), an all-FP32 one
-        differs under it (590/2000).  So the first may fuse and the second
-        may not, and the flag has to say so without being told."""
+        """An FP16-in program is unchanged by fusion, an all-FP32 one is not,
+        so the first may fuse and the second may not."""
         assert self._kernel(fp.REAL, fp.IEEEContext(5, 16)).enable_fp_fusion
         assert not self._kernel(fp.FP32, fp.FP32).enable_fp_fusion
 
