@@ -12,10 +12,11 @@ rather than left for a caller to rediscover:
 - **`FreeVarElim` before everything.**  A kernel runs from a generated file
   and cannot reference a closure, so a captured value has to become a binding
   first.  The cpp backend runs it unconditionally for the same reason.
-- **`ConstFold` before emitting.**  `tl.static_range` needs its trip count as
-  a compile-time constant, and a `range(K)` naming a *foreign* constant
-  arrives as a free variable -- `Specialize` monomorphizes contexts and types,
-  not closure values.
+- **`Simplify` first**, under ``optimize``, over every function: it folds the
+  constants `tl.static_range` needs as trip counts -- a `range(K)` naming a
+  *foreign* constant arrives as a free variable, `Specialize` monomorphizing
+  contexts and types, not closure values -- and clears what inlining would
+  otherwise copy.
 - **`Simplify` last**, under ``optimize``.  The lowerings above leave debris
   only a later pass can see, which the cpp backend says of its own pipeline
   too.
@@ -36,7 +37,6 @@ from ...module import Module
 from ...number import Context
 from ...transform import (
     AssertElim,
-    ConstFold,
     FreeVarElim,
     Simplify,
     Specialize,
@@ -70,7 +70,8 @@ class TritonCompiler(Backend):
             opt-in and a launcher wanting the check runs it host-side.
             Default ``False``.
         optimize:
-            Run ``ConstFold`` and ``Simplify``.  Sound either way, and like
+            Run ``Simplify`` before the normal form and after it.  Sound
+            either way, and like
             the cpp backend's flag of the same name it does *not* mean the
             surface AST reaches the emitter untouched -- ``FreeVarElim``,
             ``Specialize``, the normal form and tiling run regardless.
@@ -175,10 +176,11 @@ class TritonCompiler(Backend):
 
     def _compile_one(self, spec: Module, name: str) -> KernelSource:
         """One specialized entry, from the normal form through to source."""
-        func = spec.get(name).func
-        folded = (
-            func.with_ast(ConstFold.apply(func.ast)) if self.optimize else func
-        )
+        if self.optimize:
+            # first too, and over the callees: a wrapper's temporaries and a
+            # callee's copies go before inlining and unrolling multiply them
+            spec = spec.map(lambda _m, fd: Simplify.apply(fd))
+        folded = spec.get(name).func
 
         normalized = Module()
         normalized.add(folded)
@@ -195,13 +197,18 @@ class TritonCompiler(Backend):
             ))
 
         if self.optimize:
-            # last, as the cpp backend does: the lowerings above leave debris
+            # before tiling, as the cpp backend does last: the lowerings above leave debris
             # only a later pass can see -- a captured value materialized and
             # then inlined, a copy of a bound nothing reads again
             ready = ready.with_ast(Simplify.apply(ready.ast))
 
         # the emitter has no reduction across a tile's lanes
         tiles = tile_loops(ready.ast, self.block, reductions=False)
+        if self.optimize:
+            # and after tiling, which leaves bounds and copies of its own
+            tiles = tiles.rewritten(Simplify.apply(tiles.func))
+
+        # compile the final function
         return emit_kernel(
             tiles.func,
             tiles.tiled,

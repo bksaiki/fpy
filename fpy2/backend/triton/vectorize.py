@@ -286,6 +286,14 @@ def _guard(inner: ForStmt) -> If1Stmt | None:
     return stmts[0] if inner.target in _reads(stmts[0].cond) else None
 
 
+def _tile_loop(outer: ForStmt) -> ForStmt:
+    """The tile loop `SplitLoop` put in *outer*'s body."""
+    loops = [s for s in outer.body.stmts if isinstance(s, ForStmt)]
+    if len(loops) != 1:
+        raise RuntimeError(f'the tiled loop over {outer.target} holds {len(loops)} loops')
+    return loops[0]
+
+
 def carried_scalars(stmt: ForStmt, def_use: DefineUseAnalysis) -> set[NamedId]:
     """The names *stmt*'s body writes whole and carries to the next iteration:
     what tiling it turns into a reduction across the tile's lanes."""
@@ -327,6 +335,23 @@ class TileResult:
     """The `j < n` guard `SplitLoop` put around each tile's body, where it
     emitted one.  Named for the same reason: the emitter lowers a guard as the
     tile's mask, and any other `if` as a branch."""
+
+    def rewritten(self, func: FuncDef) -> 'TileResult':
+        """This result for *func*, a rewrite of :attr:`func` that preserves
+        what it computes.  A rewrite rebuilds the nodes, so each tile is found
+        again by its outer loop's target, a name this pass minted and no
+        cleanup renames, and its guard as the split left it."""
+        names = [t.target for t in self.tiled]
+        by_name = {
+            loop.target: loop for loop in _for_loops(func)
+            if loop.target in names
+        }
+        missing = [str(n) for n in names if n not in by_name]
+        if missing:
+            raise RuntimeError(f'a rewrite lost the tiled loop over {", ".join(missing)}')
+        tiled = [by_name[n] for n in names]
+        guards = [g for t in tiled if (g := _guard(_tile_loop(t))) is not None]
+        return TileResult(func, tiled, guards)
 
 
 def tile_loops(

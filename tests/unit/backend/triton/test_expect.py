@@ -49,15 +49,13 @@ def _scale(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
 _DOT = '''\
 @triton.jit
 def _batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
-    t7 = BLOCK
-    t8 = 4
     i = tl.program_id(0) * BLOCK
     j = i + tl.arange(0, BLOCK)
     r = j
     acc = 0.0
     for k in tl.static_range(8):
-        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t8), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t8), other=0.0).to(tl.float32)))
-    tl.store(out_ptr + r, acc, mask=(j < t8))'''
+        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32)))
+    tl.store(out_ptr + r, acc, mask=(j < 4))'''
 
 
 def test_the_batched_dot_product():
@@ -87,12 +85,10 @@ def test_a_map_over_one_dimension():
     assert src.source == '''\
 @triton.jit
 def _scale(xs_ptr, out_ptr, BLOCK: tl.constexpr):
-    t4 = BLOCK
-    t5 = 6
     i6 = tl.program_id(0) * BLOCK
     j = i6 + tl.arange(0, BLOCK)
     i = j
-    tl.store(out_ptr + i, (tl.load(xs_ptr + i, mask=(j < t5), other=0.0) * tl.load(xs_ptr + i, mask=(j < t5), other=0.0)), mask=(j < t5))'''
+    tl.store(out_ptr + i, (tl.load(xs_ptr + i, mask=(j < 6), other=0.0) * tl.load(xs_ptr + i, mask=(j < 6), other=0.0)), mask=(j < 6))'''
     assert src.grid_extent == 6
 
 
@@ -159,7 +155,7 @@ def test_reductions_fold_over_the_scalarized_elements():
         'propagate_nan=tl.PropagateNan.ALL) - tl.minimum(tl.minimum(row_0, '
         'row_1, propagate_nan=tl.PropagateNan.ALL), row_2, '
         'propagate_nan=tl.PropagateNan.ALL)) + ((row_0 + row_1) + row_2)), '
-        'mask=(j < t7))')
+        'mask=(j < 8))')
 
 
 def test_an_empty_sum_is_the_literal_zero():
@@ -169,7 +165,7 @@ def test_an_empty_sum_is_the_literal_zero():
         _empty, ctx=fp.FP32,
         arg_types=[ListType(RealType(fp.FP32), 6), RealType(fp.INTEGER)])
     assert src.source.splitlines()[-1] == (
-        '    tl.store(out_ptr + i, 0, mask=(j < t4))')
+        '    tl.store(out_ptr + i, 0, mask=(j < 6))')
 
 
 def test_an_empty_max_is_refused():
@@ -208,17 +204,15 @@ def test_a_zip_is_eliminated_before_emission():
     assert src.source == '''\
 @triton.jit
 def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
-    t9 = BLOCK
-    t10 = 4
     i11 = tl.program_id(0) * BLOCK
     j = i11 + tl.arange(0, BLOCK)
     i = j
     acc = 0.0
     for _i in tl.static_range(8):
-        x = tl.load(xs_ptr + _i + tl.zeros_like(j), mask=(j < t10), other=0.0)
-        y = tl.load(ys_ptr + _i + tl.zeros_like(j), mask=(j < t10), other=0.0)
+        x = tl.load(xs_ptr + _i + tl.zeros_like(j), mask=(j < 4), other=0.0)
+        y = tl.load(ys_ptr + _i + tl.zeros_like(j), mask=(j < 4), other=0.0)
         acc = (acc + (x * y))
-    tl.store(out_ptr + i, acc, mask=(j < t10))'''
+    tl.store(out_ptr + i, acc, mask=(j < 4))'''
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -257,15 +251,13 @@ def test_a_row_bound_to_a_name_flattens_to_one_load():
     assert src.source == '''\
 @triton.jit
 def _row_bound(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
-    t9 = BLOCK
-    t10 = 4
     i = tl.program_id(0) * BLOCK
     j = i + tl.arange(0, BLOCK)
     r = j
     acc = 0.0
     for k in tl.static_range(8):
-        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < t10), other=0.0).to(tl.float32)))
-    tl.store(out_ptr + r, acc, mask=(j < t10))'''
+        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32)))
+    tl.store(out_ptr + r, acc, mask=(j < 4))'''
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -294,7 +286,7 @@ def test_a_store_through_a_row_resolves_the_same_way():
             RealType(fp.INTEGER)])
     assert src.source.splitlines()[-1] == (
         '        tl.store(oss_ptr + r * 4 + k, (tl.load(xss_ptr + r * 4 + k, '
-        'mask=(j < t8), other=0.0) * 2.0), mask=(j < t8))')
+        'mask=(j < 4), other=0.0) * 2.0), mask=(j < 4))')
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -399,7 +391,7 @@ def test_an_empty_any_is_its_identity():
     folded = TritonCompiler(drop_asserts=True).compile(
         _empty_any, ctx=fp.FP32, arg_types=args)
     assert folded.source.splitlines()[-1].endswith(
-        'tl.store(out_ptr + i, 0, mask=(j < t4))')
+        'tl.store(out_ptr + i, 0, mask=(j < 4))')
 
 
 @fp.fpy(ctx=fp.FP32)
