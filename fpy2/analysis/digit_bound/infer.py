@@ -1007,21 +1007,30 @@ class _DigitBoundInferInstance(DefaultVisitor):
         which is how it arrives once scalarized.  Short of every index it
         says nothing of the others, as a single `xs[k] == 0` does not.
         """
+        return {
+            msb for d in self._covered_lists(tests)
+            if (msb := self._def(d).msb) is not None
+        }
+
+    def _covered_lists(self, tests: Sequence[Expr]) -> set[Definition]:
+        """The lists :meth:`_covered_zeros` finds every element of zeroed."""
         seen: dict[Definition, tuple[int | None, set[int]]] = {}
         for t in tests:
-            ref = self._zero_tested(t)
-            if ref is None or not isinstance(ref.value, Var):
-                continue
-            k = self.view.int_value(ref.index)
-            if k is None:
-                continue
-            d = self.def_use.find_def_from_use(ref.value)
-            seen.setdefault(d, (self._len_of(ref.value), set()))[1].add(k)
-        return {
-            msb for d, (n, ks) in seen.items()
-            if n is not None and ks >= set(range(n))
-            and (msb := self._def(d).msb) is not None
-        }
+            d, k = self._zero_tested_at(t)
+            if d is not None and k is not None:
+                seen.setdefault(d, (self._len_of_def(d), set()))[1].add(k)
+        return {d for d, (n, ks) in seen.items() if n is not None and ks >= set(range(n))}
+
+    def _zero_tested_at(self, test: Expr) -> tuple[Definition | None, int | None]:
+        """The list and constant index *test* compares against zero."""
+        ref = self._zero_tested(test)
+        if ref is None or not isinstance(ref.value, Var):
+            return None, None
+        return (self.def_use.find_def_from_use(ref.value),
+                self.view.int_value(ref.index))
+
+    def _len_of_def(self, d: Definition) -> int | None:
+        return _size(self.array_size.by_def.get(d))
 
     def _zero_tested(self, test: Expr) -> ListRef | None:
         """The `xs[k]` *test* compares against zero, through a name."""
@@ -1068,11 +1077,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
             case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
                 for value, other in ((rhs, lhs), (lhs, rhs)):
                     if self.view.int_value(value) == 0:
-                        # one zero element is not a zero list, so only a
-                        # conjunction covering the list zeroes it -- see
-                        # `_zero_paths_conj`
-                        if self._one_element(other) is not None:
-                            return None
+                        # a constant-index read has terms of its own, so a
+                        # zero element zeroes only itself
                         t = self._msb_of(other)
                         return None if t is None else [{t}]
                 return None
@@ -1102,8 +1108,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         path of every conjunct does.  A conjunct zeroing nothing leaves the
         others' zeros standing."""
         covered = self._covered_zeros(args)
+        lists = self._covered_lists(args)
         paths: list[set[Term]] = [set(covered)]
         for a in args:
+            if self._zero_tested_at(a)[0] in lists:
+                continue    # one element of a list the conjunction zeroes whole
             part = self._zero_paths(a)
             if part is None:
                 continue

@@ -2793,6 +2793,24 @@ class TestAlignedSumPrecision:
         L16 = ListType(RealType(fp.FP16), 4)
         assert self._sum_bounds(f, [L16, L16])['ts'] <= 28
 
+    def test_a_zero_test_on_one_element_zeroes_that_element(self):
+        """`c = cs[0]` has terms of its own, so `c == 0` zeroes `c` alone --
+        and the guard aligns as it does for a scalar.  A batch of one row made
+        every row index `0`, and `nvfp4` lost its accumulator's alignment."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(cs, x):
+            c = cs[0]
+            e = (-139 if c == 0 else max(fp.logb(c), -126))
+            e2 = max(e, max(fp.logb(x), -126))
+            with fp.MPFixedContext(e2 - 24, fp.RM.RTZ):
+                t0 = fp.round(c)
+                t1 = fp.round(x)
+            ts = [t0, t1]
+            return sum(ts)
+
+        R = RealType(fp.FP32)
+        assert self._sum_bounds(f, [ListType(R, 1), R])['ts'] <= 26
+
     def test_one_elements_exponent_does_not_bound_another(self):
         """A constant read is one element, not the list's summary.  Read as
         the summary, `logb(A[0])` bounded `A[1] * B[1]`, and `t` was bounded
