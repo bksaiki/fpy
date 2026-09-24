@@ -10,6 +10,7 @@ models/amd.py     AMD:    make_e_fdpa, make_ftz_addmul, make_tr_fdpa, make_gtr_f
 models/utils.py   shared helpers, and make_fma_dpa
 compile.py        compile every design to C++ and report where each one stops
 tests/            validation against the reference implementation
+bench/            runtime of the Triton kernels, and a hand-written reference
 ```
 
 Each factory takes per-instruction parameters (formats as contexts, `F`,
