@@ -115,6 +115,8 @@ def launch(
         raise CompileError(f'cannot launch a Triton kernel: {why}')
     import triton
 
+    # an unproven length is read off the tensor that has it
+    sizes = {name: args[pos].shape[depth] for name, pos, depth in src.sizes}
     # the grid before the kernel: deriving it is cheap and compiling is not,
     # so a missing extent should not cost a compile to discover
     if grid is None:
@@ -123,8 +125,10 @@ def launch(
                 'this kernel tiled nothing, so its grid has no extent to '
                 'derive; pass `grid` explicitly'
             )
-        grid = triton.cdiv(src.grid_extent, block)
+        extent = (sizes[src.grid_extent] if isinstance(src.grid_extent, str)
+                  else src.grid_extent)
+        grid = triton.cdiv(extent, block)
     kernel = load_kernel(src)
     kernel[(grid,)](
-        *args, block, enable_fp_fusion=src.enable_fp_fusion,
+        *args, block, *sizes.values(), enable_fp_fusion=src.enable_fp_fusion,
     )

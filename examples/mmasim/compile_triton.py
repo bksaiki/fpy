@@ -4,6 +4,8 @@ Compiles every MMA-Sim design to a Triton kernel, reporting where each one stops
 A design is one dot product, which has no loop to tile, so each is wrapped in
 a matmul: an `m x k` by `n x k` product, `B` given transposed so that a column
 is a row, with `out[i][j]` one call.  `m = n = 1` is the dot product itself.
+`m` and `n` are kernel arguments, so one kernel runs at any; `k` is compiled
+in.
 Asserts are dropped: a kernel cannot raise.
 
     python examples/mmasim/compile_triton.py              # one line per design
@@ -29,6 +31,7 @@ import fpy2 as fp
 from fpy2.backend.triton import TritonCompiler, launch, unavailable
 from fpy2.backend.triton.storage import choose_storage_scalar
 from fpy2.backend.triton.types import TritonScalar
+from fpy2.utils import NamedId
 
 _L = fp.types.ListType
 _R = fp.types.RealType
@@ -83,12 +86,14 @@ def _at_depth(arg_types, k: int | None):
     return [_L(a.elt, k), _L(b.elt, k), c, *grown]
 
 
-def compile_matmul(build, m: int, n: int, k: int | None):
-    """The kernel for one design as an *m* x *n* matmul over *k*, the design,
-    and its argument types; raises whatever refused it."""
+def compile_matmul(build, k: int | None):
+    """The kernel for one design as a matmul over *k*, the design, and its
+    argument types; raises whatever refused it.  `m` and `n` are the kernel's
+    to be told, so one kernel runs at any."""
     design, arg_types = build()
     arg_types = _at_depth(arg_types, k)
     a, b, c, *scales = arg_types
+    m, n = NamedId('m'), NamedId('n')
     square = _L(_L(c, n), m)
     kernel = TritonCompiler(
         drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
@@ -218,7 +223,7 @@ def main(argv: list[str]) -> int:
     ok = agree = 0
     for name, build in designs:
         try:
-            kernel, design, arg_types = compile_matmul(build, args.m, args.n, args.k)
+            kernel, design, arg_types = compile_matmul(build, args.k)
             ran = (run_matmul(kernel, design, arg_types, args.m, args.n,
                               args.run, args.seed)
                    if args.run else None)

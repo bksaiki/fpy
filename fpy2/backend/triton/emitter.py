@@ -35,6 +35,7 @@ from fractions import Fraction
 from ...analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
+    AssignDef,
     ContextUse,
     ContextUseAnalysis,
     DefineUse,
@@ -377,7 +378,7 @@ class _Emitter(Visitor):
         self.subst: dict[NamedId, str] = {}
         """Names bound to a code while a comprehension is unrolled."""
         self._next_tmp = 0
-        self.grid_extent: int | None = None
+        self.grid_extent: int | str | None = None
         self.mask: str | None = None
         """The guard in force, as a Triton predicate.
 
@@ -396,6 +397,9 @@ class _Emitter(Visitor):
         self._tile: str | None = None
         """The tile's index, while its body is emitted."""
         self._guard_mask: str | None = None
+        self.size_params: dict[NamedId, str] = {}
+        """Each unproven length a list argument has, by its size variable, to
+        the kernel parameter the launcher fills it from."""
         """The mask of the tile's own guard while inside it: lanes past the
         end, and no branch."""
 
@@ -698,34 +702,43 @@ class _Emitter(Visitor):
         start = '0' if e.start is None else self.emit(e.start)
         return base, prefix, start
 
-    def _strides(self, base: NamedId, rank: int) -> list[int]:
-        """Row-major strides for *base*, from its proven shape.
+    def _size_code(self, size: object) -> str | None:
+        """A length as code: a constant, or the kernel parameter holding it."""
+        if isinstance(size, int):
+            return str(size)
+        if isinstance(size, NamedId):
+            return self.size_params.get(size)
+        return None
 
-        A kernel argument is a flat pointer, so an unproven length has no
-        offset arithmetic to emit -- which is why this backend stores no list
-        whose length it cannot prove.
+    def _strides(self, base: NamedId, rank: int) -> list[str]:
+        """Row-major strides for *base*, as code: from its proven shape, or a
+        size the kernel takes as a parameter.
+
+        A kernel argument is a flat pointer, so a length neither proven nor a
+        parameter has no offset arithmetic to emit.
         """
         bound = next(
             (b for defn, b in self.sizes.by_def.items() if defn.name == base),
             None,
         )
-        dims: list[int] = []
+        dims: list[str | None] = []
         while isinstance(bound, ListSize):
-            if not isinstance(bound.size, int):
-                raise TritonEmitError(
-                    f'`{base}` has no proven length, so its offsets cannot be '
-                    'computed'
-                )
-            dims.append(bound.size)
+            dims.append(self._size_code(bound.size))
             bound = bound.elt
         if len(dims) < rank:
             raise TritonEmitError(
                 f'`{base}` is subscripted {rank} deep but only {len(dims)} '
                 'dimensions are proven'
             )
-        strides = [1] * rank
+        strides = ['1'] * rank
         for i in range(rank - 2, -1, -1):
-            strides[i] = strides[i + 1] * dims[i + 1]
+            dim = dims[i + 1]
+            if dim is None:
+                raise TritonEmitError(
+                    f'`{base}` has no proven length at depth {i + 1}, so its '
+                    'offsets cannot be computed'
+                )
+            strides[i] = _times(strides[i + 1], dim)
         return strides
 
     def _offset(
@@ -734,7 +747,7 @@ class _Emitter(Visitor):
         """The flat element offset, row-major, plus any slice start."""
         strides = self._strides(base, len(indices))
         terms = [
-            self.emit(idx) if st == 1 else f'{self.emit(idx)} * {st}'
+            self.emit(idx) if st == '1' else f'{self.emit(idx)} * {st}'
             for idx, st in zip(indices, strides)
         ]
         if extra is not None:
@@ -940,12 +953,13 @@ class _Emitter(Visitor):
         if isinstance(e.arg, Var) and e.arg.name in self.seqs:
             return str(len(self.seqs[e.arg.name]))
         bound = self.sizes.by_expr.get(e.arg)
-        if not isinstance(bound, ListSize) or not isinstance(bound.size, int):
+        code = self._size_code(bound.size) if isinstance(bound, ListSize) else None
+        if code is None:
             raise TritonEmitError(
-                'a length this backend cannot prove has no Triton spelling; '
-                'a kernel argument is a pointer and carries no length'
+                'a length neither proven nor an argument\'s has no Triton '
+                'spelling; a kernel argument is a pointer and carries no length'
             )
-        return str(bound.size)
+        return code
 
     def _emit_round(self, e: Round | Cast) -> str:
         """An explicit `fp.round` / `fp.cast`, which is a *cast*, not an
@@ -1740,7 +1754,25 @@ class _Emitter(Visitor):
                 'element, and `tl.static_range` yields an index; iterate a '
                 '`range` and subscript instead'
             )
-        n = _static_count(stmt, self.sizes)
+        n = static_trip_count(stmt.iterable, self.sizes)
+        if not isinstance(n, int):
+            # a length the kernel takes as a parameter: a loop at runtime,
+            # which Triton needs to carry each value at one type -- where
+            # `tl.static_range`, unrolled while tracing, did not
+            if carried := carried_scalars(stmt, self.def_use):
+                raise TritonEmitError(
+                    f'a loop with a runtime count carries `{min(carried)}`, '
+                    'which Triton needs at one type on every iteration; this '
+                    'backend does not yet arrange that'
+                )
+            it = stmt.iterable
+            args = ([self.emit(it.arg)] if isinstance(it, Range1)
+                    else [self.emit(a) for a in (it.first, it.second, it.third)])
+            ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
+            ctx.indent()
+            self._visit_block(stmt.body, ctx)
+            ctx.dedent()
+            return
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
@@ -1798,9 +1830,18 @@ class _Emitter(Visitor):
             raise TritonEmitError(
                 'a tiled loop should hold the tile loop it was split into'
             )
-        bound = self.emit(it.second)
+        stop = it.second
+        if isinstance(stop, Var):
+            # the split bound the length to a name; the grid wants the length
+            d = self.def_use.find_def_from_use(stop)
+            if (isinstance(d, AssignDef) and isinstance(d.site, Assign)
+                    and isinstance(d.site.expr, Len)):
+                stop = d.site.expr
+        bound = self._root(self.emit(stop))
         self.grid_extent = (
-            int(bound) if bound.isdigit() else self.consts.get(bound)
+            int(bound) if bound.isdigit()
+            else bound if bound in self.size_params.values()
+            else self.consts.get(bound)
         )
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
         ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
@@ -1833,24 +1874,6 @@ class _Emitter(Visitor):
 
     def _visit_function(self, func: FuncDef, ctx):
         raise TritonEmitError('emitting a whole kernel is not implemented yet')
-
-
-def _static_count(stmt: ForStmt, sizes: ArraySizeAnalysis) -> int:
-    """How many times *stmt* runs, as a compile-time constant.
-
-    ``tl.static_range`` needs the count as a ``constexpr``, so an unproven one
-    is refused.  `static_trip_count` falls back to the iterable's inferred
-    length, so a `zip` or a bare list answers where a `range` would --
-    provided the size analysis proved it, which specialization is what makes
-    true.
-    """
-    n = static_trip_count(stmt.iterable, sizes)
-    if not isinstance(n, int):
-        raise TritonEmitError(
-            f'`tl.static_range` needs a compile-time trip count, and this '
-            f'`{type(stmt.iterable).__name__}` has no proven length'
-        )
-    return n
 
 
 
@@ -1924,13 +1947,14 @@ class KernelSource:
     params: tuple[str, ...]
     """Its parameters in order, `_ptr`-suffixed where the argument is a list."""
 
-    grid_extent: int | None
+    grid_extent: int | str | None
     """How many elements the tiled dimension covers, if one was tiled.
 
     The launcher needs it to size the grid -- ``cdiv(extent, BLOCK)`` program
-    instances -- and it is the proven length the kernel was compiled for, not
-    a runtime value.  ``None`` where nothing was tiled.
+    instances: a proven length, or the name of the size parameter holding it.
+    ``None`` where nothing was tiled.
     """
+
 
     enable_fp_fusion: bool
     """Whether contracting a multiply-add is unobservable here.
@@ -1942,6 +1966,17 @@ class KernelSource:
     is not.  Measured: an FP16-in kernel is unchanged by fusion, an all-FP32
     one differs on 590 of 2000 inputs.
     """
+
+    sizes: tuple[tuple[str, int, int], ...] = ()
+    """Each size parameter, after the arguments: its name, and the argument
+    position and dimension whose length it is."""
+
+
+def _times(a: str, b: str) -> str:
+    """``a * b`` as code, folded where both are constants."""
+    if a.isdigit() and b.isdigit():
+        return str(int(a) * int(b))
+    return b if a == '1' else a if b == '1' else f'{a} * {b}'
 
 
 def _products_are_exact(func: FuncDef, emitter: _Emitter) -> bool:
@@ -1998,14 +2033,25 @@ def emit_kernel(
     )
 
     params: list[str] = []
-    for arg in func.args:
+    size_params: list[tuple[str, int, int]] = []
+    for pos, arg in enumerate(func.args):
         name = str(arg.name)
         if name == block:
             params.append(f'{name}: tl.constexpr')
         elif isinstance(arg.type, ListTypeAnn):
             params.append(f'{name}_ptr')
+            # an unproven length is the kernel's to be told, as Triton's
+            # own kernels take theirs
+            bound = sizes.by_def.get(def_use.find_def_from_site(arg.name, arg))
+            depth = 0
+            while isinstance(bound, ListSize):
+                if isinstance(bound.size, NamedId) and bound.size not in emitter.size_params:
+                    emitter.size_params[bound.size] = f'{name}_n{depth}'
+                    size_params.append((f'{name}_n{depth}', pos, depth))
+                bound, depth = bound.elt, depth + 1
         else:
             params.append(name)
+    params.extend(name for name, _, _ in size_params)
 
     body = StmtBlock([
         stmt for stmt in func.body.stmts
@@ -2025,4 +2071,5 @@ def emit_kernel(
         params=tuple(params),
         grid_extent=emitter.grid_extent,
         enable_fp_fusion=_products_are_exact(func, emitter),
+        sizes=tuple(size_params),
     )

@@ -195,9 +195,10 @@ class TestSequentialLoops:
         g = _spec(fold, fp.FP32, ctx=fp.FP32)
         assert 'tl.static_range(8)' in emit_block(g.ast.body, g.ast)
 
-    def test_a_runtime_count_is_refused(self):
-        """A bound that is genuinely not a constant: `tl.static_range` needs
-        a `constexpr`, and an argument is not one."""
+    def test_a_runtime_count_carrying_a_scalar_is_refused(self):
+        """A loop at runtime carries each value at one type, and `acc` starts
+        as a literal; `tl.static_range`, unrolled while tracing, never had to
+        care."""
         @fp.fpy(ctx=fp.FP32)
         def fold(x: fp.Real, n: fp.Real):
             acc = fp.round(0)
@@ -209,7 +210,7 @@ class TestSequentialLoops:
         m.add(fold, ctx=fp.FP32,
               arg_types=[RealType(fp.FP32), RealType(fp.INTEGER)])
         g = Specialize.apply(m, size_key=True).get('fold').func
-        with pytest.raises(TritonEmitError, match='no proven length'):
+        with pytest.raises(TritonEmitError, match='runtime count carries `acc`'):
             emit_block(g.ast.body, g.ast)
 
 
@@ -299,15 +300,15 @@ class TestMemory:
         assert emitted.splitlines()[0] == \
             'tl.store(out_ptr + i, tl.load(xs_ptr + i))'
 
-    def test_an_unproven_length_is_refused(self):
-        """A kernel argument is a flat pointer, so an unproven length has no
-        offset arithmetic to emit."""
+    def test_a_ragged_length_is_refused(self):
+        """A kernel argument is a flat pointer, so a row length neither proven
+        nor named -- the rows may differ -- has no stride to emit."""
         @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real], i: fp.Real):
-            return xs[i]
+        def f(xss: list[list[fp.Real]], i: fp.Real):
+            return xss[i][i]
 
         with pytest.raises(TritonEmitError, match='no proven length'):
-            _emit(f, [ListType(_R32), _INT])
+            _emit(f, [ListType(ListType(_R32)), _INT])
 
 
 class TestMask:
@@ -1197,3 +1198,29 @@ def test_an_exact_sum_folds_in_its_own_storage():
 
     out = _emit(f, [RealType(FP16), RealType(FP16)], ctx=fp.REAL)
     assert '(x.to(tl.float64) + y.to(tl.float64))' in out
+
+
+def test_an_unproven_length_is_a_parameter():
+    """Its offsets, loops and masks read it, and the launcher is told which
+    argument's dimension it is."""
+    from fpy2.backend.triton import TritonCompiler
+    from fpy2.utils import NamedId
+
+    @fp.fpy(ctx=fp.FP32)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for i in range(len(out)):
+            row = out[i]
+            for j in range(len(row)):
+                row[j] = xss[i][j] * 2
+        return out
+
+    m, n = NamedId('m'), NamedId('n')
+    t = ListType(ListType(_R32, n), m)
+    src = TritonCompiler(drop_asserts=True).compile(
+        f, ctx=fp.FP32, arg_types=[t, t, _INT],
+    )
+    assert src.params[-2:] == ('xss_n0', 'xss_n1')
+    assert src.sizes == (('xss_n0', 0, 0), ('xss_n1', 0, 1))
+    assert src.grid_extent == 'xss_n1'
+    assert 'for i in range(xss_n0):' in src.source
+    assert 'xss_ptr + i * xss_n1 + j' in src.source

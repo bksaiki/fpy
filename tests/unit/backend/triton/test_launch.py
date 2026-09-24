@@ -632,3 +632,31 @@ def test_a_scalar_address_under_the_tile_mask():
     launch(src, [xs, ys, ot], block=4)
     want = _prefix_plus(xs.cpu().tolist(), ys.cpu().tolist(), [0.0] * n, 4)
     assert ot.cpu().tolist() == [float(v) for v in want]
+
+
+class TestARuntimeLength:
+    """A length the arguments leave unproven is the kernel's to be told, as
+    Triton's own kernels take theirs: one kernel, launched at any length."""
+
+    def test_one_kernel_at_every_length(self):
+        import torch
+        from fpy2.utils import NamedId
+
+        n = NamedId('n')
+        src = TritonCompiler(drop_asserts=True).compile(
+            _batched_dot, ctx=fp.REAL, arg_types=[
+                ListType(ListType(RealType(FP16), K), n),
+                ListType(ListType(RealType(FP16), K), n),
+                ListType(RealType(fp.FP32), n),
+                RealType(fp.INTEGER)])
+        assert src.sizes and src.grid_extent == src.sizes[0][0]
+        for rows in (1, 6, 9, 16):
+            torch.manual_seed(rows)
+            xt = (torch.randn(rows, K) * 4).half().cuda()
+            yt = (torch.randn(rows, K) * 4).half().cuda()
+            ot = torch.zeros(rows, dtype=torch.float32).cuda()
+            launch(src, [xt, yt, ot], block=4)
+            xs = [[float(v) for v in row] for row in xt.cpu().tolist()]
+            ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
+            want = _batched_dot(xs, ys, [0.0] * rows, 4)
+            assert ot.cpu().tolist() == [float(v) for v in want], rows
