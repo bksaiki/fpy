@@ -1923,10 +1923,47 @@ class TestTheCheckInCppShape:
     """What `docs/todos/cpp-finiteness.md` needs of `ValueClassInfer`, one link
     per test.  A mask read in a plain `else` is already refined."""
 
-    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 3')
     def test_after_an_early_return(self):
         assert _typed_cls(_after_an_early_return, '(x * 3)',
                           [RealType(fp.FP32)]) & (NAN | INF) == ValueClass(0)
+
+    def test_after_an_else_that_returns(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isfinite(x):
+                y = x
+            else:
+                return 0
+            return x * 3
+
+        assert _cls(f, '(x * 3)') & (NAN | INF) == ValueClass(0)
+
+    def test_not_an_arm_that_returns_on_one_path(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, c: fp.Real) -> fp.Real:
+            if not fp.isfinite(x):
+                if c > 0:
+                    return 0
+            return x * 3
+
+        assert _cls(f, '(x * 3)') & NAN
+
+    def test_only_the_rest_of_its_block(self):
+        """Inside a loop the return ends the call, but the refinement is read
+        within the block; what follows the loop is not refined."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c):
+            s = 0
+            for x in xs:
+                if not fp.isfinite(c):
+                    return 0
+                s = c * 3
+            return c * 5
+
+        L = ListType(RealType(fp.FP32), 2)
+        R = RealType(fp.FP32)
+        assert _typed_cls(f, '(c * 3)', [L, R]) & (NAN | INF) == ValueClass(0)
+        assert _typed_cls(f, '(c * 5)', [L, R]) & NAN
 
     @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 4')
     def test_a_mask_through_a_lowered_or(self):

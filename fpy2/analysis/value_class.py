@@ -52,9 +52,9 @@ top class.
 
 Not yet taught: the sign of a zero, which would let ``signbit`` refine;
 magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
-refinement; the class of a numeric free variable; a ``for`` target over
-``range``; and the code after an early return, since :meth:`_visit_if1` refines
-only its body.
+refinement; the class of a numeric free variable; and a ``for`` target over
+``range``.  After an early return only the rest of its own block is refined,
+not what follows the statement enclosing it.
 """
 
 import enum
@@ -88,6 +88,7 @@ from .define_use import (
     DefSite,
     PhiDef,
 )
+from .reachability import Reachability, ReachabilityAnalysis
 from .type_infer import TypeAnalysis, TypeInfer
 
 __all__ = [
@@ -568,6 +569,7 @@ class _ValueClassInstance(DefaultVisitor):
     says nothing; see :meth:`_implied_universal`."""
 
     _sizes_cache: 'ArraySizeAnalysis | None'
+    _reach_cache: 'ReachabilityAnalysis | None'
 
     _scan_clocks: dict[ForStmt, tuple[int, int]]
     """The :attr:`_clock` each loop began and ended at, for
@@ -614,6 +616,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._scanned = {}
         self._scan_clocks = {}
         self._sizes_cache = None
+        self._reach_cache = None
         self.by_def = {}
         self.by_expr = {}
         self._refine = {}
@@ -1391,6 +1394,38 @@ class _ValueClassInstance(DefaultVisitor):
             self._store_element(
                 self._region_of_def(stmt.var, stmt, above), _TOP,
             )
+
+    def _visit_block(self, block: StmtBlock, ctx: None):
+        self._visit_stmts(block.stmts, ctx)
+
+    def _visit_stmts(self, stmts: Sequence[Stmt], ctx: None):
+        for i, stmt in enumerate(stmts):
+            self._visit_statement(stmt, ctx)
+            rest = stmts[i + 1:]
+            exit = self._early_exit(stmt) if rest else None
+            if exit is not None:
+                # the rest runs only where the arm that cannot fall through
+                # was not taken
+                with self._refined(*exit):
+                    self._visit_stmts(rest, ctx)
+                return
+
+    def _early_exit(self, stmt: Stmt) -> tuple[Expr, bool] | None:
+        """What *stmt*'s condition is wherever control passes it, where one
+        of its arms cannot fall through."""
+        match stmt:
+            case If1Stmt() if not self._falls_through(stmt.body):
+                return stmt.cond, False
+            case IfStmt():
+                ift, iff = self._falls_through(stmt.ift), self._falls_through(stmt.iff)
+                if ift != iff:
+                    return stmt.cond, ift
+        return None
+
+    def _falls_through(self, block: StmtBlock) -> bool:
+        if self._reach_cache is None:
+            self._reach_cache = Reachability.analyze(self.func)
+        return not block.stmts or self._reach_cache.has_exit.get(block.stmts[-1], True)
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
