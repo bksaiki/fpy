@@ -66,27 +66,17 @@ def sum_special_values(ts, c):
     they contain a NaN or an infinity (Sec. 4.2): `NaN + x = NaN`,
     `+/-inf + y = +/-inf`, and `inf - inf = NaN`.
 
-    The accumulator is just another summand: it seeds the scan over
-    the infinite terms.
+    The accumulator is just another summand.
     """
     if any([fp.isnan(t) for t in ts]) or fp.isnan(c):
         return fp.nan()
 
-    has_inf = fp.isinf(c)
-    inf_sgn = fp.signbit(c)
-    for t in ts:
-        if fp.isinf(t):
-            t_sgn = fp.signbit(t)
-            if has_inf:
-                # check that the sign is consistent with earlier infinities
-                if inf_sgn != t_sgn:
-                    return fp.nan()
-            else:
-                has_inf = True
-                inf_sgn = t_sgn
-
-    assert has_inf, "expected either NaN or infinity in the input"
-    return -fp.inf() if inf_sgn else fp.inf()
+    pos = any([fp.isinf(t) and not fp.signbit(t) for t in ts]) or (fp.isinf(c) and not fp.signbit(c))
+    neg = any([fp.isinf(t) and fp.signbit(t) for t in ts]) or (fp.isinf(c) and fp.signbit(c))
+    assert pos or neg, "expected either NaN or infinity in the input"
+    if pos and neg:
+        return fp.nan()
+    return -fp.inf() if neg else fp.inf()
 
 @fp.fpy(ctx=fp.REAL)
 def dpa_special_values(A, B, c):
@@ -95,33 +85,10 @@ def dpa_special_values(A, B, c):
     infinity (Sec. 4.2): `NaN + x = NaN`, `+/-inf + y = +/-inf`,
     `inf - inf = NaN`, and `inf * 0 = NaN`.
 
-    Only the products of infinite factors are computed; the
-    accumulator is just another summand and seeds the scan.
+    The products are exact, so the special values of their sum are the
+    answer.
     """
-    # any NaN summand => produce NaN
-    if any([fp.isnan(a) for a in A]) or any([fp.isnan(b) for b in B]) or fp.isnan(c):
-        return fp.nan()
-
-    # any infinity => produce either infinity or NaN
-    has_inf = fp.isinf(c)
-    inf_sgn = fp.signbit(c)
-    for a, b in zip(A, B):
-        if fp.isinf(a) or fp.isinf(b):
-            t = a * b
-            if fp.isnan(t):
-                return t
-
-            t_sgn = fp.signbit(t)
-            if has_inf:
-                # check that the sign is consistent with earlier infinities
-                if inf_sgn != t_sgn:
-                    return fp.nan()
-            else:
-                has_inf = True
-                inf_sgn = t_sgn
-
-    assert has_inf, "expected either NaN or infinity in the input"
-    return -fp.inf() if inf_sgn else fp.inf()
+    return sum_special_values([a * b for a, b in zip(A, B)], c)
 
 def make_fma_dpa(ctx: fp.Context):
     """
