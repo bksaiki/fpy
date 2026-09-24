@@ -1649,7 +1649,6 @@ class TestFinitenessFacts:
         read = _find(_scalarized_guard.ast, '(p0 * 3)').first
         assert info.classify(read) & (NAN | INF) == ValueClass(0)
 
-    @pytest.mark.xfail(strict=True, reason='Phase 4: backward refinement')
     def test_a_finite_product_has_finite_factors(self):
         info = ValueClassInfer.analyze(_backward_guard.ast)
         read = _find(_backward_guard.ast, '(a * 3)').first
@@ -1721,3 +1720,115 @@ def _guard_not_any(xs, c):
     return r
 
 
+_FIN = ZERO | FINITE
+
+
+def _finite_after(p_of, ctx=fp.REAL):
+    """The class of `a` where `p_of(a, b, c)`, computed under *ctx*, is
+    known finite."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
+        with ctx:
+            p = p_of(a, b, c)
+        if fp.isfinite(p):
+            r = a * 3
+        else:
+            r = 0
+        return r
+
+    from fpy2.transform import FuncInline
+    ast = FuncInline.apply(f.ast)
+    info = ValueClassInfer.analyze(ast)
+    return info.classify(_find(ast, '(a * 3)').first)
+
+
+@fp.fpy
+def _p_add(a, b, c):
+    return a + b
+
+
+@fp.fpy
+def _p_sub(a, b, c):
+    return b - a
+
+
+@fp.fpy
+def _p_mul(a, b, c):
+    return a * b
+
+
+@fp.fpy
+def _p_neg(a, b, c):
+    return -a
+
+
+@fp.fpy
+def _p_abs(a, b, c):
+    return abs(a)
+
+
+@fp.fpy
+def _p_fma(a, b, c):
+    return fp.fma(b, c, a)
+
+
+@fp.fpy
+def _p_num(a, b, c):
+    return a / b
+
+
+@fp.fpy
+def _p_den(a, b, c):
+    return b / a
+
+
+@fp.fpy
+def _p_round(a, b, c):
+    return fp.round(a)
+
+
+@fp.fpy
+def _p_chain(a, b, c):
+    q = a * b
+    return q + c
+
+
+class TestBackwardRefinement:
+    """A finite result says its operands were finite, through the names they
+    were computed from."""
+
+    @pytest.mark.parametrize(
+        'p_of', [_p_add, _p_sub, _p_mul, _p_neg, _p_abs, _p_fma, _p_num,
+                 _p_round, _p_chain], ids=lambda f: f.name)
+    def test_an_exact_operation(self, p_of):
+        assert _finite_after(p_of) & (NAN | INF) == ValueClass(0)
+
+    def test_not_a_denominator(self):
+        """`b / inf` is zero."""
+        assert _finite_after(_p_den) & INF
+
+    def test_through_a_rounding_that_keeps_infinities(self):
+        assert _finite_after(_p_mul, fp.FP32) & (NAN | INF) == ValueClass(0)
+
+    def test_not_through_one_that_saturates(self):
+        """`MX_E2M1` rounds an infinity, and a NaN, to 6."""
+        assert _finite_after(_p_mul, fp.MX_E2M1) & INF
+
+    def test_not_from_a_non_finite_result(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            p = a * b
+            if fp.isinf(p):
+                r = a * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(a * 3)') & NAN
+
+    def test_which_contexts_keep_a_non_finite_value(self):
+        from fpy2.analysis.value_class import keeps_non_finite
+        assert keeps_non_finite(fp.FP32)
+        assert keeps_non_finite(fp.MX_E4M3)      # an infinity becomes a NaN
+        assert not keeps_non_finite(fp.MX_E2M1)  # saturates
+        assert not keeps_non_finite(fp.SINT8)    # refuses

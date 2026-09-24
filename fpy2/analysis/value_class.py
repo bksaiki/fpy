@@ -250,6 +250,14 @@ def _rounded_class(ctx: Context, x: Float) -> ValueClass:
         return _BOT
 
 
+@functools.cache
+def keeps_non_finite(ctx: Context) -> bool:
+    """Whether rounding under *ctx* gives a NaN or an infinity back as one,
+    so a finite result came from a finite exact one.  ``MX_E2M1`` saturates
+    both; a fixed-point context refuses them, which a backend need not."""
+    return all(_rounded_class(ctx, x) & (_NAN | _INF) for x in _PROBES)
+
+
 #####################################################################
 # Transfer functions -- the class of an *exact* real result
 
@@ -1106,12 +1114,47 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _at(self, e: Expr, cls: ValueClass) -> list[tuple[Definition, ValueClass]]:
         """*cls*, against the definition *e* names -- nothing unless *e* is a
-        real-valued variable, since only a definition can be refined."""
+        real-valued variable, since only a definition can be refined -- and,
+        where *cls* is finite, against what that definition was computed from.
+        """
         if not isinstance(e, Var):
             return []
         if not isinstance(self.type_info.by_expr.get(e), RealType):
             return []
-        return [(self.def_use.find_def_from_use(e), cls)]
+        d = self.def_use.find_def_from_use(e)
+        out = [(d, cls)]
+        if not cls & (_NAN | _INF):
+            out += self._finite_operands(d)
+        return out
+
+    def _finite_operands(self, d: Definition) -> list[tuple[Definition, ValueClass]]:
+        """What *d* being finite says of its operands: a non-finite operand of
+        an exact ``+``, ``-``, ``*``, ``fma``, negation or ``abs`` makes it
+        non-finite, and so does a non-finite numerator -- not denominator,
+        since ``x / inf`` is zero.  Through a rounding only where the context
+        keeps a non-finite value non-finite."""
+        if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+            return []
+        e = d.site.expr
+        match e:
+            case Var():
+                return self._at(e, _ZERO | _FINITE)
+            case Neg() | Abs() | Round() | Cast():
+                operands = [e.arg]
+            case Add() | Sub() | Mul():
+                operands = [e.first, e.second]
+            case Div():
+                operands = [e.first]
+            case Fma():
+                operands = [e.first, e.second, e.third]
+            case _:
+                return []
+        scope = self.ctx_use.use_to_scope.get(e)
+        if scope is None or not isinstance(scope.ctx, Context):
+            return []
+        if scope.ctx is not REAL and not keeps_non_finite(scope.ctx):
+            return []
+        return [i for a in operands for i in self._at(a, _ZERO | _FINITE)]
 
     # ------------------------------------------------------------------
     # Expressions
