@@ -4372,7 +4372,7 @@ def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
     element, the check an early return, and the fused sum in a callee.
     *checked* is how many products the check covers."""
     @fp.fpy(ctx=fp.REAL)
-    def f(A, B):
+    def checked_first(A, B):
         prods = fp.empty(4)
         for i in range(4):
             prods[i] = A[i] * B[i]
@@ -4388,15 +4388,33 @@ def _cpp_block(exponent, *, checked: int = 4, check_first: bool = True):
         for i in range(checked):
             p = prods[i]
             m[i] = not fp.isfinite(p)
-        if not check_first:
-            s = _cpp_fused_sum(prods, e - 25)
-            if any(m):
-                return 0
-            return s
         if any(m):
             return 0
         return _cpp_fused_sum(prods, e - 25)
-    return f
+
+    @fp.fpy(ctx=fp.REAL)
+    def checked_after(A, B):
+        prods = fp.empty(4)
+        for i in range(4):
+            prods[i] = A[i] * B[i]
+        es = fp.empty(4)
+        for i in range(4):
+            if prods[i] == 0:
+                t = -35
+            else:
+                t = exponent(A[i], -15) + exponent(B[i], -15)
+            es[i] = t
+        e = max(es)
+        m = fp.empty(checked)
+        for i in range(checked):
+            p = prods[i]
+            m[i] = not fp.isfinite(p)
+        s = _cpp_fused_sum(prods, e - 25)
+        if any(m):
+            return 0
+        return s
+
+    return checked_first if check_first else checked_after
 
 
 def _cpp_block_inline(exponent, *, checked: int = 4):
@@ -4440,24 +4458,34 @@ class TestTheCheckInCppShape:
     def _fused_prec(cls, f) -> int:
         """The fused sum's precision in its own specialization, analyzed with
         the params its caller bound it to, as the C++ backend does."""
+        return max(cls._fused_precs(f))
+
+    @classmethod
+    def _fused_precs(cls, f) -> list[int]:
+        """... in each of its specializations."""
         from fpy2.ast.fpyast import Sum
         from fpy2.module import Module
-        from fpy2.transform import Specialize
+        from fpy2.transform import ConstFold, FreeVarElim, Specialize
 
         mod = Module()
         mod.add(f, ctx=fp.REAL, arg_types=[cls._L, cls._L])
+        # `checked` is a closure value, where a design's bounds are literals
+        mod = mod.map(lambda _m, fd: ConstFold.apply(FreeVarElim.apply(fd)))
         params: dict = {}
         out = Specialize.apply(mod, size_key=True, bound_params=params)
-        spec = next(g for g in out.functions() if g.name.startswith('_cpp_fused_sum'))
-        info = FormatInfer.analyze(
-            spec.ast, use_digit_bounds=True, digit_bound_params=params.get(spec.name))
-        return next(AbstractFormat.from_format(b).prec
-                    for e, b in info.by_expr.items() if isinstance(e, Sum))
+        out_precs = []
+        for spec in out.functions():
+            if spec.name.startswith('_cpp_fused_sum'):
+                info = FormatInfer.analyze(
+                    spec.ast, use_digit_bounds=True,
+                    digit_bound_params=params.get(spec.name))
+                out_precs += [AbstractFormat.from_format(b).prec
+                              for e, b in info.by_expr.items() if isinstance(e, Sum)]
+        return out_precs
 
     def test_written_directly(self):
         assert self._fused_prec(_cpp_block(_cpp_exponent)) <= 28
 
-    @pytest.mark.xfail(strict=True, reason='cpp-finiteness Phase 7')
     def test_through_the_sentinel(self):
         assert self._fused_prec(_cpp_block(_cpp_exponent0)) <= 28
 
@@ -4482,6 +4510,36 @@ class TestTheCheckInCppShape:
     def test_inline_not_where_the_check_misses_an_element(self):
         f = _cpp_block_inline(_cpp_exponent0, checked=3)
         assert self._inline_prec(f) > 28
+
+    def test_not_where_one_call_is_unchecked(self):
+        """The two calls take a specialization each -- the key holds the
+        bounds, which the assumption changes -- and only the checked one
+        is aligned."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            prods = fp.empty(4)
+            for i in range(4):
+                prods[i] = A[i] * B[i]
+            es = fp.empty(4)
+            for i in range(4):
+                if prods[i] == 0:
+                    t = -35
+                else:
+                    t = _cpp_exponent0(A[i], -15) + _cpp_exponent0(B[i], -15)
+                es[i] = t
+            e = max(es)
+            m = fp.empty(4)
+            for i in range(4):
+                p = prods[i]
+                m[i] = not fp.isfinite(p)
+            if not any(m):
+                s = _cpp_fused_sum(prods, e - 25)
+            else:
+                s = _cpp_fused_sum(prods, e - 25)
+            return s
+
+        precs = self._fused_precs(f)
+        assert min(precs) <= 28 < max(precs)
 
     def test_not_where_the_check_comes_after(self):
         f = _cpp_block(_cpp_exponent0, check_first=False)

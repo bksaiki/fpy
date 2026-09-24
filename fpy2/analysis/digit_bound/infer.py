@@ -101,6 +101,9 @@ class DigitBoundParams:
 
     store: DigitBoundStore
     args: tuple[Terms, ...]
+    assume: frozenset[int] = frozenset()
+    """The literals every call reaching the callee proved, which hold
+    wherever its body runs."""
 
 
 @dataclass
@@ -289,8 +292,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         args: tuple[Terms, ...] = (),
         arg_lit: Callable[[int], int | None] | None = None,
         classes: ValueClassAnalysis | None = None,
+        outer: Callable[[], frozenset[int]] | None = None,
     ):
         self.func = func
+        self.outer = outer
+        """The literals holding wherever this body runs: its call site's."""
         self.arg_lit = arg_lit
         """The caller's literal for "argument *i* is finite", which is this
         parameter's too."""
@@ -346,7 +352,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_block(self.func.body, None)
         self.out.ret = self._merge_returns()
         self._check_vacuous()
-        if self._guards or self._elt_guards:
+        if self._guards or self._elt_guards or self.outer is not None:
             self.out.assume_at = self._assumed
         return self.out
 
@@ -1222,7 +1228,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     return None
                 lit = self._elt_guards.get(region)
                 if lit is None:
-                    lit = self._elt_guards[region] = self.store.literal()
+                    lit = self._elt_guards[region] = self.store.literal(universal=True)
                 return lit
         return None
 
@@ -1255,11 +1261,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         `ValueClassInfer` proves finite where *e* is evaluated, and only where
         that definition is one value for every evaluation of *e* -- a
         definition in a loop *e* is outside of is one per iteration."""
+        outer = self.outer() if self.outer is not None else frozenset()
         at = self._loops_of_expr.get(e)
         if at is None:
-            return frozenset()
+            return outer
         non_finite = ValueClass.NAN | ValueClass.INF
-        return frozenset(
+        return outer | frozenset(
             lit for d, lit in self._guards.items()
             if _encloses(self._loops_of_def(d), at)
             and not self._classes.class_at(d, e) & non_finite
@@ -1781,6 +1788,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         sub = _DigitBoundInferInstance(
             e.fn.ast, view, self.store, args,
             lambda i: self._lit_of(e.args[i]),
+            outer=lambda: self._assumed(e),
         ).analyze()
         if self._elt_depth:
             # called once per element, so everything it minted is per-element
@@ -1828,6 +1836,8 @@ class DigitBoundInfer:
             raise TypeError(f'Expected \'FuncDef\', got {type(func)} for {func}')
         if params is None:
             params = DigitBoundParams(DigitBoundStore(), ())
+        assume = params.assume
         return _DigitBoundInferInstance(
             func, view, params.store, params.args, classes=classes,
+            outer=(lambda: assume) if assume else None,
         ).analyze()

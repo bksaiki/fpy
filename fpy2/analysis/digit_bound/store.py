@@ -67,6 +67,10 @@ class DigitBoundStore:
     _n_lits: int
     """How many guard literals exist."""
 
+    _universal: set[int]
+    """Literals that hold at every index or none, so a constraint they guard
+    may be replayed onto an instance."""
+
     def __init__(self, solver: Solver | None = None):
         self._solver = solver if solver is not None else Z3Solver()
         self._constraints = []
@@ -79,6 +83,7 @@ class DigitBoundStore:
         self._copies = set()
         self._by_var = {}
         self._n_lits = 0
+        self._universal = set()
 
     def _add(self, c: Constraint, each: bool = False, copy: bool = False) -> None:
         i = len(self._constraints)
@@ -151,8 +156,8 @@ class DigitBoundStore:
             return
         inst.done.add(i)
         c = self._constraints[i]
-        if c.guard:
-            # a literal names one definition, not one per index
+        if not self._universal.issuperset(c.guard):
+            # a literal naming one definition is one value per index
             return
         vs = [v for t in (c.lhs, *c.rhs) for v, _ in t.coeffs]
         moved = [v for v in vs if v.index in inst.elementwise]
@@ -166,10 +171,13 @@ class DigitBoundStore:
             tuple(t.rename(inst.subst) for t in c.rhs),
         ), copy=True)
 
-    def literal(self) -> int:
+    def literal(self, *, universal: bool = False) -> int:
         """A fresh guard literal, for a constraint that holds only where it
-        does; see :meth:`maximum`."""
+        does; see :meth:`maximum`.  *universal* where it speaks for every
+        index at once, as "every element of `xs` is finite" does."""
         self._n_lits += 1
+        if universal:
+            self._universal.add(self._n_lits)
         return self._n_lits
 
     def le(

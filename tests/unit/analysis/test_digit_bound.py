@@ -428,6 +428,17 @@ class TestAGuardedConstraint:
         assert s.reaches([(x, 4)])
         assert not s.reaches([(x, 4)], frozenset({g}))
 
+    def test_an_instance_copies_a_universal_one(self):
+        """"Every element of `xs` is finite" holds at every index or none."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        g = s.literal(universal=True)
+        s.le(elt, 3, guard=(g,))
+        s.le(elt, 9)
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in elt.coeffs}, subst, '@0')
+        assert s.maximum(elt.rename(subst), frozenset({g})) == 3
+
     def test_an_instance_does_not_copy_it(self):
         """A literal names one definition, not one per index."""
         s = DigitBoundStore()
