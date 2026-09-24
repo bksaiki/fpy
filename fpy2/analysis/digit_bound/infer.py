@@ -17,7 +17,7 @@ here builds a :class:`Format`, and nothing in the format lattice names a term.
 """
 
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -32,6 +32,7 @@ from ..array_size import ArraySizeAnalysis, ArraySizeBound, ListSize, concrete_s
 from ..context_use import ContextScope, ContextUseAnalysis, PartialContext
 from ..reaching_defs import AssignDef, Definition, PhiDef
 from ..type_infer import TypeAnalysis
+from ..value_class import ValueClass, ValueClassAnalysis, ValueClassInfer
 from .store import DigitBoundStore, Term
 
 __all__ = [
@@ -113,6 +114,8 @@ class DigitBoundAnalysis:
     by_def: dict[Definition, Terms] = field(default_factory=dict)
     by_call: dict[Call, 'DigitBoundAnalysis'] = field(default_factory=dict)
     ret: Terms = field(default_factory=Terms)
+    assume_at: Callable[[Expr], frozenset[int]] = lambda _e: frozenset()
+    """The guard literals that hold wherever an expression is evaluated."""
 
     def escapes(self, e: Expr, exp: int | None, mag: int | None) -> bool:
         """Can *e* sit below digit position *exp*, or reach past ``2 ** (mag
@@ -133,7 +136,7 @@ class DigitBoundAnalysis:
             asks.append((terms.msb, mag + 1))
         if exp is not None:
             asks.append((-terms.lsb, 1 - exp))
-        return self.store.reaches(asks)
+        return self.store.reaches(asks, self.assume_at(e))
 
     def bounds(self, e: Expr) -> Bounds | None:
         """*e*'s precision, digit position and magnitude.
@@ -145,13 +148,14 @@ class DigitBoundAnalysis:
             return None
         # One open value discards all three, so each is asked only once the
         # one before it came back closed -- every query costs a solve.
-        prec = self.store.prec(terms.msb, terms.lsb)
+        at = self.assume_at(e)
+        prec = self.store.prec(terms.msb, terms.lsb, at)
         if not isinstance(prec, int):
             return None
-        exp = -self.store.maximum(-terms.lsb)
+        exp = -self.store.maximum(-terms.lsb, at)
         if not isinstance(exp, int):
             return None
-        mag = self.store.maximum(terms.msb)
+        mag = self.store.maximum(terms.msb, at)
         if not isinstance(mag, int):
             return None
         # The three are independent maxima and need not be attained together,
@@ -212,6 +216,11 @@ def _is_empty_alloc(d: Definition) -> bool:
     return isinstance(d.site, Assign) and isinstance(d.site.expr, Empty)
 
 
+def _encloses(outer: tuple[Stmt, ...] | None, inner: tuple[Stmt, ...]) -> bool:
+    """Whether the loops *outer* are the outermost of *inner*."""
+    return outer is not None and inner[:len(outer)] == outer
+
+
 def _all(ts: Iterable[Term | None]) -> list[Term] | None:
     """*ts* as a list, or `None` if any is missing."""
     out: list[Term] = []
@@ -261,6 +270,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _non_finite_path: int
     _seen_return: bool
     _vacuous_used: list[tuple[Term, list[Term]]]
+    _classes_cache: ValueClassAnalysis | None
+    _guards: dict[Definition, int]
+    """The literal "this definition is finite", for each one a guard names."""
+    _loops: tuple[Stmt, ...]
+    """The loops enclosing the walk, outermost first."""
+    _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
+    _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
 
     def __init__(
         self,
@@ -296,6 +312,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._non_finite_path = 0
         self._seen_return = False
         self._vacuous_used = []
+        self._classes_cache = None
+        self._guards = {}
+        self._loops = ()
+        self._loops_of_stmt = {}
+        self._loops_of_expr = {}
 
     def analyze(self) -> DigitBoundAnalysis:
         # positional, so params that do not match the signature would bind
@@ -316,6 +337,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
         self._check_vacuous()
+        if self._guards:
+            self.out.assume_at = self._assumed
         return self.out
 
     # -- terms ---------------------------------------------------------
@@ -441,6 +464,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_expr(self, e: Expr, ctx):
         self._elt_depth_of[e] = self._elt_depth
+        self._loops_of_expr[e] = self._loops
         super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType | ListType):
             return
@@ -1117,6 +1141,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _visit_branches(self, stmt: If1Stmt | IfStmt, cond: Expr) -> None:
         """Merge what the two paths through *stmt* leave behind."""
+        lits = self._then_non_finite(stmt) if self.def_use.phis[stmt] else []
         for phi in self.def_use.phis[stmt]:
             # `lhs` is the `then` arm of an `if`/`else`, but the *untaken*
             # path of a one-armed `if`, where the body is `rhs`.
@@ -1142,6 +1167,71 @@ class _DigitBoundInferInstance(DefaultVisitor):
             )
             if value is not None:
                 self.out.by_def.setdefault(phi, Terms()).value = value
+            for lit in lits:
+                self._untaken(phi, iff, (lit,))
+
+    def _then_non_finite(self, stmt: If1Stmt | IfStmt) -> list[int]:
+        """A literal for each definition the `then` arm of *stmt* is reached
+        only where it is non-finite: where one holds, the arm is not taken."""
+        out: list[int] = []
+        for d, cls in self._classes.then_facts.get(stmt, ()):
+            if cls & (ValueClass.ZERO | ValueClass.FINITE):
+                continue
+            lit = self._guards.get(d)
+            if lit is None:
+                lit = self._guards[d] = self.store.literal()
+            if lit not in out:
+                out.append(lit)
+        return out
+
+    def _untaken(self, phi: Definition, iff: Definition, guard: tuple[int, ...]) -> None:
+        """*phi* is *iff* wherever *guard* holds, the `then` arm untaken."""
+        src = self.out.by_def.get(iff)
+        if src is None:
+            return
+        dst = self._def(phi)
+        if dst.msb is not None and src.msb is not None:
+            self.store.le(dst.msb, src.msb, guard=guard)
+        if dst.lsb is not None and src.lsb is not None:
+            self.store.ge(dst.lsb, src.lsb, guard=guard)
+        value = self._def_value(iff)
+        if dst.value is not None and value is not None:
+            self.store.le(dst.value, value, guard=guard)
+            self.store.ge(dst.value, value, guard=guard)
+
+    @property
+    def _classes(self) -> ValueClassAnalysis:
+        if self._classes_cache is None:
+            self._classes_cache = ValueClassInfer.analyze(
+                self.func, def_use=self.def_use, type_info=self.type_info,
+                ctx_use=self.ctx_use,
+            )
+        return self._classes_cache
+
+    def _assumed(self, e: Expr) -> frozenset[int]:
+        """The guard literals *e* may assume: each definition
+        `ValueClassInfer` proves finite where *e* is evaluated, and only where
+        that definition is one value for every evaluation of *e* -- a
+        definition in a loop *e* is outside of is one per iteration."""
+        at = self._loops_of_expr.get(e)
+        if at is None:
+            return frozenset()
+        return frozenset(
+            lit for d, lit in self._guards.items()
+            if _encloses(self._loops_of_def(d), at)
+            and not self._classes.class_at(d, e) & (ValueClass.NAN | ValueClass.INF)
+        )
+
+    def _loops_of_def(self, d: Definition) -> tuple[Stmt, ...] | None:
+        """The loops *d* takes a value in, or ``None`` where not known."""
+        site = d.site
+        if isinstance(site, Argument):
+            return ()
+        loops = self._loops_of_stmt.get(site) if isinstance(site, Stmt) else None
+        if loops is None:
+            return None
+        # a loop's own target and phis take a value per iteration of it
+        return (*loops, site) if isinstance(site, ForStmt | WhileStmt) else loops
 
     def _only_non_finite(self, cond: Expr, negated: bool) -> bool:
         """Does *cond*, read *negated* or not, hold only where some value is
@@ -1175,6 +1265,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._non_finite_path += off
         self._visit_block(block, ctx)
         self._non_finite_path -= off
+
+    def _visit_statement(self, stmt: Stmt, ctx):
+        self._loops_of_stmt[stmt] = self._loops
+        return super()._visit_statement(stmt, ctx)
+
+    def _visit_while(self, stmt: WhileStmt, ctx):
+        loops, self._loops = self._loops, (*self._loops, stmt)
+        super()._visit_while(stmt, ctx)
+        self._loops = loops
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
         self._visit_expr(stmt.cond, ctx)
@@ -1444,7 +1543,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         for phi in self.def_use.phis[stmt]:
             self._partial[phi] = self._carried(self.def_use.defs[phi.lhs])
         self._elt_depth += 1
+        loops, self._loops = self._loops, (*self._loops, stmt)
         self._visit_block(stmt.body, ctx)
+        self._loops = loops
         self._elt_depth -= 1
         self._gather = outer
         for phi in self.def_use.phis[stmt]:

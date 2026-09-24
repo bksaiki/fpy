@@ -467,6 +467,19 @@ class ValueClassAnalysis:
     ctx_use: ContextUseAnalysis
     """Underlying context-use analysis, which supplies each operation's context."""
 
+    then_facts: dict[Stmt, list[tuple[Definition, ValueClass]]]
+    """What each ``if``'s condition being true says of the definitions it
+    tests -- the refinement its `then` arm starts from."""
+
+    refine_at: dict[Expr, dict[Definition, ValueClass]]
+    """The refinement each expression was read under."""
+
+    def class_at(self, d: Definition, e: Expr) -> ValueClass:
+        """*d*'s class wherever *e* is evaluated."""
+        cls = self.by_def.get(d)
+        base = cls if isinstance(cls, ValueClass) else _TOP
+        return base & self.refine_at.get(e, {}).get(d, _TOP)
+
     def element_region(self, e: Expr) -> 'Region | None':
         """The region whose elements a fact about the list *e* belongs to, or
         ``None`` where no fact may be recorded.
@@ -592,6 +605,8 @@ class _ValueClassInstance(DefaultVisitor):
         self.by_expr = {}
         self._refine = {}
         self._refine_elt = {}
+        self.then_facts = {}
+        self.refine_at = {}
 
     @property
     def def_use(self) -> DefineUseAnalysis:
@@ -627,6 +642,8 @@ class _ValueClassInstance(DefaultVisitor):
             alias=self.alias,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
+            then_facts=self.then_facts,
+            refine_at=self.refine_at,
         )
 
     # ------------------------------------------------------------------
@@ -1160,6 +1177,7 @@ class _ValueClassInstance(DefaultVisitor):
     # Expressions
 
     def _visit_expr(self, e: Expr, ctx: None) -> ValueClass | None:  # type: ignore[override]
+        self.refine_at[e] = self._refine
         cls = super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType):
             cls = None
@@ -1347,6 +1365,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
+        self.then_facts[stmt] = self._implied(stmt.cond, True)
         entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
@@ -1356,6 +1375,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
+        self.then_facts[stmt] = self._implied(stmt.cond, True)
         entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)

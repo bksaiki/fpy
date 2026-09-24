@@ -4213,24 +4213,62 @@ class TestFinitenessSentinel:
         assert v == fp.Float.from_float(341 / 1024)
         assert bound.representable_in(v)
 
-    @pytest.mark.xfail(strict=True, reason='digit-bound-finiteness Phase 6')
     def test_the_sentinel_costs_the_fused_sum_nothing(self):
-        """`bf8`'s shape: a product's exponent through `exponent0`.  27 bits
-        written directly; 59 through the statement."""
+        """`bf8`'s shape, as the Triton normal form leaves it: a product's
+        exponent through `exponent0`, and the special-value check after the
+        exponents.  The sum is reached only where every product is finite,
+        so its factors are, and the sentinel arm was not taken: 27 bits, as
+        written directly, where the statement alone gives 59."""
         @fp.fpy(ctx=fp.REAL)
         def f(A, B):
-            p0 = A[0] * B[0]
-            p2 = A[2] * B[2]
-            x = A[0]
-            if not fp.isfinite(x):
+            a0 = A[0]
+            b0 = B[0]
+            a2 = A[2]
+            b2 = B[2]
+            p0 = a0 * b0
+            p2 = a2 * b2
+            if not fp.isfinite(a0):
                 r1 = -1
             else:
-                r1 = max(fp.logb(x), -15)
-            y = B[0]
-            if not fp.isfinite(y):
+                r1 = max(fp.logb(a0), -15)
+            if not fp.isfinite(b0):
                 r2 = -1
             else:
-                r2 = max(fp.logb(y), -15)
+                r2 = max(fp.logb(b0), -15)
+            e0 = (-35 if p0 == 0 else r1 + r2)
+            e2 = (-35 if p2 == 0 else
+                  max(fp.logb(a2), -15) + max(fp.logb(b2), -15))
+            e = max([e0, e2])
+            if any([not fp.isfinite(p0), not fp.isfinite(p2)]):
+                s = 0
+            else:
+                with fp.MPFixedContext(e - 25, fp.RM.RTZ):
+                    t0 = fp.round(p0)
+                    t1 = fp.round(p2)
+                ts = [t0, t1]
+                s = sum(ts)
+            return s
+
+        L = ListType(RealType(fp.S1E5M2), 4)
+        assert TestAlignedSumPrecision._sum_bounds(f, [L, L])['ts'] <= 27
+
+    def test_not_where_the_check_does_not_reach(self):
+        """The same sum outside the check: nothing says the sentinel arm was
+        not taken, so the merge stays a merge."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, B):
+            a0 = A[0]
+            b0 = B[0]
+            p0 = a0 * b0
+            p2 = A[2] * B[2]
+            if not fp.isfinite(a0):
+                r1 = -1
+            else:
+                r1 = max(fp.logb(a0), -15)
+            if not fp.isfinite(b0):
+                r2 = -1
+            else:
+                r2 = max(fp.logb(b0), -15)
             e0 = (-35 if p0 == 0 else r1 + r2)
             e2 = (-35 if p2 == 0 else
                   max(fp.logb(A[2]), -15) + max(fp.logb(B[2]), -15))
@@ -4242,4 +4280,40 @@ class TestFinitenessSentinel:
             return sum(ts)
 
         L = ListType(RealType(fp.S1E5M2), 4)
-        assert TestAlignedSumPrecision._sum_bounds(f, [L, L])['ts'] <= 27
+        assert TestAlignedSumPrecision._sum_bounds(f, [L, L])['ts'] > 27
+
+    @staticmethod
+    def _holds(f, arg_types, args, name: str) -> None:
+        """Every bound on *name* holds *f(*args)*."""
+        from fpy2.transform import Monomorphize
+        ast = Monomorphize.apply(f.ast, fp.REAL, arg_types)
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        v = f(*args)
+        for d, b in info.by_def.items():
+            if str(d.name) == name and hasattr(b, 'representable_in'):
+                assert b.representable_in(v), (d, b, v)
+
+    _LOOP_TYPES = [ListType(RealType(fp.FP16), 2), RealType(fp.FP32)]
+    _LOOP_ARGS = ([fp.Float(isinf=True), fp.Float.from_float(64.0)],
+                  fp.FP32.round(1 / 3))
+
+    def test_an_earlier_iterations_sentinel_is_kept(self):
+        """In the second iteration `x` is finite, but `ys[0]` was rounded in
+        the first, at the sentinel's position."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, c):
+            ys = fp.empty(2)
+            s = 0
+            for i in range(2):
+                x = xs[i]
+                if not fp.isfinite(x):
+                    r = -1
+                else:
+                    r = max(fp.logb(x), 5)
+                with fp.MPFixedContext(r - 10, fp.RM.RTZ):
+                    ys[i] = fp.round(c)
+                if fp.isfinite(x):
+                    s = ys[0] + ys[1]
+            return s
+
+        self._holds(f, self._LOOP_TYPES, self._LOOP_ARGS, 's')

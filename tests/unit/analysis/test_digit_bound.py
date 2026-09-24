@@ -235,7 +235,7 @@ class TestBackendIsReplaceable:
     def test_a_stub_solver_is_honoured(self):
         class Stub:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 return 5
 
         s = DigitBoundStore(solver=Stub())
@@ -248,7 +248,7 @@ class TestBackendIsReplaceable:
         analysis reports without a store at all -- never an exception."""
         class Undecided:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 return math.inf
 
         s = DigitBoundStore(solver=Undecided())
@@ -261,7 +261,7 @@ class TestBackendIsReplaceable:
         a solver could only reach the same answer more slowly."""
         class Exploding:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 raise AssertionError('should not have been asked')
 
         s = DigitBoundStore(solver=Exploding())
@@ -280,7 +280,7 @@ class TestBackendIsReplaceable:
         class Recording:
             def assume(self, constraint):
                 seen.append(constraint)
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 return 0
 
         s = DigitBoundStore(solver=Recording())
@@ -297,7 +297,7 @@ class TestBackendIsReplaceable:
 
         class Exact:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 asked.append(cutoff)
                 return 3
 
@@ -339,7 +339,7 @@ class TestReachesIsADecision:
     def test_a_free_variable_reaches_anything(self):
         class Exploding:
             def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None):
+            def maximize(self, objective, cutoff=None, assuming=frozenset()):
                 raise AssertionError('should not have been asked')
 
         s = DigitBoundStore(solver=Exploding())
@@ -410,6 +410,34 @@ class TestBisectionMatchesOptimization:
             _, obj = build(s, x, y)
             answers.append(s.maximum(obj))
         assert answers[0] == answers[1], f'{name}: {answers}'
+
+
+class TestAGuardedConstraint:
+    """A constraint holding only where its literals do, and a query that says
+    which it assumes."""
+
+    @pytest.mark.parametrize('bisect', [True, False])
+    def test_it_binds_only_when_assumed(self, bisect):
+        s = DigitBoundStore(solver=Z3Solver(bisect=bisect))
+        x = s.var('x')
+        s.le(x, 10)
+        g = s.literal()
+        s.le(x, 3, guard=(g,))
+        assert s.maximum(x) == 10
+        assert s.maximum(x, frozenset({g})) == 3
+        assert s.reaches([(x, 4)])
+        assert not s.reaches([(x, 4)], frozenset({g}))
+
+    def test_an_instance_does_not_copy_it(self):
+        """A literal names one definition, not one per index."""
+        s = DigitBoundStore()
+        elt = s.var('elt')
+        g = s.literal()
+        s.le(elt, 3, guard=(g,))
+        s.le(elt, 9)
+        subst = _seed(s, elt)
+        s.instance({v.index for v, _ in elt.coeffs}, subst, '@0')
+        assert s.maximum(elt.rename(subst), frozenset({g})) == 9
 
 
 class TestALoopCarriedScalarIsNotItsBody:
