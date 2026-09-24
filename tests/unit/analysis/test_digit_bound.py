@@ -741,28 +741,42 @@ def _exponent0_and(x, emin):
 
 
 class TestAPathOnlyANonFiniteValueReaches:
-    """`logb` bounds the finite values, so no assignment describes a state
-    holding a non-finite one.  A return only such a state reaches therefore
-    states nothing -- the same reading `has_finite` already gives a return
-    whose *value* has no finite values, applied to the guard instead."""
+    """A return reached only where `x` is non-finite is not taken where it is
+    finite -- which the callee says of its result, and a caller that knows `x`
+    finite resolves.  A caller that does not keeps the sentinel: `exponent0`'s
+    `-1` is a finite value, and a position built from it is a real one."""
 
     @staticmethod
-    def _round_prec(callee):
+    def _round_prec(callee, guarded: bool = True):
 
         @fp.fpy(ctx=fp.REAL)
-        def f(x):
+        def checked(x):
+            if fp.isfinite(x):
+                e = callee(x, -126)
+                with fp.MPFixedContext(e - 12, fp.RM.RTZ):
+                    t = fp.round(x)
+            else:
+                t = 0
+            return t
+
+        @fp.fpy(ctx=fp.REAL)
+        def unchecked(x):
             e = callee(x, -126)
             with fp.MPFixedContext(e - 12, fp.RM.RTZ):
                 return fp.round(x)
 
-        g = monomorphize(f, args=[RealType(fp.FP32)])
+        g = monomorphize(checked if guarded else unchecked, args=[RealType(fp.FP32)])
         b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
-        t = next(t for e, t in b.by_expr.items() if e.format() == 'fp.round(x)')
-        return b.store.prec(t.msb, t.lsb)
+        e = next(e for e in b.by_expr if e.format() == 'fp.round(x)')
+        t = b.by_expr[e]
+        return b.store.prec(t.msb, t.lsb, b.assume_at(e))
 
     def test_the_early_return_does_not_join_the_exponent(self):
         # `e >= logb(x)` survives the merge, so the round spans one binade
         assert self._round_prec(_exponent0) == 12
+
+    def test_not_where_the_caller_does_not_know(self):
+        assert self._round_prec(_exponent0, guarded=False) > 12
 
     def test_either_polarity(self):
         """The `else` of `if isfinite(x)` is the same path."""
@@ -770,7 +784,7 @@ class TestAPathOnlyANonFiniteValueReaches:
 
     def test_a_zero_guard_is_not_one(self):
         """A zero *is* a state the store describes, so its arm still joins."""
-        assert self._round_prec(_exponent0_zero) == 265
+        assert self._round_prec(_exponent0_zero) > 12
 
     def test_the_test_is_read_through_a_temporary(self):
         """Lowering hoists a condition, and a rule reading only the syntax

@@ -192,7 +192,9 @@ class DigitBoundStore:
         reaches for this; it is here for a constraint set built by hand."""
         self._add(Constraint(lhs, '==', (_as_term(rhs),)))
 
-    def le_max(self, lhs: Term, rhs: Iterable[Term | int]) -> None:
+    def le_max(
+        self, lhs: Term, rhs: Iterable[Term | int], *, guard: tuple[int, ...] = (),
+    ) -> None:
         """``lhs <= max(rhs)``.
 
         Every upper bound that goes through a `max` takes this shape, and none
@@ -201,13 +203,15 @@ class DigitBoundStore:
         """
         terms = tuple(_as_term(r) for r in rhs)
         if len(terms) == 1:
-            self.le(lhs, terms[0])
+            self.le(lhs, terms[0], guard=guard)
         elif terms:
-            self._add(Constraint(lhs, '<=max', terms))
+            self._add(Constraint(lhs, '<=max', terms, guard))
 
-    def ge_min(self, lhs: Term, rhs: Iterable[Term | int]) -> None:
+    def ge_min(
+        self, lhs: Term, rhs: Iterable[Term | int], *, guard: tuple[int, ...] = (),
+    ) -> None:
         """``lhs >= min(rhs)`` -- :meth:`le_max` with every sign flipped."""
-        self.le_max(-lhs, [-_as_term(r) for r in rhs])
+        self.le_max(-lhs, [-_as_term(r) for r in rhs], guard=guard)
 
     def maximum(
         self, term: Term, assuming: frozenset[int] = frozenset(),

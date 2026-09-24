@@ -4213,6 +4213,33 @@ class TestFinitenessSentinel:
         assert v == fp.Float.from_float(341 / 1024)
         assert bound.representable_in(v)
 
+    def test_the_sentinel_path_is_in_the_bound_across_a_call(self):
+        """The same, with the sentinel returned by a callee -- the shape the
+        C++ backend keeps, and where a return only a non-finite argument
+        reaches used to be dropped."""
+        from fpy2.transform import Monomorphize
+
+        @fp.fpy(ctx=fp.REAL)
+        def exp0(x):
+            if not fp.isfinite(x):
+                return -1
+            return max(fp.logb(x), 5)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, c):
+            r = exp0(x)
+            with fp.MPFixedContext(r - 10, fp.RM.RTZ):
+                t = fp.round(c)
+            return t
+
+        ast = Monomorphize.apply(
+            f.ast, fp.REAL, [RealType(fp.FP16), RealType(fp.FP32)])
+        info = FormatInfer.analyze(ast, use_digit_bounds=True)
+        bound = next(b for d, b in info.by_def.items() if str(d.name) == 't')
+        v = f(fp.Float(isinf=True), fp.FP32.round(1 / 3))
+        assert v == fp.Float.from_float(341 / 1024)
+        assert bound.representable_in(v)
+
     def test_the_sentinel_costs_the_fused_sum_nothing(self):
         """`bf8`'s shape, as the Triton normal form leaves it: a product's
         exponent through `exponent0`, and the special-value check after the

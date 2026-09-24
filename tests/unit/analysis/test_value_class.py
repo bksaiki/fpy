@@ -1832,3 +1832,42 @@ class TestBackwardRefinement:
         assert keeps_non_finite(fp.MX_E4M3)      # an infinity becomes a NaN
         assert not keeps_non_finite(fp.MX_E2M1)  # saturates
         assert not keeps_non_finite(fp.SINT8)    # refuses
+
+
+class TestEitherDisjunct:
+    """One of several tests holding says something of a definition all of
+    them test: it is in the union of what they say."""
+
+    def test_an_or_of_one_value(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(x):
+                r = x * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(x * 3)') & (ZERO | FINITE) == ValueClass(0)
+
+    def test_not_an_or_of_two(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real, y: fp.Real) -> fp.Real:
+            if fp.isnan(x) or fp.isinf(y):
+                r = x * 3
+            else:
+                r = 0
+            return r
+
+        assert _cls(f, '(x * 3)') & FINITE
+
+    def test_an_and_that_fails(self):
+        """Either conjunct is false, and each says `x` is not finite."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isfinite(x) and not fp.isinf(x):
+                r = 0
+            else:
+                r = x * 3
+            return r
+
+        assert _cls(f, '(x * 3)') & (ZERO | FINITE) == ValueClass(0)

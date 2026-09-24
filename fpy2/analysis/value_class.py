@@ -59,6 +59,7 @@ only its body.
 
 import enum
 import functools
+import operator
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -248,6 +249,16 @@ def _rounded_class(ctx: Context, x: Float) -> ValueClass:
         return class_of(ctx.round(x))
     except Exception:  # noqa: BLE001 -- a refusal is not a representable class
         return _BOT
+
+
+def _facts_by_def(
+    facts: list[tuple[Definition, ValueClass]],
+) -> dict[Definition, ValueClass]:
+    """*facts* with each definition's classes intersected."""
+    out: dict[Definition, ValueClass] = {}
+    for d, cls in facts:
+        out[d] = out.get(d, _TOP) & cls
+    return out
 
 
 @functools.cache
@@ -467,9 +478,9 @@ class ValueClassAnalysis:
     ctx_use: ContextUseAnalysis
     """Underlying context-use analysis, which supplies each operation's context."""
 
-    then_facts: dict[Stmt, list[tuple[Definition, ValueClass]]]
-    """What each ``if``'s condition being true says of the definitions it
-    tests -- the refinement its `then` arm starts from."""
+    arm_facts: dict[Stmt, tuple[list[tuple[Definition, ValueClass]], ...]]
+    """What each ``if``'s condition being true, then false, says of the
+    definitions it tests -- the refinement each arm starts from."""
 
     refine_at: dict[Expr, dict[Definition, ValueClass]]
     """The refinement each expression was read under."""
@@ -605,7 +616,7 @@ class _ValueClassInstance(DefaultVisitor):
         self.by_expr = {}
         self._refine = {}
         self._refine_elt = {}
-        self.then_facts = {}
+        self.arm_facts = {}
         self.refine_at = {}
 
     @property
@@ -642,7 +653,7 @@ class _ValueClassInstance(DefaultVisitor):
             alias=self.alias,
             type_info=self.type_info,
             ctx_use=self.ctx_use,
-            then_facts=self.then_facts,
+            arm_facts=self.arm_facts,
             refine_at=self.refine_at,
         )
 
@@ -792,6 +803,9 @@ class _ValueClassInstance(DefaultVisitor):
                 return [i for a in cond.args for i in self._implied(a, True)]
             case Or() if not truth:
                 return [i for a in cond.args for i in self._implied(a, False)]
+            case Or() | And():
+                return self._implied_either(
+                    [self._implied(a, truth) for a in cond.args])
             # over a literal, the `and` / `or` of its elements: the shape
             # `Scalarize` leaves a comprehension in
             case AllOf(arg=ListExpr() as lit) if truth:
@@ -820,6 +834,19 @@ class _ValueClassInstance(DefaultVisitor):
                 )
             case _:
                 return []
+
+    @staticmethod
+    def _implied_either(
+        parts: list[list[tuple[Definition, ValueClass]]],
+    ) -> list[tuple[Definition, ValueClass]]:
+        """What one of *parts* holding says: a definition every part refines
+        is in the union of what they refine it to."""
+        each = [_facts_by_def(p) for p in parts]
+        if not each:
+            return []
+        common = set(each[0]).intersection(*each[1:])
+        return [(d, functools.reduce(operator.or_, (m[d] for m in each)))
+                for d in each[0] if d in common]
 
     def _implied_ladder(
         self, d: 'Definition | None', truth: bool
@@ -1365,7 +1392,8 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_if1(self, stmt: If1Stmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self.then_facts[stmt] = self._implied(stmt.cond, True)
+        self.arm_facts[stmt] = (
+            self._implied(stmt.cond, True), self._implied(stmt.cond, False))
         entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.body, ctx)
@@ -1375,7 +1403,8 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_if(self, stmt: IfStmt, ctx: None):
         self._visit_expr(stmt.cond, ctx)
-        self.then_facts[stmt] = self._implied(stmt.cond, True)
+        self.arm_facts[stmt] = (
+            self._implied(stmt.cond, True), self._implied(stmt.cond, False))
         entry = dict(self._elt)
         with self._refined(stmt.cond, True):
             self._visit_block(stmt.ift, ctx)
