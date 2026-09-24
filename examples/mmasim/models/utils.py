@@ -85,23 +85,10 @@ def dpa_special_values(A, B, c):
     infinity (Sec. 4.2): `NaN + x = NaN`, `+/-inf + y = +/-inf`,
     `inf - inf = NaN`, and `inf * 0 = NaN`.
 
-    The products are exact, so a product is infinite exactly where one of
-    its factors is, and NaN exactly where that factor meets a zero.  The
-    accumulator is just another summand.
+    The products are exact, so the special values of their sum are the
+    answer.
     """
-    if any([fp.isnan(a) for a in A]) or any([fp.isnan(b) for b in B]) or fp.isnan(c):
-        return fp.nan()
-
-    ts = [a * b for a, b in zip(A, B)]
-    if any([fp.isnan(t) for t in ts]):
-        return fp.nan()
-
-    pos = any([fp.isinf(t) and not fp.signbit(t) for t in ts]) or (fp.isinf(c) and not fp.signbit(c))
-    neg = any([fp.isinf(t) and fp.signbit(t) for t in ts]) or (fp.isinf(c) and fp.signbit(c))
-    assert pos or neg, "expected either NaN or infinity in the input"
-    if pos and neg:
-        return fp.nan()
-    return -fp.inf() if neg else fp.inf()
+    return sum_special_values([a * b for a, b in zip(A, B)], c)
 
 def make_fma_dpa(ctx: fp.Context):
     """
