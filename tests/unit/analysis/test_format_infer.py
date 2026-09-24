@@ -2769,30 +2769,6 @@ class TestAlignedSumPrecision:
         assert bounds['ws'] == 18    # the position is one value for all of `xs`
         assert bounds['ys'] > 200    # ... and a different one for each `i`
 
-    def test_an_arm_holding_only_infinities_is_not_joined(self):
-        """`overflow_inf` inlined: an arm that is `inf` states no digits, as a
-        zero arm states none, so it must not cost the product its exponent."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(A, B):
-            p0 = A[0] * B[0]
-            if abs(p0) >= 340282366920938463463374607431768211456:
-                r0 = fp.inf()
-            else:
-                r0 = p0
-            p1 = A[1] * B[1]
-            p2 = A[2] * B[2]
-            p3 = A[3] * B[3]
-            prods = [r0, p1, p2, p3]
-            es = [max(fp.logb(A[k]), -14) + max(fp.logb(B[k]), -14)
-                  for k in range(4)]
-            e = max(es)
-            with fp.MPFixedContext(e - 25, fp.RM.RTZ):
-                ts = [fp.round(p) for p in prods]
-            return sum(ts)
-
-        L16 = ListType(RealType(fp.FP16), 4)
-        assert self._sum_bounds(f, [L16, L16])['ts'] <= 28
-
     def test_a_zero_test_on_one_element_zeroes_that_element(self):
         """`c = cs[0]` has terms of its own, so `c == 0` zeroes `c` alone --
         and the guard aligns as it does for a scalar.  A batch of one row made
@@ -4257,45 +4233,6 @@ class TestFinitenessSentinel:
         v = f(fp.Float(isinf=True), fp.FP32.round(1 / 3))
         assert v == fp.Float.from_float(341 / 1024)
         assert bound.representable_in(v)
-
-    def test_the_sentinel_costs_the_fused_sum_nothing(self):
-        """`bf8`'s shape, as the Triton normal form leaves it: a product's
-        exponent through `exponent0`, and the special-value check after the
-        exponents.  The sum is reached only where every product is finite,
-        so its factors are, and the sentinel arm was not taken: 27 bits, as
-        written directly, where the statement alone gives 59."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(A, B):
-            a0 = A[0]
-            b0 = B[0]
-            a2 = A[2]
-            b2 = B[2]
-            p0 = a0 * b0
-            p2 = a2 * b2
-            if not fp.isfinite(a0):
-                r1 = -1
-            else:
-                r1 = max(fp.logb(a0), -15)
-            if not fp.isfinite(b0):
-                r2 = -1
-            else:
-                r2 = max(fp.logb(b0), -15)
-            e0 = (-35 if p0 == 0 else r1 + r2)
-            e2 = (-35 if p2 == 0 else
-                  max(fp.logb(a2), -15) + max(fp.logb(b2), -15))
-            e = max([e0, e2])
-            if any([not fp.isfinite(p0), not fp.isfinite(p2)]):
-                s = 0
-            else:
-                with fp.MPFixedContext(e - 25, fp.RM.RTZ):
-                    t0 = fp.round(p0)
-                    t1 = fp.round(p2)
-                ts = [t0, t1]
-                s = sum(ts)
-            return s
-
-        L = ListType(RealType(fp.S1E5M2), 4)
-        assert TestAlignedSumPrecision._sum_bounds(f, [L, L])['ts'] <= 27
 
     def test_not_where_the_check_does_not_reach(self):
         """The same sum outside the check: nothing says the sentinel arm was

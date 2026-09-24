@@ -498,11 +498,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 idx, self._len_of(lst)
             ):
                 src = self._def(self.def_use.find_def_from_use(lst))
-            case ListRef(value=Var() as lst) if (
-                inst := self._at_const(e, lst)
-            ) is not None:
-                terms.msb, terms.lsb, terms.value = inst.msb, inst.lsb, inst.value
-                return
             case ListRef(value=Var() as lst, index=Var() as idx) if (
                 inst := self._at_index_set(lst, idx)
             ) is not None:
@@ -799,12 +794,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # itself is never needed.  An operand with no term contributes
                 # none, and the ordering still holds for the rest.
                 m = self._fresh_value(e)
-                elts = self._elements(e.arg) if isinstance(e, AMax | AMin) else None
-                operands = (
-                    elts or [e.arg] if isinstance(e, AMax | AMin) else list(e.args)
-                )
                 # over a summary, the ordering holds at every index
-                each = isinstance(e, AMax | AMin) and not elts
+                each = isinstance(e, AMax | AMin)
+                operands = [e.arg] if isinstance(e, AMax | AMin) else list(e.args)
                 for t in (self.value_of(a) for a in operands):
                     if t is None:
                         continue
@@ -822,23 +814,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # No rule, but a range still keeps a `max` over it bounded --
                 # enough for a position built from it to materialize.
                 return self._fresh_value(e) if self.view.int_range(e) else None
-
-    def _elements(self, e: Expr) -> list[Expr] | None:
-        """*e*'s elements where it is a literal list, following a variable to
-        its definition.
-
-        A list built any other way has only its summary, which speaks for an
-        arbitrary element rather than for each -- enough to bound a `max` from
-        above, but not to place it above every element.
-        """
-        match e:
-            case ListExpr():
-                return list(e.elts)
-            case Var():
-                d = self.def_use.find_def_from_use(e)
-                if isinstance(d.site, Assign) and isinstance(d.site.expr, ListExpr):
-                    return list(d.site.expr.elts)
-        return None
 
     def _live_arms(self, e: IfExpr) -> list[Expr]:
         """The arms of *e* that state a magnitude.
@@ -980,14 +955,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     out |= self._universal_zeros(a)
                 return out
             case And():
-                out = self._covered_zeros(cond.args)
+                out = set()
                 for a in cond.args:
                     out |= self._universal_zeros(a)
                 return out
-            case AllOf(arg=ListExpr() as lit):
-                return self._covered_zeros(lit.elts)
-            case AllOf(arg=Var() as xs) if (named := self._literal(xs)) is not None:
-                return self._covered_zeros(named.elts)
+            case AllOf(arg=ListExpr()):
+                # element by element, which says nothing of a whole list
+                return set()
+            case AllOf(arg=Var() as xs) if self._literal(xs) is not None:
+                return set()
             case AllOf():
                 # `_zero_paths` already reads both shapes an `all` takes --
                 # over a comprehension, and over the list a loop filled
@@ -998,63 +974,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 )
             case _:
                 return set()
-
-    def _covered_zeros(self, tests: Sequence[Expr]) -> set[Term]:
-        """The list summaries a conjunction of *tests* zeroes for every
-        element: `xs[k] == 0` for every index of one definition of `xs`.
-
-        What `all(x == 0 for x in xs)` says, spelled out element by element --
-        which is how it arrives once scalarized.  Short of every index it
-        says nothing of the others, as a single `xs[k] == 0` does not.
-        """
-        return {
-            msb for d in self._covered_lists(tests)
-            if (msb := self._def(d).msb) is not None
-        }
-
-    def _covered_lists(self, tests: Sequence[Expr]) -> set[Definition]:
-        """The lists :meth:`_covered_zeros` finds every element of zeroed."""
-        seen: dict[Definition, tuple[int | None, set[int]]] = {}
-        for t in tests:
-            d, k = self._zero_tested_at(t)
-            if d is not None and k is not None:
-                seen.setdefault(d, (self._len_of_def(d), set()))[1].add(k)
-        return {d for d, (n, ks) in seen.items() if n is not None and ks >= set(range(n))}
-
-    def _zero_tested_at(self, test: Expr) -> tuple[Definition | None, int | None]:
-        """The list and constant index *test* compares against zero."""
-        ref = self._zero_tested(test)
-        if ref is None or not isinstance(ref.value, Var):
-            return None, None
-        return (self.def_use.find_def_from_use(ref.value),
-                self.view.int_value(ref.index))
-
-    def _len_of_def(self, d: Definition) -> int | None:
-        return _size(self.array_size.by_def.get(d))
-
-    def _zero_tested(self, test: Expr) -> ListRef | None:
-        """The `xs[k]` *test* compares against zero, through a name."""
-        match test:
-            case Var():
-                d = self.def_use.find_def_from_use(test)
-                if isinstance(d, AssignDef) and isinstance(d.site, Assign):
-                    return self._zero_tested(d.site.expr)
-            case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
-                for value, other in ((rhs, lhs), (lhs, rhs)):
-                    if self.view.int_value(value) == 0:
-                        return self._one_element(other)
-        return None
-
-    def _one_element(self, e: Expr) -> ListRef | None:
-        """The constant-index read *e* is, directly or through a name."""
-        match e:
-            case ListRef() if self.view.int_value(e.index) is not None:
-                return e
-            case Var():
-                d = self.def_use.find_def_from_use(e)
-                if isinstance(d, AssignDef) and isinstance(d.site, Assign):
-                    return self._one_element(d.site.expr)
-        return None
 
     def _universal_zeros_of(self, d: Definition) -> set[Term]:
         """:meth:`_universal_zeros`, reached through a definition."""
@@ -1107,12 +1026,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """The paths making every one of *args* true: each zeroes what one
         path of every conjunct does.  A conjunct zeroing nothing leaves the
         others' zeros standing."""
-        covered = self._covered_zeros(args)
-        lists = self._covered_lists(args)
-        paths: list[set[Term]] = [set(covered)]
+        paths: list[set[Term]] = [set()]
         for a in args:
-            if self._zero_tested_at(a)[0] in lists:
-                continue    # one element of a list the conjunction zeroes whole
             part = self._zero_paths(a)
             if part is None:
                 continue
@@ -1178,12 +1093,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
             # lowers the grid: it states nothing and is dropped rather than
             # joined, the way `_visit_return` drops a path that returns only
             # infinities.  Joining it instead leaves the merge at its own seed.
-            # An arm holding only infinities and NaN states nothing either: a
-            # digit bound describes the finite values, and it has none.
             live = [
                 self.out.by_def.get(d)
                 for d in (ift, iff)
-                if self.view.int_value(d) != 0 and self.view.has_finite(d)
+                if self.view.int_value(d) != 0
             ]
             if live and all(t is not None for t in live):
                 self._join(phi, live)  # type: ignore[arg-type]
@@ -1399,18 +1312,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _len_of(self, e: Expr) -> int | None:
         return _size(self.array_size.by_expr.get(e))
 
-    def _in_range(self, index: Expr, length: int | None) -> bool:
-        """Is *index* a constant naming an element of a list of *length*?
-
-        A list's summary describes an arbitrary element, so one element
-        satisfies it -- for a *read*.  A write at a constant index reaches
-        only that element, which is why this is not :meth:`_covers`.
-        """
-        if length is None:
-            return False
-        k = self.view.int_value(index)
-        return k is not None and 0 <= k < length
-
     def _covers(self, index: Expr, length: int | None) -> bool:
         """Does *index* run over every element of a list of *length*?
 
@@ -1466,30 +1367,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if self.def_use.find_def_from_use(idx) is not index:
             return None
         return self._instance(key, self.def_use.find_def_from_use(lst))
-
-    def _at_const(self, e: ListRef, lst: Var) -> Terms | None:
-        """``lst[k]`` for a constant ``k`` in range: the summary at ``k``.
-
-        The summary itself would make every constant read one element, so a
-        ``logb`` of ``xs[0]`` would bound ``xs[1]``.  One renaming per index
-        keeps two reads of ``xs[0]`` one, and ``xs[0]`` paired with ``ys[0]``.
-        A row, whose own elements the renaming would take for uniform, and a
-        summary that cannot be renamed get fresh terms bracketed by it.
-        """
-        if not self._in_range(e.index, self._len_of(lst)):
-            return None
-        d_lst = self.def_use.find_def_from_use(lst)
-        if not isinstance(self._type_of(e), ListType):
-            inst = self._instance(('k', self.view.int_value(e.index)), d_lst)
-            if inst is not None:
-                return inst
-        src, terms = self._def(d_lst), Terms()
-        msb, lsb = self._fresh_interval(terms, e, f'e{len(self.out.by_expr)}')
-        if src.msb is not None:
-            self.store.le(msb, src.msb)
-        if (src_lsb := self._elt_lsb(e, src)) is not None:
-            self._grid_ge(lsb, src_lsb)
-        return terms
 
     def _instance(self, key: tuple, d_lst: Definition) -> Terms | None:
         """*d_lst*'s element summary on variables of its own, one renaming
@@ -1643,10 +1520,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     ]
                 else:
                     self._share(d, self._def(d_src))
-            case ListRef(value=Var() as lst, index=idx) if self._in_range(
-                idx, self._len_of(lst)
-            ):
-                self._share(d, self.out.by_expr[stmt.expr])
             case _:
                 src = self.out.by_expr.get(stmt.expr)
                 if src is None:
