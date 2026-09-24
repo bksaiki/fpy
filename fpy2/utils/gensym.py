@@ -35,12 +35,8 @@ class Gensym:
         self._rename_hook = rename_hook
 
     def _copy_id(self, id: NamedId, count: int | None = None) -> NamedId:
-        """*id* with *count*, as a new identifier.
-
-        Built rather than mutated: `NamedId` caches its hash, so changing
-        `count` on one already hashed files it under the old value's bucket,
-        and a later lookup of the new name misses it.
-        """
+        """*id* with *count*, built rather than mutated: `NamedId` caches its
+        hash."""
         if count is None:
             count = id.count
         match id:

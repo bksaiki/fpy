@@ -3,7 +3,7 @@ Function inlining.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..analysis import (
     AssignDef,
@@ -214,8 +214,7 @@ class _FuncInline(SiteRewriter):
         # return the bound value
         return Var(t, e.loc)
 
-
-    def _visit_list_comp(self, e: ListComp, ctx: _Ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: _Ctx) -> ListComp:
         """The element expression is evaluated with the targets bound.
 
         Splicing a callee's body into the enclosing block would put it where
@@ -225,9 +224,8 @@ class _FuncInline(SiteRewriter):
         """
         targets = [self._visit_binding(t, ctx) for t in e.targets]
         iterables = [self._visit_expr(i, ctx) for i in e.iterables]
-        inner = _Ctx(ctx.stmts, ctx.is_ctx_expr, ctx.in_while_cond, True)
-        return ListComp(targets, iterables,
-                        self._visit_expr(e.elt, inner), e.loc)
+        elt = self._visit_expr(e.elt, replace(ctx, in_comp=True))
+        return ListComp(targets, iterables, elt, e.loc)
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
         cond = self._visit_expr(stmt.cond, _Ctx(ctx.stmts, False, in_while_cond=True))

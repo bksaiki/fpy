@@ -17,6 +17,7 @@ import pytest
 import fpy2 as fp
 from fpy2 import Function
 from fpy2.analysis import Reachability, TypeInfer
+from fpy2.ast.fpyast import ForStmt, WhileStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.transform import SingleExit, TransformDeclined
 
@@ -25,48 +26,54 @@ def _returns(ast) -> int:
     return len(Reachability.analyze(ast).ret_stmts)
 
 
-class _LoopCount(DefaultVisitor):
-    def __init__(self):
+class _Count(DefaultVisitor):
+    """How many statements of *kind* a function holds."""
+
+    kind: type
+    n: int
+
+    def __init__(self, kind: type):
+        self.kind = kind
         self.n = 0
 
-    def _visit_for(self, stmt, ctx):
-        self.n += 1
-        super()._visit_for(stmt, ctx)
+    def _visit_statement(self, stmt, ctx):
+        if isinstance(stmt, self.kind):
+            self.n += 1
+        return super()._visit_statement(stmt, ctx)
 
 
-class _WhileCount(DefaultVisitor):
-    def __init__(self):
-        self.n = 0
-
-    def _visit_while(self, stmt, ctx):
-        self.n += 1
-        super()._visit_while(stmt, ctx)
+def _count(ast, kind: type) -> int:
+    v = _Count(kind)
+    v._visit_function(ast, None)
+    return v.n
 
 
 def _whiles(ast) -> int:
-    v = _WhileCount()
-    v._visit_function(ast, None)
-    return v.n
+    return _count(ast, WhileStmt)
 
 
 def _loops(ast) -> int:
-    v = _LoopCount()
-    v._visit_function(ast, None)
-    return v.n
+    return _count(ast, ForStmt)
+
+
+class _FlagNames(DefaultVisitor):
+    """The `done` flags a rewrite introduced."""
+
+    names: set[str]
+
+    def __init__(self):
+        self.names = set()
+
+    def _visit_var(self, e, ctx):
+        if str(e.name).startswith('done'):
+            self.names.add(str(e.name))
 
 
 def _flag_names(ast) -> int:
     """How many distinct `done` flags the rewrite introduced."""
-    names = set()
-
-    class _V(DefaultVisitor):
-        def _visit_var(self, e, ctx):
-            if str(e.name).startswith('done'):
-                names.add(str(e.name))
-
-    v = _V()
+    v = _FlagNames()
     v._visit_function(ast, None)
-    return len(names)
+    return len(v.names)
 
 
 def _agrees(f: Function, *args):

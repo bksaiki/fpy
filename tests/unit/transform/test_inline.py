@@ -126,14 +126,8 @@ class TestFuncInline():
             assert a(xv) == inlined_fn(xv)
 
     def test_a_call_inside_a_comprehension_is_refused(self):
-        """Splicing the body would put it outside the comprehension.
-
-        The callee's statements go into the *enclosing block*, where the
-        comprehension's targets are not bound -- so inlining here used to
-        emit a reference to an unbound name and raise `FPySyntaxError` from
-        the pass's own `SyntaxCheck`.  Left in place instead, so the refusal
-        is a call that remains rather than a crash.
-        """
+        """Splicing the body would put it outside the comprehension, where its
+        targets are not bound; the call is left in place."""
         @fp.fpy
         def twice(x: fp.Real) -> fp.Real:
             t = x * 2

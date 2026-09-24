@@ -49,8 +49,8 @@ def _placeholder_of(ty: Type) -> _Placeholder | None:
 
 def _sink(
     result: NamedId, stmts: list[Stmt], cont: list[Stmt], depth: int = 0,
-    *, done: NamedId | None = None, flag: NamedId | None = None,
-    placeholder: _Placeholder | None = None,
+    *, done: NamedId, placeholder: _Placeholder | None,
+    flag: NamedId | None = None,
 ) -> list[Stmt]:
     """*stmts* then *cont*, with every `return` rewritten to an assignment.
 
@@ -107,38 +107,29 @@ def _sink(
                 )]
             case ForStmt() | WhileStmt():
                 body = list(stmt.body.stmts)
-                if not _has_return(body) or done is None:
+                if not _has_return(body):
                     continue
                 if placeholder is None:
                     raise TransformDeclined(
                         'a `return` inside a loop needs a placeholder of the '
                         'return type for the result, and this type has none'
                     )
-                # a `return` here cannot move the continuation the way one in
-                # an `if` can: the statements after the loop are reachable
-                # from the loop's *own* exit as well.  So it is recorded in a
-                # flag and the continuation is tested against it.
+                # the code after the loop is also reached from its own exit, so
+                # a `return` sets a flag the continuation is tested against
                 inner = _sink(result, body, [], depth, done=done, flag=done,
                               placeholder=placeholder)
                 loop: Stmt
                 if isinstance(stmt, WhileStmt):
-                    # folding the flag into the condition stops the loop
-                    # rather than idling it, which is what keeps termination:
-                    # predicating the body alone would spin forever, since a
-                    # dead body never makes `cond` false.  `and` short-circuits
-                    # (it lowers to Python's), so `cond` is not evaluated after
-                    # the return -- it would not have been in the original.
+                    # in the condition, so the loop stops rather than spins;
+                    # `and` short-circuits, so `cond` is not evaluated after
                     loop = WhileStmt(
                         And([Not(Var(done, stmt.loc), stmt.loc), stmt.cond],
                             stmt.loc),
                         StmtBlock(inner), stmt.loc,
                     )
                 else:
-                    # a `for` has no condition to fold into, so the body is
-                    # guarded instead -- and the guard wraps *all* of it: with
-                    # `r` assigned once a later iteration cannot overwrite it,
-                    # so only a side effect makes the difference visible, and
-                    # a store after the returning `if` is exactly that.
+                    # the whole body is guarded, so a store after the
+                    # returning `if` stops too
                     loop = ForStmt(
                         stmt.target, stmt.iterable,
                         StmtBlock([If1Stmt(
@@ -149,20 +140,15 @@ def _sink(
                     )
                 tail = _sink(result, rest, [], depth, done=done, flag=flag,
                              placeholder=placeholder)
-                # an inner loop can have nothing after it, and an `if` with an
-                # empty body is not a statement the interpreter accepts
+                # FPy admits no `if` with an empty body
                 guarded = [If1Stmt(
                     Not(Var(done, stmt.loc), stmt.loc),
                     StmtBlock(tail), stmt.loc,
                 )] if tail else []
                 return list(stmts[:i]) + [
-                    # the result is loop-carried and assigned conditionally,
-                    # so it needs an incoming value the way a phi node does --
-                    # FPy requires definite assignment and cannot see that the
-                    # flag makes every path cover it.  The placeholder is dead.
+                    # never read, but FPy requires definite assignment
                     Assign(result, None, placeholder(stmt.loc), stmt.loc),
-                    # re-initializing a shared flag is harmless: this point is
-                    # reachable only when it is already clear
+                    # reached only while the shared flag is clear
                     Assign(done, None, BoolVal(False, stmt.loc), stmt.loc),
                     loop,
                     *guarded,
