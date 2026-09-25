@@ -91,9 +91,9 @@ scale-in are one operation, lowered together in `x`'s storage.
 Per iteration the Volta kernel loads `A` and `B` three times each: for the
 products, again in the special-value arm (`dpa_special_values` recomputes
 `a * b`), and again for the exponents.  The loads differ only in their masks --
-the arm's and the guard's -- so Triton does not merge them.  An element is
-loaded once, under the row mask, and reused: the Triton contract already lets
-an inactive lane hold garbage until it is masked.
+the arm's and the guard's -- so Triton does not merge them.  A later load under
+a narrower mask may reuse an earlier one: the Triton contract already lets an
+inactive row hold garbage until it is masked.
 
 ### Skip an arm no row takes
 
@@ -195,20 +195,44 @@ largest scale).  Bench, best GFLOP/s, against the kernels before it: every
 
 ### Phase 3 -- Each operand loaded once
 
+**Done.** A load under mask `M2` reuses an earlier load of the same element
+under `M1` where `M2` implies `M1` (`M1`'s conjuncts are among `M2`'s): every
+row `M2` keeps was loaded, and the rest may hold garbage until masked.  It
+needs no argument about address validity -- the review note's first
+principle was wrong: a branch's guard can be what keeps an address in bounds
+(`if i < len(xs): y = xs[i]`), so a load cannot simply drop it.
+`_IndentedWriter` holds the loads per open block and value-numbers pure
+bindings, so two lane indices `tl.arange(0, 4)[None, :]` bound to different
+names, or a row mask re-bound under a new temporary, are one address and one
+conjunct; a broadcast `(a & b)[:, None]` is distributed over its conjuncts.
+A reuse ends at any `tl.store` (two arguments may be one tensor), at a
+reassignment of any name in the address, and at a loop body's edge.  Every
+load is bound to a temporary, which changes the text of every kernel.
+
+Volta goes from six operand loads per iteration to two.  Bench against
+Phase 2: +1-20% on twelve designs (volta 155 -> 174, hopper 148 -> 173,
+cdna3.bf8 72 -> 87), but **cdna3.f16 131 -> 126**: reuse holds the `A` and
+`B` tiles live across the special-value arm, where a reload was an L1 hit.
+Reloading the two exponent operands recovers only 123 -> 126, so it is the
+tiles held across the arm.  Not answered with a live-range heuristic:
+Phase 5, which takes the arm off the common path, is expected to remove the
+pressure; re-measure cdna3.f16 there.
+
+Tests: `test_emitter.TestLoadReuse` (reuse under a narrower mask -- fails on
+the old emitter; none across a store, after the index is reassigned, or into
+a loop body), and the exact-text tests updated for bound loads.
+
 - **What:** loads are masked by address validity alone, and a read of an
   element is reused until a store that may alias its list.
 - **Why separate:** it changes what every kernel loads; measured after
   Phase 2, since before it the gain is 8%.
 - **Tests:** a test counting `tl.load(A_ptr` in the Volta kernel (one per
   iteration); tracker; bench.
-- **Review:** two separate principles, not an address cache.  (1) A load's
-  mask is address validity -- the row mask -- never a branch's guard, which
-  only decides whose result is kept (the Triton contract); with that, the
-  duplicate loads become the same load.  (2) Reusing a load is common
-  subexpression elimination of a pure read, valid until a store that may alias
-  the list: check it against the alias analysis, inside loops and across
-  branch arms.  The recomputed `a * b` is ordinary CSE; confirm Triton merges
-  it before adding anything for it.
+- **Review:** reuse is common subexpression elimination of a read, valid
+  where the reusing mask implies the loaded one and until a store that may
+  alias.  Check the implication is decided on canonical conjuncts, the
+  invalidation on stores, reassignments and loop bodies, and the recomputed
+  `a * b` (ordinary CSE -- Triton merges it once its loads are shared).
 
 ### Phase 4 -- `max(logb(x), c)` as a bitfield
 

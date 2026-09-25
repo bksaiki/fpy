@@ -228,7 +228,8 @@ class TestMemory:
         def f(xs: list[fp.Real], i: fp.Real):
             return xs[i]
 
-        assert _emit(f, [ListType(_R32, 8), _INT]) == 'return tl.load(xs_ptr + i)'
+        assert _emit(f, [ListType(_R32, 8), _INT]) == \
+            '__t0 = tl.load(xs_ptr + i)\nreturn __t0'
 
     def test_a_nested_subscript_flattens_row_major(self):
         @fp.fpy(ctx=fp.FP32)
@@ -236,7 +237,7 @@ class TestMemory:
             return xss[r][k]
 
         out = _emit(f, [ListType(ListType(_R32, 8), 4), _INT, _INT])
-        assert out == 'return tl.load(xss_ptr + r * 8 + k)'
+        assert out == '__t0 = tl.load(xss_ptr + r * 8 + k)\nreturn __t0'
 
     @pytest.mark.parametrize('rows,cols', [(4, 8), (3, 5), (1, 2), (7, 1)])
     def test_the_offset_agrees_with_row_major_flattening(self, rows, cols):
@@ -247,7 +248,8 @@ class TestMemory:
             return xss[r][k]
 
         out = _emit(f, [ListType(ListType(_R32, cols), rows), _INT, _INT])
-        expr = out[out.index('xss_ptr + ') + len('xss_ptr + '):].rstrip(')')
+        load = out.splitlines()[0]
+        expr = load[load.index('xss_ptr + ') + len('xss_ptr + '):].rstrip(')')
         for r in range(rows):
             for k in range(cols):
                 got = eval(expr, {}, {'r': r, 'k': k})
@@ -260,8 +262,8 @@ class TestMemory:
             return out
 
         emitted = _emit(f, [ListType(_R32, 8), ListType(_R32, 8), _INT])
-        assert emitted.splitlines()[0] == \
-            'tl.store(out_ptr + i, tl.load(xs_ptr + i))'
+        assert emitted.splitlines()[:2] == [
+            '__t0 = tl.load(xs_ptr + i)', 'tl.store(out_ptr + i, __t0)']
 
     def test_a_ragged_length_is_refused(self):
         """A kernel argument is a flat pointer, so a row length neither proven
@@ -286,12 +288,11 @@ class TestMask:
 
         emitted = _emit(
             f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
-        first = emitted.splitlines()[0]
         assert 'if' not in emitted
-        assert first == (
-            'tl.store(out_ptr + j, '
-            'tl.load(xs_ptr + j, mask=(j < n), other=0.0), mask=(j < n))'
-        )
+        assert emitted.splitlines()[:2] == [
+            '__t0 = tl.load(xs_ptr + j, mask=(j < n), other=0.0)',
+            'tl.store(out_ptr + j, __t0, mask=(j < n))',
+        ]
 
 
 class TestLiteralCast:
@@ -588,7 +589,8 @@ class TestLiteralLists:
             return w[0] + w[1]
 
         out = _emit(f, [ListType(_R32, 4)])
-        assert out == 'return (tl.load(A_ptr + 1) + tl.load(A_ptr + 1 + 1))'
+        assert out == ('__t0 = tl.load(A_ptr + 1)\n__t1 = tl.load(A_ptr + 1 + 1)\n'
+                       'return (__t0 + __t1)')
 
     def test_a_slice_survives_a_dynamic_index(self):
         """The loop stays rolled and the index need not be constant, because
@@ -705,7 +707,7 @@ class TestBranch:
 
         out = _emit(
             f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
-        assert 'mask=((j < n) & __t0)' in out
+        assert 'mask=((j < n) & __t1)' in out
 
     def test_a_store_in_an_arm_carries_its_mask(self):
         @fp.fpy(ctx=fp.FP32)
@@ -1157,3 +1159,54 @@ def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> No
                    ListType(RealType(fp.FP64), NamedId('n')), RealType(fp.INTEGER)])
     assert ('bitcast=True) * ((' in src.source) is halves
     assert ('.to(tl.float64), (-' in src.source) is not halves
+
+
+_REUSE_ARGS = (ListType(_R32, 8), ListType(_R32, 8), _INT, _INT)
+
+
+class TestLoadReuse:
+    """A load serves a later read of the same element whose mask implies its
+    own, until a store, a reassignment of a name in the address, or the edge
+    of a loop body."""
+
+    def test_under_a_narrower_mask(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            if j < n:
+                if xs[j] < 0:
+                    out[j] = xs[j]
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS), guard=True).count('tl.load(') == 1
+
+    def test_not_across_a_store(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            a = xs[j]
+            xs[j] = a * 2
+            out[j] = xs[j]
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2
+
+    def test_not_after_its_index_is_reassigned(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            t = j
+            a = xs[t]
+            t = n
+            out[j] = a + xs[t]
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2
+
+    def test_not_into_a_loop_body(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            a = xs[0]
+            for _k in range(4):
+                a = a + xs[0]
+            out[j] = a
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2

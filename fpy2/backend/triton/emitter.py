@@ -214,6 +214,44 @@ _ASSIGN = re.compile(r'(\w+) = (.*)')
 _IDENT = re.compile(r'\b\w+\b')
 
 
+def _unwrap(code: str) -> str:
+    """*code* without the parentheses that enclose all of it."""
+    while code.startswith('(') and code.endswith(')'):
+        depth = 0
+        for ch in code[1:-1]:
+            depth += (ch == '(') - (ch == ')')
+            if depth < 0:
+                return code
+        code = code[1:-1]
+    return code
+
+
+def _split_and(code: str) -> tuple[str, str] | None:
+    """*code* as the two sides of its top-level `&`, if it has one."""
+    depth = 0
+    for i, ch in enumerate(code):
+        depth += (ch == '(') - (ch == ')')
+        if depth == 0 and code.startswith(' & ', i):
+            return code[:i], code[i + 3:]
+    return None
+
+
+def _conjuncts(mask: str | None) -> frozenset[str]:
+    """The conjuncts of *mask*, a broadcast `[:, None]` distributed over them."""
+    out: set[str] = set()
+    todo = [] if mask is None else [(mask, '')]
+    while todo:
+        m, suffix = todo.pop()
+        m = _unwrap(m)
+        if m.endswith('[:, None]') and (m[:-9].endswith(')') or _split_and(m[:-9])):
+            todo.append((m[:-9], suffix + '[:, None]'))
+        elif (sides := _split_and(m)) is not None:
+            todo += [(side, suffix) for side in sides]
+        else:
+            out.add(f'({m}){suffix}' if suffix else m)
+    return frozenset(out)
+
+
 class _IndentedWriter:
     """Line-oriented Triton source builder, tracking the shape each line
     binds."""
@@ -226,19 +264,40 @@ class _IndentedWriter:
     wide: set[str]
     """The names holding a `[rows, lanes]` tile: a line reading one, or
     broadcasting across the lanes."""
+    _loads: list[tuple[bool, dict[str, tuple[str, frozenset[str]]]]]
+    """Per open block, whether it is a loop body, and the loads it bound: by
+    canonical address, the name holding it and its mask's conjuncts."""
+    _value: dict[str, str]
+    """What each name bound to a pure expression holds, its own names
+    expanded: equal texts are equal values."""
 
     def __init__(self) -> None:
         self._lines = []
         self._depth = 0
         self.rows = set()
         self.wide = set()
+        self._loads = [(False, {})]
+        self._value = {}
 
     def add_line(self, line: str = '', shape: str | None = None) -> None:
         """*line*; *shape* ('wide', 'row' or 'scalar') says what it binds
         where reading it off the line would not."""
         self._lines.append('    ' * self._depth + line if line else '')
+        if 'tl.store(' in line:
+            # another argument may be the same tensor
+            for _, loads in self._loads:
+                loads.clear()
         if (m := _ASSIGN.fullmatch(line)) is not None:
             name, code = m.groups()
+            for _, loads in self._loads:
+                for addr in [a for a, (held, _) in loads.items()
+                             if held == name or name in _IDENT.findall(a)]:
+                    del loads[addr]
+            for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
+                del self._value[held]
+            self._value.pop(name, None)
+            if 'tl.load(' not in code and name not in _IDENT.findall(code):
+                self._value[name] = self.canonical(code)
             idents = set(_IDENT.findall(code))
             if shape is None:
                 if '[None, :]' in code or '[:, None]' in code or self.wide & idents:
@@ -254,9 +313,36 @@ class _IndentedWriter:
 
     def indent(self) -> None:
         self._depth += 1
+        header = self._lines[-1].lstrip() if self._lines else ''
+        self._loads.append((header.startswith(('for ', 'while ')), {}))
 
     def dedent(self) -> None:
         self._depth -= 1
+        self._loads.pop()
+
+    def canonical(self, code: str) -> str:
+        """*code* with each name bound to a pure expression replaced by it."""
+        return re.sub(r'\b\w+\b', lambda m: f'({self._value[m[0]]})'
+                      if m[0] in self._value else m[0], code)
+
+    def load(self, addr: str, mask: str | None) -> str | None:
+        """The name holding a load of *addr* under a mask *mask* implies, if
+        one is in scope: the rows *mask* keeps were all loaded.  A loop body
+        sees none from outside, which its next iteration may have stored
+        over."""
+        want = _conjuncts(None if mask is None else self.canonical(mask))
+        addr = self.canonical(addr)
+        for loop, loads in reversed(self._loads):
+            if (hit := loads.get(addr)) is not None and hit[1] <= want:
+                return hit[0]
+            if loop:
+                return None
+        return None
+
+    def loaded(self, addr: str, mask: str | None, name: str) -> None:
+        """*name* holds a load of *addr* under *mask*."""
+        self._loads[-1][1][self.canonical(addr)] = (
+            name, _conjuncts(None if mask is None else self.canonical(mask)))
 
     def render(self) -> str:
         return '\n'.join(self._lines)
@@ -1072,16 +1158,21 @@ class _Emitter(Visitor):
         scalar address is broadcast to the rows.  Under the tile's own guard
         alone it is a scalar load.
         """
-        if self.mask is None:
-            return f'tl.load({addr})'
-        if self._tile is not None and not (
+        mask = self.mask
+        if mask is not None and self._tile is not None and not (
             (self._out.rows | self._out.wide) & set(_IDENT.findall(addr))
         ):
-            if self.mask == self._guard_mask:
+            if mask == self._guard_mask:
                 # every launched program has a live row, so the load is safe
-                return f'tl.load({addr})'
-            addr = f'{addr} + tl.zeros_like({self._tile})'
-        return f'tl.load({addr}, mask={self.mask}, other=0.0)'
+                mask = None
+            else:
+                addr = f'{addr} + tl.zeros_like({self._tile})'
+        if (held := self._out.load(addr, mask)) is not None:
+            return held
+        name = self._bind(f'tl.load({addr})' if mask is None
+                          else f'tl.load({addr}, mask={mask}, other=0.0)')
+        self._out.loaded(addr, mask, name)
+        return name
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> str:
         """A subscript: range arithmetic, an element of a tile or a literal,

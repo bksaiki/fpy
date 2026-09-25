@@ -45,7 +45,9 @@ def batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     r = j
     acc = 0.0
     for k in tl.static_range(8):
-        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32)))
+        __t0 = tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
+        __t1 = tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
+        acc = (acc + (__t0.to(tl.float32) * __t1.to(tl.float32)))
     tl.store(out_ptr + r, acc, mask=(j < 4))'''
 
 
@@ -79,7 +81,8 @@ def _scale(xs_ptr, out_ptr, BLOCK: tl.constexpr):
     i6 = tl.program_id(0) * BLOCK
     j = i6 + tl.arange(0, BLOCK)
     i = j
-    tl.store(out_ptr + i, (tl.load(xs_ptr + i, mask=(j < 6), other=0.0) * tl.load(xs_ptr + i, mask=(j < 6), other=0.0)), mask=(j < 6))'''
+    __t0 = tl.load(xs_ptr + i, mask=(j < 6), other=0.0)
+    tl.store(out_ptr + i, (__t0 * __t0), mask=(j < 6))'''
     assert src.grid_extent == 6
 
 
@@ -193,8 +196,10 @@ def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
     i = j
     acc = 0.0
     for _i in tl.static_range(8):
-        x = tl.load(xs_ptr + _i)
-        y = tl.load(ys_ptr + _i)
+        __t0 = tl.load(xs_ptr + _i)
+        x = __t0
+        __t1 = tl.load(ys_ptr + _i)
+        y = __t1
         acc = (acc + (x * y))
     tl.store(out_ptr + i, acc, mask=(j < 4))'''
 
@@ -230,10 +235,9 @@ def test_a_store_through_a_row_resolves_the_same_way():
             ListType(ListType(RealType(fp.FP32), 4), 4),
             ListType(ListType(RealType(fp.FP32), 4), 4),
             RealType(fp.INTEGER)])
-    assert src.source.splitlines()[-1] == (
-        '    tl.store(oss_ptr + r[:, None] * 4 + k, (tl.load(xss_ptr + '
-        'r[:, None] * 4 + k, mask=__t0[:, None], other=0.0) * 2.0), '
-        'mask=__t0[:, None])')
+    assert src.source.splitlines()[-2:] == [
+        '    __t1 = tl.load(xss_ptr + r[:, None] * 4 + k, mask=__t0[:, None], other=0.0)',
+        '    tl.store(oss_ptr + r[:, None] * 4 + k, (__t1 * 2.0), mask=__t0[:, None])']
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -464,8 +468,8 @@ def test_a_cast_asks_about_values_not_only_types():
             ListType(RealType(fp.FP16), 4),
             RealType(fp.INTEGER)])
     assert src.source.splitlines()[-1] == (
-        '    tl.store(out_ptr + i, tl.maximum(tl.load(xs_ptr + i, mask=(j < 4), '
-        "other=0.0), -132.0, propagate_nan=tl.PropagateNan.ALL), mask=(j < 4))")
+        '    tl.store(out_ptr + i, tl.maximum(__t0, -132.0, '
+        'propagate_nan=tl.PropagateNan.ALL), mask=(j < 4))')
 
 
 @fp.fpy(ctx=fp.FP32)
