@@ -4,4 +4,4 @@
 #   pip install -r requirements.txt
 transformers>=4.51     # Qwen3
 datasets               # WikiText-2 (Phase 2)
-lm-eval>=0.4           # zero-shot suite (Phase 3)
+lm-eval[hf]>=0.4       # zero-shot suite (Phase 3)

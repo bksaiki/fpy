@@ -165,7 +165,7 @@ examples/mmasim/serve/
   decode.py       greedy decode, divergence index vs R0
   layers.py       per-linear-layer error on a calibration batch
   vllm_plugin.py  (Phase 7) the same kernels behind vLLM's linear-method hook
-  tests/          test_kernels.py, test_swap.py
+  tests/          one per module above
 ```
 
 The paired pass runs R0 and the candidate on the same window and accumulates
@@ -262,6 +262,29 @@ distance and its PPL is the model's cross-entropy).
 
 ### Phase 3 -- Zero-shot suite and flips
 
+**Done** at smoke scale; the designs' full suites (hours each) were
+deliberately not run.  `serve/zeroshot.py` needs `lm-eval[hf]` (0.4.13 here,
+for `accelerate`); `simple_evaluate(samples=...)` takes the HellaSwag subset
+(a seeded random 2,000 of 10,042), logged under the true `doc_id`s.  Batch
+size is fixed (16: at 32 the harness's `log_softmax` over the vocabulary
+runs out of memory) so every run sees the same batches.  Flips are counted
+for each per-item metric the task logs (`acc`, `acc_norm`), over the items
+both runs have.  Each run's results are cached as `<out>/<run>.json` with its
+settings, so the suite can run a design at a time.
+
+R0, every task in full (~11 min), against Zheng et al.'s FP16 Qwen3-0.6B
+(`acc`): within one standard error on each task.
+
+| | PIQA | ARC-e | ARC-c | HellaSwag | WinoGrande | LAMBADA |
+|---|---|---|---|---|---|---|
+| R0 `acc` | 67.74 ±1.09 | 60.86 ±1.00 | 31.31 ±1.36 | 37.60 ±0.48 | 55.80 ±1.40 | 40.40 ±0.68 |
+| R0 `acc_norm` | 67.79 | 55.98 | 34.13 | 47.30 | | |
+| Zheng et al. | 67.3 | 60.8 | 31.7 | 37.6 | 56.2 | |
+
+Also run: `--limit 10` for R0, R1 and `amd.cdna2.bf16` (~1 min, no flips at
+that size); a 40-item HellaSwag subset under R0, 0 flips against the full
+run's same items.  Test: `tests/test_zeroshot.py` (`flips`).
+
 - **What:** `zeroshot.py`: `lm_eval.simple_evaluate(model=HFLM(pretrained=m),
   tasks=[piqa, arc_easy, arc_challenge, hellaswag, winogrande,
   lambada_openai], log_samples=True)` per run; accuracy (± stderr) and flips
@@ -353,6 +376,8 @@ rather than sharpening it.
 
 ## Sources
 
+- Zheng et al., *An Empirical Study of Qwen3 Quantization*, 2025 --
+  https://arxiv.org/abs/2505.02214
 - Dutta et al., *Accuracy is Not All You Need*, NeurIPS 2024 --
   https://arxiv.org/abs/2407.09141
 - Yuan et al., *Understanding and Mitigating Numerical Sources of
