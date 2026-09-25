@@ -978,3 +978,64 @@ def test_a_power_of_two_agrees_on_special_exponents() -> None:
     out = torch.zeros(n).cuda()
     launch(src, [torch.tensor(vals, dtype=torch.float16).cuda(), out], block=16)
     assert _reprs(out.cpu().tolist()) == _reprs(want)
+
+
+_S3 = RealType(fp.FixedContext(True, 0, 3, fp.RM.RTZ, fp.OV.WRAP))
+"""A small signed integer: a scale's exponent."""
+
+
+def test_a_load_is_not_reused_past_a_rebound_mask() -> None:
+    from .programs import mask_rebound
+    n = NamedId('n')
+    src = _compile(mask_rebound, [ListType(F32, n)] * 3 + [INT])
+    _agree(src, mask_rebound, [_f32([10.0, 20.0, 30.0, 40.0]), _f32([0.5, 2.0, 0.5, 2.0]),
+                               _f32([0.0] * 4)])
+
+
+def test_a_carried_name_is_not_its_value_before_the_loop() -> None:
+    from .programs import carried_index
+    n = NamedId('n')
+    src = _compile(carried_index, [ListType(ListType(F32, 4), n), ListType(RealType(fp.SINT8), n),
+                                   ListType(F32, n), INT])
+    _agree(src, carried_index, [_f32([[1.0, 2, 3, 4], [5, 6, 7, 8]]),
+                                torch.tensor([1, 2], dtype=torch.int8).cuda(), _f32([0.0] * 2)])
+
+
+def test_a_fused_scale_in_rebound_before_its_round_agrees() -> None:
+    from .programs import scale_rebound
+    n = NamedId('n')
+    src = _compile(scale_rebound, [ListType(F32, n), ListType(_S3, n), ListType(F32, n),
+                                   ListType(F32, n), INT])
+    _agree(src, scale_rebound, [_f32([1536.0, 3000.0, 4096.5, 999.0]),
+                                torch.tensor([2, 1, -1, 3], dtype=torch.int8).cuda(),
+                                _f32([0.0] * 4), _f32([0.0] * 4)])
+
+
+def test_a_fused_scale_in_a_merge_reads_agrees() -> None:
+    from .programs import scale_joined
+    n = NamedId('n')
+    src = _compile(scale_joined, [ListType(F32, n), ListType(_S3, n), ListType(RealType(fp.FP64), n),
+                                  INT])
+    _agree(src, scale_joined, [_f32([1536.0, -2.0, 3000.0, 4096.5]),
+                               torch.tensor([2, 1, -1, 3], dtype=torch.int8).cuda(),
+                               torch.zeros(4, dtype=torch.float64).cuda()])
+
+
+def test_a_fused_scale_in_of_an_element_stored_over_agrees() -> None:
+    from .programs import scale_stored_over
+    n = NamedId('n')
+    src = _compile(scale_stored_over, [ListType(ListType(F32, 2), n), ListType(_S3, n),
+                                       ListType(F32, n), INT])
+    _agree(src, scale_stored_over, [_f32([[1536.0, 1], [3000.0, 1], [4096.5, 2], [999.0, 3]]),
+                                    torch.tensor([2, 1, -1, 3], dtype=torch.int8).cuda(),
+                                    _f32([0.0] * 4)])
+
+
+def test_an_aligned_sum_of_fp16_agrees() -> None:
+    """The fused round is held in `fp32`: libdevice has no `fp16` one."""
+    from .programs import aligned_sum
+    n = NamedId('n')
+    f = aligned_sum(fp.RM.RTZ, digits=10, emin=-14)
+    src = _compile(f, [ListType(ListType(RealType(FP16), 4), n), ListType(RealType(fp.FP64), n), INT])
+    torch.manual_seed(0)
+    _agree(src, f, [(torch.randn(8, 4) * 100).half().cuda(), torch.zeros(8, dtype=torch.float64).cuda()])

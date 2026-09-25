@@ -13,6 +13,7 @@ flattened, so a kernel's time does not depend on its data.
     python examples/mmasim/bench/speed.py volta nvfp4       # some
     python examples/mmasim/bench/speed.py -m 512 --blocks 64 128
     python examples/mmasim/bench/speed.py cdna2 --blocks-m 16 32   # tile heights
+    python examples/mmasim/bench/speed.py --best            # fastest tile only
 """
 
 import argparse
@@ -84,6 +85,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument('--autotune', action='store_true',
                     help='also time the launch that picks its own block and warps')
     ap.add_argument('--reps', type=int, default=20, help='launches per timing')
+    ap.add_argument('--best', action='store_true',
+                    help="print only each design's fastest tile")
     args = ap.parse_args(argv)
     if (why := unavailable()) is not None:
         ap.error(f'needs a GPU: {why}')
@@ -105,10 +108,15 @@ def main(argv: list[str]) -> int:
         tensors = _inputs(arg_types, m, n, k)
         heights = args.blocks_m if kernel.block_m is not None else [1]
         tiles = [(b, h) for b in args.blocks for h in heights]
+        rows = []
         for block, height in [*tiles, *([(None, 1)] if args.autotune else [])]:
             t = _timed(partial(launch, kernel, tensors, block=block, block_m=height), args.reps)
             label = 'auto' if block is None else f'{height}x{block}'
-            print(f'{name:22} {k:5} {label:>9} {t * 1e3:9.3f} {2 * m * n * k / t / 1e9:9.1f}')
+            rows.append((t, f'{name:22} {k:5} {label:>9} {t * 1e3:9.3f} {2 * m * n * k / t / 1e9:9.1f}'))
+            if not args.best:
+                print(rows[-1][1])
+        if args.best:
+            print(min(rows)[1])
 
     torch.backends.cuda.matmul.allow_tf32 = False
     for dtype in (torch.float16, torch.float32):

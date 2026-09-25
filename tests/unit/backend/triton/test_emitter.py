@@ -1198,6 +1198,29 @@ def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> No
     assert ('x.to(tl.float64)' in src.source) is not halves
 
 
+def test_a_scale_bound_under_a_rounding_context_is_not_fused() -> None:
+    """`t` is `2 ** k` rounded in `fp16`, zero for these `k`: the fused round
+    would scale by the exact power."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real], ks: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for r in range(len(out)):
+            x = xs[r]
+            k = ks[r] - 30
+            with FP16:
+                t = 2 ** k
+            s = t * x
+            with fp.MPFixedContext(-1, fp.RM.RTZ):
+                y = fp.round(s)
+            out[r] = y
+        return out
+
+    n = NamedId('n')
+    s3 = RealType(fp.FixedContext(True, 0, 3, fp.RM.RTZ, fp.OV.WRAP))
+    with pytest.raises(TritonEmitError):
+        TritonCompiler(drop_asserts=True).compile(f, ctx=fp.REAL, arg_types=[
+            ListType(_R32, n), ListType(s3, n), ListType(_R32, n), _INT])
+
+
 def test_the_scale_out_leaves_the_sum() -> None:
     """`HoistScale`: every term is scaled by one power of two, so the sum
     is, once."""

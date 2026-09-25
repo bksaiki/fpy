@@ -308,8 +308,9 @@ class _IndentedWriter:
         if (m := _ASSIGN.fullmatch(line)) is not None:
             name, code = m.groups()
             for _, loads in self._loads:
-                for addr in [a for a, (held, _) in loads.items()
-                             if held == name or name in _IDENT.findall(a)]:
+                for addr in [a for a, (held, conj) in loads.items()
+                             if held == name or name in _IDENT.findall(a)
+                             or any(name in _IDENT.findall(c) for c in conj)]:
                     del loads[addr]
             for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
                 del self._value[held]
@@ -349,6 +350,13 @@ class _IndentedWriter:
         self._assigned[-1] |= gone
         for held in [n for n, v in self._value.items()
                      if n in gone or gone & set(_IDENT.findall(v))]:
+            del self._value[held]
+
+    def forget(self, names: set[str]) -> None:
+        """Drop the values known of *names* and of what reads them: a loop
+        body's carried names hold something else on a later iteration."""
+        for held in [n for n, v in self._value.items()
+                     if n in names or names & set(_IDENT.findall(v))]:
             del self._value[held]
 
     def mark(self) -> int:
@@ -1435,9 +1443,12 @@ class _Emitter(Visitor):
         }
         # each `2 ** n` binding's uses that are fused scale-ins
         fused: dict[AssignDef, set[int]] = {}
+        # a phi reads its operands without a use to show for it
+        joined = {i for ps in self.def_use.phis.values() for p in ps for i in (p.lhs, p.rhs)}
         for d in self.def_use.defs:
             site = d.site
-            if not isinstance(site, Assign) or not isinstance(site.expr, Mul):
+            if (not isinstance(site, Assign) or not isinstance(site.expr, Mul)
+                    or self.def_use.def_to_idx[d] in joined):
                 continue
             parts = self._scale_in(site.expr)
             uses = self.def_use.uses.get(d, set())
@@ -1446,7 +1457,9 @@ class _Emitter(Visitor):
             n, x, bound, var = parts
             rounds = [round_of[id(u)] for u in uses]
             try:
+                # libdevice has no `f16` integral round, and widening is exact
                 held = self._storage(x)
+                held = TritonScalar.F32 if held == TritonScalar.F16 else held
                 exact = self._active_ctx(site.expr) is REAL
                 ctxs = [self._active_ctx(r) for r in rounds]
             except (TritonEmitError, StorageSelectionError):
@@ -1458,11 +1471,15 @@ class _Emitter(Visitor):
             if (af is None or af.exp < 0 or _magnitude(af) > 2 * (bias - 1)
                     or not self.classes.is_finite(n)):
                 continue
-            # where each operand was read, by what it reads
-            reads = [(self.def_use.reach[site], _reads(x))]
+            # re-emitted at each round: what each operand reads, where it was
+            # read, and none of it a list a store may have changed since
+            reads = [(self.def_use.reach[site], _reads(x) | (set() if bound else _reads(n)))]
             if bound is not None:
                 assert isinstance(bound.site, Assign)
                 reads.append((self.def_use.reach[bound.site], _reads(n)))
+            if any((dv := at.get(v)) is not None and isinstance(self.types.by_def.get(dv), ListType)
+                   for at, read in reads for v in read):
+                continue
             if all(
                 isinstance(c, MPFixedContext) and _integral_round(c) is not None
                 and c.rm in _TO_ZERO_OR_NEAREST
@@ -1477,12 +1494,13 @@ class _Emitter(Visitor):
                 if bound is not None:
                     fused.setdefault(bound, set()).add(id(var))
         for p, ids in fused.items():
-            if {id(u) for u in self.def_use.uses.get(p, set())} <= ids:
+            if (self.def_use.def_to_idx[p] not in joined
+                    and {id(u) for u in self.def_use.uses.get(p, set())} <= ids):
                 self._unmaterialized.add(p)
 
     def _scale_in(self, e: Mul) -> tuple[Expr, Expr, AssignDef | None, Var | None] | None:
         """*e* as ``(n, x, binding, name)`` where it is ``2 ** n * x``, the
-        power of two inline or a name bound to one."""
+        power of two inline or a name bound to one it is exactly."""
         if (parts := _scaled(e)) is not None:
             return (*parts, None, None)
         for scale, x in ((e.first, e.second), (e.second, e.first)):
@@ -1490,9 +1508,18 @@ class _Emitter(Visitor):
                 continue
             d = self.def_use.find_def_from_use(scale)
             if (isinstance(d, AssignDef) and isinstance(d.site, Assign)
-                    and (n := _pow2_exponent(d.site.expr)) is not None):
+                    and (n := _pow2_exponent(pow2 := d.site.expr)) is not None
+                    and self._rounds_exactly(pow2)):
                 return n, x, d, scale
         return None
+
+    def _rounds_exactly(self, e: Expr) -> bool:
+        """Whether *e*'s context leaves it unrounded."""
+        try:
+            active = self._active_ctx(e)
+        except TritonEmitError:
+            return False
+        return active is REAL or rounds_exactly(e, self.format_info.by_expr, active)
 
     def _emit_fused_round(self, e: Round, n: Expr, x: Expr, held: TritonScalar) -> str:
         """``round(2 ** n * x)`` in `x`'s storage; :meth:`_fuse_rounds` says
@@ -2403,6 +2430,7 @@ class _Emitter(Visitor):
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
+            ctx.forget(self._carried_names(stmt))
         else:
             # `static_range` counts from zero: the target is where the
             # count lands in `range(start, stop, step)`
@@ -2412,6 +2440,7 @@ class _Emitter(Visitor):
             step = self.emit(stmt.iterable.third)
             ctx.add_line(f'for {k} in tl.static_range({n}):')
             ctx.indent()
+            ctx.forget(self._carried_names(stmt))
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
@@ -2443,9 +2472,18 @@ class _Emitter(Visitor):
                 else [self.emit(a) for a in (it.first, it.second, it.third)])
         ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
         ctx.indent()
+        ctx.forget(self._carried_names(stmt))
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
         self._carried = prev
+
+    def _carried_names(self, stmt: ForStmt) -> set[str]:
+        """The names *stmt*'s body may find changed from the last iteration:
+        its target, what the body assigns, and the tails of lists it
+        writes."""
+        mutated = self.def_use.mutated_in(stmt.body)
+        return {str(stmt.target), *map(str, mutated), *(
+            f'{v}_t{j}' for v in mutated if v in self.tiles for j in range(self.tiles[v][1]))}
 
     def _shape(self, along: frozenset[str]) -> str:
         """The shape of a value varying along the tile axes *along*: one

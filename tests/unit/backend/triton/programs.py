@@ -90,11 +90,11 @@ def round_to_int(rm: fp.RoundingMode) -> fp.Function:
     return k
 
 
-def aligned_sum(rm: fp.RM) -> fp.Function:
-    """`fused_sum`'s shape: each row's terms rounded at a grid its largest
-    exponent sets, which `RescaleFixed` scales in, then summed.  As there, a
-    row with a special value takes another arm, since its grid would not be
-    finite."""
+def aligned_sum(rm: fp.RM, digits: int = 24, emin: int = -126) -> fp.Function:
+    """`fused_sum`'s shape: each row's terms rounded at a grid *digits* below
+    its largest exponent, which `RescaleFixed` scales in, then summed.  As
+    there, a row with a special value takes another arm, since its grid would
+    not be finite."""
     @fp.fpy(ctx=fp.REAL)
     def f(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
         for r in range(len(out)):
@@ -102,8 +102,8 @@ def aligned_sum(rm: fp.RM) -> fp.Function:
             if any([not fp.isfinite(x) for x in xs]):  # noqa: C419
                 out[r] = 0
             else:
-                e = max([max(fp.logb(x), -126) for x in xs])
-                with fp.MPFixedContext(e - 24, rm):
+                e = max([max(fp.logb(x), emin) for x in xs])
+                with fp.MPFixedContext(e - digits, rm):
                     ts = [fp.round(x) for x in xs]
                 out[r] = sum(ts)
         return out
@@ -277,4 +277,83 @@ def pow2_finite(ks: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
             out[r] = 2 ** k
         else:
             out[r] = 0
+    return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def mask_rebound(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """Two loads of `xs[j]` under masks spelled alike, `x` rebound between."""
+    for j in range(len(out)):
+        x = ys[j]
+        x = x - 1
+        a = 0.0
+        if x > 0:
+            a = xs[j]
+        x = x + 2
+        b = 0.0
+        if x > 0:
+            b = xs[j]
+        out[j] = a + b
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def carried_index(xss: list[list[fp.Real]], ids: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """`x` and `y` start equal and part on later iterations."""
+    for j in range(len(out)):
+        row = xss[j]
+        x = ids[j]
+        y = ids[j]
+        s = 0.0
+        for _k in range(2):
+            a = row[x]
+            b = row[y]
+            with fp.FP32:
+                s = s + a * 10 + b
+            x = x + 1
+            y = y - 1
+        out[j] = s
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def scale_rebound(xs: list[fp.Real], ks: list[fp.Real], ko: list[fp.Real], out: list[fp.Real],
+                  BLOCK: fp.Real):
+    """The exponent of a scale-in rebound before its round."""
+    for r in range(len(out)):
+        k = ks[r] - 8
+        t = 2 ** k * xs[r]
+        k = k + 1
+        with fp.MPFixedContext(-1, fp.RM.RTZ):
+            y = fp.round(t)
+        ko[r] = k
+        out[r] = y
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def scale_joined(xs: list[fp.Real], ks: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """A scale-in a merge reads as well as its round."""
+    for r in range(len(out)):
+        x = xs[r]
+        t = x
+        if x > 0:
+            t = 2 ** (ks[r] - 8) * x
+            with fp.MPFixedContext(-1, fp.RM.RTZ):
+                y = fp.round(t)
+            out[r] = y
+        out[r] = t
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def scale_stored_over(xss: list[list[fp.Real]], ks: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """A scale-in of an element stored over before its round."""
+    for r in range(len(out)):
+        xs = xss[r]
+        t = 2 ** (ks[r] - 8) * xs[0]
+        xss[r][0] = 0
+        with fp.MPFixedContext(-1, fp.RM.RTZ):
+            y = fp.round(t)
+        out[r] = y
     return out

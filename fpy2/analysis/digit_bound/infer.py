@@ -269,7 +269,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
     """The caller's literal for "argument *i* is finite", which is this
     parameter's too."""
     _loop_index: dict[Definition, int]
-    _trip: dict[Definition, _Operand]
+    _trip: tuple[Definition, _Operand] | None
+    """The innermost loop's index and trip count, where it counts one: only
+    its `a + s * k` is element `k` of an index set, as only the innermost
+    `range`'s target is for :attr:`_gather`."""
     _partial: dict[Definition, list[Terms] | None]
     _fields: dict[Definition, tuple[Terms | None, ...]]
     _elt_expr: dict[Definition, Expr]
@@ -321,7 +324,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self.scopes = view.scopes
         self.out = DigitBoundAnalysis(store, args)
         self._loop_index = {}
-        self._trip = {}
+        self._trip = None
         self._partial = {}
         self._fields = {}
         self._elt_expr = {}
@@ -1329,10 +1332,11 @@ class _DigitBoundInferInstance(DefaultVisitor):
             for s, k in pairs:
                 if not isinstance(k, Var):
                     continue
-                n = self._trip.get(self.def_use.find_def_from_use(k))
+                if self._trip is None or self.def_use.find_def_from_use(k) is not self._trip[0]:
+                    continue
                 a, b = self._part_key(start), _ONE if s is None else self._part_key(s)
-                if n is not None and a is not None and b is not None:
-                    return ('elt', a, b, n)
+                if a is not None and b is not None:
+                    return ('elt', a, b, self._trip[1])
         return None
 
     def _at_index_set(self, lst: Var, idx: Var) -> Terms | None:
@@ -1417,7 +1421,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 # ... and a trip count, whose `a + s * k` the body may index by
                 trip = self._part_key(iterable.arg)
                 if trip is not None:
-                    self._trip[self.def_use.find_def_from_site(target, site)] = trip
+                    self._trip = (self.def_use.find_def_from_site(target, site), trip)
             case Range2() | Range3():
                 # ... it visits a *part*, which `_at_index_set` gives
                 # variables of its own.
@@ -1428,7 +1432,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 pass    # anything else binds the target to nothing
 
     def _visit_list_comp(self, e: ListComp, ctx):
-        outer = self._gather
+        outer = self._gather, self._trip
+        self._trip = None
         for target, iterable in zip(e.targets, e.iterables):
             self._visit_expr(iterable, ctx)
             # a `zip` has no counterpart in the lowered loop, so it stays here
@@ -1441,11 +1446,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._elt_depth += 1
         self._visit_expr(e.elt, ctx)
         self._elt_depth -= 1
-        self._gather = outer
+        self._gather, self._trip = outer
 
     def _visit_for(self, stmt: ForStmt, ctx):
         self._visit_expr(stmt.iterable, ctx)
-        outer = self._gather
+        outer = self._gather, self._trip
+        self._trip = None
         self._bind_iter(stmt.target, stmt.iterable, stmt)
         # A list the body fills enters the loop holding whatever it already
         # does, which a partial write leaves in place.
@@ -1456,7 +1462,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_block(stmt.body, ctx)
         self._loops = loops
         self._elt_depth -= 1
-        self._gather = outer
+        self._gather, self._trip = outer
         for phi in self.def_use.phis[stmt]:
             body_def = self.def_use.defs[phi.rhs]
             body = self.out.by_def.get(body_def)

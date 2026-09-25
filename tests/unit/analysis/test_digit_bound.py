@@ -660,6 +660,46 @@ class TestAPartOfAListKeepsItsPairing:
         assert self._precs(f) == [288, 288]
 
 
+    def test_a_count_over_the_trip_keeps_it(self):
+        """The Triton normal form: `range(len(range(0, n, 2)))` and the index
+        `0 + 2 * k`, whose index set is the evens again."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            n = len(xs)
+            es = [fp.logb(xs[i]) for i in range(len(xs))]
+            ev = max([es[i] for i in range(0, n, 2)])
+            with fp.MPFixedContext(ev - 12, fp.RM.RTZ):
+                ts = [fp.round(xs[i]) for i in range(0, n, 2)]
+            return sum(ts)
+
+        g = monomorphize(f, args=[ListType(RealType(fp.FP32), 8)])
+        ast = CompToLoop.apply(g.ast, index_ranges=True)
+        b = DigitBoundInfer.analyze(ast, FormatInfer.analyze(ast))
+        assert max(b.store.prec(t.msb, t.lsb) for e, t in b.by_expr.items()
+                   if e.format().startswith('fp.round')) == 12
+
+    def test_but_not_across_nested_counts(self):
+        """`1 + 2 * k1` and `1 + 2 * k2` are one index set, but not one index:
+        only the innermost count's element is element `k` of it."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(xs[i]) for i in range(len(xs))]
+            ys = fp.empty(4)
+            for k1 in range(4):
+                with fp.INTEGER:
+                    i1 = 1 + 2 * k1
+                for k2 in range(4):
+                    with fp.INTEGER:
+                        i2 = 1 + 2 * k2
+                    with fp.MPFixedContext(es[i1] - 12, fp.RM.RTZ):
+                        ys[k2] = fp.round(xs[i2])
+            return sum(ys)
+
+        assert all(p > 12 for p in self._precs(f))
+
+
 class TestReplayingAtAnIndexSet:
     """`instance` copies the facts that hold at every index onto fresh
     variables.  One naming anything else may be an aggregate over the whole

@@ -2224,3 +2224,37 @@ class TestFiniteSources:
                 return max(ys)
 
         assert not _lowered_cls(f, 'max(ys)', [_L4, _L4]) & NAN
+
+    def test_a_loop_phi_is_not_one_side(self):
+        """`r` finite at the guard says the *last* round's `a` was, under a
+        definition this round's `a` shares."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            r = fp.inf()
+            out = 0.0
+            for i in range(4):
+                a = xs[i]
+                if fp.isfinite(r):
+                    out = a * 2
+                r = a * 3
+            return out
+
+        assert _lowered_cls(f, '(a * 2)', [_L4]) == TOP
+        assert math.isinf(f([1.0, 2.0, 3.0, math.inf]))
+
+    def test_a_scalar_read_through_a_name_the_loop_rebinds(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, t):
+            s = t
+            ps = fp.empty(4)
+            for i in range(4):
+                u = s
+                ps[i] = xs[i] * u
+                if i == 3:
+                    s = fp.inf()
+            if all([fp.isfinite(p) for p in ps]):  # noqa: C419
+                return s * 2
+            return 0.0
+
+        assert _lowered_cls(f, '(s * 2)', [_L4, _F32]) == TOP
+        assert math.isinf(f([1.0, 2.0, 3.0, 4.0], 1.0))

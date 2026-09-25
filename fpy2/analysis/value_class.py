@@ -1280,10 +1280,12 @@ class _ValueClassInstance(DefaultVisitor):
         return [i for a in self._exact_operands(e) for i in self._at(a, _ZERO | _FINITE)]
 
     def _finite_source(self, d: Definition) -> Definition:
-        """Where *d*'s value comes from wherever it is finite: through a phi,
-        the one side that can be finite, where only one can -- as the other
-        arms of an overflow's lowering are infinities."""
-        while isinstance(d, PhiDef):
+        """Where *d*'s value comes from wherever it is finite: through an
+        `if`'s phi, the one side that can be finite, where only one can -- as
+        the other arms of an overflow's lowering are infinities.  Not a loop's:
+        its body side is a previous round's, under a definition this round
+        shares."""
+        while isinstance(d, PhiDef) and not isinstance(d.site, ForStmt | WhileStmt):
             sides = [self.def_use.defs[i] for i in (d.lhs, d.rhs)]
             live = [side for side in sides if self._def_class(side) & (_ZERO | _FINITE)]
             if len(live) != 1:
@@ -1343,12 +1345,26 @@ class _ValueClassInstance(DefaultVisitor):
                     lists.append(src)
             elif (nonempty and name is not None
                     and isinstance(self.type_info.by_expr.get(name), RealType)):
-                d = self.def_use.find_def_from_use(name)
                 # the loop's own phi holds, past the loop, what the last round
-                # left, which may be rebound after its store
-                if not (isinstance(d, PhiDef) and d.site is loop):
-                    scalars.append(d)
+                # left, which may be rebound after its store: nowhere along
+                # the names the store reads through
+                chain = self._name_chain(name)
+                if not any(isinstance(d, PhiDef) and d.site is loop for d in chain):
+                    scalars.append(chain[0])
         return lists, scalars
+
+    def _name_chain(self, e: Expr) -> list[Definition]:
+        """The definitions :meth:`_through_names` passes from *e*, first
+        to last."""
+        out: list[Definition] = []
+        while isinstance(e, Var) and (d := self.def_use.use_to_def.get(e)) is not None:
+            out.append(d)
+            if (src := self._finite_source(d)) is not d:
+                out.append(src)
+            if not isinstance(src, AssignDef) or not isinstance(src.site, Assign):
+                break
+            e = src.site.expr
+        return out
 
     def _exact_leaves(self, e: Expr) -> list[tuple[Var | None, Expr]]:
         """What *e* is an exact op of, through names and nested ops, each with
