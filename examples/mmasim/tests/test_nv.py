@@ -117,14 +117,15 @@ def run_sweep(trials):
            torch.float8_e4m3fn: fp.MX_E4M3, torch.float8_e5m2: fp.MX_E5M2}
     C_CTX = {torch.float16: fp.FP16, torch.float32: fp.FP32}
 
-    def run_t_fdpa(name, a_dtype, c_dtype, L, K, F, rho, e_zero):
+    def run_t_fdpa(name, a_dtype, c_dtype, L, K, F, rho, e_zero, b_dtype=None):
+        b_dtype = b_dtype or a_dtype
         op = fdpa.MMA_T_FDPA(F, rho, L, e_zero)
-        model = nv.make_t_fdpa_chain(L, CTX[a_dtype], CTX[a_dtype], C_CTX[c_dtype],
+        model = nv.make_t_fdpa_chain(L, CTX[a_dtype], CTX[b_dtype], C_CTX[c_dtype],
                                      F, RHO[rho], e_zero=e_zero)
         fails = 0
         for i in range(trials):
             gen = vc.GENS[i % len(vc.GENS)]
-            a, b, c = gen(K, a_dtype), gen(K, a_dtype), gen(1, c_dtype)[0]
+            a, b, c = gen(K, a_dtype), gen(K, b_dtype), gen(1, c_dtype)[0]
             ref = op.dpa(a.clone(), b.clone(), c.clone())
             if a_dtype == torch.float32:  # tf32: truncate inputs on the FPy side
                 af, bf = vc.tf32_list(a), vc.tf32_list(b)
@@ -135,13 +136,14 @@ def run_sweep(trials):
                 fails += 1
         check(f'sweep {name}: {trials - fails}/{trials}', fails == 0)
 
-    def run_st_fdpa(name, a_dtype, L, F, rho, e_zero):
-        model = nv.make_st_fdpa(CTX[a_dtype], CTX[a_dtype], fp.MX_E8M0,
+    def run_st_fdpa(name, a_dtype, L, F, rho, e_zero, b_dtype=None):
+        b_dtype = b_dtype or a_dtype
+        model = nv.make_st_fdpa(CTX[a_dtype], CTX[b_dtype], fp.MX_E8M0,
                                 F, RHO[rho], e_zero=e_zero)
         fails = 0
         for i in range(trials):
             gen = vc.GENS[i % len(vc.GENS)]
-            a, b = gen(L, a_dtype), gen(L, a_dtype)
+            a, b = gen(L, a_dtype), gen(L, b_dtype)
             c = vc.rand_bits(1, torch.float32)[0]
             alpha = vc.rand_bits(1, torch.float8_e8m0fnu)
             beta = vc.rand_bits(1, torch.float8_e8m0fnu)
@@ -196,14 +198,35 @@ def run_sweep(trials):
     run_t_fdpa('ampere.tf32.f32 L4 K8  F24', torch.float32, torch.float32, 4, 8, 24, 'RZ-FP32', -132)
     run_t_fdpa('hopper.f16.f32  L16 K32 F25', torch.float16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
     run_t_fdpa('hopper.f16.f16  L16 K16 F25', torch.float16, torch.float16, 16, 16, 25, 'RNE-FP16', -133)
-    run_t_fdpa('ada.e4m3.f32    L16 K32 F13', torch.float8_e4m3fn, torch.float32, 16, 32, 13, 'RZ-E8M13', -132)
-    run_t_fdpa('ada.e5m2.f16    L16 K16 F13', torch.float8_e5m2, torch.float16, 16, 16, 13, 'RNE-FP16', -21)
-    run_t_fdpa('hopper.e4m3.f32 L32 K32 F13', torch.float8_e4m3fn, torch.float32, 32, 32, 13, 'RZ-E8M13', -133)
     run_t_fdpa('blackwell.f16.f32 L16 K32 F25', torch.float16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
+    run_t_fdpa('hopper.tf32.f32 L8 K16 F25', torch.float32, torch.float32, 8, 16, 25, 'RZ-FP32', -133)
+    run_t_fdpa('hopper.bf16.f32 L16 K32 F25', torch.bfloat16, torch.float32, 16, 32, 25, 'RZ-FP32', -133)
+    run_t_fdpa('hopper.f16.f16 (mma) L16 K16 F25', torch.float16, torch.float16, 16, 16, 25, 'RNE-FP16', -22)
+
+    # FP8 rows, every (A, B) pair up to swapping
+    e4m3, e5m2 = torch.float8_e4m3fn, torch.float8_e5m2
+    fp8_pairs = [(e4m3, e4m3), (e5m2, e5m2), (e4m3, e5m2)]
+    f32, f16 = torch.float32, torch.float16
+    tag = {e4m3: 'e4m3', e5m2: 'e5m2', f32: 'f32', f16: 'f16'}
+    fp8_rows = [  # (arch, c dtype, L, F, rho, e_zero)
+        ('ada', f32, 16, 13, 'RZ-E8M13', -132),
+        ('ada', f16, 16, 13, 'RNE-FP16', -21),
+        ('hopper', f32, 32, 13, 'RZ-E8M13', -133),
+        ('hopper', f16, 32, 13, 'RNE-FP16', -133),
+        ('blackwell', f32, 32, 25, 'RZ-FP32', -133),
+        ('blackwell (tcgen05)', f16, 32, 25, 'RNE-FP16', -133),
+        ('blackwell (mma)', f16, 32, 25, 'RNE-FP16', -22),
+    ]
+    for arch, c_dtype, L, F, rho, e_zero in fp8_rows:
+        for a_dtype, b_dtype in fp8_pairs:
+            pair = f'{tag[a_dtype]}x{tag[b_dtype]}.{tag[c_dtype]}'
+            run_t_fdpa(f'{arch}.{pair} L{L} K32 F{F}', a_dtype, c_dtype, L, 32, F, rho, e_zero,
+                       b_dtype=b_dtype)
 
     # ST-FDPA (MXFP8)
     run_st_fdpa('mxfp8.e4m3      L32 F25', torch.float8_e4m3fn, 32, 25, 'RZ-FP32', -133)
     run_st_fdpa('mxfp8.e5m2      L32 F25', torch.float8_e5m2, 32, 25, 'RZ-FP32', -133)
+    run_st_fdpa('mxfp8.e4m3xe5m2 L32 F25', e4m3, 32, 25, 'RZ-FP32', -133, b_dtype=e5m2)
 
     # GST-FDPA (NVFP4 / MXFP4)
     run_gst_fdpa('nvfp4 (ue4m3)   K64 G16', torch.float8_e4m3fn, 64, 16, 16, 35, 'RZ-FP32', -139)

@@ -90,11 +90,12 @@ def run_sweep(trials):
 
     torch.manual_seed(0)
 
-    def run_config(name, op, model, a_dtype, K, tf32=False):
+    def run_config(name, op, model, a_dtype, K, tf32=False, b_dtype=None):
+        b_dtype = b_dtype or a_dtype
         fails = 0
         for i in range(trials):
             gen = vc.GENS[i % len(vc.GENS)]
-            a, b = gen(K, a_dtype), gen(K, a_dtype)
+            a, b = gen(K, a_dtype), gen(K, b_dtype)
             c = gen(1, torch.float32)[0]
             ref = op.dpa(a.clone(), b.clone(), c.clone())
             if tf32:  # xf32: truncate inputs on the FPy side
@@ -129,6 +130,9 @@ def run_sweep(trials):
                amd.make_gtr_fdpa(16, fp.S1E4M3, fp.S1E4M3), torch.float8_e4m3fnuz, 32)
     run_config('cdna3.bf8       L16 K32', GTR,
                amd.make_gtr_fdpa(16, fp.S1E5M2, fp.S1E5M2), torch.float8_e5m2fnuz, 32)
+    run_config('cdna3.fp8xbf8   L16 K32', GTR,
+               amd.make_gtr_fdpa(16, fp.S1E4M3, fp.S1E5M2), torch.float8_e4m3fnuz, 32,
+               b_dtype=torch.float8_e5m2fnuz)
 
 ###########################################################
 
