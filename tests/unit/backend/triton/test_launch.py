@@ -33,6 +33,7 @@ from fpy2.utils import NamedId
 
 from .programs import (
     K,
+    aligned_sum,
     any_all,
     batched_dot,
     logb,
@@ -818,3 +819,28 @@ def test_an_unfolded_rounding_with_a_nan_compiles_and_agrees():
             3 * 2**-10, -2**-10, 0.3, 17.0, 19.0, 1.1875]
     _agree_on(_to_e4m3, torch.tensor([[v] for v in vals]), 1,
               unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
+
+
+@pytest.mark.parametrize('rm', [fp.RM.RTZ, fp.RM.RNE, fp.RM.RNA, fp.RM.RTN, fp.RM.RTP])
+def test_an_aligned_sum_agrees_on_hard_cases(rm: fp.RM) -> None:
+    """Zeros, subnormals and the largest magnitudes put the grid anywhere in
+    its range, a row of zeros at its lowest; one half and just below it where
+    the scale is largest."""
+    from fpy2.backend.triton.launcher import _torch_dtype
+    hard = [0.0, -0.0, 2.0 ** -149, -(2.0 ** -149), 2.0 ** -126, 3.4028234663852886e38,
+            -3.4028234663852886e38, 1.0, -1.5, 2.0 ** -140 * 3, 1e-30, -7e20]
+    rng = random.Random(0)
+    half = (0.5 - 2.0 ** -25) * 2.0 ** 104
+    rows = [[0.0, -0.0, 0.0, 0.0], [2.0 ** -149, 0.0, -(2.0 ** -148), 0.0],
+            # scaled down by 2 ** 104: one half, and just below it
+            [2.0 ** 127, half, -half, 0.5 * 2.0 ** 104],
+            # scaled up by 2 ** 149
+            [2.0 ** -126, 3 * 2.0 ** -149, 2.0 ** -149, -(2.0 ** -148)]]
+    rows += [[rng.choice(hard) if rng.random() < 0.5 else rng.uniform(-100, 100)
+              for _ in range(4)] for _ in range(60)]
+    f = aligned_sum(rm)
+    n = len(rows)
+    src = _compile(f, [ListType(ListType(F32, 4), n), ListType(RealType(fp.FP64), n), INT],
+                   unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
+    ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
+    _agree(src, f, [torch.tensor(rows, dtype=torch.float32).cuda(), ot], block=64)

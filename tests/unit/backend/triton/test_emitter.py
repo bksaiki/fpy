@@ -1140,3 +1140,20 @@ def test_a_reduction_over_a_row_in_memory_is_refused():
 
     with pytest.raises(TritonEmitError, match='folds over a list held'):
         _rows(f, 4, 1)
+
+
+@pytest.mark.parametrize('rm, halves', [
+    (fp.RM.RTZ, True), (fp.RM.RNE, True), (fp.RM.RNA, True),
+    (fp.RM.RTN, False), (fp.RM.RTP, False),
+])
+def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> None:
+    """Where the round sends what underflows to zero, the scale-in is two
+    exact multiplies in `fp32`; floor and ceil do not, so it stays an `ldexp`
+    in `fp64`."""
+    from .programs import aligned_sum
+    src = TritonCompiler(drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS).compile(
+        aligned_sum(rm), ctx=fp.REAL,
+        arg_types=[ListType(ListType(_R32, 4), NamedId('n')),
+                   ListType(RealType(fp.FP64), NamedId('n')), RealType(fp.INTEGER)])
+    assert ('bitcast=True) * ((' in src.source) is halves
+    assert ('.to(tl.float64), (-' in src.source) is not halves

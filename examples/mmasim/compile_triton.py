@@ -51,11 +51,11 @@ Build = Callable[[], tuple[fp.Function, list[Type]]]
 
 _BLOCK = 64
 
-_EDGE_EVERY = 4
-"""Every this many `--run` draws, one puts an edge value in an element with
-probability :data:`_EDGE`."""
+_HARD_EVERY = 4
+"""Every this many `--run` draws, one puts a hard case in an element with
+probability :data:`_HARD`."""
 
-_EDGE = 0.25
+_HARD = 0.25
 
 
 def _fmt(t: Type) -> SizedFormat:
@@ -141,7 +141,7 @@ def compile_matmul(
     return kernel, design, arg_types
 
 
-def _edges(fmt: SizedFormat) -> list[float]:
+def _hard_cases(fmt: SizedFormat) -> list[float]:
     """The values of *fmt* a random draw misses: the zeros, the smallest and
     largest magnitudes, the least normal, and the specials it has."""
     hi = fmt.to_ordinal(fmt.maxval())
@@ -156,11 +156,11 @@ def _edges(fmt: SizedFormat) -> list[float]:
     return list(out.values())
 
 
-def _sample(fmt: SizedFormat, rng: random.Random, edge: float = 0.0) -> float:
-    """A value of *fmt*: an edge value with probability *edge*, else half over
+def _sample(fmt: SizedFormat, rng: random.Random, hard: float = 0.0) -> float:
+    """A value of *fmt*: a hard case with probability *hard*, else half over
     its whole range, half near one."""
-    if edge and rng.random() < edge:
-        return rng.choice(_edges(fmt))
+    if hard and rng.random() < hard:
+        return rng.choice(_hard_cases(fmt))
     hi = fmt.to_ordinal(fmt.maxval())
     try:
         fmt.from_ordinal(-1)
@@ -188,21 +188,21 @@ def _dtype(fmt: Format) -> 'torch.dtype':
     return dtypes[scalar]
 
 
-def _vector(t: Type, rng: random.Random, edge: float = 0.0) -> list[float]:
+def _vector(t: Type, rng: random.Random, hard: float = 0.0) -> list[float]:
     """A value of each of list type *t*'s elements."""
-    return [_sample(_fmt(t), rng, edge) for _ in range(_length(t))]
+    return [_sample(_fmt(t), rng, hard) for _ in range(_length(t))]
 
 
-def _row(t: Type, rng: random.Random, edge: float = 0.0) -> float | list[float]:
+def _row(t: Type, rng: random.Random, hard: float = 0.0) -> float | list[float]:
     """A value of *t*, or of each of its elements."""
-    return _vector(t, rng, edge) if isinstance(t, _L) else _sample(_fmt(t), rng, edge)
+    return _vector(t, rng, hard) if isinstance(t, _L) else _sample(_fmt(t), rng, hard)
 
 
 def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
                m: int, n: int, trials: int, seed: int,
-               block: int | None = _BLOCK, edge_every: int = _EDGE_EVERY) -> int:
+               block: int | None = _BLOCK, hard_every: int = _HARD_EVERY) -> int:
     """How many of the *m* x *n* outputs, over *trials* draws, the kernel gets
-    bit for bit.  Every *edge_every*-th draw is heavy in edge values."""
+    bit for bit.  Every *hard_every*-th draw is heavy in hard cases."""
     import torch
 
     rng = random.Random(seed)
@@ -210,7 +210,7 @@ def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
     dtype = _dtype(_fmt(c))
     agree = 0
     for trial in range(trials):
-        e = _EDGE if (trial + 1) % edge_every == 0 else 0.0
+        e = _HARD if (trial + 1) % hard_every == 0 else 0.0
         A = [_row(a, rng, e) for _ in range(m)]
         BT = [_row(b, rng, e) for _ in range(n)]
         C = [[_row(c, rng, e) for _ in range(n)] for _ in range(m)]

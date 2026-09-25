@@ -41,6 +41,7 @@ from ...analysis.format_infer import (
     rounds_exactly,
     to_abstract,
 )
+from ...analysis.format_infer.format import AbstractFormat
 from ...analysis.reaching_defs import same_object_defs
 from ...analysis.storage_infer import StorageSelectionError, join, of_bound
 from ...ast import (
@@ -116,7 +117,8 @@ from ...ast import (
 from ...ast.visitor import Visitor
 from ...number import INTEGER, REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
-from ...transform.path import walk_exprs
+from ...transform.path import walk_exprs, walk_stmts
+from ...transform.simplify_if import _reads
 from ...types import BoolType, ListType, RealType
 from ...utils import Unionfind
 from ..backend import CompileError
@@ -293,6 +295,10 @@ def _integral_round(ctx: Context) -> str | None:
     return _INT_ROUND.get(ctx.rm)
 
 
+_TO_ZERO_OR_NEAREST = frozenset({RoundingMode.RTZ, RoundingMode.RNE, RoundingMode.RNA})
+"""Integral rounds that send anything below one half to zero."""
+
+
 _LOGB: dict[TritonScalar, tuple[int, int, int, float, int, str]] = {
     TritonScalar.F16: (15, 10, 0x1F, 2.0 ** -14, 11, 'tl.int16'),
     TritonScalar.F32: (127, 23, 0xFF, 2.0 ** -126, 24, 'tl.int32'),
@@ -304,6 +310,23 @@ power of two a subnormal is scaled by, the integer to bitcast through).
 The scale is chosen so the *smallest* subnormal becomes normal: fp32's is
 `2**-149`, and `2**-149 * 2**24` is `2**-125`.
 """
+
+
+def _scaled(e: Mul) -> tuple[Expr, Expr] | None:
+    """*e* as ``(n, x)`` where it is ``2 ** n * x``, else `None`."""
+    for scale, value in ((e.first, e.second), (e.second, e.first)):
+        if (isinstance(scale, Pow) and len(scale.args) == 2
+                and isinstance(scale.args[0], RationalVal)
+                and scale.args[0].as_rational() == 2):
+            return scale.args[1], value
+    return None
+
+
+def _magnitude(af: AbstractFormat | None) -> float:
+    """The largest finite magnitude *af* admits; infinite where unknown."""
+    if af is None or not all(isinstance(b, RealFloat) for b in (af.pos_bound, af.neg_bound)):
+        return math.inf
+    return float(max(abs(af.pos_bound), abs(af.neg_bound)))
 
 
 def _joined(bounds: list[FormatBound]) -> TritonScalar | None:
@@ -416,6 +439,11 @@ class _Emitter(Visitor):
     """How many flattened branches enclose the statement being emitted."""
     _merging: set[NamedId]
     """The lists those branches merge."""
+    _fused: dict[int, tuple[Expr, Expr, TritonScalar]]
+    """Rounds of a scale-in `2 ** n * x`, by `id`, lowered as one operation in
+    `x`'s storage: `(n, x, storage)`; see :meth:`_fuse_rounds`."""
+    _unmaterialized: set[Definition]
+    """The scale-ins those rounds compute themselves."""
 
     def __init__(
         self,
@@ -474,6 +502,8 @@ class _Emitter(Visitor):
         self._next_tmp = 0
         self._branches = 0
         self._merging = set()
+        self._fused, self._unmaterialized = {}, set()
+        self._fuse_rounds()
 
     # -- storage and context -------------------------------------------
 
@@ -1114,6 +1144,8 @@ class _Emitter(Visitor):
         otherwise the context must be a hardware conversion, native or
         directed.
         """
+        if isinstance(e, Round) and (fused := self._fused.get(id(e))) is not None:
+            return self._emit_fused_round(e, *fused)
         arg = self.emit(e.arg)
         ctx = self._active_ctx(e)
         if rounds_exactly(e, self.format_info.by_expr, ctx):
@@ -1141,6 +1173,83 @@ class _Emitter(Visitor):
                 f'a cast from a float into `{ctx}` saturates where the context wraps'
             )
         return self._explicit_cast(arg, self._storage(e))
+
+    def _fuse_rounds(self) -> None:
+        """Find the integral rounds of a scale-in `RescaleFixed` split off, to
+        lower each ``round(2 ** n * x)`` as one operation in `x`'s float
+        storage `S`.
+
+        A round under a mode that sends anything below one half to zero reads
+        its argument only where it is one half or more, and there
+        `2 ** n * x` is `x` shifted, exact in `S` while it cannot overflow.  So
+        every round of the scale-in must be under such a mode and bounded
+        below `2 ** bias_S`, and `|n| <= 2 * (bias_S - 1)`, which keeps both
+        factors of :meth:`_scale_by_halves` normal.  The scale-in is not
+        materialized: what it reads must reach each round unchanged."""
+        stmt_of = {id(s.expr): s for _, s in walk_stmts(self.func) if isinstance(s, Assign)}
+        round_of = {
+            id(e.arg): e for _, e in walk_exprs(self.func)
+            if isinstance(e, Round) and isinstance(e.arg, Var) and id(e) in stmt_of
+        }
+        for d in self.def_use.defs:
+            site = d.site
+            if not isinstance(site, Assign) or not isinstance(site.expr, Mul):
+                continue
+            parts = _scaled(site.expr)
+            uses = self.def_use.uses.get(d, set())
+            if parts is None or not uses or any(id(u) not in round_of for u in uses):
+                continue
+            n, x = parts
+            rounds = [round_of[id(u)] for u in uses]
+            try:
+                held = self._storage(x)
+                exact = self._active_ctx(site.expr) is REAL
+                ctxs = [self._active_ctx(r) for r in rounds]
+            except (TritonEmitError, StorageSelectionError):
+                continue
+            if not exact or held not in _LOGB:
+                continue
+            bias = _LOGB[held][0]
+            af = to_abstract(self.format_info.by_expr.get(n))
+            if af is None or af.exp < 0 or _magnitude(af) > 2 * (bias - 1):
+                continue
+            here = self.def_use.reach[site]
+            read = _reads(site.expr)
+            if all(
+                isinstance(c, MPFixedContext) and _integral_round(c) is not None
+                and c.rm in _TO_ZERO_OR_NEAREST
+                and _magnitude(to_abstract(self.format_info.by_expr.get(r))) < 2 ** bias
+                and all(self.def_use.reach[stmt_of[id(r)]].get(v) is here.get(v) for v in read)
+                for r, c in zip(rounds, ctxs)
+            ):
+                self._unmaterialized.add(d)
+                for r in rounds:
+                    self._fused[id(r)] = (n, x, held)
+
+    def _emit_fused_round(self, e: Round, n: Expr, x: Expr, held: TritonScalar) -> str:
+        """``round(2 ** n * x)`` in `x`'s storage; :meth:`_fuse_rounds` says
+        when."""
+        ctx = self._active_ctx(e)
+        integral = _integral_round(ctx)
+        assert integral is not None
+        code = f'{integral}({self._scale_by_halves(self._emit_as(x, held), self.emit(n), held)})'
+        want = self._storage(e)
+        if want.is_float() and not getattr(ctx, 'enable_neg_zero', True):
+            code = f'({code} + 0.0)'    # `-0` is not an integer
+        return self._maybe_cast(code, held, want, self.format_info.by_expr.get(e))
+
+    def _scale_by_halves(self, x: str, n: str, held: TritonScalar) -> str:
+        """``x * 2 ** n`` as two multiplies by powers of two built from their
+        bits, where one power of two would not be normal.  Both scale the same
+        way, so the product between them lies between `x` and the result:
+        it is exact wherever the result is."""
+        bias, mbits, _, _, _, ity = _LOGB[held]
+        t = self._bind(f'{n}.to({ity})')
+        h = self._bind(f'({t} >> 1)')
+
+        def pow2(k: str) -> str:
+            return f'(({bias} + {k}) << {mbits}).to({held.format()}, bitcast=True)'
+        return f'({x} * {pow2(h)} * {pow2(f"({t} - {h})")})'
 
     def _emit_rounded(self, e: Round | Cast, v: float, ctx: Context) -> str:
         """A literal rounded, folded here: Triton would retype it rather than
@@ -1265,13 +1374,8 @@ class _Emitter(Visitor):
         is exact, it replaces the product only where the context does not
         round it.
         """
-        for scale, value in ((e.first, e.second), (e.second, e.first)):
-            if not isinstance(scale, Pow) or len(scale.args) != 2:
-                continue
-            base, exp = scale.args
-            if not (isinstance(base, RationalVal)
-                    and base.as_rational() == 2):
-                continue
+        if (parts := _scaled(e)) is not None:
+            exp, value = parts
             active = self._active_ctx(e)
             if active is not REAL and not rounds_exactly(
                 e, self.format_info.by_expr, active,
@@ -1647,6 +1751,8 @@ class _Emitter(Visitor):
                 f'a `{type(stmt.target).__name__}` assignment target has no '
                 'Triton spelling'
             )
+        if self.def_use.find_def_from_site(stmt.target, stmt) in self._unmaterialized:
+            return      # its rounds compute it
         if isinstance(stmt.expr, Empty):
             return self._allocate(stmt, ctx)
         if isinstance(stmt.expr, ListSlice) and (

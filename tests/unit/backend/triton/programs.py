@@ -88,3 +88,18 @@ def round_to_int(rm: fp.RoundingMode) -> fp.Function:
         return out
 
     return k
+
+
+def aligned_sum(rm: fp.RM) -> fp.Function:
+    """`fused_sum`'s shape: each row's terms rounded at a grid its largest
+    exponent sets, which `RescaleFixed` scales in, then summed."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+        for r in range(len(out)):
+            xs = xss[r]
+            e = max([max(fp.logb(x), -126) for x in xs])
+            with fp.MPFixedContext(e - 24, rm):
+                ts = [fp.round(x) for x in xs]
+            out[r] = sum(ts)
+        return out
+    return f
