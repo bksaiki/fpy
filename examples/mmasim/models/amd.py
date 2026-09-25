@@ -54,12 +54,14 @@ def _default_e_zero_tr(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext) -> int:
     """The exponent a zero product reads at, so that unlike T-FDPA a zero
     never raises the alignment maximum.
 
-    One below the smallest subnormal *product*, `2 ** (expmin_a + expmin_b)`.
+    One below the smallest subnormal *product*, `2 ** (expmin_a + expmin_b)`,
+    and at most FP32's `emin`, so that when every product is zero, `c` alone
+    sets the alignment (MMA-Sim reads a zero at -999).
     The slack in a larger sentinel is not free: the alignment position becomes
     a scale exponent once the rounding is rescaled, so a far-below sentinel
     asks for a `2 ** 1023` nobody can store.
     """
-    return a_ctx.expmin + b_ctx.expmin - 1
+    return min(a_ctx.expmin + b_ctx.expmin - 1, EMIN_FP32)
 
 ###########################################################
 # Helpers

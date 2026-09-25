@@ -80,6 +80,14 @@ def check_directed():
     d = tr(pad([-2.0**13, -0.5, -0.25, -0.125], 8), pad([2.0**10, 1.0, 1.0, 1.0], 8), 2.0**23)
     check('tr-fdpa round-down', float(d) == -0.5, f'got {float(d)}')
 
+    # CDNA3 zero sentinel: with every product zero, c alone sets the
+    # alignment, so a tiny c survives (MMA-Sim reads a zero at -999)
+    for name, model, L in [('tr-fdpa f16', amd.make_tr_fdpa(8, fp.FP16, fp.FP16), 8),
+                           ('gtr-fdpa fp8', amd.make_gtr_fdpa(16, fp.S1E4M3, fp.S1E4M3), 16),
+                           ('gtr-fdpa bf8', amd.make_gtr_fdpa(16, fp.S1E5M2, fp.S1E5M2), 16)]:
+        d = model([0.0] * L, [0.0] * L, 2.0**-100)
+        check(f'{name} zero products keep c', float(d) == 2.0**-100, f'got {float(d)}')
+
 ###########################################################
 # Tier 2: randomized differential sweep vs MMA-Sim (needs torch)
 
@@ -95,8 +103,12 @@ def run_sweep(trials):
         fails = 0
         for i in range(trials):
             gen = vc.GENS[i % len(vc.GENS)]
-            a, b = gen(K, a_dtype), gen(K, b_dtype)
-            c = gen(1, torch.float32)[0]
+            if i % 6 == 5:  # every product zero: c alone sets the alignment
+                a, b = vc.rand_zeros(K, a_dtype), vc.rand_zeros(K, b_dtype)
+                c = vc.rand_bits(1, torch.float32)[0]
+            else:
+                a, b = gen(K, a_dtype), gen(K, b_dtype)
+                c = gen(1, torch.float32)[0]
             ref = op.dpa(a.clone(), b.clone(), c.clone())
             if tf32:  # xf32: truncate inputs on the FPy side
                 af, bf = vc.tf32_list(a), vc.tf32_list(b)
