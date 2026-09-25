@@ -9,6 +9,7 @@ models/nv.py      NVIDIA: make_t_fdpa, make_t_fdpa_chain, make_st_fdpa, make_gst
 models/amd.py     AMD:    make_e_fdpa, make_ftz_addmul, make_tr_fdpa, make_gtr_fdpa
 models/utils.py   shared helpers, and make_fma_dpa
 compile.py        compile every design to C++ and report where each one stops
+compile_triton.py compile every design to a Triton kernel; -r runs and compares
 tests/            validation against the reference implementation
 bench/            runtime of the Triton kernels, and a hand-written reference
 ```
@@ -24,6 +25,7 @@ with `-m`:
 ```sh
 python -m models.nv          # Table 8 demo (or models.amd)
 python compile.py            # every design; -v for the failures, -o DIR to emit
+python compile_triton.py -r 64   # as Triton kernels, compared on 64 draws (GPU)
 ```
 
 ## Tests

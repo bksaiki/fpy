@@ -1,19 +1,12 @@
 """Expect tests: the exact Triton source the compiler emits.
 
-These run anywhere -- no GPU, no torch -- and they are what CI can actually
-check of this backend.  Execution is verified separately in `test_launch.py`,
-which needs hardware and therefore skips; these do not, so an emitter change
-shows up as a diff here rather than silently.
-
-Pinning the *whole* text rather than fragments is the point.  A fragment
-assertion passes while everything around it changes; the trap this backend
-exists to avoid -- an fp16 product computed in fp16 and widened afterwards --
-is a change of one character's position, not of any substring worth grepping
-for.
-
-When one of these fails, read the diff before updating it: the question is
-whether the new text is a better kernel or a broken one.
+These need no GPU; `test_launch.py` runs the kernels.  Pinning the whole text
+matters: an fp16 product computed in fp16 and widened afterwards differs from
+the right kernel by one cast's position, not by any substring worth grepping.
+When one fails, read the diff: is the new text a better kernel or a broken one?
 """
+
+import re
 
 import pytest
 
@@ -21,21 +14,19 @@ import fpy2 as fp
 from fpy2.backend.triton import TritonCompiler, TritonEmitError
 from fpy2.types import ListType, RealType
 
+from .programs import (
+    K,
+    any_all,
+    batched_dot,
+    logb,
+    nan_inf,
+    round_to_int,
+    row_bound,
+    scaled,
+    signbit,
+)
+
 FP16 = fp.IEEEContext(5, 16)
-K = 8
-
-
-@fp.fpy(ctx=fp.REAL)
-def _batched_dot(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
-                 out: list[fp.Real], BLOCK: fp.Real):
-    """The running example: FP16 in, exact products, FP32 accumulation."""
-    for r in range(len(xss)):
-        acc = fp.round(0)
-        for k in range(K):
-            with fp.FP32:
-                acc = acc + xss[r][k] * yss[r][k]
-        out[r] = acc
-    return out
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -48,7 +39,7 @@ def _scale(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
 
 _DOT = '''\
 @triton.jit
-def _batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
+def batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     i = tl.program_id(0) * BLOCK
     j = i + tl.arange(0, BLOCK)
     r = j
@@ -65,7 +56,7 @@ def test_the_batched_dot_product():
     both fp16 operands widened *before* the product rather than after.
     """
     src = TritonCompiler(drop_asserts=True).compile(
-        _batched_dot, ctx=fp.REAL, arg_types=[
+        batched_dot, ctx=fp.REAL, arg_types=[
             ListType(ListType(RealType(FP16), K), 4),
             ListType(ListType(RealType(FP16), K), 4),
             ListType(RealType(fp.FP32), 4),
@@ -94,10 +85,9 @@ def _scale(xs_ptr, out_ptr, BLOCK: tl.constexpr):
 
 def test_fp32_throughout_disables_fusion():
     """The same program at FP32: the product rounds, so contracting it into
-    an `fma` is observable and the launcher must not.  Measured on hardware
-    at 590 of 2000 inputs differing."""
+    an `fma` is observable and the launcher must not."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _batched_dot, ctx=fp.FP32, arg_types=[
+        batched_dot, ctx=fp.FP32, arg_types=[
             ListType(ListType(RealType(fp.FP32), K), 4),
             ListType(ListType(RealType(fp.FP32), K), 4),
             ListType(RealType(fp.FP32), 4),
@@ -110,7 +100,7 @@ def test_fp32_throughout_disables_fusion():
 @fp.fpy(ctx=fp.FP32)
 def _reduce(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real],
             BLOCK: fp.Real):
-    """`max`/`min`/`sum` over a scalarized row."""
+    """`max`/`min`/`sum` over a literal list."""
     for i in range(len(xs)):
         row = [xs[i], ys[i], 2.0]
         out[i] = max(row) - min(row) + sum(row)
@@ -133,17 +123,10 @@ def _empty_max(out: list[fp.Real], BLOCK: fp.Real):
     return out
 
 
-def test_reductions_fold_over_the_scalarized_elements():
-    """A sequence is gone by emission, so a reduction is a fold over values.
-
-    `propagate_nan` carries FPy's IEEE 754-2019 `maximum`; Triton's default
-    is `maximumNumber`, which returns the *other* operand.  `sum` folds left
-    because FPy's does, in the storage of its context, whose add is its
-    rounding.
-
-    Verified against the interpreter on hardware at 8/8 inputs, NaN and
-    infinite rows included.
-    """
+def test_reductions_over_a_literal_list_fold_its_elements():
+    """`propagate_nan` carries FPy's IEEE 754-2019 `maximum`; Triton's default
+    is `maximumNumber`, which returns the *other* operand.  `sum` folds left,
+    as FPy's does, in the storage of its context."""
     src = TritonCompiler(drop_asserts=True).compile(
         _reduce, ctx=fp.FP32, arg_types=[
             ListType(RealType(fp.FP32), 8),
@@ -216,49 +199,16 @@ def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
     tl.store(out_ptr + i, acc, mask=(j < 4))'''
 
 
-@fp.fpy(ctx=fp.REAL)
-def _row_bound(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
-               out: list[fp.Real], BLOCK: fp.Real):
-    """The rows bound to names, which is what inlining a call produces."""
-    for r in range(len(out)):
-        xs = xss[r]
-        ys = yss[r]
-        acc = fp.round(0)
-        for k in range(K):
-            with fp.FP32:
-                acc = acc + xs[k] * ys[k]
-        out[r] = acc
-    return out
-
-
 def test_a_row_bound_to_a_name_flattens_to_one_load():
-    """`xs = xss[r]` names a sub-list, which Triton has no value for.
-
-    The binding is not emitted: it records that `xs` is `xss` at a prefix, so
-    `xs[k]` is one load off `xss_ptr` rather than a load of a load.  Emitting
-    it as a scalar `tl.load` produced `tl.load(xs_ptr + k)`, and `xs_ptr` is
-    not a parameter -- checked on the card as `NameError: xs_ptr is not
-    defined` at JIT time.
-
-    Byte-identical to `_DOT`, which writes `xss[r][k]` inline, up to the name
-    the temporaries got.
-    """
+    """`xs = xss[r]` is not emitted: `xs[k]` is one load off `xss_ptr`, so the
+    kernel is `_DOT`'s."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _row_bound, ctx=fp.REAL, arg_types=[
+        row_bound, ctx=fp.REAL, arg_types=[
             ListType(ListType(RealType(FP16), K), 4),
             ListType(ListType(RealType(FP16), K), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
-    assert src.source == '''\
-@triton.jit
-def _row_bound(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
-    i = tl.program_id(0) * BLOCK
-    j = i + tl.arange(0, BLOCK)
-    r = j
-    acc = 0.0
-    for k in tl.static_range(8):
-        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32)))
-    tl.store(out_ptr + r, acc, mask=(j < 4))'''
+    assert src.source == _DOT.replace('def batched_dot(', 'def row_bound(')
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -274,12 +224,7 @@ def _store_row(xss: list[list[fp.Real]], oss: list[list[fp.Real]],
 
 
 def test_a_store_through_a_row_resolves_the_same_way():
-    """A store went straight to `{var}_ptr`, bypassing the row resolution.
-
-    Load and store go through one resolver, so naming a row works the same
-    either side of the assignment; before, the load beside it was already
-    correct while the store emitted `o_ptr`.
-    """
+    """Load and store resolve a named row alike: no `o_ptr` is emitted."""
     src = TritonCompiler(drop_asserts=True).compile(
         _store_row, ctx=fp.FP32, arg_types=[
             ListType(ListType(RealType(fp.FP32), 4), 4),
@@ -292,7 +237,7 @@ def test_a_store_through_a_row_resolves_the_same_way():
 
 
 @fp.fpy(ctx=fp.FP32)
-def _scaled(x: fp.Real) -> fp.Real:
+def _triple(x: fp.Real) -> fp.Real:
     """A callee, so the comprehension below holds a call."""
     t = x * 3.0
     return t
@@ -303,7 +248,7 @@ def _comp_of_calls(xss: list[list[fp.Real]], out: list[fp.Real],
                    BLOCK: fp.Real):
     """A comprehension whose elements are calls."""
     for r in range(len(out)):
-        ys = [_scaled(xss[r][k]) for k in range(3)]
+        ys = [_triple(xss[r][k]) for k in range(3)]
         out[r] = ys[0] + ys[1] + ys[2]
     return out
 
@@ -338,16 +283,8 @@ def test_a_comprehension_in_a_lazy_position_is_a_loop_too():
             ListType(ListType(RealType(fp.FP32), 3), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
-    assert 'tl.max(t6, axis=1)' in src.source
+    assert re.search(r'tl\.max\(\w+, axis=1\)', src.source)
     assert src.source.count('tl.maximum') == 1, 'the tail folds in once'
-
-
-@fp.fpy(ctx=fp.FP32)
-def _any_all(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
-    for r in range(len(out)):
-        flags = [xss[r][k] > 0.0 for k in range(3)]
-        out[r] = 2.0 if all(flags) else (1.0 if any(flags) else 0.0)
-    return out
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -363,7 +300,7 @@ def test_any_and_all_fold_with_bitwise_connectives():
     operand rather than a tile -- the same reason `and` / `or` are spelled
     that way."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _any_all, ctx=fp.FP32, arg_types=[
+        any_all, ctx=fp.FP32, arg_types=[
             ListType(ListType(RealType(fp.FP32), 3), 6),
             ListType(RealType(fp.FP32), 6),
             RealType(fp.INTEGER)])
@@ -373,7 +310,7 @@ def test_any_and_all_fold_with_bitwise_connectives():
 
 
 def test_an_empty_any_is_its_identity():
-    """`any([])` is False and `all([])` is True, as the interpreter gives.
+    """`any([])` is False, as the interpreter gives.
 
     With `optimize`, `ConstFold` settles the whole expression before the
     emitter sees it, so the fold itself is checked with it off.
@@ -388,18 +325,11 @@ def test_an_empty_any_is_its_identity():
         'tl.store(out_ptr + i, 0.0, mask=(j < 4))')
 
 
-@fp.fpy(ctx=fp.FP32)
-def _signbit(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        out[i] = 1.0 if fp.signbit(xs[i]) else 0.0
-    return out
-
-
 def test_signbit_reads_the_sign_bit():
     """No float comparison separates `-0.0` from `0.0`, so this bitcasts to
     the same-width integer and tests for negative."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _signbit, ctx=fp.FP32, arg_types=[
+        signbit, ctx=fp.FP32, arg_types=[
             ListType(RealType(fp.FP32), 8),
             ListType(RealType(fp.FP32), 8),
             RealType(fp.INTEGER)])
@@ -435,19 +365,10 @@ def test_a_boolean_merge_has_bool_storage():
     assert '.to(tl.int1' not in src.source
 
 
-@fp.fpy(ctx=fp.FP32)
-def _nan_inf(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        v = fp.nan() if xs[i] > 1.0 else (
-            fp.inf() if xs[i] > 0.0 else -fp.inf())
-        out[i] = v
-    return out
-
-
 def test_nan_and_inf_are_literals():
     """Values, not operations, so they are spelled and retyped where used."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _nan_inf, ctx=fp.FP32, arg_types=[
+        nan_inf, ctx=fp.FP32, arg_types=[
             ListType(RealType(fp.FP32), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
@@ -502,19 +423,12 @@ def test_a_reduction_over_memory_stays_rolled():
     assert src.source.count('tl.load(xss_ptr') == 1, 'one load, not eight'
 
 
-@fp.fpy(ctx=fp.FP32)
-def _logb(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        out[i] = fp.logb(xs[i])
-    return out
-
-
 def test_logb_reads_the_exponent_field():
     """No correctly-rounded primitive exists -- `tl.log2` is a
     transcendental, which the op table excludes -- so the exponent is read
     from the bits, which is exact."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _logb, ctx=fp.FP32, arg_types=[
+        logb, ctx=fp.FP32, arg_types=[
             ListType(RealType(fp.FP32), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
@@ -542,28 +456,16 @@ def _small_const(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
 
 
 def test_a_cast_asks_about_values_not_only_types():
-    """`scalar_fits_in` asks whether the two *types* nest; a conversion only
-    needs the *values* to.  They come apart wherever storage is wider than
-    the bound it was chosen to hold -- which the cpp backend already knew,
-    as `_value_fits`.
-    """
+    """`-132` is stored as `int16`, which `float16` does not nest, but its
+    value fits, so it converts rather than being refused."""
     src = TritonCompiler(drop_asserts=True).compile(
         _small_const, ctx=fp.FP16, arg_types=[
             ListType(RealType(fp.FP16), 4),
             ListType(RealType(fp.FP16), 4),
             RealType(fp.INTEGER)])
-    assert 'tl.maximum' in src.source
-
-
-@fp.fpy(ctx=fp.REAL)
-def _scaled(xs: list[fp.Real], ns: list[fp.Real], out: list[fp.Real],
-            BLOCK: fp.Real):
-    """`2 ** n * x` with a per-lane `n` -- what `RescaleFixed` emits."""
-    for i in range(len(out)):
-        with fp.REAL:
-            t = (2 ** ns[i]) * xs[i]
-        out[i] = t
-    return out
+    assert src.source.splitlines()[-1] == (
+        '    tl.store(out_ptr + i, tl.maximum(tl.load(xs_ptr + i, mask=(j < 4), '
+        "other=0.0), -132.0, propagate_nan=tl.PropagateNan.ALL), mask=(j < 4))")
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -588,7 +490,7 @@ def test_a_power_of_two_product_is_ldexp():
     """`ldexp` is `scaleB`: exact, where the product would round twice and
     rest on `exp2` returning the power exactly, which nothing guarantees."""
     src = TritonCompiler(drop_asserts=True).compile(
-        _scaled, ctx=fp.REAL, arg_types=_SCALE_ARGS)
+        scaled, ctx=fp.REAL, arg_types=_SCALE_ARGS)
     assert 'libdevice.ldexp(' in src.source
     assert '**' not in src.source
 
@@ -601,31 +503,10 @@ def test_ldexp_is_refused_where_the_context_would_round():
             _scaled_rounding, ctx=fp.FP32, arg_types=_SCALE_ARGS)
 
 
-def _round_to_int(mode: str):
-    """A kernel rounding to the integers under *mode*."""
-    src = (
-        'import fpy2 as fp\n'
-        '@fp.fpy(ctx=fp.REAL)\n'
-        'def k(xs, out, BLOCK):\n'
-        '    for i in range(len(out)):\n'
-        f'        with fp.MPFixedContext(-1, fp.RoundingMode.{mode}):\n'
-        '            t = fp.round(xs[i])\n'
-        '        out[i] = t\n'
-        '    return out\n'
-    )
-    import importlib.util
-    import pathlib
-    import sys
-    import tempfile
-    d = pathlib.Path(tempfile.mkdtemp())
-    path = d / f'ir_{mode}.py'
-    path.write_text(src)
-    spec = importlib.util.spec_from_file_location(f'ir_{mode}', path)
-    m = importlib.util.module_from_spec(spec)
-    sys.modules[f'ir_{mode}'] = m
-    spec.loader.exec_module(m)
+def _round_to_int(mode: str) -> str:
+    """The source of `round_to_int` under *mode*."""
     return TritonCompiler(drop_asserts=True).compile(
-        m.k, ctx=fp.REAL, arg_types=[
+        round_to_int(fp.RoundingMode[mode]), ctx=fp.REAL, arg_types=[
             ListType(RealType(fp.FP32), 4),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)]).source
@@ -649,12 +530,11 @@ def test_a_mode_with_no_c_function_is_refused():
         _round_to_int('RTO')
 
 
-def test_a_name_no_storage_holds_is_refused():
-    """With an unbounded exponent `t` can be any real.  Emitted anyway it was
-    computed in its operand's `f32`, as the cpp backend refuses to.  The
-    exponent, which `ldexp` takes as an `int32`, is refused first."""
-    with pytest.raises(TritonEmitError, match='narrow|no storage holds'):
+def test_an_unbounded_exponent_is_not_narrowed_to_int32():
+    """`ldexp` takes its exponent as an `int32`, which an unbounded one does
+    not fit."""
+    with pytest.raises(TritonEmitError, match='narrow tl.int64 to tl.int32'):
         TritonCompiler(drop_asserts=True).compile(
-            _scaled, ctx=fp.REAL, arg_types=[
+            scaled, ctx=fp.REAL, arg_types=[
                 _SCALE_ARGS[0], ListType(RealType(fp.INTEGER), 4),
                 *_SCALE_ARGS[2:]])

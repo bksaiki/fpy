@@ -16,8 +16,10 @@ flattened, so a kernel's time does not depend on its data.
 
 import argparse
 import sys
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -25,9 +27,13 @@ import compile_triton as ct
 from compile import DESIGNS
 
 from fpy2.backend.triton import launch, unavailable
+from fpy2.types import Type
+
+if TYPE_CHECKING:
+    import torch
 
 
-def _timed(fn, reps: int) -> float:
+def _timed(fn: Callable[[], object], reps: int) -> float:
     """Seconds per call of *fn*, after one warm-up."""
     import torch
     fn()
@@ -42,21 +48,20 @@ def _timed(fn, reps: int) -> float:
     return start.elapsed_time(stop) / reps / 1e3
 
 
-def _inputs(arg_types, m: int, n: int, k: int):
+def _inputs(arg_types: list[Type], m: int, n: int, k: int) -> list['torch.Tensor']:
     """Random tensors in each argument's storage, and the output."""
     import torch
     a, b, c, *scales = arg_types
     g = torch.Generator(device='cuda').manual_seed(0)
 
-    def rand(*shape, t):
-        fmt = (t.elt if isinstance(t, ct._L) else t).fmt
-        return torch.randn(*shape, device='cuda', generator=g).to(ct._dtype(fmt))
+    def rand(*shape: int, t: Type) -> torch.Tensor:
+        return torch.randn(*shape, device='cuda', generator=g).to(ct._dtype(ct._fmt(t)))
 
     scale_args = [
-        rand(d, *([t.length] if isinstance(t, ct._L) else []), t=t).abs() + 1
+        rand(d, *([ct._length(t)] if isinstance(t, ct._L) else []), t=t).abs() + 1
         for t, d in zip(scales, (m, n))
     ]
-    out = torch.zeros(m, n, device='cuda', dtype=ct._dtype(c.fmt))
+    out = torch.zeros(m, n, device='cuda', dtype=ct._dtype(ct._fmt(c)))
     return [rand(m, k, t=a), rand(n, k, t=b), rand(m, n, t=c), *scale_args, out]
 
 
@@ -91,7 +96,8 @@ def main(argv: list[str]) -> int:
             print(f'{name:22} {type(ex).__name__}')
             continue
         a, _, _, *scales = arg_types
-        k = a.length if scales else max(args.k // a.length, 1) * a.length
+        k0 = ct._length(a)
+        k = k0 if scales else max(args.k // k0, 1) * k0
         tensors = _inputs(arg_types, m, n, k)
         for block in [*args.blocks, *([None] if args.autotune else [])]:
             t = _timed(partial(launch, kernel, tensors, block=block), args.reps)

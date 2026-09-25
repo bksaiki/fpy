@@ -92,6 +92,7 @@ or, with `pip`:
 ```bash
 pip install fpy2
 ```
+The Triton backend also needs PyTorch, Triton and a GPU: install `fpy2[triton]`.
 
 ### Installing from source
 

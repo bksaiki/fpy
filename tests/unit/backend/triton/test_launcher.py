@@ -8,7 +8,7 @@ import os
 import pytest
 
 import fpy2 as fp
-from fpy2.backend.triton import TritonCompiler, launch, unavailable
+from fpy2.backend.triton import KernelSource, TritonCompiler, launch, unavailable
 from fpy2.types import ListType, RealType
 from fpy2.utils import NamedId
 
@@ -18,6 +18,9 @@ if os.environ.get('FPY_REQUIRE_GPU') not in (None, '', '0') and _WHY is not None
     raise RuntimeError(
         f'FPY_REQUIRE_GPU is set but the Triton runtime is unusable: {_WHY}'
     )
+
+if _WHY is None:
+    import torch
 
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
@@ -39,7 +42,7 @@ def _scale(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real, c: fp.Real):
     return out
 
 
-def _compile(f, *extra):
+def _compile(f: fp.Function, *extra: RealType) -> KernelSource:
     return TritonCompiler(drop_asserts=True).compile(
         f, ctx=fp.FP32,
         arg_types=[ListType(_R, _N), ListType(_R, _N), RealType(fp.INTEGER), *extra])
@@ -48,8 +51,6 @@ def _compile(f, *extra):
 @pytest.mark.parametrize('block', [8, None], ids=['fixed', 'tuned'])
 def test_libdevice_keeps_subnormals(block):
     """`floor` goes through libdevice, which flushes subnormals by default."""
-    import torch
-
     xs = [1e-45, -1e-45, 1e-40, -1e-40, -1.5]
     want = [float(v) for v in _floor(xs, [0.0] * len(xs), 0)]
     xt = torch.tensor(xs, dtype=torch.float32).cuda()
@@ -61,8 +62,6 @@ def test_libdevice_keeps_subnormals(block):
 
 @pytest.mark.parametrize('block', [8, None], ids=['fixed', 'tuned'])
 def test_the_block_need_not_be_last(block):
-    import torch
-
     xt = torch.arange(8, dtype=torch.float32).cuda()
     ot = torch.zeros(8, dtype=torch.float32).cuda()
     launch(_compile(_scale, _R), [xt, ot, 3.0], block=block)
@@ -71,8 +70,6 @@ def test_the_block_need_not_be_last(block):
 
 def test_int32_offsets_refuse_a_larger_tensor():
     """Checked before the device is touched, so storage-less tensors do."""
-    import torch
-
     src = _compile(_floor)
     for n, block in ((2 ** 31, 8), (2 ** 31 - 4, 8)):
         t = torch.empty(n, device='meta')
@@ -81,8 +78,6 @@ def test_int32_offsets_refuse_a_larger_tensor():
 
 
 def test_a_tensor_of_another_dtype_is_refused():
-    import torch
-
     xt = torch.zeros(4, dtype=torch.float64).cuda()
     ot = torch.zeros(4, dtype=torch.float32).cuda()
     with pytest.raises(ValueError, match='compiled for torch.float32'):

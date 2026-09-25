@@ -1,150 +1,31 @@
 """
-cpp backend: which roundings the op table cannot spell.
+cpp backend: this backend's answers to :mod:`fpy2.backend.unfold_round`.
 
-The emitter refuses a rounding under a context its op table does not dispatch
-on, and every refusal names the operator that would fix it.  This module asks
-the same question early enough to act on it, so the answer is a program point
-to rewrite rather than a message to print.
-
-The classification belongs to the backend because :func:`is_native_ctx` does.
-The operators it names are backend-independent, and none of them changes.
+*enable_fenv* false shrinks what counts as native, so a mode the emitter may no
+longer set is a site here rather than a refusal there.
 """
 
-from collections.abc import Callable
-from dataclasses import dataclass
-from enum import Enum, auto
+from functools import cache
 
-from ...analysis import ContextUse, DefineUse
-from ...ast.fpyast import (
-    BinaryOp,
-    Cast,
-    Expr,
-    FuncDef,
-    Round,
-    TernaryOp,
-    UnaryOp,
-)
-from ...number import (
-    REAL,
-    RM,
-    IEEEContext,
-    MPBFixedContext,
-    MPFixedContext,
-    OverflowMode,
-)
+from ...ast.fpyast import FuncDef
+from ...number import RM, IEEEContext, MPBFixedContext, MPFixedContext, OverflowMode
 from ...number.context.context import Context
-from ...transform import (
-    Cursor,
-    EditLog,
-    ExprCursor,
-    FloatToFixed,
-    RescaleFixed,
-    SplitRound,
-    StmtCursor,
-    TransformDeclined,
-    TransformReferenceError,
-    UnfoldOverflow,
-    UnfoldSpecial,
-)
-from ...transform.cursor import expr_sites
+from ...transform import Cursor
+from .. import unfold_round as _u
+from ..unfold_round import UnfoldKind, UnfoldMode, UnfoldSite, UnfoldTarget
 from .target import is_native_ctx, make_op_table
 
 __all__ = ['UnfoldKind', 'UnfoldMode', 'UnfoldSite', 'sites', 'unfold', 'unfold_arith']
 
-_FIXED = (MPFixedContext, MPBFixedContext)
 
-
-class UnfoldMode(Enum):
-    """How much of an unsupported rounding the compiler rewrites rather than
-    refuses.
-
-    - ``NONE``: refuse, and name the operator that would fix it.
-    - ``ROUNDINGS``: lower a rounding the op table cannot spell into integer
-      arithmetic.  Arithmetic *under* such a context still refuses: rewriting it
-      means rounding twice, which is a different claim.
-    - ``DOUBLE_ROUND``: also compute that arithmetic at a native intermediate
-      and re-round, where the correct-double-rounding rules say the two compose
-      to what the one gave.  The intermediate always rounds to nearest -- see
-      `docs/todos/rounding-recovery.md` for why, and for why a round-to-odd
-      level would not close.
-    """
-
-    NONE = 0
-    ROUNDINGS = 1
-    DOUBLE_ROUND = 2
-
-
-class UnfoldKind(Enum):
-    """What is unsupported at a site, which is also which recovery it takes."""
-
-    ARITH = auto()
-    """An operation the op table has no signature for under this context.
-    Recovered by computing at a native intermediate and re-rounding."""
-
-    FLOAT_ROUND = auto()
-    """A rounding to a float context with no C++ analogue: its storage
-    *contains* the format rather than equalling it, so a cast rounds to the
-    storage's own format.  Recovered by lowering the rounding to fixed-point."""
-
-    FIXED_ROUND = auto()
-    """A rounding to a fixed-point context the emitter cannot lower as it
-    stands -- its digits are away from position zero, or its bound has a rule
-    other than an assertion."""
-
-
-@dataclass(frozen=True)
-class UnfoldSite:
-    """One program point the emitter would refuse, and why."""
-
-    cursor: ExprCursor
-    kind: UnfoldKind
-    ctx: Context
-    """The active context that made it a site."""
-
-
-class _Scopes:
-    """The active context per expression.
-
-    `RoundingScopes` answers the same question and also infers formats, which
-    this cannot: it runs *before* the rewrite that makes format inference
-    succeed on these programs.
-    """
-
-    def __init__(self, func: FuncDef):
-        self.ctx_use = ContextUse.analyze(func, def_use=DefineUse.analyze(func))
-
-    def __call__(self, e: Expr) -> Context | None:
-        """*e*'s active context, or `None` where the scope stays symbolic."""
-        scope = self.ctx_use.find_scope_from_use(e)
-        return scope.ctx if isinstance(scope.ctx, Context) else None
-
-
-def _dispatches(e: Expr, enable_fenv: bool) -> bool:
-    """Whether the op table is what emits *e*.
-
-    Its keys are the definition: a node it does not key reaches the emitter
-    another way -- `Min` and `Max` select an operand rather than rounding, `Len`
-    is exact -- so it has no signature to miss.
-    """
-    table = make_op_table(enable_fenv=enable_fenv)
-    match e:
-        case UnaryOp():
-            return type(e) in table.unary
-        case BinaryOp():
-            return type(e) in table.binary
-        case TernaryOp():
-            return type(e) in table.ternary
-        case _:
-            return False
-
-
-def _fixed_is_lowerable(ctx: MPFixedContext | MPBFixedContext) -> bool:
+def _fixed_is_lowerable(ctx: Context) -> bool:
     """Whether `_emit_integral_round` lowers *ctx* as it stands.
 
     Its digits at position zero (``nmin == -1`` is the last unrepresentable
-    one), no random bits, and either unbounded or asserting its bound.  Read
-    from the fields alone, so no analysis is needed to ask.
+    one), no random bits, and either unbounded or asserting its bound.
     """
+    if not isinstance(ctx, MPFixedContext | MPBFixedContext):
+        return False
     if ctx.nmin != -1 or ctx.num_randbits != 0:
         return False
     return (
@@ -153,211 +34,39 @@ def _fixed_is_lowerable(ctx: MPFixedContext | MPBFixedContext) -> bool:
     )
 
 
-def _classify(
-    e: Expr, active_of: _Scopes, enable_fenv: bool,
-) -> tuple[UnfoldKind, Context] | None:
-    """*e*'s kind and the context that gives it one, or `None` where the
-    emitter needs no help.
+@cache
+def _target(enable_fenv: bool) -> UnfoldTarget:
+    def native(ctx: Context) -> bool:
+        return is_native_ctx(ctx, enable_fenv=enable_fenv)
 
-    *enable_fenv* false shrinks what counts as native, so a mode the emitter may
-    no longer set is a site here rather than a refusal there.
-    """
-    if isinstance(e, Round | Cast):
-        active = active_of(e)
-        if active is None or is_native_ctx(active, enable_fenv=enable_fenv):
-            return None
-        if active.is_stochastic():
-            # no step of the ladder draws random bits, so this is not a site --
-            # the emitter's own refusal says so, and better
-            return None
-        if isinstance(active, _FIXED):
-            if _fixed_is_lowerable(active):
-                return None
-            return UnfoldKind.FIXED_ROUND, active
-        return UnfoldKind.FLOAT_ROUND, active
-    if _dispatches(e, enable_fenv):
-        # `REAL` is the one non-native context the table reaches, by widening to
-        # an op that gives the exact result and rounds to itself.
-        active = active_of(e)
-        if active is None or active is REAL or is_native_ctx(
-            active, enable_fenv=enable_fenv,
-        ):
-            return None
-        return UnfoldKind.ARITH, active
-    return None
+    table = make_op_table(enable_fenv=enable_fenv)
+    return UnfoldTarget(
+        native=native,
+        rounds=lambda c: native(c) or _fixed_is_lowerable(c),
+        ops=frozenset({*table.unary, *table.binary, *table.ternary}),
+        # round-to-nearest only: the per-operation rules take it and the
+        # exactness rule takes any mode, and it needs no `fesetround` boundary
+        intermediates=tuple(
+            c for es, nbits in ((8, 32), (11, 64))
+            if native(c := IEEEContext(es, nbits, RM.RNE))
+        ),
+    )
 
 
 def sites(
     func: FuncDef, within: Cursor | None = None, *, enable_fenv: bool = True,
 ) -> list[UnfoldSite]:
-    """The program points of *func* the emitter would refuse, in visit order.
-
-    *func* is a specialized :class:`FuncDef`, before the analyses the emitter
-    runs on.  `within` keeps the sites at or beneath the point it names.
-    """
-    if not isinstance(func, FuncDef):
-        raise TypeError(f'Expected \'FuncDef\', got {func}')
-    active_of = _Scopes(func)
-    out: list[UnfoldSite] = []
-    for cursor in expr_sites(
-        func,
-        lambda e: _classify(e, active_of, enable_fenv) is not None,
-        within,
-    ):
-        got = _classify(cursor.resolve(), active_of, enable_fenv)
-        assert got is not None
-        out.append(UnfoldSite(cursor, *got))
-    return out
-
-
-def _intermediates(enable_fenv: bool) -> list[Context]:
-    """Native contexts to offer as an intermediate, narrowest first.
-
-    Narrowest because the intermediate's width becomes the arithmetic's
-    storage, and a wider one is never *less* admissible, so the order costs
-    nothing.
-
-    Round-to-nearest only.  It is the mode the per-operation rules take, and
-    the exactness rule takes any mode, so the two rules that matter here are
-    both reached.  It is also the mode the machine is already in: an
-    intermediate rounding some other way would put an ``fesetround`` boundary
-    around arithmetic whose whole purpose is to be the native one.  Filtered by
-    :func:`is_native_ctx`, so a mode the backend stops dispatching on stops
-    being offered.
-    """
-    return [
-        cand
-        for es, nbits in ((8, 32), (11, 64))
-        if is_native_ctx(cand := IEEEContext(es, nbits, RM.RNE),
-                         enable_fenv=enable_fenv)
-    ]
-
-
-def _split_arith(
-    func: FuncDef, site: UnfoldSite, enable_fenv: bool,
-) -> FuncDef | None:
-    """*func* with *site*'s operation computed at a native intermediate and
-    re-rounded to the target, or `None` where no intermediate is admissible.
-
-    `SplitRound` owns the soundness -- it holds the correct-double-rounding
-    rules and refuses what they do not cover -- so this only proposes.  Which
-    is why the candidates are *native* contexts and not
-    :func:`derive_intermediate`'s: that one is deliberately unbounded, so the
-    composition agrees at the ends of the range, but unbounded arithmetic is no
-    more emittable than the target's own.
-
-    A refusal is an ordinary outcome: an operation with no rule keeps the
-    refusal it has.
-    """
-    for cand in _intermediates(enable_fenv):
-        try:
-            return SplitRound.apply(func, cand, where=site.cursor)
-        except TransformDeclined:
-            continue
-    return None
-
-
-def _arith(func: FuncDef, enable_fenv: bool) -> list[UnfoldSite]:
-    return [s for s in sites(func, enable_fenv=enable_fenv)
-            if s.kind is UnfoldKind.ARITH]
-
-
-def _step(
-    func: FuncDef, todo: list[UnfoldSite], enable_fenv: bool,
-) -> FuncDef | None:
-    for site in todo:
-        out = _split_arith(func, site, enable_fenv)
-        if out is not None:
-            return out
-    return None
+    """See :func:`fpy2.backend.unfold_round.sites`."""
+    return _u.sites(func, _target(enable_fenv), within)
 
 
 def unfold_arith(func: FuncDef, *, enable_fenv: bool = True) -> FuncDef:
-    """*func* with every arithmetic site the op table cannot spell computed at
-    a native intermediate instead.
-
-    Operand formats are the precondition: the per-operation rules hold only for
-    operands the *target* represents, so an argument carrying no context of its
-    own refuses every candidate.  `Specialize` pins them in the compiler's
-    pipeline; a caller reaching this directly runs `monomorphize` first.
-
-    Sites are re-derived after each rewrite rather than forwarded: the rewrite
-    lifts its operation into a new block, so the cursors below it move.
-    """
-    todo = _arith(func, enable_fenv)
-    while todo:
-        out = _step(func, todo, enable_fenv)
-        if out is None:
-            return func
-        func = out
-        left = _arith(func, enable_fenv)
-        # the operation lands under a native context and the rounding it gains
-        # is to the target, which is a rounding site rather than an arithmetic
-        # one -- so this is what makes the loop finite
-        assert len(left) < len(todo), 'a split left as much arithmetic as it found'
-        todo = left
-    return func
-
-
-_LADDER: tuple[Callable[[FuncDef, Cursor], EditLog], ...] = (
-    lambda f, w: UnfoldSpecial.apply_with_edits(f, where=w),
-    lambda f, w: UnfoldOverflow.apply_with_edits(f, where=w, early_check=True),
-    lambda f, w: FloatToFixed.apply_with_edits(f, where=w),
-    lambda f, w: RescaleFixed.apply_with_edits(f, where=w),
-)
-"""The sequence of `docs/todos/native-lowering-roadmap.md`.
-
-`UnfoldSpecial` first, so the branches it states are upstream of everything and
-`FloatToFixed` emits no ladder of its own; `UnfoldOverflow` before
-`FloatToFixed`, so the latter sees an unbounded format and does the position
-axis alone.
-"""
-
-
-def _unfold_roundings(func: FuncDef, enable_fenv: bool) -> FuncDef:
-    """*func* with every rounding the op table cannot spell expressed as
-    integer arithmetic.
-
-    The ladder is *aimed*: each of its passes finds its own sites by active
-    context, so run over the whole program it would lower the roundings the
-    emitter already spells too -- correct, and pure waste.  The sites are this
-    module's, and one pass of the ladder clears each.
-    """
-    todo = [s for s in sites(func, enable_fenv=enable_fenv)
-            if s.kind is not UnfoldKind.ARITH]
-    if not todo:
-        return func
-    # the anchor is the *statement* holding the rounding: a step consumes the
-    # rounding it acts on, so the expression `sites` reported names nothing
-    # afterwards, while the statement survives with what replaced it beneath
-    anchors: list[Cursor] = [StmtCursor(func, s.cursor.path.stmt()) for s in todo]
-    for i in range(len(anchors)):
-        for step in _LADDER:
-            # a step that does not apply is an ordinary outcome: the two rows
-            # of the ladder are the same call with different steps declining
-            try:
-                log = step(func, anchors[i])
-            except (TransformDeclined, TransformReferenceError):
-                continue
-            func = log.result
-            anchors = [log.forward(a) for a in anchors]
-    return func
+    """See :func:`fpy2.backend.unfold_round.unfold_arith`."""
+    return _u.unfold_arith(func, _target(enable_fenv))
 
 
 def unfold(
     func: FuncDef, mode: UnfoldMode, *, enable_fenv: bool = True,
 ) -> FuncDef:
-    """*func* with every rounding the cpp op table cannot spell replaced, as
-    far as *mode* allows.
-
-    Arithmetic first: an operation under an unsupported context becomes a
-    native one plus a rounding, so the roundings the second half lowers are all
-    the roundings there are.
-    """
-    if not isinstance(func, FuncDef):
-        raise TypeError(f'Expected \'FuncDef\', got {func}')
-    if mode is UnfoldMode.NONE:
-        return func
-    if mode is UnfoldMode.DOUBLE_ROUND:
-        func = unfold_arith(func, enable_fenv=enable_fenv)
-    return _unfold_roundings(func, enable_fenv)
+    """See :func:`fpy2.backend.unfold_round.unfold`."""
+    return _u.unfold(func, mode, _target(enable_fenv))

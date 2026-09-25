@@ -1,34 +1,55 @@
 """Running an emitted kernel, and checking it against the interpreter.
 
-**Everything here needs a GPU.**  Triton compiles for `amd` and `nvidia` only
--- there is no CPU target in mainline -- so `triton` importing is not enough;
-`unavailable()` also checks for a device, and these skip without one.
+**Everything here needs a GPU.**  Triton compiles for `amd` and `nvidia` only,
+so `triton` importing is not enough; `unavailable()` also checks for a device,
+and these skip without one.
 
-The contract this closes: *if the compiler succeeds, the emitted code must
-behave as the FPy interpreter does*.  Unlike the C++ harness, this one has an
-empty non-correctly-rounded exclusion list -- the op table omits every
-transcendental -- so every function it compiles it can check bit-for-bit.
+If the compiler succeeds, the kernel must behave as the FPy interpreter does,
+bit for bit: the op table omits every transcendental, so nothing is exempt.
 """
 
+import math
 import os
+import random
 import re
+import struct
 
 import pytest
 
 import fpy2 as fp
-from fpy2.backend.triton import TritonCompiler, launch, unavailable
+from fpy2 import Module
+from fpy2.backend.backend import CompileError
+from fpy2.backend.triton import (
+    KernelSource,
+    TritonCompiler,
+    emit_kernel,
+    launch,
+    tile_loops,
+    unavailable,
+)
+from fpy2.transform import Specialize
 from fpy2.types import ListType, RealType
+from fpy2.utils import NamedId
+
+from .programs import (
+    K,
+    any_all,
+    batched_dot,
+    logb,
+    nan_inf,
+    round_to_int,
+    scaled,
+    signbit,
+)
 
 _WHY = unavailable()
 
 _REQUIRE = os.environ.get('FPY_REQUIRE_GPU') not in (None, '', '0')
 """Turn a skip into a failure.
 
-Without a GPU these tests skip, and a skip is indistinguishable from a pass in
-a summary line -- so a broken install looks exactly like a machine with no
-card, and this backend looks tested when nothing ran.  CI cannot fix that by
-acquiring hardware, so anyone who *has* a card sets this and the skip becomes
-an error instead.
+A skip is indistinguishable from a pass in a summary line, so a broken install
+looks exactly like a machine with no card.  Anyone who *has* a card sets this
+and the skip becomes an error instead.
 """
 
 if _REQUIRE and _WHY is not None:
@@ -36,49 +57,53 @@ if _REQUIRE and _WHY is not None:
         f'FPY_REQUIRE_GPU is set but the Triton runtime is unusable: {_WHY}'
     )
 
+if _WHY is None:
+    import torch
+
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 FP16 = fp.IEEEContext(5, 16)
-K = 8
+F32 = RealType(fp.FP32)
+INT = RealType(fp.INTEGER)
 
 
-@fp.fpy(ctx=fp.REAL)
-def _batched_dot(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
-                 out: list[fp.Real], BLOCK: fp.Real):
-    """FP16 in, exact products, FP32 accumulation -- the running example."""
-    for r in range(len(xss)):
-        acc = fp.round(0)
-        for k in range(K):
-            with fp.FP32:
-                acc = acc + xss[r][k] * yss[r][k]
-        out[r] = acc
-    return out
+def _compile(func: fp.Function, arg_types: list, *, ctx=fp.REAL, **opts) -> KernelSource:
+    return TritonCompiler(drop_asserts=True, **opts).compile(
+        func, ctx=ctx, arg_types=arg_types)
 
 
-def _compile(n: int):
-    return TritonCompiler(drop_asserts=True).compile(
-        _batched_dot, ctx=fp.REAL, arg_types=[
-            ListType(ListType(RealType(FP16), K), n),
-            ListType(ListType(RealType(FP16), K), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
+def _reprs(v) -> list | str:
+    """*v*, nested, as the `repr` of each float: exact, and a NaN equals one."""
+    return [_reprs(x) for x in v] if isinstance(v, list) else repr(float(v))
 
 
-def _run(n: int, block: int, seed: int = 0):
-    """The emitted kernel and the interpreter, on the same inputs."""
-    import torch
+def _agree(src: KernelSource, func: fp.Function, tensors: list, *,
+           block: int | None = 4, grid: int | None = None) -> list:
+    """Launches *src* on *tensors* and asserts the last, the output, is what
+    *func* returns on the same inputs; returns that."""
+    args = [t.cpu().tolist() for t in tensors]
+    launch(src, tensors, block=block, grid=grid)
+    want = func(*args, block)
+    assert _reprs(tensors[-1].cpu().tolist()) == _reprs(want)
+    return want
 
-    src = _compile(n)
+
+def _f32(vals: list) -> 'torch.Tensor':
+    return torch.tensor(vals, dtype=torch.float32).cuda()
+
+
+def _halves(rows: int, cols: int, scale: float = 4) -> 'torch.Tensor':
+    return (torch.randn(rows, cols) * scale).half().cuda()
+
+
+def _dot_types(n: int | NamedId) -> list:
+    return [ListType(ListType(RealType(FP16), K), n)] * 2 + [ListType(F32, n), INT]
+
+
+def _dot_agrees(src: KernelSource, n: int, block: int, seed: int) -> None:
     torch.manual_seed(seed)
-    xt = (torch.randn(n, K) * 4).half().cuda()
-    yt = (torch.randn(n, K) * 4).half().cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, yt, ot], block=block)
-
-    xs = [[float(v) for v in row] for row in xt.cpu().tolist()]
-    ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
-    want = _batched_dot(xs, ys, [0.0] * n, block)
-    return [float(v) for v in want], ot.cpu().tolist()
+    _agree(src, batched_dot, [_halves(n, K), _halves(n, K), torch.zeros(n).cuda()],
+           block=block)
 
 
 class TestDifferential:
@@ -90,224 +115,62 @@ class TestDifferential:
         (9, 4),      # two full tiles and a remainder of one
     ])
     def test_it_agrees_bit_for_bit(self, n, block):
-        want, got = _run(n, block)
-        assert got == want, f'n={n} block={block}'
+        _dot_agrees(_compile(batched_dot, _dot_types(n)), n, block, 0)
 
     @pytest.mark.parametrize('seed', [0, 1, 2, 3])
     def test_it_agrees_across_inputs(self, seed):
-        want, got = _run(6, 4, seed=seed)
-        assert got == want
+        _dot_agrees(_compile(batched_dot, _dot_types(6)), 6, 4, seed)
+
+    def test_one_kernel_at_every_length(self):
+        """A length left unproven is a kernel argument, as in Triton's own."""
+        src = _compile(batched_dot, _dot_types(NamedId('n')))
+        assert src.sizes and src.grid_extent == src.sizes[0][0]
+        for rows in (1, 6, 9, 16):
+            _dot_agrees(src, rows, 4, rows)
 
 
-class TestLauncher:
-    def test_the_grid_is_derived_from_the_proven_extent(self):
-        assert _compile(6).grid_extent == 6
-
-    def test_fusion_is_taken_from_the_kernel_not_the_caller(self):
-        """Whether contracting a multiply-add is observable is a property of
-        the program, so the launcher does not get to choose."""
-        assert _compile(6).enable_fp_fusion
-
-    def test_a_kernel_with_no_tile_needs_an_explicit_grid(self):
-        from fpy2.backend.backend import CompileError
-        from fpy2.backend.triton.emitter import KernelSource
-
-        src = KernelSource(
-            name='nothing', source='', params=(),
-            grid_extent=None, enable_fp_fusion=False)
-        with pytest.raises(CompileError, match='no extent'):
-            launch(src, [], block=4)
+def test_a_kernel_with_no_tile_needs_an_explicit_grid():
+    src = KernelSource(
+        name='nothing', source='', params=(),
+        grid_extent=None, enable_fp_fusion=False)
+    with pytest.raises(CompileError, match='no extent'):
+        launch(src, [], block=4)
 
 
-@pytest.mark.skipif(False, reason='')
-def test_the_guard_reports_a_reason(capsys):
-    """Runs with or without hardware: it *is* the guard.
-
-    It prints the reason so a CI log says why the rest did not run.  A silent
-    skip is the failure mode that matters here -- the suite passes, the
-    backend is untested, and nothing says so.
-    """
-    why = unavailable()
-    with capsys.disabled():
-        print(f'\n  [triton] {"runnable" if why is None else f"skipped: {why}"}')
-    assert why is None or isinstance(why, str)
+@pytest.mark.parametrize('n,block', [(6, 4), (8, 8), (1, 4)])
+def test_any_and_all_agree(n, block):
+    src = _compile(any_all, [ListType(ListType(F32, 3), n), ListType(F32, n), INT],
+                   ctx=fp.FP32)
+    torch.manual_seed(0)
+    want = _agree(src, any_all, [(torch.randn(n, 3) * 2).cuda(), torch.zeros(n).cuda()],
+                  block=block)
+    if n == 8:
+        assert len({float(v) for v in want}) == 3, 'every outcome is exercised'
 
 
-@fp.fpy(ctx=fp.REAL)
-def _row_bound(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
-               out: list[fp.Real], BLOCK: fp.Real):
-    """`_batched_dot` with the rows bound to names first.
-
-    What inlining a call produces: a design takes its vector as a parameter,
-    so the wrapper's `design(Ass[r], ...)` becomes `A = Ass[r]`.
-    """
-    for r in range(len(xss)):
-        xs = xss[r]
-        ys = yss[r]
-        acc = fp.round(0)
-        for k in range(K):
-            with fp.FP32:
-                acc = acc + xs[k] * ys[k]
-        out[r] = acc
-    return out
-
-
-class TestRowBinding:
-    """A row bound to a name used to emit a `_ptr` that was not a parameter.
-
-    The kernel failed to JIT at all -- `NameError: xs_ptr is not defined` --
-    so this is the regression net for it actually running.
-    """
-
-    @pytest.mark.parametrize('n,block', [(8, 8), (6, 4), (1, 4), (9, 4)])
-    def test_it_agrees_with_the_interpreter(self, n, block):
-        import torch
-
-        src = TritonCompiler(drop_asserts=True).compile(
-            _row_bound, ctx=fp.REAL, arg_types=[
-                ListType(ListType(RealType(FP16), K), n),
-                ListType(ListType(RealType(FP16), K), n),
-                ListType(RealType(fp.FP32), n),
-                RealType(fp.INTEGER)])
-        torch.manual_seed(0)
-        xt = (torch.randn(n, K) * 4).half().cuda()
-        yt = (torch.randn(n, K) * 4).half().cuda()
-        ot = torch.zeros(n, dtype=torch.float32).cuda()
-        launch(src, [xt, yt, ot], block=block)
-
-        xs = [[float(v) for v in row] for row in xt.cpu().tolist()]
-        ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
-        want = [float(v) for v in _row_bound(xs, ys, [0.0] * n, block)]
-        assert ot.cpu().tolist() == want, f'n={n} block={block}'
-
-    def test_it_matches_the_inline_form(self):
-        """Naming the row changes nothing: same loads, same order."""
-        _, got_inline = _run(8, 4)
-        import torch
-
-        src = TritonCompiler(drop_asserts=True).compile(
-            _row_bound, ctx=fp.REAL, arg_types=[
-                ListType(ListType(RealType(FP16), K), 8),
-                ListType(ListType(RealType(FP16), K), 8),
-                ListType(RealType(fp.FP32), 8),
-                RealType(fp.INTEGER)])
-        torch.manual_seed(0)
-        xt = (torch.randn(8, K) * 4).half().cuda()
-        yt = (torch.randn(8, K) * 4).half().cuda()
-        ot = torch.zeros(8, dtype=torch.float32).cuda()
-        launch(src, [xt, yt, ot], block=4)
-        assert ot.cpu().tolist() == got_inline
-
-
-@fp.fpy(ctx=fp.FP32)
-def _any_all(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
-    """Lanes disagreeing on `any` and on `all`, in one tile."""
-    for r in range(len(out)):
-        flags = [xss[r][k] > 0.0 for k in range(3)]
-        out[r] = 2.0 if all(flags) else (1.0 if any(flags) else 0.0)
-    return out
-
-
-class TestAnyAll:
-    @pytest.mark.parametrize('n,block', [(6, 4), (8, 8), (1, 4)])
-    def test_it_agrees_with_the_interpreter(self, n, block):
-        import torch
-
-        src = TritonCompiler(drop_asserts=True).compile(
-            _any_all, ctx=fp.FP32, arg_types=[
-                ListType(ListType(RealType(fp.FP32), 3), n),
-                ListType(RealType(fp.FP32), n),
-                RealType(fp.INTEGER)])
-        torch.manual_seed(0)
-        xt = (torch.randn(n, 3) * 2).float().cuda()
-        ot = torch.zeros(n, dtype=torch.float32).cuda()
-        launch(src, [xt, ot], block=block)
-
-        vals = [[float(v) for v in row] for row in xt.cpu().tolist()]
-        want = [float(v) for v in _any_all(vals, [0.0] * n, block)]
-        assert ot.cpu().tolist() == want, f'n={n} block={block}'
-
-    def test_all_three_outcomes_are_exercised(self):
-        """Otherwise the agreement above could hold on one branch alone."""
-        import torch
-
-        torch.manual_seed(0)
-        rows = (torch.randn(6, 3) * 2).float().tolist()
-        outs = {all(v > 0 for v in r) and 2 or (any(v > 0 for v in r) and 1 or 0)
-                for r in rows}
-        assert len(outs) >= 2
-
-
-@fp.fpy(ctx=fp.FP32)
-def _signbit(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        out[i] = 1.0 if fp.signbit(xs[i]) else 0.0
-    return out
+def _map_types(n: int, ctx=fp.FP32) -> list:
+    """An `xs`, an `out`, and a block."""
+    return [ListType(RealType(ctx), n), ListType(F32, n), INT]
 
 
 def test_signbit_agrees_including_both_zeros():
-    """`-0.0` is the case no float comparison reaches.
-
-    A NaN is deliberately absent: FPy does not distinguish a NaN's sign --
-    rounding normalizes it away -- so there is nothing for the hardware's
-    answer to agree with.
-    """
-    import torch
-
-    vals = [0.0, -0.0, 1.0, -1.0, 2.5, -2.5,
-            float('inf'), float('-inf')]
-    n = len(vals)
-    src = TritonCompiler(drop_asserts=True).compile(
-        _signbit, ctx=fp.FP32, arg_types=[
-            ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
-    xt = torch.tensor(vals, dtype=torch.float32).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=8)
-
-    want = [float(v) for v in _signbit(
-        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 8)]
-    assert ot.cpu().tolist() == want
+    """A NaN is absent: FPy does not distinguish a NaN's sign."""
+    vals = [0.0, -0.0, 1.0, -1.0, 2.5, -2.5, math.inf, -math.inf]
+    src = _compile(signbit, _map_types(len(vals)), ctx=fp.FP32)
+    want = _agree(src, signbit, [_f32(vals), torch.zeros(len(vals)).cuda()], block=8)
     assert want[0] == 0.0 and want[1] == 1.0, 'both zeros were exercised'
 
 
-@fp.fpy(ctx=fp.FP32)
-def _nan_inf(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        v = fp.nan() if xs[i] > 1.0 else (
-            fp.inf() if xs[i] > 0.0 else -fp.inf())
-        out[i] = v
-    return out
-
-
 def test_nan_and_inf_agree_with_the_interpreter():
-    import math
-
-    import torch
-
     vals = [2.0, 0.5, -1.0, 3.0, 0.1, -0.0]
-    n = len(vals)
-    src = TritonCompiler(drop_asserts=True).compile(
-        _nan_inf, ctx=fp.FP32, arg_types=[
-            ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
-    xt = torch.tensor(vals, dtype=torch.float32).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=4)
-
-    want = [float(v) for v in _nan_inf(
-        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 4)]
-    got = ot.cpu().tolist()
-    assert all((math.isnan(a) and math.isnan(b)) or a == b
-               for a, b in zip(got, want)), f'{got} vs {want}'
-    assert any(math.isnan(v) for v in got) and float('-inf') in got
+    src = _compile(nan_inf, _map_types(len(vals)), ctx=fp.FP32)
+    want = [float(v) for v in _agree(
+        src, nan_inf, [_f32(vals), torch.zeros(len(vals)).cuda()])]
+    assert any(math.isnan(v) for v in want) and -math.inf in want
 
 
 @fp.fpy(ctx=fp.FP32)
 def _row_slice(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
-    """A slice of a row, indexed by a loop variable."""
     for r in range(len(out)):
         w = xss[r][2:6]
         s = fp.round(0)
@@ -317,155 +180,56 @@ def _row_slice(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
     return out
 
 
-class TestSliceIsAnAddress:
-    """A slice of something in memory is the same list at an offset.
-
-    Scalarizing it into that many loads threw the address away, and a
-    subscript by anything but a constant then had nothing to resolve
-    against.  As an offset the loop stays rolled and composes with the
-    row's own stride.
-    """
-
-    @pytest.mark.parametrize('n,block', [(6, 4), (8, 8), (1, 4)])
-    def test_it_agrees_with_the_interpreter(self, n, block):
-        import torch
-
-        src = TritonCompiler(drop_asserts=True).compile(
-            _row_slice, ctx=fp.FP32, arg_types=[
-                ListType(ListType(RealType(fp.FP32), 8), n),
-                ListType(RealType(fp.FP32), n),
-                RealType(fp.INTEGER)])
-        assert 'tl.load(xss_ptr + r * 8 + j + 2' in src.source
-        torch.manual_seed(0)
-        xt = torch.randn(n, 8).float().cuda()
-        ot = torch.zeros(n, dtype=torch.float32).cuda()
-        launch(src, [xt, ot], block=block)
-
-        vals = [[float(v) for v in row] for row in xt.cpu().tolist()]
-        want = [float(v) for v in _row_slice(vals, [0.0] * n, block)]
-        assert ot.cpu().tolist() == want, f'n={n} block={block}'
-
-
-@fp.fpy(ctx=fp.FP32)
-def _logb(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        out[i] = fp.logb(xs[i])
-    return out
+@pytest.mark.parametrize('n,block', [(6, 4), (8, 8), (1, 4)])
+def test_a_slice_is_an_offset(n, block):
+    """A slice of a row in memory is the row at an offset, so a loop over it
+    stays rolled and composes with the row's own stride."""
+    src = _compile(_row_slice, [ListType(ListType(F32, 8), n), ListType(F32, n), INT],
+                   ctx=fp.FP32)
+    assert 'tl.load(xss_ptr + r * 8 + j + 2' in src.source
+    torch.manual_seed(0)
+    _agree(src, _row_slice, [torch.randn(n, 8).cuda(), torch.zeros(n).cuda()],
+           block=block)
 
 
 def test_logb_agrees_over_every_exponent_and_random_bits():
-    """Exhaustive where it can be: every fp32 exponent boundary of both
-    signs -- which is where subnormals, the scaling and the specials all
-    live -- plus random bit patterns, which land anywhere at all."""
-    import math
-    import random
-    import struct
-
-    import torch
-
-    random.seed(0)
-    vals = [1.0, 2.0, 3.0, 0.5, -4.0, 0.0, -0.0,
-            float('inf'), float('-inf'), float('nan')]
+    """Every fp32 exponent boundary of both signs -- where subnormals, the
+    scaling and the specials live -- plus random bit patterns."""
+    rng = random.Random(0)
+    vals = [1.0, 2.0, 3.0, 0.5, -4.0, 0.0, -0.0, math.inf, -math.inf, math.nan]
     for e in range(-149, 128):
         vals += [2.0 ** e, -(2.0 ** e)]
-    for _ in range(2000):
-        vals.append(
-            struct.unpack('<f', struct.pack('<I', random.getrandbits(32)))[0])
-    n = len(vals)
-
-    src = TritonCompiler(drop_asserts=True).compile(
-        _logb, ctx=fp.FP32, arg_types=[
-            ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
-    xt = torch.tensor(vals, dtype=torch.float32).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=256)
-
-    want = [float(v) for v in _logb(
-        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 256)]
-    bad = [(v, g, w) for v, g, w in zip(vals, ot.cpu().tolist(), want)
-           if not ((math.isnan(g) and math.isnan(w)) or g == w)]
-    assert not bad, f'{len(bad)} differ, first: {bad[:3]}'
-    # the subnormal range really was covered
-    assert any(w < -126 and math.isfinite(w) for w in want)
-
-
-@fp.fpy(ctx=fp.REAL)
-def _scaled(xs: list[fp.Real], ns: list[fp.Real], out: list[fp.Real],
-            BLOCK: fp.Real):
-    for i in range(len(out)):
-        with fp.REAL:
-            t = (2 ** ns[i]) * xs[i]
-        out[i] = t
-    return out
+    vals += [struct.unpack('<f', struct.pack('<I', rng.getrandbits(32)))[0]
+             for _ in range(2000)]
+    src = _compile(logb, _map_types(len(vals)), ctx=fp.FP32)
+    want = _agree(src, logb, [_f32(vals), torch.zeros(len(vals)).cuda()], block=256)
+    assert any(w < -126 and math.isfinite(w) for w in want), 'subnormals covered'
 
 
 def test_ldexp_agrees_with_a_per_lane_exponent():
-    """A *runtime* scale is how a fixed-point context with a data-dependent
-    grid reaches this backend at all: `RescaleFixed` moves the dependence out
-    of the context and into this product."""
-    import torch
-
+    """A runtime scale is how a fixed-point context with a data-dependent grid
+    reaches this backend: `RescaleFixed` moves it into this product."""
     vals = [1.0, 3.0, -2.5, 0.5, 7.0, -1.0]
     exps = [0, 2, -3, 4, 1, -1]
     n = len(vals)
-    src = TritonCompiler(drop_asserts=True).compile(
-        _scaled, ctx=fp.REAL, arg_types=[
-            ListType(RealType(fp.FP32), n),
-            # bounded, so the product has a storage: an unbounded one has none
-            ListType(RealType(fp.SINT8), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
-    xt = torch.tensor(vals, dtype=torch.float32).cuda()
-    nt = torch.tensor(exps, dtype=torch.int8).cuda()
+    # a bounded exponent, so the product has a storage
+    src = _compile(scaled, [ListType(F32, n), ListType(RealType(fp.SINT8), n),
+                            ListType(F32, n), INT])
+    xt, nt = _f32(vals), torch.tensor(exps, dtype=torch.int8).cuda()
     # the product is exact, so the kernel stores it as `float64`
     ot = torch.zeros(n, dtype=torch.float64).cuda()
-    launch(src, [xt, nt, ot], block=8, grid=1)
-
-    want = [v * 2.0 ** k for v, k in zip(vals, exps)]
-    assert ot.cpu().tolist() == want
-    assert len(set(exps)) > 1, 'the lanes really do disagree'
+    _agree(src, scaled, [xt, nt, ot], block=8, grid=1)
+    assert ot.cpu().tolist() == [v * 2.0 ** k for v, k in zip(vals, exps)]
 
 
-@fp.fpy(ctx=fp.REAL)
-def _trunc(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        with fp.MPFixedContext(-1, fp.RoundingMode.RTZ):
-            t = fp.round(xs[i])
-        out[i] = t
-    return out
-
-
-@fp.fpy(ctx=fp.REAL)
-def _rne(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(out)):
-        with fp.MPFixedContext(-1, fp.RoundingMode.RNE):
-            t = fp.round(xs[i])
-        out[i] = t
-    return out
-
-
-@pytest.mark.parametrize('f', [_trunc, _rne], ids=['RTZ', 'RNE'])
-def test_integral_rounding_agrees_including_ties(f):
+@pytest.mark.parametrize('rm', [fp.RM.RTZ, fp.RM.RNE], ids=['RTZ', 'RNE'])
+def test_integral_rounding_agrees_including_ties(rm):
     """The ties are what separate the modes, so they are in the inputs."""
-    import torch
-
     vals = [2.7, -2.7, 2.5, -2.5, 3.5, -3.5, 0.5, -0.5,
             0.0, -0.0, 1.0, -1.0, 4.5, -4.5, 100.25, -100.25]
-    n = len(vals)
-    src = TritonCompiler(drop_asserts=True).compile(
-        f, ctx=fp.REAL, arg_types=[
-            ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
-    xt = torch.tensor(vals, dtype=torch.float32).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=32, grid=1)
-
-    want = [float(v) for v in f(
-        [fp.FP32.round(v) for v in vals], [fp.FP32.round(0.0)] * n, 32)]
-    assert ot.cpu().tolist() == want
+    f = round_to_int(rm)
+    src = _compile(f, _map_types(len(vals)))
+    _agree(src, f, [_f32(vals), torch.zeros(len(vals)).cuda()], block=32, grid=1)
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -488,29 +252,16 @@ def _branchy(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
 def test_a_flattened_branch_agrees(seed):
     """Emitted from the branchy program directly: the normal form would
     if-convert it first."""
-    import torch
-
-    from fpy2 import Module
-    from fpy2.backend.triton import emit_kernel, tile_loops
-    from fpy2.transform import Specialize
-
     n = 37      # a partial last tile at any power-of-two width
     m = Module()
-    m.add(_branchy, ctx=fp.REAL, arg_types=[
-        ListType(RealType(fp.FP32), n),
-        ListType(RealType(fp.FP32), n),
-        RealType(fp.INTEGER)])
+    m.add(_branchy, ctx=fp.REAL, arg_types=_map_types(n))
     g = Specialize.apply(m, size_key=True).get(_branchy.name).func
     r = tile_loops(g.ast, 'BLOCK')
     src = emit_kernel(
         r.func, r.tiled, block='BLOCK', drop_asserts=True, guards=r.guards)
-
     torch.manual_seed(seed)
-    xt = (torch.randn(n) * 4).float().cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=16)
-    want = _branchy([float(v) for v in xt.cpu().tolist()], [0.0] * n, 16)
-    assert ot.cpu().tolist() == [float(v) for v in want]
+    _agree(src, _branchy, [(torch.randn(n) * 4).cuda(), torch.zeros(n).cuda()],
+           block=16)
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -537,22 +288,12 @@ def _largest(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
 @pytest.mark.parametrize('seed', [0, 1])
 def test_a_reduction_stays_sequential_and_agrees(f, seed):
     """No reduction across a tile is lowered, so the loop is not tiled."""
-    import torch
-
     n = 37
-    src = TritonCompiler(drop_asserts=True).compile(
-        f, ctx=fp.REAL, arg_types=[
-            ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.FP32), 1),
-            RealType(fp.INTEGER)])
+    src = _compile(f, [ListType(F32, n), ListType(F32, 1), INT])
     assert 'tl.static_range(37)' in src.source
-
     torch.manual_seed(seed)
-    xt = (torch.randn(n) * 4).float().cuda()
-    ot = torch.zeros(1, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=16, grid=1)
-    want = f([float(v) for v in xt.cpu().tolist()], [0.0], 16)
-    assert ot.cpu().tolist() == [float(v) for v in want]
+    _agree(src, f, [(torch.randn(n) * 4).cuda(), torch.zeros(1).cuda()],
+           block=16, grid=1)
 
 
 @pytest.mark.parametrize('rctx', [
@@ -567,11 +308,6 @@ def test_a_directed_round_from_f64_agrees_bit_for_bit(rctx):
     narrower format with its exponents.  The inputs are the edges --
     subnormals, the overflow boundary, the zeros, the specials -- and values
     needing more than 24 bits."""
-    import math
-    import struct
-
-    import torch
-
     @fp.fpy(ctx=fp.REAL)
     def rnd(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
         for i in range(len(xs)):
@@ -587,22 +323,10 @@ def test_a_directed_round_from_f64_agrees_bit_for_bit(rctx):
         f32max * (1 + 2 ** -30), 2.0 ** 128, -2.0 ** 128, 1e300, -1e300,
         math.inf, -math.inf, math.nan,
     ]
-    n = len(vals)
-    src = TritonCompiler(drop_asserts=True).compile(rnd, ctx=fp.REAL, arg_types=[
-        ListType(RealType(fp.FP64), n),
-        ListType(RealType(fp.FP32), n),
-        RealType(fp.INTEGER)])
+    src = _compile(rnd, _map_types(len(vals), fp.FP64))
     assert 'libdevice.double2float' in src.source
     xt = torch.tensor(vals, dtype=torch.float64).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
-    launch(src, [xt, ot], block=16)
-
-    def bits(v):
-        return struct.unpack('I', struct.pack('f', v))[0]
-
-    want = [float(v) for v in rnd(vals, [0.0] * n, 16)]
-    for x, w, g in zip(vals, want, ot.cpu().tolist()):
-        assert bits(w) == bits(g) or (math.isnan(w) and math.isnan(g)), x
+    _agree(src, rnd, [xt, torch.zeros(len(vals)).cuda()], block=16)
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -620,87 +344,39 @@ def _prefix_plus(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real],
 def test_a_scalar_address_under_the_tile_mask():
     """`xs[j]` is one address for every lane; under the tile's guard alone it
     is one scalar load, which Triton broadcasts where it meets the tile."""
-    import torch
-
     n = 8
-    src = TritonCompiler(drop_asserts=True).compile(
-        _prefix_plus, ctx=fp.REAL, arg_types=[
-            ListType(RealType(fp.FP32), 4),
-            ListType(RealType(fp.FP32), n),
-            ListType(RealType(fp.FP32), n),
-            RealType(fp.INTEGER)])
+    src = _compile(_prefix_plus, [ListType(F32, 4), ListType(F32, n), ListType(F32, n), INT])
     assert 'tl.zeros_like(' not in src.source
     torch.manual_seed(0)
-    xs = torch.randn(4).cuda()
-    ys = torch.randn(n).cuda()
-    ot = torch.zeros(n).cuda()
-    launch(src, [xs, ys, ot], block=4)
-    want = _prefix_plus(xs.cpu().tolist(), ys.cpu().tolist(), [0.0] * n, 4)
-    assert ot.cpu().tolist() == [float(v) for v in want]
-
-
-class TestARuntimeLength:
-    """A length the arguments leave unproven is the kernel's to be told, as
-    Triton's own kernels take theirs: one kernel, launched at any length."""
-
-    def test_one_kernel_at_every_length(self):
-        import torch
-
-        from fpy2.utils import NamedId
-
-        n = NamedId('n')
-        src = TritonCompiler(drop_asserts=True).compile(
-            _batched_dot, ctx=fp.REAL, arg_types=[
-                ListType(ListType(RealType(FP16), K), n),
-                ListType(ListType(RealType(FP16), K), n),
-                ListType(RealType(fp.FP32), n),
-                RealType(fp.INTEGER)])
-        assert src.sizes and src.grid_extent == src.sizes[0][0]
-        for rows in (1, 6, 9, 16):
-            torch.manual_seed(rows)
-            xt = (torch.randn(rows, K) * 4).half().cuda()
-            yt = (torch.randn(rows, K) * 4).half().cuda()
-            ot = torch.zeros(rows, dtype=torch.float32).cuda()
-            launch(src, [xt, yt, ot], block=4)
-            xs = [[float(v) for v in row] for row in xt.cpu().tolist()]
-            ys = [[float(v) for v in row] for row in yt.cpu().tolist()]
-            want = _batched_dot(xs, ys, [0.0] * rows, 4)
-            assert ot.cpu().tolist() == [float(v) for v in want], rows
+    _agree(src, _prefix_plus, [torch.randn(4).cuda(), torch.randn(n).cuda(),
+                               torch.zeros(n).cuda()])
 
 
 # -- lanes over a list ----------------------------------------------------
 
-_ROWS = 7
-
-
-def _lanes(func, arg_types):
-    return TritonCompiler(drop_asserts=True).compile(
-        func, ctx=fp.REAL, arg_types=arg_types)
-
-
-def _agree_rows(func, n_in: int, n_out: int, *, seed: int = 0) -> None:
-    """*func*, compiled, against the interpreter: a row of
-    *n_in* in and of *n_out* out per output, over `_ROWS` of them."""
-    import torch
-
-    from fpy2.utils import NamedId
-
+def _agree_on(func: fp.Function, xt: 'torch.Tensor', n_out: int, *, ctx_in=fp.FP32,
+              ctx_out=fp.FP32, n_in: int | NamedId | None = None, **opts) -> str:
+    """*func*, compiled with *opts*, against the interpreter on the rows of
+    *xt*; its source, for a caller that checks the spelling."""
+    dtypes = {FP16: torch.float16, fp.FP32: torch.float32,
+              fp.FP64: torch.float64, fp.SINT32: torch.int32}
     rows = NamedId('rows')
-    f32 = RealType(fp.FP32)
-    src = _lanes(func, [ListType(ListType(f32, n_in), rows),
-                        ListType(ListType(f32, n_out), rows),
-                        RealType(fp.INTEGER)])
-    torch.manual_seed(seed)
-    xt = (torch.randn(_ROWS, n_in) * 4).cuda()
-    xt[0, 0], xt[1, -1] = -0.0, float('inf')
-    ot = torch.zeros(_ROWS, n_out).cuda()
-    launch(src, [xt, ot], block=4)
-    want = func(xt.cpu().tolist(), [[0.0] * n_out for _ in range(_ROWS)], 4)
-    got = ot.cpu().tolist()
-    for r in range(_ROWS):
-        for k in range(n_out):
-            w, g = float(want[r][k]), got[r][k]
-            assert repr(w) == repr(g), (r, k, w, g)
+    src = _compile(func, [
+        ListType(ListType(RealType(ctx_in), n_in or xt.shape[1]), rows),
+        ListType(ListType(RealType(ctx_out), n_out), rows), INT], **opts)
+    xt = xt.to(dtypes[ctx_in]).cuda()
+    ot = torch.zeros(xt.shape[0], n_out, dtype=dtypes[ctx_out]).cuda()
+    # a kernel that tiled nothing loops over the rows itself
+    _agree(src, func, [xt, ot], grid=None if src.grid_extent else 1)
+    return src.source
+
+
+def _rows(n: int) -> 'torch.Tensor':
+    """Seven rows of *n*, with a `-0.0` and an infinity."""
+    torch.manual_seed(0)
+    xt = torch.randn(7, n) * 4
+    xt[0, 0], xt[1, -1] = -0.0, math.inf
+    return xt
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -784,19 +460,19 @@ class TestLanesOverAList:
 
     @pytest.mark.parametrize('n', [1, 3, 4, 5, 8])
     def test_an_elementwise_comprehension_at_every_index(self, n):
-        _agree_rows(_twice_plus_one, n, n)
+        _agree_on(_twice_plus_one, _rows(n), n)
 
     def test_a_call_inside_a_comprehension(self):
         """`_magnitude` branches, so its lanes take a mask of their own."""
-        _agree_rows(_called, 5, 5)
+        _agree_on(_called, _rows(5), 5)
 
     def test_join_is_a_tile_and_a_tail(self):
         """`L + 1` long: the products' tile, and the accumulator its tail."""
-        _agree_rows(_joined, 4, 5)
+        _agree_on(_joined, _rows(4), 5)
 
     @pytest.mark.parametrize('n', [4, 6])
     def test_elements_one_at_a_time(self, n):
-        _agree_rows(_picked, n, 3)
+        _agree_on(_picked, _rows(n), 3)
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -807,8 +483,8 @@ def _reduced(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real)
         ys = [x * 2 for x in xs]
         row[0] = max(ys)
         row[1] = min(ys)
-        row[2] = 1.0 if any([y > 0 for y in ys]) else 0.0
-        row[3] = 1.0 if all([y > 0 for y in ys]) else 0.0
+        row[2] = 1.0 if any([y > 0 for y in ys]) else 0.0  # noqa: C419
+        row[3] = 1.0 if all([y > 0 for y in ys]) else 0.0  # noqa: C419
         row[4] = sum(ys)
         with fp.FP16:
             zs = [x + 1 for x in xs]
@@ -816,38 +492,21 @@ def _reduced(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real)
     return out
 
 
-class TestReductionsAcrossLanes:
+@pytest.mark.parametrize('n', [4, 5, 6])
+def test_reductions_across_lanes_agree(n):
     """`max`, `min`, `any`, `all` across a tile's lanes and then its tail; a
     `sum` there only where no grouping can be seen, else left to right."""
-
-    @pytest.mark.parametrize('n', [4, 5, 6])
-    def test_they_agree_with_the_interpreter(self, n):
-        import torch
-
-        from fpy2.utils import NamedId
-
-        rows = NamedId('rows')
-        src = _lanes(_reduced, [
-            ListType(ListType(RealType(FP16), n), rows),
-            ListType(ListType(RealType(fp.FP64), 6), rows),
-            RealType(fp.INTEGER)])
-        # the `REAL` sum across the lanes; the `FP16` one left to right
-        assert re.search(r'tl\.sum\((?!tl\.where)', src.source)
-        torch.manual_seed(n)
-        xt = (torch.randn(8, n) * 1000).half()
-        xt[0] = -0.0                                   # a sum of `-0.0` alone
-        xt[1, 0], xt[1, -1] = float('inf'), -float('inf')
-        xt[2, 1] = float('nan')
-        xt[3] = torch.tensor([0.0, -0.0] * n)[:n]      # both zeros
-        xt[4, -1] = 60000.0                            # an FP16 sum overflows
-        xt[4, 0] = 60000.0
-        xt = xt.cuda()
-        ot = torch.zeros(8, 6, dtype=torch.float64).cuda()
-        launch(src, [xt, ot], block=4)
-        want = _reduced([[float(v) for v in r] for r in xt.cpu().tolist()],
-                        [[0.0] * 6 for _ in range(8)], 4)
-        for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
-            assert [repr(float(v)) for v in w] == [repr(v) for v in g], r
+    torch.manual_seed(n)
+    xt = torch.randn(8, n) * 1000
+    xt[0] = -0.0                                   # a sum of `-0.0` alone
+    xt[1, 0], xt[1, -1] = math.inf, -math.inf
+    xt[2, 1] = math.nan
+    xt[3] = torch.tensor([0.0, -0.0] * n)[:n]      # both zeros
+    xt[4, -1] = 60000.0                            # an FP16 sum overflows
+    xt[4, 0] = 60000.0
+    src = _agree_on(_reduced, xt, 6, ctx_in=FP16, ctx_out=fp.FP64)
+    # the `REAL` sum across the lanes; the `FP16` one left to right
+    assert re.search(r'tl\.sum\((?!tl\.where)', src)
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -859,34 +518,19 @@ def _grouped(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real)
         for g in range(4):
             group = ys[g * 2:(g + 1) * 2]
             row[g] = sum(group)
-            row[4 + g] = 1.0 if all([y == 0 for y in group]) else 0.0
+            row[4 + g] = 1.0 if all([y == 0 for y in group]) else 0.0  # noqa: C419
     return out
 
 
 def test_an_aligned_slice_of_a_tile_is_a_tile():
     """nvfp4's groups: row `g` of the tile reshaped to the group's width."""
-    import torch
-
-    from fpy2.utils import NamedId
-
-    rows = NamedId('rows')
-    src = _lanes(_grouped, [
-        ListType(ListType(RealType(FP16), 8), rows),
-        ListType(ListType(RealType(fp.FP64), 8), rows),
-        RealType(fp.INTEGER)])
-    assert 'tl.reshape(ys, (BLOCK, 4, 2))' in src.source
     torch.manual_seed(0)
-    xt = (torch.randn(6, 8) * 100).half()
+    xt = torch.randn(6, 8) * 100
     xt[0, :2] = 0.0
     xt[1, 2], xt[1, 3] = -0.0, -0.0
-    xt[2, 5] = float('nan')
-    xt = xt.cuda()
-    ot = torch.zeros(6, 8, dtype=torch.float64).cuda()
-    launch(src, [xt, ot], block=4)
-    want = _grouped([[float(v) for v in r] for r in xt.cpu().tolist()],
-                    [[0.0] * 8 for _ in range(6)], 4)
-    for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
-        assert [repr(float(v)) for v in w] == [repr(v) for v in g], r
+    xt[2, 5] = math.nan
+    src = _agree_on(_grouped, xt, 8, ctx_in=FP16, ctx_out=fp.FP64)
+    assert 'tl.reshape(ys, (BLOCK, 4, 2))' in src
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -912,26 +556,14 @@ def _chain(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
 def test_one_kernel_at_every_depth():
     """`K` a kernel argument: the loop over its blocks runs at runtime, and
     the accumulator it carries is a row at entry and at every assignment."""
-    import torch
-
-    from fpy2.utils import NamedId
-
     rows, k = NamedId('rows'), NamedId('k')
-    src = TritonCompiler(drop_asserts=True).compile(_chain, ctx=fp.REAL, arg_types=[
-        ListType(ListType(RealType(FP16), k), rows),
-        ListType(ListType(RealType(FP16), k), rows),
-        ListType(RealType(fp.FP32), rows), RealType(fp.INTEGER)])
+    src = _compile(_chain, [ListType(ListType(RealType(FP16), k), rows)] * 2
+                   + [ListType(F32, rows), INT])
     assert 'in range(0, ' in src.source
     for depth in (4, 8, 20):
         torch.manual_seed(depth)
-        xt = (torch.randn(6, depth) * 8).half().cuda()
-        yt = (torch.randn(6, depth) * 8).half().cuda()
-        ot = torch.zeros(6, dtype=torch.float32).cuda()
-        launch(src, [xt, yt, ot], block=4)
-        xs = [[float(v) for v in r] for r in xt.cpu().tolist()]
-        ys = [[float(v) for v in r] for r in yt.cpu().tolist()]
-        want = _chain(xs, ys, [0.0] * 6, 4)
-        assert ot.cpu().tolist() == [float(v) for v in want], depth
+        _agree(src, _chain, [_halves(6, depth, 8), _halves(6, depth, 8),
+                             torch.zeros(6).cuda()])
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -946,54 +578,46 @@ def _matmul(A: list[list[fp.Real]], BT: list[list[fp.Real]],
     return out
 
 
-def test_both_output_dimensions_are_program_ids():
+@pytest.fixture(scope='module')
+def matmul_src() -> KernelSource:
+    m, n = NamedId('m'), NamedId('n')
+    return _compile(_matmul, [ListType(ListType(F32, 8), m), ListType(ListType(F32, 8), n),
+                              ListType(ListType(F32, n), m), INT])
+
+
+def test_both_output_dimensions_are_program_ids(matmul_src):
     """`i` is `program_id(1)`, one program per row of the output, and `j`
     the tile: `m` and `n` both larger than a block."""
-    import torch
-
-    from fpy2.utils import NamedId
-
-    m, n = NamedId('m'), NamedId('n')
-    f32 = RealType(fp.FP32)
-    src = _lanes(_matmul, [ListType(ListType(f32, 8), m),
-                           ListType(ListType(f32, 8), n),
-                           ListType(ListType(f32, n), m), RealType(fp.INTEGER)])
-    assert 'i = tl.program_id(1)' in src.source and src.grid_outer is not None
+    assert 'i = tl.program_id(1)' in matmul_src.source
+    assert matmul_src.grid_outer is not None
     for rows, cols in ((5, 9), (1, 3), (6, 4)):
         torch.manual_seed(rows * cols)
-        at, bt = torch.randn(rows, 8).cuda(), torch.randn(cols, 8).cuda()
-        ot = torch.zeros(rows, cols).cuda()
-        launch(src, [at, bt, ot], block=4)
-        want = _matmul(at.cpu().tolist(), bt.cpu().tolist(),
-                       [[0.0] * cols for _ in range(rows)], 4)
-        assert ot.cpu().tolist() == [[float(v) for v in r] for r in want], (rows, cols)
+        _agree(matmul_src, _matmul, [torch.randn(rows, 8).cuda(), torch.randn(cols, 8).cuda(),
+                                     torch.zeros(rows, cols).cuda()])
 
 
-class TestTuning:
+@fp.fpy(ctx=fp.FP32)
+def _accumulate(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        for k in range(len(row)):
+            row[k] = row[k] + xs[k]
+    return out
+
+
+def test_tuning_restores_the_output_between_configs(monkeypatch):
     """Left without a block, a launch times each of `TUNING` and runs the
-    fastest -- over the arguments it is given, so what it writes is put back
-    between configs."""
-
-    @pytest.fixture(autouse=True)
-    def _two_configs(self, monkeypatch):
-        from fpy2.backend.triton import launcher
-        monkeypatch.setattr(launcher, 'TUNING', ((16, 4), (32, 2)))
-
-    def test_it_agrees_with_the_interpreter(self):
-        import torch
-
-        from fpy2.utils import NamedId
-
-        rows = NamedId('rows')
-        src = _lanes(_twice_plus_one, [
-            ListType(ListType(RealType(fp.FP32), 5), rows),
-            ListType(ListType(RealType(fp.FP32), 5), rows), RealType(fp.INTEGER)])
-        assert src.writes == ('out_ptr',)
-        xt = torch.randn(37, 5).cuda()
-        ot = torch.zeros(37, 5).cuda()
-        launch(src, [xt, ot])
-        want = _twice_plus_one(xt.cpu().tolist(), [[0.0] * 5 for _ in range(37)], 4)
-        assert ot.cpu().tolist() == [[float(v) for v in r] for r in want]
+    fastest over the arguments it is given, so an output it reads is put back
+    between configs and the update lands once."""
+    from fpy2.backend.triton import launcher
+    monkeypatch.setattr(launcher, 'TUNING', ((16, 4), (32, 2)))
+    rows = NamedId('rows')
+    src = _compile(_accumulate, [ListType(ListType(F32, 5), rows)] * 2 + [INT])
+    assert src.writes == ('out_ptr',)
+    torch.manual_seed(0)
+    _agree(src, _accumulate, [torch.randn(37, 5).cuda(), torch.randn(37, 5).cuda()],
+           block=None)
 
 
 class TestLayout:
@@ -1001,79 +625,39 @@ class TestLayout:
     for, so a tensor laid out any other way is refused rather than read and
     written in the wrong places."""
 
-    @pytest.fixture(scope='class')
-    def src(self):
-        from fpy2.utils import NamedId
-        m, n = NamedId('m'), NamedId('n')
-        f32 = RealType(fp.FP32)
-        return _lanes(_matmul, [ListType(ListType(f32, 8), m),
-                                ListType(ListType(f32, 8), n),
-                                ListType(ListType(f32, n), m), RealType(fp.INTEGER)])
-
     @staticmethod
-    def _args(m=3, n=5, k=8):
-        import torch
+    def _args(m: int = 3, n: int = 5, k: int = 8) -> list:
         return [torch.randn(m, k).cuda(), torch.randn(n, k).cuda(),
                 torch.zeros(m, n).cuda()]
 
-    def test_a_strided_view_is_refused(self, src):
-        import torch
+    def test_a_strided_view_is_refused(self, matmul_src):
         a, bt, _ = self._args()
         out = torch.zeros(3, 10).cuda()[:, :5]
         with pytest.raises(ValueError, match='`out_ptr` is not contiguous'):
-            launch(src, [a, bt, out], block=4)
+            launch(matmul_src, [a, bt, out], block=4)
 
-    def test_a_proven_length_must_match(self, src):
-        a, bt, out = self._args(k=16)
+    def test_a_proven_length_must_match(self, matmul_src):
         with pytest.raises(ValueError, match='compiled for 8'):
-            launch(src, [a, bt, out], block=4)
+            launch(matmul_src, self._args(k=16), block=4)
 
-    def test_a_shared_length_must_agree(self, src):
+    def test_a_shared_length_must_agree(self, matmul_src):
         """`out`'s rows are `A`'s, one parameter read off `A`."""
         a, bt, _ = self._args()
-        import torch
         with pytest.raises(ValueError, match='where the kernel has one length'):
-            launch(src, [a, bt, torch.zeros(4, 5).cuda()], block=4)
+            launch(matmul_src, [a, bt, torch.zeros(4, 5).cuda()], block=4)
 
-    def test_the_rank_must_match(self, src):
+    def test_the_rank_must_match(self, matmul_src):
         a, bt, _ = self._args()
-        import torch
         with pytest.raises(ValueError, match='has 1 dimensions, not 2'):
-            launch(src, [a, bt, torch.zeros(15).cuda()], block=4)
+            launch(matmul_src, [a, bt, torch.zeros(15).cuda()], block=4)
 
-    def test_a_list_takes_a_tensor(self, src):
+    def test_a_list_takes_a_tensor(self, matmul_src):
         _, bt, out = self._args()
         with pytest.raises(TypeError, match='takes a tensor'):
-            launch(src, [[[0.0] * 8] * 3, bt, out], block=4)
+            launch(matmul_src, [[[0.0] * 8] * 3, bt, out], block=4)
 
 
-# -- values the kernel once got wrong -------------------------------------
-
-def _agree_on(func, xt, n_out: int, *, ctx_in=fp.FP32, ctx_out=fp.FP32,
-              n_in=None, **opts) -> str:
-    """*func*, compiled with *opts*, against the interpreter on the rows of
-    *xt*; its source, for a caller that checks the spelling."""
-    import torch
-
-    from fpy2.utils import NamedId
-
-    dtypes = {FP16: torch.float16, fp.FP32: torch.float32,
-              fp.FP64: torch.float64, fp.SINT32: torch.int32}
-    rows = NamedId('rows')
-    src = TritonCompiler(drop_asserts=True, **opts).compile(
-        func, ctx=fp.REAL, arg_types=[
-            ListType(ListType(RealType(ctx_in), n_in or xt.shape[1]), rows),
-            ListType(ListType(RealType(ctx_out), n_out), rows),
-            RealType(fp.INTEGER)])
-    xt = xt.to(dtypes[ctx_in]).cuda()
-    ot = torch.zeros(xt.shape[0], n_out, dtype=dtypes[ctx_out]).cuda()
-    # a kernel that tiled nothing loops over the rows itself
-    launch(src, [xt, ot], block=4, grid=None if src.grid_extent else 1)
-    want = func(xt.cpu().tolist(), [[0.0] * n_out for _ in range(xt.shape[0])], 4)
-    for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
-        assert [repr(float(v)) for v in w] == [repr(float(v)) for v in g], r
-    return src.source
-
+# -- edge cases -----------------------------------------------------------
 
 @fp.fpy(ctx=fp.REAL)
 def _carried_max(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
@@ -1089,9 +673,6 @@ def _carried_max(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.R
 
 def test_a_carried_negative_zero_stays_negative():
     """A runtime loop's value, broadcast to a row: `-0.0 + 0.0` is `+0.0`."""
-    import torch
-
-    from fpy2.utils import NamedId
     _agree_on(_carried_max, torch.tensor([[-0.0, -0.0, -0.0], [-1.0, -0.0, -3.0]]),
               1, n_in=NamedId('k'))
 
@@ -1112,7 +693,6 @@ def _whole_tile(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Re
 
 
 def test_a_slice_the_whole_tile_wide_is_a_copy_without_the_tail():
-    import torch
     _agree_on(_whole_tile, torch.tensor([[1.0, 2, 3, 4, 100, 200]]), 3, ctx_in=FP16)
 
 
@@ -1133,7 +713,6 @@ def _stale_index(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.R
 
 def test_a_row_keeps_the_index_it_was_bound_at():
     """`xs[1]` is row `j`'s, not row `0`'s: `t` changed after the binding."""
-    import torch
     _agree_on(_stale_index, torch.tensor([[1.0, 2], [3.0, 4], [5.0, 6]]), 1)
 
 
@@ -1158,7 +737,6 @@ def _destructured(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.
 def test_a_destructured_name_is_held_in_its_class():
     """`a` is an exact `f16` product, so `f32`: `a * a` rounds there, not in
     the `f16` a load would leave it in."""
-    import torch
     _agree_on(_destructured, torch.tensor([[1.0, 1.0009765625, 3.0], [2.0, -1.0, 3.0]]),
               3, ctx_in=FP16)
 
@@ -1175,7 +753,6 @@ def _int_compare(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.R
 
 def test_an_integer_compares_with_a_float_exactly():
     """Not in `fp32`, where `16777217` is `16777216`."""
-    import torch
     _agree_on(_int_compare, torch.tensor([[16777217, 33554434], [16777216, 5]]),
               2, ctx_in=fp.SINT32)
 
@@ -1189,7 +766,6 @@ def _wide_literal(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.
 
 
 def test_a_literal_fp32_cannot_hold_is_typed():
-    import torch
     _agree_on(_wide_literal, torch.tensor([[1.0], [-1.0]]), 1, ctx_out=fp.FP64)
 
 
@@ -1207,7 +783,6 @@ def _rounded_literal(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: 
 
 def test_a_rounded_literal_is_rounded():
     """Retyping it would give `2.9999998`, where `FP16` rounds to `3`."""
-    import torch
     _agree_on(_rounded_literal, torch.tensor([[0.0], [1.0]]), 1, optimize=False)
 
 
@@ -1223,11 +798,7 @@ def _to_integer(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Re
 
 
 def test_rounding_to_the_integers_has_no_negative_zero():
-    import torch
     _agree_on(_to_integer, torch.tensor([[-0.5], [-0.25], [-0.0], [-1.5], [0.5]]), 1)
-
-
-E4M3 = fp.MX_E4M3
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -1235,7 +806,7 @@ def _to_e4m3(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real)
     for j in range(len(out)):
         xs = xss[j]
         row = out[j]
-        with E4M3:
+        with fp.MX_E4M3:
             row[0] = fp.round(xs[0])
     return out
 
@@ -1243,9 +814,6 @@ def _to_e4m3(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real)
 def test_an_unfolded_rounding_with_a_nan_compiles_and_agrees():
     """The unfolded rounding negates a NaN, which as a Python float has no
     `.to` to cast it with."""
-    import math
-
-    import torch
     vals = [0.0, -0.0, 1.0, -1.0, 448.0, 464.0, 1e6, -1e6, math.inf, 2**-9,
             3 * 2**-10, -2**-10, 0.3, 17.0, 19.0, 1.1875]
     _agree_on(_to_e4m3, torch.tensor([[v] for v in vals]), 1,

@@ -2,25 +2,19 @@
 Triton backend: the normal form.
 
 The cpp backend's ``StatementForm``, with calls inlined away and one exit.
-An ``if`` statement is kept.  A kernel has no per-lane branch, so the emitter
-flattens it under a mask -- but after the analyses, which read its guard:
-if-converting here would run each arm on every input *in the program*, and
-format inference would rightly bound it over all of them.
+An ``if`` is kept: the emitter flattens it under a mask, but only after the
+analyses have read its guard, since if-converting here would bound each arm
+over every input.  A comprehension becomes a loop.
 
-A comprehension becomes a loop, which the emitter runs across a tile's lanes.
-
-What survives normalization and should not is an error, per the contract's
-rejection principle -- a refusal is acceptable, a different answer is not.
+What normalization leaves that the form does not admit is an error.
 """
 
-from ...analysis import DefineUse, Reachability
+from ...analysis import DefineUse, DefineUseAnalysis, Reachability
 from ...ast import (
     Call,
     DefaultVisitor,
-    Expr,
     FuncDef,
-    NamedId,
-    Var,
+    Stmt,
     WhileStmt,
 )
 from ...function import Function
@@ -32,6 +26,7 @@ from ...transform import (
     StatementForm,
     TransformDeclined,
 )
+from ...transform.simplify_if import _reads
 from ..backend import CompileError
 
 __all__ = ['TritonNormalizeError', 'normalize', 'normalize_module']
@@ -42,34 +37,33 @@ class TritonNormalizeError(CompileError):
 
 
 _MAX_ROUNDS = 4
-"""Cap on the rounds below.
-
-One productive application suffices across the corpus -- 67 of 86 functions
-are already normal and the other 19 are stable after one -- so this only
-bounds a pipeline that stops converging, rather than a case that needs it.
-"""
+"""Cap on the rounds of :func:`normalize`, which should converge in one."""
 
 
 class _NotNormal(DefaultVisitor):
     """What remains that the normal form does not admit."""
 
-    def __init__(self, func: FuncDef):
+    func: FuncDef
+    def_use: DefineUseAnalysis
+    reasons: list[str]
+
+    def __init__(self, func: FuncDef) -> None:
         super().__init__()
         self.func = func
         self.def_use = DefineUse.analyze(func)
-        self.reasons: list[str] = []
+        self.reasons = []
 
-    def _visit_statement(self, stmt, ctx):
+    def _visit_statement(self, stmt: Stmt, ctx: None) -> None:
         match stmt:
             case WhileStmt():
                 # a tile-wide loop must run a fixed number of times; a
-                # condition the body moves makes the count per-lane
+                # condition the body moves makes the count per-row
                 moved = self.def_use.mutated_in(stmt.body)
                 if any(v in moved for v in _reads(stmt.cond)):
                     self.reasons.append('a `while` condition varies')
         return super()._visit_statement(stmt, ctx)
 
-    def _visit_call(self, e: Call, ctx):
+    def _visit_call(self, e: Call, ctx: None) -> None:
         if isinstance(e.fn, Function):
             self.reasons.append(f'a call to `{e.fn.name}` remains')
         return super()._visit_call(e, ctx)
@@ -80,23 +74,6 @@ class _NotNormal(DefaultVisitor):
         if n > 1:
             self.reasons.append(f'{n} `return`s remain')
         return self.reasons
-
-
-class _Reads(DefaultVisitor):
-    """Names an expression reads."""
-
-    def __init__(self):
-        super().__init__()
-        self.names: set[NamedId] = set()
-
-    def _visit_var(self, v: Var, ctx):
-        self.names.add(v.name)
-
-
-def _reads(e: Expr) -> set[NamedId]:
-    v = _Reads()
-    v._visit_expr(e, None)
-    return v.names
 
 
 def normalize(func: FuncDef) -> FuncDef:
@@ -134,9 +111,6 @@ def normalize(func: FuncDef) -> FuncDef:
         reasons = _NotNormal(func).check()
         if not reasons:
             return func
-    # the loop is meant to converge -- inlining is bounded by an acyclic call
-    # graph, and lowering creates no work for it.  Reaching the bound means
-    # one of those is false.
     raise TritonNormalizeError(
         f'`{func.name}` did not converge in {_MAX_ROUNDS} rounds, which is a '
         f'bug in the normal form rather than a program it declines; what '

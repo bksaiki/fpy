@@ -1,25 +1,16 @@
 """
-triton backend: target description.
+Triton backend: target description.
 
 Which primitive ops the emitter may dispatch, and what Triton surface to emit
 for each.  The shapes here (:class:`TritonOp`, :class:`ScalarOpTable`) parallel
-the cpp backend's in :mod:`fpy2.backend.cpp.ops`; they are not shared because
-the cpp ones are parameterized by ``CppScalar`` and spell C++.  Unifying them
-is a refactor of the cpp backend, not of this one.
+the cpp backend's in :mod:`fpy2.backend.cpp.ops`.
 
-**The table is deliberately small**, and every omission is a refusal rather
-than a fallback.  The contract is that if the compiler succeeds, the emitted
-code must behave as the interpreter does.  On a
-target whose defaults trade numerical agreement for throughput, holding that
-means declining to name an operation whose Triton spelling is not the one FPy
-specifies.  What is left out, and why:
+**The table is deliberately small**: an operation whose Triton spelling is
+not the one FPy specifies is refused, never approximated.  Left out:
 
-- **Every transcendental.**  There is no correctly-rounded `exp`, `log`, `sin`
-  or `erf` in Triton: `tl.exp` goes through libdevice `__nv_expf` and `tl.exp2`
-  may lower to `ex2.approx.f32`.  The cpp backend has the same exposure and
-  handles it by excluding 27 operators from its bit-exact differential check.
-  Emitting none of them instead makes that exclusion list *empty*, so every
-  function this backend compiles can also be checked bit-for-bit.
+- **Every transcendental.**  None is correctly rounded in Triton: `tl.exp`
+  goes through libdevice `__nv_expf` and `tl.exp2` may lower to
+  `ex2.approx.f32`.
 - **Division at FP16.**  Triton types `fp16 / fp16` as **fp32** -- there is no
   hardware divide below 32 bits -- so the result is an fp32 quotient narrowed
   back, which is a double rounding and not FP16's division.
@@ -28,9 +19,9 @@ specifies.  What is left out, and why:
 - **``/`` and ``tl.sqrt``.**  Both are the *fast* variants.  The correctly
   rounded ones are ``tl.div_rn`` and ``tl.sqrt_rn``, and those are what the
   table names.
-- **Every rounding mode but RNE.**  Triton exposes no per-instruction rounding
-  modifier, so a non-RNE context reaches codegen through ``unfold_round`` or
-  not at all.
+- **Arithmetic in any rounding mode but RNE.**  Triton has no per-instruction
+  rounding modifier; only some casts round directed (:func:`directed_cast`),
+  and the rest goes through ``unfold_round`` or not at all.
 """
 
 from __future__ import annotations
@@ -98,10 +89,6 @@ class TritonOp:
     out_ctx: Context
     style: TritonOpStyle = TritonOpStyle.CALL
 
-    @property
-    def is_call(self) -> bool:
-        return self.style is TritonOpStyle.CALL
-
     def matches(
         self, in_tys: tuple[TritonScalar, ...], active_ctx: Context,
     ) -> bool:
@@ -120,17 +107,15 @@ class TritonOp:
                 return f'{self.name}({", ".join(args)})'
 
 
-UnaryOpTable: TypeAlias = dict[type[Expr], list[TritonOp]]
-BinaryOpTable: TypeAlias = dict[type[Expr], list[TritonOp]]
-TernaryOpTable: TypeAlias = dict[type[Expr], list[TritonOp]]
+OpTable: TypeAlias = dict[type[Expr], list[TritonOp]]
 
 
 @dataclasses.dataclass
 class ScalarOpTable:
     """Per-op-kind tables of supported Triton signatures."""
-    unary: UnaryOpTable
-    binary: BinaryOpTable
-    ternary: TernaryOpTable
+    unary: OpTable
+    binary: OpTable
+    ternary: OpTable
 
 
 # ---------------------------------------------------------------------
@@ -144,10 +129,9 @@ _DIV_SHAPES = ((8, 32), (11, 64))
 ``fp16 / fp16`` in fp32."""
 
 
-def _fp_ctxs(shapes=_FP_SHAPES) -> list[Context]:
-    """The float contexts this backend dispatches on: round-to-nearest-even
-    only, because Triton computes in no other mode.  A *cast* has one more;
-    see :func:`directed_cast`."""
+def _fp_ctxs(shapes: tuple[tuple[int, int], ...] = _FP_SHAPES) -> list[Context]:
+    """The float contexts arithmetic dispatches on: round-to-nearest-even
+    only.  Directed casts are :func:`directed_cast`'s."""
     return [IEEEContext(es, nbits, RM.RNE) for (es, nbits) in shapes]
 
 
@@ -213,31 +197,8 @@ _NATIVE_CTXS = frozenset(_all_arith_ctxs())
 def is_native_ctx(ctx: Context) -> bool:
     """Is a cast into *ctx*'s storage the same operation as its ``round``?
 
-    **Deliberately a predicate on the context, not on ``(op, context)``**, even
-    though this target's op coverage is not uniform over a context's operations
-    -- ``Add`` at FP16 is in the table and ``Div`` at FP16 is not.
-
-    The cpp backend can read this one predicate two ways, because ``<cmath>``
-    is uniform over a context.  Here the two readings come apart, and the
-    cast reading is the one that must stay:
-
-    - As *"is a cast this context's round?"* -- which is what
-      ``_require_cast_is_round`` and ``unfold_round``'s ``Round``/``Cast``
-      classification ask -- the answer for FP16/FP32/FP64 under RNE is yes.
-      ``x.to(tl.float16)`` **is** FP16's round-to-nearest-even.
-    - As *"does the op table dispatch on this context?"* the answer is
-      per-operation.
-
-    Answering the cast question keeps a native `fp.round` to FP16 as a cast.
-    Answering ``False`` instead would send it through ``unfold_round``'s
-    integer lowering, which is sound but absurd for an operation the hardware
-    performs directly.
-
-    The cost is confined to a diagnostic: an operation the table lacks under an
-    otherwise-native context refuses with "no matching signature" and without
-    the advice to try ``unfold=DOUBLE_ROUND``.  That is a worse message, not a
-    worse outcome, and the message is accurate -- no amount of double-rounding
-    recovers an operation the target cannot perform at all.
+    A predicate on the context, not on ``(op, context)``: ``Div`` at FP16 is
+    not in the table, yet ``x.to(tl.float16)`` is FP16's round.
     """
     return ctx in _NATIVE_CTXS
 
@@ -257,7 +218,7 @@ def _same(name: str, ctxs: list[Context], arity: int,
     ]
 
 
-def _make_unary_table() -> UnaryOpTable:
+def _make_unary_table() -> OpTable:
     fp = _fp_ctxs()
     same = _all_arith_ctxs()
     return {
@@ -270,9 +231,9 @@ def _make_unary_table() -> UnaryOpTable:
     }
 
 
-def _make_binary_table() -> BinaryOpTable:
+def _make_binary_table() -> OpTable:
     same = _all_arith_ctxs()
-    table: BinaryOpTable = {
+    table: OpTable = {
         Add: _same('+', same, 2, TritonOpStyle.INFIX),
         Sub: _same('-', same, 2, TritonOpStyle.INFIX),
         Mul: _same('*', same, 2, TritonOpStyle.INFIX),
@@ -283,18 +244,13 @@ def _make_binary_table() -> BinaryOpTable:
     return table
 
 
-def _make_ternary_table() -> TernaryOpTable:
+def _make_ternary_table() -> OpTable:
     return {Fma: _same('tl.fma', _fp_ctxs(), 3)}
 
 
 @cache
 def make_op_table() -> ScalarOpTable:
-    """The triton backend's :class:`ScalarOpTable`.
-
-    Cached: it takes no arguments, every entry derives from the constants
-    above, and building it is not cheap -- each signature's storage goes
-    through ``AbstractFormat.from_format``.  Callers only read it.
-    """
+    """The Triton backend's :class:`ScalarOpTable`; cached, so read only."""
     return ScalarOpTable(
         unary=_make_unary_table(),
         binary=_make_binary_table(),

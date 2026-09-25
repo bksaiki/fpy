@@ -1041,11 +1041,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
             ift, iff = self.def_use.defs[phi.rhs], self.def_use.defs[phi.lhs]
             if isinstance(stmt, IfStmt):
                 ift, iff = iff, ift
-            # A zero arm has no digits, so it neither raises the magnitude nor
-            # lowers the grid: it states nothing and is dropped rather than
-            # joined, the way `_visit_return` drops a path that returns only
-            # infinities.  Joining it instead leaves the merge at its own seed.
-            # An arm holding only infinities and NaN has no digits either.
+            # An arm with no digits -- zero, or only infinities and NaN --
+            # states nothing, so it is dropped rather than joined, as
+            # `_visit_return` drops a path returning only infinities.
             live = [
                 self.out.by_def.get(d)
                 for d in (ift, iff)

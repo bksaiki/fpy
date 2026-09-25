@@ -17,6 +17,7 @@ from fpy2.ast.fpyast import (
     Div,
     Erf,
     Exp,
+    Expr,
     Fma,
     Log,
     Mul,
@@ -25,15 +26,16 @@ from fpy2.ast.fpyast import (
     Sub,
     Tan,
 )
-from fpy2.backend.triton.target import is_native_ctx, make_op_table
+from fpy2.backend.triton.target import OpTable, is_native_ctx, make_op_table
 from fpy2.backend.triton.types import TritonScalar as T
 
 _TABLE = make_op_table()
 _FP16 = fp.IEEEContext(5, 16, fp.RM.RNE)
 _FP32 = fp.IEEEContext(8, 32, fp.RM.RNE)
+_FP64 = fp.IEEEContext(11, 64, fp.RM.RNE)
 
 
-def _ctxs(table, op):
+def _ctxs(table: OpTable, op: type[Expr]) -> list[fp.Context]:
     return [s.out_ctx for s in table.get(op, [])]
 
 
@@ -48,6 +50,7 @@ class TestDivision:
 
     def test_fp32_and_fp64_divide_exist(self):
         assert _FP32 in _ctxs(_TABLE.binary, Div)
+        assert _FP64 in _ctxs(_TABLE.binary, Div)
 
     def test_no_integer_divide(self):
         """FPy's integer contexts round toward zero; Triton's `//` floors.
@@ -56,7 +59,7 @@ class TestDivision:
             assert ctx not in _ctxs(_TABLE.binary, Div)
 
     def test_divide_uses_the_correctly_rounded_spelling(self):
-        """`/` is `fdiv`, the fast variant."""
+        """Triton's `/` is `fdiv`, the fast variant; `tl.div_rn` is IEEE."""
         for sig in _TABLE.binary[Div]:
             assert sig.name == 'tl.div_rn'
 
@@ -72,10 +75,9 @@ class TestNoTranscendentals:
     """Not an oversight, and it is what makes the validation gate total.
 
     Triton has no correctly-rounded `exp`/`log`/`sin`/`erf`.  The cpp backend
-    lives with the same exposure by excluding 27 operators from its bit-exact
-    differential check; emitting none of them instead makes that exclusion list
-    empty, so every function this backend compiles can also be checked
-    bit-for-bit.
+    lives with the same exposure by excluding them from its bit-exact
+    differential check; emitting none of them makes that exclusion list empty,
+    so every function this backend compiles can be checked bit-for-bit.
     """
 
     @pytest.mark.parametrize('op', [Exp, Log, Sin, Cos, Tan, Erf])
@@ -101,16 +103,6 @@ class TestNativeContexts:
     def test_out_of_scope_formats_are_not_native(self):
         for ctx in (fp.BF16, fp.S1E4M3, fp.MX_E4M3, fp.TF32):
             assert not is_native_ctx(ctx)
-
-    def test_native_is_not_the_same_as_dispatchable(self):
-        """The predicate is context-level while op coverage is not uniform over
-        a context -- `Add` at FP16 dispatches and `Div` at FP16 does not.  The
-        cast reading is the one that must stay; see `is_native_ctx`'s docstring
-        for why, and for what the mismatch costs (a diagnostic, not an
-        outcome)."""
-        assert is_native_ctx(_FP16)
-        assert _FP16 in _ctxs(_TABLE.binary, Add)
-        assert _FP16 not in _ctxs(_TABLE.binary, Div)
 
 
 class TestFp16Arithmetic:

@@ -287,7 +287,7 @@ class CppCompiler(Backend):
             ``assert len(xs) == K`` becomes a type-level commitment.  No effect
             under ``unbox=NEVER``, where nothing is a value.  Default ``True``.
         unfold:
-            An :class:`~fpy2.backend.cpp.unfold_round.UnfoldMode` (also
+            An :class:`~fpy2.backend.unfold_round.UnfoldMode` (also
             reachable as ``CppCompiler.UnfoldMode``).  ``ROUNDINGS`` lowers a
             rounding the op table cannot spell into integer arithmetic instead
             of refusing it; ``DOUBLE_ROUND`` also computes arithmetic under

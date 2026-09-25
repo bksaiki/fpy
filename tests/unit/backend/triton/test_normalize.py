@@ -8,48 +8,40 @@ becomes a loop, for the lanes.
 import pytest
 
 import fpy2 as fp
-from fpy2 import Function
+from fpy2 import Function, Module
 from fpy2.analysis import ArraySizeInfer, FormatInfer
 from fpy2.ast.fpyast import (
     AssertStmt,
     Call,
     ForStmt,
+    FuncDef,
     If1Stmt,
     IfStmt,
     ListComp,
     ReturnStmt,
+    Sum,
 )
-from fpy2.ast.visitor import DefaultVisitor
-from fpy2 import Module
 from fpy2.backend.triton import (
     TritonNormalizeError,
     normalize,
     normalize_module,
 )
-from fpy2.transform import TransformDeclined
+from fpy2.backend.triton.storage import bound_fits_in_scalar
+from fpy2.backend.triton.types import TritonScalar
+from fpy2.transform import FreeVarElim, Specialize, ZipElim
+from fpy2.transform.path import walk_exprs, walk_stmts
+from fpy2.types import ListType, RealType
 
 
-def _count(ast, *types) -> int:
-    n = 0
-
-    class _V(DefaultVisitor):
-        def _visit_statement(self, stmt, ctx):
-            nonlocal n
-            if isinstance(stmt, types):
-                n += 1
-            return super()._visit_statement(stmt, ctx)
-
-        def _visit_call(self, e, ctx):
-            nonlocal n
-            if Call in types and isinstance(e.fn, Function):
-                n += 1
-            return super()._visit_call(e, ctx)
-
-    _V()._visit_function(ast, None)
-    return n
+def _count(ast: FuncDef, *types: type) -> int:
+    """Statements and expressions of *types*; a `Call` only to an FPy function."""
+    nodes = [s for _, s in walk_stmts(ast)] + [e for _, e in walk_exprs(ast)]
+    return sum(
+        isinstance(n, types) and (not isinstance(n, Call) or isinstance(n.fn, Function))
+        for n in nodes)
 
 
-def _is_normal(ast) -> None:
+def _is_normal(ast: FuncDef) -> None:
     assert _count(ast, ReturnStmt) == 1, 'not a single exit'
     assert _count(ast, Call) == 0, 'a call remains'
 
@@ -110,8 +102,9 @@ class TestReachesTheForm:
         def comp(xs: list[fp.Real]):
             return [x * 2 for x in xs]
 
-        src = normalize(comp.ast).format()
-        assert 'for' in src
+        out = normalize(comp.ast)
+        assert _count(out, ForStmt) == 1
+        assert _count(out, ListComp) == 0
 
 
 class TestAnIfIsKept:
@@ -138,7 +131,7 @@ class TestAnIfIsKept:
             assert repr(g(c, [1.0, 2.0])) == repr(guarded(c, [1.0, 2.0]))
 
 
-class TestRejects:
+class TestAssertsAndLoops:
     def test_an_assert_under_a_guard_is_left_to_the_emitter(self):
         """Nothing is hoisted, so it runs only where the guard held; whether a
         kernel can spell it is `drop_asserts`'s question, at emission."""
@@ -180,55 +173,13 @@ class TestRejects:
             normalize(_caller)
 
 
-class TestAComprehensionOpensBeforeTheInline:
-    """`FuncInline` splices a callee's body into the enclosing *statement*
-    list, so it cannot take a call inside a comprehension.  Lowered to a loop
-    first, the call is a statement of its own."""
-
-    def test_a_call_inside_a_comprehension_is_inlined(self):
-        @fp.fpy(ctx=fp.FP64)
-        def bump(x: fp.Real) -> fp.Real:
-            t = x + 1
-            return t
-
-        @fp.fpy(ctx=fp.FP64)
-        def uses(xs: list[fp.Real]):
-            ys = [bump(xs[i]) for i in range(3)]
-            return ys[0] + ys[2]
-
-        out = normalize(uses.ast)
-        _is_normal(out)
-        args = [1.0, 2.0, 3.0]
-        assert repr(Function(out, runtime=uses.runtime)(args)) == repr(uses(args))
-
-
 class TestLanes:
     """A comprehension becomes a loop, which gives a call in one a statement
     and keeps the iteration for the lanes."""
 
-    @staticmethod
-    def _lanes(func: Function) -> Function:
-        m = Module()
-        m.add(func)
-        return normalize_module(m).get(func.name).func
-
-    @staticmethod
-    def _loops(ast) -> int:
-        n = 0
-
-        class _V(DefaultVisitor):
-            def _visit_for(self, stmt, ctx):
-                nonlocal n
-                n += 1
-                super()._visit_for(stmt, ctx)
-
-            def _visit_list_comp(self, e, ctx):
-                raise AssertionError('a comprehension remains')
-
-        _V()._visit_function(ast, None)
-        return n
-
     def test_a_call_inside_a_comprehension_is_inlined(self):
+        """`FuncInline` splices a callee's body into a statement list, so it
+        cannot take a call inside a comprehension until that is a loop."""
         @fp.fpy(ctx=fp.FP64)
         def bump(x: fp.Real) -> fp.Real:
             t = x + 1
@@ -239,9 +190,10 @@ class TestLanes:
             ys = [bump(x) for x in xs]
             return ys[0] + ys[2]
 
-        out = self._lanes(uses)
+        out = _normalized(uses)
         _is_normal(out.ast)
-        assert self._loops(out.ast) == 1
+        assert _count(out.ast, ForStmt) == 1
+        assert _count(out.ast, ListComp) == 0
         args = [1.0, 2.0, 3.0]
         assert repr(out(args)) == repr(uses(args))
 
@@ -271,7 +223,7 @@ class TestLanes:
             prods = [a * b for a, b in zip(A, B)]
             return fused(join(prods, [c]), -30)
 
-        out = self._lanes(dpa)
+        out = _normalized(dpa)
         _is_normal(out.ast)
         ArraySizeInfer.analyze(out.ast)
         FormatInfer.analyze(out.ast, use_digit_bounds=True)
@@ -292,7 +244,7 @@ class TestLanes:
             neg = [-x for x in xs]
             return first_neg(neg)
 
-        out = self._lanes(uses)
+        out = _normalized(uses)
         _is_normal(out.ast)
         for xs in ([1.0, -2.0, 3.0], [-1.0, 2.0], [0.0]):
             assert repr(out(xs)) == repr(uses(xs))
@@ -319,7 +271,7 @@ def _evens(A: list[fp.Real], B: list[fp.Real]):
     prods = [a * b for a, b in zip(A, B)]
     es = [-40 if p == 0 else _exponent0(a, -15) + _exponent0(b, -15)
           for p, a, b in zip(prods, A, B)]
-    if any([not fp.isfinite(p) for p in prods]):
+    if any([not fp.isfinite(p) for p in prods]):  # noqa: C419 -- FPy has no generators
         return 0.0
     e = max([es[i] for i in range(0, 8, 2)])
     return _fused_sum([prods[i] for i in range(0, 8, 2)], e - 25)
@@ -329,12 +281,6 @@ def test_a_gathered_sum_keeps_its_bound_past_a_guard():
     """The guard is stated on each element as it is read, and the evens are
     a part of the list: the part needs "every element is finite" to carry
     the bound, which is what makes the sum fit a `double`."""
-    from fpy2.ast.fpyast import Sum
-    from fpy2.backend.triton.storage import bound_fits_in_scalar
-    from fpy2.backend.triton.types import TritonScalar
-    from fpy2.transform import FreeVarElim, Specialize, ZipElim
-    from fpy2.types import ListType, RealType
-
     fp16 = RealType(fp.IEEEContext(5, 16))
     m = Module()
     m.add(_evens, arg_types=[ListType(fp16, 8), ListType(fp16, 8)])
@@ -342,13 +288,5 @@ def test_a_gathered_sum_keeps_its_bound_past_a_guard():
     ast = normalize_module(Specialize.apply(m, size_key=True)).get(
         '_evens').func.ast
     fmt = FormatInfer.analyze(ast, use_digit_bounds=True)
-    sums = []
-
-    class _V(DefaultVisitor):
-        def _visit_unaryop(self, e, ctx):
-            if isinstance(e, Sum):
-                sums.append(fmt.by_expr.get(e))
-            return super()._visit_unaryop(e, ctx)
-
-    _V()._visit_function(ast, None)
+    sums = [fmt.by_expr.get(e) for _, e in walk_exprs(ast) if isinstance(e, Sum)]
     assert sums and all(bound_fits_in_scalar(b, TritonScalar.F64) for b in sums)

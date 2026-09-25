@@ -1,9 +1,4 @@
-"""`TritonCompiler`: the pipeline in one call.
-
-What it is really for is the *order*: three of the steps' orderings are not
-obvious and each was found the hard way, so the driver states them once rather
-than leaving a caller to rediscover them.
-"""
+"""`TritonCompiler`: the pipeline in one call."""
 
 import ast as pyast
 
@@ -12,13 +7,11 @@ import pytest
 import fpy2 as fp
 from fpy2 import Module
 from fpy2.backend.backend import CompileError
-from fpy2.backend.triton import TritonCompiler
+from fpy2.backend.triton import TritonCompiler, unavailable
 from fpy2.types import ListType, RealType
 
 FP16 = fp.IEEEContext(5, 16)
 K = 8
-"""A *foreign* constant.  `Specialize` monomorphizes contexts and types, not
-closure values, so reaching `tl.static_range` at all needs `ConstFold`."""
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -41,33 +34,18 @@ _ARGS = [
 ]
 
 
-def _compile(func=batched_dot, argt=None, **kwargs):
-    return TritonCompiler(drop_asserts=True, **kwargs).compile(
-        func, ctx=fp.REAL, arg_types=argt or _ARGS)
+def test_unavailable_is_none_or_a_reason():
+    why = unavailable()
+    assert why is None or (isinstance(why, str) and why)
 
 
-class TestPipeline:
-    def test_one_call_produces_a_kernel(self):
-        k = _compile()
-        assert k.source.startswith('@triton.jit\ndef batched_dot(')
-        assert k.params == (
-            'xss_ptr', 'yss_ptr', 'out_ptr', 'BLOCK: tl.constexpr')
-        pyast.parse(k.source)
+def test_a_list_is_a_pointer_and_the_tile_width_a_constexpr():
+    k = TritonCompiler(drop_asserts=True).compile(
+        batched_dot, ctx=fp.REAL, arg_types=_ARGS)
+    assert k.params == ('xss_ptr', 'yss_ptr', 'out_ptr', 'BLOCK: tl.constexpr')
 
-    def test_a_foreign_constant_reaches_a_static_range(self):
-        """`range(K)` names a closure value.  `ArraySizeInfer` proves the
-        length anyway, so this no longer depends on `ConstFold` -- which the
-        driver still runs, for the cases that do."""
-        assert 'tl.static_range(8)' in _compile().source
 
-    def test_the_tile_and_the_sequential_fold_are_distinguished(self):
-        """The batch tiles; the accumulation rounds, so it stays per-lane."""
-        src = _compile().source
-        assert 'tl.program_id(0)' in src and 'tl.arange(0, ' in src
-        assert src.count('tl.static_range') == 1
-
-    def test_fusion_is_derived(self):
-        assert _compile().enable_fp_fusion
+_V4 = ListType(RealType(fp.FP32), 4)
 
 
 class TestAbi:
@@ -81,10 +59,7 @@ class TestAbi:
             return out
 
         with pytest.raises(CompileError, match='no `BLOCK` parameter'):
-            TritonCompiler().compile(
-                no_block, ctx=fp.FP32,
-                arg_types=[ListType(RealType(fp.FP32), 4),
-                           ListType(RealType(fp.FP32), 4)])
+            TritonCompiler().compile(no_block, ctx=fp.FP32, arg_types=[_V4, _V4])
 
     def test_the_block_name_is_configurable(self):
         @fp.fpy(ctx=fp.FP32)
@@ -94,10 +69,7 @@ class TestAbi:
             return out
 
         k = TritonCompiler(block='TILE', drop_asserts=True).compile(
-            f, ctx=fp.FP32,
-            arg_types=[ListType(RealType(fp.FP32), 4),
-                       ListType(RealType(fp.FP32), 4),
-                       RealType(fp.INTEGER)])
+            f, ctx=fp.FP32, arg_types=[_V4, _V4, RealType(fp.INTEGER)])
         assert 'TILE: tl.constexpr' in k.source
 
     def test_an_assert_is_refused_by_default(self):
@@ -108,10 +80,9 @@ class TestAbi:
                 out[i] = xs[i]
             return out
 
-        argt = [ListType(RealType(fp.FP32), 4),
-                ListType(RealType(fp.FP32), 4), RealType(fp.INTEGER)]
         with pytest.raises(CompileError, match='cannot raise'):
-            TritonCompiler().compile(f, ctx=fp.FP32, arg_types=argt)
+            TritonCompiler().compile(
+                f, ctx=fp.FP32, arg_types=[_V4, _V4, RealType(fp.INTEGER)])
 
 
 class TestModule:
@@ -144,8 +115,7 @@ class TestOptimize:
                 out[i] = xs[i] * SCALE
             return out
 
-        argt = [ListType(RealType(fp.FP32), 4),
-                ListType(RealType(fp.FP32), 4), RealType(fp.INTEGER)]
+        argt = [_V4, _V4, RealType(fp.INTEGER)]
         on = TritonCompiler(drop_asserts=True).compile(
             scaled, ctx=fp.FP32, arg_types=argt).source
         off = TritonCompiler(drop_asserts=True, optimize=False).compile(
@@ -157,6 +127,8 @@ class TestOptimize:
 
 
 RZ_FP16 = fp.IEEEContext(5, 16, fp.RM.RTZ)
+_RZ_ARGT = [ListType(RealType(fp.FP64), 8), ListType(RealType(fp.FP16), 8),
+            RealType(fp.INTEGER)]
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -171,17 +143,14 @@ class TestUnfold:
     """A rounding Triton cannot spell -- round-toward-zero into FP16 from
     `f64` -- is lowered to integer arithmetic where `unfold` asks for it."""
 
-    _ARGT = [ListType(RealType(fp.FP64), 8), ListType(RealType(fp.FP16), 8),
-             RealType(fp.INTEGER)]
-
     def test_without_it_the_rounding_is_refused(self):
         with pytest.raises(CompileError, match='no cast spelling'):
             TritonCompiler(drop_asserts=True).compile(
-                _rz, ctx=fp.REAL, arg_types=self._ARGT)
+                _rz, ctx=fp.REAL, arg_types=_RZ_ARGT)
 
     def test_with_it_the_rounding_compiles(self):
         k = TritonCompiler(
             drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
-        ).compile(_rz, ctx=fp.REAL, arg_types=self._ARGT)
+        ).compile(_rz, ctx=fp.REAL, arg_types=_RZ_ARGT)
         assert 'libdevice.trunc' in k.source
         pyast.parse(k.source)

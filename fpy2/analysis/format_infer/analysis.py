@@ -1360,7 +1360,6 @@ def unrounded_format(
             return None
 
 
-
 def rounds_exactly(
     e: Expr, by_expr: 'dict[Expr, FormatBound]', ctx: Context | None,
 ) -> bool:

@@ -1,31 +1,18 @@
 """`rounds_exactly`: does an operation's implicit round change anything?"""
 
-import pytest
-
 import fpy2 as fp
+from fpy2 import Function
 from fpy2.analysis import ContextUse, FormatInfer
 from fpy2.analysis.format_infer import rounds_exactly, unrounded_format
-from fpy2.ast.fpyast import Add, BinaryOp, Expr
-from fpy2.ast.visitor import DefaultVisitor
+from fpy2.ast.fpyast import Add, Expr
 from fpy2.number import Context
+from fpy2.transform.path import walk_exprs
 
 
-class _Adds(DefaultVisitor):
-    def __init__(self):
-        super().__init__()
-        self.found: list[Add] = []
-
-    def _visit_binaryop(self, e: BinaryOp, ctx):
-        if isinstance(e, Add):
-            self.found.append(e)
-        return super()._visit_binaryop(e, ctx)
-
-
-def _only_add(func) -> tuple[Expr, Context | None, dict]:
-    v = _Adds()
-    v._visit_function(func.ast, None)
-    assert len(v.found) == 1, f'expected one add, got {len(v.found)}'
-    e = v.found[0]
+def _only_add(func: Function) -> tuple[Expr, Context | None, dict]:
+    adds = [e for _, e in walk_exprs(func.ast) if isinstance(e, Add)]
+    assert len(adds) == 1, f'expected one add, got {len(adds)}'
+    e = adds[0]
     fmt = FormatInfer.analyze(func.ast)
     scope = ContextUse.analyze(func.ast).find_scope_from_use(e)
     c = scope.ctx if isinstance(scope.ctx, Context) else None

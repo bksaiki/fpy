@@ -17,3 +17,7 @@ FPy provides a number of compilers from FPy to other languages.
 
 .. autoclass:: fpy2.backend.cpp.unbox.UnboxMode
    :members:
+
+.. autoclass:: fpy2.TritonCompiler
+   :members:
+   :show-inheritance:

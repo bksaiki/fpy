@@ -23,31 +23,51 @@ import argparse
 import math
 import random
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).parent))
 
 from compile import DESIGNS, _filename
 
 import fpy2 as fp
-from fpy2.backend.triton import TritonCompiler, launch, unavailable
+from fpy2.backend.triton import KernelSource, TritonCompiler, launch, unavailable
+from fpy2.backend.triton.launcher import MODULE_PREAMBLE
 from fpy2.backend.triton.storage import choose_storage_scalar
 from fpy2.backend.triton.types import TritonScalar
+from fpy2.number.context import Format, SizedFormat
+from fpy2.types import Type
 from fpy2.utils import NamedId
+
+if TYPE_CHECKING:
+    import torch
 
 _L = fp.types.ListType
 _R = fp.types.RealType
 
+Build = Callable[[], tuple[fp.Function, list[Type]]]
+"""A design's builder: the design, and its argument types."""
+
 _BLOCK = 64
 
-_PREAMBLE = (
-    'import triton\n'
-    'import triton.language as tl\n'
-    'from triton.language.extra import libdevice\n\n\n'
-)
+
+def _fmt(t: Type) -> SizedFormat:
+    """The format of *t*'s values, or of its elements'."""
+    elt = t.elt if isinstance(t, _L) else t
+    if not (isinstance(elt, _R) and isinstance(elt.fmt, SizedFormat)):
+        raise TypeError(f'expected a real type of sized format, got {t}')
+    return elt.fmt
 
 
-def _matmul(design, arity: int):
+def _length(t: Type) -> int:
+    """*t*'s length, where it is a list of known length."""
+    if not (isinstance(t, _L) and isinstance(t.length, int)):
+        raise TypeError(f'expected a list of known length, got {t}')
+    return t.length
+
+
+def _matmul(design: fp.Function, arity: int) -> fp.Function:
     """*design* as a matmul: `out[i][j]` is row `i` of `A` against row `j` of
     `BT`, and a scale is indexed the way its operand is."""
     if arity == 3:
@@ -71,24 +91,27 @@ def _matmul(design, arity: int):
     raise ValueError(f'no matmul wrapper for {arity} arguments')
 
 
-def _at_depth(arg_types, k: int | None):
+def _at_depth(arg_types: list[Type], k: int | None) -> list[Type]:
     """*arg_types* with the dot product *k* long: a multiple of the design's
     own length, with a list of scales growing alike."""
     a, b, c, *scales = arg_types
-    k0 = a.length
+    assert isinstance(a, _L) and isinstance(b, _L)
+    k0 = _length(a)
     if k is None or k == k0:
         return arg_types
     if k % k0:
         raise ValueError(f'k = {k} is not a multiple of the design\'s {k0}')
-    grown = []
+    grown: list[Type] = []
     for t in scales:
         if not isinstance(t, _L):
             raise TypeError(f'one scale per call: k must be {k0}')
-        grown.append(_L(t.elt, t.length * k // k0))
+        grown.append(_L(t.elt, _length(t) * k // k0))
     return [_L(a.elt, k), _L(b.elt, k), c, *grown]
 
 
-def compile_matmul(build, k: int | None):
+def compile_matmul(
+    build: Build, k: int | None,
+) -> tuple[KernelSource, fp.Function, list[Type]]:
     """The kernel for one design as a matmul over *k*, the design, and its
     argument types; raises whatever refused it.  The sizes are the kernel's
     to be told, so one kernel runs at any -- but for a design's scales, whose
@@ -96,6 +119,7 @@ def compile_matmul(build, k: int | None):
     design, arg_types = build()
     arg_types = _at_depth(arg_types, k)
     a, b, c, *scales = arg_types
+    assert isinstance(a, _L) and isinstance(b, _L)
     m, n = NamedId('m'), NamedId('n')
     if not scales:
         a, b = _L(a.elt, NamedId('k')), _L(b.elt, NamedId('k'))
@@ -111,7 +135,7 @@ def compile_matmul(build, k: int | None):
     return kernel, design, arg_types
 
 
-def _sample(fmt, rng: random.Random) -> float:
+def _sample(fmt: SizedFormat, rng: random.Random) -> float:
     """A value of *fmt*: half over its whole range, half near one."""
     hi = fmt.to_ordinal(fmt.maxval())
     try:
@@ -130,7 +154,7 @@ def _sample(fmt, rng: random.Random) -> float:
     return float(fmt.from_ordinal(o))
 
 
-def _dtype(fmt):
+def _dtype(fmt: Format) -> 'torch.dtype':
     import torch
     scalar = choose_storage_scalar(fmt)
     dtypes = {TritonScalar.F16: torch.float16, TritonScalar.F32: torch.float32,
@@ -140,13 +164,18 @@ def _dtype(fmt):
     return dtypes[scalar]
 
 
-def _row(t, rng):
-    if isinstance(t, _L):
-        return [_sample(t.elt.fmt, rng) for _ in range(t.length)]
-    return _sample(t.fmt, rng)
+def _vector(t: Type, rng: random.Random) -> list[float]:
+    """A value of each of list type *t*'s elements."""
+    return [_sample(_fmt(t), rng) for _ in range(_length(t))]
 
 
-def run_matmul(kernel, design, arg_types, m: int, n: int, trials: int, seed: int,
+def _row(t: Type, rng: random.Random) -> float | list[float]:
+    """A value of *t*, or of each of its elements."""
+    return _vector(t, rng) if isinstance(t, _L) else _sample(_fmt(t), rng)
+
+
+def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
+               m: int, n: int, trials: int, seed: int,
                block: int | None = _BLOCK) -> int:
     """How many of the *m* x *n* outputs, over *trials* draws, the kernel gets
     bit for bit."""
@@ -154,7 +183,7 @@ def run_matmul(kernel, design, arg_types, m: int, n: int, trials: int, seed: int
 
     rng = random.Random(seed)
     a, b, c, *scales = arg_types
-    dtype = _dtype(c.fmt)
+    dtype = _dtype(_fmt(c))
     agree = 0
     for _ in range(trials):
         A = [_row(a, rng) for _ in range(m)]
@@ -173,13 +202,13 @@ def run_matmul(kernel, design, arg_types, m: int, n: int, trials: int, seed: int
     return agree
 
 
-def _tensor(values, t):
+def _tensor(values: list, t: Type) -> 'torch.Tensor':
     """*values* on the GPU, in the dtype that holds *t*'s elements."""
     import torch
-    return torch.tensor(values, dtype=_dtype((t.elt if isinstance(t, _L) else t).fmt)).cuda()
+    return torch.tensor(values, dtype=_dtype(_fmt(t))).cuda()
 
 
-def _agreeing(got: list[float], want: list[float], dtype) -> int:
+def _agreeing(got: list[float], want: list[float], dtype: 'torch.dtype') -> int:
     """How many of *got* are *want* bit for bit, once *want* is in *dtype*:
     the same value and sign, or both NaN."""
     import torch
@@ -248,11 +277,11 @@ def main(argv: list[str]) -> int:
             note = f'  {ran}/{total} agree'
         if args.out is not None:
             path = args.out / _filename(name).replace('.cpp', '.py')
-            path.write_text(_PREAMBLE + kernel.source)
+            path.write_text(MODULE_PREAMBLE + kernel.source)
             note += f'  -> {path}'
         print(f'{name:{width}}  OK{note}')
         if args.emit:
-            print(f'\n# ==== {name} ====\n{_PREAMBLE}{kernel.source}\n')
+            print(f'\n# ==== {name} ====\n{MODULE_PREAMBLE}{kernel.source}\n')
     print(f'\n{ok}/{len(designs)} compile')
     if args.run:
         print(f'{agree}/{len(designs)} agree on every output')

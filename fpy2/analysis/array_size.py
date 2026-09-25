@@ -202,18 +202,9 @@ def trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> ArraySize:
     return bound.size if isinstance(bound, ListSize) else None
 
 
-def static_trip_count(
-    iterable: Expr, sizes: ArraySizeAnalysis,
-) -> int | None:
-    """How many times a ``for`` over *iterable* runs, as a constant.
-
-    Unlike :func:`trip_count`, whose callers need top to compare unequal,
-    this falls back to the iterable's inferred length, so a `zip`, a list
-    or a slice answers too.
-    """
-    n = trip_count(iterable, sizes)
-    if isinstance(n, int):
-        return n
+def static_trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> int | None:
+    """How many times a ``for`` over *iterable* runs, if its inferred length
+    is a constant; ``None`` otherwise."""
     bound = sizes.by_expr.get(iterable)
     if isinstance(bound, ListSize) and isinstance(bound.size, int):
         return bound.size

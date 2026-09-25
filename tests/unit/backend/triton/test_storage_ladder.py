@@ -1,10 +1,8 @@
-"""The Triton storage ladder: what its order buys, and what scope bought.
+"""The Triton storage ladder and the order of its rungs.
 
 The cpp ladder's counterpart test pins that containment is not a
 join-semilattice and that the sequence is therefore a tie-break.  Both hold
-here too.  What is *different* is that dropping `bf16` makes the **float**
-rungs a chain, which is the property that closed the one open design question
-in this module -- so it is pinned rather than left to be rediscovered.
+here too.  Unlike there, without `bf16` the float rungs are a chain.
 """
 
 import pytest
@@ -17,7 +15,8 @@ from fpy2.backend.triton.storage import (
     scalar_fits_in,
     scalar_sup,
 )
-from fpy2.backend.triton.types import FLOAT_TYPES, TritonScalar as T
+from fpy2.backend.triton.types import FLOAT_TYPES
+from fpy2.backend.triton.types import TritonScalar as T
 
 _TYS = [t for t, _ in _SIGMA]
 _IDX = {t: i for i, (t, _) in enumerate(_SIGMA)}
@@ -36,15 +35,13 @@ class TestTheLadderIsOrdered:
 
     def test_minimal_upper_bounds_are_still_not_unique(self):
         """Integer rungs stay mutually incomparable, so the sequence is still
-        the tie-break -- adding fp16 did not make the ladder a lattice."""
+        the tie-break: with fp16 the ladder is still not a lattice."""
         assert not _ABSTRACT[T.U8] <= _ABSTRACT[T.S8]
         assert not _ABSTRACT[T.S8] <= _ABSTRACT[T.U8]
 
 
 class TestTheFloatRungsAreAChain:
-    """What dropping `bf16` bought.
-
-    bf16 (es 8, prec 8) and fp16 (es 5, prec 11) are mutually incomparable, so
+    """bf16 (es 8, prec 8) and fp16 (es 5, prec 11) are mutually incomparable, so
     with both on the ladder their relative order would decide which programs
     compile and neither order is obviously right.  With bf16 out of scope the
     float rungs nest totally and the question does not arise.

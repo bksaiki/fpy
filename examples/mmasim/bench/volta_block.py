@@ -14,6 +14,7 @@ of length `k`.
 import argparse
 import random
 import sys
+from functools import partial
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -21,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import torch
 import triton
 import triton.language as tl
+from speed import _timed
 from triton.language.extra import libdevice
 
 E_ZERO = tl.constexpr(-131)   # -108 - F, the FP32-wide datapath
@@ -66,7 +68,8 @@ def volta_dpa(A, B, C, OUT, R, K, BLOCK_R: tl.constexpr, L: tl.constexpr):
     tl.store(OUT + rows, d, mask=live)
 
 
-def _run(A, B, c, out, block_r: int):
+def _run(A: torch.Tensor, B: torch.Tensor, c: torch.Tensor, out: torch.Tensor,
+         block_r: int) -> torch.Tensor:
     rows, k = A.shape
     volta_dpa[(triton.cdiv(rows, block_r),)](A, B, c, out, rows, k,
                                             BLOCK_R=block_r, L=4)
@@ -82,12 +85,12 @@ def check(n: int = 256) -> int:
     rng = random.Random(0)
     picks = [float('inf'), -float('inf'), float('nan'), 0.0, -0.0]
 
-    def spice(v):
+    def spice(v: float) -> float:
         return rng.choice(picks) if rng.random() < 0.05 else v
 
-    A = [[spice(v) for v in ct._row(a_t, rng)] for _ in range(n)]
-    B = [[spice(v) for v in ct._row(b_t, rng)] for _ in range(n)]
-    c = [spice(ct._row(c_t, rng)) for _ in range(n)]
+    A = [[spice(v) for v in ct._vector(a_t, rng)] for _ in range(n)]
+    B = [[spice(v) for v in ct._vector(b_t, rng)] for _ in range(n)]
+    c = [spice(ct._sample(ct._fmt(c_t), rng)) for _ in range(n)]
     out = torch.empty(n, dtype=torch.float32, device='cuda')
     got = _run(torch.tensor(A).half().cuda(), torch.tensor(B).half().cuda(),
                torch.tensor(c).cuda(), out, 32)
@@ -110,16 +113,7 @@ def main(argv: list[str]) -> int:
     c = torch.randn(args.rows, device='cuda')
     out = torch.empty_like(c)
     for block_r in (32, 64, 128):
-        _run(A, B, c, out, block_r)
-        torch.cuda.synchronize()
-        start = torch.cuda.Event(enable_timing=True)
-        stop = torch.cuda.Event(enable_timing=True)
-        start.record()
-        for _ in range(args.reps):
-            _run(A, B, c, out, block_r)
-        stop.record()
-        torch.cuda.synchronize()
-        t = start.elapsed_time(stop) / args.reps / 1e3
+        t = _timed(partial(_run, A, B, c, out, block_r), args.reps)
         print(f'BLOCK_R {block_r:4}  {t * 1e3:8.3f} ms  '
               f'{2 * args.rows * args.k / t / 1e9:8.1f} GFLOP/s')
     return 0 if agree == 256 else 1
