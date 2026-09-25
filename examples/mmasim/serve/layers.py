@@ -12,17 +12,18 @@ inputs `x` and weights `w`), so measure the layer's own error:
 - `ulp`: `log2(1 + |ŷ - y| / ulp(y))` per element in FP32 ("bits of error"),
   mean and max;
 - `rounded`: the fraction of elements equal to `fl(y)`, `y` rounded to FP32;
-- `bias`: mean signed error `sign(y) (ŷ - y) / (|x|ᵀ|w|)`, negative when
-  errors lean toward zero.
+- `bias`: mean error `(ŷ - y) / (|x|ᵀ|w|)`, the drift about zero;
+- `magnitude_bias`: mean error in magnitude, `sign(y) (ŷ - y) / (|x|ᵀ|w|)`,
+  negative when errors lean toward zero.
 
 `propagated` takes R0's output at the same layer, every layer before it run
 the same way: its normwise relative error is the error the model has
 gathered by then.  Only the selected metrics are computed (`propagated`
 alone needs the R0 pass).  Printed per decoder block (its seven layers
-pooled), errors in log2, bias in units of u = 2^-24; the JSON has every layer.
+pooled), errors in log2, biases in units of u = 2^-24; the JSON has every layer.
 
     python serve/layers.py                            # every run and metric
-    python serve/layers.py -r amd.cdna2.bf16 -m backward bias --segments 1
+    python serve/layers.py -r amd.cdna2.bf16 -m backward magnitude_bias --segments 1
 """
 
 import argparse
@@ -38,7 +39,7 @@ import perplexity
 import swap
 import torch
 
-METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias')
+METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias')
 U = 2.0 ** -24
 """FP32's unit roundoff."""
 
@@ -64,6 +65,7 @@ class Stats:
     ulp_max: float = 0.0
     rounded: int = 0
     bias: float = 0.0
+    magnitude_bias: float = 0.0
 
     def __iadd__(self, other: 'Stats') -> Self:
         for f in fields(self):
@@ -80,6 +82,7 @@ class Stats:
             'backward': self.backward / n, 'backward_max': self.backward_max,
             'ulp': self.ulp / n, 'ulp_max': self.ulp_max,
             'rounded': self.rounded / n, 'bias': self.bias / n,
+            'magnitude_bias': self.magnitude_bias / n,
         }
         return {k: v for k, v in out.items() if k.removesuffix('_max') in metrics}
 
@@ -94,7 +97,7 @@ def _local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
     xb = x.reshape(-1, x.shape[-1]).to(torch.bfloat16)
     wt = layer.weight.to(torch.bfloat16).double().T
     b = None if layer.bias is None else layer.bias.double()
-    scaled = 'backward' in metrics or 'bias' in metrics
+    scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
     wa = wt.abs() if scaled else None
     got = got.reshape(-1, got.shape[-1])
     rows = _rows(wt.shape[1])
@@ -113,7 +116,9 @@ def _local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
                 s.backward += float(eta.abs().sum())
                 s.backward_max = max(s.backward_max, float(eta.abs().max()))
             if 'bias' in metrics:
-                s.bias += float((torch.sign(y) * eta).sum())
+                s.bias += float(eta.sum())
+            if 'magnitude_bias' in metrics:
+                s.magnitude_bias += float((torch.sign(y) * eta).sum())
             del scale, eta
         if 'ulp' in metrics:
             # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
@@ -186,10 +191,10 @@ def by_block(stats: dict[str, Stats]) -> dict[str, Stats]:
 
 
 def _fmt(key: str, v: float) -> str:
-    """*v* as printed: errors in log2, `rounded` as a percentage, `bias` in u."""
+    """*v* as printed: errors in log2, `rounded` as a percentage, biases in u."""
     if key == 'rounded':
         return f'{v:.2%}'
-    if key == 'bias':
+    if key.endswith('bias'):
         return f'{v / U:+.3f}'
     if key.startswith('ulp'):
         return f'{v:.3f}'

@@ -42,7 +42,7 @@ def test_bf16_exact_is_correctly_rounded_and_a_design_is_not(model, tokens) -> N
 
 def test_only_the_selected_metrics_are_computed(model, tokens) -> None:
     run = swap.patch(model)
-    stats = layers.evaluate(model, run, [tokens], ['amd.cdna2.bf16'], ['bias'])
+    stats = layers.evaluate(model, run, [tokens], ['amd.cdna2.bf16'], ['magnitude_bias'])
     s = _pooled(stats['amd.cdna2.bf16'])
-    assert s.bias != 0 and s.n > 0
-    assert s.err == s.prop_ref == s.backward == s.ulp == s.rounded == 0
+    assert s.magnitude_bias != 0 and s.n > 0
+    assert s.err == s.prop_ref == s.backward == s.ulp == s.rounded == s.bias == 0

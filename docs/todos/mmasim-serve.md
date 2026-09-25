@@ -156,7 +156,8 @@ number of predicted tokens (2047 per segment) or items.
 | componentwise backward error | `\|ŷ - y\| / (\|x\|ᵀ\|w\|)` per output element, mean and max, in log2 | elements, as above | none | Oettli-Prager; Higham, ch. 7 |
 | ULP error | `log2(1 + \|ŷ - y\| / ulp(y))` per element, `ulp` in FP32 ("bits of error"), mean and max | elements | none | Herbie / FPBench |
 | correct-rounding rate | fraction of elements with `ŷ = fl(y)`, `y` rounded to nearest FP32 | elements | none | |
-| signed bias | mean of `sign(y) (ŷ - y) / (\|x\|ᵀ\|w\|)`, in units of u = 2^-24; negative leans toward zero | elements | none | |
+| bias | mean of `(ŷ - y) / (\|x\|ᵀ\|w\|)`, in units of u = 2^-24: drift about zero | elements | none | |
+| magnitude bias | mean of `sign(y) (ŷ - y) / (\|x\|ᵀ\|w\|)`, in units of u; negative leans toward zero | elements | none | |
 
 The token-level standard errors treat tokens as independent, as llama.cpp
 does; tokens in one segment are correlated, so they understate the
@@ -362,12 +363,13 @@ kinds of metric (defined under Metrics):
 - *local*, against the exact product `Y` of the same BF16-rounded inputs, in
   FP64 (the layer's own error): normwise relative error, componentwise
   backward error (mean and max), ULP error (mean and max), correct-rounding
-  rate, and signed bias;
+  rate, bias (drift about zero) and magnitude bias (toward or away from
+  zero);
 - *propagated*, against R0's output at the same layer (what the model has
   gathered by then): normwise relative error.
 
 `-m` selects metrics, and only their work is done: the backward error and
-bias add a second FP64 product (`|x|ᵀ|w|`), and only `propagated` needs the
+biases add a second FP64 product (`|x|ᵀ|w|`), and only `propagated` needs the
 R0 pass.  Cosine similarity was dropped: at these magnitudes `1 - cos` is
 about half the squared relative error, so it adds nothing.  `bf16-exact` now
 fills a preallocated output instead of concatenating its row blocks, which
@@ -375,14 +377,14 @@ held `lm_head`'s 1.2 GB output twice and ran out of memory here.
 
 Every layer pooled (errors as log2; u = 2^-24, so -24 is one unit roundoff):
 
-| run | normwise | backward mean | backward max | ULP bits mean | correctly rounded | bias (u) | propagated |
-|---|---|---|---|---|---|---|---|
-| bf16-exact | -25.24 | -29.61 | -24.16 | 0.31 | 100.00% | 0.000 | -8.16 |
-| nv.ampere.bf16.f32 | -18.53 | -23.16 | -15.44 | 4.31 | 0.83% | -1.702 | -8.10 |
-| nv.hopper.bf16.f32 | -18.97 | -23.41 | -16.34 | 4.16 | 0.86% | -1.423 | -8.12 |
-| amd.cdna2.bf16 | -21.28 | -25.89 | -18.48 | 2.04 | 10.79% | 0.000 | -8.13 |
-| amd.cdna2.bf16_1k | -21.54 | -26.08 | -18.83 | 1.94 | 11.86% | 0.000 | -8.13 |
-| amd.cdna3.bf16 | -21.91 | -26.39 | -19.49 | 1.78 | 14.00% | 0.000 | -8.15 |
+| run | normwise | backward mean | backward max | ULP bits mean | correctly rounded | bias (u) | magnitude bias (u) | propagated |
+|---|---|---|---|---|---|---|---|---|
+| bf16-exact | -25.24 | -29.61 | -24.16 | 0.31 | 100.00% | 0.000 | 0.000 | -8.16 |
+| nv.ampere.bf16.f32 | -18.53 | -23.16 | -15.44 | 4.31 | 0.83% | +0.439 | -1.702 | -8.10 |
+| nv.hopper.bf16.f32 | -18.97 | -23.41 | -16.34 | 4.16 | 0.86% | +0.370 | -1.423 | -8.12 |
+| amd.cdna2.bf16 | -21.28 | -25.89 | -18.48 | 2.04 | 10.79% | 0.000 | 0.000 | -8.13 |
+| amd.cdna2.bf16_1k | -21.54 | -26.08 | -18.83 | 1.94 | 11.86% | 0.000 | 0.000 | -8.13 |
+| amd.cdna3.bf16 | -21.91 | -26.39 | -19.49 | 1.78 | 14.00% | -0.001 | 0.000 | -8.15 |
 
 - **bf16-exact** is correctly rounded everywhere (max 0.585 bits = half an
   ulp), as it must be: a check on the reference.
@@ -391,9 +393,13 @@ Every layer pooled (errors as log2; u = 2^-24, so -24 is one unit roundoff):
   mean backward error is ~1.5-1.8 u, the AMD designs' ~0.2-0.3 u.  It peaks
   at `mlp.down_proj` (the largest `k`, 3072) in blocks 2 and 27, most for
   the NV designs.
-- **Bias** separates the vendors: the NV designs' errors lean toward zero
-  (Ampere's mean signed error -1.70 u against a mean |error| of 1.79 u,
-  so ~95% of it), consistent with truncation; the AMD designs' are unbiased.
+- **Magnitude bias** separates the vendors: the NV designs' errors lean
+  toward zero (Ampere's -1.70 u against a mean |error| of 1.79 u, so ~95%
+  of it), consistent with truncation; the AMD designs' are unbiased.
+- **Bias** about zero follows from it: the NV designs drift upward (Ampere
+  +0.44 u), varying by block from -0.14 to +1.25 u: with errors toward zero,
+  upward drift means more of the error falls on negative outputs than on
+  positive ones.  The AMD designs do not drift.
 - **ULP max** is 31-35 bits for every design: cancellation, where the exact
   `y` is near zero and its ulp tiny.  The backward error is the robust
   elementwise metric here; ULP error is kept as the conventional one.
