@@ -143,16 +143,21 @@ def launch(
     ``enable_fp_fusion`` is taken from *src* rather than from the caller.  It
     is a property of the program -- whether contracting a multiply-add is
     observable -- and the compiler derived it; letting a launcher override it
-    would make the answer depend on who ran the kernel.
+    would make the answer depend on who ran the kernel.  ``enable_reflect_ftz``
+    is off: libdevice would flush subnormals, which FPy does not.
+
+    Every argument is passed by name, so the block may sit anywhere among the
+    parameters.
     """
     why = unavailable()
     if why is not None:
         raise CompileError(f'cannot launch a Triton kernel: {why}')
     import triton
 
-    _check_layout(src, args)
+    named = _named(src, args)
+    _check_layout(src, named, block)
     # an unproven length is read off the tensor that has it
-    sizes = {name: args[pos].shape[depth] for name, pos, depth in src.sizes}
+    sizes = {name: named[src.params[pos]].shape[depth] for name, pos, depth in src.sizes}
     # the grid before the kernel: deriving it is cheap and compiling is not,
     # so a missing extent should not cost a compile to discover
     if grid is None and src.grid_extent is None:
@@ -168,32 +173,50 @@ def launch(
         n = triton.cdiv(_extent(src.grid_extent, sizes), width) if grid is None else grid
         return (n, *outer)
 
+    options = {'enable_fp_fusion': src.enable_fp_fusion, 'enable_reflect_ftz': False}
     if block is not None:
-        load_kernel(src)[dims(block)](
-            *args, block, *sizes.values(), enable_fp_fusion=src.enable_fp_fusion,
-        )
+        tile = {} if src.block is None else {src.block: block}
+        load_kernel(src)[dims(block)](**named, **tile, **sizes, **options)
         return
     if not TUNING or src.block is None:
         raise CompileError('there is nothing to tune over; pass `block`')
-    # the sizes by name: the block they follow is the config's to pass
-    _tuned(src)[lambda meta: dims(meta[src.block])](
-        *args, **sizes, enable_fp_fusion=src.enable_fp_fusion,
-    )
+    _tuned(src)[lambda meta: dims(meta[src.block])](**named, **sizes, **options)
 
 
-def _check_layout(src: KernelSource, args: Sequence[Any]) -> None:
+def _named(src: KernelSource, args: Sequence[Any]) -> dict[str, Any]:
+    """*args* keyed by the parameter each binds: every one but the block and
+    the sizes, in order."""
+    names = [
+        p for p in src.params[:len(src.params) - len(src.sizes)]
+        if p != f'{src.block}: tl.constexpr'
+    ]
+    if len(args) != len(names):
+        raise TypeError(f'the kernel takes {len(names)} arguments, not {len(args)}')
+    return dict(zip(names, args))
+
+
+_MAX_OFFSET = 2 ** 31 - 1
+"""The kernel's offsets and lane indices are `int32`."""
+
+
+def _check_layout(src: KernelSource, named: dict[str, Any], block: int | None) -> None:
     """Refuse a tensor the kernel's offsets do not describe.
 
     The kernel computes row-major offsets from the shape it was compiled for,
     so a strided view, a different rank, a length other than a proven one, or
     two tensors disagreeing on a length they share would each be read and
-    written at the wrong places, silently.  Copying to fix a layout is the
-    caller's call: a copy of an output takes the writes with it.
+    written at the wrong places, silently.  So would a tensor whose offsets,
+    or the lanes of a tile running past its end, overflow `int32`.  Copying to
+    fix a layout is the caller's call: a copy of an output takes the writes
+    with it.
     """
     import torch
+    reach = block if block is not None else max((b for b, _ in TUNING), default=1)
+    dtypes = dict(src.dtypes)
     lengths: dict[str, tuple[str, int]] = {}
     for pos, dims in src.shapes:
-        name, t = src.params[pos], args[pos]
+        name = src.params[pos]
+        t = named[name]
         if not isinstance(t, torch.Tensor):
             raise TypeError(f'`{name}` is a list, so it takes a tensor, not {type(t).__name__}')
         if not t.is_contiguous():
@@ -202,6 +225,13 @@ def _check_layout(src: KernelSource, args: Sequence[Any]) -> None:
                 'major from its shape')
         if t.dim() != len(dims):
             raise ValueError(f'`{name}` has {t.dim()} dimensions, not {len(dims)}')
+        want_dtype = _torch_dtype(dtypes[pos]) if pos in dtypes else t.dtype
+        if t.dtype != want_dtype:
+            raise ValueError(f'`{name}` holds {t.dtype}; the kernel was compiled for {want_dtype}')
+        if t.numel() + reach - 1 > _MAX_OFFSET:
+            raise ValueError(
+                f'`{name}` has {t.numel()} elements, too many for the '
+                "kernel's int32 offsets")
         for depth, (want, have) in enumerate(zip(dims, t.shape)):
             if isinstance(want, int) and want != have:
                 raise ValueError(
@@ -213,6 +243,13 @@ def _check_layout(src: KernelSource, args: Sequence[Any]) -> None:
                     raise ValueError(
                         f'`{name}` is {have} long at dimension {depth} and '
                         f'`{first}` {n}, where the kernel has one length')
+
+
+def _torch_dtype(tl_dtype: str) -> Any:
+    """The torch dtype of Triton dtype *tl_dtype*, spelled `tl.float16`."""
+    import torch
+    name = tl_dtype.removeprefix('tl.')
+    return torch.bool if name == 'int1' else getattr(torch, name)
 
 
 def _extent(extent: int | str | None, sizes: dict[str, int]) -> int:

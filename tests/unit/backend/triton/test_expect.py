@@ -166,7 +166,7 @@ def test_an_empty_sum_is_the_literal_zero():
         _empty, ctx=fp.FP32,
         arg_types=[ListType(RealType(fp.FP32), 6), RealType(fp.INTEGER)])
     assert src.source.splitlines()[-1] == (
-        '    tl.store(out_ptr + i, 0, mask=(j < 6))')
+        '    tl.store(out_ptr + i, 0.0, mask=(j < 6))')
 
 
 def test_an_empty_max_is_refused():
@@ -385,7 +385,7 @@ def test_an_empty_any_is_its_identity():
     folded = TritonCompiler(drop_asserts=True).compile(
         _empty_any, ctx=fp.FP32, arg_types=args)
     assert folded.source.splitlines()[-1].endswith(
-        'tl.store(out_ptr + i, 0, mask=(j < 4))')
+        'tl.store(out_ptr + i, 0.0, mask=(j < 4))')
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -454,7 +454,7 @@ def test_nan_and_inf_are_literals():
     assert "float('nan')" in src.source
     assert "float('inf')" in src.source
     # negated, not a second constant
-    assert "-float('inf')" in src.source or "(-float('inf'))" in src.source
+    assert "(-tl.full((), float('inf'), dtype=tl.float32))" in src.source
 
 
 @fp.fpy(ctx=fp.INTEGER)

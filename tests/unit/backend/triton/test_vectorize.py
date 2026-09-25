@@ -163,6 +163,64 @@ class TestRefuses:
 
         assert 'read back while being written' in (_why(f) or '')
 
+    def test_reading_the_list_back_through_a_temporary(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], a: list[fp.Real]):
+            for i in range(len(xs)):
+                with fp.INTEGER:
+                    j = len(xs) - 1 - i
+                t = a[j]
+                a[i] = t + xs[i]
+            return a
+
+        assert 'read back while being written' in (_why(f) or '')
+
+    def test_reading_another_list_the_loop_writes(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], a: list[fp.Real], b: list[fp.Real]):
+            for i in range(len(xs)):
+                with fp.INTEGER:
+                    j = len(xs) - 1 - i
+                t = b[j]
+                a[i] = t + xs[i]
+                b[i] = xs[i]
+            return a
+
+        assert 'read back while being written' in (_why(f) or '')
+
+    def test_a_scatter_through_a_list_of_indices(self):
+        """`for k in ks` may repeat an index, so the last write is the answer."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(ks: list[fp.Real], xs: list[fp.Real], out: list[fp.Real]):
+            for k in ks:
+                out[k] = xs[k]
+            return out
+
+        assert 'cannot show distinct' in (_why(f) or '')
+
+    def test_a_write_through_an_alias_at_a_fixed_row(self):
+        """`row = out[0]` names the same row each iteration."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(A: list[list[fp.Real]], out: list[list[fp.Real]]):
+            for i in range(len(A)):
+                row = out[0]
+                row[0] = A[i][0]
+            return out
+
+        assert _why(f) is not None
+
+    def test_a_write_through_an_alias_in_a_nested_loop(self):
+        """`row[j]` writes `out[0]`, whichever `i`."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(A: list[list[fp.Real]], out: list[list[fp.Real]]):
+            for i in range(len(A)):
+                row = out[0]
+                for j in range(len(row)):
+                    row[j] = A[i][j]
+            return out
+
+        assert why_not_tileable(_Loops.of(f.ast)[0], f.ast) is not None
+
     def test_a_write_that_ignores_the_carried_value(self):
         @fp.fpy(ctx=fp.FP64)
         def f(xs: list[fp.Real]):
@@ -542,6 +600,25 @@ class TestLanes:
         assert 'g' not in self._targets(out.lanes)
         assert len(out.lanes) == 1
 
+    def test_a_lane_reading_its_tile_at_another_lane_is_not_one(self):
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs, out):
+            for r in range(len(xs)):
+                acc = [xs[r][k] for k in range(4)]
+                for k in range(4):
+                    with fp.INTEGER:
+                        j = 3 - k
+                    t = acc[j]
+                    acc[k] = t + 1
+                for k in range(4):
+                    out[r][k] = acc[k]
+            return out
+
+        L = ListType(ListType(_R, 4), _M)
+        out = tile_loops(self._normal(f, [L, L]), 4, lanes=True)
+        assert not any('3 - k' in s.format() for s in out.lanes)
+        assert len(out.lanes) == 2
+
     def test_a_rewrite_finds_the_lanes_again(self):
         _, ast = self._matmul(_M, _N)
         out = tile_loops(ast, 4, lanes=True)
@@ -572,6 +649,19 @@ class TestTheGridsSecondAxis:
 
         ast = TestLanes._normal(f, [ListType(ListType(_R, _N), _M), ListType(_R, _N)])
         assert tile_loops(ast, 4, reductions=False, lanes=True).grid == []
+
+    def test_a_loop_writing_through_a_fixed_row_is_not_one(self):
+        """`row = out[0]`: every iteration writes the same row."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(A, out):
+            for i in range(len(A)):
+                row = out[0]
+                for j in range(len(row)):
+                    row[j] = A[i][j]
+            return out
+
+        L = ListType(ListType(_R, _N), _M)
+        assert tile_loops(TestLanes._normal(f, [L, L]), 4, lanes=True).grid == []
 
     def test_without_lanes_there_is_none(self):
         _, ast = TestLanes()._matmul(_M, _N)

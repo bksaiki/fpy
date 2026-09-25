@@ -16,9 +16,11 @@ fallback:
   inferred formats.  Deciding that by *proof* rather than by a fast-math flag
   is what makes the tile reduction bit-identical rather than merely permitted.
 - **A list the loop writes must be written at its own index.**  Every
-  subscript has to be the loop variable or invariant across the loop, so no
-  two iterations touch the same element.  Anything else -- `out[i % 2]`,
-  `out[k]`, `out[i + 1]` -- is refused rather than sent to a dependence test.
+  subscript up to the loop variable's has to be invariant across the loop, so
+  no two iterations touch the same element, and every read of that list,
+  through any name, must be under it.  Anything else -- `out[i % 2]`,
+  `out[k]`, `out[i + 1]`, `t = out[n - 1 - i]` -- is refused rather than sent
+  to a dependence test.  A write through `row = out[i]` is a write to `out`.
 - **A write that ignores the carried value is refused.**  Which iteration
   wrote last is exactly what a tile does not preserve.
 """
@@ -39,28 +41,45 @@ from ...analysis import (
 )
 from ...analysis.array_size import static_trip_count
 from ...analysis.format_infer import rounds_exactly
+from ...analysis.reaching_defs import AssignDef, Definition, same_object_defs
 from ...ast import (
     Add,
     And,
+    Argument,
     Assign,
+    Attribute,
     BoolVal,
+    Call,
+    ContextStmt,
     DefaultVisitor,
+    Empty,
+    Enumerate,
     Expr,
     ForStmt,
+    Fst,
     FuncDef,
-    Id,
     If1Stmt,
+    IfExpr,
     IndexedAssign,
     Integer,
+    ListComp,
+    ListExpr,
+    ListRef,
+    ListSlice,
     Max,
     Min,
     Mul,
     NamedId,
     Or,
+    Range1,
+    Range2,
+    Range3,
+    Snd,
     Stmt,
     Sub,
-    TupleBinding,
+    TupleExpr,
     Var,
+    Zip,
 )
 from ...number import Context
 from ...transform import SplitLoop, SplitLoopStrategy
@@ -74,16 +93,6 @@ _SELECTS: tuple[type[Expr], ...] = (Max, Min, And, Or)
 _ROUNDS: tuple[type[Expr], ...] = (Add, Sub, Mul)
 """Combines that compute a new value, so regrouping is observable unless every
 step is exact."""
-
-
-def _target_names(target: Id | TupleBinding) -> set[NamedId]:
-    """The names a `for` binds each iteration."""
-    if isinstance(target, TupleBinding):
-        out: set[NamedId] = set()
-        for elt in target.elts:
-            out |= _target_names(elt)
-        return out
-    return {target} if isinstance(target, NamedId) else set()
 
 
 class _Reads(DefaultVisitor):
@@ -177,35 +186,211 @@ def _why_scalar_refuses(
     return None
 
 
-def _why_indexed_refuses(
-    name: NamedId,
-    writes: list[IndexedAssign],
-    loop_vars: set[NamedId],
-    moved: set[NamedId],
-) -> str | None:
-    """Why *name*'s element writes may collide across iterations, or `None`."""
-    for stmt in writes:
-        if name in _reads(stmt.expr):
-            return (
-                f'`{name}` is read back while being written, which orders the '
-                'iterations against each other'
-            )
-        saw_loop_var = False
-        for idx in stmt.indices:
-            if isinstance(idx, Var) and idx.name in loop_vars:
-                saw_loop_var = True
-            elif isinstance(idx, Var) and idx.name not in moved:
-                pass                       # invariant across this loop
-            else:
+_Key = Definition | tuple[str, int] | str | None
+"""An index: the definition a name reads, a literal, :data:`_UP`, or `None`
+for anything else, which matches nothing."""
+
+_UP = 'up'
+"""Ends the path of a list whose elements live at the path before it: a
+comprehension, a list display or a slice.  Indexing it drops it."""
+
+_Place = tuple[Definition | None, tuple[_Key, ...]]
+"""Where a value may live: a list and a path of indices into it.  A `None`
+list is one this pass cannot follow, so it may be any."""
+
+_OPAQUE: tuple[type[Expr], ...] = (
+    Call, TupleExpr, Fst, Snd, Zip, Enumerate, Attribute, Empty, ListComp, ListExpr,
+)
+"""What may hand back a list :class:`_Places` does not follow; anything else
+it does not follow is a value, naming no list."""
+
+
+class _Places:
+    """Which list, and where in it, a value may be: through `x = y`,
+    `x = y[i]`, a phi and an update.  Other routes to a list are opaque."""
+
+    def __init__(self, def_use: DefineUseAnalysis):
+        self.def_use = def_use
+        self._base: dict[Definition, frozenset[_Place]] = {}
+
+    def key(self, e: Expr) -> _Key:
+        if isinstance(e, Var):
+            return self.def_use.use_to_def.get(e)
+        if isinstance(e, Integer):
+            return ('int', e.val)
+        return None
+
+    def of_def(self, d: Definition) -> frozenset[_Place]:
+        # an update and a phi name the list already there
+        out: set[_Place] = set()
+        stack, seen = [d], set()
+        while stack:
+            c = stack.pop()
+            if c not in seen:
+                seen.add(c)
+                prev = same_object_defs(c)
+                stack.extend(self.def_use.defs[i] for i in prev)
+                if not prev:
+                    out |= self._of_base(c)
+        return frozenset(out)
+
+    def _of_base(self, d: Definition) -> frozenset[_Place]:
+        if d in self._base:
+            return self._base[d]
+        self._base[d] = frozenset({(None, ())})     # a cycle is opaque
+        out: frozenset[_Place]
+        match d:
+            case AssignDef(site=Argument() | FuncDef()):
+                out = frozenset({(d, ())})
+            case AssignDef(site=Assign(target=NamedId(), expr=e)):
+                out = self.of_expr(e, d)
+            case AssignDef(site=ForStmt(iterable=it)) | AssignDef(site=ListComp(iterables=(it,))):
+                out = self.at(self.of_expr(it), None)
+            case AssignDef(site=ContextStmt()):
+                out = frozenset()
+            case _:
+                out = frozenset({(None, ())})
+        self._base[d] = out
+        return out
+
+    @staticmethod
+    def at(places: frozenset[_Place], k: _Key) -> frozenset[_Place]:
+        """*places* indexed by *k*."""
+        return frozenset(
+            (r, p[:-1] if p and p[-1] == _UP else p + (k,))
+            for r, p in places
+        )
+
+    def of_expr(self, e: Expr, d: Definition | None = None) -> frozenset[_Place]:
+        """The places *e* may be; *d* is the definition it is bound to, the
+        list it makes if it makes one."""
+        match e:
+            case Var():
+                d = self.def_use.use_to_def.get(e)
+                return frozenset({(None, ())}) if d is None else self.of_def(d)
+            case ListRef():
+                return self.at(self.of_expr(e.value), self.key(e.index))
+            case ListSlice():
+                inner = self.at(self.of_expr(e.value), None)
+                return frozenset((r, p + (_UP,)) for r, p in inner)
+            case IfExpr():
+                return self.of_expr(e.ift, d) | self.of_expr(e.iff, d)
+            case Empty() if d is not None:
+                return frozenset({(d, ())})
+            case ListComp() | ListExpr() if d is not None:
+                # a fresh spine, holding what its elements are
+                elts = [e.elt] if isinstance(e, ListComp) else e.elts
+                held = {(r, p + (_UP,)) for x in elts for r, p in self.of_expr(x)}
+                return frozenset({(d, ())} | held)
+            case _ if isinstance(e, _OPAQUE):
+                return frozenset({(None, ())})
+            case _:
+                return frozenset()
+
+
+class _Writes(DefaultVisitor):
+    """Every element write in a block, and the ids of the nodes that may
+    define a name there."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes: list[IndexedAssign] = []
+        self.sites: set[int] = set()
+
+    def _visit_statement(self, stmt: Stmt, ctx):
+        self.sites.add(id(stmt))
+        if isinstance(stmt, IndexedAssign):
+            self.writes.append(stmt)
+        return super()._visit_statement(stmt, ctx)
+
+    def _visit_list_comp(self, e: ListComp, ctx):
+        self.sites.add(id(e))
+        return super()._visit_list_comp(e, ctx)
+
+
+class _ReadPlaces(DefaultVisitor):
+    """Every place a block reads, a subscript chain taken whole."""
+
+    def __init__(self, places: _Places):
+        super().__init__()
+        self.places = places
+        self.out: set[_Place] = set()
+
+    def _visit_var(self, e: Var, ctx):
+        self.out |= self.places.of_expr(e)
+
+    def _visit_list_ref(self, e: ListRef, ctx):
+        self.out |= self.places.of_expr(e)
+        base: Expr = e
+        while isinstance(base, ListRef):
+            self._visit_expr(base.index, ctx)
+            base = base.value
+        if not isinstance(base, Var):
+            self._visit_expr(base, ctx)
+
+
+def _why_writes_refuse(stmt: ForStmt, def_use: DefineUseAnalysis) -> str | None:
+    """Why the element writes of *stmt*'s body may collide across iterations,
+    or `None`.  A write is at a path whose loop-variable index makes it
+    distinct per iteration; every read of that list must be under it."""
+    places = _Places(def_use)
+    body = _Writes()
+    body._visit_block(stmt.body, None)
+    ranged = isinstance(stmt.iterable, (Range1, Range2, Range3))
+
+    def kind(k: _Key) -> str | None:
+        """'loop' for this loop's variable, 'fixed' for an index invariant
+        across the loop, `None` for any other."""
+        if isinstance(k, tuple):
+            return 'fixed'
+        if k is None or isinstance(k, str):
+            return None
+        if k.site is stmt:
+            return 'loop' if ranged and isinstance(k, AssignDef) else None
+        return None if id(k.site) in body.sites else 'fixed'
+
+    regions: dict[Definition, tuple[_Key, ...]] = {}
+    for w in body.writes:
+        distinct = (
+            f'`{w.var}` is written at an index this backend cannot show '
+            'distinct per iteration'
+        )
+        where = places.of_def(def_use.find_def_from_use(w))
+        for i in w.indices:
+            where = places.at(where, places.key(i))
+        for root, path in where:
+            if root is None:
+                return f'`{w.var}` may be a list this backend cannot follow'
+            if id(root.site) in body.sites:
+                continue                    # allocated each iteration
+            kinds = [kind(k) for k in path]
+            if 'loop' not in kinds:
+                if None in kinds:
+                    return distinct
                 return (
-                    f'`{name}` is written at an index this backend cannot '
-                    'show distinct per iteration'
+                    f'every iteration writes `{w.var}` at the same index, so '
+                    'the last write is the answer'
                 )
-        if not saw_loop_var:
-            return (
-                f'every iteration writes `{name}` at the same index, so the '
-                'last write is the answer'
-            )
+            # what follows the loop variable stays inside its own element
+            n = kinds.index('loop') + 1
+            if None in kinds[:n]:
+                return distinct
+            region = path[:n]
+            if regions.setdefault(root, region) != region:
+                return f'`{w.var}` is written at two paths, which may collide'
+
+    if regions:
+        reads = _ReadPlaces(places)
+        reads._visit_block(stmt.body, None)
+        for root, path in reads.out:
+            if root is None:
+                return 'a list this backend cannot follow is read'
+            held = regions.get(root)
+            if held is not None and path[:len(held)] != held:
+                return (
+                    f'`{root.name}` is read back while being written, which '
+                    'orders the iterations against each other'
+                )
     return None
 
 
@@ -232,12 +417,6 @@ def why_not_tileable(
         fmt = FormatInfer.analyze(func)
 
     carried = def_use.mutated_in(stmt.body)
-    if not carried:
-        return None
-
-    loop_vars = _target_names(stmt.target)
-    moved = carried | def_use.introed_in(stmt.body) | loop_vars
-
     body = _Body(carried)
     body._visit_block(stmt.body, None)
 
@@ -248,15 +427,15 @@ def why_not_tileable(
                 f'`{name}` is written both whole and by element, and the '
                 'order between the two is the answer'
             )
-        if indexed:
-            why = _why_indexed_refuses(name, indexed, loop_vars, moved)
-        elif scalar:
+        if scalar:
             why = _why_scalar_refuses(name, scalar, ctx_use, fmt)
-        else:
+        elif not indexed:
             why = f'`{name}` is carried by something this backend cannot read'
+        else:
+            why = None
         if why is not None:
             return why
-    return None
+    return _why_writes_refuse(stmt, def_use)
 
 
 class _ForLoops(DefaultVisitor):

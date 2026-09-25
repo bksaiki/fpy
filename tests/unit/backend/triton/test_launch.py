@@ -419,7 +419,8 @@ def test_ldexp_agrees_with_a_per_lane_exponent():
             RealType(fp.INTEGER)])
     xt = torch.tensor(vals, dtype=torch.float32).cuda()
     nt = torch.tensor(exps, dtype=torch.int8).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    # the product is exact, so the kernel stores it as `float64`
+    ot = torch.zeros(n, dtype=torch.float64).cuda()
     launch(src, [xt, nt, ot], block=8, grid=1)
 
     want = [v * 2.0 ** k for v, k in zip(vals, exps)]
@@ -590,7 +591,8 @@ def test_round_toward_zero_fp32_agrees_bit_for_bit():
         ListType(RealType(fp.FP32), n),
         RealType(fp.INTEGER)])
     xt = torch.tensor(vals, dtype=torch.float64).cuda()
-    ot = torch.zeros(n, dtype=torch.float32).cuda()
+    # the unfolded rounding's bound is not provably `float32`
+    ot = torch.zeros(n, dtype=torch.float64).cuda()
     launch(src, [xt, ot], block=16)
 
     def bits(v):
@@ -641,6 +643,7 @@ class TestARuntimeLength:
 
     def test_one_kernel_at_every_length(self):
         import torch
+
         from fpy2.utils import NamedId
 
         n = NamedId('n')
@@ -677,6 +680,7 @@ def _agree_rows(func, n_in: int, n_out: int, *, seed: int = 0) -> None:
     """*func*, compiled, against the interpreter: a row of
     *n_in* in and of *n_out* out per output, over `_ROWS` of them."""
     import torch
+
     from fpy2.utils import NamedId
 
     rows = NamedId('rows')
@@ -817,6 +821,7 @@ class TestReductionsAcrossLanes:
     @pytest.mark.parametrize('n', [4, 5, 6])
     def test_they_agree_with_the_interpreter(self, n):
         import torch
+
         from fpy2.utils import NamedId
 
         rows = NamedId('rows')
@@ -859,6 +864,7 @@ def _grouped(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real)
 def test_an_aligned_slice_of_a_tile_is_a_tile():
     """nvfp4's groups: row `g` of the tile reshaped to the group's width."""
     import torch
+
     from fpy2.utils import NamedId
 
     rows = NamedId('rows')
@@ -905,6 +911,7 @@ def test_one_kernel_at_every_depth():
     """`K` a kernel argument: the loop over its blocks runs at runtime, and
     the accumulator it carries is a row at entry and at every assignment."""
     import torch
+
     from fpy2.utils import NamedId
 
     rows, k = NamedId('rows'), NamedId('k')
@@ -941,6 +948,7 @@ def test_both_output_dimensions_are_program_ids():
     """`i` is `program_id(1)`, one program per row of the output, and `j`
     the tile: `m` and `n` both larger than a block."""
     import torch
+
     from fpy2.utils import NamedId
 
     m, n = NamedId('m'), NamedId('n')
@@ -971,6 +979,7 @@ class TestTuning:
 
     def test_it_agrees_with_the_interpreter(self):
         import torch
+
         from fpy2.utils import NamedId
 
         rows = NamedId('rows')
@@ -1034,3 +1043,208 @@ class TestLayout:
         _, bt, out = self._args()
         with pytest.raises(TypeError, match='takes a tensor'):
             launch(src, [[[0.0] * 8] * 3, bt, out], block=4)
+
+
+# -- values the kernel once got wrong -------------------------------------
+
+def _agree_on(func, xt, n_out: int, *, ctx_in=fp.FP32, ctx_out=fp.FP32,
+              n_in=None, **opts) -> str:
+    """*func*, compiled with *opts*, against the interpreter on the rows of
+    *xt*; its source, for a caller that checks the spelling."""
+    import torch
+
+    from fpy2.utils import NamedId
+
+    dtypes = {FP16: torch.float16, fp.FP32: torch.float32,
+              fp.FP64: torch.float64, fp.SINT32: torch.int32}
+    rows = NamedId('rows')
+    src = TritonCompiler(drop_asserts=True, **opts).compile(
+        func, ctx=fp.REAL, arg_types=[
+            ListType(ListType(RealType(ctx_in), n_in or xt.shape[1]), rows),
+            ListType(ListType(RealType(ctx_out), n_out), rows),
+            RealType(fp.INTEGER)])
+    xt = xt.to(dtypes[ctx_in]).cuda()
+    ot = torch.zeros(xt.shape[0], n_out, dtype=dtypes[ctx_out]).cuda()
+    # a kernel that tiled nothing loops over the rows itself
+    launch(src, [xt, ot], block=4, grid=None if src.grid_extent else 1)
+    want = func(xt.cpu().tolist(), [[0.0] * n_out for _ in range(xt.shape[0])], 4)
+    for r, (w, g) in enumerate(zip(want, ot.cpu().tolist())):
+        assert [repr(float(v)) for v in w] == [repr(float(v)) for v in g], r
+    return src.source
+
+
+@fp.fpy(ctx=fp.REAL)
+def _carried_max(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        acc = xs[0]
+        for i in range(len(xs)):
+            acc = max(acc, xs[i])
+        row[0] = acc
+    return out
+
+
+def test_a_carried_negative_zero_stays_negative():
+    """A runtime loop's value, broadcast to a row: `-0.0 + 0.0` is `+0.0`."""
+    import torch
+
+    from fpy2.utils import NamedId
+    _agree_on(_carried_max, torch.tensor([[-0.0, -0.0, -0.0], [-1.0, -0.0, -3.0]]),
+              1, n_in=NamedId('k'))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _whole_tile(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        ys = [x * 2 for x in xs]
+        zs = ys[0:4]
+        zs[0] = 7
+        with fp.FP32:
+            row[0] = sum(zs)
+        row[1] = ys[0]
+        row[2] = ys[5]
+    return out
+
+
+def test_a_slice_the_whole_tile_wide_is_a_copy_without_the_tail():
+    import torch
+    _agree_on(_whole_tile, torch.tensor([[1.0, 2, 3, 4, 100, 200]]), 3, ctx_in=FP16)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _stale_index(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        row = out[j]
+        t = j
+        acc = xss[0][0] * 0
+        for i in range(2):
+            xs = xss[t]
+            t = 0
+            with fp.FP32:
+                acc = acc + xs[i]
+        row[0] = acc
+    return out
+
+
+def test_a_row_keeps_the_index_it_was_bound_at():
+    """`xs[1]` is row `j`'s, not row `0`'s: `t` changed after the binding."""
+    import torch
+    _agree_on(_stale_index, torch.tensor([[1.0, 2], [3.0, 4], [5.0, 6]]), 1)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _destructured(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        a = xs[0] * xs[0]
+        b = xs[0]
+        c = a
+        if xs[1] > 0:
+            a, b = (xs[1], xs[2])
+            with fp.FP32:
+                c = a * a
+        row[0] = c
+        row[1] = a
+        row[2] = b
+    return out
+
+
+def test_a_destructured_name_is_held_in_its_class():
+    """`a` is an exact `f16` product, so `f32`: `a * a` rounds there, not in
+    the `f16` a load would leave it in."""
+    import torch
+    _agree_on(_destructured, torch.tensor([[1.0, 1.0009765625, 3.0], [2.0, -1.0, 3.0]]),
+              3, ctx_in=FP16)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _int_compare(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        row[0] = 1.0 if xs[0] > 16777216.5 else 0.0
+        row[1] = 1.0 if xs[0] == xs[1] * 0.5 else 0.0
+    return out
+
+
+def test_an_integer_compares_with_a_float_exactly():
+    """Not in `fp32`, where `16777217` is `16777216`."""
+    import torch
+    _agree_on(_int_compare, torch.tensor([[16777217, 33554434], [16777216, 5]]),
+              2, ctx_in=fp.SINT32)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _wide_literal(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        row = out[j]
+        row[0] = fp.rational(4503599627370497, 4503599627370496)
+    return out
+
+
+def test_a_literal_fp32_cannot_hold_is_typed():
+    import torch
+    _agree_on(_wide_literal, torch.tensor([[1.0], [-1.0]]), 1, ctx_out=fp.FP64)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _rounded_literal(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        with FP16:
+            z = fp.round(fp.rational(12582911, 4194304))
+        with fp.FP32:
+            row[0] = xs[0] + z
+    return out
+
+
+def test_a_rounded_literal_is_rounded():
+    """Retyping it would give `2.9999998`, where `FP16` rounds to `3`."""
+    import torch
+    _agree_on(_rounded_literal, torch.tensor([[0.0], [1.0]]), 1, optimize=False)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _to_integer(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        with fp.INTEGER:
+            t = fp.round(xs[0])
+        row[0] = t
+    return out
+
+
+def test_rounding_to_the_integers_has_no_negative_zero():
+    import torch
+    _agree_on(_to_integer, torch.tensor([[-0.5], [-0.25], [-0.0], [-1.5], [0.5]]), 1)
+
+
+E4M3 = fp.MX_E4M3
+
+
+@fp.fpy(ctx=fp.REAL)
+def _to_e4m3(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        with E4M3:
+            row[0] = fp.round(xs[0])
+    return out
+
+
+def test_an_unfolded_rounding_with_a_nan_compiles_and_agrees():
+    """The unfolded rounding negates a NaN, which as a Python float has no
+    `.to` to cast it with."""
+    import math
+
+    import torch
+    vals = [0.0, -0.0, 1.0, -1.0, 448.0, 464.0, 1e6, -1e6, math.inf, 2**-9,
+            3 * 2**-10, -2**-10, 0.3, 17.0, 19.0, 1.1875]
+    _agree_on(_to_e4m3, torch.tensor([[v] for v in vals]), 1,
+              unfold=TritonCompiler.UnfoldMode.ROUNDINGS)

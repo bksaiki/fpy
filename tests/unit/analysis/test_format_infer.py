@@ -4547,3 +4547,29 @@ class TestTheCheckInCppShape:
     def test_not_where_the_check_misses_an_element(self):
         f = _cpp_block(_cpp_exponent0, checked=3)
         assert self._fused_prec(f) > 28
+
+
+class TestNegationOfZero:
+    """`-(0)` is `-0.0` under `REAL`, even from a system with one zero."""
+
+    @staticmethod
+    def _neg(ctx):
+        @fp.fpy
+        def f(x: fp.Real) -> fp.Real:
+            with fp.SINT8:
+                a = fp.round(x)
+            with ctx:
+                return -a
+
+        info = FormatInfer.analyze(f.ast, use_digit_bounds=True)
+        [neg] = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Neg']
+        return AbstractFormat.from_format(neg)
+
+    def test_admitted_under_real(self):
+        assert (-AbstractFormat.from_format(fp.SINT8.format())).has_neg_zero
+        assert self._neg(fp.REAL).has_neg_zero
+
+    def test_dropped_under_the_integers(self):
+        neg = self._neg(fp.SINT8)
+        assert not neg.has_neg_zero
+        assert neg.exp == 0

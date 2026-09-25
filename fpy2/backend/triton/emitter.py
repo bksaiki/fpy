@@ -27,7 +27,9 @@ operation with no signature under the active context is an error, not a
 fallback.
 """
 
+import math
 import re
+import struct
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -122,7 +124,7 @@ from ...ast import (
     Var,
 )
 from ...ast.visitor import DefaultVisitor, Visitor
-from ...number import REAL, Context, Float, RealFloat, RoundingMode
+from ...number import INTEGER, REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...types import BoolType, ListType, RealType
 from ...utils import Unionfind
@@ -131,12 +133,15 @@ from .storage import (
     TritonStorageDomain,
     bound_fits_in_scalar,
     choose_storage_scalar,
+    exact_integer_bits,
     scalar_fits_in,
+    scalar_sup,
     to_triton,
 )
 from .target import (
     ScalarOpTable,
     TritonOp,
+    _int_ctxs,
     downcast_rounding,
     is_native_ctx,
     make_op_table,
@@ -166,16 +171,43 @@ def _reads_name(code: str, names: set[str]) -> bool:
     return any(re.search(rf'\b{re.escape(n)}\b', code) for n in names)
 
 
-_SPECIALS = frozenset({"float('nan')", "float('inf')", "(-float('inf'))"})
+_SPECIALS: dict[str, float] = {
+    "float('nan')": math.nan,
+    "float('inf')": math.inf,
+    "(-float('inf'))": -math.inf,
+}
 """How `fp.nan()` and `fp.inf()` are spelled: Python floats, so weakly typed."""
+
+_NUMBER = re.compile(r'-?\d[\w.+-]*')
 
 
 def _as_literal(code: str) -> float | None:
     """*code* as a number, if that is all it is."""
+    if not _NUMBER.fullmatch(code):
+        return None
     try:
         return float(code)
     except ValueError:
         return None
+
+
+def _as_number(code: str) -> int | float | bool | None:
+    """*code* as the Python number Triton sees, if that is all it is."""
+    if code in _SPECIALS:
+        return _SPECIALS[code]
+    if code in ('True', 'False'):
+        return code == 'True'
+    n = _literal_int(code)
+    return n if n is not None else _as_literal(code)
+
+
+def _fp32_exact(v: float) -> bool:
+    """Whether Triton types the Python float *v* as an `fp32` holding it: it
+    takes `fp32` for a zero, a special or an `fp32` normal, else `fp64`."""
+    if math.isnan(v) or v == 0 or math.isinf(v):
+        return True
+    return (2.0 ** -126 <= abs(v) <= 3.4028234663852886e38
+            and struct.unpack('f', struct.pack('f', v))[0] == v)
 
 
 def _literal_int(code: str) -> int | None:
@@ -340,8 +372,6 @@ class _Emitter(Visitor):
         named `{list}_t{k}`.  Assigning a tile rebinds its name: a tile is a
         value, so a write is a select into a new one.
         """
-        self.tile_alias: dict[NamedId, NamedId] = {}
-        """Names bound to a local list, to the list: one list, two names."""
         self._lane: tuple[NamedId, int] | None = None
         """The lane loop's target and width, while its tile is emitted."""
         self._row_width = '1'
@@ -361,6 +391,11 @@ class _Emitter(Visitor):
         self._members: dict[Definition, list[Definition]] = defaultdict(list)
         for d, c in self._class_of.items():
             self._members[c].append(d)
+        counts: dict[str, int] = defaultdict(int)
+        for n, ds in self.def_use.name_to_defs.items():
+            counts[str(n)] += len(ds)
+        self._once = {n for n, c in counts.items() if c == 1}
+        """The names assigned exactly once."""
         self._class_ty: dict[Definition, TritonScalar | None] = {}
         """One storage per class, as the cpp backend declares a name: every
         read of a scalar name is in it and every assignment is cast into it,
@@ -398,7 +433,7 @@ class _Emitter(Visitor):
         `constexpr`, and a plain variable holding one is not.  So a tile's
         width is resolved back to the name it came from.
         """
-        self.rows: dict[NamedId, tuple[NamedId, list[Expr]]] = {}
+        self.rows: dict[NamedId, tuple[NamedId, list[Expr | str]]] = {}
         """Names bound to a *row* of a pointer-backed list, as (base, prefix).
 
         `A = Ass[r]` names a sub-list, which is neither a value Triton has nor
@@ -408,7 +443,7 @@ class _Emitter(Visitor):
         keeps the loop rolled, where scalarizing the row would unroll every
         load in it.
         """
-        self.slices: dict[NamedId, tuple[NamedId, list[Expr], str]] = {}
+        self.slices: dict[NamedId, tuple[NamedId, list[Expr | str], str]] = {}
         """Names bound to a *slice* of a pointer-backed list, as
         (base, prefix, start).
 
@@ -440,6 +475,8 @@ class _Emitter(Visitor):
         """
         self._branches = 0
         """How many flattened branches enclose the statement being emitted."""
+        self._merging: set[NamedId] = set()
+        """The lists those branches merge."""
         self._lanes: set[str] = set()
         """The writer's `lanes`, bound when emission starts."""
         self._wide: set[str] = set()
@@ -555,6 +592,26 @@ class _Emitter(Visitor):
             return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
         return f'{code}.to({want.format()})'
 
+    def _typed(self, code: str, want: TritonScalar, force: bool = False) -> str:
+        """*code* as a *want* tensor where it is a Python number no tensor
+        operand types: Triton makes a float `fp32`, rounding it.  An integer
+        is left to Triton, which holds it; *force* types any number."""
+        v = _as_number(code)
+        if v is None or not (force or want.is_float()):
+            return code
+        if (not force and want is TritonScalar.F32 and isinstance(v, float)
+                and _fp32_exact(v)):
+            return code
+        return f'tl.full((), {code}, dtype={want.format()})'
+
+    def _weak(self, codes: list[str], wants: Sequence[TritonScalar]) -> list[str]:
+        """*codes*, typed where every one is a Python number, so no tensor
+        among them types the rest.  Integers stay Python's, whose arithmetic
+        is exact."""
+        if all(_as_number(c) is not None for c in codes):
+            return [self._typed(c, w, w.is_float()) for c, w in zip(codes, wants)]
+        return codes
+
     # -- dispatch ------------------------------------------------------
 
     def _dispatch(
@@ -583,17 +640,17 @@ class _Emitter(Visitor):
 
         for sig in sigs:
             if sig.matches(storages, active):
-                return sig.format(*codes)
+                return sig.format(*self._weak(codes, storages))
 
         target = self._active_storage(sigs, active, len(operands))
         if target is not None:
             want = (target,) * len(operands)
             for sig in sigs:
                 if sig.in_tys == want and sig.out_ctx == active:
-                    return sig.format(*[
+                    return sig.format(*self._weak([
                         self._maybe_cast(code, have, target, bound)
                         for code, have, bound in zip(codes, storages, bounds)
-                    ])
+                    ], want))
 
         if active is REAL:
             widened = self._try_widen(e, sigs, codes, storages, bounds)
@@ -647,10 +704,10 @@ class _Emitter(Visitor):
             if not all(fits(h, b, slot) for h, b in zip(storages, bounds)):
                 continue
             sig = next(g for g in sigs if g.in_tys == (slot,) * len(codes))
-            out = sig.format(*[
+            out = sig.format(*self._weak([
                 self._maybe_cast(code, have, slot, bound)
                 for code, have, bound in zip(codes, storages, bounds)
-            ])
+            ], sig.in_tys))
             return out if slot == target else self._explicit_cast(out, target)
         return None
 
@@ -672,14 +729,14 @@ class _Emitter(Visitor):
         """Whether *e* is a sequence rather than a scalar."""
         return isinstance(self.sizes.by_expr.get(e), ListSize)
 
-    def _flatten(self, e: ListRef) -> tuple[NamedId, list[Expr], str | None]:
+    def _flatten(self, e: ListRef) -> tuple[NamedId, list[Expr | str], str | None]:
         """A subscript chain as its base and indices, outermost first.
 
         A base bound to a row resolves through to the pointer it came from,
         so `A = Ass[r]; A[i]` gives `Ass` at `[r, i]` -- one load, not a load
         of a load.
         """
-        indices: list[Expr] = []
+        indices: list[Expr | str] = []
         cur: Expr = e
         while isinstance(cur, ListRef):
             indices.append(cur.index)
@@ -693,8 +750,8 @@ class _Emitter(Visitor):
         return self._resolve(cur.name, indices)
 
     def _resolve(
-        self, name: NamedId, indices: list[Expr],
-    ) -> tuple[NamedId, list[Expr], str | None]:
+        self, name: NamedId, indices: list[Expr | str],
+    ) -> tuple[NamedId, list[Expr | str], str | None]:
         """*name* followed through the rows and slices that bound it.
 
         Returns the base, its indices, and any constant offset a slice
@@ -731,7 +788,7 @@ class _Emitter(Visitor):
 
     def _slice_base(
         self, e: ListSlice,
-    ) -> tuple[NamedId, list[Expr], str] | None:
+    ) -> tuple[NamedId, list[Expr | str], str] | None:
         """*e* as (base, prefix, start) where it slices something in memory.
 
         `None` where it does not -- a slice of a local sequence of computed
@@ -750,8 +807,22 @@ class _Emitter(Visitor):
         if extra is not None:
             # a slice of a slice: one offset is all this carries for now
             return None
-        start = '0' if e.start is None else self.emit(e.start)
-        return base, prefix, start
+        start = '0' if e.start is None else self._pin(self.emit(e.start))
+        return base, self._pinned(prefix), start
+
+    def _pin(self, code: str) -> str:
+        """*code*, bound to a temporary unless it is a number or a name
+        assigned once: a binding is re-emitted where it is used.  In a row
+        tile the temporary is a row, as its source need not be one on every
+        iteration of an unrolled loop."""
+        if _as_number(code) is not None or code in self._once:
+            return code
+        if self._tile is not None and not self._wide & set(_IDENT.findall(code)):
+            return self._bind(f'tl.broadcast_to({code}, ({self._row_width},))', 'row')
+        return self._bind(code)
+
+    def _pinned(self, indices: list[Expr | str]) -> list[Expr | str]:
+        return [i if isinstance(i, str) else self._pin(self.emit(i)) for i in indices]
 
     def _size_code(self, size: object) -> str | None:
         """A length as code: a constant, or the kernel parameter holding it."""
@@ -793,13 +864,20 @@ class _Emitter(Visitor):
         return strides
 
     def _offset(
-        self, base: NamedId, indices: list[Expr], extra: str | None = None,
+        self, base: NamedId, indices: list[Expr | str], extra: str | None = None,
     ) -> str:
         """The flat element offset, row-major, plus any slice start."""
         strides = self._strides(base, len(indices))
+        # a pinned row index, read as a column across a lane loop's tile
+        codes = [
+            self.emit(i) if not isinstance(i, str)
+            else f'{i}[:, None]' if self._lane is not None and i in self._lanes
+            else i
+            for i in indices
+        ]
         terms = [
-            self.emit(idx) if st == '1' else f'{self.emit(idx)} * {st}'
-            for idx, st in zip(indices, strides)
+            code if st == '1' else f'{code} * {st}'
+            for code, st in zip(codes, strides)
         ]
         if extra is not None:
             terms.append(extra)
@@ -810,13 +888,8 @@ class _Emitter(Visitor):
     # -- tiles ---------------------------------------------------------
 
     def _tile_of(self, e: Expr) -> NamedId | None:
-        """The local list *e* names, through its aliases, or `None`."""
-        if not isinstance(e, Var):
-            return None
-        name = e.name
-        while name in self.tile_alias:
-            name = self.tile_alias[name]
-        return name if name in self.tiles else None
+        """The local list *e* names, or `None`."""
+        return e.name if isinstance(e, Var) and e.name in self.tiles else None
 
     def _as_col(self, code: str) -> str:
         """*code* broadcastable against a tile: a row value as a column."""
@@ -917,6 +990,7 @@ class _Emitter(Visitor):
     def _allocate(self, stmt: Assign, ctx: _IndentedWriter):
         """`fp.empty(n)` of a static length, as a tile and its tail."""
         assert isinstance(stmt.target, NamedId)
+        self._no_branch(stmt.target)
         bound = self.sizes.by_expr.get(stmt.expr)
         if not (isinstance(bound, ListSize) and isinstance(bound.size, int)
                 and bound.size > 0 and not isinstance(bound.elt, ListSize)):
@@ -933,7 +1007,16 @@ class _Emitter(Visitor):
             f'dtype={elt.format()})', 'wide')
         zero = 'False' if elt is TritonScalar.BOOL else '0.0' if elt.is_float() else '0'
         for j in range(n - width):
-            ctx.add_line(f'{stmt.target}_t{j} = {zero}')
+            ctx.add_line(f'{stmt.target}_t{j} = {self._typed(zero, elt)}')
+
+    def _no_branch(self, name: NamedId):
+        """Refuse rebinding a list a branch merges: a tile merges by its
+        masked writes alone."""
+        if name in self._merging:
+            raise TritonEmitError(
+                f'`{name}` is a list held in registers, rebound under a branch '
+                'it is merged out of'
+            )
 
     def _aligned_block(self, start: Expr | None, width: int) -> str | None:
         """*start* as `k` where it is `k * width`, else `None`."""
@@ -949,11 +1032,21 @@ class _Emitter(Visitor):
                     return code if scale == 1 else f'({code} * {scale})'
         return None
 
+    def _within(self, e: Expr | None, hi: int) -> bool:
+        """Whether *e* is proven in `[0, hi]`; `None` is `0`."""
+        if e is None:
+            return True
+        af = to_abstract(self.format_info.by_expr.get(e))
+        return (af is not None
+                and isinstance(af.neg_bound, RealFloat) and af.neg_bound >= 0
+                and isinstance(af.pos_bound, RealFloat) and af.pos_bound <= hi)
+
     def _slice_tile(self, stmt: Assign, tile: NamedId, ctx: _IndentedWriter):
         """`xs[k * W:(k + 1) * W]` of a tile, as a tile of its own: row `k` of
         the tile reshaped to `W` wide.  Selected like an extract, by a sum
         whose other rows are `-0.0`."""
         assert isinstance(stmt.target, NamedId) and isinstance(stmt.expr, ListSlice)
+        self._no_branch(stmt.target)
         width, _, elt = self.tiles[tile]
         bound = self.sizes.by_expr.get(stmt.expr)
         w = bound.size if isinstance(bound, ListSize) else None
@@ -965,10 +1058,15 @@ class _Emitter(Visitor):
                 f'a slice of `{tile}` is a tile only where it is a power of two '
                 'wide and starts at a multiple of that'
             )
-        if w == width:
-            self.tile_alias[stmt.target] = tile
-            return
+        if not self._within(stmt.expr.start, width - w):
+            raise TritonEmitError(
+                f'a slice of `{tile}` is a tile only where it is proven to lie '
+                f'in its first {width} elements'
+            )
         self.tiles[stmt.target] = (w, 0, elt)
+        if w == width:
+            ctx.add_line(f'{stmt.target} = {tile}', 'wide')
+            return
         rows = width // w
         shape = f'({self._row_width}, {rows}, {w})'
         blocks = f'tl.reshape({tile}, {shape})'
@@ -1027,80 +1125,7 @@ class _Emitter(Visitor):
 
             case ListExpr():
                 return [self.emit(elt) for elt in e.elts]
-            case ListSlice():
-                return self._slice_elements(e)
         return None
-
-    def _range_elements(self, e: Expr) -> list[str] | None:
-        """A `range`, as its index values.
-
-        Unrolling a comprehension means substituting each index in turn, so
-        the range has to come apart the same way a list does -- its elements
-        are the indices themselves.
-        """
-        lo: int | None
-        hi: int | None
-        step: int | None
-        if isinstance(e, Range1):
-            lo, hi, step = 0, self._const_index(e.arg), 1
-        elif isinstance(e, Range3):
-            lo = self._const_index(e.first)
-            hi = self._const_index(e.second)
-            step = self._const_index(e.third)
-        else:
-            return None
-        if lo is None or hi is None or step is None or step == 0:
-            return None
-        return [str(i) for i in range(lo, hi, step)]
-
-    def _source_elements(self, e: Expr) -> list[str] | None:
-        """*e* as elements, where it is being *consumed* as a sequence.
-
-        Wider than :meth:`_elements` by one case: a pointer-backed list, whose
-        elements are that many loads.  Kept separate because expanding one is
-        only wanted where a sequence is taken apart -- iterated or sliced --
-        and never for `t = xs`, which is a copy of a pointer rather than a
-        request for its contents.
-        """
-        elems = self._elements(e)
-        if elems is not None:
-            return elems
-        # a `range` expands only where a comprehension consumes it: bound to
-        # a name it stays a range, which is index arithmetic rather than
-        # values
-        if isinstance(e, (Range1, Range3)):
-            return self._range_elements(e)
-        if not isinstance(e, Var) or self._tile_of(e) is not None:
-            return None
-        bound = self.sizes.by_expr.get(e)
-        if isinstance(bound, ListSize) and isinstance(bound.size, int):
-            return [self._load_at(e.name, str(i)) for i in range(bound.size)]
-        return None
-
-    def _slice_elements(self, e: ListSlice) -> list[str] | None:
-        """A slice, as its elements.
-
-        The length comes from the size analysis, which cancels a common base:
-        `xs[k:k + L]` is `L` whatever `k` is, provided the index arithmetic is
-        exact.  The *offsets* are then `start + 0 .. start + n - 1`.
-        """
-        bound = self.sizes.by_expr.get(e)
-        if not isinstance(bound, ListSize) or not isinstance(bound.size, int):
-            return None
-        inner = self._elements(e.value)
-        start = 0 if e.start is None else self._const_index(e.start)
-        if inner is not None:
-            if start is None:
-                return None
-            return inner[start:start + bound.size]
-        # a pointer-backed list: the slice is that many loads
-        if not isinstance(e.value, Var) or self._tile_of(e.value) is not None:
-            return None
-        base = self.emit(e.start) if e.start is not None else '0'
-        return [
-            self._load_at(e.value.name, base if i == 0 else f'{base} + {i}')
-            for i in range(bound.size)
-        ]
 
     def _const_index(self, e: Expr) -> int | None:
         """*e* as a compile-time index, or `None`."""
@@ -1109,9 +1134,6 @@ class _Emitter(Visitor):
             return int(code)
         except ValueError:
             return None
-
-    def _load_at(self, base: NamedId, offset: str) -> str:
-        return self._masked_load(f'{base}_ptr + {offset}')
 
     def _masked_load(self, addr: str) -> str:
         """`tl.load` at *addr*, under whatever guard is in force.
@@ -1147,7 +1169,13 @@ class _Emitter(Visitor):
         if (tile := self._tile_of(e.value)) is not None:
             if self._at_lane(tile, e.index):
                 return str(tile)
-            code = self._extract(tile, self.emit(e.index))
+            idx = self.emit(e.index)
+            if self._wide & set(_IDENT.findall(idx)):
+                raise TritonEmitError(
+                    f'`{tile}` is read at an index that varies across its '
+                    'lanes, which is a gather'
+                )
+            code = self._extract(tile, idx)
             return code if self._lane is None else self._as_col(code)
         elems = self._elements(e.value)
         if elems is not None:
@@ -1192,11 +1220,10 @@ class _Emitter(Visitor):
         """An explicit `fp.round` / `fp.cast`, which is a *cast*, not an
         operation the table dispatches.
 
-        Where the round changes nothing it emits nothing -- a literal already
-        representable in the target needs no `.to`, and Triton has no spelling
-        for casting one.  Otherwise it is a cast, which is sound only under a
-        context whose `round` *is* the hardware conversion; `is_native_ctx`
-        answers exactly that question.
+        Where the round changes nothing it emits nothing, and a literal is
+        rounded here, since Triton has no spelling for casting one.  Otherwise
+        it is a cast, which is sound only under a context whose `round` *is*
+        the hardware conversion; `is_native_ctx` answers exactly that question.
 
         A fixed-point context sitting at position zero is the exception: its
         values are the integers, so the round is one of the C integral
@@ -1216,12 +1243,38 @@ class _Emitter(Visitor):
                 'here and a kernel cannot check.  Pass `drop_asserts` to round '
                 'without the check'
             )
+        if (v := _as_number(arg)) is not None and not isinstance(v, bool):
+            return self._emit_rounded(e, v, ctx)
         integral = _integral_round(ctx)
         if integral is not None:
-            return f'{integral}({arg})'
+            want = self._storage(e)
+            code = f'{integral}({arg})'
+            if want.is_float() and not getattr(ctx, 'enable_neg_zero', True):
+                code = f'({code} + 0.0)'    # `-0` is not an integer
+            return self._maybe_cast(code, self._storage(e.arg), want,
+                                    self.format_info.by_expr.get(e))
         if not is_native_ctx(ctx):
             return self._emit_downcast(e, arg, ctx)
+        if ctx is not INTEGER and ctx in _int_ctxs() and self._storage(e.arg).is_float():
+            raise TritonEmitError(
+                f'a cast from a float into `{ctx}` saturates where the context wraps'
+            )
         return self._explicit_cast(arg, self._storage(e))
+
+    def _emit_rounded(self, e: Round | Cast, v: float, ctx: Context) -> str:
+        """A literal rounded, folded here: Triton would retype it rather than
+        round it."""
+        try:
+            r = ctx.round(v)
+        except ValueError as exc:
+            raise TritonEmitError(f'rounding `{v}` aborts: {exc}') from None
+        if r.isnan:
+            return "float('nan')"
+        if r.isinf:
+            return "(-float('inf'))" if r.s else "float('inf')"
+        if r.is_zero() and r.s:
+            return f'(-tl.zeros((), {self._storage(e).format()}))'
+        return self._emit_numeric_literal(r.as_rational())
 
     def _emit_downcast(self, e: Round | Cast, arg: str, ctx: Context) -> str:
         """A `round` Triton spells as a narrowing cast under a rounding mode.
@@ -1229,14 +1282,11 @@ class _Emitter(Visitor):
         `tl.cast` takes an `fp_downcast_rounding` that reaches one context
         more than `is_native_ctx`: `x.to(tl.float16,
         fp_downcast_rounding="rtz")` **is** FP16's round-toward-zero.  Which
-        conversions it covers is `downcast_rounding`'s to say.  A literal is
-        excluded for the reason `_explicit_cast` gives -- it would be retyped
-        rather than cast, and retyping rounds to nearest whatever mode is
-        asked for.
+        conversions it covers is `downcast_rounding`'s to say.
         """
         want = self._storage(e)
         rm = downcast_rounding(ctx, self._storage(e.arg))
-        if rm is None or _as_literal(arg) is not None:
+        if rm is None:
             raise TritonEmitError(
                 f'`{type(e).__name__.lower()}` to `{ctx}` is not a hardware '
                 'conversion, so it has no cast spelling'
@@ -1251,8 +1301,41 @@ class _Emitter(Visitor):
         tile, so the links join with `&`.  Each operand is emitted once per
         link it appears in; they are names by the time the normal form is
         done, so nothing is recomputed.
+
+        Floats against floats, or integers against integers, Triton promotes
+        exactly, and an integer literal every side holds takes the others'
+        type; a mix is cast into one storage holding each, since Triton would
+        compare an `int32` against a float in `fp32`.
         """
         codes = [self.emit(a) for a in e.args]
+        try:
+            haves = [self._storage(a) for a in e.args]
+        except StorageSelectionError as exc:
+            raise TritonEmitError(f'a compared value has no storage: {exc}') from None
+        bounds = [self.format_info.by_expr.get(a) for a in e.args]
+        kinds = {
+            h.is_float() for c, h, b in zip(codes, haves, bounds)
+            if _literal_int(c) is None
+            or not all(self._value_fits(b, h, w) for w in haves)
+        }
+        if len(kinds) <= 1:
+            return self._chain(e, self._weak(codes, haves))
+        want = next((w for w in haves if all(
+            self._value_fits(b, h, w) for h, b in zip(haves, bounds))), None)
+        if want is None:
+            try:
+                want = scalar_sup(haves)
+            except StorageSelectionError:
+                raise TritonEmitError(
+                    'no storage holds both sides of a comparison'
+                ) from None
+        return self._chain(e, self._weak([
+            self._maybe_cast(c, h, want, b)
+            for c, h, b in zip(codes, haves, bounds)
+        ], [want] * len(haves)))
+
+    @staticmethod
+    def _chain(e: Compare, codes: list[str]) -> str:
         links = [
             f'({codes[i]} {_COMPARE[op]} {codes[i + 1]})'
             for i, op in enumerate(e.ops)
@@ -1447,11 +1530,11 @@ class _Emitter(Visitor):
             width, tail, _ = self.tiles[tile]
             elems = [self._extract(tile, str(k)) for k in range(width + tail)]
         else:
-            elems = self._source_elements(e.arg)
+            elems = self._elements(e.arg)
         if elems is None:
             raise TritonEmitError(
-                f'`{type(e).__name__.lower()}` needs a sequence of proven '
-                'length to fold over'
+                f'`{type(e).__name__.lower()}` folds over a list held in '
+                'registers or a literal one, and this is neither'
             )
         if isinstance(e, (AnyOf, AllOf)):
             # `&` / `|` rather than Python's keywords, which short-circuit and
@@ -1476,20 +1559,21 @@ class _Emitter(Visitor):
             seq = self.format_info.by_expr.get(e.arg)
             fits = want is not None and isinstance(seq, ListFormat) and (
                 bound_fits_in_scalar(seq.elt, want))
-            if fits:
-                # under `REAL`, every partial sum lies in the sum's own format,
-                # so its storage holds each exactly; under a native context,
-                # an add in its storage is its rounding
-                assert want is not None
-                if ctx is not REAL and not is_native_ctx(ctx):
-                    fits = False
-                else:
-                    elems = [self._explicit_cast(c, want) for c in elems]
-            if not fits and ctx is not REAL:
+            # under `REAL`, every partial sum lies in the sum's own format,
+            # so its storage holds each exactly; under a native context, an
+            # add in its storage is its rounding
+            if ctx is not REAL and not (fits and is_native_ctx(ctx)):
                 raise TritonEmitError(
                     f'`sum` under `{ctx}` rounds each partial sum, which needs '
                     "every element held exactly in that context's storage"
                 )
+            if want is None or not fits:
+                raise TritonEmitError(
+                    '`sum` is exact, and no storage holds its elements and '
+                    'partial sums'
+                )
+            elems = self._weak([self._explicit_cast(c, want) for c in elems],
+                               [want] * len(elems))
             acc = elems[0]
             for rhs in elems[1:]:
                 acc = f'({acc} + {rhs})'
@@ -1569,11 +1653,11 @@ class _Emitter(Visitor):
         """
         name = 'tl.maximum' if isinstance(e, Max) else 'tl.minimum'
         want = self._storage(e)
-        args = [
+        args = self._weak([
             self._maybe_cast(self.emit(a), self._storage(a), want,
                              self.format_info.by_expr.get(a))
             for a in e.args
-        ]
+        ], [want] * len(e.args))
         if not args:
             raise TritonEmitError(f'`{name}` needs at least one operand')
         return self._fold_select(name, args)
@@ -1589,11 +1673,11 @@ class _Emitter(Visitor):
         contract asks.
         """
         want = self._storage(e)
-        arms = [
+        arms = self._weak([
             self._maybe_cast(self.emit(a), self._storage(a), want,
                               self.format_info.by_expr.get(a))
             for a in (e.ift, e.iff)
-        ]
+        ], [want, want])
         return f'tl.where({self.emit(e.cond)}, {arms[0]}, {arms[1]})'
 
     # -- expressions ---------------------------------------------------
@@ -1808,9 +1892,6 @@ class _Emitter(Visitor):
             )
         if isinstance(stmt.expr, Empty):
             return self._allocate(stmt, ctx)
-        if (tile := self._tile_of(stmt.expr)) is not None:
-            self.tile_alias[stmt.target] = tile
-            return
         if isinstance(stmt.expr, ListSlice) and (
             tile := self._tile_of(stmt.expr.value)
         ) is not None:
@@ -1837,7 +1918,7 @@ class _Emitter(Visitor):
             base, indices, extra = self._flatten(stmt.expr)
             if extra is not None:
                 return  # a row of a slice: no place to keep the offset yet
-            self.rows[stmt.target] = (base, indices)
+            self.rows[stmt.target] = (base, self._pinned(indices))
             return
         match stmt.expr:
             case Range1():
@@ -1845,10 +1926,11 @@ class _Emitter(Visitor):
                 return
             case Range3():
                 self.ranges[stmt.target] = (
-                    self.emit(stmt.expr.first), self.emit(stmt.expr.third),
+                    self._pin(self.emit(stmt.expr.first)),
+                    self._pin(self.emit(stmt.expr.third)),
                 )
                 return
-        code = self._into_class(stmt, self.emit(stmt.expr))
+        code = self._into_class(stmt.target, stmt, stmt.expr, self.emit(stmt.expr))
         if stmt.target in self._carried:
             ctx.add_line(f'{stmt.target} = {self._as_row(code, self._carried[stmt.target])}', 'row')
             return
@@ -1858,22 +1940,21 @@ class _Emitter(Visitor):
             self.copies[str(stmt.target)] = self._root(code)
         ctx.add_line(f'{stmt.target} = {code}')
 
-    def _into_class(self, stmt: Assign, code: str) -> str:
-        """*code*, the value *stmt* assigns, in its target's class storage."""
-        assert isinstance(stmt.target, NamedId)
-        d = self.def_use.find_def_from_site(stmt.target, stmt)
+    def _into_class(self, target: NamedId, stmt: Assign, e: Expr, code: str) -> str:
+        """*code*, the value of *e* *stmt* assigns *target*, in its class
+        storage."""
+        d = self.def_use.find_def_from_site(target, stmt)
         if not isinstance(self.types.by_def.get(d), RealType):
             return code
         want = self._class_storage(d)
         if want is None:
             # a name is held in one storage, as a declaration has one type
             raise TritonEmitError(
-                f'no storage holds every value `{stmt.target}` is assigned'
+                f'no storage holds every value `{target}` is assigned'
             )
-        return self._maybe_cast(
-            code, self._storage(stmt.expr), want,
-            self.format_info.by_expr.get(stmt.expr),
-        )
+        return self._typed(self._maybe_cast(
+            code, self._storage(e), want, self.format_info.by_expr.get(e),
+        ), want)
 
     def _emit_destructure(self, stmt: Assign, ctx: _IndentedWriter):
         """`a, b = (x, y)`, as one assignment per element.
@@ -1906,7 +1987,11 @@ class _Emitter(Visitor):
                 f'{len(stmt.expr.elts)} elements'
             )
 
-        codes = [self.emit(e) for e in stmt.expr.elts]
+        codes = [
+            self._into_class(n, stmt, e, self.emit(e)) if isinstance(n, NamedId)
+            else self.emit(e)
+            for n, e in zip(names, stmt.expr.elts)
+        ]
         bound = {str(n) for n in names if isinstance(n, NamedId)}
         if any(_reads_name(code, bound) for code in codes):
             tmps = []
@@ -1927,6 +2012,21 @@ class _Emitter(Visitor):
         base, indices, extra = self._resolve(stmt.var, list(stmt.indices))
         addr = f'{base}_ptr + {self._offset(base, indices, extra)}'
         val = self.emit(stmt.expr)
+        # `tl.store` converts to the pointer's type, which may round
+        want = self._arg_storage(self._root(str(base)))
+        have, bound = self._storage(stmt.expr), self.format_info.by_expr.get(stmt.expr)
+        af = to_abstract(bound)
+        if self._value_fits(bound, have, want):
+            val = self._maybe_cast(val, have, want, bound)
+        elif not (have.is_float() and want.is_float() and af is not None
+                  and af.prec <= (exact_integer_bits(want) or 0)):
+            # only a precision the pointer lacks: a bound can overstate the
+            # exponent range, as an unfolded rounding's does
+            raise TritonEmitError(
+                f'storing {have.format()} through a {want.format()} pointer '
+                'would round'
+            )
+        val = self._typed(val, want)
         mask = '' if self.mask is None else f', mask={self.mask}'
         ctx.add_line(f'tl.store({addr}, {val}{mask})')
         self.written.add(f'{self._root(str(base))}_ptr')
@@ -1939,10 +2039,11 @@ class _Emitter(Visitor):
         if len(stmt.indices) != 1:
             raise TritonEmitError(f'`{tile}` has one dimension')
         idx = stmt.indices[0]
-        val = self._maybe_cast(
-            self.emit(stmt.expr), self._storage(stmt.expr), self.tiles[tile][2],
+        elt = self.tiles[tile][2]
+        val = self._typed(self._maybe_cast(
+            self.emit(stmt.expr), self._storage(stmt.expr), elt,
             self.format_info.by_expr.get(stmt.expr),
-        )
+        ), elt)
         if self._at_lane(tile, idx):
             mask = self.mask if self._branches else 'True'
             ctx.add_line(f'{tile} = tl.where({mask}, {val}, {tile})', 'wide')
@@ -2016,8 +2117,10 @@ class _Emitter(Visitor):
         is not renamed -- and a name the first arm overwrites is saved before
         it and restored after, for the second arm and the merge to read.
         """
-        # a list behind a pointer merges by its masked stores alone
+        # a list behind a pointer or in registers merges by its masked
+        # writes alone
         phis = []
+        lists = set()
         for p in self.def_use.phis[stmt]:
             if not isinstance(self.types.by_def.get(p), ListType):
                 phis.append(p)
@@ -2026,6 +2129,8 @@ class _Emitter(Visitor):
                     f'`{p.name}` is a list chosen by a branch, which has no '
                     'Triton value'
                 )
+            else:
+                lists.add(p.name)
         merged = {p.name for p in phis}
         named: tuple[dict, ...] = (self.consts, self.copies, self.ranges,
                                    self.rows, self.slices, self.seqs)
@@ -2048,6 +2153,7 @@ class _Emitter(Visitor):
             for v in sorted(self.def_use.mutated_in(ift)) if v in merged
         }
         self._branches += 1
+        prev_merging, self._merging = self._merging, self._merging | lists
         self.mask = cond if outer is None else f'({outer} & {cond})'
         self._visit_block(ift, ctx)
         taken = {p.name: self._bind(str(p.name)) for p in phis}
@@ -2058,6 +2164,7 @@ class _Emitter(Visitor):
             self.mask = f'(~{cond})' if outer is None else f'({outer} & ~{cond})'
             self._visit_block(iff, ctx)
         self._branches -= 1
+        self._merging = prev_merging
         self.mask = outer
 
         # a phi's sides share its class, so they are in one storage already
@@ -2083,8 +2190,6 @@ class _Emitter(Visitor):
         # against the values.  Loading the element instead needs the
         # iterable's base and stride, which a slice or a `zip` does not
         # supply, so this refuses rather than guesses.
-        if (tile := self._tile_of(stmt.iterable)) is not None:
-            return self._iterate_tile(stmt, tile, ctx)
         if not isinstance(stmt.iterable, (Range1, Range3)):
             raise TritonEmitError(
                 f'a `for` over a `{type(stmt.iterable).__name__}` binds an '
@@ -2144,27 +2249,31 @@ class _Emitter(Visitor):
         self._carried = prev
 
     def _as_row(self, code: str, held: TritonScalar) -> str:
-        """*code*, broadcast across the row tile's rows."""
-        zeros = f'tl.zeros(({self._row_width},), dtype={held.format()})'
-        return f'({code} | {zeros})' if held is TritonScalar.BOOL else f'({code} + {zeros})'
+        """*code*, broadcast across the row tile's rows.  An integer is
+        added to zeros, which also widens a name bound to Triton's `int32`;
+        a float is not, as `-0.0 + 0.0` is `+0.0`."""
+        if held.is_integer():
+            return f'({code} + tl.zeros(({self._row_width},), dtype={held.format()}))'
+        return f'tl.broadcast_to({self._typed(code, held, True)}, ({self._row_width},))'
 
-    def _iterate_tile(self, stmt: ForStmt, tile: NamedId, ctx: _IndentedWriter):
-        """`for x in xs` over a tile: in order, each element extracted."""
-        target = stmt.target
-        if not isinstance(target, NamedId):
-            raise TritonEmitError('a loop over a tile binds one name')
-        width, tail, elt = self.tiles[tile]
-        k = f'__t{self._next_tmp}'
-        self._next_tmp += 1
-        ctx.add_line(f'for {k} in tl.static_range({width + tail}):')
-        ctx.indent()
-        d = self.def_use.find_def_from_site(target, stmt)
-        want = self._class_storage(d) or elt
-        code = self._maybe_cast(self._extract(tile, k), elt, want,
-                                self.format_info.by_def.get(d))
-        ctx.add_line(f'{target} = {code}')
-        self._visit_block(stmt.body, ctx)
-        ctx.dedent()
+    def _arg_storage(self, name: str) -> TritonScalar:
+        """The storage of the elements kernel argument *name* points at."""
+        arg = next(a for a in self.func.args if str(a.name) == name)
+        assert isinstance(arg.name, NamedId)
+        d = self.def_use.find_def_from_site(arg.name, arg)
+        ty, bound = self.types.by_def.get(d), self.format_info.by_def.get(d)
+        while isinstance(ty, ListType):
+            ty = ty.elt
+        while isinstance(bound, ListFormat):
+            bound = bound.elt
+        if isinstance(ty, BoolType):
+            return TritonScalar.BOOL
+        try:
+            return choose_storage_scalar(bound)
+        except StorageSelectionError:
+            raise TritonEmitError(
+                f'`{name}` holds no storage Triton has, so it cannot be stored to'
+            ) from None
 
     def _root(self, name: str) -> str:
         """*name* followed through the copies that bound it."""
@@ -2382,6 +2491,9 @@ class KernelSource:
     """Each list argument's position and the shape its offsets assume, row
     major: a proven length, the size parameter holding one, or ``None``."""
 
+    dtypes: tuple[tuple[int, str], ...] = ()
+    """Each list argument's position and its elements' Triton dtype."""
+
 
 def _times(a: str, b: str) -> str:
     """``a * b`` as code, folded where both are constants."""
@@ -2483,6 +2595,10 @@ def emit_kernel(
     out.indent()
     emitter._visit_block(body, out)
     out.dedent()
+    dtypes = tuple(
+        (pos, emitter._arg_storage(str(func.args[pos].name)).format())
+        for pos, _ in shapes
+    )
 
     return KernelSource(
         name=func.name,
@@ -2493,6 +2609,7 @@ def emit_kernel(
         block=block,
         writes=tuple(p for p in params if p in emitter.written),
         shapes=tuple(shapes),
+        dtypes=dtypes,
         enable_fp_fusion=_products_are_exact(func, emitter),
         sizes=tuple(size_params),
     )

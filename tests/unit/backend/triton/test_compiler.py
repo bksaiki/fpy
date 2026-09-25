@@ -151,7 +151,7 @@ class TestOptimize:
         off = TritonCompiler(drop_asserts=True, optimize=False).compile(
             scaled, ctx=fp.FP32, arg_types=argt).source
         assert 'SCALE' not in on
-        assert 'SCALE = 2.5' in off
+        assert 'SCALE = ' in off
         # the value still reaches the multiply either way
         assert '2.5' in on and '2.5' in off
 

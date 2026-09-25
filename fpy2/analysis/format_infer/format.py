@@ -154,18 +154,15 @@ class AbstractFormat:
     def __neg__(self) -> 'AbstractFormat':
         """Negation of the format (swaps positive and negative bounds).
 
-        ``has_neg_zero`` carries over unchanged.  Negation maps ``+0.0`` to
-        ``-0.0``, and every format represents a ``+0.0`` -- ``pos_bound >= 0 >=
-        neg_bound`` holds by convention and nothing excludes zero -- so the image
-        holds a ``-0.0`` exactly when this number system has one at all.  A
-        system without: ``-(0)`` under ``SINT8`` is ``+0.0``, since
-        two's-complement has a single zero.
+        Exact, so the image holds ``-0.0``: every format holds ``+0.0``.
+        Whether it survives is the rounding context's to say -- ``-(0)`` under
+        ``SINT8`` is ``+0.0``, and under ``REAL`` it is ``-0.0``.
         """
         # negation maps +inf <-> -inf; NaN is unsigned so it is preserved
         return AbstractFormat(
             self.prec, self.exp, -self.neg_bound, neg_bound=-self.pos_bound,
             has_pos_inf=self.has_neg_inf, has_neg_inf=self.has_pos_inf, has_nan=self.has_nan,
-            has_neg_zero=self.has_neg_zero,
+            has_neg_zero=True,
         )
 
     def __abs__(self) -> 'AbstractFormat':

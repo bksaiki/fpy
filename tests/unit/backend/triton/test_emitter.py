@@ -1162,7 +1162,7 @@ def test_an_exact_sum_no_storage_holds_is_refused():
             t = fp.round(s)
         return t
 
-    with pytest.raises(TritonEmitError, match='no storage holds every value'):
+    with pytest.raises(TritonEmitError, match='no storage holds its elements'):
         _emit(f, [RealType(fp.FP64), RealType(fp.FP64)], ctx=fp.REAL)
 
 
@@ -1276,3 +1276,114 @@ def test_an_unaligned_slice_of_a_tile_is_refused():
     with pytest.raises(TritonEmitError, match='starts at a multiple'):
         TritonCompiler(drop_asserts=True).compile(
             f, ctx=fp.REAL, arg_types=[ListType(_R32, 8), ListType(_R32, 1), _INT])
+
+
+def _rows(f, n_in: int, n_out: int, out=fp.FP32):
+    from fpy2.backend.triton import TritonCompiler
+    from fpy2.utils import NamedId
+
+    rows = NamedId('rows')
+    return TritonCompiler(drop_asserts=True).compile(f, ctx=fp.REAL, arg_types=[
+        ListType(ListType(_R32, n_in), rows),
+        ListType(ListType(RealType(out), n_out), rows), _INT])
+
+
+def test_a_slice_into_the_tail_is_refused():
+    """`ys[4:6]` of six is past the tile's four lanes, in its tail."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            ys = [x * 2 for x in xs]
+            ws = ys[4:6]
+            row[0] = max(ws)
+        return out
+
+    with pytest.raises(TritonEmitError, match='proven to lie in its first 4'):
+        _rows(f, 6, 1)
+
+
+def test_a_read_at_a_lane_varying_index_is_refused():
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            ys = [x * 2 for x in xs]
+            for k in range(4):
+                row[k] = ys[3 - k]
+        return out
+
+    with pytest.raises(TritonEmitError, match='varies across its lanes'):
+        _rows(f, 4, 4)
+
+
+def test_a_list_rebound_under_a_branch_is_refused():
+    """A tile merges by masked writes; a new one under the branch would
+    replace it on every row."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            ys = [x * 2 for x in xs]
+            if xs[0] > 0:
+                ys = [x * 3 for x in xs]
+            for k in range(len(row)):
+                row[k] = ys[k]
+        return out
+
+    with pytest.raises(TritonEmitError, match='rebound under a branch'):
+        _rows(f, 4, 4)
+
+
+def test_an_exact_sum_over_a_tile_no_storage_holds_is_refused():
+    """Folding in the elements' `f64` rounds each partial sum."""
+    from fpy2.backend.triton import TritonCompiler
+    from fpy2.utils import NamedId
+
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            ys = [x * 1 for x in xs]
+            row[0] = 1.0 if sum(ys) > 0 else 0.0
+        return out
+
+    f64 = RealType(fp.FP64)
+    with pytest.raises(TritonEmitError, match='no storage holds its elements'):
+        TritonCompiler(drop_asserts=True).compile(f, ctx=fp.REAL, arg_types=[
+            ListType(ListType(f64, 3), NamedId('rows')),
+            ListType(ListType(f64, 1), NamedId('rows')), _INT])
+
+
+def test_a_store_that_rounds_is_refused():
+    """`tl.store` converts to the pointer's `f16`, which rounds an `f32`."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            with fp.FP32:
+                row[0] = xs[0] * 1.5
+        return out
+
+    with pytest.raises(TritonEmitError, match='would round'):
+        _rows(f, 1, 1, out=FP16)
+
+
+def test_a_reduction_over_a_row_in_memory_is_refused():
+    """A row of an argument is an address, not elements to fold."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            with fp.FP32:
+                row[0] = sum(xs)
+        return out
+
+    with pytest.raises(TritonEmitError, match='folds over a list held'):
+        _rows(f, 4, 1)
