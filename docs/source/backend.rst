@@ -20,4 +20,5 @@ FPy provides a number of compilers from FPy to other languages.
 
 .. autoclass:: fpy2.TritonCompiler
    :members:
+   :exclude-members: UnfoldMode
    :show-inheritance:
