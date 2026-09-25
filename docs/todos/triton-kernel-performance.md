@@ -1,0 +1,276 @@
+# Triton: kernel performance
+
+Implementation plan.  The design is settled; what follows is the phase
+breakdown, one phase per commit.
+
+## Working policy
+
+- **Pause after each phase for review.** Do not begin the next phase until the
+  current one has been looked at.
+- **Do not commit.** The author of the change leaves the working tree dirty;
+  commits are made by the repository owner.
+- **Run only the tests relevant to the phase.** The full unit suite runs once,
+  at the end, after the last phase.
+- **Comments stay succinct**, and notes about *process* -- what was tried, what
+  a phase decided, why an ordering was chosen -- belong in this document, not in
+  source comments.
+
+## Context
+
+The mmasim kernels run at 59-199 GFLOP/s on a TITAN V
+(`examples/mmasim/bench/speed.py`, 1024 x 1024, `k = 256`); an FP32 matmul
+written in FPy runs at 194.  Every change below was first made by hand in the
+emitted source and checked bit for bit against the unchanged kernel's output;
+the scripts are in the session scratchpad and are not part of the plan.
+
+**Where the time goes** (`ncu`, `nv.volta.f16.f32`):
+
+| | as emitted | f32 truncation |
+|---|---|---|
+| SM throughput / L1 busy | 82% / 81% | 69% / 96% |
+| DRAM throughput | 0.3% | 0.4% |
+| top stall | math pipe (f64) | load/store throttle |
+| sectors per global load | 16.5 | 16.5 |
+
+As emitted, the kernel is bound by the f64 in `fused_sum`'s truncation; with
+that gone, by the number of load instructions.  DRAM is idle: the operands hit
+in L1 (91%).
+
+**Measured, Volta, each on top of the last, all bit-identical:**
+
+| change | GFLOP/s |
+|---|---|
+| as emitted | 132 |
+| truncation in f32, power-of-two scale from bits | 157 |
+| each operand loaded once per iteration | 221 |
+| special-value arm skipped when no row takes it (+ unmasked `A` load) | 245 |
+| `max(logb(x), c)` as a bitfield | 367 |
+| integer accumulation of the aligned sum | 373 |
+
+Each mostly unblocks the next: f32 truncation alone is +19%, with single loads
++68%.
+
+**Measured elsewhere:**
+
+| change | before | after |
+|---|---|---|
+| FP32 matmul, 2-D output tile 64 x 64, same summation order | 194 | 2,019 |
+| Volta, hand-written, 2-D tile 4 x 64 against one row per program | 212 | 309 |
+| Volta, hand-written, 16-wide `k` loads split in registers, one row | 212 | 267 |
+| the same, with the 4 x 64 tile | 309 | 305 |
+| `cdna3.bf8`, even/odd gathers as `reshape` + `split` | 59 | 76 |
+
+cuBLAS FP32 is 8,041; a bit-exact kernel is capped near half of FMA peak,
+since FPy's `acc + a * b` rounds the product.
+
+**Tried and rejected** (no gain, or a loss, on the 367-373 kernel):
+eliding the NaN guard on `e_max`'s reduction; `tl.range` with `num_stages` 2-3
+or `loop_unroll_factor` 2-4 (all within 1%); integer storage for exponents
+(-1%); truncation as a mantissa shift (370 -> 241) or a bit mask (370 -> 263) --
+a power-of-two multiply and `trunc` are two float instructions.
+
+## The changes
+
+### Truncation in f32 (`fused_sum`, via `RescaleFixed`)
+
+`RescaleFixed` lowers a runtime-grid round to
+`ldexp(trunc(ldexp(x, -k)), k)`.  The emitter widens to `f64` and calls
+`libdevice.ldexp` twice.  The truncated value never has more bits than `x`, so
+`f32` holds every step when `x` does, and `ldexp` by an exact power of two is a
+multiply by `((127 + n) << 23)` bitcast -- exact when `2 ** n` is normal and the
+product neither overflows nor underflows.  Those conditions come from the
+format and digit bounds on `k` and `x`; where they are not proven, `ldexp`
+stays.
+
+### Each operand loaded once
+
+Per iteration the Volta kernel loads `A` and `B` three times each: for the
+products, again in the special-value arm (`dpa_special_values` recomputes
+`a * b`), and again for the exponents.  The loads differ only in their masks --
+the arm's and the guard's -- so Triton does not merge them.  An element is
+loaded once, under the row mask, and reused: the Triton contract already lets
+an inactive lane hold garbage until it is masked.
+
+### Skip an arm no row takes
+
+The flattened special-value arm runs on every row every iteration.  Where a
+branch guards a flattened arm, `if tl.max(guard & row_mask) != 0:` around it
+skips the work when no active row needs it.  A garbage row can only turn it on,
+which costs time, not bits.
+
+### `max(logb(x), c)` as a bitfield
+
+For finite `x` held in IEEE storage `S` and `c >= emin_S`,
+`max(logb(x), c) == max(field(x) - bias_S, c)`: a subnormal or zero reads
+`emin_S - 1 < c` and clamps.  The emitter spells the general `logb` -- a
+four-deep `where` chain with a subnormal rescale -- and then `tl.maximum` with
+NaN propagation.  Infinities and NaN keep their answer through one `where` on
+`isfinite`, dropped where value classes prove `x` finite (every mmasim use
+sits under the special-value guard).  `exponent0`'s
+`where(isfinite(x), max(logb(x), emin), -1)` is the same peephole.
+
+### Gathers as `reshape` + `split`
+
+`cdna3.bf8` splits a 16-wide tile into its even and odd elements, emitted as a
+static loop of masked-sum extracts: O(L^2).  A stride-2 gather of a tile is
+`tl.split(tl.reshape(t, (BLOCK, n // 2, 2)))`.
+
+### 2-D output tiles
+
+Each program computes one row of `A` against `BLOCK` columns, so everything
+that depends only on `B` -- its loads, exponents and finiteness -- is recomputed
+for every row of `A`, and every `B` element is loaded `m` times.  Tiling the
+grid's second axis by `BM` makes row values `[BM, BLOCK]` and lane tiles
+`[BM, BLOCK, L]`; what depends only on `A` is computed at `[BM, 1, L]`, only on
+`B` at `[1, BLOCK, L]`.  `vectorize._grid` already finds the loop; it becomes a
+tile axis rather than `program_id(1)`.
+
+### Integer accumulation
+
+Every term of `fused_sum`'s exact sum is `q * 2 ** g` on one grid, `q` an
+integer of at most 25 bits, so the sum is an `int32` sum and one scaled
+conversion.  It needs the terms to have no `-0`, which an integer has no
+spelling of: `fused_sum` now rounds with `enable_neg_zero=False`, matching
+MMA-Sim (#321).
+
+## Phases
+
+### Phase 1 -- A regression net at the edges
+
+**Done.** `compile_triton._edges` lists each format's edge values (filtered
+by `representable_in`: E8M0 has no zero, FP4 no specials), and every
+`_EDGE_EVERY`-th `-r` draw puts one in an element with probability `_EDGE`.
+The GPU test went to `examples/mmasim/tests/test_triton.py`, not
+`tests/unit`: no unit test imports the example, and the test needs its
+harness.  With the special-value select deleted from the Volta kernel, plain
+draws agree 128/128 and edge draws 34/128.  Tracker unchanged: 14/16, all
+agree.
+
+- **What:** `examples/mmasim/compile_triton.py`'s `-r` draws only in-range
+  values; it never samples a special, an FP32 subnormal, a zero of either sign,
+  or values near the overflow boundary.  Add an edge-value draw (`_sample`), on
+  by default for a share of the draws, and a GPU test in
+  `tests/unit/backend/triton/test_launch.py` running two designs (Volta, bf8)
+  on an edge batch against the interpreter.
+- **Why first:** every later phase rewrites special-value, zero and exponent
+  handling; the current net would not see a mistake there.
+- **Tests:** `FPY_REQUIRE_GPU=1 .venv/bin/python -m pytest
+  tests/unit/backend/triton/test_launch.py -q -n auto`;
+  `cd examples/mmasim && ../../.venv/bin/python compile_triton.py -r 64`.
+
+### Phase 2 -- Truncation in f32
+
+- **What:** in `fpy2/backend/triton/emitter.py`, `_emit_ldexp` emits the
+  power-of-two multiply where the bounds prove it exact, and the intermediates
+  of a runtime-grid round keep the argument's storage.  Find why they are `f64`
+  today (the storage the format bound of `x * 2 ** -k` gets) and fix it at that
+  point.
+- **Why:** the largest single cost; it also exposes the load bottleneck the
+  next phase removes.
+- **Tests:** a test that an f16-input `fused_sum` kernel has no `float64` and
+  no `libdevice.ldexp` (`test_expect.py`), and an edge-value launch test that
+  it agrees; tracker `-r 64`; bench Volta and hopper.
+
+### Phase 3 -- Each operand loaded once
+
+- **What:** the emitter caches a load by its address within one loop body,
+  issued under the row mask, and reuses it where the same element is read under
+  a narrower mask.
+- **Why separate:** it changes what every kernel loads; measured after
+  Phase 2, since before it the gain is 8%.
+- **Tests:** a test counting `tl.load(A_ptr` in the Volta kernel (one per
+  iteration); tracker; bench.
+
+### Phase 4 -- `max(logb(x), c)` as a bitfield
+
+- **What:** a peephole in `_emit_select_op` for `Max` of a `Logb` and a
+  constant `c >= emin` of the argument's storage; the `exponent0` shape too.
+- **Tests:** `test_emitter.py` for the spelling and the conditions (a `c` below
+  `emin_S` keeps the general form; an unproven-finite `x` keeps the `where`); a
+  launch test on every fp16/bf16/f32 special and subnormal; tracker; bench.
+
+### Phase 5 -- Skip an arm no row takes
+
+- **What:** `_emit_branch` wraps a flattened arm whose work is large in a
+  block-uniform `if` on its guard, masked by the rows.
+- **Tests:** an edge-value launch test in which one row of a block is special
+  and the rest are not; tracker; bench.
+
+### Phase 6 -- Gathers as `reshape` + `split`
+
+- **What:** the emitter spells a stride-2 gather of a tile with `reshape` and
+  `split`; other strides keep the extract loop.
+- **Tests:** `test_expect.py` for the spelling; a launch test; tracker; bench
+  bf8.
+
+### Phase 7 -- 2-D output tiles
+
+- **What:** `vectorize.py` tiles the grid's second axis by a `BM`; the emitter
+  gives values a `[BM, ...]` leading dimension and computes one-operand work at
+  its own shape; the launcher tunes `BM` with `BLOCK`.
+- **Why last:** the largest change, touching tiling, emission and launch; the
+  phases before it keep their gains inside it.
+- **Tests:** `test_vectorize.py` for the chosen axes; a launch test of the FPy
+  FP32 matmul against the interpreter at sizes not divisible by `BM`; tracker;
+  bench, with the FP32 matmul among the designs.
+
+### Phase 8 -- Integer accumulation
+
+- **What:** the aligned exact sum becomes an `int32` sum of the truncated
+  terms, scaled once; conditions from the digit bounds (every term on one grid,
+  the sum within 31 bits).
+- **Tests:** tracker; the NV all-`-0` directed case agrees with MMA-Sim; bench.
+
+### After the last phase
+
+```
+.venv/bin/python -m pytest tests/unit -q -n auto
+FPY_REQUIRE_GPU=1 .venv/bin/python -m pytest tests/unit/backend/triton -q -n auto
+.venv/bin/python -m mypy fpy2
+.venv/bin/python -m ruff check fpy2 tests
+cd examples/mmasim && ../../.venv/bin/python compile_triton.py -r 256
+cd examples/mmasim && ../../.venv/bin/python compile.py -o /tmp/cpp && \
+  ../../.venv/bin/python tests/test_nv.py && ../../.venv/bin/python tests/test_amd.py
+.venv/bin/python examples/mmasim/bench/speed.py
+```
+
+and update the Performance table in `triton-mmasim-matmul.md`.
+
+## Open items
+
+### Load caching: in the emitter, or a CSE pass before it?
+
+A pass over the normal form (common subexpressions, `a * b` computed twice)
+would also help the C++ backend and is easier to test in isolation; the
+emitter sees the one thing the AST does not -- that two reads differ only by a
+mask it added.  **Provisional:** the emitter, keyed by address.  Reopen if a
+duplicate that is not a load (the recomputed product) survives Triton's own
+CSE.
+
+### Is a power-of-two scale always provable where the designs need it?
+
+The multiply is exact only when `2 ** n` is normal and the product in range;
+if the bounds on `k` are loose in some design, it keeps `libdevice.ldexp`, and
+the gain is partial.  **Provisional:** prove it or keep `ldexp`; count the
+designs that qualify in Phase 2.
+
+### How does a 2-D tile meet the lane tiles?
+
+Lane tiles become 3-D.  A hand-written 3-D Volta kernel with one row per
+program ran at 212 against the emitted kernel's 373, so the shape itself may
+cost what the tile saves; the +46% was measured within the hand-written
+kernel.  **Provisional:** Phase 7 lands first for kernels without lane tiles
+(the FP32 matmul, `fp64_fma`, `cdna2`), then the MMA designs, measured against
+the Phase 6 kernel.
+
+### Wider `k` loads?
+
++26% with one row per program, nothing with a 2-D tile.  **Provisional:** not
+planned; reopen if Phase 7 does not reach the MMA designs.
+
+### Do these gains hold on other GPUs?
+
+The TITAN V runs `f64` at half the `f32` rate; most GPUs run it at 1/32-1/64,
+so Phases 2 and 8 would matter more there, and a different L1 would move
+Phase 3.  **Provisional:** measure on the TITAN V; revisit when another GPU is
+available.
