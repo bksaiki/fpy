@@ -62,6 +62,10 @@ def rand_subnormal(n, dtype):
                                        dtype=torch.float64)))
     return (torch.randn(n, dtype=torch.float64) * 2.0 ** emin).float().to(dtype)
 
+def rand_zeros(n, dtype):
+    """+/-0 only."""
+    return torch.tensor([random.choice([0.0, -0.0]) for _ in range(n)]).to(dtype)
+
 GENS = [rand_bits, rand_edge, rand_mixed, rand_normal, rand_subnormal]
 
 def out_bits(t):

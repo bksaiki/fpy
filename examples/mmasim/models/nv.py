@@ -13,7 +13,7 @@ so the models here are written at that level.
 Each model is built by calling a `make_XXX` factory with the
 per-instruction parameters; input and accumulator formats are given as
 contexts (`EFloatContext`, or `ExpContext` for E8M0 scales; only their
-`emin` is read). For example, Hopper's FP16 x FP16 + FP32 wgmma
+exponent range is read). For example, Hopper's FP16 x FP16 + FP32 wgmma
 instruction with K = 32 is:
 
     dpa = make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32)
@@ -26,6 +26,9 @@ Instruction-to-model mapping on NVIDIA Tensor Cores (Table 3):
     FP8, FP6/FP4    -> `make_t_fdpa`
     MXFP8/6/4       -> `make_st_fdpa`    (scaled truncated FDPA)
     MXFP4/NVFP4     -> `make_gst_fdpa`   (group-scaled truncated FDPA)
+
+A and B take their formats separately: an FP8 instruction may pair
+E4M3 with E5M2, and an f8f6f4 one any two of E5M2, E4M3 and E2M1.
 
 When K exceeds the FDPA arity `L`, FDPAs are chained
 (`make_t_fdpa_chain`). TF32 instructions truncate their FP32 operands
@@ -74,7 +77,7 @@ explicitly, per the table above; GST-FDPA defaults to -139.
 
 import fpy2 as fp
 
-from .utils import dpa_special_values, exponent, fused_sum, join, make_fma_dpa
+from .utils import dpa_special_values, exp_floor, exponent, fused_sum, join, make_fma_dpa
 
 ###########################################################
 # Rounding contexts
@@ -120,15 +123,15 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
     Builds a T-FDPA (Algorithm 7): truncated fused dot-product-add.
 
     `a_ctx`, `b_ctx`, `c_ctx` describe the input and accumulator
-    formats (only their `emin` is read); `F` and `rho` are
+    formats (only their exponent range is read); `F` and `rho` are
     per-instruction parameters (see the module docstring).
 
     If `e_zero` is omitted, it is derived from the accumulator format
     and F (`is_mma=False` selects the wgmma/tcgen05 datapath); the
     FP8 instructions (F = 13) must pass it explicitly.
     """
-    emin_a = a_ctx.emin
-    emin_b = b_ctx.emin
+    emin_a = exp_floor(a_ctx)
+    emin_b = exp_floor(b_ctx)
     emin_c = c_ctx.emin
     if e_zero is None:
         e_zero = _default_e_zero(c_ctx, F, is_mma)
@@ -199,8 +202,8 @@ def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     with scale factors `alpha` and `beta` (E8M0) applied to the
     products; MXFP8/6/4 MMA instructions. The accumulator is FP32.
     """
-    emin_a = a_ctx.emin
-    emin_b = b_ctx.emin
+    emin_a = exp_floor(a_ctx)
+    emin_b = exp_floor(b_ctx)
     emin_s = scale_ctx.emin
     emin_c = fp.FP32.emin
     if e_zero is None:
