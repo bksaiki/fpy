@@ -457,17 +457,45 @@ storage selection with no rule of its own.  Two emitter rules follow:
   use is fused is not materialized.  It now also requires `n` finite, which
   Phase 2 did not check: the scale-in of a fixed-point position `n` is only
   reached with `n` finite where the source program is defined (the context
-  refuses anything else), but the emitter sees the rewritten program.  Where
-  the classes cannot show it (`cdna3`, `blackwell`: an exponent from `logb`
-  of an operand whose finiteness follows from its product's), the scale-in
-  is a multiply by the materialized power -- one, in `f32` where the product
-  fits -- and `HoistScale` keeps the scale-out on each term, since it needs
-  the factor finite too.  Teaching value classes that a finite product has
-  finite operands would give those designs the rest.
+  refuses anything else), but the emitter sees the rewritten program.
 
-`aligned_sum` (the tests' `fused_sum` shape) gained `fused_sum`'s
-special-value arm, since its grid is only finite behind one, and guards a
-local copy of its row: every row of `xss` is one region to the value classes.
+At first `cdna3` and `blackwell` could not show it, so their scale-in was a
+multiply by the materialized power and `HoistScale` (which needs the factor
+finite too) kept the scale-out on each term.  The exponent is finite -- it is
+`logb` of operands under "every product is finite" -- and five gaps in
+`ValueClassInfer` hid it, each fixed as a rule:
+
+- **A join** (`_finite_source`): an overflow's lowering joins `+-inf` with the
+  product, so a finite join is the product.  Through a phi, finiteness
+  passes to the one side that can be finite.
+- **Nested operands, and scalars** (`_exact_leaves`): "a list filled with
+  exact ops of same-index reads is finite, so the lists read are" looked one
+  level deep; blackwell fills `((a * b) * alpha) * beta`.  Scalar operands are
+  refined too where the list is non-empty -- no element, no product -- and not
+  a name the fill loop's own phi binds, which past the loop holds what the
+  last round left.
+- **Per-list element facts** (`_ElementKey`, `_list_key`): a fact about every
+  element of a list was kept under its alias region, and every row of a 2-D
+  argument shares one.  It is kept under the definition naming the list where
+  the region holds more than one: a definition names one list, and the fact
+  lasts until a store into its region, which the same stamp catches.
+- **List parameters in their format** (`_seed_params`): a scalar parameter's
+  class came from its format and a list's elements' did not.  A region is
+  seeded where every list it holds is such a parameter (E4M3 scales: no
+  infinity).
+- **The fixpoint budget** (`_fixpoint`): rounds were counted per phi, but the
+  element map is iterated too; a loop with no phis that stored anything got
+  one round and dropped every element fact to the top.  Counted per phi and
+  per region.
+- **A scan inside an arm** (`_stored_at`, `_holds_the_scan`): a join re-stamps
+  what an arm stored into, to void the arm's facts, and that made a mask
+  scanned inside an arm look stored into after its scan.  A scan survives
+  real stores, which are now recorded apart.
+
+With these, `aligned_sum` (the tests' `fused_sum` shape, which gained
+`fused_sum`'s special-value arm, since its grid is only finite behind one)
+guards its row of `xss` directly.  The C++ output of every design is
+unchanged.
 
 Bench, back to back against Phase 7a (TITAN V, best over `BLOCK`):
 
@@ -488,12 +516,21 @@ Bench, back to back against Phase 7a (TITAN V, best over `BLOCK`):
 cdna2 and `fp64 (fma)` unchanged (no fixed-point sum).  Trackers: 14/16, all
 agree, at `-r 64` and at 5 x 9.
 
+With the value-class rules, back to back against the table above: mxfp8
+207 -> 284 (+37%), cdna3.f16 235 -> 313 (+33%), cdna3.bf16 168 -> 201 (+20%),
+nvfp4 176 -> 199 (+13%); the rest unchanged.
+
 Tests: `test_emitter.test_the_scale_out_leaves_the_sum`,
 `test_emitter.test_a_power_of_two_is_its_bits`, and
 `test_launch.test_a_power_of_two_agrees_on_special_exponents` (against values
 computed in Python: the interpreter has no `pow` under `REAL`);
 `test_a_scale_in_stays_in_its_operands_storage` now checks floor and ceil
-widen to `f64` rather than an `ldexp` spelling.
+widen to `f64` rather than an `ldexp` spelling;
+`test_value_class.TestFiniteSources` (a rule per case, and a rebound scalar
+the fill loop's phi holds, whose program returns `inf`) and
+`TestAGuardOverARow` (the scanned row learns it, a store into another row
+voids it); `examples/mmasim/tests/test_triton.py::test_all_negative_zeros_agree`,
+the directed NV case the plan named.
 
 - **What:** the aligned exact sum becomes an `int32` sum of the truncated
   terms, scaled once; conditions from the digit bounds (every term on one grid,

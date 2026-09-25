@@ -1554,9 +1554,10 @@ _MATRIX = [ListType(ListType(RealType(fp.FP32), 4), 2)]
 
 
 class TestAGuardOverARow:
-    """Both guards rest on `_one_list`, and the rows of one nested list share a
-    region *and* an allocation site -- so counting sites is not what "a single
-    list" means, and a fact proved about one row would land on every other.
+    """The rows of one nested list share a region *and* an allocation site --
+    so counting sites is not what "a single list" means, and a fact proved
+    about one row, kept under the region, would land on every other.  It is
+    kept under the definition naming the row instead, which is one list.
 
     Neither spelling is special here; the predicate is.
     """
@@ -1594,10 +1595,9 @@ class TestAGuardOverARow:
         assert _amax_unfused(f, arg_types=_MATRIX) == TOP
         assert math.isinf(f([[1.0, 2.0, 3.0, 4.0], [float('inf'), 0.0, 0.0, 0.0]]))
 
-    def test_the_row_the_guard_actually_scanned_learns_nothing_either(self):
-        """The conservative half of the trade: `r0` really is all-finite, and
-        this gives that up too.  Separating the rows is a precision question
-        for `AliasAnalysis`, not a soundness one."""
+    def test_the_row_the_guard_scanned_learns_it(self):
+        """`r0` names one list, so what the scan says of its elements holds
+        of them until a store into the rows' region."""
         @fp.fpy(ctx=fp.REAL)
         def f(xss):
             r0 = xss[0]
@@ -1606,6 +1606,25 @@ class TestAGuardOverARow:
                 x = r0[i]
                 m[i] = fp.isfinite(x)
             if all(m):
+                return max(r0)
+            else:
+                return 0.0
+
+        assert _amax_unfused(f, arg_types=_MATRIX) == ZERO | FINITE
+
+    def test_a_store_into_another_row_voids_it(self):
+        """A store through another name into the rows' region may be into
+        `r0`, which is the stamp's to catch."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss):
+            r0 = xss[0]
+            r1 = xss[1]
+            m = fp.empty(4)
+            for i in range(4):
+                x = r0[i]
+                m[i] = fp.isfinite(x)
+            if all(m):
+                r1[0] = fp.inf()
                 return max(r0)
             else:
                 return 0.0
@@ -2112,3 +2131,96 @@ class TestBackThroughAFill:
             return r
 
         assert _typed_cls(f, '(A[1] * 3)', [_L4, _L4, RealType(fp.FP32)]) & INF
+
+
+#####################################################################
+# What a finite value says of what it was computed from
+
+_F32 = RealType(fp.FP32)
+_L4 = ListType(_F32, 4)
+
+
+def _lowered_cls(fn, text: str, args: list) -> ValueClass:
+    """:func:`_cls`, after :class:`CompToLoop`, which leaves a list filled by a
+    loop and a guard over a mask."""
+    low = st.comp_to_loop(st.monomorphize(fn, args=args))
+    return ValueClassInfer.analyze(low.ast).classify(_find(low.ast, text))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scaled_fill(xs, ys, s):
+    ps = [(xs[i] * ys[i]) * s for i in range(len(xs))]
+    if all([fp.isfinite(p) for p in ps]):  # noqa: C419
+        return (s * 2) + max(xs)
+    return 0.0
+
+
+class TestFiniteSources:
+    def test_through_a_join_only_one_side_can_be_finite(self):
+        """An overflow lowered to a branch: the other arm is an infinity, so a
+        finite join is the product, and its operands are finite."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b):
+            p = a * b
+            if abs(p) >= 1e30:
+                r = fp.inf()
+            else:
+                r = p
+            if fp.isfinite(r):
+                return a * 2
+            return 0.0
+
+        assert _lowered_cls(f, '(a * 2)', [_F32, _F32]) == ZERO | FINITE
+
+    def test_a_nested_fill_speaks_for_its_lists_and_scalars(self):
+        assert _lowered_cls(_scaled_fill, 'max(xs)', [_L4, _L4, _F32]) == ZERO | FINITE
+        assert _lowered_cls(_scaled_fill, '(s * 2)', [_L4, _L4, _F32]) == ZERO | FINITE
+
+    def test_an_empty_fill_says_nothing_of_a_scalar(self):
+        """No element, no product: `s` was never multiplied."""
+        empty = ListType(_F32, 0)
+        assert _lowered_cls(_scaled_fill, '(s * 2)', [empty, empty, _F32]) == TOP
+
+    def test_a_scalar_the_loop_rebinds_is_not_the_one_it_stored(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, t):
+            s = t
+            ps = fp.empty(4)
+            for i in range(4):
+                ps[i] = xs[i] * s
+                if i == 3:
+                    s = fp.inf()
+            if all([fp.isfinite(p) for p in ps]):  # noqa: C419
+                return s * 2
+            return 0.0
+
+        assert _lowered_cls(f, '(s * 2)', [_L4, _F32]) == TOP
+        assert math.isinf(f([1.0, 2.0, 3.0, 4.0], 1.0))
+
+    def test_a_list_parameter_is_in_its_format(self):
+        """E4M3 has no infinity, as a scalar of it has none -- and a loop that
+        stores elsewhere keeps that, which its phis alone did not budget."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            for _i in range(4):
+                m = fp.empty(4)
+                m[0] = 1.0
+            return max(xs)
+
+        e4m3 = ListType(RealType(fp.MX_E4M3), 4)
+        assert _lowered_cls(f, 'max(xs)', [e4m3]) == NAN | ZERO | FINITE
+
+    def test_the_second_rung_of_a_guard_scanned_inside_an_arm(self):
+        """`ys` is scanned inside the arm; the join voids what the arm said,
+        but nothing stored into the mask after its scan."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs, ys):
+            bad = any([fp.isnan(x) for x in xs])  # noqa: C419
+            if not bad:
+                bad = any([fp.isnan(y) for y in ys])  # noqa: C419
+            if bad:
+                return 0.0
+            else:
+                return max(ys)
+
+        assert not _lowered_cls(f, 'max(ys)', [_L4, _L4]) & NAN

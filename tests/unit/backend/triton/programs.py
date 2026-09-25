@@ -94,12 +94,11 @@ def aligned_sum(rm: fp.RM) -> fp.Function:
     """`fused_sum`'s shape: each row's terms rounded at a grid its largest
     exponent sets, which `RescaleFixed` scales in, then summed.  As there, a
     row with a special value takes another arm, since its grid would not be
-    finite; the guard reads a local list, as the designs' does, since every
-    row of `xss` is one region to the value classes."""
+    finite."""
     @fp.fpy(ctx=fp.REAL)
     def f(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
         for r in range(len(out)):
-            xs = [x for x in xss[r]]
+            xs = xss[r]
             if any([not fp.isfinite(x) for x in xs]):  # noqa: C419
                 out[r] = 0
             else:
