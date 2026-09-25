@@ -299,6 +299,25 @@ run's same items.  Test: `tests/test_zeroshot.py` (`flips`).
 
 ### Phase 4 -- Greedy decode divergence
 
+**Done** at smoke scale.  `serve/decode.py` follows Yuan et al.'s
+non-reasoning setup: a seeded random 100 of MATH-500 (their benchmark best
+suited to a 0.6B model; long step-by-step outputs), Qwen3's chat template
+with thinking off (the model card warns against greedy decoding only when
+thinking) and its math instruction, up to 2,048 new tokens.  Reported: the
+fraction diverged (Yuan's `Div_Percent`) and the mean and median index over
+those that do.  Each run's tokens are cached as `<out>/<run>.json`.
+
+Decode is launch-bound at `m = 1`: 38 tokens/s for R0, 11-15 for every
+design.  A run stops at its first departure from R0, but most prompts never
+depart, so a design costs about R0's full length: ~1.6 h per design at 100
+prompts (R0's mean output ~740 tokens), ~10 h for every run.
+
+Smoke run, 5 prompts (~10 min): R0's mean length 736 tokens (one at the
+limit); diverged: bf16-exact 2 (indices 416 mean), `amd.cdna2.bf16` 1 (713),
+`nv.hopper.bf16.f32` 1 (607).  Test: `tests/test_decode.py` (R0 against
+itself never diverges; a reference altered at position 3 stops decoding
+there and reports 3).
+
 - **What:** `decode.py`: a fixed prompt set, greedy decode N tokens per run,
   the divergence index against R0 (first differing position; "never" counted
   apart) and the fraction of prompts that diverge.
