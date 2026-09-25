@@ -17,6 +17,7 @@ Asserts are dropped: a kernel cannot raise.
     python examples/mmasim/compile_triton.py -m 4 -n 4 -r 1   # a 4 x 4 matmul
     python examples/mmasim/compile_triton.py -r 8 --autotune  # the launch picks
                                                           # its block and warps
+    python examples/mmasim/compile_triton.py -j 8         # compile in 8 processes
 """
 
 import argparse
@@ -24,13 +25,13 @@ import math
 import random
 import sys
 from collections.abc import Callable
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from compile import DESIGNS, _filename
+from compile import DESIGNS, _filename, in_processes
 
 import fpy2 as fp
 from fpy2.backend.triton import KernelSource, TritonCompiler, launch, unavailable
@@ -143,6 +144,14 @@ def compile_matmul(
                    square, _R(fp.INTEGER)],
     )
     return kernel, design, arg_types
+
+
+def _kernel_named(name: str, k: int | None) -> tuple[KernelSource | None, str, str]:
+    """The kernel for design *name*, or `None` and the refusal's type and text."""
+    try:
+        return compile_matmul(dict(DESIGNS)[name], k)[0], '', ''
+    except Exception as ex:  # noqa: BLE001 -- any refusal is a result
+        return None, type(ex).__name__, str(ex)
 
 
 @cache
@@ -266,6 +275,9 @@ def main(argv: list[str]) -> int:
                          'bit for bit, with the interpreter')
     ap.add_argument('-s', '--seed', type=int, default=0,
                     help='seed for the inputs --run draws')
+    ap.add_argument('-j', '--jobs', type=int, default=1,
+                    help='compile in this many processes (default 1); '
+                         '--run launches from this one')
     ap.add_argument('--autotune', action='store_true',
                     help=f'let each launch pick its block and warps by timing '
                          f'them, rather than a block of {_BLOCK}')
@@ -290,16 +302,21 @@ def main(argv: list[str]) -> int:
     total = args.run * args.m * args.n
     width = max(len(name) for name, _ in designs)
     ok = agree = 0
-    for name, build in designs:
-        try:
-            kernel, design, arg_types = compile_matmul(build, args.k)
-            ran = (run_matmul(kernel, design, arg_types, args.m, args.n,
-                              args.run, args.seed,
-                              None if args.autotune else _BLOCK)
-                   if args.run else None)
-        except Exception as ex:  # noqa: BLE001 -- any refusal is a result
-            detail = str(ex) if args.verbose else str(ex).split('\n')[0][:110]
-            print(f'{name:{width}}  {type(ex).__name__}: {detail}')
+    kernels = in_processes(partial(_kernel_named, k=args.k),
+                           [name for name, _ in designs], args.jobs)
+    for (name, build), (kernel, kind, why) in zip(designs, kernels):
+        ran = None
+        if kernel is not None and args.run:
+            design, arg_types = build()
+            try:
+                ran = run_matmul(kernel, design, _at_depth(arg_types, args.k),
+                                 args.m, args.n, args.run, args.seed,
+                                 None if args.autotune else _BLOCK)
+            except Exception as ex:  # noqa: BLE001 -- any refusal is a result
+                kernel, kind, why = None, type(ex).__name__, str(ex)
+        if kernel is None:
+            detail = why if args.verbose else why.split('\n')[0][:110]
+            print(f'{name:{width}}  {kind}: {detail}')
             continue
         ok += 1
         note = ''

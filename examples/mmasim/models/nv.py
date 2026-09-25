@@ -27,6 +27,9 @@ Instruction-to-model mapping on NVIDIA Tensor Cores (Table 3):
     MXFP8/6/4       -> `make_st_fdpa`    (scaled truncated FDPA)
     MXFP4/NVFP4     -> `make_gst_fdpa`   (group-scaled truncated FDPA)
 
+A and B take their formats separately: an FP8 instruction may pair
+E4M3 with E5M2, and an f8f6f4 one any two of E5M2, E4M3 and E2M1.
+
 When K exceeds the FDPA arity `L`, FDPAs are chained
 (`make_t_fdpa_chain`). TF32 instructions truncate their FP32 operands
 to TF32 (`RZ_TF32`) before the dot product.

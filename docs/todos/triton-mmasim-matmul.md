@@ -4,8 +4,11 @@
 
 `examples/mmasim/compile_triton.py` compiles each design as an `m x k` by
 `n x k` matmul and, with `-r DRAWS`, compares every output bit for bit with
-the interpreter.  **14/16 compile and agree**; `amd.cdna1.*` is out of scope
-(280-525 bits of exact sum, which C++ refuses too).
+the interpreter.  **50/62 compile**; the 14 of the first 16 that compiled
+agreed, and the rest have not been run on a GPU.  `amd.cdna1.*` is out of scope
+(280-525 bits of exact sum, which C++ refuses too), and so, for now, is FP16
+output at `e_zero = -133` (Hopper wgmma, Blackwell tcgen05): the zero sentinel
+stretches the exact sum to 179 bits.
 
 The shape the kernels take:
 
@@ -35,7 +38,8 @@ Rules the backend keeps:
 ## Performance
 
 TITAN V, `examples/mmasim/bench/speed.py`, best over block sizes (1024 x
-1024, `k = 256`; mxfp8 and nvfp4 at their own `k`):
+1024, `k = 256`; mxfp8 (now `mx.e5m2`) and nvfp4 at their own `k`), the
+first 16 designs:
 
 | kernel | GFLOP/s |
 |---|---|
