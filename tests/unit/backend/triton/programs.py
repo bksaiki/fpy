@@ -219,3 +219,36 @@ def rare_cell(xs: list[fp.Real], ys: list[fp.Real], out: list[list[fp.Real]], BL
                 s = x + y
             row[j] = s
     return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def arm_writes(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """`rare_arm`, its long arm writing a list: a lane element and one of
+    the tail."""
+    for r in range(len(out)):
+        xs = xss[r]
+        t = [x * 2 for x in xs]
+        if any([not fp.isfinite(x) for x in xs]):  # noqa: C419
+            a = xs[0] * xs[1] + xs[2]
+            b = a * xs[3] - xs[0] * xs[2]
+            c = b * b + a * xs[1]
+            d = c - b * xs[3] + a
+            e = d * xs[0] + c * xs[1] - b * xs[2]
+            t[0] = e + d * a - c
+            t[4] = d - e
+        out[r] = t[0] + t[4]
+    return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def row_first(xss: list[list[fp.Real]], ys: list[fp.Real], out: list[list[fp.Real]], BLOCK: fp.Real):
+    """A row's sum over a runtime length, ahead of the column tile."""
+    for i in range(len(out)):
+        xs = xss[i]
+        acc = 0.0
+        for k in range(len(xs)):
+            acc = acc + xs[k]
+        row = out[i]
+        for j in range(len(row)):
+            row[j] = acc * ys[j]
+    return out

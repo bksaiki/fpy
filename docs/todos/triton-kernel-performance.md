@@ -350,7 +350,8 @@ over the new loop, as does `examples/mmasim/tests/test_triton.py` on bf8.
 ### Phase 7 -- 2-D output tiles
 
 **Done for kernels without lanes** (`cdna2`, `fp64 (fma)`), per the open
-item; the MMA designs are Phase 7b.  No AST change: `_grid` already proves
+item; for the MMA designs it was built and measured, and not kept (Phase 7b
+below).  No AST change: `_grid` already proves
 the loop around the tile tileable, so `_emit_grid` evaluates it as a tile of
 `BLOCK_M` rows (`i = program_id(1) * BLOCK_M + arange(BLOCK_M)[:, None]`,
 guarded by `i < m`) where it used to be one program per iteration.  In such a
@@ -400,6 +401,42 @@ kernel with `block_m=4`, which the launcher first divided the grid by.
   special cases.  Check the tiling legality (`_why_writes_refuse`) with two
   tiled axes, masks on both, and the 3-D layout cost from the open item.
 
+### Phase 7b -- 2-D tiles beside lanes
+
+**Measured and not kept.**  Lane tiles made `[BM, BLOCK, P]` (every spelling
+that assumed one row axis made rank-free, as the open item listed) agree on
+every design, but only Volta gains (TITAN V, best over `BLOCK` 64 and 128,
+`BM` 1, 2, 4; 4 and 8 warps):
+
+| design | Phase 7a | `BM = 1`, rank 3 | best `BM > 1` |
+|---|---|---|---|
+| volta | 260 | 253 | 278 (2 x 128) |
+| turing | 299 | 295 | 280 |
+| ampere tf32 / bf16 | 252 / 231 | 249 / 228 | 253 / 216 |
+| ada / hopper | 284 / 286 | 281 / 283 | 262 / 263 |
+| mxfp8 / nvfp4 | 154 / 145 | 152 / 145 | 150 / 133 |
+| cdna3.f16 / bf16 / bf8 | 183 / 147 / 143 | 182 / 147 / 135 | 160 / 144 / 130 |
+
+A 2 x 128 tile of rows is already 1,024 lane elements per tile, and 8 warps
+are slower everywhere; past `BM = 4` with `BLOCK = 128`, `ptxas` takes
+minutes per configuration.  Kept lanes at one row per program: +7% on one
+design does not pay for a rank-3 lane path the others would not use.
+Numbers vary about 10% between sessions (mxfp8 at 7a read 171 once, 154 back
+to back with this), so each row above is back to back.
+
+Two bugs found on the way, fixed in this commit:
+- A skipped arm (Phase 5) restored every name it reassigned, a list included:
+  its writes, which are how a list merges, were undone.  It now keeps them,
+  a tail element broadcast to the rows ahead of the `if`
+  (`test_launch.test_a_skipped_arm_keeps_its_writes_to_a_list`).
+- Under a tile of rows but outside the column tile (Phase 7a), a runtime
+  loop's carried value was not broadcast, and `_shape` gave it one dimension:
+  a row's reduction ahead of the column tile did not compile.  Carries and
+  pins broadcast under any tile axis, and a kernel with a tile of rows has two
+  dimensions throughout
+  (`test_launch.test_a_loop_ahead_of_the_column_tile_carries_a_column`).
+Every design's kernel is byte-identical to Phase 7a's.
+
 ### Phase 8 -- Integer accumulation
 
 - **What:** the aligned exact sum becomes an `int32` sum of the truncated
@@ -412,6 +449,15 @@ kernel with `block_m=4`, which the launcher first divided the grid by.
   Phase 2's fused rounds), integer terms with no `-0`, and a sum that fits the
   integer type -- come from the analyses.  Check it is stated as that rewrite
   and not matched on `fused_sum`'s shape.
+- **Revised:** the identity is `HoistScale` (`fpy2.strategies.hoist_scale`),
+  after `HoistInvariant` hoists the scale out of the loop: on `fused_sum`
+  after `comp_to_loop`, `rescale_fixed` and `simplify`, the two leave
+  `t14 * sum(ts)` with `ts` the unscaled rounds.  So Phase 8 is those two in
+  the Triton pipeline under `optimize=True`, not an emitter rule.  Phase 2's
+  fused round then has to follow the hoisted `t = 2 ** -_k` to its definition,
+  as it matches `2 ** n * x` inline today, and the sum of integer-valued
+  rounds has to find a storage (digit bounds: the sum within 24 bits for
+  `f32`, or an `int32`).
 
 ### After the last phase
 
@@ -451,13 +497,11 @@ program ran at 212 against the emitted kernel's 373, so the shape itself may
 cost what the tile saves; the +46% was measured within the hand-written
 kernel.  **Provisional:** Phase 7 lands first for kernels without lane tiles
 (the FP32 matmul, `fp64_fma`, `cdna2`), then the MMA designs, measured against
-the Phase 6 kernel.  The first half landed (Phase 7).  For the second, the
-spellings that assume one row axis are `[:, None]` for a row value against
-the lanes (`_as_col`, `_offset`, `_visit_var`, `_conjuncts`), `axis=1` in
-lane reductions, and `(BLOCK, P)` in tile allocations and gathers
-(`_row_width`); Triton has no `...` index, but `tl.expand_dims(x, -1)` and
-`axis=-1` are rank-free.  An `A`-only tile should be allocated at
-`[BM, 1, P]`, which is the writer's `along` again.
+the Phase 6 kernel.  **Settled** (Phase 7b): the tile of rows beside lanes
+was built and gains only on Volta (+7%), so lanes keep one row per program.
+Reopen on a GPU with more registers per thread, or if an `A`-only tile
+allocated at `[BM, 1, P]` (the writer's `along`, from its reads) cuts the
+register pressure.
 
 ### Wider `k` loads?
 

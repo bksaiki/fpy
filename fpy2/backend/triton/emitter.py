@@ -577,6 +577,8 @@ class _Emitter(Visitor):
     """How many rows a tile holds: the tiled loop's width inside one."""
     _axes: list[tuple[str, str]]
     """The tile axes in force, outermost first: each index's name and width."""
+    _rows_index: str | None
+    """The tile of rows' index, while inside it."""
     _axis_guards: dict[str, str]
     """Each tile axis's guard, by its index's name: the rows past its end."""
     _guard_mask: str | None
@@ -653,6 +655,7 @@ class _Emitter(Visitor):
         self._tile = None
         self._row_width = '1'
         self._axes = []
+        self._rows_index = None
         self._axis_guards = {}
         self._guard_mask = None
         self._carried = {}
@@ -940,7 +943,7 @@ class _Emitter(Visitor):
         iteration of a `static_range`."""
         if _as_number(code) is not None or code in self._once:
             return code
-        if self._tile is not None and not self._out.wide & set(_IDENT.findall(code)):
+        if self._axes and not self._out.wide & set(_IDENT.findall(code)):
             return self._bind(f'tl.broadcast_to({code}, {self._shape(self._out.axes)})', 'row')
         return self._bind(code)
 
@@ -2265,14 +2268,21 @@ class _Emitter(Visitor):
             ctx.add_line(f'{v} = {code}')
         if skip:
             # Triton keeps a name's type across an `if`: what the arm reassigns
-            # is put back, a merged name already is
-            kept = sorted(ctx.reassigned() & before - {str(v) for v in saved})
+            # is put back, a merged name already is, and a list the `if`
+            # merges keeps the arm's writes, a tail element broadcast to the
+            # rows ahead of it
+            tails = {f'{v}_t{j}': self.tiles[v][2] for v in lists if v in self.tiles
+                     for j in range(self.tiles[v][1])}
+            written = ctx.reassigned() & before & ({str(v) for v in lists} | set(tails))
+            kept = sorted(ctx.reassigned() & before - {str(v) for v in saved} - written)
             copies = {k: f'__t{self._next_tmp + i}' for i, k in enumerate(kept)}
             self._next_tmp += len(kept)
             for k in kept:
                 ctx.add_line(f'{k} = {copies[k]}', shapes[k])
             ctx.dedent()
             ctx.insert(at, [f'{copies[k]} = {k}' for k in kept] + [
+                f'{v} = {self._as_row(v, tails[v])}' for v in sorted(written & set(tails))
+            ] + [
                 f'{taken[p.name]} = {self._placeholder(p, taken[p.name], ctx)}'
                 for p in phis])
         restore(set())
@@ -2344,7 +2354,7 @@ class _Emitter(Visitor):
         """
         carried = carried_scalars(stmt, self.def_use)
         prev = self._carried
-        if self._tile is not None and carried:
+        if self._axes and carried:
             self._carried = {}
             for p in self.def_use.phis.get(stmt, ()):
                 if p.name not in carried:
@@ -2368,12 +2378,14 @@ class _Emitter(Visitor):
 
     def _shape(self, along: frozenset[str]) -> str:
         """The shape of a value varying along the tile axes *along*: one
-        dimension per axis, of width 1 where it does not vary."""
+        dimension per axis the kernel has, of width 1 where it does not vary
+        -- two under a tile of rows, even outside the column tile."""
         if not along:
             return '()'
-        if len(self._axes) == 1:
-            return f'({self._axes[0][1]},)'
-        return f'({", ".join(w if a in along else "1" for a, w in self._axes)})'
+        widths = dict(self._axes)
+        slots = [self._rows_index, self._tile] if self.block_m is not None else [self._tile]
+        dims = [widths[a] if a is not None and a in along else '1' for a in slots]
+        return f'({dims[0]},)' if len(dims) == 1 else f'({", ".join(dims)})'
 
     def _enter_axis(self, index: str, width: str) -> None:
         self._axes.append((index, width))
@@ -2488,7 +2500,7 @@ class _Emitter(Visitor):
             self._visit_block(stmt.body, ctx)
             return
         # a tile of `block_m` rows, each a column `[block_m, 1]`
-        i = str(stmt.target)
+        i = self._rows_index = str(stmt.target)
         self._enter_axis(i, self.block_m)
         ctx.add_line(f'{i} = tl.program_id(1) * {self.block_m} + '
                      f'tl.arange(0, {self.block_m})[:, None]', frozenset({i}))
@@ -2499,6 +2511,7 @@ class _Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
         self.mask, self._guard_mask = prev
         self._leave_axis()
+        self._rows_index = None
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter) -> None:
         for stmt in block.stmts:

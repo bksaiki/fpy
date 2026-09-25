@@ -941,3 +941,28 @@ def test_a_skipped_arm_agrees_in_a_tile_of_rows() -> None:
     ys = [rng.uniform(-4, 4) for _ in range(7)]
     xs[5] = math.inf
     _agree(src, rare_cell, [_f32(xs), _f32(ys), torch.zeros(9, 7).cuda()], block_m=4)
+
+
+def test_a_skipped_arm_keeps_its_writes_to_a_list() -> None:
+    """A list merges by its masked writes, so the arm's are not undone when
+    it ends."""
+    from .programs import arm_writes
+    rng = random.Random(0)
+    rows = [[rng.uniform(-4, 4) for _ in range(5)] for _ in range(32)]
+    rows[3][2] = math.inf
+    n = len(rows)
+    src = _compile(arm_writes, [ListType(ListType(F32, 5), n), ListType(F32, n), INT])
+    assert 'if tl.max(' in src.source
+    _agree(src, arm_writes, [torch.tensor(rows).cuda(), torch.zeros(n).cuda()], block=16)
+
+
+def test_a_loop_ahead_of_the_column_tile_carries_a_column() -> None:
+    """Under a tile of rows alone, a carried value is `[BM, 1]`."""
+    from .programs import row_first
+    m, n, k = NamedId('m'), NamedId('n'), NamedId('k')
+    src = _compile(row_first, [ListType(ListType(F32, k), m), ListType(F32, n),
+                               ListType(ListType(F32, n), m), INT])
+    assert 'acc = tl.broadcast_to(acc, (BLOCK_M, 1))' in src.source
+    torch.manual_seed(0)
+    _agree(src, row_first, [torch.randn(5, 3).cuda(), torch.randn(9).cuda(),
+                            torch.zeros(5, 9).cuda()], block_m=4)
