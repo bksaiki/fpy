@@ -1374,6 +1374,21 @@ def test_a_store_that_rounds_is_refused():
         _rows(f, 1, 1, out=FP16)
 
 
+def test_a_store_that_overflows_is_refused():
+    """Every `f32` value times `2 ** 200` has `f32`'s precision but not its
+    range, so `tl.store` would overflow it."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for j in range(len(out)):
+            xs = xss[j]
+            row = out[j]
+            row[0] = xs[0] * 2 ** 200
+        return out
+
+    with pytest.raises(TritonEmitError, match='would round'):
+        _rows(f, 1, 1)
+
+
 def test_a_reduction_over_a_row_in_memory_is_refused():
     """A row of an argument is an address, not elements to fold."""
     @fp.fpy(ctx=fp.REAL)

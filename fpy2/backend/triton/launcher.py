@@ -35,7 +35,7 @@ def unavailable() -> str | None:
     except Exception as e:  # noqa: BLE001
         return f'torch does not import: {type(e).__name__}: {e}'
     try:
-        import triton
+        pass
     except Exception as e:  # noqa: BLE001
         return f'triton does not import: {type(e).__name__}: {e}'
     if not torch.cuda.is_available():

@@ -74,7 +74,8 @@ __all__ = [
     'ScalarOpTable',
     'TritonOp',
     'TritonOpStyle',
-    'downcast_rounding',
+    'castable',
+    'directed_cast',
     'is_native_ctx',
     'make_op_table',
 ]
@@ -146,36 +147,52 @@ _DIV_SHAPES = ((8, 32), (11, 64))
 def _fp_ctxs(shapes=_FP_SHAPES) -> list[Context]:
     """The float contexts this backend dispatches on: round-to-nearest-even
     only, because Triton computes in no other mode.  A *cast* has one more;
-    see :func:`downcast_rounding`."""
+    see :func:`directed_cast`."""
     return [IEEEContext(es, nbits, RM.RNE) for (es, nbits) in shapes]
 
 
-_RTZ_DOWNCASTS = frozenset({(TritonScalar.F32, TritonScalar.F16)})
-"""``(source, target)`` pairs Triton lowers under round-toward-zero.
+_DIRECTED = {RM.RTZ: 'rz', RM.RTN: 'rd', RM.RTP: 'ru'}
+"""libdevice's suffix for each directed rounding."""
 
-``tl.cast`` accepts ``fp_downcast_rounding`` on any narrowing float-to-float
-conversion, but the NVIDIA backend then rejects an ``f64`` source --
-*"Unsupported rounding mode for conversion"* -- although PTX has
-``cvt.rz.f32.f64`` and ``rtne`` from ``f64`` lowers fine.  A gap in the
-lowering rather than the hardware, and measured rather than assumed.
-"""
+_TO_F32 = {
+    TritonScalar.F64: 'double2float',
+    TritonScalar.S32: 'int2float',
+    TritonScalar.U32: 'uint2float',
+    TritonScalar.S64: 'll2float',
+    TritonScalar.U64: 'ull2float',
+}
+"""libdevice's directed conversions into `f32`; any narrower source is exact.
+`tl.cast` has no directed mode from these: the NVIDIA backend rejects one."""
 
 
-def downcast_rounding(ctx: Context, src: TritonScalar) -> str | None:
-    """The ``fp_downcast_rounding`` under which a cast from *src* into *ctx*
-    **is** its ``round``, or ``None`` where no cast is.
+def _plain(ctx: Context) -> IEEEContext | None:
+    """*ctx*, where it is an IEEE format and nothing more."""
+    if isinstance(ctx, IEEEContext) and ctx == IEEEContext(ctx.es, ctx.nbits, ctx.rm):
+        return ctx
+    return None
 
-    Round-to-nearest is not an answer here: it needs no mode, so a context
-    that rounds that way is already native.  Overflow is the other half of the
-    question -- these are the hardware conversions, which reach infinity
-    rather than the largest finite value, so a context asking for anything
-    else is not one of them.
-    """
-    if not isinstance(ctx, IEEEContext) or (ctx.es, ctx.nbits) not in _FP_SHAPES:
-        return None
-    if ctx.rm is not RM.RTZ or ctx != IEEEContext(ctx.es, ctx.nbits, ctx.rm):
-        return None
-    return 'rtz' if (src, _ty_of(ctx)) in _RTZ_DOWNCASTS else None
+
+def castable(ctx: Context) -> bool:
+    """Whether a round into *ctx* is a directed conversion from any source:
+    one into `f32`, or truncation onto a format with `f32`'s exponents."""
+    c = _plain(ctx)
+    return c is not None and c.es == 8 and (
+        (c.nbits == 32 and c.rm in _DIRECTED) or (c.nbits < 32 and c.rm is RM.RTZ))
+
+
+def directed_cast(ctx: Context, src: TritonScalar) -> tuple[str, int] | None:
+    """The cast from *src* that **is** *ctx*'s round: a format string over
+    its argument, and how many low bits of the `f32` result then clear, since
+    truncating toward zero composes.  ``None`` where there is none."""
+    c = _plain(ctx)
+    if c is not None and castable(c):
+        spell = f'libdevice.{_TO_F32[src]}_{_DIRECTED[c.rm]}({{}})' \
+            if src in _TO_F32 else '{}.to(tl.float32)'
+        return spell, 32 - c.nbits
+    if c is not None and (c.es, c.nbits) == (5, 16) and c.rm is RM.RTZ \
+            and src is TritonScalar.F32:
+        return '{}.to(tl.float16, fp_downcast_rounding="rtz")', 0
+    return None
 
 
 def _int_ctxs() -> list[Context]:

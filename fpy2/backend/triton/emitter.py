@@ -46,7 +46,6 @@ from ...analysis import (
     Definition,
     FormatAnalysis,
     FormatInfer,
-    PhiDef,
     TypeAnalysis,
     TypeInfer,
 )
@@ -92,7 +91,6 @@ from ...ast import (
     IsInf,
     IsNan,
     Len,
-    ListComp,
     ListExpr,
     ListRef,
     ListSlice,
@@ -113,7 +111,6 @@ from ...ast import (
     ReturnStmt,
     Round,
     Signbit,
-    Stmt,
     StmtBlock,
     Sum,
     TernaryOp,
@@ -133,7 +130,6 @@ from .storage import (
     TritonStorageDomain,
     bound_fits_in_scalar,
     choose_storage_scalar,
-    exact_integer_bits,
     scalar_fits_in,
     scalar_sup,
     to_triton,
@@ -142,7 +138,7 @@ from .target import (
     ScalarOpTable,
     TritonOp,
     _int_ctxs,
-    downcast_rounding,
+    directed_cast,
     is_native_ctx,
     make_op_table,
 )
@@ -1277,21 +1273,21 @@ class _Emitter(Visitor):
         return self._emit_numeric_literal(r.as_rational())
 
     def _emit_downcast(self, e: Round | Cast, arg: str, ctx: Context) -> str:
-        """A `round` Triton spells as a narrowing cast under a rounding mode.
-
-        `tl.cast` takes an `fp_downcast_rounding` that reaches one context
-        more than `is_native_ctx`: `x.to(tl.float16,
-        fp_downcast_rounding="rtz")` **is** FP16's round-toward-zero.  Which
-        conversions it covers is `downcast_rounding`'s to say.
-        """
-        want = self._storage(e)
-        rm = downcast_rounding(ctx, self._storage(e.arg))
-        if rm is None:
+        """A `round` Triton spells as a conversion under a directed rounding;
+        :func:`directed_cast` says which."""
+        cast = directed_cast(ctx, self._storage(e.arg))
+        if cast is None:
             raise TritonEmitError(
                 f'`{type(e).__name__.lower()}` to `{ctx}` is not a hardware '
                 'conversion, so it has no cast spelling'
             )
-        return f'{arg}.to({want.format()}, fp_downcast_rounding="{rm}")'
+        spell, clear = cast
+        code = spell.format(arg)
+        if not clear:
+            return code
+        t = self._bind(code)
+        bits = f'({t}.to(tl.int32, bitcast=True) & {-(1 << clear)}).to(tl.float32, bitcast=True)'
+        return f'tl.where({t} != {t}, {t}, {bits})'    # a NaN keeps its payload
 
     def _emit_compare(self, e: Compare) -> str:
         """A comparison, which rounds nothing and so is not in the op table.
@@ -2015,17 +2011,12 @@ class _Emitter(Visitor):
         # `tl.store` converts to the pointer's type, which may round
         want = self._arg_storage(self._root(str(base)))
         have, bound = self._storage(stmt.expr), self.format_info.by_expr.get(stmt.expr)
-        af = to_abstract(bound)
-        if self._value_fits(bound, have, want):
-            val = self._maybe_cast(val, have, want, bound)
-        elif not (have.is_float() and want.is_float() and af is not None
-                  and af.prec <= (exact_integer_bits(want) or 0)):
-            # only a precision the pointer lacks: a bound can overstate the
-            # exponent range, as an unfolded rounding's does
+        if not self._value_fits(bound, have, want):
             raise TritonEmitError(
                 f'storing {have.format()} through a {want.format()} pointer '
                 'would round'
             )
+        val = self._maybe_cast(val, have, want, bound)
         val = self._typed(val, want)
         mask = '' if self.mask is None else f', mask={self.mask}'
         ctx.add_line(f'tl.store({addr}, {val}{mask})')

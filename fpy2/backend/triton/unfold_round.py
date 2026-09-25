@@ -42,7 +42,7 @@ from ...transform import (
 )
 from ...transform.cursor import expr_sites
 from .emitter import _integral_round
-from .target import _DIV_SHAPES, _fp_ctxs, is_native_ctx, make_op_table
+from .target import _DIV_SHAPES, _fp_ctxs, castable, is_native_ctx, make_op_table
 
 __all__ = [
     'UnfoldKind',
@@ -159,7 +159,7 @@ def _classify(
     """
     if isinstance(e, Round | Cast):
         active = active_of(e)
-        if active is None or is_native_ctx(active):
+        if active is None or is_native_ctx(active) or castable(active):
             return None
         if active.is_stochastic():
             # no step of the ladder draws random bits, so this is not a site --

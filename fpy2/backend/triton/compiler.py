@@ -31,7 +31,6 @@ for the batch dimension: say it in the program rather than invent a
 convention around it.
 """
 
-from ...ast import FuncDef
 from ...function import Function
 from ...module import Module
 from ...number import Context

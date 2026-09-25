@@ -156,22 +156,22 @@ class TestOptimize:
         assert '2.5' in on and '2.5' in off
 
 
-RZ_FP32 = fp.IEEEContext(8, 32, fp.RM.RTZ)
+RZ_FP16 = fp.IEEEContext(5, 16, fp.RM.RTZ)
 
 
 @fp.fpy(ctx=fp.REAL)
 def _rz(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
     for i in range(len(xs)):
-        with RZ_FP32:
+        with RZ_FP16:
             out[i] = fp.round(xs[i])
     return out
 
 
 class TestUnfold:
-    """A rounding Triton cannot spell -- round-toward-zero from `f64` -- is
-    lowered to integer arithmetic where `unfold` asks for it."""
+    """A rounding Triton cannot spell -- round-toward-zero into FP16 from
+    `f64` -- is lowered to integer arithmetic where `unfold` asks for it."""
 
-    _ARGT = [ListType(RealType(fp.FP64), 8), ListType(RealType(fp.FP32), 8),
+    _ARGT = [ListType(RealType(fp.FP64), 8), ListType(RealType(fp.FP16), 8),
              RealType(fp.INTEGER)]
 
     def test_without_it_the_rounding_is_refused(self):

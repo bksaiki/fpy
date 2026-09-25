@@ -555,25 +555,29 @@ def test_a_reduction_stays_sequential_and_agrees(f, seed):
     assert ot.cpu().tolist() == [float(v) for v in want]
 
 
-_RZ_FP32 = fp.IEEEContext(8, 32, fp.RM.RTZ)
-
-
-@fp.fpy(ctx=fp.REAL)
-def _rz(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
-    for i in range(len(xs)):
-        with _RZ_FP32:
-            out[i] = fp.round(xs[i])
-    return out
-
-
-def test_round_toward_zero_fp32_agrees_bit_for_bit():
-    """Lowered through `unfold`: Triton rounds toward zero from `f32` only.
-    The inputs are the edges -- subnormals, the overflow boundary, the zeros,
-    the specials -- and values needing more than 24 bits."""
+@pytest.mark.parametrize('rctx', [
+    fp.IEEEContext(8, 32, fp.RM.RTZ),
+    fp.IEEEContext(8, 32, fp.RM.RTN),
+    fp.IEEEContext(8, 32, fp.RM.RTP),
+    fp.IEEEContext(8, 22, fp.RM.RTZ),
+    fp.IEEEContext(8, 16, fp.RM.RTZ),
+], ids=['rtz', 'rtn', 'rtp', 'e8m13-rtz', 'bf16-rtz'])
+def test_a_directed_round_from_f64_agrees_bit_for_bit(rctx):
+    """libdevice's directed conversion into `f32`, then truncation onto a
+    narrower format with its exponents.  The inputs are the edges --
+    subnormals, the overflow boundary, the zeros, the specials -- and values
+    needing more than 24 bits."""
     import math
     import struct
 
     import torch
+
+    @fp.fpy(ctx=fp.REAL)
+    def rnd(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for i in range(len(xs)):
+            with rctx:
+                out[i] = fp.round(xs[i])
+        return out
 
     f32max = struct.unpack('f', struct.pack('I', 0x7f7fffff))[0]
     vals = [
@@ -584,21 +588,19 @@ def test_round_toward_zero_fp32_agrees_bit_for_bit():
         math.inf, -math.inf, math.nan,
     ]
     n = len(vals)
-    src = TritonCompiler(
-        drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
-    ).compile(_rz, ctx=fp.REAL, arg_types=[
+    src = TritonCompiler(drop_asserts=True).compile(rnd, ctx=fp.REAL, arg_types=[
         ListType(RealType(fp.FP64), n),
         ListType(RealType(fp.FP32), n),
         RealType(fp.INTEGER)])
+    assert 'libdevice.double2float' in src.source
     xt = torch.tensor(vals, dtype=torch.float64).cuda()
-    # the unfolded rounding's bound is not provably `float32`
-    ot = torch.zeros(n, dtype=torch.float64).cuda()
+    ot = torch.zeros(n, dtype=torch.float32).cuda()
     launch(src, [xt, ot], block=16)
 
     def bits(v):
         return struct.unpack('I', struct.pack('f', v))[0]
 
-    want = [float(v) for v in _rz(vals, [0.0] * n, 16)]
+    want = [float(v) for v in rnd(vals, [0.0] * n, 16)]
     for x, w, g in zip(vals, want, ot.cpu().tolist()):
         assert bits(w) == bits(g) or (math.isnan(w) and math.isnan(g)), x
 

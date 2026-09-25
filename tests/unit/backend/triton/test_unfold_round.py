@@ -10,13 +10,13 @@ from fpy2.transform import Monomorphize
 from fpy2.types import ListType, RealType
 from fpy2.utils import NamedId
 
-RZ_FP32 = fp.IEEEContext(8, 32, fp.RM.RTZ)
+RZ_FP16 = fp.IEEEContext(5, 16, fp.RM.RTZ)
 BOUNDED = fp.MPBFixedContext(-1, RealFloat.from_int(2 ** 17), fp.RM.RTZ, overflow=fp.OverflowMode.ASSERT)
 
 
 @fp.fpy
-def rz_fp32(x: fp.Real):
-    with RZ_FP32:
+def rz_fp16(x: fp.Real):
+    with RZ_FP16:
         return fp.round(x)
 
 
@@ -35,14 +35,25 @@ def _kinds(func):
 
 
 def test_classify():
-    assert _kinds(_mono(rz_fp32, fp.FP64)) == [(UnfoldKind.FLOAT_ROUND, RZ_FP32)]
+    assert _kinds(_mono(rz_fp16, fp.FP64)) == [(UnfoldKind.FLOAT_ROUND, RZ_FP16)]
     # a bounded context is never lowered as it stands: its check cannot raise
     assert _kinds(_mono(bounded, fp.FP16)) == [(UnfoldKind.FIXED_ROUND, BOUNDED)]
 
 
+@fp.fpy
+def rz_e8m13(x: fp.Real):
+    with fp.IEEEContext(8, 22, fp.RM.RTZ):
+        return fp.round(x)
+
+
+def test_a_directed_round_with_f32_exponents_is_no_site():
+    """A cast spells it from any source, so it is not lowered."""
+    assert _kinds(_mono(rz_e8m13, fp.FP64)) == []
+
+
 def test_unfold_float_round_leaves_no_site():
     """The ladder's bounds are proven, so none is left for the emitter."""
-    out = unfold(_mono(rz_fp32, fp.FP64), UnfoldMode.ROUNDINGS)
+    out = unfold(_mono(rz_fp16, fp.FP64), UnfoldMode.ROUNDINGS)
     assert sites(out) == []
 
 
