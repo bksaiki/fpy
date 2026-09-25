@@ -37,6 +37,10 @@ fixed tile, as autotuning would retune at every new sequence length."""
 
 Combine = Literal['linear', 'tree']
 
+_ELEMS = 1 << 26
+"""Output elements per block of rows, so memory does not grow with `split_k`:
+at 2048 tokens each of `lm_head`'s partials is 1.2 GB whole."""
+
 
 @cache
 def compiled(design: str) -> tuple[KernelSource, int]:
@@ -76,17 +80,35 @@ def linear(
         raise ValueError(
             f'`k` = {k} does not split into {split_k} slices of a multiple of '
             f"{design}'s length {k0}")
-    lead = x.shape[:-1]
     held = dict(kernel.dtypes)
     a = x.reshape(-1, k).to(torch.bfloat16).to(_torch_dtype(held[0]))
     b = w.to(torch.bfloat16).to(_torch_dtype(held[1]))
-    step = k // split_k
-    parts = [_matmul(a[:, s:s + step].contiguous(), b[:, s:s + step].contiguous(), design)
-             for s in range(0, k, step)]
-    while len(parts) > 1:
-        if combine == 'linear':
-            parts = [parts[0] + parts[1], *parts[2:]]
-        else:
-            parts = [parts[i] + parts[i + 1] if i + 1 < len(parts) else parts[i]
-                     for i in range(0, len(parts), 2)]
-    return parts[0].reshape(*lead, w.shape[0])
+    y = torch.empty(a.shape[0], w.shape[0], dtype=torch.float32, device=x.device)
+    rows = max(1, _ELEMS // w.shape[0])
+    for i in range(0, a.shape[0], rows):
+        y[i:i + rows] = _split(a[i:i + rows], b, design, split_k, combine)
+    return y.reshape(*x.shape[:-1], w.shape[0])
+
+
+def _split(a: torch.Tensor, b: torch.Tensor, design: str, split_k: int, combine: Combine) -> torch.Tensor:
+    """:func:`linear` on BF16 values in the kernel's storage."""
+    step = a.shape[1] // split_k
+
+    def part(s: int) -> torch.Tensor:
+        lo = s * step
+        return _matmul(a[:, lo:lo + step].contiguous(), b[:, lo:lo + step].contiguous(), design)
+
+    def tree(s: int, n: int) -> torch.Tensor:
+        """Slices `s` to `s + n` pairwise, the left half the largest power of
+        two below `n`."""
+        if n == 1:
+            return part(s)
+        h = 1 << ((n - 1).bit_length() - 1)
+        return tree(s, h).add_(tree(s + h, n - h))
+
+    if combine == 'tree':
+        return tree(0, split_k)
+    y = part(0)
+    for s in range(1, split_k):
+        y += part(s)
+    return y

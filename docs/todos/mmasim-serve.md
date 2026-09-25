@@ -220,6 +220,35 @@ comparison of record is Phase 2's.
 
 ### Phase 2 -- Perplexity and distance on WikiText-2
 
+**Done** at smoke scale; the full 146-segment pass (~1.6 h, each `split_k`
+pass as long) was deliberately not run.  First 8 segments (16,376 tokens):
+
+| run | PPL | KL vs R0 | top-1 |
+|---|---|---|---|
+| fp32 | 17.8334 | 0 | 100% |
+| bf16-exact | 17.8384 | 4.27e-5 | 99.59% |
+| nv.ampere.bf16.f32 | 17.8370 | 4.28e-5 | 99.68% |
+| nv.hopper.bf16.f32 | 17.8369 | 4.17e-5 | 99.57% |
+| amd.cdna2.bf16 | 17.8400 | 4.11e-5 | 99.63% |
+| amd.cdna2.bf16_1k | 17.8352 | 4.17e-5 | 99.68% |
+| amd.cdna3.bf16 | 17.8365 | 4.24e-5 | 99.55% |
+
+RMS Δp is 0.16-0.18% for every run but R0.  `split_k = 4`, `linear` and
+`tree`, run on one segment for CDNA2 and Hopper: KL stays ~4e-5, with no
+conclusion drawn about order.  `split_k` first ran out of memory at
+`lm_head`, whose 1.2 GB partials were all held at once.  `kernels.linear`
+now sums the partials as it makes them and works in row blocks of 2^26
+output elements, so memory does not grow with `split_k`.
+
+`serve/perplexity.py`: WikiText-2 is now
+`Salesforce/wikitext` on the Hub (same `wikitext-2-raw-v1` data); its test
+split is 299,078 Qwen3 tokens, 146 whole 2048-token segments.  Perplexity is
+the mean NLL over each segment's 2047 predicted tokens; Δp is the change in
+the correct token's probability, as llama.cpp defines it.  Distributions are
+compared 512 tokens at a time, one segment's full-vocabulary log-probabilities
+being 1.2 GB.  Test: `tests/test_perplexity.py` (R0 against itself is zero
+distance and its PPL is the model's cross-entropy).
+
 - **What:** `perplexity.py`: `wikitext-2-raw-v1` test, joined and tokenized as
   the Hugging Face perplexity guide does, split into 2048-token segments
   (GPTQ convention); per run: perplexity, and against R0 per token: KL(R0 ||
