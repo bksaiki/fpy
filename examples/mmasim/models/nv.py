@@ -74,7 +74,7 @@ explicitly, per the table above; GST-FDPA defaults to -139.
 
 import fpy2 as fp
 
-from .utils import dpa_special_values, exponent, fused_sum, join, make_fma_dpa
+from .utils import dpa_special_values, exp_floor, exponent, fused_sum, join, make_fma_dpa
 
 ###########################################################
 # Rounding contexts
@@ -127,8 +127,8 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
     and F (`is_mma=False` selects the wgmma/tcgen05 datapath); the
     FP8 instructions (F = 13) must pass it explicitly.
     """
-    emin_a = a_ctx.emin
-    emin_b = b_ctx.emin
+    emin_a = exp_floor(a_ctx)
+    emin_b = exp_floor(b_ctx)
     emin_c = c_ctx.emin
     if e_zero is None:
         e_zero = _default_e_zero(c_ctx, F, is_mma)
@@ -199,8 +199,8 @@ def make_st_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext,
     with scale factors `alpha` and `beta` (E8M0) applied to the
     products; MXFP8/6/4 MMA instructions. The accumulator is FP32.
     """
-    emin_a = a_ctx.emin
-    emin_b = b_ctx.emin
+    emin_a = exp_floor(a_ctx)
+    emin_b = exp_floor(b_ctx)
     emin_s = scale_ctx.emin
     emin_c = fp.FP32.emin
     if e_zero is None:

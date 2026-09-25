@@ -48,6 +48,14 @@ def exponent(x, emin):
     """
     return max(fp.logb(x), emin)
 
+def exp_floor(ctx: fp.EFloatContext) -> int:
+    """
+    The `emin` that `exponent` floors an operand of format `ctx` at.
+    E2M1 is not floored (its `expmin`), matching MMA-Sim, which decodes
+    E2M1 to FP16.
+    """
+    return ctx.expmin if ctx.format() == fp.MX_E2M1.format() else ctx.emin
+
 @fp.fpy(ctx=fp.REAL)
 def round_down_at(x, n):
     """
