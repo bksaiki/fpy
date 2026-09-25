@@ -24,6 +24,7 @@ import math
 import random
 import sys
 from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,6 +51,15 @@ Build = Callable[[], tuple[fp.Function, list[Type]]]
 """A design's builder: the design, and its argument types."""
 
 _BLOCK = 64
+_BLOCK_M = 4
+"""`--run`'s tile height: taller than the default `-m`, so the mask on the
+rows past the end is exercised."""
+
+_HARD_EVERY = 4
+"""Every this many `--run` draws, each element is a hard case with
+probability :data:`_HARD`."""
+
+_HARD = 0.25
 
 
 def _fmt(t: Type) -> SizedFormat:
@@ -135,8 +145,27 @@ def compile_matmul(
     return kernel, design, arg_types
 
 
-def _sample(fmt: SizedFormat, rng: random.Random) -> float:
-    """A value of *fmt*: half over its whole range, half near one."""
+@cache
+def _hard_cases(fmt: SizedFormat) -> list[float]:
+    """The values of *fmt* a random draw misses: the zeros, the smallest and
+    largest magnitudes, the least normal, and the specials it has."""
+    hi = fmt.to_ordinal(fmt.maxval())
+    mags = [0.0, float(fmt.from_ordinal(1)), float(fmt.from_ordinal(hi)), math.inf, math.nan]
+    if (normal := getattr(fmt, 'min_normal', None)) is not None:
+        mags.append(float(normal()))
+    out: dict[str, float] = {}
+    for v in mags:
+        for x in (v, -v):
+            if fmt.representable_in(fp.Float.from_float(x)):
+                out.setdefault(repr(x), x)
+    return list(out.values())
+
+
+def _sample(fmt: SizedFormat, rng: random.Random, hard: float = 0.0) -> float:
+    """A value of *fmt*: a hard case with probability *hard*, else half over
+    its whole range, half near one."""
+    if hard and rng.random() < hard:
+        return rng.choice(_hard_cases(fmt))
     hi = fmt.to_ordinal(fmt.maxval())
     try:
         fmt.from_ordinal(-1)
@@ -164,36 +193,38 @@ def _dtype(fmt: Format) -> 'torch.dtype':
     return dtypes[scalar]
 
 
-def _vector(t: Type, rng: random.Random) -> list[float]:
+def _vector(t: Type, rng: random.Random, hard: float = 0.0) -> list[float]:
     """A value of each of list type *t*'s elements."""
-    return [_sample(_fmt(t), rng) for _ in range(_length(t))]
+    return [_sample(_fmt(t), rng, hard) for _ in range(_length(t))]
 
 
-def _row(t: Type, rng: random.Random) -> float | list[float]:
+def _row(t: Type, rng: random.Random, hard: float = 0.0) -> float | list[float]:
     """A value of *t*, or of each of its elements."""
-    return _vector(t, rng) if isinstance(t, _L) else _sample(_fmt(t), rng)
+    return _vector(t, rng, hard) if isinstance(t, _L) else _sample(_fmt(t), rng, hard)
 
 
 def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
                m: int, n: int, trials: int, seed: int,
-               block: int | None = _BLOCK) -> int:
+               block: int | None = _BLOCK, hard_every: int = _HARD_EVERY,
+               block_m: int = _BLOCK_M) -> int:
     """How many of the *m* x *n* outputs, over *trials* draws, the kernel gets
-    bit for bit."""
+    bit for bit.  Every *hard_every*-th draw is heavy in hard cases."""
     import torch
 
     rng = random.Random(seed)
     a, b, c, *scales = arg_types
     dtype = _dtype(_fmt(c))
     agree = 0
-    for _ in range(trials):
-        A = [_row(a, rng) for _ in range(m)]
-        BT = [_row(b, rng) for _ in range(n)]
-        C = [[_row(c, rng) for _ in range(n)] for _ in range(m)]
-        S = [[_row(t, rng) for _ in range(d)] for t, d in zip(scales, (m, n))]
+    for trial in range(trials):
+        e = _HARD if (trial + 1) % hard_every == 0 else 0.0
+        A = [_row(a, rng, e) for _ in range(m)]
+        BT = [_row(b, rng, e) for _ in range(n)]
+        C = [[_row(c, rng, e) for _ in range(n)] for _ in range(m)]
+        S = [[_row(t, rng, e) for _ in range(d)] for t, d in zip(scales, (m, n))]
         out = torch.zeros(m, n, dtype=dtype).cuda()
         launch(kernel, [_tensor(A, a), _tensor(BT, b), _tensor(C, c),
                         *(_tensor(s, t) for s, t in zip(S, scales)), out],
-               block=block)
+               block=block, block_m=block_m)
         want = [
             float(design(A[i], BT[j], C[i][j], *((S[0][i], S[1][j]) if S else ())))
             for i in range(m) for j in range(n)

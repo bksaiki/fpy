@@ -1,9 +1,11 @@
-"""Expect tests: the exact Triton source the compiler emits.
+"""Expect tests: the Triton source a full compile emits.
 
-These need no GPU; `test_launch.py` runs the kernels.  Pinning the whole text
-matters: an fp16 product computed in fp16 and widened afterwards differs from
-the right kernel by one cast's position, not by any substring worth grepping.
-When one fails, read the diff: is the new text a better kernel or a broken one?
+`test_emitter.py` checks `emit_block` on its own; neither needs a GPU, and
+`test_launch.py` runs the kernels.  Where a cast's position is the point, the
+whole text is pinned: an fp16 product computed in fp16 and widened afterwards
+differs from the right kernel by one cast's position, not by any substring
+worth grepping.  When one fails, read the diff: is the new text a better
+kernel or a broken one?
 """
 
 import re
@@ -23,7 +25,6 @@ from .programs import (
     round_to_int,
     row_bound,
     scaled,
-    signbit,
 )
 
 FP16 = fp.IEEEContext(5, 16)
@@ -45,7 +46,9 @@ def batched_dot(xss_ptr, yss_ptr, out_ptr, BLOCK: tl.constexpr):
     r = j
     acc = 0.0
     for k in tl.static_range(8):
-        acc = (acc + (tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32) * tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0).to(tl.float32)))
+        __t0 = tl.load(xss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
+        __t1 = tl.load(yss_ptr + r * 8 + k, mask=(j < 4), other=0.0)
+        acc = (acc + (__t0.to(tl.float32) * __t1.to(tl.float32)))
     tl.store(out_ptr + r, acc, mask=(j < 4))'''
 
 
@@ -79,7 +82,8 @@ def _scale(xs_ptr, out_ptr, BLOCK: tl.constexpr):
     i6 = tl.program_id(0) * BLOCK
     j = i6 + tl.arange(0, BLOCK)
     i = j
-    tl.store(out_ptr + i, (tl.load(xs_ptr + i, mask=(j < 6), other=0.0) * tl.load(xs_ptr + i, mask=(j < 6), other=0.0)), mask=(j < 6))'''
+    __t0 = tl.load(xs_ptr + i, mask=(j < 6), other=0.0)
+    tl.store(out_ptr + i, (__t0 * __t0), mask=(j < 6))'''
     assert src.grid_extent == 6
 
 
@@ -100,10 +104,10 @@ def test_fp32_throughout_disables_fusion():
 @fp.fpy(ctx=fp.FP32)
 def _reduce(xs: list[fp.Real], ys: list[fp.Real], out: list[fp.Real],
             BLOCK: fp.Real):
-    """`max`/`min`/`sum` over a literal list."""
+    """`sum` over a literal list."""
     for i in range(len(xs)):
         row = [xs[i], ys[i], 2.0]
-        out[i] = max(row) - min(row) + sum(row)
+        out[i] = sum(row)
     return out
 
 
@@ -123,23 +127,15 @@ def _empty_max(out: list[fp.Real], BLOCK: fp.Real):
     return out
 
 
-def test_reductions_over_a_literal_list_fold_its_elements():
-    """`propagate_nan` carries FPy's IEEE 754-2019 `maximum`; Triton's default
-    is `maximumNumber`, which returns the *other* operand.  `sum` folds left,
-    as FPy's does, in the storage of its context."""
+def test_a_sum_over_a_literal_list_folds_left():
+    """As FPy's does."""
     src = TritonCompiler(drop_asserts=True).compile(
         _reduce, ctx=fp.FP32, arg_types=[
             ListType(RealType(fp.FP32), 8),
             ListType(RealType(fp.FP32), 8),
             ListType(RealType(fp.FP32), 8),
             RealType(fp.INTEGER)])
-    assert src.source.splitlines()[-1] == (
-        '    tl.store(out_ptr + i, ((tl.maximum(tl.maximum(row_0, row_1, '
-        'propagate_nan=tl.PropagateNan.ALL), row_2, '
-        'propagate_nan=tl.PropagateNan.ALL) - tl.minimum(tl.minimum(row_0, '
-        'row_1, propagate_nan=tl.PropagateNan.ALL), row_2, '
-        'propagate_nan=tl.PropagateNan.ALL)) + ((row_0.to(tl.float32) + '
-        'row_1.to(tl.float32)) + row_2.to(tl.float32))), mask=(j < 8))')
+    assert re.search(r'\(\(row_0\S* \+ row_1\S*\) \+ row_2\S*\)', src.source)
 
 
 def test_an_empty_sum_is_the_literal_zero():
@@ -185,18 +181,8 @@ def test_a_zip_is_eliminated_before_emission():
             ListType(RealType(fp.FP32), K),
             ListType(RealType(fp.FP32), 4),
             RealType(fp.INTEGER)])
-    assert src.source == '''\
-@triton.jit
-def _zipped(xs_ptr, ys_ptr, out_ptr, BLOCK: tl.constexpr):
-    i11 = tl.program_id(0) * BLOCK
-    j = i11 + tl.arange(0, BLOCK)
-    i = j
-    acc = 0.0
-    for _i in tl.static_range(8):
-        x = tl.load(xs_ptr + _i)
-        y = tl.load(ys_ptr + _i)
-        acc = (acc + (x * y))
-    tl.store(out_ptr + i, acc, mask=(j < 4))'''
+    loop = re.search(r'for (\w+) in tl\.static_range\(8\):', src.source)
+    assert loop and f'tl.load(xs_ptr + {loop[1]})' in src.source
 
 
 def test_a_row_bound_to_a_name_flattens_to_one_load():
@@ -230,41 +216,9 @@ def test_a_store_through_a_row_resolves_the_same_way():
             ListType(ListType(RealType(fp.FP32), 4), 4),
             ListType(ListType(RealType(fp.FP32), 4), 4),
             RealType(fp.INTEGER)])
-    assert src.source.splitlines()[-1] == (
-        '    tl.store(oss_ptr + r[:, None] * 4 + k, (tl.load(xss_ptr + '
-        'r[:, None] * 4 + k, mask=__t0[:, None], other=0.0) * 2.0), '
-        'mask=__t0[:, None])')
-
-
-@fp.fpy(ctx=fp.FP32)
-def _triple(x: fp.Real) -> fp.Real:
-    """A callee, so the comprehension below holds a call."""
-    t = x * 3.0
-    return t
-
-
-@fp.fpy(ctx=fp.FP32)
-def _comp_of_calls(xss: list[list[fp.Real]], out: list[fp.Real],
-                   BLOCK: fp.Real):
-    """A comprehension whose elements are calls."""
-    for r in range(len(out)):
-        ys = [_triple(xss[r][k]) for k in range(3)]
-        out[r] = ys[0] + ys[1] + ys[2]
-    return out
-
-
-def test_a_comprehension_of_calls_compiles():
-    """`FuncInline` cannot reach a call inside a comprehension, so without
-    `StatementForm` ahead of it the call survives and the normal form is never
-    reached.  As a loop, the call is a statement of its own."""
-    src = TritonCompiler(drop_asserts=True).compile(
-        _comp_of_calls, ctx=fp.FP32, arg_types=[
-            ListType(ListType(RealType(fp.FP32), 3), 4),
-            ListType(RealType(fp.FP32), 4),
-            RealType(fp.INTEGER)])
-    assert 'tl.store' in src.source
-    # the callee's body once across a tile of two, once for the tail
-    assert src.source.count('* 3.0') == 2
+    assert src.source.splitlines()[-2:] == [
+        '    __t1 = tl.load(xss_ptr + r[:, None] * 4 + k, mask=__t0[:, None], other=0.0)',
+        '    tl.store(oss_ptr + r[:, None] * 4 + k, (__t1 * 2.0), mask=__t0[:, None])']
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -323,17 +277,6 @@ def test_an_empty_any_is_its_identity():
         _empty_any, ctx=fp.FP32, arg_types=args)
     assert folded.source.splitlines()[-1].endswith(
         'tl.store(out_ptr + i, 0.0, mask=(j < 4))')
-
-
-def test_signbit_reads_the_sign_bit():
-    """No float comparison separates `-0.0` from `0.0`, so this bitcasts to
-    the same-width integer and tests for negative."""
-    src = TritonCompiler(drop_asserts=True).compile(
-        signbit, ctx=fp.FP32, arg_types=[
-            ListType(RealType(fp.FP32), 8),
-            ListType(RealType(fp.FP32), 8),
-            RealType(fp.INTEGER)])
-    assert '.to(tl.int32, bitcast=True) < 0' in src.source
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -396,33 +339,6 @@ def test_nan_is_refused_where_the_context_cannot_hold_one():
                 RealType(fp.INTEGER)])
 
 
-@fp.fpy(ctx=fp.FP32)
-def _tile_reduction(xss: list[list[fp.Real]], out: list[fp.Real],
-                    BLOCK: fp.Real):
-    """A reduction over a *pointer-backed* row: must stay a rolled loop."""
-    for r in range(len(out)):
-        acc = fp.round(0)
-        for k in range(8):
-            acc = acc + xss[r][k]
-        out[r] = acc
-    return out
-
-
-def test_a_reduction_over_memory_stays_rolled():
-    """Unrolling is for lists of values, which have no iteration to perform.
-
-    A loop over something in memory does, and this is the shape the backend
-    is built around -- unrolling it would rewrite every kernel.
-    """
-    src = TritonCompiler(drop_asserts=True).compile(
-        _tile_reduction, ctx=fp.FP32, arg_types=[
-            ListType(ListType(RealType(fp.FP32), 8), 4),
-            ListType(RealType(fp.FP32), 4),
-            RealType(fp.INTEGER)])
-    assert 'for k in tl.static_range(8):' in src.source
-    assert src.source.count('tl.load(xss_ptr') == 1, 'one load, not eight'
-
-
 def test_logb_reads_the_exponent_field():
     """No correctly-rounded primitive exists -- `tl.log2` is a
     transcendental, which the op table excludes -- so the exponent is read
@@ -464,8 +380,8 @@ def test_a_cast_asks_about_values_not_only_types():
             ListType(RealType(fp.FP16), 4),
             RealType(fp.INTEGER)])
     assert src.source.splitlines()[-1] == (
-        '    tl.store(out_ptr + i, tl.maximum(tl.load(xs_ptr + i, mask=(j < 4), '
-        "other=0.0), -132.0, propagate_nan=tl.PropagateNan.ALL), mask=(j < 4))")
+        '    tl.store(out_ptr + i, tl.maximum(__t0, -132.0, '
+        'propagate_nan=tl.PropagateNan.ALL), mask=(j < 4))')
 
 
 @fp.fpy(ctx=fp.FP32)

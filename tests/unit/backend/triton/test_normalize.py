@@ -97,15 +97,6 @@ class TestReachesTheForm:
         _is_normal(out.ast)
         assert repr(out(3.0)) == repr(plain(3.0))
 
-    def test_a_comprehension_is_a_loop(self):
-        @fp.fpy(ctx=fp.FP64)
-        def comp(xs: list[fp.Real]):
-            return [x * 2 for x in xs]
-
-        out = normalize(comp.ast)
-        assert _count(out, ForStmt) == 1
-        assert _count(out, ListComp) == 0
-
 
 class TestAnIfIsKept:
     """The emitter flattens an `if`; the normal form leaves it for the

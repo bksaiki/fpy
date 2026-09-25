@@ -26,8 +26,11 @@ from ...number import Context
 from ...transform import (
     AssertElim,
     FreeVarElim,
+    HoistInvariant,
+    HoistScale,
     Simplify,
     Specialize,
+    TransformDeclined,
     ZipElim,
 )
 from ...types import Type
@@ -141,6 +144,11 @@ class TritonCompiler(Backend):
 
         if self.optimize:
             ready = ready.with_ast(Simplify.apply(ready.ast))
+            for hoist in (HoistInvariant.apply, HoistScale.apply):
+                try:
+                    ready = ready.with_ast(hoist(ready.ast))
+                except TransformDeclined:
+                    pass  # nothing to hoist is not a failure
 
         tiles = tile_loops(ready.ast, self.block)
         if self.optimize:

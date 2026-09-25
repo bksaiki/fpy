@@ -12,6 +12,8 @@ flattened, so a kernel's time does not depend on its data.
     python examples/mmasim/bench/speed.py                   # every design
     python examples/mmasim/bench/speed.py volta nvfp4       # some
     python examples/mmasim/bench/speed.py -m 512 --blocks 64 128
+    python examples/mmasim/bench/speed.py cdna2 --blocks-m 16 32   # tile heights
+    python examples/mmasim/bench/speed.py --best            # fastest tile only
 """
 
 import argparse
@@ -77,16 +79,21 @@ def main(argv: list[str]) -> int:
                          '(default 256)')
     ap.add_argument('--blocks', type=int, nargs='*', default=[16, 32, 64, 128],
                     help='block sizes to time (default 16 32 64 128)')
+    ap.add_argument('--blocks-m', type=int, nargs='*', default=[1, 4, 16, 32, 64],
+                    help='tile heights to time, for a kernel tiling its rows '
+                         '(default 1 4 16 32 64)')
     ap.add_argument('--autotune', action='store_true',
                     help='also time the launch that picks its own block and warps')
     ap.add_argument('--reps', type=int, default=20, help='launches per timing')
+    ap.add_argument('--best', action='store_true',
+                    help="print only each design's fastest tile")
     args = ap.parse_args(argv)
     if (why := unavailable()) is not None:
         ap.error(f'needs a GPU: {why}')
     import torch
 
     m, n = args.m, args.n or args.m
-    print(f'{"design":22} {"k":>5} {"block":>5} {"ms":>9} {"GFLOP/s":>9}')
+    print(f'{"design":22} {"k":>5} {"block":>9} {"ms":>9} {"GFLOP/s":>9}')
     for name, build in DESIGNS:
         if args.filter and not any(f in name for f in args.filter):
             continue
@@ -99,10 +106,17 @@ def main(argv: list[str]) -> int:
         k0 = ct._length(a)
         k = k0 if scales else max(args.k // k0, 1) * k0
         tensors = _inputs(arg_types, m, n, k)
-        for block in [*args.blocks, *([None] if args.autotune else [])]:
-            t = _timed(partial(launch, kernel, tensors, block=block), args.reps)
-            label = 'auto' if block is None else block
-            print(f'{name:22} {k:5} {label:>5} {t * 1e3:9.3f} {2 * m * n * k / t / 1e9:9.1f}')
+        heights = args.blocks_m if kernel.block_m is not None else [1]
+        tiles = [(b, h) for b in args.blocks for h in heights]
+        rows = []
+        for block, height in [*tiles, *([(None, 1)] if args.autotune else [])]:
+            t = _timed(partial(launch, kernel, tensors, block=block, block_m=height), args.reps)
+            label = 'auto' if block is None else f'{height}x{block}'
+            rows.append((t, f'{name:22} {k:5} {label:>9} {t * 1e3:9.3f} {2 * m * n * k / t / 1e9:9.1f}'))
+            if not args.best:
+                print(rows[-1][1])
+        if args.best:
+            print(min(rows)[1])
 
     torch.backends.cuda.matmul.allow_tf32 = False
     for dtype in (torch.float16, torch.float32):
@@ -110,7 +124,7 @@ def main(argv: list[str]) -> int:
         y = torch.randn(args.k, n, device='cuda', dtype=dtype)
         t = _timed(partial(torch.matmul, x, y), args.reps)
         label = f'torch.matmul {str(dtype).split(".")[1]}'
-        print(f'{label:22} {args.k:5} {"":5} {t * 1e3:9.3f} {2 * m * n * args.k / t / 1e9:9.1f}')
+        print(f'{label:22} {args.k:5} {"":9} {t * 1e3:9.3f} {2 * m * n * args.k / t / 1e9:9.1f}')
     return 0
 
 

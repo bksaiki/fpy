@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import reduce
 
 from ...analysis import (
     ArraySizeAnalysis,
@@ -32,6 +33,8 @@ from ...analysis import (
     FormatInfer,
     TypeAnalysis,
     TypeInfer,
+    ValueClassAnalysis,
+    ValueClassInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import (
@@ -41,9 +44,11 @@ from ...analysis.format_infer import (
     rounds_exactly,
     to_abstract,
 )
+from ...analysis.format_infer.format import AbstractFormat
 from ...analysis.reaching_defs import same_object_defs
 from ...analysis.storage_infer import StorageSelectionError, join, of_bound
 from ...ast import (
+    Add,
     AllOf,
     AMax,
     AMin,
@@ -116,7 +121,8 @@ from ...ast import (
 from ...ast.visitor import Visitor
 from ...number import INTEGER, REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
-from ...transform.path import walk_exprs
+from ...transform.path import sub_blocks, sub_exprs, walk_exprs, walk_stmts
+from ...transform.simplify_if import _reads, _size
 from ...types import BoolType, ListType, RealType
 from ...utils import Unionfind
 from ..backend import CompileError
@@ -212,49 +218,186 @@ _ASSIGN = re.compile(r'(\w+) = (.*)')
 _IDENT = re.compile(r'\b\w+\b')
 
 
+def _unwrap(code: str) -> str:
+    """*code* without the parentheses that enclose all of it."""
+    while code.startswith('(') and code.endswith(')'):
+        depth = 0
+        for ch in code[1:-1]:
+            depth += (ch == '(') - (ch == ')')
+            if depth < 0:
+                return code
+        code = code[1:-1]
+    return code
+
+
+def _split_and(code: str) -> tuple[str, str] | None:
+    """*code* as the two sides of its top-level `&`, if it has one."""
+    depth = 0
+    for i, ch in enumerate(code):
+        depth += (ch == '(') - (ch == ')')
+        if depth == 0 and code.startswith(' & ', i):
+            return code[:i], code[i + 3:]
+    return None
+
+
+def _conjuncts(mask: str | None) -> frozenset[str]:
+    """The conjuncts of *mask*, a broadcast `[:, None]` distributed over them."""
+    out: set[str] = set()
+    todo = [] if mask is None else [(mask, '')]
+    while todo:
+        m, suffix = todo.pop()
+        m = _unwrap(m)
+        if m.endswith('[:, None]') and (m[:-9].endswith(')') or _split_and(m[:-9])):
+            todo.append((m[:-9], suffix + '[:, None]'))
+        elif (sides := _split_and(m)) is not None:
+            todo += [(side, suffix) for side in sides]
+        else:
+            out.add(f'({m}){suffix}' if suffix else m)
+    return frozenset(out)
+
+
 class _IndentedWriter:
     """Line-oriented Triton source builder, tracking the shape each line
     binds."""
 
     _lines: list[str]
     _depth: int
-    rows: set[str]
-    """The names holding a row vector: a line reading `tl.arange` or another
-    one.  An address wrongly taken for a scalar is only broadcast needlessly."""
+    axes: frozenset[str]
+    """The tile axes in force, each by the name of its index."""
+    along: dict[str, frozenset[str]]
+    """The names holding a row value, by the axes it varies along: a line
+    reading another one, or broadcast to the tile's shape (every axis)."""
     wide: set[str]
     """The names holding a `[rows, lanes]` tile: a line reading one, or
     broadcasting across the lanes."""
+    _loads: list[tuple[bool, dict[str, tuple[str, frozenset[str]]]]]
+    """Per open block, whether it is a loop body, and the loads it bound: by
+    canonical address, the name holding it and its mask's conjuncts."""
+    _assigned: list[set[str]]
+    """Per open block, the names it assigns, whose known values are dropped
+    when it closes."""
+    _value: dict[str, str]
+    """What each name bound to a pure expression holds, its own names
+    expanded: equal texts are equal values."""
 
     def __init__(self) -> None:
         self._lines = []
         self._depth = 0
-        self.rows = set()
+        self.axes = frozenset()
+        self.along = {}
         self.wide = set()
+        self._loads = [(False, {})]
+        self._assigned = [set()]
+        self._value = {}
 
-    def add_line(self, line: str = '', shape: str | None = None) -> None:
-        """*line*; *shape* ('wide', 'row' or 'scalar') says what it binds
-        where reading it off the line would not."""
+    def along_of(self, code: str) -> frozenset[str]:
+        """The axes *code* varies along, by the names it reads."""
+        return frozenset().union(*(self.along.get(n, ()) for n in _IDENT.findall(code)))
+
+    def add_line(self, line: str = '', shape: str | frozenset[str] | None = None) -> None:
+        """*line*; *shape* ('wide', 'row' or 'scalar', or the axes of a row)
+        says what it binds where reading it off the line would not."""
         self._lines.append('    ' * self._depth + line if line else '')
+        if 'tl.store(' in line:
+            # the store may alias any pointer loaded from
+            for _, loads in self._loads:
+                loads.clear()
         if (m := _ASSIGN.fullmatch(line)) is not None:
             name, code = m.groups()
+            for _, loads in self._loads:
+                for addr in [a for a, (held, conj) in loads.items()
+                             if held == name or name in _IDENT.findall(a)
+                             or any(name in _IDENT.findall(c) for c in conj)]:
+                    del loads[addr]
+            for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
+                del self._value[held]
+            self._value.pop(name, None)
+            self._assigned[-1].add(name)
             idents = set(_IDENT.findall(code))
+            if 'tl.load(' not in code and name not in idents:
+                self._value[name] = self.canonical(code)
+            along = self.along_of(code)
             if shape is None:
                 if '[None, :]' in code or '[:, None]' in code or self.wide & idents:
                     shape = 'wide'
-                elif 'tl.arange(' in code or self.rows & idents:
+                elif 'tl.arange(' in code:
                     shape = 'row'
+                elif along:
+                    shape = along
             self.wide.discard(name)
-            self.rows.discard(name)
+            self.along.pop(name, None)
             if shape == 'wide':
                 self.wide.add(name)
             elif shape == 'row':
-                self.rows.add(name)
+                self.along[name] = self.axes
+            elif isinstance(shape, frozenset):
+                self.along[name] = shape
 
     def indent(self) -> None:
         self._depth += 1
+        header = self._lines[-1].lstrip() if self._lines else ''
+        self._loads.append((header.startswith(('for ', 'while ')), {}))
+        self._assigned.append(set())
 
     def dedent(self) -> None:
         self._depth -= 1
+        self._loads.pop()
+        gone = self._assigned.pop()
+        self._assigned[-1] |= gone
+        for held in [n for n, v in self._value.items()
+                     if n in gone or gone & set(_IDENT.findall(v))]:
+            del self._value[held]
+
+    def forget(self, names: set[str]) -> None:
+        """Drop the values known of *names* and of what reads them: a loop
+        body's carried names hold something else on a later iteration."""
+        for held in [n for n, v in self._value.items()
+                     if n in names or names & set(_IDENT.findall(v))]:
+            del self._value[held]
+
+    def mark(self) -> int:
+        """Where the next line goes, for :meth:`insert`."""
+        return len(self._lines)
+
+    def defined(self) -> set[str]:
+        """Every name assigned so far."""
+        return set().union(*self._assigned)
+
+    def reassigned(self) -> set[str]:
+        """The names the open block has assigned."""
+        return set(self._assigned[-1])
+
+    def insert(self, at: int, lines: list[str]) -> None:
+        """*lines* at *at*, at the current depth: bindings a later block needs
+        in front of it, whose shape it decided."""
+        self._lines[at:at] = ['    ' * self._depth + line for line in lines]
+
+    def canonical(self, code: str) -> str:
+        """*code* with each name bound to a pure expression replaced by it."""
+        return _IDENT.sub(lambda m: f'({self._value[m[0]]})'
+                          if m[0] in self._value else m[0], code)
+
+    def load(self, addr: str, mask: str | None) -> str | None:
+        """A name in scope already holding a load of *addr* under a mask that
+        *mask* implies.  A loop body sees none from outside it: a later
+        iteration may have stored over them."""
+        addr, want = self._key(addr, mask)
+        for loop, loads in reversed(self._loads):
+            if (hit := loads.get(addr)) is not None and hit[1] <= want:
+                return hit[0]
+            if loop:
+                return None
+        return None
+
+    def loaded(self, addr: str, mask: str | None, name: str) -> None:
+        """*name* holds a load of *addr* under *mask*."""
+        addr, conj = self._key(addr, mask)
+        self._loads[-1][1][addr] = (name, conj)
+
+    def _key(self, addr: str, mask: str | None) -> tuple[str, frozenset[str]]:
+        """A load's address and mask conjuncts, each name bound to a pure
+        expression replaced by it."""
+        return self.canonical(addr), _conjuncts(None if mask is None else self.canonical(mask))
 
     def render(self) -> str:
         return '\n'.join(self._lines)
@@ -293,6 +436,15 @@ def _integral_round(ctx: Context) -> str | None:
     return _INT_ROUND.get(ctx.rm)
 
 
+_SKIP_SIZE = 64
+"""The size, in AST nodes, from which an arm is worth the reduction and branch
+that skip it where no row takes it."""
+
+
+_TO_ZERO_OR_NEAREST = frozenset({RoundingMode.RTZ, RoundingMode.RNE, RoundingMode.RNA})
+"""Rounding modes that send anything below one half to zero."""
+
+
 _LOGB: dict[TritonScalar, tuple[int, int, int, float, int, str]] = {
     TritonScalar.F16: (15, 10, 0x1F, 2.0 ** -14, 11, 'tl.int16'),
     TritonScalar.F32: (127, 23, 0xFF, 2.0 ** -126, 24, 'tl.int32'),
@@ -304,6 +456,37 @@ power of two a subnormal is scaled by, the integer to bitcast through).
 The scale is chosen so the *smallest* subnormal becomes normal: fp32's is
 `2**-149`, and `2**-149 * 2**24` is `2**-125`.
 """
+
+
+def _pow2_exponent(e: Expr) -> Expr | None:
+    """`n` where *e* is ``2 ** n``, else `None`."""
+    if (isinstance(e, Pow) and isinstance(e.args[0], RationalVal)
+            and e.args[0].as_rational() == 2):
+        return e.args[1]
+    return None
+
+
+def _scaled(e: Mul) -> tuple[Expr, Expr] | None:
+    """*e* as ``(n, x)`` where it is ``2 ** n * x``, else `None`."""
+    for scale, value in ((e.first, e.second), (e.second, e.first)):
+        if (n := _pow2_exponent(scale)) is not None:
+            return n, value
+    return None
+
+
+def _least(bound: FormatBound | None) -> float:
+    """The least finite value *bound* admits; `-inf` where unknown."""
+    af = to_abstract(bound)
+    if af is None or not isinstance(af.neg_bound, RealFloat):
+        return -math.inf
+    return float(af.neg_bound)
+
+
+def _magnitude(af: AbstractFormat | None) -> float:
+    """The largest finite magnitude *af* admits; infinite where unknown."""
+    if af is None or not all(isinstance(b, RealFloat) for b in (af.pos_bound, af.neg_bound)):
+        return math.inf
+    return float(max(abs(af.pos_bound), abs(af.neg_bound)))
 
 
 def _joined(bounds: list[FormatBound]) -> TritonScalar | None:
@@ -330,6 +513,7 @@ class _Emitter(Visitor):
     format_info: FormatAnalysis
     types: TypeAnalysis
     ctx_use: ContextUseAnalysis
+    classes: ValueClassAnalysis
     sizes: ArraySizeAnalysis
     op_table: ScalarOpTable
     drop_asserts: bool
@@ -343,6 +527,9 @@ class _Emitter(Visitor):
     """The loops across a tile's lanes."""
     grid_loops: Sequence[ForStmt]
     """The loop the grid's second axis takes."""
+    block_m: str | None
+    """The `tl.constexpr` tiling the grid's second axis, where its loop is a
+    tile of rows rather than one program per iteration."""
     tiles: dict[NamedId, tuple[int, int, TritonScalar]]
     """Local lists of static length, as (width, tail length, element storage).
 
@@ -396,9 +583,13 @@ class _Emitter(Visitor):
     """The tiled loop's index, while its body is emitted."""
     _row_width: str
     """How many rows a tile holds: the tiled loop's width inside one."""
+    _axes: list[tuple[str, str]]
+    """The tile axes in force, outermost first: each index's name and width."""
+    _axis_guards: dict[str, str]
+    """Each tile axis's guard, by its index's name: the rows past its end."""
     _guard_mask: str | None
-    """The tile's own guard while inside it: the rows past the end, and no
-    branch."""
+    """The tiles' own guards in force, conjoined: the rows past each end, and
+    no branch."""
     _carried: dict[NamedId, TritonScalar]
     """The names a runtime loop in a tile carries as rows, by storage."""
     _class_of: dict[Definition, Definition]
@@ -416,6 +607,15 @@ class _Emitter(Visitor):
     """How many flattened branches enclose the statement being emitted."""
     _merging: set[NamedId]
     """The lists those branches merge."""
+    _logb_floor: dict[int, float]
+    """For a `logb` under a `max`, by `id`, the least value the `max`'s other
+    operands hold: at or above the storage's least normal exponent, a zero or
+    subnormal reads as those whatever `logb` gives it."""
+    _fused: dict[int, tuple[Expr, Expr, TritonScalar]]
+    """Rounds of a scale-in `2 ** n * x`, by `id`, lowered as one operation in
+    `x`'s storage: `(n, x, storage)`; see :meth:`_fuse_rounds`."""
+    _unmaterialized: set[Definition]
+    """The scale-ins those rounds compute themselves."""
 
     def __init__(
         self,
@@ -425,12 +625,16 @@ class _Emitter(Visitor):
         guards: Sequence[If1Stmt] = (),
         lanes: Sequence[ForStmt] = (),
         grid: Sequence[ForStmt] = (),
+        block_m: str | None = None,
     ) -> None:
         self.func = func
         self.def_use = DefineUse.analyze(func)
-        self.format_info = FormatInfer.analyze(func, use_digit_bounds=True)
         self.types = TypeInfer.check(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.classes = ValueClassInfer.analyze(
+            func, def_use=self.def_use, type_info=self.types, ctx_use=self.ctx_use)
+        self.format_info = FormatInfer.analyze(
+            func, use_digit_bounds=True, value_classes=self.classes)
         self.sizes = ArraySizeInfer.analyze(func)
         self.op_table = make_op_table()
         self.drop_asserts = drop_asserts
@@ -438,6 +642,7 @@ class _Emitter(Visitor):
         self.guards = guards
         self.lane_loops = lanes
         self.grid_loops = grid
+        self.block_m = block_m
         self.tiles = {}
         self.ranges = {}
         self.consts = {}
@@ -455,6 +660,8 @@ class _Emitter(Visitor):
         self._lane = None
         self._tile = None
         self._row_width = '1'
+        self._axes = []
+        self._axis_guards = {}
         self._guard_mask = None
         self._carried = {}
         defs = self.def_use.defs
@@ -474,6 +681,9 @@ class _Emitter(Visitor):
         self._next_tmp = 0
         self._branches = 0
         self._merging = set()
+        self._fused, self._unmaterialized = {}, set()
+        self._logb_floor = {}
+        self._fuse_rounds()
 
     # -- storage and context -------------------------------------------
 
@@ -738,8 +948,8 @@ class _Emitter(Visitor):
         iteration of a `static_range`."""
         if _as_number(code) is not None or code in self._once:
             return code
-        if self._tile is not None and not self._out.wide & set(_IDENT.findall(code)):
-            return self._bind(f'tl.broadcast_to({code}, ({self._row_width},))', 'row')
+        if self._axes and not self._out.wide & set(_IDENT.findall(code)):
+            return self._bind(f'tl.broadcast_to({code}, {self._shape(self._out.axes)})', 'row')
         return self._bind(code)
 
     def _pinned(self, indices: list[Expr | str]) -> list[Expr | str]:
@@ -789,7 +999,7 @@ class _Emitter(Visitor):
         # a pinned row index, as a column against a lane loop's tile
         codes = [
             self.emit(i) if not isinstance(i, str)
-            else f'{i}[:, None]' if self._lane is not None and i in self._out.rows
+            else f'{i}[:, None]' if self._lane is not None and i in self._out.along
             else i
             for i in indices
         ]
@@ -812,7 +1022,7 @@ class _Emitter(Visitor):
         """*code* broadcastable against a tile: a row value as a column."""
         if not _IDENT.fullmatch(code):
             code = self._bind(code)
-        return f'{code}[:, None]' if code in self._out.rows else code
+        return f'{code}[:, None]' if code in self._out.along else code
 
     @staticmethod
     def _lane_vec(width: int) -> str:
@@ -832,6 +1042,59 @@ class _Emitter(Visitor):
                 f'{self._lane[1]}; tiles of different widths do not combine'
             )
         return True
+
+    def _gather(self, tile: NamedId, index: Expr, idx: str) -> str:
+        """*tile* read at a lane loop's index *index*, which varies across
+        the lanes.  Where it is `a + s * lane`, `s` a power of two, `a < s`
+        and the tile `s` times the loop's width, it is a column of the tile
+        reshaped to `s`-wide rows: a `split` per bit of `s`.  Otherwise each
+        lane selects its element by a one-hot reduction."""
+        assert self._lane is not None
+        width, tail, elt = self.tiles[tile]
+        lanes = self._lane[1]
+        if not self._within(index, width + tail - 1):
+            raise TritonEmitError(
+                f'`{tile}` is read at an index not proven within its '
+                f'{width + tail} elements'
+            )
+        if (affine := self._affine_lane(index)) is not None:
+            a, step = affine
+            if step > 1 and step & (step - 1) == 0 and a < step and width == step * lanes:
+                code = f'tl.reshape({tile}, ({self._row_width}, {lanes}' \
+                       + ', 2' * (step.bit_length() - 1) + '))'
+                for b in range(step.bit_length() - 1):
+                    code = f'tl.split({code})[{(a >> b) & 1}]'
+                return self._bind(code, 'wide')
+        at = f'(tl.arange(0, {width})[None, None, :] == ({idx})[:, :, None])'
+        src = f'{tile}[:, None, :]'
+        if elt is TritonScalar.BOOL:
+            code = f'(tl.max(tl.where({at}, {src}, False).to(tl.int32), axis=2) != 0)'
+        else:
+            zero = f'(-tl.zeros(({self._row_width}, {lanes}, {width}), dtype={elt.format()}))'
+            code = f'tl.sum(tl.where({at}, {src}, {zero}), axis=2).to({elt.format()})'
+        for j in reversed(range(tail)):
+            code = f'tl.where(({idx}) == {width + j}, {tile}_t{j}[:, None], {code})'
+        return self._bind(code, 'wide')
+
+    def _affine_lane(self, e: Expr) -> tuple[int, int] | None:
+        """*e* as `(a, s)` where it is `a + s * lane`, through the names the
+        normal form binds, `a` and `s` integers."""
+        assert self._lane is not None
+        lane = self._lane[0]
+        while isinstance(e, Var) and e.name != lane:
+            d = self.def_use.use_to_def.get(e)
+            if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+                return None
+            e = d.site.expr
+        match e:
+            case Var():
+                return 0, 1
+            case Add() | Mul():
+                for c, rest in ((e.first, e.second), (e.second, e.first)):
+                    if isinstance(c, Integer) and (r := self._affine_lane(rest)) is not None:
+                        a, st = r
+                        return (c.val + a, st) if isinstance(e, Add) else (c.val * a, c.val * st)
+        return None
 
     def _extract(self, tile: NamedId, idx: str) -> str:
         """Element *idx* of *tile*, a row value: one lane, selected by a
@@ -1036,22 +1299,29 @@ class _Emitter(Visitor):
         return None
 
     def _masked_load(self, addr: str) -> str:
-        """`tl.load` at *addr*, under whatever guard is in force.
+        """`tl.load` at *addr* under the guard in force, bound to a name, or a
+        name already holding it (:meth:`_IndentedWriter.load`).
 
         Triton rejects a tensor mask on a scalar address, so under a branch a
-        scalar address is broadcast to the rows.  Under the tile's own guard
-        alone it is a scalar load.
+        scalar address is broadcast to the tile.  Under the tiles' own guards
+        alone it takes those of the axes it varies along: every launched
+        program has a live index along each, so the load is safe.
         """
-        if self.mask is None:
-            return f'tl.load({addr})'
-        if self._tile is not None and not (
-            (self._out.rows | self._out.wide) & set(_IDENT.findall(addr))
-        ):
-            if self.mask == self._guard_mask:
-                # every launched program has a live row, so the load is safe
-                return f'tl.load({addr})'
-            addr = f'{addr} + tl.zeros_like({self._tile})'
-        return f'tl.load({addr}, mask={self.mask}, other=0.0)'
+        mask = self.mask
+        if mask is not None and self._axes and not self._out.wide & set(_IDENT.findall(addr)):
+            along = self._out.along_of(addr)
+            if mask == self._guard_mask and (self._lane is None or not along):
+                guards = [self._axis_guards[a] for a, _ in self._axes
+                          if a in along and a in self._axis_guards]
+                mask = reduce(lambda x, y: f'({x} & {y})', guards) if guards else None
+            elif not along:
+                addr = f'{addr} + tl.zeros_like({self._axes[-1][0]})'
+        if (held := self._out.load(addr, mask)) is not None:
+            return held
+        name = self._bind(f'tl.load({addr})' if mask is None
+                          else f'tl.load({addr}, mask={mask}, other=0.0)')
+        self._out.loaded(addr, mask, name)
+        return name
 
     def _visit_list_ref(self, e: ListRef, ctx: None) -> str:
         """A subscript: range arithmetic, an element of a tile or a literal,
@@ -1066,10 +1336,7 @@ class _Emitter(Visitor):
                 return str(tile)
             idx = self.emit(e.index)
             if self._out.wide & set(_IDENT.findall(idx)):
-                raise TritonEmitError(
-                    f'`{tile}` is read at an index that varies across its '
-                    'lanes, which is a gather'
-                )
+                return self._gather(tile, e.index, idx)
             code = self._extract(tile, idx)
             return code if self._lane is None else self._as_col(code)
         elems = self._elements(e.value)
@@ -1114,6 +1381,8 @@ class _Emitter(Visitor):
         otherwise the context must be a hardware conversion, native or
         directed.
         """
+        if isinstance(e, Round) and (fused := self._fused.get(id(e))) is not None:
+            return self._emit_fused_round(e, *fused)
         arg = self.emit(e.arg)
         ctx = self._active_ctx(e)
         if rounds_exactly(e, self.format_info.by_expr, ctx):
@@ -1126,14 +1395,8 @@ class _Emitter(Visitor):
             )
         if (v := _as_number(arg)) is not None and not isinstance(v, bool):
             return self._emit_rounded(e, v, ctx)
-        integral = _integral_round(ctx)
-        if integral is not None:
-            want = self._storage(e)
-            code = f'{integral}({arg})'
-            if want.is_float() and not getattr(ctx, 'enable_neg_zero', True):
-                code = f'({code} + 0.0)'    # `-0` is not an integer
-            return self._maybe_cast(code, self._storage(e.arg), want,
-                                    self.format_info.by_expr.get(e))
+        if _integral_round(ctx) is not None:
+            return self._integral(e, arg, self._storage(e.arg))
         if not is_native_ctx(ctx):
             return self._emit_downcast(e, arg, ctx)
         if ctx is not INTEGER and ctx in _int_ctxs() and self._storage(e.arg).is_float():
@@ -1141,6 +1404,132 @@ class _Emitter(Visitor):
                 f'a cast from a float into `{ctx}` saturates where the context wraps'
             )
         return self._explicit_cast(arg, self._storage(e))
+
+    def _fuse_rounds(self) -> None:
+        """Find the integral rounds of a `2 ** n * x` scale-in, as
+        `RescaleFixed` splits off, to lower as one operation in `x`'s float
+        storage `S`.
+
+        A round-to-zero or -nearest ignores anything below one half, and above
+        it `2 ** n * x` is exact in `S` unless it overflows.  So each round
+        must use such a mode with `|result| < 2 ** bias_S`, and `n` must be a
+        finite integer with `|n| <= 2 * (bias_S - 1)`, which keeps both
+        factors of :meth:`_scale_by_halves` normal.  The scale-in is not
+        materialized, so what it reads must reach each round unchanged; nor is
+        a `2 ** n` binding only such scale-ins use."""
+        stmt_of = {id(s.expr): s for _, s in walk_stmts(self.func) if isinstance(s, Assign)}
+        round_of = {
+            id(e.arg): e for _, e in walk_exprs(self.func)
+            if isinstance(e, Round) and isinstance(e.arg, Var) and id(e) in stmt_of
+        }
+        # each `2 ** n` binding's uses that are fused scale-ins
+        fused: dict[AssignDef, set[int]] = {}
+        # a phi reads its operands without a use to show for it
+        joined = {i for ps in self.def_use.phis.values() for p in ps for i in (p.lhs, p.rhs)}
+        for d in self.def_use.defs:
+            site = d.site
+            if (not isinstance(site, Assign) or not isinstance(site.expr, Mul)
+                    or self.def_use.def_to_idx[d] in joined):
+                continue
+            parts = self._scale_in(site.expr)
+            uses = self.def_use.uses.get(d, set())
+            if parts is None or not uses or any(id(u) not in round_of for u in uses):
+                continue
+            n, x, bound, var = parts
+            rounds = [round_of[id(u)] for u in uses]
+            try:
+                # libdevice has no `f16` integral round, and widening is exact
+                held = self._storage(x)
+                held = TritonScalar.F32 if held == TritonScalar.F16 else held
+                exact = self._active_ctx(site.expr) is REAL
+                ctxs = [self._active_ctx(r) for r in rounds]
+            except (TritonEmitError, StorageSelectionError):
+                continue
+            if not exact or held not in _LOGB:
+                continue
+            bias = _LOGB[held][0]
+            span = self.format_info.int_range(n)
+            if (span is None or max(-span[0], span[1]) > 2 * (bias - 1)
+                    or not self.classes.is_finite(n)):
+                continue
+            # re-emitted at each round: the reaching defs at each operand's
+            # site and the names it reads, none a list a store may change
+            reads = [(self.def_use.reach[site], _reads(x) | (set() if bound else _reads(n)))]
+            if bound is not None:
+                assert isinstance(bound.site, Assign)
+                reads.append((self.def_use.reach[bound.site], _reads(n)))
+            if any((dv := at.get(v)) is not None and isinstance(self.types.by_def.get(dv), ListType)
+                   for at, read in reads for v in read):
+                continue
+            if all(
+                isinstance(c, MPFixedContext) and _integral_round(c) is not None
+                and c.rm in _TO_ZERO_OR_NEAREST
+                and _magnitude(to_abstract(self.format_info.by_expr.get(r))) < 2 ** bias
+                and all(self.def_use.reach[stmt_of[id(r)]].get(v) is at.get(v)
+                        for at, read in reads for v in read)
+                for r, c in zip(rounds, ctxs)
+            ):
+                self._unmaterialized.add(d)
+                for r in rounds:
+                    self._fused[id(r)] = (n, x, held)
+                if bound is not None:
+                    fused.setdefault(bound, set()).add(id(var))
+        for p, ids in fused.items():
+            if (self.def_use.def_to_idx[p] not in joined
+                    and {id(u) for u in self.def_use.uses.get(p, set())} <= ids):
+                self._unmaterialized.add(p)
+
+    def _scale_in(self, e: Mul) -> tuple[Expr, Expr, AssignDef | None, Var | None] | None:
+        """*e* as ``(n, x, binding, name)`` where it is ``2 ** n * x``, the
+        power of two inline or a name bound to one it is exactly."""
+        if (parts := _scaled(e)) is not None:
+            return (*parts, None, None)
+        for scale, x in ((e.first, e.second), (e.second, e.first)):
+            if not isinstance(scale, Var):
+                continue
+            d = self.def_use.find_def_from_use(scale)
+            if (isinstance(d, AssignDef) and isinstance(d.site, Assign)
+                    and (n := _pow2_exponent(pow2 := d.site.expr)) is not None
+                    and self._rounds_exactly(pow2)):
+                return n, x, d, scale
+        return None
+
+    def _rounds_exactly(self, e: Expr) -> bool:
+        """Whether *e*'s context leaves it unrounded."""
+        try:
+            active = self._active_ctx(e)
+        except TritonEmitError:
+            return False
+        return active is REAL or rounds_exactly(e, self.format_info.by_expr, active)
+
+    def _emit_fused_round(self, e: Round, n: Expr, x: Expr, held: TritonScalar) -> str:
+        """``round(2 ** n * x)`` in `x`'s storage; :meth:`_fuse_rounds` says
+        when."""
+        return self._integral(e, self._scale_by_halves(self._emit_as(x, held), self.emit(n), held), held)
+
+    def _integral(self, e: Round | Cast, arg: str, have: TritonScalar) -> str:
+        """*e*, a rounding to the integers, of *arg* held in *have*."""
+        ctx = self._active_ctx(e)
+        integral = _integral_round(ctx)
+        assert integral is not None
+        code = f'{integral}({arg})'
+        want = self._storage(e)
+        if want.is_float() and not getattr(ctx, 'enable_neg_zero', True):
+            code = f'({code} + 0.0)'    # `-0` is not an integer
+        return self._maybe_cast(code, have, want, self.format_info.by_expr.get(e))
+
+    def _scale_by_halves(self, x: str, n: str, held: TritonScalar) -> str:
+        """``x * 2 ** n`` as two multiplies by powers of two built from their
+        bits, where one power of two would not be normal.  Both scale the same
+        way, so the product between them lies between `x` and the result:
+        it is exact wherever the result is."""
+        bias, mbits, _, _, _, ity = _LOGB[held]
+        t = self._bind(f'{n}.to({ity})')
+        h = self._bind(f'({t} >> 1)')
+
+        def pow2(k: str) -> str:
+            return f'(({bias} + {k}) << {mbits}).to({held.format()}, bitcast=True)'
+        return f'({x} * {pow2(h)} * {pow2(f"({t} - {h})")})'
 
     def _emit_rounded(self, e: Round | Cast, v: float, ctx: Context) -> str:
         """A literal rounded, folded here: Triton would retype it rather than
@@ -1256,6 +1645,38 @@ class _Emitter(Visitor):
             f'no Triton spelling for `{type(e).__name__}`'
         )
 
+    def _emit_pow2(self, e: Expr) -> str | None:
+        """``2 ** n``, `n` a bounded integer, from the exponent bits of the
+        narrowest float at least as wide as the storage whose normal range
+        holds it, then converted; or `None`.  A NaN or infinite `n` is selected
+        apart unless value classes prove it finite."""
+        n = _pow2_exponent(e)
+        if n is None or not self._rounds_exactly(e):
+            return None
+        try:
+            held = self._storage(e)
+        except StorageSelectionError:
+            return None
+        span = self.format_info.int_range(n)
+        if held not in _LOGB or span is None:
+            return None
+        lo, hi = span
+        wide = next((w for w in _LOGB if _LOGB[w][0] >= _LOGB[held][0]
+                     and 1 - _LOGB[w][0] <= lo and hi <= _LOGB[w][0]), None)
+        if wide is None:
+            return None
+        bias, mbits, *_, ity = _LOGB[wide]
+        finite = self.classes.is_finite(n)
+        k = self.emit(n) if finite else self._bind(self.emit(n))
+        bits = f'(({bias} + {k}.to({ity})) << {mbits}).to({wide.format()}, bitcast=True)'
+        if wide is not held:
+            bits = f'{bits}.to({held.format()})'
+        if finite:
+            return bits
+        inf = "float('inf')"
+        return (f"tl.where({k} != {k}, float('nan'), tl.where({k} == {inf}, {inf}, "
+                f'tl.where({k} == -{inf}, 0.0, {bits})))')
+
     def _emit_ldexp(self, e: Mul) -> str | None:
         """``2 ** n * v`` as ``libdevice.ldexp(v, n)``, or `None`.
 
@@ -1265,13 +1686,8 @@ class _Emitter(Visitor):
         is exact, it replaces the product only where the context does not
         round it.
         """
-        for scale, value in ((e.first, e.second), (e.second, e.first)):
-            if not isinstance(scale, Pow) or len(scale.args) != 2:
-                continue
-            base, exp = scale.args
-            if not (isinstance(base, RationalVal)
-                    and base.as_rational() == 2):
-                continue
+        if (parts := _scaled(e)) is not None:
+            exp, value = parts
             active = self._active_ctx(e)
             if active is not REAL and not rounds_exactly(
                 e, self.format_info.by_expr, active,
@@ -1286,11 +1702,8 @@ class _Emitter(Visitor):
             elif held.is_float():
                 # `ldexp` takes an `int32`: exact where every finite value
                 # is an integer it holds; a special one is on a masked-off row
-                af = to_abstract(self.format_info.by_expr.get(exp))
-                if af is None or af.exp < 0 or not all(
-                    isinstance(b, RealFloat) and abs(b) < 2 ** 31
-                    for b in (af.pos_bound, af.neg_bound)
-                ):
+                span = self.format_info.int_range(exp)
+                if span is None or max(-span[0], span[1]) >= 2 ** 31:
                     return None
                 n = f'{n}.to(tl.int32)'
             # `ldexp` computes in its argument's type: the product's storage,
@@ -1307,7 +1720,11 @@ class _Emitter(Visitor):
 
         A subnormal is first scaled exactly by `2**k` into the normals, and
         `k` taken back off.  The specials are `logB`'s own: `+/-0` is `-inf`,
-        `+/-inf` is `+inf`, a NaN is a NaN.
+        `+/-inf` is `+inf`, a NaN is a NaN.  Under a `max` with another
+        operand at least `emin` (:attr:`_logb_floor`), a zero or subnormal
+        reads its raw field, `emin - 1`, which the `max` discards; where value
+        classes prove *x* finite, there are no infinities or NaN to answer
+        for.
         """
         have = self._storage(e.arg)
         spec = _LOGB.get(have)
@@ -1327,14 +1744,18 @@ class _Emitter(Visitor):
         bias, mant, mask, min_normal, scale, ity = spec
         x = self.emit(e.arg)
         fty = want.format()
-        sub = f'(tl.abs({x}) < {min_normal!r})'
-        scaled = f'tl.where({sub}, {x} * {float(2 ** scale)!r}, {x})'
-        bits = f'({scaled}).to({ity}, bitcast=True)'
-        exp = f'((({bits} >> {mant}) & {mask}) - {bias})'
-        adj = f'tl.where({sub}, {exp} - {scale}, {exp}).to({fty})'
-        at_zero = f"tl.where(tl.abs({x}) == 0.0, float('-inf'), {adj})"
-        at_inf = (f"tl.where(tl.abs({x}) == float('inf'), float('inf'), "
-                  f'{at_zero})')
+        if self._logb_floor.get(id(e), -math.inf) >= 1 - bias:
+            finite = f'(((({x}).to({ity}, bitcast=True) >> {mant}) & {mask}) - {bias}).to({fty})'
+        else:
+            sub = f'(tl.abs({x}) < {min_normal!r})'
+            scaled = f'tl.where({sub}, {x} * {float(2 ** scale)!r}, {x})'
+            bits = f'({scaled}).to({ity}, bitcast=True)'
+            exp = f'((({bits} >> {mant}) & {mask}) - {bias})'
+            adj = f'tl.where({sub}, {exp} - {scale}, {exp}).to({fty})'
+            finite = f"tl.where(tl.abs({x}) == 0.0, float('-inf'), {adj})"
+        if self.classes.is_finite(e.arg):
+            return finite
+        at_inf = f"tl.where(tl.abs({x}) == float('inf'), float('inf'), {finite})"
         return f"tl.where({x} != {x}, float('nan'), {at_inf})"
 
     def _emit_reduction(self, e: UnaryOp) -> str:
@@ -1462,6 +1883,12 @@ class _Emitter(Visitor):
         operand."""
         name = 'tl.maximum' if isinstance(e, Max) else 'tl.minimum'
         want = self._storage(e)
+        if isinstance(e, Max):
+            for a in e.args:
+                if isinstance(a, Logb):
+                    self._logb_floor[id(a)] = max(
+                        (_least(self.format_info.by_expr.get(b)) for b in e.args if b is not a),
+                        default=-math.inf)
         args = self._weak([self._emit_as(a, want) for a in e.args],
                           [want] * len(e.args))
         if not args:
@@ -1492,7 +1919,7 @@ class _Emitter(Visitor):
                 f'`{e.name}` is a list held in registers, which has a value '
                 'only element by element'
             )
-        if self._lane is not None and str(e.name) in self._out.rows:
+        if self._lane is not None and str(e.name) in self._out.along:
             return f'{e.name}[:, None]'
         return str(e.name)
 
@@ -1553,6 +1980,8 @@ class _Emitter(Visitor):
             scaled = self._emit_ldexp(e)
             if scaled is not None:
                 return scaled
+        if (bits := self._emit_pow2(e)) is not None:
+            return bits
         return self._dispatch(e, self.op_table.binary, [
             (self.emit(e.first), e.first),
             (self.emit(e.second), e.second),
@@ -1647,6 +2076,8 @@ class _Emitter(Visitor):
                 f'a `{type(stmt.target).__name__}` assignment target has no '
                 'Triton spelling'
             )
+        if self.def_use.find_def_from_site(stmt.target, stmt) in self._unmaterialized:
+            return      # its rounds compute it
         if isinstance(stmt.expr, Empty):
             return self._allocate(stmt, ctx)
         if isinstance(stmt.expr, ListSlice) and (
@@ -1810,18 +2241,25 @@ class _Emitter(Visitor):
             return self._emit_branch(stmt, stmt.body, None, ctx)
         # a tile's guard only drops the over-run: nothing merges out of it
         prev, prev_guard = self.mask, self._guard_mask
-        self.mask = self._guard_mask = self.emit(stmt.cond)
+        cond = self.emit(stmt.cond)
+        if self._tile is not None:
+            self._axis_guards[self._tile] = cond
+        self.mask = self._guard_mask = cond if prev is None else f'({prev} & {cond})'
         self._visit_block(stmt.body, ctx)
         self.mask, self._guard_mask = prev, prev_guard
 
     def _visit_if(self, stmt: IfStmt, ctx: _IndentedWriter) -> None:
         self._emit_branch(stmt, stmt.ift, stmt.iff, ctx)
 
+    def _fresh(self) -> str:
+        """A temporary's name."""
+        self._next_tmp += 1
+        return f'__t{self._next_tmp - 1}'
+
     def _bind(self, code: str, shape: str | None = None) -> str:
         """*code*, evaluated once into a temporary ahead of the line being
         built; *shape* as for `add_line`."""
-        name = f'__t{self._next_tmp}'
-        self._next_tmp += 1
+        name = self._fresh()
         self._out.add_line(f'{name} = {code}', shape)
         return name
 
@@ -1886,10 +2324,37 @@ class _Emitter(Visitor):
         self._branches += 1
         prev_merging, self._merging = self._merging, self._merging | lists
         self.mask = cond if outer is None else f'({outer} & {cond})'
+        skip = self._lane is None and _size(ift.stmts) >= _SKIP_SIZE
+        if skip:
+            live = self._bind(self.mask)
+            at, before = ctx.mark(), ctx.defined()
+            shapes = {v: ctx.along.get(v) or ('wide' if v in ctx.wide else 'scalar')
+                      for v in before}
+            ctx.add_line(f'if tl.max({live}.to(tl.int32)) != 0:' if live in ctx.along
+                         else f'if {live}:')
+            ctx.indent()
         self._visit_block(ift, ctx)
         taken = {p.name: self._bind(str(p.name)) for p in phis}
         for v, code in saved.items():
             ctx.add_line(f'{v} = {code}')
+        if skip:
+            # Triton needs one type per name across the `if`: a name the arm
+            # reassigns is copied ahead and restored in the arm, a merged name
+            # gets a placeholder ahead, and a merged list keeps the arm's
+            # writes, its tail elements broadcast ahead
+            tails = {f'{v}_t{j}': self.tiles[v][2] for v in lists if v in self.tiles
+                     for j in range(self.tiles[v][1])}
+            written = ctx.reassigned() & before & ({str(v) for v in lists} | set(tails))
+            kept = sorted(ctx.reassigned() & before - {str(v) for v in saved} - written)
+            copies = {k: self._fresh() for k in kept}
+            for k in kept:
+                ctx.add_line(f'{k} = {copies[k]}', shapes[k])
+            ctx.dedent()
+            ctx.insert(at, [f'{copies[k]} = {k}' for k in kept] + [
+                f'{v} = {self._as_row(v, tails[v])}' for v in sorted(written & set(tails))
+            ] + [
+                f'{taken[p.name]} = {self._placeholder(p, taken[p.name])}'
+                for p in phis])
         restore(set())
         if iff is not None:
             self.mask = f'(~{cond})' if outer is None else f'({outer} & ~{cond})'
@@ -1902,6 +2367,15 @@ class _Emitter(Visitor):
         for p in phis:
             ctx.add_line(f'{p.name} = tl.where({cond}, {taken[p.name]}, {p.name})')
         restore(merged)
+
+    def _placeholder(self, p: Definition, name: str) -> str:
+        """A value of *name*'s type, for a skipped arm to leave it: no live row
+        selects it."""
+        held = self._class_storage(p)
+        if held is None:
+            raise TritonEmitError(f'`{p.name}` has no storage to hold across a skipped arm')
+        shape = self._shape(self._out.along.get(name, frozenset()))
+        return f'tl.zeros({shape}, dtype={held.format()})'
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:
         if any(stmt is t for t in self.tiled):
@@ -1928,15 +2402,16 @@ class _Emitter(Visitor):
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
+            ctx.forget(self._carried_names(stmt))
         else:
             # `static_range` counts from zero: the target is where the
             # count lands in `range(start, stop, step)`
-            k = f'__t{self._next_tmp}'
-            self._next_tmp += 1
+            k = self._fresh()
             start = self.emit(stmt.iterable.first)
             step = self.emit(stmt.iterable.third)
             ctx.add_line(f'for {k} in tl.static_range({n}):')
             ctx.indent()
+            ctx.forget(self._carried_names(stmt))
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
@@ -1946,11 +2421,12 @@ class _Emitter(Visitor):
 
         Triton holds a carried value at one type and shape on every
         iteration.  The type is its class's storage already; in a tile, each
-        carried name is broadcast to a row at entry and at every assignment.
+        carried name is broadcast to the tile axes' shape at entry and at
+        every assignment.
         """
         carried = carried_scalars(stmt, self.def_use)
         prev = self._carried
-        if self._tile is not None and carried:
+        if self._axes and carried:
             self._carried = {}
             for p in self.def_use.phis.get(stmt, ()):
                 if p.name not in carried:
@@ -1968,17 +2444,47 @@ class _Emitter(Visitor):
                 else [self.emit(a) for a in (it.first, it.second, it.third)])
         ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
         ctx.indent()
+        ctx.forget(self._carried_names(stmt))
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
         self._carried = prev
 
+    def _carried_names(self, stmt: ForStmt) -> set[str]:
+        """The names *stmt*'s body may find changed from the last iteration:
+        its target, what the body assigns, and the tails of lists it
+        writes."""
+        mutated = self.def_use.mutated_in(stmt.body)
+        return {str(stmt.target), *map(str, mutated), *(
+            f'{v}_t{j}' for v in mutated if v in self.tiles for j in range(self.tiles[v][1]))}
+
+    def _shape(self, along: frozenset[str]) -> str:
+        """The shape of a value varying along the tile axes *along*: `()` for
+        none, else one dimension per axis the kernel has (two under a tile of
+        rows), `1` where it does not vary."""
+        if not along:
+            return '()'
+        dims = [w if a in along else '1' for a, w in self._axes]
+        if self.block_m is not None:
+            dims += ['1'] * (2 - len(dims))
+        return f'({dims[0]},)' if len(dims) == 1 else f'({", ".join(dims)})'
+
+    def _enter_axis(self, index: str, width: str) -> None:
+        self._axes.append((index, width))
+        self._out.axes = frozenset(a for a, _ in self._axes)
+
+    def _leave_axis(self) -> None:
+        index, _ = self._axes.pop()
+        self._axis_guards.pop(index, None)
+        self._out.axes = frozenset(a for a, _ in self._axes)
+
     def _as_row(self, code: str, held: TritonScalar) -> str:
-        """*code*, broadcast across the tile's rows.  An integer is
+        """*code*, broadcast to the tile axes in force.  An integer is
         added to zeros, which also widens a name bound to Triton's `int32`;
         a float is not, as `-0.0 + 0.0` is `+0.0`."""
+        shape = self._shape(self._out.axes)
         if held.is_integer():
-            return f'({code} + tl.zeros(({self._row_width},), dtype={held.format()}))'
-        return f'tl.broadcast_to({self._typed(code, held, True)}, ({self._row_width},))'
+            return f'({code} + tl.zeros({shape}, dtype={held.format()}))'
+        return f'tl.broadcast_to({self._typed(code, held, True)}, {shape})'
 
     def _arg_storage(self, name: str) -> TritonScalar:
         """The storage of the elements kernel argument *name* points at."""
@@ -2017,7 +2523,8 @@ class _Emitter(Visitor):
             i = tl.program_id(0) * B
             j = i + tl.arange(0, B)
 
-        Any other shape is refused.
+        Under a tile of rows, `j` is a `[1, B]` row.  Any other shape is
+        refused.
         """
         outer = stmt.target
         it = stmt.iterable
@@ -2034,12 +2541,17 @@ class _Emitter(Visitor):
                 'a tiled loop should hold the tile loop it was split into'
             )
         self.grid_extent = self._extent(it.second)
+        # under a tile of rows, the column index takes the second dimension
+        cols = '[None, :]' if self._axes else ''
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
-        ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
+        self._enter_axis(str(inner.target), width)
+        ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width}){cols}',
+                     frozenset({str(inner.target)}))
         prev = self._tile, self._row_width
         self._tile, self._row_width = str(inner.target), width
         self._visit_block(inner.body, ctx)
         self._tile, self._row_width = prev
+        self._leave_axis()
 
     def _extent(self, stop: Expr) -> int | str | None:
         """How far a grid axis runs: a proven length, or the size parameter
@@ -2058,15 +2570,30 @@ class _Emitter(Visitor):
         )
 
     def _emit_grid(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:
-        """A loop the grid's second axis takes: one iteration per program."""
+        """A loop the grid's second axis takes: one iteration per program, or a
+        tile of `block_m` of them."""
         it = stmt.iterable
         if not isinstance(it, Range1) or not isinstance(stmt.target, NamedId):
             raise TritonEmitError('a grid axis should count a `range`')
         self.grid_outer = self._extent(it.arg)
         if self.grid_outer is None:
             raise TritonEmitError('a grid axis needs a length the launcher knows')
-        ctx.add_line(f'{stmt.target} = tl.program_id(1)')
+        if self.block_m is None:
+            ctx.add_line(f'{stmt.target} = tl.program_id(1)')
+            self._visit_block(stmt.body, ctx)
+            return
+        # `block_m` rows per program; the row index is a `[block_m, 1]` column
+        i = str(stmt.target)
+        self._enter_axis(i, self.block_m)
+        ctx.add_line(f'{i} = tl.program_id(1) * {self.block_m} + '
+                     f'tl.arange(0, {self.block_m})[:, None]', frozenset({i}))
+        live = self._bind(f'({i} < {self.emit(it.arg)})')
+        self._axis_guards[i] = live
+        prev = self.mask, self._guard_mask
+        self.mask = self._guard_mask = live
         self._visit_block(stmt.body, ctx)
+        self.mask, self._guard_mask = prev
+        self._leave_axis()
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter) -> None:
         for stmt in block.stmts:
@@ -2160,12 +2687,16 @@ class KernelSource:
     position and dimension whose length it is."""
 
     grid_outer: int | str | None = None
-    """How many programs the grid's second axis runs, one per iteration of
-    the loop around the tile, as :attr:`grid_extent` is spelled; ``None``
-    where the grid has one axis."""
+    """How many iterations of the loop around the tile the grid's second
+    axis covers, as :attr:`grid_extent` is spelled; ``None`` where the grid
+    has one axis."""
 
     block: str | None = None
     """The tile width's parameter, a `tl.constexpr` the launcher picks."""
+
+    block_m: str | None = None
+    """The second axis's tile height, likewise, where each program takes
+    that many of its iterations; ``None`` where it takes one."""
 
     writes: tuple[str, ...] = ()
     """The pointer parameters the kernel stores through, which tuning runs
@@ -2218,7 +2749,11 @@ def emit_kernel(
     """
     if not isinstance(func, FuncDef):
         raise TypeError(f"Expected a 'FuncDef', got {func}")
-    emitter = _Emitter(func, tiled, drop_asserts, guards, lanes, grid)
+    # tile the grid's rows too, unless a lane loop needs one row per program
+    block_m = f'{block}_M' if grid and not lanes and block is not None else None
+    if block_m is not None and any(str(a.name) == block_m for a in func.args):
+        raise TritonEmitError(f'`{block_m}` names an argument and the second tile axis')
+    emitter = _Emitter(func, tiled, drop_asserts, guards, lanes, grid, block_m)
 
     params: list[str] = []
     size_params: list[tuple[str, int, int]] = []
@@ -2227,6 +2762,8 @@ def emit_kernel(
         name = str(arg.name)
         if name == block:
             params.append(f'{name}: tl.constexpr')
+            if block_m is not None:
+                params.append(f'{block_m}: tl.constexpr')
         elif isinstance(arg.type, ListTypeAnn):
             params.append(f'{name}_ptr')
             assert isinstance(arg.name, NamedId)
@@ -2268,6 +2805,7 @@ def emit_kernel(
         grid_extent=emitter.grid_extent,
         grid_outer=emitter.grid_outer,
         block=block,
+        block_m=block_m,
         writes=tuple(p for p in params if p in emitter.written),
         shapes=tuple(shapes),
         dtypes=dtypes,

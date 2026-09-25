@@ -47,8 +47,9 @@ rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
 never correct.
 
-Scalars only: a list or tuple carries no class, and reading an element gives the
-top class.
+A list or tuple carries no class of its own; a list's elements share one per
+region, or per definition where a region holds several lists
+(:data:`_ElementKey`).
 
 Not yet taught: the sign of a zero, which would let ``signbit`` refine;
 magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
@@ -70,7 +71,7 @@ from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..number import REAL, Context, Float
 from ..number.context.format import Format
-from ..types import RealType, Type
+from ..types import ListType, RealType, Type
 from .alias import Alias, AliasAnalysis, Region
 from .array_size import (
     ArraySizeAnalysis,
@@ -402,6 +403,12 @@ def _exact_select(args: list[ValueClass], *, is_max: bool) -> ValueClass:
     return out
 
 
+_ElementKey: TypeAlias = 'Region | Definition'
+"""What a fact about every element of a list is kept under: its region, where
+that abstracts one list, else the definition naming it, which is one list
+wherever it is read.  Either lasts until a store into the region."""
+
+
 def _trackable(alias: AliasAnalysis, region: 'Region | None') -> 'Region | None':
     """*region*, unless no fact about its elements may be recorded.
 
@@ -470,8 +477,9 @@ class ValueClassAnalysis:
     alias: AliasAnalysis
     """Underlying alias analysis: which lists may be the same location.  A class
     for a list's *elements* is a property of that location rather than of a
-    name, so a `Region` -- the set of locations a place may hold -- is the key.
-    See :meth:`element_region`."""
+    name, so a `Region` -- the set of locations a place may hold -- is the key,
+    or the naming definition where a region holds several lists
+    (:data:`_ElementKey`).  See :meth:`element_region`."""
 
     type_info: TypeAnalysis
     """Underlying basic-type analysis, which decides what carries a class."""
@@ -486,7 +494,7 @@ class ValueClassAnalysis:
     refine_at: dict[Expr, dict[Definition, ValueClass]]
     """The refinement each expression was read under."""
 
-    elements_seen: dict[Expr, dict[Region, ValueClass]]
+    elements_seen: dict[Expr, dict[_ElementKey, ValueClass]]
     """What every element of each list is, wherever each expression is read."""
 
     def class_at(self, d: Definition, e: Expr) -> ValueClass:
@@ -495,9 +503,9 @@ class ValueClassAnalysis:
         base = cls if isinstance(cls, ValueClass) else _TOP
         return base & self.refine_at.get(e, {}).get(d, _TOP)
 
-    def elements_at(self, region: Region, e: Expr) -> ValueClass:
-        """What every element of *region* is wherever *e* is evaluated."""
-        return self.elements_seen.get(e, {}).get(region, _TOP)
+    def elements_at(self, key: _ElementKey, e: Expr) -> ValueClass:
+        """What every element of *key*'s list is wherever *e* is evaluated."""
+        return self.elements_seen.get(e, {}).get(key, _TOP)
 
     def element_region(self, e: Expr) -> 'Region | None':
         """The region whose elements a fact about the list *e* belongs to, or
@@ -543,10 +551,11 @@ class _ValueClassInstance(DefaultVisitor):
     """Single-use instance of value-class analysis."""
 
     _ROUNDS_PER_PHI = len(_ATOMS)
-    """A phi gains at least one atom per round until it stops growing, so this
-    many rounds per phi is enough to reach a fixpoint.  Exceeding it means a
-    transfer function is not monotone -- a bug -- and the phis drop to the top
-    class rather than the loop running forever."""
+    """A phi, or a region's elements, gains at least one atom per round until
+    it stops growing, so this many rounds per phi and per region is enough to
+    reach a fixpoint.  Exceeding it means a transfer function is not monotone
+    -- a bug -- and every phi and region's elements drop to the top class
+    rather than the loop running forever."""
 
     func: FuncDef
     type_info: TypeAnalysis
@@ -556,8 +565,8 @@ class _ValueClassInstance(DefaultVisitor):
     by_expr: dict[Expr, ValueClass | None]
     arm_facts: dict[Stmt, tuple[list[tuple[Definition, ValueClass]], ...]]
     refine_at: dict[Expr, dict[Definition, ValueClass]]
-    elements_seen: dict[Expr, dict[Region, ValueClass]]
-    _elements_now: tuple[dict, dict, int, dict[Region, ValueClass]] | None
+    elements_seen: dict[Expr, dict[_ElementKey, ValueClass]]
+    _elements_now: tuple[dict, dict, int, dict[_ElementKey, ValueClass]] | None
 
     alias: AliasAnalysis
 
@@ -571,6 +580,11 @@ class _ValueClassInstance(DefaultVisitor):
     _touched: dict[Region, int]
     """When each region's elements last changed.  Monotone and never restored,
     so a store anywhere already walked voids a fact taken before it."""
+
+    _stored_at: dict[Region, int]
+    """When a store last landed in each region: :attr:`_touched` without
+    :meth:`_retouch`'s re-stamps, which void an arm's facts but store
+    nothing.  A scan's mask holds until this passes its exit."""
 
     _scanned: dict[ForStmt, int]
     """For a loop that did *not* store into the list it iterates, that list's
@@ -600,8 +614,9 @@ class _ValueClassInstance(DefaultVisitor):
     """Per-definition mask the enclosing branches imply, intersected into every
     read of that definition.  Saved and restored around each arm."""
 
-    _refine_elt: dict[Region, tuple[ValueClass, int]]
-    """The same, per region, with the :attr:`_touched` stamp it was taken at.
+    _refine_elt: dict[_ElementKey, tuple[ValueClass, int]]
+    """The same, per list (:data:`_ElementKey`), with the :attr:`_touched`
+    stamp of its region it was taken at.
 
     :attr:`_refine` needs no stamp, a rebind making a new `Definition` where a
     list's contents change under a fixed one.  An arm *restores* this map, so
@@ -623,6 +638,7 @@ class _ValueClassInstance(DefaultVisitor):
         self._stored = {}
         self._clock = 0
         self._touched = {}
+        self._stored_at = {}
         self._scanned = {}
         self._scan_clocks = {}
         self._sizes_cache = None
@@ -709,43 +725,65 @@ class _ValueClassInstance(DefaultVisitor):
         region = self._region_of(e)
         return region if region is not None and self._one_list(region) else None
 
+    def _list_key(self, e: Expr) -> '_ElementKey | None':
+        """What a fact about every element of the list *e* names is kept
+        under; see :data:`_ElementKey`."""
+        region = self._region_of(e)
+        if region is None or self._one_list(region):
+            return region
+        return self.def_use.find_def_from_use(e) if isinstance(e, Var) else None
+
+    def _key_stamp(self, key: _ElementKey) -> int:
+        """The :attr:`_touched` stamp of *key*'s region; `-1` where no fact
+        about it may be kept."""
+        region = key if isinstance(key, Region) else _trackable(
+            self.alias, self.alias.region_of(key))
+        return -1 if region is None else self._stamp(region)
+
     def _elements_of(self, e: Expr) -> ValueClass:
-        """What every element of the list *e* names currently is."""
+        """What every element of the list *e* names currently is: what its
+        region holds, and what the branches say of that list."""
         region = self._region_of(e)
         if region is None:
             return _TOP
-        return self._elt.get(region, _TOP) & self._mask_of(region)
+        cls = self._elt.get(region, _TOP) & self._mask_of(region)
+        key = self._list_key(e)
+        return cls if key is None or key == region else cls & self._mask_of(key)
 
-    def _elements_here(self) -> dict[Region, ValueClass]:
-        """:meth:`_elements_of` for every region with a fact, shared until a
+    def _elements_here(self) -> dict[_ElementKey, ValueClass]:
+        """:meth:`_elements_of` for every list with a fact, shared until a
         store, a refinement or a join changes one."""
         now = self._elements_now
         if (now is None or now[0] is not self._elt
                 or now[1] is not self._refine_elt or now[2] != self._clock):
-            regions = {*self._elt, *self._refine_elt}
+            keys = {*self._elt, *self._refine_elt}
             now = self._elements_now = (self._elt, self._refine_elt, self._clock, {
-                r: self._elt.get(r, _TOP) & self._mask_of(r) for r in regions})
+                k: (self._elt.get(k, _TOP) if isinstance(k, Region) else _TOP)
+                & self._mask_of(k) for k in keys})
         return now[3]
 
     def _stamp(self, region: Region) -> int:
         return self._touched.get(region, 0)
 
-    def _touch(self, region: Region):
-        """Record that *region*'s elements changed."""
+    def _touch(self, region: Region, store: bool = True) -> None:
+        """Record that *region*'s elements changed, by a store unless a join
+        is only voiding what an arm said of them."""
         self._clock += 1
         self._touched[region] = self._clock
+        if store:
+            self._stored_at[region] = self._clock
 
     def _retouch(self, clock: int) -> None:
         """Touch every region stored into since *clock* again: past a join,
         those stores only may have happened."""
         for region in [r for r, t in self._touched.items() if t > clock]:
-            self._touch(region)
+            self._touch(region, store=False)
 
-    def _mask_of(self, region: Region) -> ValueClass:
-        """What the enclosing branches imply about *region*'s elements, or the
+    def _mask_of(self, key: _ElementKey) -> ValueClass:
+        """What the enclosing branches imply about *key*'s elements, or the
         top class once a store has landed since that was taken."""
-        cls, stamp = self._refine_elt.get(region, (_TOP, 0))
-        return cls if stamp == self._stamp(region) else _TOP
+        cls, stamp = self._refine_elt.get(key, (_TOP, 0))
+        return cls if stamp == self._key_stamp(key) else _TOP
 
     def _store_element(self, region: 'Region | None', cls: ValueClass):
         """Record a store of *cls* into *region*, which joins: the elements the
@@ -820,14 +858,20 @@ class _ValueClassInstance(DefaultVisitor):
             out[d] = out.get(d, _TOP) & cls
         # re-stamped, so an entry a store has already invalidated reads as the
         # top class here rather than coming back as this arm's starting point
-        out_elt = {r: (self._mask_of(r), self._stamp(r)) for r in saved_elt}
+        out_elt = {k: (self._mask_of(k), self._key_stamp(k)) for k in saved_elt}
         todo = self._implied_elements(cond, truth)
         while todo:
-            region, cls = todo.pop()
-            prev, _ = out_elt.get(region, (_TOP, 0))
-            out_elt[region] = (prev & cls, self._stamp(region))
-            if not cls & (_NAN | _INF):
-                todo.extend((src, _ZERO | _FINITE) for src in self._filled_from(region))
+            key, cls = todo.pop()
+            prev, _ = out_elt.get(key, (_TOP, 0))
+            out_elt[key] = (prev & cls, self._key_stamp(key))
+            # only a region has fill sites to follow; a definition key shares
+            # its region's
+            if not cls & (_NAN | _INF) and isinstance(key, Region):
+                srcs, scalars = self._filled_from(key)
+                todo.extend((src, _ZERO | _FINITE) for src in srcs)
+                for d in scalars:
+                    for i, c in [(d, _ZERO | _FINITE), *self._finite_operands(d)]:
+                        out[i] = out.get(i, _TOP) & c
         self._refine, self._refine_elt = out, out_elt
         try:
             yield
@@ -952,7 +996,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_elements(
         self, cond: Expr, truth: bool
-    ) -> 'list[tuple[Region, ValueClass]]':
+    ) -> 'list[tuple[_ElementKey, ValueClass]]':
         """What *cond* being *truth* says about the elements of a list."""
         match cond:
             case Not():
@@ -981,7 +1025,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_elements_at(
         self, d: Definition, truth: bool
-    ) -> 'list[tuple[Region, ValueClass]]':
+    ) -> 'list[tuple[_ElementKey, ValueClass]]':
         """:meth:`_implied_at`, for the elements of a list."""
         if isinstance(d, AssignDef) and isinstance(d.site, Assign):
             return self._implied_elements(d.site.expr, truth)
@@ -990,7 +1034,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_universal(
         self, d: 'Definition | None', truth: bool
-    ) -> 'list[tuple[Region, ValueClass]]':
+    ) -> 'list[tuple[_ElementKey, ValueClass]]':
         """What a *lowered* ``all`` / ``any`` being *truth* says about the list
         it scanned.
 
@@ -1019,16 +1063,14 @@ class _ValueClassInstance(DefaultVisitor):
         if not isinstance(stmt.target, NamedId):
             return []
         region = self._region_of(stmt.iterable)
+        key = self._list_key(stmt.iterable)
         # a store since the exit -- or one the loop made itself, which leaves
-        # no entry -- means the list read is not the list scanned, and a region
-        # holding two lists means scanning one says nothing about the other
-        if region is None or not self._one_list(region):
-            return []
-        if self._scanned.get(stmt) != self._stamp(region):
+        # no entry -- means the list read is not the list scanned
+        if region is None or key is None or self._scanned.get(stmt) != self._stamp(region):
             return []
         target = self.def_use.find_def_from_site(stmt.target, stmt)
         return [
-            (region, cls)
+            (key, cls)
             for td, cls in self._implied_fold(d, truth)
             if td == target
         ]
@@ -1067,7 +1109,7 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _implied_mask(
         self, mask: Expr, truth: bool
-    ) -> 'list[tuple[Region, ValueClass]]':
+    ) -> 'list[tuple[_ElementKey, ValueClass]]':
         """What a *materialised* ``all`` / ``any`` being *truth* says about the
         list the mask was computed from.
 
@@ -1132,7 +1174,7 @@ class _ValueClassInstance(DefaultVisitor):
         name for the same list is not, and neither is a callee's.
         """
         region = self._sole_region(mask)
-        return region is not None and self._stamp(region) <= exited
+        return region is not None and self._stored_at.get(region, 0) <= exited
 
     def _is_target(self, e: Expr, loop: ForStmt) -> bool:
         """Whether *e* names *loop*'s target."""
@@ -1143,8 +1185,8 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _scanned_by(
         self, d: Definition, loop: ForStmt, entry: int
-    ) -> 'Region | None':
-        """The region *d* reads an element of, where *loop* covers it and
+    ) -> '_ElementKey | None':
+        """The list *d* reads an element of, where *loop* covers it and
         nothing has stored into it since the clock read *entry*.  ``None``
         where *d* is not such a read, or where any of that is unproven."""
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
@@ -1154,12 +1196,12 @@ class _ValueClassInstance(DefaultVisitor):
             return None
         if not self._is_target(ref.index, loop):
             return None
-        region = self._sole_region(ref.value)
-        if region is None:
+        key = self._list_key(ref.value)
+        if key is None:
             return None
         # a store since before the scan leaves the elements the predicate
         # tested different from the ones the list holds now
-        if self._stamp(region) > entry:
+        if self._key_stamp(key) > entry:
             return None
         # and the loop must have run once per element, not over a prefix
         size = self.sizes.by_def.get(self.def_use.find_def_from_use(ref.value))
@@ -1167,7 +1209,7 @@ class _ValueClassInstance(DefaultVisitor):
             return None
         if not size_eq(trip_count(loop.iterable, self.sizes), size.size):
             return None
-        return region
+        return key
 
     def _implied_compare(
         self, cond: Compare, truth: bool
@@ -1230,12 +1272,28 @@ class _ValueClassInstance(DefaultVisitor):
         non-finite, and so does a non-finite numerator -- not denominator,
         since ``x / inf`` is zero.  Through a rounding only where the context
         keeps a non-finite value non-finite."""
+        if (src := self._finite_source(d)) is not d:
+            return [(src, _ZERO | _FINITE), *self._finite_operands(src)]
         if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
             return []
         e = d.site.expr
         if isinstance(e, Var):
             return self._at(e, _ZERO | _FINITE)
         return [i for a in self._exact_operands(e) for i in self._at(a, _ZERO | _FINITE)]
+
+    def _finite_source(self, d: Definition) -> Definition:
+        """Where *d*'s value comes from wherever it is finite: through an
+        `if`'s phi, the one side that can be finite, where only one can -- as
+        the other arms of an overflow's lowering are infinities.  Not a loop's:
+        its body side is a previous round's, under a definition this round
+        shares."""
+        while isinstance(d, PhiDef) and not isinstance(d.site, ForStmt | WhileStmt):
+            sides = [self.def_use.defs[i] for i in (d.lhs, d.rhs)]
+            live = [side for side in sides if self._def_class(side) & (_ZERO | _FINITE)]
+            if len(live) != 1:
+                break
+            d = live[0]
+        return d
 
     def _exact_operands(self, e: Expr) -> list[Expr]:
         """The operands *e* being finite makes finite; see
@@ -1258,40 +1316,75 @@ class _ValueClassInstance(DefaultVisitor):
             return []
         return operands
 
-    def _filled_from(self, region: Region) -> 'list[Region]':
-        """Lists whose elements are finite wherever *region*'s are: *region*'s
-        only store is in one loop covering it, storing an exact op of
-        same-index reads of lists that loop also covers and that were
-        unchanged when it began."""
+    def _filled_from(self, region: Region) -> 'tuple[list[_ElementKey], list[Definition]]':
+        """`(lists, scalars)` finite wherever *region*'s elements are:
+        *region*'s only store is in one loop covering it, storing exact ops,
+        however nested, of same-index reads of lists the loop covers and that
+        were unchanged when it began, or, where the list is nonempty, of
+        scalars."""
         sites = self._fill_sites().get(region, [])
         if len(sites) != 1:
-            return []
+            return [], []
         store, loop = sites[0]
         if loop is None:
-            return []
+            return [], []
         clocks = self._scan_clocks.get(loop)
         if clocks is None or len(store.indices) != 1 or not self._is_target(store.indices[0], loop):
-            return []
+            return [], []
         entry, exited = clocks
         if self._stamp(region) > exited or not self._covers(loop, store):
-            return []
-        out: list[Region] = []
-        for a in self._exact_operands(self._through_names(store.expr)):
-            a = self._through_names(a)
-            if not isinstance(a, ListRef) or not isinstance(a.value, Var):
-                continue
-            src = self._sole_region(a.value)
-            if (src is not None and self._is_index(a.index, loop)
-                    and self._stamp(src) <= entry
-                    and self._covers(loop, a.value)):
+            return [], []
+        size = self.sizes.by_def.get(self.def_use.find_def_from_use(store))
+        nonempty = isinstance(size, ListSize) and isinstance(size.size, int) and size.size > 0
+        lists: list[_ElementKey] = []
+        scalars: list[Definition] = []
+        for name, a in self._exact_leaves(store.expr):
+            if (isinstance(a, ListRef) and isinstance(a.value, Var)
+                    and self._is_index(a.index, loop)):
+                src = self._list_key(a.value)
+                if (src is not None and 0 <= self._key_stamp(src) <= entry
+                        and self._covers(loop, a.value)):
+                    lists.append(src)
+            elif (nonempty and name is not None
+                    and isinstance(self.type_info.by_expr.get(name), RealType)):
+                # the loop's own phi holds, past the loop, what the last round
+                # left, which may be rebound after its store: nowhere along
+                # the names the store reads through
+                chain = self._name_chain(name)
+                if not any(isinstance(d, PhiDef) and d.site is loop for d in chain):
+                    scalars.append(chain[0])
+        return lists, scalars
+
+    def _name_chain(self, e: Expr) -> list[Definition]:
+        """The definitions :meth:`_through_names` passes from *e*, first
+        to last."""
+        out: list[Definition] = []
+        while isinstance(e, Var) and (d := self.def_use.use_to_def.get(e)) is not None:
+            out.append(d)
+            if (src := self._finite_source(d)) is not d:
                 out.append(src)
+            if not isinstance(src, AssignDef) or not isinstance(src.site, Assign):
+                break
+            e = src.site.expr
         return out
 
+    def _exact_leaves(self, e: Expr) -> list[tuple[Var | None, Expr]]:
+        """What *e* is an exact op of, through names and nested ops, each with
+        the name it was read through, if any: each is finite wherever *e*
+        is."""
+        name = e if isinstance(e, Var) else None
+        e = self._through_names(e)
+        ops = self._exact_operands(e)
+        return [leaf for a in ops for leaf in self._exact_leaves(a)] if ops else [(name, e)]
+
     def _through_names(self, e: Expr) -> Expr:
-        """*e*, or the expression the name *e* was assigned: what inlining
-        leaves between a store and the operation it stores."""
+        """*e*, or the expression the name *e* was assigned wherever it is
+        finite: what inlining leaves between a store and the operation it
+        stores, and a lowered overflow's join (:meth:`_finite_source`)."""
         while isinstance(e, Var):
             d = self.def_use.use_to_def.get(e)
+            if d is not None:
+                d = self._finite_source(d)
             if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
                 break
             e = d.site.expr
@@ -1510,6 +1603,33 @@ class _ValueClassInstance(DefaultVisitor):
                     self._stored[region] = _BOT
                 self._touch(region)
 
+    def _seed_params(self, func: FuncDef) -> None:
+        """A list parameter's elements are in the format its type pins them
+        to, as a scalar parameter is.  A region holding a list built any
+        other way keeps the top class, so a region is seeded only where every
+        list it holds is such a parameter."""
+        pinned: dict[tuple[Expr | Argument, int], ValueClass] = {}
+        regions: set[Region] = set()
+        for arg in func.args:
+            if not isinstance(arg.name, NamedId):
+                continue
+            d = self.def_use.find_def_from_site(arg.name, arg)
+            ty, depth = self.type_info.by_def.get(d), 0
+            while isinstance(ty, ListType):
+                if isinstance(ty.elt, RealType) and ty.elt.fmt is not None:
+                    region = _trackable(self.alias, self.alias.region_of(d, depth))
+                    if region is not None:
+                        pinned[(arg, depth)] = representable_classes_of(ty.elt.fmt)
+                        regions.add(region)
+                ty, depth = ty.elt, depth + 1
+        for region in regions:
+            sites = self.alias.sites_at(region)
+            if sites and all(s.kind == 'param' and (s.node, s.depth) in pinned for s in sites):
+                cls = _BOT
+                for s in sites:
+                    cls |= pinned[(s.node, s.depth)]
+                self._elt[region] = cls
+
     def _region_of_def(self, target, site, depth: int = 0) -> 'Region | None':
         """The region *depth* list levels inside what *target* binds at *site*.
         ``depth`` is what a nested store writes through."""
@@ -1634,16 +1754,20 @@ class _ValueClassInstance(DefaultVisitor):
         """Drives a loop's phi classes to convergence.
 
         A phi's class starts at what reached the loop and is re-joined with the
-        body's result until two rounds agree.  Joining only ever adds atoms and
+        body's result until two rounds agree, and so is the element class of
+        every region the body stores into.  Joining only ever adds atoms and
         there are finitely many, so the sequence stops on its own; if it has not
-        stopped after :attr:`_ROUNDS_PER_PHI` rounds per phi, a transfer
-        function is not monotone and every phi is dropped to the top class.
+        stopped after :attr:`_ROUNDS_PER_PHI` rounds per phi and per region, a
+        transfer function is not monotone and every phi and region's elements
+        drop to the top class.
         """
         phis = self.def_use.phis[stmt]
         for phi in phis:
             self._set_def(phi, self._def_class(self.def_use.defs[phi.lhs]))
         entry = dict(self._elt)
-        for _ in range(self._ROUNDS_PER_PHI * len(phis) + 1):
+        rounds = 0
+        while rounds <= self._ROUNDS_PER_PHI * (len(phis) + len(self._elt)):
+            rounds += 1
             prev = ({phi: self.by_def[phi] for phi in phis}, dict(self._elt))
             run_body()
             for phi in phis:
@@ -1676,6 +1800,7 @@ class _ValueClassInstance(DefaultVisitor):
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
                 self._set_def(d, _arg_class(self.type_info.by_def.get(d)))
+        self._seed_params(func)
         for v in func.free_vars:
             self._set_def(self.def_use.find_def_from_site(v, func), _TOP)
         self._visit_block(func.body, ctx)

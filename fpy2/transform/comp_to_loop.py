@@ -116,6 +116,9 @@ class _CompToLoopInstance(SiteRewriter):
     """whether to lower a dependent clause list (:meth:`_lower_dependent`).  On
     unless a consumer opts out, since it costs a materialised row per outer
     element"""
+    index_ranges: bool
+    """whether a comprehension over `range(a, b, s)` loops over its trip `k`,
+    binding `a + s * k` (see :meth:`CompToLoop.apply`)"""
     _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
@@ -128,6 +131,7 @@ class _CompToLoopInstance(SiteRewriter):
         where: int | Cursor | None = None,
         temp_id: NamedId | None = None,
         dependent: bool = True,
+        index_ranges: bool = False,
     ):
         self.func = func
         self.def_use = def_use
@@ -135,6 +139,7 @@ class _CompToLoopInstance(SiteRewriter):
         self.gensym = Gensym(reserved=def_use.names())
         self.where = where
         self.dependent = dependent
+        self.index_ranges = index_ranges
         self._fill = None
 
     # ------------------------------------------------------------------
@@ -350,11 +355,20 @@ class _CompToLoopInstance(SiteRewriter):
             not self._inlinable(iters[0])
             or isinstance(e.targets[0], UnderscoreId)
         )
-        if len(e.targets) == 1 and indexed:
+        # or, with `index_ranges`, count a range's trip and compute its target
+        counted = (self.index_ranges and isinstance(iters[0], Range2 | Range3)
+                   and isinstance(e.targets[0], NamedId))
+        if len(e.targets) == 1 and (indexed or counted):
             idx = self.gensym.refresh(self.temp_id)
             src = iters[0]
             stmts: list[Stmt] = []
-            if not isinstance(e.targets[0], UnderscoreId):
+            if not indexed:
+                assert isinstance(src, Range2 | Range3)
+                step = Mul(clone(src.third), Var(idx, loc), loc) if isinstance(src, Range3) else Var(idx, loc)
+                stmts.append(integer_ctx([Assign(
+                    copy_target(e.targets[0]), None, Add(clone(src.first), step, loc), loc,
+                )], loc))
+            elif not isinstance(e.targets[0], UnderscoreId):
                 # a discarded target binds nothing the element can read, and a
                 # subscript has no effect to keep
                 stmts.append(Assign(
@@ -523,6 +537,7 @@ class CompToLoop:
     def apply(
         func: FuncDef, *, where: int | Cursor | None = None,
         temp_id: NamedId | None = None, dependent: bool = True,
+        index_ranges: bool = False,
     ) -> FuncDef:
         """
         Lowers every comprehension of `func` it can into an allocation plus a
@@ -534,15 +549,21 @@ class CompToLoop:
         `dependent=False` opts out of lowering a clause list whose length is a
         sum rather than a product, which costs a materialised row per outer
         element where every other shape allocates once and fills.
+
+        `index_ranges=True` loops a comprehension over `range(a, b, s)` by its
+        trip count, the target computed as `a + s * k`: for a consumer that
+        subscripts a range arithmetically rather than materialising it.
         """
         return CompToLoop.apply_with_edits(
             func, where=where, temp_id=temp_id, dependent=dependent,
+            index_ranges=index_ranges,
         ).result
 
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *, where: int | Cursor | None = None,
         temp_id: NamedId | None = None, dependent: bool = True,
+        index_ranges: bool = False,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced.
 
@@ -559,6 +580,7 @@ class CompToLoop:
         def_use = DefineUse.analyze(func)
         vtor = _CompToLoopInstance(
             func, def_use, where, temp_id, dependent=dependent,
+            index_ranges=index_ranges,
         )
         out = vtor.apply()
         vtor.check_site('a comprehension')

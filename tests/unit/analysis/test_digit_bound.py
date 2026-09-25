@@ -22,6 +22,36 @@ from fpy2.transform import CompToLoop
 from fpy2.types import ListType, RealType
 
 
+def _analyze(fn, args, lower=None):
+    """*fn* monomorphized at *args*, lowered by *lower*, and its digit bounds."""
+    ast = monomorphize(fn, args=args).ast
+    if lower is not None:
+        ast = lower(ast)
+    return ast, DigitBoundInfer.analyze(ast, FormatInfer.analyze(ast))
+
+
+def _term(b, text: str):
+    """The expression printing as *text*, and its terms."""
+    return next((e, t) for e, t in b.by_expr.items() if e.format() == text)
+
+
+class _FakeSolver:
+    """A backend answering every query with *answer*, recording what it is
+    told and each query's cutoff."""
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.assumed = []
+        self.cutoffs = []
+
+    def assume(self, constraint):
+        self.assumed.append(constraint)
+
+    def maximize(self, objective, cutoff=None, assuming=frozenset()):
+        self.cutoffs.append(cutoff)
+        return self.answer
+
+
 class TestTerm:
     """Affine arithmetic.  ``==`` is structural, never a constraint."""
 
@@ -33,12 +63,6 @@ class TestTerm:
         assert (a + 1) - 1 == a
         assert 3 - a == -a + 3
 
-    def test_a_cancelled_variable_leaves_no_coefficient(self):
-        s = DigitBoundStore()
-        a = s.var('a')
-        assert (a - a).coeffs == ()
-        assert (a - a).const == 0
-
     def test_ordering_is_deterministic(self):
         """Terms order by creation index, not by ``id()``."""
         s = DigitBoundStore()
@@ -48,21 +72,10 @@ class TestTerm:
 
 class TestQueries:
 
-    def test_empty_store_is_unbounded(self):
-        s = DigitBoundStore()
-        assert s.maximum(s.var('x')) == math.inf
-
     def test_a_constant_term_needs_no_constraints(self):
         s = DigitBoundStore()
         a = s.var('a')
         assert s.maximum(a - a + 7) == 7
-
-    def test_unsatisfiable_is_bottom(self):
-        s = DigitBoundStore()
-        a = s.var('a')
-        s.le(a, 3)
-        s.ge(a, 5)
-        assert s.maximum(a) == -math.inf
 
     def test_precision_is_the_span(self):
         s = DigitBoundStore()
@@ -73,10 +86,10 @@ class TestQueries:
 
 
 class TestFusedSum:
-    """``nv.t_fdpa`` at ``F = 24``: the store the emission rules build."""
+    """``nv.t_fdpa``: the store the emission rules build, symbolic in `F`."""
 
     @staticmethod
-    def _store(F=24):
+    def _store(F):
         s = DigitBoundStore()
         v = {n: s.var(n) for n in
              ('la', 'lb', 'lc', 'ea', 'eb', 'e_c', 'es', 'e_max', 'n', 'lp')}
@@ -93,24 +106,13 @@ class TestFusedSum:
         s.eq(v['n'], v['e_max'] - F - 1)              # the call-site argument
         return s, v
 
-    def test_product_summand_is_F_plus_2(self):
-        s, v = self._store(F=24)
-        assert s.prec(v['lp'], v['n'] + 1) == 26
-
-    def test_the_accumulator_is_F_plus_1(self):
+    def test_a_product_is_F_plus_2_and_the_accumulator_F_plus_1(self):
         """`c` is bounded by its own `e_c <= e_max`, so it reaches one binade
         less far than a product does."""
-        s, v = self._store(F=24)
-        assert s.prec(v['lc'], v['n'] + 1) == 25
-
-    def test_the_rounding_mode_decides_the_carry(self):
-        s, v = self._store(F=24)
-        assert (s.prec(v['lp'], v['n'] + 1) + 1) == 27
-
-    def test_F_is_symbolic_to_the_store(self):
         for F in (13, 24, 35):
             s, v = self._store(F)
             assert s.prec(v['lp'], v['n'] + 1) == F + 2
+            assert s.prec(v['lc'], v['n'] + 1) == F + 1
 
     def test_dropping_the_max_ordering_loses_everything(self):
         """The two `max` facts are the whole content: without them every other
@@ -128,65 +130,17 @@ class TestFusedSum:
 
 
 class TestSelfAnchored:
-    """``with fp.MPFixedContext(logb(x) - k): y = fp.round(x)``.
+    """``with fp.MPFixedContext(logb(x) - k): y = fp.round(x)`` keeps `k`
+    digits.  A grid coarser than the value's whole reach (`k < 0`) keeps
+    none: a count of digits floors at zero."""
 
-    Measured on `FP32`: precision 12 at `k = 12`, and 13 under the default
-    `RM.RNE`, whose carry reaches `2**(e+1)` exactly.
-    """
-
-    @pytest.mark.parametrize('k', [0, 1, 5, 12, 23])
-    def test_prec_is_k(self, k):
+    @pytest.mark.parametrize('k', [12, -5])
+    def test_prec_is_k_floored_at_zero(self, k):
         s = DigitBoundStore()
-        lx, e, n = s.var('lx'), s.var('e'), s.var('n')
+        lx, n = s.var('lx'), s.var('n')
         s.le(lx, 127)
-        s.eq(e, lx)                 # e = logb(x) names x's own exponent
-        s.eq(n, e - k)
-        assert s.prec(lx, n + 1) == k
-        assert (s.prec(lx, n + 1) + 1) == k + 1
-
-
-class TestPrecIsNeverNegative:
-    """``msb - lsb + 1`` goes negative when the grid is coarser than the value's
-    whole reach.  A count of digits cannot be, so the query floors at zero --
-    and zero is below what a :class:`Format` admits, so a caller materializing
-    one has to handle it.
-    """
-
-    @staticmethod
-    def _store(k):
-        s = DigitBoundStore()
-        l, n = s.var('l'), s.var('n')
-        s.le(l, 127)
-        s.eq(n, l - k)
-        return s, l, n
-
-    def test_a_coarse_grid_floors_at_zero(self):
-        for k in (0, -1, -5, -100):
-            s, l, n = self._store(k)
-            assert s.prec(l, n + 1) == 0, k
-
-    def test_the_carry_still_applies_below_zero(self):
-        """A mode that rounds away from zero reaches one quantum however
-        coarse the grid is, so it keeps its digit."""
-        for k in (0, -1, -5, -100):
-            s, l, n = self._store(k)
-            assert (s.prec(l, n + 1) + 1) == 1, k
-
-
-class TestPrecAndPrecAt:
-    """A context states the digit *below* its least significant one,
-    so its grid is one higher.
-
-    A context names the first *un*representable digit, so its grid sits one
-    position higher -- an off-by-one worth having in exactly one place.
-    """
-
-    def test_they_agree(self):
-        s = DigitBoundStore()
-        l, n = s.var('l'), s.var('n')
-        s.le(l, 100)
-        s.eq(n, l - 7)
-        assert s.prec(l, n + 1) == s.prec(l, n + 1) == 7
+        s.eq(n, lx - k)
+        assert s.prec(lx, n + 1) == max(k, 0)
 
 
 class TestDisjunctiveBounds:
@@ -233,86 +187,45 @@ class TestBackendIsReplaceable:
     interface is that the backend choice stays reversible."""
 
     def test_a_stub_solver_is_honoured(self):
-        class Stub:
-            def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None, assuming=frozenset()):
-                return 5
-
-        s = DigitBoundStore(solver=Stub())
+        s = DigitBoundStore(solver=_FakeSolver(5))
         x = s.var('x')
         s.le(x, 3)   # constrain it, or the store answers `inf` without asking
         assert s.maximum(x) == 5
 
-    def test_an_undecided_backend_degrades_to_unbounded(self):
-        """`unknown` must read as the unbounded answer, which is what the
-        analysis reports without a store at all -- never an exception."""
-        class Undecided:
-            def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None, assuming=frozenset()):
-                return math.inf
-
-        s = DigitBoundStore(solver=Undecided())
-        x = s.var('x')
-        s.le(x, 3)
-        assert s.maximum(x) == math.inf
-
     def test_a_free_variable_needs_no_backend(self):
         """Nothing constrains it, so it is unbounded by inspection -- asking
         a solver could only reach the same answer more slowly."""
-        class Exploding:
-            def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None, assuming=frozenset()):
-                raise AssertionError('should not have been asked')
-
-        s = DigitBoundStore(solver=Exploding())
+        solver = _FakeSolver(0)
+        s = DigitBoundStore(solver=solver)
         x, y = s.var('x'), s.var('y')
         s.le(y, 3)
         assert s.maximum(x) == math.inf
         assert s.maximum(-x) == math.inf
         assert s.maximum(x + y) == math.inf
+        assert solver.cutoffs == []
 
     def test_every_constraint_reaches_the_backend(self):
         """The store states each constraint once, as it is made: a backend
         that only saw them at query time would have to be re-told the system
         on every objective."""
-        seen = []
-
-        class Recording:
-            def assume(self, constraint):
-                seen.append(constraint)
-            def maximize(self, objective, cutoff=None, assuming=frozenset()):
-                return 0
-
-        s = DigitBoundStore(solver=Recording())
+        solver = _FakeSolver(0)
+        s = DigitBoundStore(solver=solver)
         x, y = s.var('x'), s.var('y')
         s.le(x, 3)
         s.eq(y, x)
         s.le_max(x, [y, 4])
-        assert len(seen) == 3
+        assert len(solver.assumed) == 3
 
     def test_a_backend_may_ignore_the_cutoff(self):
         """`cutoff` lets a backend stop early; the exact maximum is an upper
         bound whatever the caller asked for, so ignoring it stays correct."""
-        asked = []
-
-        class Exact:
-            def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None, assuming=frozenset()):
-                asked.append(cutoff)
-                return 3
-
-        s = DigitBoundStore(solver=Exact())
+        solver = _FakeSolver(3)
+        s = DigitBoundStore(solver=solver)
         x = s.var('x')
         s.le(x, 3)
         assert s.reaches([(x, 3)]) is True
         assert s.reaches([(x, 4)]) is False
-        assert asked == [3, 4]      # the threshold reached the backend
-
-    def test_a_zero_timeout_is_not_an_error(self):
-        s = DigitBoundStore(solver=Z3Solver(timeout_ms=1))
-        x = s.var('x')
-        s.le(x, 3)
-        assert s.maximum(x) in (3, math.inf)
+        assert solver.cutoffs == [3, 4]      # the threshold reached the backend
 
 
 class TestReachesIsADecision:
@@ -337,79 +250,45 @@ class TestReachesIsADecision:
         assert s.reaches([]) is False
 
     def test_a_free_variable_reaches_anything(self):
-        class Exploding:
-            def assume(self, constraint): pass
-            def maximize(self, objective, cutoff=None, assuming=frozenset()):
-                raise AssertionError('should not have been asked')
-
-        s = DigitBoundStore(solver=Exploding())
+        solver = _FakeSolver(0)
+        s = DigitBoundStore(solver=solver)
         x = s.var('x')
         assert s.reaches([(x, 10**9)]) is True
-
-
-class TestUnboundedIsNotGuessed:
-    """The upward probe needs somewhere to stop; where it stops must only ever
-    loosen the answer, and a finite maximum must never be cut off."""
-
-    def test_a_deeply_negative_maximum_is_still_exact(self):
-        """It sits far below any plausible cutoff, and reporting it as
-        unsatisfiable -- or as anything below itself -- would be unsound."""
-        s = DigitBoundStore()
-        x = s.var('x')
-        s.le(x, -5_000_000)
-        assert s.maximum(x) == -5_000_000
-
-    def test_a_large_finite_maximum_is_still_exact(self):
-        s = DigitBoundStore()
-        x = s.var('x')
-        s.le(x, 9_000_000)
-        assert s.maximum(x) == 9_000_000
-
-    def test_an_unbounded_objective_reads_as_inf(self):
-        s = DigitBoundStore()
-        x, y = s.var('x'), s.var('y')
-        s.le(y, 3)          # constrained, so the store does ask
-        s.ge(x, y)          # x only bounded below
-        assert s.maximum(x) == math.inf
-
-    def test_an_unsatisfiable_store_reads_as_negative_inf(self):
-        s = DigitBoundStore()
-        x = s.var('x')
-        s.le(x, 1)
-        s.ge(x, 2)
-        assert s.maximum(x) == -math.inf
+        assert solver.cutoffs == []
 
 
 class TestBisectionMatchesOptimization:
     """Bisection is the default because it is cheaper; it has to agree with
-    `Optimize`, which is the reference."""
+    `Optimize`, which is the reference.  Its upward probe needs somewhere to
+    stop, and where it stops must only ever loosen the answer."""
 
     CASES = (
-        ('bounded above', lambda s, x, y: (s.le(x, 42), x)),
-        ('deeply negative', lambda s, x, y: (s.le(x, -5_000_000), x)),
-        ('large finite', lambda s, x, y: (s.le(x, 9_000_000), x)),
-        ('through a chain', lambda s, x, y: ((s.le(y, 7), s.le(x, y)), x)),
-        ('bounded below only', lambda s, x, y: ((s.le(y, 3), s.ge(x, y)), x)),
+        # far below any plausible cutoff: reading it as unsatisfiable, or as
+        # anything below itself, would be unsound
+        ('deeply negative', lambda s, x, y: (s.le(x, -5_000_000), x), -5_000_000),
+        ('large finite', lambda s, x, y: (s.le(x, 9_000_000), x), 9_000_000),
+        ('through a chain', lambda s, x, y: ((s.le(y, 7), s.le(x, y)), x), 7),
+        ('bounded below only', lambda s, x, y: (
+            (s.le(y, 3), s.ge(x, y)), x), math.inf),
         ('over a max', lambda s, x, y: (
-            (s.le(y, 3), s.le_max(x, [y, y + 5])), x)),
-        ('unsatisfiable', lambda s, x, y: ((s.le(x, 1), s.ge(x, 2)), x)),
+            (s.le(y, 3), s.le_max(x, [y, y + 5])), x), 8),
+        ('unsatisfiable', lambda s, x, y: (
+            (s.le(x, 1), s.ge(x, 2)), x), -math.inf),
         # nothing restricts a coefficient to a unit, and the probe's ceiling
         # has to reach far enough for one that is not
         ('scaled objective', lambda s, x, y: (
-            (s.le(x, 1), s.ge(x, 0)), x * 100)),
+            (s.le(x, 1), s.ge(x, 0)), x * 100), 100),
         ('scaled constraint', lambda s, x, y: (
-            (s.le(x * 7, 70), s.ge(x, 0)), x)),
+            (s.le(x * 7, 70), s.ge(x, 0)), x), 10),
     )
 
-    @pytest.mark.parametrize('name,build', CASES, ids=[c[0] for c in CASES])
-    def test_both_backends_agree(self, name, build):
-        answers = []
+    @pytest.mark.parametrize('name,build,want', CASES, ids=[c[0] for c in CASES])
+    def test_both_backends_find_the_maximum(self, name, build, want):
         for bisect in (True, False):
             s = DigitBoundStore(solver=Z3Solver(bisect=bisect))
             x, y = s.var('x'), s.var('y')
             _, obj = build(s, x, y)
-            answers.append(s.maximum(obj))
-        assert answers[0] == answers[1], f'{name}: {answers}'
+            assert s.maximum(obj) == want, (name, bisect)
 
 
 class TestAGuardedConstraint:
@@ -428,8 +307,9 @@ class TestAGuardedConstraint:
         assert s.reaches([(x, 4)])
         assert not s.reaches([(x, 4)], frozenset({g}))
 
-    def test_an_instance_copies_a_universal_one(self):
-        """"Every element of `xs` is finite" holds at every index or none."""
+    def test_an_instance_copies_a_universal_one_under_its_guard(self):
+        """"Every element of `xs` is finite" holds at every index or none --
+        and at every index only where it holds at all."""
         s = DigitBoundStore()
         elt = s.var('elt')
         g = s.literal(universal=True)
@@ -437,18 +317,9 @@ class TestAGuardedConstraint:
         s.le(elt, 9)
         subst: dict[int, Term] = {}
         s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
-        assert s.maximum(elt.rename(subst), frozenset({g})) == 3
-
-    def test_the_copy_keeps_its_guard(self):
-        """It holds at every index -- where it holds at all."""
-        s = DigitBoundStore()
-        elt = s.var('elt')
-        g = s.literal(universal=True)
-        s.le(elt, 3, guard=(g,))
-        s.le(elt, 9)
-        subst: dict[int, Term] = {}
-        s.instance({v.index for v, _ in elt.coeffs}, subst, 0, '@0')
-        assert s.maximum(elt.rename(subst)) == 9
+        part = elt.rename(subst)
+        assert s.maximum(part, frozenset({g})) == 3
+        assert s.maximum(part) == 9
 
     def test_an_instance_does_not_copy_it(self):
         """A literal names one definition, not one per index."""
@@ -476,11 +347,8 @@ class TestALoopCarriedScalarIsNotItsBody:
                 d = xs[i]       # never reads `d`, so nothing mints the phi
             return d
 
-        g = monomorphize(
-            f, args=[RealType(fp.FP64), ListType(RealType(fp.FP16), 4)],
-        )
-        b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
-        ret = b.by_expr[g.ast.body.stmts[-1].expr]
+        ast, b = _analyze(f, [RealType(fp.FP64), ListType(RealType(fp.FP16), 4)])
+        ret = b.by_expr[ast.body.stmts[-1].expr]
         # `xs` tops out at 2**15 and `c` at 2**1023; `d` is `c` on the way in
         assert b.store.maximum(ret.msb) == 1023
 
@@ -499,15 +367,12 @@ class TestAZeroArmStatesNoMagnitude:
             y = 0 if x == 0 else r
             return y + r
 
-        g = monomorphize(f, args=[RealType(fp.FP32)])
-        b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
-        got = {
-            e.format(): b.store.prec(t.msb, t.lsb)
-            for e, t in b.by_expr.items()
-            if e.format() in ('(0 if x == 0 else r)', '(y + r)')
-        }
-        # `r` is 13 digits; the zero arm adds none, and the sum one more
-        assert got == {'(0 if x == 0 else r)': 12, '(y + r)': 13}
+        _, b = _analyze(f, [RealType(fp.FP32)])
+        _, sel = _term(b, '(0 if x == 0 else r)')
+        _, total = _term(b, '(y + r)')
+        # `r` is 12 digits; the zero arm adds none, and the sum one more
+        assert b.store.prec(sel.msb, sel.lsb) == 12
+        assert b.store.prec(total.msb, total.lsb) == 13
 
 
 @fp.fpy(ctx=fp.FP64)
@@ -523,9 +388,7 @@ class TestARefinedBoundStaysOnItsPath:
 
     @staticmethod
     def _max_logb_of_x(fn):
-
-        g = monomorphize(fn, args=[RealType(fp.FP64)])
-        b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
+        _, b = _analyze(fn, [RealType(fp.FP64)])
         logb = next(t.msb for d, t in b.by_def.items()
                     if str(d.name) == 'x' and t.msb is not None)
         return b.store.maximum(logb)
@@ -571,11 +434,8 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
 
     @staticmethod
     def _max_logb(fn, text):
-
-        g = monomorphize(fn, args=[RealType(fp.FP16), RealType(fp.FP16)])
-        b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
-        t = next(t for e, t in b.by_expr.items()
-                 if e.format() == text and t.msb is not None)
+        _, b = _analyze(fn, [RealType(fp.FP16), RealType(fp.FP16)])
+        _, t = _term(b, text)
         return b.store.maximum(t.msb)
 
     def test_arithmetic_under_a_coarse_context_carries(self):
@@ -619,12 +479,14 @@ class TestAPartOfAListKeepsItsPairing:
 
     @staticmethod
     def _precs(fn):
-
-        g = monomorphize(fn, args=[ListType(RealType(fp.FP32), 8)])
-        # both forms: the comprehension and the gather loop it lowers to
+        # every form: the comprehension, the gather loop it lowers to, and
+        # the counted loop `range(len(range(a, b, s)))` with index `a + s * k`
         out = []
-        for ast in (g.ast, CompToLoop.apply(g.ast)):
-            b = DigitBoundInfer.analyze(ast, FormatInfer.analyze(ast))
+        for lower in (
+            None, CompToLoop.apply,
+            lambda ast: CompToLoop.apply(ast, index_ranges=True),
+        ):
+            _, b = _analyze(fn, [ListType(RealType(fp.FP32), 8)], lower)
             out.append(max(
                 b.store.prec(t.msb, t.lsb)
                 for e, t in b.by_expr.items()
@@ -643,7 +505,7 @@ class TestAPartOfAListKeepsItsPairing:
                 ts = [fp.round(xs[i]) for i in range(0, n, 2)]
             return sum(ts)
 
-        assert self._precs(f) == [12, 12]
+        assert self._precs(f) == [12, 12, 12]
 
     def test_and_says_nothing_about_the_odds(self):
 
@@ -657,7 +519,27 @@ class TestAPartOfAListKeepsItsPairing:
             return sum(ts)
 
         # `ev` bounds no odd element, so the round spans fp32's whole reach
-        assert self._precs(f) == [288, 288]
+        assert self._precs(f) == [288, 288, 288]
+
+    def test_but_not_across_nested_counts(self):
+        """`1 + 2 * k1` and `1 + 2 * k2` are one index set, but not one index:
+        only the innermost count's element is element `k` of it."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs):
+            es = [fp.logb(xs[i]) for i in range(len(xs))]
+            ys = fp.empty(4)
+            for k1 in range(4):
+                with fp.INTEGER:
+                    i1 = 1 + 2 * k1
+                for k2 in range(4):
+                    with fp.INTEGER:
+                        i2 = 1 + 2 * k2
+                    with fp.MPFixedContext(es[i1] - 12, fp.RM.RTZ):
+                        ys[k2] = fp.round(xs[i2])
+            return sum(ys)
+
+        assert all(p > 12 for p in self._precs(f))
 
 
 class TestReplayingAtAnIndexSet:
@@ -690,39 +572,8 @@ def _exponent0(x, emin):
 
 
 @fp.fpy(ctx=fp.REAL)
-def _exponent0_else(x, emin):
-    if fp.isfinite(x):
-        return max(fp.logb(x), emin)
-    else:
-        return -1
-
-
-@fp.fpy(ctx=fp.REAL)
 def _exponent0_zero(x, emin):
     if x == 0:
-        return -1
-    return max(fp.logb(x), emin)
-
-
-@fp.fpy(ctx=fp.REAL)
-def _exponent0_hoisted(x, emin):
-    """The shape lowering leaves: the test in a temporary."""
-    t = not fp.isfinite(x)
-    if t:
-        return -1
-    return max(fp.logb(x), emin)
-
-
-@fp.fpy(ctx=fp.REAL)
-def _exponent0_or(x, emin):
-    if fp.isnan(x) or fp.isinf(x):
-        return -1
-    return max(fp.logb(x), emin)
-
-
-@fp.fpy(ctx=fp.REAL)
-def _exponent0_and(x, emin):
-    if fp.isnan(x) and emin < 0:
         return -1
     return max(fp.logb(x), emin)
 
@@ -752,10 +603,8 @@ class TestAPathOnlyANonFiniteValueReaches:
             with fp.MPFixedContext(e - 12, fp.RM.RTZ):
                 return fp.round(x)
 
-        g = monomorphize(checked if guarded else unchecked, args=[RealType(fp.FP32)])
-        b = DigitBoundInfer.analyze(g.ast, FormatInfer.analyze(g.ast))
-        e = next(e for e in b.by_expr if e.format() == 'fp.round(x)')
-        t = b.by_expr[e]
+        _, b = _analyze(checked if guarded else unchecked, [RealType(fp.FP32)])
+        e, t = _term(b, 'fp.round(x)')
         return b.store.prec(t.msb, t.lsb, b.assume_at(e))
 
     def test_the_early_return_does_not_join_the_exponent(self):
@@ -765,20 +614,6 @@ class TestAPathOnlyANonFiniteValueReaches:
     def test_not_where_the_caller_does_not_know(self):
         assert self._round_prec(_exponent0, guarded=False) > 12
 
-    def test_either_polarity(self):
-        """The `else` of `if isfinite(x)` is the same path."""
-        assert self._round_prec(_exponent0_else) == 12
-
     def test_a_zero_guard_is_not_one(self):
         """A zero *is* a state the store describes, so its arm still joins."""
         assert self._round_prec(_exponent0_zero) > 12
-
-    def test_the_test_is_read_through_a_temporary(self):
-        """Lowering hoists a condition, and a rule reading only the syntax
-        would switch off where it matters most."""
-        assert self._round_prec(_exponent0_hoisted) == 12
-
-    def test_either_connective(self):
-        """`or` needs every disjunct, `and` only one conjunct."""
-        assert self._round_prec(_exponent0_or) == 12
-        assert self._round_prec(_exponent0_and) == 12

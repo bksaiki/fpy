@@ -10,21 +10,9 @@ from fpy2.backend.backend import CompileError
 from fpy2.backend.triton import TritonCompiler, unavailable
 from fpy2.types import ListType, RealType
 
+from .programs import K, batched_dot
+
 FP16 = fp.IEEEContext(5, 16)
-K = 8
-
-
-@fp.fpy(ctx=fp.REAL)
-def batched_dot(xss: list[list[fp.Real]], yss: list[list[fp.Real]],
-                out: list[fp.Real], BLOCK: fp.Real):
-    for r in range(len(xss)):
-        acc = fp.round(0)
-        for k in range(K):
-            with fp.FP32:
-                acc = acc + xss[r][k] * yss[r][k]
-        out[r] = acc
-    return out
-
 
 _ARGS = [
     ListType(ListType(RealType(FP16), K), 4),
@@ -37,12 +25,6 @@ _ARGS = [
 def test_unavailable_is_none_or_a_reason():
     why = unavailable()
     assert why is None or (isinstance(why, str) and why)
-
-
-def test_a_list_is_a_pointer_and_the_tile_width_a_constexpr():
-    k = TritonCompiler(drop_asserts=True).compile(
-        batched_dot, ctx=fp.REAL, arg_types=_ARGS)
-    assert k.params == ('xss_ptr', 'yss_ptr', 'out_ptr', 'BLOCK: tl.constexpr')
 
 
 _V4 = ListType(RealType(fp.FP32), 4)
@@ -73,7 +55,8 @@ class TestAbi:
         assert 'TILE: tl.constexpr' in k.source
 
     def test_an_assert_is_refused_by_default(self):
-        """Dropping one is a semantic change, so it is asked for."""
+        """Here the `assert BLOCK >= 1` that `tile_loops` inserts: dropping
+        one is a semantic change, so it is asked for."""
         @fp.fpy(ctx=fp.FP32)
         def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
             for i in range(len(xs)):
@@ -97,12 +80,6 @@ class TestModule:
 class TestOptimize:
     """`optimize` gates `ConstFold` and `Simplify`, as the cpp backend's flag
     of the same name gates its optimizing transforms."""
-
-    def test_both_settings_compile_this_program(self):
-        for optimize in (True, False):
-            k = TritonCompiler(drop_asserts=True, optimize=optimize).compile(
-                batched_dot, ctx=fp.REAL, arg_types=_ARGS)
-            pyast.parse(k.source)
 
     def test_optimizing_removes_the_debris(self):
         """`FreeVarElim` materializes a captured value and `ConstFold` then

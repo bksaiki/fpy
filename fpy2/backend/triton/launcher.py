@@ -83,21 +83,37 @@ def load_kernel(src: KernelSource) -> Any:
 TUNING: tuple[tuple[int, int], ...] = (
     (16, 4), (32, 2), (32, 8), (64, 4), (64, 8), (128, 4), (128, 8),
 )
-"""The (block, warps) pairs :func:`launch` tries when it picks the block."""
+"""The (block, warps) pairs :func:`launch` tries when it picks the block, for
+a kernel without :attr:`~KernelSource.block_m`."""
+
+TUNING_2D: tuple[tuple[int, int, int], ...] = (
+    (16, 64, 4), (32, 32, 4), (32, 64, 4), (64, 32, 4), (64, 64, 4), (64, 64, 8),
+    (128, 16, 4), (128, 32, 8),
+)
+"""The (block, block_m, warps) triples it tries for a kernel with
+:attr:`~KernelSource.block_m`."""
+
+def _configs(src: KernelSource) -> list[tuple[int, int, int]]:
+    """The (block, block_m, warps) triples *src* is tuned over."""
+    return [(b, 1, w) for b, w in TUNING] if src.block_m is None else list(TUNING_2D)
+
 
 _TUNED: dict[str, Any] = {}
 """Kernels wrapped in `triton.autotune`, keyed by source as `_LOADED` is."""
 
 
 def _tuned(src: KernelSource) -> Any:
-    """*src* under `triton.autotune`: each of `TUNING` timed on the first
-    launch at each shape, keyed on the sizes the kernel takes, and every
+    """*src* under `triton.autotune`: each of :func:`_configs` timed on the
+    first launch at each shape, keyed on the sizes the kernel takes, and every
     argument it stores through restored between configs, since each one is
     run more than once."""
     import triton
     cached = _TUNED.get(src.source)
     if cached is None:
-        configs = [triton.Config({src.block: b}, num_warps=w) for b, w in TUNING]
+        configs = [
+            triton.Config({src.block: b} if src.block_m is None else {src.block: b, src.block_m: bm},
+                          num_warps=w)
+            for b, bm, w in _configs(src)]
         cached = _TUNED[src.source] = triton.autotune(
             configs, key=[name for name, _, _ in src.sizes],
             restore_value=list(src.writes),
@@ -110,18 +126,20 @@ def launch(
     args: Sequence[Any],
     *,
     block: int | None = None,
+    block_m: int = 1,
     grid: int | None = None,
 ) -> None:
     """Run *src* over *args*, which are `torch.Tensor`s and scalars.
 
-    *block* is the tile width; left out, the launch picks it, and the number
-    of warps with it, from `TUNING` by timing each on the first launch at a
-    shape.
+    *block* is the tile width, and *block_m* the second axis's tile height
+    where the kernel has one (:attr:`KernelSource.block_m`); with *block*
+    left out, the launch picks both, and the number of warps with them, from
+    `TUNING` or `TUNING_2D` by timing each on the first launch at a shape.
 
     *grid* defaults to covering :attr:`KernelSource.grid_extent` in tiles of
     *block*: the last instance runs a full tile, its excess rows masked off.
-    A second axis, where there is one, runs :attr:`KernelSource.grid_outer`
-    programs.
+    A second axis, where there is one, covers :attr:`KernelSource.grid_outer`
+    in tiles of *block_m*.
 
     ``enable_fp_fusion`` is taken from *src*, which knows whether contracting
     a multiply-add is observable.  ``enable_reflect_ftz`` is off: libdevice
@@ -136,7 +154,9 @@ def launch(
     import triton
 
     named = _named(src, args)
-    _check_layout(src, named, block)
+    if src.block_m is None:
+        block_m = 1     # one program per iteration of the second axis
+    _check_layout(src, named, block, block_m)
     # an unproven length is read off the tensor that has it
     sizes = {name: named[src.params[pos]].shape[depth] for name, pos, depth in src.sizes}
     # before compiling, which is costly
@@ -145,22 +165,25 @@ def launch(
             'this kernel tiled nothing, so its grid has no extent to derive; '
             'pass `grid` explicitly'
         )
-    outer = () if src.grid_outer is None else (_extent(src.grid_outer, sizes),)
-    if 0 in outer or (grid is None and _extent(src.grid_extent, sizes) == 0):
+    rows = None if src.grid_outer is None else _extent(src.grid_outer, sizes)
+    if rows == 0 or (grid is None and _extent(src.grid_extent, sizes) == 0):
         return  # nothing to compute, and no grid to launch it on
 
-    def dims(width: int) -> tuple[int, ...]:
+    def dims(width: int, height: int) -> tuple[int, ...]:
         n = triton.cdiv(_extent(src.grid_extent, sizes), width) if grid is None else grid
-        return (n, *outer)
+        return (n,) if rows is None else (n, triton.cdiv(rows, height))
 
     options = {'enable_fp_fusion': src.enable_fp_fusion, 'enable_reflect_ftz': False}
     if block is not None:
         tile = {} if src.block is None else {src.block: block}
-        load_kernel(src)[dims(block)](**named, **tile, **sizes, **options)
+        if src.block_m is not None:
+            tile[src.block_m] = block_m
+        load_kernel(src)[dims(block, block_m)](**named, **tile, **sizes, **options)
         return
     if src.block is None:
         raise CompileError('there is nothing to tune over; pass `block`')
-    _tuned(src)[lambda meta: dims(meta[src.block])](**named, **sizes, **options)
+    _tuned(src)[lambda meta: dims(meta[src.block], meta.get(src.block_m, 1))](
+        **named, **sizes, **options)
 
 
 def _named(src: KernelSource, args: Sequence[Any]) -> dict[str, Any]:
@@ -168,7 +191,7 @@ def _named(src: KernelSource, args: Sequence[Any]) -> dict[str, Any]:
     the sizes, in order."""
     names = [
         p for p in src.params[:len(src.params) - len(src.sizes)]
-        if p != f'{src.block}: tl.constexpr'
+        if p not in (f'{src.block}: tl.constexpr', f'{src.block_m}: tl.constexpr')
     ]
     if len(args) != len(names):
         raise TypeError(f'the kernel takes {len(names)} arguments, not {len(args)}')
@@ -179,7 +202,9 @@ _MAX_OFFSET = 2 ** 31 - 1
 """The kernel's offsets are `int32`."""
 
 
-def _check_layout(src: KernelSource, named: dict[str, Any], block: int | None) -> None:
+def _check_layout(
+    src: KernelSource, named: dict[str, Any], block: int | None, block_m: int,
+) -> None:
     """Refuse a tensor the kernel's offsets do not describe.
 
     The kernel computes row-major offsets from the shape it was compiled for,
@@ -189,7 +214,9 @@ def _check_layout(src: KernelSource, named: dict[str, Any], block: int | None) -
     `int32`.  It does not copy: a copy of an output would take the writes.
     """
     import torch
-    reach = block if block is not None else max(b for b, _ in TUNING)
+    if block is None:
+        block = max(b for b, _, _ in _configs(src))
+        block_m = max(bm for _, bm, _ in _configs(src))
     dtypes = dict(src.dtypes)
     lengths: dict[str, tuple[str, int]] = {}
     for pos, dims in src.shapes:
@@ -206,6 +233,8 @@ def _check_layout(src: KernelSource, named: dict[str, Any], block: int | None) -
         want_dtype = _torch_dtype(dtypes[pos]) if pos in dtypes else t.dtype
         if t.dtype != want_dtype:
             raise ValueError(f'`{name}` holds {t.dtype}; the kernel was compiled for {want_dtype}')
+        # the last tile of rows may run `block_m - 1` rows past the end
+        reach = block + (block_m - 1) * (t.numel() // max(t.shape[0], 1) if t.dim() else 0)
         if t.numel() + reach - 1 > _MAX_OFFSET:
             raise ValueError(
                 f'`{name}` has {t.numel()} elements, too many for the '

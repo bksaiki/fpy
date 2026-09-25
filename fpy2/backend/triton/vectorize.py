@@ -414,8 +414,8 @@ class TileResult:
     """The loops beneath the tiles that run across a tile's lanes, unsplit."""
 
     grid: list[ForStmt]
-    """The loop the grid's second axis takes, one iteration per program,
-    where there is one (:func:`_grid`)."""
+    """The loop the grid's second axis takes, one iteration per program or a
+    tile of them, where there is one (:func:`_grid`)."""
 
     def rewritten(self, func: FuncDef) -> 'TileResult':
         """This result for *func*, a rewrite of :attr:`func` that preserves

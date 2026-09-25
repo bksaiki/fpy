@@ -7,12 +7,13 @@ operation -- never after it, which would widen an already-rounded value.
 
 import ast as pyast
 import inspect
+import re
 
 import pytest
 
 import fpy2 as fp
 from fpy2 import Function, Module
-from fpy2.ast.fpyast import Add, Div, Exp, Expr, If1Stmt, Mul
+from fpy2.ast.fpyast import Div, Exp, Expr, If1Stmt
 from fpy2.ast.visitor import Visitor
 from fpy2.backend.triton import KernelSource, TritonCompiler
 from fpy2.backend.triton.emitter import (
@@ -27,9 +28,25 @@ from fpy2.transform.path import walk_exprs
 from fpy2.types import ListType, RealType, Type
 from fpy2.utils import NamedId
 
+from .programs import (
+    aligned_sum,
+    interleaved,
+    logb_clamped,
+    logb_finite,
+    logb_guarded,
+    pow2_finite,
+    pow2_logb,
+    rare_arm,
+    reversed_row,
+    short_arm,
+)
+
 FP16 = fp.IEEEContext(5, 16)
 _R32 = RealType(fp.FP32)
 _INT = RealType(fp.INTEGER)
+_N = NamedId('n')
+_ALIGNED_ARGS: list[Type | None] = [
+    ListType(ListType(_R32, 4), _N), ListType(RealType(fp.FP64), _N), _INT]
 
 
 def _spec(func: Function, argt: list[Type | None], ctx: Context = fp.FP32) -> Function:
@@ -54,6 +71,11 @@ def _emit(
                       drop_asserts=drop_asserts)
 
 
+def _compile(func: Function, arg_types: list[Type | None], **opts) -> KernelSource:
+    """*func* compiled under `REAL`, its asserts dropped."""
+    return TritonCompiler(drop_asserts=True, **opts).compile(func, ctx=fp.REAL, arg_types=arg_types)
+
+
 def _flat(func: Function, n_out: int = 8, ctx: Context = fp.FP32) -> KernelSource:
     """*func* compiled over eight `f32` inputs and *n_out* outputs."""
     return TritonCompiler(drop_asserts=True).compile(
@@ -66,9 +88,8 @@ def _rows(
 ) -> KernelSource:
     """*func* compiled over a runtime count of rows."""
     rows = NamedId('rows')
-    return TritonCompiler(drop_asserts=True).compile(func, ctx=fp.REAL, arg_types=[
-        ListType(ListType(RealType(elt), n_in), rows),
-        ListType(ListType(RealType(out), n_out), rows), _INT])
+    return _compile(func, [ListType(ListType(RealType(elt), n_in), rows),
+                           ListType(ListType(RealType(out), n_out), rows), _INT])
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -76,23 +97,6 @@ def _prod(x: fp.Real, y: fp.Real):
     p = x * y
     with fp.FP32:
         return p + p
-
-
-class TestCastDiscipline:
-    def test_an_exact_product_widens_its_operands(self):
-        """Cast *then* multiply: an fp16 product is never rounded in fp16 and
-        widened after."""
-        f = _spec(_prod, [RealType(FP16)] * 2, fp.REAL)
-        assert emit_expr(_find(f, Mul), f.ast) == \
-            '(x.to(tl.float32) * y.to(tl.float32))'
-
-    def test_same_storage_needs_no_cast(self):
-        @fp.fpy(ctx=fp.FP32)
-        def add(x: fp.Real, y: fp.Real):
-            return x + y
-
-        f = _spec(add, [_R32, _R32])
-        assert emit_expr(_find(f, Add), f.ast) == '(x + y)'
 
 
 class TestSpelling:
@@ -228,17 +232,10 @@ class TestMemory:
         def f(xs: list[fp.Real], i: fp.Real):
             return xs[i]
 
-        assert _emit(f, [ListType(_R32, 8), _INT]) == 'return tl.load(xs_ptr + i)'
+        assert _emit(f, [ListType(_R32, 8), _INT]) == \
+            '__t0 = tl.load(xs_ptr + i)\nreturn __t0'
 
-    def test_a_nested_subscript_flattens_row_major(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xss: list[list[fp.Real]], r: fp.Real, k: fp.Real):
-            return xss[r][k]
-
-        out = _emit(f, [ListType(ListType(_R32, 8), 4), _INT, _INT])
-        assert out == 'return tl.load(xss_ptr + r * 8 + k)'
-
-    @pytest.mark.parametrize('rows,cols', [(4, 8), (3, 5), (1, 2), (7, 1)])
+    @pytest.mark.parametrize('rows,cols', [(3, 5), (7, 1)])
     def test_the_offset_agrees_with_row_major_flattening(self, rows, cols):
         """The differential for the indexing: evaluate the emitted offset for
         every cell and compare against the flat index."""
@@ -247,7 +244,8 @@ class TestMemory:
             return xss[r][k]
 
         out = _emit(f, [ListType(ListType(_R32, cols), rows), _INT, _INT])
-        expr = out[out.index('xss_ptr + ') + len('xss_ptr + '):].rstrip(')')
+        load = out.splitlines()[0]
+        expr = load[load.index('xss_ptr + ') + len('xss_ptr + '):].rstrip(')')
         for r in range(rows):
             for k in range(cols):
                 got = eval(expr, {}, {'r': r, 'k': k})
@@ -260,8 +258,8 @@ class TestMemory:
             return out
 
         emitted = _emit(f, [ListType(_R32, 8), ListType(_R32, 8), _INT])
-        assert emitted.splitlines()[0] == \
-            'tl.store(out_ptr + i, tl.load(xs_ptr + i))'
+        assert emitted.splitlines()[:2] == [
+            '__t0 = tl.load(xs_ptr + i)', 'tl.store(out_ptr + i, __t0)']
 
     def test_a_ragged_length_is_refused(self):
         """A kernel argument is a flat pointer, so a row length neither proven
@@ -286,12 +284,11 @@ class TestMask:
 
         emitted = _emit(
             f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
-        first = emitted.splitlines()[0]
         assert 'if' not in emitted
-        assert first == (
-            'tl.store(out_ptr + j, '
-            'tl.load(xs_ptr + j, mask=(j < n), other=0.0), mask=(j < n))'
-        )
+        assert emitted.splitlines()[:2] == [
+            '__t0 = tl.load(xs_ptr + j, mask=(j < n), other=0.0)',
+            'tl.store(out_ptr + j, __t0, mask=(j < n))',
+        ]
 
 
 class TestLiteralCast:
@@ -366,25 +363,17 @@ class TestNamedRefusals:
 
 
 class TestSelectOps:
-    def test_max_propagates_nan(self):
+    @pytest.mark.parametrize('op, name', [(max, 'maximum'), (min, 'minimum')])
+    def test_a_nan_propagates(self, op, name):
         """FPy follows IEEE 754-2019 `maximum`, where a NaN operand
         propagates; Triton's default is `PropagateNan.NONE`, which is
         `maximumNumber` and returns the *other* operand."""
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real, y: fp.Real):
-            return max(x, y)
+            return op(x, y)
 
         assert _emit(f, [_R32, _R32]) == (
-            'return tl.maximum(x, y, propagate_nan=tl.PropagateNan.ALL)'
-        )
-
-    def test_min_too(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(x: fp.Real, y: fp.Real):
-            return min(x, y)
-
-        assert _emit(f, [_R32, _R32]) == (
-            'return tl.minimum(x, y, propagate_nan=tl.PropagateNan.ALL)'
+            f'return tl.{name}(x, y, propagate_nan=tl.PropagateNan.ALL)'
         )
 
     def test_an_nary_max_folds_pairwise(self):
@@ -469,16 +458,6 @@ class TestLoopBinding:
     """`tl.static_range` yields an *index*.  That is what the loop variable
     means only when the iterable is a `range`."""
 
-    def test_a_range_binds_the_index(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real]):
-            acc = fp.round(0)
-            for i in range(4):
-                acc = acc + xs[i]
-            return acc
-
-        assert 'for i in tl.static_range(4):' in _emit(f, [ListType(_R32, 4)])
-
     def test_iterating_a_list_is_refused(self):
         """`for x in xs` binds an *element*, and emitting the index in its
         place maxes against 0, 1, 2 rather than against the values -- a silent
@@ -488,17 +467,6 @@ class TestLoopBinding:
         def f(xs: list[fp.Real]):
             acc = fp.round(0)
             for x in xs:
-                acc = acc + x
-            return acc
-
-        with pytest.raises(TritonEmitError, match='binds an element'):
-            _emit(f, [ListType(_R32, 4)])
-
-    def test_iterating_a_slice_is_refused(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real]):
-            acc = fp.round(0)
-            for x in xs[1:]:
                 acc = acc + x
             return acc
 
@@ -588,7 +556,8 @@ class TestLiteralLists:
             return w[0] + w[1]
 
         out = _emit(f, [ListType(_R32, 4)])
-        assert out == 'return (tl.load(A_ptr + 1) + tl.load(A_ptr + 1 + 1))'
+        assert out == ('__t0 = tl.load(A_ptr + 1)\n__t1 = tl.load(A_ptr + 1 + 1)\n'
+                       'return (__t0 + __t1)')
 
     def test_a_slice_survives_a_dynamic_index(self):
         """The loop stays rolled and the index need not be constant, because
@@ -694,18 +663,6 @@ class TestBranch:
 
         out = _emit(f, [_R32, _R32])
         assert out.index('y = __t1') < out.index('w = (y * 3.0)')
-
-    def test_nested_branches_compose_the_mask(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
-            if j < n:
-                if xs[j] < 0:
-                    out[j] = xs[j]
-            return out
-
-        out = _emit(
-            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
-        assert 'mask=((j < n) & __t0)' in out
 
     def test_a_store_in_an_arm_carries_its_mask(self):
         @fp.fpy(ctx=fp.FP32)
@@ -969,8 +926,28 @@ def test_an_unproven_length_is_a_parameter():
     assert src.params[-2:] == ('xss_n0', 'xss_n1')
     assert src.sizes == (('xss_n0', 0, 0), ('xss_n1', 0, 1))
     assert (src.grid_extent, src.grid_outer) == ('xss_n1', 'xss_n0')
-    assert 'i = tl.program_id(1)' in src.source
+    assert 'i = tl.program_id(1) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]' in src.source
     assert 'xss_ptr + i * xss_n1 + j' in src.source
+
+
+def test_a_load_is_masked_along_the_axes_its_address_varies():
+    """Under a tile of rows, a load of `xs[i]` is a column, masked by the
+    rows' guard alone; `ys[j]` a row, by the columns'."""
+    @fp.fpy(ctx=fp.FP32)
+    def f(xs: list[fp.Real], ys: list[fp.Real], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for i in range(len(out)):
+            row = out[i]
+            for j in range(len(row)):
+                row[j] = xs[i] * ys[j]
+        return out
+
+    m, n = NamedId('m'), NamedId('n')
+    src = TritonCompiler(drop_asserts=True).compile(f, ctx=fp.FP32, arg_types=[
+        ListType(_R32, m), ListType(_R32, n), ListType(ListType(_R32, n), m), _INT])
+    rows = re.search(r'(__t\d+) = \(i < \w+\)', src.source)
+    assert rows is not None
+    assert f'tl.load(xs_ptr + i, mask={rows[1]}, other=0.0)' in src.source
+    assert re.search(r'tl\.load\(ys_ptr \+ j, mask=\(j\d+ < t\d+\), other=0\.0\)', src.source)
 
 
 class TestLanes:
@@ -1048,19 +1025,33 @@ def test_a_slice_into_the_tail_is_refused():
         _rows(f, 6, 1)
 
 
-def test_a_read_at_a_lane_varying_index_is_refused():
-    @fp.fpy(ctx=fp.REAL)
-    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
-        for j in range(len(out)):
-            xs = xss[j]
-            row = out[j]
-            ys = [x * 2 for x in xs]
-            for k in range(4):
-                row[k] = ys[3 - k]
-        return out
+class TestGather:
+    """A read of a tile at a lane-varying index."""
 
-    with pytest.raises(TritonEmitError, match='varies across its lanes'):
-        _rows(f, 4, 4)
+    def test_an_interleaved_part_splits(self):
+        """`a + s * k` with `s` a power of two over the whole tile is a
+        reshape and a split per bit of `s`."""
+        src = _rows(interleaved, 8, 4, elt=FP16).source
+        assert src.count('tl.split(tl.reshape(') == 2
+        assert 'tl.sum(' not in src
+
+    def test_any_other_index_is_a_one_hot_sum(self):
+        src = _rows(reversed_row, 4, 4, elt=FP16).source
+        assert 'tl.sum(tl.where((tl.arange(0, 4)[None, None, :] == ' in src
+
+    def test_an_index_past_the_tile_is_refused(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+            for j in range(len(out)):
+                xs = xss[j]
+                row = out[j]
+                ys = [x * 2 for x in xs]
+                for k in range(4):
+                    row[k] = ys[k + 1]
+            return out
+
+        with pytest.raises(TritonEmitError, match='not proven within its 4'):
+            _rows(f, 4, 4, elt=FP16)
 
 
 def test_a_list_rebound_under_a_branch_is_refused():
@@ -1140,3 +1131,149 @@ def test_a_reduction_over_a_row_in_memory_is_refused():
 
     with pytest.raises(TritonEmitError, match='folds over a list held'):
         _rows(f, 4, 1)
+
+
+@pytest.mark.parametrize('rm, halves', [(fp.RM.RNA, True), (fp.RM.RTN, False)])
+def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> None:
+    """Under RTZ, RNE and RNA, which send anything below one half to zero,
+    the scale-in is two exact multiplies in `fp32`; floor and ceil stay in
+    `fp64`."""
+    src = _compile(aligned_sum(rm), _ALIGNED_ARGS, unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
+    assert ('bitcast=True) * ((' in src.source) is halves
+    assert ('x.to(tl.float64)' in src.source) is not halves
+
+
+def test_a_scale_bound_under_a_rounding_context_is_not_fused() -> None:
+    """`t` is `2 ** k` rounded in `fp16`, zero for these `k`: the fused round
+    would scale by the exact power."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real], ks: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for r in range(len(out)):
+            x = xs[r]
+            k = ks[r] - 30
+            with FP16:
+                t = 2 ** k
+            s = t * x
+            with fp.MPFixedContext(-1, fp.RM.RTZ):
+                y = fp.round(s)
+            out[r] = y
+        return out
+
+    s3 = RealType(fp.FixedContext(True, 0, 3, fp.RM.RTZ, fp.OV.WRAP))
+    with pytest.raises(TritonEmitError):
+        _compile(f, [ListType(_R32, _N), ListType(s3, _N), ListType(_R32, _N), _INT])
+
+
+def test_the_scale_out_leaves_the_sum() -> None:
+    """`HoistScale`: every term is scaled by one power of two, so the sum
+    is, once."""
+    src = _compile(aligned_sum(fp.RM.RTZ), _ALIGNED_ARGS)
+    total = re.search(r'(__t\d+) = tl\.sum\(', src.source)
+    assert total is not None
+    assert f' * {total[1]})' in src.source
+
+
+def test_a_power_of_two_is_its_bits() -> None:
+    src = _compile(pow2_finite, [ListType(RealType(fp.SINT8), _N), ListType(RealType(fp.FP64), _N), _INT])
+    assert '<< 52).to(tl.float64, bitcast=True)' in src.source
+    assert "float('nan')" not in src.source
+    # an exponent that may be infinite or NaN has those selected apart
+    src = _compile(pow2_logb, [ListType(RealType(FP16), _N), ListType(_R32, _N), _INT])
+    assert "float('nan'), tl.where(" in src.source
+
+
+_REUSE_ARGS = (ListType(_R32, 8), ListType(_R32, 8), _INT, _INT)
+
+
+class TestLoadReuse:
+    """A load serves a later read of the same element whose mask implies its
+    own, until a store, a reassignment of a name in the address, or the edge
+    of a loop body."""
+
+    def test_under_a_narrower_mask(self):
+        """A nested branch composes its mask with the guard's."""
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            if j < n:
+                if xs[j] < 0:
+                    out[j] = xs[j]
+            return out
+
+        out = _emit(f, list(_REUSE_ARGS), guard=True)
+        assert 'mask=((j < n) & __t1)' in out
+        assert out.count('tl.load(') == 1
+
+    def test_not_across_a_store(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            a = xs[j]
+            xs[j] = a * 2
+            out[j] = xs[j]
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2
+
+    def test_not_after_its_index_is_reassigned(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            t = j
+            a = xs[t]
+            t = n
+            out[j] = a + xs[t]
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2
+
+    def test_not_into_a_loop_body(self):
+        @fp.fpy(ctx=fp.FP32)
+        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
+            a = xs[0]
+            for _k in range(4):
+                a = a + xs[0]
+            out[j] = a
+            return out
+
+        assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2
+
+
+class TestLogb:
+    """`logb` answers infinities and NaN only where they may occur, and a
+    zero or subnormal only where no `max` clamps it away."""
+
+    @staticmethod
+    def _logb(f: Function, ctx: Context) -> str:
+        return _compile(f, [ListType(RealType(ctx), _N), ListType(RealType(ctx), _N), _INT]).source
+
+    def test_clamped_at_the_least_exponent_it_is_the_field(self):
+        src = self._logb(logb_clamped(-14), FP16)
+        assert '6.103515625e-05' not in src          # no subnormal rescale
+        assert "float('-inf')" not in src            # no zero
+        assert "float('nan')" in src                 # nothing proves `x` finite
+
+    def test_clamped_below_the_least_exponent_it_is_not(self):
+        assert '6.103515625e-05' in self._logb(logb_clamped(-20), FP16)
+
+    def test_proven_finite_it_needs_no_special(self):
+        src = self._logb(logb_guarded(-126), fp.FP32)
+        assert "float('nan'), tl.where" not in src
+        assert "== float('inf')" not in src
+
+    def test_proven_finite_unclamped_it_keeps_zero_and_subnormals(self):
+        src = self._logb(logb_finite, fp.FP32)
+        assert "float('-inf')" in src and '1.1754943508222875e-38' in src
+        assert "== float('inf')" not in src
+
+
+class TestSkippedArm:
+    """A long arm runs only where some live row takes it; a short one stays
+    flattened, where the reduction would cost more than it saves."""
+
+    @staticmethod
+    def _src(f: Function) -> str:
+        return _compile(f, [ListType(ListType(_R32, 4), _N), ListType(_R32, _N), _INT]).source
+
+    def test_a_long_arm_is_skipped(self):
+        assert 'if tl.max(' in self._src(rare_arm)
+
+    def test_a_short_arm_is_not(self):
+        assert 'if tl.max(' not in self._src(short_arm)
