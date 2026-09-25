@@ -30,10 +30,12 @@ def _bits(x: float) -> int | str:
     return 'nan' if math.isnan(x) else struct.unpack('<I', struct.pack('<f', x))[0]
 
 
+@pytest.mark.parametrize('m', [1, 3])
 @pytest.mark.parametrize('design', DESIGNS)
-def test_agrees_with_the_interpreter(design: str) -> None:
+def test_agrees_with_the_interpreter(design: str, m: int) -> None:
     """Bit for bit (any NaN as one), on FP32 activations the wrapper rounds to
-    BF16 and on the hard cases of BF16."""
+    BF16 and on the hard cases of BF16, at `m` below the design's tile
+    height."""
     import compile_triton as ct
     import torch
     from compile import DESIGNS as ALL
@@ -41,7 +43,7 @@ def test_agrees_with_the_interpreter(design: str) -> None:
     f, arg_types = dict(ALL)[design]()
     _, k0 = kernels.compiled(design)
     rng = random.Random(0)
-    m, n, k = 2, 3, 2 * k0
+    n, k = 3, 2 * k0
     x = torch.tensor([[rng.gauss(0, 4) for _ in range(k)] for _ in range(m)])
     x[0, :4] = torch.tensor([0.0, -0.0, 3.0e38, 1.0e-40])
     w = torch.tensor([[ct._sample(ct._fmt(arg_types[1]), rng, hard=0.25) for _ in range(k)]
@@ -69,6 +71,27 @@ def test_split_k_sums_its_partials_in_the_order_asked(design: str) -> None:
     x, w = x.cuda(), w.cuda()
     assert kernels.linear(x, w, design, split_k=4, combine='linear').item() == 0.0
     assert kernels.linear(x, w, design, split_k=4, combine='tree').item() == 1.0
+
+
+def test_a_call_frees_what_it_allocates() -> None:
+    """Nothing a call allocates outlives it with the garbage collector off,
+    as a reference cycle would hold its inputs until a collection."""
+    import gc
+
+    import torch
+
+    design = 'amd.cdna2.bf16'
+    _, k0 = kernels.compiled(design)
+    x, w = torch.randn(8, 4 * k0).cuda(), torch.randn(16, 4 * k0).cuda()
+    kernels.linear(x, w, design, split_k=4, combine='tree')
+    gc.disable()
+    try:
+        before = torch.cuda.memory_allocated()
+        for combine in ('linear', 'tree'):
+            kernels.linear(x, w, design, split_k=4, combine=combine)
+        assert torch.cuda.memory_allocated() == before
+    finally:
+        gc.enable()
 
 
 def test_a_k_the_design_cannot_take_is_refused() -> None:

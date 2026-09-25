@@ -193,6 +193,7 @@ examples/mmasim/serve/
   perplexity.py   paired WikiText-2 pass: PPL per run, KL / top-1 / RMS dp vs R0
   zeroshot.py     lm-evaluation-harness suite per run, flips vs R0
   decode.py       greedy decode, divergence index vs R0
+  chat.py         terminal chat through any run, switchable mid-conversation
   layers.py       per-linear-layer error on a calibration batch
   vllm_plugin.py  (Phase 7) the same kernels behind vLLM's linear-method hook
   tests/          one per module above
@@ -463,6 +464,41 @@ Smoke runs, one each:
 No published zero-shot numbers for Qwen3.5-0.8B were found to check R0
 against.
 
+### Serving overhead (after Phase 6)
+
+**Done.**  A review of the serve path found that at `m = 1` the torch-side
+wrapper, not the kernels, set decode speed: `kernels.linear` spent ~210 us
+of CPU per call (19 us for `F.linear`), ~45 ms per token over 197 layers.
+Applied, each bit-exact (the tests compare with `kernels.linear` and the
+interpreter; a 1-segment CDNA2 perplexity is unchanged):
+
+- Weights are prepared once per layer (`kernels.prepare`, cached by
+  `swap.Run`): a BF16 checkpoint in FP32 already holds BF16 values, so the
+  weight itself is passed, where each call used to re-round and copy it
+  (7.2 GB of traffic per decoded token).  Under `split_k > 1` the slices are
+  cached as one `[split_k, n, k / split_k]` tensor.
+- An input rounded once serves every layer that reads the same tensor
+  (`q/k/v_proj`, `gate/up_proj`).
+- The kernel's accumulator `C` and its output are one zeroed buffer (each
+  program reads its tile of `C` before writing it), not two buffers and a
+  copy; `split_k = 1` launches once, without row blocks.
+- The `tree` combine was a self-recursive closure, a reference cycle that
+  kept each call's inputs alive until a garbage collection (+0.58 GB per
+  `lm_head` call): now module-level (`kernels._tree`), with a test that a
+  call frees what it allocates with the collector off.
+- `block_m` is capped at the next power of two above `m`: CDNA2's 64 had
+  computed 63 masked rows per tile at `m = 1`.
+- `bf16-exact` works in blocks of columns as well as rows, from the prepared
+  weight: it had built `lm_head`'s whole FP64 weight (1.2-2 GB) per call.
+
+Decode, tokens/s before and after: bf16-exact 19.1 -> 21.0, Ampere
+14.6 -> 21.5, Hopper 14.7 -> 21.4, CDNA2 12.9 -> 19.2, CDNA2 1k
+13.5 -> 19.1, CDNA3 11.2 -> 13.3 (FP32 38).  Not applied: skipping the
+launcher's per-call checks (~35 us; it would duplicate the launcher) and CUDA
+graphs for decode (the only way past `transformers`' own ~22 ms per token;
+needs a static cache, which changes attention's numerics, so every decode
+reference would be regenerated).
+
 ### Phase 7 -- Serving through vLLM
 
 - **What:** `vllm_plugin.py`: a `@register_quantization_config` whose linear
@@ -482,11 +518,14 @@ against.
 .venv/bin/python -m pytest tests/unit -q -n auto
 cd examples/mmasim && ../../.venv/bin/python -m pytest tests serve/tests -q
 .venv/bin/python -m mypy fpy2
-.venv/bin/ruff check fpy2 tests examples/mmasim/serve
+.venv/bin/ruff check examples/mmasim/serve
 ```
 
 and a results section here: one table per model (R0, R1, each design) with
-PPL, KL, top-1, flips, accuracy and divergence index.
+PPL, KL, top-1, flips and accuracy.  The divergence index stays at its Phase
+4 smoke scale: decode is launch-bound at `m = 1` (13-19 tokens/s even for
+the fastest designs), so 100 prompts would take ~4.6 h on Qwen3-0.6B and
+~9 h on Qwen3.5-0.8B for R0, R1 and the CDNA2 designs alone.
 
 ## Open items
 

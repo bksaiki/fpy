@@ -21,7 +21,7 @@ import json
 import random
 import statistics
 import sys
-from collections.abc import Collection
+from collections.abc import Collection, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -31,24 +31,42 @@ import torch
 INSTRUCTION = 'Please reason step by step, and put your final answer within \\boxed{}.'
 
 
+def stop_tokens(model: torch.nn.Module, tok: Any) -> set[int]:
+    """The chat template's end of turn (the tokenizer's EOS) and the model's
+    end of text: Qwen3.5 has no `generation_config.json` to give both."""
+    ids = model.generation_config.eos_token_id
+    return {tok.eos_token_id, *(ids if isinstance(ids, list) else [ids])}
+
+
+@torch.no_grad()
+def stream(
+    model: torch.nn.Module, prompt: torch.Tensor, max_new: int, eos: Collection[int],
+) -> Iterator[int]:
+    """Greedy tokens after *prompt* `[1, t]` as they are made: up to *max_new*,
+    through the first of *eos*."""
+    from transformers import DynamicCache
+
+    cache = DynamicCache(config=model.config)
+    x = prompt
+    for _ in range(max_new):
+        t = int(model(x, past_key_values=cache, use_cache=True).logits[0, -1].argmax())
+        yield t
+        if t in eos:
+            return
+        x = prompt.new_tensor([[t]])
+
+
 def greedy(
     model: torch.nn.Module, prompt: torch.Tensor, max_new: int, eos: Collection[int],
     ref: list[int] | None = None,
 ) -> list[int]:
-    """Greedy tokens after *prompt* `[1, t]`: up to *max_new*, through the first
-    of *eos*, and with *ref* through the first that differs from it."""
-    from transformers import DynamicCache
-
-    cache = DynamicCache(config=model.config)
+    """:func:`stream`'s tokens, and with *ref* through the first that differs
+    from it."""
     out: list[int] = []
-    x = prompt
-    with torch.no_grad():
-        while len(out) < max_new:
-            t = int(model(x, past_key_values=cache, use_cache=True).logits[0, -1].argmax())
-            out.append(t)
-            if t in eos or (ref is not None and t != ref[len(out) - 1]):
-                break
-            x = prompt.new_tensor([[t]])
+    for t in stream(model, prompt, max_new, eos):
+        out.append(t)
+        if ref is not None and t != ref[len(out) - 1]:
+            break
     return out
 
 
@@ -94,9 +112,7 @@ def main(argv: list[str]) -> int:
         if model is None:
             model, run = swap.load(args.model)
             run.split_k, run.combine = args.split_k, args.combine
-            # the chat template's end of turn, and the model's end of text
-            ids = model.generation_config.eos_token_id
-            eos = {tok.eos_token_id, *(ids if isinstance(ids, list) else [ids])}
+            eos = stop_tokens(model, tok)
         run.mode = mode
         ref = runs.get('fp32')
         runs[mode] = []
