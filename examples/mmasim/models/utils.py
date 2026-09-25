@@ -32,11 +32,10 @@ def fused_sum(xs, n, rm):
     Each summand is rounded with mode `rm` to a fixed-point value
     whose first unrepresentable digit is `n` (so the least significant
     representable digit has exponent `exp = n + 1`), then the rounded
-    summands are added exactly. `sum` folds from the first element
-    with no `+0` identity, so IEEE signed-zero rules apply: a sum of
-    all `-0.0` terms is `-0.0`.
+    summands are added exactly. Rounding folds `-0` to `+0`, so a zero
+    sum is always `+0`, as in MMA-Sim.
     """
-    with fp.MPFixedContext(n, rm):
+    with fp.MPFixedContext(n, rm, enable_neg_zero=False):
         ts = [fp.round(x) for x in xs]
     return sum(ts)
 

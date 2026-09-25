@@ -57,7 +57,7 @@ def check_directed():
     check('special c = inf', float(m24([1.0], [1.0], float('inf'))) == float('inf'))
 
     d = m24([-0.0, 0.0], [1.0, -1.0], -0.0)
-    check('signed zero: all -0 sums to -0', d == 0 and fp.signbit(d))
+    check('signed zero: all -0 sums to +0', d == 0 and not fp.signbit(d))
     d = m24([0.0, 0.0], [1.0, -1.0], -0.0)
     check('signed zero: mixed 0 sums to +0', d == 0 and not fp.signbit(d))
 
