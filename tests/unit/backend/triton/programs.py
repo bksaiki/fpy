@@ -103,3 +103,39 @@ def aligned_sum(rm: fp.RM) -> fp.Function:
             out[r] = sum(ts)
         return out
     return f
+
+
+def logb_clamped(c: int) -> fp.Function:
+    """`max(logb(x), c)`, with nothing known of `x`."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for i in range(len(xs)):
+            out[i] = max(fp.logb(xs[i]), c)
+        return out
+    return f
+
+
+def logb_guarded(c: int) -> fp.Function:
+    """`max(logb(x), c)` where `x` is proven finite."""
+    @fp.fpy(ctx=fp.REAL)
+    def f(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+        for i in range(len(xs)):
+            x = xs[i]
+            if fp.isfinite(x):
+                out[i] = max(fp.logb(x), c)
+            else:
+                out[i] = 0
+        return out
+    return f
+
+
+@fp.fpy(ctx=fp.REAL)
+def logb_finite(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """`logb(x)` where `x` is proven finite."""
+    for i in range(len(xs)):
+        x = xs[i]
+        if fp.isfinite(x):
+            out[i] = fp.logb(x)
+        else:
+            out[i] = 0
+    return out

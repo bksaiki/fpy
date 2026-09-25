@@ -1210,3 +1210,40 @@ class TestLoadReuse:
             return out
 
         assert _emit(f, list(_REUSE_ARGS)).count('tl.load(') == 2
+
+
+class TestLogb:
+    """`logb` answers infinities and NaN only where they may occur, and a
+    zero or subnormal only where no `max` clamps it away."""
+
+    @staticmethod
+    def _logb(f: Function, ctx: Context) -> str:
+        from fpy2.utils import NamedId
+        n = NamedId('n')
+        src = TritonCompiler(drop_asserts=True).compile(
+            f, ctx=fp.REAL,
+            arg_types=[ListType(RealType(ctx), n), ListType(RealType(ctx), n), RealType(fp.INTEGER)])
+        return src.source
+
+    def test_clamped_at_the_least_exponent_it_is_the_field(self):
+        from .programs import logb_clamped
+        src = self._logb(logb_clamped(-14), FP16)
+        assert '6.103515625e-05' not in src          # no subnormal rescale
+        assert "float('-inf')" not in src            # no zero
+        assert "float('nan')" in src                 # nothing proves `x` finite
+
+    def test_clamped_below_the_least_exponent_it_is_not(self):
+        from .programs import logb_clamped
+        assert '6.103515625e-05' in self._logb(logb_clamped(-20), FP16)
+
+    def test_proven_finite_it_needs_no_special(self):
+        from .programs import logb_guarded
+        src = self._logb(logb_guarded(-126), fp.FP32)
+        assert "float('nan'), tl.where" not in src
+        assert "== float('inf')" not in src
+
+    def test_proven_finite_unclamped_it_keeps_zero_and_subnormals(self):
+        from .programs import logb_finite
+        src = self._logb(logb_finite, fp.FP32)
+        assert "float('-inf')" in src and '1.1754943508222875e-38' in src
+        assert "== float('inf')" not in src

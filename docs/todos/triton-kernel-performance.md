@@ -236,6 +236,29 @@ a loop body), and the exact-text tests updated for bound loads.
 
 ### Phase 4 -- `max(logb(x), c)` as a bitfield
 
+**Done**, as the review's two rules.  The emitter now runs `ValueClassInfer`
+itself and hands it to `FormatInfer` (no kernel changes by that alone).
+(1) `_emit_logb` drops the infinity and NaN arms where
+`classes.is_finite(x)`.  (2) `_clamp_logbs` marks a `logb` operand of a `max`
+one of whose other operands' least value is at or above `emin` of the
+argument's *storage*; a clamped `logb` is its field minus the bias, a zero or subnormal
+reading `emin - 1`.  The condition is on bounds, not literals, and holds for
+either operand order.  The format bound of `x` does not carry finiteness --
+`logb`'s arguments were full `IEEEFormat`s -- so value classes, not formats,
+answer rule (1).
+
+In Volta every exponent, the accumulator's too, is a bitfield and a clamp.
+Bench against Phase 3: +10-51% on every design with exponents (volta
+174 -> 234, turing 176 -> 262, ampere.tf32 146 -> 220, cdna3.f16 126 -> 174,
+nvfp4 124 -> 143), cdna2 and fp64 unchanged.  cdna3.f16's Phase 3 regression
+is more than recovered.
+
+Tests: `test_emitter.TestLogb` (three fail on the old emitter; a clamp below
+`emin` keeps the subnormal arm), `test_launch.test_logb_agrees_on_hard_cases`
+over fp16 and fp32 zeros, subnormal edges, the largest values, infinities
+and NaN, clamped at, above and below `emin`, and proven finite with and
+without a clamp.
+
 - **What:** `_emit_logb` drops the NaN and infinity arms where value classes
   prove `x` finite, and a `max(logb(x), c)` with `c >= emin_S` drops the
   subnormal arm; together, the bitfield.  `exponent0`'s shape follows.

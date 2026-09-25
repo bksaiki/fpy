@@ -844,3 +844,31 @@ def test_an_aligned_sum_agrees_on_hard_cases(rm: fp.RM) -> None:
                    unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
     ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
     _agree(src, f, [torch.tensor(rows, dtype=torch.float32).cuda(), ot], block=64)
+
+
+_LOGB_HARD = {
+    'fp16': [0.0, -0.0, 2.0 ** -24, -(2.0 ** -24), 2.0 ** -14 * (1 - 2 ** -10), 2.0 ** -14,
+             65504.0, -65504.0, math.inf, -math.inf, math.nan, 1.0, -3.5, 1000.0],
+    'fp32': [0.0, -0.0, 2.0 ** -149, -(2.0 ** -149), 2.0 ** -126 * (1 - 2 ** -23), 2.0 ** -126,
+             3.4028234663852886e38, -3.4028234663852886e38, math.inf, -math.inf, math.nan,
+             1.0, -3.5, 1e30],
+}
+
+
+@pytest.mark.parametrize('prog, c', [
+    ('clamped', -14), ('clamped', -20), ('clamped', -126), ('clamped', -140),
+    ('guarded', -14), ('guarded', -126), ('finite', None),
+])
+@pytest.mark.parametrize('fmt', ['fp16', 'fp32'])
+def test_logb_agrees_on_hard_cases(prog: str, c: int | None, fmt: str) -> None:
+    from fpy2.backend.triton.launcher import _torch_dtype
+
+    from .programs import logb_clamped, logb_finite, logb_guarded
+    f = (logb_finite if c is None
+         else logb_clamped(c) if prog == 'clamped' else logb_guarded(c))
+    ctx, dtype = (FP16, torch.float16) if fmt == 'fp16' else (fp.FP32, torch.float32)
+    vals = _LOGB_HARD[fmt]
+    n = len(vals)
+    src = _compile(f, [ListType(RealType(ctx), n), ListType(RealType(ctx), n), INT])
+    ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
+    _agree(src, f, [torch.tensor(vals, dtype=dtype).cuda(), ot], block=16)

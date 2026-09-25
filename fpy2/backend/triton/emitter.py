@@ -32,6 +32,8 @@ from ...analysis import (
     FormatInfer,
     TypeAnalysis,
     TypeInfer,
+    ValueClassAnalysis,
+    ValueClassInfer,
 )
 from ...analysis.array_size import ListSize, static_trip_count
 from ...analysis.format_infer import (
@@ -408,6 +410,14 @@ def _scaled(e: Mul) -> tuple[Expr, Expr] | None:
     return None
 
 
+def _least(bound: FormatBound | None) -> float:
+    """The least finite value *bound* admits; `-inf` where unknown."""
+    af = to_abstract(bound)
+    if af is None or not isinstance(af.neg_bound, RealFloat):
+        return -math.inf
+    return float(af.neg_bound)
+
+
 def _magnitude(af: AbstractFormat | None) -> float:
     """The largest finite magnitude *af* admits; infinite where unknown."""
     if af is None or not all(isinstance(b, RealFloat) for b in (af.pos_bound, af.neg_bound)):
@@ -439,6 +449,7 @@ class _Emitter(Visitor):
     format_info: FormatAnalysis
     types: TypeAnalysis
     ctx_use: ContextUseAnalysis
+    classes: ValueClassAnalysis
     sizes: ArraySizeAnalysis
     op_table: ScalarOpTable
     drop_asserts: bool
@@ -525,6 +536,10 @@ class _Emitter(Visitor):
     """How many flattened branches enclose the statement being emitted."""
     _merging: set[NamedId]
     """The lists those branches merge."""
+    _clamped: set[int]
+    """The `logb`s, by `id`, whose `max` has an operand at or above their
+    storage's least exponent: a zero or subnormal there reads as that operand
+    whatever `logb` gives it."""
     _fused: dict[int, tuple[Expr, Expr, TritonScalar]]
     """Rounds of a scale-in `2 ** n * x`, by `id`, lowered as one operation in
     `x`'s storage: `(n, x, storage)`; see :meth:`_fuse_rounds`."""
@@ -542,9 +557,12 @@ class _Emitter(Visitor):
     ) -> None:
         self.func = func
         self.def_use = DefineUse.analyze(func)
-        self.format_info = FormatInfer.analyze(func, use_digit_bounds=True)
         self.types = TypeInfer.check(func)
         self.ctx_use = ContextUse.analyze(func, def_use=self.def_use)
+        self.classes = ValueClassInfer.analyze(
+            func, def_use=self.def_use, type_info=self.types, ctx_use=self.ctx_use)
+        self.format_info = FormatInfer.analyze(
+            func, use_digit_bounds=True, value_classes=self.classes)
         self.sizes = ArraySizeInfer.analyze(func)
         self.op_table = make_op_table()
         self.drop_asserts = drop_asserts
@@ -589,6 +607,7 @@ class _Emitter(Visitor):
         self._branches = 0
         self._merging = set()
         self._fused, self._unmaterialized = {}, set()
+        self._clamped = set()
         self._fuse_rounds()
 
     # -- storage and context -------------------------------------------
@@ -1502,7 +1521,10 @@ class _Emitter(Visitor):
 
         A subnormal is first scaled exactly by `2**k` into the normals, and
         `k` taken back off.  The specials are `logB`'s own: `+/-0` is `-inf`,
-        `+/-inf` is `+inf`, a NaN is a NaN.
+        `+/-inf` is `+inf`, a NaN is a NaN.  Under a `max` that clamps below
+        the least normal exponent (:attr:`_clamped`), a zero or subnormal
+        reads its field, `emin - 1`, which clamps the same; where value classes
+        prove *x* finite, there are no infinities or NaN to answer for.
         """
         have = self._storage(e.arg)
         spec = _LOGB.get(have)
@@ -1522,14 +1544,18 @@ class _Emitter(Visitor):
         bias, mant, mask, min_normal, scale, ity = spec
         x = self.emit(e.arg)
         fty = want.format()
-        sub = f'(tl.abs({x}) < {min_normal!r})'
-        scaled = f'tl.where({sub}, {x} * {float(2 ** scale)!r}, {x})'
-        bits = f'({scaled}).to({ity}, bitcast=True)'
-        exp = f'((({bits} >> {mant}) & {mask}) - {bias})'
-        adj = f'tl.where({sub}, {exp} - {scale}, {exp}).to({fty})'
-        at_zero = f"tl.where(tl.abs({x}) == 0.0, float('-inf'), {adj})"
-        at_inf = (f"tl.where(tl.abs({x}) == float('inf'), float('inf'), "
-                  f'{at_zero})')
+        if id(e) in self._clamped:
+            finite = f'(((({x}).to({ity}, bitcast=True) >> {mant}) & {mask}) - {bias}).to({fty})'
+        else:
+            sub = f'(tl.abs({x}) < {min_normal!r})'
+            scaled = f'tl.where({sub}, {x} * {float(2 ** scale)!r}, {x})'
+            bits = f'({scaled}).to({ity}, bitcast=True)'
+            exp = f'((({bits} >> {mant}) & {mask}) - {bias})'
+            adj = f'tl.where({sub}, {exp} - {scale}, {exp}).to({fty})'
+            finite = f"tl.where(tl.abs({x}) == 0.0, float('-inf'), {adj})"
+        if self.classes.is_finite(e.arg):
+            return finite
+        at_inf = f"tl.where(tl.abs({x}) == float('inf'), float('inf'), {finite})"
         return f"tl.where({x} != {x}, float('nan'), {at_inf})"
 
     def _emit_reduction(self, e: UnaryOp) -> str:
@@ -1657,11 +1683,28 @@ class _Emitter(Visitor):
         operand."""
         name = 'tl.maximum' if isinstance(e, Max) else 'tl.minimum'
         want = self._storage(e)
+        if isinstance(e, Max):
+            self._clamp_logbs(e)
         args = self._weak([self._emit_as(a, want) for a in e.args],
                           [want] * len(e.args))
         if not args:
             raise TritonEmitError(f'`{name}` needs at least one operand')
         return self._fold_select(name, args)
+
+    def _clamp_logbs(self, e: Max) -> None:
+        """Mark each `logb` operand of *e* another operand keeps at or above
+        its storage's least normal exponent."""
+        for a in e.args:
+            if not isinstance(a, Logb):
+                continue
+            try:
+                held = self._storage(a.arg)
+            except (TritonEmitError, StorageSelectionError):
+                continue
+            floor = max((_least(self.format_info.by_expr.get(b)) for b in e.args if b is not a),
+                        default=-math.inf)
+            if held in _LOGB and floor >= 1 - _LOGB[held][0]:
+                self._clamped.add(id(a))
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> str:
         """``tl.where``, with both arms in the result's storage.  Both arms
