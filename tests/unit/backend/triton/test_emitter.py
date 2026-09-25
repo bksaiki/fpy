@@ -1187,15 +1187,41 @@ def test_a_reduction_over_a_row_in_memory_is_refused():
 ])
 def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> None:
     """Where the round sends what underflows to zero, the scale-in is two
-    exact multiplies in `fp32`; floor and ceil do not, so it stays an `ldexp`
-    in `fp64`."""
+    exact multiplies in `fp32`; floor and ceil do not, so it stays in
+    `fp64`."""
     from .programs import aligned_sum
     src = TritonCompiler(drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS).compile(
         aligned_sum(rm), ctx=fp.REAL,
         arg_types=[ListType(ListType(_R32, 4), NamedId('n')),
                    ListType(RealType(fp.FP64), NamedId('n')), RealType(fp.INTEGER)])
     assert ('bitcast=True) * ((' in src.source) is halves
-    assert ('.to(tl.float64), (-' in src.source) is not halves
+    assert ('x.to(tl.float64)' in src.source) is not halves
+
+
+def test_the_scale_out_leaves_the_sum() -> None:
+    """`HoistScale`: every term is scaled by one power of two, so the sum
+    is, once."""
+    from .programs import aligned_sum
+    src = TritonCompiler(drop_asserts=True).compile(
+        aligned_sum(fp.RM.RTZ), ctx=fp.REAL,
+        arg_types=[ListType(ListType(_R32, 4), NamedId('n')),
+                   ListType(RealType(fp.FP64), NamedId('n')), RealType(fp.INTEGER)])
+    total = re.search(r'(__t\d+) = tl\.sum\(', src.source)
+    assert total is not None
+    assert f' * {total[1]})' in src.source
+
+
+def test_a_power_of_two_is_its_bits() -> None:
+    from .programs import pow2_finite, pow2_logb
+    n = NamedId('n')
+    src = TritonCompiler(drop_asserts=True).compile(pow2_finite, ctx=fp.REAL, arg_types=[
+        ListType(RealType(fp.SINT8), n), ListType(RealType(fp.FP64), n), _INT])
+    assert '<< 52).to(tl.float64, bitcast=True)' in src.source
+    assert "float('nan')" not in src.source
+    # an exponent that may be infinite or NaN has those selected apart
+    src = TritonCompiler(drop_asserts=True).compile(pow2_logb, ctx=fp.REAL, arg_types=[
+        ListType(RealType(FP16), n), ListType(_R32, n), _INT])
+    assert "float('nan'), tl.where(" in src.source
 
 
 _REUSE_ARGS = (ListType(_R32, 8), ListType(_R32, 8), _INT, _INT)

@@ -439,6 +439,62 @@ Every design's kernel is byte-identical to Phase 7a's.
 
 ### Phase 8 -- Integer accumulation
 
+**Done**, as revised below: `HoistInvariant` then `HoistScale` run after the
+normal form under `optimize=True` (`TritonCompiler._compile_one`).  On
+`fused_sum` the scale-in `2 ** -k` and scale-out `2 ** k` leave the element
+loop and the scale-out leaves the sum, so the terms are the unscaled rounds,
+which digit bounds put in an `int32`: the integer accumulation comes out of
+storage selection with no rule of its own.  Two emitter rules follow:
+
+- `2 ** n` on its own (`_emit_pow2`), since the hoisted power is a binding:
+  the bit pattern of a float whose normal range holds every finite `n` (an
+  integer), converted to the power's storage, which holds it exactly.  Where
+  value classes cannot show `n` finite, `+inf`, `-inf` and NaN are selected
+  apart (`inf`, `+0`, NaN); the power is computed once per row, so the selects
+  are cheap.
+- Phase 2's fused round follows a scale bound to a name (`_scale_in`): it
+  re-emits `n` where the binding reads it unchanged, and a binding whose every
+  use is fused is not materialized.  It now also requires `n` finite, which
+  Phase 2 did not check: the scale-in of a fixed-point position `n` is only
+  reached with `n` finite where the source program is defined (the context
+  refuses anything else), but the emitter sees the rewritten program.  Where
+  the classes cannot show it (`cdna3`, `blackwell`: an exponent from `logb`
+  of an operand whose finiteness follows from its product's), the scale-in
+  is a multiply by the materialized power -- one, in `f32` where the product
+  fits -- and `HoistScale` keeps the scale-out on each term, since it needs
+  the factor finite too.  Teaching value classes that a finite product has
+  finite operands would give those designs the rest.
+
+`aligned_sum` (the tests' `fused_sum` shape) gained `fused_sum`'s
+special-value arm, since its grid is only finite behind one, and guards a
+local copy of its row: every row of `xss` is one region to the value classes.
+
+Bench, back to back against Phase 7a (TITAN V, best over `BLOCK`):
+
+| design | Phase 7a | Phase 8 | |
+|---|---|---|---|
+| turing | 301 | 465 | +55% |
+| ada | 284 | 433 | +52% |
+| volta | 260 | 372 | +43% |
+| hopper | 286 | 405 | +42% |
+| ampere tf32 | 252 | 359 | +42% |
+| ampere bf16 | 231 | 325 | +41% |
+| cdna3.f16 | 183 | 236 | +29% |
+| cdna3.bf8 | 143 | 179 | +25% |
+| mxfp8 | 171 | 209 | +23% |
+| cdna3.bf16 | 147 | 168 | +14% |
+| nvfp4 | 160 | 176 | +10% |
+
+cdna2 and `fp64 (fma)` unchanged (no fixed-point sum).  Trackers: 14/16, all
+agree, at `-r 64` and at 5 x 9.
+
+Tests: `test_emitter.test_the_scale_out_leaves_the_sum`,
+`test_emitter.test_a_power_of_two_is_its_bits`, and
+`test_launch.test_a_power_of_two_agrees_on_special_exponents` (against values
+computed in Python: the interpreter has no `pow` under `REAL`);
+`test_a_scale_in_stays_in_its_operands_storage` now checks floor and ceil
+widen to `f64` rather than an `ldexp` spelling.
+
 - **What:** the aligned exact sum becomes an `int32` sum of the truncated
   terms, scaled once; conditions from the digit bounds (every term on one grid,
   the sum within 31 bits).

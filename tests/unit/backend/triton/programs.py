@@ -92,15 +92,21 @@ def round_to_int(rm: fp.RoundingMode) -> fp.Function:
 
 def aligned_sum(rm: fp.RM) -> fp.Function:
     """`fused_sum`'s shape: each row's terms rounded at a grid its largest
-    exponent sets, which `RescaleFixed` scales in, then summed."""
+    exponent sets, which `RescaleFixed` scales in, then summed.  As there, a
+    row with a special value takes another arm, since its grid would not be
+    finite; the guard reads a local list, as the designs' does, since every
+    row of `xss` is one region to the value classes."""
     @fp.fpy(ctx=fp.REAL)
     def f(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
         for r in range(len(out)):
-            xs = xss[r]
-            e = max([max(fp.logb(x), -126) for x in xs])
-            with fp.MPFixedContext(e - 24, rm):
-                ts = [fp.round(x) for x in xs]
-            out[r] = sum(ts)
+            xs = [x for x in xss[r]]
+            if any([not fp.isfinite(x) for x in xs]):  # noqa: C419
+                out[r] = 0
+            else:
+                e = max([max(fp.logb(x), -126) for x in xs])
+                with fp.MPFixedContext(e - 24, rm):
+                    ts = [fp.round(x) for x in xs]
+                out[r] = sum(ts)
         return out
     return f
 
@@ -251,4 +257,25 @@ def row_first(xss: list[list[fp.Real]], ys: list[fp.Real], out: list[list[fp.Rea
         row = out[i]
         for j in range(len(row)):
             row[j] = acc * ys[j]
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def pow2_logb(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """`2 ** n` of an exponent that is infinite at zero and at infinity, and
+    NaN at NaN.  The interpreter has no `pow` under `REAL`."""
+    for r in range(len(out)):
+        out[r] = 2 ** fp.logb(xs[r])
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def pow2_finite(ks: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """`2 ** n` of an integer the guard shows finite: its bits alone."""
+    for r in range(len(out)):
+        k = ks[r]
+        if fp.isfinite(k):
+            out[r] = 2 ** k
+        else:
+            out[r] = 0
     return out

@@ -456,13 +456,19 @@ The scale is chosen so the *smallest* subnormal becomes normal: fp32's is
 """
 
 
+def _pow2_exponent(e: Expr) -> Expr | None:
+    """`n` where *e* is ``2 ** n``, else `None`."""
+    if (isinstance(e, Pow) and isinstance(e.args[0], RationalVal)
+            and e.args[0].as_rational() == 2):
+        return e.args[1]
+    return None
+
+
 def _scaled(e: Mul) -> tuple[Expr, Expr] | None:
     """*e* as ``(n, x)`` where it is ``2 ** n * x``, else `None`."""
     for scale, value in ((e.first, e.second), (e.second, e.first)):
-        if (isinstance(scale, Pow) and len(scale.args) == 2
-                and isinstance(scale.args[0], RationalVal)
-                and scale.args[0].as_rational() == 2):
-            return scale.args[1], value
+        if (n := _pow2_exponent(scale)) is not None:
+            return n, value
     return None
 
 
@@ -1419,21 +1425,25 @@ class _Emitter(Visitor):
         every round of the scale-in must be under such a mode and bounded
         below `2 ** bias_S`, and `|n| <= 2 * (bias_S - 1)`, which keeps both
         factors of :meth:`_scale_by_halves` normal.  The scale-in is not
-        materialized: what it reads must reach each round unchanged."""
+        materialized: what it reads must reach each round unchanged.  Nor is
+        a binding of `2 ** n` whose every use is such a scale-in, which each
+        round re-emits from `n`, bound where the binding is."""
         stmt_of = {id(s.expr): s for _, s in walk_stmts(self.func) if isinstance(s, Assign)}
         round_of = {
             id(e.arg): e for _, e in walk_exprs(self.func)
             if isinstance(e, Round) and isinstance(e.arg, Var) and id(e) in stmt_of
         }
+        # each `2 ** n` binding's uses that are fused scale-ins
+        fused: dict[AssignDef, set[int]] = {}
         for d in self.def_use.defs:
             site = d.site
             if not isinstance(site, Assign) or not isinstance(site.expr, Mul):
                 continue
-            parts = _scaled(site.expr)
+            parts = self._scale_in(site.expr)
             uses = self.def_use.uses.get(d, set())
             if parts is None or not uses or any(id(u) not in round_of for u in uses):
                 continue
-            n, x = parts
+            n, x, bound, var = parts
             rounds = [round_of[id(u)] for u in uses]
             try:
                 held = self._storage(x)
@@ -1445,20 +1455,44 @@ class _Emitter(Visitor):
                 continue
             bias = _LOGB[held][0]
             af = to_abstract(self.format_info.by_expr.get(n))
-            if af is None or af.exp < 0 or _magnitude(af) > 2 * (bias - 1):
+            if (af is None or af.exp < 0 or _magnitude(af) > 2 * (bias - 1)
+                    or not self.classes.is_finite(n)):
                 continue
-            here = self.def_use.reach[site]
-            read = _reads(site.expr)
+            # where each operand was read, by what it reads
+            reads = [(self.def_use.reach[site], _reads(x))]
+            if bound is not None:
+                assert isinstance(bound.site, Assign)
+                reads.append((self.def_use.reach[bound.site], _reads(n)))
             if all(
                 isinstance(c, MPFixedContext) and _integral_round(c) is not None
                 and c.rm in _TO_ZERO_OR_NEAREST
                 and _magnitude(to_abstract(self.format_info.by_expr.get(r))) < 2 ** bias
-                and all(self.def_use.reach[stmt_of[id(r)]].get(v) is here.get(v) for v in read)
+                and all(self.def_use.reach[stmt_of[id(r)]].get(v) is at.get(v)
+                        for at, read in reads for v in read)
                 for r, c in zip(rounds, ctxs)
             ):
                 self._unmaterialized.add(d)
                 for r in rounds:
                     self._fused[id(r)] = (n, x, held)
+                if bound is not None:
+                    fused.setdefault(bound, set()).add(id(var))
+        for p, ids in fused.items():
+            if {id(u) for u in self.def_use.uses.get(p, set())} <= ids:
+                self._unmaterialized.add(p)
+
+    def _scale_in(self, e: Mul) -> tuple[Expr, Expr, AssignDef | None, Var | None] | None:
+        """*e* as ``(n, x, binding, name)`` where it is ``2 ** n * x``, the
+        power of two inline or a name bound to one."""
+        if (parts := _scaled(e)) is not None:
+            return (*parts, None, None)
+        for scale, x in ((e.first, e.second), (e.second, e.first)):
+            if not isinstance(scale, Var):
+                continue
+            d = self.def_use.find_def_from_use(scale)
+            if (isinstance(d, AssignDef) and isinstance(d.site, Assign)
+                    and (n := _pow2_exponent(d.site.expr)) is not None):
+                return n, x, d, scale
+        return None
 
     def _emit_fused_round(self, e: Round, n: Expr, x: Expr, held: TritonScalar) -> str:
         """``round(2 ** n * x)`` in `x`'s storage; :meth:`_fuse_rounds` says
@@ -1598,6 +1632,41 @@ class _Emitter(Visitor):
         raise TritonEmitError(
             f'no Triton spelling for `{type(e).__name__}`'
         )
+
+    def _emit_pow2(self, e: Expr) -> str | None:
+        """``2 ** n`` as the bit pattern of a float whose normal range holds
+        every finite `n`, an integer, converted to the storage, which holds
+        it exactly; or `None`.  A special `n` is selected apart."""
+        n = _pow2_exponent(e)
+        if n is None:
+            return None
+        active = self._active_ctx(e)
+        if active is not REAL and not rounds_exactly(e, self.format_info.by_expr, active):
+            return None
+        try:
+            held = self._storage(e)
+        except StorageSelectionError:
+            return None
+        af = to_abstract(self.format_info.by_expr.get(n))
+        if (held not in _LOGB or af is None or af.exp < 0
+                or not isinstance(af.neg_bound, RealFloat)
+                or not isinstance(af.pos_bound, RealFloat)):
+            return None
+        wide = next((w for w in _LOGB if _LOGB[w][0] >= _LOGB[held][0]
+                     and 1 - _LOGB[w][0] <= af.neg_bound and af.pos_bound <= _LOGB[w][0]), None)
+        if wide is None:
+            return None
+        bias, mbits, *_, ity = _LOGB[wide]
+        finite = self.classes.is_finite(n)
+        k = self.emit(n) if finite else self._bind(self.emit(n))
+        bits = f'(({bias} + {k}.to({ity})) << {mbits}).to({wide.format()}, bitcast=True)'
+        if wide is not held:
+            bits = f'{bits}.to({held.format()})'
+        if finite:
+            return bits
+        inf = "float('inf')"
+        return (f"tl.where({k} != {k}, float('nan'), tl.where({k} == {inf}, {inf}, "
+                f'tl.where({k} == -{inf}, 0.0, {bits})))')
 
     def _emit_ldexp(self, e: Mul) -> str | None:
         """``2 ** n * v`` as ``libdevice.ldexp(v, n)``, or `None`.
@@ -1915,6 +1984,8 @@ class _Emitter(Visitor):
             scaled = self._emit_ldexp(e)
             if scaled is not None:
                 return scaled
+        if (bits := self._emit_pow2(e)) is not None:
+            return bits
         return self._dispatch(e, self.op_table.binary, [
             (self.emit(e.first), e.first),
             (self.emit(e.second), e.second),

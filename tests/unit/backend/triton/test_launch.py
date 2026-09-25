@@ -966,3 +966,15 @@ def test_a_loop_ahead_of_the_column_tile_carries_a_column() -> None:
     torch.manual_seed(0)
     _agree(src, row_first, [torch.randn(5, 3).cuda(), torch.randn(9).cuda(),
                             torch.zeros(5, 9).cuda()], block_m=4)
+
+
+def test_a_power_of_two_agrees_on_special_exponents() -> None:
+    """`2 ** logb(x)`: `+0` at a zero, `inf` at an infinity, NaN at NaN."""
+    from .programs import pow2_logb
+    vals = [0.0, -0.0, 2.0 ** -24, 2.0 ** -14, 1.0, -3.0, 65504.0, math.inf, -math.inf, math.nan]
+    want = [0.0, 0.0, 2.0 ** -24, 2.0 ** -14, 1.0, 2.0, 2.0 ** 15, math.inf, math.inf, math.nan]
+    n = len(vals)
+    src = _compile(pow2_logb, [ListType(RealType(FP16), n), ListType(F32, n), INT])
+    out = torch.zeros(n).cuda()
+    launch(src, [torch.tensor(vals, dtype=torch.float16).cuda(), out], block=16)
+    assert _reprs(out.cpu().tolist()) == _reprs(want)
