@@ -30,11 +30,10 @@ from dataclasses import dataclass
 import swap
 import torch
 
-MODEL = 'Qwen/Qwen3-0.6B'
 CONTEXT = 2048
 _ROWS = 512
 """Tokens per block when comparing distributions: a segment's full-vocabulary
-log-probabilities are 1.2 GB each in FP32."""
+log-probabilities are 1.2-2 GB in FP32, so R0's are held on the host."""
 
 
 @dataclass
@@ -58,6 +57,19 @@ class Totals:
         self.kl_sq += (kl * kl).sum().item()
         self.same_top1 += int(same.sum().item())
         self.dp_sq += (dp * dp).sum().item()
+
+    def compare(self, ref: torch.Tensor, lp: torch.Tensor, target: torch.Tensor) -> None:
+        """Add one segment's next-token log-probabilities *lp* `[t, vocab]`
+        against R0's *ref* (on the host), *target* the tokens predicted."""
+        for i in range(0, lp.shape[0], _ROWS):
+            q = lp[i:i + _ROWS]
+            r = ref[i:i + _ROWS].to(q.device)
+            tgt = target[i:i + _ROWS]
+            rows = torch.arange(q.shape[0], device=q.device)
+            self.add(nll=-q[rows, tgt],
+                     kl=(r.exp() * (r - q)).sum(-1),
+                     same=r.argmax(-1) == q.argmax(-1),
+                     dp=q[rows, tgt].exp() - r[rows, tgt].exp())
 
     def report(self) -> dict[str, float]:
         """Means over tokens, each with its standard error."""
@@ -110,16 +122,8 @@ def evaluate(
             torch.cuda.synchronize()
             t.seconds += time.perf_counter() - start
             if ref is None:
-                ref = lp
-            offset = 0
-            for r, q in zip(ref.split(_ROWS), lp.split(_ROWS)):
-                tgt = target[offset:offset + r.shape[0]]
-                offset += r.shape[0]
-                rows = torch.arange(r.shape[0], device=r.device)
-                t.add(nll=-q[rows, tgt],
-                      kl=(r.exp() * (r - q)).sum(-1),
-                      same=r.argmax(-1) == q.argmax(-1),
-                      dp=q[rows, tgt].exp() - r[rows, tgt].exp())
+                ref = lp.cpu()
+            t.compare(ref, lp, target)
             del lp
         if progress:
             print(f'segment {i + 1}', file=sys.stderr, flush=True)
@@ -129,6 +133,7 @@ def evaluate(
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument('--model', default=swap.MODEL)
     ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('--segments', type=int, default=None,
@@ -139,19 +144,18 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     import datasets
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     text = '\n\n'.join(datasets.load_dataset(
         'Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')['text'])
-    ids = AutoTokenizer.from_pretrained(MODEL)(text, return_tensors='pt').input_ids.cuda()
+    ids = AutoTokenizer.from_pretrained(args.model)(text, return_tensors='pt').input_ids.cuda()
     segs = segments(ids)[:args.segments]
-    model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32).cuda().eval()
-    run = swap.patch(model)
+    model, run = swap.load(args.model)
     run.split_k, run.combine = args.split_k, args.combine
 
     totals = evaluate(model, run, segs, args.runs, progress=True)
     results = {
-        'model': MODEL, 'context': CONTEXT, 'segments': len(segs),
+        'model': args.model, 'context': CONTEXT, 'segments': len(segs),
         'split_k': args.split_k, 'combine': args.combine,
         'runs': {mode: t.report() for mode, t in totals.items()},
     }

@@ -93,43 +93,46 @@ def _rows(n: int) -> int:
 
 def _local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
            x: torch.Tensor, got: torch.Tensor) -> None:
-    """Add *got*, *layer*'s output on *x*, to *s*'s local metrics."""
+    """Add *got*, *layer*'s output on *x*, to *s*'s local metrics, in blocks
+    of output columns and rows: `lm_head`'s FP64 weights alone are 2 GB."""
     xb = x.reshape(-1, x.shape[-1]).to(torch.bfloat16)
-    wt = layer.weight.to(torch.bfloat16).double().T
-    b = None if layer.bias is None else layer.bias.double()
-    scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
-    wa = wt.abs() if scaled else None
     got = got.reshape(-1, got.shape[-1])
-    rows = _rows(wt.shape[1])
-    for i in range(0, xb.shape[0], rows):
-        a, g = xb[i:i + rows].double(), got[i:i + rows]
-        y = a @ wt if b is None else a @ wt + b
-        e = g.double() - y
-        s.n += e.numel()
-        if 'normwise' in metrics:
-            s.err += float((e * e).sum())
-            s.ref += float((y * y).sum())
-        if scaled:
-            scale = a.abs() @ wa if b is None else a.abs() @ wa + b.abs()
-            eta = torch.where(scale > 0, e / scale, 0.0)
-            if 'backward' in metrics:
-                s.backward += float(eta.abs().sum())
-                s.backward_max = max(s.backward_max, float(eta.abs().max()))
-            if 'bias' in metrics:
-                s.bias += float(eta.sum())
-            if 'magnitude_bias' in metrics:
-                s.magnitude_bias += float((torch.sign(y) * eta).sum())
-            del scale, eta
-        if 'ulp' in metrics:
-            # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
-            _, ex = torch.frexp(y)
-            ex = torch.where(y == 0, -125, ex)
-            bits = torch.log2(1 + e.abs() / torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149)))
-            s.ulp += float(bits.sum())
-            s.ulp_max = max(s.ulp_max, float(bits.max()))
-            del ex, bits
-        if 'rounded' in metrics:
-            s.rounded += int((g == y.float()).sum())
+    scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
+    cols = _rows(xb.shape[1])
+    for j in range(0, got.shape[1], cols):
+        wt = layer.weight[j:j + cols].to(torch.bfloat16).double().T
+        wa = wt.abs() if scaled else None
+        b = None if layer.bias is None else layer.bias[j:j + cols].double()
+        rows = _rows(wt.shape[1])
+        for i in range(0, xb.shape[0], rows):
+            a, g = xb[i:i + rows].double(), got[i:i + rows, j:j + cols]
+            y = a @ wt if b is None else a @ wt + b
+            e = g.double() - y
+            s.n += e.numel()
+            if 'normwise' in metrics:
+                s.err += float((e * e).sum())
+                s.ref += float((y * y).sum())
+            if scaled:
+                scale = a.abs() @ wa if b is None else a.abs() @ wa + b.abs()
+                eta = torch.where(scale > 0, e / scale, 0.0)
+                if 'backward' in metrics:
+                    s.backward += float(eta.abs().sum())
+                    s.backward_max = max(s.backward_max, float(eta.abs().max()))
+                if 'bias' in metrics:
+                    s.bias += float(eta.sum())
+                if 'magnitude_bias' in metrics:
+                    s.magnitude_bias += float((torch.sign(y) * eta).sum())
+                del scale, eta
+            if 'ulp' in metrics:
+                # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
+                _, ex = torch.frexp(y)
+                ex = torch.where(y == 0, -125, ex)
+                bits = torch.log2(1 + e.abs() / torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149)))
+                s.ulp += float(bits.sum())
+                s.ulp_max = max(s.ulp_max, float(bits.max()))
+                del ex, bits
+            if 'rounded' in metrics:
+                s.rounded += int((g == y.float()).sum())
 
 
 def _propagated(s: Stats, got: torch.Tensor, ref: torch.Tensor) -> None:
@@ -203,6 +206,7 @@ def _fmt(key: str, v: float) -> str:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument('--model', default=swap.MODEL)
     ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('-m', '--metrics', nargs='*', choices=METRICS, default=list(METRICS))
@@ -213,14 +217,13 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     import datasets
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
     text = '\n\n'.join(datasets.load_dataset(
         'Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')['text'])
-    ids = AutoTokenizer.from_pretrained(perplexity.MODEL)(text, return_tensors='pt').input_ids.cuda()
+    ids = AutoTokenizer.from_pretrained(args.model)(text, return_tensors='pt').input_ids.cuda()
     segs = perplexity.segments(ids)[:args.segments]
-    model = AutoModelForCausalLM.from_pretrained(perplexity.MODEL, dtype=torch.float32).cuda().eval()
-    run = swap.patch(model)
+    model, run = swap.load(args.model)
     run.split_k, run.combine = args.split_k, args.combine
 
     stats = evaluate(model, run, segs, args.runs, args.metrics)
@@ -247,7 +250,7 @@ def main(argv: list[str]) -> int:
     if args.out:
         with open(args.out, 'w') as f:
             json.dump({
-                'model': perplexity.MODEL, 'segments': len(segs), 'metrics': args.metrics,
+                'model': args.model, 'segments': len(segs), 'metrics': args.metrics,
                 'split_k': args.split_k, 'combine': args.combine,
                 'runs': {mode: {n: s.report(args.metrics) for n, s in layer.items()}
                          for mode, layer in stats.items()},

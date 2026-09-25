@@ -415,13 +415,53 @@ selected metrics are computed).
 
 ### Phase 6 -- Qwen3.5-0.8B
 
-- **What:** the same runs on the hybrid model, text only
-  (`Qwen3_5ForCausalLM` or skipping the vision tower).  The DeltaNet recurrence
-  and its short convolution stay torch FP32; confirm it runs on sm_70 through
-  `transformers`' PyTorch fallback, and that every swapped `k` is a multiple
-  of 16.
-- **Why after:** a second, architecturally different model, once the
-  pipeline is proven on the plain one.
+**Done** at smoke scale.  Every script takes `--model` (default
+`swap.MODEL`, Qwen3-0.6B) and loads through `swap.load`.  `transformers`
+5.17 loads `Qwen/Qwen3.5-0.8B` as `Qwen3_5ForCausalLM`, text only, with no
+missing weights: 752M parameters, 24 layers (18 Gated DeltaNet, 6 full
+attention), hidden 1024, FFN 3584, vocabulary 248,320, tied embeddings.
+Without `causal_conv1d`, `flash-linear-attention` or `kernels` installed,
+the short convolution and the delta rule take `transformers`' PyTorch
+reference path, in FP32 (it warns, and it works on sm_70).  The 187 swapped
+linear layers have `k` in {1024, 2048, 3584}, all multiples of 32 and at
+`split_k = 4` too.
+
+What the larger vocabulary (2 GB of logits per 2048-token segment) needed:
+
+- `perplexity.py` holds R0's log-probabilities on the host.  A leak also
+  surfaced: the comparison loop's last block, a view, kept each run's
+  log-probabilities alive into the next run (1.2 GB on Qwen3 too); the
+  comparison is now `Totals.compare`, so its locals die with it.
+- `layers.py` works in blocks of output columns as well as rows:
+  `lm_head`'s FP64 weights and their absolute values were 2 GB each.
+- `zeroshot.py` needs `--batch-size 8` (16 runs out of memory in the
+  harness's `log_softmax`).
+- `decode.py` builds its cache from the model's config, which gives the
+  DeltaNet layers their recurrent-state cache; and it stops on the
+  tokenizer's EOS (`<|im_end|>`, the chat template's end of turn) as well as
+  the model's (`<|endoftext|>`), Qwen3.5 having no `generation_config.json`.
+
+Smoke runs, one each:
+
+- Perplexity, 1 segment, every run: R0 12.4586; KL 2.7-2.9e-5 and top-1
+  99.7-99.9% for the rest (Qwen3 at the same segment: 14.18, ~4e-5).  Per
+  segment: Ampere 17 s, Hopper 15 s, CDNA2 4 s, CDNA3 28 s.
+- Per-layer error, 1 segment, every run and metric (~1.8 min): the same
+  ordering, magnitude bias (NV -1.5 to -1.8 u, AMD ~0) and upward NV drift
+  (+0.7 to +0.85 u) as on Qwen3.  One new effect: both CDNA2 designs' max
+  backward error is 2^-8.9, all in block 0's `in_proj_qkv`, whose weight
+  row 423 holds values ~1e-37.  Their FP32 products are subnormal and
+  CDNA2's FTZ-Mul flushes them (`models/amd.py`), so outputs of ~1e-36 are
+  off by 2^-9 relative to `|x|ᵀ|w|`; CDNA3 does not flush.  Normwise error
+  is unaffected.
+- Zero-shot, `--limit 10`, R0 and `amd.cdna2.bf16` at batch 8 (~1 min): no
+  flips.
+- Decode, 2 prompts, R0 and `amd.cdna2.bf16` (~4 min): R0's outputs are
+  1002 and 2048 (the limit) tokens and end at `<|im_end|>`; CDNA2 diverges
+  on one, at 639.
+
+No published zero-shot numbers for Qwen3.5-0.8B were found to check R0
+against.
 
 ### Phase 7 -- Serving through vLLM
 

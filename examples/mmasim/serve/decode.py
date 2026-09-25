@@ -28,7 +28,6 @@ from typing import Any
 import swap
 import torch
 
-MODEL = 'Qwen/Qwen3-0.6B'
 INSTRUCTION = 'Please reason step by step, and put your final answer within \\boxed{}.'
 
 
@@ -40,7 +39,7 @@ def greedy(
     of *eos*, and with *ref* through the first that differs from it."""
     from transformers import DynamicCache
 
-    cache = DynamicCache()
+    cache = DynamicCache(config=model.config)
     out: list[int] = []
     x = prompt
     with torch.no_grad():
@@ -60,6 +59,7 @@ def divergence(ref: list[int], got: list[int]) -> int | None:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument('--model', default=swap.MODEL)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
     ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
                     help='runs besides fp32 (default: bf16-exact and every design)')
@@ -70,13 +70,13 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     import datasets
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
-    settings = {'model': MODEL, 'prompts': args.prompts, 'max_new': args.max_new,
+    settings = {'model': args.model, 'prompts': args.prompts, 'max_new': args.max_new,
                 'split_k': args.split_k, 'combine': args.combine}
     problems = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')['problem']
     picked = sorted(random.Random(0).sample(range(len(problems)), args.prompts))
-    tok = AutoTokenizer.from_pretrained(MODEL)
+    tok = AutoTokenizer.from_pretrained(args.model)
     prompts = [tok.apply_chat_template(
         [{'role': 'user', 'content': f'{problems[i]}\n{INSTRUCTION}'}],
         add_generation_prompt=True, enable_thinking=False, return_dict=True,
@@ -92,10 +92,11 @@ def main(argv: list[str]) -> int:
             runs[mode] = cached['tokens']
             continue
         if model is None:
-            model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32).cuda().eval()
-            run = swap.patch(model)
+            model, run = swap.load(args.model)
             run.split_k, run.combine = args.split_k, args.combine
-            eos = set(model.generation_config.eos_token_id)
+            # the chat template's end of turn, and the model's end of text
+            ids = model.generation_config.eos_token_id
+            eos = {tok.eos_token_id, *(ids if isinstance(ids, list) else [ids])}
         run.mode = mode
         ref = runs.get('fp32')
         runs[mode] = []

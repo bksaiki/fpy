@@ -25,7 +25,6 @@ from typing import Any
 import swap
 import torch
 
-MODEL = 'Qwen/Qwen3-0.6B'
 TASKS = ('piqa', 'arc_easy', 'arc_challenge', 'hellaswag', 'winogrande', 'lambada_openai')
 METRICS = ('acc', 'acc_norm')
 
@@ -71,6 +70,7 @@ def flips(ref: Items, got: Items) -> dict[str, tuple[int, int]]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
+    ap.add_argument('--model', default=swap.MODEL)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
     ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
                     help='runs besides fp32 (default: bf16-exact and every design)')
@@ -84,9 +84,9 @@ def main(argv: list[str]) -> int:
     args = ap.parse_args(argv)
 
     from lm_eval.models.huggingface import HFLM
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
 
-    settings = {'model': MODEL, 'limit': args.limit, 'hellaswag': args.hellaswag,
+    settings = {'model': args.model, 'limit': args.limit, 'hellaswag': args.hellaswag,
                 'batch_size': args.batch_size, 'split_k': args.split_k, 'combine': args.combine}
     samples = None
     if args.limit is None and args.hellaswag:
@@ -102,10 +102,9 @@ def main(argv: list[str]) -> int:
             runs[mode] = cached
             continue
         if lm is None:
-            model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32).cuda().eval()
-            run = swap.patch(model)
+            model, run = swap.load(args.model)
             run.split_k, run.combine = args.split_k, args.combine
-            lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(MODEL),
+            lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
         runs[mode] = {'settings': settings,
                       **evaluate(lm, run, mode, limit=args.limit, samples=samples)}

@@ -24,6 +24,9 @@ import torch.nn.functional as F
 
 MODES = ('fp32', 'bf16-exact', *kernels.BF16_DESIGNS)
 
+MODEL = 'Qwen/Qwen3-0.6B'
+"""The default model; `Qwen/Qwen3.5-0.8B` also runs (text only)."""
+
 _ROWS = 256
 """Rows per block of `bf16-exact`'s FP64 product."""
 
@@ -65,3 +68,12 @@ def patch(model: torch.nn.Module) -> Run:
             layer.forward = MethodType(
                 lambda self, x: run.linear(x, self.weight, self.bias), layer)
     return run
+
+
+def load(name: str = MODEL) -> tuple[torch.nn.Module, Run]:
+    """*name*'s causal LM from the Hub, in FP32 on the GPU and patched
+    (:func:`patch`)."""
+    from transformers import AutoModelForCausalLM
+
+    model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.float32).cuda().eval()
+    return model, patch(model)
