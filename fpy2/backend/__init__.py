@@ -8,3 +8,6 @@ from .cpp import CppCompileError, CppCompiler
 
 # FPCore backend
 from .fpc import FPCoreCompileError, FPCoreCompiler
+
+# Triton backend
+from .triton import TritonCompiler, TritonEmitError

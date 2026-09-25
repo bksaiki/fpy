@@ -221,16 +221,13 @@ class TestAbstractFormat():
         assert not (i8 - i8).has_neg_zero
 
     def test_neg_carries_neg_zero_over(self):
-        """Negation maps `+0.0` to `-0.0`, and every format represents a `+0.0` — so
-        the image holds one exactly when the number system does.
-
-        Checked against the interpreter: `-(+0)` is `-0.0` under FP64, while
-        `-(0)` under `SINT8` is `+0.0`, two's-complement having a single zero.
-        """
+        """Negation is exact and maps `+0.0` to `-0.0`; the rounding context
+        decides whether it survives, and `SINT8` has a single zero."""
         f64 = AbstractFormat.from_format(fp.FP64.format())
         i8 = AbstractFormat.from_format(fp.SINT8.format())
         assert (-f64).has_neg_zero
-        assert not (-i8).has_neg_zero
+        assert (-i8).has_neg_zero
+        assert not ((-i8) & i8).has_neg_zero
 
     def test_mul_derives_neg_zero_from_either_sign(self):
         """A zero product takes the XOR of the operand signs, so a `-0.0` needs
@@ -260,15 +257,15 @@ class TestAbstractFormat():
     def test_integer_ops_keep_an_integer_storage(self):
         """The payoff: deriving the flag must not cost integer code its storage.
 
-        Negation of an integer-bounded value never yields a `-0.0`, and a
-        product rounded to an integer *destination* has none either — the
-        intersection with its format removes what the unrounded product admits.
+        A negation or product rounded to an integer *destination* has no
+        `-0.0` -- the intersection with its format removes what the exact
+        result admits.
         """
         from fpy2.backend.cpp.storage import choose_storage_scalar
         from fpy2.backend.cpp.types import CppScalar
         i8 = AbstractFormat.from_format(fp.SINT8.format())
         i16 = AbstractFormat.from_format(fp.SINT16.format())
-        assert choose_storage_scalar((-i8).format()) != CppScalar.F32
+        assert choose_storage_scalar(((-i8) & i16).format()) != CppScalar.F32
         assert choose_storage_scalar(((i8 * i8) & i16).format()) != CppScalar.F32
 
     def test_abs_never_has_a_negative_zero(self):

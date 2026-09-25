@@ -36,6 +36,7 @@ from .backend import (
     Backend,
     CppCompiler,
     FPCoreCompiler,
+    TritonCompiler,
 )
 
 # runtime support

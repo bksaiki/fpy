@@ -41,6 +41,7 @@ __all__ = [
     'concrete_size',
     'is_size_eq',
     'size_eq',
+    'static_trip_count',
     'trip_count',
 ]
 
@@ -199,6 +200,15 @@ def trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> ArraySize:
         return None
     bound = sizes.by_expr.get(stop.arg)
     return bound.size if isinstance(bound, ListSize) else None
+
+
+def static_trip_count(iterable: Expr, sizes: ArraySizeAnalysis) -> int | None:
+    """How many times a ``for`` over *iterable* runs, if its inferred length
+    is a constant; ``None`` otherwise."""
+    bound = sizes.by_expr.get(iterable)
+    if isinstance(bound, ListSize) and isinstance(bound.size, int):
+        return bound.size
+    return None
 
 
 #####################################################################

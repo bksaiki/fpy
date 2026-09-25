@@ -19,6 +19,7 @@ from .analysis import (
     exact_unop,
     is_bottom,
     round_is_identity,
+    rounds_exactly,
     to_abstract,
     unrounded_format,
 )
@@ -55,6 +56,7 @@ __all__ = [
     'exact_unop',
     'is_bottom',
     'round_is_identity',
+    'rounds_exactly',
     'to_abstract',
     'unrounded_format',
 ]
