@@ -1050,19 +1050,35 @@ def test_a_slice_into_the_tail_is_refused():
         _rows(f, 6, 1)
 
 
-def test_a_read_at_a_lane_varying_index_is_refused():
-    @fp.fpy(ctx=fp.REAL)
-    def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
-        for j in range(len(out)):
-            xs = xss[j]
-            row = out[j]
-            ys = [x * 2 for x in xs]
-            for k in range(4):
-                row[k] = ys[3 - k]
-        return out
+class TestGather:
+    """A read of a tile at a lane-varying index."""
 
-    with pytest.raises(TritonEmitError, match='varies across its lanes'):
-        _rows(f, 4, 4)
+    def test_an_interleaved_part_splits(self):
+        """`a + s * k` with `s` a power of two over the whole tile is a
+        reshape and a split per bit of `a`."""
+        from .programs import interleaved
+        src = _rows(interleaved, 8, 4, elt=FP16).source
+        assert src.count('tl.split(tl.reshape(') == 2
+        assert 'tl.sum(' not in src
+
+    def test_any_other_index_is_a_one_hot_sum(self):
+        from .programs import reversed_row
+        src = _rows(reversed_row, 4, 4, elt=FP16).source
+        assert 'tl.sum(tl.where((tl.arange(0, 4)[None, None, :] == ' in src
+
+    def test_an_index_past_the_tile_is_refused(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+            for j in range(len(out)):
+                xs = xss[j]
+                row = out[j]
+                ys = [x * 2 for x in xs]
+                for k in range(4):
+                    row[k] = ys[k + 1]
+            return out
+
+        with pytest.raises(TritonEmitError, match='not proven within its 4'):
+            _rows(f, 4, 4, elt=FP16)
 
 
 def test_a_list_rebound_under_a_branch_is_refused():

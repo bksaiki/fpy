@@ -311,6 +311,34 @@ old emitter; a short one is not), and
 
 ### Phase 6 -- Gathers as `reshape` + `split`
 
+**Done**, as two rules.  First, the Triton normal form lowers a
+comprehension over `range(a, b, s)` to a count from zero,
+`for k in range(len(range(a, b, s))): i = a + s * k; t[k] = ...`
+(`CompToLoop`'s `index_ranges`, set only by `normalize`): the write index is
+the lane, and the read `xs[i]` a lane-varying index into a tile.  Second, the
+emitter lowers any such read as a gather (`_gather`), replacing Phase 1's
+refusal: an index proven within the tile; `a + s * k` with `s` a power of two,
+`a < s`, and no tail is a `reshape` and a `split` per bit of `a`; anything
+else is a one-hot sum over a `[BLOCK, lanes, width]` compare (filled with
+`-0.0`, so the sum is the element), plus the tail.
+
+Digit bounds paired the parts of a gather by the loop's `range`, which the
+new loop hides -- and `len(range(1, 16, 2))` folds to `8`.  An index
+`a + s * k` with `k` over `range(n)` is now keyed by its index set
+`(a, s, n)` (`_elt_key`), so `es` and `prods` gathered over the evens still
+share their variables; the key types are named (`_Operand`, `_RangeKey`,
+`_EltKey`).
+
+Bench against Phase 5: cdna3.bf8 99 -> 143 (+44%; the hand edit of Phase 0
+gave +29%); every other design unchanged.
+Trackers unchanged: Triton 14/16, all agree; C++ 14/16.
+
+Tests: `test_comp_to_loop.test_index_ranges_counts_the_trip` (a start, a
+step, a negative step), `test_emitter.TestGather` (split, one-hot, an index
+past the tile refused), `test_launch.test_a_gather_agrees_on_hard_cases`;
+`test_normalize.test_a_gathered_sum_keeps_its_bound_past_a_guard` now runs
+over the new loop, as does `examples/mmasim/tests/test_triton.py` on bf8.
+
 - **What:** the emitter spells a stride-2 gather of a tile with `reshape` and
   `split`; other strides keep the extract loop.
 - **Tests:** `test_expect.py` for the spelling; a launch test; tracker; bench

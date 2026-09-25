@@ -99,9 +99,9 @@ def normalize(func: FuncDef) -> FuncDef:
 
     for _ in range(_MAX_ROUNDS):
         func = SingleExit.apply(func)
-        func = StatementForm.apply(func)
+        func = StatementForm.apply(func, index_ranges=True)
         func = FuncInline.apply(func, recursive=True)
-        func = StatementForm.apply(func)
+        func = StatementForm.apply(func, index_ranges=True)
         # after the statement form: it emits the scale-in and scale-out as
         # statements, which a rounding inside a comprehension has no slot for
         try:

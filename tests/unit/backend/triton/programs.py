@@ -170,3 +170,28 @@ def short_arm(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
             s = xs[0] + xs[1]
         out[r] = s
     return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def interleaved(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    """The larger of each even and odd pair."""
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        ys = [x * 2 for x in xs]
+        es = [ys[i] for i in range(0, 8, 2)]
+        os = [ys[i] for i in range(1, 8, 2)]
+        for k in range(4):
+            row[k] = max(es[k], os[k])
+    return out
+
+
+@fp.fpy(ctx=fp.REAL)
+def reversed_row(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.Real):
+    for j in range(len(out)):
+        xs = xss[j]
+        row = out[j]
+        ys = [x * 2 for x in xs]
+        for k in range(4):
+            row[k] = ys[3 - k]
+    return out

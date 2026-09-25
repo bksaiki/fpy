@@ -47,6 +47,7 @@ from ...analysis.format_infer.format import AbstractFormat
 from ...analysis.reaching_defs import same_object_defs
 from ...analysis.storage_infer import StorageSelectionError, join, of_bound
 from ...ast import (
+    Add,
     AllOf,
     AMax,
     AMin,
@@ -1010,6 +1011,62 @@ class _Emitter(Visitor):
             )
         return True
 
+    def _gather(self, tile: NamedId, index: Expr, idx: str) -> str:
+        """*tile* read at a lane loop's index *index*, which varies across
+        the lanes.  Where it is `a + s * lane`, `s` a power of two, `a < s`
+        and the tile `s` times the loop's width, it is a column of the tile
+        reshaped to `s`-wide rows: a `split` per bit of `s`.  Otherwise each
+        lane selects its element by a one-hot reduction."""
+        assert self._lane is not None
+        width, tail, elt = self.tiles[tile]
+        lanes = self._lane[1]
+        if not self._within(index, width + tail - 1):
+            raise TritonEmitError(
+                f'`{tile}` is read at an index not proven within its '
+                f'{width + tail} elements'
+            )
+        if (affine := self._affine_lane(index)) is not None:
+            a, step = affine
+            if step > 1 and step & (step - 1) == 0 and a < step and width == step * lanes:
+                code = f'tl.reshape({tile}, ({self._row_width}, {lanes}' \
+                       + ', 2' * (step.bit_length() - 1) + '))'
+                for b in range(step.bit_length() - 1):
+                    code = f'tl.split({code})[{(a >> b) & 1}]'
+                return self._bind(code, 'wide')
+        at = f'(tl.arange(0, {width})[None, None, :] == ({idx})[:, :, None])'
+        src = f'{tile}[:, None, :]'
+        if elt is TritonScalar.BOOL:
+            code = f'(tl.max(tl.where({at}, {src}, False).to(tl.int32), axis=2) != 0)'
+        else:
+            zero = f'(-tl.zeros(({self._row_width}, {lanes}, {width}), dtype={elt.format()}))'
+            code = f'tl.sum(tl.where({at}, {src}, {zero}), axis=2).to({elt.format()})'
+        for j in reversed(range(tail)):
+            code = f'tl.where(({idx}) == {width + j}, {tile}_t{j}[:, None], {code})'
+        return self._bind(code, 'wide')
+
+    def _affine_lane(self, e: Expr) -> tuple[int, int] | None:
+        """*e* as `(a, s)` where it is `a + s * lane`, through the names the
+        normal form binds, `a` and `s` integers."""
+        assert self._lane is not None
+        lane = self._lane[0]
+        while isinstance(e, Var) and e.name != lane:
+            d = self.def_use.use_to_def.get(e)
+            if not isinstance(d, AssignDef) or not isinstance(d.site, Assign):
+                return None
+            e = d.site.expr
+        match e:
+            case Var():
+                return 0, 1
+            case Add():
+                for c, rest in ((e.first, e.second), (e.second, e.first)):
+                    if isinstance(c, Integer) and (r := self._affine_lane(rest)) is not None:
+                        return c.val + r[0], r[1]
+            case Mul():
+                for c, rest in ((e.first, e.second), (e.second, e.first)):
+                    if isinstance(c, Integer) and (r := self._affine_lane(rest)) is not None:
+                        return c.val * r[0], c.val * r[1]
+        return None
+
     def _extract(self, tile: NamedId, idx: str) -> str:
         """Element *idx* of *tile*, a row value: one lane, selected by a
         reduction whose other lanes are the identity.  For a float that is
@@ -1248,10 +1305,7 @@ class _Emitter(Visitor):
                 return str(tile)
             idx = self.emit(e.index)
             if self._out.wide & set(_IDENT.findall(idx)):
-                raise TritonEmitError(
-                    f'`{tile}` is read at an index that varies across its '
-                    'lanes, which is a gather'
-                )
+                return self._gather(tile, e.index, idx)
             code = self._extract(tile, idx)
             return code if self._lane is None else self._as_col(code)
         elems = self._elements(e.value)

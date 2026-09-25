@@ -30,11 +30,11 @@ class StatementForm:
     outright, and ``Hoistable`` is idempotent over its own output.
 
     With *simplify*, ``Simplify`` runs on the result, clearing the temporaries
-    the lowering binds.
+    the lowering binds.  *index_ranges* is ``CompToLoop``'s.
     """
 
     @staticmethod
-    def apply(func: FuncDef, *, simplify: bool = False) -> FuncDef:
+    def apply(func: FuncDef, *, simplify: bool = False, index_ranges: bool = False) -> FuncDef:
         if not isinstance(func, FuncDef):
             raise TypeError(f'Expected \'FuncDef\', got {func}')
         while True:
@@ -44,7 +44,7 @@ class StatementForm:
             # leaves
             func = UnfoldEnumerate.apply(func)
             func = UnfoldZip.apply(func)
-            log = CompToLoop.apply_with_edits(func)
+            log = CompToLoop.apply_with_edits(func, index_ranges=index_ranges)
             if not log.edits:
                 return Simplify.apply(func) if simplify else func
             func = log.result

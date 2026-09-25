@@ -119,6 +119,21 @@ def _rows(xss: list[list[fp.Real]]) -> list[list[fp.Real]]:
     return [row for row in xss]
 
 
+@fp.fpy(ctx=fp.FP64)
+def _odds(xs: list[fp.Real]) -> list[fp.Real]:
+    return [xs[i] * 2.0 for i in range(1, 7, 2)]
+
+
+@fp.fpy(ctx=fp.FP64)
+def _from_one(xs: list[fp.Real]) -> list[fp.Real]:
+    return [xs[i] * 2.0 for i in range(1, 4)]
+
+
+@fp.fpy(ctx=fp.FP64)
+def _down(xs: list[fp.Real]) -> list[fp.Real]:
+    return [xs[i] * 2.0 for i in range(7, 0, -2)]
+
+
 # ----------------------------------------------------------------------
 # The rewrite
 
@@ -259,6 +274,15 @@ class TestCompToLoop:
         src = CompToLoop.apply(f.ast).format()
         assert re.search(r'for i in range\(3\):\n\s+\w+\[i\] = ', src)
         assert _agree(f, [1.0, 2.0, 3.0])
+
+    @pytest.mark.parametrize('f', [_odds, _from_one, _down])
+    def test_index_ranges_counts_the_trip(self, f):
+        """With `index_ranges`, a range with a start or step becomes a count
+        from zero and its element `a + s * k`: the write index and the read
+        are separate."""
+        src = CompToLoop.apply(f.ast, index_ranges=True).format()
+        assert re.search(r'for \w+ in range\(len\(range\([^)]*\)\)\):', src)
+        assert _agree(f, [float(x) for x in range(8)], index_ranges=True)
 
     def test_a_non_range_iterable_still_binds(self):
         """The temp evaluates an iterable once and keeps the loop bound out of

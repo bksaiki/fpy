@@ -116,6 +116,10 @@ class _CompToLoopInstance(SiteRewriter):
     """whether to lower a dependent clause list (:meth:`_lower_dependent`).  On
     unless a consumer opts out, since it costs a materialised row per outer
     element"""
+    index_ranges: bool
+    """whether a comprehension over `range(a, b, s)` counts its trip `k` and
+    computes `a + s * k`, rather than carrying a write index: for a consumer
+    whose subscript of a range is arithmetic, not a list"""
     _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
@@ -128,6 +132,7 @@ class _CompToLoopInstance(SiteRewriter):
         where: int | Cursor | None = None,
         temp_id: NamedId | None = None,
         dependent: bool = True,
+        index_ranges: bool = False,
     ):
         self.func = func
         self.def_use = def_use
@@ -135,6 +140,7 @@ class _CompToLoopInstance(SiteRewriter):
         self.gensym = Gensym(reserved=def_use.names())
         self.where = where
         self.dependent = dependent
+        self.index_ranges = index_ranges
         self._fill = None
 
     # ------------------------------------------------------------------
@@ -377,6 +383,22 @@ class _CompToLoopInstance(SiteRewriter):
             out.append(ForStmt(target, clone(iters[0]), body, loc))
             return Var(acc, loc)
 
+        if (self.index_ranges and len(e.targets) == 1
+                and isinstance(e.targets[0], NamedId)
+                and isinstance(iters[0], Range2 | Range3)):
+            # the trip `k` is the write index, and the target `a + s * k`
+            rng = iters[0]
+            k = self.gensym.refresh(self.temp_id)
+            step = Mul(clone(rng.third), Var(k, loc), loc) if isinstance(rng, Range3) else Var(k, loc)
+            target = copy_target(e.targets[0])
+            assert isinstance(target, NamedId)
+            body = StmtBlock([
+                integer_ctx([Assign(target, None, Add(clone(rng.first), step, loc), loc)], loc),
+                IndexedAssign(acc, place(Var(k, loc)), elt, loc),
+            ])
+            out.append(ForStmt(k, Range1(None, Len(None, clone(rng), loc), loc), body, loc))
+            return Var(acc, loc)
+
         # Several clauses, or one whose iterable is not indexed: nest loops
         # over the original targets and carry a write index.
         j_id = self.gensym.refresh(self.temp_id)
@@ -523,6 +545,7 @@ class CompToLoop:
     def apply(
         func: FuncDef, *, where: int | Cursor | None = None,
         temp_id: NamedId | None = None, dependent: bool = True,
+        index_ranges: bool = False,
     ) -> FuncDef:
         """
         Lowers every comprehension of `func` it can into an allocation plus a
@@ -534,15 +557,21 @@ class CompToLoop:
         `dependent=False` opts out of lowering a clause list whose length is a
         sum rather than a product, which costs a materialised row per outer
         element where every other shape allocates once and fills.
+
+        `index_ranges=True` loops a comprehension over `range(a, b, s)` by its
+        trip count, the target computed as `a + s * k`: for a consumer that
+        subscripts a range arithmetically rather than materialising it.
         """
         return CompToLoop.apply_with_edits(
             func, where=where, temp_id=temp_id, dependent=dependent,
+            index_ranges=index_ranges,
         ).result
 
     @staticmethod
     def apply_with_edits(
         func: FuncDef, *, where: int | Cursor | None = None,
         temp_id: NamedId | None = None, dependent: bool = True,
+        index_ranges: bool = False,
     ) -> EditLog:
         """:meth:`apply`, with an :class:`EditLog` of what it replaced.
 
@@ -559,6 +588,7 @@ class CompToLoop:
         def_use = DefineUse.analyze(func)
         vtor = _CompToLoopInstance(
             func, def_use, where, temp_id, dependent=dependent,
+            index_ranges=index_ranges,
         )
         out = vtor.apply()
         vtor.check_site('a comprehension')

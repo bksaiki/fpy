@@ -885,3 +885,15 @@ def test_a_skipped_arm_agrees_where_one_row_takes_it() -> None:
     src = _compile(rare_arm, [ListType(ListType(F32, 4), n), ListType(F32, n), INT])
     assert 'if tl.max(' in src.source
     _agree(src, rare_arm, [torch.tensor(rows).cuda(), torch.zeros(n).cuda()], block=16)
+
+
+@pytest.mark.parametrize('name, n_in', [('interleaved', 8), ('reversed_row', 4)])
+def test_a_gather_agrees_on_hard_cases(name: str, n_in: int) -> None:
+    """Signed zeros, subnormals, the largest magnitudes, and the specials:
+    a gather moves each bit pattern unchanged."""
+    from . import programs
+    hard = [0.0, -0.0, 2.0 ** -24, -(2.0 ** -14), 65504.0, -65504.0,
+            math.inf, -math.inf, math.nan, 1.5]
+    rng = random.Random(0)
+    rows = [[rng.choice(hard) for _ in range(n_in)] for _ in range(32)]
+    _agree_on(getattr(programs, name), torch.tensor(rows), 4, ctx_in=FP16)
