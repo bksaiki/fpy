@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from functools import cached_property
 
 from ...analysis import (
+    Alias,
+    AliasAnalysis,
     ArraySizeAnalysis,
     ArraySizeInfer,
     ContextUse,
@@ -41,25 +43,19 @@ from ...analysis import (
 )
 from ...analysis.array_size import static_trip_count
 from ...analysis.format_infer import rounds_exactly
-from ...analysis.reaching_defs import AssignDef, Definition, same_object_defs
+from ...analysis.reaching_defs import Definition, same_object_defs
 from ...ast import (
     Add,
     And,
     Argument,
     Assign,
-    Attribute,
     BoolVal,
-    Call,
-    ContextStmt,
     DefaultVisitor,
     Empty,
-    Enumerate,
     Expr,
     ForStmt,
-    Fst,
     FuncDef,
     If1Stmt,
-    IfExpr,
     IndexedAssign,
     Integer,
     ListComp,
@@ -74,12 +70,9 @@ from ...ast import (
     Range1,
     Range2,
     Range3,
-    Snd,
     Stmt,
     Sub,
-    TupleExpr,
     Var,
-    Zip,
 )
 from ...number import Context
 from ...transform import SplitLoop, SplitLoopStrategy
@@ -186,141 +179,40 @@ def _why_scalar_refuses(
     return None
 
 
-_Key = Definition | tuple[str, int] | str | None
-"""An index: the definition a name reads, a literal, :data:`_UP`, or `None`
-for anything else, which matches nothing."""
+_LOOP = object()
+"""The key of an index that is the loop's own variable."""
 
-_UP = 'up'
-"""Ends the path of a list whose elements live at the path before it: a
-comprehension, a list display or a slice.  Indexing it drops it."""
-
-_Place = tuple[Definition | None, tuple[_Key, ...]]
-"""Where a value may live: a list and a path of indices into it.  A `None`
-list is one this pass cannot follow, so it may be any."""
-
-_OPAQUE: tuple[type[Expr], ...] = (
-    Call, TupleExpr, Fst, Snd, Zip, Enumerate, Attribute, Empty, ListComp, ListExpr,
-)
-"""What may hand back a list :class:`_Places` does not follow; anything else
-it does not follow is a value, naming no list."""
+_ALLOCS: tuple[type[Expr], ...] = (Empty, ListExpr, ListComp, ListSlice)
+"""What makes a fresh list: a slice copies."""
 
 
-class _Places:
-    """Which list, and where in it, a value may be: through `x = y`,
-    `x = y[i]`, a phi and an update.  Other routes to a list are opaque."""
+class _Accesses(DefaultVisitor):
+    """A loop body's element writes, the ids of the nodes that may define a
+    name in it, and what it reads, a subscript chain taken whole."""
 
-    def __init__(self, def_use: DefineUseAnalysis):
-        self.def_use = def_use
-        self._base: dict[Definition, frozenset[_Place]] = {}
-
-    def key(self, e: Expr) -> _Key:
-        if isinstance(e, Var):
-            return self.def_use.use_to_def.get(e)
-        if isinstance(e, Integer):
-            return ('int', e.val)
-        return None
-
-    def of_def(self, d: Definition) -> frozenset[_Place]:
-        # an update and a phi name the list already there
-        out: set[_Place] = set()
-        stack, seen = [d], set()
-        while stack:
-            c = stack.pop()
-            if c not in seen:
-                seen.add(c)
-                prev = same_object_defs(c)
-                stack.extend(self.def_use.defs[i] for i in prev)
-                if not prev:
-                    out |= self._of_base(c)
-        return frozenset(out)
-
-    def _of_base(self, d: Definition) -> frozenset[_Place]:
-        if d in self._base:
-            return self._base[d]
-        self._base[d] = frozenset({(None, ())})     # a cycle is opaque
-        out: frozenset[_Place]
-        match d:
-            case AssignDef(site=Argument() | FuncDef()):
-                out = frozenset({(d, ())})
-            case AssignDef(site=Assign(target=NamedId(), expr=e)):
-                out = self.of_expr(e, d)
-            case AssignDef(site=ForStmt(iterable=it)) | AssignDef(site=ListComp(iterables=(it,))):
-                out = self.at(self.of_expr(it), None)
-            case AssignDef(site=ContextStmt()):
-                out = frozenset()
-            case _:
-                out = frozenset({(None, ())})
-        self._base[d] = out
-        return out
-
-    @staticmethod
-    def at(places: frozenset[_Place], k: _Key) -> frozenset[_Place]:
-        """*places* indexed by *k*."""
-        return frozenset(
-            (r, p[:-1] if p and p[-1] == _UP else p + (k,))
-            for r, p in places
-        )
-
-    def of_expr(self, e: Expr, d: Definition | None = None) -> frozenset[_Place]:
-        """The places *e* may be; *d* is the definition it is bound to, the
-        list it makes if it makes one."""
-        match e:
-            case Var():
-                d = self.def_use.use_to_def.get(e)
-                return frozenset({(None, ())}) if d is None else self.of_def(d)
-            case ListRef():
-                return self.at(self.of_expr(e.value), self.key(e.index))
-            case ListSlice():
-                inner = self.at(self.of_expr(e.value), None)
-                return frozenset((r, p + (_UP,)) for r, p in inner)
-            case IfExpr():
-                return self.of_expr(e.ift, d) | self.of_expr(e.iff, d)
-            case Empty() if d is not None:
-                return frozenset({(d, ())})
-            case ListComp() | ListExpr() if d is not None:
-                # a fresh spine, holding what its elements are
-                elts = [e.elt] if isinstance(e, ListComp) else e.elts
-                held = {(r, p + (_UP,)) for x in elts for r, p in self.of_expr(x)}
-                return frozenset({(d, ())} | held)
-            case _ if isinstance(e, _OPAQUE):
-                return frozenset({(None, ())})
-            case _:
-                return frozenset()
-
-
-class _Writes(DefaultVisitor):
-    """Every element write in a block, and the ids of the nodes that may
-    define a name there."""
+    writes: list[IndexedAssign]
+    sites: set[int]
+    reads: list[Expr]
 
     def __init__(self):
         super().__init__()
-        self.writes: list[IndexedAssign] = []
-        self.sites: set[int] = set()
+        self.writes, self.sites, self.reads = [], set(), []
 
-    def _visit_statement(self, stmt: Stmt, ctx):
+    def _visit_statement(self, stmt: Stmt, ctx: None):
         self.sites.add(id(stmt))
         if isinstance(stmt, IndexedAssign):
             self.writes.append(stmt)
         return super()._visit_statement(stmt, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: None):
         self.sites.add(id(e))
         return super()._visit_list_comp(e, ctx)
 
+    def _visit_var(self, e: Var, ctx: None):
+        self.reads.append(e)
 
-class _ReadPlaces(DefaultVisitor):
-    """Every place a block reads, a subscript chain taken whole."""
-
-    def __init__(self, places: _Places):
-        super().__init__()
-        self.places = places
-        self.out: set[_Place] = set()
-
-    def _visit_var(self, e: Var, ctx):
-        self.out |= self.places.of_expr(e)
-
-    def _visit_list_ref(self, e: ListRef, ctx):
-        self.out |= self.places.of_expr(e)
+    def _visit_list_ref(self, e: ListRef, ctx: None):
+        self.reads.append(e)
         base: Expr = e
         while isinstance(base, ListRef):
             self._visit_expr(base.index, ctx)
@@ -329,68 +221,102 @@ class _ReadPlaces(DefaultVisitor):
             self._visit_expr(base, ctx)
 
 
-def _why_writes_refuse(stmt: ForStmt, def_use: DefineUseAnalysis) -> str | None:
+def _peel(e: Expr) -> tuple[Expr, tuple[Expr, ...]]:
+    """*e* as a base and the indices a subscript chain applies to it."""
+    idx: tuple[Expr, ...] = ()
+    while isinstance(e, ListRef):
+        idx, e = (e.index, *idx), e.value
+    return e, idx
+
+
+def _root(
+    d: Definition, def_use: DefineUseAnalysis,
+) -> tuple[Definition, tuple[Expr, ...]] | None:
+    """The one list *d* is part of, and the indices to it, through `x = y[i]`
+    and the updates and phis that name the same list; `None` if unclear."""
+    prefix: tuple[Expr, ...] = ()
+    while True:
+        bases, stack, seen = set(), [d], set()
+        while stack:
+            c = stack.pop()
+            if c not in seen:
+                seen.add(c)
+                prev = same_object_defs(c)
+                stack.extend(def_use.defs[i] for i in prev)
+                if not prev:
+                    bases.add(c)
+        if len(bases) != 1:
+            return None
+        (d,) = bases
+        if not isinstance(d.site, Assign):
+            return d, prefix
+        base, idx = _peel(d.site.expr)
+        if not isinstance(base, Var):
+            return d, prefix
+        d, prefix = def_use.find_def_from_use(base), idx + prefix
+
+
+def _why_writes_refuse(
+    stmt: ForStmt, def_use: DefineUseAnalysis, alias: AliasAnalysis,
+) -> str | None:
     """Why the element writes of *stmt*'s body may collide across iterations,
-    or `None`.  A write is at a path whose loop-variable index makes it
-    distinct per iteration; every read of that list must be under it."""
-    places = _Places(def_use)
-    body = _Writes()
+    or `None`.  A write's indices must reach the loop variable through
+    invariant ones, and every read of that list must be at that element."""
+    body = _Accesses()
     body._visit_block(stmt.body, None)
     ranged = isinstance(stmt.iterable, (Range1, Range2, Range3))
 
-    def kind(k: _Key) -> str | None:
-        """'loop' for this loop's variable, 'fixed' for an index invariant
-        across the loop, `None` for any other."""
-        if isinstance(k, tuple):
-            return 'fixed'
-        if k is None or isinstance(k, str):
+    def key(i: Expr) -> object | None:
+        if isinstance(i, Integer):
+            return ('int', i.val)
+        if not isinstance(i, Var):
             return None
-        if k.site is stmt:
-            return 'loop' if ranged and isinstance(k, AssignDef) else None
-        return None if id(k.site) in body.sites else 'fixed'
+        d = def_use.find_def_from_use(i)
+        if d.site is stmt:
+            return _LOOP if ranged else None
+        return None if id(d.site) in body.sites else d
 
-    regions: dict[Definition, tuple[_Key, ...]] = {}
+    held: dict[Definition, tuple[object, ...]] = {}
     for w in body.writes:
-        distinct = (
-            f'`{w.var}` is written at an index this backend cannot show '
-            'distinct per iteration'
-        )
-        where = places.of_def(def_use.find_def_from_use(w))
-        for i in w.indices:
-            where = places.at(where, places.key(i))
-        for root, path in where:
-            if root is None:
-                return f'`{w.var}` may be a list this backend cannot follow'
+        found = _root(def_use.find_def_from_use(w), def_use)
+        if found is None:
+            return f'`{w.var}` may be a list this backend cannot follow'
+        root, prefix = found
+        if isinstance(root.site, Assign) and isinstance(root.site.expr, _ALLOCS):
             if id(root.site) in body.sites:
                 continue                    # allocated each iteration
-            kinds = [kind(k) for k in path]
-            if 'loop' not in kinds:
-                if None in kinds:
-                    return distinct
-                return (
-                    f'every iteration writes `{w.var}` at the same index, so '
-                    'the last write is the answer'
-                )
-            # what follows the loop variable stays inside its own element
-            n = kinds.index('loop') + 1
-            if None in kinds[:n]:
-                return distinct
-            region = path[:n]
-            if regions.setdefault(root, region) != region:
-                return f'`{w.var}` is written at two paths, which may collide'
+        elif not isinstance(root.site, Argument):
+            return f'`{w.var}` may be a list this backend cannot follow'
+        keys = [key(i) for i in (*prefix, *w.indices)]
+        if _LOOP not in keys:
+            if None in keys:
+                return (f'`{w.var}` is written at an index this backend '
+                        'cannot show distinct per iteration')
+            return (f'every iteration writes `{w.var}` at the same index, so '
+                    'the last write is the answer')
+        n = keys.index(_LOOP) + 1
+        if None in keys[:n]:
+            return (f'`{w.var}` is written at an index this backend cannot '
+                    'show distinct per iteration')
+        if held.setdefault(root, tuple(keys[:n])) != tuple(keys[:n]):
+            return f'`{w.var}` is written at two indices, which may collide'
 
-    if regions:
-        reads = _ReadPlaces(places)
-        reads._visit_block(stmt.body, None)
-        for root, path in reads.out:
-            if root is None:
-                return 'a list this backend cannot follow is read'
-            held = regions.get(root)
-            if held is not None and path[:len(held)] != held:
-                return (
-                    f'`{root.name}` is read back while being written, which '
-                    'orders the iterations against each other'
-                )
+    regions = {alias.region_of(r) for r in held} - {None}
+    for e in body.reads:
+        base, idx = _peel(e)
+        found = _root(def_use.find_def_from_use(base), def_use) \
+            if isinstance(base, Var) else None
+        if found is None:
+            if alias.region_of_expr(e) in regions:
+                return ('a list the loop writes is read through a name this '
+                        'backend cannot follow')
+            continue
+        root, prefix = found
+        at = tuple(key(i) for i in (*prefix, *idx))
+        for r, path in held.items():
+            if (root is r or alias.may_alias(root, r)) and at[:len(path)] != path:
+                return (f'`{r.name}` is read back while being written, which '
+                        'orders the iterations against each other')
     return None
 
 
@@ -435,7 +361,7 @@ def why_not_tileable(
             why = None
         if why is not None:
             return why
-    return _why_writes_refuse(stmt, def_use)
+    return _why_writes_refuse(stmt, def_use, Alias.analyze(func, def_use=def_use))
 
 
 class _ForLoops(DefaultVisitor):
