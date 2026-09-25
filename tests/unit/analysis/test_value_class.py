@@ -1350,6 +1350,12 @@ class TestTheLoweredRounding:
         assert not info.is_finite(_find(low.ast, 'x >= 65536'))
 
 
+def _lower(fn, args: list):
+    """*fn* specialized to *args* and lowered only as far as
+    :class:`CompToLoop`."""
+    return st.comp_to_loop(st.monomorphize(fn, args=args))
+
+
 def _amax_unfused(fn, n: int = 4, *, arg_types: list | None = None) -> ValueClass:
     """The class of the ``max(...)`` in *fn*, lowered only as far as
     :class:`CompToLoop`.
@@ -1359,8 +1365,7 @@ def _amax_unfused(fn, n: int = 4, *, arg_types: list | None = None) -> ValueClas
     this unchanged, which is what lets the two spellings be compared.
     """
     from fpy2.ast.fpyast import AMax
-    args = arg_types if arg_types is not None else _arg_types(n, 1, 0)
-    low = st.comp_to_loop(st.monomorphize(fn, args=args))
+    low = _lower(fn, arg_types if arg_types is not None else _arg_types(n, 1, 0))
     info = ValueClassInfer.analyze(low.ast)
     return next(v for e, v in info.by_expr.items() if isinstance(e, AMax))
 
@@ -2137,13 +2142,12 @@ class TestBackThroughAFill:
 # What a finite value says of what it was computed from
 
 _F32 = RealType(fp.FP32)
-_L4 = ListType(_F32, 4)
 
 
 def _lowered_cls(fn, text: str, args: list) -> ValueClass:
     """:func:`_cls`, after :class:`CompToLoop`, which leaves a list filled by a
     loop and a guard over a mask."""
-    low = st.comp_to_loop(st.monomorphize(fn, args=args))
+    low = _lower(fn, args)
     return ValueClassInfer.analyze(low.ast).classify(_find(low.ast, text))
 
 
@@ -2198,8 +2202,8 @@ class TestFiniteSources:
         assert math.isinf(f([1.0, 2.0, 3.0, 4.0], 1.0))
 
     def test_a_list_parameter_is_in_its_format(self):
-        """E4M3 has no infinity, as a scalar of it has none -- and a loop that
-        stores elsewhere keeps that, which its phis alone did not budget."""
+        """E4M3 has no infinity, so neither has an element of an E4M3 list,
+        even past a loop that stores elsewhere."""
         @fp.fpy(ctx=fp.REAL)
         def f(xs):
             for _i in range(4):

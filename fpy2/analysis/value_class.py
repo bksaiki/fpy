@@ -47,8 +47,9 @@ rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
 never correct.
 
-Scalars only: a list or tuple carries no class, and reading an element gives the
-top class.
+A list or tuple carries no class of its own; a list's elements share one per
+region, or per definition where a region holds several lists
+(:data:`_ElementKey`).
 
 Not yet taught: the sign of a zero, which would let ``signbit`` refine;
 magnitudes (``x > 1``), which is `FormatInfer`'s question; ``assert`` as a
@@ -476,8 +477,9 @@ class ValueClassAnalysis:
     alias: AliasAnalysis
     """Underlying alias analysis: which lists may be the same location.  A class
     for a list's *elements* is a property of that location rather than of a
-    name, so a `Region` -- the set of locations a place may hold -- is the key.
-    See :meth:`element_region`."""
+    name, so a `Region` -- the set of locations a place may hold -- is the key,
+    or the naming definition where a region holds several lists
+    (:data:`_ElementKey`).  See :meth:`element_region`."""
 
     type_info: TypeAnalysis
     """Underlying basic-type analysis, which decides what carries a class."""
@@ -552,8 +554,8 @@ class _ValueClassInstance(DefaultVisitor):
     """A phi, or a region's elements, gains at least one atom per round until
     it stops growing, so this many rounds per phi and per region is enough to
     reach a fixpoint.  Exceeding it means a transfer function is not monotone
-    -- a bug -- and the phis drop to the top class rather than the loop
-    running forever."""
+    -- a bug -- and every phi and region's elements drop to the top class
+    rather than the loop running forever."""
 
     func: FuncDef
     type_info: TypeAnalysis
@@ -580,9 +582,9 @@ class _ValueClassInstance(DefaultVisitor):
     so a store anywhere already walked voids a fact taken before it."""
 
     _stored_at: dict[Region, int]
-    """When a store last landed in each region: :attr:`_touched` without the
-    joins' :meth:`_retouch`, which voids facts an arm took rather than
-    storing anything.  What a scan's result survives."""
+    """When a store last landed in each region: :attr:`_touched` without
+    :meth:`_retouch`'s re-stamps, which void an arm's facts but store
+    nothing.  A scan's mask holds until this passes its exit."""
 
     _scanned: dict[ForStmt, int]
     """For a loop that did *not* store into the list it iterates, that list's
@@ -763,7 +765,7 @@ class _ValueClassInstance(DefaultVisitor):
     def _stamp(self, region: Region) -> int:
         return self._touched.get(region, 0)
 
-    def _touch(self, region: Region, store: bool = True):
+    def _touch(self, region: Region, store: bool = True) -> None:
         """Record that *region*'s elements changed, by a store unless a join
         is only voiding what an arm said of them."""
         self._clock += 1
@@ -862,8 +864,8 @@ class _ValueClassInstance(DefaultVisitor):
             key, cls = todo.pop()
             prev, _ = out_elt.get(key, (_TOP, 0))
             out_elt[key] = (prev & cls, self._key_stamp(key))
-            # a region's fills are its only stores; a list sharing one has none
-            # of its own to follow
+            # only a region has fill sites to follow; a definition key shares
+            # its region's
             if not cls & (_NAN | _INF) and isinstance(key, Region):
                 srcs, scalars = self._filled_from(key)
                 todo.extend((src, _ZERO | _FINITE) for src in srcs)
@@ -1315,10 +1317,10 @@ class _ValueClassInstance(DefaultVisitor):
         return operands
 
     def _filled_from(self, region: Region) -> 'tuple[list[_ElementKey], list[Definition]]':
-        """What is finite wherever *region*'s elements are: *region*'s only
-        store is in one loop covering it, storing exact ops, however nested,
-        of same-index reads of lists that loop also covers and that were
-        unchanged when it began -- and, where there is an element at all, of
+        """`(lists, scalars)` finite wherever *region*'s elements are:
+        *region*'s only store is in one loop covering it, storing exact ops,
+        however nested, of same-index reads of lists the loop covers and that
+        were unchanged when it began, or, where the list is nonempty, of
         scalars."""
         sites = self._fill_sites().get(region, [])
         if len(sites) != 1:
@@ -1623,9 +1625,10 @@ class _ValueClassInstance(DefaultVisitor):
         for region in regions:
             sites = self.alias.sites_at(region)
             if sites and all(s.kind == 'param' and (s.node, s.depth) in pinned for s in sites):
-                self._elt[region] = _BOT
+                cls = _BOT
                 for s in sites:
-                    self._elt[region] |= pinned[(s.node, s.depth)]
+                    cls |= pinned[(s.node, s.depth)]
+                self._elt[region] = cls
 
     def _region_of_def(self, target, site, depth: int = 0) -> 'Region | None':
         """The region *depth* list levels inside what *target* binds at *site*.
@@ -1755,8 +1758,8 @@ class _ValueClassInstance(DefaultVisitor):
         every region the body stores into.  Joining only ever adds atoms and
         there are finitely many, so the sequence stops on its own; if it has not
         stopped after :attr:`_ROUNDS_PER_PHI` rounds per phi and per region, a
-        transfer function is not monotone and every phi is dropped to the top
-        class.
+        transfer function is not monotone and every phi and region's elements
+        drop to the top class.
         """
         phis = self.def_use.phis[stmt]
         for phi in phis:

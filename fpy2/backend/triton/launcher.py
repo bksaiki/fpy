@@ -83,7 +83,8 @@ def load_kernel(src: KernelSource) -> Any:
 TUNING: tuple[tuple[int, int], ...] = (
     (16, 4), (32, 2), (32, 8), (64, 4), (64, 8), (128, 4), (128, 8),
 )
-"""The (block, warps) pairs :func:`launch` tries when it picks the block."""
+"""The (block, warps) pairs :func:`launch` tries when it picks the block, for
+a kernel without :attr:`~KernelSource.block_m`."""
 
 TUNING_2D: tuple[tuple[int, int, int], ...] = (
     (16, 64, 4), (32, 32, 4), (32, 64, 4), (64, 32, 4), (64, 64, 4), (64, 64, 8),
@@ -92,23 +93,27 @@ TUNING_2D: tuple[tuple[int, int, int], ...] = (
 """The (block, block_m, warps) triples it tries for a kernel with
 :attr:`~KernelSource.block_m`."""
 
+def _configs(src: KernelSource) -> list[tuple[int, int, int]]:
+    """The (block, block_m, warps) triples *src* is tuned over."""
+    return [(b, 1, w) for b, w in TUNING] if src.block_m is None else list(TUNING_2D)
+
+
 _TUNED: dict[str, Any] = {}
 """Kernels wrapped in `triton.autotune`, keyed by source as `_LOADED` is."""
 
 
 def _tuned(src: KernelSource) -> Any:
-    """*src* under `triton.autotune`: each of `TUNING` timed on the first
-    launch at each shape, keyed on the sizes the kernel takes, and every
+    """*src* under `triton.autotune`: each of :func:`_configs` timed on the
+    first launch at each shape, keyed on the sizes the kernel takes, and every
     argument it stores through restored between configs, since each one is
     run more than once."""
     import triton
     cached = _TUNED.get(src.source)
     if cached is None:
-        configs = (
-            [triton.Config({src.block: b}, num_warps=w) for b, w in TUNING]
-            if src.block_m is None else
-            [triton.Config({src.block: b, src.block_m: bm}, num_warps=w)
-             for b, bm, w in TUNING_2D])
+        configs = [
+            triton.Config({src.block: b} if src.block_m is None else {src.block: b, src.block_m: bm},
+                          num_warps=w)
+            for b, bm, w in _configs(src)]
         cached = _TUNED[src.source] = triton.autotune(
             configs, key=[name for name, _, _ in src.sizes],
             restore_value=list(src.writes),
@@ -210,8 +215,8 @@ def _check_layout(
     """
     import torch
     if block is None:
-        block, block_m = (max(b for b, _ in TUNING), 1) if src.block_m is None \
-            else (max(t[0] for t in TUNING_2D), max(t[1] for t in TUNING_2D))
+        block = max(b for b, _, _ in _configs(src))
+        block_m = max(bm for _, bm, _ in _configs(src))
     dtypes = dict(src.dtypes)
     lengths: dict[str, tuple[str, int]] = {}
     for pos, dims in src.shapes:
@@ -228,7 +233,7 @@ def _check_layout(
         want_dtype = _torch_dtype(dtypes[pos]) if pos in dtypes else t.dtype
         if t.dtype != want_dtype:
             raise ValueError(f'`{name}` holds {t.dtype}; the kernel was compiled for {want_dtype}')
-        # a tile of rows runs its last `block_m - 1` rows past the end
+        # the last tile of rows may run `block_m - 1` rows past the end
         reach = block + (block_m - 1) * (t.numel() // max(t.shape[0], 1) if t.dim() else 0)
         if t.numel() + reach - 1 > _MAX_OFFSET:
             raise ValueError(

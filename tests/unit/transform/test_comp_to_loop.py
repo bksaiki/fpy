@@ -277,9 +277,8 @@ class TestCompToLoop:
 
     @pytest.mark.parametrize('f', [_odds, _from_one, _down])
     def test_index_ranges_counts_the_trip(self, f):
-        """With `index_ranges`, a range with a start or step becomes a count
-        from zero and its element `a + s * k`: the write index and the read
-        are separate."""
+        """With `index_ranges`, a loop over `range(a, b, s)` counts its trip
+        `k` from zero and binds the target to `a + s * k`."""
         src = CompToLoop.apply(f.ast, index_ranges=True).format()
         assert re.search(r'for \w+ in range\(len\(range\([^)]*\)\)\):', src)
         assert _agree(f, [float(x) for x in range(8)], index_ranges=True)

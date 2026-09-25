@@ -1293,9 +1293,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
 
     def _range_key(self, e: Expr) -> _RangeKey | None:
         """An identity for a range, so two loops over the same one land on
-        the same index set.  Structural: a literal by its value, a variable by
-        its definition.
-        """
+        the same index set."""
         match e:
             case Range2():
                 step: _Operand | None = _ONE
@@ -1309,8 +1307,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return (start, stop, step)
 
     def _part_key(self, e: Expr) -> _Operand | None:
-        """A range operand's identity: a literal by its value, a variable by
-        its definition."""
+        """*e* as an :data:`_Operand`, or `None`."""
         const = self.view.int_value(e)
         if const is not None:
             return ('c', const)
@@ -1329,19 +1326,21 @@ class _DigitBoundInferInstance(DefaultVisitor):
         for start, step in ((e.first, e.second), (e.second, e.first)):
             pairs = [(step.first, step.second), (step.second, step.first)] \
                 if isinstance(step, Mul) else [(None, step)]
+            a = self._part_key(start)
             for s, k in pairs:
-                if not isinstance(k, Var):
+                if not isinstance(k, Var) or a is None or self._trip is None:
                     continue
-                if self._trip is None or self.def_use.find_def_from_use(k) is not self._trip[0]:
+                if self.def_use.find_def_from_use(k) is not self._trip[0]:
                     continue
-                a, b = self._part_key(start), _ONE if s is None else self._part_key(s)
-                if a is not None and b is not None:
+                b = _ONE if s is None else self._part_key(s)
+                if b is not None:
                     return ('elt', a, b, self._trip[1])
         return None
 
     def _at_index_set(self, lst: Var, idx: Var) -> Terms | None:
-        """*lst*'s element summary restricted to the range the enclosing loop
-        runs over, or ``None`` where there is no such range.
+        """*lst*'s element summary restricted to the index set *idx* covers:
+        the enclosing loop's range, or `a + s * k` over a trip count
+        (:meth:`_elt_key`); ``None`` where there is no such set.
 
         A bound the part builds -- a ``max`` over it -- says nothing about
         the rest, so the part gets variables of its own and the store replays

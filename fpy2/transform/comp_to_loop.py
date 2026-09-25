@@ -117,9 +117,8 @@ class _CompToLoopInstance(SiteRewriter):
     unless a consumer opts out, since it costs a materialised row per outer
     element"""
     index_ranges: bool
-    """whether a comprehension over `range(a, b, s)` counts its trip `k` and
-    computes `a + s * k`, rather than carrying a write index: for a consumer
-    whose subscript of a range is arithmetic, not a list"""
+    """whether a comprehension over `range(a, b, s)` loops over its trip `k`,
+    binding `a + s * k` (see :meth:`CompToLoop.apply`)"""
     _fill: tuple[ListComp, NamedId, tuple[Expr, ...]] | None
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
@@ -356,11 +355,20 @@ class _CompToLoopInstance(SiteRewriter):
             not self._inlinable(iters[0])
             or isinstance(e.targets[0], UnderscoreId)
         )
-        if len(e.targets) == 1 and indexed:
+        # or, with `index_ranges`, count a range's trip and compute its target
+        counted = (self.index_ranges and isinstance(iters[0], Range2 | Range3)
+                   and isinstance(e.targets[0], NamedId))
+        if len(e.targets) == 1 and (indexed or counted):
             idx = self.gensym.refresh(self.temp_id)
             src = iters[0]
             stmts: list[Stmt] = []
-            if not isinstance(e.targets[0], UnderscoreId):
+            if not indexed:
+                assert isinstance(src, Range2 | Range3)
+                step = Mul(clone(src.third), Var(idx, loc), loc) if isinstance(src, Range3) else Var(idx, loc)
+                stmts.append(integer_ctx([Assign(
+                    copy_target(e.targets[0]), None, Add(clone(src.first), step, loc), loc,
+                )], loc))
+            elif not isinstance(e.targets[0], UnderscoreId):
                 # a discarded target binds nothing the element can read, and a
                 # subscript has no effect to keep
                 stmts.append(Assign(
@@ -381,22 +389,6 @@ class _CompToLoopInstance(SiteRewriter):
             assert isinstance(target, NamedId)
             body = StmtBlock([IndexedAssign(acc, place(Var(target, loc)), elt, loc)])
             out.append(ForStmt(target, clone(iters[0]), body, loc))
-            return Var(acc, loc)
-
-        if (self.index_ranges and len(e.targets) == 1
-                and isinstance(e.targets[0], NamedId)
-                and isinstance(iters[0], Range2 | Range3)):
-            # the trip `k` is the write index, and the target `a + s * k`
-            rng = iters[0]
-            k = self.gensym.refresh(self.temp_id)
-            step = Mul(clone(rng.third), Var(k, loc), loc) if isinstance(rng, Range3) else Var(k, loc)
-            target = copy_target(e.targets[0])
-            assert isinstance(target, NamedId)
-            body = StmtBlock([
-                integer_ctx([Assign(target, None, Add(clone(rng.first), step, loc), loc)], loc),
-                IndexedAssign(acc, place(Var(k, loc)), elt, loc),
-            ])
-            out.append(ForStmt(k, Range1(None, Len(None, clone(rng), loc), loc), body, loc))
             return Var(acc, loc)
 
         # Several clauses, or one whose iterable is not indexed: nest loops

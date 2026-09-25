@@ -28,9 +28,25 @@ from fpy2.transform.path import walk_exprs
 from fpy2.types import ListType, RealType, Type
 from fpy2.utils import NamedId
 
+from .programs import (
+    aligned_sum,
+    interleaved,
+    logb_clamped,
+    logb_finite,
+    logb_guarded,
+    pow2_finite,
+    pow2_logb,
+    rare_arm,
+    reversed_row,
+    short_arm,
+)
+
 FP16 = fp.IEEEContext(5, 16)
 _R32 = RealType(fp.FP32)
 _INT = RealType(fp.INTEGER)
+_N = NamedId('n')
+_ALIGNED_ARGS: list[Type | None] = [
+    ListType(ListType(_R32, 4), _N), ListType(RealType(fp.FP64), _N), _INT]
 
 
 def _spec(func: Function, argt: list[Type | None], ctx: Context = fp.FP32) -> Function:
@@ -55,6 +71,11 @@ def _emit(
                       drop_asserts=drop_asserts)
 
 
+def _compile(func: Function, arg_types: list[Type | None], **opts) -> KernelSource:
+    """*func* compiled under `REAL`, its asserts dropped."""
+    return TritonCompiler(drop_asserts=True, **opts).compile(func, ctx=fp.REAL, arg_types=arg_types)
+
+
 def _flat(func: Function, n_out: int = 8, ctx: Context = fp.FP32) -> KernelSource:
     """*func* compiled over eight `f32` inputs and *n_out* outputs."""
     return TritonCompiler(drop_asserts=True).compile(
@@ -67,9 +88,8 @@ def _rows(
 ) -> KernelSource:
     """*func* compiled over a runtime count of rows."""
     rows = NamedId('rows')
-    return TritonCompiler(drop_asserts=True).compile(func, ctx=fp.REAL, arg_types=[
-        ListType(ListType(RealType(elt), n_in), rows),
-        ListType(ListType(RealType(out), n_out), rows), _INT])
+    return _compile(func, [ListType(ListType(RealType(elt), n_in), rows),
+                           ListType(ListType(RealType(out), n_out), rows), _INT])
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -1076,14 +1096,12 @@ class TestGather:
 
     def test_an_interleaved_part_splits(self):
         """`a + s * k` with `s` a power of two over the whole tile is a
-        reshape and a split per bit of `a`."""
-        from .programs import interleaved
+        reshape and a split per bit of `s`."""
         src = _rows(interleaved, 8, 4, elt=FP16).source
         assert src.count('tl.split(tl.reshape(') == 2
         assert 'tl.sum(' not in src
 
     def test_any_other_index_is_a_one_hot_sum(self):
-        from .programs import reversed_row
         src = _rows(reversed_row, 4, 4, elt=FP16).source
         assert 'tl.sum(tl.where((tl.arange(0, 4)[None, None, :] == ' in src
 
@@ -1186,14 +1204,10 @@ def test_a_reduction_over_a_row_in_memory_is_refused():
     (fp.RM.RTN, False), (fp.RM.RTP, False),
 ])
 def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> None:
-    """Where the round sends what underflows to zero, the scale-in is two
-    exact multiplies in `fp32`; floor and ceil do not, so it stays in
+    """Under RTZ, RNE and RNA, which send anything below one half to zero,
+    the scale-in is two exact multiplies in `fp32`; floor and ceil stay in
     `fp64`."""
-    from .programs import aligned_sum
-    src = TritonCompiler(drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS).compile(
-        aligned_sum(rm), ctx=fp.REAL,
-        arg_types=[ListType(ListType(_R32, 4), NamedId('n')),
-                   ListType(RealType(fp.FP64), NamedId('n')), RealType(fp.INTEGER)])
+    src = _compile(aligned_sum(rm), _ALIGNED_ARGS, unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
     assert ('bitcast=True) * ((' in src.source) is halves
     assert ('x.to(tl.float64)' in src.source) is not halves
 
@@ -1214,36 +1228,26 @@ def test_a_scale_bound_under_a_rounding_context_is_not_fused() -> None:
             out[r] = y
         return out
 
-    n = NamedId('n')
     s3 = RealType(fp.FixedContext(True, 0, 3, fp.RM.RTZ, fp.OV.WRAP))
     with pytest.raises(TritonEmitError):
-        TritonCompiler(drop_asserts=True).compile(f, ctx=fp.REAL, arg_types=[
-            ListType(_R32, n), ListType(s3, n), ListType(_R32, n), _INT])
+        _compile(f, [ListType(_R32, _N), ListType(s3, _N), ListType(_R32, _N), _INT])
 
 
 def test_the_scale_out_leaves_the_sum() -> None:
     """`HoistScale`: every term is scaled by one power of two, so the sum
     is, once."""
-    from .programs import aligned_sum
-    src = TritonCompiler(drop_asserts=True).compile(
-        aligned_sum(fp.RM.RTZ), ctx=fp.REAL,
-        arg_types=[ListType(ListType(_R32, 4), NamedId('n')),
-                   ListType(RealType(fp.FP64), NamedId('n')), RealType(fp.INTEGER)])
+    src = _compile(aligned_sum(fp.RM.RTZ), _ALIGNED_ARGS)
     total = re.search(r'(__t\d+) = tl\.sum\(', src.source)
     assert total is not None
     assert f' * {total[1]})' in src.source
 
 
 def test_a_power_of_two_is_its_bits() -> None:
-    from .programs import pow2_finite, pow2_logb
-    n = NamedId('n')
-    src = TritonCompiler(drop_asserts=True).compile(pow2_finite, ctx=fp.REAL, arg_types=[
-        ListType(RealType(fp.SINT8), n), ListType(RealType(fp.FP64), n), _INT])
+    src = _compile(pow2_finite, [ListType(RealType(fp.SINT8), _N), ListType(RealType(fp.FP64), _N), _INT])
     assert '<< 52).to(tl.float64, bitcast=True)' in src.source
     assert "float('nan')" not in src.source
     # an exponent that may be infinite or NaN has those selected apart
-    src = TritonCompiler(drop_asserts=True).compile(pow2_logb, ctx=fp.REAL, arg_types=[
-        ListType(RealType(FP16), n), ListType(_R32, n), _INT])
+    src = _compile(pow2_logb, [ListType(RealType(FP16), _N), ListType(_R32, _N), _INT])
     assert "float('nan'), tl.where(" in src.source
 
 
@@ -1304,32 +1308,23 @@ class TestLogb:
 
     @staticmethod
     def _logb(f: Function, ctx: Context) -> str:
-        from fpy2.utils import NamedId
-        n = NamedId('n')
-        src = TritonCompiler(drop_asserts=True).compile(
-            f, ctx=fp.REAL,
-            arg_types=[ListType(RealType(ctx), n), ListType(RealType(ctx), n), RealType(fp.INTEGER)])
-        return src.source
+        return _compile(f, [ListType(RealType(ctx), _N), ListType(RealType(ctx), _N), _INT]).source
 
     def test_clamped_at_the_least_exponent_it_is_the_field(self):
-        from .programs import logb_clamped
         src = self._logb(logb_clamped(-14), FP16)
         assert '6.103515625e-05' not in src          # no subnormal rescale
         assert "float('-inf')" not in src            # no zero
         assert "float('nan')" in src                 # nothing proves `x` finite
 
     def test_clamped_below_the_least_exponent_it_is_not(self):
-        from .programs import logb_clamped
         assert '6.103515625e-05' in self._logb(logb_clamped(-20), FP16)
 
     def test_proven_finite_it_needs_no_special(self):
-        from .programs import logb_guarded
         src = self._logb(logb_guarded(-126), fp.FP32)
         assert "float('nan'), tl.where" not in src
         assert "== float('inf')" not in src
 
     def test_proven_finite_unclamped_it_keeps_zero_and_subnormals(self):
-        from .programs import logb_finite
         src = self._logb(logb_finite, fp.FP32)
         assert "float('-inf')" in src and '1.1754943508222875e-38' in src
         assert "== float('inf')" not in src
@@ -1341,16 +1336,10 @@ class TestSkippedArm:
 
     @staticmethod
     def _src(f: Function) -> str:
-        from fpy2.utils import NamedId
-        n = NamedId('n')
-        return TritonCompiler(drop_asserts=True).compile(
-            f, ctx=fp.REAL,
-            arg_types=[ListType(ListType(_R32, 4), n), ListType(_R32, n), RealType(fp.INTEGER)]).source
+        return _compile(f, [ListType(ListType(_R32, 4), _N), ListType(_R32, _N), _INT]).source
 
     def test_a_long_arm_is_skipped(self):
-        from .programs import rare_arm
         assert 'if tl.max(' in self._src(rare_arm)
 
     def test_a_short_arm_is_not(self):
-        from .programs import short_arm
         assert 'if tl.max(' not in self._src(short_arm)

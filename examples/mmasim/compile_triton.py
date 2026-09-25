@@ -24,6 +24,7 @@ import math
 import random
 import sys
 from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,10 +52,11 @@ Build = Callable[[], tuple[fp.Function, list[Type]]]
 
 _BLOCK = 64
 _BLOCK_M = 4
-"""A tile of rows taller than any `--run` draw's, so its excess is masked."""
+"""`--run`'s tile height: taller than the default `-m`, so the mask on the
+rows past the end is exercised."""
 
 _HARD_EVERY = 4
-"""Every this many `--run` draws, one puts a hard case in an element with
+"""Every this many `--run` draws, each element is a hard case with
 probability :data:`_HARD`."""
 
 _HARD = 0.25
@@ -143,6 +145,7 @@ def compile_matmul(
     return kernel, design, arg_types
 
 
+@cache
 def _hard_cases(fmt: SizedFormat) -> list[float]:
     """The values of *fmt* a random draw misses: the zeros, the smallest and
     largest magnitudes, the least normal, and the specials it has."""

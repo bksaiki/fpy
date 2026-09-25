@@ -27,6 +27,7 @@ from fpy2.backend.triton import (
     tile_loops,
     unavailable,
 )
+from fpy2.backend.triton.launcher import _torch_dtype
 from fpy2.transform import Specialize
 from fpy2.types import ListType, RealType
 from fpy2.utils import NamedId
@@ -35,10 +36,25 @@ from .programs import (
     K,
     aligned_sum,
     any_all,
+    arm_writes,
     batched_dot,
+    carried_index,
+    interleaved,
     logb,
+    logb_clamped,
+    logb_finite,
+    logb_guarded,
+    mask_rebound,
     nan_inf,
+    pow2_logb,
+    rare_arm,
+    rare_cell,
+    reversed_row,
     round_to_int,
+    row_first,
+    scale_joined,
+    scale_rebound,
+    scale_stored_over,
     scaled,
     signbit,
 )
@@ -87,6 +103,11 @@ def _agree(src: KernelSource, func: fp.Function, tensors: list, *,
     want = func(*args, block)
     assert _reprs(tensors[-1].cpu().tolist()) == _reprs(want)
     return want
+
+
+def _out_like(src: KernelSource, n: int, pos: int = 1) -> 'torch.Tensor':
+    """*n* zeros in the storage of *src*'s list argument at *pos*."""
+    return torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[pos])).cuda()
 
 
 def _f32(vals: list) -> 'torch.Tensor':
@@ -587,7 +608,7 @@ def matmul_src() -> KernelSource:
 
 
 def test_both_output_dimensions_are_program_ids(matmul_src):
-    """Beside lanes, `i` is `program_id(1)`, one program per row of the
+    """With a lane loop, `i` is `program_id(1)`, one program per row of the
     output, and `j` the tile: `m` and `n` both larger than a block."""
     assert 'i = tl.program_id(1)\n' in matmul_src.source
     assert matmul_src.grid_outer is not None and matmul_src.block_m is None
@@ -827,7 +848,6 @@ def test_an_aligned_sum_agrees_on_hard_cases(rm: fp.RM) -> None:
     """Zeros, subnormals and the largest magnitudes put the grid anywhere in
     its range, a row of zeros at its lowest; one half and just below it where
     the scale is largest."""
-    from fpy2.backend.triton.launcher import _torch_dtype
     hard = [0.0, -0.0, 2.0 ** -149, -(2.0 ** -149), 2.0 ** -126, 3.4028234663852886e38,
             -3.4028234663852886e38, 1.0, -1.5, 2.0 ** -140 * 3, 1e-30, -7e20]
     rng = random.Random(0)
@@ -843,8 +863,7 @@ def test_an_aligned_sum_agrees_on_hard_cases(rm: fp.RM) -> None:
     n = len(rows)
     src = _compile(f, [ListType(ListType(F32, 4), n), ListType(RealType(fp.FP64), n), INT],
                    unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
-    ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
-    _agree(src, f, [torch.tensor(rows, dtype=torch.float32).cuda(), ot], block=64)
+    _agree(src, f, [torch.tensor(rows, dtype=torch.float32).cuda(), _out_like(src, n)], block=64)
 
 
 _LOGB_HARD = {
@@ -857,47 +876,42 @@ _LOGB_HARD = {
 
 
 @pytest.mark.parametrize('prog, c', [
-    ('clamped', -14), ('clamped', -20), ('clamped', -126), ('clamped', -140),
-    ('guarded', -14), ('guarded', -126), ('finite', None),
+    (logb_clamped, -14), (logb_clamped, -20), (logb_clamped, -126), (logb_clamped, -140),
+    (logb_guarded, -14), (logb_guarded, -126), (logb_finite, None),
 ])
 @pytest.mark.parametrize('fmt', ['fp16', 'fp32'])
-def test_logb_agrees_on_hard_cases(prog: str, c: int | None, fmt: str) -> None:
-    from fpy2.backend.triton.launcher import _torch_dtype
-
-    from .programs import logb_clamped, logb_finite, logb_guarded
-    f = (logb_finite if c is None
-         else logb_clamped(c) if prog == 'clamped' else logb_guarded(c))
+def test_logb_agrees_on_hard_cases(prog, c: int | None, fmt: str) -> None:
+    f = prog if c is None else prog(c)
     ctx, dtype = (FP16, torch.float16) if fmt == 'fp16' else (fp.FP32, torch.float32)
     vals = _LOGB_HARD[fmt]
     n = len(vals)
     src = _compile(f, [ListType(RealType(ctx), n), ListType(RealType(ctx), n), INT])
-    ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
-    _agree(src, f, [torch.tensor(vals, dtype=dtype).cuda(), ot], block=16)
+    _agree(src, f, [torch.tensor(vals, dtype=dtype).cuda(), _out_like(src, n)], block=16)
 
 
-def test_a_skipped_arm_agrees_where_one_row_takes_it() -> None:
+@pytest.mark.parametrize('prog, width', [(rare_arm, 4), (arm_writes, 5)])
+def test_a_skipped_arm_agrees_where_one_row_takes_it(prog, width: int) -> None:
     """Block 0 has one row with an infinity, block 1 none, so the arm runs for
-    one and is skipped for the other."""
-    from .programs import rare_arm
+    one and is skipped for the other; a list the arm writes keeps the writes,
+    as a list merges by them."""
     rng = random.Random(0)
-    rows = [[rng.uniform(-4, 4) for _ in range(4)] for _ in range(32)]
+    rows = [[rng.uniform(-4, 4) for _ in range(width)] for _ in range(32)]
     rows[3][2] = math.inf
     n = len(rows)
-    src = _compile(rare_arm, [ListType(ListType(F32, 4), n), ListType(F32, n), INT])
+    src = _compile(prog, [ListType(ListType(F32, width), n), ListType(F32, n), INT])
     assert 'if tl.max(' in src.source
-    _agree(src, rare_arm, [torch.tensor(rows).cuda(), torch.zeros(n).cuda()], block=16)
+    _agree(src, prog, [torch.tensor(rows).cuda(), torch.zeros(n).cuda()], block=16)
 
 
-@pytest.mark.parametrize('name, n_in', [('interleaved', 8), ('reversed_row', 4)])
-def test_a_gather_agrees_on_hard_cases(name: str, n_in: int) -> None:
+@pytest.mark.parametrize('prog, n_in', [(interleaved, 8), (reversed_row, 4)])
+def test_a_gather_agrees_on_hard_cases(prog, n_in: int) -> None:
     """Signed zeros, subnormals, the largest magnitudes, and the specials:
     a gather moves each bit pattern unchanged."""
-    from . import programs
     hard = [0.0, -0.0, 2.0 ** -24, -(2.0 ** -14), 65504.0, -65504.0,
             math.inf, -math.inf, math.nan, 1.5]
     rng = random.Random(0)
     rows = [[rng.choice(hard) for _ in range(n_in)] for _ in range(32)]
-    _agree_on(getattr(programs, name), torch.tensor(rows), 4, ctx_in=FP16)
+    _agree_on(prog, torch.tensor(rows), 4, ctx_in=FP16)
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -917,8 +931,8 @@ def _dot_matmul(A: list[list[fp.Real]], BT: list[list[fp.Real]],
 
 @pytest.mark.parametrize('block_m', [1, 4])
 def test_a_tile_of_rows_agrees_past_its_end(block_m: int) -> None:
-    """With no lanes, the rows of the output are a tile too: counts that are
-    not a multiple of either tile's size."""
+    """With no lanes, the rows of the output are a tile too: counts including
+    ones not a multiple of either tile's size."""
     m, n, k = NamedId('m'), NamedId('n'), NamedId('k')
     src = _compile(_dot_matmul, [ListType(ListType(F32, k), m), ListType(ListType(F32, k), n),
                                  ListType(ListType(F32, n), m), INT])
@@ -932,7 +946,6 @@ def test_a_tile_of_rows_agrees_past_its_end(block_m: int) -> None:
 def test_a_skipped_arm_agrees_in_a_tile_of_rows() -> None:
     """The skip reduces a `[BM, BLOCK]` mask, and the merged name's
     placeholder has that shape."""
-    from .programs import rare_cell
     m, n = NamedId('m'), NamedId('n')
     src = _compile(rare_cell, [ListType(F32, m), ListType(F32, n), ListType(ListType(F32, n), m), INT])
     assert src.block_m is not None and 'if tl.max(' in src.source
@@ -943,22 +956,8 @@ def test_a_skipped_arm_agrees_in_a_tile_of_rows() -> None:
     _agree(src, rare_cell, [_f32(xs), _f32(ys), torch.zeros(9, 7).cuda()], block_m=4)
 
 
-def test_a_skipped_arm_keeps_its_writes_to_a_list() -> None:
-    """A list merges by its masked writes, so the arm's are not undone when
-    it ends."""
-    from .programs import arm_writes
-    rng = random.Random(0)
-    rows = [[rng.uniform(-4, 4) for _ in range(5)] for _ in range(32)]
-    rows[3][2] = math.inf
-    n = len(rows)
-    src = _compile(arm_writes, [ListType(ListType(F32, 5), n), ListType(F32, n), INT])
-    assert 'if tl.max(' in src.source
-    _agree(src, arm_writes, [torch.tensor(rows).cuda(), torch.zeros(n).cuda()], block=16)
-
-
 def test_a_loop_ahead_of_the_column_tile_carries_a_column() -> None:
     """Under a tile of rows alone, a carried value is `[BM, 1]`."""
-    from .programs import row_first
     m, n, k = NamedId('m'), NamedId('n'), NamedId('k')
     src = _compile(row_first, [ListType(ListType(F32, k), m), ListType(F32, n),
                                ListType(ListType(F32, n), m), INT])
@@ -970,7 +969,6 @@ def test_a_loop_ahead_of_the_column_tile_carries_a_column() -> None:
 
 def test_a_power_of_two_agrees_on_special_exponents() -> None:
     """`2 ** logb(x)`: `+0` at a zero, `inf` at an infinity, NaN at NaN."""
-    from .programs import pow2_logb
     vals = [0.0, -0.0, 2.0 ** -24, 2.0 ** -14, 1.0, -3.0, 65504.0, math.inf, -math.inf, math.nan]
     want = [0.0, 0.0, 2.0 ** -24, 2.0 ** -14, 1.0, 2.0, 2.0 ** 15, math.inf, math.inf, math.nan]
     n = len(vals)
@@ -985,7 +983,6 @@ _S3 = RealType(fp.FixedContext(True, 0, 3, fp.RM.RTZ, fp.OV.WRAP))
 
 
 def test_a_load_is_not_reused_past_a_rebound_mask() -> None:
-    from .programs import mask_rebound
     n = NamedId('n')
     src = _compile(mask_rebound, [ListType(F32, n)] * 3 + [INT])
     _agree(src, mask_rebound, [_f32([10.0, 20.0, 30.0, 40.0]), _f32([0.5, 2.0, 0.5, 2.0]),
@@ -993,7 +990,6 @@ def test_a_load_is_not_reused_past_a_rebound_mask() -> None:
 
 
 def test_a_carried_name_is_not_its_value_before_the_loop() -> None:
-    from .programs import carried_index
     n = NamedId('n')
     src = _compile(carried_index, [ListType(ListType(F32, 4), n), ListType(RealType(fp.SINT8), n),
                                    ListType(F32, n), INT])
@@ -1002,7 +998,6 @@ def test_a_carried_name_is_not_its_value_before_the_loop() -> None:
 
 
 def test_a_fused_scale_in_rebound_before_its_round_agrees() -> None:
-    from .programs import scale_rebound
     n = NamedId('n')
     src = _compile(scale_rebound, [ListType(F32, n), ListType(_S3, n), ListType(F32, n),
                                    ListType(F32, n), INT])
@@ -1012,7 +1007,6 @@ def test_a_fused_scale_in_rebound_before_its_round_agrees() -> None:
 
 
 def test_a_fused_scale_in_a_merge_reads_agrees() -> None:
-    from .programs import scale_joined
     n = NamedId('n')
     src = _compile(scale_joined, [ListType(F32, n), ListType(_S3, n), ListType(RealType(fp.FP64), n),
                                   INT])
@@ -1022,7 +1016,6 @@ def test_a_fused_scale_in_a_merge_reads_agrees() -> None:
 
 
 def test_a_fused_scale_in_of_an_element_stored_over_agrees() -> None:
-    from .programs import scale_stored_over
     n = NamedId('n')
     src = _compile(scale_stored_over, [ListType(ListType(F32, 2), n), ListType(_S3, n),
                                        ListType(F32, n), INT])
@@ -1033,7 +1026,6 @@ def test_a_fused_scale_in_of_an_element_stored_over_agrees() -> None:
 
 def test_an_aligned_sum_of_fp16_agrees() -> None:
     """The fused round is held in `fp32`: libdevice has no `fp16` one."""
-    from .programs import aligned_sum
     n = NamedId('n')
     f = aligned_sum(fp.RM.RTZ, digits=10, emin=-14)
     src = _compile(f, [ListType(ListType(RealType(FP16), 4), n), ListType(RealType(fp.FP64), n), INT])
