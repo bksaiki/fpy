@@ -135,6 +135,35 @@ Settled choices:
   evaluation: deterministic, eager, and what `lm-evaluation-harness` drives.
   vLLM is for serving (Phase 7) and does not run on this GPU.
 
+## Metrics
+
+Each metric, as the code computes it.  Notation: `p_t` is R0's next-token
+distribution at position `t` and `q_t` the run's, both over the vocabulary;
+`y_t` is the correct next token; logarithms are natural (nats); `N` is the
+number of predicted tokens (2047 per segment) or items.
+
+| metric | definition | pooled over | uncertainty | source |
+|---|---|---|---|---|
+| perplexity | `exp((1/N) Σ_t -log q_t(y_t))` | predicted tokens | standard error of the mean NLL, times PPL (delta method) | HF perplexity guide; GPTQ |
+| KL divergence | `(1/N) Σ_t Σ_v p_t(v) (log p_t(v) - log q_t(v))`, i.e. KL(R0 ‖ run) | predicted tokens | standard error of the mean | llama.cpp |
+| top-1 agreement | `(1/N) Σ_t [argmax p_t = argmax q_t]` | predicted tokens | binomial, `sqrt(a (1 - a) / N)` | llama.cpp ("same top p") |
+| RMS Δp | `sqrt((1/N) Σ_t (q_t(y_t) - p_t(y_t))^2)` | predicted tokens | none | llama.cpp |
+| `acc` | fraction of items whose highest-log-likelihood choice is correct; LAMBADA: the target word is the greedy continuation | items | sample standard deviation / `sqrt(N)` (harness) | lm-evaluation-harness |
+| `acc_norm` | as `acc`, each choice's log-likelihood divided by its length in characters | items | as `acc` | lm-evaluation-harness |
+| flips | items whose per-item `acc` (or `acc_norm`) differs from R0's, over the items both runs have | items | none (count and fraction) | Dutta et al. |
+| divergence index | first generated position (0-based) where the run's greedy token differs from R0's; none if it matches R0 to R0's end | prompts: fraction diverged, mean and median index of those that do | none | Yuan et al. (`Div_Index`, `Div_Percent`) |
+| normwise relative error | `‖Ŷ - Y‖_F / ‖Y‖_F` for a layer's output matrix (tokens x features), in log2 | every token and segment stacked into one matrix; a block row stacks its seven layers | none | Higham, *Accuracy and Stability of Numerical Algorithms* |
+| componentwise backward error | `\|ŷ - y\| / (\|x\|ᵀ\|w\|)` per output element, mean and max, in log2 | elements, as above | none | Oettli-Prager; Higham, ch. 7 |
+| ULP error | `log2(1 + \|ŷ - y\| / ulp(y))` per element, `ulp` in FP32 ("bits of error"), mean and max | elements | none | Herbie / FPBench |
+| correct-rounding rate | fraction of elements with `ŷ = fl(y)`, `y` rounded to nearest FP32 | elements | none | |
+| signed bias | mean of `sign(y) (ŷ - y) / (\|x\|ᵀ\|w\|)`, in units of u = 2^-24; negative leans toward zero | elements | none | |
+
+The token-level standard errors treat tokens as independent, as llama.cpp
+does; tokens in one segment are correlated, so they understate the
+uncertainty.  In the per-layer metrics `Ŷ` is the run's output and `Y` the
+exact product, in FP64, of its own BF16-rounded inputs `x` and weights `w`
+(local), or R0's output at that layer (propagated, normwise only).
+
 ## Cost
 
 Qwen3-0.6B is about 1.2 GFLOP per token (twice its ~0.6B matmul parameters,
@@ -325,10 +354,58 @@ there and reports 3).
 
 ### Phase 5 -- Per-layer error
 
-- **What:** `layers.py`: on a calibration batch (a few WikiText-2 segments),
-  each linear layer's output relative error and cosine similarity against R1
-  and R0, by depth: where accumulation error enters, and whether it grows.
-- **Tests:** R1 against R1 is zero error.
+**Done**, in full (4 segments, every run, every metric, ~4.5 min).
+`serve/layers.py` hooks every linear layer and compares its FP32 output
+elementwise with a reference.  The plan's "against R1 and R0" became two
+kinds of metric (defined under Metrics):
+
+- *local*, against the exact product `Y` of the same BF16-rounded inputs, in
+  FP64 (the layer's own error): normwise relative error, componentwise
+  backward error (mean and max), ULP error (mean and max), correct-rounding
+  rate, and signed bias;
+- *propagated*, against R0's output at the same layer (what the model has
+  gathered by then): normwise relative error.
+
+`-m` selects metrics, and only their work is done: the backward error and
+bias add a second FP64 product (`|x|ᵀ|w|`), and only `propagated` needs the
+R0 pass.  Cosine similarity was dropped: at these magnitudes `1 - cos` is
+about half the squared relative error, so it adds nothing.  `bf16-exact` now
+fills a preallocated output instead of concatenating its row blocks, which
+held `lm_head`'s 1.2 GB output twice and ran out of memory here.
+
+Every layer pooled (errors as log2; u = 2^-24, so -24 is one unit roundoff):
+
+| run | normwise | backward mean | backward max | ULP bits mean | correctly rounded | bias (u) | propagated |
+|---|---|---|---|---|---|---|---|
+| bf16-exact | -25.24 | -29.61 | -24.16 | 0.31 | 100.00% | 0.000 | -8.16 |
+| nv.ampere.bf16.f32 | -18.53 | -23.16 | -15.44 | 4.31 | 0.83% | -1.702 | -8.10 |
+| nv.hopper.bf16.f32 | -18.97 | -23.41 | -16.34 | 4.16 | 0.86% | -1.423 | -8.12 |
+| amd.cdna2.bf16 | -21.28 | -25.89 | -18.48 | 2.04 | 10.79% | 0.000 | -8.13 |
+| amd.cdna2.bf16_1k | -21.54 | -26.08 | -18.83 | 1.94 | 11.86% | 0.000 | -8.13 |
+| amd.cdna3.bf16 | -21.91 | -26.39 | -19.49 | 1.78 | 14.00% | 0.000 | -8.15 |
+
+- **bf16-exact** is correctly rounded everywhere (max 0.585 bits = half an
+  ulp), as it must be: a check on the reference.
+- **Local** error is flat with depth and orders the designs the same way on
+  every metric: Ampere, Hopper, CDNA2, CDNA2 1k, CDNA3.  The NV designs'
+  mean backward error is ~1.5-1.8 u, the AMD designs' ~0.2-0.3 u.  It peaks
+  at `mlp.down_proj` (the largest `k`, 3072) in blocks 2 and 27, most for
+  the NV designs.
+- **Bias** separates the vendors: the NV designs' errors lean toward zero
+  (Ampere's mean signed error -1.70 u against a mean |error| of 1.79 u,
+  so ~95% of it), consistent with truncation; the AMD designs' are unbiased.
+- **ULP max** is 31-35 bits for every design: cancellation, where the exact
+  `y` is near zero and its ulp tiny.  The backward error is the robust
+  elementwise metric here; ULP error is kept as the conventional one.
+- **Propagated** error is ~2^-9 at block 0 and ~2^-8.4 through most of the
+  model, set by input rounding (`bf16-exact` alike): 2^10-2^13 times the
+  local error.  Blocks 11-14 are the exception: there, the designs' errors
+  add to it, largest in `k_proj`/`v_proj` (block 12: `bf16-exact` 9.2e-3,
+  CDNA3 1.3e-2, Ampere 2.3e-2), and it settles back after block 15.
+
+Test: `tests/test_layers.py` (`bf16-exact` is correctly rounded with its
+input rounding as propagated error, a design errs in every block; only the
+selected metrics are computed).
 
 ### Phase 6 -- Qwen3.5-0.8B
 

@@ -43,7 +43,9 @@ class Run:
             # in blocks of rows: `lm_head` in FP64 is 2.5 GB at 2048 tokens
             wd = w.to(torch.bfloat16).double().T
             xd = x.reshape(-1, x.shape[-1]).to(torch.bfloat16)
-            y = torch.cat([(r.double() @ wd).float() for r in xd.split(_ROWS)])
+            y = torch.empty(xd.shape[0], w.shape[0], device=x.device)
+            for i in range(0, xd.shape[0], _ROWS):
+                y[i:i + _ROWS] = xd[i:i + _ROWS].double() @ wd
             y = y.reshape(*x.shape[:-1], w.shape[0])
         elif self.mode in kernels.BF16_DESIGNS:
             y = kernels.linear(x, w, self.mode, split_k=self.split_k, combine=self.combine)
