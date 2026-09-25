@@ -195,3 +195,27 @@ def reversed_row(xss: list[list[fp.Real]], out: list[list[fp.Real]], BLOCK: fp.R
         for k in range(4):
             row[k] = ys[3 - k]
     return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def rare_cell(xs: list[fp.Real], ys: list[fp.Real], out: list[list[fp.Real]], BLOCK: fp.Real):
+    """`rare_arm` over a tile of rows: a cell with a non-finite operand takes
+    a long arm."""
+    for i in range(len(out)):
+        row = out[i]
+        for j in range(len(row)):
+            x = xs[i]
+            y = ys[j]
+            if not fp.isfinite(x) or not fp.isfinite(y):
+                a = x * x + 1
+                b = a * y - x
+                c = b * b + a * y
+                d = c - b * y + a
+                e = d * x + c * y - b
+                f = e * e - d * x + c * a
+                g = f * y + e * b - d * c
+                s = g + f * a - e * d + c
+            else:
+                s = x + y
+            row[j] = s
+    return out

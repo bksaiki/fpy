@@ -50,6 +50,8 @@ Build = Callable[[], tuple[fp.Function, list[Type]]]
 """A design's builder: the design, and its argument types."""
 
 _BLOCK = 64
+_BLOCK_M = 4
+"""A tile of rows taller than any `--run` draw's, so its excess is masked."""
 
 _HARD_EVERY = 4
 """Every this many `--run` draws, one puts a hard case in an element with
@@ -200,7 +202,8 @@ def _row(t: Type, rng: random.Random, hard: float = 0.0) -> float | list[float]:
 
 def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
                m: int, n: int, trials: int, seed: int,
-               block: int | None = _BLOCK, hard_every: int = _HARD_EVERY) -> int:
+               block: int | None = _BLOCK, hard_every: int = _HARD_EVERY,
+               block_m: int = _BLOCK_M) -> int:
     """How many of the *m* x *n* outputs, over *trials* draws, the kernel gets
     bit for bit.  Every *hard_every*-th draw is heavy in hard cases."""
     import torch
@@ -218,7 +221,7 @@ def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
         out = torch.zeros(m, n, dtype=dtype).cuda()
         launch(kernel, [_tensor(A, a), _tensor(BT, b), _tensor(C, c),
                         *(_tensor(s, t) for s, t in zip(S, scales)), out],
-               block=block)
+               block=block, block_m=block_m)
         want = [
             float(design(A[i], BT[j], C[i][j], *((S[0][i], S[1][j]) if S else ())))
             for i in range(m) for j in range(n)

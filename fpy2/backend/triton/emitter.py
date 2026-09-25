@@ -18,6 +18,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import reduce
 
 from ...analysis import (
     ArraySizeAnalysis,
@@ -261,9 +262,11 @@ class _IndentedWriter:
 
     _lines: list[str]
     _depth: int
-    rows: set[str]
-    """The names holding a row vector: a line reading `tl.arange` or another
-    one.  An address wrongly taken for a scalar is only broadcast needlessly."""
+    axes: frozenset[str]
+    """The tile axes in force, each by the name of its index."""
+    along: dict[str, frozenset[str]]
+    """The names holding a row value, by the axes it varies along: a line
+    reading another one, or broadcast to the tile's shape (every axis)."""
     wide: set[str]
     """The names holding a `[rows, lanes]` tile: a line reading one, or
     broadcasting across the lanes."""
@@ -282,16 +285,21 @@ class _IndentedWriter:
     def __init__(self) -> None:
         self._lines = []
         self._depth = 0
-        self.rows = set()
+        self.axes = frozenset()
+        self.along = {}
         self.wide = set()
         self._loads = [(False, {})]
         self._assigned = [set()]
         self.defined = set()
         self._value = {}
 
-    def add_line(self, line: str = '', shape: str | None = None) -> None:
-        """*line*; *shape* ('wide', 'row' or 'scalar') says what it binds
-        where reading it off the line would not."""
+    def along_of(self, code: str) -> frozenset[str]:
+        """The axes *code* varies along, by the names it reads."""
+        return frozenset().union(*(self.along.get(n, ()) for n in _IDENT.findall(code)))
+
+    def add_line(self, line: str = '', shape: str | frozenset[str] | None = None) -> None:
+        """*line*; *shape* ('wide', 'row' or 'scalar', or the axes of a row)
+        says what it binds where reading it off the line would not."""
         self._lines.append('    ' * self._depth + line if line else '')
         if 'tl.store(' in line:
             # another argument may be the same tensor
@@ -311,17 +319,22 @@ class _IndentedWriter:
             if 'tl.load(' not in code and name not in _IDENT.findall(code):
                 self._value[name] = self.canonical(code)
             idents = set(_IDENT.findall(code))
+            along = self.along_of(code)
             if shape is None:
                 if '[None, :]' in code or '[:, None]' in code or self.wide & idents:
                     shape = 'wide'
-                elif 'tl.arange(' in code or self.rows & idents:
+                elif 'tl.arange(' in code:
                     shape = 'row'
+                elif along:
+                    shape = along
             self.wide.discard(name)
-            self.rows.discard(name)
+            self.along.pop(name, None)
             if shape == 'wide':
                 self.wide.add(name)
             elif shape == 'row':
-                self.rows.add(name)
+                self.along[name] = self.axes
+            elif isinstance(shape, frozenset):
+                self.along[name] = shape
 
     def indent(self) -> None:
         self._depth += 1
@@ -506,6 +519,9 @@ class _Emitter(Visitor):
     """The loops across a tile's lanes."""
     grid_loops: Sequence[ForStmt]
     """The loop the grid's second axis takes."""
+    block_m: str | None
+    """The `tl.constexpr` tiling the grid's second axis, where its loop is a
+    tile of rows rather than one program per iteration."""
     tiles: dict[NamedId, tuple[int, int, TritonScalar]]
     """Local lists of static length, as (width, tail length, element storage).
 
@@ -559,6 +575,10 @@ class _Emitter(Visitor):
     """The tiled loop's index, while its body is emitted."""
     _row_width: str
     """How many rows a tile holds: the tiled loop's width inside one."""
+    _axes: list[tuple[str, str]]
+    """The tile axes in force, outermost first: each index's name and width."""
+    _axis_guards: dict[str, str]
+    """Each tile axis's guard, by its index's name: the rows past its end."""
     _guard_mask: str | None
     """The tile's own guard while inside it: the rows past the end, and no
     branch."""
@@ -597,6 +617,7 @@ class _Emitter(Visitor):
         guards: Sequence[If1Stmt] = (),
         lanes: Sequence[ForStmt] = (),
         grid: Sequence[ForStmt] = (),
+        block_m: str | None = None,
     ) -> None:
         self.func = func
         self.def_use = DefineUse.analyze(func)
@@ -613,6 +634,7 @@ class _Emitter(Visitor):
         self.guards = guards
         self.lane_loops = lanes
         self.grid_loops = grid
+        self.block_m = block_m
         self.tiles = {}
         self.ranges = {}
         self.consts = {}
@@ -630,6 +652,8 @@ class _Emitter(Visitor):
         self._lane = None
         self._tile = None
         self._row_width = '1'
+        self._axes = []
+        self._axis_guards = {}
         self._guard_mask = None
         self._carried = {}
         defs = self.def_use.defs
@@ -917,7 +941,7 @@ class _Emitter(Visitor):
         if _as_number(code) is not None or code in self._once:
             return code
         if self._tile is not None and not self._out.wide & set(_IDENT.findall(code)):
-            return self._bind(f'tl.broadcast_to({code}, ({self._row_width},))', 'row')
+            return self._bind(f'tl.broadcast_to({code}, {self._shape(self._out.axes)})', 'row')
         return self._bind(code)
 
     def _pinned(self, indices: list[Expr | str]) -> list[Expr | str]:
@@ -967,7 +991,7 @@ class _Emitter(Visitor):
         # a pinned row index, as a column against a lane loop's tile
         codes = [
             self.emit(i) if not isinstance(i, str)
-            else f'{i}[:, None]' if self._lane is not None and i in self._out.rows
+            else f'{i}[:, None]' if self._lane is not None and i in self._out.along
             else i
             for i in indices
         ]
@@ -990,7 +1014,7 @@ class _Emitter(Visitor):
         """*code* broadcastable against a tile: a row value as a column."""
         if not _IDENT.fullmatch(code):
             code = self._bind(code)
-        return f'{code}[:, None]' if code in self._out.rows else code
+        return f'{code}[:, None]' if code in self._out.along else code
 
     @staticmethod
     def _lane_vec(width: int) -> str:
@@ -1273,18 +1297,19 @@ class _Emitter(Visitor):
         """`tl.load` at *addr*, under whatever guard is in force.
 
         Triton rejects a tensor mask on a scalar address, so under a branch a
-        scalar address is broadcast to the rows.  Under the tile's own guard
-        alone it is a scalar load.
+        scalar address is broadcast to the rows.  Under the tiles' own guards
+        alone it takes those of the axes it varies along: every launched
+        program has a live row along each, so the load is safe.
         """
         mask = self.mask
-        if mask is not None and self._tile is not None and not (
-            (self._out.rows | self._out.wide) & set(_IDENT.findall(addr))
-        ):
-            if mask == self._guard_mask:
-                # every launched program has a live row, so the load is safe
-                mask = None
-            else:
-                addr = f'{addr} + tl.zeros_like({self._tile})'
+        if mask is not None and self._axes and not self._out.wide & set(_IDENT.findall(addr)):
+            along = self._out.along_of(addr)
+            if mask == self._guard_mask and (self._lane is None or not along):
+                guards = [self._axis_guards[a] for a, _ in self._axes
+                          if a in along and a in self._axis_guards]
+                mask = reduce(lambda x, y: f'({x} & {y})', guards) if guards else None
+            elif not along:
+                addr = f'{addr} + tl.zeros_like({self._axes[-1][0]})'
         if (held := self._out.load(addr, mask)) is not None:
             return held
         name = self._bind(f'tl.load({addr})' if mask is None
@@ -1826,7 +1851,7 @@ class _Emitter(Visitor):
                 f'`{e.name}` is a list held in registers, which has a value '
                 'only element by element'
             )
-        if self._lane is not None and str(e.name) in self._out.rows:
+        if self._lane is not None and str(e.name) in self._out.along:
             return f'{e.name}[:, None]'
         return str(e.name)
 
@@ -2146,7 +2171,10 @@ class _Emitter(Visitor):
             return self._emit_branch(stmt, stmt.body, None, ctx)
         # a tile's guard only drops the over-run: nothing merges out of it
         prev, prev_guard = self.mask, self._guard_mask
-        self.mask = self._guard_mask = self.emit(stmt.cond)
+        cond = self.emit(stmt.cond)
+        if self._tile is not None:
+            self._axis_guards[self._tile] = cond
+        self.mask = self._guard_mask = cond if prev is None else f'({prev} & {cond})'
         self._visit_block(stmt.body, ctx)
         self.mask, self._guard_mask = prev, prev_guard
 
@@ -2226,9 +2254,9 @@ class _Emitter(Visitor):
         if skip:
             live = self._bind(self.mask)
             at, before = ctx.mark(), set(ctx.defined)
-            shapes = {v: 'row' if v in ctx.rows else 'wide' if v in ctx.wide else 'scalar'
+            shapes = {v: ctx.along.get(v) or ('wide' if v in ctx.wide else 'scalar')
                       for v in before}
-            ctx.add_line(f'if tl.max({live}.to(tl.int32)) != 0:' if live in ctx.rows
+            ctx.add_line(f'if tl.max({live}.to(tl.int32)) != 0:' if live in ctx.along
                          else f'if {live}:')
             ctx.indent()
         self._visit_block(ift, ctx)
@@ -2266,7 +2294,7 @@ class _Emitter(Visitor):
         held = self._class_storage(p)
         if held is None:
             raise TritonEmitError(f'`{p.name}` has no storage to hold across a skipped arm')
-        shape = f'({self._row_width},)' if name in ctx.rows else '()'
+        shape = self._shape(ctx.along.get(name, frozenset()))
         return f'tl.zeros({shape}, dtype={held.format()})'
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:
@@ -2338,13 +2366,32 @@ class _Emitter(Visitor):
         ctx.dedent()
         self._carried = prev
 
+    def _shape(self, along: frozenset[str]) -> str:
+        """The shape of a value varying along the tile axes *along*: one
+        dimension per axis, of width 1 where it does not vary."""
+        if not along:
+            return '()'
+        if len(self._axes) == 1:
+            return f'({self._axes[0][1]},)'
+        return f'({", ".join(w if a in along else "1" for a, w in self._axes)})'
+
+    def _enter_axis(self, index: str, width: str) -> None:
+        self._axes.append((index, width))
+        self._out.axes = frozenset(a for a, _ in self._axes)
+
+    def _leave_axis(self) -> None:
+        index, _ = self._axes.pop()
+        self._axis_guards.pop(index, None)
+        self._out.axes = frozenset(a for a, _ in self._axes)
+
     def _as_row(self, code: str, held: TritonScalar) -> str:
         """*code*, broadcast across the tile's rows.  An integer is
         added to zeros, which also widens a name bound to Triton's `int32`;
         a float is not, as `-0.0 + 0.0` is `+0.0`."""
+        shape = self._shape(self._out.axes)
         if held.is_integer():
-            return f'({code} + tl.zeros(({self._row_width},), dtype={held.format()}))'
-        return f'tl.broadcast_to({self._typed(code, held, True)}, ({self._row_width},))'
+            return f'({code} + tl.zeros({shape}, dtype={held.format()}))'
+        return f'tl.broadcast_to({self._typed(code, held, True)}, {shape})'
 
     def _arg_storage(self, name: str) -> TritonScalar:
         """The storage of the elements kernel argument *name* points at."""
@@ -2400,12 +2447,17 @@ class _Emitter(Visitor):
                 'a tiled loop should hold the tile loop it was split into'
             )
         self.grid_extent = self._extent(it.second)
+        # under a tile of rows, a column index varies along the second axis
+        cols = '[None, :]' if self._axes else ''
         ctx.add_line(f'{outer} = tl.program_id(0) * {width}')
-        ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width})')
+        self._enter_axis(str(inner.target), width)
+        ctx.add_line(f'{inner.target} = {outer} + tl.arange(0, {width}){cols}',
+                     frozenset({str(inner.target)}))
         prev = self._tile, self._row_width
         self._tile, self._row_width = str(inner.target), width
         self._visit_block(inner.body, ctx)
         self._tile, self._row_width = prev
+        self._leave_axis()
 
     def _extent(self, stop: Expr) -> int | str | None:
         """How far a grid axis runs: a proven length, or the size parameter
@@ -2431,8 +2483,22 @@ class _Emitter(Visitor):
         self.grid_outer = self._extent(it.arg)
         if self.grid_outer is None:
             raise TritonEmitError('a grid axis needs a length the launcher knows')
-        ctx.add_line(f'{stmt.target} = tl.program_id(1)')
+        if self.block_m is None:
+            ctx.add_line(f'{stmt.target} = tl.program_id(1)')
+            self._visit_block(stmt.body, ctx)
+            return
+        # a tile of `block_m` rows, each a column `[block_m, 1]`
+        i = str(stmt.target)
+        self._enter_axis(i, self.block_m)
+        ctx.add_line(f'{i} = tl.program_id(1) * {self.block_m} + '
+                     f'tl.arange(0, {self.block_m})[:, None]', frozenset({i}))
+        live = self._bind(f'({i} < {self.emit(it.arg)})')
+        self._axis_guards[i] = live
+        prev = self.mask, self._guard_mask
+        self.mask = self._guard_mask = live
         self._visit_block(stmt.body, ctx)
+        self.mask, self._guard_mask = prev
+        self._leave_axis()
 
     def _visit_block(self, block: StmtBlock, ctx: _IndentedWriter) -> None:
         for stmt in block.stmts:
@@ -2526,12 +2592,16 @@ class KernelSource:
     position and dimension whose length it is."""
 
     grid_outer: int | str | None = None
-    """How many programs the grid's second axis runs, one per iteration of
-    the loop around the tile, as :attr:`grid_extent` is spelled; ``None``
-    where the grid has one axis."""
+    """How many iterations of the loop around the tile the grid's second
+    axis covers, as :attr:`grid_extent` is spelled; ``None`` where the grid
+    has one axis."""
 
     block: str | None = None
     """The tile width's parameter, a `tl.constexpr` the launcher picks."""
+
+    block_m: str | None = None
+    """The second axis's tile height, likewise, where each program takes
+    that many of its iterations; ``None`` where it takes one."""
 
     writes: tuple[str, ...] = ()
     """The pointer parameters the kernel stores through, which tuning runs
@@ -2584,7 +2654,11 @@ def emit_kernel(
     """
     if not isinstance(func, FuncDef):
         raise TypeError(f"Expected a 'FuncDef', got {func}")
-    emitter = _Emitter(func, tiled, drop_asserts, guards, lanes, grid)
+    # a tile of rows; beside lanes, one row per program
+    block_m = f'{block}_M' if grid and not lanes and block is not None else None
+    if block_m is not None and any(str(a.name) == block_m for a in func.args):
+        raise TritonEmitError(f'`{block_m}` names an argument and the second tile axis')
+    emitter = _Emitter(func, tiled, drop_asserts, guards, lanes, grid, block_m)
 
     params: list[str] = []
     size_params: list[tuple[str, int, int]] = []
@@ -2593,6 +2667,8 @@ def emit_kernel(
         name = str(arg.name)
         if name == block:
             params.append(f'{name}: tl.constexpr')
+            if block_m is not None:
+                params.append(f'{block_m}: tl.constexpr')
         elif isinstance(arg.type, ListTypeAnn):
             params.append(f'{name}_ptr')
             assert isinstance(arg.name, NamedId)
@@ -2634,6 +2710,7 @@ def emit_kernel(
         grid_extent=emitter.grid_extent,
         grid_outer=emitter.grid_outer,
         block=block,
+        block_m=block_m,
         writes=tuple(p for p in params if p in emitter.written),
         shapes=tuple(shapes),
         dtypes=dtypes,

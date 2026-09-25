@@ -349,6 +349,43 @@ over the new loop, as does `examples/mmasim/tests/test_triton.py` on bf8.
 
 ### Phase 7 -- 2-D output tiles
 
+**Done for kernels without lanes** (`cdna2`, `fp64 (fma)`), per the open
+item; the MMA designs are Phase 7b.  No AST change: `_grid` already proves
+the loop around the tile tileable, so `_emit_grid` evaluates it as a tile of
+`BLOCK_M` rows (`i = program_id(1) * BLOCK_M + arange(BLOCK_M)[:, None]`,
+guarded by `i < m`) where it used to be one program per iteration.  In such a
+kernel every row value is rank 2: the column index is `[1, BLOCK]`, so a
+value's shape is `[BM, 1]`, `[1, BLOCK]` or `[BM, BLOCK]` by broadcasting.
+The writer now tracks, per name, the tile axes it varies along
+(`_IndentedWriter.along`, replacing the `rows` set); from that come the
+shape a carried value or a skipped arm's placeholder is given (`_shape`), and
+a load's mask under the tiles' own guards: the guards of the axes its address
+varies along (`_masked_load`), so `A`'s loads stay `[BM, 1]` -- the
+generalization of Phase 3's unmasked scalar load, sound for the same reason
+(every program has a live row on each axis).  `emit_kernel` adds a
+`BLOCK_M: tl.constexpr` beside `BLOCK`, the launcher takes `block_m`
+(default 1; ignored for a kernel without one) and tunes it from
+`TUNING_2D`, and the bench sweeps it (`--blocks-m`).  The tracker launches
+with `BLOCK_M = 4`, so a draw of fewer rows masks the rest.
+
+Bench against Phase 6 (best over the sweep):
+
+| design | Phase 6 | Phase 7 | BM x BLOCK |
+|---|---|---|---|
+| cdna2.bf16 | 195 | 1,282 | 64 x 32 |
+| cdna2.f16 | 196 | 1,229 | 64 x 16 |
+| fp64 (fma) | 185 | 1,519 | 32 x 128 |
+
+The MMA designs are unchanged (their kernels are byte-identical).  The FP32
+matmul was not added to the designs: `fp64 (fma)` is the same FPy loop.
+
+Tests: `test_launch.test_a_tile_of_rows_agrees_past_its_end` (a runtime-`k`
+dot-product matmul at counts not a multiple of either tile, `BLOCK_M` 1 and
+4), `test_emitter.test_a_load_is_masked_along_the_axes_its_address_varies`,
+`test_launch.test_a_skipped_arm_agrees_in_a_tile_of_rows`, and
+`test_both_output_dimensions_are_program_ids` now launching a lane
+kernel with `block_m=4`, which the launcher first divided the grid by.
+
 - **What:** `vectorize.py` tiles the grid's second axis by a `BM`; the emitter
   gives values a `[BM, ...]` leading dimension and computes one-operand work at
   its own shape; the launcher tunes `BM` with `BLOCK`.
@@ -414,7 +451,13 @@ program ran at 212 against the emitted kernel's 373, so the shape itself may
 cost what the tile saves; the +46% was measured within the hand-written
 kernel.  **Provisional:** Phase 7 lands first for kernels without lane tiles
 (the FP32 matmul, `fp64_fma`, `cdna2`), then the MMA designs, measured against
-the Phase 6 kernel.
+the Phase 6 kernel.  The first half landed (Phase 7).  For the second, the
+spellings that assume one row axis are `[:, None]` for a row value against
+the lanes (`_as_col`, `_offset`, `_visit_var`, `_conjuncts`), `axis=1` in
+lane reductions, and `(BLOCK, P)` in tile allocations and gathers
+(`_row_width`); Triton has no `...` index, but `tl.expand_dims(x, -1)` and
+`axis=-1` are rank-free.  An `A`-only tile should be allocated at
+`[BM, 1, P]`, which is the writer's `along` again.
 
 ### Wider `k` loads?
 

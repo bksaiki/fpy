@@ -79,11 +79,11 @@ def _reprs(v) -> list | str:
 
 
 def _agree(src: KernelSource, func: fp.Function, tensors: list, *,
-           block: int | None = 4, grid: int | None = None) -> list:
+           block: int | None = 4, block_m: int = 1, grid: int | None = None) -> list:
     """Launches *src* on *tensors* and asserts the last, the output, is what
     *func* returns on the same inputs; returns that."""
     args = [t.cpu().tolist() for t in tensors]
-    launch(src, tensors, block=block, grid=grid)
+    launch(src, tensors, block=block, block_m=block_m, grid=grid)
     want = func(*args, block)
     assert _reprs(tensors[-1].cpu().tolist()) == _reprs(want)
     return want
@@ -587,14 +587,15 @@ def matmul_src() -> KernelSource:
 
 
 def test_both_output_dimensions_are_program_ids(matmul_src):
-    """`i` is `program_id(1)`, one program per row of the output, and `j`
-    the tile: `m` and `n` both larger than a block."""
-    assert 'i = tl.program_id(1)' in matmul_src.source
-    assert matmul_src.grid_outer is not None
+    """Beside lanes, `i` is `program_id(1)`, one program per row of the
+    output, and `j` the tile: `m` and `n` both larger than a block."""
+    assert 'i = tl.program_id(1)\n' in matmul_src.source
+    assert matmul_src.grid_outer is not None and matmul_src.block_m is None
     for rows, cols in ((5, 9), (1, 3), (6, 4)):
         torch.manual_seed(rows * cols)
+        # a tile height is ignored where there is no tile of rows
         _agree(matmul_src, _matmul, [torch.randn(rows, 8).cuda(), torch.randn(cols, 8).cuda(),
-                                     torch.zeros(rows, cols).cuda()])
+                                     torch.zeros(rows, cols).cuda()], block_m=4)
 
 
 @fp.fpy(ctx=fp.FP32)
@@ -897,3 +898,46 @@ def test_a_gather_agrees_on_hard_cases(name: str, n_in: int) -> None:
     rng = random.Random(0)
     rows = [[rng.choice(hard) for _ in range(n_in)] for _ in range(32)]
     _agree_on(getattr(programs, name), torch.tensor(rows), 4, ctx_in=FP16)
+
+
+@fp.fpy(ctx=fp.FP32)
+def _dot_matmul(A: list[list[fp.Real]], BT: list[list[fp.Real]],
+                out: list[list[fp.Real]], BLOCK: fp.Real):
+    for i in range(len(out)):
+        row = out[i]
+        for j in range(len(row)):
+            a = A[i]
+            b = BT[j]
+            acc = 0.0
+            for k in range(len(a)):
+                acc = acc + a[k] * b[k]
+            row[j] = acc
+    return out
+
+
+@pytest.mark.parametrize('block_m', [1, 4])
+def test_a_tile_of_rows_agrees_past_its_end(block_m: int) -> None:
+    """With no lanes, the rows of the output are a tile too: counts that are
+    not a multiple of either tile's size."""
+    m, n, k = NamedId('m'), NamedId('n'), NamedId('k')
+    src = _compile(_dot_matmul, [ListType(ListType(F32, k), m), ListType(ListType(F32, k), n),
+                                 ListType(ListType(F32, n), m), INT])
+    assert src.block_m == 'BLOCK_M'
+    for rows, cols in ((5, 9), (1, 3), (6, 4)):
+        torch.manual_seed(rows * cols)
+        _agree(src, _dot_matmul, [torch.randn(rows, 7).cuda(), torch.randn(cols, 7).cuda(),
+                                  torch.zeros(rows, cols).cuda()], block_m=block_m)
+
+
+def test_a_skipped_arm_agrees_in_a_tile_of_rows() -> None:
+    """The skip reduces a `[BM, BLOCK]` mask, and the merged name's
+    placeholder has that shape."""
+    from .programs import rare_cell
+    m, n = NamedId('m'), NamedId('n')
+    src = _compile(rare_cell, [ListType(F32, m), ListType(F32, n), ListType(ListType(F32, n), m), INT])
+    assert src.block_m is not None and 'if tl.max(' in src.source
+    rng = random.Random(0)
+    xs = [rng.uniform(-4, 4) for _ in range(9)]
+    ys = [rng.uniform(-4, 4) for _ in range(7)]
+    xs[5] = math.inf
+    _agree(src, rare_cell, [_f32(xs), _f32(ys), torch.zeros(9, 7).cuda()], block_m=4)

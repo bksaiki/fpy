@@ -7,6 +7,7 @@ operation -- never after it, which would widen an already-rounded value.
 
 import ast as pyast
 import inspect
+import re
 
 import pytest
 
@@ -971,8 +972,28 @@ def test_an_unproven_length_is_a_parameter():
     assert src.params[-2:] == ('xss_n0', 'xss_n1')
     assert src.sizes == (('xss_n0', 0, 0), ('xss_n1', 0, 1))
     assert (src.grid_extent, src.grid_outer) == ('xss_n1', 'xss_n0')
-    assert 'i = tl.program_id(1)' in src.source
+    assert 'i = tl.program_id(1) * BLOCK_M + tl.arange(0, BLOCK_M)[:, None]' in src.source
     assert 'xss_ptr + i * xss_n1 + j' in src.source
+
+
+def test_a_load_is_masked_along_the_axes_its_address_varies():
+    """Under a tile of rows, a load of `xs[i]` is a column, masked by the
+    rows' guard alone; `ys[j]` a row, by the columns'."""
+    @fp.fpy(ctx=fp.FP32)
+    def f(xs: list[fp.Real], ys: list[fp.Real], out: list[list[fp.Real]], BLOCK: fp.Real):
+        for i in range(len(out)):
+            row = out[i]
+            for j in range(len(row)):
+                row[j] = xs[i] * ys[j]
+        return out
+
+    m, n = NamedId('m'), NamedId('n')
+    src = TritonCompiler(drop_asserts=True).compile(f, ctx=fp.FP32, arg_types=[
+        ListType(_R32, m), ListType(_R32, n), ListType(ListType(_R32, n), m), _INT])
+    rows = re.search(r'(__t\d+) = \(i < \w+\)', src.source)
+    assert rows is not None
+    assert f'tl.load(xs_ptr + i, mask={rows[1]}, other=0.0)' in src.source
+    assert re.search(r'tl\.load\(ys_ptr \+ j, mask=\(j\d+ < t\d+\), other=0\.0\)', src.source)
 
 
 class TestLanes:
