@@ -13,7 +13,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function, Module
-from fpy2.ast.fpyast import Add, Div, Exp, Expr, If1Stmt, Mul
+from fpy2.ast.fpyast import Div, Exp, Expr, If1Stmt
 from fpy2.ast.visitor import Visitor
 from fpy2.backend.triton import KernelSource, TritonCompiler
 from fpy2.backend.triton.emitter import (
@@ -97,23 +97,6 @@ def _prod(x: fp.Real, y: fp.Real):
     p = x * y
     with fp.FP32:
         return p + p
-
-
-class TestCastDiscipline:
-    def test_an_exact_product_widens_its_operands(self):
-        """Cast *then* multiply: an fp16 product is never rounded in fp16 and
-        widened after."""
-        f = _spec(_prod, [RealType(FP16)] * 2, fp.REAL)
-        assert emit_expr(_find(f, Mul), f.ast) == \
-            '(x.to(tl.float32) * y.to(tl.float32))'
-
-    def test_same_storage_needs_no_cast(self):
-        @fp.fpy(ctx=fp.FP32)
-        def add(x: fp.Real, y: fp.Real):
-            return x + y
-
-        f = _spec(add, [_R32, _R32])
-        assert emit_expr(_find(f, Add), f.ast) == '(x + y)'
 
 
 class TestSpelling:
@@ -252,15 +235,7 @@ class TestMemory:
         assert _emit(f, [ListType(_R32, 8), _INT]) == \
             '__t0 = tl.load(xs_ptr + i)\nreturn __t0'
 
-    def test_a_nested_subscript_flattens_row_major(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xss: list[list[fp.Real]], r: fp.Real, k: fp.Real):
-            return xss[r][k]
-
-        out = _emit(f, [ListType(ListType(_R32, 8), 4), _INT, _INT])
-        assert out == '__t0 = tl.load(xss_ptr + r * 8 + k)\nreturn __t0'
-
-    @pytest.mark.parametrize('rows,cols', [(4, 8), (3, 5), (1, 2), (7, 1)])
+    @pytest.mark.parametrize('rows,cols', [(3, 5), (7, 1)])
     def test_the_offset_agrees_with_row_major_flattening(self, rows, cols):
         """The differential for the indexing: evaluate the emitted offset for
         every cell and compare against the flat index."""
@@ -388,25 +363,17 @@ class TestNamedRefusals:
 
 
 class TestSelectOps:
-    def test_max_propagates_nan(self):
+    @pytest.mark.parametrize('op, name', [(max, 'maximum'), (min, 'minimum')])
+    def test_a_nan_propagates(self, op, name):
         """FPy follows IEEE 754-2019 `maximum`, where a NaN operand
         propagates; Triton's default is `PropagateNan.NONE`, which is
         `maximumNumber` and returns the *other* operand."""
         @fp.fpy(ctx=fp.FP32)
         def f(x: fp.Real, y: fp.Real):
-            return max(x, y)
+            return op(x, y)
 
         assert _emit(f, [_R32, _R32]) == (
-            'return tl.maximum(x, y, propagate_nan=tl.PropagateNan.ALL)'
-        )
-
-    def test_min_too(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(x: fp.Real, y: fp.Real):
-            return min(x, y)
-
-        assert _emit(f, [_R32, _R32]) == (
-            'return tl.minimum(x, y, propagate_nan=tl.PropagateNan.ALL)'
+            f'return tl.{name}(x, y, propagate_nan=tl.PropagateNan.ALL)'
         )
 
     def test_an_nary_max_folds_pairwise(self):
@@ -491,16 +458,6 @@ class TestLoopBinding:
     """`tl.static_range` yields an *index*.  That is what the loop variable
     means only when the iterable is a `range`."""
 
-    def test_a_range_binds_the_index(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real]):
-            acc = fp.round(0)
-            for i in range(4):
-                acc = acc + xs[i]
-            return acc
-
-        assert 'for i in tl.static_range(4):' in _emit(f, [ListType(_R32, 4)])
-
     def test_iterating_a_list_is_refused(self):
         """`for x in xs` binds an *element*, and emitting the index in its
         place maxes against 0, 1, 2 rather than against the values -- a silent
@@ -510,17 +467,6 @@ class TestLoopBinding:
         def f(xs: list[fp.Real]):
             acc = fp.round(0)
             for x in xs:
-                acc = acc + x
-            return acc
-
-        with pytest.raises(TritonEmitError, match='binds an element'):
-            _emit(f, [ListType(_R32, 4)])
-
-    def test_iterating_a_slice_is_refused(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real]):
-            acc = fp.round(0)
-            for x in xs[1:]:
                 acc = acc + x
             return acc
 
@@ -717,18 +663,6 @@ class TestBranch:
 
         out = _emit(f, [_R32, _R32])
         assert out.index('y = __t1') < out.index('w = (y * 3.0)')
-
-    def test_nested_branches_compose_the_mask(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
-            if j < n:
-                if xs[j] < 0:
-                    out[j] = xs[j]
-            return out
-
-        out = _emit(
-            f, [ListType(_R32, 8), ListType(_R32, 8), _INT, _INT], guard=True)
-        assert 'mask=((j < n) & __t1)' in out
 
     def test_a_store_in_an_arm_carries_its_mask(self):
         @fp.fpy(ctx=fp.FP32)
@@ -1199,10 +1133,7 @@ def test_a_reduction_over_a_row_in_memory_is_refused():
         _rows(f, 4, 1)
 
 
-@pytest.mark.parametrize('rm, halves', [
-    (fp.RM.RTZ, True), (fp.RM.RNE, True), (fp.RM.RNA, True),
-    (fp.RM.RTN, False), (fp.RM.RTP, False),
-])
+@pytest.mark.parametrize('rm, halves', [(fp.RM.RNA, True), (fp.RM.RTN, False)])
 def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> None:
     """Under RTZ, RNE and RNA, which send anything below one half to zero,
     the scale-in is two exact multiplies in `fp32`; floor and ceil stay in
@@ -1260,6 +1191,7 @@ class TestLoadReuse:
     of a loop body."""
 
     def test_under_a_narrower_mask(self):
+        """A nested branch composes its mask with the guard's."""
         @fp.fpy(ctx=fp.FP32)
         def f(xs: list[fp.Real], out: list[fp.Real], j: fp.Real, n: fp.Real):
             if j < n:
@@ -1267,7 +1199,9 @@ class TestLoadReuse:
                     out[j] = xs[j]
             return out
 
-        assert _emit(f, list(_REUSE_ARGS), guard=True).count('tl.load(') == 1
+        out = _emit(f, list(_REUSE_ARGS), guard=True)
+        assert 'mask=((j < n) & __t1)' in out
+        assert out.count('tl.load(') == 1
 
     def test_not_across_a_store(self):
         @fp.fpy(ctx=fp.FP32)

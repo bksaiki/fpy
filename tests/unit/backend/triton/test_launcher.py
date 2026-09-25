@@ -8,7 +8,13 @@ import os
 import pytest
 
 import fpy2 as fp
-from fpy2.backend.triton import KernelSource, TritonCompiler, launch, unavailable
+from fpy2.backend.triton import (
+    KernelSource,
+    TritonCompiler,
+    launch,
+    launcher,
+    unavailable,
+)
 from fpy2.types import ListType, RealType
 from fpy2.utils import NamedId
 
@@ -26,6 +32,12 @@ pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 _N = NamedId('n')
 _R = RealType(fp.FP32)
+
+
+@pytest.fixture(autouse=True)
+def _two_configs(monkeypatch):
+    """A tuned launch times every config; two are enough to pick between."""
+    monkeypatch.setattr(launcher, 'TUNING', ((16, 4), (32, 2)))
 
 
 @fp.fpy(ctx=fp.FP32)

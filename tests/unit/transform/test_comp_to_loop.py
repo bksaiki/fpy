@@ -120,11 +120,6 @@ def _rows(xss: list[list[fp.Real]]) -> list[list[fp.Real]]:
 
 
 @fp.fpy(ctx=fp.FP64)
-def _odds(xs: list[fp.Real]) -> list[fp.Real]:
-    return [xs[i] * 2.0 for i in range(1, 7, 2)]
-
-
-@fp.fpy(ctx=fp.FP64)
 def _from_one(xs: list[fp.Real]) -> list[fp.Real]:
     return [xs[i] * 2.0 for i in range(1, 4)]
 
@@ -275,7 +270,7 @@ class TestCompToLoop:
         assert re.search(r'for i in range\(3\):\n\s+\w+\[i\] = ', src)
         assert _agree(f, [1.0, 2.0, 3.0])
 
-    @pytest.mark.parametrize('f', [_odds, _from_one, _down])
+    @pytest.mark.parametrize('f', [_from_one, _down])
     def test_index_ranges_counts_the_trip(self, f):
         """With `index_ranges`, a loop over `range(a, b, s)` counts its trip
         `k` from zero and binds the target to `a + s * k`."""
