@@ -139,3 +139,34 @@ def logb_finite(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
         else:
             out[i] = 0
     return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def rare_arm(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A row with a non-finite element takes a long arm; the rest a short one."""
+    for r in range(len(out)):
+        xs = xss[r]
+        if any([not fp.isfinite(x) for x in xs]):  # noqa: C419
+            a = xs[0] * xs[1] + xs[2]
+            b = a * xs[3] - xs[0] * xs[2]
+            c = b * b + a * xs[1]
+            d = c - b * xs[3] + a
+            e = d * xs[0] + c * xs[1] - b * xs[2]
+            s = e + d * a - c
+        else:
+            s = xs[0] + xs[1]
+        out[r] = s
+    return out
+
+
+@fp.fpy(ctx=fp.FP32)
+def short_arm(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """The same with a short arm, which is not worth skipping."""
+    for r in range(len(out)):
+        xs = xss[r]
+        if any([not fp.isfinite(x) for x in xs]):  # noqa: C419
+            s = xs[0] * xs[1]
+        else:
+            s = xs[0] + xs[1]
+        out[r] = s
+    return out

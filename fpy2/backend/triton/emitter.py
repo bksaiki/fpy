@@ -119,7 +119,7 @@ from ...ast import (
 from ...ast.visitor import Visitor
 from ...number import INTEGER, REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
-from ...transform.path import walk_exprs, walk_stmts
+from ...transform.path import sub_blocks, sub_exprs, walk_exprs, walk_stmts
 from ...transform.simplify_if import _reads
 from ...types import BoolType, ListType, RealType
 from ...utils import Unionfind
@@ -269,6 +269,11 @@ class _IndentedWriter:
     _loads: list[tuple[bool, dict[str, tuple[str, frozenset[str]]]]]
     """Per open block, whether it is a loop body, and the loads it bound: by
     canonical address, the name holding it and its mask's conjuncts."""
+    _assigned: list[set[str]]
+    """Per open block, the names it assigns: past it, none holds a value the
+    block is known to have given it."""
+    defined: set[str]
+    """Every name assigned so far."""
     _value: dict[str, str]
     """What each name bound to a pure expression holds, its own names
     expanded: equal texts are equal values."""
@@ -279,6 +284,8 @@ class _IndentedWriter:
         self.rows = set()
         self.wide = set()
         self._loads = [(False, {})]
+        self._assigned = [set()]
+        self.defined = set()
         self._value = {}
 
     def add_line(self, line: str = '', shape: str | None = None) -> None:
@@ -298,6 +305,8 @@ class _IndentedWriter:
             for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
                 del self._value[held]
             self._value.pop(name, None)
+            self._assigned[-1].add(name)
+            self.defined.add(name)
             if 'tl.load(' not in code and name not in _IDENT.findall(code):
                 self._value[name] = self.canonical(code)
             idents = set(_IDENT.findall(code))
@@ -317,10 +326,29 @@ class _IndentedWriter:
         self._depth += 1
         header = self._lines[-1].lstrip() if self._lines else ''
         self._loads.append((header.startswith(('for ', 'while ')), {}))
+        self._assigned.append(set())
 
     def dedent(self) -> None:
         self._depth -= 1
         self._loads.pop()
+        gone = self._assigned.pop()
+        self._assigned[-1] |= gone
+        for held in [n for n, v in self._value.items()
+                     if n in gone or gone & set(_IDENT.findall(v))]:
+            del self._value[held]
+
+    def mark(self) -> int:
+        """Where the next line goes, for :meth:`insert`."""
+        return len(self._lines)
+
+    def reassigned(self) -> set[str]:
+        """The names the open block has assigned."""
+        return set(self._assigned[-1])
+
+    def insert(self, at: int, lines: list[str]) -> None:
+        """*lines* at *at*, at the current depth: bindings a later block needs
+        in front of it, whose shape it decided."""
+        self._lines[at:at] = ['    ' * self._depth + line for line in lines]
 
     def canonical(self, code: str) -> str:
         """*code* with each name bound to a pure expression replaced by it."""
@@ -381,6 +409,20 @@ def _integral_round(ctx: Context) -> str | None:
     if not isinstance(ctx, MPFixedContext) or ctx.nmin != -1:
         return None
     return _INT_ROUND.get(ctx.rm)
+
+
+_SKIP_SIZE = 64
+"""The size, in AST nodes, from which an arm is worth the reduction and branch
+that skip it where no row takes it."""
+
+
+def _size(block: StmtBlock) -> int:
+    """*block*'s statements and expressions, counted."""
+    def expr(e: Expr) -> int:
+        return 1 + sum(expr(x) for _, _, x in sub_exprs(e))
+    return sum(1 + sum(expr(x) for _, _, x in sub_exprs(stmt))
+               + sum(_size(b) for _, b in sub_blocks(stmt) if b is not None)
+               for stmt in block.stmts)
 
 
 _TO_ZERO_OR_NEAREST = frozenset({RoundingMode.RTZ, RoundingMode.RNE, RoundingMode.RNA})
@@ -2126,10 +2168,31 @@ class _Emitter(Visitor):
         self._branches += 1
         prev_merging, self._merging = self._merging, self._merging | lists
         self.mask = cond if outer is None else f'({outer} & {cond})'
+        skip = self._lane is None and _size(ift) >= _SKIP_SIZE
+        if skip:
+            live = self._bind(self.mask)
+            at, before = ctx.mark(), set(ctx.defined)
+            shapes = {v: 'row' if v in ctx.rows else 'wide' if v in ctx.wide else 'scalar'
+                      for v in before}
+            ctx.add_line(f'if tl.max({live}.to(tl.int32)) != 0:' if live in ctx.rows
+                         else f'if {live}:')
+            ctx.indent()
         self._visit_block(ift, ctx)
         taken = {p.name: self._bind(str(p.name)) for p in phis}
         for v, code in saved.items():
             ctx.add_line(f'{v} = {code}')
+        if skip:
+            # Triton keeps a name's type across an `if`: what the arm reassigns
+            # is put back, a merged name already is
+            kept = sorted(ctx.reassigned() & before - {str(v) for v in saved})
+            copies = {k: f'__t{self._next_tmp + i}' for i, k in enumerate(kept)}
+            self._next_tmp += len(kept)
+            for k in kept:
+                ctx.add_line(f'{k} = {copies[k]}', shapes[k])
+            ctx.dedent()
+            ctx.insert(at, [f'{copies[k]} = {k}' for k in kept] + [
+                f'{taken[p.name]} = {self._placeholder(p, taken[p.name], ctx)}'
+                for p in phis])
         restore(set())
         if iff is not None:
             self.mask = f'(~{cond})' if outer is None else f'({outer} & ~{cond})'
@@ -2142,6 +2205,15 @@ class _Emitter(Visitor):
         for p in phis:
             ctx.add_line(f'{p.name} = tl.where({cond}, {taken[p.name]}, {p.name})')
         restore(merged)
+
+    def _placeholder(self, p: Definition, name: str, ctx: _IndentedWriter) -> str:
+        """A value of *name*'s type, for a skipped arm to leave it: no live row
+        selects it."""
+        held = self._class_storage(p)
+        if held is None:
+            raise TritonEmitError(f'`{p.name}` has no storage to hold across a skipped arm')
+        shape = f'({self._row_width},)' if name in ctx.rows else '()'
+        return f'tl.zeros({shape}, dtype={held.format()})'
 
     def _visit_for(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:
         if any(stmt is t for t in self.tiled):

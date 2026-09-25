@@ -1247,3 +1247,24 @@ class TestLogb:
         src = self._logb(logb_finite, fp.FP32)
         assert "float('-inf')" in src and '1.1754943508222875e-38' in src
         assert "== float('inf')" not in src
+
+
+class TestSkippedArm:
+    """A long arm runs only where some live row takes it; a short one stays
+    flattened, where the reduction would cost more than it saves."""
+
+    @staticmethod
+    def _src(f: Function) -> str:
+        from fpy2.utils import NamedId
+        n = NamedId('n')
+        return TritonCompiler(drop_asserts=True).compile(
+            f, ctx=fp.REAL,
+            arg_types=[ListType(ListType(_R32, 4), n), ListType(_R32, n), RealType(fp.INTEGER)]).source
+
+    def test_a_long_arm_is_skipped(self):
+        from .programs import rare_arm
+        assert 'if tl.max(' in self._src(rare_arm)
+
+    def test_a_short_arm_is_not(self):
+        from .programs import short_arm
+        assert 'if tl.max(' not in self._src(short_arm)

@@ -872,3 +872,16 @@ def test_logb_agrees_on_hard_cases(prog: str, c: int | None, fmt: str) -> None:
     src = _compile(f, [ListType(RealType(ctx), n), ListType(RealType(ctx), n), INT])
     ot = torch.zeros(n, dtype=_torch_dtype(dict(src.dtypes)[1])).cuda()
     _agree(src, f, [torch.tensor(vals, dtype=dtype).cuda(), ot], block=16)
+
+
+def test_a_skipped_arm_agrees_where_one_row_takes_it() -> None:
+    """Block 0 has one row with an infinity, block 1 none, so the arm runs for
+    one and is skipped for the other."""
+    from .programs import rare_arm
+    rng = random.Random(0)
+    rows = [[rng.uniform(-4, 4) for _ in range(4)] for _ in range(32)]
+    rows[3][2] = math.inf
+    n = len(rows)
+    src = _compile(rare_arm, [ListType(ListType(F32, 4), n), ListType(F32, n), INT])
+    assert 'if tl.max(' in src.source
+    _agree(src, rare_arm, [torch.tensor(rows).cuda(), torch.zeros(n).cuda()], block=16)

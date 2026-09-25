@@ -275,6 +275,29 @@ without a clamp.
 
 ### Phase 5 -- Skip an arm no row takes
 
+**Done**, for a `then` arm: the special-value arm always is one, and an
+`else` arm is the same rule with the guard negated, left for when a design
+needs it.  An arm of at least `_SKIP_SIZE` AST nodes (64) runs under
+`if tl.max(live.to(tl.int32)) != 0:`, `live` its rows' mask; lane loops are
+left flattened, their values being 2-D.  Triton keeps a name's type across
+an `if`, so the arm's merge temporaries are given a placeholder of their
+final type in front of it (`_placeholder`, inserted once the arm has decided
+the shape), and every name the arm reassigns that existed before is saved in
+front and put back at its end -- harmless, as the `if` does not merge it.
+Leaving a block now forgets the values it assigned in the writer's value
+numbering, since a skipped arm leaves placeholders, not them.
+
+Bench against Phase 4, on the benchmark's inputs, which hold no special
+value, so every block skips: +3-16% on every design with a special-value arm
+(turing 260 -> 300, hopper 252 -> 285, volta 234 -> 260, cdna3.f16
+174 -> 182), cdna2 and fp64 unchanged.  Where every block has a special row,
+the reduction is the cost.  cdna3.f16, re-measured as Phase 3 asked: 182,
+against 131 before Phase 3.
+
+Tests: `test_emitter.TestSkippedArm` (a long arm is skipped -- fails on the
+old emitter; a short one is not), and
+`test_launch.test_a_skipped_arm_agrees_where_one_row_takes_it`.
+
 - **What:** `_emit_branch` wraps a flattened arm whose work is large in a
   block-uniform `if` on its guard, masked by the rows.
 - **Tests:** a launch test on hard test cases in which one row of a block is special
