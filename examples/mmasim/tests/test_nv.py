@@ -35,7 +35,9 @@ from models import nv
 FAILURES = 0
 
 E2M1 = 'e2m1'
-"""Stands in for E2M1's torch dtype, which does not work (MMA-Sim decodes it to FP16)."""
+"""Stands in for E2M1, which has no working torch dtype.  MMA-Sim has no E2M1
+T-FDPA or ST-FDPA, so the sweep hands the reference FP16 tensors: its rows check
+the model against `exp_floor`'s assumption, not against hardware."""
 
 def check(name, ok, detail=''):
     global FAILURES
@@ -75,9 +77,9 @@ def check_directed():
     m = nv.make_t_fdpa(fp.FP16, fp.FP16, fp.FP16, 24, nv.RNE_FP16, e_zero=-29)
     check('e_zero tie case (e_zero=-29)', float(m(A, B, 0.0)) == 2.0**-24)
 
-    # E2M1's 0.5 reads exponent -1, so the products align at -2 and c
-    # survives; at E2M1's emin of 0 it is truncated. Verified against
-    # the MMA-Sim reference.
+    # E2M1's 0.5 reads exponent -1 (`exp_floor`, unverified), so the
+    # products align at -2 and c survives; at E2M1's emin of 0 it is
+    # truncated.
     m = nv.make_t_fdpa(fp.MX_E2M1, fp.MX_E2M1, fp.FP32, 25, nv.RZ_FP32, e_zero=-133)
     check('e2m1 exponent floor', float(m([0.5, 0.5], [0.5, -0.5], 2.0**-27)) == 2.0**-27)
 
@@ -123,7 +125,7 @@ def run_sweep(trials):
                 -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
 
     def draw(i, n, dtype):
-        """Trial *i*'s *n* inputs; E2M1 as the FP16 tensor the reference decodes it to."""
+        """Trial *i*'s *n* inputs; E2M1 as an FP16 tensor (see `E2M1`)."""
         if dtype == E2M1:
             vals = [0.0, -0.0, 0.0, 0.5, -0.5] if i % 3 == 2 else FP4_VALS
             return torch.tensor([random.choice(vals) for _ in range(n)], dtype=torch.float16)
@@ -231,7 +233,7 @@ def run_sweep(trials):
         ('hopper', f16, 32, 13, 'RNE-FP16', -133, fp8_pairs),
         ('blackwell', f32, 32, 25, 'RZ-FP32', -133, f8f6f4_pairs),
         ('blackwell (tcgen05)', f16, 32, 25, 'RNE-FP16', -133, f8f6f4_pairs),
-        ('blackwell (mma)', f16, 32, 25, 'RNE-FP16', -22, f8f6f4_pairs),
+        ('rtx_blackwell (mma)', f16, 32, 25, 'RNE-FP16', -22, f8f6f4_pairs),
     ]
     for arch, c_dtype, L, F, rho, e_zero, pairs in fp8_rows:
         for a_dtype, b_dtype in pairs:
@@ -239,11 +241,8 @@ def run_sweep(trials):
             run_t_fdpa(f'{arch}.{pair} L{L} K32 F{F}', a_dtype, c_dtype, L, 32, F, rho, e_zero,
                        b_dtype=b_dtype)
 
-    # ST-FDPA (MXFP8)
-    run_st_fdpa('mxfp8.e4m3      L32 F25', torch.float8_e4m3fn, 32, 25, 'RZ-FP32', -133)
-    run_st_fdpa('mxfp8.e5m2      L32 F25', torch.float8_e5m2, 32, 25, 'RZ-FP32', -133)
-    run_st_fdpa('mxfp8.e4m3xe5m2 L32 F25', e4m3, 32, 25, 'RZ-FP32', -133, b_dtype=e5m2)
-    for a_dtype, b_dtype in f8f6f4_pairs[3:]:
+    # ST-FDPA (MXFP8/6/4)
+    for a_dtype, b_dtype in f8f6f4_pairs:
         run_st_fdpa(f'mx.{tag[a_dtype]}x{tag[b_dtype]} L32 F25', a_dtype, 32, 25, 'RZ-FP32', -133,
                     b_dtype=b_dtype)
 

@@ -102,11 +102,11 @@ def run_sweep(trials):
         b_dtype = b_dtype or a_dtype
         fails = 0
         for i in range(trials):
-            gen = vc.GENS[i % len(vc.GENS)]
             if i % 6 == 5:  # every product zero: c alone sets the alignment
                 a, b = vc.rand_zeros(K, a_dtype), vc.rand_zeros(K, b_dtype)
                 c = vc.rand_bits(1, torch.float32)[0]
             else:
+                gen = vc.GENS[i % len(vc.GENS)]
                 a, b = gen(K, a_dtype), gen(K, b_dtype)
                 c = gen(1, torch.float32)[0]
             ref = op.dpa(a.clone(), b.clone(), c.clone())

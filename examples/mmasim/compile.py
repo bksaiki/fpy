@@ -1,8 +1,8 @@
 """
 Compiles every MMA-Sim design to C++, reporting where each one stops.
 
-A roadmap tracker rather than a test: most designs do not compile yet, and
-the point is to see *which* refusal each one hits and how the count moves.
+A roadmap tracker rather than a test: the point is to see *which* refusal
+each design hits and how the count moves.
 
     python examples/mmasim/compile.py           # one line per design
     python examples/mmasim/compile.py -v        # full error text
@@ -16,6 +16,7 @@ import sys
 from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -25,9 +26,10 @@ from models.utils import make_fma_dpa
 
 import fpy2 as fp
 import fpy2.strategies as st
+from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
 from fpy2.strategies import TransformDeclined
 from fpy2.transform import CompToLoop, RescaleFixed, Simplify, ZipElim
-from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
+from fpy2.types import Type
 
 _L = fp.types.ListType
 _R = fp.types.RealType
@@ -38,7 +40,10 @@ def _vecs(a_ctx, b_ctx, c_ctx, k):
     return [_L(_R(a_ctx), k), _L(_R(b_ctx), k), _R(c_ctx)]
 
 
-def _t_chain(L, a_ctx, b_ctx, c_ctx, F, rho, k, **kw):
+def _t_chain(
+    L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
+    F: int, rho: fp.Context, k: int, **kw: Any,
+) -> Callable[[], tuple[fp.Function, list[Type]]]:
     """A T-FDPA chain's builder, over vectors of length *k*."""
     return lambda: (nv.make_t_fdpa_chain(L, a_ctx, b_ctx, c_ctx, F, rho, **kw),
                     _vecs(a_ctx, b_ctx, c_ctx, k))
@@ -94,14 +99,15 @@ DESIGNS = [
       for tag, a, b in _FP8_PAIRS],
     *[(f'nv.hopper.{tag}.f16', _t_chain(32, a, b, fp.FP16, 13, RNE_FP16, 32, e_zero=-133))
       for tag, a, b in _FP8_PAIRS],
-    # Blackwell, and RTX Blackwell but for tcgen05
+    # Blackwell tcgen05, also RTX Blackwell mma
     *[(f'nv.blackwell.{tag}.f32', _t_chain(32, a, b, fp.FP32, 25, RZ_FP32, 32))
       for tag, a, b in _F8F6F4_PAIRS],
     *[(f'nv.blackwell.{tag}.f16.tcgen05', _t_chain(32, a, b, fp.FP16, 25, RNE_FP16, 32,
                                                    is_mma=False))
       for tag, a, b in _F8F6F4_PAIRS],
-    *[(f'nv.blackwell.{tag}.f16.mma', _t_chain(32, a, b, fp.FP16, 25, RNE_FP16, 32))
+    *[(f'nv.rtx_blackwell.{tag}.f16.mma', _t_chain(32, a, b, fp.FP16, 25, RNE_FP16, 32))
       for tag, a, b in _F8F6F4_PAIRS],
+    # also RTX Blackwell
     *[(f'nv.blackwell.mx.{tag}', lambda a=a, b=b: (
         nv.make_st_fdpa(a, b, fp.MX_E8M0, 25, RZ_FP32),
         _vecs(a, b, fp.FP32, 32) + [_R(fp.MX_E8M0), _R(fp.MX_E8M0)]))
@@ -175,13 +181,15 @@ def compile_design(build) -> str:
 
 def in_processes(fn: Callable, items: Iterable, jobs: int) -> Iterator:
     """*fn* of each of *items*, in order: in *jobs* processes if more than one.
-    *fn* and what it returns must pickle, so a worker takes a design's name,
-    not its builder, a lambda."""
+    *fn* and its results must pickle."""
     if jobs <= 1:
         yield from map(fn, items)
         return
-    with ProcessPoolExecutor(jobs) as pool:
+    pool = ProcessPoolExecutor(jobs)
+    try:
         yield from pool.map(fn, items)
+    finally:
+        pool.shutdown(cancel_futures=True)
 
 
 def _compile_named(name: str) -> tuple[str | None, str, str]:

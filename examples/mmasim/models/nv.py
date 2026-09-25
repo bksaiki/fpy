@@ -13,7 +13,7 @@ so the models here are written at that level.
 Each model is built by calling a `make_XXX` factory with the
 per-instruction parameters; input and accumulator formats are given as
 contexts (`EFloatContext`, or `ExpContext` for E8M0 scales; only their
-`emin` is read). For example, Hopper's FP16 x FP16 + FP32 wgmma
+exponent range is read). For example, Hopper's FP16 x FP16 + FP32 wgmma
 instruction with K = 32 is:
 
     dpa = make_t_fdpa_chain(16, fp.FP16, fp.FP16, fp.FP32, 25, RZ_FP32)
@@ -123,7 +123,7 @@ def make_t_fdpa(a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFlo
     Builds a T-FDPA (Algorithm 7): truncated fused dot-product-add.
 
     `a_ctx`, `b_ctx`, `c_ctx` describe the input and accumulator
-    formats (only their `emin` is read); `F` and `rho` are
+    formats (only their exponent range is read); `F` and `rho` are
     per-instruction parameters (see the module docstring).
 
     If `e_zero` is omitted, it is derived from the accumulator format

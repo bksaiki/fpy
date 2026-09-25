@@ -821,6 +821,60 @@ while the store admits it at or below the `then` arm, and `_check_vacuous`
 re-asks once the walk is over, the mid-walk read being the one thing that
 could go stale.  A real fix is a path-sensitive store.
 
+### It now costs ten designs
+
+At `d9f7a532`, `examples/mmasim/compile.py` compiles 50/62. Beside
+`amd.cdna1.*`, the 10 refusals are every FP16-accumulator design at
+`e_zero = -133`: `nv.hopper.f16.f16.wgmma`, `nv.hopper.*.f16`, and
+`nv.blackwell.*.f16.tcgen05`. The mma versions, at -22, compile.
+
+**Why.** T-FDPA writes `e_c = e_zero if c == 0 else exponent(c, emin_c)`, so
+`c` is both the zero test and the `logb` argument. `value_of(Logb)` floors
+`msb(c)` at `expmin_c - 1`: -25 for FP16, -150 for FP32. `_usable` then
+rejects the `c == 0` disjunct whenever `e_zero` lies below that floor, and
+`c`'s anchor to `e_max` is lost. `c` is bounded only by its format, 2^16,
+while `n = e_max - F - 1` still reaches `e_zero - F - 1`. So `fused_sum`'s
+return needs `MPBFloatFormat(pmax=68)` at -26, and `pmax=179` for the full
+wgmma chain at -133. C++ fails in `return_storage` ("no storage format
+contains"), and Triton with "`sum` is exact, and no storage holds its
+elements and partial sums".
+
+Instrumenting `_merge_arms` on a one-element `make_t_fdpa(FP16, FP16, acc,
+25, rho, e_zero=...)`, with the `c == 0` merge's (floor of `then` arm, floor
+of the disjunct, `_usable`):
+
+| acc | `e_zero` | merge | result |
+|---|---|---|---|
+| FP16 | -25 | (-25, -25, True) | compiles |
+| FP16 | -26 | (-26, -25, False) | `pmax=68` |
+| FP32 | -133 | (-133, -150, True) | compiles |
+| FP32 | -200 | (-200, -150, False) | refuses |
+
+A design compiles exactly when `e_zero >= expmin_c - 1`. The products' merge,
+`e_zero if p == 0 else exponent(a) + exponent(b)`, is unaffected: the `logb`
+reads are of `a` and `b`, so the disjunct `msb(p)` has no floor (`-inf`).
+
+**Not a model fix.** Raising the sentinel for `c` alone changes results
+where a product can read below it, as FP16 and E5M2 products can (-28).
+
+**Options.**
+1. A path-sensitive store, as above.
+2. A narrower rule, untried: skip the floor where the `logb` only feeds a
+   `max` with a constant, as in `exponent(x, emin) = max(logb(x), emin)`,
+   since that `max` already floors the position. It must keep the 30 unit
+   tests above and the `65535.999999940395` case correct.
+
+**To reproduce:**
+
+```sh
+cd examples/mmasim
+python compile.py nv.hopper.f16.f16      # wgmma refuses, mma compiles
+```
+
+and, for the threshold, `compile_design(_t_chain(1, fp.FP16, fp.FP16,
+fp.FP16, 25, RNE_FP16, 1, e_zero=-25))` (compiles), and the same at -26
+(refuses).
+
 ## Still open from the performance work
 
 The corpus went 74s -> 20s and 5,672 z3 invocations -> 3,138, almost entirely
