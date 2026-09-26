@@ -4226,6 +4226,66 @@ class TestAZeroGuardNoPathNames:
         assert fmt.pmax == 28
 
 
+_ZERO_EXPONENT = pytest.mark.xfail(
+    strict=True, reason='see docs/todos/digit-bound-logb-floor.md')
+
+
+class TestALogbOfZeroHasNoFloor:
+    """`logb(0)` is `-inf`, so `x`'s least exponent bounds `logb(x)` only where
+    `x` is non-zero -- and a program may read `logb(0)` and go on."""
+
+    @_ZERO_EXPONENT
+    def test_selection_passes_over_an_infinity(self):
+        """At `x = 0` the `max` is `-1000`, below every exponent `x` has, and
+        the `min` is `1000`, above every one."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def lo(x):
+            return max(fp.logb(x), -1000)
+
+        @fp.fpy(ctx=fp.REAL)
+        def hi(x):
+            return min(-fp.logb(x), 1000)
+
+        zero = fp.FP16.round(0)
+        for f, src in ((lo, 'max(fp.logb(x), -1000)'), (hi, 'min(-fp.logb(x), 1000)')):
+            g = monomorphize(f, args=[RealType(fp.FP16)])
+            fmt = _fmt_of(FormatInfer.analyze(g.ast), src)
+            assert fmt.representable_in(f(zero)), src
+
+    @_ZERO_EXPONENT
+    def test_a_position_through_that_max_keeps_its_grid(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x, y):
+            e = max(fp.logb(x), -1000)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(y)
+
+        g = monomorphize(f, args=[RealType(fp.FP16), RealType(fp.FP32)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(y)')
+        tiny = fp.FP32.round(2 ** -149)
+        assert fmt.representable_in(f(fp.FP16.round(0), tiny))
+
+    @pytest.mark.parametrize('e_zero', [-25, pytest.param(-26, marks=_ZERO_EXPONENT)])
+    def test_a_zero_sentinel_below_the_floor_still_anchors(self, e_zero):
+        """T-FDPA's alignment, in which a zero reads as exponent `e_zero`.  A
+        zero has no digits to place, so the sum is as wide at any `e_zero` --
+        not only down to FP16's floor, `-24`, less one."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, c):
+            e_a = e_zero if a == 0 else max(fp.logb(a), -14)
+            e_c = e_zero if c == 0 else max(fp.logb(c), -14)
+            with fp.MPFixedContext(max(e_a, e_c) - 12, fp.RM.RTZ):
+                ta = fp.round(a)
+                tc = fp.round(c)
+            return ta + tc
+
+        g = monomorphize(f, args=[RealType(fp.FP16), RealType(fp.FP16)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), '(ta + tc)')
+        assert fmt.pmax == 14
+
+
 class TestFinitenessSentinel:
     """`exponent0` reads a non-finite exponent as `-1`; a merge keeps it
     wherever it is reached."""

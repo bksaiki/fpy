@@ -72,6 +72,12 @@ The round's bound is `MPBFloatFormat(pmax=24, emin=-10, ...)`, which does not
 contain `f(0, 2 ** -149) = 2 ** -149`.  At `x = 0`, `e` is `-1000`, but the
 floor says `e >= -24`.
 
+The floor is not the only cause.  The format domain's `exact_select` gives
+`max(logb(x), -1000)` the range `[-24, 15]`, though `logb(x)`'s own format
+admits `-inf`, which the `max` passes over.  The digit-bound analysis seeds
+from that range, so deleting the floor alone leaves the probe unsound (Phase
+2's record).
+
 ## The floor is a precondition
 
 `logb(0)` is `-inf`, so `x != 0` may be assumed exactly where `-inf` would make
@@ -113,7 +119,10 @@ value being non-zero.  Everything below follows from that:
 3. a merge joins its edges' bounds, each computed under that edge's facts;
 4. `_merge_arms`' vacuous disjunct, which reads a zero's `msb` as `-inf`, is
    exactly true rather than in tension with the floor, so the checks layered
-   on to catch that tension (`_usable`, `_check_vacuous`) go.
+   on to catch that tension (`_usable`, `_check_vacuous`) go;
+5. in the format domain, where `logb(x)`'s format carries the `-inf`, a
+   `max` passes over it: an operand that may be `-inf` does not bound a `max`
+   from below (dually, `+inf` and a `min` from above).
 
 ### A non-zero literal per `logb` term
 
@@ -148,7 +157,7 @@ zero path.  This covers the three `TestAZeroGuard*` tests, among them
 
 With no unconditional floor, `_floor(t)` of a `logb`'s term is `-inf`, so
 `_usable` always holds, and `_check_vacuous` and `_vacuous_used` have nothing
-to check.  They go, once a measurement confirms it (Phase 4).  `_floor` stays,
+to check.  They go, once a measurement confirms it (Phase 5).  `_floor` stays,
 gaining an `assuming` parameter, since the merge projection reads it.
 
 ### Not a literal-encoded store
@@ -251,7 +260,52 @@ the fix alone.
 python -m pytest tests/unit/analysis/test_format_infer.py -n 8
 ```
 
-### Phase 3 - Guard the floor
+**Done.**  `TestALogbOfZeroHasNoFloor`, whose tests share one strict `xfail`
+marker, `_ZERO_EXPONENT`:
+
+- `test_selection_passes_over_an_infinity`: the format of
+  `max(logb(x), -1000)` and `min(-logb(x), 1000)` at `x = 0`.
+- `test_a_position_through_that_max_keeps_its_grid`: the probe.
+- `test_a_zero_sentinel_below_the_floor_still_anchors`, at `e_zero` of `-25`
+  and `-26`: the T-FDPA miniature.  Its sum is 14 digits wide at `-25`, and 54
+  at `-26`; with no floor it is 14 at both.
+
+Where it diverged from the plan: the probe is not the floor's alone.  On
+scratch copies of HEAD, each test flips as follows (`--runxfail`):
+
+| test | select fix | no floor | both |
+|---|---|---|---|
+| `test_selection_passes_over_an_infinity` | pass | fail | pass |
+| `test_a_position_through_that_max_keeps_its_grid` | fail | fail | pass |
+| `test_a_zero_sentinel_below_the_floor_still_anchors[-26]` | fail | pass | pass |
+
+Hence Phase 3.  With `--runxfail`, each failure at HEAD is an assertion, not a
+harness error.
+
+### Phase 3 - Selection passes over an infinity
+
+`exact_select` in `fpy2/analysis/format_infer/analysis.py` bounds a `max` below
+by its operands' greatest lower bound, and a `min` above by their least upper
+bound.  An operand that may be `-inf` breaks the first: the `max` then takes
+another operand, so `max(logb(0), -1000)` is `-1000`, outside `[-24, 15]`.
+The lower bound is the greatest over the operands that cannot be `-inf`, or the
+least over all of them when every one can; dually for a `min`.  The docstring's
+claim that special values need only the join's flags goes.
+
+**Why separate.** It is a format-domain rule, independent of the store.
+Landing it first leaves Phase 4's diff about the floor alone.
+
+**Tests.** Remove `test_selection_passes_over_an_infinity`'s marker.
+
+```sh
+python -m pytest tests/unit/analysis -n 8
+cd examples/mmasim && python compile.py -j 8     # still 50/62
+```
+
+On a scratch copy, the fix alone passes all 1127 tests in `tests/unit/analysis`
+and leaves the corpus at 50/62.
+
+### Phase 4 - Guard the floor
 
 In `infer.py`:
 
@@ -267,7 +321,8 @@ In `infer.py`:
 and without the projection it fails 3.  The three pieces together are the
 smallest change that keeps the suite green.
 
-**Tests.** Remove Phase 2's `xfail` markers.
+**Tests.** Remove the remaining `_ZERO_EXPONENT` markers, and the marker
+itself.
 
 ```sh
 python -m pytest tests/unit/analysis -n 8
@@ -279,7 +334,7 @@ python compile_triton.py -j 8      # 60/62
 Also time `compile.py -j 8` against HEAD's 38 s: more distinct assumption sets
 mean more z3 calls.
 
-### Phase 4 - Drop `_usable` and `_check_vacuous`
+### Phase 5 - Drop `_usable` and `_check_vacuous`
 
 First confirm, with a temporary assert, that `_usable` never returns `False` on
 `tests/unit/analysis` and the corpus.  Then delete `_usable`,
@@ -290,9 +345,9 @@ keep them and record the case here.
 **Why separate.** It is a deletion justified by a measurement, and reviewing it
 apart from the fix keeps each diff about one thing.
 
-**Tests.** The same as Phase 3.
+**Tests.** The same as Phase 4.
 
-### Phase 5 - Docs
+### Phase 6 - Docs
 
 In `digit-bound-inference.md`, replace "The floor under `logb` is stated too
 widely" and "It now costs ten designs" with a short account of the guarded
@@ -326,7 +381,7 @@ walk, and restore it after `if` arms and loop bodies.
 
 *Provisional:* defer.  With no floor at all, `tests.infra.backend.cpp --mode
 run` is unchanged (see Context), so nothing in the corpus needs the floor
-downstream.  Reopen if a program that compiles today refuses after Phase 3.
+downstream.  Reopen if a program that compiles today refuses after Phase 4.
 
 ### Should `nz` on a list-element summary be universal?
 
