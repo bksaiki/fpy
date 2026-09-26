@@ -403,6 +403,15 @@ apart from the fix keeps each diff about one thing.
 
 **Tests.** The same as Phase 4.
 
+**Done.**  The temporary assert never fired, on `tests/unit/analysis` and
+`tests/unit/backend` (2176 passed), on the mmasim corpus (60/62), or on
+`tests.infra.backend.cpp --mode emit` (138 functions, no failure); the last
+was not in the plan, and was run because it covers the most programs.  The
+deletion is 38 lines.  Afterwards: `tests/unit/analysis` 1131 passed, `mypy
+fpy2` clean, `compile.py -j 8 -r 256` 60/62 with all 60 agreeing,
+`compile_triton.py -j 8` 60/62.  `value_of(Logb)`'s comment was already
+rewritten in Phase 4.
+
 ### Phase 6 - Docs
 
 In `digit-bound-inference.md`, replace "The floor under `logb` is stated too

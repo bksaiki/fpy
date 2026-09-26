@@ -293,7 +293,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _gather: tuple[_RangeKey, Definition] | None
     _gathered: set[Expr]
     _returns: list[tuple[Expr, Terms]]
-    _vacuous_used: list[tuple[Term, list[Term]]]
     _classes_cache: ValueClassAnalysis | None
     _guards: dict[Definition, int]
     """The literal "this definition is finite", for each one a guard names."""
@@ -347,7 +346,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._gather = None
         self._gathered = set()
         self._returns = []
-        self._vacuous_used = []
         self._classes_cache = classes
         self._guards = {}
         self._elt_guards = {}
@@ -377,7 +375,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
         self.out.ret = self._merge_returns()
-        self._check_vacuous()
         self.out.assume_at = self._assumed
         return self.out
 
@@ -862,9 +859,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # other one.  Both hold; the second alone would leave `m` free below,
         # and an absolute position is as necessary as a relative one.
         vacuous = self._vacuous(cond)
-        if vacuous is not None and self._usable(vacuous, ift):
+        if vacuous is not None:
             self.store.ge_min(m, [iff, *vacuous])
-            self._vacuous_used.append((ift, vacuous))
         # Each arm is reached only where its facts hold, so `m` is at least the
         # lesser arm floor under them.  A constant, which carries none of the
         # `else` arm's facts onto the `then` path.
@@ -875,42 +871,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self.store.ge(m, int(lo))
         return m
 
-    def _usable(self, vacuous: list[Term], ift: Term) -> bool:
-        """Whether any vacuous disjunct can still sit at or below the `then` arm.
-
-        Such a disjunct stands in for "the `then` arm carries no magnitude",
-        and is worth stating only while the store admits it there.  It need
-        not: `value_of(Logb)` floors a `logb`'s term on *every* path, since
-        "x is non-zero here" has no term of its own to sit on.  A program
-        that supplies its own position for the zero case pushes the merge up
-        to that floor, and a value rounded at the `then` arm's position loses
-        every digit below it.
-
-        Skipping is sound -- a disjunct only ever tightens.  Read off the
-        store as it stands, which is why :meth:`_check_vacuous` re-asks.
-        Localising the floor instead needs a path-sensitive store; see
-        `docs/todos/digit-bound-inference.md`.
-        """
-        keep = self._floor(ift)
-        return any(self._floor(t) <= keep for t in vacuous)
-
     def _floor(self, t: Term, assuming: frozenset[int] = frozenset()) -> int | float:
         """The least value *t* can take; `-inf` where nothing floors it."""
         return -self.store.maximum(-t, assuming)
-
-    def _check_vacuous(self) -> None:
-        """:meth:`_usable` reads the store mid-walk, so a `ge` stated *after* a
-        merge could floor a disjunct that was free when it was taken -- and the
-        constraint it justified is already in the store, where nothing can
-        retract it.  The alternative to noticing is a silently over-narrow
-        integer.
-        """
-        for ift, vacuous in self._vacuous_used:
-            if not self._usable(vacuous, ift):
-                raise RuntimeError(
-                    f'digit-bound: a vacuous disjunct of `{ift}` was floored '
-                    f'after the merge that used it, in `{self.func.name}`'
-                )
 
     def _vacuous(self, cond: Expr) -> list[Term] | None:
         """`logb`s that every path into the arm *cond* guards leaves free.
