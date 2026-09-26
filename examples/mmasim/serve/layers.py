@@ -19,8 +19,8 @@ inputs `x` and weights `w`), so measure the layer's own error:
 `propagated` takes R0's output at the same layer, every layer before it run
 the same way: its normwise relative error is the error the model has
 gathered by then.  Only the selected metrics are computed (`propagated`
-alone needs the R0 pass).  Printed per decoder block (its seven layers
-pooled), errors in log2, biases in units of u = 2^-24; the JSON has every layer.
+alone needs the R0 pass).  Printed per decoder block (its layers pooled),
+errors in log2, biases in units of u = 2^-24; the JSON has every layer.
 
     python serve/layers.py                            # every run and metric
     python serve/layers.py -r amd.cdna2.bf16 -m backward magnitude_bias --segments 1
@@ -33,7 +33,7 @@ import re
 import sys
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, fields
-from typing import Self
+from functools import partial
 
 import perplexity
 import swap
@@ -44,8 +44,7 @@ U = 2.0 ** -24
 """FP32's unit roundoff."""
 
 _ELEMS = 1 << 24
-"""Output elements per block of rows when comparing: `lm_head`'s output is
-311M."""
+"""Elements per block (weight columns, output rows) when comparing."""
 
 
 @dataclass
@@ -67,14 +66,13 @@ class Stats:
     bias: float = 0.0
     magnitude_bias: float = 0.0
 
-    def __iadd__(self, other: 'Stats') -> Self:
-        for f in fields(self):
-            a, b = getattr(self, f.name), getattr(other, f.name)
-            setattr(self, f.name, max(a, b) if f.name.endswith('_max') else a + b)
-        return self
+    def __add__(self, other: 'Stats') -> 'Stats':
+        """Pooled with *other*: sums added, maxima the larger."""
+        return Stats(**{f.name: (max if f.name.endswith('_max') else sum)(
+            (getattr(self, f.name), getattr(other, f.name))) for f in fields(self)})
 
     def report(self, metrics: Collection[str]) -> dict[str, float]:
-        """Each of *metrics*' statistics, linear."""
+        """Each of *metrics*' statistics, not log2."""
         n = max(self.n, 1)
         out = {
             'normwise': math.sqrt(self.err / self.ref) if self.ref else 0.0,
@@ -94,7 +92,7 @@ def _rows(n: int) -> int:
 def local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
            x: torch.Tensor, got: torch.Tensor) -> None:
     """Add *got*, *layer*'s output on *x*, to *s*'s local metrics, in blocks
-    of output columns and rows: `lm_head`'s FP64 weights alone are 2 GB."""
+    of output columns and rows.  *layer* has no bias (`swap.patch`)."""
     xb = x.reshape(-1, x.shape[-1]).to(torch.bfloat16)
     got = got.reshape(-1, got.shape[-1])
     scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
@@ -102,18 +100,17 @@ def local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
     for j in range(0, got.shape[1], cols):
         wt = layer.weight[j:j + cols].to(torch.bfloat16).double().T
         wa = wt.abs() if scaled else None
-        b = None if layer.bias is None else layer.bias[j:j + cols].double()
         rows = _rows(wt.shape[1])
         for i in range(0, xb.shape[0], rows):
             a, g = xb[i:i + rows].double(), got[i:i + rows, j:j + cols]
-            y = a @ wt if b is None else a @ wt + b
+            y = a @ wt
             e = g.double() - y
             s.n += e.numel()
             if 'normwise' in metrics:
                 s.err += float((e * e).sum())
                 s.ref += float((y * y).sum())
             if scaled:
-                scale = a.abs() @ wa if b is None else a.abs() @ wa + b.abs()
+                scale = a.abs() @ wa
                 eta = torch.where(scale > 0, e / scale, 0.0)
                 if 'backward' in metrics:
                     s.backward += float(eta.abs().sum())
@@ -158,19 +155,18 @@ def evaluate(
     local_metrics = set(metrics) - {'propagated'}
     ref: dict[str, torch.Tensor] = {}
 
-    def hook(name: str):
-        def record(layer: torch.nn.Linear, inputs: tuple[torch.Tensor], y: torch.Tensor) -> None:
-            if run.mode == 'fp32':
-                ref[name] = y.cpu()
-                return
-            s = stats[run.mode][name]
-            if local_metrics:
-                local(s, local_metrics, layer, inputs[0], y)
-            if 'propagated' in metrics:
-                _propagated(s, y, ref[name])
-        return record
+    def record(name: str, layer: torch.nn.Linear, inputs: tuple[torch.Tensor],
+               y: torch.Tensor) -> None:
+        if run.mode == 'fp32':
+            ref[name] = y.cpu()
+            return
+        s = stats[run.mode][name]
+        if local_metrics:
+            local(s, local_metrics, layer, inputs[0], y)
+        if 'propagated' in metrics:
+            _propagated(s, y, ref[name])
 
-    handles = [m.register_forward_hook(hook(n)) for n, m in layers.items()]
+    handles = [m.register_forward_hook(partial(record, n)) for n, m in layers.items()]
     try:
         with torch.no_grad():
             for seg in segs:
@@ -189,7 +185,8 @@ def by_block(stats: dict[str, Stats]) -> dict[str, Stats]:
     pooled: dict[str, Stats] = {}
     for name, s in stats.items():
         m = re.search(r'layers\.(\d+)\.', name)
-        pooled.setdefault(f'block {m.group(1)}' if m else name, Stats()).__iadd__(s)
+        key = f'block {m.group(1)}' if m else name
+        pooled[key] = pooled.get(key, Stats()) + s
     return pooled
 
 
@@ -206,39 +203,31 @@ def fmt(key: str, v: float) -> str:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('--model', default=swap.MODEL)
-    ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
+    swap.add_args(ap)
+    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('-m', '--metrics', nargs='*', choices=METRICS, default=list(METRICS))
     ap.add_argument('--segments', type=int, default=4)
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=['linear', 'tree'], default='linear')
     ap.add_argument('-o', '--out', default=None, help='write every layer\'s metrics as JSON here')
     args = ap.parse_args(argv)
 
-    ids = perplexity.wikitext(args.model)
-    segs = perplexity.segments(ids)[:args.segments]
-    model, run = swap.load(args.model)
-    run.split_k, run.combine = args.split_k, args.combine
+    segs = perplexity.segments(perplexity.wikitext(args.model))[:args.segments]
+    model, run = swap.load(args.model, args.split_k, args.combine)
 
     stats = evaluate(model, run, segs, args.runs, args.metrics)
     blocks = {mode: {k: s.report(args.metrics) for k, s in by_block(layer).items()}
               for mode, layer in stats.items()}
-    total = {}
-    for mode, layer in stats.items():
-        pooled = Stats()
-        for s in layer.values():
-            pooled += s
-        total[mode] = pooled.report(args.metrics)
+    total = {mode: sum(layer.values(), Stats()).report(args.metrics)
+             for mode, layer in stats.items()}
+    keys = list(next(iter(total.values())))
     w = max(map(len, blocks))
-    for key in next(iter(total.values())):
+    for key in keys:
         if key.endswith('_max'):
             continue
         print(f'\n{key}')
         print(f'{"":10} ' + ' '.join(f'{m:>{w}}' for m in blocks))
         for row in next(iter(blocks.values())):
             print(f'{row:10} ' + ' '.join(f'{fmt(key, b[row][key]):>{w}}' for b in blocks.values()))
-    keys = list(next(iter(total.values())))
     print(f'\nevery layer\n{"":{w}} ' + ' '.join(f'{k:>12}' for k in keys))
     for mode, t in total.items():
         print(f'{mode:{w}} ' + ' '.join(f'{fmt(k, t[k]):>12}' for k in keys))

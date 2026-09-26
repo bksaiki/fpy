@@ -8,21 +8,20 @@
 import math
 
 import pytest
+import torch
 
 from fpy2.backend.triton import unavailable
 
 _WHY = unavailable()
-pytest.importorskip('transformers')
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 import perplexity
 import swap
 
 
-def test_the_baseline_is_its_own_reference(model, tokens) -> None:
+def test_the_baseline_is_its_own_reference(model: torch.nn.Module, tokens: torch.Tensor) -> None:
     """R0 against itself is no distance at all, and its perplexity is the
     model's cross-entropy over the segments; another run is some distance."""
-    import torch
     run = swap.patch(model)
     segs = perplexity.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
     totals = perplexity.evaluate(model, run, segs, ['bf16-exact'])

@@ -4,19 +4,19 @@ Greedy decode, and where each run's output departs from R0's.
 The divergence index (Yuan et al. 2025) of a prompt is the first generated
 position at which a run's greedy token differs from R0's; a run that matches
 R0 to its end never diverges.  Prompts are a fixed random sample of MATH-500
-under Qwen3's chat template, thinking off, with the model card's instruction
-for math; decoding is up to 2,048 new tokens, as Yuan et al. do for
-non-reasoning models.  A run other than R0 stops at its first departure, so
-its cost is its divergence index rather than R0's length.
+under the model's chat template, thinking off, with Qwen's instruction for
+math; decoding is up to 2,048 new tokens, as Yuan et al. do for
+non-reasoning models.  A run other than R0 stops at its first departure.
 
 Each run's tokens go to `<out>/<run>.json` and are reused by a later call
-with the same settings.
+with the same settings (and, past R0, the same R0 tokens).
 
     python serve/decode.py -o dec                      # every run
     python serve/decode.py -o dec -r amd.cdna2.bf16 --prompts 10
 """
 
 import argparse
+import hashlib
 import json
 import random
 import statistics
@@ -32,10 +32,18 @@ INSTRUCTION = 'Please reason step by step, and put your final answer within \\bo
 
 
 def stop_tokens(model: torch.nn.Module, tok: Any) -> set[int]:
-    """The chat template's end of turn (the tokenizer's EOS) and the model's
-    end of text: Qwen3.5 has no `generation_config.json` to give both."""
+    """The tokenizer's EOS (the chat template's end of turn) and the model's
+    end of text."""
     ids = model.generation_config.eos_token_id
     return {tok.eos_token_id, *(ids if isinstance(ids, list) else [ids])}
+
+
+def encode(tok: Any, messages: list[dict[str, str]]) -> torch.Tensor:
+    """*messages* under *tok*'s chat template, thinking off, ready for the
+    reply: `[1, t]` on the GPU."""
+    return tok.apply_chat_template(
+        messages, add_generation_prompt=True, enable_thinking=False,
+        return_dict=True, return_tensors='pt')['input_ids'].cuda()
 
 
 @torch.no_grad()
@@ -77,14 +85,12 @@ def divergence(ref: list[int], got: list[int]) -> int | None:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('--model', default=swap.MODEL)
+    swap.add_args(ap)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
-    ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
+    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('--prompts', type=int, default=100, help='MATH-500 problems, a fixed random sample')
     ap.add_argument('--max-new', type=int, default=2048)
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=['linear', 'tree'], default='linear')
     args = ap.parse_args(argv)
 
     import datasets
@@ -95,39 +101,37 @@ def main(argv: list[str]) -> int:
     problems = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')['problem']
     picked = sorted(random.Random(0).sample(range(len(problems)), args.prompts))
     tok = AutoTokenizer.from_pretrained(args.model)
-    prompts = [tok.apply_chat_template(
-        [{'role': 'user', 'content': f'{problems[i]}\n{INSTRUCTION}'}],
-        add_generation_prompt=True, enable_thinking=False, return_dict=True,
-        return_tensors='pt')['input_ids'] for i in picked]
+    prompts = [encode(tok, [{'role': 'user', 'content': f'{problems[i]}\n{INSTRUCTION}'}])
+               for i in picked]
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     model = run = None
     runs: dict[str, list[list[int]]] = {}
-    for mode in ('fp32', *[m for m in args.runs if m != 'fp32']):
+    for mode in ('fp32', *args.runs):
         path = out / f'{mode}.json'
-        if path.exists() and (cached := json.loads(path.read_text()))['settings'] == settings:
+        ref = runs.get('fp32')
+        want = settings if ref is None else {
+            **settings, 'fp32': hashlib.sha256(json.dumps(ref).encode()).hexdigest()}
+        if path.exists() and (cached := json.loads(path.read_text()))['settings'] == want:
             runs[mode] = cached['tokens']
             continue
         if model is None:
-            model, run = swap.load(args.model)
-            run.split_k, run.combine = args.split_k, args.combine
+            model, run = swap.load(args.model, args.split_k, args.combine)
             eos = stop_tokens(model, tok)
         run.mode = mode
-        ref = runs.get('fp32')
         runs[mode] = []
         for i, p in enumerate(prompts):
-            runs[mode].append(greedy(model, p.cuda(), args.max_new, eos, ref and ref[i]))
+            runs[mode].append(greedy(model, p, args.max_new, eos, ref and ref[i]))
             print(f'{mode} prompt {i + 1}', file=sys.stderr, flush=True)
-        run.mode = 'fp32'
-        path.write_text(json.dumps({'settings': settings, 'tokens': runs[mode]}))
+        path.write_text(json.dumps({'settings': want, 'tokens': runs[mode]}))
 
     ref = runs['fp32']
     print(f'R0: {len(ref)} prompts, mean length {statistics.mean(map(len, ref)):.0f} tokens, '
           f'{sum(len(r) == args.max_new for r in ref)} at the limit')
     print(f'{"run":20} {"diverged":>16} {"mean index":>11} {"median":>7}')
     for mode, got in runs.items():
-        idx: list[Any] = [divergence(r, g) for r, g in zip(ref, got)]
+        idx: list[int | None] = [divergence(r, g) for r, g in zip(ref, got)]
         hit = [i for i in idx if i is not None]
         mean, med = (f'{statistics.mean(hit):.0f}', f'{statistics.median(hit):.0f}') if hit else ('-', '-')
         print(f'{mode:20} {len(hit):5} ({len(hit) / len(ref):6.1%}) {mean:>11} {med:>7}')

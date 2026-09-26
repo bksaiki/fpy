@@ -11,8 +11,8 @@ the same model, and per predicted token this accumulates
 - whether the top-1 token matches R0's;
 - Δp, the change in the probability of the correct token (RMS reported),
 
-as llama.cpp's `perplexity --kl-divergence` reports them.  Nothing is stored
-per token beyond one segment, so a run is a single pass.
+as llama.cpp's `perplexity --kl-divergence` reports them.  Only one
+segment's R0 log-probabilities are held, on the host.
 
     python serve/perplexity.py                          # every run
     python serve/perplexity.py -r amd.cdna2.bf16 --segments 4
@@ -32,8 +32,7 @@ import torch
 
 CONTEXT = 2048
 _ROWS = 512
-"""Tokens per block when comparing distributions: a segment's full-vocabulary
-log-probabilities are 1.2-2 GB in FP32, so R0's are held on the host."""
+"""Tokens per block of log-softmax and comparison."""
 
 
 @dataclass
@@ -123,41 +122,39 @@ def evaluate(
     first.  *run* is `swap.patch(model)`'s; its `split_k` / `combine` apply to
     every design."""
     totals = {mode: Totals() for mode in ('fp32', *[m for m in modes if m != 'fp32'])}
-    for i, seg in enumerate(segs):
-        target = seg[0, 1:]
-        ref = None
-        for mode, t in totals.items():
-            run.mode = mode
-            start = time.perf_counter()
-            lp = _log_probs(model, seg)
-            torch.cuda.synchronize()
-            t.seconds += time.perf_counter() - start
-            if ref is None:
-                ref = lp.cpu()
-            t.compare(ref, lp, target)
-            del lp
-        if progress:
-            print(f'segment {i + 1}', file=sys.stderr, flush=True)
-    run.mode = 'fp32'
+    try:
+        for i, seg in enumerate(segs):
+            target = seg[0, 1:]
+            ref = None
+            for mode, t in totals.items():
+                run.mode = mode
+                start = time.perf_counter()
+                lp = _log_probs(model, seg)
+                torch.cuda.synchronize()
+                t.seconds += time.perf_counter() - start
+                if ref is None:
+                    ref = lp.cpu()
+                t.compare(ref, lp, target)
+                del lp
+            if progress:
+                print(f'segment {i + 1}', file=sys.stderr, flush=True)
+    finally:
+        run.mode = 'fp32'
     return totals
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('--model', default=swap.MODEL)
-    ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
+    swap.add_args(ap)
+    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('--segments', type=int, default=None,
                     help='only the first this many segments (default: all)')
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=['linear', 'tree'], default='linear')
     ap.add_argument('-o', '--out', default=None, help='write the results as JSON here')
     args = ap.parse_args(argv)
 
-    ids = wikitext(args.model)
-    segs = segments(ids)[:args.segments]
-    model, run = swap.load(args.model)
-    run.split_k, run.combine = args.split_k, args.combine
+    segs = segments(wikitext(args.model))[:args.segments]
+    model, run = swap.load(args.model, args.split_k, args.combine)
 
     totals = evaluate(model, run, segs, args.runs, progress=True)
     results = {

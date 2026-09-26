@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any
 
 import swap
-import torch
 
 TASKS = ('piqa', 'arc_easy', 'arc_challenge', 'hellaswag', 'winogrande', 'lambada_openai')
 METRICS = ('acc', 'acc_norm')
@@ -32,12 +31,12 @@ Items = dict[str, dict[str, float]]
 """Per item (`doc_id`, as a string): each of :data:`METRICS` it logs."""
 
 
-def hellaswag_subset(n: int, seed: int = 0) -> list[int]:
+def hellaswag_subset(n: int) -> list[int]:
     """A fixed random *n* of HellaSwag's validation items, by index."""
     from lm_eval.tasks import TaskManager, get_task_dict
 
     total = len(get_task_dict(['hellaswag'], TaskManager())['hellaswag'].eval_docs)
-    return sorted(random.Random(seed).sample(range(total), n))
+    return sorted(random.Random(0).sample(range(total), n))
 
 
 def evaluate(lm: Any, run: swap.Run, mode: str, **kw: Any) -> dict[str, Any]:
@@ -70,17 +69,15 @@ def flips(ref: Items, got: Items) -> dict[str, tuple[int, int]]:
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('--model', default=swap.MODEL)
+    swap.add_args(ap)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
-    ap.add_argument('-r', '--runs', nargs='*', default=[m for m in swap.MODES if m != 'fp32'],
+    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('--hellaswag', type=int, default=2000,
                     help='HellaSwag items, a fixed random subset (0: all)')
     ap.add_argument('--limit', type=int, default=None,
                     help='only the first this many items of every task (a smoke run)')
     ap.add_argument('--batch-size', type=int, default=16)
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=['linear', 'tree'], default='linear')
     args = ap.parse_args(argv)
 
     from lm_eval.models.huggingface import HFLM
@@ -96,14 +93,13 @@ def main(argv: list[str]) -> int:
     out.mkdir(parents=True, exist_ok=True)
     lm = run = None
     runs: dict[str, dict[str, Any]] = {}
-    for mode in ('fp32', *[m for m in args.runs if m != 'fp32']):
+    for mode in ('fp32', *args.runs):
         path = out / f'{mode}.json'
         if path.exists() and (cached := json.loads(path.read_text()))['settings'] == settings:
             runs[mode] = cached
             continue
         if lm is None:
-            model, run = swap.load(args.model)
-            run.split_k, run.combine = args.split_k, args.combine
+            model, run = swap.load(args.model, args.split_k, args.combine)
             lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
         runs[mode] = {'settings': settings,

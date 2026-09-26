@@ -22,18 +22,16 @@ import swap
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    ap.add_argument('--model', default=swap.MODEL)
+    swap.add_args(ap)
     ap.add_argument('-r', '--run', choices=swap.MODES, default='fp32')
     ap.add_argument('--max-new', type=int, default=1024, help='tokens per reply at most')
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=['linear', 'tree'], default='linear')
     args = ap.parse_args(argv)
 
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    model, run = swap.load(args.model)
-    run.mode, run.split_k, run.combine = args.run, args.split_k, args.combine
+    model, run = swap.load(args.model, args.split_k, args.combine)
+    run.mode = args.run
     eos = decode.stop_tokens(model, tok)
     messages: list[dict[str, str]] = []
     print(f'{args.model}, run {run.mode}.  /run <mode>, /reset, /quit.', file=sys.stderr)
@@ -60,24 +58,25 @@ def main(argv: list[str]) -> int:
             continue
 
         messages.append({'role': 'user', 'content': line})
-        prompt = tok.apply_chat_template(
-            messages, add_generation_prompt=True, enable_thinking=False,
-            return_dict=True, return_tensors='pt')['input_ids'].cuda()
+        prompt = decode.encode(tok, messages)
         out: list[int] = []
         shown = ''
         start = time.perf_counter()
         try:
             for t in decode.stream(model, prompt, args.max_new, eos):
                 out.append(t)
-                # decode the whole reply: a token can be part of a character
+                # decode the whole reply, holding back a character still incomplete
                 text = tok.decode(out, skip_special_tokens=True)
-                print(text[len(shown):], end='', flush=True)
-                shown = text
+                if not text.endswith('\ufffd'):
+                    print(text[len(shown):], end='', flush=True)
+                    shown = text
         except KeyboardInterrupt:
             pass
         seconds = time.perf_counter() - start
-        print(f'\n({len(out)} tokens, {len(out) / seconds:.1f} tokens/s)', file=sys.stderr)
-        messages.append({'role': 'assistant', 'content': shown})
+        text = tok.decode(out, skip_special_tokens=True)
+        print(text[len(shown):], flush=True)
+        print(f'({len(out)} tokens, {len(out) / seconds:.1f} tokens/s)', file=sys.stderr)
+        messages.append({'role': 'assistant', 'content': text})
 
 
 if __name__ == '__main__':

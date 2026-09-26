@@ -4,15 +4,15 @@ import sys
 from pathlib import Path
 
 import pytest
+import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 
 @pytest.fixture(scope='module')
-def model():
+def model() -> torch.nn.Module:
     """Qwen3's shape, small: every `k` a multiple of each design's length,
     weights BF16 values held in FP32, as a checkpoint loads."""
-    import torch
     transformers = pytest.importorskip('transformers')
     torch.manual_seed(0)
     cfg = transformers.Qwen3Config(
@@ -27,6 +27,5 @@ def model():
 
 
 @pytest.fixture(scope='module')
-def tokens():
-    import torch
+def tokens() -> torch.Tensor:
     return torch.randint(0, 96, (1, 16), generator=torch.Generator().manual_seed(1)).cuda()

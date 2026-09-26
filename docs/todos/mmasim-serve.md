@@ -188,7 +188,8 @@ HellaSwag subset.  Greedy decode runs at `m = 1`, the kernels' worst shape.
 
 ```
 examples/mmasim/serve/
-  kernels.py      compile each BF16 design once; linear(x, w) -> FP32
+  kernels.py      compile each BF16 design once; prepare / round_input / matmul,
+                  linear(x, w) -> FP32; register
   swap.py         replace a model's nn.Linear forwards with a run mode
   perplexity.py   paired WikiText-2 pass: PPL per run, KL / top-1 / RMS dp vs R0
   zeroshot.py     lm-evaluation-harness suite per run, flips vs R0
@@ -196,9 +197,10 @@ examples/mmasim/serve/
   chat.py         terminal chat through any run, switchable mid-conversation
   local.py        local per-layer metrics on cached activations, per design
   workloads.py    token sequences to capture on: WikiText-2, MT-Bench sessions
-  layers.py       per-linear-layer error on a calibration batch
+  layers.py       per-linear-layer error through the model, on WikiText-2 segments
   vllm_plugin.py  (Phase 7) the same kernels behind vLLM's linear-method hook
-  tests/          one per module above
+  tests/          one per module but chat.py (workloads in test_local.py)
+  results/        (gitignored) run outputs and the MT-Bench cache
 ```
 
 The paired pass runs R0 and the candidate on the same window and accumulates
@@ -216,7 +218,7 @@ runs, so the paired pass needs one copy in memory).  Where it departed:
 
 - The kernels hold BF16 values in FP32 storage (the Triton backend has no
   BF16 storage type), so `linear` rounds to BF16 and hands over the kernel's
-  own dtype, read from `KernelSource.dtypes`.
+  own dtype (now `kernels.storage`).
 - Each design runs at a fixed tile (`BF16_DESIGNS`), the fastest at a
   2048-token FFN shape: autotuning keys on the sizes and would retune at
   every new sequence length.
@@ -245,10 +247,9 @@ comparison of record is Phase 2's.
 - **Tests** (`tests/test_kernels.py`, `tests/test_swap.py`): `linear` agrees
   bit-for-bit with the FPy design on small random and hard-case matrices;
   `fp32` mode reproduces the unswapped FP32 model's logits exactly;
-  `bf16-exact` agrees with an FP64 reference; a design mode's logits are close
-  to `bf16-exact` (a sanity bound, not a claim); `split_k = S` equals the
-  kernel run slice by slice with the partials summed in the stated order, and
-  `linear` and `tree` differ where the partials' magnitudes make them.
+  a design mode's logits are close to `bf16-exact` (a sanity bound, not a
+  claim); four slices of partials 1, 2^24, 1 and -2^24 sum to 0 `linear` and
+  to 1 `tree`; a `k` the design cannot take is refused.
   `cd examples/mmasim && ../../.venv/bin/python -m pytest serve/tests -q`
 
 ### Phase 2 -- Perplexity and distance on WikiText-2
@@ -269,8 +270,8 @@ pass as long) was deliberately not run.  First 8 segments (16,376 tokens):
 RMS Δp is 0.16-0.18% for every run but R0.  `split_k = 4`, `linear` and
 `tree`, run on one segment for CDNA2 and Hopper: KL stays ~4e-5, with no
 conclusion drawn about order.  `split_k` first ran out of memory at
-`lm_head`, whose 1.2 GB partials were all held at once.  `kernels.linear`
-now sums the partials as it makes them and works in row blocks of 2^26
+`lm_head`, whose 1.2 GB partials were all held at once.  The combine (now
+`kernels.matmul`) sums the partials as it makes them and works in row blocks of 2^26
 output elements, so memory does not grow with `split_k`.
 
 `serve/perplexity.py`: WikiText-2 is now
@@ -341,7 +342,7 @@ fraction diverged (Yuan's `Div_Percent`) and the mean and median index over
 those that do.  Each run's tokens are cached as `<out>/<run>.json`.
 
 Decode is launch-bound at `m = 1`: 38 tokens/s for R0, 11-15 for every
-design.  A run stops at its first departure from R0, but most prompts never
+design (before the serving-overhead work below: 13-21.5).  A run stops at its first departure from R0, but most prompts never
 depart, so a design costs about R0's full length: ~1.6 h per design at 100
 prompts (R0's mean output ~740 tokens), ~10 h for every run.
 
@@ -488,7 +489,7 @@ interpreter; a 1-segment CDNA2 perplexity is unchanged):
   kept each call's inputs alive until a garbage collection (+0.58 GB per
   `lm_head` call): now module-level (`kernels._tree`), with a test that a
   call frees what it allocates with the collector off.
-- `block_m` is capped at the next power of two above `m`: CDNA2's 64 had
+- `block_m` is capped at the power of two `>= m`: CDNA2's 64 had
   computed 63 masked rows per tile at `m = 1`.
 - `bf16-exact` works in blocks of columns as well as rows, from the prepared
   weight: it had built `lm_head`'s whole FP64 weight (1.2-2 GB) per call.
@@ -537,6 +538,17 @@ linear layers.  `--tokens` positions are sampled over all conversations
 `assistant`, `template`) from the template's structure -- so `--by` reports
 the metrics per role or per category, each kernel still run once.
 
+MT-Bench on Qwen3-0.6B (2048 sampled tokens: 316 user, 1679 assistant, 53
+template; 18 min to generate the conversations once, 4-20 s per design):
+the designs rank as on WikiText-2 in every role and every category, each
+mean within ~0.1 in log2 of WikiText-2's.  The NV designs' drift about zero
+depends on the workload: Ampere's bias is +0.35 u on user tokens, +0.82 u on
+the model's own replies and -0.51 u on template tokens, its magnitude bias
+-1.68 / -1.92 / -1.88 u; the AMD designs stay unbiased.  Template tokens
+are ~0.25 bits worse in normwise error for every design.  (Measured before
+the empty think block was tagged `template`: 4 template tokens per
+conversation then counted as `assistant`.)
+
 Qwen3-0.6B, every design (errors as log2, biases in u; seconds per design
 including the FP64 reference; the whole run, with loading, capture and
 compiling, 77 s):
@@ -554,8 +566,8 @@ These agree with `layers.py`'s (8192 tokens, each design's own inputs) to
 fidelity.  At `--tokens 512` the means move by at most ~0.1 and the order
 is unchanged; the maxima move more, as maxima do.
 
-Local metrics on Qwen3.5-0.8B at the same 4 segments as Phase 5 (every
-layer pooled), for the record: normwise -19.20 Ampere, -19.47 Hopper,
+Local metrics on Qwen3.5-0.8B from `layers.py` at the same 4 segments as
+Phase 5 (every layer pooled), for the record: normwise -19.20 Ampere, -19.47 Hopper,
 -21.60 CDNA2, -21.80 CDNA2 1k, -22.11 CDNA3; magnitude bias -1.80 / -1.52 u
 for the NV designs, ~0 for AMD; bias +0.80 / +0.68 u for NV.  Hopper's max
 ULP error there is 126 bits: an exact product of exactly 0, whose ulp is
@@ -564,15 +576,15 @@ ULP error there is 126 bits: an exact product of exactly 0, whose ulp is
 ### Phase 7 -- Serving through vLLM
 
 - **What:** `vllm_plugin.py`: a `@register_quantization_config` whose linear
-  method's `apply` calls `kernels.linear` (weights `[out, in]`, as vLLM stores
-  them); `--enforce-eager` (CUDA graphs and `torch.compile` would bypass the
+  method prepares each weight once (`kernels.prepare`, weights `[out, in]` as
+  vLLM stores them) and its `apply` calls `kernels.matmul`; `--enforce-eager` (CUDA graphs and `torch.compile` would bypass the
   Python hook); an OpenAI-compatible endpoint serving Qwen3-0.6B through a
   design; tokens/s reported.  `lm_head` is not a linear method in vLLM, so it
   stays vLLM's.
 - **Why last, and where:** mainline vLLM requires compute capability 7.5+,
   and the TITAN V is 7.0.  It runs on a newer GPU (or a Volta fork); nothing
   earlier depends on it.  It demonstrates serving; the numbers of record come
-  from Phases 2-5.
+  from Phases 2-5 and the local metrics.
 
 ### After the last phase
 
@@ -583,11 +595,12 @@ cd examples/mmasim && ../../.venv/bin/python -m pytest tests serve/tests -q
 .venv/bin/ruff check examples/mmasim/serve
 ```
 
-and a results section here: one table per model (R0, R1, each design) with
-PPL, KL, top-1, flips and accuracy.  The divergence index stays at its Phase
-4 smoke scale: decode is launch-bound at `m = 1` (13-19 tokens/s even for
-the fastest designs), so 100 prompts would take ~4.6 h on Qwen3-0.6B and
-~9 h on Qwen3.5-0.8B for R0, R1 and the CDNA2 designs alone.
+and a results section here, per model: the local metrics of every design
+(the primary evaluation, on WikiText-2 and MT-Bench), and the end-to-end
+ones (PPL, KL, top-1, flips, accuracy) at the scale they were run, which
+for Phases 2-3 is smoke scale unless run in full.  The divergence index
+stays at its Phase 4 smoke scale: decode is launch-bound at `m = 1` (13-22
+tokens/s for the designs), so 100 prompts would take hours per design.
 
 ## Open items
 
@@ -613,7 +626,8 @@ Phase 2-5 show those differences at all.
 ### A BF16-output variant
 
 Round each GEMM's FP32 result to BF16 before the next op, as a deployed BF16
-stack does: a flag in `kernels.linear`, and variants of R1 and R2.  For
+stack does: a flag in `kernels.matmul` and `swap.Run`, and variants of R1
+and R2.  For
 deployment realism if a reviewer asks; it dilutes the design-to-design signal
 rather than sharpening it.
 

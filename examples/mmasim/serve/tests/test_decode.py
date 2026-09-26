@@ -6,6 +6,7 @@ skipped without either.
 """
 
 import pytest
+import torch
 
 from fpy2.backend.triton import unavailable
 
@@ -16,7 +17,7 @@ import decode
 import swap
 
 
-def test_a_run_stops_at_its_first_departure(model, tokens) -> None:
+def test_a_run_stops_at_its_first_departure(model: torch.nn.Module, tokens: torch.Tensor) -> None:
     """R0 against itself never diverges; against a reference altered at
     position 3, decoding stops there and reports 3."""
     swap.patch(model)

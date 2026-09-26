@@ -5,34 +5,29 @@ skipped without either.
     pytest serve/tests
 """
 
-import sys
-from pathlib import Path
-
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import torch
 
 from fpy2.backend.triton import unavailable
 
 _WHY = unavailable()
-pytest.importorskip('transformers')
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 import kernels
 import swap
 
 
-def _logits(model, tokens):
-    import torch
+def _logits(model: torch.nn.Module, tokens: torch.Tensor) -> torch.Tensor:
     with torch.no_grad():
         return model(tokens).logits
 
 
-def test_each_run_computes_as_it_says(model, tokens, monkeypatch) -> None:
+def test_each_run_computes_as_it_says(
+    model: torch.nn.Module, tokens: torch.Tensor, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`fp32` is the unpatched model, bit for bit; a design routes every
     linear layer, `lm_head` included, through its kernel and lands near
     `bf16-exact`; and switching back restores `fp32`."""
-    import torch
     before = _logits(model, tokens)
     run = swap.patch(model)
     assert torch.equal(_logits(model, tokens), before)
@@ -52,25 +47,33 @@ def test_each_run_computes_as_it_says(model, tokens, monkeypatch) -> None:
     assert torch.equal(_logits(model, tokens), before)
 
 
-def test_a_design_through_the_run_is_kernels_linear(model, tokens) -> None:
+def test_a_design_through_the_run_is_kernels_linear(
+    model: torch.nn.Module, tokens: torch.Tensor,
+) -> None:
     """Weights prepared once and an input rounded once for the layers that
-    share it change nothing: every layer's output, at `split_k` 1 and 4, is
-    `kernels.linear`'s on the same input, bit for bit."""
-    import torch
+    share it change nothing: every layer's output, at `split_k` 1 and 4, and
+    after a weight changes in place, is `kernels.linear`'s on the same input,
+    bit for bit."""
     run = swap.patch(model)
     pairs = []
 
-    def check(layer, inputs, y):
+    def check(layer: torch.nn.Linear, inputs: tuple[torch.Tensor], y: torch.Tensor) -> None:
         pairs.append((y, kernels.linear(inputs[0], layer.weight, run.mode,
                                          split_k=run.split_k, combine=run.combine)))
 
     handles = [m.register_forward_hook(check) for m in model.modules()
                if isinstance(m, torch.nn.Linear)]
+    w = model.lm_head.weight
     try:
         for split_k, combine in ((1, 'linear'), (4, 'linear'), (4, 'tree')):
             run.mode, run.split_k, run.combine = 'amd.cdna2.bf16', split_k, combine
             _logits(model, tokens)
+        with torch.no_grad():
+            w.neg_()
+        _logits(model, tokens)
     finally:
+        with torch.no_grad():
+            w.neg_()
         for h in handles:
             h.remove()
     assert pairs and all(torch.equal(got, want) for got, want in pairs)

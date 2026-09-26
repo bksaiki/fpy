@@ -1,19 +1,16 @@
 """
-`kernels.linear` against the FPy interpreter.  Needs a GPU; skipped without
-one.
+`kernels.linear`.  Needs a GPU; skipped without one.
 
     pytest serve/tests
 """
 
+import gc
 import math
 import random
 import struct
-import sys
-from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import torch
 
 from fpy2.backend.triton import unavailable
 
@@ -34,10 +31,8 @@ def _bits(x: float) -> int | str:
 @pytest.mark.parametrize('design', DESIGNS)
 def test_agrees_with_the_interpreter(design: str, m: int) -> None:
     """Bit for bit (any NaN as one), on FP32 activations the wrapper rounds to
-    BF16 and on the hard cases of BF16, at `m` below the design's tile
-    height."""
+    BF16 and hard-case BF16 weights."""
     import compile_triton as ct
-    import torch
     from compile import DESIGNS as ALL
 
     f, arg_types = dict(ALL)[design]()
@@ -61,8 +56,6 @@ def test_agrees_with_the_interpreter(design: str, m: int) -> None:
 def test_split_k_sums_its_partials_in_the_order_asked(design: str) -> None:
     """Four slices, one product each, of 1, 2**24, 1 and -2**24: left to
     right the ones round away at 2**24, pairwise they survive as 1."""
-    import torch
-
     _, k0 = kernels.compiled(design)
     x = torch.zeros(1, 4 * k0)
     w = torch.zeros(1, 4 * k0)
@@ -76,10 +69,6 @@ def test_split_k_sums_its_partials_in_the_order_asked(design: str) -> None:
 def test_a_call_frees_what_it_allocates() -> None:
     """Nothing a call allocates outlives it with the garbage collector off,
     as a reference cycle would hold its inputs until a collection."""
-    import gc
-
-    import torch
-
     design = 'amd.cdna2.bf16'
     _, k0 = kernels.compiled(design)
     x, w = torch.randn(8, 4 * k0).cuda(), torch.randn(16, 4 * k0).cuda()
@@ -94,9 +83,17 @@ def test_a_call_frees_what_it_allocates() -> None:
         gc.enable()
 
 
-def test_a_k_the_design_cannot_take_is_refused() -> None:
-    import torch
+@pytest.mark.parametrize('split_k', [1, 4])
+def test_rows_in_blocks_change_nothing(split_k: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    design = 'amd.cdna2.bf16'
+    _, k0 = kernels.compiled(design)
+    x, w = torch.randn(8, 4 * k0).cuda(), torch.randn(16, 4 * k0).cuda()
+    whole = kernels.linear(x, w, design, split_k=split_k)
+    monkeypatch.setattr(kernels, '_ELEMS', 3 * 16)
+    assert torch.equal(kernels.linear(x, w, design, split_k=split_k), whole)
 
+
+def test_a_k_the_design_cannot_take_is_refused() -> None:
     design = 'nv.hopper.bf16.f32'
     _, k0 = kernels.compiled(design)
     x, w = torch.zeros(1, k0 + 1).cuda(), torch.zeros(1, k0 + 1).cuda()

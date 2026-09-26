@@ -2,6 +2,6 @@
 # fpy2[triton] (torch and triton) and ../requirements.txt:
 #
 #   pip install -r requirements.txt
-transformers>=4.51     # Qwen3
-datasets               # WikiText-2 (Phase 2)
-lm-eval[hf]>=0.4       # zero-shot suite (Phase 3)
+transformers>=5        # Qwen3, Qwen3.5
+datasets               # WikiText-2, MATH-500, MT-Bench
+lm-eval[hf]>=0.4       # zero-shot suite
