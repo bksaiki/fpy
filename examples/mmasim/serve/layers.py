@@ -91,7 +91,7 @@ def _rows(n: int) -> int:
     return max(1, _ELEMS // n)
 
 
-def _local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
+def local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
            x: torch.Tensor, got: torch.Tensor) -> None:
     """Add *got*, *layer*'s output on *x*, to *s*'s local metrics, in blocks
     of output columns and rows: `lm_head`'s FP64 weights alone are 2 GB."""
@@ -155,7 +155,7 @@ def evaluate(
     layers = {n: m for n, m in model.named_modules() if isinstance(m, torch.nn.Linear)}
     modes = [m for m in modes if m != 'fp32']
     stats = {mode: {n: Stats() for n in layers} for mode in modes}
-    local = set(metrics) - {'propagated'}
+    local_metrics = set(metrics) - {'propagated'}
     ref: dict[str, torch.Tensor] = {}
 
     def hook(name: str):
@@ -164,8 +164,8 @@ def evaluate(
                 ref[name] = y.cpu()
                 return
             s = stats[run.mode][name]
-            if local:
-                _local(s, local, layer, inputs[0], y)
+            if local_metrics:
+                local(s, local_metrics, layer, inputs[0], y)
             if 'propagated' in metrics:
                 _propagated(s, y, ref[name])
         return record
@@ -193,7 +193,7 @@ def by_block(stats: dict[str, Stats]) -> dict[str, Stats]:
     return pooled
 
 
-def _fmt(key: str, v: float) -> str:
+def fmt(key: str, v: float) -> str:
     """*v* as printed: errors in log2, `rounded` as a percentage, biases in u."""
     if key == 'rounded':
         return f'{v:.2%}'
@@ -216,12 +216,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-o', '--out', default=None, help='write every layer\'s metrics as JSON here')
     args = ap.parse_args(argv)
 
-    import datasets
-    from transformers import AutoTokenizer
-
-    text = '\n\n'.join(datasets.load_dataset(
-        'Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')['text'])
-    ids = AutoTokenizer.from_pretrained(args.model)(text, return_tensors='pt').input_ids.cuda()
+    ids = perplexity.wikitext(args.model)
     segs = perplexity.segments(ids)[:args.segments]
     model, run = swap.load(args.model)
     run.split_k, run.combine = args.split_k, args.combine
@@ -242,11 +237,11 @@ def main(argv: list[str]) -> int:
         print(f'\n{key}')
         print(f'{"":10} ' + ' '.join(f'{m:>{w}}' for m in blocks))
         for row in next(iter(blocks.values())):
-            print(f'{row:10} ' + ' '.join(f'{_fmt(key, b[row][key]):>{w}}' for b in blocks.values()))
+            print(f'{row:10} ' + ' '.join(f'{fmt(key, b[row][key]):>{w}}' for b in blocks.values()))
     keys = list(next(iter(total.values())))
     print(f'\nevery layer\n{"":{w}} ' + ' '.join(f'{k:>12}' for k in keys))
     for mode, t in total.items():
-        print(f'{mode:{w}} ' + ' '.join(f'{_fmt(k, t[k]):>12}' for k in keys))
+        print(f'{mode:{w}} ' + ' '.join(f'{fmt(k, t[k]):>12}' for k in keys))
     if args.out:
         with open(args.out, 'w') as f:
             json.dump({

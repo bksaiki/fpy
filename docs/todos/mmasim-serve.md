@@ -194,6 +194,8 @@ examples/mmasim/serve/
   zeroshot.py     lm-evaluation-harness suite per run, flips vs R0
   decode.py       greedy decode, divergence index vs R0
   chat.py         terminal chat through any run, switchable mid-conversation
+  local.py        local per-layer metrics on cached activations, per design
+  workloads.py    token sequences to capture on: WikiText-2, MT-Bench sessions
   layers.py       per-linear-layer error on a calibration batch
   vllm_plugin.py  (Phase 7) the same kernels behind vLLM's linear-method hook
   tests/          one per module above
@@ -499,6 +501,66 @@ graphs for decode (the only way past `transformers`' own ~22 ms per token;
 needs a static cache, which changes attention's numerics, so every decode
 reference would be regenerated).
 
+### Local metrics on cached activations: the primary evaluation
+
+A grid search over designs cannot afford the end-to-end evaluations (hours
+per design at the kernels' present speed), so unless those become orders of
+magnitude cheaper, local per-layer metrics are *the* evaluation of a design;
+the end-to-end ones are for the few worth confirming.  `serve/local.py`
+captures every linear layer's input once, under
+`bf16-exact` on the first `--tokens` (default 2048) tokens of WikiText-2's
+test split, as BF16 on the host (one tensor per distinct input:
+`q/k/v_proj` share one, as do `gate/up_proj`; ~0.4 MB per token for
+Qwen3-0.6B).  Each design then runs only its kernel on each layer's cached
+input and weight and is compared with the exact product (`layers.local`):
+no model forward, and every design sees identical inputs, where
+`layers.py` gives each design its own propagated ones.  `--layers` limits it
+to layers matching a regex; `kernels.register(name, build, block, block_m)`
+adds a design (a grid point) beside the five.  Test:
+`tests/test_local.py` (where no linear layer comes before, block 0's
+`q/k/v_proj`, it equals `layers.evaluate` exactly; a registered copy
+evaluates as its original).
+
+**Workloads** (`serve/workloads.py`, `-w`).  WikiText-2's first tokens are
+the quantization-calibration convention, but prose without a chat template,
+turns or generated text is narrow for a chat model, and calibration data is
+known to shift quantization results (Williams & Aletras, 2024).  `mtbench`
+simulates user sessions: MT-Bench's 80 two-turn conversations (10 each of
+writing, roleplay, reasoning, math, coding, extraction, STEM, humanities),
+under the chat template with thinking off, each reply R0's greedy decode (at
+most 512 tokens), generated once and cached as JSON.  A conversation's
+sequence is its last turn as the model processes it (the first exchange as
+history, then the second question and reply); one prefill of it gives each
+layer the inputs incremental decoding would, up to FP32 noise outside the
+linear layers.  `--tokens` positions are sampled over all conversations
+(seeded), and every row keeps its tags -- `category`, and `role` (`user`,
+`assistant`, `template`) from the template's structure -- so `--by` reports
+the metrics per role or per category, each kernel still run once.
+
+Qwen3-0.6B, every design (errors as log2, biases in u; seconds per design
+including the FP64 reference; the whole run, with loading, capture and
+compiling, 77 s):
+
+| design | normwise | backward mean | backward max | ULP bits mean | correctly rounded | bias | magnitude bias | s (2048) | s (512) |
+|---|---|---|---|---|---|---|---|---|---|
+| nv.ampere.bf16.f32 | -18.52 | -23.15 | -15.56 | 4.33 | 0.82% | +0.467 | -1.709 | 12.4 | 3.3 |
+| nv.hopper.bf16.f32 | -18.97 | -23.41 | -16.40 | 4.18 | 0.85% | +0.393 | -1.429 | 10.2 | 2.8 |
+| amd.cdna2.bf16 | -21.27 | -25.88 | -18.38 | 2.06 | 10.70% | 0.000 | 0.000 | 3.7 | 1.1 |
+| amd.cdna2.bf16_1k | -21.52 | -26.08 | -18.82 | 1.96 | 11.76% | 0.000 | 0.000 | 3.7 | 1.1 |
+| amd.cdna3.bf16 | -21.91 | -26.38 | -19.47 | 1.79 | 13.88% | -0.001 | 0.000 | 19.1 | 5.0 |
+
+These agree with `layers.py`'s (8192 tokens, each design's own inputs) to
+~0.01 in log2 for every mean, so the shared inputs cost nothing in
+fidelity.  At `--tokens 512` the means move by at most ~0.1 and the order
+is unchanged; the maxima move more, as maxima do.
+
+Local metrics on Qwen3.5-0.8B at the same 4 segments as Phase 5 (every
+layer pooled), for the record: normwise -19.20 Ampere, -19.47 Hopper,
+-21.60 CDNA2, -21.80 CDNA2 1k, -22.11 CDNA3; magnitude bias -1.80 / -1.52 u
+for the NV designs, ~0 for AMD; bias +0.80 / +0.68 u for NV.  Hopper's max
+ULP error there is 126 bits: an exact product of exactly 0, whose ulp is
+2^-149, so the ULP maximum stays a poor metric.
+
 ### Phase 7 -- Serving through vLLM
 
 - **What:** `vllm_plugin.py`: a `@register_quantization_config` whose linear
@@ -554,6 +616,19 @@ Round each GEMM's FP32 result to BF16 before the next op, as a deployed BF16
 stack does: a flag in `kernels.linear`, and variants of R1 and R2.  For
 deployment realism if a reviewer asks; it dilutes the design-to-design signal
 rather than sharpening it.
+
+### Dense linear algebra through the designs
+
+The same kernels as the GEMM of blocked factorizations, LAPACK-style: the
+trailing-matrix updates of LU, Cholesky and QR, where most of the flops are
+(the HPL-MxP benchmark does LU in low precision on tensor cores and recovers
+FP64 accuracy by iterative refinement).  It needs its own metrics, from
+numerical linear algebra rather than ML: the normwise backward error of a
+solve, `||b - Ax|| / (||A|| ||x|| + ||b||)`; the iterations iterative
+refinement takes to reach FP64 accuracy, and whether it converges at all; the
+loss of orthogonality of QR, `||I - QᵀQ||`; and the growth factor of LU.
+Test matrices would come from the usual generators (random with a given
+condition number, as LAPACK's `xLATMS` makes them).
 
 ## Sources
 

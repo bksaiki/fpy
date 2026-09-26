@@ -44,9 +44,21 @@ does not compute masked rows."""
 
 Combine = Literal['linear', 'tree']
 
+_BUILDS: dict[str, Callable] = dict(DESIGNS)
+
 _ELEMS = 1 << 26
 """Output elements per block of rows under `split_k > 1`, so memory does not
 grow with it: at 2048 tokens each of `lm_head`'s partials is 1.2 GB whole."""
+
+
+def register(name: str, build: Callable, block: int, block_m: int) -> None:
+    """Add a BF16 x BF16 -> FP32 design, as `compile.DESIGNS` defines them
+    (*build* returns the FPy function and its argument types), run at the
+    tile `(block, block_m)`: a point of a grid search, say."""
+    if name in BF16_DESIGNS:
+        raise ValueError(f'{name!r} is already a design')
+    _BUILDS[name] = build
+    BF16_DESIGNS[name] = (block, block_m)
 
 
 @cache
@@ -54,7 +66,7 @@ def compiled(design: str) -> tuple[KernelSource, int]:
     """*design*'s kernel and the length its `k` must be a multiple of."""
     if design not in BF16_DESIGNS:
         raise ValueError(f'{design!r} is not one of {sorted(BF16_DESIGNS)}')
-    kernel, _, arg_types = ct.compile_matmul(dict(DESIGNS)[design], None)
+    kernel, _, arg_types = ct.compile_matmul(_BUILDS[design], None)
     return kernel, ct._length(arg_types[0])
 
 
