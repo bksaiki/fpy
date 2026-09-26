@@ -220,6 +220,15 @@ python compile_triton.py -j 8      # still 50/62 after the move
   `exponent(c, -14)` share a mangled name.  This is a C++ backend bug that
   predates this plan; `compile.py` never invoked a compiler, so nothing saw it.
   `compile_triton.py -j 8` and `compile.py -j 8` are unchanged at 50/62.
+- **Fixed separately**, as its own change, in `fpy2/transform/specialize.py`.
+  A spec is now keyed on its *source* function, with `origins` mapping each
+  copy back to it across rounds.  That map replaces `bases`, since the source
+  carries its own name.  Keying on the source exposed a second dependence on
+  copy identity: `_expand` re-added each public without its caller's `ctx`
+  and `arg_types`, so from round 2 on a public's instantiation lived only in
+  its copy.  It now keeps them, as the comment in `apply` already said.
+  Regression test: `TestCopiesOfOneFunctionAreOneSpec`.  After the fix,
+  `compile.py -j 8 -r 256` gives 50/62 compile and all 50 agree.
 
 ### Phase 2 - Regression tests
 
@@ -318,21 +327,6 @@ walk, and restore it after `if` arms and loop bodies.
 *Provisional:* defer.  With no floor at all, `tests.infra.backend.cpp --mode
 run` is unchanged (see Context), so nothing in the corpus needs the floor
 downstream.  Reopen if a program that compiles today refuses after Phase 3.
-
-### Where does the duplicate-specialization fix go?
-
-Phase 1 found that three designs do not build.  The cause is in
-`fpy2/transform/specialize.py`: a spec's key is `(fdef, inst)`, and from the
-second fixpoint round on `fdef` is the previous round's spec, not the source
-function.  The mangled name digests only `inst`.  So two identical specs of
-`exponent` reach one name.  The fix is to key specs on their source function,
-carrying a map from each spec back to it across rounds.  A scratchpad trial
-brought `compile.py -r 16` from 47 to 50 agreeing, with nothing else changing;
-the unit suite was not run.
-
-*Provisional:* its own change, before Phase 3, so all fifty designs are under
-the differential check when the analysis changes.  It is a backend fix,
-unrelated to digit bounds.
 
 ### Should `nz` on a list-element summary be universal?
 
