@@ -4226,10 +4226,6 @@ class TestAZeroGuardNoPathNames:
         assert fmt.pmax == 28
 
 
-_ZERO_EXPONENT = pytest.mark.xfail(
-    strict=True, reason='see docs/todos/digit-bound-logb-floor.md')
-
-
 class TestALogbOfZeroHasNoFloor:
     """`logb(0)` is `-inf`, so `x`'s least exponent bounds `logb(x)` only where
     `x` is non-zero -- and a program may read `logb(0)` and go on."""
@@ -4252,20 +4248,29 @@ class TestALogbOfZeroHasNoFloor:
             fmt = _fmt_of(FormatInfer.analyze(g.ast), src)
             assert fmt.representable_in(f(zero)), src
 
-    @_ZERO_EXPONENT
     def test_a_position_through_that_max_keeps_its_grid(self):
+        """Directly, and through a `min`, whose finite range bounds it only
+        where `x` is non-zero."""
+
         @fp.fpy(ctx=fp.REAL)
-        def f(x, y):
+        def direct(x, y):
             e = max(fp.logb(x), -1000)
             with fp.MPFixedContext(e - 10, fp.RM.RTZ):
                 return fp.round(y)
 
-        g = monomorphize(f, args=[RealType(fp.FP16), RealType(fp.FP32)])
-        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(y)')
-        tiny = fp.FP32.round(2 ** -149)
-        assert fmt.representable_in(f(fp.FP16.round(0), tiny))
+        @fp.fpy(ctx=fp.REAL)
+        def through_min(x, y):
+            e = max(min(fp.logb(x), 5), -1000)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(y)
 
-    @pytest.mark.parametrize('e_zero', [-25, pytest.param(-26, marks=_ZERO_EXPONENT)])
+        tiny = fp.FP32.round(2 ** -149)
+        for f in (direct, through_min):
+            g = monomorphize(f, args=[RealType(fp.FP16), RealType(fp.FP32)])
+            fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), 'fp.round(y)')
+            assert fmt.representable_in(f(fp.FP16.round(0), tiny)), f.name
+
+    @pytest.mark.parametrize('e_zero', [-25, -26])
     def test_a_zero_sentinel_below_the_floor_still_anchors(self, e_zero):
         """T-FDPA's alignment, in which a zero reads as exponent `e_zero`.  A
         zero has no digits to place, so the sum is as wide at any `e_zero` --

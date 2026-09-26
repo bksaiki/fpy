@@ -488,7 +488,7 @@ class TestAPartOfAListKeepsItsPairing:
         ):
             _, b = _analyze(fn, [ListType(RealType(fp.FP32), 8)], lower)
             out.append(max(
-                b.store.prec(t.msb, t.lsb)
+                b.store.prec(t.msb, t.lsb, b.assume_at(e))
                 for e, t in b.by_expr.items()
                 if e.format().startswith('fp.round')
             ))

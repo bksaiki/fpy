@@ -76,7 +76,7 @@ The floor is not the only cause.  The format domain's `exact_select` gives
 `max(logb(x), -1000)` the range `[-24, 15]`, though `logb(x)`'s own format
 admits `-inf`, which the `max` passes over.  The digit-bound analysis seeds
 from that range, so deleting the floor alone leaves the probe unsound (Phase
-2's record).
+2's record).  A third cause, the same seed for a `min`, is in Phase 4's.
 
 ## The floor is a precondition
 
@@ -91,8 +91,9 @@ the program undefined:
   input (`ValueClassInfer` does not refine them), so `exponent(c, -14)` does
   run at `c = 0` and is well defined there.
 
-So the floor holds where a rounding's position is affine in `logb(x)`, and on
-the arm of a zero test that excludes `x = 0`.  Nowhere else.
+So the floor holds wherever a fixed-point context was built at a position
+affine in `logb(x)` -- it is the `with`, constructing the context, that raises
+-- and on the arm of a zero test that excludes `x = 0`.  Nowhere else.
 
 ## Guard literals already exist
 
@@ -124,24 +125,37 @@ value being non-zero.  Everything below follows from that:
    `max` passes over it: an operand that may be `-inf` does not bound a `max`
    from below (dually, `+inf` and a `min` from above).
 
-### A non-zero literal per `logb` term
+### A literal per variable that may be `-inf`
 
-`value_of(Logb)` states `msb(x) >= lo` under a literal `nz(x)`, one per `msb`
-term, instead of unconditionally.  The map from term to literal is shared with
-callee instances, as the store is.  A guarded constraint only narrows where it
-is assumed, so the floor is sound wherever it is not.
+`DigitBoundStore.not_neg_inf(t)` mints, once per variable, the literal "this is
+not `-inf`", and returns the guard for *t*.  It lives in the store, which
+already records a literal's universality, so it travels wherever the store
+does -- into callee instances and into `DigitBoundParams` -- with nothing
+threaded.  A guarded constraint only narrows where it is assumed, so each
+bound is sound wherever it is not.
 
-### Assumed at a strict rounding
+Two places state a lower bound on such a variable:
 
-`_rounding(e)` already returns a `Round`/`Cast`'s position as a term.  Where
-that term names `msb(x)` with a non-zero coefficient, the position is affine in
-`logb(x)`, hence non-finite at `x = 0`, hence undefined there.  So the
-rounding's queries assume `nz(x)`.
+- `value_of(Logb)`'s floor, `msb(x) >= lo`, where `nz(x)` is the guard;
+- `_fresh_value`'s seed from the format's integer range, which is a range of
+  the *finite* values.  A `min`'s value is `-inf` wherever an operand is:
+  `min(logb(0), 5)`.  So where the format admits `-inf`
+  (`FormatView.has_neg_inf`), the seed is guarded by the value's own literal.
+
+### Assumed where a `with` dominates
+
+Building `MPFixedContext(p)` needs `p` finite, and a `-inf` in any variable of
+an affine `p` makes it non-finite.  So `_visit_context` establishes
+`not_neg_inf(p)` for whatever the `with` dominates: its body, and the rest of
+the block it sits in.  `_visit_block` restores the set on exit, so nothing
+established in an `if` arm or a loop body outlives it.  `_assumed(e)` adds what
+was established where *e* was visited, and a callee inherits it through
+`outer`.
 
 `max`, `min` and `IfExpr` mint fresh terms, so a position built through
-`exponent(...)` never qualifies.  A callee's parameter carries the caller's
-term, so `round_at(x, logb(x) - 12)` does.  This covers the 27 tests in the
-first four classes above.
+`exponent(...)` names only the `max`'s term, whose own seed is what its
+literal guards.  A callee's parameter carries the caller's term, so
+`round_at(x, logb(x) - 12)` names `msb(x)`.
 
 ### Projected at a merge
 
@@ -348,6 +362,34 @@ python compile_triton.py -j 8      # 60/62
 Also time `compile.py -j 8` against HEAD's 38 s: more distinct assumption sets
 mean more z3 calls.
 
+**Done.**  `tests/unit/analysis` 1131 passed, `tests/unit/backend`,
+`transform`, `strategies` and `test_module.py` 3117 passed, `mypy fpy2`
+clean.  `compile.py -j 8 -r 256`: **60/62 compile, and all 60 agree on every
+draw**.  `compile_triton.py -j 8`: 60/62.  `compile.py -j 8` takes 36.8 s.
+Where it diverged from the plan:
+
+- **The literal map lives in the store**, as `not_neg_inf`, not in a map
+  passed to `_DigitBoundInferInstance`.  `DigitBoundParams` carries the store
+  into a spec's re-analysis, and a map beside it would have had to follow.
+- **`_fresh_value`'s seed is a third cause**, found while checking the
+  principle.  With the floor removed and Phase 3 in, `max(min(logb(x), 5),
+  -1000)` was still unsound: the `min`'s value was seeded at `-24`.  It is now
+  guarded by the value's own literal, where the format admits `-inf`
+  (`FormatView.has_neg_inf`, new).  Regression: `through_min` in
+  `test_a_position_through_that_max_keeps_its_grid`.
+- **The assumption sits at the `with`, not at the rounding.**  Assuming at the
+  rounding alone failed `TestAlignedSumPrecision` (2) and
+  `TestPartialFramesBoundAFilledList` (1), whose `sum` follows the `with`.
+  They had passed with no floor at all only because the seed above was still
+  unguarded.  The `with` constructing the context is where the interpreter
+  raises, so its precondition holds at everything it dominates.  That settles
+  the first open item, which is removed.
+- `test_digit_bound.py`'s `TestAPartOfAListKeepsItsPairing._precs` asked the
+  store with no literals; it now asks with `assume_at(e)`, as that file's
+  other helper does.
+- `_usable`'s docstring still describes the unconditional floor; Phase 5
+  deletes it.
+
 ### Phase 5 - Drop `_usable` and `_check_vacuous`
 
 First confirm, with a temporary assert, that `_usable` never returns `False` on
@@ -382,21 +424,6 @@ cd examples/mmasim && pytest tests && python compile.py -j 8 -r 256 && python co
 
 ## Open items
 
-### Does anything downstream of a strict rounding need the floor?
-
-The strict rule assumes `nz(x)` at the rounding alone, so a later use of its
-result has no absolute anchor where today it has one.  `RescaleFixed` runs
-before both backends, and turns a strict position into a `2 ** k` scale around
-a round at a concrete position.  So on the compile path the rule never fires,
-and the scale-out product loses its floor either way.  Such a program could
-start refusing.  Extending the assumption to every query the rounding
-dominates costs about 20 lines: carry the set of established facts through the
-walk, and restore it after `if` arms and loop bodies.
-
-*Provisional:* defer.  With no floor at all, `tests.infra.backend.cpp --mode
-run` is unchanged (see Context), so nothing in the corpus needs the floor
-downstream.  Reopen if a program that compiles today refuses after Phase 4.
-
 ### Should `nz` on a list-element summary be universal?
 
 A universal literal is replayed onto per-index instances such as slices and
@@ -406,6 +433,30 @@ non-universal literal is sound and dropped on replay.
 
 *Provisional:* non-universal, since the corpus compiles with no floor at all.
 Reopen if a shape needs a per-element anchor.
+
+### Does the value channel need the `+inf` mirror?
+
+`logb(inf)` is `+inf`, and the value channel reads `logb(x)` as `msb(x)`, whose
+upper seed bounds only *finite* values.  So an upper bound read through a
+`min` fails at `x = inf`:
+
+```python
+@fp.fpy(ctx=fp.REAL)
+def hi(x, y):                       # x: FP16, y: FP32
+    e = min(fp.logb(x), 1000)       # 1000 at x = inf
+    with fp.MPFixedContext(e - 10, fp.RM.RAZ):
+        return fp.round(y)
+```
+
+The round is bounded below `2 ** 129`, and `hi(inf, 1.0)` is about `2e298`.
+Unsound before this plan and after it; nothing in mmasim reaches it, since
+every model sends a non-finite input down a special-value path first.  The
+dual of the `-inf` fix does not apply as is: `msb(x)`'s upper seed is also the
+magnitude bound on finite values, so guarding it would lose that too.  The fix
+separates `logb(x)`'s value from `msb(x)` where `x` may be infinite, tied by
+the finiteness literal `_lit(d)` that already exists.
+
+*Provisional:* out of scope; a plan of its own.
 
 ### Validating the Triton kernels on a GPU
 

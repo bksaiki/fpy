@@ -204,6 +204,10 @@ class FormatView(Protocol):
         """Does *of*'s format hold any finite value?"""
         ...
 
+    def has_neg_inf(self, of: Expr | Definition) -> bool:
+        """Can *of* be `-inf`?"""
+        ...
+
     def int_range(self, of: Expr | Definition) -> tuple[int, int] | None:
         """The least and greatest values, when only integers are held."""
         ...
@@ -300,6 +304,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
     """The loops enclosing the walk, outermost first."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
     _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
+    _scope_of: dict[ContextStmt, ContextScope]
+    _established: frozenset[int]
+    """The literals every `with` dominating the walk's position makes true."""
+    _established_at: dict[Expr, frozenset[int]]
 
     def __init__(
         self,
@@ -346,6 +354,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._loops = ()
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
+        self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
+        self._established = frozenset()
+        self._established_at = {}
 
     def analyze(self) -> DigitBoundAnalysis:
         # positional, so params that do not match the signature would bind
@@ -367,8 +378,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._visit_block(self.func.body, None)
         self.out.ret = self._merge_returns()
         self._check_vacuous()
-        if self._guards or self._elt_guards or self.outer is not None:
-            self.out.assume_at = self._assumed
+        self.out.assume_at = self._assumed
         return self.out
 
     # -- terms ---------------------------------------------------------
@@ -495,6 +505,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _visit_expr(self, e: Expr, ctx):
         self._elt_depth_of[e] = self._elt_depth
         self._loops_of_expr[e] = self._loops
+        self._established_at[e] = self._established
         super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType | ListType):
             return
@@ -776,15 +787,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     d = self.def_use.find_def_from_use(e.arg)
                     of = d
                     t = t if t is not None else self._def(d).msb
-                # Reading a `logb` is what anchors the term absolutely, and is
-                # where the argument may be taken as non-zero: a rounding
-                # steered by `logb(0)` has no position at all.  A *precondition*
-                # rather than a fact -- `logb(x)` is `msb(x)`, so this lands on
-                # every path -- and `_usable` is where a program that hands the
-                # zero path a position of its own is caught leaving it.
+                # What anchors the term absolutely -- where the argument is
+                # non-zero, since `logb(0)` is `-inf`.  A rounding at a
+                # position built from it assumes so (`_assumed`).
                 lo, _ = self.view.logb_range(of)
                 if t is not None and lo is not None:
-                    store.ge(t, lo)
+                    store.ge(t, lo, guard=store.not_neg_inf(t))
                 return t
             case Neg():
                 inner = self.value_of(e.arg)
@@ -857,6 +865,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         if vacuous is not None and self._usable(vacuous, ift):
             self.store.ge_min(m, [iff, *vacuous])
             self._vacuous_used.append((ift, vacuous))
+        # Each arm is reached only where its facts hold, so `m` is at least the
+        # lesser arm floor under them.  A constant, which carries none of the
+        # `else` arm's facts onto the `then` path.
+        facts = self._else_facts(cond)
+        if facts:
+            lo = min(self._floor(ift), self._floor(iff, facts))
+            if lo > -math.inf:
+                self.store.ge(m, int(lo))
         return m
 
     def _usable(self, vacuous: list[Term], ift: Term) -> bool:
@@ -878,9 +894,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         keep = self._floor(ift)
         return any(self._floor(t) <= keep for t in vacuous)
 
-    def _floor(self, t: Term) -> int | float:
+    def _floor(self, t: Term, assuming: frozenset[int] = frozenset()) -> int | float:
         """The least value *t* can take; `-inf` where nothing floors it."""
-        return -self.store.maximum(-t)
+        return -self.store.maximum(-t, assuming)
 
     def _check_vacuous(self) -> None:
         """:meth:`_usable` reads the store mid-walk, so a `ge` stated *after* a
@@ -920,6 +936,20 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 seen.add(t)
                 out.append(t - 1)
         return out or None
+
+    def _else_facts(self, cond: Expr) -> frozenset[int]:
+        """The literals *cond* failing proves: each value some path zeroes
+        alone is non-zero.  Not one tested of every element -- `all(...)`
+        failing names no element."""
+        paths = self._zero_paths(cond)
+        if not paths:
+            return frozenset()
+        every = self._universal_zeros(cond)
+        return frozenset(
+            lit for atoms in paths if len(atoms) == 1
+            for t in atoms if t not in every
+            for lit in self.store.not_neg_inf(t)
+        )
 
     def _forced_zero(
         self, e: Expr, atoms: set[Term], every: set[Term],
@@ -1163,8 +1193,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """The guard literals *e* may assume: each definition
         `ValueClassInfer` proves finite where *e* is evaluated, and only where
         that definition is one value for every evaluation of *e* -- a
-        definition in a loop *e* is outside of is one per iteration."""
+        definition in a loop *e* is outside of is one per iteration.
+
+        And what every `with` dominating *e* makes true; see
+        :meth:`_visit_context`."""
         outer = self.outer() if self.outer is not None else frozenset()
+        outer |= self._established_at.get(e, frozenset())
         at = self._loops_of_expr.get(e)
         if at is None:
             return outer
@@ -1188,6 +1222,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return None
         # a loop's own target and phis take a value per iteration of it
         return (*loops, site) if isinstance(site, ForStmt | WhileStmt) else loops
+
+    def _visit_context(self, stmt: ContextStmt, ctx: Any) -> None:
+        """Constructing a fixed-point context needs its position finite, so
+        whatever the `with` dominates may assume it."""
+        self._visit_expr(stmt.ctx, ctx)
+        scope = self._scope_of.get(stmt)
+        found = self._position(scope) if scope is not None else None
+        if found is not None:
+            self._established |= frozenset(self.store.not_neg_inf(found[0]))
+        self._visit_block(stmt.body, ctx)
+
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> None:
+        # a `with` dominates the rest of its block, and nothing past it
+        established = self._established
+        super()._visit_block(block, ctx)
+        self._established = established
 
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         self._loops_of_stmt[stmt] = self._loops
@@ -1214,7 +1264,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         v = self._var(f'V{len(self.out.by_expr)}')
         rng = self.view.int_range(e)
         if rng is not None:
-            self.store.ge(v, rng[0])
+            # the range is of the finite values, and `min(logb(0), 5)` is not one
+            guard = self.store.not_neg_inf(v) if self.view.has_neg_inf(e) else ()
+            self.store.ge(v, rng[0], guard=guard)
             self.store.le(v, rng[1])
         return v
 
@@ -1241,7 +1293,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         if e not in self.ctx_use.use_to_scope:
             return None
-        scope = self.ctx_use.find_scope_from_use(e)
+        return self._position(self.ctx_use.find_scope_from_use(e))
+
+    def _position(self, scope: ContextScope) -> tuple[Term, RoundingMode | None] | None:
+        """The digit position *scope* rounds at, and the mode it rounds with."""
         ctx = self.scopes.get(scope, scope.ctx)
         pos: object
         rm: object
