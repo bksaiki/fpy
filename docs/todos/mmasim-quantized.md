@@ -94,17 +94,21 @@ the format it stores them (RedHatAI's FP8 scales are BF16).
 
 ### The recipes (round to nearest, "RTN")
 
-Weights from a master, and all activations, are quantized by the standard
-recipe for their scheme:
+Weights from a master, and all activations, are quantized by `torchao`'s
+standard quantizers, rather than recipes of our own:
 
-- **FP8 per row / per block**: `s = amax / 448` over the row or block,
-  elements `rne_e4m3(v / s)`, saturating.
-- **MX** (OCP MX v1.0, section 6.3): `X = 2^(floor(log2 amax) - emax)`,
-  `emax` the element format's largest exponent (8 for E4M3, 2 for E2M1), as
-  E8M0; elements `rne(v / X)`, clamped to the format's largest normal.
-- **NVFP4** (NVIDIA's two-level recipe): per-tensor `g = amax / (448 * 6)`
-  in FP32; per 16, `s = rne_e4m3(amax_block / (6 * g))`; elements
-  `rne_e2m1(v / (s * g))`, saturating.
+- **FP8 per row / per block**: `Float8Tensor` (`PerRow`, `PerBlock`),
+  `s = amax / 448` over the row or block, elements `rne_e4m3(v / s)`.
+- **MX** (OCP MX v1.0, section 6.3): `MXTensor.to_mx` with
+  `ScaleCalculationMode.FLOOR`, `X = 2^(floor(log2 amax) - emax)` as E8M0,
+  elements `rne(v / X)`, saturating.
+- **NVFP4** (NVIDIA's two-level recipe): `NVFP4Tensor.to_nvfp4`, per-tensor
+  `g = amax / (448 * 6)` in FP32; per 16, `s = rne_e4m3((amax_block / 6) /
+  g)`; elements `rne_e2m1` of `v` times the reciprocal of `s * g`.
+
+`torchao`'s own `dequantize` rounds to FP32 (and multiplies by reciprocals);
+the exact reference instead multiplies elements and scales out in FP64
+(`quant.Quantized.dequantize`).
 
 Activations are quantized from the BF16 values a deployment has in hand
 (the captured inputs are already BF16).
@@ -162,18 +166,26 @@ under the scheme per the table above.
 
 ### Phase 1 -- Formats, schemes and recipes
 
-- **What:** `serve/quant.py`: rounding to E4M3, E5M2, E2M1 (OCP and FNUZ)
-  with RNE and saturation, E8M0 and UE4M3 scale rounding; a `Scheme`
-  dataclass (per-operand element format, scale format, block shape, where
-  applied) and the six named schemes; `quantize(t, scheme, operand)` -> a
-  `Quantized` (elements in the kernel's storage, scales laid out per block),
-  and `dequantize` for the exact reference.  Pure torch, no kernels.
-- **Why first:** everything later consumes it, and it is testable alone.
-- **Tests:** `tests/test_quant.py`: each rounding against FPy's own contexts
-  for the format, over every BF16 value (65,536) and the ties and
-  overflow cases; each recipe on hand-worked blocks from the OCP MX
-  specification and NVIDIA's NVFP4 description; `dequantize(quantize(v))`
-  within the format's half-ulp of `v / scale`.
+**Done.**  `serve/quant.py`: `Scaling`, `Operand`, `Scheme`, the six named
+schemes (`SCHEMES`; `scheme('fp8-row:fnuz')` and `fp8-block:fnuz` take FNUZ
+elements), and `quantize(t, operand)` -> `Quantized` (FP32 tensors holding
+the elements' and scales' values, one scale per block) with an exact FP64
+`dequantize`.  Where it departed: the recipes are `torchao`'s (0.18, a new
+requirement; its emulated paths run on sm_70 and on CPU) rather than our
+own, and they agree with the plan's where it was specific.  A first version
+of our own matched `torchao` bit for bit on MX and FP8; on NVFP4 it differed
+by the order of FP32 operations (`amax / (6 g)` against `(amax / 6) / g`, a
+reciprocal against a division), which settles that choice as `torchao`'s.
+Formats are FPy's contexts (`fp.MX_E4M3`, `fp.S1E4M3`, ...), each with its
+torch dtype for `torchao`.
+
+- **Tests** (`tests/test_quant.py`, CPU, ~3 s): inputs built to be lossless
+  (each block of a format's values, scaled by a power of two; NVFP4 by UE4M3
+  values under a power-of-two tensor scale) come back exactly for every
+  scheme, which checks the elements, the FP4 unpacking and the scales'
+  layout; on values over twelve binades, every element and scale is
+  representable in the FPy format the scheme names; only the software-scaled
+  FP8 schemes take `:fnuz`.
 
       cd examples/mmasim && ../../.venv/bin/python -m pytest -q serve/tests/test_quant.py
 
@@ -258,9 +270,10 @@ on WikiText-2 and MT-Bench.
 
 OCP MX v1.0 takes `floor(log2 amax)`, which can push a block's largest
 element past the format's range, where it saturates; NVIDIA's MXFP8 recipe
-in Transformer Engine rounds the scale up instead, never saturating, at the
-cost of a coarser scale.  Provisional: the specification's floor, as the
-reference definition.  Reopen if saturation shows in the quantization error.
+rounds the scale up instead (`torchao`'s `RCEIL`), never saturating, at the
+cost of a coarser scale.  Provisional: the specification's floor
+(`ScaleCalculationMode.FLOOR`, `torchao`'s default).  Reopen if saturation
+shows in the quantization error; the other is one argument away.
 
 ### NVFP4's per-tensor scale for activations: dynamic or calibrated?
 
