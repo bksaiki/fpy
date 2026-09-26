@@ -4234,7 +4234,6 @@ class TestALogbOfZeroHasNoFloor:
     """`logb(0)` is `-inf`, so `x`'s least exponent bounds `logb(x)` only where
     `x` is non-zero -- and a program may read `logb(0)` and go on."""
 
-    @_ZERO_EXPONENT
     def test_selection_passes_over_an_infinity(self):
         """At `x = 0` the `max` is `-1000`, below every exponent `x` has, and
         the `min` is `1000`, above every one."""

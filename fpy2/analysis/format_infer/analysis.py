@@ -1257,9 +1257,12 @@ def exact_select(
     Returns ``None`` when an operand is not abstractable, leaving the caller's
     join in place.
 
-    Special values keep the join's answer: a ``min`` yields ``+inf`` only if
-    *every* operand does, so ``or`` is an over-approximation -- sound, and the
-    finite bounds are where the precision was being lost.
+    An infinity on the ordered side is passed over, not picked:
+    ``max(-inf, -1000)`` is ``-1000``.  So only an operand that cannot be
+    ``-inf`` bounds a ``max`` from below, and where every one can, the result
+    may be any one's least finite value; dually for a ``min``.  The special-value
+    flags keep the join's ``or``, an over-approximation: a ``min`` yields
+    ``+inf`` only if every operand does.
     """
     afs = []
     for f in arg_fmts:
@@ -1272,12 +1275,19 @@ def exact_select(
     if not afs:
         return None
 
-    pick = min if is_min else max
     joined = reduce(lambda a, b: a | b, afs)
+    if is_min:
+        caps = [af.pos_bound for af in afs if not af.has_pos_inf]
+        pos_bound = min(caps) if caps else max(af.pos_bound for af in afs)
+        neg_bound = min(af.neg_bound for af in afs)
+    else:
+        floors = [af.neg_bound for af in afs if not af.has_neg_inf]
+        neg_bound = max(floors) if floors else min(af.neg_bound for af in afs)
+        pos_bound = max(af.pos_bound for af in afs)
     return AbstractFormat(
         joined.prec, joined.exp,
-        pick(af.pos_bound for af in afs),
-        neg_bound=pick(af.neg_bound for af in afs),
+        pos_bound,
+        neg_bound=neg_bound,
         has_pos_inf=joined.has_pos_inf,
         has_neg_inf=joined.has_neg_inf,
         has_nan=joined.has_nan,

@@ -305,6 +305,20 @@ cd examples/mmasim && python compile.py -j 8     # still 50/62
 On a scratch copy, the fix alone passes all 1127 tests in `tests/unit/analysis`
 and leaves the corpus at 50/62.
 
+**Done.**  `tests/unit/analysis` is 1129 passed and 2 `xfail`ed (Phase 4's), and
+the corpus is at 50/62.  Where it diverged from the plan:
+
+- **Two backend tests pinned a miscompile.**  In `test_class_guards.py`,
+  `test_a_double_clamp_gives_an_integer` and
+  `test_an_operand_is_not_narrowed_by_the_result` expected `int8_t` for
+  `min(max(logb(x), -126), 128)` over FP32.  But `logb(inf)` is `+inf`, which
+  the `min` passes over for 128.  At HEAD the C++ returned **-128** for
+  `x = inf`, where the interpreter gives 128.  Both now expect `int16_t`, and
+  the first test's comment says why.  Found by running
+  `tests/unit/backend tests/unit/transform tests/unit/strategies`, which the
+  phase's own commands did not cover: format inference feeds storage
+  selection.
+
 ### Phase 4 - Guard the floor
 
 In `infer.py`:

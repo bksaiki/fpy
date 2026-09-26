@@ -248,9 +248,9 @@ class TestAClampReachesIntegerStorage:
         tys = [RealType(fp.FP32)]
         assert 'float unclamped(' in CppCompiler().compile(
             unclamped, ctx=fp.REAL, arg_types=tys)
-        # `logb` of an FP32 tops out at 127, so `min(., 128)` bounds the range
-        # to [-126, 127] -- which is why this is `int8_t` and not `int16_t`
-        assert 'int8_t clamped(' in CppCompiler().compile(
+        # `logb(inf)` is `+inf`, which the `min` passes over for 128, so the
+        # range is [-126, 128] -- `int16_t`, where `int8_t` wraps 128 to -128
+        assert 'int16_t clamped(' in CppCompiler().compile(
             clamped, ctx=fp.REAL, arg_types=tys)
 
     def test_one_clamp_is_not_enough(self):
@@ -311,7 +311,7 @@ class TestAResultStorageIsNotAnOperandTarget:
                 return min(max(fp.logb(x), -126), 128)
 
         out = CppCompiler().compile(q, ctx=fp.REAL, arg_types=[RealType(fp.FP32)])
-        assert 'int8_t q(' in out
+        assert 'int16_t q(' in out
         assert 'std::logb(' in out          # the operand keeps its float op
         assert 'std::ilogb(' not in out
 
