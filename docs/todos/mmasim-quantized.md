@@ -191,22 +191,52 @@ torch dtype for `torchao`.
 
 ### Phase 2 -- Unscaled FP8 designs and `fp8-row`, end to end in local metrics
 
-- **What:** `kernels` generalizes from BF16: every compiled design with its
-  consumed formats (read from its argument types) and storage; `round_input`
-  and `prepare` become the scheme's quantizers; epilogue scaling
-  (`acc * s_x[i] * s_w[j]`, FP32).  `swap.Run` takes a scheme and gains
-  `<scheme>-exact`.  `layers.local` takes the quantized operands for its
-  reference and gains the quantization error.  `local.py` gains `--scheme`
-  and `--models`; RTN from the master only.
-- **Why:** the smallest end-to-end step: the unscaled chains are the BF16
-  pipeline with other element formats and a scaled epilogue.
-- **Tests:** `test_kernels.py` extends the interpreter comparison to one
-  design of each unscaled FP8/FP4 kind; the `bf16` scheme reproduces
-  today's local metrics bit for bit (the regression net); `fp8-row`'s
-  epilogue against an FP64 reference; `swap`'s `fp8-row-exact` against
-  `layers.local`'s reference.
+**Done.**  `kernels.TILES` holds every design used (the five BF16 ones and
+`nv.ada/hopper/blackwell.e4m3.f32`, `amd.cdna3.fp8`, each at its fastest
+tile at the 2048-token FFN shape: 128, 32, 32, 64); `formats(design)` reads
+a design's input and accumulator formats from its build (no compile), and
+`applicable(design, scheme)` / `designs(scheme)` pair them with a scheme's
+elements.  `kernels.prepare` only lays out values already quantized;
+`kernels.linear` rounds to the design's own formats.  `swap.Run` has a
+`scheme` (default `bf16`) and the runs `fp32`, `<scheme>-exact` and the
+scheme's designs (`swap.modes`); `swap.gemm` runs a design on quantized
+operands with `fp8-row`'s epilogue, `acc * s_x[i] * s_w[j]` in FP32.
+`layers.local` takes the quantized operands and the unquantized ones, and
+gains `quantization`, the normwise error of the exact quantized product
+against the exact unquantized one.  `local.py --scheme` captures under the
+scheme's exact run and evaluates every design the scheme applies to.
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -q serve/tests
+Departures: `--models` waits for Phase 5 (with RTN only, one master at a
+time is `--model`); `--scheme` is `local.py`'s alone, the other scripts'
+run lists being BF16's; `Quantized.take` gives `--by` its rows.
+
+- **Regression net:** `bf16` reproduces the pre-phase local metrics on
+  Qwen3-0.6B (2048 WikiText-2 tokens) bit for bit, all 40 pooled totals,
+  with `quantization` exactly 0 (BF16 inputs and weights).
+- **Tests:** the interpreter comparison covers all nine designs (the four
+  FP8 ones too); `swap.modes` picks the E4M3 designs for `fp8-row` and
+  CDNA3's for `:fnuz`; `fp8-row-exact` is, layer by layer, the dequantized
+  operands' FP64 product rounded once; each FP8 design's logits are nearer
+  the exact run's than quantizing moved them from R0; under `local`, both
+  errors are present for `fp8-row`, `quantization` is 0 for `bf16`, and a
+  design the scheme does not apply to is refused.
+
+Qwen3-0.6B, `fp8-row` (RTN), first 2048 WikiText-2 tokens, every layer
+pooled (log2; -24 is one unit roundoff):
+
+| design | normwise | backward mean | correctly rounded | bias (u) | magnitude bias (u) | quantization | s |
+|---|---|---|---|---|---|---|---|
+| nv.ada.e4m3.f32 | -9.03 | -14.68 | 0.01% | +44.3 | -124.5 | -4.87 | 11.8 |
+| nv.hopper.e4m3.f32 | -9.03 | -14.69 | 0.01% | +35.8 | -102.2 | -4.87 | 9.0 |
+| nv.blackwell.e4m3.f32 | -21.30 | -27.41 | 39.07% | +0.02 | -0.08 | -4.87 | 9.1 |
+| amd.cdna3.fp8 (`:fnuz`) | -23.68 | -28.33 | 50.34% | 0.00 | 0.00 | -4.87 | 14.1 |
+
+Ada's and Hopper's FP8 accumulators keep 13 bits, truncating
+(`RZ_E8M13`): run over the whole of `k` without promotion, their error is
+2^12 times Blackwell's (25 bits) and leans heavily toward zero -- the
+effect DeepSeek-V3 reports, and the reason block-scaled FP8 promotes its
+partials to FP32 every 128 of `k` (Phase 3).  Quantization error (2^-4.9) is
+the same for every design and still the larger.
 
 ### Phase 3 -- `fp8-block`: scaled partials over `k`
 

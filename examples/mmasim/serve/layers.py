@@ -3,8 +3,9 @@ Per-layer error: where each run's error enters, and how it grows with depth.
 
 On a few WikiText-2 segments, each linear layer's FP32 output `Ŷ` is compared
 elementwise with a reference, over every token and segment.  Local metrics
-take as reference the exact product `Y` (FP64, of the same BF16-rounded
-inputs `x` and weights `w`), so measure the layer's own error:
+take as reference the exact product `Y` (FP64) of the same inputs `x` and
+weights `w`, quantized by the run's scheme (BF16 rounded, by default), so
+measure the layer's own error:
 
 - `normwise`: normwise relative error `||Ŷ - Y||_F / ||Y||_F`;
 - `backward`: componentwise backward error `|ŷ - y| / (|x|ᵀ|w|)` per
@@ -14,7 +15,9 @@ inputs `x` and weights `w`), so measure the layer's own error:
 - `rounded`: the fraction of elements equal to `fl(y)`, `y` rounded to FP32;
 - `bias`: mean error `(ŷ - y) / (|x|ᵀ|w|)`, the drift about zero;
 - `magnitude_bias`: mean error in magnitude, `sign(y) (ŷ - y) / (|x|ᵀ|w|)`,
-  negative when errors lean toward zero.
+  negative when errors lean toward zero;
+- `quantization`: normwise relative error of `Y` itself against the exact
+  product of the unquantized inputs, the quantization's own error.
 
 `propagated` takes R0's output at the same layer, every layer before it run
 the same way: its normwise relative error is the error the model has
@@ -36,10 +39,12 @@ from dataclasses import dataclass, fields
 from functools import partial
 
 import perplexity
+import quant
 import swap
 import torch
 
-METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias')
+METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias',
+           'quantization')
 U = 2.0 ** -24
 """FP32's unit roundoff."""
 
@@ -65,6 +70,9 @@ class Stats:
     rounded: int = 0
     bias: float = 0.0
     magnitude_bias: float = 0.0
+    q_err: float = 0.0
+    """`||Y - Y_0||_F^2`, `Y_0` the unquantized operands' exact product"""
+    q_ref: float = 0.0
 
     def __add__(self, other: 'Stats') -> 'Stats':
         """Pooled with *other*: sums added, maxima the larger."""
@@ -81,6 +89,7 @@ class Stats:
             'ulp': self.ulp / n, 'ulp_max': self.ulp_max,
             'rounded': self.rounded / n, 'bias': self.bias / n,
             'magnitude_bias': self.magnitude_bias / n,
+            'quantization': math.sqrt(self.q_err / self.q_ref) if self.q_ref else 0.0,
         }
         return {k: v for k, v in out.items() if k.removesuffix('_max') in metrics}
 
@@ -89,20 +98,22 @@ def _rows(n: int) -> int:
     return max(1, _ELEMS // n)
 
 
-def local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
-           x: torch.Tensor, got: torch.Tensor) -> None:
-    """Add *got*, *layer*'s output on *x*, to *s*'s local metrics, in blocks
-    of output columns and rows.  *layer* has no bias (`swap.patch`)."""
-    xb = x.reshape(-1, x.shape[-1]).to(torch.bfloat16)
-    got = got.reshape(-1, got.shape[-1])
+def local(s: Stats, metrics: Collection[str], qa: quant.Quantized, qw: quant.Quantized,
+          got: torch.Tensor, unquantized: tuple[torch.Tensor, torch.Tensor]) -> None:
+    """Add *got* `[m, n]`, the output on quantized activations *qa* and
+    weights *qw*, to *s*'s local metrics, in blocks of output columns and
+    rows; `quantization` compares their exact product with that of the
+    *unquantized* activations and weights."""
+    x0, w0 = unquantized
+    m, k = qa.elements.shape
     scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
-    cols = _rows(xb.shape[1])
+    cols = _rows(k)
     for j in range(0, got.shape[1], cols):
-        wt = layer.weight[j:j + cols].to(torch.bfloat16).double().T
+        wt = qw.dequantize(slice(j, j + cols)).T
         wa = wt.abs() if scaled else None
         rows = _rows(wt.shape[1])
-        for i in range(0, xb.shape[0], rows):
-            a, g = xb[i:i + rows].double(), got[i:i + rows, j:j + cols]
+        for i in range(0, m, rows):
+            a, g = qa.dequantize(slice(i, i + rows)), got[i:i + rows, j:j + cols]
             y = a @ wt
             e = g.double() - y
             s.n += e.numel()
@@ -130,6 +141,11 @@ def local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
                 del ex, bits
             if 'rounded' in metrics:
                 s.rounded += int((g == y.float()).sum())
+            if 'quantization' in metrics:
+                y0 = x0[i:i + rows].double() @ w0[j:j + cols].double().T
+                d = y - y0
+                s.q_err += float((d * d).sum())
+                s.q_ref += float((y0 * y0).sum())
 
 
 def _propagated(s: Stats, got: torch.Tensor, ref: torch.Tensor) -> None:
@@ -162,7 +178,10 @@ def evaluate(
             return
         s = stats[run.mode][name]
         if local_metrics:
-            local(s, local_metrics, layer, inputs[0], y)
+            x = inputs[0].reshape(-1, inputs[0].shape[-1])
+            local(s, local_metrics, quant.quantize(x, run.scheme.x),
+                  quant.quantize(layer.weight, run.scheme.w), y.reshape(-1, y.shape[-1]),
+                  (x, layer.weight))
         if 'propagated' in metrics:
             _propagated(s, y, ref[name])
 

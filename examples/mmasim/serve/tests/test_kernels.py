@@ -18,8 +18,10 @@ _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 import kernels
+import quant
 
-DESIGNS = list(kernels.BF16_DESIGNS)
+DESIGNS = list(kernels.TILES)
+BF16 = kernels.designs(quant.SCHEMES['bf16'])
 
 
 def _bits(x: float) -> int | str:
@@ -31,7 +33,7 @@ def _bits(x: float) -> int | str:
 @pytest.mark.parametrize('design', DESIGNS)
 def test_agrees_with_the_interpreter(design: str, m: int) -> None:
     """Bit for bit (any NaN as one), on FP32 activations the wrapper rounds to
-    BF16 and hard-case BF16 weights."""
+    the design's format and hard-case weights in its format."""
     import compile_triton as ct
     from compile import DESIGNS as ALL
 
@@ -42,9 +44,10 @@ def test_agrees_with_the_interpreter(design: str, m: int) -> None:
     x = torch.tensor([[rng.gauss(0, 4) for _ in range(k)] for _ in range(m)])
     x[0, :4] = torch.tensor([0.0, -0.0, 3.0e38, 1.0e-40])
     w = torch.tensor([[ct._sample(ct._fmt(arg_types[1]), rng, hard=0.25) for _ in range(k)]
-                      for _ in range(n)]).to(torch.bfloat16)
+                      for _ in range(n)])
     got = kernels.linear(x.cuda(), w.cuda(), design).cpu()
-    xb = x.to(torch.bfloat16).float().tolist()
+    fx = quant.DTYPES[quant.context(kernels.formats(design)[0])]
+    xb = x.to(fx).float().tolist()
     wb = w.float().tolist()
     for i in range(m):
         for j in range(n):
@@ -52,7 +55,7 @@ def test_agrees_with_the_interpreter(design: str, m: int) -> None:
             assert _bits(got[i, j].item()) == _bits(want), (i, j, got[i, j].item(), want)
 
 
-@pytest.mark.parametrize('design', DESIGNS)
+@pytest.mark.parametrize('design', BF16)
 def test_split_k_sums_its_partials_in_the_order_asked(design: str) -> None:
     """Four slices, one product each, of 1, 2**24, 1 and -2**24: left to
     right the ones round away at 2**24, pairwise they survive as 1."""

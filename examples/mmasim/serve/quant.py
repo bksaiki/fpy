@@ -81,13 +81,19 @@ SCHEMES = {s.name: s for s in [
 
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
-_DTYPES = {
+DTYPES = {
     fp.BF16: torch.bfloat16,
     fp.MX_E4M3: torch.float8_e4m3fn, fp.MX_E5M2: torch.float8_e5m2,
     fp.S1E4M3: torch.float8_e4m3fnuz, fp.S1E5M2: torch.float8_e5m2fnuz,
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
 }
 """Each element format's torch dtype, as `torchao` takes it."""
+
+
+def context(fmt: object) -> Context:
+    """The element format among :data:`DTYPES` that is *fmt* (a design's
+    argument format)."""
+    return next(c for c in DTYPES if c.format() == fmt)
 
 
 def scheme(name: str) -> Scheme:
@@ -114,15 +120,22 @@ class Quantized:
     scales: torch.Tensor | None = None
     tensor: torch.Tensor | None = None
 
-    def dequantize(self) -> torch.Tensor:
-        """The values it holds, in FP64: exact for E8M0 and UE4M3 scales,
-        within FP64's rounding for FP32 ones."""
-        v = self.elements.double()
+    def take(self, rows: torch.Tensor | slice) -> 'Quantized':
+        """Its rows *rows*, for an operand whose scale blocks are one row
+        tall (every scheme's activations)."""
+        if self.operand.scaling is not None and self.operand.scaling.rows != 1:
+            raise ValueError('rows of scale blocks taller than one')
+        return replace(self, elements=self.elements[rows],
+                       scales=None if self.scales is None else self.scales[rows])
+
+    def dequantize(self, rows: slice = slice(None)) -> torch.Tensor:
+        """The values it holds, of *rows*, in FP64: exact for E8M0 and UE4M3
+        scales, within FP64's rounding for FP32 ones."""
+        v = self.elements[rows].double()
         if self.scales is not None:
             s = self.operand.scaling
-            br, bc = s.rows, s.cols or v.shape[1]
-            v = v * (self.scales.double().repeat_interleave(br, 0)[:v.shape[0]]
-                     .repeat_interleave(bc, 1)[:, :v.shape[1]])
+            i = torch.arange(self.elements.shape[0], device=v.device)[rows] // s.rows
+            v = v * self.scales[i].double().repeat_interleave(s.cols or v.shape[1], 1)[:, :v.shape[1]]
         return v if self.tensor is None else v * self.tensor.double()
 
 
@@ -136,9 +149,12 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
     NVFP4 with the per-tensor scale from `t`'s largest magnitude, FP8 with
     `amax / max` per block."""
     s = op.scaling
-    dtype = _DTYPES[op.elements]
+    dtype = DTYPES[op.elements]
     if s is None:
-        return Quantized(op, t.to(dtype).float())
+        # *t* itself when it already holds the format's values, as a BF16
+        # checkpoint's weights loaded in FP32 do
+        q = t.to(dtype).float()
+        return Quantized(op, t if t.dtype == torch.float32 and torch.equal(q, t) else q)
     if s.fmt == fp.MX_E8M0:
         q = MXTensor.to_mx(t, dtype, s.cols, ScaleCalculationMode.FLOOR)
         elements = _fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float()
