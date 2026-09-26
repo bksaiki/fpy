@@ -147,7 +147,9 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
     """*t* `[r, k]` by *op*'s standard round-to-nearest recipe, `torchao`'s:
     MX by the OCP specification's floor (`ScaleCalculationMode.FLOOR`),
     NVFP4 with the per-tensor scale from `t`'s largest magnitude, FP8 with
-    `amax / max` per block."""
+    `amax / max` per block.  Rows short of a whole block are padded with
+    zeros, which leave its `amax` as it is; `k` must be a whole number of
+    blocks."""
     s = op.scaling
     dtype = DTYPES[op.elements]
     if s is None:
@@ -164,5 +166,7 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
         q = NVFP4Tensor.to_nvfp4(t.float(), s.cols, per_tensor_scale=g)
         return Quantized(op, _fp4(q.qdata), q.scale.float(), q.per_tensor_scale)
     granularity = PerRow() if s.cols is None else PerBlock([s.rows, s.cols])
-    q = Float8Tensor.from_hp(t, float8_dtype=dtype, granularity=granularity)
-    return Quantized(op, q.qdata.float(), q.scale.float())
+    r = t.shape[0]
+    padded = torch.nn.functional.pad(t, (0, 0, 0, -r % s.rows))
+    q = Float8Tensor.from_hp(padded, float8_dtype=dtype, granularity=granularity)
+    return Quantized(op, q.qdata.float()[:r], q.scale.float())

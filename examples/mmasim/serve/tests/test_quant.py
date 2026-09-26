@@ -52,6 +52,13 @@ def test_lossless_inputs_come_back_exactly(name: str, operand: str, values: torc
     assert torch.equal(quant.quantize(t, op).dequantize(), t.double())
 
 
+def test_a_short_block_is_padded_with_zeros() -> None:
+    """Rows short of a whole 128-row block quantize as the block would with
+    zeros below them: still lossless."""
+    t = _blocks(_E4M3, 448.0, (128, 256), (128, 128), [2.0 ** 3, 2.0 ** -5])[:64]
+    assert torch.equal(quant.quantize(t, quant.SCHEMES['fp8-block'].w).dequantize(), t.double())
+
+
 def test_nvfp4_comes_back_exactly() -> None:
     """With a power-of-two per-tensor scale, blocks of E2M1 values scaled by
     UE4M3 values are lossless too."""

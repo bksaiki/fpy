@@ -9,6 +9,7 @@ import math
 import random
 import struct
 
+import numpy as np
 import pytest
 import torch
 
@@ -84,6 +85,35 @@ def test_a_call_frees_what_it_allocates() -> None:
         assert torch.cuda.memory_allocated() == before
     finally:
         gc.enable()
+
+
+def test_scaled_partials_sum_in_order() -> None:
+    """Each 128 of `k` from a zero accumulator, scaled and summed left to
+    right in FP32, `y + p * (s_x * s_w)`: bit for bit (any NaN as one)
+    against the interpreter's partials combined so."""
+    import compile_triton as ct
+    from compile import DESIGNS as ALL
+
+    design = 'nv.hopper.e4m3.f32'
+    f, arg_types = dict(ALL)[design]()
+    rng = random.Random(0)
+    m, n, k = 2, 3, 256
+    fmt = ct._fmt(arg_types[0])
+    x = torch.tensor([[ct._sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(m)])
+    w = torch.tensor([[ct._sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(n)])
+    sx = torch.rand(m, 2) * 4
+    sw = torch.rand(n, 2) * 4
+    held = kernels.storage(design)
+    got = kernels.matmul(x.cuda().to(held[0]), kernels.prepare(w.cuda(), held[1], 2), design,
+                         scales=(sx.cuda(), sw.cuda())).cpu()
+    for i in range(m):
+        for j in range(n):
+            acc = np.float32(0)
+            for c in range(2):
+                p = np.float32(f(x[i, c * 128:(c + 1) * 128].tolist(),
+                                 w[j, c * 128:(c + 1) * 128].tolist(), 0.0))
+                acc = acc + p * (np.float32(sx[i, c]) * np.float32(sw[j, c]))
+            assert _bits(got[i, j].item()) == _bits(float(acc)), (i, j)
 
 
 @pytest.mark.parametrize('split_k', [1, 4])

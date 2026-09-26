@@ -88,14 +88,15 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
         assert math.isclose(pooled.err, s.err, rel_tol=1e-9)
 
 
+@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block'])
 def test_a_scheme_measures_its_quantization_apart_from_the_design(
-    model: torch.nn.Module, tokens: torch.Tensor,
+    name: str, model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
-    """Under `fp8-row` both errors are there; under `bf16`, on BF16 inputs and
-    weights, quantizing costs nothing; a design the scheme does not apply to
-    is refused."""
+    """Under the FP8 schemes both errors are there; under `bf16`, on BF16
+    inputs and weights, quantizing costs nothing; a design the scheme does
+    not apply to is refused, as is splitting `fp8-block`'s blocks further."""
     run = swap.patch(model)
-    fp8 = quant.SCHEMES['fp8-row']
+    fp8 = quant.SCHEMES[name]
     acts = local.capture(model, run, _seqs(tokens), scheme=fp8)
     stats = local.evaluate(model, acts, 'nv.hopper.e4m3.f32', scheme=fp8)['all']
     s = sum(stats.values(), layers.Stats()).report(local.METRICS)
@@ -104,6 +105,9 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
     assert sum(bf16['all'].values(), layers.Stats()).report(['quantization'])['quantization'] == 0
     with pytest.raises(ValueError, match='does not take'):
         local.evaluate(model, acts, 'amd.cdna2.bf16', scheme=fp8)
+    if fp8.applied == 'k-blocks':
+        with pytest.raises(ValueError, match='its own blocks'):
+            local.evaluate(model, acts, 'nv.hopper.e4m3.f32', scheme=fp8, split_k=2)
 
 
 def test_sample_is_fixed_and_in_order() -> None:

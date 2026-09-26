@@ -60,12 +60,28 @@ def exact(qa: quant.Quantized, qw: quant.Quantized) -> torch.Tensor:
     return y
 
 
+def slices(scheme: quant.Scheme, k: int, split_k: int) -> int:
+    """The slices of `k` a weight is prepared in under *scheme*: *split_k*,
+    or the scheme's own blocks of `k` (`fp8-block`'s 128s), split no
+    further."""
+    if scheme.applied != 'k-blocks':
+        return split_k
+    if split_k != 1:
+        raise ValueError(f'{scheme.name} splits `k` into its own blocks, not {split_k}')
+    return k // scheme.x.scaling.cols
+
+
 def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
          w: torch.Tensor, combine: kernels.Combine = 'linear') -> torch.Tensor:
     """`qa @ qw.T` by *design* under *scheme*, FP32: *w* is *qw*'s elements
-    prepared for it (`kernels.prepare`), and the scales are applied after the
-    kernel, `acc * s_x[i] * s_w[j]`."""
-    y = kernels.matmul(qa.elements.to(kernels.storage(design)[0]), w, design, combine)
+    prepared for it (`kernels.prepare`, in :func:`slices`), and the scales
+    applied after the kernel, `acc * s_x[i] * s_w[j]`, or to each block of
+    `k`'s partial (`kernels.matmul`)."""
+    a = qa.elements.to(kernels.storage(design)[0])
+    if scheme.applied == 'k-blocks':
+        sw = qw.scales.repeat_interleave(qw.operand.scaling.rows, 0)[:w.shape[1]]
+        return kernels.matmul(a, w, design, scales=(qa.scales, sw))
+    y = kernels.matmul(a, w, design, combine)
     return y * qa.scales * qw.scales.T if scheme.applied == 'epilogue' else y
 
 
@@ -97,11 +113,12 @@ class Run:
         return self._weights[key][1]
 
     def _prepare(self, w: torch.Tensor, qw: quant.Quantized, dtype: torch.dtype) -> torch.Tensor:
-        key = (id(w), w._version, self.scheme.name, dtype, self.split_k)
+        split = slices(self.scheme, w.shape[1], self.split_k)
+        key = (id(w), w._version, self.scheme.name, dtype, split)
         if key not in self._prepared:
             self._prepared = {k: v for k, v in self._prepared.items()
                               if k[0] != id(w) and k[2:] == key[2:]}
-            self._prepared[key] = kernels.prepare(qw.elements, dtype, self.split_k)
+            self._prepared[key] = kernels.prepare(qw.elements, dtype, split)
         return self._prepared[key]
 
     def _quantize(self, x: torch.Tensor) -> quant.Quantized:

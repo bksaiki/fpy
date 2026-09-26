@@ -80,21 +80,21 @@ def test_a_design_through_the_run_is_kernels_linear(
     assert pairs and all(torch.equal(got, want) for got, want in pairs)
 
 
+@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block'])
 def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
-    model: torch.nn.Module, tokens: torch.Tensor,
+    name: str, model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
-    """`fp8-row`'s designs are the E4M3 ones (`:fnuz`'s CDNA3's); its exact run
-    is, layer by layer, the quantized operands' FP64 product rounded once;
-    each design, its scales applied after the kernel, is nearer the exact run
-    than quantizing moved it from R0 (Ada's and Hopper's 13-bit accumulators
-    come closest)."""
-    fp8 = quant.SCHEMES['fp8-row']
-    assert swap.modes(fp8) == ('fp32', 'fp8-row-exact', 'nv.ada.e4m3.f32',
+    """The FP8 schemes' designs are the E4M3 ones (`:fnuz`'s CDNA3's); the
+    exact run is, layer by layer, the quantized operands' FP64 product
+    rounded once; each design, its scales applied after the kernel or to each
+    128 of `k`, is nearer the exact run than quantizing moved it from R0."""
+    fp8 = quant.SCHEMES[name]
+    assert swap.modes(fp8) == ('fp32', f'{name}-exact', 'nv.ada.e4m3.f32',
                                'nv.hopper.e4m3.f32', 'nv.blackwell.e4m3.f32')
-    assert swap.modes(quant.scheme('fp8-row:fnuz'))[2:] == ('amd.cdna3.fp8',)
+    assert swap.modes(quant.scheme(f'{name}:fnuz'))[2:] == ('amd.cdna3.fp8',)
     run = swap.patch(model)
     r0 = _logits(model, tokens)
-    run.scheme, run.mode = fp8, 'fp8-row-exact'
+    run.scheme, run.mode = fp8, f'{name}-exact'
     pairs = []
 
     def check(layer: torch.nn.Linear, inputs: tuple[torch.Tensor], y: torch.Tensor) -> None:

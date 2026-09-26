@@ -240,15 +240,34 @@ the same for every design and still the larger.
 
 ### Phase 3 -- `fp8-block`: scaled partials over `k`
 
-- **What:** `kernels.matmul`'s slices, each from a zero accumulator, summed
-  in FP32 with each partial scaled by its block's `s_x * s_w` (DeepGEMM's
-  promotion every 128 of `k`).
-- **Why separate:** it changes the combine that `split_k` shares, which
-  deserves its own review.
-- **Tests:** the scaled combine against an FPy reference of the same order
-  on a small matmul; `split_k` unchanged.
+**Done.**  `kernels.matmul(..., scales=(s_x, s_w))` runs each 128 of `k`
+from a zero accumulator and sums the partials left to right in FP32,
+`y + p * (s_x * s_w)` (DeepGEMM's promotion); `swap.slices` prepares a
+`fp8-block` weight in its own 128-blocks and refuses a further `split_k`;
+`swap.gemm` expands the weight's 128-row block scales over its rows.  Where
+it departed: `torchao`'s `PerBlock` takes only whole blocks, so
+`quant.quantize` pads rows short of one with zeros, which leave the block's
+`amax` as it is (the test model's 64-row `k/v_proj`, Qwen3.5's 16-row
+`in_proj_a/b`); a `k` not a multiple of 128 is refused (none in these
+models).  The test model grew to hidden 128, FFN 256, so that every `k` is.
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -q serve/tests/test_kernels.py
+- **Tests:** the scaled sum, bit for bit (any NaN as one), against the
+  interpreter's partials combined in the same order in NumPy FP32; the
+  `swap` and `local` scheme tests over both FP8 schemes; `split_k` refused
+  under `fp8-block`; a short block still lossless.
+
+Qwen3-0.6B, first 2048 WikiText-2 tokens, every layer pooled (log2):
+
+| design | `fp8-row` normwise | `fp8-block` normwise | `fp8-block` backward mean | `fp8-block` magnitude bias (u) |
+|---|---|---|---|---|
+| nv.ada.e4m3.f32 | -9.03 | -12.17 | -16.65 | -46.2 |
+| nv.hopper.e4m3.f32 | -9.03 | -12.27 | -16.76 | -38.6 |
+| nv.blackwell.e4m3.f32 | -21.30 | -23.66 | -27.96 | -0.01 |
+| amd.cdna3.fp8 (`:fnuz`) | -23.68 | -23.67 | -28.01 | 0.00 |
+
+Promotion every 128 buys Ada and Hopper ~3 bits and more than halves their
+lean toward zero, still 2^11 short of Blackwell; quantization error is
+2^-4.92 (2^-4.87 per row).
 
 ### Phase 4 -- Block-scaled instructions: `mxfp8`, `mxfp4`, `nvfp4`
 

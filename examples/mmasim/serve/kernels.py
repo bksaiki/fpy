@@ -76,7 +76,7 @@ def applicable(design: str, scheme: quant.Scheme) -> bool:
     """Whether *design* takes *scheme*'s elements as they are: an unscaled
     design, and scales applied after it or not at all."""
     x, w, _ = formats(design)
-    return (len(_args(design)) == 3 and scheme.applied in ('none', 'epilogue')
+    return (len(_args(design)) == 3 and scheme.applied in ('none', 'epilogue', 'k-blocks')
             and (x, w) == (scheme.x.elements.format(), scheme.w.elements.format()))
 
 
@@ -138,14 +138,19 @@ def _tree(part: Callable[[int], torch.Tensor], s: int, n: int) -> torch.Tensor:
     return _tree(part, s, h).add_(_tree(part, s + h, n - h))
 
 
-def matmul(a: torch.Tensor, w: torch.Tensor, design: str, combine: Combine = 'linear') -> torch.Tensor:
+def matmul(
+    a: torch.Tensor, w: torch.Tensor, design: str, combine: Combine = 'linear',
+    scales: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> torch.Tensor:
     """`a @ w.T` by *design*, FP32 `[m, n]`, for `a` holding its activation values
     and `w` from :func:`prepare` in *design*'s :func:`storage`.
 
     With `w` in `s > 1` slices, each slice goes through the kernel from a zero
     accumulator and the FP32 partials are summed left to right (`linear`) or
     pairwise (`tree`); one slice accumulates `k` in order through the design
-    alone."""
+    alone.  With *scales* `(s_x [m, s], s_w [n, s])`, each slice's partial is
+    scaled as it is summed, left to right, `y + p * (s_x * s_w)` in FP32, as
+    block-scaled FP8 promotes it."""
     s, n, step = w.shape
     m, k = a.shape
     k0 = compiled(design)[1]
@@ -158,7 +163,11 @@ def matmul(a: torch.Tensor, w: torch.Tensor, design: str, combine: Combine = 'li
     rows = max(1, _ELEMS // n)
     for i in range(0, m, rows):
         blk, ab = y[i:i + rows], parts[:, i:i + rows]
-        if combine == 'tree' and s > 1:
+        if scales is not None:
+            sx, sw = scales
+            for j in range(s):
+                blk += _part(ab, w, design, j) * (sx[i:i + rows, j, None] * sw[:, j])
+        elif combine == 'tree' and s > 1:
             blk.copy_(_tree(partial(_part, ab, w, design), 0, s))
         else:
             _launch(ab[0], w[0], blk, design)

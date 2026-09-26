@@ -135,8 +135,8 @@ def evaluate(
                 continue
             a = acts.input(name).cuda().float()
             qa, qw = quant.quantize(a, scheme.x), quant.quantize(layer.weight, scheme.w)
-            y = swap.gemm(design, scheme, qa, qw, kernels.prepare(qw.elements, held, split_k),
-                          combine)
+            w = kernels.prepare(qw.elements, held, swap.slices(scheme, a.shape[1], split_k))
+            y = swap.gemm(design, scheme, qa, qw, w, combine)
             for g, rows in groups.items():
                 layers.local(stats[g].setdefault(name, layers.Stats()), metrics, qa.take(rows),
                              qw, y[rows], (a[rows], layer.weight))
