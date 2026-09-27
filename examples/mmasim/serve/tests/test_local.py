@@ -6,6 +6,7 @@
 """
 
 import math
+import random
 from functools import partial
 
 import pytest
@@ -149,11 +150,15 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
 
 
 def test_sample_is_fixed_and_in_order() -> None:
+    """At seed 0, the positions it has always picked (`Random(0)`)."""
     seqs = [workloads.Sequence([0] * n, {}) for n in (5, 0, 7)]
     keep = local.sample(seqs, 6)
     assert keep == local.sample(seqs, 6) and sum(map(len, keep)) == 6 and keep[1] == []
     assert all(k == sorted(k) and all(0 <= p < len(s.ids) for p in k) for k, s in zip(keep, seqs))
     assert local.sample(seqs, None) == [list(range(5)), [], list(range(7))]
+    old = sorted(random.Random(0).sample(range(12), 6))
+    assert [p for p in old if p < 5] == keep[0] and [p - 5 for p in old if p >= 5] == keep[2]
+    assert local.sample(seqs, 6, seed=1) != keep
 
 
 def test_roles_follow_the_chat_template() -> None:

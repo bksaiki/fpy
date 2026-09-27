@@ -20,7 +20,6 @@ Seconds per design include the metrics' FP64 work.
 import argparse
 import bisect
 import json
-import random
 import re
 import sys
 import time
@@ -60,17 +59,14 @@ class Activations:
     """Per tag, each row's label (`workloads.Sequence.tags`)."""
 
 
-def sample(seqs: list[workloads.Sequence], tokens: int | None) -> list[list[int]]:
-    """A fixed random *tokens* positions over *seqs* (all, if `None` or no
-    fewer), as each sequence's positions in order."""
+def sample(seqs: list[workloads.Sequence], tokens: int | None, seed: int = 0) -> list[list[int]]:
+    """*tokens* positions over *seqs* (`swap.pick`), as each sequence's
+    positions in order."""
     ends = [0]
     for seq in seqs:
         ends.append(ends[-1] + len(seq.ids))
-    picks = range(ends[-1])
-    if tokens is not None and tokens < ends[-1]:
-        picks = sorted(random.Random(0).sample(picks, tokens))
     keep: list[list[int]] = [[] for _ in seqs]
-    for p in picks:
+    for p in swap.pick(ends[-1], tokens, seed):
         i = bisect.bisect_right(ends, p) - 1
         keep[i].append(p - ends[i])
     return keep
@@ -78,12 +74,12 @@ def sample(seqs: list[workloads.Sequence], tokens: int | None) -> list[list[int]
 
 def capture(
     model: torch.nn.Module, run: swap.Run, seqs: list[workloads.Sequence],
-    tokens: int | None = None,
+    tokens: int | None = None, seed: int = 0,
 ) -> Activations:
     """Each linear layer's input under *run*'s scheme's exact run, as BF16
     (the values a deployment holds, before any quantizing), at
-    :func:`sample`'s positions over *seqs*.  *run* is `swap.patch(model)`'s."""
-    keep = sample(seqs, tokens)
+    :func:`sample`'s positions over *seqs* by *seed*.  *run* is `swap.patch(model)`'s."""
+    keep = sample(seqs, tokens, seed)
     parts: list[list[torch.Tensor]] = []
     peaks: list[list[torch.Tensor]] = []
     index: dict[str, int] = {}
@@ -216,6 +212,7 @@ def main(argv: list[str]) -> int:
 
     out: dict[str, Any] = {
         'scheme': args.scheme.name, 'workload': args.workload, 'tokens': args.tokens,
+        'seed': args.seed,
         'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
         'models': {}}
     for name in args.models or [args.model]:
@@ -235,7 +232,7 @@ def main(argv: list[str]) -> int:
             path = args.transcripts or (Path(__file__).parent / 'results'
                                         / f'mtbench-{name.replace("/", "--")}.json')
             seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name), path)
-        acts = capture(model, run, seqs, args.tokens)
+        acts = capture(model, run, seqs, args.tokens, args.seed)
 
         results: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
         total: dict[str, dict[str, dict[str, dict[str, float]]]] = {}

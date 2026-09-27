@@ -149,16 +149,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
     ap.add_argument('--segments', type=int, default=None,
-                    help='only the first this many segments (default: all)')
+                    help='this many segments at random (default: all)')
     ap.add_argument('-o', '--out', default=None, help='write the results as JSON here')
     args = ap.parse_args(argv)
 
-    segs = segments(wikitext(args.model))[:args.segments]
+    segs = segments(wikitext(args.model))
+    segs = [segs[i] for i in swap.pick(len(segs), args.segments, args.seed)]
     model, run = swap.load(args.model, args.split_k, args.combine)
 
     totals = evaluate(model, run, segs, args.runs, progress=True)
     results = {
-        'model': args.model, 'context': CONTEXT, 'segments': len(segs),
+        'model': args.model, 'context': CONTEXT, 'segments': len(segs), 'seed': args.seed,
         'split_k': args.split_k, 'combine': args.combine,
         'runs': {mode: t.report() for mode, t in totals.items()},
     }

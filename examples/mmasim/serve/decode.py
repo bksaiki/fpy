@@ -3,7 +3,7 @@ Greedy decode, and where each run's output departs from R0's.
 
 The divergence index (Yuan et al. 2025) of a prompt is the first generated
 position at which a run's greedy token differs from R0's; a run that matches
-R0 to its end never diverges.  Prompts are a fixed random sample of MATH-500
+R0 to its end never diverges.  Prompts are a seeded random sample of MATH-500
 under the model's chat template, thinking off, with Qwen's instruction for
 math; decoding is up to 2,048 new tokens, as Yuan et al. do for
 non-reasoning models.  A run other than R0 stops at its first departure.
@@ -18,7 +18,6 @@ with the same settings (and, past R0, the same R0 tokens).
 import argparse
 import hashlib
 import json
-import random
 import statistics
 import sys
 from collections.abc import Collection, Iterator
@@ -89,17 +88,18 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
     ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
-    ap.add_argument('--prompts', type=int, default=100, help='MATH-500 problems, a fixed random sample')
+    ap.add_argument('--prompts', type=int, default=100, help='MATH-500 problems, at random')
     ap.add_argument('--max-new', type=int, default=2048)
     args = ap.parse_args(argv)
 
     import datasets
     from transformers import AutoTokenizer
 
-    settings = {'model': args.model, 'prompts': args.prompts, 'max_new': args.max_new,
+    settings = {'model': args.model, 'prompts': args.prompts, 'seed': args.seed,
+                'max_new': args.max_new,
                 'split_k': args.split_k, 'combine': args.combine}
     problems = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')['problem']
-    picked = sorted(random.Random(0).sample(range(len(problems)), args.prompts))
+    picked = swap.pick(len(problems), args.prompts, args.seed)
     tok = AutoTokenizer.from_pretrained(args.model)
     prompts = [encode(tok, [{'role': 'user', 'content': f'{problems[i]}\n{INSTRUCTION}'}])
                for i in picked]

@@ -22,7 +22,7 @@ import swap
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    swap.add_args(ap)
+    swap.add_args(ap, seed=False)
     ap.add_argument('-r', '--run', choices=swap.MODES, default='fp32')
     ap.add_argument('--max-new', type=int, default=1024, help='tokens per reply at most')
     args = ap.parse_args(argv)

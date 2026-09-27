@@ -11,13 +11,12 @@ Each run's results go to `<out>/<run>.json` and are reused by a later call
 with the same settings, so the suite can be run a design at a time.
 
     python serve/zeroshot.py -o zs                        # every run
-    python serve/zeroshot.py -o zs-full -r bf16-exact --hellaswag 0
-    python serve/zeroshot.py -o smoke --limit 10
+    python serve/zeroshot.py -o zs-full -r bf16-exact --items 0
+    python serve/zeroshot.py -o smoke --items 10
 """
 
 import argparse
 import json
-import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -31,12 +30,18 @@ Items = dict[str, dict[str, float]]
 """Per item (`doc_id`, as a string): each of :data:`METRICS` it logs."""
 
 
-def hellaswag_subset(n: int) -> list[int]:
-    """A fixed random *n* of HellaSwag's validation items, by index."""
+def sizes() -> dict[str, int]:
+    """Each of :data:`TASKS`' item count."""
     from lm_eval.tasks import TaskManager, get_task_dict
 
-    total = len(get_task_dict(['hellaswag'], TaskManager())['hellaswag'].eval_docs)
-    return sorted(random.Random(0).sample(range(total), n))
+    tasks = get_task_dict(list(TASKS), TaskManager())
+    return {t: len(tasks[t].eval_docs) for t in TASKS}
+
+
+def subsets(counts: dict[str, int], n: int | None, seed: int = 0) -> dict[str, list[int]]:
+    """*n* items of each task in *counts* that has more (`swap.pick`), by
+    index."""
+    return {t: swap.pick(k, n, seed) for t, k in counts.items() if n is not None and n < k}
 
 
 def evaluate(lm: Any, run: swap.Run, mode: str, **kw: Any) -> dict[str, Any]:
@@ -73,21 +78,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
     ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
                     help='runs besides fp32 (default: bf16-exact and every design)')
-    ap.add_argument('--hellaswag', type=int, default=2000,
-                    help='HellaSwag items, a fixed random subset (0: all)')
-    ap.add_argument('--limit', type=int, default=None,
-                    help='only the first this many items of every task (a smoke run)')
+    ap.add_argument('--items', type=int, default=2000,
+                    help='items per task at most, at random (0: all)')
     ap.add_argument('--batch-size', type=int, default=16)
     args = ap.parse_args(argv)
 
     from lm_eval.models.huggingface import HFLM
     from transformers import AutoTokenizer
 
-    settings = {'model': args.model, 'limit': args.limit, 'hellaswag': args.hellaswag,
+    settings = {'model': args.model, 'items': args.items, 'seed': args.seed,
                 'batch_size': args.batch_size, 'split_k': args.split_k, 'combine': args.combine}
-    samples = None
-    if args.limit is None and args.hellaswag:
-        samples = {'hellaswag': hellaswag_subset(args.hellaswag)}
+    samples = subsets(sizes(), args.items or None, args.seed) or None
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -103,7 +104,7 @@ def main(argv: list[str]) -> int:
             lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
         runs[mode] = {'settings': settings,
-                      **evaluate(lm, run, mode, limit=args.limit, samples=samples)}
+                      **evaluate(lm, run, mode, samples=samples)}
         path.write_text(json.dumps(runs[mode]))
 
     ref = runs['fp32']['items']
