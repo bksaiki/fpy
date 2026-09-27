@@ -6,7 +6,7 @@ evaluated with under a scheme.
 each quantized linear layer's weight is its dequantized values in FP32 (the
 weight R0 runs), and its stored elements and scales are kept in the
 checkpoint's scheme, with NVFP4's static per-tensor activation scales.
-:func:`weights_for` applies the rules of `docs/todos/mmasim-quantized.md`: a
+:func:`weights_for` applies the rules of `docs/todos/mmasim-serving.md`: a
 checkpoint in the scheme as it is; one in another scheme converted if that
 is exact, else only when asked to requantize; a master left to RTN.
 """

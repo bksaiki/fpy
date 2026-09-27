@@ -9,7 +9,7 @@ runs `torchao`'s standard quantizer for the scheme (`MXTensor`,
 `NVFP4Tensor`, `Float8Tensor`) and keeps its elements and scales as FP32
 tensors holding their values; :meth:`Quantized.dequantize` multiplies them
 out in FP64, where `torchao`'s own rounds to FP32.  See
-`docs/todos/mmasim-quantized.md`.
+`docs/todos/mmasim-serving.md`.
 """
 
 from dataclasses import dataclass, replace
@@ -77,7 +77,7 @@ SCHEMES = {s.name: s for s in [
     Scheme('mxfp4', _mx(fp.MX_E2M1, 32), _mx(fp.MX_E2M1, 32), 'instruction'),
     Scheme('nvfp4', _nvfp4(), _nvfp4(), 'instruction'),
 ]}
-"""The named schemes (`docs/todos/mmasim-quantized.md`)."""
+"""The named schemes (`docs/todos/mmasim-serving.md`)."""
 
 _FNUZ = {fp.MX_E4M3: fp.S1E4M3, fp.MX_E5M2: fp.S1E5M2}
 
