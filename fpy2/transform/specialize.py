@@ -203,7 +203,12 @@ class _Instance(NamedTuple):
 
 
 class _SpecKey(NamedTuple):
-    """Which function, instantiated how."""
+    """Which function, instantiated how.
+
+    *fdef* is the *source* function: from the second round on, specialization
+    is handed its own copies, and two copies reaching one instantiation are
+    one spec.
+    """
     fdef: FuncDef
     inst: _Instance
 
@@ -368,10 +373,7 @@ def _mangle_private(base: str, inst: _Instance) -> str:
     The key decides identity; this only has to label it, uniquely and
     reproducibly.
 
-    *base* is the unmangled name, which the caller tracks: specialization
-    re-reads its own output, and recovering the base by stripping the suffix
-    would take `helper__deadbeef` apart too and collide it with a `helper`
-    beside it.
+    *base* is the source function's name.
     """
     parts = [base]
     if inst.ctx is not None:
@@ -617,13 +619,13 @@ class Specialize:
             raise TypeError(f'expected a `Module`, got {type(module)} for {module}')
 
         previous: _Shape | None = None
-        # every name this pass has coined, and the name it was coined from
-        bases: dict[str, str] = {}
+        # every copy this pass has made, and the source function it copies
+        origins: dict[FuncDef, FuncDef] = {}
         for _ in range(Specialize._MAX_ROUNDS):
             if bound_params is not None:
                 bound_params.clear()   # only the final round's bound_params describe the output
             out, shape = Specialize._expand(
-                module, size_key=size_key, bases=bases, bound_params=bound_params,
+                module, origins, size_key=size_key, bound_params=bound_params,
             )
             if shape == previous:
                 return _drop_dead_args(out, bound_params)
@@ -645,9 +647,9 @@ class Specialize:
     @staticmethod
     def _expand(
         module: Module,
+        origins: dict[FuncDef, FuncDef],
         *,
         size_key: bool = False,
-        bases: dict[str, str] | None = None,
         bound_params: dict[str, DigitBoundParams] | None = None,
     ) -> tuple[Module, _Shape]:
         """One expansion of *module*, and the shape of what it produced.
@@ -660,6 +662,9 @@ class Specialize:
         worklist stays finite; the cost is the same template-instantiation
         economics as the ctx and format axes.  ``False`` keeps keys and mangled
         names identical to a size-blind run.
+
+        *origins* maps each copy an earlier round made to its source
+        function, and is extended with this round's.
 
         *bound_params* is filled, by spec name, with the constraint store
         and argument terms each callee's caller bound it to; replaying them
@@ -687,7 +692,7 @@ class Specialize:
         worklist: list[_SpecKey] = []
         for entry in module:
             atypes = entry.arg_types
-            key = _SpecKey(entry.func.ast, _Instance(
+            key = _SpecKey(origins.get(entry.func.ast, entry.func.ast), _Instance(
                 ctx=entry.ctx,
                 arg_types=_arg_types_key(atypes, size_key),
             ))
@@ -701,7 +706,9 @@ class Specialize:
         while worklist:
             key = worklist.pop(0)
             atypes = arg_types_for.get(key)
-            mono = Monomorphize.apply(key.fdef, key.inst.ctx, atypes)
+            # the copy reached first: copies of one source differ only in what
+            # earlier rounds derived, which this one derives at least as sharply
+            mono = Monomorphize.apply(orig_func[key].ast, key.inst.ctx, atypes)
             mono = _pin_arg_values(mono, arg_vals_for.get(key))
             monos[key] = mono
 
@@ -739,7 +746,7 @@ class Specialize:
                 # a `Context` makes a callee's `with` resolvable; a rounding
                 # mode reaches one through a context constructor
                 callee_arg_vals = _pinnable_args(callee_fn.ast, call.args, pe)
-                callee_key = _SpecKey(callee_fn.ast, _Instance(
+                callee_key = _SpecKey(origins.get(callee_fn.ast, callee_fn.ast), _Instance(
                     ctx=callee_ctx,
                     arg_types=_arg_types_key(callee_atypes, size_key),
                     arg_vals=_arg_vals_key(callee_arg_vals),
@@ -798,11 +805,7 @@ class Specialize:
             if k in spec_to_public_name:
                 names[k] = spec_to_public_name[k]
             else:
-                name = orig_func[k].name
-                base = name if bases is None else bases.get(name, name)
-                names[k] = _mangle_private(base, k.inst)
-                if bases is not None:
-                    bases[names[k]] = base
+                names[k] = _mangle_private(k.fdef.name, k.inst)
 
         # --- 4. Build leaves-first, rewiring each body per call site.
         new_funcs: dict[_SpecKey, Function] = {}
@@ -813,6 +816,7 @@ class Specialize:
             }
             rewired = _RebindCallSites(site_to_func).apply(monos[k])
             rewired.name = names[k]
+            origins[rewired] = k.fdef
             new_funcs[k] = orig_func[k].with_ast(rewired)
 
         # --- 5. Re-add the publics; `add` discovers the privates through
@@ -823,6 +827,7 @@ class Specialize:
 
         out = Module(module.name)
         for entry_name, k in public_keys:
-            out.add(new_funcs[k], name=entry_name)
+            # the caller's instantiation, so the next round keys the same spec
+            out.add(new_funcs[k], name=entry_name, ctx=k.inst.ctx, arg_types=arg_types_for[k])
         shape = frozenset(Counter(k.inst for k in monos).items())
         return out, shape

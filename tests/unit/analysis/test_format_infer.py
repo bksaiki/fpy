@@ -4226,6 +4226,131 @@ class TestAZeroGuardNoPathNames:
         assert fmt.pmax == 28
 
 
+class TestALogbOfZeroHasNoFloor:
+    """`logb(0)` is `-inf`, so `x`'s least exponent bounds `logb(x)` only where
+    `x` is non-zero -- and a program may read `logb(0)` and go on."""
+
+    TINY = fp.FP32.round(2 ** -149)
+
+    @staticmethod
+    def _holds(f, arg_types, args) -> bool:
+        """Does each inferred format of *f*'s `fp.round(y)` hold *f*(*args*)?"""
+        g = monomorphize(f, args=arg_types)
+        info = FormatInfer.analyze(g.ast, use_digit_bounds=True)
+        fmts = [b for e, b in info.by_expr.items() if e.format() == 'fp.round(y)']
+        assert fmts
+        return all(b.representable_in(f(*args)) for b in fmts)
+
+    def test_selection_passes_over_an_infinity(self):
+        """At `x = 0` the `max` is `-1000`, below every exponent `x` has, and
+        the `min` is `1000`, above every one."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def lo(x):
+            return max(fp.logb(x), -1000)
+
+        @fp.fpy(ctx=fp.REAL)
+        def hi(x):
+            return min(-fp.logb(x), 1000)
+
+        zero = fp.FP16.round(0)
+        for f, src in ((lo, 'max(fp.logb(x), -1000)'), (hi, 'min(-fp.logb(x), 1000)')):
+            g = monomorphize(f, args=[RealType(fp.FP16)])
+            fmt = _fmt_of(FormatInfer.analyze(g.ast), src)
+            assert fmt.representable_in(f(zero)), src
+
+    def test_a_position_through_that_max_keeps_its_grid(self):
+        """Directly, and through a `min`, whose finite range bounds it only
+        where `x` is non-zero."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def direct(x, y):
+            e = max(fp.logb(x), -1000)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(y)
+
+        @fp.fpy(ctx=fp.REAL)
+        def through_min(x, y):
+            e = max(min(fp.logb(x), 5), -1000)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(y)
+
+        types = [RealType(fp.FP16), RealType(fp.FP32)]
+        for f in (direct, through_min):
+            assert self._holds(f, types, [fp.FP16.round(0), self.TINY]), f.name
+
+    def test_a_failed_and_proves_neither_operand_non_zero(self):
+        """`t` is `a == 0 and b == 0` as lowering leaves it, a phi: false at
+        `a = 5, b = 0`."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, b, y):
+            t = a == 0
+            if t:
+                t = b == 0
+            e = 0 if t else max(fp.logb(b), -1000)
+            with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                return fp.round(y)
+
+        h = fp.FP16
+        types = [RealType(h), RealType(h), RealType(fp.FP32)]
+        assert self._holds(f, types, [h.round(5), h.round(0), self.TINY])
+
+    def test_one_element_says_nothing_of_another(self):
+        """`xs[i]` and `x` share `xs`'s summary, and at `xs = [1, 0]` one is
+        non-zero where the other is not -- whether a failed test or a `with`
+        says so."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def tested(xs, y):
+            acc = 3
+            for i in range(len(xs)):
+                for x in xs:
+                    e = 0 if xs[i] == 0 else max(fp.logb(x), -1000)
+                    with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                        r = fp.round(y)
+                    if e < -500:
+                        acc = r
+            return acc
+
+        @fp.fpy(ctx=fp.REAL)
+        def rounded(xs, y):
+            acc = y
+            for i in range(len(xs)):
+                if i == 0:
+                    with fp.MPFixedContext(fp.logb(xs[i]) - 10, fp.RM.RTZ):
+                        z = fp.round(xs[i])
+                    for x in xs:
+                        e = max(fp.logb(x), -1000)
+                        with fp.MPFixedContext(e - 10, fp.RM.RTZ):
+                            acc = fp.round(y)
+            return acc
+
+        xs = [fp.FP16.round(1), fp.FP16.round(0)]
+        types = [ListType(RealType(fp.FP16), 2), RealType(fp.FP32)]
+        for f in (tested, rounded):
+            assert self._holds(f, types, [xs, self.TINY]), f.name
+
+    @pytest.mark.parametrize('e_zero', [-25, -26])
+    def test_a_zero_sentinel_below_the_floor_still_anchors(self, e_zero):
+        """T-FDPA's alignment, in which a zero reads as exponent `e_zero`.  A
+        zero has no digits to place, so the sum is as wide at any `e_zero` --
+        not only down to FP16's floor, `-24`, less one."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(a, c):
+            e_a = e_zero if a == 0 else max(fp.logb(a), -14)
+            e_c = e_zero if c == 0 else max(fp.logb(c), -14)
+            with fp.MPFixedContext(max(e_a, e_c) - 12, fp.RM.RTZ):
+                ta = fp.round(a)
+                tc = fp.round(c)
+            return ta + tc
+
+        g = monomorphize(f, args=[RealType(fp.FP16), RealType(fp.FP16)])
+        fmt = _fmt_of(FormatInfer.analyze(g.ast, use_digit_bounds=True), '(ta + tc)')
+        assert fmt.pmax == 14
+
+
 class TestFinitenessSentinel:
     """`exponent0` reads a non-finite exponent as `-1`; a merge keeps it
     wherever it is reached."""

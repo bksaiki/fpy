@@ -204,6 +204,10 @@ class FormatView(Protocol):
         """Does *of*'s format hold any finite value?"""
         ...
 
+    def has_neg_inf(self, of: Expr | Definition) -> bool:
+        """Can *of* be `-inf`?"""
+        ...
+
     def int_range(self, of: Expr | Definition) -> tuple[int, int] | None:
         """The least and greatest values, when only integers are held."""
         ...
@@ -289,7 +293,6 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _gather: tuple[_RangeKey, Definition] | None
     _gathered: set[Expr]
     _returns: list[tuple[Expr, Terms]]
-    _vacuous_used: list[tuple[Term, list[Term]]]
     _classes_cache: ValueClassAnalysis | None
     _guards: dict[Definition, int]
     """The literal "this definition is finite", for each one a guard names."""
@@ -300,6 +303,13 @@ class _DigitBoundInferInstance(DefaultVisitor):
     """The loops enclosing the walk, outermost first."""
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
     _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
+    _scope_of: dict[ContextStmt, ContextScope]
+    _established: frozenset[tuple[int, int]]
+    """What every `with` dominating the walk's position makes true: each
+    variable it needs not `-inf`, with the literal saying so."""
+    _established_at: dict[Expr, frozenset[tuple[int, int]]]
+    _summaries: set[int] | None
+    """:meth:`_summary_vars`, once the walk is over."""
 
     def __init__(
         self,
@@ -339,13 +349,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._gather = None
         self._gathered = set()
         self._returns = []
-        self._vacuous_used = []
         self._classes_cache = classes
         self._guards = {}
         self._elt_guards = {}
         self._loops = ()
         self._loops_of_stmt = {}
         self._loops_of_expr = {}
+        self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
+        self._established = frozenset()
+        self._established_at = {}
+        self._summaries = None
 
     def analyze(self) -> DigitBoundAnalysis:
         # positional, so params that do not match the signature would bind
@@ -366,9 +379,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
         self.out.ret = self._merge_returns()
-        self._check_vacuous()
-        if self._guards or self._elt_guards or self.outer is not None:
-            self.out.assume_at = self._assumed
+        self._summaries = self._summary_vars()
+        self.out.assume_at = self._assumed
         return self.out
 
     # -- terms ---------------------------------------------------------
@@ -495,6 +507,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
     def _visit_expr(self, e: Expr, ctx):
         self._elt_depth_of[e] = self._elt_depth
         self._loops_of_expr[e] = self._loops
+        self._established_at[e] = self._established
         super()._visit_expr(e, ctx)
         if not isinstance(self.type_info.by_expr.get(e), RealType | ListType):
             return
@@ -776,15 +789,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     d = self.def_use.find_def_from_use(e.arg)
                     of = d
                     t = t if t is not None else self._def(d).msb
-                # Reading a `logb` is what anchors the term absolutely, and is
-                # where the argument may be taken as non-zero: a rounding
-                # steered by `logb(0)` has no position at all.  A *precondition*
-                # rather than a fact -- `logb(x)` is `msb(x)`, so this lands on
-                # every path -- and `_usable` is where a program that hands the
-                # zero path a position of its own is caught leaving it.
+                # What anchors the term absolutely -- where the argument is
+                # non-zero, since `logb(0)` is `-inf`.  A `with` at a position
+                # built from it establishes so (`_visit_context`).
                 lo, _ = self.view.logb_range(of)
                 if t is not None and lo is not None:
-                    store.ge(t, lo)
+                    store.ge(t, lo, guard=store.not_neg_inf(t))
                 return t
             case Neg():
                 inner = self.value_of(e.arg)
@@ -854,47 +864,21 @@ class _DigitBoundInferInstance(DefaultVisitor):
         # other one.  Both hold; the second alone would leave `m` free below,
         # and an absolute position is as necessary as a relative one.
         vacuous = self._vacuous(cond)
-        if vacuous is not None and self._usable(vacuous, ift):
+        if vacuous is not None:
             self.store.ge_min(m, [iff, *vacuous])
-            self._vacuous_used.append((ift, vacuous))
+        # Each arm is reached only where its facts hold, so `m` is at least the
+        # lesser arm floor under them.  A constant, which carries none of the
+        # `else` arm's facts onto the `then` path.
+        facts = self._else_facts(cond)
+        if facts:
+            lo = min(self._floor(ift), self._floor(iff, facts))
+            if isinstance(lo, int):
+                self.store.ge(m, lo)
         return m
 
-    def _usable(self, vacuous: list[Term], ift: Term) -> bool:
-        """Whether any vacuous disjunct can still sit at or below the `then` arm.
-
-        Such a disjunct stands in for "the `then` arm carries no magnitude",
-        and is worth stating only while the store admits it there.  It need
-        not: `value_of(Logb)` floors a `logb`'s term on *every* path, since
-        "x is non-zero here" has no term of its own to sit on.  A program
-        that supplies its own position for the zero case pushes the merge up
-        to that floor, and a value rounded at the `then` arm's position loses
-        every digit below it.
-
-        Skipping is sound -- a disjunct only ever tightens.  Read off the
-        store as it stands, which is why :meth:`_check_vacuous` re-asks.
-        Localising the floor instead needs a path-sensitive store; see
-        `docs/todos/digit-bound-inference.md`.
-        """
-        keep = self._floor(ift)
-        return any(self._floor(t) <= keep for t in vacuous)
-
-    def _floor(self, t: Term) -> int | float:
+    def _floor(self, t: Term, assuming: frozenset[int] = frozenset()) -> int | float:
         """The least value *t* can take; `-inf` where nothing floors it."""
-        return -self.store.maximum(-t)
-
-    def _check_vacuous(self) -> None:
-        """:meth:`_usable` reads the store mid-walk, so a `ge` stated *after* a
-        merge could floor a disjunct that was free when it was taken -- and the
-        constraint it justified is already in the store, where nothing can
-        retract it.  The alternative to noticing is a silently over-narrow
-        integer.
-        """
-        for ift, vacuous in self._vacuous_used:
-            if not self._usable(vacuous, ift):
-                raise RuntimeError(
-                    f'digit-bound: a vacuous disjunct of `{ift}` was floored '
-                    f'after the merge that used it, in `{self.func.name}`'
-                )
+        return -self.store.maximum(-t, assuming)
 
     def _vacuous(self, cond: Expr) -> list[Term] | None:
         """`logb`s that every path into the arm *cond* guards leaves free.
@@ -920,6 +904,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 seen.add(t)
                 out.append(t - 1)
         return out or None
+
+    def _else_facts(self, cond: Expr) -> frozenset[int]:
+        """The literals *cond* failing proves: each value some path zeroes
+        alone is non-zero.  Not one tested of every element -- `all(...)`
+        failing names no element."""
+        paths = self._zero_paths(cond, exact=True)
+        if not paths:
+            return frozenset()
+        every = self._universal_zeros(cond)
+        summaries = self._summary_vars()
+        return frozenset(
+            lit for atoms in paths if len(atoms) == 1
+            for t in atoms if t not in every
+            for (v, _), lit in zip(t.coeffs, self.store.not_neg_inf(t))
+            if v.index not in summaries
+        )
 
     def _forced_zero(
         self, e: Expr, atoms: set[Term], every: set[Term],
@@ -983,12 +983,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return (self._universal_zeros(d.site.expr)
                 if isinstance(d.site, Assign) else set())
 
-    def _zero_paths(self, cond: Expr) -> list[set[Term]] | None:
+    def _zero_paths(self, cond: Expr, exact: bool = False) -> list[set[Term]] | None:
         """One set of zeroed `logb`s per path making *cond* true.
 
         ``None`` where some path zeroes nothing.  Lowering leaves `a or b` as a
         phi over two conditions and `all(xs)` as a reduce over a list an inner
         loop filled, so both are read through.
+
+        With *exact*, each path must also *make* *cond* true, which is what a
+        failed *cond* can be read back from: a phi is not read, since it may be
+        an `and`.
         """
         match cond:
             case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
@@ -999,38 +1003,38 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return None
             case Or():
                 # `And` is the dual and is not handled
-                return self._zero_paths_all(cond.args)
+                return self._zero_paths_all(cond.args, exact)
             case AllOf(arg=ListComp() as comp):
                 # every element true, so whatever the element tests is zero
-                return self._zero_paths(comp.elt)
+                return self._zero_paths(comp.elt, exact)
             case AllOf(arg=Var() as xs):
                 # ... and the same after the comprehension became a loop
                 elt = self._elt_expr.get(self.def_use.find_def_from_use(xs))
-                return None if elt is None else self._zero_paths(elt)
+                return None if elt is None else self._zero_paths(elt, exact)
             case Var():
-                return self._zero_paths_of(self.def_use.find_def_from_use(cond))
+                return self._zero_paths_of(self.def_use.find_def_from_use(cond), exact)
             case _:
                 return None
 
-    def _zero_paths_of(self, d: Definition) -> list[set[Term]] | None:
+    def _zero_paths_of(self, d: Definition, exact: bool = False) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""
         if isinstance(d, PhiDef):
-            if d.is_loop:
-                return None     # carried, so not the `a or b` this reads
+            if d.is_loop or exact:
+                return None     # carried, or maybe an `and`, not the `a or b` this reads
             return self._zero_paths_all(
                 [self.def_use.defs[i] for i in (d.lhs, d.rhs)]
             )
-        return self._zero_paths(d.site.expr) if isinstance(d.site, Assign) else None
+        return self._zero_paths(d.site.expr, exact) if isinstance(d.site, Assign) else None
 
     def _zero_paths_all(
-        self, branches: Sequence[Expr] | Sequence[Definition]
+        self, branches: Sequence[Expr] | Sequence[Definition], exact: bool = False,
     ) -> list[set[Term]] | None:
         """Every branch's paths together, or `None` if any branch has none."""
         found: list[set[Term]] = []
         for b in branches:
             part = (
-                self._zero_paths(b) if isinstance(b, Expr)
-                else self._zero_paths_of(b)
+                self._zero_paths(b, exact) if isinstance(b, Expr)
+                else self._zero_paths_of(b, exact)
             )
             if part is None:
                 return None
@@ -1163,8 +1167,15 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """The guard literals *e* may assume: each definition
         `ValueClassInfer` proves finite where *e* is evaluated, and only where
         that definition is one value for every evaluation of *e* -- a
-        definition in a loop *e* is outside of is one per iteration."""
+        definition in a loop *e* is outside of is one per iteration.
+
+        And what every `with` dominating *e* makes true; see
+        :meth:`_visit_context`."""
         outer = self.outer() if self.outer is not None else frozenset()
+        summaries = self._summaries if self._summaries is not None else self._summary_vars()
+        outer |= frozenset(
+            lit for v, lit in self._established_at.get(e, ()) if v not in summaries
+        )
         at = self._loops_of_expr.get(e)
         if at is None:
             return outer
@@ -1188,6 +1199,36 @@ class _DigitBoundInferInstance(DefaultVisitor):
             return None
         # a loop's own target and phis take a value per iteration of it
         return (*loops, site) if isinstance(site, ForStmt | WhileStmt) else loops
+
+    def _visit_context(self, stmt: ContextStmt, ctx: Any) -> None:
+        """Constructing a fixed-point context needs its position finite, so
+        whatever the `with` dominates may assume it."""
+        self._visit_expr(stmt.ctx, ctx)
+        scope = self._scope_of.get(stmt)
+        found = self._position(scope) if scope is not None else None
+        if found is not None:
+            pos = found[0]
+            lits = self.store.not_neg_inf(pos)
+            self._established |= {(v.index, lit) for (v, _), lit in zip(pos.coeffs, lits)}
+        self._visit_block(stmt.body, ctx)
+
+    def _summary_vars(self) -> set[int]:
+        """The variables some list's terms name.  Each stands for every element,
+        so a fact about one element -- a failed `xs[i] == 0`, or a `with` at
+        `logb(xs[i]) - k` -- is no fact about it."""
+        out: set[int] = set()
+        for of, terms in (*self.out.by_expr.items(), *self.out.by_def.items()):
+            if isinstance(self._type_of(of), ListType):
+                for t in (terms.msb, terms.lsb, terms.value):
+                    if t is not None:
+                        out.update(v.index for v, _ in t.coeffs)
+        return out
+
+    def _visit_block(self, block: StmtBlock, ctx: Any) -> None:
+        # a `with` dominates the rest of its block, and nothing past it
+        established = self._established
+        super()._visit_block(block, ctx)
+        self._established = established
 
     def _visit_statement(self, stmt: Stmt, ctx: Any) -> Any:
         self._loops_of_stmt[stmt] = self._loops
@@ -1214,7 +1255,9 @@ class _DigitBoundInferInstance(DefaultVisitor):
         v = self._var(f'V{len(self.out.by_expr)}')
         rng = self.view.int_range(e)
         if rng is not None:
-            self.store.ge(v, rng[0])
+            # the range is of the finite values, and `min(logb(0), 5)` is not one
+            guard = self.store.not_neg_inf(v) if self.view.has_neg_inf(e) else ()
+            self.store.ge(v, rng[0], guard=guard)
             self.store.le(v, rng[1])
         return v
 
@@ -1241,7 +1284,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """
         if e not in self.ctx_use.use_to_scope:
             return None
-        scope = self.ctx_use.find_scope_from_use(e)
+        return self._position(self.ctx_use.find_scope_from_use(e))
+
+    def _position(self, scope: ContextScope) -> tuple[Term, RoundingMode | None] | None:
+        """The digit position *scope* rounds at, and the mode it rounds with."""
         ctx = self.scopes.get(scope, scope.ctx)
         pos: object
         rm: object

@@ -46,6 +46,10 @@ class DigitBoundStore:
     """Literals that hold at every index or none, so a constraint they guard
     may be replayed onto an instance."""
 
+    _not_neg_inf: dict[int, int]
+    """Each variable's literal "this is not `-inf`", for those that have one;
+    see :meth:`not_neg_inf`."""
+
     def __init__(self, solver: Solver | None = None):
         self._solver = solver if solver is not None else Z3Solver()
         self._constraints = []
@@ -55,6 +59,7 @@ class DigitBoundStore:
         self._constrained = set()
         self._n_lits = 0
         self._universal = set()
+        self._not_neg_inf = {}
 
     def _add(self, c: Constraint) -> None:
         self._constraints.append(c)
@@ -124,6 +129,21 @@ class DigitBoundStore:
         if universal:
             self._universal.add(self._n_lits)
         return self._n_lits
+
+    def not_neg_inf(self, t: Term) -> tuple[int, ...]:
+        """The literals saying no variable of *t* is `-inf`, one per variable.
+
+        A variable may stand for `-inf` -- a zero's `logb` -- which an integer
+        store represents as arbitrarily low.  So a lower bound on one holds
+        only under its literal, and whatever needs *t* finite assumes these.
+        """
+        out = []
+        for v, _ in t.coeffs:
+            lit = self._not_neg_inf.get(v.index)
+            if lit is None:
+                lit = self._not_neg_inf[v.index] = self.literal()
+            out.append(lit)
+        return tuple(out)
 
     def le(self, lhs: Term, rhs: Term | int, *, guard: tuple[int, ...] = ()) -> None:
         """``lhs <= rhs``, only where every literal in *guard* holds."""

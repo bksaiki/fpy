@@ -413,3 +413,36 @@ class TestAUserNameIsNotUnmangled:
         out = CppCompiler().compile_module(m)
         defs = [l for l in out.splitlines() if l.startswith('double helper')]
         assert len(defs) == 2 and len(set(defs)) == 2, defs
+
+
+class TestCopiesOfOneFunctionAreOneSpec:
+    """Specialization re-reads its own output, so from the second round on it
+    is handed copies of a function, not the function.  A spec is the *source*
+    function instantiated, so two copies reaching one instantiation are one
+    spec -- as two, they took one name and the C++ defined it twice."""
+
+    def test_calls_that_converge_in_a_later_round_share_a_spec(self):
+        @fp.fpy(ctx=fp.REAL)
+        def h(x):
+            return fp.logb(x)
+
+        @fp.fpy(ctx=fp.REAL)
+        def rnd(s, rho):
+            with rho:
+                return fp.round(s)
+
+        @fp.fpy(ctx=fp.REAL)
+        def g(a, c):
+            # `c`'s format is known only once `rnd`'s return is, a round later
+            return rnd(a * c * c * h(a) * h(c), fp.FP16)
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(A, c):
+            d = c
+            for a in A:
+                d = g(a, d)
+            return d
+
+        mod = _module((f, [ListType(RealType(fp.FP16), 4), RealType(fp.FP16)]))
+        names = [s.name for s in Specialize.apply(mod).functions()]
+        assert len([n for n in names if n.startswith('h__')]) == 1, names

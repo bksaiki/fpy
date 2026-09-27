@@ -21,24 +21,33 @@ Asserts are dropped: a kernel cannot raise.
 """
 
 import argparse
-import math
 import random
 import sys
-from collections.abc import Callable
-from functools import cache, partial
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from compile import DESIGNS, _filename, in_processes
+from compile import (
+    _HARD,
+    _HARD_EVERY,
+    DESIGNS,
+    Build,
+    _filename,
+    _fmt,
+    _length,
+    _row,
+    _same,
+    in_processes,
+)
 
 import fpy2 as fp
 from fpy2.backend.triton import KernelSource, TritonCompiler, launch, unavailable
 from fpy2.backend.triton.launcher import MODULE_PREAMBLE
 from fpy2.backend.triton.storage import choose_storage_scalar
 from fpy2.backend.triton.types import TritonScalar
-from fpy2.number.context import Format, SizedFormat
+from fpy2.number.context import Format
 from fpy2.types import Type
 from fpy2.utils import NamedId
 
@@ -48,34 +57,10 @@ if TYPE_CHECKING:
 _L = fp.types.ListType
 _R = fp.types.RealType
 
-Build = Callable[[], tuple[fp.Function, list[Type]]]
-"""A design's builder: the design, and its argument types."""
-
 _BLOCK = 64
 _BLOCK_M = 4
 """`--run`'s tile height: taller than the default `-m`, so the mask on the
 rows past the end is exercised."""
-
-_HARD_EVERY = 4
-"""Every this many `--run` draws, each element is a hard case with
-probability :data:`_HARD`."""
-
-_HARD = 0.25
-
-
-def _fmt(t: Type) -> SizedFormat:
-    """The format of *t*'s values, or of its elements'."""
-    elt = t.elt if isinstance(t, _L) else t
-    if not (isinstance(elt, _R) and isinstance(elt.fmt, SizedFormat)):
-        raise TypeError(f'expected a real type of sized format, got {t}')
-    return elt.fmt
-
-
-def _length(t: Type) -> int:
-    """*t*'s length, where it is a list of known length."""
-    if not (isinstance(t, _L) and isinstance(t.length, int)):
-        raise TypeError(f'expected a list of known length, got {t}')
-    return t.length
 
 
 def _matmul(design: fp.Function, arity: int) -> fp.Function:
@@ -154,44 +139,6 @@ def _kernel_named(name: str, k: int | None) -> tuple[KernelSource | None, str, s
         return None, type(ex).__name__, str(ex)
 
 
-@cache
-def _hard_cases(fmt: SizedFormat) -> list[float]:
-    """The values of *fmt* a random draw misses: the zeros, the smallest and
-    largest magnitudes, the least normal, and the specials it has."""
-    hi = fmt.to_ordinal(fmt.maxval())
-    mags = [0.0, float(fmt.from_ordinal(1)), float(fmt.from_ordinal(hi)), math.inf, math.nan]
-    if (normal := getattr(fmt, 'min_normal', None)) is not None:
-        mags.append(float(normal()))
-    out: dict[str, float] = {}
-    for v in mags:
-        for x in (v, -v):
-            if fmt.representable_in(fp.Float.from_float(x)):
-                out.setdefault(repr(x), x)
-    return list(out.values())
-
-
-def _sample(fmt: SizedFormat, rng: random.Random, hard: float = 0.0) -> float:
-    """A value of *fmt*: a hard case with probability *hard*, else half over
-    its whole range, half near one."""
-    if hard and rng.random() < hard:
-        return rng.choice(_hard_cases(fmt))
-    hi = fmt.to_ordinal(fmt.maxval())
-    try:
-        fmt.from_ordinal(-1)
-        lo = -hi
-    except Exception:  # noqa: BLE001 -- an unsigned format
-        lo = fmt.to_ordinal(fmt.minval())
-    if rng.random() < 0.5:
-        o = rng.randint(lo, hi)
-    else:
-        one = fp.Float.from_float(1.0)
-        mid = fmt.to_ordinal(one) if fmt.representable_in(one) else hi // 2
-        w = max(hi // 8, 1)
-        o = rng.randint(max(mid - w, 0), min(mid + w, hi))
-        o = -o if lo < 0 and rng.random() < 0.5 else o
-    return float(fmt.from_ordinal(o))
-
-
 def _dtype(fmt: Format) -> 'torch.dtype':
     import torch
     scalar = choose_storage_scalar(fmt)
@@ -200,16 +147,6 @@ def _dtype(fmt: Format) -> 'torch.dtype':
     if scalar not in dtypes:
         raise ValueError(f'no tensor dtype for {scalar}')
     return dtypes[scalar]
-
-
-def _vector(t: Type, rng: random.Random, hard: float = 0.0) -> list[float]:
-    """A value of each of list type *t*'s elements."""
-    return [_sample(_fmt(t), rng, hard) for _ in range(_length(t))]
-
-
-def _row(t: Type, rng: random.Random, hard: float = 0.0) -> float | list[float]:
-    """A value of *t*, or of each of its elements."""
-    return _vector(t, rng, hard) if isinstance(t, _L) else _sample(_fmt(t), rng, hard)
 
 
 def run_matmul(kernel: KernelSource, design: fp.Function, arg_types: list[Type],
@@ -253,11 +190,7 @@ def _agreeing(got: list[float], want: list[float], dtype: 'torch.dtype') -> int:
     the same value and sign, or both NaN."""
     import torch
     want = torch.tensor(want, dtype=dtype).tolist()
-    return sum(
-        bool(g == w) and math.copysign(1, g) == math.copysign(1, w)
-        or (math.isnan(g) and math.isnan(w))
-        for g, w in zip(got, want)
-    )
+    return sum(_same(g, w) for g, w in zip(got, want))
 
 
 def main(argv: list[str]) -> int:
