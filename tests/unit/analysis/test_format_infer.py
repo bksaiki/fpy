@@ -13,7 +13,7 @@ from fpy2 import dim, size
 from fractions import Fraction
 from hypothesis import given, settings, strategies as st
 
-from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
+from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis
 from fpy2.analysis.format_infer import (
     AbstractFormat,
     ListFormat,
@@ -1922,76 +1922,41 @@ def _format_kind_matches_type(fmt, ty) -> bool:
 class TestFormatInferOnGeneratedPrograms:
     """``FormatInfer`` driven by the type-directed FPy program generator.
 
-    Each test below probes a different format-analysis invariant on
-    randomly generated programs whose ``with``-block contexts are
-    concrete (``ForeignVal`` of a :class:`Context`), so partial evaluation
-    should always resolve them — exercising the "concrete" rather than
-    "symbolic" code paths.
+    The ``with``-block contexts are concrete (``ForeignVal`` of a
+    :class:`Context`), so partial evaluation should always resolve them --
+    exercising the "concrete" rather than "symbolic" code paths.  One test,
+    since generating the program is nearly all of the cost; running at all
+    covers the pre-analysis chain (``DefineUse`` -> ``TypeInfer`` ->
+    ``ContextUse`` -> ``ArraySize`` -> ``FormatInfer``).
     """
 
     @given(fpy_real_funcdef(**_GEN_KWARGS))
     @settings(max_examples=100, deadline=None)
-    def test_doesnt_crash(self, fd: FuncDef) -> None:
-        """End-to-end: the analysis runs to completion on every generated
-        program. Catches regressions in the pre-analysis chain
-        (``DefineUse`` → ``TypeInfer`` → ``ContextUse`` → ``ArraySize`` →
-        ``FormatInfer``) that the handwritten suite might miss."""
-        FormatInfer.analyze(fd)
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_is_deterministic(self, fd: FuncDef) -> None:
-        """Same AST → same analysis shape. Catches accidental statefulness
-        (e.g. ``Gensym`` carrying state, hidden caches)."""
-        a1 = FormatInfer.analyze(fd)
-        a2 = FormatInfer.analyze(fd)
-        assert len(a1.by_def) == len(a2.by_def)
-        assert len(a1.by_expr) == len(a2.by_expr)
-        assert len(a1.by_call) == len(a2.by_call)
-        assert a1.fn_fmt.arg_fmts == a2.fn_fmt.arg_fmts
-        assert a1.fn_fmt.ret_fmt == a2.fn_fmt.ret_fmt
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_format_kind_matches_type_kind(self, fd: FuncDef) -> None:
-        """For every expression in ``by_expr``, the format-bound's "kind"
-        agrees with the basic-type's "kind" (see :func:`_format_kind_matches_type`).
-
-        Catches mismatches like a real-typed expression with a
-        ``TupleFormat``, or a tuple-typed expression with a scalar
-        ``Format`` — both would indicate a soundness break between
-        :class:`TypeInfer` and :class:`FormatInfer`.
-        """
-        t_info = TypeInfer.check(fd)
-        f_info = FormatInfer.analyze(fd)
-        for expr, fmt in f_info.by_expr.items():
-            # Only check expressions that the type-checker also recorded
-            # — some generator-emitted nodes (Var carriers for symbol
-            # names) aren't typed values.
-            if expr not in t_info.by_expr:
-                continue
-            ty = t_info.by_expr[expr]
-            assert _format_kind_matches_type(fmt, ty), (
-                f'format kind mismatch on {type(expr).__name__}: '
-                f'type={ty.format()} format={type(fmt).__name__}'
-            )
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_fn_fmt_arg_count_matches_funcdef(self, fd: FuncDef) -> None:
-        """``fn_fmt.arg_fmts`` has one entry per function parameter."""
+    def test_generated_programs(self, fd: FuncDef) -> None:
         info = FormatInfer.analyze(fd)
-        assert len(info.fn_fmt.arg_fmts) == len(fd.args)
+        types = info.type_info
 
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_return_format_matches_return_type(self, fd: FuncDef) -> None:
-        """The function's ``fn_fmt.ret_fmt`` is a format-bound consistent
-        with the declared return type — for these all-real generators,
-        a scalar Format / SetFormat / None."""
-        t_info = TypeInfer.check(fd)
-        f_info = FormatInfer.analyze(fd)
-        assert _format_kind_matches_type(f_info.fn_fmt.ret_fmt, t_info.return_type)
+        # a format-bound's kind agrees with its type's: a real-typed expression
+        # with a `TupleFormat` would be a soundness break between the two.
+        # Some generator-emitted nodes (`Var` carriers for symbol names) are not
+        # typed values.
+        for expr, fmt in info.by_expr.items():
+            if expr in types.by_expr:
+                ty = types.by_expr[expr]
+                assert _format_kind_matches_type(fmt, ty), (
+                    f'format kind mismatch on {type(expr).__name__}: '
+                    f'type={ty.format()} format={type(fmt).__name__}'
+                )
+        assert len(info.fn_fmt.arg_fmts) == len(fd.args)
+        assert _format_kind_matches_type(info.fn_fmt.ret_fmt, types.return_type)
+
+        # no state carried between runs; keys are AST nodes, so compare sizes
+        again = FormatInfer.analyze(fd)
+        assert len(again.by_def) == len(info.by_def)
+        assert len(again.by_expr) == len(info.by_expr)
+        assert len(again.by_call) == len(info.by_call)
+        assert again.fn_fmt.arg_fmts == info.fn_fmt.arg_fmts
+        assert again.fn_fmt.ret_fmt == info.fn_fmt.ret_fmt
 
 
 class TestTupleAccessorFormats:

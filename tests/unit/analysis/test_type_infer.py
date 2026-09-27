@@ -17,14 +17,10 @@ from hypothesis import given, settings, strategies as st
 from fpy2.analysis import TypeInfer
 from fpy2.analysis.type_infer import TypeInfer as _TI
 from fpy2.analysis.type_infer import TypeInferError
-from fpy2.ast.fpyast import AllOf, AnyOf, Ast, Expr, Fst, FuncDef, Snd
+from fpy2.ast.fpyast import AllOf, AnyOf, Ast, Expr, Fst, Snd, Var
 from fpy2.types import BoolType, RealType, TupleType, Type
 
-from ..generators import (
-    arbitrary_type,
-    fpy_funcdef,
-    fpy_real_funcdef,
-)
+from ..generators import arbitrary_type, fpy_funcdef
 
 
 class TestCrossFunction:
@@ -173,30 +169,22 @@ _GEN_KWARGS = dict(
 
 
 class TestTypeInferOnGeneratedPrograms:
-    """``TypeInfer`` driven by the type-directed FPy program generator.
-
-    The generator constructs a ``FuncDef`` whose signature is known up
-    front. Each test below probes a different ``TypeInfer`` invariant by
-    running the analysis on those generated programs.
-    """
+    """``TypeInfer`` driven by the type-directed FPy program generator, whose
+    signature is known up front.  One test, since generating the program is
+    nearly all of the cost."""
 
     @given(st.data())
     @settings(max_examples=100, deadline=None)
-    def test_inferred_signature_matches_generator(self, data: st.DataObject) -> None:
-        """``TypeInfer.check`` recovers exactly the signature the generator built.
-
-        This is the strongest property: ``arg_types`` and ``return_type``
-        come from the generator's own draws, and inference is expected to
-        round-trip them with no widening or loss.
-        """
+    def test_generated_programs(self, data: st.DataObject) -> None:
         n_args = data.draw(st.integers(0, 3))
         arg_ts: tuple[Type, ...] = tuple(
             data.draw(arbitrary_type(max_depth=1)) for _ in range(n_args)
         )
         ret_t = data.draw(arbitrary_type(max_depth=1))
         fd = data.draw(fpy_funcdef(arg_ts, ret_t, **_GEN_KWARGS))
-
         analysis = TypeInfer.check(fd)
+
+        # the signature the generator built, with no widening or loss
         assert tuple(analysis.arg_types) == arg_ts, (
             f'arg mismatch: inferred {[t.format() for t in analysis.arg_types]}, '
             f'generator built with {[t.format() for t in arg_ts]}'
@@ -206,52 +194,19 @@ class TestTypeInferOnGeneratedPrograms:
             f'generator built with {ret_t.format()}'
         )
 
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_is_deterministic(self, fd: FuncDef) -> None:
-        """Running ``TypeInfer.check`` twice on the same AST yields the same answer.
-
-        Catches accidental statefulness in the analysis (e.g. ``Gensym``
-        leakage, cache poisoning).
-        """
-        a1 = TypeInfer.check(fd)
-        a2 = TypeInfer.check(fd)
-        assert a1.fn_type == a2.fn_type
-        # by_def / by_expr are dicts whose keys differ between runs (fresh
-        # AST identity), but their *sizes* should agree.
-        assert len(a1.by_def) == len(a2.by_def)
-        assert len(a1.by_expr) == len(a2.by_expr)
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_every_body_expr_has_inferred_type(self, fd: FuncDef) -> None:
-        """Every ``Expr`` in the body should appear in ``analysis.by_expr``.
-
-        Soundness gap if not — it means a sub-expression's type was never
-        established, but the rest of the function still type-checked
-        (likely indicating dead-code in the inference walk).
-        """
-        analysis = TypeInfer.check(fd)
-        # Some sub-expressions (e.g. function-symbol ``Var`` nodes carried
-        # by ``Named*Op`` for the surface name like 'sqrt') are syntactic
-        # carriers, not values to type-check. Conservatively: every
-        # encountered ``Expr`` should either be in ``by_expr`` or be one
-        # of those carriers, which live on ``func`` slots.
+        # every body expression is typed, but for the `Var` carrying a
+        # `Named*Op`'s surface name, which is not a value
         for expr in _walk_exprs(fd.body):
-            if expr in analysis.by_expr:
-                continue
-            # Carrier check: the expr is referenced via a parent's ``func``
-            # slot (Named*Op / Call). Approximate this by asking: is this
-            # expression a ``Var`` we never actually use as a value?
-            # We can't easily walk parents here, so we just allow ``Var``
-            # nodes to be absent — this under-asserts but doesn't FN.
-            from fpy2.ast.fpyast import Var
-            if isinstance(expr, Var):
-                continue
-            raise AssertionError(
+            assert expr in analysis.by_expr or isinstance(expr, Var), (
                 f'sub-expression of type {type(expr).__name__} '
                 f'has no inferred type in by_expr'
             )
+
+        # no state carried between runs; keys are AST nodes, so compare sizes
+        again = TypeInfer.check(fd)
+        assert again.fn_type == analysis.fn_type
+        assert len(again.by_def) == len(analysis.by_def)
+        assert len(again.by_expr) == len(analysis.by_expr)
 
 
 class TestTupleAccessors:

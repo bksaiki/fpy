@@ -390,86 +390,49 @@ _GEN_KWARGS = dict(
 class TestContextUseOnGeneratedPrograms:
     """``ContextUse`` driven by the type-directed generator.
 
-    Generated functions have:
-    - no function-level ``ctx`` annotation (``FuncMeta.ctx is None``), so
-      the function scope is always symbolic;
-    - ``with``-block contexts that are always ``ForeignVal`` of a concrete
-      :class:`Context` (drawn from ``_DEFAULT_CONTEXTS``), so they should
-      always resolve concretely — never symbolic.
+    Generated functions have no function-level ``ctx`` annotation, so the
+    function scope is always symbolic; and ``with``-block contexts that are
+    always ``ForeignVal`` of a concrete :class:`Context`, so they should always
+    resolve concretely.  One test, since generating the program is nearly all
+    of the cost.
     """
 
     @given(fpy_real_funcdef(**_GEN_KWARGS))
     @settings(max_examples=80, deadline=None)
-    def test_scope_count_matches_context_stmt_count(self, fd: FuncDef) -> None:
-        """``len(scopes) == 1 + (# of ContextStmts in body)``.
-
-        The ``1`` is the function-level scope; each ``ContextStmt``
-        introduces exactly one nested scope.
-        """
-        n_with = sum(1 for n in _walk_ast(fd.body) if isinstance(n, ContextStmt))
+    def test_generated_programs(self, fd: FuncDef) -> None:
         result = ContextUse.analyze(fd)
-        assert len(result.scopes) == 1 + n_with, (
-            f'expected {1 + n_with} scopes (1 + {n_with} with-blocks), '
+        withs = [n for n in _walk_ast(fd.body) if isinstance(n, ContextStmt)]
+
+        # one scope for the function, then one per `with`
+        assert len(result.scopes) == 1 + len(withs), (
+            f'expected {1 + len(withs)} scopes (1 + {len(withs)} with-blocks), '
             f'got {len(result.scopes)}'
         )
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_function_scope_is_first_and_symbolic(self, fd: FuncDef) -> None:
-        """``scopes[0]`` is the function-level scope; its ctx is a fresh
-        symbolic ``NamedId`` (the generator never sets ``FuncMeta.ctx``)."""
-        result = ContextUse.analyze(fd)
         assert result.scopes[0].site is fd
         assert isinstance(result.scopes[0].ctx, NamedId)
 
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_with_block_contexts_resolve_concretely(self, fd: FuncDef) -> None:
-        """Every ``ContextStmt``'s scope should resolve to a concrete
-        ``Context`` value (not a fresh symbolic ``NamedId``), because the
-        generator only emits ``ForeignVal(<concrete_ctx>, None)`` for
-        ``with``-block ctx expressions.
-
-        If this ever fails, either partial-eval lost the value or the
-        scope-lookup is mis-indexed.
-        """
-        result = ContextUse.analyze(fd)
+        # each `with` resolves to the very context it names
         scope_by_site = {s.site: s for s in result.scopes}
-        for node in _walk_ast(fd.body):
-            if not isinstance(node, ContextStmt):
-                continue
-            # Sanity-check the generator's assumption first.
+        for node in withs:
             assert isinstance(node.ctx, ForeignVal), (
                 'generator unexpectedly emitted a non-literal with-ctx; '
                 'this test relies on `ForeignVal(<Context>, None)`'
             )
-            expected_ctx = node.ctx.val
             scope = scope_by_site[node]
             assert isinstance(scope.ctx, Context), (
                 f'with-block ctx did not resolve to a concrete Context: '
                 f'got {scope.ctx!r} for site {node}'
             )
-            assert scope.ctx is expected_ctx, (
+            assert scope.ctx is node.ctx.val, (
                 f'with-block ctx resolved to wrong Context: '
-                f'expected {expected_ctx!r}, got {scope.ctx!r}'
+                f'expected {node.ctx.val!r}, got {scope.ctx!r}'
             )
 
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_use_to_scope_consistent_with_uses(self, fd: FuncDef) -> None:
-        """``use_to_scope`` is the inverse of ``uses`` — every use in
-        ``uses[s]`` should map back to ``s`` in ``use_to_scope``, and
-        every key of ``use_to_scope`` should appear in exactly one
-        ``uses`` set."""
-        result = ContextUse.analyze(fd)
-        # Forward direction: uses[s] ⇒ use_to_scope[u] is s
+        # `use_to_scope` inverts `uses`, and no use is in two scopes
+        seen: set = set()
         for scope, uses in result.uses.items():
             for u in uses:
                 assert result.use_to_scope[u] is scope
-        # Reverse direction: every use_to_scope key appears in exactly one set
-        seen: set = set()
-        for uses in result.uses.values():
-            for u in uses:
                 assert id(u) not in seen, 'use appears in two scopes'
                 seen.add(id(u))
         assert set(id(u) for u in result.use_to_scope) == seen
