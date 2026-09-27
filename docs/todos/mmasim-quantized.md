@@ -92,10 +92,14 @@ reaches the mixed designs; the six above are the named ones.  RTN scales are
 FP32 unless the scheme says otherwise; a checkpoint's scales are taken in
 the format it stores them (RedHatAI's FP8 scales are BF16).
 
-### The recipes (round to nearest, "RTN")
+### The recipes
 
-Weights from a master, and all activations, are quantized by `torchao`'s
-standard quantizers, rather than recipes of our own:
+Weights from a master, and all activations, are quantized by round-to-nearest
+quantization -- "RTN" in the quantization literature: each value scaled and
+rounded straight to the nearest level of its format, with no calibration,
+the baseline GPTQ and AWQ are measured against; not to be confused with the
+rounding mode, which is RNE (round to nearest, ties to even).  The quantizers
+are `torchao`'s standard ones, rather than recipes of our own:
 
 - **FP8 per row / per block**: `Float8Tensor` (`PerRow`, `PerBlock`),
   `s = amax / 448` over the row or block, elements `rne_e4m3(v / s)`.
@@ -271,34 +275,92 @@ lean toward zero, still 2^11 short of Blackwell; quantization error is
 
 ### Phase 4 -- Block-scaled instructions: `mxfp8`, `mxfp4`, `nvfp4`
 
-- **What:** a `k` of many instructions as a chain of launches over one
-  output buffer, each launch one instruction's `k` (32 or 64) with its
-  scales and the previous result as `C`, as the hardware chains them (the
-  aliased `C`/`out` launch allows it); NVFP4's per-tensor scale in the
-  epilogue; MXFP4's scales given to both 16-groups under
-  `nv.blackwell.mxfp4`.  `k / 32` launches per layer (32-96 for Qwen3), about
-  a second per design on cached inputs.
-- **Why separate:** the only designs whose scales live in the instruction.
-- **Tests:** the chain against the interpreter's chain of the same design
-  at `k` of two and three instructions; each scheme's exact reference.
+**Done.**  `kernels.TILES` adds `nv.blackwell.mx.e4m3`, `.mx.e2m1` (32, one
+scale per call), `.mxfp4` and `.nvfp4` (64, four scales per call); a
+design's scales per call and the elements each covers (`kernels.group`)
+come from its argument types, and `applicable` pairs a block-scaled design
+with a scheme whose elements and scale format it takes, in groups dividing
+the scheme's blocks: `mxfp8` -> `mx.e4m3`, `mxfp4` -> `mx.e2m1` and
+`mxfp4`, `nvfp4` -> `nvfp4`.  `kernels.chain` runs `k` as one launch per
+instruction onto one buffer, each taking the last one's result as `C`;
+`swap` lays each operand's scales out per instruction (`_per_call`, a
+32-block scale given to both of `nv.blackwell.mxfp4`'s 16-groups), and
+NVFP4's per-tensor scales multiply the result, `acc * (g_x * g_w)`.  A
+block-scaled design's `k` is split into its instructions, so `split_k` is
+refused.  Measured, not "about a second": 11-17 s per design on 2048
+cached tokens, the metrics' FP64 work included.
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -q serve/tests/test_kernels.py serve/tests/test_quant.py
+- **Tests:** each chain, three instructions deep, bit for bit (any NaN as
+  one) against the interpreter chained the same way, on hard-case elements
+  and scales; the `swap` scheme test over all five quantizing schemes (each
+  picks its designs; its exact run is the quantized FP64 product; each
+  design nearer it than quantizing moved R0); `local` for `nvfp4`.
+
+Qwen3-0.6B, RTN, first 2048 WikiText-2 tokens, every layer pooled (log2):
+
+| scheme | design | normwise | backward mean | correctly rounded | magnitude bias (u) | quantization |
+|---|---|---|---|---|---|---|
+| `mxfp8` | nv.blackwell.mx.e4m3 | -21.28 | -27.44 | 44.00% | -0.087 | -4.47 |
+| `mxfp4` | nv.blackwell.mx.e2m1 | -26.91 | -51.80 | 100.00% | 0.000 | -2.52 |
+| `mxfp4` | nv.blackwell.mxfp4 | -26.91 | -51.80 | 100.00% | 0.000 | -2.52 |
+| `nvfp4` | nv.blackwell.nvfp4 | -23.26 | -29.33 | 81.76% | 0.001 | -2.98 |
+
+Blackwell's MXFP4 paths are effectively exact: E2M1 products under
+power-of-two scales, summed, fit the accumulator, so all but about one
+output in 10^9 is correctly rounded, and the two designs agree.  The quantization dominates:
+RTN to FP4 costs 2^-2.5 (MXFP4) and 2^-3.0 (NVFP4, its finer blocks and
+E4M3 scales the better), and MXFP8's power-of-two scales 2^-4.5 against
+FP32 scales' 2^-4.9.
 
 ### Phase 5 -- Quantized checkpoints
 
-- **What:** `serve/checkpoints.py`: a `compressed-tensors` reader for the
-  three checkpoints above (FP8 per channel and per block; NVFP4 packed,
-  with its global-scale convention), yielding each linear layer's elements
-  and scales in its scheme and the model's other weights; the weight-source
-  rules (as-is, RTN, exact conversion, `--requantize`); the master for the
-  quantization error.
-- **Why last:** RTN covers every scheme before it; checkpoints add loading
-  and the rules, not arithmetic.
-- **Tests:** each reader against the master (the dequantized weights near
-  the BF16 ones, per scheme); the rules on small hand-made tensors, including
-  a lossy conversion refused without `--requantize`.
+**Done.**  `serve/checkpoints.py`: `load(name)` builds a `compressed-tensors`
+checkpoint's model from its own config and tensors, each quantized layer's
+weight its dequantized values, and keeps the stored elements and scales on
+the GPU in the scheme its config names (`fp8-row` per channel, `fp8-block`
+per 128 x 128, `nvfp4`), with NVFP4's static activation scales;
+`weights_for(checkpoint, scheme, requantize)` gives a checkpoint's weights
+under a scheme as `checkpoint`, `converted` (RTN in the scheme loses nothing,
+checked by dequantizing both) or `requantized` (only with `--requantize`),
+else refuses.  `swap.give` hands a `Run` those weights, their static scales
+and the layers it leaves as R0; `Run.weight` and `Run.quantize` are what
+`layers` and `local.evaluate` quantize with.  `local.py --models` takes
+masters and checkpoints, `--master` names a checkpoint's master where its
+model card does not (`RedHatAI/Qwen3-0.6B-FP8-BLOCK`), and each model's
+table says where its weights came from.
 
-      cd examples/mmasim && ../../.venv/bin/python -m pytest -q serve/tests/test_checkpoints.py
+Departures: the FP4 unpacking and the global-scale convention are
+`compressed-tensors`' own (a new requirement): elements low nibble first,
+scale `s / g`, so a layer's per-tensor factor is the reciprocal of the
+stored `weight_global_scale` (the activations' of `input_global_scale`).
+Under a quantizing scheme a master's `lm_head` is now left unquantized, as
+every checkpoint leaves it, so the Phase 2-4 tables (which quantized it)
+shift: `fp8-row`'s quantization error, for one, goes from 2^-4.87 to
+2^-5.24 without it.
+
+- **Tests** (`tests/test_checkpoints.py`): the rules on hand-made weights (as
+  it is; an exact conversion; a lossy one refused, then taken with
+  `requantize`); a `Run` takes given weights and leaves ignored layers to R0;
+  each downloaded checkpoint (skipped if not) reads as Qwen3-0.6B quantized,
+  every layer's elements and scales in the scheme's formats and within the
+  scheme's quantization error of the master (FP8 2^-5.3, NVFP4 2^-3.4), a
+  wrong packing or scale convention being far off.
+
+Qwen3-0.6B's RTN against the checkpoints, first 2048 WikiText-2 tokens,
+`lm_head` left out, every other layer pooled (log2):
+
+| scheme | design | RTN normwise | checkpoint normwise | RTN quantization | checkpoint quantization |
+|---|---|---|---|---|---|
+| `fp8-row` | nv.ada.e4m3.f32 | -8.80 | -8.78 | -5.24 | -5.25 |
+| `fp8-row` | nv.blackwell.e4m3.f32 | -21.04 | -21.08 | -5.24 | -5.25 |
+| `fp8-block` | nv.ada.e4m3.f32 | -12.24 | -12.25 | -5.25 | -5.25 |
+| `fp8-block` | nv.blackwell.e4m3.f32 | -23.63 | -23.62 | -5.25 | -5.25 |
+| `nvfp4` | nv.blackwell.nvfp4 | -23.03 | -23.23 | -3.27 | -3.26 |
+
+The checkpoints (MSE-calibrated FP8 weights, NVFP4 with static activation
+scales) sit within ~0.05 in log2 of RTN on every metric and design, so RTN
+from the master stands in for them in a grid search.  Asking the FP8
+checkpoint for `bf16` is refused: 196 layers would requantize lossily.
 
 ### After the last phase
 
@@ -309,9 +371,96 @@ cd examples/mmasim && ../../.venv/bin/python -m pytest tests serve/tests -q
 .venv/bin/ruff check examples/mmasim/serve
 ```
 
-and a results section here: per scheme, the local metrics of every
-applicable design on Qwen3-0.6B (RTN) and on each checkpoint, both errors,
-on WikiText-2 and MT-Bench.
+and a results section here, per scheme, on Qwen3-0.6B (RTN) and on each
+checkpoint, on WikiText-2 and MT-Bench, in two tables: the observable effect
+(each design's output against the exact product of the unquantized
+operands: quantization and design together, a `total` metric in
+`layers.local`), and the design's own (the local metrics against the exact
+product of the quantized operands).
+
+## Results
+
+Qwen3-0.6B, first 2048 WikiText-2 tokens and 2048 sampled over MT-Bench,
+`lm_head` left out of the quantizing schemes, every other linear layer
+pooled; log2, -24 being one unit roundoff.  RTN is the master quantized
+here; the checkpoints are taken as they are, on WikiText-2 (MT-Bench would
+need each one's conversations, ~18 min of decoding apiece, and they track
+RTN within ~0.05 on WikiText-2).
+
+**The observable effect** -- each design's output against the exact product
+of the unquantized operands (`total`), beside the quantization's own error:
+
+| scheme | model | design | total (WikiText) | total (MT-Bench) | quantization (WikiText) |
+|---|---|---|---|---|---|
+| `bf16` | RTN | nv.ampere.bf16.f32 | -18.52 | -18.46 | -inf |
+| `bf16` | RTN | nv.hopper.bf16.f32 | -18.97 | -18.95 | -inf |
+| `bf16` | RTN | amd.cdna2.bf16 | -21.27 | -21.31 | -inf |
+| `bf16` | RTN | amd.cdna2.bf16_1k | -21.52 | -21.56 | -inf |
+| `bf16` | RTN | amd.cdna3.bf16 | -21.91 | -21.93 | -inf |
+| `fp8-row` | RTN | nv.ada.e4m3.f32 | -5.23 | -5.24 | -5.24 |
+| `fp8-row` | RTN | nv.hopper.e4m3.f32 | -5.23 | -5.24 | -5.24 |
+| `fp8-row` | RTN | nv.blackwell.e4m3.f32 | -5.24 | -5.25 | -5.24 |
+| `fp8-row` | Qwen3-0.6B-FP8-dynamic | nv.ada.e4m3.f32 | -5.24 | - | -5.25 |
+| `fp8-row` | Qwen3-0.6B-FP8-dynamic | nv.hopper.e4m3.f32 | -5.24 | - | -5.25 |
+| `fp8-row` | Qwen3-0.6B-FP8-dynamic | nv.blackwell.e4m3.f32 | -5.25 | - | -5.25 |
+| `fp8-row:fnuz` | RTN | amd.cdna3.fp8 | -5.24 | -5.26 | -5.24 |
+| `fp8-block` | RTN | nv.ada.e4m3.f32 | -5.25 | -5.28 | -5.25 |
+| `fp8-block` | RTN | nv.hopper.e4m3.f32 | -5.25 | -5.28 | -5.25 |
+| `fp8-block` | RTN | nv.blackwell.e4m3.f32 | -5.25 | -5.28 | -5.25 |
+| `fp8-block` | Qwen3-0.6B-FP8-BLOCK | nv.ada.e4m3.f32 | -5.25 | - | -5.25 |
+| `fp8-block` | Qwen3-0.6B-FP8-BLOCK | nv.hopper.e4m3.f32 | -5.25 | - | -5.25 |
+| `fp8-block` | Qwen3-0.6B-FP8-BLOCK | nv.blackwell.e4m3.f32 | -5.25 | - | -5.25 |
+| `fp8-block:fnuz` | RTN | amd.cdna3.fp8 | -5.26 | -5.28 | -5.26 |
+| `mxfp8` | RTN | nv.blackwell.mx.e4m3 | -4.97 | -4.98 | -4.97 |
+| `mxfp4` | RTN | nv.blackwell.mx.e2m1 | -2.87 | -2.87 | -2.87 |
+| `mxfp4` | RTN | nv.blackwell.mxfp4 | -2.87 | -2.87 | -2.87 |
+| `nvfp4` | RTN | nv.blackwell.nvfp4 | -3.27 | -3.28 | -3.27 |
+| `nvfp4` | Qwen3-0.6B-NVFP4 | nv.blackwell.nvfp4 | -3.26 | - | -3.26 |
+
+**The design's own effect** -- against the exact product of the quantized
+operands:
+
+| scheme | model | design | normwise | backward mean | correctly rounded | magnitude bias (u) | normwise (MT-Bench) |
+|---|---|---|---|---|---|---|---|
+| `bf16` | RTN | nv.ampere.bf16.f32 | -18.52 | -23.15 | 0.82% | -1.709 | -18.46 |
+| `bf16` | RTN | nv.hopper.bf16.f32 | -18.97 | -23.41 | 0.85% | -1.429 | -18.95 |
+| `bf16` | RTN | amd.cdna2.bf16 | -21.27 | -25.88 | 10.70% | -0.000 | -21.31 |
+| `bf16` | RTN | amd.cdna2.bf16_1k | -21.52 | -26.08 | 11.76% | -0.000 | -21.56 |
+| `bf16` | RTN | amd.cdna3.bf16 | -21.91 | -26.38 | 13.88% | +0.000 | -21.93 |
+| `fp8-row` | RTN | nv.ada.e4m3.f32 | -8.80 | -14.61 | 0.01% | -125.913 | -8.41 |
+| `fp8-row` | RTN | nv.hopper.e4m3.f32 | -8.80 | -14.63 | 0.01% | -104.968 | -8.41 |
+| `fp8-row` | RTN | nv.blackwell.e4m3.f32 | -21.04 | -27.19 | 34.71% | -0.097 | -21.10 |
+| `fp8-row` | Qwen3-0.6B-FP8-dynamic | nv.ada.e4m3.f32 | -8.78 | -14.62 | 0.01% | -125.154 | - |
+| `fp8-row` | Qwen3-0.6B-FP8-dynamic | nv.hopper.e4m3.f32 | -8.79 | -14.64 | 0.01% | -104.254 | - |
+| `fp8-row` | Qwen3-0.6B-FP8-dynamic | nv.blackwell.e4m3.f32 | -21.08 | -27.21 | 35.14% | -0.095 | - |
+| `fp8-row:fnuz` | RTN | amd.cdna3.fp8 | -23.56 | -28.23 | 47.76% | +0.000 | -23.54 |
+| `fp8-block` | RTN | nv.ada.e4m3.f32 | -12.24 | -16.74 | 0.02% | -43.572 | -12.30 |
+| `fp8-block` | RTN | nv.hopper.e4m3.f32 | -12.31 | -16.83 | 0.02% | -38.439 | -12.38 |
+| `fp8-block` | RTN | nv.blackwell.e4m3.f32 | -23.63 | -27.90 | 34.35% | -0.014 | -23.64 |
+| `fp8-block` | Qwen3-0.6B-FP8-BLOCK | nv.ada.e4m3.f32 | -12.25 | -16.75 | 0.02% | -43.445 | - |
+| `fp8-block` | Qwen3-0.6B-FP8-BLOCK | nv.hopper.e4m3.f32 | -12.32 | -16.84 | 0.02% | -38.359 | - |
+| `fp8-block` | Qwen3-0.6B-FP8-BLOCK | nv.blackwell.e4m3.f32 | -23.62 | -27.91 | 34.56% | -0.013 | - |
+| `fp8-block:fnuz` | RTN | amd.cdna3.fp8 | -23.65 | -27.96 | 35.25% | -0.001 | -23.67 |
+| `mxfp8` | RTN | nv.blackwell.mx.e4m3 | -21.03 | -27.18 | 38.08% | -0.105 | -21.12 |
+| `mxfp4` | RTN | nv.blackwell.mx.e2m1 | -26.70 | -51.27 | 100.00% | -0.000 | -inf |
+| `mxfp4` | RTN | nv.blackwell.mxfp4 | -26.70 | -51.27 | 100.00% | -0.000 | -inf |
+| `nvfp4` | RTN | nv.blackwell.nvfp4 | -23.03 | -29.18 | 75.56% | -0.000 | -23.25 |
+| `nvfp4` | Qwen3-0.6B-NVFP4 | nv.blackwell.nvfp4 | -23.23 | -29.18 | 76.84% | -0.005 | - |
+
+- The observable effect is the quantization's: `total` equals
+  `quantization` to ~0.02 for every quantizing scheme, even under Ada's
+  and Hopper's FP8 accumulators (2^-8.8 against 2^-5.2).  A design shows
+  only where the quantization is absent, `bf16` here (its cached inputs
+  and master are BF16 already, so its quantization error is 0 and its
+  observable effect is the design's).
+- The designs separate cleanly on their own effect, the same way on both
+  workloads: truncating FP8 accumulators (Ada, Hopper) at 2^-8.8 with a
+  strong lean toward zero, 2^-12.3 with promotion every 128; Blackwell
+  and CDNA3 FP8 near FP32 rounding (2^-21 to 2^-23.7); Blackwell's MXFP4
+  paths exact to FP32 (on MT-Bench, every output the exact product).
+- Per scheme, RTN and the checkpoints agree to ~0.05, and so do the two
+  workloads, but for `fp8-row`'s truncating accumulators, ~0.4 worse on
+  MT-Bench (2^-8.4).
 
 ## Open items
 

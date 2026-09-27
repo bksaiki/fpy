@@ -60,15 +60,16 @@ def test_cached_inputs_give_the_model_run_where_inputs_agree(
     first = [f'model.layers.0.self_attn.{p}_proj' for p in 'qkv']
     assert len({acts.index[n] for n in first}) == 1
 
-    same = [m for m in local.METRICS if m != 'quantization']  # FP32 inputs there, BF16 here
-    got = local.evaluate(model, acts, design)['all']
+    # unquantized inputs FP32 there, BF16 here
+    same = [m for m in local.METRICS if m not in ('quantization', 'total')]
+    got = local.evaluate(model, run, acts, design)['all']
     want = layers.evaluate(model, run, [tokens], [design], same)[design]
     for name in first:
         assert got[name].report(same) == want[name].report(same)
 
     if 'test.copy' not in kernels.TILES:
         kernels.register('test.copy', dict(DESIGNS)[design], *kernels.TILES[design])
-    copy = local.evaluate(model, acts, 'test.copy')['all']
+    copy = local.evaluate(model, run, acts, 'test.copy')['all']
     assert all(copy[n].report(local.METRICS) == s.report(local.METRICS) for n, s in got.items())
 
 
@@ -78,8 +79,8 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
     run = swap.patch(model)
     acts = local.capture(model, run, _seqs(tokens), tokens=10)
     assert len(acts.tags['role']) == acts.inputs[0].shape[0] == 10
-    whole = local.evaluate(model, acts, 'amd.cdna2.bf16')['all']
-    parts = local.evaluate(model, acts, 'amd.cdna2.bf16', by='role')
+    whole = local.evaluate(model, run, acts, 'amd.cdna2.bf16')['all']
+    parts = local.evaluate(model, run, acts, 'amd.cdna2.bf16', by='role')
     assert set(parts) == {'user', 'assistant'}
     for name, s in whole.items():
         pooled = sum((g[name] for g in parts.values()), layers.Stats())
@@ -88,26 +89,30 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
         assert math.isclose(pooled.err, s.err, rel_tol=1e-9)
 
 
-@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block'])
+@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block', 'nvfp4'])
 def test_a_scheme_measures_its_quantization_apart_from_the_design(
     name: str, model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
-    """Under the FP8 schemes both errors are there; under `bf16`, on BF16
+    """Under a quantizing scheme both errors are there; under `bf16`, on BF16
     inputs and weights, quantizing costs nothing; a design the scheme does
-    not apply to is refused, as is splitting `fp8-block`'s blocks further."""
+    not apply to is refused, as is splitting `k`'s own blocks further."""
     run = swap.patch(model)
     fp8 = quant.SCHEMES[name]
     acts = local.capture(model, run, _seqs(tokens), scheme=fp8)
-    stats = local.evaluate(model, acts, 'nv.hopper.e4m3.f32', scheme=fp8)['all']
+    design = kernels.designs(fp8)[0]
+    stats = local.evaluate(model, run, acts, design, scheme=fp8)['all']
     s = sum(stats.values(), layers.Stats()).report(local.METRICS)
-    assert s['quantization'] > 0 and s['normwise'] > 0 and s['rounded'] < 1
-    bf16 = local.evaluate(model, local.capture(model, run, _seqs(tokens)), 'amd.cdna2.bf16')
+    assert s['quantization'] > 0 and s['normwise'] > 0 and s['total'] > 0 and s['rounded'] < 1
+    bf16 = local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
+                          'amd.cdna2.bf16')
     assert sum(bf16['all'].values(), layers.Stats()).report(['quantization'])['quantization'] == 0
     with pytest.raises(ValueError, match='does not take'):
-        local.evaluate(model, acts, 'amd.cdna2.bf16', scheme=fp8)
-    if fp8.applied == 'k-blocks':
+        local.evaluate(model, run, acts, 'amd.cdna2.bf16', scheme=fp8)
+    if fp8.applied != 'epilogue':
+        run.split_k = 2
         with pytest.raises(ValueError, match='its own blocks'):
-            local.evaluate(model, acts, 'nv.hopper.e4m3.f32', scheme=fp8, split_k=2)
+            local.evaluate(model, run, acts, design, scheme=fp8)
+        run.split_k = 1
 
 
 def test_sample_is_fixed_and_in_order() -> None:

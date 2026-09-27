@@ -80,18 +80,28 @@ def test_a_design_through_the_run_is_kernels_linear(
     assert pairs and all(torch.equal(got, want) for got, want in pairs)
 
 
-@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block'])
+_E4M3 = ('nv.ada.e4m3.f32', 'nv.hopper.e4m3.f32', 'nv.blackwell.e4m3.f32')
+
+
+@pytest.mark.parametrize('name, designs', [
+    ('fp8-row', _E4M3),
+    ('fp8-block', _E4M3),
+    ('mxfp8', ('nv.blackwell.mx.e4m3',)),
+    ('mxfp4', ('nv.blackwell.mx.e2m1', 'nv.blackwell.mxfp4')),
+    ('nvfp4', ('nv.blackwell.nvfp4',)),
+])
 def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
-    name: str, model: torch.nn.Module, tokens: torch.Tensor,
+    name: str, designs: tuple[str, ...], model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
-    """The FP8 schemes' designs are the E4M3 ones (`:fnuz`'s CDNA3's); the
-    exact run is, layer by layer, the quantized operands' FP64 product
-    rounded once; each design, its scales applied after the kernel or to each
-    128 of `k`, is nearer the exact run than quantizing moved it from R0."""
+    """A scheme's designs are those taking its elements and scales (the FP8
+    schemes' FNUZ variants, CDNA3's); the exact run is, layer by layer, the
+    quantized operands' FP64 product rounded once; each design, its scales
+    applied around the kernel, per 128 of `k`, or by its instructions, is
+    nearer the exact run than quantizing moved it from R0."""
     fp8 = quant.SCHEMES[name]
-    assert swap.modes(fp8) == ('fp32', f'{name}-exact', 'nv.ada.e4m3.f32',
-                               'nv.hopper.e4m3.f32', 'nv.blackwell.e4m3.f32')
-    assert swap.modes(quant.scheme(f'{name}:fnuz'))[2:] == ('amd.cdna3.fp8',)
+    assert swap.modes(fp8) == ('fp32', f'{name}-exact', *designs)
+    if fp8.applied != 'instruction':
+        assert swap.modes(quant.scheme(f'{name}:fnuz'))[2:] == ('amd.cdna3.fp8',)
     run = swap.patch(model)
     r0 = _logits(model, tokens)
     run.scheme, run.mode = fp8, f'{name}-exact'

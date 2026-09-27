@@ -143,11 +143,11 @@ def _fp4(packed: torch.Tensor) -> torch.Tensor:
     return f4_unpacked_to_f32(unpack_uint4(packed))
 
 
-def quantize(t: torch.Tensor, op: Operand) -> Quantized:
+def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None) -> Quantized:
     """*t* `[r, k]` by *op*'s standard round-to-nearest recipe, `torchao`'s:
     MX by the OCP specification's floor (`ScaleCalculationMode.FLOOR`),
-    NVFP4 with the per-tensor scale from `t`'s largest magnitude, FP8 with
-    `amax / max` per block.  Rows short of a whole block are padded with
+    NVFP4 with the per-tensor scale *tensor*, else from `t`'s largest
+    magnitude, FP8 with `amax / max` per block.  Rows short of a whole block are padded with
     zeros, which leave its `amax` as it is; `k` must be a whole number of
     blocks."""
     s = op.scaling
@@ -162,7 +162,7 @@ def quantize(t: torch.Tensor, op: Operand) -> Quantized:
         elements = _fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float()
         return Quantized(op, elements, q.scale.float())
     if s.tensor:
-        g = per_tensor_amax_to_scale(t.abs().amax())
+        g = per_tensor_amax_to_scale(t.abs().amax()) if tensor is None else tensor
         q = NVFP4Tensor.to_nvfp4(t.float(), s.cols, per_tensor_scale=g)
         return Quantized(op, _fp4(q.qdata), q.scale.float(), q.per_tensor_scale)
     granularity = PerRow() if s.cols is None else PerBlock([s.rows, s.cols])

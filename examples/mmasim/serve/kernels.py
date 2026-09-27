@@ -36,6 +36,10 @@ TILES: dict[str, tuple[int, int]] = {
     'nv.hopper.e4m3.f32': (32, 1),
     'nv.blackwell.e4m3.f32': (32, 1),
     'amd.cdna3.fp8': (64, 1),
+    'nv.blackwell.mx.e4m3': (32, 1),
+    'nv.blackwell.mx.e2m1': (32, 1),
+    'nv.blackwell.mxfp4': (16, 1),
+    'nv.blackwell.nvfp4': (16, 1),
 }
 """Each design and its fixed tile `(block, block_m)`, the fastest per
 `bench/speed.py --best`."""
@@ -72,30 +76,56 @@ def formats(design: str) -> tuple[Any, Any, Any]:
     return a.elt.fmt, b.elt.fmt, c.fmt
 
 
+def block_scaled(design: str) -> bool:
+    """Whether *design* takes scales, as an instruction's own arguments."""
+    return len(_args(design)) == 5
+
+
+def group(design: str) -> int:
+    """How many elements of `k` one of a block-scaled *design*'s scales
+    covers in a call."""
+    k0, scale = _length(design), _args(design)[3]
+    return k0 // scale.length if hasattr(scale, 'length') else k0
+
+
 def applicable(design: str, scheme: quant.Scheme) -> bool:
-    """Whether *design* takes *scheme*'s elements as they are: an unscaled
-    design, and scales applied after it or not at all."""
+    """Whether *design* takes *scheme*'s operands as they are: its elements,
+    and either an unscaled design with the scales applied around it, or a
+    block-scaled one taking the scales' format in groups that divide their
+    blocks."""
     x, w, _ = formats(design)
-    return (len(_args(design)) == 3 and scheme.applied in ('none', 'epilogue', 'k-blocks')
-            and (x, w) == (scheme.x.elements.format(), scheme.w.elements.format()))
+    if (x, w) != (scheme.x.elements.format(), scheme.w.elements.format()):
+        return False
+    if not block_scaled(design):
+        return scheme.applied in ('none', 'epilogue', 'k-blocks')
+    s = scheme.x.scaling
+    scale = getattr(_args(design)[3], 'elt', _args(design)[3])
+    return (scheme.applied == 'instruction' and scale.fmt == s.fmt.format()
+            and s.cols % group(design) == 0)
 
 
 def designs(scheme: quant.Scheme) -> list[str]:
     return [d for d in TILES if applicable(d, scheme)]
 
 
+def _length(design: str) -> int:
+    return ct._length(_args(design)[0])
+
+
 @cache
 def compiled(design: str) -> tuple[KernelSource, int]:
-    """*design*'s kernel and the length its `k` must be a multiple of."""
+    """*design*'s kernel and the length its `k` must be a multiple of (a
+    block-scaled design's, one instruction)."""
     kernel, _, _ = ct.compile_matmul(_BUILDS[design], None)
-    return kernel, ct._length(_args(design)[0])
+    return kernel, _length(design)
 
 
 @cache
-def storage(design: str) -> tuple[torch.dtype, torch.dtype]:
-    """The torch dtypes *design*'s kernel holds its activations and weights in."""
+def storage(design: str) -> tuple[torch.dtype, ...]:
+    """The torch dtypes *design*'s kernel holds its activations and weights
+    in, and a block-scaled one's scales."""
     held = dict(compiled(design)[0].dtypes)
-    return _torch_dtype(held[0]), _torch_dtype(held[1])
+    return tuple(_torch_dtype(held[i]) for i in ((0, 1, 3) if block_scaled(design) else (0, 1)))
 
 
 def prepare(w: torch.Tensor, dtype: torch.dtype, split_k: int = 1) -> torch.Tensor:
@@ -111,14 +141,15 @@ def prepare(w: torch.Tensor, dtype: torch.dtype, split_k: int = 1) -> torch.Tens
     return b.view(n, split_k, k // split_k).transpose(0, 1).contiguous()
 
 
-def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str) -> None:
-    """*y* `[m, n]`, zeros, becomes `a @ b.T` by *design*: it is both the
-    kernel's accumulator `C` and its output, each program reading its tile
-    of `C` before writing it.  `block_m` is capped at the power of two
-    `>= m`."""
+def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
+            *scales: torch.Tensor) -> None:
+    """*y* `[m, n]` becomes `a @ b.T` by *design* (with *scales*, a
+    block-scaled one's), accumulated onto *y*: it is both the kernel's `C`
+    and its output, each program reading its tile of `C` before writing it.
+    `block_m` is capped at the power of two `>= m`."""
     block, block_m = TILES[design]
     m = a.shape[0]
-    launch(compiled(design)[0], [a, b, y, y],
+    launch(compiled(design)[0], [a, b, y, *scales, y],
            block=block, block_m=min(block_m, 1 << (m - 1).bit_length()))
 
 
@@ -173,6 +204,27 @@ def matmul(
             _launch(ab[0], w[0], blk, design)
             for j in range(1, s):
                 blk += _part(ab, w, design, j)
+    return y
+
+
+def chain(a: torch.Tensor, w: torch.Tensor, xs: torch.Tensor, ys: torch.Tensor,
+          design: str) -> torch.Tensor:
+    """`a @ w.T` by a block-scaled *design*, FP32 `[m, n]`: `k` as a chain of
+    its instructions, each taking the previous one's result as its
+    accumulator, as the hardware chains them.  `a` holds its activation
+    values, `w` is from :func:`prepare` in one slice per instruction, and
+    `xs [s, m, ...]` / `ys [s, n, ...]` are each instruction's scales."""
+    s, n, k0 = w.shape
+    m = a.shape[0]
+    if k0 != compiled(design)[1] or a.shape[1] != s * k0:
+        raise ValueError(f"`w` is not in {design}'s instructions of {compiled(design)[1]}")
+    y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
+    parts = a.view(m, s, k0).transpose(0, 1).contiguous()
+    rows = max(1, _ELEMS // n)
+    for i in range(0, m, rows):
+        blk = y[i:i + rows]
+        for t in range(s):
+            _launch(parts[t, i:i + rows], w[t], blk, design, xs[t, i:i + rows], ys[t])
     return y
 
 

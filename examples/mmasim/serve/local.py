@@ -6,7 +6,10 @@ Every linear layer's BF16 input is captured once under the scheme's exact
 run (`--scheme`, default `bf16`) on a workload (`workloads`), the same for
 every design; each design the scheme applies to then runs only its kernel on
 each cached input and weight, both quantized by the scheme, against their
-exact product (`layers.local`).  `--by` splits the result by a tag.  A grid search
+exact product (`layers.local`).  `--by` splits the result by a tag.  `--models` takes
+masters, quantized by RTN (`lm_head` left unquantized under a quantizing
+scheme, as every checkpoint found leaves it), and quantized checkpoints
+(`checkpoints`), taken as they are in their own scheme.  A grid search
 registers designs (`kernels.register`), captures once, and calls
 :func:`evaluate` per design; the seconds reported per design include the
 metrics' own FP64 work.
@@ -15,6 +18,7 @@ metrics' own FP64 work.
     python serve/local.py -d amd.cdna2.bf16 --tokens 512 --layers mlp -o s.json
     python serve/local.py --workload mtbench --by role
     python serve/local.py --scheme fp8-row
+    python serve/local.py --scheme nvfp4 --models Qwen/Qwen3-0.6B kaitchup/Qwen3-0.6B-NVFP4
 """
 
 import argparse
@@ -28,7 +32,9 @@ from collections.abc import Collection
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import Any
 
+import checkpoints
 import kernels
 import layers
 import perplexity
@@ -111,15 +117,18 @@ def capture(
 
 
 def evaluate(
-    model: torch.nn.Module, acts: Activations, design: str,
+    model: torch.nn.Module, run: swap.Run, acts: Activations, design: str,
     metrics: Collection[str] = METRICS, *, scheme: quant.Scheme = swap.BF16,
-    by: str | None = None, split_k: int = 1, combine: kernels.Combine = 'linear',
-    only: str | None = None,
+    by: str | None = None, only: str | None = None,
+    masters: dict[str, torch.Tensor] | None = None,
 ) -> dict[str, dict[str, layers.Stats]]:
     """*design*'s local :class:`layers.Stats` for *metrics* under *scheme*,
     per group of rows (by the tag *by*; one group, `all`, without) and per
     linear layer of *model* (those whose name *only* matches, as a regex), on
-    *acts*."""
+    *acts*.  *run* (`swap.patch(model)`'s) gives each layer's weight and
+    static scale, splits `k` as it says, and leaves out the layers it
+    ignores; `quantization` compares with *masters*' weights, by layer name,
+    else the layer's own."""
     if not kernels.applicable(design, scheme):
         raise ValueError(f'{design} does not take {scheme.name}')
     groups: dict[str, torch.Tensor | slice] = {'all': slice(None)}
@@ -129,25 +138,61 @@ def evaluate(
                   for g in dict.fromkeys(labels)}
     stats: dict[str, dict[str, layers.Stats]] = {g: {} for g in groups}
     held = kernels.storage(design)[1]
-    with torch.no_grad():
-        for name, layer in model.named_modules():
-            if not isinstance(layer, torch.nn.Linear) or (only and not re.search(only, name)):
-                continue
-            a = acts.input(name).cuda().float()
-            qa, qw = quant.quantize(a, scheme.x), quant.quantize(layer.weight, scheme.w)
-            w = kernels.prepare(qw.elements, held, swap.slices(scheme, a.shape[1], split_k))
-            y = swap.gemm(design, scheme, qa, qw, w, combine)
-            for g, rows in groups.items():
-                layers.local(stats[g].setdefault(name, layers.Stats()), metrics, qa.take(rows),
-                             qw, y[rows], (a[rows], layer.weight))
+    previous, run.scheme = run.scheme, scheme
+    try:
+        with torch.no_grad():
+            for name, layer in model.named_modules():
+                if (not isinstance(layer, torch.nn.Linear) or id(layer.weight) in run.ignore
+                        or (only and not re.search(only, name))):
+                    continue
+                a = acts.input(name).cuda().float()
+                qa, qw = run.quantize(a, layer.weight), run.weight(layer.weight)
+                split = swap.slices(design, scheme, a.shape[1], run.split_k)
+                y = swap.gemm(design, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
+                              run.combine)
+                w0 = layer.weight if masters is None else masters[name].cuda()
+                for g, rows in groups.items():
+                    layers.local(stats[g].setdefault(name, layers.Stats()), metrics,
+                                 qa.take(rows), qw, y[rows], (a[rows], w0))
+    finally:
+        run.scheme = previous
     return stats
+
+
+def _load(name: str, scheme: quant.Scheme, *, requantize: bool, master: str | None,
+          split_k: int, combine: kernels.Combine,
+          ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any], dict[str, torch.Tensor] | None]:
+    """*name* ready to evaluate under *scheme*; what its weights are (their
+    source, the layers left unquantized, the master their quantization is
+    measured against, if one is known); and that master's weights (`None`:
+    the model's own)."""
+    if not checkpoints.is_checkpoint(name):
+        model, run = swap.load(name, split_k, combine)
+        ignore = [] if scheme.name == 'bf16' else ['lm_head']
+        swap.give(run, model, scheme, {}, ignore=ignore)
+        return model, run, {'source': 'rtn', 'ignore': ignore, 'master': name}, None
+    model, ckpt = checkpoints.load(name)
+    run = swap.patch(model)
+    run.split_k, run.combine = split_k, combine
+    weights, source = checkpoints.weights_for(ckpt, scheme, requantize)
+    swap.give(run, model, scheme, weights, ckpt.inputs if source == 'checkpoint' else None,
+              ckpt.ignore)
+    master = master or checkpoints.base_model(name)
+    masters = None if master is None else checkpoints.master_weights(master)
+    return model, run, {'source': source, 'ignore': ckpt.ignore, 'master': master}, masters
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     swap.add_args(ap)
+    ap.add_argument('--models', nargs='*', default=None,
+                    help='masters (RTN) and quantized checkpoints to evaluate (default: --model)')
     ap.add_argument('--scheme', type=quant.scheme, default=swap.BF16,
                     help=f'one of {", ".join(quant.SCHEMES)}, or fp8-row:fnuz, fp8-block:fnuz')
+    ap.add_argument('--requantize', action='store_true',
+                    help='allow a checkpoint in another scheme to be requantized, lossily')
+    ap.add_argument('--master', default=None, help='the unquantized model a checkpoint is '
+                    'measured against (default: its model card\'s base model)')
     ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES),
                     help='designs the scheme applies to (default: all of them)')
     ap.add_argument('-m', '--metrics', nargs='*', choices=METRICS, default=list(METRICS))
@@ -165,50 +210,61 @@ def main(argv: list[str]) -> int:
     if refused := [d for d in designs if not kernels.applicable(d, args.scheme)]:
         ap.error(f'{args.scheme.name} does not apply to {", ".join(refused)}')
 
-    model, run = swap.load(args.model)
-    if args.workload == 'wikitext':
-        acts = capture(model, run, workloads.wikitext(args.model, args.tokens),
-                       scheme=args.scheme)
-    else:
-        from transformers import AutoTokenizer
+    out: dict[str, Any] = {
+        'scheme': args.scheme.name, 'workload': args.workload, 'tokens': args.tokens,
+        'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
+        'models': {}}
+    for name in args.models or [args.model]:
+        model, run, about, masters = _load(name, args.scheme, requantize=args.requantize,
+                                           master=args.master, split_k=args.split_k,
+                                           combine=args.combine)
+        metrics = [m for m in args.metrics if m not in ('quantization', 'total') or about['master']]
+        if args.workload == 'wikitext':
+            seqs = workloads.wikitext(name, args.tokens)
+        else:
+            from transformers import AutoTokenizer
 
-        path = args.transcripts or (Path(__file__).parent / 'results'
-                                    / f'mtbench-{args.model.replace("/", "--")}.json')
-        seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(args.model), path)
+            path = args.transcripts or (Path(__file__).parent / 'results'
+                                        / f'mtbench-{name.replace("/", "--")}.json')
+            seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name), path)
         acts = capture(model, run, seqs, args.tokens, args.scheme)
 
-    results: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
-    total: dict[str, dict[str, dict[str, float]]] = {}
-    seconds: dict[str, float] = {}
-    for design in designs:
-        kernels.compiled(design)
-        torch.cuda.synchronize()
-        start = time.perf_counter()
-        stats = evaluate(model, acts, design, args.metrics, scheme=args.scheme, by=args.by,
-                         split_k=args.split_k, combine=args.combine, only=args.layers)
-        torch.cuda.synchronize()
-        seconds[design] = time.perf_counter() - start
-        total[design] = {g: sum(per.values(), layers.Stats()).report(args.metrics)
-                         for g, per in stats.items()}
-        results[design] = {g: {n: st.report(args.metrics) for n, st in per.items()}
-                           for g, per in stats.items()}
+        results: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
+        total: dict[str, dict[str, dict[str, float]]] = {}
+        seconds: dict[str, float] = {}
+        for design in designs:
+            kernels.compiled(design)
+            torch.cuda.synchronize()
+            start = time.perf_counter()
+            stats = evaluate(model, run, acts, design, metrics, scheme=args.scheme, by=args.by,
+                             only=args.layers, masters=masters)
+            torch.cuda.synchronize()
+            seconds[design] = time.perf_counter() - start
+            total[design] = {g: sum(per.values(), layers.Stats()).report(metrics)
+                             for g, per in stats.items()}
+            results[design] = {g: {n: st.report(metrics) for n, st in per.items()}
+                               for g, per in stats.items()}
 
-    first = next(iter(total.values()))
-    keys = list(next(iter(first.values())))
-    w = max(map(len, total))
-    for g in first:
-        rows = acts.tags[args.by].count(g) if args.by else acts.inputs[0].shape[0]
-        print(f'\n{g} ({rows} tokens)\n{"":{w}} ' + ' '.join(f'{k:>14}' for k in keys) + f' {"s":>6}')
-        for design, t in total.items():
-            print(f'{design:{w}} ' + ' '.join(f'{layers.fmt(k, t[g][k]):>14}' for k in keys)
-                  + f' {seconds[design]:6.1f}')
+        print(f'\n== {name}: weights {about["source"]}, unquantized: '
+              f'{", ".join(about["ignore"]) or "none"}; quantization against '
+              f'{about["master"] or "nothing (no master)"}')
+        first = next(iter(total.values()))
+        keys = list(next(iter(first.values())))
+        w = max(map(len, total))
+        for g in first:
+            rows = acts.tags[args.by].count(g) if args.by else acts.inputs[0].shape[0]
+            print(f'\n{g} ({rows} tokens)\n{"":{w}} ' + ' '.join(f'{k:>14}' for k in keys)
+                  + f' {"s":>6}')
+            for design, t in total.items():
+                print(f'{design:{w}} ' + ' '.join(f'{layers.fmt(k, t[g][k]):>14}' for k in keys)
+                      + f' {seconds[design]:6.1f}')
+        out['models'][name] = {**about, 'metrics': metrics, 'seconds': seconds,
+                               'total': total, 'runs': results}
+        del model, run, acts, masters
+        torch.cuda.empty_cache()
     if args.out:
         with open(args.out, 'w') as f:
-            json.dump({'model': args.model, 'scheme': args.scheme.name,
-                       'workload': args.workload, 'tokens': args.tokens,
-                       'by': args.by, 'layers': args.layers, 'metrics': args.metrics,
-                       'split_k': args.split_k, 'combine': args.combine,
-                       'seconds': seconds, 'total': total, 'runs': results}, f, indent=2)
+            json.dump(out, f, indent=2)
     return 0
 
 

@@ -21,7 +21,8 @@ pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 import kernels
 import quant
 
-DESIGNS = list(kernels.TILES)
+DESIGNS = [d for d in kernels.TILES if not kernels.block_scaled(d)]
+SCALED = [d for d in kernels.TILES if kernels.block_scaled(d)]
 BF16 = kernels.designs(quant.SCHEMES['bf16'])
 
 
@@ -85,6 +86,40 @@ def test_a_call_frees_what_it_allocates() -> None:
         assert torch.cuda.memory_allocated() == before
     finally:
         gc.enable()
+
+
+@pytest.mark.parametrize('design', SCALED)
+def test_a_chain_of_instructions_agrees_with_the_interpreter(design: str) -> None:
+    """`k` as three instructions, each accumulating onto the last's result:
+    bit for bit (any NaN as one) against the interpreter chained so, on
+    hard-case elements and scales."""
+    import compile_triton as ct
+    from compile import DESIGNS as ALL
+
+    f, args = dict(ALL)[design]()
+    k0, per = kernels.compiled(design)[1], kernels.compiled(design)[1] // kernels.group(design)
+    rng = random.Random(0)
+    m, n, s = 2, 3, 3
+
+    def draw(t: object, *shape: int) -> torch.Tensor:
+        fmt = ct._fmt(t)
+        return torch.tensor([ct._sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]
+                            ).view(shape)
+
+    x, w = draw(args[0], m, s * k0), draw(args[1], n, s * k0)
+    xs, ys = draw(args[3], s, m, per), draw(args[4], s, n, per)
+    if per == 1:
+        xs, ys = xs[..., 0], ys[..., 0]
+    held = kernels.storage(design)
+    got = kernels.chain(x.cuda().to(held[0]), kernels.prepare(w.cuda(), held[1], s),
+                        xs.cuda().to(held[2]), ys.cuda().to(held[2]), design).cpu()
+    for i in range(m):
+        for j in range(n):
+            acc = 0.0
+            for t in range(s):
+                acc = float(f(x[i, t * k0:(t + 1) * k0].tolist(), w[j, t * k0:(t + 1) * k0].tolist(),
+                              acc, xs[t, i].tolist(), ys[t, j].tolist()))
+            assert _bits(got[i, j].item()) == _bits(acc), (i, j, got[i, j].item(), acc)
 
 
 def test_scaled_partials_sum_in_order() -> None:

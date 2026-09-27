@@ -17,7 +17,9 @@ measure the layer's own error:
 - `magnitude_bias`: mean error in magnitude, `sign(y) (ŷ - y) / (|x|ᵀ|w|)`,
   negative when errors lean toward zero;
 - `quantization`: normwise relative error of `Y` itself against the exact
-  product of the unquantized inputs, the quantization's own error.
+  product `Y_0` of the unquantized inputs, the quantization's own error;
+- `total`: normwise relative error of `Ŷ` against `Y_0`, the observable
+  effect of quantization and design together.
 
 `propagated` takes R0's output at the same layer, every layer before it run
 the same way: its normwise relative error is the error the model has
@@ -44,7 +46,7 @@ import swap
 import torch
 
 METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias',
-           'quantization')
+           'quantization', 'total')
 U = 2.0 ** -24
 """FP32's unit roundoff."""
 
@@ -73,6 +75,8 @@ class Stats:
     q_err: float = 0.0
     """`||Y - Y_0||_F^2`, `Y_0` the unquantized operands' exact product"""
     q_ref: float = 0.0
+    t_err: float = 0.0
+    """`||Ŷ - Y_0||_F^2`"""
 
     def __add__(self, other: 'Stats') -> 'Stats':
         """Pooled with *other*: sums added, maxima the larger."""
@@ -90,6 +94,7 @@ class Stats:
             'rounded': self.rounded / n, 'bias': self.bias / n,
             'magnitude_bias': self.magnitude_bias / n,
             'quantization': math.sqrt(self.q_err / self.q_ref) if self.q_ref else 0.0,
+            'total': math.sqrt(self.t_err / self.q_ref) if self.q_ref else 0.0,
         }
         return {k: v for k, v in out.items() if k.removesuffix('_max') in metrics}
 
@@ -141,11 +146,13 @@ def local(s: Stats, metrics: Collection[str], qa: quant.Quantized, qw: quant.Qua
                 del ex, bits
             if 'rounded' in metrics:
                 s.rounded += int((g == y.float()).sum())
-            if 'quantization' in metrics:
+            if {'quantization', 'total'} & set(metrics):
                 y0 = x0[i:i + rows].double() @ w0[j:j + cols].double().T
-                d = y - y0
-                s.q_err += float((d * d).sum())
                 s.q_ref += float((y0 * y0).sum())
+                if 'quantization' in metrics:
+                    s.q_err += float(((y - y0) ** 2).sum())
+                if 'total' in metrics:
+                    s.t_err += float(((g.double() - y0) ** 2).sum())
 
 
 def _propagated(s: Stats, got: torch.Tensor, ref: torch.Tensor) -> None:
@@ -179,9 +186,8 @@ def evaluate(
         s = stats[run.mode][name]
         if local_metrics:
             x = inputs[0].reshape(-1, inputs[0].shape[-1])
-            local(s, local_metrics, quant.quantize(x, run.scheme.x),
-                  quant.quantize(layer.weight, run.scheme.w), y.reshape(-1, y.shape[-1]),
-                  (x, layer.weight))
+            local(s, local_metrics, run.quantize(inputs[0], layer.weight),
+                  run.weight(layer.weight), y.reshape(-1, y.shape[-1]), (x, layer.weight))
         if 'propagated' in metrics:
             _propagated(s, y, ref[name])
 
