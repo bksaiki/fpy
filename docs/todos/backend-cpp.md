@@ -334,7 +334,7 @@ it firing; with the pass gone, `std::ldexp(x, n)` is emitted again rather than a
 separate power and product.
 
 What replaced it is nothing: the emitter mints a name where it needs one, which
-is 50 sites over the corpus (`test_bind_profile.py` pins them), against the
+is 50 sites over the corpus (`test_corpus_profile.py` pins them), against the
 1236 mentions the pass was producing. Two routes were considered and rejected
 while it was still in place, and both stay rejected:
 

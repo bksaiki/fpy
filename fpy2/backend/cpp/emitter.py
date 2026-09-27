@@ -358,7 +358,7 @@ class CppInternalError(CppEmitError):
     A *backend bug*, not a program this backend cannot compile -- kept distinct
     so it does not reach the user as "your program is unsupported".  A subclass,
     so handlers are unchanged and the type survives on ``__cause__``, which is
-    how ``test_internal_invariants.py`` tells the two apart.
+    how ``test_corpus_profile.py`` tells the two apart.
     """
 
     def __init__(self, msg: str, *, at: 'Ast | None' = None):
