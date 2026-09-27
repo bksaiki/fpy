@@ -3,10 +3,9 @@ The designs' Triton matmuls, as a linear layer's `x @ W.T`.
 
 Each design compiles once with `m`, `n` and `k` symbolic; `k` must be a
 multiple of the design's length.  Its inputs hold values of its input
-formats (BF16, FP8) in the kernel's storage dtype (FP32, FP16); the result
-is the design's FP32 accumulator.  :func:`linear` rounds to those formats
-and does it all per call; a caller with quantized operands (`swap`) calls
-:func:`prepare` once per weight and :func:`matmul` per call.
+formats in the kernel's storage dtype; the result is its FP32 accumulator.
+:func:`linear` does it all per call; `swap` calls :func:`prepare` once per
+weight and :func:`matmul` per call.
 """
 
 import sys
@@ -85,22 +84,21 @@ def block_scaled(design: str) -> bool:
 def group(design: str) -> int:
     """How many elements of `k` one of a block-scaled *design*'s scales
     covers in a call."""
-    k0, scale = _length(design), _args(design)[3]
+    k0, scale = _arg_length(_args(design)[0]), _args(design)[3]
     return k0 // scale.length if hasattr(scale, 'length') else k0
 
 
 def applicable(design: str, scheme: quant.Scheme) -> bool:
-    """Whether *design* takes *scheme*'s operands as they are: its elements,
-    and either an unscaled design with the scales applied around it, or a
-    block-scaled one taking the scales' format in groups that divide their
-    blocks."""
+    """Whether *design* takes *scheme*'s elements, and its scales: applied
+    outside an unscaled design, or taken by a block-scaled one in its format,
+    in groups dividing the scheme's blocks."""
     x, w, _ = formats(design)
     if (x, w) != (scheme.x.elements.format(), scheme.w.elements.format()):
         return False
     if not block_scaled(design):
         return scheme.applied in ('none', 'epilogue', 'k-blocks')
-    s = scheme.x.scaling
-    scale = getattr(_args(design)[3], 'elt', _args(design)[3])
+    s, arg = scheme.x.scaling, _args(design)[3]
+    scale = getattr(arg, 'elt', arg)
     return (scheme.applied == 'instruction' and scale.fmt == s.fmt.format()
             and s.cols % group(design) == 0)
 
@@ -109,16 +107,12 @@ def designs(scheme: quant.Scheme) -> list[str]:
     return [d for d in TILES if applicable(d, scheme)]
 
 
-def _length(design: str) -> int:
-    return _arg_length(_args(design)[0])
-
-
 @cache
 def compiled(design: str) -> tuple[KernelSource, int]:
     """*design*'s kernel and the length its `k` must be a multiple of (a
     block-scaled design's, one instruction)."""
     kernel, _, _ = ct.compile_matmul(_BUILDS[design], None)
-    return kernel, _length(design)
+    return kernel, _arg_length(_args(design)[0])
 
 
 @cache
@@ -144,10 +138,9 @@ def prepare(w: torch.Tensor, dtype: torch.dtype, split_k: int = 1) -> torch.Tens
 
 def _launch(a: torch.Tensor, b: torch.Tensor, y: torch.Tensor, design: str,
             *scales: torch.Tensor) -> None:
-    """*y* `[m, n]` becomes `a @ b.T` by *design* (with *scales*, a
-    block-scaled one's), accumulated onto *y*: it is both the kernel's `C`
-    and its output, each program reading its tile of `C` before writing it.
-    `block_m` is capped at the power of two `>= m`."""
+    """Accumulate `a @ b.T` by *design* (block-scaled: with *scales*) onto
+    *y* `[m, n]`, which is both `C` and the output.  `block_m` is capped at
+    the power of two `>= m`."""
     block, block_m = TILES[design]
     m = a.shape[0]
     launch(compiled(design)[0], [a, b, y, *scales, y],
@@ -182,20 +175,28 @@ def matmul(
     pairwise (`tree`); one slice accumulates `k` in order through the design
     alone.  With *scales* `(s_x [m, s], s_w [n, s])`, each slice's partial is
     scaled as it is summed, left to right, `y + p * (s_x * s_w)` in FP32, as
-    block-scaled FP8 promotes it."""
+    block-scaled FP8 promotes it.  A block-scaled design takes `w` in one
+    slice per instruction and *scales* `(xs [s, m, ...], ys [s, n, ...])`,
+    each instruction's, and chains them: each takes the last one's result
+    as its accumulator."""
     s, n, step = w.shape
     m, k = a.shape
     k0 = compiled(design)[1]
-    if k != s * step or step % k0:
+    chained = block_scaled(design)
+    if k != s * step or step % k0 or (chained and step != k0):
         raise ValueError(
-            f'`k` = {k} does not split into {s} slices of a multiple of '
-            f"{design}'s length {k0}")
+            f'`k` = {k} does not split into {s} slices of '
+            f"{'' if chained else 'a multiple of '}{design}'s length {k0}")
     y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
     parts = a.view(m, s, step).transpose(0, 1).contiguous() if s > 1 else a.unsqueeze(0)
     rows = max(1, _ELEMS // n)
     for i in range(0, m, rows):
         blk, ab = y[i:i + rows], parts[:, i:i + rows]
-        if scales is not None:
+        if chained and scales is not None:
+            xs, ys = scales
+            for j in range(s):
+                _launch(ab[j], w[j], blk, design, xs[j, i:i + rows], ys[j])
+        elif scales is not None:
             sx, sw = scales
             for j in range(s):
                 blk += _part(ab, w, design, j) * (sx[i:i + rows, j, None] * sw[:, j])
@@ -208,32 +209,11 @@ def matmul(
     return y
 
 
-def chain(a: torch.Tensor, w: torch.Tensor, xs: torch.Tensor, ys: torch.Tensor,
-          design: str) -> torch.Tensor:
-    """`a @ w.T` by a block-scaled *design*, FP32 `[m, n]`: `k` as a chain of
-    its instructions, each taking the previous one's result as its
-    accumulator, as the hardware chains them.  `a` holds its activation
-    values, `w` is from :func:`prepare` in one slice per instruction, and
-    `xs [s, m, ...]` / `ys [s, n, ...]` are each instruction's scales."""
-    s, n, k0 = w.shape
-    m = a.shape[0]
-    if k0 != compiled(design)[1] or a.shape[1] != s * k0:
-        raise ValueError(f"`w` is not in {design}'s instructions of {compiled(design)[1]}")
-    y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
-    parts = a.view(m, s, k0).transpose(0, 1).contiguous()
-    rows = max(1, _ELEMS // n)
-    for i in range(0, m, rows):
-        blk = y[i:i + rows]
-        for t in range(s):
-            _launch(parts[t, i:i + rows], w[t], blk, design, xs[t, i:i + rows], ys[t])
-    return y
-
-
 def linear(
     x: torch.Tensor, w: torch.Tensor, design: str, *,
     split_k: int = 1, combine: Combine = 'linear',
 ) -> torch.Tensor:
-    """`x @ w.T` by *design*, for `x` `[..., k]` and `w` `[n, k]` (as
+    """`x @ w.T` by an unscaled *design*, for `x` `[..., k]` and `w` `[n, k]` (as
     `nn.Linear` stores it): both rounded to its input formats (unscaled, as
     torch casts), the FP32 result.  *split_k* splits `k` into that many
     contiguous slices (:func:`matmul`)."""

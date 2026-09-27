@@ -115,9 +115,12 @@ quantization ("RTN").
   - **MX:** `MXTensor.to_mx`, `ScaleCalculationMode.RCEIL`.  This is
     NVIDIA's (cuBLAS's) rule: the power of two at or above `amax / max`, so
     no element saturates.
-  - **NVFP4:** `NVFP4Tensor.to_nvfp4`, NVIDIA's two-level recipe.  Per
-    tensor `g = amax / (448 * 6)`; per 16, `s = rne_e4m3((amax_block / 6) /
-    g)`.
+  - **NVFP4:** `nvfp4_quantize` (`NVFP4Tensor`'s), NVIDIA's two-level
+    recipe.  Per tensor `g = amax / (448 * 6)`; per 16, `s =
+    rne_e4m3((amax_block / 6) / g)`.  A dynamic `g` is per call, so on
+    cached inputs it is per row, from the row's sequence's `amax`.
+  - FP8's scale is bounded below, so an all-zero block quantizes to zeros,
+    not NaN; its kernel is torchao's PyTorch path on every host.
 - `quant.Quantized.dequantize` is our own: it multiplies out in FP64, where
   `torchao`'s rounds to FP32.
 
@@ -152,7 +155,7 @@ cached `(x, W)`.
 - Every design sees identical inputs, and there is no propagation between
   layers.
 - Means are within ~0.01 in log2 of `layers.py`, where each design sees its
-  own inputs.
+  own inputs (measured under `bf16`).
 
 **Two references** (parallel tables in every run):
 - **quantized:** the quantized operands' exact product, scales included.
@@ -238,7 +241,7 @@ Options:
 
 ```
 examples/mmasim/serve/
-  kernels.py      compile each design once; prepare, matmul, chain, linear; register
+  kernels.py      compile each design once; prepare, matmul, linear; register
   quant.py        schemes, torchao's RTN, Quantized with an exact FP64 dequantize
   checkpoints.py  compressed-tensors checkpoints; weights_for
   swap.py         a model's nn.Linear forwards through a Run (mode, scheme)
@@ -259,6 +262,19 @@ examples/mmasim/serve/
 u.  "RTN" is the master quantized here.  The checkpoints were run on
 WikiText-2 only: on MT-Bench each would need its own conversations, ~18 min
 of decoding apiece.
+
+The quantizing schemes' tables predate two review fixes: the capture pass
+now quantizes activations from BF16 (it took FP32), and NVFP4's dynamic
+scale is per sequence on cached inputs (it pooled every row).  Re-run on
+Qwen3-0.6B, the numbers move by at most 0.15 in log2, and the quantization
+errors not at all:
+
+| scheme | design | workload | normwise before | after |
+|---|---|---|---|---|
+| `nvfp4` | nv.blackwell.nvfp4 | WikiText | -23.03 | -23.18 |
+| `nvfp4` | nv.blackwell.nvfp4 | MT-Bench | -23.25 | -23.21 |
+| `fp8-row` | nv.blackwell.e4m3.f32 | WikiText | -21.04 | -21.09 |
+| `fp8-row` | nv.ada.e4m3.f32 | WikiText | -8.80 | -8.80 |
 
 ### Qwen3-0.6B: the observable effect
 

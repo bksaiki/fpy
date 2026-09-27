@@ -1,15 +1,7 @@
 """
-Quantization schemes, quantized by `torchao`'s recipes and dequantized
-exactly.
-
-A scheme says how each operand of `x @ W.T` is represented: its element
-format, and its scaling (scale format, block shape).  Formats are FPy's own
-contexts, the formats the designs' arguments are declared in.  :func:`quantize`
-runs `torchao`'s standard quantizer for the scheme (`MXTensor`,
-`NVFP4Tensor`, `Float8Tensor`) and keeps its elements and scales as FP32
-tensors holding their values; :meth:`Quantized.dequantize` multiplies them
-out in FP64, where `torchao`'s own rounds to FP32.  See
-`docs/todos/mmasim-serving.md`.
+Quantization schemes, in FPy formats: `torchao`'s RTN quantizes, and
+:meth:`Quantized.dequantize` multiplies out exactly in FP64 (`torchao`'s
+rounds to FP32).  See `docs/todos/mmasim-serving.md`.
 """
 
 from dataclasses import dataclass, replace
@@ -20,10 +12,11 @@ from torchao.prototype.mx_formats.config import ScaleCalculationMode
 from torchao.prototype.mx_formats.kernels import f4_unpacked_to_f32, unpack_uint4
 from torchao.prototype.mx_formats.mx_tensor import MXTensor
 from torchao.prototype.mx_formats.nvfp4_tensor import (
-    NVFP4Tensor,
+    nvfp4_quantize,
     per_tensor_amax_to_scale,
 )
 from torchao.quantization import Float8Tensor, PerBlock, PerRow
+from torchao.quantization.quantize_.common.kernel_preference import KernelPreference
 
 import fpy2 as fp
 from fpy2 import Context
@@ -113,7 +106,7 @@ def scheme(name: str) -> Scheme:
 class Quantized:
     """An operand `[r, k]` quantized: FP32 tensors holding its elements'
     values, its scales' (one per block, `[ceil(r / rows), ceil(k / cols)]`),
-    and its per-tensor scale's."""
+    and its per-tensor scale's (a scalar, or `[r, 1]`, one per row)."""
 
     operand: Operand
     elements: torch.Tensor
@@ -125,37 +118,39 @@ class Quantized:
         tall (every scheme's activations)."""
         if self.operand.scaling is not None and self.operand.scaling.rows != 1:
             raise ValueError('rows of scale blocks taller than one')
-        return replace(self, elements=self.elements[rows],
-                       scales=None if self.scales is None else self.scales[rows])
+        return replace(self, elements=self.elements[rows], scales=_rows(self.scales, rows),
+                       tensor=_rows(self.tensor, rows))
 
     def dequantize(self, rows: slice = slice(None)) -> torch.Tensor:
-        """The values it holds, of *rows*, in FP64: exact for E8M0 and UE4M3
-        scales, within FP64's rounding for FP32 ones."""
+        """Its values, of *rows*, in FP64, exactly."""
         v = self.elements[rows].double()
         if self.scales is not None:
-            s = self.operand.scaling
+            s, (r, k) = self.operand.scaling, v.shape
             i = torch.arange(self.elements.shape[0], device=v.device)[rows] // s.rows
-            v = v * self.scales[i].double().repeat_interleave(s.cols or v.shape[1], 1)[:, :v.shape[1]]
-        return v if self.tensor is None else v * self.tensor.double()
+            v = (v.view(r, -1, s.cols or k) * self.scales[i].double()[..., None]).view(r, k)
+        return v if self.tensor is None else v * _rows(self.tensor, rows).double()
+
+
+def _rows(t: torch.Tensor | None, rows: torch.Tensor | slice) -> torch.Tensor | None:
+    """*t*'s *rows*, unless it is a scalar or absent."""
+    return t if t is None or t.dim() == 0 else t[rows]
 
 
 def _fp4(packed: torch.Tensor) -> torch.Tensor:
     return f4_unpacked_to_f32(unpack_uint4(packed))
 
 
-def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None) -> Quantized:
-    """*t* `[r, k]` by *op*'s standard round-to-nearest recipe, `torchao`'s:
-    MX with NVIDIA's scales (`ScaleCalculationMode.RCEIL`, cuBLAS's: the
-    ceiling of `amax / max`, so no element saturates),
-    NVFP4 with the per-tensor scale *tensor*, else from `t`'s largest
-    magnitude, FP8 with `amax / max` per block.  Rows short of a whole block are padded with
-    zeros, which leave its `amax` as it is; `k` must be a whole number of
-    blocks."""
+def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None,
+             amax: torch.Tensor | None = None) -> Quantized:
+    """*t* `[r, k]` by `torchao`'s RTN for *op*: MX with `RCEIL` scales
+    (cuBLAS's; nothing saturates); NVFP4 with per-tensor scale *tensor*,
+    else from *amax* (a scalar, or `[r, 1]` per row), else from `amax(|t|)`;
+    FP8 with `amax / max` per block, a ragged last row block zero-padded.
+    `k` must be whole blocks."""
     s = op.scaling
     dtype = DTYPES[op.elements]
     if s is None:
-        # *t* itself when it already holds the format's values, as a BF16
-        # checkpoint's weights loaded in FP32 do
+        # reuse *t* when lossless (e.g. BF16 weights held in FP32)
         q = t.to(dtype).float()
         return Quantized(op, t if t.dtype == torch.float32 and torch.equal(q, t) else q)
     if s.fmt == fp.MX_E8M0:
@@ -163,11 +158,15 @@ def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None) -
         elements = _fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float()
         return Quantized(op, elements, q.scale.float())
     if s.tensor:
-        g = per_tensor_amax_to_scale(t.abs().amax()) if tensor is None else tensor
-        q = NVFP4Tensor.to_nvfp4(t.float(), s.cols, per_tensor_scale=g)
-        return Quantized(op, _fp4(q.qdata), q.scale.float(), q.per_tensor_scale)
+        if tensor is None:
+            tensor = per_tensor_amax_to_scale(t.abs().amax() if amax is None else amax)
+        scales, packed = nvfp4_quantize(t.float().contiguous(), s.cols, tensor)
+        return Quantized(op, _fp4(packed), scales.float(), tensor)
     granularity = PerRow() if s.cols is None else PerBlock([s.rows, s.cols])
     r = t.shape[0]
     padded = torch.nn.functional.pad(t, (0, 0, 0, -r % s.rows))
-    q = Float8Tensor.from_hp(padded, float8_dtype=dtype, granularity=granularity)
+    # a lower bound keeps an all-zero block's scale from 0 (and its elements from NaN)
+    q = Float8Tensor.from_hp(padded, float8_dtype=dtype, granularity=granularity,
+                             hp_value_lb=torch.finfo(torch.float32).tiny,
+                             kernel_preference=KernelPreference.TORCH)
     return Quantized(op, q.qdata.float()[:r], q.scale.float())

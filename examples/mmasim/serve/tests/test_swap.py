@@ -98,18 +98,19 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
     quantized operands' FP64 product rounded once; each design, its scales
     applied around the kernel, per 128 of `k`, or by its instructions, is
     nearer the exact run than quantizing moved it from R0."""
-    fp8 = quant.SCHEMES[name]
-    assert swap.modes(fp8) == ('fp32', f'{name}-exact', *designs)
-    if fp8.applied != 'instruction':
+    scheme = quant.SCHEMES[name]
+    assert swap.modes(scheme) == ('fp32', f'{name}-exact', *designs)
+    if scheme.applied != 'instruction':
         assert swap.modes(quant.scheme(f'{name}:fnuz'))[2:] == ('amd.cdna3.fp8',)
     run = swap.patch(model)
     r0 = _logits(model, tokens)
-    run.scheme, run.mode = fp8, f'{name}-exact'
+    run.scheme, run.mode = scheme, f'{name}-exact'
     pairs = []
 
     def check(layer: torch.nn.Linear, inputs: tuple[torch.Tensor], y: torch.Tensor) -> None:
-        qa = quant.quantize(inputs[0].reshape(-1, inputs[0].shape[-1]), fp8.x)
-        qw = quant.quantize(layer.weight, fp8.w)
+        x = inputs[0].reshape(-1, inputs[0].shape[-1]).to(torch.bfloat16).float()
+        qa = quant.quantize(x, scheme.x)
+        qw = quant.quantize(layer.weight, scheme.w)
         pairs.append((y.reshape(qa.elements.shape[0], -1),
                       (qa.dequantize() @ qw.dequantize().T).float()))
 
@@ -122,6 +123,6 @@ def test_a_scheme_picks_its_designs_and_quantizes_both_operands(
             h.remove()
     assert pairs and all(torch.equal(got, want) for got, want in pairs)
     quantizing = (exact - r0).abs().max()
-    for run.mode in swap.modes(fp8)[2:]:
+    for run.mode in swap.modes(scheme)[2:]:
         assert (_logits(model, tokens) - exact).abs().max() < quantizing
     run.mode, run.scheme = 'fp32', swap.BF16

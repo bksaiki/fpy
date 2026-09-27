@@ -60,7 +60,7 @@ def test_cached_inputs_give_the_model_run_where_inputs_agree(
     first = [f'model.layers.0.self_attn.{p}_proj' for p in 'qkv']
     assert len({acts.index[n] for n in first}) == 1
 
-    # unquantized inputs FP32 there, BF16 here
+    # layers.evaluate's unquantized inputs are FP32; local's are BF16
     same = [m for m in local.METRICS if m != 'quantization']
     got = local.evaluate(model, run, acts, design)['quantized']['all']
     want = layers.evaluate(model, run, [tokens], [design], same)[design]
@@ -99,25 +99,26 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
     costs nothing and the two references agree; a design the scheme does not
     apply to is refused, as is splitting `k`'s own blocks further."""
     run = swap.patch(model)
-    fp8 = quant.SCHEMES[name]
-    acts = local.capture(model, run, _seqs(tokens), scheme=fp8)
-    design = kernels.designs(fp8)[0]
+    scheme = run.scheme = quant.SCHEMES[name]
+    acts = local.capture(model, run, _seqs(tokens))
+    design = kernels.designs(scheme)[0]
     own, both = (sum(r['all'].values(), layers.Stats()).report(local.METRICS)
-                 for r in local.evaluate(model, run, acts, design, scheme=fp8).values())
+                 for r in local.evaluate(model, run, acts, design).values())
     assert own['quantization'] > 0 and own['rounded'] < 1
     assert both['normwise'] > own['normwise'] > 0
+    with pytest.raises(ValueError, match='does not take'):
+        local.evaluate(model, run, acts, 'amd.cdna2.bf16')
+    if scheme.applied != 'epilogue':
+        run.split_k = 2
+        with pytest.raises(ValueError, match='its own blocks'):
+            local.evaluate(model, run, acts, design)
+        run.split_k = 1
+    run.scheme = swap.BF16
     own, both = (sum(r['all'].values(), layers.Stats()).report(local.METRICS)
                  for r in local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
                                          'amd.cdna2.bf16').values())
     assert own.pop('quantization') == 0 and own.pop('rounded') > 0
     assert own == {m: v for m, v in both.items() if m in own}
-    with pytest.raises(ValueError, match='does not take'):
-        local.evaluate(model, run, acts, 'amd.cdna2.bf16', scheme=fp8)
-    if fp8.applied != 'epilogue':
-        run.split_k = 2
-        with pytest.raises(ValueError, match='its own blocks'):
-            local.evaluate(model, run, acts, design, scheme=fp8)
-        run.split_k = 1
 
 
 def test_sample_is_fixed_and_in_order() -> None:

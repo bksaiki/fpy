@@ -111,8 +111,8 @@ def test_a_chain_of_instructions_agrees_with_the_interpreter(design: str) -> Non
     if per == 1:
         xs, ys = xs[..., 0], ys[..., 0]
     held = kernels.storage(design)
-    got = kernels.chain(x.cuda().to(held[0]), kernels.prepare(w.cuda(), held[1], s),
-                        xs.cuda().to(held[2]), ys.cuda().to(held[2]), design).cpu()
+    got = kernels.matmul(x.cuda().to(held[0]), kernels.prepare(w.cuda(), held[1], s), design,
+                         scales=(xs.cuda().to(held[2]), ys.cuda().to(held[2]))).cpu()
     for i in range(m):
         for j in range(n):
             acc = 0.0

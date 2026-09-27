@@ -1,14 +1,7 @@
 """
-Quantized checkpoints (`compressed-tensors`), and the weights a model is
-evaluated with under a scheme.
-
-:func:`load` builds a checkpoint's model from its own config and tensors:
-each quantized linear layer's weight is its dequantized values in FP32 (the
-weight R0 runs), and its stored elements and scales are kept in the
-checkpoint's scheme, with NVFP4's static per-tensor activation scales.
-:func:`weights_for` applies the rules of `docs/todos/mmasim-serving.md`: a
-checkpoint in the scheme as it is; one in another scheme converted if that
-is exact, else only when asked to requantize; a master left to RTN.
+Quantized `compressed-tensors` checkpoints: :func:`load` reads one (R0 runs
+its dequantized weights); :func:`weights_for` gives its weights under a
+scheme (`docs/todos/mmasim-serving.md`).
 """
 
 import json
@@ -37,14 +30,15 @@ class Checkpoint:
 def _scheme(qc: dict[str, Any]) -> quant.Scheme:
     """The scheme a `compressed-tensors` quantization config describes."""
     group = next(iter(qc['config_groups'].values()))
-    w = group['weights']
-    if w['num_bits'] == 4 and w.get('group_size') == 16:
-        return quant.SCHEMES['nvfp4']
-    if w['num_bits'] == 8 and w['type'] == 'float' and w['strategy'] == 'channel':
-        return quant.SCHEMES['fp8-row']
-    if w['num_bits'] == 8 and w['strategy'] == 'block' and w['block_structure'] == [128, 128]:
-        return quant.SCHEMES['fp8-block']
-    raise ValueError(f'no scheme for weights {w}')
+    w, x = group['weights'], group.get('input_activations')
+    if w['type'] == 'float' and x and x['type'] == 'float' and x['num_bits'] == w['num_bits']:
+        if w['num_bits'] == 4 and w.get('group_size') == 16:
+            return quant.SCHEMES['nvfp4']
+        if w['num_bits'] == 8 and w['strategy'] == 'channel':
+            return quant.SCHEMES['fp8-row']
+        if w['num_bits'] == 8 and w['strategy'] == 'block' and w['block_structure'] == [128, 128]:
+            return quant.SCHEMES['fp8-block']
+    raise ValueError(f'no scheme for weights {w}, activations {x}')
 
 
 def _weight(scheme: quant.Scheme, t: dict[str, torch.Tensor], name: str) -> quant.Quantized:

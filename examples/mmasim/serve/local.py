@@ -2,17 +2,13 @@
 Local per-layer error of each design on cached activations, without running
 the model.
 
-Every linear layer's BF16 input is captured once under the scheme's exact
-run (`--scheme`, default `bf16`) on a workload (`workloads`), the same for
-every design; each design the scheme applies to then runs only its kernel on
-each cached input and weight, both quantized by the scheme, against their
-exact product (`layers.local`).  `--by` splits the result by a tag.  `--models` takes
-masters, quantized by RTN (`lm_head` left unquantized under a quantizing
-scheme, as every checkpoint found leaves it), and quantized checkpoints
-(`checkpoints`), taken as they are in their own scheme.  A grid search
-registers designs (`kernels.register`), captures once, and calls
-:func:`evaluate` per design; the seconds reported per design include the
-metrics' own FP64 work.
+Every linear layer's BF16 input is captured once under `--scheme`'s exact
+run on a workload (`workloads`); each applicable design then runs only its
+kernel on the cached, quantized operands, measured against the exact
+product of the quantized and of the unquantized operands (`layers.local`).
+`--by` splits by a tag.  `--models` takes masters (RTN, `lm_head`
+unquantized unless `bf16`) and checkpoints (`checkpoints.weights_for`).
+Seconds per design include the metrics' FP64 work.
 
     python serve/local.py                               # every BF16 design
     python serve/local.py -d amd.cdna2.bf16 --tokens 512 --layers mlp -o s.json
@@ -56,13 +52,13 @@ class Activations:
     distinct input (`q/k/v_proj` share one, as do `gate/up_proj`)."""
 
     inputs: list[torch.Tensor]
+    amax: list[torch.Tensor]
+    """Per input, each row's sequence's `max |x|` `[t]`: a dynamic per-tensor
+    scale's, as the model computes it per call."""
     index: dict[str, int]
     """Each layer's input in :attr:`inputs`, by name."""
     tags: dict[str, list[str]]
     """Per tag, each row's label (`workloads.Sequence.tags`)."""
-
-    def input(self, name: str) -> torch.Tensor:
-        return self.inputs[self.index[name]]
 
 
 def sample(seqs: list[workloads.Sequence], tokens: int | None) -> list[list[int]]:
@@ -83,13 +79,14 @@ def sample(seqs: list[workloads.Sequence], tokens: int | None) -> list[list[int]
 
 def capture(
     model: torch.nn.Module, run: swap.Run, seqs: list[workloads.Sequence],
-    tokens: int | None = None, scheme: quant.Scheme = swap.BF16,
+    tokens: int | None = None,
 ) -> Activations:
-    """Each linear layer's input under *scheme*'s exact run, as BF16 (the
-    values a deployment holds, before any quantizing), at :func:`sample`'s
-    positions over *seqs*.  *run* is `swap.patch(model)`'s."""
+    """Each linear layer's input under *run*'s scheme's exact run, as BF16
+    (the values a deployment holds, before any quantizing), at
+    :func:`sample`'s positions over *seqs*.  *run* is `swap.patch(model)`'s."""
     keep = sample(seqs, tokens)
     parts: list[list[torch.Tensor]] = []
+    peaks: list[list[torch.Tensor]] = []
     index: dict[str, int] = {}
     last, slot, rows = None, -1, None
 
@@ -99,13 +96,15 @@ def capture(
             last, slot = args[0], slot + 1
             if slot == len(parts):
                 parts.append([])
-            parts[slot].append(args[0][0, rows].to(torch.bfloat16).cpu())
+                peaks.append([])
+            x = args[0].to(torch.bfloat16)
+            parts[slot].append(x[0, rows].cpu())
+            peaks[slot].append(x.abs().amax().float().expand(len(rows)).cpu())
         index[name] = slot
 
     handles = [m.register_forward_pre_hook(partial(record, n)) for n, m in model.named_modules()
                if isinstance(m, torch.nn.Linear)]
-    previous = run.scheme
-    run.mode, run.scheme = f'{scheme.name}-exact', scheme
+    run.mode = f'{run.scheme.name}-exact'
     try:
         with torch.no_grad():
             for seq, pos in zip(seqs, keep):
@@ -113,28 +112,25 @@ def capture(
                     last, slot, rows = None, -1, torch.tensor(pos, device='cuda')
                     model(torch.tensor([seq.ids], device='cuda'))
     finally:
-        run.mode, run.scheme = 'fp32', previous
+        run.mode = 'fp32'
         for h in handles:
             h.remove()
     tags = {k: [seq.tags[k][p] for seq, pos in zip(seqs, keep) for p in pos] for k in seqs[0].tags}
-    return Activations([torch.cat(p) for p in parts], index, tags)
+    return Activations([torch.cat(p) for p in parts], [torch.cat(p) for p in peaks], index, tags)
 
 
 def evaluate(
     model: torch.nn.Module, run: swap.Run, acts: Activations, design: str,
-    metrics: Collection[str] = METRICS, *, scheme: quant.Scheme = swap.BF16,
-    by: str | None = None, only: str | None = None,
+    metrics: Collection[str] = METRICS, *, by: str | None = None, only: str | None = None,
     masters: dict[str, torch.Tensor] | None = None, unquantized: bool = True,
 ) -> dict[str, dict[str, dict[str, layers.Stats]]]:
-    """*design*'s local :class:`layers.Stats` for *metrics* under *scheme*,
-    by reference (`quantized`, the quantized operands' exact product: the
-    design's own effect; and, if *unquantized*, `unquantized`, the original
-    operands': the quantization's and the design's), per group of rows (by
-    the tag *by*; one group, `all`, without) and per linear layer of *model*
-    (those whose name *only* matches, as a regex), on *acts*.  *run*
-    (`swap.patch(model)`'s) gives each layer's weight and static scale,
-    splits `k` as it says, and leaves out the layers it ignores; the original
-    weights are *masters*', by layer name, else the layer's own."""
+    """*design*'s :class:`layers.Stats` under *run*'s scheme, as `{reference:
+    {group: {layer: Stats}}}`: references :data:`REFERENCES` (`unquantized`
+    only if *unquantized*); groups by tag *by*, else `all`; layers matching
+    regex *only*, minus *run*'s ignored ones.  *run* gives weights, static
+    scales and `k` splits; unquantized weights are *masters*', else the
+    layer's own."""
+    scheme = run.scheme
     if not kernels.applicable(design, scheme):
         raise ValueError(f'{design} does not take {scheme.name}')
     groups: dict[str, torch.Tensor | slice] = {'all': slice(None)}
@@ -145,51 +141,50 @@ def evaluate(
     stats: dict[str, dict[str, dict[str, layers.Stats]]] = {
         r: {g: {} for g in groups} for r in REFERENCES[:1 + unquantized]}
     held = kernels.storage(design)[1]
-    previous, run.scheme = run.scheme, scheme
-    try:
-        with torch.no_grad():
-            for name, layer in model.named_modules():
-                if (not isinstance(layer, torch.nn.Linear) or id(layer.weight) in run.ignore
-                        or (only and not re.search(only, name))):
-                    continue
-                a = acts.input(name).cuda().float()
-                qa, qw = run.quantize(a, layer.weight), run.weight(layer.weight)
-                split = swap.slices(design, scheme, a.shape[1], run.split_k)
-                y = swap.gemm(design, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
-                              run.combine)
-                w0 = layer.weight if masters is None else masters[name].cuda()
-                for g, rows in groups.items():
-                    s0 = None
-                    if unquantized:
-                        s0 = stats['unquantized'][g][name] = layers.Stats()
-                    layers.local(stats['quantized'][g].setdefault(name, layers.Stats()), metrics,
-                                 qa.take(rows), qw, y[rows], (a[rows], w0), s0)
-    finally:
-        run.scheme = previous
+    with torch.no_grad():
+        for name, layer in model.named_modules():
+            if (not isinstance(layer, torch.nn.Linear) or id(layer.weight) in run.ignore
+                    or (only and not re.search(only, name))):
+                continue
+            i = acts.index[name]
+            a = acts.inputs[i].cuda().float()
+            qa = run.quantize(a, layer.weight, acts.amax[i].cuda()[:, None])
+            qw = run.weight(layer.weight)
+            split = swap.slices(design, scheme, a.shape[1], run.split_k)
+            y = swap.gemm(design, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
+                          run.combine)
+            w0 = layer.weight if masters is None else masters[name].cuda()
+            for g, rows in groups.items():
+                s0 = None
+                if unquantized:
+                    s0 = stats['unquantized'][g][name] = layers.Stats()
+                layers.local(stats['quantized'][g].setdefault(name, layers.Stats()), metrics,
+                             qa.take(rows), qw, y[rows], (a[rows], w0), s0)
     return stats
 
 
 def _load(name: str, scheme: quant.Scheme, *, requantize: bool, master: str | None,
           split_k: int, combine: kernels.Combine,
           ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any], dict[str, torch.Tensor] | None]:
-    """*name* ready to evaluate under *scheme*; what its weights are (their
-    source, the layers left unquantized, the master their quantization is
-    measured against, if one is known); and that master's weights (`None`:
+    """*name*'s model and run under *scheme*, its `about` (weights' source,
+    unquantized layers, master or `None`), and the master's weights (`None`:
     the model's own)."""
-    if not checkpoints.is_checkpoint(name):
-        model, run = swap.load(name, split_k, combine)
-        ignore = [] if scheme.name == 'bf16' else ['lm_head']
+    masters = None
+    if checkpoints.is_checkpoint(name):
+        model, ckpt = checkpoints.load(name)
+        run = swap.patch(model)
+        weights, source = checkpoints.weights_for(ckpt, scheme, requantize)
+        ignore = ckpt.ignore
+        swap.give(run, model, scheme, weights, ckpt.inputs if source == 'checkpoint' else None,
+                  ignore)
+        master = master or checkpoints.base_model(name)
+        masters = None if master is None else checkpoints.master_weights(master)
+    else:
+        model, run = swap.load(name)
+        source, ignore, master = 'rtn', [] if scheme.name == 'bf16' else ['lm_head'], name
         swap.give(run, model, scheme, {}, ignore=ignore)
-        return model, run, {'source': 'rtn', 'ignore': ignore, 'master': name}, None
-    model, ckpt = checkpoints.load(name)
-    run = swap.patch(model)
     run.split_k, run.combine = split_k, combine
-    weights, source = checkpoints.weights_for(ckpt, scheme, requantize)
-    swap.give(run, model, scheme, weights, ckpt.inputs if source == 'checkpoint' else None,
-              ckpt.ignore)
-    master = master or checkpoints.base_model(name)
-    masters = None if master is None else checkpoints.master_weights(master)
-    return model, run, {'source': source, 'ignore': ckpt.ignore, 'master': master}, masters
+    return model, run, {'source': source, 'ignore': ignore, 'master': master}, masters
 
 
 def main(argv: list[str]) -> int:
@@ -232,7 +227,7 @@ def main(argv: list[str]) -> int:
         metrics = [m for m in args.metrics if m != 'quantization' or known]
         refs = {'quantized': metrics}
         if known:
-            refs['unquantized'] = [m for m in metrics if m not in ('rounded', 'quantization')]
+            refs['unquantized'] = [m for m in metrics if m not in layers.QUANTIZED_ONLY]
         if args.workload == 'wikitext':
             seqs = workloads.wikitext(name, args.tokens)
         else:
@@ -241,7 +236,7 @@ def main(argv: list[str]) -> int:
             path = args.transcripts or (Path(__file__).parent / 'results'
                                         / f'mtbench-{name.replace("/", "--")}.json')
             seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name), path)
-        acts = capture(model, run, seqs, args.tokens, args.scheme)
+        acts = capture(model, run, seqs, args.tokens)
 
         results: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
         total: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
@@ -250,8 +245,8 @@ def main(argv: list[str]) -> int:
             kernels.compiled(design)
             torch.cuda.synchronize()
             start = time.perf_counter()
-            stats = evaluate(model, run, acts, design, metrics, scheme=args.scheme, by=args.by,
-                             only=args.layers, masters=masters, unquantized=known)
+            stats = evaluate(model, run, acts, design, metrics, by=args.by, only=args.layers,
+                             masters=masters, unquantized=known)
             torch.cuda.synchronize()
             seconds[design] = time.perf_counter() - start
             for r, per_ref in stats.items():

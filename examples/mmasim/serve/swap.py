@@ -4,11 +4,11 @@ Replace how a model's `nn.Linear` layers compute, one run at a time.
 A run computes under a quantization scheme (`quant`, default `bf16`):
 
 - `fp32`: the model in full precision, `x @ W.T` in FP32 (TF32 off).
-- `<scheme>-exact` (`bf16-exact`, ...): `x` and `W` quantized by the
-  scheme, their product in FP64 (exact for BF16 and FP8 products), rounded
-  once to FP32.
+- `<scheme>-exact` (`bf16-exact`, ...): `x` (from BF16) and `W` quantized
+  by the scheme, their product in FP64, rounded once to FP32.
 - a design the scheme applies to (`kernels.designs`): the quantized
-  elements through its kernel, the scheme's scales applied after it.
+  elements through its kernel, the scheme's scales applied after it, per
+  block of `k`, or by its instructions (:func:`gemm`).
 
 Everything outside the linear layers is left as it is: load the model in FP32
 so that is full precision in every run.  A linear layer with a bias is
@@ -61,9 +61,9 @@ def exact(qa: quant.Quantized, qw: quant.Quantized) -> torch.Tensor:
 
 
 def slices(design: str, scheme: quant.Scheme, k: int, split_k: int) -> int:
-    """The slices of `k` a weight is prepared in for *design* under
-    *scheme*: *split_k*, or `k`'s own blocks, split no further: `fp8-block`'s
-    128s, or a block-scaled design's instructions."""
+    """How many slices of `k` to prepare a weight in: *split_k*, or one per
+    scale block of `k` (`fp8-block`'s 128) or per instruction of a
+    block-scaled *design*."""
     if scheme.applied not in ('k-blocks', 'instruction'):
         return split_k
     if split_k != 1:
@@ -75,7 +75,7 @@ def slices(design: str, scheme: quant.Scheme, k: int, split_k: int) -> int:
 
 def _per_call(q: quant.Quantized, design: str) -> torch.Tensor:
     """*q*'s block scales as a block-scaled *design*'s instructions take them,
-    `[s, rows]` (one a call) or `[s, rows, g]` (one a group of the call),
+    `[s, rows]` (one per call) or `[s, rows, g]` (one per group),
     each scale repeated over the groups its block covers."""
     k0, g = kernels.compiled(design)[1], kernels.group(design)
     r, k = q.elements.shape
@@ -86,20 +86,19 @@ def _per_call(q: quant.Quantized, design: str) -> torch.Tensor:
 
 def gemm(design: str, scheme: quant.Scheme, qa: quant.Quantized, qw: quant.Quantized,
          w: torch.Tensor, combine: kernels.Combine = 'linear') -> torch.Tensor:
-    """`qa @ qw.T` by *design* under *scheme*, FP32: *w* is *qw*'s elements
-    prepared for it (`kernels.prepare`, in :func:`slices`), and the scales
-    applied after the kernel, `acc * s_x[i] * s_w[j]`, to each block of
-    `k`'s partial (`kernels.matmul`), or by the instructions
-    (`kernels.chain`), a per-tensor scale then `acc * (g_x * g_w)`."""
+    """`qa @ qw.T` by *design* under *scheme*, FP32; *w* is *qw*'s elements
+    prepared in :func:`slices`.  Scales apply per `scheme.applied`: after
+    the GEMM, `acc * s_x[i] * s_w[j]`; to each block of `k`'s partial; or in
+    the instructions, then per tensor, `acc * (g_x * g_w)`."""
     a = qa.elements.to(kernels.storage(design)[0])
     if scheme.applied == 'instruction':
-        y = kernels.chain(a, w, _per_call(qa, design), _per_call(qw, design), design)
-        return y if qa.tensor is None else y * (qa.tensor * qw.tensor)
+        y = kernels.matmul(a, w, design, scales=(_per_call(qa, design), _per_call(qw, design)))
+        return y if qa.tensor is None else y.mul_(qa.tensor * qw.tensor)
     if scheme.applied == 'k-blocks':
         sw = qw.scales.repeat_interleave(qw.operand.scaling.rows, 0)[:w.shape[1]]
         return kernels.matmul(a, w, design, scales=(qa.scales, sw))
     y = kernels.matmul(a, w, design, combine)
-    return y * qa.scales * qw.scales.T if scheme.applied == 'epilogue' else y
+    return y.mul_(qa.scales).mul_(qw.scales.T) if scheme.applied == 'epilogue' else y
 
 
 @dataclass
@@ -126,15 +125,14 @@ class Run:
     ignore: set[int] = field(default_factory=set)
     _weights: dict[tuple[int, int, str], tuple[torch.Tensor, quant.Quantized]] = field(
         default_factory=dict, compare=False, repr=False)
-    """Each weight and it quantized, by `id`, version and scheme."""
-    _prepared: dict[tuple[int, int, str, torch.dtype, int], torch.Tensor] = field(
+    """Each weight and its quantized form, by `id`, version and scheme."""
+    _prepared: dict[int, tuple[quant.Quantized, torch.dtype, int, torch.Tensor]] = field(
         default_factory=dict, compare=False, repr=False)
-    """Each quantized weight prepared (`kernels.prepare`), by `id`, version,
-    scheme, storage and split; only the current scheme, storage and split's
-    are kept."""
+    """By weight `id`, its last quantized form, storage, split, and those
+    elements prepared (`kernels.prepare`)."""
     _input: tuple[torch.Tensor, tuple[Any, ...], quant.Quantized] | None = field(
         default=None, compare=False, repr=False)
-    """The last input, its version, scheme and static scale, and it quantized."""
+    """The last input, its version, scheme and scales' ids, and its quantized form."""
 
     def _given(self) -> Given | None:
         return self.given if self.given is not None and self.given.scheme == self.scheme.name else None
@@ -152,24 +150,25 @@ class Run:
 
     def _prepare(self, w: torch.Tensor, qw: quant.Quantized, dtype: torch.dtype) -> torch.Tensor:
         split = slices(self.mode, self.scheme, w.shape[1], self.split_k)
-        key = (id(w), w._version, self.scheme.name, dtype, split)
-        if key not in self._prepared:
-            self._prepared = {k: v for k, v in self._prepared.items()
-                              if k[0] != id(w) and k[2:] == key[2:]}
-            self._prepared[key] = kernels.prepare(qw.elements, dtype, split)
-        return self._prepared[key]
+        got = self._prepared.get(id(w))
+        if got is None or got[0] is not qw or got[1:3] != (dtype, split):
+            got = self._prepared[id(w)] = (qw, dtype, split, kernels.prepare(qw.elements, dtype, split))
+        return got[3]
 
-    def quantize(self, x: torch.Tensor, w: torch.Tensor) -> quant.Quantized:
-        """*x*, the input of the layer with weight *w*, quantized (with its
-        static scale, if given), reused while the same tensor comes back
+    def quantize(self, x: torch.Tensor, w: torch.Tensor,
+                 amax: torch.Tensor | None = None) -> quant.Quantized:
+        """*x*, the input of the layer with weight *w*, rounded to BF16 and
+        quantized (with its static scale, if given; else a per-tensor scale
+        from *amax*, if given), reused while the same tensor comes back
         unchanged: `q/k/v_proj` share one, as do `gate/up_proj`."""
         given = self._given()
         scale = None if given is None else given.inputs.get(id(w))
-        key = (x._version, self.scheme.name, None if scale is None else float(scale))
+        key = (x._version, self.scheme.name, id(scale), id(amax))
         last = self._input
         if last is not None and last[0] is x and last[1] == key:
             return last[2]
-        qa = quant.quantize(x.reshape(-1, x.shape[-1]), self.scheme.x, scale)
+        a = x.reshape(-1, x.shape[-1]).to(torch.bfloat16).float()
+        qa = quant.quantize(a, self.scheme.x, scale, amax)
         self._input = (x, key, qa)
         return qa
 
@@ -205,10 +204,10 @@ def patch(model: torch.nn.Module) -> Run:
 def give(run: Run, model: torch.nn.Module, scheme: quant.Scheme,
          weights: dict[str, quant.Quantized], inputs: dict[str, torch.Tensor] | None = None,
          ignore: list[str] | tuple[str, ...] = ()) -> None:
-    """Have *run* take *model*'s layers named in *weights* with those
-    weights under *scheme* (and the static activation scales *inputs*), and
-    compute those named in *ignore* as R0."""
+    """Set *run*'s scheme, give it *weights* and static activation scales
+    *inputs* for it, by layer name; layers in *ignore* compute as R0."""
     layers = dict(model.named_modules())
+    run.scheme = scheme
     run.given = Given(scheme.name, {id(layers[n].weight): q for n, q in weights.items()},
                       {id(layers[n].weight): s for n, s in (inputs or {}).items()})
     run.ignore = {id(layers[n].weight) for n in ignore}
