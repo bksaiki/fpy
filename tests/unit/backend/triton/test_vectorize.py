@@ -206,11 +206,12 @@ class TestRefuses:
                 row[0] = A[i][0]
             return out
 
-        assert _why(f) is not None
+        assert 'writes `row` at the same index' in _why(f)
 
     def test_a_write_through_an_alias_in_a_nested_loop(self):
         """`row[j]` writes `out[0]`, whichever `i`."""
-        assert why_not_tileable(_loops(_fixed_row.ast)[0], _fixed_row.ast) is not None
+        why = why_not_tileable(_loops(_fixed_row.ast)[0], _fixed_row.ast)
+        assert 'cannot show distinct per iteration' in why
 
 
 class TestApi:

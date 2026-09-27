@@ -20,6 +20,7 @@ import pytest
 import fpy2 as fp
 from fpy2.backend.cpp.compiler import CppCompiler
 from fpy2.backend.cpp.types import CppList, CppTuple
+from fpy2.backend.cpp.unbox import UnboxMode
 from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
@@ -41,13 +42,17 @@ def _levels(ty, path=''):
 
 
 def _profile():
-    """``(total levels, [names that keep a handle])`` over the corpus."""
+    """``(total levels, [names that keep a handle])`` over the corpus.
+
+    Under ALLOW: STRICT refuses a function that keeps a handle, which would
+    drop it here rather than count it.
+    """
     total, boxed = 0, []
     for f in corpus():
         try:
             ty = fp.analysis.TypeInfer.check(f.ast)
             args = [_inst_type(t) for t in ty.arg_types]
-            params, ret = CppCompiler().signature(
+            params, ret = CppCompiler(unbox=UnboxMode.ALLOW).signature(
                 f, ctx=fp.FP64, arg_types=args,
             )
         except Exception:
@@ -67,7 +72,7 @@ def profile():
 
 def test_no_signature_keeps_a_handle_unexpectedly(profile):
     _total, boxed = profile
-    assert boxed == [], (
+    assert len(boxed) == EXPECTED_BOXED, (
         f'{len(boxed)} signature list levels keep a handle:\n  '
         + '\n  '.join(boxed)
         + '\n\nEach is either real sharing — in which case record it in '

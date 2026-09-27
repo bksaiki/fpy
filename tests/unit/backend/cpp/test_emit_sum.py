@@ -68,7 +68,8 @@ class TestAccumulatorWidth:
             f, ctx=fp.FP64, arg_types=[_L64],
         )
         assert 'std::accumulate' in out, out
-        assert 'static_cast<double>(' in out, out
+        # the seed's cast, not the empty-list guard's `static_cast<double>(0)`
+        assert 'static_cast<double>(q[static_cast<size_t>(0)])' in out, out
 
     def test_a_narrower_accumulator_is_refused(self):
         """FP64 elements into an FP32 accumulator.

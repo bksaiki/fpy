@@ -28,9 +28,6 @@ from fpy2.types import BoolType, RealType
 from tests.infra.backend.cpp import _inst_type, corpus
 from tests.infra.examples import all_example_tests, all_unit_tests
 
-# The generated matrix's mixed-format instantiations, which are what reach the
-# storage-reconciliation paths at all -- a uniform-format sweep never does.
-_FORMATS = (fp.FP32, fp.FP64)
 
 
 def _internal_cause(exc: BaseException) -> CppInternalError | None:
@@ -51,9 +48,13 @@ def _internal_cause(exc: BaseException) -> CppInternalError | None:
 
 
 def _attempt(func, arg_types) -> str | None:
-    """Compile *func*, returning a failure description iff it hit an invariant."""
+    """Compile *func*, returning a failure description iff it hit an invariant.
+
+    Under a concrete context: a symbolic one fails storage selection for most of
+    the corpus, before the emitter -- where every invariant is -- is reached.
+    """
     try:
-        CppCompiler().compile(func, arg_types=arg_types)
+        CppCompiler().compile(func, ctx=fp.FP64, arg_types=arg_types)
     except Exception as e:
         internal = _internal_cause(e)
         if internal is not None:
@@ -77,17 +78,12 @@ def _sweep():
         hit = _attempt(f, uniform)
         if hit is not None:
             hits.append(hit)
-        # mixed: re-instantiate every real/list-of-real argument at FP32, which
-        # is what drives a narrower value into a wider place
-        for fmt in _FORMATS:
-            try:
-                mixed = [_inst_type(t) for t in ty.arg_types]
-                mixed = [_retype(a, fmt) for a in mixed]
-            except Exception:
-                continue
-            hit = _attempt(f, mixed)
-            if hit is not None:
-                hits.append(hit)
+        # mixed: every real/list-of-real argument at FP32 under the FP64 body,
+        # which is what drives a narrower value into a wider place -- the
+        # storage-reconciliation paths a uniform sweep never reaches
+        hit = _attempt(f, [_retype(a, fp.FP32) for a in uniform])
+        if hit is not None:
+            hits.append(hit)
     return hits
 
 

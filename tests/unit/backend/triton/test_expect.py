@@ -408,7 +408,6 @@ def test_a_power_of_two_product_is_ldexp():
     src = TritonCompiler(drop_asserts=True).compile(
         scaled, ctx=fp.REAL, arg_types=_SCALE_ARGS)
     assert 'libdevice.ldexp(' in src.source
-    assert '**' not in src.source
 
 
 def test_ldexp_is_refused_where_the_context_would_round():

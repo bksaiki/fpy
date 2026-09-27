@@ -514,9 +514,9 @@ class TestFloatContextUnaffected:
     def test_non_float_context_in_float_storage_is_reported(self):
         """``storage.is_float()`` does not imply a float context — that used to
         be a bare ``assert`` and is now a diagnostic."""
-        # a fixed-point context at a non-zero position lands here
-        with pytest.raises(CppCompileError):
-            _emit(MPBFixedContext(-8, fp.RealFloat(exp=4, c=1), overflow=ASSERT))
+        # a bounded float that is not an `EFloatContext` lands here
+        with pytest.raises(CppCompileError, match='is not a floating-point context'):
+            _emit(fp.MPBFloatContext(11, -14, fp.RealFloat(c=65504)))
 
 
 class TestTheLoweredScaleInStaysNarrow:

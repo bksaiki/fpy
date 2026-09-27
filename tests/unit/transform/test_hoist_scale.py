@@ -17,7 +17,7 @@ import pytest
 from fpy2.analysis import ArraySizeInfer, LiveVars, ValueClassInfer
 from fpy2.analysis.array_size import ListSize, is_size_eq
 from fpy2.ast import IndexedAssign, Pow, Sum, Var
-from fpy2.transform import HoistScale, TransformDeclined, walk_exprs
+from fpy2.transform import HoistScale, TransformDeclined, hoist_scale, walk_exprs
 from fpy2.transform.hoist_invariant import _from_before, _Nodes
 from fpy2.transform.utils import RoundingScopes
 from fpy2.types import ListType, RealType
@@ -149,14 +149,6 @@ def _selection(ctx, *, use_min: bool = False):
                 return max([(2 ** k) * x for x in xs])
             else:
                 return 0.0
-    return f
-
-
-def _unguarded_selection(ctx):
-    """The same without the guard, so `2 ** k` may be zero or an infinity."""
-    @fp.fpy(ctx=ctx)
-    def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
-        return max([(2 ** k) * x for x in xs])
     return f
 
 
@@ -339,6 +331,26 @@ UNSOUND = (
     (product_read_in_the_body, [([1.0, 2.0, 4.0], 1.0)]),
     (product_rounds, [([1.0, 2.0], 1.0)]),
 )
+
+
+_NEVER_MATCHED = {'list_rebound_after_the_loop', 'writes_twice', 'product_rounds'}
+"""Refused by the match itself, before any soundness condition is asked, so there
+is no rewrite to run: `test_it_is_refused` is the whole story."""
+
+
+def _forced(func, monkeypatch) -> fp.Function:
+    """*func* rewritten with every soundness refusal lifted."""
+    monkeypatch.setattr(hoist_scale, '_why_not', lambda site, facts: None)
+    out = HoistScale.apply(func.ast)
+    assert not out.is_equiv(func.ast)
+    return fp.Function(out, runtime=func.runtime)
+
+
+def _outcome(func, args) -> str:
+    try:
+        return repr(func(*args))
+    except Exception as ex:  # noqa: BLE001 -- the exception is the outcome
+        return type(ex).__name__
 
 
 class TestTheShapeTheRewriteMatches:
@@ -555,13 +567,15 @@ class TestSoundness:
         assert HoistScale.sites(func.ast) == []
         assert HoistScale.apply(func.ast).is_equiv(func.ast)
 
-    @pytest.mark.parametrize('func,args', UNSOUND, ids=lambda v: getattr(v, 'name', ''))
-    def test_the_values_would_have_changed(self, func, args):
-        """Not just refused — refused for cause: the rewrite really is wrong
-        on each of these."""
-        out = fp.Function(HoistScale.apply(func.ast), runtime=func.runtime)
-        for a in args:
-            assert repr(out(*a)) == repr(func(*a))
+    @pytest.mark.parametrize(
+        'func,args', [c for c in UNSOUND if c[0].name not in _NEVER_MATCHED],
+        ids=lambda v: getattr(v, 'name', ''),
+    )
+    def test_the_values_would_have_changed(self, func, args, monkeypatch):
+        """Not just refused — refused for cause: with the refusal lifted, the
+        rewrite really is wrong on each of these."""
+        out = _forced(func, monkeypatch)
+        assert any(_outcome(out, a) != _outcome(func, a) for a in args)
 
 
 class TestSelections:
@@ -602,12 +616,19 @@ class TestSelections:
         assert _why(f) == ['the reduction does not round exactly']
 
     def test_a_factor_that_may_be_zero_is_refused(self):
-        """`2 ** k` is zero at `k = -inf`, and `0 * inf` is a NaN that a
-        selection propagates from any element while `c * max(xs)` sees only
-        the selected one.  The guard is what rules it out."""
-        f = _unguarded_selection(fp.REAL)
+        """`0 * inf` is a NaN that a selection propagates from any element,
+        while `c * max(xs)` sees only the selected one.  Finite is not enough."""
+        @fp.fpy(ctx=fp.REAL)
+        def f(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+            if fp.isfinite(k):
+                return max([k * x for x in xs])
+            else:
+                return 0.0
+
         assert HoistScale.sites(f.ast) == []
-        assert 'may be zero' in _why(f)[0] or 'infinity or a NaN' in _why(f)[0]
+        assert _why(f) == [
+            'the factor may be zero, and `0 * inf` is a NaN the selection would propagate'
+        ]
 
 
 _INTEGER_INF = [fp.Float(isinf=True), 1.0]
@@ -692,14 +713,6 @@ class TestSelectionSoundness:
 
     @pytest.mark.parametrize('func,args', SELECTION_UNSOUND,
                              ids=lambda v: getattr(v, 'name', ''))
-    def test_the_values_would_have_changed(self, func, args):
-        out = fp.Function(HoistScale.apply(func.ast), runtime=func.runtime)
-        try:
-            want = repr(func(*args))
-        except Exception as ex:
-            want = type(ex).__name__
-        try:
-            got = repr(out(*args))
-        except Exception as ex:
-            got = type(ex).__name__
-        assert want == got
+    def test_the_values_would_have_changed(self, func, args, monkeypatch):
+        out = _forced(func, monkeypatch)
+        assert _outcome(out, args) != _outcome(func, args)
