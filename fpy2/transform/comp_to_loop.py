@@ -133,8 +133,7 @@ class _CompToLoopInstance(SiteRewriter):
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
     `acc` and copying it in"""
-    slots: set[Expr]
-    """where a statement may go before the expression's own"""
+    strict: set[Expr]
 
     def __init__(
         self,
@@ -153,7 +152,7 @@ class _CompToLoopInstance(SiteRewriter):
         self.dependent = dependent
         self.index_ranges = index_ranges
         self._fill = None
-        self.slots = Hoistability.analyze(func).slots
+        self.strict = Hoistability.analyze(func).strict
 
     # ------------------------------------------------------------------
     # Verification
@@ -439,11 +438,10 @@ class _CompToLoopInstance(SiteRewriter):
             Declined(
                 'there is no statement-level position for the loop the rewrite '
                 'emits: a `while` condition runs every iteration, a conditional '
-                'branch or a short-circuited operand may not run at all, a '
-                'comprehension has no slot until the one around it is lowered, '
-                'and a loop hoisted past an operand to its left runs before it'
+                'branch or a short-circuited operand may not run at all, and a '
+                'comprehension has no slot until the one around it is lowered'
             )
-            if e not in self.slots
+            if e not in self.strict
             else self._verify(e)
         )
         if declined is not None:
@@ -492,6 +490,8 @@ class _CompToLoopInstance(SiteRewriter):
         if (
             isinstance(stmt.expr, ListComp)
             and isinstance(stmt.var, NamedId)
+            # every write repeats the indices, so they must be atoms
+            and all(isinstance(i, _ATOMIC) for i in stmt.indices)
             and self._fillable(stmt.expr, stmt.var, slot=True)
         ):
             self._fill = (stmt.expr, stmt.var, tuple(stmt.indices))
@@ -501,7 +501,11 @@ class _CompToLoopInstance(SiteRewriter):
             return ctx.pop(), ctx
         return s, ctx
 
+    def _fresh(self) -> NamedId:
+        return self.gensym.refresh(self.temp_id)
+
     def apply(self) -> FuncDef:
+        self._select()
         return self._visit_function(self.func, None)
 
 

@@ -103,6 +103,7 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..utils import Gensym
+from .utils import name_forced
 
 # ----------------------------------------------------------------------
 # The rewrite
@@ -157,11 +158,10 @@ class _HoistableInstance(DefaultTransformVisitor):
         whatever it holds, so this can name an aggregate.
         """
         rebuilt = super()._visit_expr(e, ctx)
-        if not ctx.hoistable or e not in ctx.force or isinstance(rebuilt, ATOMIC):
+        if not ctx.hoistable:
             return rebuilt
-        t = self.gensym.fresh(self.prefix)
-        ctx.stmts.append(Assign(t, None, rebuilt, e.loc))
-        return Var(t, e.loc)
+        fresh = lambda: self.gensym.fresh(self.prefix)
+        return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _lowered(self, e: Expr, ctx: _Ctx) -> bool:
         """Whether *e* becomes statements here.  :func:`lowers` says whether the
@@ -295,7 +295,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         inner = _Ctx(stmts=[])
         for stmt in block.stmts:
             s, _ = self._visit_statement(
-                stmt, dataclasses.replace(inner, force=frozenset(force_names(stmt))),
+                stmt, dataclasses.replace(inner, force=frozenset(force_names(stmt, lowers))),
             )
             inner.stmts.append(s)
         return StmtBlock(inner.stmts), ctx

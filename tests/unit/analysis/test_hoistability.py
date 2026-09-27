@@ -24,8 +24,9 @@ def _stmt(f, index: int = 0) -> Stmt:
 
 
 def _forced(node: 'Stmt | Expr') -> set[str]:
-    """:func:`force_names` as formatted source, which is what a test can read."""
-    return {e.format() for e in force_names(node)}
+    """:func:`force_names` for `Hoistable`'s lowerings, as formatted source,
+    which is what a test can read."""
+    return {e.format() for e in force_names(node, lowers)}
 
 
 def _first(func: FuncDef, kind) -> Expr:
@@ -45,6 +46,10 @@ def _first(func: FuncDef, kind) -> Expr:
 
 def _expr(f, kind) -> Expr:
     return _first(f.ast, kind)
+
+
+def _is_comp(e: Expr) -> bool:
+    return isinstance(e, fp.ast.ListComp)
 
 
 # ----------------------------------------------------------------------
@@ -103,13 +108,13 @@ class TestHoistsInside:
         @fp.fpy
         def f(x: fp.Real, c: bool) -> fp.Real:
             return 1.0 + fp.sqrt(fp.sqrt(x) if c else 0.0)
-        assert hoists_inside(_expr(f, fp.ast.Add))
+        assert hoists_inside(_expr(f, fp.ast.Add), lowers)
 
     def test_a_program_with_no_non_strict_position(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: fp.Real, d: fp.Real) -> fp.Real:
             return (a * b) + (c * d)
-        assert not hoists_inside(_expr(f, fp.ast.Add))
+        assert not hoists_inside(_expr(f, fp.ast.Add), lowers)
 
     def test_an_unlowered_ternary_still_reports_its_condition(self):
         """The arms are sealed but the condition is not: it runs whenever the
@@ -119,15 +124,7 @@ class TestHoistsInside:
             return x if (b and fp.sqrt(x) > y) else y
         outer = _expr(f, fp.ast.IfExpr)
         assert not lowers(outer)
-        assert hoists_inside(outer)
-
-    def test_a_comprehension_hoists_as_a_whole(self):
-        """`CompToLoop` lowers it into the enclosing slot, whatever its
-        element holds."""
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            return [x for x in xs]
-        assert hoists_inside(_expr(f, fp.ast.ListComp))
+        assert hoists_inside(outer, lowers)
 
     def test_a_sealed_operand_is_not_searched(self):
         """A chained comparison's third operand may not run, so nothing is
@@ -135,7 +132,7 @@ class TestHoistsInside:
         @fp.fpy
         def f(xs: list[fp.Real], a: fp.Real, b: fp.Real) -> bool:
             return a < b < len([x for x in xs])
-        assert not hoists_inside(_expr(f, fp.ast.Compare))
+        assert not hoists_inside(_expr(f, fp.ast.Compare), _is_comp)
 
 
 # ----------------------------------------------------------------------
@@ -229,13 +226,12 @@ class TestForceNames:
             return [fp.sqrt(a) + (fp.sqrt(x) if c else 0.0) for x in xs]
         assert _forced(_stmt(f)) == set()
 
-    def test_a_comprehension_to_the_right_names_a_left_operand(self):
-        """`CompToLoop` hoists the comprehension above the statement, so
-        `fp.sqrt(a)` must be named to keep its place."""
+    def test_any_hoist_names_a_left_operand(self):
+        """Whatever a pass hoists: here `CompToLoop`'s comprehension."""
         @fp.fpy
         def f(xs: list[fp.Real], a: fp.Real) -> fp.Real:
             return fp.sqrt(a) + len([x for x in xs])
-        assert _forced(_stmt(f)) == {'fp.sqrt(a)'}
+        assert {e.format() for e in force_names(_stmt(f), _is_comp)} == {'fp.sqrt(a)'}
 
     def test_a_program_with_no_lowering_forces_no_name(self):
         """ANF would name both products here."""
@@ -260,19 +256,19 @@ class TestForceNames:
 
 
 # ----------------------------------------------------------------------
-# `slots`: where a statement may go before an expression's own
+# `strict`: what runs exactly once whenever its statement does
 
 
-def _slots(f) -> set[str]:
-    return {e.format() for e in Hoistability.analyze(f.ast).slots}
+def _strict(f) -> set[str]:
+    return {e.format() for e in Hoistability.analyze(f.ast).strict}
 
 
-class TestSlots:
-    def test_a_strict_operand_is_a_slot(self):
+class TestStrict:
+    def test_a_strict_operand(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             return a + fp.sqrt(b)
-        assert 'fp.sqrt(b)' in _slots(f)
+        assert 'fp.sqrt(b)' in _strict(f)
 
     def test_a_sealed_operand_is_not(self):
         """A ternary arm, an `and` tail, a comparison tail, a comprehension's
@@ -287,17 +283,15 @@ class TestSlots:
             return (fp.exp(a) if b else 0.0) + \
                 (1.0 if (c and fp.floor(a) > 0.0) else 0.0) + \
                 (1.0 if (b == c == (fp.ceil(a) > 0.0)) else 0.0)
-        slots = _slots(f)
+        strict = _strict(f)
         for sealed in ('fp.sqrt(a)', 'fp.cbrt(a)', 'fp.exp(a)', 'fp.log(x)', 'xs',
                        'fp.floor(a)', 'fp.ceil(a)'):
-            assert sealed not in slots, sealed
-        assert '[fp.log(x) for x in xs]' in slots
+            assert sealed not in strict, sealed
+        assert '[fp.log(x) for x in xs]' in strict
 
-    def test_an_operand_right_of_a_non_atom_is_not(self):
-        """A statement before this one would run before `fp.sqrt(a)`."""
+    def test_order_is_not_strictness(self):
+        """Hoisting `fp.sqrt(b)` names `fp.sqrt(a)` first; both run once."""
         @fp.fpy
         def f(a: fp.Real, b: fp.Real) -> fp.Real:
             return fp.sqrt(a) + fp.sqrt(b)
-        slots = _slots(f)
-        assert 'fp.sqrt(a)' in slots
-        assert 'fp.sqrt(b)' not in slots
+        assert {'fp.sqrt(a)', 'fp.sqrt(b)'} <= _strict(f)

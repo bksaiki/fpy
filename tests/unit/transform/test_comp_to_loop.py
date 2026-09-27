@@ -457,12 +457,33 @@ class TestRefusals:
         assert f([-1.0], False) is False
 
     def test_a_left_operand_is_not_overtaken(self):
-        """The loop lands above the statement, so it would run `h` before `g`."""
+        """The loop lands above the statement, so `g(y)` is named first;
+        otherwise `h` would run before it."""
         @fp.fpy
         def f(y: fp.Real, xs: list[fp.Real]) -> bool:
             return _needs_positive_g(y) == (len([_needs_positive_h(x) for x in xs]) > 0)
 
-        assert CompToLoop.sites(f.ast) == []
+        out = CompToLoop.apply(f.ast)
+        assert _count(out, ListComp) == 0
+        with pytest.raises(AssertionError) as before:
+            f(-1.0, [-1.0])
+        with pytest.raises(AssertionError) as after:
+            Function(out, runtime=f.runtime)(-1.0, [-1.0])
+        assert 'g' in str(before.value)
+        assert str(after.value) == str(before.value)
+
+    def test_a_slot_fill_needs_atomic_indices(self):
+        """Every write repeats the indices; a non-atomic one is named once and
+        the comprehension filled into a temporary instead."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(zs: list[list[fp.Real]], i: int, xs: list[fp.Real]) -> list[list[fp.Real]]:
+            zs[i + 0] = [x for x in xs]
+            return zs
+
+        out = CompToLoop.apply(f.ast)
+        assert _count(out, ListComp) == 0
+        assert out.format().count('i + 0') == 1
+        assert _vals(Function(out, runtime=f.runtime)([[0.0]], 0, [1.0, 2.0])) == [[1.0, 2.0]]
 
     def test_rejects_non_funcdef(self):
         with pytest.raises(TypeError):
@@ -474,6 +495,22 @@ class TestRefusals:
 
 
 class TestWhere:
+    def test_a_site_left_in_place_is_named_not_overtaken(self):
+        """`where=1` lowers only the second comprehension, so the operand that
+        runs before it is bound to a name first; `where=0` needs nothing."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            return len([x for x in xs]) + len([y for y in ys])
+
+        assert len(CompToLoop.sites(f.ast)) == 2
+        second = CompToLoop.apply(f.ast, where=1)
+        assert _count(second, ListComp) == 1
+        assert second.body.stmts[0].expr.format() == 'len([x for x in xs])'
+        first = CompToLoop.apply(f.ast, where=0)
+        assert _count(first, ListComp) == 1
+        assert '[y for y in ys]' in first.body.stmts[-1].format()
+        assert _agree(f, [1.0], [2.0, 3.0])
+
     def test_sites_are_comprehensions(self):
         found = CompToLoop.sites(_one.ast)
         assert all(isinstance(c, ExprCursor) for c in found)

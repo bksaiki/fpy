@@ -3,6 +3,7 @@ Shared machinery for the transforms: the loop rewrites and the rounding
 rewrites.
 """
 
+from collections.abc import Callable, Container
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,6 +16,7 @@ from ..analysis import (
     concrete_size,
 )
 from ..analysis.format_infer import FormatAnalysis, FormatInfer
+from ..analysis.hoistability import ATOMIC, force_names
 from ..ast.fpyast import (
     Assign,
     Attribute,
@@ -247,6 +249,20 @@ def rebuild(e: Expr, args: list[Expr]) -> Expr:
             raise RuntimeError(f'not an operation: {e!r}')
 
 
+def name_forced(
+    e: Expr, rebuilt: Expr, force: Container[Expr], out: list[Stmt],
+    fresh: Callable[[], NamedId],
+) -> Expr:
+    """*rebuilt*, bound to a fresh name at the end of *out* where *e* is one a
+    hoist to its right would otherwise overtake -- see
+    :func:`~fpy2.analysis.hoistability.force_names`."""
+    if e not in force or isinstance(rebuilt, ATOMIC):
+        return rebuilt
+    t = fresh()
+    out.append(Assign(t, None, rebuilt, e.loc))
+    return Var(t, e.loc)
+
+
 def check_where(where: int | Cursor | None) -> None:
     """Rejects a `where` that names nothing of the kind."""
     if isinstance(where, bool) or (
@@ -364,6 +380,13 @@ class SiteRewriter(DefaultTransformVisitor):
     _target: tuple[BlockPath, range] | None
     _target_expr: Expr | None
     """the expression an explicit cursor names, where the sites are expressions"""
+    hoisted: frozenset[Expr] = frozenset()
+    """the expression sites the rewrite takes, found by :meth:`_select`; each
+    statement's operands to their left are named first, so the statements a
+    site emits do not overtake them"""
+    _force: frozenset[Expr] = frozenset()
+    """:func:`~fpy2.analysis.hoistability.force_names` for the statement being
+    visited"""
     _expr_sited: bool = False
     """whether this rewrite's candidates are expressions rather than statements;
     only such a rewrite can be aimed with an :class:`ExprCursor`"""
@@ -404,6 +427,23 @@ class SiteRewriter(DefaultTransformVisitor):
     def _visit_function(self, func: FuncDef, ctx):
         self._begin(func)
         return super()._visit_function(func, ctx)
+
+    def _select(self) -> None:
+        """Walk without rewriting, under `where`, so `hoisted` holds the
+        expression sites the rewrite will take."""
+        self.listing = True
+        self._visit_function(self.func, None)
+        self.listing = False
+        self.hoisted = frozenset(self.found_exprs)
+
+    def _fresh(self) -> NamedId:
+        """A name for an operand :func:`name_forced` binds; a subclass calling
+        :meth:`_select` supplies it."""
+        raise NotImplementedError
+
+    def _visit_expr(self, e: Expr, ctx):
+        rebuilt = super()._visit_expr(e, ctx)
+        return name_forced(e, rebuilt, self._force, ctx, self._fresh)
 
     def _list(self) -> None:
         """Walk without rewriting, so `found` / `found_exprs` / `refused` hold
@@ -555,11 +595,15 @@ class SiteRewriter(DefaultTransformVisitor):
         out: list[Stmt] = []
         # a nested block must not lose an edit the enclosing statement already
         # made -- e.g. one hoisted out of the `if` condition above this block
-        outer = self._replaced
+        outer, outer_force = self._replaced, self._force
         for pos, stmt in enumerate(block.stmts):
             self._site = (block, pos)
             self._replaced = False
             self._dropped = False
+            self._force = (
+                frozenset(force_names(stmt, self.hoisted.__contains__))
+                if self.hoisted else frozenset()
+            )
             before = len(out)
             s, _ = self._visit_statement(stmt, out)
             if not self._dropped:
@@ -570,7 +614,7 @@ class SiteRewriter(DefaultTransformVisitor):
             # cleared before returning, or a nested block whose last statement
             # was dropped would drop the compound statement around it too
             self._dropped = False
-        self._replaced = outer
+        self._replaced, self._force = outer, outer_force
         return StmtBlock(out), None
 
     def _mark_exprs(self, block: StmtBlock, pos: int) -> None:

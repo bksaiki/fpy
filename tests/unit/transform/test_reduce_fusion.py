@@ -24,7 +24,7 @@ from fpy2 import Function
 from fpy2.ast.fpyast import (
     AllOf, AnyOf, Assign, BoolVal, ForStmt, ListComp, Or, Var,
 )
-from fpy2.transform import Hoistable, ReduceFusion
+from fpy2.transform import ReduceFusion
 
 
 def _fuse(f) -> Function:
@@ -293,14 +293,13 @@ class TestRewriteSuppressed:
         _agree(f, [([1.0, 3.0],), ([],)])
 
     def test_a_left_operand_is_not_overtaken(self):
-        """The loop lands above the statement, so it would run `h` before
-        `g`.  `Hoistable` names `g(y)` first, and then it fuses."""
+        """The loop lands above the statement, so `g(y)` is named first;
+        otherwise `h` would run before it."""
         @fp.fpy
         def f(y: fp.Real, xs: list[fp.Real]) -> bool:
             return _needs_positive_g(y) == all([_needs_positive_h(x) for x in xs])
 
-        assert _has_node(ReduceFusion.apply(f.ast), AllOf)
-        out = ReduceFusion.apply(Hoistable.apply(f.ast))
+        out = ReduceFusion.apply(f.ast)
         assert not _has_node(out, AllOf)
         with pytest.raises(AssertionError) as before:
             f(-1.0, [-1.0])

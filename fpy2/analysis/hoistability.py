@@ -2,26 +2,24 @@
 Hoistability: where a statement may be inserted above an expression's statement.
 
 FPy has statements and expressions, so a pass needing a temporary for an
-expression hoists it into a statement above.  That is sound where the program
-is in *hoistable form*:
+expression hoists it into a statement above the one it sits in.  That preserves
+meaning when two things hold:
 
-    Every expression node is evaluated exactly once, unconditionally, whenever
-    its enclosing statement is reached.
+1. The expression is *strict*: evaluated exactly once, unconditionally, whenever
+   its statement is (:attr:`HoistabilityAnalysis.strict`).  Being a statement
+   operand does not imply strictness, so the *sealed* positions are listed by
+   enumeration (:data:`SEALED_REASON`): a ternary arm, an ``and``/``or`` tail, a
+   ``while`` condition, a comprehension's element and iterables, an ``assert``
+   message, and a chained comparison's third operand and beyond.
+2. Nothing the statement evaluates before it is left to run after it.  So a
+   hoist carries its evaluation prefix: the operands to its left are bound to
+   names first, in order (:func:`force_names`).
 
-**The sealed positions** break it, and being a statement operand does not imply
-strictness, so they are listed by enumeration (:data:`SEALED_REASON`): a ternary
-arm, an ``and``/``or`` tail, a ``while`` condition, a comprehension's element
-and iterables, an ``assert`` message, and a chained comparison's third operand
-and beyond.
-
-**The ordering hazard.**  A hoist lands above the whole statement, so it
-overtakes the operands to its left unless they are named first: see
-:func:`force_names`.  :attr:`HoistabilityAnalysis.slots` says where a hoist is
-sound as the program stands.
-
-:class:`~fpy2.transform.Hoistable` rewrites a program into this form.
+:class:`~fpy2.transform.Hoistable` lowers what it can so that every expression
+outside the sealed positions it leaves is strict.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..ast.accessors import subblocks, subexprs
@@ -74,44 +72,40 @@ def lowers(e: Expr) -> bool:
             return False
 
 
-def hoists_inside(e: Expr) -> bool:
-    """Whether a statement lands above the enclosing statement from anywhere in
-    `e`, `e` itself included: a lowering of :class:`~fpy2.transform.Hoistable`,
-    or a comprehension, which :class:`~fpy2.transform.CompToLoop` lowers into
-    the same slot.
+def hoists_inside(e: Expr, hoisted: Callable[[Expr], bool]) -> bool:
+    """Whether anything in `e`, `e` itself included, is `hoisted`.
 
     Only strict operands are searched, since nothing is hoisted out of a sealed
     one.
     """
-    if lowers(e) or isinstance(e, ListComp):
-        return True
-    return any(hoists_inside(kid) for kid in _strict(e))
+    return hoisted(e) or any(hoists_inside(child, hoisted) for child in _strict(e))
 
 
 def _strict(node: 'Stmt | Expr') -> list[Expr]:
     """The operands of `node` evaluated exactly once whenever it is, in
     evaluation order: always a prefix of :func:`~fpy2.ast.accessors.subexprs`."""
-    kids = [sub for _field, _i, sub in subexprs(node)]
+    children = [sub for _field, _i, sub in subexprs(node)]
     match node:
         case IfExpr() | And() | Or() | AssertStmt():
-            return kids[:1]    # the arms, the tail, or the message may not run
+            return children[:1]    # the arms, the tail, or the message may not run
         case Compare():
-            return kids[:2]    # a chain short-circuits after the first pair
+            return children[:2]    # a chain short-circuits after the first pair
         case ListComp() | WhileStmt():
             return []
         case _:
-            return kids
+            return children
 
 
-def force_names(node: 'Stmt | Expr') -> set[Expr]:
-    """The expressions in `node` to bind to a name, so a hoist to their right
-    does not overtake them.
+def force_names(node: 'Stmt | Expr', hoisted: Callable[[Expr], bool]) -> set[Expr]:
+    """The expressions in `node` to bind to a name, so the `hoisted` ones to
+    their right do not overtake them.
 
     The *prefix rule*: at any node, let ``last`` be the position of the last
     child -- in :func:`~fpy2.ast.accessors.subexprs` order, which is
-    evaluation order -- that something hoists out of (:func:`hoists_inside`).
+    evaluation order -- that something is hoisted out of (:func:`hoists_inside`).
     Every earlier child that is not already an atom is named, since a hoist
-    lands above the whole statement and would otherwise run before them.
+    lands above the whole statement and would otherwise run before them.  One
+    that is itself hoisted becomes an atom on its own.
 
     .. code-block:: python
 
@@ -128,28 +122,28 @@ def force_names(node: 'Stmt | Expr') -> set[Expr]:
     structurally-equal operands stay distinct.
     """
     out: set[Expr] = set()
-    _collect(node, out)
+    _collect(node, out, hoisted)
     return out
 
 
-def _collect(node: 'Stmt | Expr', out: set[Expr]) -> None:
+def _collect(node: 'Stmt | Expr', out: set[Expr], hoisted: Callable[[Expr], bool]) -> None:
     """Accumulate :func:`force_names` for `node` and everything under it."""
     if isinstance(node, ListComp):
         return
-    kids = [sub for _field, _i, sub in subexprs(node)]
+    children = [sub for _field, _i, sub in subexprs(node)]
     if isinstance(node, AssertStmt):
-        kids = kids[:1]        # the message is sealed; only the test is strict
+        children = children[:1]        # the message is sealed; only the test is strict
     elif isinstance(node, Compare):
-        kids = kids[:2]        # a chain short-circuits after the first pair
+        children = children[:2]        # a chain short-circuits after the first pair
     if not isinstance(node, (IfExpr, And, Or)):
-        hoisting = [i for i, kid in enumerate(kids) if hoists_inside(kid)]
+        hoisting = [i for i, child in enumerate(children) if hoists_inside(child, hoisted)]
         if hoisting:
             out.update(
-                kid for kid in kids[:max(hoisting)]
-                if not isinstance(kid, ATOMIC)
+                child for child in children[:max(hoisting)]
+                if not isinstance(child, ATOMIC)
             )
-    for kid in kids:
-        _collect(kid, out)
+    for child in children:
+        _collect(child, out, hoisted)
 
 
 @dataclass(frozen=True)
@@ -160,26 +154,22 @@ class HoistabilityAnalysis:
     """Every operand in a sealed position with its :data:`SEALED_REASON` key,
     in visit order."""
 
-    slots: set[Expr]
-    """Every expression a statement may be inserted before its own statement
-    for: it is reached through strict operands only, and every operand that runs
-    before it is an atom."""
+    strict: set[Expr]
+    """Every expression reached from its statement through strict operands
+    only."""
 
 
-def _slots(block: StmtBlock, out: set[Expr]) -> None:
+def _strict_exprs(block: StmtBlock, out: set[Expr]) -> None:
     for stmt in block.stmts:
-        _slot_operands(stmt, out)
+        _strict_operands(stmt, out)
         for _field, sub in subblocks(stmt):
-            _slots(sub, out)
+            _strict_exprs(sub, out)
 
 
-def _slot_operands(node: 'Stmt | Expr', out: set[Expr]) -> None:
-    strict = _strict(node)
-    for i, kid in enumerate(strict):
-        if not all(isinstance(k, ATOMIC) for k in strict[:i]):
-            return             # a hoist here would overtake an earlier operand
-        out.add(kid)
-        _slot_operands(kid, out)
+def _strict_operands(node: 'Stmt | Expr', out: set[Expr]) -> None:
+    for child in _strict(node):
+        out.add(child)
+        _strict_operands(child, out)
 
 
 class _Sealed(DefaultVisitor):
@@ -233,6 +223,6 @@ class Hoistability:
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
         v = _Sealed()
         v._visit_function(func, None)
-        slots: set[Expr] = set()
-        _slots(func.body, slots)
-        return HoistabilityAnalysis(v.found, slots)
+        strict: set[Expr] = set()
+        _strict_exprs(func.body, strict)
+        return HoistabilityAnalysis(v.found, strict)

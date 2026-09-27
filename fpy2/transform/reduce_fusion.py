@@ -35,16 +35,18 @@ blocked on the cpp emitter accepting an implicit narrowing inside
 ``docs/todos/backend-cpp.md``.  Multi-stage comprehensions
 (``[e for a in xs for b in ys]``) would need nested loops and are left alone.
 
-A reduction is fused only where :class:`~fpy2.analysis.Hoistability` says a
-statement may go before its own -- not in a ternary arm, an ``and``/``or`` tail
-or a ``while`` condition, nor to the right of an operand the loop would
-overtake.  Run :class:`~fpy2.transform.Hoistable` first to make that everywhere.
+A reduction is fused only where it is strict (see
+:class:`~fpy2.analysis.Hoistability`) -- not in a ternary arm, an ``and``/``or``
+tail or a ``while`` condition -- and the operands to its left are named first, so
+the loop does not overtake them.  Run :class:`~fpy2.transform.Hoistable` first to
+open the positions it lowers.
 """
 
 import dataclasses
 from typing import Any
 
 from ..analysis import DefineUse, DefineUseAnalysis, Hoistability, SyntaxCheck
+from ..analysis.hoistability import force_names
 from ..ast.fpyast import (
     AllOf,
     And,
@@ -62,6 +64,7 @@ from ..ast.fpyast import (
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
+from .utils import name_forced
 
 
 @dataclasses.dataclass
@@ -69,6 +72,9 @@ class _Ctx:
     """Block-walk accumulator: :meth:`_fuse` appends the seed and loop here,
     and :meth:`_visit_block` emits them before the enclosing statement."""
     stmts: list[Stmt]
+    force: frozenset[Expr] = frozenset()
+    """:func:`~fpy2.analysis.hoistability.force_names` for the statement being
+    visited"""
 
     @staticmethod
     def default() -> '_Ctx':
@@ -81,13 +87,12 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
 
     func: FuncDef
     gensym: Gensym
-    slots: set[Expr]
-    """where a statement may go before the expression's own"""
+    strict: set[Expr]
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
-        self.slots = Hoistability.analyze(func).slots
+        self.strict = Hoistability.analyze(func).strict
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -98,23 +103,30 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
     def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, Any]:
         block_ctx = _Ctx.default()
         for stmt in block.stmts:
-            new_stmt, _ = self._visit_statement(stmt, block_ctx)
+            force = frozenset(force_names(stmt, self._fusable))
+            new_stmt, _ = self._visit_statement(stmt, _Ctx(block_ctx.stmts, force))
             block_ctx.stmts.append(new_stmt)
         return StmtBlock(block_ctx.stmts), ctx
 
     # ------------------------------------------------------------------
     # Expression rewriting
 
-    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        if (
-            e in self.slots
+    def _fusable(self, e: Expr) -> bool:
+        return (
+            e in self.strict
             and isinstance(e, (AnyOf, AllOf))
             and isinstance(e.arg, ListComp)
             # multi-stage comps would need nested loops; leave them alone
             and len(e.arg.targets) == 1
-        ):
+        )
+
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
+        if self._fusable(e):
+            assert isinstance(e, (AnyOf, AllOf)) and isinstance(e.arg, ListComp)
             return self._fuse(e, e.arg, ctx)
-        return super()._visit_expr(e, ctx)
+        rebuilt = super()._visit_expr(e, ctx)
+        fresh = lambda: self.gensym.fresh('t')
+        return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _fuse(self, e: 'AnyOf | AllOf', comp: ListComp, ctx: _Ctx) -> Expr:
         """Emit the seed + loop into *ctx* and return ``Var(acc)``."""
