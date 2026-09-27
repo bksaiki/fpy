@@ -61,15 +61,15 @@ def test_cached_inputs_give_the_model_run_where_inputs_agree(
     assert len({acts.index[n] for n in first}) == 1
 
     # unquantized inputs FP32 there, BF16 here
-    same = [m for m in local.METRICS if m not in ('quantization', 'total')]
-    got = local.evaluate(model, run, acts, design)['all']
+    same = [m for m in local.METRICS if m != 'quantization']
+    got = local.evaluate(model, run, acts, design)['quantized']['all']
     want = layers.evaluate(model, run, [tokens], [design], same)[design]
     for name in first:
         assert got[name].report(same) == want[name].report(same)
 
     if 'test.copy' not in kernels.TILES:
         kernels.register('test.copy', dict(DESIGNS)[design], *kernels.TILES[design])
-    copy = local.evaluate(model, run, acts, 'test.copy')['all']
+    copy = local.evaluate(model, run, acts, 'test.copy')['quantized']['all']
     assert all(copy[n].report(local.METRICS) == s.report(local.METRICS) for n, s in got.items())
 
 
@@ -79,8 +79,8 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
     run = swap.patch(model)
     acts = local.capture(model, run, _seqs(tokens), tokens=10)
     assert len(acts.tags['role']) == acts.inputs[0].shape[0] == 10
-    whole = local.evaluate(model, run, acts, 'amd.cdna2.bf16')['all']
-    parts = local.evaluate(model, run, acts, 'amd.cdna2.bf16', by='role')
+    whole = local.evaluate(model, run, acts, 'amd.cdna2.bf16')['quantized']['all']
+    parts = local.evaluate(model, run, acts, 'amd.cdna2.bf16', by='role')['quantized']
     assert set(parts) == {'user', 'assistant'}
     for name, s in whole.items():
         pooled = sum((g[name] for g in parts.values()), layers.Stats())
@@ -93,19 +93,24 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
 def test_a_scheme_measures_its_quantization_apart_from_the_design(
     name: str, model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
-    """Under a quantizing scheme both errors are there; under `bf16`, on BF16
-    inputs and weights, quantizing costs nothing; a design the scheme does
-    not apply to is refused, as is splitting `k`'s own blocks further."""
+    """Under a quantizing scheme the quantization errs, and against the
+    unquantized operands the design's output errs by more than against the
+    quantized ones; under `bf16`, on BF16 inputs and weights, quantizing
+    costs nothing and the two references agree; a design the scheme does not
+    apply to is refused, as is splitting `k`'s own blocks further."""
     run = swap.patch(model)
     fp8 = quant.SCHEMES[name]
     acts = local.capture(model, run, _seqs(tokens), scheme=fp8)
     design = kernels.designs(fp8)[0]
-    stats = local.evaluate(model, run, acts, design, scheme=fp8)['all']
-    s = sum(stats.values(), layers.Stats()).report(local.METRICS)
-    assert s['quantization'] > 0 and s['normwise'] > 0 and s['total'] > 0 and s['rounded'] < 1
-    bf16 = local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
-                          'amd.cdna2.bf16')
-    assert sum(bf16['all'].values(), layers.Stats()).report(['quantization'])['quantization'] == 0
+    own, both = (sum(r['all'].values(), layers.Stats()).report(local.METRICS)
+                 for r in local.evaluate(model, run, acts, design, scheme=fp8).values())
+    assert own['quantization'] > 0 and own['rounded'] < 1
+    assert both['normwise'] > own['normwise'] > 0
+    own, both = (sum(r['all'].values(), layers.Stats()).report(local.METRICS)
+                 for r in local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
+                                         'amd.cdna2.bf16').values())
+    assert own.pop('quantization') == 0 and own.pop('rounded') > 0
+    assert own == {m: v for m, v in both.items() if m in own}
     with pytest.raises(ValueError, match='does not take'):
         local.evaluate(model, run, acts, 'amd.cdna2.bf16', scheme=fp8)
     if fp8.applied != 'epilogue':

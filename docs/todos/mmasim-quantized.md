@@ -378,9 +378,18 @@ cd examples/mmasim && ../../.venv/bin/python -m pytest tests serve/tests -q
 and a results section here, per scheme, on Qwen3-0.6B (RTN) and on each
 checkpoint, on WikiText-2 and MT-Bench, in two tables: the observable effect
 (each design's output against the exact product of the unquantized
-operands: quantization and design together, a `total` metric in
-`layers.local`), and the design's own (the local metrics against the exact
-product of the quantized operands).
+operands: quantization and design together) and the design's own (against
+the exact product of the quantized operands).
+
+**Done**, and `local.py` now reports both as parallel tables in every run:
+`layers.local` takes the same metrics against either reference (`_against`,
+all but `rounded` against the unquantized one, where it means nothing), and
+`local.evaluate` returns them by reference (`quantized`, `unquantized`).
+This replaced a single `total` metric, the unquantized table's normwise
+error.  The unquantized table is left out only for a checkpoint with no
+known master.  A first look (Qwen3-0.6B, `fp8-row`, 512 tokens): against the
+originals the backward error is 2^-9.3 for every design, and RTN FP8 leans
+toward zero in magnitude (-1,500 u, ~5% of that backward error).
 
 ## Results
 
@@ -392,9 +401,10 @@ need each one's conversations, ~18 min of decoding apiece, and they track
 RTN within ~0.05 on WikiText-2).
 
 **The observable effect** -- each design's output against the exact product
-of the unquantized operands (`total`), beside the quantization's own error:
+of the unquantized operands (the unquantized table's normwise error),
+beside the quantization's own error:
 
-| scheme | model | design | total (WikiText) | total (MT-Bench) | quantization (WikiText) |
+| scheme | model | design | normwise vs unquantized (WikiText) | normwise vs unquantized (MT-Bench) | quantization (WikiText) |
 |---|---|---|---|---|---|
 | `bf16` | RTN | nv.ampere.bf16.f32 | -18.52 | -18.46 | -inf |
 | `bf16` | RTN | nv.hopper.bf16.f32 | -18.97 | -18.95 | -inf |
@@ -451,8 +461,8 @@ operands:
 | `nvfp4` | RTN | nv.blackwell.nvfp4 | -23.03 | -29.18 | 75.56% | -0.000 | -23.25 |
 | `nvfp4` | Qwen3-0.6B-NVFP4 | nv.blackwell.nvfp4 | -23.23 | -29.18 | 76.84% | -0.005 | - |
 
-- The observable effect is the quantization's: `total` equals
-  `quantization` to ~0.02 for every quantizing scheme, even under Ada's
+- The observable effect is the quantization's: the normwise error against
+  the unquantized operands equals `quantization` to ~0.02 for every quantizing scheme, even under Ada's
   and Hopper's FP8 accumulators (2^-8.8 against 2^-5.2).  A design shows
   only where the quantization is absent, `bf16` here (its cached inputs
   and master are BF16 already, so its quantization error is 0 and its

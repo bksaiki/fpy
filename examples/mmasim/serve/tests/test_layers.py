@@ -44,4 +44,4 @@ def test_only_the_selected_metrics_are_computed(model: torch.nn.Module, tokens: 
     s = sum(stats['amd.cdna2.bf16'].values(), layers.Stats())
     assert s.magnitude_bias != 0 and s.n > 0
     assert s.err == s.prop_ref == s.backward == s.ulp == s.rounded == s.bias == s.q_err == 0
-    assert s.t_err == s.q_ref == 0
+    assert s.q_ref == 0

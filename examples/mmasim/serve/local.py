@@ -44,6 +44,10 @@ import torch
 import workloads
 
 METRICS = tuple(m for m in layers.METRICS if m != 'propagated')
+REFERENCES = ('quantized', 'unquantized')
+"""What a design's output is measured against: the exact product of the
+quantized operands (its own effect), or of the unquantized ones (the
+quantization's with its own)."""
 
 
 @dataclass
@@ -120,15 +124,17 @@ def evaluate(
     model: torch.nn.Module, run: swap.Run, acts: Activations, design: str,
     metrics: Collection[str] = METRICS, *, scheme: quant.Scheme = swap.BF16,
     by: str | None = None, only: str | None = None,
-    masters: dict[str, torch.Tensor] | None = None,
-) -> dict[str, dict[str, layers.Stats]]:
+    masters: dict[str, torch.Tensor] | None = None, unquantized: bool = True,
+) -> dict[str, dict[str, dict[str, layers.Stats]]]:
     """*design*'s local :class:`layers.Stats` for *metrics* under *scheme*,
-    per group of rows (by the tag *by*; one group, `all`, without) and per
-    linear layer of *model* (those whose name *only* matches, as a regex), on
-    *acts*.  *run* (`swap.patch(model)`'s) gives each layer's weight and
-    static scale, splits `k` as it says, and leaves out the layers it
-    ignores; `quantization` compares with *masters*' weights, by layer name,
-    else the layer's own."""
+    by reference (`quantized`, the quantized operands' exact product: the
+    design's own effect; and, if *unquantized*, `unquantized`, the original
+    operands': the quantization's and the design's), per group of rows (by
+    the tag *by*; one group, `all`, without) and per linear layer of *model*
+    (those whose name *only* matches, as a regex), on *acts*.  *run*
+    (`swap.patch(model)`'s) gives each layer's weight and static scale,
+    splits `k` as it says, and leaves out the layers it ignores; the original
+    weights are *masters*', by layer name, else the layer's own."""
     if not kernels.applicable(design, scheme):
         raise ValueError(f'{design} does not take {scheme.name}')
     groups: dict[str, torch.Tensor | slice] = {'all': slice(None)}
@@ -136,7 +142,8 @@ def evaluate(
         labels = acts.tags[by]
         groups = {g: torch.tensor([i for i, x in enumerate(labels) if x == g], device='cuda')
                   for g in dict.fromkeys(labels)}
-    stats: dict[str, dict[str, layers.Stats]] = {g: {} for g in groups}
+    stats: dict[str, dict[str, dict[str, layers.Stats]]] = {
+        r: {g: {} for g in groups} for r in REFERENCES[:1 + unquantized]}
     held = kernels.storage(design)[1]
     previous, run.scheme = run.scheme, scheme
     try:
@@ -152,8 +159,11 @@ def evaluate(
                               run.combine)
                 w0 = layer.weight if masters is None else masters[name].cuda()
                 for g, rows in groups.items():
-                    layers.local(stats[g].setdefault(name, layers.Stats()), metrics,
-                                 qa.take(rows), qw, y[rows], (a[rows], w0))
+                    s0 = None
+                    if unquantized:
+                        s0 = stats['unquantized'][g][name] = layers.Stats()
+                    layers.local(stats['quantized'][g].setdefault(name, layers.Stats()), metrics,
+                                 qa.take(rows), qw, y[rows], (a[rows], w0), s0)
     finally:
         run.scheme = previous
     return stats
@@ -218,7 +228,11 @@ def main(argv: list[str]) -> int:
         model, run, about, masters = _load(name, args.scheme, requantize=args.requantize,
                                            master=args.master, split_k=args.split_k,
                                            combine=args.combine)
-        metrics = [m for m in args.metrics if m not in ('quantization', 'total') or about['master']]
+        known = about['master'] is not None
+        metrics = [m for m in args.metrics if m != 'quantization' or known]
+        refs = {'quantized': metrics}
+        if known:
+            refs['unquantized'] = [m for m in metrics if m not in ('rounded', 'quantization')]
         if args.workload == 'wikitext':
             seqs = workloads.wikitext(name, args.tokens)
         else:
@@ -229,36 +243,41 @@ def main(argv: list[str]) -> int:
             seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name), path)
         acts = capture(model, run, seqs, args.tokens, args.scheme)
 
-        results: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
-        total: dict[str, dict[str, dict[str, float]]] = {}
+        results: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
+        total: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
         seconds: dict[str, float] = {}
         for design in designs:
             kernels.compiled(design)
             torch.cuda.synchronize()
             start = time.perf_counter()
             stats = evaluate(model, run, acts, design, metrics, scheme=args.scheme, by=args.by,
-                             only=args.layers, masters=masters)
+                             only=args.layers, masters=masters, unquantized=known)
             torch.cuda.synchronize()
             seconds[design] = time.perf_counter() - start
-            total[design] = {g: sum(per.values(), layers.Stats()).report(metrics)
-                             for g, per in stats.items()}
-            results[design] = {g: {n: st.report(metrics) for n, st in per.items()}
-                               for g, per in stats.items()}
+            for r, per_ref in stats.items():
+                total.setdefault(r, {})[design] = {
+                    g: sum(per.values(), layers.Stats()).report(refs[r]) for g, per in per_ref.items()}
+                results.setdefault(r, {})[design] = {
+                    g: {n: st.report(refs[r]) for n, st in per.items()} for g, per in per_ref.items()}
 
         print(f'\n== {name}: weights {about["source"]}, unquantized: '
-              f'{", ".join(about["ignore"]) or "none"}; quantization against '
+              f'{", ".join(about["ignore"]) or "none"}; originals from '
               f'{about["master"] or "nothing (no master)"}')
-        first = next(iter(total.values()))
-        keys = list(next(iter(first.values())))
-        w = max(map(len, total))
-        for g in first:
-            rows = acts.tags[args.by].count(g) if args.by else acts.inputs[0].shape[0]
-            print(f'\n{g} ({rows} tokens)\n{"":{w}} ' + ' '.join(f'{k:>14}' for k in keys)
-                  + f' {"s":>6}')
-            for design, t in total.items():
-                print(f'{design:{w}} ' + ' '.join(f'{layers.fmt(k, t[g][k]):>14}' for k in keys)
-                      + f' {seconds[design]:6.1f}')
-        out['models'][name] = {**about, 'metrics': metrics, 'seconds': seconds,
+        for r, by_design in total.items():
+            print(f'\n-- against the {r} operands\' exact product: '
+                  + ("the design's own effect" if r == 'quantized'
+                     else "the quantization's and the design's"))
+            first = next(iter(by_design.values()))
+            keys = list(next(iter(first.values())))
+            w = max(map(len, by_design))
+            for g in first:
+                rows = acts.tags[args.by].count(g) if args.by else acts.inputs[0].shape[0]
+                print(f'\n{g} ({rows} tokens)\n{"":{w}} ' + ' '.join(f'{k:>14}' for k in keys)
+                      + f' {"s":>6}')
+                for design, t in by_design.items():
+                    print(f'{design:{w}} ' + ' '.join(f'{layers.fmt(k, t[g][k]):>14}' for k in keys)
+                          + f' {seconds[design]:6.1f}')
+        out['models'][name] = {**about, 'metrics': refs, 'seconds': seconds,
                                'total': total, 'runs': results}
         del model, run, acts, masters
         torch.cuda.empty_cache()
