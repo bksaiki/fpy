@@ -359,7 +359,7 @@ class SiteRewriter(DefaultTransformVisitor):
     func: FuncDef
     """the program being walked; set by the subclass"""
     gensym: Gensym
-    """set by an expression-sited subclass"""
+    """set by a hoisting subclass"""
     where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
@@ -388,8 +388,10 @@ class SiteRewriter(DefaultTransformVisitor):
     """:func:`~fpy2.analysis.hoistability.force_names` for the statement being
     visited"""
     _strict: set[Expr]
-    """where an expression site may be, if `_expr_sited`: see
-    :class:`~fpy2.analysis.Hoistability`"""
+    """where a site may be, if `_hoists`: see :class:`~fpy2.analysis.Hoistability`"""
+    _hoists: bool = False
+    """whether a site emits statements before the one it sits in, which it may
+    only do from a strict position and after naming what runs before it"""
     _expr_sited: bool = False
     """whether this rewrite's candidates are expressions rather than statements;
     only such a rewrite can be aimed with an :class:`ExprCursor`"""
@@ -426,13 +428,13 @@ class SiteRewriter(DefaultTransformVisitor):
             self._target_expr = self.where.resolve()
         else:
             self._target = _target_of(self.where, func)
-        if self._expr_sited:
+        if self._hoists:
             self._strict = Hoistability.analyze(func).strict
 
     def _visit_function(self, func: FuncDef, ctx):
-        # an expression site's statement names its earlier operands, so the
-        # sites the rewrite takes are found first
-        if self._expr_sited and not self.listing:
+        # a hoisting site's statement names its earlier operands, so the sites
+        # the rewrite takes are found first
+        if self._hoists and not self.listing:
             self._select()
         self._begin(func)
         return super()._visit_function(func, ctx)
@@ -449,8 +451,8 @@ class SiteRewriter(DefaultTransformVisitor):
         self.gensym = gensym
 
     def _fresh(self) -> NamedId:
-        """A name for an operand :func:`name_forced` binds; an expression-sited
-        subclass supplies it."""
+        """A name for an operand :func:`name_forced` binds; a hoisting subclass
+        supplies it."""
         raise NotImplementedError
 
     def _visit_expr(self, e: Expr, ctx):
@@ -645,6 +647,8 @@ class PreambleScoped(SiteRewriter):
     is scope, not soundness -- a header is evaluated exactly once -- so a
     subclass may lift it (the derived-iterable unfolds do).
     """
+
+    _hoists = True
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
         return super()._visit_if1(stmt, None)[0], ctx

@@ -116,6 +116,7 @@ class _CompToLoopInstance(SiteRewriter):
     """Lowers selected comprehensions into an allocation plus a loop."""
 
     _expr_sited = True   # the candidates are comprehensions
+    _hoists = True
 
     func: FuncDef
     def_use: DefineUseAnalysis
