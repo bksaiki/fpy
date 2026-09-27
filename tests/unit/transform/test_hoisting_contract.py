@@ -22,11 +22,14 @@ from fpy2.transform import (
     RescaleFixed,
     RoundInsert,
     SplitRound,
+    StatementForm,
+    UnfoldEnumerate,
     UnfoldNegZero,
     UnfoldOverflow,
     UnfoldSpecial,
+    UnfoldZip,
 )
-from fpy2.types import RealType
+from fpy2.types import ListType, RealType
 
 
 @fp.fpy
@@ -50,6 +53,17 @@ def _bump(xs: list[fp.Real]) -> fp.Real:
 @fp.fpy
 def _get(xs: list[fp.Real]) -> fp.Real:
     return xs[0]
+
+
+@fp.fpy
+def _wrap(xs: list[fp.Real]) -> list[fp.Real]:
+    return [xs[0]]
+
+
+@fp.fpy
+def _nonempty(xs: list[fp.Real]) -> list[fp.Real]:
+    assert len(xs) > 0, 'nonempty'
+    return xs
 
 
 def _outcome(ast, runtime, args):
@@ -138,7 +152,58 @@ def _guarded(C, op):
     return guarded
 
 
+# derived iterables: their unfolding binds arguments and asserts lengths
+@fp.fpy(ctx=fp.FP64)
+def _zip_and_tail(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+    return len(xs) == len(ys) and len(zip(xs, ys)) > 0
+
+
+@fp.fpy(ctx=fp.FP64)
+def _zip_comparison_tail(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+    return len(xs) == len(ys) == len(zip(xs, ys))
+
+
+@fp.fpy(ctx=fp.FP64)
+def _zip_message(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    assert len(xs) > 0, len(zip(xs, ys))
+    return 0
+
+
+@fp.fpy(ctx=fp.FP64)
+def _zip_order_through_the_heap(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+    return _bump(xs) < fp.fst(zip(_wrap(xs), ys)[0])
+
+
+@fp.fpy(ctx=fp.FP64)
+def _enumerate_and_tail(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+    return len(xs) > 0 and len(enumerate(_nonempty(xs))) > 0
+
+
+@fp.fpy(ctx=fp.FP64)
+def _enumerate_comparison_tail(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+    return 0 < len(xs) < len(enumerate(_nonempty(xs))) + 1
+
+
+@fp.fpy(ctx=fp.FP64)
+def _enumerate_message(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+    assert len(ys) > 0, len(enumerate(_nonempty(xs)))
+    return 0
+
+
+@fp.fpy(ctx=fp.FP64)
+def _enumerate_order_through_the_heap(xs: list[fp.Real], ys: list[fp.Real]) -> bool:
+    return _bump(xs) < fp.snd(enumerate(_wrap(xs))[0])
+
+
 _F32 = RealType(fp.FP32)
+_L32 = ListType(_F32)
+
+_ITERABLES = [
+    (UnfoldZip, [(_zip_and_tail, ([1, 2], [1])), (_zip_comparison_tail, ([1, 2], [1])),
+                 (_zip_message, ([1, 2], [1])), (_zip_order_through_the_heap, ([1], [1]))]),
+    (UnfoldEnumerate, [(_enumerate_and_tail, ([], [1])), (_enumerate_comparison_tail, ([], [1])),
+                       (_enumerate_message, ([], [1])), (_enumerate_order_through_the_heap, ([1], [1]))]),
+]
 
 _SCOPED: list[tuple[Any, fp.Context]] = [
     (UnfoldSpecial, fp.MPFixedContext(-8, enable_nan=True, enable_inf=True)),
@@ -168,10 +233,15 @@ _ROWS = [
       for P, C in _SCOPED for f, args in _rounding(C)],
     *[(f'{P.__name__}-guarded-{op.__name__}-{v}', _guarded(C, op), (v,), P.apply, False)
       for P, C, op, v in _GUARDED],
+    *[(f'{P.__name__}-{f.name}', f, args, P.apply, True)
+      for P, cases in _ITERABLES for f, args in cases],
+    *[(f'StatementForm-{f.name}', f, args, StatementForm.apply, True)
+      for _, cases in _ITERABLES for f, args in cases],
 ]
 
 
 @pytest.mark.parametrize('f,args,apply,mono', [r[1:] for r in _ROWS], ids=[r[0] for r in _ROWS])
 def test_the_outcome_is_unchanged(f, args, apply, mono):
-    ast = Monomorphize.apply(f.ast, fp.REAL, [_F32] * len(args)) if mono else f.ast
+    types = [_L32 if isinstance(a, list) else _F32 for a in args]
+    ast = Monomorphize.apply(f.ast, f.ast.ctx or fp.REAL, types) if mono else f.ast
     assert _outcome(apply(ast), f.runtime, args) == _outcome(ast, f.runtime, args)

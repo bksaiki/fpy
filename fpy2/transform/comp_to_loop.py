@@ -40,7 +40,7 @@ what makes the two a fixpoint.
 
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, Hoistability, LiveVars, SyntaxCheck
+from ..analysis import DefineUse, DefineUseAnalysis, LiveVars, SyntaxCheck
 from ..ast.fpyast import (
     Add,
     Assign,
@@ -133,7 +133,6 @@ class _CompToLoopInstance(SiteRewriter):
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
     `acc` and copying it in"""
-    strict: set[Expr]
 
     def __init__(
         self,
@@ -152,7 +151,6 @@ class _CompToLoopInstance(SiteRewriter):
         self.dependent = dependent
         self.index_ranges = index_ranges
         self._fill = None
-        self.strict = Hoistability.analyze(func).strict
 
     # ------------------------------------------------------------------
     # Verification
@@ -441,7 +439,7 @@ class _CompToLoopInstance(SiteRewriter):
                 'branch or a short-circuited operand may not run at all, and a '
                 'comprehension has no slot until the one around it is lowered'
             )
-            if e not in self.strict
+            if e not in self._strict
             else self._verify(e)
         )
         if declined is not None:
@@ -505,7 +503,6 @@ class _CompToLoopInstance(SiteRewriter):
         return self.gensym.refresh(self.temp_id)
 
     def apply(self) -> FuncDef:
-        self._select()
         return self._visit_function(self.func, None)
 
 

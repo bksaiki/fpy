@@ -35,7 +35,6 @@ from ..ast.fpyast import (
     IfExpr,
     IfStmt,
     Integer,
-    ListComp,
     Location,
     NamedBinaryOp,
     NamedId,
@@ -55,7 +54,6 @@ from ..ast.fpyast import (
     UnaryOp,
     UnderscoreId,
     Var,
-    WhileStmt,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import (
@@ -361,7 +359,7 @@ class SiteRewriter(DefaultTransformVisitor):
     func: FuncDef
     """the program being walked; set by the subclass"""
     gensym: Gensym
-    """set by a subclass that calls :meth:`_select`"""
+    """set by an expression-sited subclass"""
     where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
@@ -389,6 +387,9 @@ class SiteRewriter(DefaultTransformVisitor):
     _force: frozenset[Expr] = frozenset()
     """:func:`~fpy2.analysis.hoistability.force_names` for the statement being
     visited"""
+    _strict: set[Expr]
+    """where an expression site may be, if `_expr_sited`: see
+    :class:`~fpy2.analysis.Hoistability`"""
     _expr_sited: bool = False
     """whether this rewrite's candidates are expressions rather than statements;
     only such a rewrite can be aimed with an :class:`ExprCursor`"""
@@ -425,8 +426,14 @@ class SiteRewriter(DefaultTransformVisitor):
             self._target_expr = self.where.resolve()
         else:
             self._target = _target_of(self.where, func)
+        if self._expr_sited:
+            self._strict = Hoistability.analyze(func).strict
 
     def _visit_function(self, func: FuncDef, ctx):
+        # an expression site's statement names its earlier operands, so the
+        # sites the rewrite takes are found first
+        if self._expr_sited and not self.listing:
+            self._select()
         self._begin(func)
         return super()._visit_function(func, ctx)
 
@@ -442,8 +449,8 @@ class SiteRewriter(DefaultTransformVisitor):
         self.gensym = gensym
 
     def _fresh(self) -> NamedId:
-        """A name for an operand :func:`name_forced` binds; a subclass calling
-        :meth:`_select` supplies it."""
+        """A name for an operand :func:`name_forced` binds; an expression-sited
+        subclass supplies it."""
         raise NotImplementedError
 
     def _visit_expr(self, e: Expr, ctx):
@@ -632,16 +639,11 @@ class PreambleScoped(SiteRewriter):
     """A rewrite that emits statements before the one it is visiting.
 
     `_visit_block` hands each statement visitor the list to emit into and
-    `DefaultTransformVisitor` threads it down to every sub-expression, but only
-    some of those positions are evaluated where that list runs.  This passes
-    `None` for a compound statement's own sub-expression, which is how a
-    subclass knows there is no slot to use.
-
-    For a `while` condition that is soundness: the condition is re-evaluated
-    every iteration and a preamble before the loop computes it once, which does
-    not terminate.  The rest is scope -- those positions are evaluated exactly
-    once, so a subclass may lift the seal where it can use one (`CompToLoop`
-    and the derived-iterable unfolds do).
+    `DefaultTransformVisitor` threads it down to every sub-expression.  Where a
+    site may be is `strict`; beyond that, this passes `None` for the header of
+    an `if`, `for` or `with`, which is how a subclass knows not to use it.  That
+    is scope, not soundness -- a header is evaluated exactly once -- so a
+    subclass may lift it (the derived-iterable unfolds do).
     """
 
     def _visit_if1(self, stmt: If1Stmt, ctx):
@@ -650,30 +652,11 @@ class PreambleScoped(SiteRewriter):
     def _visit_if(self, stmt: IfStmt, ctx):
         return super()._visit_if(stmt, None)[0], ctx
 
-    def _visit_while(self, stmt: WhileStmt, ctx):
-        return super()._visit_while(stmt, None)[0], ctx
-
     def _visit_for(self, stmt: ForStmt, ctx):
         return super()._visit_for(stmt, None)[0], ctx
 
     def _visit_context(self, stmt: ContextStmt, ctx):
         return super()._visit_context(stmt, None)[0], ctx
-
-    def _visit_list_comp(self, e: ListComp, ctx) -> ListComp:
-        # the element sees the loop targets and later iterables see earlier
-        # ones, so no statement-level preamble reaches inside a comprehension
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, None) for i in e.iterables]
-        elt = self._visit_expr(e.elt, None)
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_if_expr(self, e: IfExpr, ctx) -> IfExpr:
-        # the condition is evaluated unconditionally; the branches are not, so
-        # hoisting one of them out would evaluate it either way
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
 
 
 class ExprSiteRewriter(PreambleScoped):
@@ -697,19 +680,9 @@ class ExprSiteRewriter(PreambleScoped):
     scopes: 'RoundingScopes'
     gensym: Gensym
     where: 'Cursor | int | None'
-    strict: set[Expr]
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
-
-    def _visit_function(self, func: FuncDef, ctx):
-        if not self.listing:
-            self._select()
-        return super()._visit_function(func, ctx)
-
-    def _begin(self, func: FuncDef) -> None:
-        super()._begin(func)
-        self.strict = Hoistability.analyze(func).strict
 
     def _fresh(self) -> NamedId:
         return self.gensym.fresh('_t')
@@ -734,7 +707,7 @@ class ExprSiteRewriter(PreambleScoped):
         # a refusal is not a site, so it is decided before an index is spent:
         # `ctx` is `None` where no statement-level preamble reaches
         info = (
-            Declined(self._no_slot) if ctx is None or e not in self.strict
+            Declined(self._no_slot) if ctx is None or e not in self._strict
             else self._check(e)
         )
         if isinstance(info, Declined):

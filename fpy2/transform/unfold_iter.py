@@ -35,7 +35,7 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
-from .utils import PreambleScoped, check_where
+from .utils import PreambleScoped, check_where, name_forced
 
 _NO_SLOT = (
     'the iterable has no statement-level position for the bindings the '
@@ -69,6 +69,9 @@ class _UnfoldIterInstance(PreambleScoped):
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
+
+    def _fresh(self) -> NamedId:
+        return self.gensym.refresh(self.temp_id)
 
     # ------------------------------------------------------------------
     # What a subclass supplies
@@ -110,13 +113,11 @@ class _UnfoldIterInstance(PreambleScoped):
             self._elt(args, i, loc), loc,
         )
 
-    # `PreambleScoped` seals every compound statement's sub-expression, which a
-    # `while` condition needs and these three do not: each is evaluated exactly
-    # once, where the preamble runs, and the `for` iterable is where a derived
-    # iterable appears -- sealing it would refuse the site that matters.  A
-    # nested block builds its own preamble in `_visit_block` either way, so
-    # un-sealing is the base implementation back.  A comprehension's own
-    # positions stay sealed.
+    # `PreambleScoped` seals the header of an `if`, `for` or `with`, which is
+    # scope: each is evaluated exactly once, where the preamble runs, and the
+    # `for` iterable is where a derived iterable appears -- sealing it would
+    # refuse the site that matters.  A nested block builds its own preamble in
+    # `_visit_block` either way, so un-sealing is the base implementation back.
     _visit_for = DefaultTransformVisitor._visit_for
     _visit_if1 = DefaultTransformVisitor._visit_if1
     _visit_if = DefaultTransformVisitor._visit_if
@@ -127,7 +128,7 @@ class _UnfoldIterInstance(PreambleScoped):
             return super()._visit_expr(e, ctx)
 
         # a refusal is not a site, so it is decided before an index is spent
-        if ctx is None:
+        if ctx is None or e not in self._strict:
             self.refused.append((e, _NO_SLOT))
             if self._target_expr is e:
                 self.declined.append(_NO_SLOT)
@@ -145,7 +146,7 @@ class _UnfoldIterInstance(PreambleScoped):
 
         emitted = self._emit(e, ctx)
         self._replaced = True
-        return emitted
+        return name_forced(e, emitted, self._force, ctx, self._fresh)
 
 
 class _UnfoldZipInstance(_UnfoldIterInstance):
