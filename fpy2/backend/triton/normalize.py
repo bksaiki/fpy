@@ -17,6 +17,7 @@ from ...ast import (
     Stmt,
     WhileStmt,
 )
+from ...ast.accessors import vars_in
 from ...function import Function
 from ...module import Module
 from ...transform import (
@@ -26,7 +27,6 @@ from ...transform import (
     StatementForm,
     TransformDeclined,
 )
-from ...transform.simplify_if import _reads
 from ..backend import CompileError
 
 __all__ = ['TritonNormalizeError', 'normalize', 'normalize_module']
@@ -59,7 +59,7 @@ class _NotNormal(DefaultVisitor):
                 # a tile-wide loop must run a fixed number of times; a
                 # condition the body moves makes the count per-row
                 moved = self.def_use.mutated_in(stmt.body)
-                if any(v in moved for v in _reads(stmt.cond)):
+                if any(v.name in moved for v in vars_in(stmt.cond)):
                     self.reasons.append('a `while` condition varies')
         return super()._visit_statement(stmt, ctx)
 

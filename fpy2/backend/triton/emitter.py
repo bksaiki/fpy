@@ -118,12 +118,12 @@ from ...ast import (
     Var,
     WhileStmt,
 )
-from ...ast.accessors import subblocks, subexprs
+from ...ast.accessors import subblocks, subexprs, vars_in
 from ...ast.visitor import Visitor
 from ...number import INTEGER, REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
 from ...transform.path import walk_exprs, walk_stmts
-from ...transform.simplify_if import _reads, _size
+from ...transform.simplify_if import _size
 from ...types import BoolType, ListType, RealType
 from ...utils import Unionfind
 from ..backend import CompileError
@@ -1455,10 +1455,11 @@ class _Emitter(Visitor):
                 continue
             # re-emitted at each round: the reaching defs at each operand's
             # site and the names it reads, none a list a store may change
-            reads = [(self.def_use.reach[site], _reads(x) | (set() if bound else _reads(n)))]
+            operands = [x] if bound else [x, n]
+            reads = [(self.def_use.reach[site], {v.name for e in operands for v in vars_in(e)})]
             if bound is not None:
                 assert isinstance(bound.site, Assign)
-                reads.append((self.def_use.reach[bound.site], _reads(n)))
+                reads.append((self.def_use.reach[bound.site], {v.name for v in vars_in(n)}))
             if any((dv := at.get(v)) is not None and isinstance(self.types.by_def.get(dv), ListType)
                    for at, read in reads for v in read):
                 continue

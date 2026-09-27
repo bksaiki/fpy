@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from ..analysis import ContextUse, DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..analysis.context_use import ContextUseAnalysis
 from ..ast import *
+from ..ast.accessors import vars_in
 from ..function import Function
 from ..number import (
     Context,
@@ -72,23 +73,6 @@ class _Subst(DefaultTransformVisitor):
 
     def apply(self, e: Expr) -> Expr:
         return self._visit_expr(e, None)
-
-
-class _Names(DefaultVisitor):
-    """Names an expression reads."""
-
-    def __init__(self):
-        super().__init__()
-        self.names: set[NamedId] = set()
-
-    def _visit_var(self, e: Var, ctx):
-        self.names.add(e.name)
-
-
-def _reads(e: Expr) -> set[NamedId]:
-    v = _Names()
-    v._visit_expr(e, None)
-    return v.names
 
 
 class _Size(DefaultVisitor):
@@ -415,7 +399,7 @@ class _SimplifyIfInstance(SiteRewriter):
         # An inlined arm leaves pre-`if` names in the merges, so a merge can
         # read one an earlier merge has already overwritten.  Those go through
         # a temporary: the merges happen at once.
-        reads = {var: _reads(e) for var, e in exprs.items()}
+        reads = {var: {v.name for v in vars_in(e)} for var, e in exprs.items()}
         shared = {
             var for var in exprs
             if any(var in reads[o] for o in exprs if o != var)

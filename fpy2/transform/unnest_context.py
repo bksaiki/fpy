@@ -8,27 +8,7 @@ from ..analysis import (
     SyntaxCheck,
 )
 from ..ast import *
-
-
-class _Vars(DefaultVisitor):
-    """Every `Var` in a subtree."""
-
-    found: list[Var]
-
-    def __init__(self):
-        self.found = []
-
-    def _visit_var(self, e: Var, ctx: None):
-        self.found.append(e)
-
-    @staticmethod
-    def of(node: Expr | Stmt) -> list[Var]:
-        inst = _Vars()
-        if isinstance(node, Expr):
-            inst._visit_expr(node, None)
-        else:
-            inst._visit_statement(node, None)
-        return inst.found
+from ..ast.accessors import vars_in
 
 
 class _Contexts(DefaultVisitor):
@@ -103,14 +83,14 @@ class _Unnester(DefaultTransformVisitor):
         # which would leave it reading the new value instead of the old
         block = StmtBlock(list(run))
         rebound = DefAnalysis.analyze(block)[block]
-        if any(v.name in rebound for v in _Vars.of(stmt.ctx)):
+        if any(v.name in rebound for v in vars_in(stmt.ctx)):
             return False
 
         # the target is bound after the hoisted blocks, so none may read it
         if isinstance(stmt.target, NamedId):
             d = self.def_use.find_def_from_site(stmt.target, stmt)
             for s in run:
-                if any(self.def_use.use_to_def.get(v) == d for v in _Vars.of(s)):
+                if any(self.def_use.use_to_def.get(v) == d for v in vars_in(s)):
                     return False
 
         return True

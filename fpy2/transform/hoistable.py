@@ -65,7 +65,7 @@ from typing import Any
 
 from ..analysis import DefineUse, Reachability, SyntaxCheck
 from ..analysis.define_use import DefineUseAnalysis
-from ..ast.accessors import subexprs
+from ..ast.accessors import subexprs, vars_in
 from ..ast.fpyast import (
     And,
     AssertStmt,
@@ -111,20 +111,6 @@ _SEALED_REASON = {
     'message': 'an assert message is evaluated only on failure',
     'comparison': 'a chained comparison short-circuits after the first pair',
 }
-
-def _reads(name: NamedId, exprs: 'list[Expr] | tuple[Expr, ...]') -> bool:
-    """Whether any of *exprs* mentions *name*."""
-    found = False
-
-    class _Reads(DefaultVisitor):
-        def _visit_var(self, e: Var, ctx):
-            nonlocal found
-            if e.name == name:
-                found = True
-
-    for e in exprs:
-        _Reads()._visit_expr(e, None)
-    return found
 
 def lowers(e: Expr) -> bool:
     """Whether this pass emits a statement *at* `e`.
@@ -376,7 +362,7 @@ class _HoistableInstance(DefaultTransformVisitor):
             if isinstance(e, IfExpr):
                 return self._branch_on(e, target, ctx)
             assert isinstance(e, (And, Or))
-            if not _reads(target, e.args[1:]):
+            if not any(v.name == target for a in e.args[1:] for v in vars_in(a)):
                 return self._short_circuit(e, ctx, target)
             # a chain assigns its target before the later operands run, so one
             # that reads the target would see the accumulator

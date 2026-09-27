@@ -1,5 +1,5 @@
 """
-Where an AST node holds its blocks and sub-expressions.
+Where an AST node holds its blocks, sub-expressions and variables.
 """
 
 from typing import Literal, TypeAlias
@@ -31,8 +31,10 @@ from .fpyast import (
     TernaryOp,
     TupleExpr,
     UnaryOp,
+    Var,
     WhileStmt,
 )
+from .visitor import DefaultVisitor
 
 BlockField: TypeAlias = Literal['body', 'ift', 'iff']
 """The fields a statement can hold a block in."""
@@ -118,3 +120,26 @@ def subexprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...
         case _:
             return ()
 
+
+class _Vars(DefaultVisitor):
+    found: list[Var]
+
+    def __init__(self):
+        self.found = []
+
+    def _visit_var(self, e: Var, ctx: None):
+        self.found.append(e)
+
+
+def vars_in(node: Expr | Stmt) -> list[Var]:
+    """Every `Var` in *node*, in visit order.
+
+    Syntactic, so a comprehension's own target counts -- unlike
+    :class:`~fpy2.analysis.LiveVars`.
+    """
+    v = _Vars()
+    if isinstance(node, Expr):
+        v._visit_expr(node, None)
+    else:
+        v._visit_statement(node, None)
+    return v.found
