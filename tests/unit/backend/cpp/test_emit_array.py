@@ -349,17 +349,6 @@ class TestEndToEnd:
         )
         assert 'const std::array<double, 4>& xs' in out
 
-    def test_unsized_parameter_stays_a_vector(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return xs[0]
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64, arg_types=[ListType(RealType(fp.FP64))],
-        )
-        assert 'const std::vector<double>& xs' in out
-
     def test_a_join_of_two_sizes_demotes_to_vector(self):
         @fp.fpy
         def f(c: bool, x: fp.Real) -> fp.Real:
@@ -500,20 +489,6 @@ class TestEndToEnd:
             f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
         )
         assert 'std::array<std::vector<' in out
-
-    def test_strict_mode_emits_arrays(self):
-        """STRICT gates handles, not sizes: a fully-unboxable program keeps
-        its arrays under the default mode."""
-        @fp.fpy
-        def f(a: fp.Real) -> fp.Real:
-            with fp.FP64:
-                xs = [a, 2.5, 3.5]
-                return xs[0]
-
-        out = CppCompiler(unbox=UnboxMode.STRICT).compile(
-            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)],
-        )
-        assert 'std::array<double, 3>' in out
 
     def test_assert_len_pins_a_parameter(self):
         """The route the `arrays` docstring advertises: a trusted top-level

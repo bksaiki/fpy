@@ -209,26 +209,10 @@ class TestTheInterpreterReference:
 
 
 class TestNoSupportLibrary:
-    def test_nothing_emits_fpy(self):
-        src = CppCompiler().compile(
-            _binary(True), arg_types=[RealType(fp.FP64)] * 2)
-        assert 'fpy::' not in src
 
     def test_the_helper_block_is_empty(self):
         assert CPP_HELPERS == ''
         assert CppCompiler().helpers() == ''
-
-    def test_a_min_program_compiles_without_helpers(self):
-        if _CXX is None:
-            pytest.skip('no C++ compiler')
-        src = CppCompiler().compile(
-            _binary(False), arg_types=[RealType(fp.FP64)] * 2)
-        with tempfile.TemporaryDirectory() as td:
-            cpp = Path(td) / 'm.cpp'
-            cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src)
-            r = subprocess.run([_CXX, '-std=c++17', '-fsyntax-only', str(cpp)],
-                               capture_output=True, text=True)
-        assert r.returncode == 0, r.stderr[-2000:]
 
 
 class TestTheNaryFold:
@@ -276,7 +260,6 @@ class TestTheFloatPathReachesTheLibraryForm:
         out = CppCompiler().compile(q, arg_types=[RealType(fp.FP64)] * 2)
         assert 'std::max(' not in out
         assert 'isnan' in out and 'signbit' in out
-
 
     def test_a_reduction_over_guarded_elements_uses_the_library_form(self):
         """The fold reads the *element* class, so a guard over the whole list

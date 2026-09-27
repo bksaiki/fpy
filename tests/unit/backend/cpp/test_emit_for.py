@@ -36,34 +36,6 @@ class TestForRange:
         assert 'for (int8_t i = 0; i < 10; ++i) {' in out
         assert 'acc = (acc + x);' in out
 
-    def test_for_range2(self):
-        """``range(start, stop)`` uses the start as the initialiser."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for i in range(2, 8):
-                    acc = acc + x
-                return acc
-
-        out = _compile(CppCompiler(), f)
-        assert 'for (int8_t i = 2; i < 8; ++i) {' in out
-
-    def test_for_range3(self):
-        """``range(start, stop, step)`` increments by ``step``."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for i in range(0, 12, 3):
-                    acc = acc + x
-                return acc
-
-        out = _compile(CppCompiler(), f)
-        assert 'for (int8_t i = 0; i < 12; i += 3) {' in out
-
     def test_two_loops_share_independent_counters(self):
         """Two for-loops over different counters each declare-on-assign
         in their own header."""

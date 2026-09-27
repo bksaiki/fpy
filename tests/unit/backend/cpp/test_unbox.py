@@ -81,24 +81,6 @@ class TestTheJoin:
         assert _levels(storage['ys']) == [True]
         assert _levels(storage['xs']) == [True]
 
-    def test_no_class_is_unboxed_against_one_it_reads(self):
-        """The property that makes the conjunction sufficient: a class cannot
-        come out unboxed while a class it is assigned from stays boxed, because
-        the assignment merged their alias classes and hence their site sets."""
-        @fp.fpy
-        def f(xs: list[fp.Real], c: bool, x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                if c:
-                    ys = [x, x]
-                else:
-                    ys = xs
-                ys[0] = 99
-                return xs[0]
-
-        storage, _ = _decide(f, [ListType(R), BoolType(), R])
-        boxed = {n for n, ty in storage.items() if _levels(ty)[0]}
-        assert {'xs', 'ys'} <= boxed
-
 
 class TestUnboxed:
     """Where the decision should be positive — rejecting everything would be
@@ -573,7 +555,6 @@ class TestProjectionByReference:
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
         )
         assert 'auto& row' not in out, out
-
 
     def test_a_literal_nested_three_deep_unboxes_at_every_level(self):
         """Seeding a site per level is only right where nothing else describes

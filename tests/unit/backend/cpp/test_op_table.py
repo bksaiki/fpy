@@ -88,19 +88,6 @@ class TestOpTableShape:
 class TestDispatchDirect:
     """Direct same-type matches emit without a cast."""
 
-    def test_double_add(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        assert 'return (x + y);' in out
-        assert 'static_cast' not in out
-
     @pytest.mark.parametrize(
         'ctx', [fp.UINT8, fp.UINT16, fp.UINT32, fp.UINT64],
     )

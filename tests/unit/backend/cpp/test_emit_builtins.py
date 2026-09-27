@@ -19,7 +19,6 @@ import pytest
 
 import fpy2 as fp
 from fpy2.backend.cpp import CppCompileError, CppCompiler
-from fpy2.backend.cpp.emitter import CppEmitter
 from fpy2.transform import CompToLoop, Hoistable, StatementForm
 from fpy2.types import ListType, RealType
 
@@ -272,10 +271,6 @@ class TestTheEmitterNoLongerHasThem:
     instead of to a fixpoint leaves 2 and 9 -- a `zip` only gets its statement
     slot after `CompToLoop` opens the comprehension around it.
     """
-
-    def test_the_methods_are_gone(self):
-        for name in ('_emit_zip', '_emit_enumerate'):
-            assert not hasattr(CppEmitter, name)
 
     def test_a_zip_reaching_the_emitter_is_a_tripwire(self):
         """Reached by taking the unfold out, which is the only way in."""

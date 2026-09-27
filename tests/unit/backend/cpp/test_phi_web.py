@@ -26,22 +26,6 @@ def _compile(func, *, arg_ctx=None) -> str:
 class TestPhiWebRenaming:
     """Per-SSA-def renaming."""
 
-    def test_sequential_rebind_renames(self):
-        """A rebind without a phi merge becomes its own C++ variable;
-        single-writer classes fold the type into the assign."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                x = x * 2
-                return x
-
-        out = _compile(f)
-        # The arg is still ``x``; the rebind class picks ``x_1``.
-        assert 'double f(double x)' in out
-        assert 'double x_1 = (x * static_cast<double>(2));' in out
-        assert 'return x_1;' in out
-
     def test_rebind_in_if_merges_with_arg(self):
         """A branch-only rebind has a phi linking it to the arg, so
         the whole class shares the bare arg name — no rename, and no

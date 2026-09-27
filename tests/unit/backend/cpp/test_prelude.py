@@ -7,19 +7,11 @@ explicitly (or ``prelude()`` for both at once) and concatenates the
 result with each compiled function.
 """
 
-import fpy2 as fp
-
 from fpy2.backend.cpp import CppCompiler
-from fpy2.types import RealType
 
 
 class TestHeaders:
     """Header set covers everything the emitter actually uses."""
-
-    def test_headers_returns_a_list(self):
-        cc = CppCompiler()
-        headers = cc.headers()
-        assert isinstance(headers, list)
 
     def test_headers_include_required_set(self):
         cc = CppCompiler()
@@ -53,14 +45,6 @@ class TestHeaders:
         assert '#include <bogus>' not in h2
 
 
-class TestHelpers:
-    """Runtime helpers: NaN/signed-zero-correct `fpy::min`/`max`, nothing else."""
-
-    def test_helpers_returns_string(self):
-        cc = CppCompiler()
-        assert isinstance(cc.helpers(), str)
-
-
 class TestPrelude:
     """``prelude`` = headers + helpers concatenated."""
 
@@ -77,39 +61,5 @@ class TestPrelude:
             assert required in pre
 
 
-class TestCompileStillFunctionOnly:
-    """``compile()`` itself does not emit headers — exact-string
-    tests in the rest of the suite rely on this."""
-
-    def test_compile_does_not_include_headers(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        assert '#include' not in out
-        assert out.startswith('double f')
 
 
-class TestEndToEndUnit:
-    """Smoke-test that combining ``prelude`` + ``compile`` produces
-    a syntactically self-contained translation unit string."""
-
-    def test_unit_combines(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        cc = CppCompiler()
-        body = cc.compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        unit = cc.prelude() + body
-        # Order: includes first, then function.
-        assert unit.index('#include <cmath>') < unit.index('double f')

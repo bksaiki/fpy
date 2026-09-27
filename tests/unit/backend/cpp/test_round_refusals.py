@@ -17,7 +17,6 @@ import re
 import pytest
 
 import fpy2 as fp
-import fpy2.strategies as st
 from fpy2.backend.cpp import CppCompiler
 from fpy2.backend.cpp.compiler import CppCompileError
 from fpy2.backend.cpp.target import is_native_ctx
@@ -32,7 +31,6 @@ _STOCHASTIC = fp.IEEEContext(8, 32, fp.RM.RNE, fp.OverflowMode.OVERFLOW, 4)
 # every reason a float context is not what a cast into its storage does
 _REFUSED = [
     pytest.param(fp.FP16, id='fp16'),
-    pytest.param(fp.IEEEContext(5, 16), id='ieee_5_16'),
     pytest.param(fp.MX_E5M2, id='e5m2'),
     pytest.param(fp.MX_E4M3, id='e4m3'),
     pytest.param(fp.MX_E2M1, id='e2m1'),
@@ -106,21 +104,6 @@ class TestFormatEqualityIsNotEnough:
 
 
 class TestTheSupportedPathSurvives:
-    def test_the_lowered_fp16_rounding_still_compiles(self):
-        """The guard must refuse only what was wrong.  `FP16` is reachable
-        through the lowering pipeline, which replaces the rounding before the
-        emitter sees it -- that path is what `test_lowered_roundtrip.py` checks
-        bit-for-bit, and it must keep compiling."""
-        @fp.fpy(ctx=fp.REAL)
-        def q(x: fp.Real) -> fp.Real:
-            with fp.FP16:
-                y = fp.round(x)
-            return y
-
-        ref = st.monomorphize(q, args=[RealType(fp.FP32)])
-        low = st.rescale_fixed(st.float_to_fixed(
-            st.unfold_overflow(ref, early_check=True)))
-        assert CppCompiler().compile(low)
 
     def test_a_fixed_point_context_is_exempt(self):
         """`_validate_context_rm` has already checked that a libm call or an

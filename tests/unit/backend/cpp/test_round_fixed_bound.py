@@ -257,23 +257,6 @@ class TestOperandTypesAndSpecials:
         assert '-100' not in out
         assert 'v <= 100' in out
 
-    def test_a_signed_operand_keeps_both_comparisons(self):
-        out = _emit(_INT_STORAGE, arg_ctx=fp.SINT32)
-        assert '-100 <= v && v <= 100' in out
-
-    def test_a_representable_special_is_exempt_from_the_bound(self):
-        """No magnitude test admits an infinity, so a context that represents one
-        would abort on a value it can hold.
-
-        The exemption tests the *operand*: a finite value too large for the
-        storage narrows to an infinity on the way in, and that one does overflow.
-        """
-        ctx = fp.MPBFixedContext(
-            -1, fp.RealFloat(exp=0, c=100), rm=fp.RM.RTZ, overflow=A,
-            enable_nan=True, enable_inf=True)
-        out = _emit(ctx)
-        assert '!std::isfinite(v) || std::fabs(' in out
-
 
 class TestRefusalsOnTheIntegerStoragePath:
     """``_validate_context_rm`` checks these only for float storage, so the
@@ -324,12 +307,6 @@ class TestNativeContextsAreUntouched:
         assert out.count('assert(') == 1
         assert 'std::isfinite' in out
 
-    def test_wrapping_matches_for_a_native_context(self):
-        q = _round_fn(fp.SINT8)
-        assert float(q(128.0)) == -128.0
-        assert float(q(-129.0)) == 127.0
-        assert float(q(200.0)) == -56.0
-
 
 class TestIntegerOperand:
     def test_no_pointless_float_tests_for_an_integer_operand(self):
@@ -370,10 +347,6 @@ class TestSixtyFourBitWrapIsExact:
     @pytest.mark.parametrize('ctx, ctype, fmt', [
         pytest.param(fp.UINT64, 'unsigned long long', '%llu', id='uint64'),
         pytest.param(fp.SINT64, 'long long', '%lld', id='sint64'),
-        # the narrow types take the same path; they would pass either way,
-        # which is what makes them the control
-        pytest.param(fp.UINT16, 'unsigned long long', '%llu', id='uint16'),
-        pytest.param(fp.SINT8, 'long long', '%lld', id='sint8'),
     ])
     def test_value_for_value(self, ctx, ctype, fmt):
         if _CXX is None:

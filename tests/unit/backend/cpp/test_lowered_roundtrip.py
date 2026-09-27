@@ -131,34 +131,31 @@ def _lower(func, src):
         early_check=True))))
 
 
-def _run(target, src=fp.FP32, *, via_flag=False) -> None:
-    """Lower ``round`` into *target* from a *src* source, compile, and diff.
-
-    With *via_flag* the compiler does the lowering itself, from the same
-    monomorphized program the reference evaluates.
-    """
-    if _CXX is None:
-        pytest.skip('no C++ compiler')
-
+def _rounding(target) -> fp.Function:
     @fp.fpy(ctx=fp.REAL)
     def q(x: fp.Real) -> fp.Real:
         with target:
             y = fp.round(x)
         return y
+    return q
 
+
+def _run(target, src=fp.FP32) -> None:
+    """Lower ``round`` into *target* from a *src* source through the compiler's
+    own `unfold=DOUBLE_ROUND`, compile, and diff."""
+    if _CXX is None:
+        pytest.skip('no C++ compiler')
+    q = _rounding(target)
     ref = st.monomorphize(q, args=[RealType(src)])
-    _diff(ref, ref if via_flag else _lower(q, src), src, src.nbits,
-          via_flag=via_flag)
+    _diff(ref, src, src.nbits)
 
 
-def _diff(ref, low, in_fmt, width: int, *, via_flag=False) -> None:
-    """Compile *low*, feed it every input of *in_fmt*, and diff against *ref*
-    evaluated by the interpreter."""
-    cc = CppCompiler(
-        unfold=UnfoldMode.DOUBLE_ROUND if via_flag else UnfoldMode.NONE,
-    )
+def _diff(ref, in_fmt, width: int) -> None:
+    """Compile *ref* with the compiler's own lowering, feed it every input of
+    *in_fmt*, and diff against *ref* evaluated by the interpreter."""
+    cc = CppCompiler(unfold=UnfoldMode.DOUBLE_ROUND)
     mod = Module()
-    mod.add(low)
+    mod.add(ref)
     driver = _DRIVER.replace('SRCTY', _CTYPE[width])
     text = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(mod), driver])
 
@@ -210,23 +207,26 @@ _TARGET_IDS = ['fp16_rne', 'fp16_rtz', 'fp16_rtp', 'fp16_rtn', 'fp16_rna',
 
 
 class TestLoweredRoundtrip:
-    """Compiled output against the interpreter, bit for bit."""
+    """The strategies, applied by hand, against the compiler's own lowering."""
 
+    @pytest.mark.parametrize('src', [fp.FP32, fp.FP64], ids=['fp32', 'fp64'])
     @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
-    def test_matches_the_interpreter(self, target):
-        _run(target)
+    def test_the_schedule_is_what_the_flag_runs(self, target, src):
+        """Byte for byte, so `TestUnfoldRoundingsFlag`'s bit-exact runs answer
+        for both.
 
-    @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
-    def test_matches_the_interpreter_from_fp64(self, target):
-        """The source format that matters, and the one this path could not
-        reach until branch refinement read the guards.
-
-        Storage selection used to fail here: the scale-in was inferred at
-        ``2 ** 2108`` against a true ``[2 ** 10, 2 ** 11)``, and its finest digit
-        at ``2 ** -1090``.  Compiling is only half of it -- this is the half that
-        says the answer is right.
+        FP64 is the source format that matters, and the one this path could not
+        reach until branch refinement read the guards: storage selection used
+        to fail, the scale-in inferred at ``2 ** 2108`` against a true
+        ``[2 ** 10, 2 ** 11)``, and its finest digit at ``2 ** -1090``.
         """
-        _run(target, src=fp.FP64)
+        q = _rounding(target)
+        flag = Module()
+        flag.add(st.monomorphize(q, args=[RealType(src)]))
+        hand = Module()
+        hand.add(_lower(q, src))
+        assert (CppCompiler(unfold=UnfoldMode.NONE).compile_module(hand)
+                == CppCompiler(unfold=UnfoldMode.DOUBLE_ROUND).compile_module(flag))
 
     def test_needs_no_support_library(self):
         """The goal is C++ that depends on nothing of ours.  The lowered
@@ -299,7 +299,7 @@ def test_a_native_rounding_beside_a_lowered_one_still_round_trips():
     """...and the program the compiler emits for it agrees with the
     interpreter over every `FP32` input."""
     ref = st.monomorphize(_native_beside_lowered(), args=[RealType(fp.FP32)])
-    _diff(ref, ref, fp.FP32, fp.FP32.nbits, via_flag=True)
+    _diff(ref, fp.FP32, fp.FP32.nbits)
 
 
 # ----------------------------------------------------------------------
@@ -362,11 +362,11 @@ class TestUnfoldRoundingsFlag:
 
     @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
     def test_matches_the_interpreter(self, target):
-        _run(target, via_flag=True)
+        _run(target)
 
     @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
     def test_matches_the_interpreter_from_fp64(self, target):
-        _run(target, fp.FP64, via_flag=True)
+        _run(target, fp.FP64)
 
 
 def _run_arith(target, prog) -> None:
@@ -381,7 +381,7 @@ def _run_arith(target, prog) -> None:
     if _CXX is None:
         pytest.skip('no C++ compiler')
     ref = st.monomorphize(prog, args=[RealType(target)])
-    _diff(ref, ref, target, 32, via_flag=True)
+    _diff(ref, target, 32)
 
 
 class TestArithRoundtrip:

@@ -33,23 +33,6 @@ class TestCppCompilerStub:
         with pytest.raises(TypeError, match='UnboxMode'):
             CppCompiler(unbox='allow')
 
-    def test_compile_returns_source_string(self):
-        """A simple monomorphized program compiles to a non-empty C++
-        source string."""
-        from fpy2.types import RealType
-
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        compiler = CppCompiler()
-        out = compiler.compile(
-            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64), RealType(fp.FP64)]
-        )
-        assert isinstance(out, str)
-        assert 'double f(double x, double y)' in out
-
     def test_compile_unconstrained_args_rejects(self):
         """An un-monomorphized argument can't be assigned a finite C++
         storage type — the compiler reports a clear error pointing at

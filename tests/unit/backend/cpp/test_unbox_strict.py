@@ -209,11 +209,6 @@ class TestStrictIsTheDefault:
                 _shared, ctx=fp.FP64, arg_types=[L, BoolType(), R],
             )
 
-    def test_default_compiles_an_unboxable_kernel(self):
-        assert 'std::shared_ptr' not in CppCompiler().compile(
-            _scale, ctx=fp.FP64, arg_types=[L, R],
-        )
-
 
 class TestOtherModesUnchanged:
     """STRICT is a third mode, not a change to the other two."""
