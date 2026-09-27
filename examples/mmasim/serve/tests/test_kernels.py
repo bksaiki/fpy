@@ -36,8 +36,8 @@ def _bits(x: float) -> int | str:
 def test_agrees_with_the_interpreter(design: str, m: int) -> None:
     """Bit for bit (any NaN as one), on FP32 activations the wrapper rounds to
     the design's format and hard-case weights in its format."""
-    import compile_triton as ct
     from compile import DESIGNS as ALL
+    from compile import _fmt, _sample
 
     f, arg_types = dict(ALL)[design]()
     _, k0 = kernels.compiled(design)
@@ -45,7 +45,7 @@ def test_agrees_with_the_interpreter(design: str, m: int) -> None:
     n, k = 3, 2 * k0
     x = torch.tensor([[rng.gauss(0, 4) for _ in range(k)] for _ in range(m)])
     x[0, :4] = torch.tensor([0.0, -0.0, 3.0e38, 1.0e-40])
-    w = torch.tensor([[ct._sample(ct._fmt(arg_types[1]), rng, hard=0.25) for _ in range(k)]
+    w = torch.tensor([[_sample(_fmt(arg_types[1]), rng, hard=0.25) for _ in range(k)]
                       for _ in range(n)])
     got = kernels.linear(x.cuda(), w.cuda(), design).cpu()
     fx = quant.DTYPES[quant.context(kernels.formats(design)[0])]
@@ -93,8 +93,8 @@ def test_a_chain_of_instructions_agrees_with_the_interpreter(design: str) -> Non
     """`k` as three instructions, each accumulating onto the last's result:
     bit for bit (any NaN as one) against the interpreter chained so, on
     hard-case elements and scales."""
-    import compile_triton as ct
     from compile import DESIGNS as ALL
+    from compile import _fmt, _sample
 
     f, args = dict(ALL)[design]()
     k0, per = kernels.compiled(design)[1], kernels.compiled(design)[1] // kernels.group(design)
@@ -102,8 +102,8 @@ def test_a_chain_of_instructions_agrees_with_the_interpreter(design: str) -> Non
     m, n, s = 2, 3, 3
 
     def draw(t: object, *shape: int) -> torch.Tensor:
-        fmt = ct._fmt(t)
-        return torch.tensor([ct._sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]
+        fmt = _fmt(t)
+        return torch.tensor([_sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]
                             ).view(shape)
 
     x, w = draw(args[0], m, s * k0), draw(args[1], n, s * k0)
@@ -126,16 +126,16 @@ def test_scaled_partials_sum_in_order() -> None:
     """Each 128 of `k` from a zero accumulator, scaled and summed left to
     right in FP32, `y + p * (s_x * s_w)`: bit for bit (any NaN as one)
     against the interpreter's partials combined so."""
-    import compile_triton as ct
     from compile import DESIGNS as ALL
+    from compile import _fmt, _sample
 
     design = 'nv.hopper.e4m3.f32'
     f, arg_types = dict(ALL)[design]()
     rng = random.Random(0)
     m, n, k = 2, 3, 256
-    fmt = ct._fmt(arg_types[0])
-    x = torch.tensor([[ct._sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(m)])
-    w = torch.tensor([[ct._sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(n)])
+    fmt = _fmt(arg_types[0])
+    x = torch.tensor([[_sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(m)])
+    w = torch.tensor([[_sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(n)])
     sx = torch.rand(m, 2) * 4
     sw = torch.rand(n, 2) * 4
     held = kernels.storage(design)

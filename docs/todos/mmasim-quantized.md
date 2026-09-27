@@ -33,8 +33,8 @@ assumes BF16 operands:
 | `layers.local` | the exact product of BF16-rounded `x` and `w` |
 
 MMA-Sim also models the low-precision tensor-core instructions, and they
-compile to Triton (`compile_triton.py`, 50/62; every FP32-accumulating FP8
-and FP4 design compiles):
+compile to Triton (`compile_triton.py`, 60/62 since #325; every FP8 and FP4
+design compiles):
 
 | kind | designs | instruction `k` | scales |
 |---|---|---|---|
@@ -44,8 +44,12 @@ and FP4 design compiles):
 | block-scaled, one instruction | `nv.blackwell.nvfp4` / `.mxfp4` | 64 | four UE4M3 / E8M0 per operand row (16 each) |
 
 The emitted kernels hold FP8/FP4 elements in FP16 storage, E8M0 scales in
-FP32 and UE4M3 scales in FP16, all exactly.  The FP16-output designs at
-`e_zero = -133` are refused by the compiler and out of scope.
+FP32 and UE4M3 scales in FP16, all exactly.  The FP16-accumulating designs
+(`*.f16`, incl. `e_zero = -133`'s since #325) compile and agree with the
+interpreter, but no scheme here can use them: RTN scales each row's or
+block's largest element to E4M3's 448, so one product of two (200,704)
+already overflows FP16's 65,504, and they return infinities (see Future
+work).
 
 Small quantized checkpoints of Qwen3-0.6B exist for the schemes wanted,
 all in `compressed-tensors` format, all leaving `lm_head` in BF16:
@@ -504,3 +508,16 @@ The ones found rotate with Hadamard transforms first (FP-Quant) or mix
 MXFP4 and MXFP8 per layer (Intel's).  Provisional: MX schemes are RTN only.
 Reopen for a rotation-free MXFP4 checkpoint, or to support the rotation
 (it is a fixed transform of both operands before quantizing).
+
+## Future work
+
+### FP8 with an FP16 accumulator
+
+The `*.f16` FP8 designs (Ada, Hopper wgmma and mma, Blackwell tcgen05, RTX
+Blackwell) accumulate in FP16.  Under any recipe here their products
+overflow it (448^2 > 65,504), so they need a scheme whose scales keep
+`|x| |w|` summed within FP16's range, say `amax / 16` per block instead of
+`amax / 448`, at the cost of E4M3's top four binades.  `kernels.matmul`
+would then take the accumulator's storage dtype (FP16) for `C` and its
+output, converting partials to FP32 to combine them.
+

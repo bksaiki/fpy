@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import compile_triton as ct
 import quant
 from compile import DESIGNS
+from compile import _length as _arg_length
 
 from fpy2.backend.triton import KernelSource, launch
 from fpy2.backend.triton.launcher import _torch_dtype
@@ -109,7 +110,7 @@ def designs(scheme: quant.Scheme) -> list[str]:
 
 
 def _length(design: str) -> int:
-    return ct._length(_args(design)[0])
+    return _arg_length(_args(design)[0])
 
 
 @cache
