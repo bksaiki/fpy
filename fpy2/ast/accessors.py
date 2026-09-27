@@ -1,5 +1,5 @@
 """
-Where an AST node holds its sub-expressions.
+Where an AST node holds its blocks and sub-expressions.
 """
 
 from typing import Literal, TypeAlias
@@ -27,11 +27,15 @@ from .fpyast import (
     NullaryOp,
     ReturnStmt,
     Stmt,
+    StmtBlock,
     TernaryOp,
     TupleExpr,
     UnaryOp,
     WhileStmt,
 )
+
+BlockField: TypeAlias = Literal['body', 'ift', 'iff']
+"""The fields a statement can hold a block in."""
 
 ExprField: TypeAlias = Literal[
     # of a statement
@@ -45,6 +49,18 @@ ExprField: TypeAlias = Literal[
 A typo'd field is then a type error, and :func:`subexprs` is checked against
 this list.
 """
+
+
+def subblocks(stmt: Stmt) -> tuple[tuple[BlockField, StmtBlock], ...]:
+    """The blocks *stmt* encloses, each with the field that names it."""
+    match stmt:
+        case IfStmt():
+            return ('ift', stmt.ift), ('iff', stmt.iff)
+        case If1Stmt() | WhileStmt() | ForStmt() | ContextStmt():
+            return ('body', stmt.body),
+        case _:
+            return ()
+
 
 
 def subexprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...]:

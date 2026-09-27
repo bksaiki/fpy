@@ -21,25 +21,16 @@ Build one by descending::
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
-from ..ast.accessors import ExprField, subexprs
+from ..ast.accessors import BlockField, ExprField, subblocks, subexprs
 from ..ast.fpyast import (
-    ContextStmt,
     Expr,
-    ForStmt,
     FuncDef,
-    If1Stmt,
-    IfStmt,
     Stmt,
     StmtBlock,
-    WhileStmt,
 )
 from .error import TransformReferenceError
-
-BlockField: TypeAlias = Literal['body', 'ift', 'iff']
-"""The fields a statement can hold a block in."""
-
 
 
 @dataclass(frozen=True)
@@ -130,18 +121,6 @@ def bad_path(path: Path, why: str) -> TransformReferenceError:
     return TransformReferenceError(f'`{format_path(path)}` {why}')
 
 
-def sub_blocks(stmt: Stmt) -> tuple[tuple[BlockField, StmtBlock], ...]:
-    """The blocks *stmt* encloses, each with the field that names it."""
-    match stmt:
-        case IfStmt():
-            return ('ift', stmt.ift), ('iff', stmt.iff)
-        case If1Stmt() | WhileStmt() | ForStmt() | ContextStmt():
-            return ('body', stmt.body),
-        case _:
-            return ()
-
-
-
 def resolve_block(func: FuncDef, path: BlockPath) -> StmtBlock:
     """The block *path* names in *func*."""
     match path:
@@ -149,7 +128,7 @@ def resolve_block(func: FuncDef, path: BlockPath) -> StmtBlock:
             return func.body
         case SubBlock(parent, field):
             stmt = resolve_stmt(func, parent)
-            for name, block in sub_blocks(stmt):
+            for name, block in subblocks(stmt):
                 if name == field:
                     return block
             raise bad_path(path, f'names no `{field}` block of a `{type(stmt).__name__}`')
@@ -212,7 +191,7 @@ def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:
         for i, stmt in enumerate(block.stmts):
             here = StmtPath(path, i)
             yield here, stmt
-            for field, sub in sub_blocks(stmt):
+            for field, sub in subblocks(stmt):
                 yield from walk(sub, SubBlock(here, field))
 
     yield from walk(func.body, FuncBody())
@@ -224,7 +203,7 @@ def walk_blocks(func: FuncDef) -> Iterator[tuple[BlockPath, StmtBlock]]:
         yield path, block
         for i, stmt in enumerate(block.stmts):
             here = StmtPath(path, i)
-            for field, sub in sub_blocks(stmt):
+            for field, sub in subblocks(stmt):
                 yield from walk(sub, SubBlock(here, field))
 
     yield from walk(func.body, FuncBody())

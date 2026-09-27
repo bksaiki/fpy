@@ -12,6 +12,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.ast import Assign, ContextStmt, ForStmt, IfStmt, ReturnStmt
+from fpy2.ast.accessors import subblocks
 from fpy2.transform import (
     FuncBody,
     StmtCursor,
@@ -26,7 +27,6 @@ from fpy2.transform.path import (
     resolve_block,
     resolve_expr,
     resolve_stmt,
-    sub_blocks,
     walk_blocks,
     walk_exprs,
     walk_stmts,
@@ -100,10 +100,10 @@ def test_resolve_stmt():
     assert isinstance(resolve_stmt(ast, FuncBody().stmt(1).block('iff').stmt(0)), ForStmt)
 
 
-def test_sub_blocks():
+def test_subblocks():
     ast = nested.ast
-    assert sub_blocks(resolve_stmt(ast, FuncBody().stmt(0))) == ()
-    fields = [f for f, _ in sub_blocks(resolve_stmt(ast, FuncBody().stmt(1)))]
+    assert subblocks(resolve_stmt(ast, FuncBody().stmt(0))) == ()
+    fields = [f for f, _ in subblocks(resolve_stmt(ast, FuncBody().stmt(1)))]
     assert fields == ['ift', 'iff']
 
 
@@ -156,7 +156,7 @@ class _Recorder(DefaultTransformVisitor):
 
 
 def test_the_walks_agree_with_the_visitor():
-    """`sub_blocks` / `subexprs` name the fields the visitor descends through
+    """`subblocks` / `subexprs` name the fields the visitor descends through
     without naming, so the two must encode the same tree shape and order."""
     seen = _Recorder()
     seen._visit_function(busy.ast, None)
