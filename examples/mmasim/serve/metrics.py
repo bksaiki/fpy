@@ -20,9 +20,11 @@ log2, biases in units of u = 2^-24.
 """
 
 import math
+import random
 import statistics
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, fields
+from typing import TypeVar
 
 import quant
 import torch
@@ -32,6 +34,8 @@ QUANTIZED_ONLY = ('rounded', 'quantization')
 """Metrics taken against the quantized operands' product only."""
 U = 2.0 ** -24
 """FP32's unit roundoff."""
+
+_T = TypeVar('_T')
 
 _ELEMS = 1 << 24
 """Elements per block (weight columns, output rows) when comparing."""
@@ -180,4 +184,16 @@ def holm(ps: Sequence[float]) -> list[float]:
         top = max(top, min(1.0, (len(order) - rank) * ps[i]))
         out[i] = top
     return out
+
+
+def bootstrap(units: Sequence[_T], stat: Callable[[Sequence[_T]], float],
+                 iters: int = 10_000, seed: int = 0) -> tuple[float, float]:
+    """A 95% percentile interval of *stat* over *units* resampled with
+    replacement; a resample where it is NaN counts for nothing."""
+    rng = random.Random(seed)
+    vals = sorted(v for _ in range(iters)
+                  if not math.isnan(v := stat(rng.choices(units, k=len(units)))))
+    if not vals:
+        return math.nan, math.nan
+    return vals[int(0.025 * (len(vals) - 1))], vals[int(0.975 * (len(vals) - 1))]
 

@@ -25,6 +25,7 @@ segment's reference log-probabilities are held, on the host.
 """
 
 import argparse
+import itertools
 import json
 import math
 import sys
@@ -58,6 +59,10 @@ class Totals:
     """Each segment's mean NLL."""
     vs: dict[str, dict[str, list[float]]] = field(default_factory=dict)
     """Per reference run, each segment's mean `kl` and top-1 `disagree`ment."""
+    first: dict[str, list[int | None]] = field(default_factory=dict)
+    """Per reference run, each segment's first top-1 disagreement, if any."""
+    first_miss: list[int | None] = field(default_factory=list)
+    """Each segment's first position whose top-1 is not the target, if any."""
 
     def add(self, nll: torch.Tensor, kl: torch.Tensor, same: torch.Tensor, dp: torch.Tensor) -> None:
         self.tokens += nll.numel()
@@ -74,11 +79,15 @@ class Totals:
         against each of *refs* (on the host, R0's first, which the
         token-level sums take), *target* the tokens predicted."""
         nll, seg = 0.0, {name: [0.0, 0] for name in refs}
+        first: dict[str, int | None] = dict.fromkeys(refs)
+        miss = None
         for i in range(0, lp.shape[0], _ROWS):
             q = lp[i:i + _ROWS]
             tgt = target[i:i + _ROWS]
             rows = torch.arange(q.shape[0], device=q.device)
             nll += -q[rows, tgt].sum().item()
+            if miss is None and (hit := q.argmax(-1) == tgt).logical_not().any():
+                miss = i + int(hit.logical_not().nonzero()[0])
             for j, (name, ref) in enumerate(refs.items()):
                 r = ref[i:i + _ROWS].to(q.device)
                 kl, same = (r.exp() * (r - q)).sum(-1), r.argmax(-1) == q.argmax(-1)
@@ -87,12 +96,16 @@ class Totals:
                              dp=q[rows, tgt].exp() - r[rows, tgt].exp())
                 seg[name][0] += kl.sum().item()
                 seg[name][1] += int((~same).sum().item())
+                if first[name] is None and not same.all():
+                    first[name] = i + int((~same).nonzero()[0])
         t = lp.shape[0]
         self.nll_seg.append(nll / t)
+        self.first_miss.append(miss)
         for name, (kl_sum, differ) in seg.items():
             v = self.vs.setdefault(name, {'kl': [], 'disagree': []})
             v['kl'].append(kl_sum / t)
             v['disagree'].append(differ / t)
+            self.first.setdefault(name, []).append(first[name])
 
     def report(self) -> dict[str, float]:
         """Means over tokens, each with its standard error."""
@@ -140,23 +153,24 @@ def _log_probs(model: torch.nn.Module, seg: torch.Tensor) -> torch.Tensor:
 
 def evaluate(
     model: torch.nn.Module, run: swap.Run, segs: Iterable[torch.Tensor],
-    modes: Sequence[str], *, progress: bool = False,
+    modes: Sequence[str], *, starts: Iterable[int] | None = None, progress: bool = False,
 ) -> dict[str, Totals]:
     """R0 and each of *modes* over *segs*: every mode's totals, `fp32`'s
     first, each against R0 and a design also against *run*'s scheme's exact
-    run, if among *modes*.  *run* is `swap.patch(model)`'s; its `split_k` /
-    `combine` apply to every design."""
+    run, if among *modes*.  Each segment is predicted from its position in
+    *starts* on (1: every token but the first).  *run* is
+    `swap.patch(model)`'s; its `split_k` / `combine` apply to every design."""
     exact = f'{run.scheme.name}-exact'
     rest = sorted((m for m in modes if m != 'fp32'), key=lambda m: m != exact)
     totals = {mode: Totals() for mode in ('fp32', *rest)}
     try:
-        for i, seg in enumerate(segs):
-            target = seg[0, 1:]
+        for i, (seg, first) in enumerate(zip(segs, starts or itertools.repeat(1))):
+            target = seg[0, first:]
             refs: dict[str, torch.Tensor] = {}
             for mode, t in totals.items():
                 run.mode = mode
                 start = time.perf_counter()
-                lp = _log_probs(model, seg)
+                lp = _log_probs(model, seg)[first - 1:]
                 torch.cuda.synchronize()
                 t.seconds += time.perf_counter() - start
                 if mode in ('fp32', exact):
@@ -219,7 +233,8 @@ def main(argv: list[str]) -> int:
         'split_k': args.split_k, 'combine': args.combine,
         'runs': {mode: t.report() for mode, t in totals.items()},
         'paired': against(totals),
-        'per_segment': {mode: {'nll': t.nll_seg, **t.vs} for mode, t in totals.items()},
+        'per_segment': {mode: {'nll': t.nll_seg, **t.vs, 'first': t.first}
+                        for mode, t in totals.items()},
     }
     print(f'{"run":20} {"ppl":>14} {"KL":>20} {"top-1":>16} {"RMS dp":>8} {"s":>7}')
     for mode, r in results['runs'].items():

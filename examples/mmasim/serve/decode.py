@@ -1,15 +1,20 @@
 """
-Greedy decode, and where each run's output departs from R0's.
+Greedy decode, and where each run departs from R0's output.
 
-The divergence index (Yuan et al. 2025) of a prompt is the first generated
-position at which a run's greedy token differs from R0's; a run that matches
-R0 to its end never diverges.  Prompts are a seeded random sample of MATH-500
-under the model's chat template, thinking off, with Qwen's instruction for
-math; decoding is up to 2,048 new tokens, as Yuan et al. do for
-non-reasoning models.  A run other than R0 stops at its first departure.
-
-Each run's tokens go to `<out>/<run>.json` and are reused by a later call
-with the same settings (and, past R0, the same R0 tokens).
+R0 decodes greedily: a seeded random sample of MATH-500 under the model's
+chat template, thinking off, with Qwen's instruction for math, up to 2,048
+new tokens, as Yuan et al. 2025 do for non-reasoning models; cached as
+`<out>/fp32.json` for the same settings.  Every run is then teacher-forced
+on each prompt and R0's reply, one prefill (`perplexity.evaluate`), and
+compared position by position with R0 forced so, and a design with the
+scheme's exact run too.  A prompt's divergence index is its first
+disagreement, Yuan et al.'s index computed on prefill: at a near-tie,
+prefill's and decoding's attention round differently enough to decide
+differently, so the two can differ prompt by prompt.  R0's first miss of
+its own tokens is recorded too.  Reported: the fraction diverged, the
+median index of those that do (a bootstrap interval over prompts), and the
+paired per-prompt statistics of `perplexity.against`; all in
+`<out>/forced.json`.
 
     python serve/decode.py -o dec                      # every run
     python serve/decode.py -o dec -r amd.cdna2.bf16 --prompts 10
@@ -17,15 +22,17 @@ with the same settings (and, past R0, the same R0 tokens).
 """
 
 import argparse
-import hashlib
 import json
+import math
 import statistics
 import sys
-from collections.abc import Collection, Iterator
+from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 import checkpoints
+import metrics
+import perplexity
 import swap
 import torch
 
@@ -84,11 +91,38 @@ def divergence(ref: list[int], got: list[int]) -> int | None:
     return next((i for i, (a, b) in enumerate(zip(ref, got)) if a != b), None)
 
 
+def _median(firsts: Sequence[int | None]) -> float:
+    """The median of the indices that are not `None` (NaN if none are)."""
+    hit = [f for f in firsts if f is not None]
+    return statistics.median(hit) if hit else math.nan
+
+
+def divergences(totals: dict[str, perplexity.Totals]) -> dict[str, dict[str, dict[str, float]]]:
+    """Per reference and run (`perplexity.evaluate`'s comparisons, a run
+    against itself left out): the fraction of prompts diverged with its
+    standard error, and the median index of those that do with a bootstrap
+    95% interval over prompts."""
+    out: dict[str, dict[str, dict[str, float]]] = {}
+    for ref in totals:
+        rows = {}
+        for mode, t in totals.items():
+            if mode == ref or ref not in t.first:
+                continue
+            firsts = t.first[ref]
+            frac, se = metrics.paired([float(f is not None) for f in firsts])
+            lo, hi = metrics.bootstrap(firsts, _median)
+            rows[mode] = {'diverged': frac, 'diverged_se': se, 'median': _median(firsts),
+                          'median_lo': lo, 'median_hi': hi}
+        if rows:
+            out[ref] = rows
+    return out
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     swap.add_args(ap)
     checkpoints.add_args(ap)
-    ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
+    ap.add_argument('-o', '--out', required=True, help='directory for R0\'s tokens and the results')
     ap.add_argument('-r', '--runs', nargs='*',
                     help="runs besides fp32 (default: the scheme's exact run and every design)")
     ap.add_argument('--prompts', type=int, default=100, help='MATH-500 problems, at random')
@@ -100,47 +134,56 @@ def main(argv: list[str]) -> int:
 
     modes = checkpoints.runs(ap, args)
     settings = {'model': args.model, 'prompts': args.prompts, 'seed': args.seed,
-                'max_new': args.max_new, 'split_k': args.split_k, 'combine': args.combine}
+                'max_new': args.max_new}
     problems = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')['problem']
     picked = swap.pick(len(problems), args.prompts, args.seed)
     tok = AutoTokenizer.from_pretrained(args.model)
     prompts = [encode(tok, [{'role': 'user', 'content': f'{problems[i]}\n{INSTRUCTION}'}])
                for i in picked]
+    model, run, about = checkpoints.for_scheme(
+        args.model, args.scheme, requantize=args.requantize, master=args.master,
+        split_k=args.split_k, combine=args.combine)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    model = run = None
-    runs: dict[str, list[list[int]]] = {}
-    for mode in ('fp32', *modes):
-        path = out / f'{mode}.json'
-        ref = runs.get('fp32')
-        want = settings if ref is None else {
-            **settings, 'scheme': args.scheme.name, 'requantize': args.requantize,
-            'fp32': hashlib.sha256(json.dumps(ref).encode()).hexdigest()}
-        if path.exists() and (cached := json.loads(path.read_text()))['settings'] == want:
-            runs[mode] = cached['tokens']
-            continue
-        if model is None:
-            model, run, _ = checkpoints.for_scheme(
-                args.model, args.scheme, requantize=args.requantize, master=args.master,
-                split_k=args.split_k, combine=args.combine)
-            eos = stop_tokens(model, tok)
-        run.mode = mode
-        runs[mode] = []
+    path = out / 'fp32.json'
+    if path.exists() and (cached := json.loads(path.read_text()))['settings'] == settings:
+        ref = cached['tokens']
+    else:
+        eos = stop_tokens(model, tok)
+        ref = []
         for i, p in enumerate(prompts):
-            runs[mode].append(greedy(model, p, args.max_new, eos, ref and ref[i]))
-            print(f'{mode} prompt {i + 1}', file=sys.stderr, flush=True)
-        path.write_text(json.dumps({'settings': want, 'tokens': runs[mode]}))
+            ref.append(greedy(model, p, args.max_new, eos))
+            print(f'fp32 prompt {i + 1}', file=sys.stderr, flush=True)
+        path.write_text(json.dumps({'settings': settings, 'tokens': ref}))
 
-    ref = runs['fp32']
+    seqs = [torch.cat([p, p.new_tensor([r])], -1) for p, r in zip(prompts, ref)]
+    totals = perplexity.evaluate(model, run, seqs, modes, starts=[p.shape[1] for p in prompts],
+                                 progress=True)
+    floor = totals['fp32'].first_miss
+    results = {
+        'settings': {**settings, 'scheme': args.scheme.name, 'split_k': args.split_k,
+                     'combine': args.combine, **about},
+        'floor': {'missed': sum(f is not None for f in floor) / len(floor), 'first': floor},
+        'divergence': divergences(totals), 'paired': perplexity.against(totals),
+        'per_prompt': {mode: {'nll': t.nll_seg, **t.vs, 'first': t.first}
+                       for mode, t in totals.items()},
+    }
+    (out / 'forced.json').write_text(json.dumps(results, indent=2))
+
     print(f'R0: {len(ref)} prompts, mean length {statistics.mean(map(len, ref)):.0f} tokens, '
-          f'{sum(len(r) == args.max_new for r in ref)} at the limit')
-    print(f'{"run":20} {"diverged":>16} {"mean index":>11} {"median":>7}')
-    for mode, got in runs.items():
-        idx: list[int | None] = [divergence(r, g) for r, g in zip(ref, got)]
-        hit = [i for i in idx if i is not None]
-        mean, med = (f'{statistics.mean(hit):.0f}', f'{statistics.median(hit):.0f}') if hit else ('-', '-')
-        print(f'{mode:20} {len(hit):5} ({len(hit) / len(ref):6.1%}) {mean:>11} {med:>7}')
+          f'{sum(len(r) == args.max_new for r in ref)} at the limit; forced, it misses its own '
+          f'tokens on {results["floor"]["missed"]:.1%} (median first miss {_median(floor):.0f})')
+    for name, rows in results['divergence'].items():
+        paired = results['paired'][name]
+        print(f'\nagainst {name}, forced\n{"run":20} {"diverged":>16} {"median index":>20} '
+              f'{"disagree":>18} {"KL":>20}')
+        for mode, r in rows.items():
+            q = paired[mode]
+            print(f'{mode:20} {r["diverged"]:6.1%} ±{r["diverged_se"]:5.1%}  '
+                  f'{r["median"]:6.0f} [{r["median_lo"]:.0f}, {r["median_hi"]:.0f}]  '
+                  f'{q["disagree"]:7.3%} ±{q["disagree_se"]:.3%} '
+                  f'{q["kl"]:10.3e} ±{q["kl_se"]:.1e}')
     return 0
 
 
