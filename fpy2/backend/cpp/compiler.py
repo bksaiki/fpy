@@ -39,6 +39,7 @@ from ...number import Context
 from ...transform import (
     EnumerateElim,
     FreeVarElim,
+    Hoistable,
     ReduceFusion,
     RoundElim,
     Simplify,
@@ -470,8 +471,9 @@ class CppCompiler(Backend):
             # `zip` is still in an iterable position
             module = module.map(lambda _m, fd: EnumerateElim.apply(fd))
             module = module.map(lambda _m, fd: ZipElim.apply(fd))
-            # after both, so a `zip`/`enumerate` comp is already an indexed comp
-            module = module.map(lambda _m, fd: ReduceFusion.apply(fd))
+            # after both, so a `zip`/`enumerate` comp is already an indexed comp,
+            # and after `Hoistable`, so every reduction has a slot to fuse into
+            module = module.map(lambda _m, fd: ReduceFusion.apply(Hoistable.apply(fd)))
 
         # `size_key`: a spec per distinct argument-length vector, so a proven
         # length crosses the call edge as the callee's annotation and both ends

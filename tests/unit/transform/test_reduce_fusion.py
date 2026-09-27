@@ -24,11 +24,23 @@ from fpy2 import Function
 from fpy2.ast.fpyast import (
     AllOf, AnyOf, Assign, BoolVal, ForStmt, ListComp, Or, Var,
 )
-from fpy2.transform import ReduceFusion
+from fpy2.transform import Hoistable, ReduceFusion
 
 
 def _fuse(f) -> Function:
     return Function(ReduceFusion.apply(f.ast))
+
+
+@fp.fpy
+def _needs_positive_g(x: fp.Real) -> bool:
+    assert x > 0.0, 'g'
+    return True
+
+
+@fp.fpy
+def _needs_positive_h(x: fp.Real) -> bool:
+    assert x > 0.0, 'h'
+    return True
 
 
 def _find(ast, cls):
@@ -189,13 +201,14 @@ class TestSemanticsPreserved:
         _agree(f, [([1.0, -2.0], 1.0), ([1.0, 2.0], 1.0), ([-1.0], -1.0), ([], 1.0)])
 
     def test_two_reductions_in_one_statement(self):
+        """Only the first: the `and` tail may not run."""
         @fp.fpy
         def f(xs: list[fp.Real]) -> bool:
             with fp.FP64:
                 return any([x < 0 for x in xs]) and all([x < 10 for x in xs])
 
         out = ReduceFusion.apply(f.ast)
-        assert not _has_node(out, AnyOf) and not _has_node(out, AllOf)
+        assert not _has_node(out, AnyOf) and _has_node(out, AllOf)
         _agree(f, [([1.0, -2.0],), ([1.0, 20.0],), ([-1.0, 2.0],), ([],)])
 
     def test_inside_loop_and_if_condition(self):
@@ -247,6 +260,54 @@ class TestRewriteSuppressed:
         # the inner reduction sits in a comp element -> no statement slot
         assert _has_node(out, AnyOf)
         _agree(f, [([1.0, 2.0],), ([],), ([3.0],)])
+
+    def test_an_and_tail_not_fused(self):
+        """The tail runs only where `c` holds; hoisted, it raised where the
+        program returned `False`."""
+        @fp.fpy
+        def f(xs: list[fp.Real], c: bool) -> bool:
+            return c and all([_needs_positive_g(x) for x in xs])
+
+        assert _has_node(ReduceFusion.apply(f.ast), AllOf)
+        _agree(f, [([-1.0], False), ([1.0], True)])
+
+    def test_a_comparison_tail_not_fused(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], a: bool, b: bool) -> bool:
+            return a == b == all([_needs_positive_g(x) for x in xs])
+
+        assert _has_node(ReduceFusion.apply(f.ast), AllOf)
+        _agree(f, [([-1.0], True, False), ([1.0], True, True)])
+
+    def test_a_while_condition_not_fused(self):
+        """The condition re-runs every iteration; hoisted, it ran once and the
+        loop never ended."""
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            i = 0
+            while any([x > i for x in xs]):
+                i += 1
+            return i
+
+        assert _has_node(ReduceFusion.apply(f.ast), AnyOf)
+        _agree(f, [([1.0, 3.0],), ([],)])
+
+    def test_a_left_operand_is_not_overtaken(self):
+        """The loop lands above the statement, so it would run `h` before
+        `g`.  `Hoistable` names `g(y)` first, and then it fuses."""
+        @fp.fpy
+        def f(y: fp.Real, xs: list[fp.Real]) -> bool:
+            return _needs_positive_g(y) == all([_needs_positive_h(x) for x in xs])
+
+        assert _has_node(ReduceFusion.apply(f.ast), AllOf)
+        out = ReduceFusion.apply(Hoistable.apply(f.ast))
+        assert not _has_node(out, AllOf)
+        with pytest.raises(AssertionError) as before:
+            f(-1.0, [-1.0])
+        with pytest.raises(AssertionError) as after:
+            Function(out)(-1.0, [-1.0])
+        assert 'g' in str(before.value)
+        assert str(after.value) == str(before.value)
 
     def test_multi_stage_comprehension_left_alone(self):
         """``[e for a in xs for b in ys]`` has two targets; fusing it needs

@@ -16,14 +16,15 @@ and beyond.
 
 **The ordering hazard.**  A hoist lands above the whole statement, so it
 overtakes the operands to its left unless they are named first: see
-:func:`force_names`.
+:func:`force_names`.  :attr:`HoistabilityAnalysis.slots` says where a hoist is
+sound as the program stands.
 
 :class:`~fpy2.transform.Hoistable` rewrites a program into this form.
 """
 
 from dataclasses import dataclass
 
-from ..ast.accessors import subexprs
+from ..ast.accessors import subblocks, subexprs
 from ..ast.fpyast import (
     And,
     AssertStmt,
@@ -36,6 +37,7 @@ from ..ast.fpyast import (
     NullaryOp,
     Or,
     Stmt,
+    StmtBlock,
     ValueExpr,
     Var,
     WhileStmt,
@@ -83,13 +85,22 @@ def hoists_inside(e: Expr) -> bool:
     """
     if lowers(e) or isinstance(e, ListComp):
         return True
-    kids = [sub for _field, _i, sub in subexprs(e)]
-    match e:
-        case IfExpr() | And() | Or():
-            kids = kids[:1]    # the arms, or the tail, may not run
+    return any(hoists_inside(kid) for kid in _strict(e))
+
+
+def _strict(node: 'Stmt | Expr') -> list[Expr]:
+    """The operands of `node` evaluated exactly once whenever it is, in
+    evaluation order: always a prefix of :func:`~fpy2.ast.accessors.subexprs`."""
+    kids = [sub for _field, _i, sub in subexprs(node)]
+    match node:
+        case IfExpr() | And() | Or() | AssertStmt():
+            return kids[:1]    # the arms, the tail, or the message may not run
         case Compare():
-            kids = kids[:2]    # a chain short-circuits after the first pair
-    return any(hoists_inside(kid) for kid in kids)
+            return kids[:2]    # a chain short-circuits after the first pair
+        case ListComp() | WhileStmt():
+            return []
+        case _:
+            return kids
 
 
 def force_names(node: 'Stmt | Expr') -> set[Expr]:
@@ -149,6 +160,27 @@ class HoistabilityAnalysis:
     """Every operand in a sealed position with its :data:`SEALED_REASON` key,
     in visit order."""
 
+    slots: set[Expr]
+    """Every expression a statement may be inserted before its own statement
+    for: it is reached through strict operands only, and every operand that runs
+    before it is an atom."""
+
+
+def _slots(block: StmtBlock, out: set[Expr]) -> None:
+    for stmt in block.stmts:
+        _slot_operands(stmt, out)
+        for _field, sub in subblocks(stmt):
+            _slots(sub, out)
+
+
+def _slot_operands(node: 'Stmt | Expr', out: set[Expr]) -> None:
+    strict = _strict(node)
+    for i, kid in enumerate(strict):
+        if not all(isinstance(k, ATOMIC) for k in strict[:i]):
+            return             # a hoist here would overtake an earlier operand
+        out.add(kid)
+        _slot_operands(kid, out)
+
 
 class _Sealed(DefaultVisitor):
     """Collects :attr:`HoistabilityAnalysis.sealed`."""
@@ -201,4 +233,6 @@ class Hoistability:
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
         v = _Sealed()
         v._visit_function(func, None)
-        return HoistabilityAnalysis(v.found)
+        slots: set[Expr] = set()
+        _slots(func.body, slots)
+        return HoistabilityAnalysis(v.found, slots)

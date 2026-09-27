@@ -12,7 +12,7 @@ changes which exception a program raises -- so it is tested here on its own.
 import fpy2 as fp
 from fpy2.ast.fpyast import Expr, FuncDef, Stmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.analysis.hoistability import force_names, hoists_inside, lowers
+from fpy2.analysis.hoistability import Hoistability, force_names, hoists_inside, lowers
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -257,3 +257,47 @@ class TestForceNames:
         if_stmt = _stmt(f)
         assert _forced(if_stmt) == set()
         assert _forced(if_stmt.ift.stmts[0]) == {'fp.sqrt(a)'}
+
+
+# ----------------------------------------------------------------------
+# `slots`: where a statement may go before an expression's own
+
+
+def _slots(f) -> set[str]:
+    return {e.format() for e in Hoistability.analyze(f.ast).slots}
+
+
+class TestSlots:
+    def test_a_strict_operand_is_a_slot(self):
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            return a + fp.sqrt(b)
+        assert 'fp.sqrt(b)' in _slots(f)
+
+    def test_a_sealed_operand_is_not(self):
+        """A ternary arm, an `and` tail, a comparison tail, a comprehension's
+        parts, an assert message, and a `while` condition may not run when
+        their statement does -- or run more than once."""
+        @fp.fpy
+        def f(xs: list[fp.Real], a: fp.Real, b: bool, c: bool) -> fp.Real:
+            assert b, fp.sqrt(a) > 0.0
+            while fp.cbrt(a) > 0.0:
+                a = a - 1.0
+            n = len([fp.log(x) for x in xs])
+            return (fp.exp(a) if b else 0.0) + \
+                (1.0 if (c and fp.floor(a) > 0.0) else 0.0) + \
+                (1.0 if (b == c == (fp.ceil(a) > 0.0)) else 0.0)
+        slots = _slots(f)
+        for sealed in ('fp.sqrt(a)', 'fp.cbrt(a)', 'fp.exp(a)', 'fp.log(x)', 'xs',
+                       'fp.floor(a)', 'fp.ceil(a)'):
+            assert sealed not in slots, sealed
+        assert '[fp.log(x) for x in xs]' in slots
+
+    def test_an_operand_right_of_a_non_atom_is_not(self):
+        """A statement before this one would run before `fp.sqrt(a)`."""
+        @fp.fpy
+        def f(a: fp.Real, b: fp.Real) -> fp.Real:
+            return fp.sqrt(a) + fp.sqrt(b)
+        slots = _slots(f)
+        assert 'fp.sqrt(a)' in slots
+        assert 'fp.sqrt(b)' not in slots
