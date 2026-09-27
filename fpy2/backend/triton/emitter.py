@@ -118,10 +118,11 @@ from ...ast import (
     Var,
     WhileStmt,
 )
+from ...ast.accessors import subexprs
 from ...ast.visitor import Visitor
 from ...number import INTEGER, REAL, Context, Float, RealFloat, RoundingMode
 from ...number.context.mp_fixed import MPFixedContext
-from ...transform.path import sub_blocks, sub_exprs, walk_exprs, walk_stmts
+from ...transform.path import sub_blocks, walk_exprs, walk_stmts
 from ...transform.simplify_if import _reads, _size
 from ...types import BoolType, ListType, RealType
 from ...utils import Unionfind

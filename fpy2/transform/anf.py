@@ -61,6 +61,7 @@ from ..analysis import (
     TypeInfer,
 )
 from ..analysis.type_infer import TypeAnalysis
+from ..ast.accessors import subexprs
 from ..ast.fpyast import (
     AllOf,
     AMax,
@@ -111,7 +112,6 @@ from ..types import BoolType, RealType
 from ..utils import Gensym
 from .error import TransformError
 from .hoistable import _ATOMIC, _SEALED_REASON
-from .path import sub_exprs
 
 _NAMEABLE_TYPES = (RealType, BoolType)
 """Types whose values this pass binds to a name.  A whitelist, so an unresolved
@@ -145,7 +145,7 @@ def needs_slot(e: Expr) -> bool:
     """
     if not isinstance(e, _SLOT_FREE) or isinstance(e, _NEEDS_SLOT):
         return True
-    return any(needs_slot(sub) for _field, _i, sub in sub_exprs(e))
+    return any(needs_slot(sub) for _field, _i, sub in subexprs(e))
 
 
 # ----------------------------------------------------------------------

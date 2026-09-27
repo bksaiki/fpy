@@ -26,6 +26,7 @@ import pytest
 import fpy2 as fp
 from fpy2 import Function
 from fpy2.analysis import DefineUse, TypeInfer
+from fpy2.ast.accessors import subexprs
 from fpy2.ast.fpyast import (
     And,
     Assign,
@@ -51,7 +52,7 @@ from fpy2.number import REAL
 from fpy2.transform import ANF, Hoistable
 from fpy2.transform.error import TransformError
 from fpy2.transform.anf import needs_slot
-from fpy2.transform.path import sub_exprs, walk_stmts
+from fpy2.transform.path import walk_stmts
 from fpy2.types import BoolType, RealType
 
 # ----------------------------------------------------------------------
@@ -86,7 +87,7 @@ def _unnamed(func: FuncDef) -> list[Expr]:
     def descend(e: Expr) -> None:
         if isinstance(e, _SEALS):
             return
-        for _field, _i, sub in sub_exprs(e):
+        for _field, _i, sub in subexprs(e):
             if not isinstance(sub, _ATOM) and isinstance(
                 types.by_expr.get(sub), _SCALAR,
             ):
@@ -94,7 +95,7 @@ def _unnamed(func: FuncDef) -> list[Expr]:
             descend(sub)
 
     for _path, stmt in walk_stmts(func):
-        for field, _i, e in sub_exprs(stmt):
+        for field, _i, e in subexprs(stmt):
             if isinstance(stmt, WhileStmt) and field == 'cond':
                 continue
             descend(e)

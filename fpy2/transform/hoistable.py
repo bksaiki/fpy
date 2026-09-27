@@ -65,6 +65,7 @@ from typing import Any
 
 from ..analysis import DefineUse, Reachability, SyntaxCheck
 from ..analysis.define_use import DefineUseAnalysis
+from ..ast.accessors import subexprs
 from ..ast.fpyast import (
     And,
     AssertStmt,
@@ -97,7 +98,6 @@ from ..ast.fpyast import (
 from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
 from ..number import REAL
 from ..utils import Gensym
-from .path import sub_exprs
 
 _ATOMIC = (Var, ValueExpr, NullaryOp)
 """Expressions that are already a place, or need none."""
@@ -153,7 +153,7 @@ def hoists_inside(e: Expr) -> bool:
     """
     if lowers(e) or isinstance(e, ListComp):
         return True
-    kids = [sub for _field, _i, sub in sub_exprs(e)]
+    kids = [sub for _field, _i, sub in subexprs(e)]
     match e:
         case IfExpr() | And() | Or():
             kids = kids[:1]    # the arms, or the tail, may not run
@@ -167,7 +167,7 @@ def force_names(node: 'Stmt | Expr') -> set[Expr]:
     does not overtake them.
 
     The *prefix rule*: at any node, let ``last`` be the position of the last
-    child -- in :func:`~fpy2.transform.path.sub_exprs` order, which is
+    child -- in :func:`~fpy2.ast.accessors.subexprs` order, which is
     evaluation order -- that something hoists out of (:func:`hoists_inside`).
     Every earlier child that is not already an atom is named, since a hoist
     lands above the whole statement and would otherwise run before them.
@@ -195,7 +195,7 @@ def _collect(node: 'Stmt | Expr', out: set[Expr]) -> None:
     """Accumulate :func:`force_names` for `node` and everything under it."""
     if isinstance(node, ListComp):
         return
-    kids = [sub for _field, _i, sub in sub_exprs(node)]
+    kids = [sub for _field, _i, sub in subexprs(node)]
     if isinstance(node, AssertStmt):
         kids = kids[:1]        # the message is sealed; only the test is strict
     elif isinstance(node, Compare):

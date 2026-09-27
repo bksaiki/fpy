@@ -1,0 +1,104 @@
+"""
+Where an AST node holds its sub-expressions.
+"""
+
+from typing import Literal, TypeAlias
+
+from .fpyast import (
+    AssertStmt,
+    Assign,
+    Attribute,
+    BinaryOp,
+    Call,
+    Compare,
+    ContextStmt,
+    EffectStmt,
+    Expr,
+    ForStmt,
+    If1Stmt,
+    IfExpr,
+    IfStmt,
+    IndexedAssign,
+    ListComp,
+    ListExpr,
+    ListRef,
+    ListSlice,
+    NaryOp,
+    NullaryOp,
+    ReturnStmt,
+    Stmt,
+    TernaryOp,
+    TupleExpr,
+    UnaryOp,
+    WhileStmt,
+)
+
+ExprField: TypeAlias = Literal[
+    # of a statement
+    'expr', 'indices', 'cond', 'iterable', 'ctx', 'test', 'msg',
+    # of an expression
+    'args', 'kwargs', 'elts', 'value', 'index', 'start', 'stop',
+    'iterables', 'elt', 'ift', 'iff',
+]
+"""The fields a statement or expression can hold an expression in.
+
+A typo'd field is then a type error, and :func:`subexprs` is checked against
+this list.
+"""
+
+
+def subexprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...]:
+    """The expressions *node* holds, each with the field and position naming it.
+
+    The only place the AST's expression field names appear: resolving a path
+    needs this field-to-child lookup, which a visitor's dispatch does not
+    expose.
+    """
+    def at(field: ExprField, es) -> tuple[tuple[ExprField, int | None, Expr], ...]:
+        return tuple((field, i, e) for i, e in enumerate(es))
+
+    match node:
+        # statements
+        case Assign() | EffectStmt() | ReturnStmt():
+            return ('expr', None, node.expr),
+        case IndexedAssign():
+            return *at('indices', node.indices), ('expr', None, node.expr)
+        case If1Stmt() | IfStmt() | WhileStmt():
+            return ('cond', None, node.cond),
+        case ForStmt():
+            return ('iterable', None, node.iterable),
+        case ContextStmt():
+            return ('ctx', None, node.ctx),
+        case AssertStmt():
+            if node.msg is None:
+                return ('test', None, node.test),
+            return ('test', None, node.test), ('msg', None, node.msg)
+        # expressions -- every operator holds its operands in `args`, whatever
+        # its arity, and `arg` / `first` / `second` are properties over that
+        case Call():
+            return *at('args', node.args), *at('kwargs', [v for _, v in node.kwargs])
+        case NullaryOp() | UnaryOp() | BinaryOp() | TernaryOp() | NaryOp() | Compare():
+            return at('args', node.args)
+        case TupleExpr() | ListExpr():
+            return at('elts', node.elts)
+        case ListRef():
+            return ('value', None, node.value), ('index', None, node.index)
+        case ListSlice():
+            out: list[tuple[ExprField, int | None, Expr]] = [
+                ('value', None, node.value)
+            ]
+            if node.start is not None:
+                out.append(('start', None, node.start))
+            if node.stop is not None:
+                out.append(('stop', None, node.stop))
+            return tuple(out)
+        case ListComp():
+            return *at('iterables', node.iterables), ('elt', None, node.elt)
+        case IfExpr():
+            return (('cond', None, node.cond), ('ift', None, node.ift),
+                    ('iff', None, node.iff))
+        case Attribute():
+            return ('value', None, node.value),
+        case _:
+            return ()
+

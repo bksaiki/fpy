@@ -156,7 +156,7 @@ class _Recorder(DefaultTransformVisitor):
 
 
 def test_the_walks_agree_with_the_visitor():
-    """`sub_blocks` / `sub_exprs` name the fields the visitor descends through
+    """`sub_blocks` / `subexprs` name the fields the visitor descends through
     without naming, so the two must encode the same tree shape and order."""
     seen = _Recorder()
     seen._visit_function(busy.ast, None)
