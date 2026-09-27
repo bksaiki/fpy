@@ -217,3 +217,16 @@ class TestTerminatedBranchJoin:
         phis = {str(p.name): p for p in info.phis[stmt]}
         assert 'x' in phis and not phis['x'].is_intro
         assert f(False) == 1
+
+
+class TestAssertMessage:
+    """An `assert`'s message is an expression like any other."""
+
+    def test_a_comprehension_in_the_message_defines_its_target(self):
+        @fp.fpy
+        def f(xs: list[fp.Real], c: bool) -> bool:
+            assert c, any([x > 0 for x in xs])
+            return c
+
+        info = DefineUse.analyze(f.ast)
+        assert any(str(d.name) == 'x' for d in info.defs)

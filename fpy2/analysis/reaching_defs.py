@@ -516,6 +516,8 @@ class _ReachingDefs(DefaultVisitor):
 
     def _visit_assert(self, stmt: AssertStmt, ctx: _DefCtx):
         self._visit_expr(stmt.test, ctx)
+        if stmt.msg is not None:
+            self._visit_expr(stmt.msg, ctx)
         return ctx
 
     def _visit_effect(self, stmt: EffectStmt, ctx: _DefCtx):
