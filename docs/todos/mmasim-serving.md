@@ -154,8 +154,9 @@ Where a model's weights come from is recorded with every result
 cached `(x, W)`.
 - Every design sees identical inputs, and there is no propagation between
   layers.
-- Means are within ~0.01 in log2 of `layers.py`, where each design sees its
-  own inputs (measured under `bf16`).
+- Means are within ~0.01 in log2 of each design's metrics on its own inputs,
+  the model run through it (measured under `bf16`; `test_local.py` checks
+  where the inputs agree).
 
 **Two references** (parallel tables in every run):
 - **quantized:** the quantized operands' exact product, scales included.
@@ -198,7 +199,6 @@ columns report `log2` of the value, so `-24` is one unit roundoff.
 | bias | mean of `(ŷ - y) / (\|x\|ᵀ\|w\|)` in u: drift about zero | elements | |
 | magnitude bias | mean of `sign(y) (ŷ - y) / (\|x\|ᵀ\|w\|)` in u; negative leans toward zero | elements | |
 | quantization | `‖Y_q - Y_0‖_F / ‖Y_0‖_F`, log2 | every token stacked | |
-| propagated (`layers.py` only) | normwise, against R0's output at that layer | every token stacked | |
 
 `-m` selects metrics, and only those are computed.
 
@@ -226,7 +226,7 @@ python serve/local.py --scheme fp8-row --models Qwen/Qwen3-0.6B RedHatAI/Qwen3-0
 python serve/local.py --scheme fp8-block --models RedHatAI/Qwen3-0.6B-FP8-BLOCK --master Qwen/Qwen3-0.6B
 python serve/local.py --scheme mxfp4 --models kaitchup/Qwen3-0.6B-NVFP4 --requantize
 python serve/local.py --scheme nvfp4 -d nv.blackwell.nvfp4 -w mtbench --by role -m normwise backward
-python serve/{perplexity,zeroshot,decode,layers}.py --model Qwen/Qwen3.5-0.8B   # bf16 runs
+python serve/{perplexity,zeroshot,decode}.py --model Qwen/Qwen3.5-0.8B   # bf16 runs
 python serve/chat.py                                    # terminal chat, run switchable mid-conversation
 ```
 
@@ -246,8 +246,8 @@ examples/mmasim/serve/
   checkpoints.py  compressed-tensors checkpoints; weights_for
   swap.py         a model's nn.Linear forwards through a Run (mode, scheme)
   local.py        capture, then local metrics per design (the primary evaluation)
+  metrics.py      the local metrics (Stats, local)
   workloads.py    WikiText-2; MT-Bench sessions
-  layers.py       per-layer metrics through the model, propagated included
   perplexity.py   WikiText-2 PPL, KL / top-1 / RMS dp vs R0
   zeroshot.py     lm-evaluation-harness suite, flips vs R0
   decode.py       greedy decode, divergence index vs R0
@@ -419,9 +419,10 @@ WikiText-2, first 8 segments:
 
 - **Decode:** 5 MATH-500 prompts, Yuan et al.'s setup.  bf16-exact diverged
   on 2, CDNA2 on 1, Hopper on 1.
-- **Propagated error** (`layers.py`) is input rounding's, ~2^-8.4, which is
-  2^10 to 2^13 times the local error.  The exception is blocks 11-14, where
-  the designs add to it.
+- **Propagated error** (normwise against R0's output at each layer, in the
+  retired `layers.py`) is input rounding's, ~2^-8.4, which is 2^10 to 2^13
+  times the local error.  The exception is blocks 11-14, where the designs
+  add to it.
 - **Qwen3.5-0.8B:** PPL 12.46 on segment 0; KL 2.7-2.9e-5 for every run.
 
 ## Record
@@ -493,9 +494,10 @@ to have).
 
 ### Uncertainty on local metrics
 
-Pooled means carry no intervals.  A bootstrap over sequences (WikiText-2
-segments, MT-Bench conversations) would separate real design differences
-of ~0.05-0.1 in log2 from sampling noise.
+Pooled means carry no intervals.  Standard errors clustered by sequence
+(WikiText-2 segments, MT-Bench conversations) would separate real design
+differences of ~0.05-0.1 in log2 from sampling noise
+(`mmasim-end-to-end.md` builds the statistics).
 
 ### A larger model or a second family
 

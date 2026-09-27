@@ -5,7 +5,7 @@ the model.
 Every linear layer's BF16 input is captured once under `--scheme`'s exact
 run on a workload (`workloads`); each applicable design then runs only its
 kernel on the cached, quantized operands, measured against the exact
-product of the quantized and of the unquantized operands (`layers.local`).
+product of the quantized and of the unquantized operands (`metrics.local`).
 `--by` splits by a tag.  `--models` takes masters (RTN, `lm_head`
 unquantized unless `bf16`) and checkpoints (`checkpoints.weights_for`).
 Seconds per design include the metrics' FP64 work.
@@ -32,14 +32,13 @@ from typing import Any
 
 import checkpoints
 import kernels
-import layers
+import metrics
 import perplexity
 import quant
 import swap
 import torch
 import workloads
 
-METRICS = tuple(m for m in layers.METRICS if m != 'propagated')
 REFERENCES = ('quantized', 'unquantized')
 """What a design's output is measured against: the exact product of the
 quantized operands (its own effect), or of the unquantized ones (the
@@ -121,15 +120,15 @@ def capture(
 
 def evaluate(
     model: torch.nn.Module, run: swap.Run, acts: Activations, design: str,
-    metrics: Collection[str] = METRICS, *, by: str | None = None, only: str | None = None,
+    names: Collection[str] = metrics.METRICS, *, by: str | None = None, only: str | None = None,
     masters: dict[str, torch.Tensor] | None = None, unquantized: bool = True,
-) -> dict[str, dict[str, dict[str, layers.Stats]]]:
-    """*design*'s :class:`layers.Stats` under *run*'s scheme, as `{reference:
-    {group: {layer: Stats}}}`: references :data:`REFERENCES` (`unquantized`
-    only if *unquantized*); groups by tag *by*, else `all`; layers matching
-    regex *only*, minus *run*'s ignored ones.  *run* gives weights, static
-    scales and `k` splits; unquantized weights are *masters*', else the
-    layer's own."""
+) -> dict[str, dict[str, dict[str, metrics.Stats]]]:
+    """*design*'s :class:`metrics.Stats` for metrics *names* under *run*'s
+    scheme, as `{reference: {group: {layer: Stats}}}`: references
+    :data:`REFERENCES` (`unquantized` only if *unquantized*); groups by tag
+    *by*, else `all`; layers matching regex *only*, minus *run*'s ignored
+    ones.  *run* gives weights, static scales and `k` splits; unquantized
+    weights are *masters*', else the layer's own."""
     scheme = run.scheme
     if not kernels.applicable(design, scheme):
         raise ValueError(f'{design} does not take {scheme.name}')
@@ -138,7 +137,7 @@ def evaluate(
         labels = acts.tags[by]
         groups = {g: torch.tensor([i for i, x in enumerate(labels) if x == g], device='cuda')
                   for g in dict.fromkeys(labels)}
-    stats: dict[str, dict[str, dict[str, layers.Stats]]] = {
+    stats: dict[str, dict[str, dict[str, metrics.Stats]]] = {
         r: {g: {} for g in groups} for r in REFERENCES[:1 + unquantized]}
     held = kernels.storage(design)[1]
     with torch.no_grad():
@@ -157,9 +156,9 @@ def evaluate(
             for g, rows in groups.items():
                 s0 = None
                 if unquantized:
-                    s0 = stats['unquantized'][g][name] = layers.Stats()
-                layers.local(stats['quantized'][g].setdefault(name, layers.Stats()), metrics,
-                             qa.take(rows), qw, y[rows], (a[rows], w0), s0)
+                    s0 = stats['unquantized'][g][name] = metrics.Stats()
+                metrics.local(stats['quantized'][g].setdefault(name, metrics.Stats()), names,
+                              qa.take(rows), qw, y[rows], (a[rows], w0), s0)
     return stats
 
 
@@ -200,7 +199,7 @@ def main(argv: list[str]) -> int:
                     'measured against (default: its model card\'s base model)')
     ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES),
                     help='designs the scheme applies to (default: all of them)')
-    ap.add_argument('-m', '--metrics', nargs='*', choices=METRICS, default=list(METRICS))
+    ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, default=list(metrics.METRICS))
     ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext')
     ap.add_argument('--tokens', type=int, default=perplexity.CONTEXT,
                     help='rows captured: WikiText-2\'s first, or sampled over MT-Bench')
@@ -224,10 +223,10 @@ def main(argv: list[str]) -> int:
                                            master=args.master, split_k=args.split_k,
                                            combine=args.combine)
         known = about['master'] is not None
-        metrics = [m for m in args.metrics if m != 'quantization' or known]
-        refs = {'quantized': metrics}
+        names = [m for m in args.metrics if m != 'quantization' or known]
+        refs = {'quantized': names}
         if known:
-            refs['unquantized'] = [m for m in metrics if m not in layers.QUANTIZED_ONLY]
+            refs['unquantized'] = [m for m in names if m not in metrics.QUANTIZED_ONLY]
         if args.workload == 'wikitext':
             seqs = workloads.wikitext(name, args.tokens)
         else:
@@ -245,13 +244,13 @@ def main(argv: list[str]) -> int:
             kernels.compiled(design)
             torch.cuda.synchronize()
             start = time.perf_counter()
-            stats = evaluate(model, run, acts, design, metrics, by=args.by, only=args.layers,
+            stats = evaluate(model, run, acts, design, names, by=args.by, only=args.layers,
                              masters=masters, unquantized=known)
             torch.cuda.synchronize()
             seconds[design] = time.perf_counter() - start
             for r, per_ref in stats.items():
                 total.setdefault(r, {})[design] = {
-                    g: sum(per.values(), layers.Stats()).report(refs[r]) for g, per in per_ref.items()}
+                    g: sum(per.values(), metrics.Stats()).report(refs[r]) for g, per in per_ref.items()}
                 results.setdefault(r, {})[design] = {
                     g: {n: st.report(refs[r]) for n, st in per.items()} for g, per in per_ref.items()}
 
@@ -270,7 +269,7 @@ def main(argv: list[str]) -> int:
                 print(f'\n{g} ({rows} tokens)\n{"":{w}} ' + ' '.join(f'{k:>14}' for k in keys)
                       + f' {"s":>6}')
                 for design, t in by_design.items():
-                    print(f'{design:{w}} ' + ' '.join(f'{layers.fmt(k, t[g][k]):>14}' for k in keys)
+                    print(f'{design:{w}} ' + ' '.join(f'{metrics.fmt(k, t[g][k]):>14}' for k in keys)
                           + f' {seconds[design]:6.1f}')
         out['models'][name] = {**about, 'metrics': refs, 'seconds': seconds,
                                'total': total, 'runs': results}

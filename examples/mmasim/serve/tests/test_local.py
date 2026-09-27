@@ -6,6 +6,7 @@
 """
 
 import math
+from functools import partial
 
 import pytest
 import torch
@@ -16,8 +17,8 @@ _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 import kernels
-import layers
 import local
+import metrics
 import quant
 import swap
 import workloads
@@ -44,6 +45,32 @@ def _seqs(tokens: torch.Tensor) -> list[workloads.Sequence]:
     return [workloads.Sequence(ids, {'role': ['user'] * half + ['assistant'] * (len(ids) - half)})]
 
 
+def _own_inputs(model: torch.nn.Module, run: swap.Run, tokens: torch.Tensor, design: str,
+                names: list[str]) -> dict[str, metrics.Stats]:
+    """*design*'s local metrics *names* with the model run through it, each
+    linear layer on its own inputs."""
+    stats: dict[str, metrics.Stats] = {}
+
+    def record(name: str, layer: torch.nn.Linear, inputs: tuple[torch.Tensor],
+               y: torch.Tensor) -> None:
+        x = inputs[0].reshape(-1, inputs[0].shape[-1])
+        metrics.local(stats.setdefault(name, metrics.Stats()), names,
+                      run.quantize(x, layer.weight), run.weight(layer.weight),
+                      y.reshape(-1, y.shape[-1]), (x, layer.weight))
+
+    handles = [m.register_forward_hook(partial(record, n)) for n, m in model.named_modules()
+               if isinstance(m, torch.nn.Linear)]
+    run.mode = design
+    try:
+        with torch.no_grad():
+            model(tokens)
+    finally:
+        run.mode = 'fp32'
+        for h in handles:
+            h.remove()
+    return stats
+
+
 def test_cached_inputs_give_the_model_run_where_inputs_agree(
     model: torch.nn.Module, tokens: torch.Tensor,
 ) -> None:
@@ -60,17 +87,17 @@ def test_cached_inputs_give_the_model_run_where_inputs_agree(
     first = [f'model.layers.0.self_attn.{p}_proj' for p in 'qkv']
     assert len({acts.index[n] for n in first}) == 1
 
-    # layers.evaluate's unquantized inputs are FP32; local's are BF16
-    same = [m for m in local.METRICS if m != 'quantization']
+    # unquantized inputs are FP32 there, BF16 here
+    same = [m for m in metrics.METRICS if m != 'quantization']
     got = local.evaluate(model, run, acts, design)['quantized']['all']
-    want = layers.evaluate(model, run, [tokens], [design], same)[design]
+    want = _own_inputs(model, run, tokens, design, same)
     for name in first:
         assert got[name].report(same) == want[name].report(same)
 
     if 'test.copy' not in kernels.TILES:
         kernels.register('test.copy', dict(DESIGNS)[design], *kernels.TILES[design])
     copy = local.evaluate(model, run, acts, 'test.copy')['quantized']['all']
-    assert all(copy[n].report(local.METRICS) == s.report(local.METRICS) for n, s in got.items())
+    assert all(copy[n].report(metrics.METRICS) == s.report(metrics.METRICS) for n, s in got.items())
 
 
 def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor) -> None:
@@ -83,7 +110,7 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
     parts = local.evaluate(model, run, acts, 'amd.cdna2.bf16', by='role')['quantized']
     assert set(parts) == {'user', 'assistant'}
     for name, s in whole.items():
-        pooled = sum((g[name] for g in parts.values()), layers.Stats())
+        pooled = sum((g[name] for g in parts.values()), metrics.Stats())
         assert (pooled.n, pooled.rounded) == (s.n, s.rounded)
         assert (pooled.backward_max, pooled.ulp_max) == (s.backward_max, s.ulp_max)
         assert math.isclose(pooled.err, s.err, rel_tol=1e-9)
@@ -102,7 +129,7 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
     scheme = run.scheme = quant.SCHEMES[name]
     acts = local.capture(model, run, _seqs(tokens))
     design = kernels.designs(scheme)[0]
-    own, both = (sum(r['all'].values(), layers.Stats()).report(local.METRICS)
+    own, both = (sum(r['all'].values(), metrics.Stats()).report(metrics.METRICS)
                  for r in local.evaluate(model, run, acts, design).values())
     assert own['quantization'] > 0 and own['rounded'] < 1
     assert both['normwise'] > own['normwise'] > 0
@@ -114,7 +141,7 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
             local.evaluate(model, run, acts, design)
         run.split_k = 1
     run.scheme = swap.BF16
-    own, both = (sum(r['all'].values(), layers.Stats()).report(local.METRICS)
+    own, both = (sum(r['all'].values(), metrics.Stats()).report(metrics.METRICS)
                  for r in local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
                                          'amd.cdna2.bf16').values())
     assert own.pop('quantization') == 0 and own.pop('rounded') > 0
