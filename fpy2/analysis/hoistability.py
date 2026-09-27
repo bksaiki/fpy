@@ -105,7 +105,7 @@ def force_names(node: 'Stmt | Expr', hoisted: Callable[[Expr], bool]) -> set[Exp
     evaluation order -- that something is hoisted out of (:func:`hoists_inside`).
     Every earlier child that is not already an atom is named, since a hoist
     lands above the whole statement and would otherwise run before them.  One
-    that is itself hoisted becomes an atom on its own.
+    the pass hoists itself needs a name only if what replaces it is not an atom.
 
     .. code-block:: python
 

@@ -16,7 +16,7 @@ from ..analysis import (
     concrete_size,
 )
 from ..analysis.format_infer import FormatAnalysis, FormatInfer
-from ..analysis.hoistability import ATOMIC, force_names
+from ..analysis.hoistability import ATOMIC, Hoistability, force_names
 from ..ast.fpyast import (
     Assign,
     Attribute,
@@ -360,6 +360,8 @@ class SiteRewriter(DefaultTransformVisitor):
 
     func: FuncDef
     """the program being walked; set by the subclass"""
+    gensym: Gensym
+    """set by a subclass that calls :meth:`_select`"""
     where: int | Cursor | None
     site_idx: int
     edits: list[Edit]
@@ -431,10 +433,13 @@ class SiteRewriter(DefaultTransformVisitor):
     def _select(self) -> None:
         """Walk without rewriting, under `where`, so `hoisted` holds the
         expression sites the rewrite will take."""
+        # a check may mint names, which must not shift the rewrite's
+        gensym, self.gensym = self.gensym, Gensym(self.gensym.names)
         self.listing = True
         self._visit_function(self.func, None)
         self.listing = False
         self.hoisted = frozenset(self.found_exprs)
+        self.gensym = gensym
 
     def _fresh(self) -> NamedId:
         """A name for an operand :func:`name_forced` binds; a subclass calling
@@ -679,6 +684,9 @@ class ExprSiteRewriter(PreambleScoped):
     index is spent, count the site, and either list it or emit.  A subclass
     says which expressions it considers (`_candidate`), whether one may be
     rewritten (`_check`), and what replaces it (`_emit`).
+
+    A site must be strict (see :class:`~fpy2.analysis.Hoistability`), and the
+    operands its statement evaluates before it are named first.
     """
 
     _expr_sited = True   # the sites are expressions, not statements
@@ -689,9 +697,22 @@ class ExprSiteRewriter(PreambleScoped):
     scopes: 'RoundingScopes'
     gensym: Gensym
     where: 'Cursor | int | None'
+    strict: set[Expr]
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
+
+    def _visit_function(self, func: FuncDef, ctx):
+        if not self.listing:
+            self._select()
+        return super()._visit_function(func, ctx)
+
+    def _begin(self, func: FuncDef) -> None:
+        super()._begin(func)
+        self.strict = Hoistability.analyze(func).strict
+
+    def _fresh(self) -> NamedId:
+        return self.gensym.fresh('_t')
 
     def _candidate(self, e: Expr) -> bool:
         """Whether *e* is an expression this rewrite considers at all."""
@@ -712,7 +733,10 @@ class ExprSiteRewriter(PreambleScoped):
 
         # a refusal is not a site, so it is decided before an index is spent:
         # `ctx` is `None` where no statement-level preamble reaches
-        info = Declined(self._no_slot) if ctx is None else self._check(e)
+        info = (
+            Declined(self._no_slot) if ctx is None or e not in self.strict
+            else self._check(e)
+        )
         if isinstance(info, Declined):
             self.refused.append((e, info.reason))
             if self._named_by_cursor(e):
@@ -731,7 +755,7 @@ class ExprSiteRewriter(PreambleScoped):
             return super()._visit_expr(e, ctx)
 
         self._replaced = True
-        return self._emit(e, info, ctx)
+        return name_forced(e, self._emit(e, info, ctx), self._force, ctx, self._fresh)
 
 
 class RoundingRewriter(ExprSiteRewriter):
