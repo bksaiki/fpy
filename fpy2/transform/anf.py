@@ -60,6 +60,7 @@ from ..analysis import (
     SyntaxCheck,
     TypeInfer,
 )
+from ..analysis.hoistability import ATOMIC, SEALED_REASON, Hoistability
 from ..analysis.type_infer import TypeAnalysis
 from ..ast.accessors import subexprs
 from ..ast.fpyast import (
@@ -106,20 +107,19 @@ from ..ast.fpyast import (
     Var,
     WhileStmt,
 )
-from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
+from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..types import BoolType, RealType
 from ..utils import Gensym
 from .error import TransformError
-from .hoistable import _ATOMIC, _SEALED_REASON
 
 _NAMEABLE_TYPES = (RealType, BoolType)
 """Types whose values this pass binds to a name.  A whitelist, so an unresolved
 ``VarType`` is left inline: naming an aggregate wrongly is the costly direction."""
 
 
-_SLOT_FREE = _ATOMIC + (Compare, Not, And, Or, IfExpr,
-                        UnaryOp, BinaryOp, TernaryOp)
+_SLOT_FREE = ATOMIC + (Compare, Not, And, Or, IfExpr,
+                       UnaryOp, BinaryOp, TernaryOp)
 """Node kinds whose own lowering needs no statement.  A whitelist: an unfamiliar
 kind needs a slot, since a false negative leaves an operand where its statement
 cannot go."""
@@ -154,7 +154,7 @@ def needs_slot(e: Expr) -> bool:
 
 
 _CANNOT_SLOT = frozenset(
-    _SEALED_REASON[k] for k in ('ternary', 'chain', 'condition')
+    SEALED_REASON[k] for k in ('ternary', 'chain', 'condition')
 )
 """The sealed positions no consumer can give a slot -- each a miscompile in
 ``docs/todos/backend-cpp.md``.  A comprehension is absent on purpose: the cpp
@@ -184,52 +184,10 @@ def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
 
     See :meth:`ANF.refusals`, the public entry point.
     """
-    out: list[tuple[Expr, str]] = []
-
-    def check(e: Expr, why: str) -> None:
-        if needs_slot(e):
-            out.append((e, _SEALED_REASON[why]))
-
-    class _Residue(DefaultVisitor):
-        def _visit_if_expr(self, e: IfExpr, ctx):
-            check(e.ift, 'ternary')
-            check(e.iff, 'ternary')
-            super()._visit_if_expr(e, ctx)
-
-        def _visit_naryop(self, e: NaryOp, ctx):
-            if isinstance(e, (And, Or)):
-                for arg in e.args[1:]:
-                    check(arg, 'chain')
-            super()._visit_naryop(e, ctx)
-
-        def _visit_list_comp(self, e: ListComp, ctx):
-            # not descended into: the comprehension is why nothing inside it can
-            # be hoisted, so it is the one entry.  Descending reported a ternary
-            # in its element as a `_CANNOT_SLOT` refusal and refused a program
-            # this pass seals and normalizes correctly.
-            check(e.elt, 'element')
-            for iterable in e.iterables:
-                check(iterable, 'iterable')
-
-        def _visit_while(self, stmt: WhileStmt, ctx):
-            check(stmt.cond, 'condition')
-            super()._visit_while(stmt, ctx)
-
-        def _visit_assert(self, stmt: AssertStmt, ctx):
-            # the test is strict, the message is not; not descended into, as
-            # with a comprehension
-            self._visit_expr(stmt.test, ctx)
-            if stmt.msg is not None:
-                check(stmt.msg, 'message')
-
-        def _visit_compare(self, e: Compare, ctx):
-            for arg in e.args[2:]:
-                check(arg, 'comparison')
-            for arg in e.args[:2]:
-                self._visit_expr(arg, ctx)
-
-    _Residue()._visit_function(func, None)
-    return out
+    return [
+        (e, SEALED_REASON[why]) for e, why in Hoistability.analyze(func).sealed
+        if needs_slot(e)
+    ]
 
 
 @dataclasses.dataclass
@@ -283,7 +241,7 @@ class _ANFInstance(DefaultTransformVisitor):
         # it accumulated into, and naming that again is a pure copy.
         if (
             not ctx.hoistable
-            or isinstance(rebuilt, _ATOMIC)
+            or isinstance(rebuilt, ATOMIC)
             or not self._nameable(e)
         ):
             return rebuilt

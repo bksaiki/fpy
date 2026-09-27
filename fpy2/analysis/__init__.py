@@ -25,6 +25,7 @@ from .define_use import DefCtx, DefineUse, DefineUseAnalysis, UseSite
 from .defs import DefAnalysis
 from .escape import Escape, EscapeSummary
 from .format_infer import FormatAnalysis, FormatInfer
+from .hoistability import Hoistability, HoistabilityAnalysis
 from .live_vars import LiveVars
 from .partial_eval import PartialEval, PartialEvalInfo, base_env
 from .purity import Purity

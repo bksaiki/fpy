@@ -1,18 +1,18 @@
 """
-Unit tests for the two analyses behind :mod:`fpy2.transform.hoistable`.
+Unit tests for :mod:`fpy2.analysis.hoistability`.
 
-:func:`~fpy2.transform.hoistable.lowers` says where the pass emits a statement
-and :func:`~fpy2.transform.hoistable.hoists_inside` where anything lands above
-the enclosing statement; :func:`~fpy2.transform.hoistable.force_names` is the
-*prefix rule*, which says what must be named so a hoist does not overtake the
-operands to its left.  The rule is the subtle part of the pass -- getting it wrong changes
-which exception a program raises -- so it is tested here on its own.
+:func:`~fpy2.analysis.hoistability.lowers` says where `Hoistable` emits a
+statement and :func:`~fpy2.analysis.hoistability.hoists_inside` where anything
+lands above the enclosing statement; :func:`~fpy2.analysis.hoistability.force_names`
+is the *prefix rule*, which says what must be named so a hoist does not overtake
+the operands to its left.  The rule is the subtle part -- getting it wrong
+changes which exception a program raises -- so it is tested here on its own.
 """
 
 import fpy2 as fp
 from fpy2.ast.fpyast import Expr, FuncDef, Stmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.transform.hoistable import force_names, hoists_inside, lowers
+from fpy2.analysis.hoistability import force_names, hoists_inside, lowers
 
 # ----------------------------------------------------------------------
 # Helpers

@@ -56,7 +56,7 @@ which are then evaluated later than they were:
     return g(a) + t                      # raises h's assertion -- wrong
 
 So the pass names exactly as much as that costs, and no more: see
-:func:`force_names`.  Where it sits in the cpp pipeline is §1 of
+:func:`~fpy2.analysis.hoistability.force_names`.  Where it sits in the cpp pipeline is §1 of
 ``docs/todos/backend-independence.md``.
 """
 
@@ -65,7 +65,14 @@ from typing import Any
 
 from ..analysis import DefineUse, Reachability, SyntaxCheck
 from ..analysis.define_use import DefineUseAnalysis
-from ..ast.accessors import subexprs, vars_in
+from ..analysis.hoistability import (
+    ATOMIC,
+    SEALED_REASON,
+    Hoistability,
+    force_names,
+    lowers,
+)
+from ..ast.accessors import vars_in
 from ..ast.fpyast import (
     And,
     AssertStmt,
@@ -85,172 +92,17 @@ from ..ast.fpyast import (
     NamedId,
     NaryOp,
     Not,
-    NullaryOp,
     Or,
     ReturnStmt,
     Stmt,
     StmtBlock,
     UnderscoreId,
-    ValueExpr,
     Var,
     WhileStmt,
 )
-from ..ast.visitor import DefaultTransformVisitor, DefaultVisitor
+from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..utils import Gensym
-
-_ATOMIC = (Var, ValueExpr, NullaryOp)
-"""Expressions that are already a place, or need none."""
-
-_SEALED_REASON = {
-    'ternary': 'a ternary arm is evaluated conditionally',
-    'chain': 'a short-circuited operand may not be evaluated',
-    'element': "a comprehension's element runs once per iteration",
-    'iterable': "a comprehension's iterable may read an earlier target",
-    'condition': 'a `while` condition is re-evaluated every iteration',
-    'message': 'an assert message is evaluated only on failure',
-    'comparison': 'a chained comparison short-circuits after the first pair',
-}
-
-def lowers(e: Expr) -> bool:
-    """Whether this pass emits a statement *at* `e`.
-
-    An arm, or an operand after the first, that is not already an atom is an
-    operand with nowhere to put a statement.
-    """
-    match e:
-        case IfExpr():
-            return not (
-                isinstance(e.ift, _ATOMIC) and isinstance(e.iff, _ATOMIC)
-            )
-        case And() | Or():
-            return any(not isinstance(a, _ATOMIC) for a in e.args[1:])
-        case _:
-            return False
-
-
-def hoists_inside(e: Expr) -> bool:
-    """Whether a statement lands above the enclosing statement from anywhere in
-    `e`, `e` itself included: a lowering of this pass, or a comprehension, which
-    :class:`~fpy2.transform.CompToLoop` lowers into the same slot.
-
-    Only strict operands are searched, since nothing is hoisted out of a sealed
-    one.
-    """
-    if lowers(e) or isinstance(e, ListComp):
-        return True
-    kids = [sub for _field, _i, sub in subexprs(e)]
-    match e:
-        case IfExpr() | And() | Or():
-            kids = kids[:1]    # the arms, or the tail, may not run
-        case Compare():
-            kids = kids[:2]    # a chain short-circuits after the first pair
-    return any(hoists_inside(kid) for kid in kids)
-
-
-def force_names(node: 'Stmt | Expr') -> set[Expr]:
-    """The expressions in `node` to bind to a name, so a hoist to their right
-    does not overtake them.
-
-    The *prefix rule*: at any node, let ``last`` be the position of the last
-    child -- in :func:`~fpy2.ast.accessors.subexprs` order, which is
-    evaluation order -- that something hoists out of (:func:`hoists_inside`).
-    Every earlier child that is not already an atom is named, since a hoist
-    lands above the whole statement and would otherwise run before them.
-
-    .. code-block:: python
-
-        f(g(y), a if c else b)   # -> {g(y)}: the ternary hoists above it
-        f(a if c else b, g(y))   # -> {}: nothing runs before the ternary
-        xs[i + 1] = a if c else b  # -> {i + 1}: an index runs before the value
-
-    A ternary or chain is exempt: its condition lands in the ``IfStmt``
-    condition and each arm in a block of its own, so order is preserved
-    structurally -- and naming an arm is the bug the rule exists to prevent.  A
-    comprehension is not entered: its element runs once per iteration.
-
-    The set is keyed by identity: ``Expr`` defines no ``__eq__``, so two
-    structurally-equal operands stay distinct.
-    """
-    out: set[Expr] = set()
-    _collect(node, out)
-    return out
-
-
-def _collect(node: 'Stmt | Expr', out: set[Expr]) -> None:
-    """Accumulate :func:`force_names` for `node` and everything under it."""
-    if isinstance(node, ListComp):
-        return
-    kids = [sub for _field, _i, sub in subexprs(node)]
-    if isinstance(node, AssertStmt):
-        kids = kids[:1]        # the message is sealed; only the test is strict
-    elif isinstance(node, Compare):
-        kids = kids[:2]        # a chain short-circuits after the first pair
-    if not isinstance(node, (IfExpr, And, Or)):
-        hoisting = [i for i, kid in enumerate(kids) if hoists_inside(kid)]
-        if hoisting:
-            out.update(
-                kid for kid in kids[:max(hoisting)]
-                if not isinstance(kid, _ATOMIC)
-            )
-    for kid in kids:
-        _collect(kid, out)
-
-
-# ----------------------------------------------------------------------
-# The residue
-
-
-def _list_refusals(func: FuncDef) -> list[tuple[Expr, str]]:
-    """The sealed positions of *func* still holding a non-atom.
-
-    The criterion is :func:`lowers`': an operand that is not an atom.
-    """
-    out: list[tuple[Expr, str]] = []
-
-    def check(e: Expr, why: str) -> None:
-        if not isinstance(e, _ATOMIC):
-            out.append((e, _SEALED_REASON[why]))
-
-    class _Residue(DefaultVisitor):
-        def _visit_if_expr(self, e: IfExpr, ctx):
-            check(e.ift, 'ternary')
-            check(e.iff, 'ternary')
-            super()._visit_if_expr(e, ctx)
-
-        def _visit_naryop(self, e: NaryOp, ctx):
-            if isinstance(e, (And, Or)):
-                for arg in e.args[1:]:
-                    check(arg, 'chain')
-            super()._visit_naryop(e, ctx)
-
-        def _visit_list_comp(self, e: ListComp, ctx):
-            # not descended into: the comprehension is why nothing inside it
-            # can be hoisted, so it is the one entry
-            check(e.elt, 'element')
-            for iterable in e.iterables:
-                check(iterable, 'iterable')
-
-        def _visit_while(self, stmt: WhileStmt, ctx):
-            check(stmt.cond, 'condition')
-            super()._visit_while(stmt, ctx)
-
-        def _visit_assert(self, stmt: AssertStmt, ctx):
-            # the test is strict, the message is not; not descended into, as
-            # with a comprehension
-            self._visit_expr(stmt.test, ctx)
-            if stmt.msg is not None:
-                check(stmt.msg, 'message')
-
-        def _visit_compare(self, e: Compare, ctx):
-            for arg in e.args[2:]:
-                check(arg, 'comparison')
-            for arg in e.args[:2]:
-                self._visit_expr(arg, ctx)
-
-    _Residue()._visit_function(func, None)
-    return out
-
 
 # ----------------------------------------------------------------------
 # The rewrite
@@ -262,7 +114,8 @@ class _Ctx:
 
     ``stmts`` is the block being built: a statement visitor appends the bindings
     it needs, and the block visitor appends the rewritten statement after them.
-    ``force`` is :func:`force_names` for the statement being visited.
+    ``force`` is :func:`~fpy2.analysis.hoistability.force_names` for the
+    statement being visited.
     ``hoistable`` is false inside a sealed position, where nothing may be named.
     """
 
@@ -304,7 +157,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         whatever it holds, so this can name an aggregate.
         """
         rebuilt = super()._visit_expr(e, ctx)
-        if not ctx.hoistable or e not in ctx.force or isinstance(rebuilt, _ATOMIC):
+        if not ctx.hoistable or e not in ctx.force or isinstance(rebuilt, ATOMIC):
             return rebuilt
         t = self.gensym.fresh(self.prefix)
         ctx.stmts.append(Assign(t, None, rebuilt, e.loc))
@@ -477,7 +330,7 @@ class _HoistableInstance(DefaultTransformVisitor):
         return IfStmt(cond, ift, iff, stmt.loc), ctx
 
     def _visit_while(self, stmt: WhileStmt, ctx: _Ctx):
-        if isinstance(stmt.cond, _ATOMIC):
+        if isinstance(stmt.cond, ATOMIC):
             # already a place; nothing in it to hoist
             body, _ = self._visit_block(stmt.body, ctx)
             return WhileStmt(self._visit_expr(stmt.cond, ctx), body, stmt.loc), ctx
@@ -562,7 +415,10 @@ class Hoistable:
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')
-        return _list_refusals(func)
+        return [
+            (e, SEALED_REASON[why]) for e, why in Hoistability.analyze(func).sealed
+            if not isinstance(e, ATOMIC)
+        ]
 
     @staticmethod
     def apply(func: FuncDef) -> FuncDef:
