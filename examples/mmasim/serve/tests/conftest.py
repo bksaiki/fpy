@@ -11,13 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 @pytest.fixture(scope='module')
 def model() -> torch.nn.Module:
-    """Qwen3's shape, small: every `k` a multiple of each design's length,
-    weights BF16 values held in FP32, as a checkpoint loads."""
+    """Qwen3's shape, small: every `k` a multiple of 128 (`fp8-block`'s
+    blocks) and so of each design's length, `k/v_proj` 64 rows (a ragged
+    128-row block), weights BF16 values held in FP32, as a checkpoint
+    loads."""
     transformers = pytest.importorskip('transformers')
     torch.manual_seed(0)
     cfg = transformers.Qwen3Config(
-        vocab_size=96, hidden_size=64, intermediate_size=128, num_hidden_layers=2,
-        num_attention_heads=2, num_key_value_heads=1, head_dim=32,
+        vocab_size=96, hidden_size=128, intermediate_size=256, num_hidden_layers=2,
+        num_attention_heads=2, num_key_value_heads=1, head_dim=64,
         tie_word_embeddings=True)
     m = transformers.Qwen3ForCausalLM(cfg).float().cuda().eval()
     with torch.no_grad():

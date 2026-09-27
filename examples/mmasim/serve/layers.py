@@ -3,8 +3,9 @@ Per-layer error: where each run's error enters, and how it grows with depth.
 
 On a few WikiText-2 segments, each linear layer's FP32 output `Ŷ` is compared
 elementwise with a reference, over every token and segment.  Local metrics
-take as reference the exact product `Y` (FP64, of the same BF16-rounded
-inputs `x` and weights `w`), so measure the layer's own error:
+take as reference the exact product `Y` (FP64) of the same inputs `x` and
+weights `w`, quantized by the run's scheme (BF16 rounded, by default), so
+measure the layer's own error:
 
 - `normwise`: normwise relative error `||Ŷ - Y||_F / ||Y||_F`;
 - `backward`: componentwise backward error `|ŷ - y| / (|x|ᵀ|w|)` per
@@ -14,7 +15,11 @@ inputs `x` and weights `w`), so measure the layer's own error:
 - `rounded`: the fraction of elements equal to `fl(y)`, `y` rounded to FP32;
 - `bias`: mean error `(ŷ - y) / (|x|ᵀ|w|)`, the drift about zero;
 - `magnitude_bias`: mean error in magnitude, `sign(y) (ŷ - y) / (|x|ᵀ|w|)`,
-  negative when errors lean toward zero.
+  negative when errors lean toward zero;
+- `quantization`: normwise relative error of `Y` itself against the exact
+  product `Y_0` of the unquantized inputs, the quantization's own error.
+
+With *s0*, :func:`local` also measures against `Y_0`.
 
 `propagated` takes R0's output at the same layer, every layer before it run
 the same way: its normwise relative error is the error the model has
@@ -36,10 +41,14 @@ from dataclasses import dataclass, fields
 from functools import partial
 
 import perplexity
+import quant
 import swap
 import torch
 
-METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias')
+METRICS = ('normwise', 'propagated', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias',
+           'quantization')
+QUANTIZED_ONLY = ('rounded', 'quantization')
+"""Metrics taken against the quantized operands' product only."""
 U = 2.0 ** -24
 """FP32's unit roundoff."""
 
@@ -65,6 +74,10 @@ class Stats:
     rounded: int = 0
     bias: float = 0.0
     magnitude_bias: float = 0.0
+    q_err: float = 0.0
+    """`||Y - Y_0||_F^2`, `Y_0` the unquantized operands' exact product"""
+    q_ref: float = 0.0
+    """`||Y_0||_F^2`"""
 
     def __add__(self, other: 'Stats') -> 'Stats':
         """Pooled with *other*: sums added, maxima the larger."""
@@ -81,6 +94,7 @@ class Stats:
             'ulp': self.ulp / n, 'ulp_max': self.ulp_max,
             'rounded': self.rounded / n, 'bias': self.bias / n,
             'magnitude_bias': self.magnitude_bias / n,
+            'quantization': math.sqrt(self.q_err / self.q_ref) if self.q_ref else 0.0,
         }
         return {k: v for k, v in out.items() if k.removesuffix('_max') in metrics}
 
@@ -89,47 +103,69 @@ def _rows(n: int) -> int:
     return max(1, _ELEMS // n)
 
 
-def local(s: Stats, metrics: Collection[str], layer: torch.nn.Linear,
-           x: torch.Tensor, got: torch.Tensor) -> None:
-    """Add *got*, *layer*'s output on *x*, to *s*'s local metrics, in blocks
-    of output columns and rows.  *layer* has no bias (`swap.patch`)."""
-    xb = x.reshape(-1, x.shape[-1]).to(torch.bfloat16)
-    got = got.reshape(-1, got.shape[-1])
+def _against(s: Stats, metrics: Collection[str], a: torch.Tensor, wt: torch.Tensor,
+             wa: torch.Tensor | None, g: torch.Tensor) -> torch.Tensor:
+    """Add output block *g*'s *metrics* against `y = a @ wt` (FP64) to *s*,
+    and return `y`; *wa* is `|wt|`, or `None` if unneeded."""
+    y = a @ wt
+    e = g.double() - y
+    s.n += e.numel()
+    if 'normwise' in metrics:
+        s.err += float((e * e).sum())
+        s.ref += float((y * y).sum())
+    if wa is not None:
+        scale = a.abs() @ wa
+        eta = torch.where(scale > 0, e / scale, 0.0)
+        if 'backward' in metrics:
+            s.backward += float(eta.abs().sum())
+            s.backward_max = max(s.backward_max, float(eta.abs().max()))
+        if 'bias' in metrics:
+            s.bias += float(eta.sum())
+        if 'magnitude_bias' in metrics:
+            s.magnitude_bias += float((torch.sign(y) * eta).sum())
+        del scale, eta
+    if 'ulp' in metrics:
+        # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
+        _, ex = torch.frexp(y)
+        ex = torch.where(y == 0, -125, ex)
+        bits = torch.log2(1 + e.abs() / torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149)))
+        s.ulp += float(bits.sum())
+        s.ulp_max = max(s.ulp_max, float(bits.max()))
+        del ex, bits
+    if 'rounded' in metrics:
+        s.rounded += int((g == y.float()).sum())
+    return y
+
+
+def local(s: Stats, metrics: Collection[str], qa: quant.Quantized, qw: quant.Quantized,
+          got: torch.Tensor, unquantized: tuple[torch.Tensor, torch.Tensor],
+          s0: Stats | None = None) -> None:
+    """Add *got* `[m, n]`, the output on *qa* and *qw*, to *s*'s *metrics*,
+    in blocks.  `quantization` compares their exact product with the
+    *unquantized* operands'; *s0*, if given, takes the metrics (but
+    :data:`QUANTIZED_ONLY`) against the latter."""
+    x0, w0 = unquantized
+    m, k = qa.elements.shape
     scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
-    cols = _rows(xb.shape[1])
+    before = s0 is not None or 'quantization' in metrics
+    metrics0 = set(metrics) - set(QUANTIZED_ONLY)
+    cols = _rows(k)
     for j in range(0, got.shape[1], cols):
-        wt = layer.weight[j:j + cols].to(torch.bfloat16).double().T
+        wt = qw.dequantize(slice(j, j + cols)).T
         wa = wt.abs() if scaled else None
+        w0t = w0[j:j + cols].double().T if before else None
+        w0a = w0t.abs() if s0 is not None and scaled else None
         rows = _rows(wt.shape[1])
-        for i in range(0, xb.shape[0], rows):
-            a, g = xb[i:i + rows].double(), got[i:i + rows, j:j + cols]
-            y = a @ wt
-            e = g.double() - y
-            s.n += e.numel()
-            if 'normwise' in metrics:
-                s.err += float((e * e).sum())
-                s.ref += float((y * y).sum())
-            if scaled:
-                scale = a.abs() @ wa
-                eta = torch.where(scale > 0, e / scale, 0.0)
-                if 'backward' in metrics:
-                    s.backward += float(eta.abs().sum())
-                    s.backward_max = max(s.backward_max, float(eta.abs().max()))
-                if 'bias' in metrics:
-                    s.bias += float(eta.sum())
-                if 'magnitude_bias' in metrics:
-                    s.magnitude_bias += float((torch.sign(y) * eta).sum())
-                del scale, eta
-            if 'ulp' in metrics:
-                # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
-                _, ex = torch.frexp(y)
-                ex = torch.where(y == 0, -125, ex)
-                bits = torch.log2(1 + e.abs() / torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149)))
-                s.ulp += float(bits.sum())
-                s.ulp_max = max(s.ulp_max, float(bits.max()))
-                del ex, bits
-            if 'rounded' in metrics:
-                s.rounded += int((g == y.float()).sum())
+        for i in range(0, m, rows):
+            a, g = qa.dequantize(slice(i, i + rows)), got[i:i + rows, j:j + cols]
+            y = _against(s, metrics, a, wt, wa, g)
+            if w0t is None:
+                continue
+            a0 = x0[i:i + rows].double()
+            y0 = a0 @ w0t if s0 is None else _against(s0, metrics0, a0, w0t, w0a, g)
+            if 'quantization' in metrics:
+                s.q_err += float(((y - y0) ** 2).sum())
+                s.q_ref += float((y0 * y0).sum())
 
 
 def _propagated(s: Stats, got: torch.Tensor, ref: torch.Tensor) -> None:
@@ -148,8 +184,10 @@ def evaluate(
     metrics: Collection[str] = METRICS,
 ) -> dict[str, dict[str, Stats]]:
     """Each of *modes*' :class:`Stats` over *segs* for *metrics*, every
-    linear layer by name in model order.  *run* is `swap.patch(model)`'s."""
-    layers = {n: m for n, m in model.named_modules() if isinstance(m, torch.nn.Linear)}
+    linear layer by name in model order but *run*'s ignored ones.  *run* is
+    `swap.patch(model)`'s."""
+    layers = {n: m for n, m in model.named_modules()
+              if isinstance(m, torch.nn.Linear) and id(m.weight) not in run.ignore}
     modes = [m for m in modes if m != 'fp32']
     stats = {mode: {n: Stats() for n in layers} for mode in modes}
     local_metrics = set(metrics) - {'propagated'}
@@ -162,7 +200,9 @@ def evaluate(
             return
         s = stats[run.mode][name]
         if local_metrics:
-            local(s, local_metrics, layer, inputs[0], y)
+            x = inputs[0].reshape(-1, inputs[0].shape[-1])
+            local(s, local_metrics, run.quantize(inputs[0], layer.weight),
+                  run.weight(layer.weight), y.reshape(-1, y.shape[-1]), (x, layer.weight))
         if 'propagated' in metrics:
             _propagated(s, y, ref[name])
 

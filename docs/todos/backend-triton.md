@@ -7,10 +7,10 @@ bit with the interpreter.
 
 ## Status
 
-**50/62 designs compile, and all 50 agree** (`compile_triton.py -j 8 -r 8`).
-Refused: `amd.cdna1.*` (280-525 bits of exact sum, which C++ refuses too) and
-FP16 output at `e_zero = -133` (Hopper wgmma, Blackwell tcgen05), where the
-zero sentinel stretches the exact sum to 179 bits.  The BF16 designs run at
+**60/62 designs compile, and all 60 agree** (`compile_triton.py -j 8 -r 8`).
+Refused: `amd.cdna1.*`, 280-525 bits of exact sum, which C++ refuses too.
+The FP16-output designs at `e_zero = -133` (Hopper wgmma, Blackwell
+tcgen05) compile since #325 (`format_infer` and digit bound fixes).  The BF16 designs run at
 170-1,500 GFLOP/s on a TITAN V (`bench/speed.py --best`), against ~27,000 for
 cuBLAS in FP16; `examples/mmasim/serve/` runs an LLM through them.
 

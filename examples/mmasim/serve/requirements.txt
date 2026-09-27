@@ -5,3 +5,5 @@
 transformers>=5        # Qwen3, Qwen3.5
 datasets               # WikiText-2, MATH-500, MT-Bench
 lm-eval[hf]>=0.4       # zero-shot suite
+torchao>=0.18          # quantization recipes and tensor types
+compressed-tensors     # quantized checkpoints (0.19)
