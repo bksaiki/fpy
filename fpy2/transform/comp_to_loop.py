@@ -30,14 +30,15 @@ rather than a product.  That one is built a row at a time and flattened
 row per outer element; ``dependent=False`` declines it.
 
 What the pass leaves, without erroring, is a comprehension with no statement
-slot: a ``while`` condition, an ``IfExpr`` branch, or one nested in another.
+slot -- one :class:`~fpy2.analysis.Hoistability` does not list, such as in a
+``while`` condition, an ``IfExpr`` branch, or another comprehension.
 Running it again after :class:`~fpy2.transform.Hoistable` clears each, which is
 what makes the two a fixpoint.
 """
 
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, LiveVars, SyntaxCheck
+from ..analysis import DefineUse, DefineUseAnalysis, Hoistability, LiveVars, SyntaxCheck
 from ..ast.fpyast import (
     Add,
     Assign,
@@ -46,7 +47,6 @@ from ..ast.fpyast import (
     ForStmt,
     FuncDef,
     Id,
-    IfExpr,
     IndexedAssign,
     Integer,
     Len,
@@ -63,7 +63,6 @@ from ..ast.fpyast import (
     UnderscoreId,
     ValueExpr,
     Var,
-    WhileStmt,
 )
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
@@ -123,6 +122,8 @@ class _CompToLoopInstance(SiteRewriter):
     """an assignment's right-hand comprehension, and the place its loops may
     write into -- a name, plus the indices of a slot -- instead of minting an
     `acc` and copying it in"""
+    slots: set[Expr]
+    """where a statement may go before the expression's own"""
 
     def __init__(
         self,
@@ -141,6 +142,7 @@ class _CompToLoopInstance(SiteRewriter):
         self.dependent = dependent
         self.index_ranges = index_ranges
         self._fill = None
+        self.slots = Hoistability.analyze(func).slots
 
     # ------------------------------------------------------------------
     # Verification
@@ -420,10 +422,11 @@ class _CompToLoopInstance(SiteRewriter):
             Declined(
                 'there is no statement-level position for the loop the rewrite '
                 'emits: a `while` condition runs every iteration, a conditional '
-                'branch may not run at all, and a comprehension has no slot '
-                'until the one around it is lowered'
+                'branch or a short-circuited operand may not run at all, a '
+                'comprehension has no slot until the one around it is lowered, '
+                'and a loop hoisted past an operand to its left runs before it'
             )
-            if ctx is None
+            if e not in self.slots
             else self._verify(e)
         )
         if declined is not None:
@@ -480,20 +483,6 @@ class _CompToLoopInstance(SiteRewriter):
         if self._took_fill(offered):
             return ctx.pop(), ctx
         return s, ctx
-
-    def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # a branch is conditional, so a loop hoisted out of one runs either
-        # way; the condition is unconditional and keeps its slot
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
-
-    def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        # the condition re-runs every iteration where a loop hoisted before the
-        # `while` runs once, freezing the comprehension at its first value
-        stmt, _ = super()._visit_while(stmt, None)
-        return stmt, ctx
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)

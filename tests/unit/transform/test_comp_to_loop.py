@@ -39,6 +39,18 @@ from fpy2.utils import NamedId
 # Helpers
 
 
+@fp.fpy
+def _needs_positive_g(x: fp.Real) -> bool:
+    assert x > 0.0, 'g'
+    return True
+
+
+@fp.fpy
+def _needs_positive_h(x: fp.Real) -> bool:
+    assert x > 0.0, 'h'
+    return True
+
+
 def _count(ast, kind) -> int:
     """How many *kind* nodes are in *ast*."""
     n = 0
@@ -234,13 +246,16 @@ class TestCompToLoop:
 
     def test_a_comprehension_in_an_iterable_does_not_claim_the_target(self):
         """Only the assignment's own right-hand side may fill ``zs``; the
-        comprehension inside its iterable is a different list."""
+        comprehension inside its iterable is a different list.  An iterable is
+        sealed, so that one is lowered by the second run."""
         @fp.fpy(ctx=fp.FP64)
         def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
             zs = [r[0] for r in [q for q in xss]]
             return zs
 
-        out = CompToLoop.apply(f.ast)
+        once = CompToLoop.apply(f.ast)
+        assert _count(once, ListComp) == 1
+        out = CompToLoop.apply(once)
         assert _count(out, ListComp) == 0
         assert _count(out, Empty) == 2      # one fills `zs`, one the inner list
         assert _agree(f, [[1.0, 2.0], [3.0]])
@@ -412,6 +427,25 @@ class TestRefusals:
         cursor, _ = CompToLoop.refusals(f.ast)[0]
         with pytest.raises(TransformDeclined, match='no statement-level position'):
             CompToLoop.apply(f.ast, where=cursor)
+
+    def test_a_short_circuited_operand_is_refused(self):
+        """The tail runs only where `c` holds; hoisted, it raised where the
+        program returned `False`."""
+        @fp.fpy
+        def f(xs: list[fp.Real], c: bool) -> bool:
+            return c and len([_needs_positive_g(x) for x in xs]) > 0
+
+        assert CompToLoop.sites(f.ast) == []
+        assert CompToLoop.apply(f.ast).is_equiv(f.ast)
+        assert f([-1.0], False) is False
+
+    def test_a_left_operand_is_not_overtaken(self):
+        """The loop lands above the statement, so it would run `h` before `g`."""
+        @fp.fpy
+        def f(y: fp.Real, xs: list[fp.Real]) -> bool:
+            return _needs_positive_g(y) == (len([_needs_positive_h(x) for x in xs]) > 0)
+
+        assert CompToLoop.sites(f.ast) == []
 
     def test_rejects_non_funcdef(self):
         with pytest.raises(TypeError):
