@@ -1,8 +1,10 @@
 # mmasim quantized: local metrics beyond BF16
 
-Implementation plan.  The design is settled; what follows is the phase
-breakdown, one phase per commit.  Code lives under `examples/mmasim/serve/`,
-next to the BF16 pipeline (`docs/todos/mmasim-serve.md`).
+Implementation plan, one phase per commit.  Code lives under
+`examples/mmasim/serve/`, next to the BF16 pipeline
+(`docs/todos/mmasim-serve.md`).  **Complete:** Phases 1-5, the results, and
+local metrics against both references; what is open is under Open items and
+Future work.
 
 ## Working policy
 
@@ -107,9 +109,10 @@ are `torchao`'s standard ones, rather than recipes of our own:
 
 - **FP8 per row / per block**: `Float8Tensor` (`PerRow`, `PerBlock`),
   `s = amax / 448` over the row or block, elements `rne_e4m3(v / s)`.
-- **MX** (OCP MX v1.0, section 6.3): `MXTensor.to_mx` with
-  `ScaleCalculationMode.FLOOR`, `X = 2^(floor(log2 amax) - emax)` as E8M0,
-  elements `rne(v / X)`, saturating.
+- **MX**: `MXTensor.to_mx` with NVIDIA's scales (`ScaleCalculationMode.RCEIL`,
+  cuBLAS's: `X` the power of two at or above `amax / max`, so no element
+  saturates), elements `rne(v / X)`.  (The OCP MX v1.0 floor was the
+  recipe until the open item below settled it.)
 - **NVFP4** (NVIDIA's two-level recipe): `NVFP4Tensor.to_nvfp4`, per-tensor
   `g = amax / (448 * 6)` in FP32; per 16, `s = rne_e4m3((amax_block / 6) /
   g)`; elements `rne_e2m1` of `v` times the reciprocal of `s * g`.
@@ -164,11 +167,14 @@ unchanged.
 
     python serve/local.py --scheme fp8-row --models Qwen/Qwen3-0.6B RedHatAI/Qwen3-0.6B-FP8-dynamic
     python serve/local.py --scheme mxfp4 -d nv.blackwell.mxfp4
-    python serve/local.py --scheme nvfp4 --models kaitchup/Qwen3-0.6B-NVFP4 --requantize
+    python serve/local.py --scheme fp8-block --models RedHatAI/Qwen3-0.6B-FP8-BLOCK --master Qwen/Qwen3-0.6B
+    python serve/local.py --scheme mxfp4 --models kaitchup/Qwen3-0.6B-NVFP4 --requantize
 
-`--scheme` defaults to `bf16`, which is today's behavior; `--designs`
-defaults to every design applicable to the scheme; each model is evaluated
-under the scheme per the table above.
+`--scheme` defaults to `bf16`; `--designs` defaults to every design
+applicable to the scheme; each model is evaluated under the scheme per the
+table above, `--master` naming a checkpoint's unquantized model where its
+card does not.  Every run prints two tables: against the quantized
+operands' exact product and against the unquantized ones'.
 
 ## Phases
 
@@ -480,12 +486,15 @@ operands:
 
 ### Which MX scale rounding: the specification's floor, or rounding up?
 
-OCP MX v1.0 takes `floor(log2 amax)`, which can push a block's largest
-element past the format's range, where it saturates; NVIDIA's MXFP8 recipe
-rounds the scale up instead (`torchao`'s `RCEIL`), never saturating, at the
-cost of a coarser scale.  Provisional: the specification's floor
-(`ScaleCalculationMode.FLOOR`, `torchao`'s default).  Reopen if saturation
-shows in the quantization error; the other is one argument away.
+**Settled: NVIDIA's.**  OCP MX v1.0 takes `floor(log2 amax)`, which can push
+a block's largest element past the format's range, where it saturates;
+cuBLAS's recipe rounds the scale up instead (`torchao`'s `RCEIL`), never
+saturating, at the cost of a coarser scale.  The branch follows NVIDIA's,
+for MXFP8 (which cuBLAS documents it for) and MXFP4 (the same E8M0 scales).
+On Qwen3-0.6B (2048 WikiText-2 tokens) it takes MXFP8's quantization error
+from 2^-4.97 to 2^-5.19 and MXFP4's from 2^-2.87 to 2^-2.81 (the coarser
+scale costs E2M1's few values more than saturating did); the designs' own
+errors barely move.  The Results tables below are the floor's.
 
 ### NVFP4's per-tensor scale for activations: dynamic or calibrated?
 

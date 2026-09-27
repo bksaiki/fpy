@@ -145,7 +145,8 @@ def _fp4(packed: torch.Tensor) -> torch.Tensor:
 
 def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None) -> Quantized:
     """*t* `[r, k]` by *op*'s standard round-to-nearest recipe, `torchao`'s:
-    MX by the OCP specification's floor (`ScaleCalculationMode.FLOOR`),
+    MX with NVIDIA's scales (`ScaleCalculationMode.RCEIL`, cuBLAS's: the
+    ceiling of `amax / max`, so no element saturates),
     NVFP4 with the per-tensor scale *tensor*, else from `t`'s largest
     magnitude, FP8 with `amax / max` per block.  Rows short of a whole block are padded with
     zeros, which leave its `amax` as it is; `k` must be a whole number of
@@ -158,7 +159,7 @@ def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None) -
         q = t.to(dtype).float()
         return Quantized(op, t if t.dtype == torch.float32 and torch.equal(q, t) else q)
     if s.fmt == fp.MX_E8M0:
-        q = MXTensor.to_mx(t, dtype, s.cols, ScaleCalculationMode.FLOOR)
+        q = MXTensor.to_mx(t, dtype, s.cols, ScaleCalculationMode.RCEIL)
         elements = _fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float()
         return Quantized(op, elements, q.scale.float())
     if s.tensor:
