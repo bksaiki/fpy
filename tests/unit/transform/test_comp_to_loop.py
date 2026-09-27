@@ -313,6 +313,23 @@ class TestCompToLoop:
 
 
 class TestDependentClauses:
+    def test_a_later_iterable_runs_once_per_element(self):
+        """`nonempty(ys)` runs once per `a`, so never over an empty `xs`;
+        bound before the loops, it raised where the program returned `[]`."""
+        @fp.fpy
+        def nonempty(ys: list[fp.Real]) -> list[fp.Real]:
+            assert len(ys) > 0
+            return ys
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            return [a + b for a in xs for b in nonempty(ys)]
+
+        assert _agree(f, [], [])
+        assert _agree(f, [1.0, 2.0], [3.0])
+        why = CompToLoop.refusals(f.ast, dependent=False)
+        assert len(why) == 1 and 'not an atom' in why[0][1]
+
     @pytest.mark.parametrize('f', ['_ragged', '_ragged3'])
     def test_opting_out_leaves_a_dependent_clause_list_alone(self, f):
         """`[b for a in xss for b in a]` has length `sum(len(a) for a in xss)`,

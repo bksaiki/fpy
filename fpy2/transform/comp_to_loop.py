@@ -27,7 +27,9 @@ A **dependent clause list** -- a clause's iterable mentions an earlier clause's
 target, as in ``[b for a in xs for b in a]`` -- has a length that is a sum
 rather than a product.  That one is built a row at a time and flattened
 (:meth:`~._CompToLoopInstance._lower_dependent`), at the cost of a materialised
-row per outer element; ``dependent=False`` declines it.
+row per outer element; ``dependent=False`` declines it.  So is a later clause
+whose iterable is not an atom: it runs once per element of the earlier clauses,
+so never over an empty one, and binding it before the loops would run it once.
 
 What the pass leaves, without erroring, is a comprehension with no statement
 slot -- one :class:`~fpy2.analysis.Hoistability` does not list, such as in a
@@ -101,6 +103,15 @@ def dependent_clauses(e: ListComp) -> list[int]:
     return out
 
 
+def _per_element(e: ListComp) -> bool:
+    """Whether a later clause's iterable must run once per element of the
+    earlier clauses rather than once before the loops."""
+    return bool(dependent_clauses(e)) or not all(
+        isinstance(it, _ATOMIC) or _CompToLoopInstance._inlinable(it)
+        for it in e.iterables[1:]
+    )
+
+
 class _CompToLoopInstance(SiteRewriter):
     """Lowers selected comprehensions into an allocation plus a loop."""
 
@@ -156,6 +167,11 @@ class _CompToLoopInstance(SiteRewriter):
                 'a later clause\'s iterable mentions an earlier clause\'s '
                 'target, so the length is not a product of the clause lengths'
             )
+        if not self.dependent and _per_element(e):
+            return Declined(
+                'a later clause\'s iterable is not an atom, so it runs once per '
+                'element of the earlier clauses'
+            )
         return None
 
     # ------------------------------------------------------------------
@@ -196,7 +212,7 @@ class _CompToLoopInstance(SiteRewriter):
         list keeps only its *first* iterable out here; the rest and the element
         go into the nested comprehension :meth:`_lower_dependent` builds.
         """
-        keep = 1 if dependent_clauses(e) else len(e.iterables)
+        keep = 1 if _per_element(e) else len(e.iterables)
         for i, iterable in enumerate(e.iterables):
             self._visit_expr(iterable, out if i < keep else None)
         self._visit_expr(e.elt, None)
@@ -311,10 +327,11 @@ class _CompToLoopInstance(SiteRewriter):
         """Emit the allocation and loops into *out*; return the result `Var`."""
         loc = e.loc
         fill = self._take_fill(e)
-        if dependent_clauses(e):
+        if _per_element(e):
             return self._lower_dependent(e, out, fill)
 
-        # every clause is independent, so each iterable is evaluated once here
+        # every later iterable is an atom or a range over atoms, so evaluating
+        # each once here is unobservable
         iters: list[Expr] = []
         for iterable in e.iterables:
             src = self._visit_expr(iterable, out)
