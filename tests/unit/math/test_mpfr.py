@@ -212,13 +212,14 @@ class MPFREquivTestCase():
     """
 
     def test_fuzz_unary(self, num_inputs: int = 256):
+        rng = random.Random(1)
         for op, mpfr in _unary_ops.items():
             for ctx_base in _ctxs:
                 for rm in _rms:
                     ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
-                        i = random.randint(0, 1 << ctx.nbits - 1)
+                        i = rng.randrange(1 << ctx.nbits)
                         x = ctx.decode(i)
                         # evaluate operation
                         fl = op(x, ctx=ctx)
@@ -229,23 +230,28 @@ class MPFREquivTestCase():
                         assert not ref.inexact, f'r={r}, ref={ref}'
                         assert isinstance(fl, Float)
                         # check that they are the numerical values are the same
-                        if fl.isnan:
+                        if ref.isnan:
                             assert fl.isnan, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}'
                         else:
                             assert fl == ref, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}'
                         # check that the flags are the same
                         assert fl.overflow == flags.overflow, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}'
                         assert fl.inexact == flags.inexact, f'op={op}, rm={rm}, x={x}, fl={fl}, ref={ref}, flags={flags}'
+                        assert fl.divzero == flags.divzero, f'op={op}, rm={rm}, x={x}, fl={fl}, flags={flags}'
+                        # MPFR also flags a NaN that only propagates
+                        if not x.isnan:
+                            assert fl.invalid == flags.invalid, f'op={op}, rm={rm}, x={x}, fl={fl}, flags={flags}'
 
     def test_fuzz_binary(self, num_inputs: int = 256):
+        rng = random.Random(1)
         for op, mpfr in _binary_ops.items():
             for ctx_base in _ctxs:
                 for rm in _rms:
                     ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
-                        i = random.randint(0, 1 << ctx.nbits - 1)
-                        j = random.randint(0, 1 << ctx.nbits - 1)
+                        i = rng.randrange(1 << ctx.nbits)
+                        j = rng.randrange(1 << ctx.nbits)
                         x = ctx.decode(i)
                         y = ctx.decode(j)
                         # evaluate operation
@@ -257,24 +263,29 @@ class MPFREquivTestCase():
                         assert not ref.inexact
                         assert isinstance(fl, Float)
                         # check that they are the same
-                        if fl.isnan:
+                        if ref.isnan:
                             assert fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}'
                         else:
                             assert fl == ref, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}'
                         # check that the flags are the same
                         assert fl.overflow == flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}'
                         assert fl.inexact == flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, ref={ref}, flags={flags}'
+                        assert fl.divzero == flags.divzero, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, flags={flags}'
+                        # MPFR also flags a NaN that only propagates
+                        if not any(v.isnan for v in (x, y)):
+                            assert fl.invalid == flags.invalid, f'op={op}, rm={rm}, x={x}, y={y}, fl={fl}, flags={flags}'
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
+        rng = random.Random(1)
         for op, mpfr in _ternary_ops.items():
             for ctx_base in _ctxs:
                 for rm in _rms:
                     ctx = ctx_base.with_params(rm=rm)
                     for _ in range(num_inputs):
                         # sample point
-                        i = random.randint(0, 1 << ctx.nbits - 1)
-                        j = random.randint(0, 1 << ctx.nbits - 1)
-                        k = random.randint(0, 1 << ctx.nbits - 1)
+                        i = rng.randrange(1 << ctx.nbits)
+                        j = rng.randrange(1 << ctx.nbits)
+                        k = rng.randrange(1 << ctx.nbits)
                         x = ctx.decode(i)
                         y = ctx.decode(j)
                         z = ctx.decode(k)
@@ -287,10 +298,14 @@ class MPFREquivTestCase():
                         assert not ref.inexact
                         assert isinstance(fl, Float)
                         # check that they are the same
-                        if fl.isnan:
+                        if ref.isnan:
                             assert fl.isnan, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}'
                         else:
                             assert fl == ref, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}'
                         # check that the flags are the same
                         assert fl.overflow == flags.overflow, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}'
                         assert fl.inexact == flags.inexact, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, ref={ref}, flags={flags}'
+                        assert fl.divzero == flags.divzero, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, flags={flags}'
+                        # MPFR also flags a NaN that only propagates
+                        if not any(v.isnan for v in (x, y, z)):
+                            assert fl.invalid == flags.invalid, f'op={op}, rm={rm}, x={x}, y={y}, z={z}, fl={fl}, flags={flags}'

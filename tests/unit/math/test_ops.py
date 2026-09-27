@@ -208,50 +208,30 @@ class MathInt64NoExceptTestCase():
         tgamma: 1 << 4,
     }
 
+    @staticmethod
+    def _int64() -> FixedContext:
+        # RTZ, so a rounding mode has nothing to vary
+        ctx = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
+        return FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=ctx.maxval(s=True), inf_value=ctx.maxval(s=True))
+
+    def _sample(self, op, ctx: FixedContext) -> Float:
+        max_value = self._max_integer.get(op, self._default_max_integer)
+        return Float.from_int(random.randint(0, max_value) * random.choice([-1, 1]), ctx)
+
     def test_fuzz_unary(self, num_inputs: int = 256):
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
+        ctx = self._int64()
         for op in _unary_ops:
-            max_value = self._max_integer.get(op, self._default_max_integer)
-            for rm in _rms:
-                for _ in range(num_inputs):
-                    # sample point
-                    i = random.randint(0, max_value) * random.choice([-1, 1])
-                    i *= random.choice([-1, 1])
-                    x = Float.from_int(i, INT64)
-                    # evaluate
-                    op(x, ctx=INT64)
+            for _ in range(num_inputs):
+                op(self._sample(op, ctx), ctx=ctx)
 
     def test_fuzz_binary(self, num_inputs: int = 256):
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
+        ctx = self._int64()
         for op in _binary_ops:
-            max_value = self._max_integer.get(op, self._default_max_integer)
-            for rm in _rms:
-                ctx = MPFixedContext(-1, rm, enable_nan=True, enable_inf=True)
-                for _ in range(num_inputs):
-                    # sample point
-                    i = random.randint(0, max_value) * random.choice([-1, 1])
-                    j = random.randint(0, max_value) * random.choice([-1, 1])
-                    x = Float.from_int(i, ctx)
-                    y = Float.from_int(j, ctx)
-                    # evaluate
-                    op(x, y, ctx=ctx)
+            for _ in range(num_inputs):
+                op(self._sample(op, ctx), self._sample(op, ctx), ctx=ctx)
 
     def test_fuzz_ternary(self, num_inputs: int = 256):
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP)
-        INT64 = FixedContext(True, 0, 64, RM.RTZ, OV.WRAP, nan_value=INT64.maxval(s=True), inf_value=INT64.maxval(s=True))
+        ctx = self._int64()
         for op in _ternary_ops:
-            max_value = self._max_integer.get(op, self._default_max_integer)
-            for rm in _rms:
-                ctx = MPFixedContext(-1, rm, enable_nan=True, enable_inf=True)
-                for _ in range(num_inputs):
-                    # sample point
-                    i = random.randint(0, max_value) * random.choice([-1, 1])
-                    j = random.randint(0, max_value) * random.choice([-1, 1])
-                    k = random.randint(0,max_value) * random.choice([-1, 1])
-                    x = Float.from_int(i, ctx)
-                    y = Float.from_int(j, ctx)
-                    z = Float.from_int(k, ctx)
-                    # evaluate
-                    op(x, y, z, ctx=ctx)
+            for _ in range(num_inputs):
+                op(self._sample(op, ctx), self._sample(op, ctx), self._sample(op, ctx), ctx=ctx)

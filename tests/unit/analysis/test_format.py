@@ -672,25 +672,21 @@ class TestAbstractFormat():
         exps: list[int | float] = [-10, -5, 0, 5, float('-inf')]
         bounds: list[fp.RealFloat | float] = [fp.RealFloat.from_int(64), fp.RealFloat.from_int(1024), float('inf')]
 
-        # iterator over all combinations
-        params1 = itertools.product(precs, exps, bounds)
-        params2 = itertools.product(precs, exps, bounds)
+        params = [
+            (p, e, b) for p, e, b in itertools.product(precs, exps, bounds)
+            if not (p == float('inf') and e == float('-inf'))  # invalid format
+        ]
 
-        for p1, e1, b1 in params1:
-            if p1 == float('inf') and e1 == float('-inf'):
-                continue  # skip invalid format
-
+        for p1, e1, b1 in params:
             fmt1 = AbstractFormat(p1, e1, b1)
-            for p2, e2, b2 in params2:
-                if p2 == float('inf') and e2 == float('-inf'):
-                    continue  # skip invalid format
-
+            for p2, e2, b2 in params:
                 fmt2 = AbstractFormat(p2, e2, b2)
                 fmt = fmt1 * fmt2
 
+                # the product's bound may clip its own effective precision
                 ep1, ep2 = fmt1.effective_prec(), fmt2.effective_prec()
                 expected = max(ep1, ep2) if 1 in (ep1, ep2) else ep1 + ep2
-                assert fmt.effective_prec() == expected
+                assert fmt.prec == expected
                 assert fmt.exp == e1 + e2
                 assert fmt.pos_bound == b1 * b2
 
