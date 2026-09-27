@@ -29,7 +29,6 @@ from . import (
     bool_expr,
     context_expr,
     expr,
-    fpy_funcdef,
     fpy_function,
     fpy_real_funcdef,
     fpy_real_function,
@@ -48,17 +47,33 @@ def _wrap_as_funcdef(body_expr: Expr) -> FuncDef:
     return FuncDef('f', [], body, meta)
 
 
-class TestGeneratedTypeChecks:
-    """Every generated function should type-check to ``real -> ... -> real``."""
+def _typechecks_and_runs(f: fp.Function, data: st.DataObject) -> None:
+    """*f* type-checks to ``real -> ... -> real`` and evaluates under ``fp.FP64``.
 
-    @given(fpy_real_funcdef())
-    def test_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        for at in analysis.arg_types:
-            assert isinstance(at, RealType), f"arg type {at.format()} is not real"
-        assert isinstance(analysis.return_type, RealType), (
-            f"return type {analysis.return_type.format()} is not real"
-        )
+    One test per distribution, since generating the program is nearly all of
+    the cost.  FP64 (not ``fp.REAL``) because ``Div`` isn't implemented for
+    real-number arithmetic; FP64 handles div-by-zero / sqrt of negative / etc.
+    by producing ``±inf`` or ``nan`` rather than raising.
+    """
+    analysis = TypeInfer.check(f.ast)
+    for at in analysis.arg_types:
+        assert isinstance(at, RealType), f"arg type {at.format()} is not real"
+    assert isinstance(analysis.return_type, RealType), (
+        f"return type {analysis.return_type.format()} is not real"
+    )
+    inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+              for _ in range(len(f.args))]
+    f(*inputs, ctx=fp.FP64)
+
+
+class TestGeneratedTypeChecks:
+    """Every generated function should type-check to ``real -> ... -> real``,
+    and run."""
+
+    @given(fpy_real_function(), st.data())
+    @settings(max_examples=100, deadline=None)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
     @given(fpy_real_funcdef(num_args=st.just(0), max_depth=st.just(0)))
     def test_zero_arg_zero_depth_is_just_a_literal(self, fd: FuncDef) -> None:
@@ -67,26 +82,6 @@ class TestGeneratedTypeChecks:
         # not in env (which would crash type inference) when env is empty.
         analysis = TypeInfer.check(fd)
         assert isinstance(analysis.return_type, RealType)
-
-
-class TestGeneratedRuns:
-    """Generated functions should evaluate under ``fp.FP64`` without crashing.
-
-    FP64 (not ``fp.REAL``) because ``Div`` isn't implemented for real-number
-    arithmetic; FP64 handles div-by-zero / sqrt of negative / etc. by
-    producing ``±inf`` or ``nan`` rather than raising.
-    """
-
-    @given(
-        fpy_real_function(num_args=st.integers(0, 3), max_depth=st.integers(0, 3)),
-        st.data(),
-    )
-    @settings(max_examples=100, deadline=None)
-    def test_runs_under_FP64(self, f: fp.Function, data: st.DataObject) -> None:
-        n = len(f.args)
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(n)]
-        f(*inputs, ctx=fp.FP64)
 
 
 class TestRealExprStrategyDirectly:
@@ -191,21 +186,16 @@ class TestTupleExprStrategyDirectly:
 class TestStmtBlock:
     """Statement-block generator.
 
-    Both tests suppress Hypothesis's ``too_slow`` health check because
-    ``stmt_block`` is heavier than a leaf-expr strategy (a single draw
-    can recurse through nested ``with``/``if``/``for`` bodies) — the
-    health check trips on the first few draws under unfortunate seeds
-    even when later draws are fast.
+    Suppresses Hypothesis's ``too_slow`` health check because ``stmt_block``
+    is heavier than a leaf-expr strategy (a single draw can recurse through
+    nested ``with``/``if``/``for`` bodies) — the health check trips on the
+    first few draws under unfortunate seeds even when later draws are fast.
     """
 
     @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
     @settings(suppress_health_check=[HealthCheck.too_slow])
-    def test_ends_with_return(self, block) -> None:
+    def test_ends_with_return_and_typechecks_when_wrapped(self, block) -> None:
         assert isinstance(block.stmts[-1], ReturnStmt)
-
-    @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
-    @settings(suppress_health_check=[HealthCheck.too_slow])
-    def test_typechecks_when_wrapped(self, block) -> None:
         fd = FuncDef('f', [], block,
                      FuncMeta(set(), None, None, {}, ForeignEnv.default()))
         analysis = TypeInfer.check(fd)
@@ -294,19 +284,6 @@ class TestCompoundLocals:
 class TestForStmt:
     """``ForStmt`` (``for i in range(N): ...``) in bodies."""
 
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(1, 2),
-        max_assigns=st.just(1),
-        max_contexts=st.just(0),
-        max_ifs=st.just(0),
-        max_loops=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_loops_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
     @given(
         fpy_real_function(
             num_args=st.integers(0, 2),
@@ -319,28 +296,12 @@ class TestForStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_loops_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestWhileStmt:
     """``WhileStmt`` (counter-driven template) in bodies."""
-
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(1, 2),
-        max_assigns=st.just(1),
-        max_contexts=st.just(0),
-        max_ifs=st.just(0),
-        max_loops=st.just(0),
-        max_whiles=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_whiles_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
 
     @given(
         fpy_real_function(
@@ -355,10 +316,8 @@ class TestWhileStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_whiles_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestAllControlFlow:
@@ -386,18 +345,6 @@ class TestAllControlFlow:
 class TestIfStmt:
     """``IfStmt`` / ``If1Stmt`` inside generated function bodies."""
 
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(1, 2),
-        max_assigns=st.just(1),
-        max_contexts=st.just(0),
-        max_ifs=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_ifs_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
     @given(
         fpy_real_function(
             num_args=st.integers(0, 2),
@@ -409,10 +356,8 @@ class TestIfStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_ifs_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestZipEnumerate:
@@ -452,35 +397,13 @@ class TestZipEnumerate:
 
 
 class TestArbitraryFuncdef:
-    """``fpy_funcdef`` with arbitrary signatures."""
-
-    @given(
-        st.data(),
-    )
-    @settings(max_examples=60, deadline=None)
-    def test_arbitrary_typed_funcdef_typechecks(self, data: st.DataObject) -> None:
-        # Draw a small random signature (1-3 args, all scalar-only for
-        # easier value generation in the runtime test below).
-        n_args = data.draw(st.integers(1, 3))
-        arg_ts = tuple(
-            data.draw(arbitrary_type(max_depth=1, scalar_only=True))
-            for _ in range(n_args)
-        )
-        ret_t = data.draw(arbitrary_type(max_depth=1, scalar_only=True))
-        fd = data.draw(fpy_funcdef(
-            arg_ts, ret_t,
-            max_depth=st.just(2),
-            max_assigns=st.just(1),
-            max_contexts=st.just(0),
-        ))
-        analysis = TypeInfer.check(fd)
-        assert tuple(analysis.arg_types) == arg_ts
-        assert analysis.return_type == ret_t
+    """``fpy_funcdef`` with arbitrary signatures.  Scalar-only, for easier value
+    generation."""
 
     @given(st.data())
     @settings(max_examples=60, deadline=None)
-    def test_arbitrary_typed_function_runs(self, data: st.DataObject) -> None:
-        n_args = data.draw(st.integers(0, 2))
+    def test_arbitrary_typed_function_typechecks_and_runs(self, data: st.DataObject) -> None:
+        n_args = data.draw(st.integers(0, 3))
         arg_ts = tuple(
             data.draw(arbitrary_type(max_depth=1, scalar_only=True))
             for _ in range(n_args)
@@ -492,6 +415,9 @@ class TestArbitraryFuncdef:
             max_assigns=st.just(1),
             max_contexts=st.just(0),
         ))
+        analysis = TypeInfer.check(f.ast)
+        assert tuple(analysis.arg_types) == arg_ts
+        assert analysis.return_type == ret_t
         inputs = [data.draw(value_for_type(t)) for t in arg_ts]
         f(*inputs, ctx=fp.FP64)
 
@@ -510,17 +436,6 @@ class TestContextExpr:
 class TestContextStmt:
     """Generated functions with ``with CTX:`` blocks should typecheck + run."""
 
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(0, 2),
-        max_assigns=st.integers(0, 2),
-        max_contexts=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_contexts_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
     @given(
         fpy_real_function(
             num_args=st.integers(0, 2),
@@ -531,10 +446,8 @@ class TestContextStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_contexts_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestIncludeNarrowing:
