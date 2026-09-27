@@ -1,18 +1,18 @@
 """
 Unit tests for the two analyses behind :mod:`fpy2.transform.hoistable`.
 
-:func:`~fpy2.transform.hoistable.lowers` and
-:func:`~fpy2.transform.hoistable.lowers_inside` say where the pass emits a
-statement; :func:`~fpy2.transform.hoistable.force_names` is the *prefix rule*,
-which says what must be named so a lowering does not overtake the operands to
-its left.  The rule is the subtle part of the pass -- getting it wrong changes
+:func:`~fpy2.transform.hoistable.lowers` says where the pass emits a statement
+and :func:`~fpy2.transform.hoistable.hoists_inside` where anything lands above
+the enclosing statement; :func:`~fpy2.transform.hoistable.force_names` is the
+*prefix rule*, which says what must be named so a hoist does not overtake the
+operands to its left.  The rule is the subtle part of the pass -- getting it wrong changes
 which exception a program raises -- so it is tested here on its own.
 """
 
 import fpy2 as fp
 from fpy2.ast.fpyast import Expr, FuncDef, Stmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.transform.hoistable import force_names, lowers, lowers_inside
+from fpy2.transform.hoistable import force_names, hoists_inside, lowers
 
 # ----------------------------------------------------------------------
 # Helpers
@@ -95,21 +95,21 @@ class TestLowers:
 
 
 # ----------------------------------------------------------------------
-# `lowers_inside`: whether anything under a node lowers
+# `hoists_inside`: whether anything under a node hoists
 
 
-class TestLowersInside:
+class TestHoistsInside:
     def test_finds_a_lowering_under_a_strict_operator(self):
         @fp.fpy
         def f(x: fp.Real, c: bool) -> fp.Real:
             return 1.0 + fp.sqrt(fp.sqrt(x) if c else 0.0)
-        assert lowers_inside(_expr(f, fp.ast.Add))
+        assert hoists_inside(_expr(f, fp.ast.Add))
 
     def test_a_program_with_no_non_strict_position(self):
         @fp.fpy
         def f(a: fp.Real, b: fp.Real, c: fp.Real, d: fp.Real) -> fp.Real:
             return (a * b) + (c * d)
-        assert not lowers_inside(_expr(f, fp.ast.Add))
+        assert not hoists_inside(_expr(f, fp.ast.Add))
 
     def test_an_unlowered_ternary_still_reports_its_condition(self):
         """The arms are sealed but the condition is not: it runs whenever the
@@ -119,17 +119,23 @@ class TestLowersInside:
             return x if (b and fp.sqrt(x) > y) else y
         outer = _expr(f, fp.ast.IfExpr)
         assert not lowers(outer)
-        assert lowers_inside(outer)
+        assert hoists_inside(outer)
 
-    def test_a_comprehension_is_sealed(self):
-        """Its element runs once per iteration, so the pass hoists nothing out
-        of it however much the element would want a slot."""
+    def test_a_comprehension_hoists_as_a_whole(self):
+        """`CompToLoop` lowers it into the enclosing slot, whatever its
+        element holds."""
         @fp.fpy
-        def f(xs: list[fp.Real], c: bool) -> list[fp.Real]:
-            return [fp.sqrt(x) if c else 0.0 for x in xs]
-        comp = _expr(f, fp.ast.ListComp)
-        assert lowers(comp.elt)
-        assert not lowers_inside(comp)
+        def f(xs: list[fp.Real]) -> list[fp.Real]:
+            return [x for x in xs]
+        assert hoists_inside(_expr(f, fp.ast.ListComp))
+
+    def test_a_sealed_operand_is_not_searched(self):
+        """A chained comparison's third operand may not run, so nothing is
+        hoisted out of it."""
+        @fp.fpy
+        def f(xs: list[fp.Real], a: fp.Real, b: fp.Real) -> bool:
+            return a < b < len([x for x in xs])
+        assert not hoists_inside(_expr(f, fp.ast.Compare))
 
 
 # ----------------------------------------------------------------------
@@ -222,6 +228,14 @@ class TestForceNames:
         def f(xs: list[fp.Real], a: fp.Real, c: bool) -> list[fp.Real]:
             return [fp.sqrt(a) + (fp.sqrt(x) if c else 0.0) for x in xs]
         assert _forced(_stmt(f)) == set()
+
+    def test_a_comprehension_to_the_right_names_a_left_operand(self):
+        """`CompToLoop` hoists the comprehension above the statement, so
+        `fp.sqrt(a)` must be named to keep its place."""
+        @fp.fpy
+        def f(xs: list[fp.Real], a: fp.Real) -> fp.Real:
+            return fp.sqrt(a) + len([x for x in xs])
+        assert _forced(_stmt(f)) == {'fp.sqrt(a)'}
 
     def test_a_program_with_no_lowering_forces_no_name(self):
         """ANF would name both products here."""

@@ -143,29 +143,34 @@ def lowers(e: Expr) -> bool:
             return False
 
 
-def lowers_inside(e: Expr) -> bool:
-    """Whether this pass emits a statement anywhere in `e`, `e` itself included.
+def hoists_inside(e: Expr) -> bool:
+    """Whether a statement lands above the enclosing statement from anywhere in
+    `e`, `e` itself included: a lowering of this pass, or a comprehension, which
+    :class:`~fpy2.transform.CompToLoop` lowers into the same slot.
 
-    A comprehension is the only sealed position needing an exception: an
-    unlowered ternary's arms and an unlowered chain's tail are atoms by
-    definition, and an atom has no children to find anything in.
+    Only strict operands are searched, since nothing is hoisted out of a sealed
+    one.
     """
-    if lowers(e):
+    if lowers(e) or isinstance(e, ListComp):
         return True
-    if isinstance(e, ListComp):
-        return False
-    return any(lowers_inside(sub) for _field, _i, sub in sub_exprs(e))
+    kids = [sub for _field, _i, sub in sub_exprs(e)]
+    match e:
+        case IfExpr() | And() | Or():
+            kids = kids[:1]    # the arms, or the tail, may not run
+        case Compare():
+            kids = kids[:2]    # a chain short-circuits after the first pair
+    return any(hoists_inside(kid) for kid in kids)
 
 
 def force_names(node: 'Stmt | Expr') -> set[Expr]:
-    """The expressions in `node` to bind to a name, so a lowering to their right
+    """The expressions in `node` to bind to a name, so a hoist to their right
     does not overtake them.
 
     The *prefix rule*: at any node, let ``last`` be the position of the last
     child -- in :func:`~fpy2.transform.path.sub_exprs` order, which is
-    evaluation order -- that a lowering fires inside.  Every earlier child that
-    is not already an atom is named, since a lowering hoists above the whole
-    statement and would otherwise run before them.
+    evaluation order -- that something hoists out of (:func:`hoists_inside`).
+    Every earlier child that is not already an atom is named, since a hoist
+    lands above the whole statement and would otherwise run before them.
 
     .. code-block:: python
 
@@ -176,7 +181,7 @@ def force_names(node: 'Stmt | Expr') -> set[Expr]:
     A ternary or chain is exempt: its condition lands in the ``IfStmt``
     condition and each arm in a block of its own, so order is preserved
     structurally -- and naming an arm is the bug the rule exists to prevent.  A
-    comprehension is sealed.
+    comprehension is not entered: its element runs once per iteration.
 
     The set is keyed by identity: ``Expr`` defines no ``__eq__``, so two
     structurally-equal operands stay distinct.
@@ -196,10 +201,10 @@ def _collect(node: 'Stmt | Expr', out: set[Expr]) -> None:
     elif isinstance(node, Compare):
         kids = kids[:2]        # a chain short-circuits after the first pair
     if not isinstance(node, (IfExpr, And, Or)):
-        lowering = [i for i, kid in enumerate(kids) if lowers_inside(kid)]
-        if lowering:
+        hoisting = [i for i, kid in enumerate(kids) if hoists_inside(kid)]
+        if hoisting:
             out.update(
-                kid for kid in kids[:max(lowering)]
+                kid for kid in kids[:max(hoisting)]
                 if not isinstance(kid, _ATOMIC)
             )
     for kid in kids:
