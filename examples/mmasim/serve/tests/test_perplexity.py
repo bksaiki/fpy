@@ -16,6 +16,7 @@ _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
 import perplexity
+import quant
 import swap
 
 
@@ -34,3 +35,19 @@ def test_the_baseline_is_its_own_reference(model: torch.nn.Module, tokens: torch
     assert r0['tokens'] == r1['tokens'] == 2 * 15
     assert r1['kl'] > 0
     assert run.mode == 'fp32'
+
+
+def test_a_quantizing_scheme_runs_end_to_end(model: torch.nn.Module, tokens: torch.Tensor) -> None:
+    """Under `fp8-row` (`lm_head` left to R0, as `checkpoints.for_scheme`
+    does), the exact run is farther from R0 than `bf16-exact`, and every
+    design runs."""
+    run = swap.patch(model)
+    segs = perplexity.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
+    bf16 = perplexity.evaluate(model, run, segs, ['bf16-exact'])['bf16-exact'].report()['kl']
+    fp8 = quant.SCHEMES['fp8-row']
+    swap.give(run, model, fp8, {}, ignore=['lm_head'])
+    totals = perplexity.evaluate(model, run, segs, swap.modes(fp8)[1:])
+    assert totals['fp8-row-exact'].report()['kl'] > bf16
+    assert all(0 < t.report()['kl'] < math.inf for m, t in totals.items() if m != 'fp32')
+    swap.give(run, model, swap.BF16, {})
+

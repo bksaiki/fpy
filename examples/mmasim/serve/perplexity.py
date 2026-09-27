@@ -17,6 +17,7 @@ segment's R0 log-probabilities are held, on the host.
     python serve/perplexity.py                          # every run
     python serve/perplexity.py -r amd.cdna2.bf16 --segments 4
     python serve/perplexity.py --split-k 4 --combine tree -o tree.json
+    python serve/perplexity.py --scheme fp8-row --segments 20
 """
 
 import argparse
@@ -27,6 +28,7 @@ import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+import checkpoints
 import swap
 import torch
 
@@ -146,20 +148,25 @@ def evaluate(
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     swap.add_args(ap)
-    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
-                    help='runs besides fp32 (default: bf16-exact and every design)')
+    checkpoints.add_args(ap)
+    ap.add_argument('-r', '--runs', nargs='*',
+                    help="runs besides fp32 (default: the scheme's exact run and every design)")
     ap.add_argument('--segments', type=int, default=None,
                     help='this many segments at random (default: all)')
     ap.add_argument('-o', '--out', default=None, help='write the results as JSON here')
     args = ap.parse_args(argv)
 
+    runs = checkpoints.runs(ap, args)
     segs = segments(wikitext(args.model))
     segs = [segs[i] for i in swap.pick(len(segs), args.segments, args.seed)]
-    model, run = swap.load(args.model, args.split_k, args.combine)
+    model, run, about = checkpoints.for_scheme(
+        args.model, args.scheme, requantize=args.requantize, master=args.master,
+        split_k=args.split_k, combine=args.combine)
 
-    totals = evaluate(model, run, segs, args.runs, progress=True)
+    totals = evaluate(model, run, segs, runs, progress=True)
     results = {
-        'model': args.model, 'context': CONTEXT, 'segments': len(segs), 'seed': args.seed,
+        'model': args.model, 'scheme': args.scheme.name, **about,
+        'context': CONTEXT, 'segments': len(segs), 'seed': args.seed,
         'split_k': args.split_k, 'combine': args.combine,
         'runs': {mode: t.report() for mode, t in totals.items()},
     }

@@ -35,8 +35,7 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
 
 
 MODES = modes()
-RUNS = MODES[1:]
-"""Every `bf16` run but R0 (`fp32`)."""
+"""Every `bf16` run."""
 
 MODEL = 'Qwen/Qwen3-0.6B'
 """The default model; `Qwen/Qwen3.5-0.8B` also runs (text only)."""

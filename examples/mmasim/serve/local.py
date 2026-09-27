@@ -33,7 +33,6 @@ import checkpoints
 import kernels
 import metrics
 import perplexity
-import quant
 import swap
 import torch
 import workloads
@@ -158,41 +157,12 @@ def evaluate(
     return stats
 
 
-def _load(name: str, scheme: quant.Scheme, *, requantize: bool, master: str | None,
-          split_k: int, combine: kernels.Combine,
-          ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any], dict[str, torch.Tensor] | None]:
-    """*name*'s model and run under *scheme*, its `about` (weights' source,
-    unquantized layers, master or `None`), and the master's weights (`None`:
-    the model's own)."""
-    masters = None
-    if checkpoints.is_checkpoint(name):
-        model, ckpt = checkpoints.load(name)
-        run = swap.patch(model)
-        weights, source = checkpoints.weights_for(ckpt, scheme, requantize)
-        ignore = ckpt.ignore
-        swap.give(run, model, scheme, weights, ckpt.inputs if source == 'checkpoint' else None,
-                  ignore)
-        master = master or checkpoints.base_model(name)
-        masters = None if master is None else checkpoints.master_weights(master)
-    else:
-        model, run = swap.load(name)
-        source, ignore, master = 'rtn', [] if scheme.name == 'bf16' else ['lm_head'], name
-        swap.give(run, model, scheme, {}, ignore=ignore)
-    run.split_k, run.combine = split_k, combine
-    return model, run, {'source': source, 'ignore': ignore, 'master': master}, masters
-
-
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     swap.add_args(ap)
     ap.add_argument('--models', nargs='*', default=None,
                     help='masters (RTN) and quantized checkpoints to evaluate (default: --model)')
-    ap.add_argument('--scheme', type=quant.scheme, default=swap.BF16,
-                    help=f'one of {", ".join(quant.SCHEMES)}, or fp8-row:fnuz, fp8-block:fnuz')
-    ap.add_argument('--requantize', action='store_true',
-                    help='allow a checkpoint in another scheme to be requantized, lossily')
-    ap.add_argument('--master', default=None, help='the unquantized model a checkpoint is '
-                    'measured against (default: its model card\'s base model)')
+    checkpoints.add_args(ap)
     ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES),
                     help='designs the scheme applies to (default: all of them)')
     ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, default=list(metrics.METRICS))
@@ -216,10 +186,12 @@ def main(argv: list[str]) -> int:
         'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
         'models': {}}
     for name in args.models or [args.model]:
-        model, run, about, masters = _load(name, args.scheme, requantize=args.requantize,
-                                           master=args.master, split_k=args.split_k,
-                                           combine=args.combine)
+        model, run, about = checkpoints.for_scheme(
+            name, args.scheme, requantize=args.requantize, master=args.master,
+            split_k=args.split_k, combine=args.combine)
         known = about['master'] is not None
+        masters = (checkpoints.master_weights(about['master'])
+                   if known and about['source'] != 'rtn' else None)
         names = [m for m in args.metrics if m != 'quantization' or known]
         refs = {'quantized': names}
         if known:

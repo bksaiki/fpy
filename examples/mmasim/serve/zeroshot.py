@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import checkpoints
 import swap
 
 TASKS = ('piqa', 'arc_easy', 'arc_challenge', 'hellaswag', 'winogrande', 'lambada_openai')
@@ -75,9 +76,10 @@ def flips(ref: Items, got: Items) -> dict[str, tuple[int, int]]:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     swap.add_args(ap)
+    checkpoints.add_args(ap)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
-    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
-                    help='runs besides fp32 (default: bf16-exact and every design)')
+    ap.add_argument('-r', '--runs', nargs='*',
+                    help="runs besides fp32 (default: the scheme's exact run and every design)")
     ap.add_argument('--items', type=int, default=2000,
                     help='items per task at most, at random (0: all)')
     ap.add_argument('--batch-size', type=int, default=16)
@@ -86,6 +88,7 @@ def main(argv: list[str]) -> int:
     from lm_eval.models.huggingface import HFLM
     from transformers import AutoTokenizer
 
+    modes = checkpoints.runs(ap, args)
     settings = {'model': args.model, 'items': args.items, 'seed': args.seed,
                 'batch_size': args.batch_size, 'split_k': args.split_k, 'combine': args.combine}
     samples = subsets(sizes(), args.items or None, args.seed) or None
@@ -94,16 +97,20 @@ def main(argv: list[str]) -> int:
     out.mkdir(parents=True, exist_ok=True)
     lm = run = None
     runs: dict[str, dict[str, Any]] = {}
-    for mode in ('fp32', *args.runs):
+    for mode in ('fp32', *modes):
         path = out / f'{mode}.json'
-        if path.exists() and (cached := json.loads(path.read_text()))['settings'] == settings:
+        want = settings if mode == 'fp32' else {
+            **settings, 'scheme': args.scheme.name, 'requantize': args.requantize}
+        if path.exists() and (cached := json.loads(path.read_text()))['settings'] == want:
             runs[mode] = cached
             continue
         if lm is None:
-            model, run = swap.load(args.model, args.split_k, args.combine)
+            model, run, _ = checkpoints.for_scheme(
+                args.model, args.scheme, requantize=args.requantize, master=args.master,
+                split_k=args.split_k, combine=args.combine)
             lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
-        runs[mode] = {'settings': settings,
+        runs[mode] = {'settings': want,
                       **evaluate(lm, run, mode, samples=samples)}
         path.write_text(json.dumps(runs[mode]))
 

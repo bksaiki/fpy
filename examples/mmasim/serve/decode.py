@@ -13,6 +13,7 @@ with the same settings (and, past R0, the same R0 tokens).
 
     python serve/decode.py -o dec                      # every run
     python serve/decode.py -o dec -r amd.cdna2.bf16 --prompts 10
+    python serve/decode.py -o dec-fp8 --scheme fp8-row
 """
 
 import argparse
@@ -24,6 +25,7 @@ from collections.abc import Collection, Iterator
 from pathlib import Path
 from typing import Any
 
+import checkpoints
 import swap
 import torch
 
@@ -85,9 +87,10 @@ def divergence(ref: list[int], got: list[int]) -> int | None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     swap.add_args(ap)
+    checkpoints.add_args(ap)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
-    ap.add_argument('-r', '--runs', nargs='*', choices=swap.RUNS, default=list(swap.RUNS),
-                    help='runs besides fp32 (default: bf16-exact and every design)')
+    ap.add_argument('-r', '--runs', nargs='*',
+                    help="runs besides fp32 (default: the scheme's exact run and every design)")
     ap.add_argument('--prompts', type=int, default=100, help='MATH-500 problems, at random')
     ap.add_argument('--max-new', type=int, default=2048)
     args = ap.parse_args(argv)
@@ -95,9 +98,9 @@ def main(argv: list[str]) -> int:
     import datasets
     from transformers import AutoTokenizer
 
+    modes = checkpoints.runs(ap, args)
     settings = {'model': args.model, 'prompts': args.prompts, 'seed': args.seed,
-                'max_new': args.max_new,
-                'split_k': args.split_k, 'combine': args.combine}
+                'max_new': args.max_new, 'split_k': args.split_k, 'combine': args.combine}
     problems = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')['problem']
     picked = swap.pick(len(problems), args.prompts, args.seed)
     tok = AutoTokenizer.from_pretrained(args.model)
@@ -108,16 +111,19 @@ def main(argv: list[str]) -> int:
     out.mkdir(parents=True, exist_ok=True)
     model = run = None
     runs: dict[str, list[list[int]]] = {}
-    for mode in ('fp32', *args.runs):
+    for mode in ('fp32', *modes):
         path = out / f'{mode}.json'
         ref = runs.get('fp32')
         want = settings if ref is None else {
-            **settings, 'fp32': hashlib.sha256(json.dumps(ref).encode()).hexdigest()}
+            **settings, 'scheme': args.scheme.name, 'requantize': args.requantize,
+            'fp32': hashlib.sha256(json.dumps(ref).encode()).hexdigest()}
         if path.exists() and (cached := json.loads(path.read_text()))['settings'] == want:
             runs[mode] = cached['tokens']
             continue
         if model is None:
-            model, run = swap.load(args.model, args.split_k, args.combine)
+            model, run, _ = checkpoints.for_scheme(
+                args.model, args.scheme, requantize=args.requantize, master=args.master,
+                split_k=args.split_k, combine=args.combine)
             eos = stop_tokens(model, tok)
         run.mode = mode
         runs[mode] = []

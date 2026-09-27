@@ -1,15 +1,19 @@
 """
 Quantized `compressed-tensors` checkpoints: :func:`load` reads one (R0 runs
 its dequantized weights); :func:`weights_for` gives its weights under a
-scheme (`docs/todos/mmasim-serving.md`).
+scheme (`docs/todos/mmasim-serving.md`); :func:`for_scheme` loads a master
+or a checkpoint ready to run under one.
 """
 
+import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import kernels
 import quant
+import swap
 import torch
 from compressed_tensors.compressors.nvfp4.helpers import unpack_fp4_from_uint8
 
@@ -128,3 +132,45 @@ def master_weights(name: str) -> dict[str, torch.Tensor]:
 
     model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.float32)
     return {n: m.weight.detach() for n, m in model.named_modules() if isinstance(m, torch.nn.Linear)}
+
+
+def for_scheme(name: str, scheme: quant.Scheme, *, requantize: bool = False,
+               master: str | None = None, split_k: int = 1, combine: kernels.Combine = 'linear',
+               ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any]]:
+    """*name*, a master (RTN) or a checkpoint, and its run under *scheme*,
+    with its `about`: its weights' source, its unquantized layers (`lm_head`
+    under a quantizing scheme), and its master (*master*, else a
+    checkpoint's card's base model; `None` if unknown)."""
+    if is_checkpoint(name):
+        model, ckpt = load(name)
+        run = swap.patch(model)
+        weights, source = weights_for(ckpt, scheme, requantize)
+        ignore = ckpt.ignore
+        swap.give(run, model, scheme, weights, ckpt.inputs if source == 'checkpoint' else None,
+                  ignore)
+        master = master or base_model(name)
+    else:
+        model, run = swap.load(name)
+        source, ignore, master = 'rtn', [] if scheme.name == 'bf16' else ['lm_head'], name
+        swap.give(run, model, scheme, {}, ignore=ignore)
+    run.split_k, run.combine = split_k, combine
+    return model, run, {'source': source, 'ignore': ignore, 'master': master}
+
+
+def add_args(ap: argparse.ArgumentParser) -> None:
+    """The options choosing a scheme and a model's weights under it."""
+    ap.add_argument('--scheme', type=quant.scheme, default=swap.BF16,
+                    help=f'one of {", ".join(quant.SCHEMES)}, or fp8-row:fnuz, fp8-block:fnuz')
+    ap.add_argument('--requantize', action='store_true',
+                    help='allow a checkpoint in another scheme to be requantized, lossily')
+    ap.add_argument('--master', default=None, help='the unquantized model a checkpoint is '
+                    'measured against (default: its model card\'s base model)')
+
+
+def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
+    """`args.runs` checked against `args.scheme`'s (all but R0 if not
+    given)."""
+    known = swap.modes(args.scheme)[1:]
+    if bad := [r for r in args.runs or () if r not in known]:
+        ap.error(f'{args.scheme.name} has no run {", ".join(bad)} (only {", ".join(known)})')
+    return args.runs or list(known)
