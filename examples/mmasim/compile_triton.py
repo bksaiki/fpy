@@ -23,7 +23,6 @@ Asserts are dropped: a kernel cannot raise.
 import argparse
 import random
 import sys
-from collections.abc import Callable
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -34,6 +33,7 @@ from compile import (
     _HARD,
     _HARD_EVERY,
     DESIGNS,
+    Build,
     _filename,
     _fmt,
     _length,
@@ -56,9 +56,6 @@ if TYPE_CHECKING:
 
 _L = fp.types.ListType
 _R = fp.types.RealType
-
-Build = Callable[[], tuple[fp.Function, list[Type]]]
-"""A design's builder: the design, and its argument types."""
 
 _BLOCK = 64
 _BLOCK_M = 4

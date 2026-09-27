@@ -1,8 +1,9 @@
 """
 Compiles every MMA-Sim design to C++, reporting where each one stops.
 
-A roadmap tracker rather than a test: the point is to see *which* refusal
-each design hits and how the count moves.
+A roadmap tracker: the point is to see *which* refusal each design hits and
+how the count moves.  With `-r`, each design that compiles is also run
+against the interpreter.
 
     python examples/mmasim/compile.py           # one line per design
     python examples/mmasim/compile.py -v        # full error text
@@ -42,6 +43,9 @@ from fpy2.types import Type
 
 _L = fp.types.ListType
 _R = fp.types.RealType
+
+Build = Callable[[], tuple[fp.Function, list[Type]]]
+"""A design's builder: the design, and its argument types."""
 
 _HARD_EVERY = 4
 """Every this many `--run` draws, each element is a hard case with
@@ -92,7 +96,7 @@ def _vecs(a_ctx, b_ctx, c_ctx, k):
 def _t_chain(
     L: int, a_ctx: fp.EFloatContext, b_ctx: fp.EFloatContext, c_ctx: fp.EFloatContext,
     F: int, rho: fp.Context, k: int, **kw: Any,
-) -> Callable[[], tuple[fp.Function, list[Type]]]:
+) -> Build:
     """A T-FDPA chain's builder, over vectors of length *k*."""
     return lambda: (nv.make_t_fdpa_chain(L, a_ctx, b_ctx, c_ctx, F, rho, **kw),
                     _vecs(a_ctx, b_ctx, c_ctx, k))
@@ -214,7 +218,7 @@ def _prepare(_module, func):
     return func
 
 
-def compile_design(build) -> str:
+def compile_design(build: Build) -> str:
     """The C++ for one design; raises whatever refused it.
 
     Every function is prepared, not just the entry: a model's rounding at a
@@ -310,7 +314,7 @@ def _same(got: float, want: float) -> bool:
             or math.isnan(got) and math.isnan(want))
 
 
-def run_design(src: str, build, draws: int, seed: int) -> int:
+def run_design(src: str, build: Build, draws: int, seed: int) -> int:
     """How many of *draws* random inputs the C++ *src* of design *build* gets
     bit for bit.  Every :data:`_HARD_EVERY`-th draw is heavy in hard cases.
     A run that aborts -- a failed assert -- misses every draw after it."""

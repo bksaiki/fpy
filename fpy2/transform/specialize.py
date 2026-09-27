@@ -373,9 +373,7 @@ def _mangle_private(base: str, inst: _Instance) -> str:
     The key decides identity; this only has to label it, uniquely and
     reproducibly.
 
-    *base* is the source function's name.  It is not recovered by stripping
-    a copy's suffix, which would take `helper__deadbeef` apart too and collide
-    it with a `helper` beside it.
+    *base* is the source function's name.
     """
     parts = [base]
     if inst.ctx is not None:

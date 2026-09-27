@@ -304,9 +304,12 @@ class _DigitBoundInferInstance(DefaultVisitor):
     _loops_of_stmt: dict[Stmt, tuple[Stmt, ...]]
     _loops_of_expr: dict[Expr, tuple[Stmt, ...]]
     _scope_of: dict[ContextStmt, ContextScope]
-    _established: frozenset[int]
-    """The literals every `with` dominating the walk's position makes true."""
-    _established_at: dict[Expr, frozenset[int]]
+    _established: frozenset[tuple[int, int]]
+    """What every `with` dominating the walk's position makes true: each
+    variable it needs not `-inf`, with the literal saying so."""
+    _established_at: dict[Expr, frozenset[tuple[int, int]]]
+    _summaries: set[int] | None
+    """:meth:`_summary_vars`, once the walk is over."""
 
     def __init__(
         self,
@@ -355,6 +358,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
         self._scope_of = {s.site: s for s in self.ctx_use.scopes if isinstance(s.site, ContextStmt)}
         self._established = frozenset()
         self._established_at = {}
+        self._summaries = None
 
     def analyze(self) -> DigitBoundAnalysis:
         # positional, so params that do not match the signature would bind
@@ -375,6 +379,7 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 self._mark_elt(d, src.msb, src.value, lsb=src.lsb)
         self._visit_block(self.func.body, None)
         self.out.ret = self._merge_returns()
+        self._summaries = self._summary_vars()
         self.out.assume_at = self._assumed
         return self.out
 
@@ -785,8 +790,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
                     of = d
                     t = t if t is not None else self._def(d).msb
                 # What anchors the term absolutely -- where the argument is
-                # non-zero, since `logb(0)` is `-inf`.  A rounding at a
-                # position built from it assumes so (`_assumed`).
+                # non-zero, since `logb(0)` is `-inf`.  A `with` at a position
+                # built from it establishes so (`_visit_context`).
                 lo, _ = self.view.logb_range(of)
                 if t is not None and lo is not None:
                     store.ge(t, lo, guard=store.not_neg_inf(t))
@@ -867,8 +872,8 @@ class _DigitBoundInferInstance(DefaultVisitor):
         facts = self._else_facts(cond)
         if facts:
             lo = min(self._floor(ift), self._floor(iff, facts))
-            if lo > -math.inf:
-                self.store.ge(m, int(lo))
+            if isinstance(lo, int):
+                self.store.ge(m, lo)
         return m
 
     def _floor(self, t: Term, assuming: frozenset[int] = frozenset()) -> int | float:
@@ -904,14 +909,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
         """The literals *cond* failing proves: each value some path zeroes
         alone is non-zero.  Not one tested of every element -- `all(...)`
         failing names no element."""
-        paths = self._zero_paths(cond)
+        paths = self._zero_paths(cond, exact=True)
         if not paths:
             return frozenset()
         every = self._universal_zeros(cond)
+        summaries = self._summary_vars()
         return frozenset(
             lit for atoms in paths if len(atoms) == 1
             for t in atoms if t not in every
-            for lit in self.store.not_neg_inf(t)
+            for (v, _), lit in zip(t.coeffs, self.store.not_neg_inf(t))
+            if v.index not in summaries
         )
 
     def _forced_zero(
@@ -976,12 +983,16 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return (self._universal_zeros(d.site.expr)
                 if isinstance(d.site, Assign) else set())
 
-    def _zero_paths(self, cond: Expr) -> list[set[Term]] | None:
+    def _zero_paths(self, cond: Expr, exact: bool = False) -> list[set[Term]] | None:
         """One set of zeroed `logb`s per path making *cond* true.
 
         ``None`` where some path zeroes nothing.  Lowering leaves `a or b` as a
         phi over two conditions and `all(xs)` as a reduce over a list an inner
         loop filled, so both are read through.
+
+        With *exact*, each path must also *make* *cond* true, which is what a
+        failed *cond* can be read back from: a phi is not read, since it may be
+        an `and`.
         """
         match cond:
             case Compare(ops=(CompareOp.EQ,), args=(lhs, rhs)):
@@ -992,38 +1003,38 @@ class _DigitBoundInferInstance(DefaultVisitor):
                 return None
             case Or():
                 # `And` is the dual and is not handled
-                return self._zero_paths_all(cond.args)
+                return self._zero_paths_all(cond.args, exact)
             case AllOf(arg=ListComp() as comp):
                 # every element true, so whatever the element tests is zero
-                return self._zero_paths(comp.elt)
+                return self._zero_paths(comp.elt, exact)
             case AllOf(arg=Var() as xs):
                 # ... and the same after the comprehension became a loop
                 elt = self._elt_expr.get(self.def_use.find_def_from_use(xs))
-                return None if elt is None else self._zero_paths(elt)
+                return None if elt is None else self._zero_paths(elt, exact)
             case Var():
-                return self._zero_paths_of(self.def_use.find_def_from_use(cond))
+                return self._zero_paths_of(self.def_use.find_def_from_use(cond), exact)
             case _:
                 return None
 
-    def _zero_paths_of(self, d: Definition) -> list[set[Term]] | None:
+    def _zero_paths_of(self, d: Definition, exact: bool = False) -> list[set[Term]] | None:
         """*d*'s paths, taking a merge as the paths that reach it."""
         if isinstance(d, PhiDef):
-            if d.is_loop:
-                return None     # carried, so not the `a or b` this reads
+            if d.is_loop or exact:
+                return None     # carried, or maybe an `and`, not the `a or b` this reads
             return self._zero_paths_all(
                 [self.def_use.defs[i] for i in (d.lhs, d.rhs)]
             )
-        return self._zero_paths(d.site.expr) if isinstance(d.site, Assign) else None
+        return self._zero_paths(d.site.expr, exact) if isinstance(d.site, Assign) else None
 
     def _zero_paths_all(
-        self, branches: Sequence[Expr] | Sequence[Definition]
+        self, branches: Sequence[Expr] | Sequence[Definition], exact: bool = False,
     ) -> list[set[Term]] | None:
         """Every branch's paths together, or `None` if any branch has none."""
         found: list[set[Term]] = []
         for b in branches:
             part = (
-                self._zero_paths(b) if isinstance(b, Expr)
-                else self._zero_paths_of(b)
+                self._zero_paths(b, exact) if isinstance(b, Expr)
+                else self._zero_paths_of(b, exact)
             )
             if part is None:
                 return None
@@ -1161,7 +1172,10 @@ class _DigitBoundInferInstance(DefaultVisitor):
         And what every `with` dominating *e* makes true; see
         :meth:`_visit_context`."""
         outer = self.outer() if self.outer is not None else frozenset()
-        outer |= self._established_at.get(e, frozenset())
+        summaries = self._summaries if self._summaries is not None else self._summary_vars()
+        outer |= frozenset(
+            lit for v, lit in self._established_at.get(e, ()) if v not in summaries
+        )
         at = self._loops_of_expr.get(e)
         if at is None:
             return outer
@@ -1193,8 +1207,22 @@ class _DigitBoundInferInstance(DefaultVisitor):
         scope = self._scope_of.get(stmt)
         found = self._position(scope) if scope is not None else None
         if found is not None:
-            self._established |= frozenset(self.store.not_neg_inf(found[0]))
+            pos = found[0]
+            lits = self.store.not_neg_inf(pos)
+            self._established |= {(v.index, lit) for (v, _), lit in zip(pos.coeffs, lits)}
         self._visit_block(stmt.body, ctx)
+
+    def _summary_vars(self) -> set[int]:
+        """The variables some list's terms name.  Each stands for every element,
+        so a fact about one element -- a failed `xs[i] == 0`, or a `with` at
+        `logb(xs[i]) - k` -- is no fact about it."""
+        out: set[int] = set()
+        for of, terms in (*self.out.by_expr.items(), *self.out.by_def.items()):
+            if isinstance(self._type_of(of), ListType):
+                for t in (terms.msb, terms.lsb, terms.value):
+                    if t is not None:
+                        out.update(v.index for v, _ in t.coeffs)
+        return out
 
     def _visit_block(self, block: StmtBlock, ctx: Any) -> None:
         # a `with` dominates the rest of its block, and nothing past it
