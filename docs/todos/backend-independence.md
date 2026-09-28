@@ -178,9 +178,8 @@ So the acceptance test for each unfold is not the emitted C++: it is that
 function's `fn_fmt` moves to `REAL_FORMAT`. Neither can be asserted over the
 corpus alone. The test needs a witness set whose lengths come from
 *proven-length parameters*, one per size shape the unfolds construct.
-The remaining precision gaps `ArraySizeInfer` has are
-[array-size-integer-exactness.md](array-size-integer-exactness.md) and
-[array-size-symbolic.md](array-size-symbolic.md); this makes them a prerequisite
+The remaining precision gap `ArraySizeInfer` has is
+[array-size-symbolic.md](array-size-symbolic.md); this makes it a prerequisite
 rather than an adjacent nicety.
 
 ## Done

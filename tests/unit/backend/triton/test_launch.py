@@ -27,7 +27,6 @@ from fpy2.backend.triton import (
     tile_loops,
     unavailable,
 )
-from fpy2.backend.triton.emitter import TritonEmitError
 from fpy2.backend.triton.launcher import _torch_dtype
 from fpy2.transform import Specialize
 from fpy2.types import ListType, RealType
@@ -1126,8 +1125,6 @@ def _integer_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list
     return out
 
 
-@pytest.mark.xfail(strict=True, raises=TritonEmitError,
-                   reason='Phase 5: `INTEGER` arithmetic leaves the slice unsized')
 def test_an_integer_context_index_agrees():
     src = _compile(_integer_index, _rows_of(1024, 64))
     _agree(src, _integer_index, _randn(1024, 64))

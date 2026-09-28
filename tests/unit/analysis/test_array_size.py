@@ -576,6 +576,61 @@ class TestArraySizeInfer:
 
         assert self._slice_bound(f).size is None
 
+    def test_list_slice_range_target_under_integer(self):
+        """``x[i : i + 32]`` -> 32 under ``INTEGER``: a ``range`` target is an
+        integer, and ``INTEGER`` holds every integer, so ``+`` does not round."""
+
+        @fp.fpy
+        def f(x: list[fp.Real]) -> list[fp.Real]:
+            ys = []
+            for i in range(0, len(x), 32):
+                with fp.INTEGER:
+                    ys = x[i:i + 32]
+            return ys
+
+        assert self._slice_bound(f).size == 32
+
+    def test_list_slice_integer_scaled_base(self):
+        """``i = t * 16`` under ``INTEGER`` is ``t`` scaled by 16, so
+        ``x[i : i + 64]`` -> 64."""
+
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: list[fp.Real]) -> list[fp.Real]:
+            ys = []
+            for t in range(len(x)):
+                with fp.INTEGER:
+                    i = t * 16
+                ys = x[i:i + 64]
+            return ys
+
+        assert self._slice_bound(f).size == 64
+
+    def test_list_slice_range_target_under_float_is_unknown(self):
+        """A float context may round integers (``FP32`` rounds ``2**24 + 1``),
+        so a ``range`` target's ``i + 32`` does not cancel."""
+
+        @fp.fpy
+        def f(x: list[fp.Real]) -> list[fp.Real]:
+            ys = []
+            for i in range(0, len(x), 32):
+                with fp.FP32:
+                    ys = x[i:i + 32]
+            return ys
+
+        assert self._slice_bound(f).size is None
+
+    def test_list_slice_real_offset_under_integer_is_unknown(self):
+        """A ``Real`` argument need not be an integer, so ``INTEGER`` rounds
+        ``i + 16`` -> unknown."""
+
+        @fp.fpy
+        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
+            with fp.INTEGER:
+                y = x[i:i + 16]
+            return y
+
+        assert self._slice_bound(f).size is None
+
     # ------------------------------------------------------------------
     # range() with symbolic-offset bounds (shares the slice affine logic)
 
@@ -622,6 +677,21 @@ class TestArraySizeInfer:
             return ys
 
         assert self._range_bound(f, 'Range2').size == 0
+
+    def test_range2_range_target_under_integer(self):
+        """``range(i, i + 32)`` -> 32 with ``i`` a ``range`` target, under
+        ``INTEGER``."""
+
+        @fp.fpy
+        def f(xs: list[fp.Real]) -> fp.Real:
+            s = 0.0
+            for i in range(0, len(xs), 32):
+                with fp.INTEGER:
+                    for j in range(i, i + 32):
+                        s = j
+            return s
+
+        assert self._range_bound(f, 'Range2').size == 32
 
     def test_range3_symbolic_offset_with_step(self):
         """``range(i, i + 16, 2)`` -> 8: span 16 stepped by 2."""
