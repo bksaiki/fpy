@@ -26,7 +26,7 @@ class Checkpoint:
     """The linear layers it leaves unquantized."""
     inputs: dict[str, torch.Tensor] = field(default_factory=dict)
     """NVFP4's static per-tensor activation scales, by layer name (their
-    stored reciprocals inverted, as `torchao` takes them)."""
+    stored reciprocals inverted, as `quant.quantize`'s *tensor*)."""
 
 
 def _scheme(qc: dict[str, Any]) -> quant.Scheme:

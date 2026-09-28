@@ -1,11 +1,15 @@
 """
-The options the scripts share.
+The options the scripts share, and what they do with them alike.
 """
 
 import argparse
-from typing import get_args
+import json
+from pathlib import Path
+from typing import Any, get_args
 
-from . import kernels, quant, swap
+import torch
+
+from . import checkpoints, kernels, quant, swap
 
 
 def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
@@ -28,6 +32,12 @@ def add_scheme_args(ap: argparse.ArgumentParser) -> None:
                     'measured against (default: its model card\'s base model)')
 
 
+def add_runs(ap: argparse.ArgumentParser) -> None:
+    """`-r`, the runs to compare with R0 (checked by :func:`runs`)."""
+    ap.add_argument('-r', '--runs', nargs='*',
+                    help="runs besides fp32 (default: the scheme's exact run and every design)")
+
+
 def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
     """`args.runs` checked against `args.scheme`'s (all but R0 if not
     given)."""
@@ -35,3 +45,19 @@ def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
     if bad := [r for r in args.runs or () if r not in known]:
         ap.error(f'{args.scheme.name} has no run {", ".join(bad)} (only {", ".join(known)})')
     return args.runs or list(known)
+
+
+def load(args: argparse.Namespace, name: str | None = None,
+         ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any]]:
+    """*name* (default `--model`) under *args*' scheme and splits:
+    `checkpoints.for_scheme`'s."""
+    return checkpoints.for_scheme(name or args.model, args.scheme, requantize=args.requantize,
+                                  master=args.master, split_k=args.split_k, combine=args.combine)
+
+
+def cached(path: Path, settings: dict[str, Any]) -> dict[str, Any] | None:
+    """The JSON at *path*, if it was made with *settings*."""
+    if path.exists() and (got := json.loads(path.read_text()))['settings'] == settings:
+        return got
+    return None
+

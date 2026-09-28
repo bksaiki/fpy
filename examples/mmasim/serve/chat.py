@@ -3,9 +3,7 @@ Chat with the model in the terminal, its linear layers through a run.
 
 Greedy decoding, thinking off, the conversation re-encoded each turn by the
 model's chat template; the reply streams as it is decoded.  `--model` is a
-master (Qwen/Qwen3-0.6B, Qwen/Qwen3.5-0.8B) or a quantized checkpoint
-(RedHatAI/Qwen3-0.6B-FP8-dynamic, RedHatAI/Qwen3-0.6B-FP8-BLOCK,
-kaitchup/Qwen3-0.6B-NVFP4), run under `--scheme` as the other scripts do
+master or a quantized checkpoint, run under `--scheme`
 (`checkpoints.for_scheme`).  Commands:
 
     /run <mode>   switch run (fp32, the scheme's exact run, or a design);
@@ -23,7 +21,7 @@ import argparse
 import sys
 import time
 
-from core import checkpoints, cli, generate, swap
+from core import cli, generate, swap
 
 
 def main(argv: list[str]) -> int:
@@ -40,9 +38,7 @@ def main(argv: list[str]) -> int:
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(args.model)
-    model, run, about = checkpoints.for_scheme(
-        args.model, args.scheme, requantize=args.requantize, master=args.master,
-        split_k=args.split_k, combine=args.combine)
+    model, run, about = cli.load(args)
     run.mode = args.run
     eos = generate.stop_tokens(model, tok)
     messages: list[dict[str, str]] = []

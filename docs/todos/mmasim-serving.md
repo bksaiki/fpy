@@ -11,7 +11,8 @@ arithmetic is measured.
 - **Primary evaluation: local per-layer metrics on cached activations.** A
   grid search over designs cannot afford the end-to-end evaluations, which
   take hours per design.
-- **In progress:** Stage 1 of the Roadmap (`mmasim-end-to-end.md`).
+- **Done:** Stage 1 of the Roadmap (`mmasim-end-to-end.md`).  **Next:**
+  Stage 2.
 - **Left:** the Roadmap, Essential gaps and Nice to have.
 
 ## Roadmap
@@ -34,7 +35,7 @@ What is reported to show it, at every stage:
 
 ### Stage 1 -- Tractable end-to-end evaluations
 
-`mmasim-end-to-end.md`, in progress:
+**Done**, `mmasim-end-to-end.md`:
 - seeded subsets, paired statistics against R0 and `<scheme>-exact`, and
   teacher-forced divergence;
 - Phase 6 measured the sizes that separate the widest design pairs: 50
@@ -42,10 +43,12 @@ What is reported to show it, at every stage:
   poorly and stays the generation view.  Zero-shot's continuous scores
   beat its accuracy but rank worse than perplexity, so it is the capability
   confirmation (`--items 500`, ~50 min per slow design);
-- Phase 7 makes the easy performance wins: several designs per pass in
+- Phase 7 made the easy performance wins: several designs per pass in
   local metrics, sharing their design-independent FP64 work; captured
   activations cached on disk; designs compiled in parallel;
-- Phase 8 restructures `serve/` into `core/` plus scripts.
+- Phase 8 restructured `serve/` into `core/` plus scripts;
+- after it: zero-shot's continuous scores, chat under any scheme, leaner
+  quantizers and scoring (Record).
 
 ### Stage 2 -- Do local metrics predict end-to-end effects?
 

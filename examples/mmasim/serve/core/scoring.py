@@ -12,14 +12,16 @@ block of positions at a time; a reference's stay on the GPU, block by block.
 
 import itertools
 import math
+import statistics
 import sys
 import time
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
-from . import metrics, swap
+from . import stats, swap
 
 _ROWS = 512
 """Tokens per block of log-softmax and comparison."""
@@ -38,44 +40,45 @@ class Totals:
     dp_sq: float = 0.0
     seconds: float = 0.0
     nll_seg: list[float] = field(default_factory=list)
-    """Each segment's mean NLL."""
+    """Each sequence's mean NLL."""
     vs: dict[str, dict[str, list[float]]] = field(default_factory=dict)
-    """Per reference run, each segment's mean `kl` and top-1 `disagree`ment."""
+    """Per reference run, each sequence's mean `kl` and top-1 `disagree`ment."""
     first: dict[str, list[int | None]] = field(default_factory=dict)
-    """Per reference run, each segment's first top-1 disagreement, if any."""
+    """Per reference run, each sequence's first top-1 disagreement, if any."""
     first_miss: list[int | None] = field(default_factory=list)
-    """Each segment's first position whose top-1 is not the target, if any."""
+    """Each sequence's first position whose top-1 is not the target, if any."""
 
-    def add(self, nll: torch.Tensor, kl: torch.Tensor, same: torch.Tensor, dp: torch.Tensor) -> None:
-        self.tokens += nll.numel()
-        self.nll += nll.sum().item()
-        self.nll_sq += (nll * nll).sum().item()
-        self.kl += kl.sum().item()
-        self.kl_sq += (kl * kl).sum().item()
-        self.same_top1 += int(same.sum().item())
-        self.dp_sq += (dp * dp).sum().item()
+    def per_sequence(self) -> dict[str, Any]:
+        return {'nll': self.nll_seg, **self.vs, 'first': self.first}
 
     def compare(self, refs: dict[str, list[torch.Tensor] | None], lps: Iterable[torch.Tensor],
                 target: torch.Tensor) -> None:
-        """Add one segment's next-token log-probabilities, *lps* in blocks of
-        positions `[b, vocab]`, against each of *refs* (its log-probabilities
-        in the same blocks, or `None` for these same ones; R0's first, which
-        the token-level sums take), *target* the tokens predicted."""
+        """Add one sequence's next-token log-probabilities *lps* (blocks
+        `[b, vocab]`) against each of *refs* (its blocks, or `None` for *lps*
+        itself); the token-level sums take the first (R0).  *target*: the
+        tokens predicted."""
         nll, seg = 0.0, {name: [0.0, 0] for name in refs}
         first: dict[str, int | None] = dict.fromkeys(refs)
         miss, i = None, 0
         for b, q in enumerate(lps):
             tgt = target[i:i + q.shape[0]]
             rows = torch.arange(q.shape[0], device=q.device)
-            nll += -q[rows, tgt].sum().item()
+            lq = q[rows, tgt]
+            nll += -lq.sum().item()
             if miss is None and (hit := q.argmax(-1) == tgt).logical_not().any():
                 miss = i + int(hit.logical_not().nonzero()[0])
             for j, (name, ref) in enumerate(refs.items()):
                 r = q if ref is None else ref[b]
                 kl, same = (r.exp() * (r - q)).sum(-1), r.argmax(-1) == q.argmax(-1)
                 if j == 0:
-                    self.add(nll=-q[rows, tgt], kl=kl, same=same,
-                             dp=q[rows, tgt].exp() - r[rows, tgt].exp())
+                    dp = lq.exp() - r[rows, tgt].exp()
+                    self.tokens += lq.numel()
+                    self.nll -= lq.sum().item()
+                    self.nll_sq += (lq * lq).sum().item()
+                    self.kl += kl.sum().item()
+                    self.kl_sq += (kl * kl).sum().item()
+                    self.same_top1 += int(same.sum().item())
+                    self.dp_sq += (dp * dp).sum().item()
                 seg[name][0] += kl.sum().item()
                 seg[name][1] += int((~same).sum().item())
                 if first[name] is None and not same.all():
@@ -161,11 +164,19 @@ def evaluate(
     return totals
 
 
+def median_first(firsts: Sequence[int | None]) -> float:
+    """The median of the first disagreements that happen (NaN if none do)."""
+    hit = [f for f in firsts if f is not None]
+    return statistics.median(hit) if hit else math.nan
+
+
 def against(totals: dict[str, Totals]) -> dict[str, dict[str, dict[str, float]]]:
-    """Paired over segments, per reference and run (:func:`evaluate`'s
+    """Paired over sequences, per reference and run (:func:`evaluate`'s
     comparisons, a run against itself left out): the mean and standard error
-    of Δ NLL, KL and top-1 disagreement, and Δ NLL's p-value, Holm-adjusted
-    over the runs sharing the reference."""
+    of Δ NLL, KL, top-1 disagreement, and the fraction of sequences that
+    disagree at all; Δ NLL's p-value, Holm-adjusted over the runs sharing
+    the reference; and the median first disagreement, with a bootstrap 95%
+    interval."""
     out: dict[str, dict[str, dict[str, float]]] = {}
     for ref, base in totals.items():
         rows: dict[str, dict[str, float]] = {}
@@ -173,11 +184,15 @@ def against(totals: dict[str, Totals]) -> dict[str, dict[str, dict[str, float]]]
             if mode == ref or ref not in t.vs:
                 continue
             r = rows[mode] = {}
-            r['dnll'], r['dnll_se'] = metrics.paired(t.nll_seg, base.nll_seg)
+            r['dnll'], r['dnll_se'] = stats.paired(t.nll_seg, base.nll_seg)
             for k in ('kl', 'disagree'):
-                r[k], r[f'{k}_se'] = metrics.paired(t.vs[ref][k])
-            r['p'] = metrics.p_value(r['dnll'], r['dnll_se'])
-        for r, p in zip(rows.values(), metrics.holm([r['p'] for r in rows.values()])):
+                r[k], r[f'{k}_se'] = stats.paired(t.vs[ref][k])
+            firsts = t.first[ref]
+            r['diverged'], r['diverged_se'] = stats.paired([float(f is not None) for f in firsts])
+            r['median'] = median_first(firsts)
+            r['median_lo'], r['median_hi'] = stats.bootstrap(firsts, median_first)
+            r['p'] = stats.p_value(r['dnll'], r['dnll_se'])
+        for r, p in zip(rows.values(), stats.holm([r['p'] for r in rows.values()])):
             r['p_holm'] = p
         if rows:
             out[ref] = rows

@@ -1,8 +1,8 @@
 """
 Quantization schemes, in FPy formats: :func:`quantize` is round-to-nearest
 as `torchao` computes it, in a few tensor ops, and
-:meth:`Quantized.dequantize` multiplies out exactly in FP64 (`torchao`'s
-rounds to FP32).  See `docs/todos/mmasim-serving.md`.
+:meth:`Quantized.dequantize` multiplies out exactly in FP64.  See
+`docs/todos/mmasim-serving.md`.
 """
 
 from dataclasses import dataclass, replace
@@ -72,7 +72,7 @@ DTYPES = {
     fp.S1E4M3: torch.float8_e4m3fnuz, fp.S1E5M2: torch.float8_e5m2fnuz,
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
 }
-"""Each element format's torch dtype, as `torchao` takes it."""
+"""Each element format's torch dtype."""
 
 
 def context(fmt: object) -> Context:
@@ -85,6 +85,8 @@ def scheme(name: str) -> Scheme:
     """A named scheme; `fp8-row:fnuz` and `fp8-block:fnuz` take FNUZ FP8
     elements, as CDNA3's designs do."""
     base, _, variant = name.partition(':')
+    if base not in SCHEMES:
+        raise ValueError(f'no scheme {name!r}')
     s = SCHEMES[base]
     if not variant:
         return s
@@ -143,7 +145,7 @@ def _e2m1(x: torch.Tensor) -> torch.Tensor:
 def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None,
              amax: torch.Tensor | None = None) -> Quantized:
     """*t* `[r, k]` (FP32, finite) by round-to-nearest for *op*, as `torchao`
-    computes it, in fewer tensor ops (checked against it bit for bit):
+    computes it:
 
     - FP8 per block: `s = max(amax, tiny) / max`, elements `(v / s)`
       clamped and cast; a ragged last row block zero-padded.

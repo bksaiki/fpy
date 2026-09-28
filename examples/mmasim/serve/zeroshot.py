@@ -9,7 +9,7 @@ metric the task logs (`acc`, `acc_norm`), over the items both runs have.
 Paired per item (:func:`against`), each run against R0 and each design
 against the scheme's exact run, per task and macro-averaged over them, each
 with its standard error: Δ acc, and the continuous :data:`SCORES` from each
-choice's log-likelihood, which move where accuracy is too coarse to.  The
+choice's log-likelihood.  The
 macro Δ acc's and Δ log-likelihood's p-values are Holm-adjusted over the runs
 sharing a reference.  All in `<out>/paired.json`.
 
@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from core import checkpoints, cli, metrics, swap, workloads
+from core import cli, stats, swap, workloads
 
 TASKS = ('piqa', 'arc_easy', 'arc_challenge', 'hellaswag', 'winogrande', 'lambada_openai')
 METRICS = ('acc', 'acc_norm')
@@ -99,30 +99,29 @@ def _scores(ref: dict[str, Any], got: dict[str, Any]) -> dict[str, float]:
     return out
 
 
+def _both(ref: Items, got: Items) -> dict[str, list[str]]:
+    """Per metric of :data:`METRICS`, the items both *ref* and *got* log it
+    for (none left out)."""
+    common = sorted(ref.keys() & got.keys())
+    both = {m: [d for d in common if m in ref[d] and m in got[d]] for m in METRICS}
+    return {m: ds for m, ds in both.items() if ds}
+
+
 def flips(ref: Items, got: Items) -> dict[str, tuple[int, int]]:
     """Per metric: the items whose value differs, and the items compared."""
-    common = ref.keys() & got.keys()
-    counts: dict[str, tuple[int, int]] = {}
-    for m in METRICS:
-        both = [d for d in common if m in ref[d] and m in got[d]]
-        if both:
-            counts[m] = (sum(ref[d][m] != got[d][m] for d in both), len(both))
-    return counts
+    return {m: (sum(ref[d][m] != got[d][m] for d in ds), len(ds))
+            for m, ds in _both(ref, got).items()}
 
 
 def delta(ref: Items, got: Items) -> dict[str, tuple[float, float]]:
     """Over the items both have, the mean and standard error of each metric's
     `got - ref`, and of each of :data:`SCORES`."""
-    common = sorted(ref.keys() & got.keys())
-    out: dict[str, tuple[float, float]] = {}
-    for m in METRICS:
-        both = [d for d in common if m in ref[d] and m in got[d]]
-        if both:
-            out[m] = metrics.paired([got[d][m] for d in both], [ref[d][m] for d in both])
-    per = [_scores(ref[d], got[d]) for d in common]
+    out = {m: stats.paired([got[d][m] for d in ds], [ref[d][m] for d in ds])
+           for m, ds in _both(ref, got).items()}
+    per = [_scores(ref[d], got[d]) for d in sorted(ref.keys() & got.keys())]
     for m in SCORES:
         if xs := [x[m] for x in per if m in x]:
-            out[m] = metrics.paired(xs)
+            out[m] = stats.paired(xs)
     return out
 
 
@@ -145,9 +144,9 @@ def against(items: dict[str, dict[str, Items]], exact: str) -> dict[str, dict[st
                     macro[m] = (statistics.fmean(x for x, _ in ds),
                                 math.sqrt(sum(se * se for _, se in ds)) / len(ds))
             rows[mode] = {'tasks': tasks, 'macro': macro,
-                          'p': {m: metrics.p_value(*macro[m]) for m in ('acc', 'll')}}
+                          'p': {m: stats.p_value(*macro[m]) for m in ('acc', 'll')}}
         for m in ('acc', 'll'):
-            for r, p in zip(rows.values(), metrics.holm([r['p'][m] for r in rows.values()])):
+            for r, p in zip(rows.values(), stats.holm([r['p'][m] for r in rows.values()])):
                 r.setdefault('p_holm', {})[m] = p
         if rows:
             out[ref] = rows
@@ -158,9 +157,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     cli.add_args(ap)
     cli.add_scheme_args(ap)
+    cli.add_runs(ap)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
-    ap.add_argument('-r', '--runs', nargs='*',
-                    help="runs besides fp32 (default: the scheme's exact run and every design)")
     ap.add_argument('--items', type=int, default=500,
                     help='items per task at most, at random (0: all)')
     ap.add_argument('--batch-size', type=int, default=16)
@@ -171,7 +169,7 @@ def main(argv: list[str]) -> int:
 
     modes = cli.runs(ap, args)
     settings = {'model': args.model, 'items': args.items, 'seed': args.seed, 'logged': 'lls',
-                'batch_size': args.batch_size, 'split_k': args.split_k, 'combine': args.combine}
+                'batch_size': args.batch_size}
     samples = subsets(sizes(), args.items or None, args.seed) or None
 
     out = Path(args.out)
@@ -181,14 +179,13 @@ def main(argv: list[str]) -> int:
     for mode in ('fp32', *modes):
         path = out / f'{mode}.json'
         want = settings if mode == 'fp32' else {
-            **settings, 'scheme': args.scheme.name, 'requantize': args.requantize}
-        if path.exists() and (cached := json.loads(path.read_text()))['settings'] == want:
+            **settings, 'scheme': args.scheme.name, 'requantize': args.requantize,
+            'split_k': args.split_k, 'combine': args.combine}
+        if cached := cli.cached(path, want):
             runs[mode] = cached
             continue
         if lm is None:
-            model, run, _ = checkpoints.for_scheme(
-                args.model, args.scheme, requantize=args.requantize, master=args.master,
-                split_k=args.split_k, combine=args.combine)
+            model, run, _ = cli.load(args)
             lm = HFLM(pretrained=model, tokenizer=AutoTokenizer.from_pretrained(args.model),
                       batch_size=args.batch_size)
         runs[mode] = {'settings': want,

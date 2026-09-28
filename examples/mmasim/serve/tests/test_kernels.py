@@ -1,5 +1,5 @@
 """
-`kernels.linear`.  Needs a GPU; skipped without one.
+`kernels.linear` and `kernels.matmul`.  Needs a GPU; skipped without one.
 
     pytest serve/tests
 """

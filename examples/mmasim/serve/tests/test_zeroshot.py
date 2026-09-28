@@ -10,7 +10,7 @@ import random
 
 import torch
 import zeroshot
-from core import metrics, workloads
+from core import stats, workloads
 
 
 def test_pick_is_seeded_sorted_and_whole_when_asked_for_all() -> None:
@@ -19,8 +19,8 @@ def test_pick_is_seeded_sorted_and_whole_when_asked_for_all() -> None:
     assert workloads.pick(5, None) == workloads.pick(5, 5) == workloads.pick(5, 9) == [0, 1, 2, 3, 4]
 
 
-def test_subsets_cap_every_task_and_keep_the_old_hellaswag_one() -> None:
-    """At seed 0, HellaSwag's 2,000 are those it has always run (`Random(0)`);
+def test_subsets_cap_every_task_by_seed() -> None:
+    """At seed 0, a capped task's items are `Random(0)`'s sample;
     a task no larger than the cap runs whole."""
     got = zeroshot.subsets({'hellaswag': 10042, 'piqa': 1838}, 2000)
     assert set(got) == {'hellaswag'}
@@ -40,14 +40,14 @@ def test_flips_count_changed_items_over_those_both_runs_have() -> None:
 
 
 def test_paired_statistics_by_hand() -> None:
-    assert metrics.paired([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == (0.0, 0.0)
-    mean, se = metrics.paired([3.0, 1.0, 5.0], [1.0, 1.0, 1.0])   # d = 2, 0, 4
+    assert stats.paired([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == (0.0, 0.0)
+    mean, se = stats.paired([3.0, 1.0, 5.0], [1.0, 1.0, 1.0])   # d = 2, 0, 4
     assert mean == 2.0 and math.isclose(se, 2.0 / math.sqrt(3))
-    assert math.isnan(metrics.paired([1.0])[1])
-    assert math.isclose(metrics.p_value(1.959963984540054, 1.0), 0.05)
-    assert metrics.p_value(0.0, 0.0) == 1.0 and metrics.p_value(1.0, 0.0) == 0.0
-    assert [round(p, 12) for p in metrics.holm([0.01, 0.04, 0.03])] == [0.03, 0.06, 0.06]
-    got = metrics.holm([0.01, math.nan])
+    assert math.isnan(stats.paired([1.0])[1])
+    assert math.isclose(stats.p_value(1.959963984540054, 1.0), 0.05)
+    assert stats.p_value(0.0, 0.0) == 1.0 and stats.p_value(1.0, 0.0) == 0.0
+    assert [round(p, 12) for p in stats.holm([0.01, 0.04, 0.03])] == [0.03, 0.06, 0.06]
+    got = stats.holm([0.01, math.nan])
     assert got[0] == 0.01 and math.isnan(got[1])
 
 

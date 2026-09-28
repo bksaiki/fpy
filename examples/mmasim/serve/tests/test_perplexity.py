@@ -15,7 +15,7 @@ from fpy2.backend.triton import unavailable
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
-from core import metrics, quant, scoring, swap, workloads
+from core import quant, scoring, stats, swap, workloads
 
 
 def test_the_baseline_is_its_own_reference(model: torch.nn.Module, tokens: torch.Tensor) -> None:
@@ -63,7 +63,7 @@ def test_runs_pair_against_r0_and_the_exact_run(model: torch.nn.Module, tokens: 
     assert set(got['fp32']) == {'bf16-exact', 'amd.cdna2.bf16'}
     assert set(got['bf16-exact']) == {'amd.cdna2.bf16'}
     r = got['fp32']['amd.cdna2.bf16']
-    apart = math.hypot(metrics.paired(totals['amd.cdna2.bf16'].nll_seg)[1],
-                       metrics.paired(totals['fp32'].nll_seg)[1])
+    apart = math.hypot(stats.paired(totals['amd.cdna2.bf16'].nll_seg)[1],
+                       stats.paired(totals['fp32'].nll_seg)[1])
     assert 0 < r['dnll_se'] < apart and r['kl'] > 0 and 0 <= r['p_holm'] <= 1
 

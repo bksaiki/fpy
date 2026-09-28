@@ -1,9 +1,12 @@
 # mmasim end-to-end: tractable evaluations through seeded subsets
 
-Implementation plan.  The design is settled; what follows is the phase
-breakdown, one phase per commit.  Code under `examples/mmasim/serve/`; the
-parent plan is `docs/todos/mmasim-serving.md` (Nice to have: "Tractable
-end-to-end evaluations").
+**Complete:** Phases 1-8, and the zero-shot addendum to Phase 6.  What was
+left went to `docs/todos/mmasim-serving.md` (the Roadmap's Stage 2, and the
+deferred performance items in its Record).
+
+Implementation plan, one phase per commit.  Code under
+`examples/mmasim/serve/`; the parent plan is `docs/todos/mmasim-serving.md`
+(Roadmap, Stage 1).
 
 ## Working policy
 

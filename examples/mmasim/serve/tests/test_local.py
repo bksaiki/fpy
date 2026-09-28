@@ -161,7 +161,7 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
 
 
 def test_sample_is_fixed_and_in_order() -> None:
-    """At seed 0, the positions it has always picked (`Random(0)`)."""
+    """At seed 0, `Random(0)`'s positions."""
     seqs = [workloads.Sequence([0] * n, {}) for n in (5, 0, 7)]
     keep = local.sample(seqs, 6)
     assert keep == local.sample(seqs, 6) and sum(map(len, keep)) == 6 and keep[1] == []

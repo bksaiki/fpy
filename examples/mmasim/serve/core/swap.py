@@ -70,8 +70,8 @@ def slices(design: str, scheme: quant.Scheme, k: int, split_k: int) -> int:
 
 def _per_call(q: quant.Quantized, design: str) -> torch.Tensor:
     """*q*'s block scales as a block-scaled *design*'s instructions take them,
-    `[s, rows]` (one per call) or `[s, rows, g]` (one per group),
-    each scale repeated over the groups its block covers."""
+    `[s, rows]` (one per instruction) or `[s, rows, k0 // g]` (one per
+    group), each scale repeated over the groups its block covers."""
     k0, g = kernels.compiled(design)[1], kernels.group(design)
     r, k = q.elements.shape
     sc = q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).view(r, k // k0, k0 // g)
@@ -210,13 +210,10 @@ def give(run: Run, model: torch.nn.Module, scheme: quant.Scheme,
     run.ignore = {id(layers[n].weight) for n in ignore}
 
 
-def load(name: str = MODEL, split_k: int = 1, combine: kernels.Combine = 'linear',
-         ) -> tuple[torch.nn.Module, Run]:
+def load(name: str = MODEL) -> tuple[torch.nn.Module, Run]:
     """*name*'s causal LM from the Hub, in FP32 on the GPU and patched
-    (:func:`patch`), its designs splitting `k` as given."""
+    (:func:`patch`)."""
     from transformers import AutoModelForCausalLM
 
     model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.float32).cuda().eval()
-    run = patch(model)
-    run.split_k, run.combine = split_k, combine
-    return model, run
+    return model, patch(model)

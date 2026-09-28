@@ -8,9 +8,10 @@ kernel on the cached, quantized operands, measured against the exact
 product of the quantized and of the unquantized operands (`metrics.local`).
 `--by` splits by a tag.  `--models` takes masters (RTN, `lm_head`
 unquantized unless `bf16`) and checkpoints (`checkpoints.weights_for`).
-The designs of a run share each layer's exact products, so the seconds
-reported are each design's kernels and, once, the metrics.  `--acts`
-caches the captured activations across runs.
+The designs of a run share each layer's exact products, a chunk of designs
+at a time (`_OUT_ELEMS`); the seconds reported are each design's weight
+preparation and kernels, and the metrics.  `--acts` caches the captured
+activations across runs.
 
     python serve/local.py                               # every BF16 design
     python serve/local.py -d amd.cdna2.bf16 --tokens 512 --layers mlp -o s.json
@@ -37,7 +38,7 @@ from core import checkpoints, cli, kernels, metrics, swap, workloads
 
 _OUT_ELEMS = 1 << 28
 """Design outputs (FP32 elements) held at once: past it, a layer's designs
-run a few at a time, `lm_head` at 2048 tokens one at a time."""
+run in chunks, each chunk against the exact products anew."""
 
 REFERENCES = ('quantized', 'unquantized')
 """What a design's output is measured against: the exact product of the
@@ -77,9 +78,9 @@ def capture(
     model: torch.nn.Module, run: swap.Run, seqs: list[workloads.Sequence],
     tokens: int | None = None, seed: int = 0,
 ) -> Activations:
-    """Each linear layer's input under *run*'s scheme's exact run, as BF16
-    (the values a deployment holds, before any quantizing), at
-    :func:`sample`'s positions over *seqs* by *seed*.  *run* is `swap.patch(model)`'s."""
+    """Each linear layer's input under *run*'s scheme's exact run, as BF16,
+    at :func:`sample`'s positions over *seqs* by *seed*.  *run* is
+    `swap.patch(model)`'s."""
     keep = sample(seqs, tokens, seed)
     parts: list[list[torch.Tensor]] = []
     peaks: list[list[torch.Tensor]] = []
@@ -127,9 +128,9 @@ def evaluate(
     groups by tag *by*, else `all`; layers matching regex *only*, minus
     *run*'s ignored ones.  *run* gives weights, static scales and `k`
     splits; unquantized weights are *masters*', else the layer's own.  The
-    designs share each layer's exact products (`metrics.local`).  With
-    *seconds*, each design's kernel time is added under its name and the
-    metrics' under `metrics`."""
+    designs share each layer's exact products (`metrics.local`), a chunk at
+    a time.  With *seconds*, each design's time (weight preparation and
+    kernels) is added under its name, and the metrics' under `metrics`."""
     scheme = run.scheme
     if refused := [d for d in designs if not kernels.applicable(d, scheme)]:
         raise ValueError(f'{", ".join(refused)} does not take {scheme.name}')
@@ -219,9 +220,7 @@ def main(argv: list[str]) -> int:
         'by': args.by, 'layers': args.layers, 'split_k': args.split_k, 'combine': args.combine,
         'models': {}}
     for name in args.models or [args.model]:
-        model, run, about = checkpoints.for_scheme(
-            name, args.scheme, requantize=args.requantize, master=args.master,
-            split_k=args.split_k, combine=args.combine)
+        model, run, about = cli.load(args, name)
         known = about['master'] is not None
         masters = (checkpoints.master_weights(about['master'])
                    if known and about['source'] != 'rtn' else None)
@@ -281,8 +280,8 @@ def main(argv: list[str]) -> int:
                 for design, t in by_design.items():
                     print(f'{design:{w}} ' + ' '.join(f'{metrics.fmt(k, t[g][k]):>14}' for k in keys)
                           + f' {seconds[design]:6.1f}')
-        print(f'\ns: each design\'s kernels; the metrics, shared by all {len(designs)}: '
-              f'{seconds["metrics"]:.1f} s')
+        print(f'\ns: each design\'s weight preparation and kernels; the metrics, shared '
+              f'within chunks of designs: {seconds["metrics"]:.1f} s')
         out['models'][name] = {**about, 'metrics': refs, 'seconds': seconds,
                                'total': total, 'runs': results}
         del model, run, acts, masters

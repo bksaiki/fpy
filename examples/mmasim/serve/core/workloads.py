@@ -6,7 +6,7 @@ the token sequences local metrics are captured on, every token tagged:
 - `wikitext`: the first tokens of WikiText-2's test split, one sequence of
   prose.
 - `mtbench`: MT-Bench's 80 two-turn conversations held as a user would with
-  the model: its chat template, thinking off, each reply R0's greedy generate.
+  the model: its chat template, thinking off, each reply R0's greedy decode.
   A conversation's sequence is its last turn as the model processes it: the
   first exchange as history, the second question, the reply.  Generated once
   and cached as JSON.

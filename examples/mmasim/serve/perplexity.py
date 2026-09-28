@@ -1,22 +1,11 @@
 """
 WikiText-2 perplexity, and each run's distance from the FP32 baseline.
 
-The test split, joined and tokenized as the Hugging Face perplexity guide does,
-is cut into 2048-token segments (the GPTQ convention; the remainder is
-dropped).  Each segment runs through R0 (`fp32`) and then every other run on
-the same model, and per predicted token this accumulates
-
-- the negative log-likelihood of the next token, for perplexity;
-- KL(R0 || run) of the next-token distributions;
-- whether the top-1 token matches R0's;
-- Δp, the change in the probability of the correct token (RMS reported),
-
-as llama.cpp's `perplexity --kl-divergence` reports them.  Then, paired
-over segments (`scoring.against`): each run against R0, and each design against
-the scheme's exact run, as Δ NLL (the log of the perplexity ratio), KL and
-top-1 disagreement, each a mean over segments with its standard error, and
-Δ NLL's p-value, Holm-adjusted over the runs sharing a reference.  Only one
-segment's reference log-probabilities are held, on the host.
+The test split, joined and tokenized as the Hugging Face perplexity guide
+does, cut into 2048-token segments (the GPTQ convention; the remainder
+dropped), and scored by `scoring`: per token, NLL, KL(R0 || run), top-1 and
+RMS Δp as llama.cpp's `perplexity --kl-divergence` reports them; paired over
+segments against R0 and the scheme's exact run (`scoring.against`).
 
     python serve/perplexity.py                          # every run
     python serve/perplexity.py -r amd.cdna2.bf16 --segments 4
@@ -28,15 +17,14 @@ import argparse
 import json
 import sys
 
-from core import checkpoints, cli, scoring, workloads
+from core import cli, scoring, workloads
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     cli.add_args(ap)
     cli.add_scheme_args(ap)
-    ap.add_argument('-r', '--runs', nargs='*',
-                    help="runs besides fp32 (default: the scheme's exact run and every design)")
+    cli.add_runs(ap)
     ap.add_argument('--segments', type=int, default=50,
                     help='this many segments at random (0: all)')
     ap.add_argument('-o', '--out', default=None, help='write the results as JSON here')
@@ -45,9 +33,7 @@ def main(argv: list[str]) -> int:
     runs = cli.runs(ap, args)
     segs = workloads.segments(workloads.wikitext_ids(args.model))
     segs = [segs[i] for i in workloads.pick(len(segs), args.segments or None, args.seed)]
-    model, run, about = checkpoints.for_scheme(
-        args.model, args.scheme, requantize=args.requantize, master=args.master,
-        split_k=args.split_k, combine=args.combine)
+    model, run, about = cli.load(args)
 
     totals = scoring.evaluate(model, run, segs, runs, progress=True)
     results = {
@@ -56,8 +42,7 @@ def main(argv: list[str]) -> int:
         'split_k': args.split_k, 'combine': args.combine,
         'runs': {mode: t.report() for mode, t in totals.items()},
         'paired': scoring.against(totals),
-        'per_segment': {mode: {'nll': t.nll_seg, **t.vs, 'first': t.first}
-                        for mode, t in totals.items()},
+        'per_segment': {mode: t.per_sequence() for mode, t in totals.items()},
     }
     print(f'{"run":20} {"ppl":>14} {"KL":>20} {"top-1":>16} {"RMS dp":>8} {"s":>7}')
     for mode, r in results['runs'].items():
