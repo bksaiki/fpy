@@ -45,13 +45,14 @@ from ..analysis.format_infer import (
 )
 from ..analysis.partial_eval import PartialEvalInfo
 from ..analysis.type_infer import TypeInferError
-from ..analysis.value_class import ValueClassInfer
+from ..analysis.value_class import ValueClass, ValueClassInfer
 from ..ast import Call, Expr, ForeignVal, FuncDef
 from ..ast.visitor import DefaultTransformVisitor
 from ..function import Function
 from ..interpret.value import Foreign
 from ..module import Module
 from ..number import Context, RoundingMode
+from ..number.context import MPBFixedFormat, MPBFloatFormat
 from ..number.context.format import Format
 from ..number.context.real import REAL_FORMAT
 from ..types import ListType, RealType, TupleType, Type
@@ -126,6 +127,23 @@ def _bound_to_type(
         return RealType(None if af is None else af.format())
     assert isinstance(bound, Format), f'unexpected FormatBound: {type(bound)}'
     return RealType(bound)
+
+
+def _without_specials(fmt: FormatBound, cls: ValueClass | None) -> FormatBound:
+    """*fmt* without the NaN and infinities the caller's class *cls* rules out,
+    so the callee's own analyses see what its caller proved.  Only a format with
+    the flags to clear: an `IEEEFormat` always has both."""
+    if cls is None or not isinstance(fmt, MPBFixedFormat | MPBFloatFormat):
+        return fmt
+    nan = fmt.enable_nan and bool(cls & ValueClass.NAN)
+    inf = fmt.enable_inf and bool(cls & ValueClass.INF)
+    if (nan, inf) == (fmt.enable_nan, fmt.enable_inf):
+        return fmt
+    if isinstance(fmt, MPBFixedFormat):
+        return MPBFixedFormat(
+            fmt.nmin, fmt.pos_maxval, fmt.neg_maxval, nan, inf, fmt.enable_neg_zero)
+    return MPBFloatFormat(
+        fmt.pmax, fmt.emin, fmt.pos_maxval, fmt.neg_maxval, nan, inf, fmt.enable_neg_zero)
 
 
 def _arg_fmts_to_arg_types(
@@ -731,6 +749,13 @@ class Specialize:
                 # Only concrete ``Context``s count; symbolic / None collapse.
                 callee_ctx = callee_ctx_raw if isinstance(callee_ctx_raw, Context) else None
                 callee_arg_fmts = sub_fa.fn_fmt.arg_fmts
+                if callee_arg_fmts is not None:
+                    # in the key through the types: a caller that cannot prove
+                    # it gets its own spec
+                    callee_arg_fmts = tuple(
+                        _without_specials(f, classes.by_expr.get(a))
+                        for f, a in zip(callee_arg_fmts, call.args, strict=True)
+                    )
                 # concrete ints only: a symbolic size is a per-run gensym
                 callee_arg_sizes = (
                     tuple(

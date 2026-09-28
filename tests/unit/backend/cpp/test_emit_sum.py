@@ -15,6 +15,7 @@ narrows on assignment, rounding twice; widening ``T`` to hold the unrounded seed
 would instead round every addition at the wrong format.
 """
 
+import math
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +30,22 @@ from fpy2.types import ListType, RealType
 
 _L64 = ListType(RealType(fp.FP64))
 _CXX = shutil.which('c++') or shutil.which('g++')
+
+
+def _run(func, arg_types, main: str) -> str:
+    """The output of *func*'s C++ with *main* appended."""
+    cc = CppCompiler()
+    src = (
+        cc.prelude() + '\n' + cc.compile(func, arg_types=arg_types) + '\n'
+        + '#include <cstdio>\n' + main
+    )
+    with tempfile.TemporaryDirectory() as d:
+        cpp, exe = Path(d) / 's.cpp', Path(d) / 's'
+        cpp.write_text(src)
+        assert _CXX is not None
+        subprocess.run([_CXX, '-std=c++11', '-o', str(exe), str(cpp)], check=True)
+        return subprocess.run(
+            [str(exe)], capture_output=True, text=True, check=True).stdout
 
 
 class TestTheEmittedFold:
@@ -124,18 +141,56 @@ class TestIntegralFloatElements:
         xs, k = [65504.0, 2.0 ** -14, 0.0, 0.0, 0.0], 38
         want = int(_scaled_sum(xs, k))
         assert want == 65504 * 2 ** 38 + 2 ** 24
-        cc = CppCompiler()
-        src = (
-            cc.prelude() + '\n'
-            + cc.compile(_scaled_sum, arg_types=_SCALED_ARGS) + '\n'
-            + '#include <cstdio>\n'
-            + 'int main() { std::array<float, 5> xs{' + ', '.join(map(repr, xs))
+        got = _run(_scaled_sum, _SCALED_ARGS, (
+            'int main() { std::array<float, 5> xs{' + ', '.join(map(repr, xs))
             + f'}}; printf("%lld\\n", (long long) _scaled_sum(xs, {k})); }}\n'
+        ))
+        assert int(got) == want
+
+
+@fp.fpy(ctx=fp.REAL)
+def _fsum(xs, k):
+    ts = fp.empty(len(xs))
+    for i in range(len(xs)):
+        with fp.MPFixedContext(-1, fp.RM.RTZ, enable_neg_zero=False):
+            r = fp.round(xs[i])
+        t = 2 ** k * r
+        ts[i] = t
+    return sum(ts)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _guarded_fsum(xs, y):
+    if fp.isfinite(y):
+        return _fsum(xs, max(fp.logb(y), -10))
+    return 0.0
+
+
+_GUARDED_ARGS = [ListType(RealType(fp.FP16), 4), RealType(fp.FP16)]
+
+
+class TestAScaleOnlyTheCallerProvesFinite:
+    """`2 ** k` may leave the sum only where `k` is finite, and only the
+    caller's guard says so: the callee sees it through its parameter's format.
+    """
+
+    def test_the_factor_leaves_the_loop(self):
+        out = CppCompiler().compile(_guarded_fsum, arg_types=_GUARDED_ARGS)
+        assert '* static_cast<double>(std::accumulate(' in out, out
+
+    @pytest.mark.skipif(_CXX is None, reason='no C++ compiler')
+    def test_it_agrees_with_the_interpreter(self):
+        cases = [
+            ([1.5, -3.0, 7.9, 0.0], 12.0),
+            ([65504.0, 1.0, -2.0, 3.0], 2.0 ** -14),
+            ([1.0, 2.0, 3.0, 4.0], 0.0),
+            ([1.0, 2.0, 3.0, 4.0], math.inf),
+        ]
+        calls = ''.join(
+            'printf("%a\\n", (double) _guarded_fsum(std::array<float, 4>{'
+            + ', '.join(map(repr, xs)) + f'}}, {"INFINITY" if math.isinf(y) else repr(y)}));'
+            for xs, y in cases
         )
-        with tempfile.TemporaryDirectory() as d:
-            cpp, exe = Path(d) / 's.cpp', Path(d) / 's'
-            cpp.write_text(src)
-            assert _CXX is not None
-            subprocess.run([_CXX, '-std=c++11', '-o', str(exe), str(cpp)], check=True)
-            got = subprocess.run([str(exe)], capture_output=True, text=True, check=True)
-        assert int(got.stdout) == want
+        got = _run(_guarded_fsum, _GUARDED_ARGS, f'int main() {{ {calls} }}\n')
+        want = [float(_guarded_fsum(xs, y)).hex() for xs, y in cases]
+        assert [float.fromhex(g).hex() for g in got.split()] == want

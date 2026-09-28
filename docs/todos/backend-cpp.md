@@ -662,7 +662,9 @@ than the property it is testing for; widening it to pure operands fuses these.
 representation choice with the callee specialized per argument representation. It
 needs one body per representation vector and nothing has measured a gain that
 justifies it. If ever wanted, the representation must join the specialization key
-rather than be patched on after, since storage is decided per spec.
+rather than be patched on after, since storage is decided per spec.  One case
+does, through the key: a caller's value classes clear the NaN and infinities
+from a callee parameter's format (`interprocedural-value-classes.md`).
 
 ### Aliasing: what still refuses
 
