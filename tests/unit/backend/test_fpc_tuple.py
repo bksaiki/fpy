@@ -19,21 +19,6 @@ def _compile(f) -> str:
 
 
 class TestTupleAccessors:
-    def test_fst_emits_ref0(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            t = (a, b)
-            return fp.fst(t)
-
-        assert '(ref t 0)' in _compile(f)
-
-    def test_snd_pair_emits_ref1(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            t = (a, b)
-            return fp.snd(t)
-
-        assert '(ref t 1)' in _compile(f)
 
     def test_chain_over_nested_pair(self):
         """``fst(snd(t))`` over a nested pair lowers to nested refs."""
@@ -69,13 +54,6 @@ class TestComparisonOperands:
         with pytest.raises(FPCoreCompileError, match='compares numbers only'):
             FPCoreCompiler().compile(f)
 
-    def test_a_real_comparison_still_compiles(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> bool:
-            return x == y
-
-        assert '==' in str(FPCoreCompiler().compile(f))
-
 
 class TestComparisonChains:
     """FPCore's comparisons are n-ary, so a run of one operator is a single
@@ -92,13 +70,6 @@ class TestComparisonChains:
 
         assert '(< x y z)' in str(FPCoreCompiler().compile(lt))
         assert '(<= x y z)' in str(FPCoreCompiler().compile(le))
-
-    def test_a_change_of_operator_starts_a_new_call(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real, z: fp.Real) -> bool:
-            return x < y == z
-
-        assert '(and (< x y) (== y z))' in str(FPCoreCompiler().compile(f))
 
     def test_three_runs(self):
         @fp.fpy

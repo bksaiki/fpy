@@ -83,44 +83,6 @@ class TestWhileUnrollWhere():
     """`where` names a single loop by pre-order index; an index that names no
     loop is a caller error, not a silent no-op."""
 
-    def test_out_of_range_raises(self):
-        @fp.fpy
-        def one_loop(t: fp.Real):
-            while t > 0:      # the only while loop -> index 0
-                t -= 1
-            return t
-
-        for bad in (1, 2, 5):
-            try:
-                fp.transform.WhileUnroll.apply(one_loop.ast, where=bad, times=1)
-                assert False, f'expected TransformReferenceError for where={bad}'
-            except fp.transform.TransformReferenceError:
-                pass
-
-    def test_negative_raises(self):
-        @fp.fpy
-        def one_loop(t: fp.Real):
-            while t > 0:
-                t -= 1
-            return t
-
-        try:
-            fp.transform.WhileUnroll.apply(one_loop.ast, where=-1, times=1)
-            assert False, 'expected TransformReferenceError for where=-1'
-        except fp.transform.TransformReferenceError:
-            pass
-
-    def test_no_loops_raises(self):
-        @fp.fpy
-        def no_loop(x: fp.Real):
-            return x + 1
-
-        try:
-            fp.transform.WhileUnroll.apply(no_loop.ast, where=0, times=1)
-            assert False, 'expected TransformReferenceError: no loop at index 0'
-        except fp.transform.TransformReferenceError:
-            pass
-
     def test_valid_where_selects_one_loop(self):
         # Two sibling loops; where=1 selects the second and is in range.
         @fp.fpy

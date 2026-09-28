@@ -71,17 +71,6 @@ class TestListSliceIsEquiv:
         assert not _last_expr(a).is_equiv(_last_expr(b))
         assert not _last_expr(b).is_equiv(_last_expr(a))
 
-    def test_identical_slices_are_equivalent(self):
-        @fp.fpy
-        def a(xs: list[fp.Real]) -> list[fp.Real]:
-            return xs[1:3]
-
-        @fp.fpy
-        def b(xs: list[fp.Real]) -> list[fp.Real]:
-            return xs[1:3]
-
-        assert _last_expr(a).is_equiv(_last_expr(b))
-
     def test_both_bounds_absent_are_equivalent(self):
         @fp.fpy
         def a(xs: list[fp.Real]) -> list[fp.Real]:

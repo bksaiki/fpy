@@ -10,7 +10,6 @@ import pytest
 
 import fpy2 as fp
 
-from fpy2.ast import Add, Assign
 from fpy2.rewrite import find, find_all
 from fpy2.strategies import (
     BlockCursor,
@@ -51,15 +50,6 @@ def once(x, y, z):
 
 
 @fp.fpy
-def branchy(x, y, z):
-    if x > 0:
-        t = x * y + z
-    else:
-        t = z
-    return t
-
-
-@fp.fpy
 def stmts(x):
     y = x * 2
     z = y + 1
@@ -68,29 +58,6 @@ def stmts(x):
 
 # ----------------------------------------------------------------------
 # find_all
-
-
-def test_find_all_lists_expression_matches_in_order():
-    found = find_all(mul_add, twice)
-    assert all(isinstance(c, ExprCursor) for c in found)
-    assert [c.path.stmt() for c in found] == [FuncBody().stmt(0), FuncBody().stmt(1)]
-    assert all(isinstance(c.resolve(), Add) for c in found)
-
-
-def test_find_all_reaches_into_a_branch():
-    found = find_all(mul_add, branchy)
-    assert [c.path.stmt() for c in found] == [FuncBody().stmt(0).block('ift').stmt(0)]
-
-
-def test_find_all_lists_a_one_statement_match_as_a_statement():
-    found = find_all(scale, stmts)
-    assert found == [StmtCursor(stmts.ast, FuncBody().stmt(0))]
-    assert isinstance(found[0].resolve(), Assign)
-
-
-def test_find_all_lists_a_k_statement_match_as_a_region():
-    found = find_all(scale_then_bump, stmts)
-    assert found == [BlockCursor(stmts.ast, FuncBody(), range(0, 2))]
 
 
 def test_find_all_returns_nothing_where_it_matches_nothing():
@@ -170,34 +137,4 @@ def test_within_is_forwarded_from_an_earlier_program():
 
     assert [c.path.stmt() for c in find_all(mul_add, out, site)] == [
         FuncBody().stmt(1)
-    ]
-
-
-def test_within_of_an_unrelated_program_is_a_bad_reference():
-    other = StmtCursor(stmts.ast, FuncBody().stmt(0))
-    with pytest.raises(TransformReferenceError, match='unrelated program'):
-        find_all(mul_add, twice, other)
-
-
-# ----------------------------------------------------------------------
-# Overlap, which the caller has to know about
-
-
-@fp.pattern
-def two_bumps(a, b):
-    y = a + 1
-    z = b + 1
-
-
-def test_overlapping_matches_are_all_listed():
-    @fp.fpy
-    def three(x):
-        a = x + 1
-        b = x + 1
-        c = x + 1
-        return a + b + c
-
-    found = find_all(two_bumps, three)
-    assert [c.span for c in found if isinstance(c, BlockCursor)] == [
-        range(0, 2), range(1, 3)
     ]

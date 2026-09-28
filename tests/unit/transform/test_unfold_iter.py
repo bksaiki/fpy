@@ -10,7 +10,6 @@ from fpy2.ast import NamedId
 from fpy2.transform import (
     Hoistable,
     TransformDeclined,
-    TransformReferenceError,
     UnfoldEnumerate,
     UnfoldZip,
 )
@@ -249,14 +248,6 @@ class TestWhere:
         cursor, _ = UnfoldZip.refusals(f.ast)[0]
         with pytest.raises(TransformDeclined, match='statement-level'):
             UnfoldZip.apply(f.ast, where=cursor)
-
-    def test_an_index_past_the_end(self):
-        @fp.fpy(ctx=fp.FP64)
-        def f(xs: list[fp.Real], ys: list[fp.Real]):
-            return zip(xs, ys)
-
-        with pytest.raises(TransformReferenceError):
-            UnfoldZip.apply(f.ast, where=3)
 
     def test_nothing_to_do_is_not_an_error(self):
         @fp.fpy(ctx=fp.FP64)

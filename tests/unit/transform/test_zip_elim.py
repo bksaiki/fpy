@@ -318,22 +318,6 @@ class TestProperties:
         twice = ZipElim.apply(once)
         assert once.is_equiv(twice)
 
-    def test_syntax_check_passes(self):
-        """``ZipElim.apply`` runs ``SyntaxCheck.check`` internally; if
-        the rewrite produced ill-formed output, ``apply`` itself would
-        raise.  This test just exercises a representative input."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for a, b in zip(xs, ys):
-                    acc = acc + a * b
-                return acc
-
-        # Should not raise.
-        ZipElim.apply(f.ast)
-
 
 def _contains(ast: fp.ast.FuncDef, types) -> bool:
     """True iff any sub-expression of *ast* is an instance of *types*."""

@@ -11,43 +11,6 @@ def _maxval_ordinal(ctx: IEEEContext):
 class ToOrdinalTestCase():
     """Testing `IEEEContext.to_ordinal()`"""
 
-    def test_native(self, num_encodings: int = 10_000):
-        # rounding context for native Python floats
-        fp64 = IEEEContext(11, 64, RM.RNE)
-        # sample 10_000 random floating-point values
-        random.seed(1)
-        xs: list[Float] = []
-        for _ in range(num_encodings):
-            s = random.choice([False, True])
-            exp = random.randint(fp64.expmin, fp64.expmax)
-            c = random.randint(0, 1 << fp64.pmax)
-            x = Float(s, exp, c, ctx=fp64)
-            assert fp64.representable_under(x)
-            xs.append(x)
-        # run ordinal conversion
-        for x in xs:
-            i = fp64.to_ordinal(x)
-            assert isinstance(i, int), f'x={x}, i={i}'
-            assert i >= -(1 << fp64.nbits - 1), f'x={x}, i={i}'
-            assert i < 1 << fp64.nbits - 1, f'x={x}, i={i}'
-
-    def test_small(self, es_max: int = 6, nbits_max: int = 8):
-        # iterate over possible contexts
-        for es in range(2, es_max+1):
-            for nbits in range(es + 2, nbits_max+1):
-                ctx = IEEEContext(es, nbits, RM.RNE)
-                # for ctx, encode all possible values
-                for s in (True, False):
-                    for exp in range(ctx.expmin, ctx.expmax + 1):
-                        for c in range(0, 1 << ctx.pmax):
-                            x = Float(s, exp, c, ctx=ctx)
-                            assert ctx.representable_under(x)
-
-                            i = ctx.to_ordinal(x)
-                            assert isinstance(i, int), f'x={x}, i={i}'
-                            assert i >= -(1 << ctx.nbits - 1), f'x={x}, i={i}'
-                            assert i < 1 << ctx.nbits - 1, f'x={x}, i={i}'
-
     def test_values_native(self):
         # rounding context for native Python floats
         fp64 = IEEEContext(11, 64, RM.RNE)

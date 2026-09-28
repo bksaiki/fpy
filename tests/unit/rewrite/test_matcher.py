@@ -9,10 +9,6 @@ def insert_fma_l(a, b, c):
     a * b + c
 
 @fpy
-def f(x, y, z):
-    return x * y + z
-
-@fpy
 def g(x, y, z):
     return y * z + x
 
@@ -51,16 +47,6 @@ class MatchExprTestCase(_MatcherTestCase):
         assert len(matches) == 1
         self.assertAstEqual(matches[0].subst['a'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['b'], Var(NamedId('y'), None))
-
-
-    def test_fma_example_1(self):
-        assert isinstance(f, Function)
-        m = Matcher(insert_fma_l)
-        matches = m.match(f)
-        assert len(matches) == 1
-        self.assertAstEqual(matches[0].subst['a'], Var(NamedId('x'), None))
-        self.assertAstEqual(matches[0].subst['b'], Var(NamedId('y'), None))
-        self.assertAstEqual(matches[0].subst['c'], Var(NamedId('z'), None))
 
     def test_fma_example_2(self):
         assert isinstance(g, Function)
@@ -200,7 +186,6 @@ class MatchStmtTestCase(_MatcherTestCase):
         self.assertAstEqual(matches[0].subst['t'], Var(NamedId('x'), None))
         self.assertAstEqual(matches[0].subst['N'], Integer(100, None))
         self.assertAstEqual(matches[0].subst['e'], Add(Var(NamedId('x'), None), Integer(1, None), None))
-
 
     def test_fma_example_1(self):
         assert isinstance(f2, Function)

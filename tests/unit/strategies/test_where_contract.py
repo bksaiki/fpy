@@ -425,7 +425,7 @@ def test_where_none_acts_exactly_when_there_are_sites(strategy, func, kw):
         )
 
 
-@pytest.mark.parametrize('strategy,func,kw', ROWS, ids=IDS)
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
 def test_a_listed_cursor_aims_the_same_as_its_index(strategy, func, kw):
     """`sites(...)[j]` and `where=j` name the same site -- where that cursor
     names only that site.
@@ -468,7 +468,7 @@ def test_a_strategy_that_applies_to_nothing_lists_nothing(strategy, func, kw):
         _apply(strategy, func, 0, kw)
 
 
-@pytest.mark.parametrize('strategy,func,kw', ROWS, ids=IDS)
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
 def test_an_index_past_the_end_is_an_error(strategy, func, kw):
     """Never a silent no-op: an index outside `range(k)` names nothing."""
     k = len(sites(strategy, func, **kw))
@@ -476,7 +476,7 @@ def test_an_index_past_the_end_is_an_error(strategy, func, kw):
         _apply(strategy, func, k, kw)
 
 
-@pytest.mark.parametrize('strategy,func,kw', ROWS, ids=IDS)
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
 def test_sites_and_refusals_are_disjoint(strategy, func, kw):
     """A program point is a site or a refusal, never both."""
     # `str` rather than `.path`: a region has a span instead, and no listing

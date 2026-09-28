@@ -76,18 +76,16 @@ def _storage(
 
 
 class TestTheRunningExample:
-    def test_fp16_arguments_stay_fp16(self):
+    def test_fp16_arguments_stay_fp16_and_the_product_gets_fp32(self):
         """The point of having an fp16 rung at all: the cpp backend widens
         these parameters to `float` at the boundary because it cannot spell
-        fp16, so its kernel cannot take an fp16 buffer."""
-        got = _storage(dot, [ListType(RealType(fp.FP16), K)] * 2)
-        assert got['x'] == got['y'] == {T.F16}
+        fp16, so its kernel cannot take an fp16 buffer.
 
-    def test_the_exact_product_gets_fp32(self):
-        """FP16 carries prec 11, so a product needs 22 bits against fp32's 24.
+        FP16 carries prec 11, so a product needs 22 bits against fp32's 24.
         The analysis must place it a rung up -- and exactly one rung up, since
         fp64 would be correct but wasteful."""
         got = _storage(dot, [ListType(RealType(fp.FP16), K)] * 2)
+        assert got['x'] == got['y'] == {T.F16}
         assert got['p'] == {T.F32}
         assert T.F64 not in set().union(*got.values())
 

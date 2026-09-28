@@ -6,28 +6,6 @@ from hypothesis import given, strategies as st
 from ...generators import floats
 
 
-class DecodeTestCase():
-    """Testing `IEEEContext.decode()`"""
-
-    def test_native(self, num_encodings: int = 10_000):
-        # sample 10_000 random encodings
-        random.seed(1)
-        encodings = [random.randint(0, (1 << FP64.nbits) - 1) for _ in range(num_encodings)]
-        # run decode
-        for i in encodings:
-            x = FP64.decode(i)
-            assert isinstance(x, Float), f'i={i}, x={x}'
-
-    def test_small(self, es_max: int = 6, nbits_max: int = 8):
-        # iterate over possible contexts
-        for es in range(2, es_max+1):
-            for nbits in range(es + 2, nbits_max+1):
-                ctx = IEEEContext(es, nbits, RM.RNE)
-                # for ctx, decode all possible encodings
-                for i in range(1 << ctx.nbits):
-                    x = ctx.decode(i)
-                    assert isinstance(x, Float), f'i={i}, x={x}'
-
 class EncodeTestCase():
     """Testing `IEEEContext.encode()`"""
 

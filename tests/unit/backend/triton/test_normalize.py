@@ -72,8 +72,10 @@ def _normalized(func: Function) -> Function:
 class TestReachesTheForm:
     def test_all_three_at_once(self):
         """`_caller` needs every pass: a call, two exits in the callee, and an
-        `if` of its own."""
-        _is_normal(_normalized(_caller).ast)
+        `if` of its own.  The callee's exits become an `if`, which is kept."""
+        out = _normalized(_caller).ast
+        _is_normal(out)
+        assert _count(out, IfStmt, If1Stmt) == 2
 
     def test_values_are_preserved(self):
         out = _normalized(_caller)
@@ -101,9 +103,6 @@ class TestReachesTheForm:
 class TestAnIfIsKept:
     """The emitter flattens an `if`; the normal form leaves it for the
     analyses to read its guard first."""
-
-    def test_the_callees_exits_become_an_if(self):
-        assert _count(_normalized(_caller).ast, IfStmt, If1Stmt) == 2
 
     def test_a_guarded_loop_stays_guarded(self):
         @fp.fpy(ctx=fp.FP64)

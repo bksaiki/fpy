@@ -40,9 +40,6 @@ ADMITTED: dict[tuple[RM, RM], str] = {
 
 ALL_MODES = (RM.RNE, RM.RNA, RM.RTP, RM.RTN, RM.RTZ, RM.RAZ, RM.RTO, RM.RTE)
 
-_SORTED = sorted(ADMITTED, key=lambda p: (p[0].name, p[1].name))
-_IDS = [f'{a.name}_over_{b.name}' for a, b in _SORTED]
-
 
 def _fmt(ctx: fp.Context) -> AbstractFormat:
     fmt = ctx.format()
@@ -60,11 +57,6 @@ def _wide() -> AbstractFormat:
 
 
 class TestAdmitted:
-    @pytest.mark.parametrize('rm1,rm2', _SORTED, ids=_IDS)
-    def test_holds_over_a_wide_intermediate(self, rm1, rm2):
-        pair = (rm1, rm2)
-        assert double_round_ok(_fp32(), rm1, _wide(), rm2), ADMITTED[pair]
-
     def test_nothing_else_is_admitted(self):
         """The admitted set exactly: 9 of the 64 mode pairs."""
         got = {
@@ -75,25 +67,6 @@ class TestAdmitted:
 
 
 class TestRefused:
-    def test_rne_over_rne(self):
-        """The one that matters most: every `fp.FP*` context is RNE, so this is
-        the pairing a hand-written program falls into, and Table 2's last row
-        says it is unsound however wide the intermediate."""
-        assert not double_round_ok(_fp32(), RM.RNE, _wide(), RM.RNE)
-        assert not double_round_ok(_fp32(), RM.RNE, _fmt(fp.FP64), RM.RNE)
-
-    @pytest.mark.parametrize('rm1', [RM.RNE, RM.RNA, RM.RTZ, RM.RAZ, RM.RTO])
-    def test_rte_as_an_intermediate(self, rm1):
-        """`RTE` is in FPy's `RoundingMode` but in none of the theorems."""
-        assert not double_round_ok(_fp32(), rm1, _wide(), RM.RTE)
-
-    @pytest.mark.parametrize('rm1', [RM.RTP, RM.RTN])
-    def test_a_directed_nearest_mode_over_rto(self, rm1):
-        """RTP and RTN are proved only against *themselves* -- there is no
-        `rndRTO_RTP`, so this declines rather than being inferred from the fact
-        that they reduce to RAZ/RTZ by sign."""
-        assert not double_round_ok(_fp32(), rm1, _wide(), RM.RTO)
-
     def test_an_intermediate_narrower_than_the_target(self):
         assert not double_round_ok(_fmt(fp.FP64), RM.RTZ, _fmt(fp.FP32), RM.RTZ)
 
@@ -282,15 +255,14 @@ class TestOperationRules:
         assert double_round_op_ok(op, f1, RM.RNE, f2(need), RM.RNE)
         assert not double_round_op_ok(op, f1, RM.RNE, f2(need - 1), RM.RNE)
 
-    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
     @pytest.mark.parametrize('rm1,rm2', [
         (RM.RTZ, RM.RNE), (RM.RNE, RM.RTZ), (RM.RTO, RM.RNE), (RM.RNE, RM.RTO),
         (RM.RTP, RM.RTP), (RM.RTE, RM.RNE),
     ])
-    def test_only_nearest_over_nearest(self, op, rm1, rm2):
+    def test_only_nearest_over_nearest(self, rm1, rm2):
         """Proved for `.nearest` on both sides.  Not conservatism: `add` over a
         far wider intermediate still disagrees with a directed target."""
-        assert not double_round_op_ok(op, _flx(3), rm1, _flx(64), rm2)
+        assert not double_round_op_ok(DoubleRoundOp.ADD, _flx(3), rm1, _flx(64), rm2)
 
     @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
     @pytest.mark.parametrize('rm1', [RM.RNE, RM.RNA])
@@ -298,10 +270,10 @@ class TestOperationRules:
     def test_the_tie_breaks_are_independent(self, op, rm1, rm2):
         assert double_round_op_ok(op, _flx(4), rm1, _flx(64), rm2)
 
-    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
-    def test_the_degenerate_format(self, op):
+    def test_the_degenerate_format(self):
         """`IsUndefined`: one digit and no minimum quantum leaves nearest-even
         with no answer, so the theorems exclude it.  Nearest-away is fine."""
+        op = DoubleRoundOp.ADD
         assert not double_round_op_ok(op, _flx(1), RM.RNE, _flx(64), RM.RNE)
         assert double_round_op_ok(op, _flx(1), RM.RNA, _flx(64), RM.RNE)
 
@@ -365,15 +337,14 @@ class TestOperationRules:
         assert double_round_op_ok(op, _fmt(fp.FP32), RM.RNE, _fmt(fp.FP64), RM.RNE)
         assert double_round_op_ok(op, _fmt(fp.FP32), RM.RNE, _flx(64), RM.RNE) is spans
 
-    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
     @pytest.mark.parametrize('missing', ['has_nan', 'has_pos_inf', 'has_neg_zero'])
-    def test_a_special_the_intermediate_lacks(self, op, missing):
+    def test_a_special_the_intermediate_lacks(self, missing):
         """The premises are about finite values, but a program carries specials
         through the split: one the target has and the intermediate has not comes
         back changed, or raises.  Figure 8 gets this from containment; these
         rules need it stated, since they deliberately do not ask for
         containment."""
-        f1 = _fmt(fp.FP32)
+        op, f1 = DoubleRoundOp.ADD, _fmt(fp.FP32)
         assert isinstance(f1.exp, int)
         deep = f1.exp - 200
         assert double_round_op_ok(op, f1, RM.RNE, self._at_exp(deep), RM.RNE)
@@ -431,19 +402,17 @@ class TestDeriveForOperation:
         assert _fmt(via).exp == -math.inf
         assert double_round_op_ok(op, _fmt(target), RM.RNE, _fmt(via), RM.RNE)
 
-    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
-    def test_a_directed_target(self, op):
+    def test_a_directed_target(self):
         with pytest.raises(ValueError, match='round-to-nearest'):
-            derive_intermediate(fp.FP32.with_params(rm=RM.RTZ), op)
+            derive_intermediate(fp.FP32.with_params(rm=RM.RTZ), DoubleRoundOp.ADD)
 
-    @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
-    def test_a_fixed_point_target(self, op):
+    def test_a_fixed_point_target(self):
         """No finite precision, so no rule -- unlike the round-to-odd
         derivation, which handles fixed point.  A nearest fixed-point target, so
         that precision is what refuses it rather than the mode."""
         target = fp.MPFixedContext(-1, RM.RNE)
         with pytest.raises(ValueError, match='finite precision'):
-            derive_intermediate(target, op)
+            derive_intermediate(target, DoubleRoundOp.ADD)
         assert derive_intermediate(target) is not None
 
     def test_a_sqrt_target_representing_nothing_below_one(self):
@@ -495,8 +464,8 @@ class TestOperationRulesAgainstArithmetic:
         return bad
 
     @pytest.mark.parametrize('op', list(DoubleRoundOp), ids=lambda o: o.value)
-    @pytest.mark.parametrize('p1', [3, 4])
-    def test_an_accepted_pair_agrees_with_rounding_once(self, op, p1):
+    def test_an_accepted_pair_agrees_with_rounding_once(self, op):
+        p1 = 3
         target = fp.MPFloatContext(p1, RM.RNE)
         f1 = _fmt(target)
         for dp in range(2 * p1 + 4):

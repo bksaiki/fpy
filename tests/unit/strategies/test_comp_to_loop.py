@@ -11,9 +11,7 @@ import pytest
 import fpy2 as fp
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.strategies import (
-    ExprCursor,
     TransformDeclined,
-    TransformReferenceError,
     comp_to_loop,
     elim_round,
     insert_round,
@@ -100,27 +98,6 @@ class TestLeftAlone:
     def test_it_lowers_by_default(self):
         """A consumer opts *out* of unfolding, not in."""
         assert sites(comp_to_loop, _ragged) != []
-
-
-class TestWhere:
-    def test_sites_are_comprehensions(self):
-        found = sites(comp_to_loop, _scale)
-        assert all(isinstance(c, ExprCursor) for c in found)
-        assert [type(c.resolve()).__name__ for c in found] == ['ListComp']
-
-    def test_a_cursor_aims_the_same_as_its_index(self):
-        for j, cursor in enumerate(sites(comp_to_loop, _scale)):
-            expect = comp_to_loop(_scale, j).format()
-            assert comp_to_loop(_scale, cursor).format() == expect
-
-    def test_a_where_naming_nothing(self):
-        with pytest.raises(TransformReferenceError):
-            comp_to_loop(_scale, 7)
-
-    def test_a_cursor_of_an_unrelated_program(self):
-        other = sites(comp_to_loop, _sq)[0]
-        with pytest.raises(TransformReferenceError):
-            comp_to_loop(_scale, other)
 
 
 class TestUnblocksTheRoundingAxis:

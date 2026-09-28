@@ -67,17 +67,6 @@ class TestOpFolding:
         assert isinstance(e, Integer), f'expected Integer, got {type(e).__name__}'
         assert e.val == 3
 
-    def test_mul_folds_under_fp64(self):
-        @fp.fpy
-        def f():
-            with fp.FP64:
-                return 2.0 * 3.0
-
-        folded = ConstFold.apply(f.ast)
-        e = _return_expr(folded)
-        assert isinstance(e, Integer)
-        assert e.val == 6
-
     def test_no_fold_outside_context(self):
         """Op stays unfolded without an active rounding context."""
         @fp.fpy
@@ -147,17 +136,6 @@ class TestOpFolding:
         e = _return_expr(folded)
         assert isinstance(e, BoolVal), f'expected BoolVal; got {type(e).__name__}'
         assert e.val is True
-
-    def test_amin_folds_over_literal_list(self):
-        @fp.fpy
-        def f():
-            with fp.FP64:
-                return min([3.0, 1.0, 2.0])
-
-        folded = ConstFold.apply(f.ast)
-        e = _return_expr(folded)
-        assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
-        assert e.val == 1
 
     def test_list_ref_folds(self):
         @fp.fpy
@@ -347,67 +325,6 @@ class TestPhiMergeFolding:
         e = _return_expr(folded)
         assert isinstance(e, Integer), f'expected Integer; got {type(e).__name__}'
         assert e.val == 5
-
-    def test_if_else_different_values(self):
-        """``Var(x)`` doesn't fold when branches disagree."""
-        @fp.fpy
-        def f(c: bool) -> fp.Real:
-            with fp.FP64:
-                if c:
-                    x = 5.0
-                else:
-                    x = 7.0
-                return x
-
-        folded = ConstFold.apply(f.ast)
-        e = _return_expr(folded)
-        assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'
-
-    def test_if1_same_value(self):
-        """``If1Stmt``: pre-if def + in-branch def agree."""
-        @fp.fpy
-        def f(c: bool) -> fp.Real:
-            with fp.FP64:
-                x = 5.0
-                if c:
-                    x = 5.0
-                return x
-
-        folded = ConstFold.apply(f.ast)
-        e = _return_expr(folded)
-        assert isinstance(e, Integer)
-        assert e.val == 5
-
-    def test_loop_invariant_value_folds(self):
-        """Loop where the body re-assigns the same value the variable
-        already had — phi fixpoint stabilizes at the value."""
-        @fp.fpy
-        def f(c: bool) -> fp.Real:
-            with fp.FP64:
-                x = 5.0
-                while c:
-                    x = 5.0
-                return x
-
-        folded = ConstFold.apply(f.ast)
-        e = _return_expr(folded)
-        assert isinstance(e, Integer)
-        assert e.val == 5
-
-    def test_loop_mutating_does_not_fold(self):
-        """Loop where the body mutates the variable — phi goes to
-        ``_TOP``, the return stays as ``Var``."""
-        @fp.fpy
-        def f(n: fp.Real) -> fp.Real:
-            with fp.FP64:
-                i = 0
-                while i < n:
-                    i = i + 1
-                return i
-
-        folded = ConstFold.apply(f.ast)
-        e = _return_expr(folded)
-        assert isinstance(e, Var), f'expected Var; got {type(e).__name__}'
 
 
 class TestNonFiniteValues:

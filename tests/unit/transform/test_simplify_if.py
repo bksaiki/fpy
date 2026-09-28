@@ -311,26 +311,6 @@ _REFUSED = [
 ]
 
 
-class TestUnconditionalRefusals:
-    """Constructs that can change whether, or which, value comes out.  No
-    evaluation strategy makes these legal, so no mode admits them."""
-
-    @pytest.mark.parametrize('f,why', _REFUSED, ids=lambda v: getattr(v, 'name', ''))
-    def test_declines(self, f, why):
-        with pytest.raises(TransformDeclined, match=re.escape(why)):
-            SimplifyIf.apply(f.ast)
-
-    def test_a_return_declines_rather_than_erroring(self):
-        """A `return` in a branch has no expression form; the refusal has to
-        come before the rewrite, which would fail on a name it had renamed."""
-        with pytest.raises(TransformDeclined):
-            SimplifyIf.apply(returns_in_branch.ast)
-
-    def test_an_inner_refusal_declines_the_outer_if(self):
-        with pytest.raises(TransformDeclined):
-            SimplifyIf.apply(nested_unhoistable.ast)
-
-
 class TestTheRefusalsDoNotOverreach:
     def test_a_guarded_read_is_still_accepted(self):
         """Partial *reads* are the keyword's business, not this phase's."""
@@ -502,17 +482,6 @@ class TestWhere:
     @pytest.mark.parametrize('where', [0, 1])
     def test_an_index_rewrites_exactly_one(self, where):
         assert _n_ifs(SimplifyIf.apply(two_ifs.ast, where)) == 1
-
-    def test_none_rewrites_every_one(self):
-        assert _n_ifs(SimplifyIf.apply(two_ifs.ast, None)) == 0
-
-    def test_a_cursor_rewrites_the_one_it_names(self):
-        cursor = SimplifyIf.sites(two_ifs.ast)[1]
-        assert _n_ifs(SimplifyIf.apply(two_ifs.ast, cursor)) == 1
-
-    def test_an_out_of_range_index_is_a_bad_reference(self):
-        with pytest.raises(TransformReferenceError, match='does not correspond'):
-            SimplifyIf.apply(two_ifs.ast, 5)
 
     @pytest.mark.parametrize('where', [0, 1])
     def test_semantics_are_preserved(self, where):

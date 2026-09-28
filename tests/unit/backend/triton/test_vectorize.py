@@ -113,11 +113,6 @@ class TestTileable:
 
         assert _why(f) is None
 
-    def test_a_nested_write_mixes_the_loop_variable_with_an_invariant(self):
-        """`out[i][j]` in the `j` loop: `i` is invariant there, so the
-        elements are still distinct."""
-        assert _why(_nested) is None
-
 
 class TestRefuses:
     def test_a_carried_scalar(self):
@@ -281,8 +276,11 @@ class TestTileLoops:
 
     def test_only_the_innermost_of_a_nest_is_tiled(self):
         """Both loops are tileable, but the target wants one tiled dimension:
-        the outer becomes the program instance, the inner the tile."""
+        the outer becomes the program instance, the inner the tile.  The inner
+        writes `out[i][j]`, and `i` is invariant there, so its elements are
+        still distinct."""
         assert why_not_tileable(_loops(_nested.ast)[0], _nested.ast) is None
+        assert _why(_nested) is None
         out = tile_loops(_nested.ast, 4).func
         # outer left alone + the inner split into a pair
         assert _count(out, ForStmt) == 3
@@ -446,21 +444,18 @@ class TestLanes:
         assert not any('3 - k' in s.format() for s in out.lanes)
         assert len(out.lanes) == 2
 
-    def test_a_rewrite_finds_the_lanes_again(self):
-        out = tile_loops(_matmul(_M, _N), 4)
-        again = out.rewritten(Simplify.apply(out.func))
-        assert _targets(again.lanes) == _targets(out.lanes)
-
 
 class TestTheGridsSecondAxis:
     """The loop directly around a lone tile, carrying nothing and inside no
     other, is one program per iteration."""
 
     def test_a_matmul_takes_its_rows(self):
+        """Also after a rewrite, which finds the lanes again."""
         out = tile_loops(_matmul(_M, _N), 4)
         assert _targets(out.grid) == ['i']
         again = out.rewritten(Simplify.apply(out.func))
         assert _targets(again.grid) == ['i']
+        assert _targets(again.lanes) == _targets(out.lanes)
 
     def test_a_carrying_loop_is_not_one(self):
         @fp.fpy(ctx=fp.FP64)

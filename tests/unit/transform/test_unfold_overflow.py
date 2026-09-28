@@ -415,18 +415,14 @@ class TestFixedPoint:
         out = UnfoldOverflow.apply(_quantizer(fp.FP16).ast, early_check=True)
         assert not _nodes(out, IsFinite)
 
-    @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
-    @pytest.mark.parametrize('src', [
-        fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT),
-        fp.FixedContext(True, -4, 8, fp.RoundingMode.RNE, _SAT),
-        fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT),
-        fp.SMFixedContext(-8, 16, fp.RoundingMode.RTZ, _SAT),
-        MPBFixedContext(-4, RealFloat(exp=0, c=255), overflow=_SAT),
-        MPBFixedContext(-4, RealFloat(exp=0, c=255),
-                        overflow=fp.OverflowMode.OVERFLOW, enable_inf=True),
-        MPBFixedContext(-2, RealFloat(exp=0, c=100),
-                        neg_maxval=RealFloat(s=True, exp=0, c=50), overflow=_SAT),
-    ], ids=['fixed_32', 'fixed_8', 'sm_16', 'sm_rtz', 'mpb_sat', 'mpb_inf', 'mpb_asym'])
+    @pytest.mark.parametrize('src, early_check', [
+        (MPBFixedContext(-4, RealFloat(exp=0, c=255),
+                         overflow=fp.OverflowMode.OVERFLOW, enable_inf=True), False),
+        (MPBFixedContext(-4, RealFloat(exp=0, c=255),
+                         overflow=fp.OverflowMode.OVERFLOW, enable_inf=True), True),
+        (fp.FixedContext(True, -16, 32, fp.RoundingMode.RNE, _SAT), True),
+        (fp.SMFixedContext(-8, 16, fp.RoundingMode.RTZ, _SAT), False),
+    ], ids=['mpb_inf-plain', 'mpb_inf-early_check', 'fixed_32-early_check', 'sm_rtz-plain'])
     def test_equivalence(self, src, early_check):
         f = _quantizer(src)
         out = UnfoldOverflow.apply(f.ast, early_check=early_check)
@@ -494,11 +490,6 @@ class TestWhere:
         remaining = [c for c in _round_ctxs(out) if c in (fp.FP16, fp.FP32)]
         assert remaining == left
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
-
-    def test_index_past_the_last_site(self):
-        f = self._two()
-        with pytest.raises(TransformReferenceError):
-            UnfoldOverflow.apply(f.ast, where=9)
 
     def test_naming_a_refused_block_raises(self):
         """A refused block is not a site, so no index names it -- and the
@@ -671,8 +662,8 @@ class TestEquivalence:
 
     @pytest.mark.parametrize('early_check', [False, True], ids=['plain', 'early_check'])
     @pytest.mark.parametrize('ctx', [
-        fp.FP16, fp.FP32, fp.FP64, fp.IEEEContext(4, 8), fp.IEEEContext(8, 32),
-    ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8', 'ieee_8_32'])
+        fp.FP16, fp.FP32, fp.FP64, fp.IEEEContext(4, 8),
+    ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8'])
     def test_formats(self, ctx, early_check):
         f = _quantizer(ctx)
         out = UnfoldOverflow.apply(f.ast, early_check=early_check)

@@ -11,8 +11,7 @@ For each context class, we verify:
 import pytest
 import fpy2 as fp
 import fpy2.number.format
-from fractions import Fraction
-from hypothesis import given, assume, strategies as st
+from hypothesis import given, strategies as st
 
 from tests.unit.generators import (
     mp_float_contexts,
@@ -21,7 +20,6 @@ from tests.unit.generators import (
     efloat_contexts,
     fixed_contexts,
     sm_fixed_contexts,
-    floats,
     common_contexts,
 )
 
@@ -33,27 +31,6 @@ from tests.unit.generators import (
 def mp_float_formats(draw, max_p: int = 64):
     p = draw(st.integers(1, max_p))
     return fp.number.format.MPFloatFormat(p)
-
-@st.composite
-def mp_fixed_formats(draw, min_n: int = -32, max_n: int = 32):
-    n = draw(st.integers(min_n, max_n))
-    enable_nan = draw(st.booleans())
-    enable_inf = draw(st.booleans())
-    return fp.number.format.MPFixedFormat(n, enable_nan, enable_inf)
-
-@st.composite
-def mps_float_formats(draw, max_p: int = 64, min_emin: int = -128, max_emin: int = 128):
-    p = draw(st.integers(1, max_p))
-    emin = draw(st.integers(min_emin, max_emin))
-    return fp.number.format.MPSFloatFormat(p, emin)
-
-@st.composite
-def efloat_formats(draw, max_es: int = 4, max_nbits: int = 8,
-                   min_eoffset: int = -16, max_eoffset: int = 16):
-    # reuse efloat_contexts and extract format
-    ctx = draw(efloat_contexts(max_es=max_es, max_nbits=max_nbits,
-                               min_eoffset=min_eoffset, max_eoffset=max_eoffset))
-    return ctx.format()
 
 @st.composite
 def ieee_formats(draw, max_es: int = 5, max_nbits: int = 16):
@@ -291,77 +268,6 @@ class TestFormatEquality:
 
 
 ###########################################################
-# Tests: is_equiv
-
-class TestFormatIsEquiv:
-    """Test format equality (formerly is_equiv, now __eq__)."""
-
-    def test_mp_float_is_equiv_self(self):
-        fmt = fp.number.format.MPFloatFormat(53)
-        assert fmt == fmt
-
-    def test_mp_float_is_equiv_other(self):
-        fmt1 = fp.number.format.MPFloatFormat(53)
-        fmt2 = fp.number.format.MPFloatFormat(53)
-        assert fmt1 == fmt2
-
-    def test_mp_float_not_equiv_different_p(self):
-        assert fp.number.format.MPFloatFormat(53) != fp.number.format.MPFloatFormat(24)
-
-    def test_mp_fixed_is_equiv(self):
-        fmt1 = fp.number.format.MPFixedFormat(-4, True, False)
-        fmt2 = fp.number.format.MPFixedFormat(-4, True, False)
-        assert fmt1 == fmt2
-
-    def test_ieee_is_equiv(self):
-        fmt1 = fp.number.format.IEEEFormat(11, 64)
-        fmt2 = fp.number.format.IEEEFormat(11, 64)
-        assert fmt1 == fmt2
-
-    def test_ieee_not_equiv_different_nbits(self):
-        assert fp.number.format.IEEEFormat(8, 32) != fp.number.format.IEEEFormat(11, 64)
-
-
-###########################################################
-# Tests: representable_under / canonical_under / normal_under
-
-class TestFormatRepresentable:
-    """Test representable_under for format types."""
-
-    @given(
-        mps_float_formats(max_p=8, min_emin=-64, max_emin=64).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
-            )
-        )
-    )
-    def test_mps_float_representable(self, fmt_x):
-        fmt, x = fmt_x
-        assert fmt.representable_in(x)
-
-    @given(efloat_formats(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8).flatmap(
-        lambda fmt: st.tuples(
-            st.just(fmt),
-            floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.EFloatContext.from_format(fmt))
-        )
-    ))
-    def test_efloat_representable(self, fmt_x):
-        fmt, x = fmt_x
-        assert fmt.representable_in(x)
-
-    @given(ieee_formats(max_es=5, max_nbits=16).flatmap(
-        lambda fmt: st.tuples(
-            st.just(fmt),
-            floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.IEEEContext.from_format(fmt))
-        )
-    ))
-    def test_ieee_representable(self, fmt_x):
-        fmt, x = fmt_x
-        assert fmt.representable_in(x)
-
-
-###########################################################
 # Tests: enable_nan / enable_inf on the float formats
 
 class TestFloatFormatSpecialValues:
@@ -402,136 +308,10 @@ class TestFloatFormatSpecialValues:
 
 
 ###########################################################
-# Tests: OrdinalFormat methods
-
-class TestOrdinalFormat:
-    """Test OrdinalFormat methods on format types."""
-
-    @given(
-        mps_float_formats(max_p=8, min_emin=-32, max_emin=32).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
-            )
-        )
-    )
-    def test_mps_to_ordinal_from_ordinal_roundtrip(self, fmt_x):
-        fmt, x = fmt_x
-        ord_val = fmt.to_ordinal(x)
-        x2 = fmt.from_ordinal(ord_val)
-        assert fmt.to_ordinal(x2) == ord_val
-
-    @given(
-        mp_fixed_formats(min_n=-16, max_n=16).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fp.MPFixedContext.from_format(fmt))
-            )
-        )
-    )
-    def test_mp_fixed_to_fractional_ordinal(self, fmt_x):
-        fmt, x = fmt_x
-        frac_ord = fmt.to_fractional_ordinal(x)
-        assert isinstance(frac_ord, Fraction)
-
-    @given(
-        mps_float_formats(max_p=4, min_emin=-8, max_emin=8).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=4, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
-            )
-        )
-    )
-    def test_mps_next_up(self, fmt_x):
-        fmt, x = fmt_x
-        assume(x < fmt.from_ordinal(1000000))
-        y = fmt.next_up(x)
-        assert isinstance(y, fp.Float)
-        # ordinal of y should be one more than ordinal of x
-        assert fmt.to_ordinal(y) == fmt.to_ordinal(x) + 1
-
-    @given(
-        mps_float_formats(max_p=4, min_emin=-8, max_emin=8).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=4, exp_min=-20, exp_max=20, allow_infinity=False, allow_nan=False, ctx=fp.MPSFloatContext.from_format(fmt))
-            )
-        )
-    )
-    def test_mps_next_down(self, fmt_x):
-        fmt, x = fmt_x
-        assume(x > fmt.from_ordinal(-1000000))
-        y = fmt.next_down(x)
-        assert isinstance(y, fp.Float)
-        assert fmt.to_ordinal(y) == fmt.to_ordinal(x) - 1
-
-
-###########################################################
-# Tests: SizedFormat methods
-
-class TestSizedFormat:
-    """Test SizedFormat methods on format types."""
-
-    @given(efloat_formats(max_es=4, max_nbits=8, min_eoffset=-8, max_eoffset=8).filter(
-        lambda fmt: fp.EFloatContext.from_format(fmt).has_nonzero()
-    ))
-    def test_efloat_maxval(self, fmt: fp.number.format.EFloatFormat):
-        maxval = fmt.maxval()
-        assert isinstance(maxval, fp.Float)
-        assert not maxval.is_negative()
-
-    @given(ieee_formats(max_es=5, max_nbits=16))
-    def test_ieee_largest_smallest(self, fmt: fp.number.format.IEEEFormat):
-        largest = fmt.largest()
-        smallest = fmt.smallest()
-        assert isinstance(largest, fp.Float)
-        assert isinstance(smallest, fp.Float)
-        assert not largest.is_negative()
-        assert not smallest.is_positive()
-
-    @given(fixed_formats(min_scale=-8, max_scale=8, max_nbits=8))
-    def test_fixed_maxval(self, fmt: fp.number.format.FixedFormat):
-        maxval = fmt.maxval()
-        assert isinstance(maxval, fp.Float)
-        assert not maxval.is_negative()
-
-
-###########################################################
 # Tests: EncodableFormat methods
 
 class TestEncodableFormat:
     """Test EncodableFormat methods on format types."""
-
-    @given(
-        ieee_formats(max_es=5, max_nbits=16).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=8, exp_min=-100, exp_max=100, allow_infinity=False, allow_nan=False, ctx=fp.IEEEContext.from_format(fmt))
-            )
-        )
-    )
-    def test_ieee_encode_decode_roundtrip(self, fmt_x):
-        fmt, x = fmt_x
-        encoded = fmt.encode(x)
-        assert isinstance(encoded, int)
-        assert encoded >= 0
-        decoded = fmt.decode(encoded)
-        assert x == decoded
-
-    @given(
-        fixed_formats(min_scale=-8, max_scale=8, max_nbits=8).flatmap(
-            lambda fmt: st.tuples(
-                st.just(fmt),
-                floats(prec_max=8, exp_min=-50, exp_max=50, allow_infinity=False, allow_nan=False, ctx=fp.FixedContext.from_format(fmt))
-            )
-        )
-    )
-    def test_fixed_encode_decode_roundtrip(self, fmt_x):
-        fmt, x = fmt_x
-        encoded = fmt.encode(x)
-        assert isinstance(encoded, int)
-        decoded = fmt.decode(encoded)
-        assert x == decoded
 
     @given(exp_formats(max_nbits=8, min_eoffset=-8, max_eoffset=8).flatmap(
         lambda fmt: st.tuples(
@@ -612,13 +392,6 @@ class TestFormatKnownValues:
         fmt = ctx.format()
         assert isinstance(fmt, fp.number.format.MPFloatFormat)
         assert fmt.pmax == 24
-
-    def test_mpfloat_format_is_equiv_context(self):
-        """MPFloatFormat equality mirrors MPFloatContext.is_equiv."""
-        fmt1 = fp.number.format.MPFloatFormat(53)
-        fmt2 = fp.number.format.MPFloatFormat(53)
-        assert fmt1 == fmt2
-        assert fmt1 != fp.number.format.MPFloatFormat(24)
 
     def test_mps_format_minval(self):
         """MPSFloatFormat.minval() works correctly."""

@@ -1,11 +1,11 @@
-"""Unit tests for :func:`fpy2.strategies.lift_context`."""
+"""Unit tests for the :class:`fpy2.transform.LiftContext` transform."""
 
 
 import fpy2 as fp
 
 from fpy2.ast import Assign, ContextStmt, ForStmt, Var
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.strategies import lift_context
+from fpy2.transform import LiftContext
 
 
 def _find_stmt(ast, node_type):
@@ -52,35 +52,31 @@ def _no_ctx(x: fp.Real) -> fp.Real:
 class TestLiftContext:
 
     def test_ctor_lifted(self):
-        out = lift_context(_with_ctor)
-        assert isinstance(out.ast.body.stmts[0], Assign)
-        with_stmt = _find_stmt(out.ast, ContextStmt)
+        out = LiftContext.apply(_with_ctor.ast)
+        assert isinstance(out.body.stmts[0], Assign)
+        with_stmt = _find_stmt(out, ContextStmt)
         assert isinstance(with_stmt.ctx, Var)
         for x in (0.0, 1.5, -3.25):
-            assert _with_ctor(x) == out(x)
+            assert _with_ctor(x) == _with_ctor.with_ast(out)(x)
         # the input is not mutated
         assert not isinstance(_with_ctor.ast.body.stmts[0], Assign)
 
     def test_hoisted_out_of_loop(self):
-        out = lift_context(_ctor_in_loop)
+        out = LiftContext.apply(_ctor_in_loop.ast)
         # the binding precedes the loop; the loop body references it
-        assert isinstance(out.ast.body.stmts[0], Assign)
-        loop = _find_stmt(out.ast, ForStmt)
-        with_stmt = _find_stmt(out.ast, ContextStmt)
+        assert isinstance(out.body.stmts[0], Assign)
+        loop = _find_stmt(out, ForStmt)
+        with_stmt = _find_stmt(out, ContextStmt)
         assert loop is not None and isinstance(with_stmt.ctx, Var)
         xs = [1.0, 2.5, -0.5]
-        assert _ctor_in_loop(xs) == out(xs)
+        assert _ctor_in_loop(xs) == _ctor_in_loop.with_ast(out)(xs)
 
     def test_var_ctx_noop(self):
-        out = lift_context(_ctx_param)
-        assert out.ast.is_equiv(_ctx_param.ast)
+        assert LiftContext.apply(_ctx_param.ast).is_equiv(_ctx_param.ast)
 
     def test_no_ctx_noop(self):
-        out = lift_context(_no_ctx)
-        assert out.ast.is_equiv(_no_ctx.ast)
+        assert LiftContext.apply(_no_ctx.ast).is_equiv(_no_ctx.ast)
 
     def test_idempotent(self):
-        once = lift_context(_with_ctor)
-        twice = lift_context(once)
-        assert once.ast.is_equiv(twice.ast)
-
+        once = LiftContext.apply(_with_ctor.ast)
+        assert LiftContext.apply(once).is_equiv(once)

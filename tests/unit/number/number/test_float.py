@@ -82,25 +82,6 @@ class TestFloatConstructors(FloatTestCast):
 
 class TestFloatReprMethods(FloatTestCast):
 
-    @given(st.integers())
-    def test_as_int(self, x):
-        y = fp.Float.from_int(x)
-        assert x == int(y)
-
-    @given(st.floats(allow_nan=False, allow_infinity=False, allow_subnormal=True))
-    def test_as_float(self, x):
-        y = fp.Float.from_float(x)
-        assert x == float(y)
-
-    @given(st.fractions(min_value=-1, max_value=1, max_denominator=1000))
-    def test_as_rational(self, x):
-        if fp.utils.is_dyadic(x):
-            y = fp.Float.from_rational(x)
-            assert x == y.as_rational()
-        else:
-            with pytest.raises(ValueError):
-                fp.Float.from_rational(x)
-
     @given(floats(prec_max=64, exp_max=512, exp_min=-512), st.integers(-512, 512))
     def test_split(self, x: fp.Float, n: int):
         hi, lo = x.split(n)

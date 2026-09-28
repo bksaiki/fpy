@@ -178,20 +178,6 @@ class TestSequentialLoops:
             'return acc'
         )
 
-    def test_a_foreign_constant_is_resolved_by_the_size_analysis(self):
-        """`ArraySizeInfer` proves the iterable's length through the free
-        variable, and `static_trip_count` reads it."""
-        width = 8
-
-        @fp.fpy(ctx=fp.FP32)
-        def fold(x: fp.Real):
-            acc = fp.round(0)
-            for _k in range(width):
-                acc = acc + x
-            return acc
-
-        assert 'tl.static_range(8)' in _emit(fold, [_R32])
-
     def test_a_runtime_count_carrying_a_scalar(self):
         """A loop at runtime carries each value at one type.  Outside a row
         tile a literal start is one: Triton types it by the body."""
@@ -227,13 +213,6 @@ class TestContextStatements:
 
 
 class TestMemory:
-    def test_a_flat_load(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(xs: list[fp.Real], i: fp.Real):
-            return xs[i]
-
-        assert _emit(f, [ListType(_R32, 8), _INT]) == \
-            '__t0 = tl.load(xs_ptr + i)\nreturn __t0'
 
     @pytest.mark.parametrize('rows,cols', [(3, 5), (7, 1)])
     def test_the_offset_agrees_with_row_major_flattening(self, rows, cols):
@@ -303,9 +282,8 @@ class TestLiteralCast:
         def f(xs: list[fp.Real], i: fp.Real):
             return xs[i] * 2
 
-        out = _emit(f, [ListType(_R32, 8), _INT])
-        assert '2.0' in out
-        assert '.to(' not in out
+        assert _emit(f, [ListType(_R32, 8), _INT]) == \
+            '__t0 = tl.load(xs_ptr + i)\nreturn (__t0 * 2.0)'
 
     def test_everything_emitted_is_parseable_python(self):
         """The emitter's output has to lex, whatever else it is."""
@@ -331,24 +309,6 @@ class TestNamedRefusals:
 
         with pytest.raises(TritonEmitError, match='comprehension'):
             _emit(f, [ListType(_R32, 8)])
-
-    def test_a_tuple_names_itself(self):
-        @fp.fpy(ctx=fp.FP32)
-        def f(x: fp.Real):
-            return (x, x)
-
-        with pytest.raises(TritonEmitError, match='tuple'):
-            _emit(f, [_R32])
-
-    def test_an_assert_names_itself(self):
-        """A kernel cannot raise."""
-        @fp.fpy(ctx=fp.FP32)
-        def f(x: fp.Real):
-            assert x > 0, 'positive'
-            return x
-
-        with pytest.raises(TritonEmitError, match='cannot raise'):
-            _emit(f, [_R32])
 
     def test_every_abstract_visit_method_is_implemented(self):
         """`Visitor` is an ABC, so a node kind added to the AST breaks this

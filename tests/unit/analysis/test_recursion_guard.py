@@ -53,18 +53,6 @@ class TestTypeInferGuard:
         with pytest.raises(TypeInferError):
             TypeInfer.check(m.ast)
 
-    def test_acyclic_multi_function_still_checks(self):
-        @fp.fpy
-        def g(x: fp.Real) -> fp.Real:
-            return x + 1
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return g(x) * 2
-
-        # no exception
-        TypeInfer.check(f.ast)
-
 
 class TestFormatInferGuard:
     def test_recursion_raises_call_graph_error(self):

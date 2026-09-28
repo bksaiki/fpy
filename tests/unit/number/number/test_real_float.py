@@ -23,18 +23,11 @@ class TestRealFloatConstructors():
         assert isinstance(x, fp.RealFloat)
         assert x == a
 
-    @given(st.fractions(min_value=-1e6, max_value=1e6, max_denominator=1_000_000).filter(
-        lambda x: fp.utils.is_dyadic(x)
-    ))
-    def test_from_rational(self, a: Fraction):
-        x = fp.RealFloat.from_rational(a)
-        assert isinstance(x, fp.RealFloat)
-        assert x == a
-
     @given(real_floats(prec_max=16, exp_min=-32, exp_max=32))
     def test_from_rational_roundtrip(self, x: fp.RealFloat):
         # `from_rational` recovers the value, though not necessarily the encoding
         y = fp.RealFloat.from_rational(x.as_rational())
+        assert isinstance(y, fp.RealFloat)
         assert y == x
 
 
@@ -85,7 +78,6 @@ class TestRealFloatReprMethods():
         assert not y.is_more_significant(-2)
         assert not y.is_more_significant(-1)
         assert not y.is_more_significant(0)
-
 
     @given(real_floats(prec_max=64, exp_max=512, exp_min=-512), st.integers(-512, 512))
     def test_split(self, x: fp.RealFloat, n: int):

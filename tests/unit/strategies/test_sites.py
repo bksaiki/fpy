@@ -145,13 +145,6 @@ def test_the_rounding_strategies_list_their_roundings():
         ], strategy
 
 
-def test_a_strategy_that_applies_to_nothing_lists_nothing():
-    """`two_sites` rounds to `FP16`, which has no negative-zero rule to shed and
-    nothing fixed-point to rescale, so neither strategy has a site in it."""
-    for strategy in (unfold_neg_zero, rescale_fixed):
-        assert sites(strategy, two_sites) == []
-
-
 def test_a_listing_is_outermost_first():
     found = sites(unfold_special, nested)
     assert [c.path.stmt() for c in found] == [
@@ -187,20 +180,7 @@ def test_inline_lists_expressions():
     found = sites(inline, calls)
     assert all(isinstance(c, ExprCursor) for c in found)
     assert [_callee(c) for c in found] == ['sq', 'cube']
-
-
-def test_inline_honours_the_funcs_filter():
-    only = sites(inline, calls, funcs=[cube])
-    assert [_callee(c) for c in only] == ['cube']
-
-
-def test_a_listing_is_semantic():
-    """A candidate the strategy refuses is not a site: it neither appears in a
-    listing nor consumes an index.  A cursor naming it still says why."""
-    assert sites(unfold_special, declining) == []
-    at_block = StmtCursor(declining.ast, FuncBody().stmt(0))
-    with pytest.raises(TransformDeclined, match='rounds exactly'):
-        unfold_special(declining, where=at_block)
+    assert [_callee(c) for c in sites(inline, calls, funcs=[cube])] == ['cube']
 
 
 def test_a_strategy_that_takes_no_where_has_no_sites():
@@ -222,14 +202,6 @@ def _aims_alike(strategy, func, i, cursor):
             strategy(func, where=cursor)
         return
     assert strategy(func, where=cursor).format() == expect
-
-
-@pytest.mark.parametrize('strategy', [
-    unfold_special, unfold_neg_zero, unfold_overflow, float_to_fixed, rescale_fixed,
-])
-def test_a_listed_site_aims_the_same_as_its_index(strategy):
-    for i, cursor in enumerate(sites(strategy, two_sites)):
-        _aims_alike(strategy, two_sites, i, cursor)
 
 
 @pytest.mark.parametrize('strategy,func', [
@@ -255,19 +227,8 @@ def test_a_cast_block_is_not_listed_where_it_does_not_count():
         assert [c.path.stmt().index for c in listed] == [0]
 
 
-def test_a_listed_insert_round_site_aims_the_same_as_its_index():
-    """`insert_round` takes a `ctx` as well, so it binds one rather than
-    joining the parametrization above."""
-    def aim(func, where):
-        return insert_round(func, fp.FP64, where=where)
-
-    for i, cursor in enumerate(sites(insert_round, two_sites, ctx=fp.FP64)):
-        _aims_alike(aim, two_sites, i, cursor)
 
 
-def test_a_listed_call_aims_the_same_as_its_index():
-    for i, cursor in enumerate(sites(inline, calls)):
-        assert inline(calls, cursor).format() == inline(calls, i).format()
 
 
 # ----------------------------------------------------------------------
@@ -302,12 +263,6 @@ def test_within_asks_a_forwarded_site_what_it_now_holds():
     assert len(inner) == 1
     # ... and it is inside the wrapper the rewrite left behind
     assert inner[0].path.stmt() != FuncBody().stmt(0).block('body').stmt(0)
-
-
-def test_within_of_another_program_is_a_bad_reference():
-    other = StmtCursor(nested.ast, FuncBody().stmt(0))
-    with pytest.raises(TransformReferenceError, match='unrelated program'):
-        sites(unfold_special, two_sites, other)
 
 
 def test_within_is_forwarded_like_a_where():

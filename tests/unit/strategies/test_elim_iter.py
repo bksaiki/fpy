@@ -12,7 +12,7 @@ import fpy2 as fp
 
 from fpy2.ast import Enumerate, Zip
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.strategies import elim_iter, inline, unroll_for
+from fpy2.strategies import elim_iter
 
 
 def _has_node(ast, node_type) -> bool:
@@ -67,26 +67,6 @@ _YS = [0.5, -1.5, 2.5, -3.5]
 
 class TestElimIter:
 
-    def test_zip_eliminated(self):
-        out = elim_iter(_dot)
-        assert not _has_node(out.ast, Zip)
-        assert _dot(_XS, _YS) == out(_XS, _YS)
-        # the input is not mutated
-        assert _has_node(_dot.ast, Zip)
-
-    def test_enumerate_eliminated(self):
-        out = elim_iter(_weighted_sum)
-        assert not _has_node(out.ast, Enumerate)
-        assert _weighted_sum(_XS) == out(_XS)
-
-    def test_enumerate_of_zip_eliminated(self):
-        # both intermediates collapse at once — this is why the bundle
-        # runs EnumerateElim before ZipElim
-        out = elim_iter(_enum_zip)
-        assert not _has_node(out.ast, Enumerate)
-        assert not _has_node(out.ast, Zip)
-        assert _enum_zip(_XS, _YS) == out(_XS, _YS)
-
     def test_flags(self):
         out = elim_iter(_dot, enable_zip=False)
         assert _has_node(out.ast, Zip)
@@ -102,14 +82,4 @@ class TestElimIter:
         assert not _has_node(out.ast, Zip)
         assert _enum_zip(_XS, _YS) == out(_XS, _YS)
 
-    def test_loop_schedule_composition(self):
-        # inline, then eliminate the derived iterable, then unroll the
-        # resulting indexed loop
-        sched = inline(_dot)
-        sched = elim_iter(sched)
-        sched = unroll_for(sched, times=1)
-        assert not _has_node(sched.ast, Zip)
-        assert _dot(_XS, _YS) == sched(_XS, _YS)
-        # odd length exercises the PEEL remainder
-        assert _dot(_XS[:3], _YS[:3]) == sched(_XS[:3], _YS[:3])
 

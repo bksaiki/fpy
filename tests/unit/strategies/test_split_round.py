@@ -16,7 +16,6 @@ from fpy2.analysis.format_infer import DoubleRoundOp, derive_intermediate
 from fpy2.strategies import (
     ExprCursor,
     TransformDeclined,
-    TransformReferenceError,
     monomorphize,
     refusals,
     simplify,
@@ -65,7 +64,6 @@ class TestSplitRound:
         for a, b in _sweep(200):
             assert str(out(a, b)) == str(_product(a, b))
 
-
     def test_rejects_a_non_context_intermediate(self):
         with pytest.raises(TypeError):
             split_round(_product, fp.FP32.format())  # type: ignore[arg-type]
@@ -95,15 +93,6 @@ class TestWhere:
         assert len(found) == 3      # two operands and the outer add
         assert all(isinstance(c, ExprCursor) for c in found)
 
-    def test_a_cursor_aims_the_same_as_its_index(self):
-        for j, cursor in enumerate(sites(split_round, _two_ops, ctx=VIA32)):
-            assert split_round(_two_ops, VIA32, cursor).format() \
-                == split_round(_two_ops, VIA32, j).format()
-
-    def test_a_where_naming_nothing(self):
-        with pytest.raises(TransformReferenceError):
-            split_round(_product, VIA32, 7)
-
     def test_a_cursor_forwards_across_a_split(self):
         """A cursor taken before the first split still names its operation
         after, which is what `func.rebase` and `exprs_preserved` are for."""
@@ -111,11 +100,6 @@ class TestWhere:
         once = split_round(_two_ops, VIA32, listed[0])
         twice = split_round(once, VIA32, listed[1])
         assert twice.format().count('RoundingMode.RTO') == 2
-
-    def test_a_cursor_of_an_unrelated_program(self):
-        other = sites(split_round, _two_ops, ctx=VIA32)[0]
-        with pytest.raises(TransformReferenceError):
-            split_round(_product, VIA32, other)
 
 
 class TestTheRecipe:

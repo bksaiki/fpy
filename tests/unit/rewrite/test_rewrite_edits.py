@@ -197,17 +197,6 @@ def test_overlapping_matches_decline_the_whole_application():
         widen.apply(three)
 
 
-def test_a_named_match_is_unaffected_by_other_overlaps():
-    """Only one match is rewritten, so nothing conflicts."""
-    @fp.fpy
-    def three(x):
-        y = x + 1
-        z = x + 1
-        w = x + 1
-        return y + z + w
-
-    out = widen.apply(three, 0)
-    assert out.edits is not None and len(out.edits.edits) == 1
 
 
 # ----------------------------------------------------------------------
@@ -228,18 +217,6 @@ def test_a_cursor_names_the_match_to_rewrite():
     assert out.edits is not None
     edit, = out.edits.edits
     assert edit.index == 2
-
-
-def test_an_index_and_the_cursor_it_lists_aim_alike():
-    @fp.fpy
-    def two(x):
-        y = x + 1
-        z = y * 3
-        y = x + 1
-        return y + z
-
-    for i, cursor in enumerate(find_all(bump_l, two)):
-        assert bump.apply(two, cursor).format() == bump.apply(two, i).format()
 
 
 def test_a_cursor_naming_no_match_is_a_bad_reference():
@@ -277,16 +254,6 @@ def test_a_stale_cursor_is_forwarded_on_arrival():
     twice_ = bump.apply(once, site)    # the second, named against the original
 
     assert twice_.format().count('x + 2') == 2
-
-
-def test_where_defaults_to_every_match():
-    @fp.fpy
-    def two(x, y, z):
-        a = x * y + z
-        b = z * y + x
-        return a + b
-
-    assert fma.apply(two).format().count('fp.fma') == 2
 
 
 def test_an_unselected_match_keeps_its_statements():

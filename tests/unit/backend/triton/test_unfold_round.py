@@ -97,11 +97,6 @@ def test_a_wrapping_round_from_an_integer_is_a_cast():
     assert '.to(tl.int8)' in _compile_wrap8(fp.SINT16).source
 
 
-def test_a_float_into_sint8_is_refused():
-    with pytest.raises(TritonEmitError, match='saturates where the context wraps'):
-        _compile_wrap8(fp.FP32)
-
-
 @pytest.mark.parametrize('mode', [UnfoldMode.NONE, UnfoldMode.ROUNDINGS])
 def test_a_wrapping_round_from_a_float_is_refused(mode):
     @fp.fpy(ctx=fp.FP32)

@@ -95,7 +95,6 @@ class TestFloatToFixed:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-
     def test_removes_the_float_rounding(self):
         assert fp.FP16 in _round_ctxs(_quantized_sum.ast)
         out = float_to_fixed(_quantized_sum)
@@ -109,13 +108,6 @@ class TestFloatToFixed:
     def test_preserves_results(self):
         out = float_to_fixed(_quantized_sum)
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
-
-    def test_idempotent(self):
-        """The lowered program has no float rounding left to lower."""
-        once = float_to_fixed(_quantized_sum)
-        twice = float_to_fixed(once)
-        assert twice.ast.is_equiv(once.ast)
-
 
     def test_composes_with_simplify(self):
         out = simplify(float_to_fixed(_quantized_sum), enable_const_fold_context=False)

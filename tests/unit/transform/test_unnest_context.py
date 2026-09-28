@@ -94,32 +94,6 @@ class TestTrailing:
         assert _nested_pairs(out) == 0
         assert _agrees(f, out)
 
-    def test_the_context_count_is_unchanged(self):
-        """The rewrite trades nesting for sibling order; it never duplicates
-        or drops a `with`."""
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                a = x + 1.0
-                with fp.FP16:
-                    b = a * 3.0
-            return b
-
-        def count(ast):
-            n = 0
-
-            class V(DefaultVisitor):
-                def _visit_context(self, stmt, ctx):
-                    nonlocal n
-                    n += 1
-                    super()._visit_context(stmt, ctx)
-
-            V()._visit_function(ast, None)
-            return n
-
-        assert count(UnnestContext.apply(f.ast)) == count(f.ast) == 2
-
-
     def test_a_peel_may_leave_a_sole_nested_block(self):
         """Peeling the trailing block leaves the parent holding one nested
         statement, which this pass declines and `DeadCodeEliminate`

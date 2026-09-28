@@ -155,9 +155,8 @@ def _walk_exprs(node):
                     yield from _walk_exprs(item)
 
 
-# Generator config used across the property tests below. Conservative
-# bounds keep test wall-clock reasonable while still exercising every
-# statement kind.
+# Generator config for the property test below: one assignment, no control
+# flow, to keep wall-clock down.
 _GEN_KWARGS = dict(
     max_depth=st.just(2),
     max_assigns=st.just(1),

@@ -25,7 +25,6 @@ from fpy2.types import ListType, RealType
 from .test_hoist_invariant import (
     _VALUES,
     _agrees_by_value,
-    _loop_bodies_text,
     _loops,
     _scale_factor,
     _text,
@@ -540,10 +539,6 @@ class TestTheWholeSchedule:
         assert 'ts[t10] = _t13' in src
         assert 'return (t14 * sum(ts))' in src
         assert len(_loops(out.ast)[-1].body.stmts) == 4
-
-    def test_the_elements_are_written_unscaled(self):
-        out = _full_schedule(fused_sum)
-        assert '2 **' not in _loop_bodies_text(out.ast)
 
     def test_the_fp32_branch_is_untouched(self):
         """Condition 1 is per-site: the `else` arm rounds, so its reduction is

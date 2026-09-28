@@ -27,7 +27,6 @@ from fpy2.function import Function
 from fpy2.transform import (
     ExprCursor,
     Monomorphize,
-    RoundElim,
     RoundInsert,
     TransformDeclined,
     TransformReferenceError,
@@ -124,11 +123,6 @@ class TestSites:
         assert len(RoundInsert.sites(ast, ctx=fp.FP64)) == 2
         assert RoundInsert.sites(ast, ctx=fp.FP32) == []
 
-    def test_a_cursor_aims_the_same_as_its_index(self):
-        ast = _fp32_args(_sum_of_squares, 2)
-        for i, cursor in enumerate(RoundInsert.sites(ast, ctx=fp.FP64)):
-            expect = RoundInsert.apply(ast, fp.FP64, where=i)
-            assert RoundInsert.apply(ast, fp.FP64, where=cursor).is_equiv(expect)
 
 
 # ----------------------------------------------------------------------
@@ -176,10 +170,6 @@ class TestRoundInsert:
         once = RoundInsert.apply(_fp32_args(_sum_of_squares, 2), fp.FP64)
         assert RoundInsert.apply(once, fp.FP64).is_equiv(once)
 
-    def test_inverts_round_elim(self):
-        pinned = _fp32_args(_sum_of_squares, 2)
-        out = RoundInsert.apply(RoundElim.apply(pinned), fp.FP64)
-        assert _agree(pinned, out, _sum_of_squares.runtime, 2)
 
 
 # ----------------------------------------------------------------------
@@ -229,11 +219,6 @@ class TestDeclines:
         ast = _fp32_args(_sum_of_squares, 2)
         with pytest.raises(TypeError):
             RoundInsert.apply(ast, fp.FP64.format())  # type: ignore[arg-type]
-
-    def test_a_where_out_of_range(self):
-        ast = _fp32_args(_sum_of_squares, 2)
-        with pytest.raises(TransformReferenceError, match='does not correspond'):
-            RoundInsert.apply(ast, fp.FP64, where=99)
 
     def test_a_where_of_the_wrong_type(self):
         ast = _fp32_args(_sum_of_squares, 2)

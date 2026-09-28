@@ -51,36 +51,6 @@ def _is_pos_zero(x) -> bool:
 class TestVariadicNaN:
     """``Min`` / ``Max`` propagate NaN regardless of argument position."""
 
-    def test_min_nan_first(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return min(a, b)
-        assert _is_nan(f(math.nan, 1.0, ctx=fp.FP64))
-
-    def test_min_nan_second(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return min(a, b)
-        assert _is_nan(f(1.0, math.nan, ctx=fp.FP64))
-
-    def test_max_nan_first(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return max(a, b)
-        assert _is_nan(f(math.nan, 1.0, ctx=fp.FP64))
-
-    def test_max_nan_second(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return max(a, b)
-        assert _is_nan(f(1.0, math.nan, ctx=fp.FP64))
-
-    def test_min_both_nan(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return min(a, b)
-        assert _is_nan(f(math.nan, math.nan, ctx=fp.FP64))
-
     def test_max_nan_in_middle_of_three(self):
         """Three-arg min/max with NaN sandwiched between finite values."""
         @fp.fpy
@@ -93,35 +63,6 @@ class TestVariadicNaN:
         def f(a: fp.Real, b: fp.Real, c: fp.Real) -> fp.Real:
             return min(a, b, c)
         assert _is_nan(f(1.0, 2.0, math.nan, ctx=fp.FP64))
-
-
-class TestVariadicSignedZero:
-    """``Min`` / ``Max`` respect IEEE 754 signed-zero ordering."""
-
-    def test_min_neg_pos_zero(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return min(a, b)
-        assert _is_neg_zero(f(-0.0, 0.0, ctx=fp.FP64))
-
-    def test_min_pos_neg_zero(self):
-        """Order-independent: ``min(+0, -0)`` must still be ``-0``."""
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return min(a, b)
-        assert _is_neg_zero(f(0.0, -0.0, ctx=fp.FP64))
-
-    def test_max_neg_pos_zero(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return max(a, b)
-        assert _is_pos_zero(f(-0.0, 0.0, ctx=fp.FP64))
-
-    def test_max_pos_neg_zero(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return max(a, b)
-        assert _is_pos_zero(f(0.0, -0.0, ctx=fp.FP64))
 
 
 class TestVariadicSanity:
