@@ -471,6 +471,35 @@ class TestRoundingAwayFromZeroLeavesTheBinade:
         assert self._max_logb(down, 'fp.trunc((x * fp.exp2(-15)))') == 3
 
 
+class TestAPowerOfTwoThroughAName:
+    """A power-of-two factor multiplies exactly whether written in place or
+    bound to a name first, which is how `HoistInvariant` leaves it."""
+
+    def test_it_bounds_like_the_factor_in_place(self):
+
+        @fp.fpy(ctx=fp.REAL)
+        def inline(x):
+            k = fp.logb(x) - 10
+            with fp.MPFixedContext(-1, fp.RM.RTZ):
+                return fp.round(x * 2 ** -k)
+
+        @fp.fpy(ctx=fp.REAL)
+        def named(x):
+            k = fp.logb(x) - 10
+            s = 2 ** -k
+            with fp.MPFixedContext(-1, fp.RM.RTZ):
+                return fp.round(x * s)
+
+        maxvals = []
+        for fn in (inline, named):
+            ast = monomorphize(fn, args=[RealType(fp.FP16)]).ast
+            fa = FormatInfer.analyze(ast, use_digit_bounds=True)
+            [fmt] = [f for e, f in fa.by_expr.items() if e.format().startswith('fp.round')]
+            maxvals.append(fmt.pos_maxval)
+        # `x * 2 ** -k` is below 2^11, so an 11-bit integer
+        assert maxvals == [fp.RealFloat.from_int(2 ** 11)] * 2
+
+
 class TestAPartOfAListKeepsItsPairing:
     """`for i in range(a, b, s)` visits part of a list, so `xs[i]` is an
     element of that part.  Two parts taken over the same range stay paired --

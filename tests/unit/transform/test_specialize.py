@@ -232,6 +232,31 @@ class TestShape:
         assert len([n for n in specs if n.startswith('callee')]) == 1
 
 
+class TestTheCallersClassNarrowsTheParameter:
+    """A parameter format loses the NaN and infinities its caller's class rules
+    out.  Through the type, so it is also in the key: a caller that cannot rule
+    them out gets a spec of its own."""
+
+    def test_a_guarded_and_an_unguarded_call_are_two_specs(self):
+        @fp.fpy(ctx=fp.REAL)
+        def scale(x, k):
+            return x * 2 ** k
+
+        @fp.fpy(ctx=fp.REAL)
+        def caller(x, y):
+            a = scale(x, max(fp.logb(y), -126))
+            if fp.isfinite(y):
+                return scale(x, max(fp.logb(y), -126))
+            return a
+
+        f32 = RealType(fp.FP32)
+        specs = _specs(_module((caller, [f32, f32])))
+        ks = [s.ast.args[1].type.fmt for n, s in specs.items() if n.startswith('scale')]
+        assert sorted((k.enable_nan, k.enable_inf) for k in ks) == [
+            (False, False), (True, True),
+        ]
+
+
 class TestDerivedBounds:
     """A caller's relation between two arguments -- `n` is `xs`'s greatest
     exponent less twelve -- reduces to no per-argument format, so it cannot be

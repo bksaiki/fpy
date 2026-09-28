@@ -707,6 +707,65 @@ class TestArgumentsAndContexts:
         assert _cls(f, 'g(x)') == TOP
 
 
+@fp.fpy(ctx=fp.REAL)
+def _exponent(x: fp.Real, emin: fp.Real) -> fp.Real:
+    return max(fp.logb(x), emin)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _exponent_plus_one(x: fp.Real) -> fp.Real:
+    return _exponent(x, -126) + 1
+
+
+@fp.fpy(ctx=fp.FP64)
+def _store_then_read(xs: list[fp.Real], ys: list[fp.Real], z: fp.Real) -> fp.Real:
+    ok = True
+    for y in ys:
+        b = fp.isfinite(y)
+        ok = ok and b
+    if ok:
+        xs[0] = z
+        return ys[0]
+    return 0.0
+
+
+class TestCalls:
+    """A call is its callee's return class under the call's argument classes:
+    on its own `_exponent` may return a NaN or `+inf`, and only the caller's
+    guard rules them out."""
+
+    def test_a_guard_in_the_caller_reaches_the_callee(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            a = _exponent(x, -14)
+            if fp.isfinite(x):
+                return _exponent(x, -126)
+            return a
+
+        assert _cls(f, '_exponent(x, -126)', [_F32]) == ZERO | FINITE
+        assert _cls(f, '_exponent(x, -14)', [_F32]) == NAN | POS_INF | ZERO | FINITE
+
+    def test_through_a_chain_of_calls(self):
+        @fp.fpy(ctx=fp.REAL)
+        def f(x: fp.Real) -> fp.Real:
+            if fp.isfinite(x):
+                return _exponent_plus_one(x)
+            return 0.0
+
+        assert _cls(f, '_exponent_plus_one(x)', [_F32]) == ZERO | FINITE
+
+    def test_a_list_passed_twice_is_one_list(self):
+        """On its own, `_store_then_read` assumes `xs` and `ys` are two lists,
+        so `ys[0]` is finite; handed `a` twice, the store makes it `z`."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(a: list[fp.Real], b: list[fp.Real], z: fp.Real) -> fp.Real:
+            return _store_then_read(a, a, z) + _store_then_read(a, b, z)
+
+        args = [ListType(RealType(fp.FP64), 1)] * 2 + [RealType(fp.FP64)]
+        assert _cls(f, '_store_then_read(a, a, z)', args) == TOP
+        assert _cls(f, '_store_then_read(a, b, z)', args) == ZERO | FINITE
+
+
 class TestListElementClasses:
     """What a list's elements are, keyed by the location they live in.
 

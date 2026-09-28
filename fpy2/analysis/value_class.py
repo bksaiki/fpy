@@ -47,6 +47,10 @@ rule here reports the classes its rounding context can represent, which for an
 unbounded or symbolic context is every class — so adding a rule can only narrow,
 never correct.
 
+A call to an FPy function has the class its callee returns, analyzed with the
+call's argument classes rather than summarized once: ``max(logb(x), emin)`` is
+finite only where the caller has ruled out a NaN ``x``.
+
 A list or tuple carries no class of its own; a list's elements share one per
 region, or per definition where a region holds several lists
 (:data:`_ElementKey`).
@@ -69,10 +73,11 @@ from typing import TypeAlias
 
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
+from ..function import Function
 from ..number import REAL, Context, Float
 from ..number.context.format import Format
 from ..types import ListType, RealType, Type
-from .alias import Alias, AliasAnalysis, Region
+from .alias import Alias, AliasAnalysis, Region, _carries_list
 from .array_size import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -547,6 +552,35 @@ class ValueClassAnalysis:
 #####################################################################
 # Analysis
 
+_CalleePre: TypeAlias = tuple[
+    TypeAnalysis, ContextUseAnalysis, AliasAnalysis, ReachabilityAnalysis
+]
+
+
+class _CalleeCache:
+    """Shared by an analysis and every callee analysis under it, so a callee
+    reached on several paths with the same argument classes is analyzed once."""
+
+    pre: dict[FuncDef, _CalleePre]
+    ret: dict[tuple[FuncDef, tuple[ValueClass | None, ...]], ValueClass]
+
+    def __init__(self):
+        self.pre = {}
+        self.ret = {}
+
+    def analyses(self, func: FuncDef) -> _CalleePre:
+        if func not in self.pre:
+            def_use = DefineUse.analyze(func)
+            type_info = TypeInfer.check(func, def_use=def_use)
+            self.pre[func] = (
+                type_info,
+                ContextUse.analyze(func, def_use=def_use),
+                Alias.analyze(func, def_use=def_use, type_info=type_info),
+                Reachability.analyze(func),
+            )
+        return self.pre[func]
+
+
 class _ValueClassInstance(DefaultVisitor):
     """Single-use instance of value-class analysis."""
 
@@ -623,17 +657,26 @@ class _ValueClassInstance(DefaultVisitor):
     without the stamp a store in a branch nested inside it would come back
     undone on the way out."""
 
+    _arg_classes: Sequence[ValueClass | None] | None
+    """Each argument's class at a call site; `None` for an entry."""
+
+    _cache: _CalleeCache
+
     def __init__(
         self,
         func: FuncDef,
         type_info: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
         alias: AliasAnalysis,
+        arg_classes: Sequence[ValueClass | None] | None = None,
+        cache: _CalleeCache | None = None,
     ):
         self.func = func
         self.type_info = type_info
         self.ctx_use = ctx_use
         self.alias = alias
+        self._arg_classes = arg_classes
+        self._cache = _CalleeCache() if cache is None else cache
         self._elt = {}
         self._stored = {}
         self._clock = 0
@@ -1575,8 +1618,58 @@ class _ValueClassInstance(DefaultVisitor):
 
     def _visit_call(self, e: Call, ctx: None) -> ValueClass:
         super()._visit_call(e, ctx)
-        # the callee produces the result, so the caller's context says nothing
-        return _TOP
+        return self._callee_ret_class(e)
+
+    def _callee_ret_class(self, e: Call) -> ValueClass:
+        """The join of what the callee returns under *this* call's argument
+        classes; the top class where the callee is not an FPy function or the
+        result is not real."""
+        if not (isinstance(e.fn, Function)
+                and isinstance(self.type_info.by_expr.get(e), RealType)):
+            return _TOP
+        if self._may_share_a_list(e.args):
+            return _TOP
+        callee = e.fn.ast
+        arg_classes = tuple(self.by_expr.get(arg) for arg in e.args)
+        key = (callee, arg_classes)
+        if key not in self._cache.ret:
+            # the call graph is acyclic (`TypeInfer.check`), so this terminates
+            type_info, ctx_use, alias, reach = self._cache.analyses(callee)
+            info = _ValueClassInstance(
+                callee, type_info, ctx_use, alias, arg_classes, self._cache,
+            ).analyze()
+            ret = _BOT
+            for stmt in reach.ret_stmts:
+                if reach.has_entry.get(stmt, True):
+                    ret |= info.classify(stmt.expr)
+            self._cache.ret[key] = ret
+        return self._cache.ret[key]
+
+    def _may_share_a_list(self, args: Sequence[Expr]) -> bool:
+        """Whether two of *args* may hold the same list.  The callee's analysis
+        gives each list parameter a region of its own, so there a store through
+        one says nothing of what another holds."""
+        held = [self._lists_in(arg) for arg in args
+                if _carries_list(self.type_info.by_expr.get(arg))]
+        if len(held) < 2:
+            return False
+        known = [regions for regions in held if regions is not None]
+        if len(known) < len(held):
+            return True
+        return sum(map(len, known)) != len(frozenset().union(*known))
+
+    def _lists_in(self, arg: Expr) -> frozenset[Region] | None:
+        """The region of every list level *arg* holds, or `None` where one is
+        unknown or inside a tuple."""
+        out: set[Region] = set()
+        ty, depth = self.type_info.by_expr.get(arg), 0
+        while isinstance(ty, ListType):
+            region = self.alias.region_of_expr(arg, depth)
+            if region is None:
+                return None
+            out.add(region)
+            ty, depth = ty.elt, depth + 1
+        return None if _carries_list(ty) else frozenset(out)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> ValueClass:
         # arms unrefined: a backend may evaluate both on every input
@@ -1796,10 +1889,12 @@ class _ValueClassInstance(DefaultVisitor):
         self._visit_expr(e.elt, ctx)
 
     def _visit_function(self, func: FuncDef, ctx: None):
-        for arg in func.args:
+        given = self._arg_classes or [None] * len(func.args)
+        for arg, at_call in zip(func.args, given, strict=True):
             if isinstance(arg.name, NamedId):
                 d = self.def_use.find_def_from_site(arg.name, arg)
-                self._set_def(d, _arg_class(self.type_info.by_def.get(d)))
+                cls = _arg_class(self.type_info.by_def.get(d))
+                self._set_def(d, cls if at_call is None else cls & at_call)
         self._seed_params(func)
         for v in func.free_vars:
             self._set_def(self.def_use.find_def_from_site(v, func), _TOP)

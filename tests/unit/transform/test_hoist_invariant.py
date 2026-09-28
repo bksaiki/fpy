@@ -558,6 +558,59 @@ class TestSoundness:
         for xs in ([1.0, 1.0], [1.0, 1.0, 1.0]):
             assert repr(g(xs)) == repr(f(xs))
 
+    def test_a_list_allocation_stays(self):
+        """Hoisted, `[n]` is one list every row shares, so the write into row
+        0 shows through row 1."""
+        @fp.fpy(ctx=fp.REAL)
+        def bound(n: fp.Real) -> fp.Real:
+            zss = [[0.0], [0.0]]
+            for i in range(2):
+                zs = [n]
+                zss[i] = zs
+            zss[0][0] = 1.0
+            return zss[1][0]
+
+        @fp.fpy(ctx=fp.REAL)
+        def operand(n: fp.Real) -> fp.Real:
+            zss = [[0.0], [0.0]]
+            for i in range(2):
+                zss[i] = [n]
+            zss[0][0] = 1.0
+            return zss[1][0]
+
+        for f in (bound, operand):
+            assert _hoisted(f).ast.is_equiv(f.ast)
+
+    def test_what_may_fail_stays(self):
+        """Above the loop an expression runs where the loop might not have run
+        it.  `round(v)` has no result for a NaN `v`, which the guard keeps from
+        it; `ys[0]` has none for an empty `ys`, which a zero-trip loop never
+        reads."""
+        no_nan = fp.MPBFixedContext(
+            -1, fp.RealFloat(exp=10, c=1), rm=fp.RM.RTZ,
+            overflow=fp.OverflowMode.ASSERT,
+        )
+
+        @fp.fpy(ctx=no_nan)
+        def guarded(v: fp.Real, xs: list[fp.Real]) -> fp.Real:
+            for x in xs:
+                if not fp.isfinite(v):
+                    return 0
+                y = fp.round(v)
+                if y > x:
+                    return y
+            return 1
+
+        @fp.fpy(ctx=fp.REAL)
+        def subscript(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + ys[0] * x
+            return acc
+
+        for f in (guarded, subscript):
+            assert _hoisted(f).ast.is_equiv(f.ast)
+
     def test_a_body_that_would_empty_keeps_one_statement(self):
         """A `for` with no statements does not re-parse and the interpreter
         rejects it, so the last one stays behind."""
