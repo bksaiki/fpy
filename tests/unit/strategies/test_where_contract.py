@@ -306,6 +306,31 @@ def _nested_ifs(x: fp.Real, y: fp.Real) -> fp.Real:
     return z
 
 
+@fp.fpy
+def _refused_if(x: fp.Real) -> fp.Real:
+    if x > 0:
+        assert x > 1
+        a = 1.0
+    else:
+        a = 2.0
+    return a
+
+
+@fp.fpy
+def _refuses_then_simplifies(x: fp.Real, y: fp.Real) -> fp.Real:
+    """A refused `if` before a site, so index 0 is `body[1]`."""
+    if x > 0:
+        assert x > 1
+        a = 1.0
+    else:
+        a = 2.0
+    if y > 0:
+        b = 3.0
+    else:
+        b = 4.0
+    return a + b
+
+
 ACTS = [
     ('unfold_special', unfold_special, _two_floats, {}),
     ('unfold_special/mixed', unfold_special, _refuses_then_acts, {}),
@@ -329,6 +354,7 @@ ACTS = [
     ('unfold_enumerate', unfold_enumerate, _two_enumerates, {}),
     ('simplify_if', simplify_if, _two_ifs, {}),
     ('simplify_if/nested', simplify_if, _nested_ifs, {}),
+    ('simplify_if/mixed', simplify_if, _refuses_then_simplifies, {}),
     ('hoist_invariant', hoist_invariant, _two_invariant_for, {}),
     ('hoist_invariant/nested', hoist_invariant, _nested_invariant_for, {}),
     ('hoist_scale', hoist_scale, _two_scaled_sums, {}),
@@ -356,6 +382,7 @@ REFUSES = [
     ('split_round/refuses', split_round, _two_rounded, {'ctx': fp.FP32}),
     ('unfold_zip/refuses', unfold_zip, _sealed_zip, {}),
     ('unfold_enumerate/refuses', unfold_enumerate, _sealed_enumerate, {}),
+    ('simplify_if/refuses', simplify_if, _refused_if, {}),
 ]
 
 # `unroll_while` has no row: it refuses nothing at all.

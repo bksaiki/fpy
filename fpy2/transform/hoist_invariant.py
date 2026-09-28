@@ -344,9 +344,7 @@ class _HoistInvariant(SiteRewriter):
         if not hoistable:
             why = '; '.join(_refusals(stmt, self.ctx)) or 'the body is empty'
             self.refused.append((stmt, why))
-            # only a cursor can name a refusal: an index counts sites, and
-            # `where=None` means "every site", not "this one too"
-            if self._target is not None and self._selects(block, pos, -1):
+            if self._named_by_cursor(stmt):
                 self.declined.append(why)
                 if not self.listing:
                     raise TransformDeclined(f'nothing to hoist out of the loop: {why}')

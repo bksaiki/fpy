@@ -509,11 +509,13 @@ class SiteRewriter(DefaultTransformVisitor):
         )
         return [(c, reasons[id(c.resolve())]) for c in found]
 
-    def _named_by_cursor(self, e: Expr) -> bool:
-        """Whether an explicit cursor names the expression *e*, ignoring the
-        index: what decides whether a refusal is reported or merely counted."""
+    def _named_by_cursor(self, node: Expr | Stmt) -> bool:
+        """Whether an explicit cursor names *node*, the candidate at the
+        current site: what decides whether a refusal is reported or merely
+        counted.  An index counts sites, and a refusal is not one; `where=None`
+        means every site, not this one too."""
         if self._target_expr is not None:
-            return self._target_expr is e
+            return self._target_expr is node
         return self._target is not None and self._selects(*self._site, -1)
 
     def check_site(self, what: str) -> None:

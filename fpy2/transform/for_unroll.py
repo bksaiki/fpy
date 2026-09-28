@@ -255,7 +255,7 @@ class _ForUnroll(SiteRewriter):
         if reason is not None:
             # a refusal is not a site, so it takes no index
             self.refused.append((stmt, reason))
-            if self._target is not None and self._selects(block, pos, -1):
+            if self._named_by_cursor(stmt):
                 self.declined.append(reason)
             return super()._visit_for(stmt, ctx)
 

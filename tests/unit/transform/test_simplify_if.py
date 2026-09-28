@@ -25,6 +25,7 @@ from fpy2.number import OverflowMode, RealFloat
 from fpy2.transform.cursor import expr_sites, stmt_sites
 from fpy2.transform import (
     BlockCursor,
+    FuncBody,
     SimplifyIf,
     TransformDeclined,
     TransformReferenceError,
@@ -76,6 +77,13 @@ def _names(ast) -> set:
 
 def _apply(f: Function) -> Function:
     return Function(SimplifyIf.apply(f.ast), runtime=f.runtime)
+
+
+def _every_if(f: Function, *, strict: bool = False):
+    """Every `if`, named by a cursor: a refused one raises, where `where=None`
+    would leave it in place."""
+    body = BlockCursor(f.ast, FuncBody(), range(len(f.ast.body.stmts)))
+    return SimplifyIf.apply(f.ast, body, strict=strict)
 
 
 def _agrees(f: Function, *args):
@@ -314,7 +322,7 @@ _REFUSED = [
 class TestTheRefusalsDoNotOverreach:
     def test_a_guarded_read_is_still_accepted(self):
         """Partial *reads* are the keyword's business, not this phase's."""
-        SimplifyIf.apply(guarded_read.ast)
+        _every_if(guarded_read)
 
 
 
@@ -367,29 +375,29 @@ class TestStrictGovernsUnprovenEffects:
 
     @pytest.mark.parametrize('f', _UNPROVEN)
     def test_the_default_hoists(self, f):
-        SimplifyIf.apply(f.ast)
+        _every_if(f)
 
     @pytest.mark.parametrize('f', _UNPROVEN)
     def test_strict_declines(self, f):
         with pytest.raises(TransformDeclined):
-            SimplifyIf.apply(f.ast, strict=True)
+            _every_if(f, strict=True)
 
     def test_a_resolved_safe_context_is_accepted_under_strict(self):
         """`strict` refuses what cannot be *shown* safe, not every rounding."""
-        SimplifyIf.apply(rounds_under_fp32.ast, strict=True)
+        _every_if(rounds_under_fp32, strict=True)
 
 
 class TestAbortsRefuseUnderEveryMode:
     @pytest.mark.parametrize('strict', [False, True])
     def test_assert_overflow_rounding(self, strict):
         with pytest.raises(TransformDeclined, match='ASSERT` overflow'):
-            SimplifyIf.apply(rounds_under_assert_overflow.ast, strict=strict)
+            _every_if(rounds_under_assert_overflow, strict=strict)
 
     @pytest.mark.parametrize('f,why', _REFUSED, ids=lambda v: getattr(v, 'name', ''))
     @pytest.mark.parametrize('strict', [False, True])
     def test_refusals_hold_under_strict(self, f, why, strict):
         with pytest.raises(TransformDeclined, match=re.escape(why)):
-            SimplifyIf.apply(f.ast, strict=strict)
+            _every_if(f, strict=strict)
 
 
 @fp.fpy(ctx=fp.FP64)
@@ -413,25 +421,25 @@ class TestStrictNeedsAResolvedContext:
 
     @pytest.mark.parametrize('f', _UNARY + [nested])
     def test_the_default_accepts_an_unannotated_program(self, f):
-        SimplifyIf.apply(f.ast)
+        _every_if(f)
 
     @pytest.mark.parametrize(
         'f', [one_armed, two_armed, mutated_in_both, two_variables]
     )
     def test_strict_declines_unannotated_arithmetic(self, f):
         with pytest.raises(TransformDeclined, match='unresolved context'):
-            SimplifyIf.apply(f.ast, strict=True)
+            _every_if(f, strict=True)
 
     @pytest.mark.parametrize('f', [condition_is_a_var, nested])
     def test_a_literal_only_branch_is_accepted(self, f):
         """`ContextUse` records no use site for a literal, and a literal does
         not overflow its context -- so there is nothing here `strict` cannot
         prove."""
-        SimplifyIf.apply(f.ast, strict=True)
+        _every_if(f, strict=True)
 
     @pytest.mark.parametrize('strict', [False, True])
     def test_a_pinned_context_is_accepted_under_both(self, strict):
-        SimplifyIf.apply(pinned_two_armed.ast, strict=strict)
+        _every_if(pinned_two_armed, strict=strict)
 
 
 # ----------------------------------------------------------------------
@@ -710,12 +718,12 @@ class TestAbortsNotReachedThroughRound:
     ])
     def test_assert_overflow_is_found_whatever_rounds(self, f, strict):
         with pytest.raises(TransformDeclined, match='ASSERT` overflow'):
-            SimplifyIf.apply(f.ast, strict=strict)
+            _every_if(f, strict=strict)
 
     @pytest.mark.parametrize('strict', [False, True])
     def test_a_callee_is_refused_rather_than_scanned(self, strict):
         with pytest.raises(TransformDeclined, match='callee is not scanned'):
-            SimplifyIf.apply(calls_an_asserting_function.ast, strict=strict)
+            _every_if(calls_an_asserting_function, strict=strict)
 
     def test_a_context_constructor_is_not_a_refused_call(self):
         """`fp.MPBFixedContext(...)` in a `with` header is a `Call` too;
@@ -757,7 +765,7 @@ class TestUnrepresentableResults:
 
     def test_strict_declines(self):
         with pytest.raises(TransformDeclined, match='infinity or NaN'):
-            SimplifyIf.apply(logb_guarded_from_zero.ast, strict=True)
+            _every_if(logb_guarded_from_zero, strict=True)
 
     def test_the_default_rewrites_and_agrees(self):
         """Including on `0`, the input the guard excluded."""
@@ -778,7 +786,7 @@ class TestUnrepresentableResults:
                     total = total + x
             return total
 
-        SimplifyIf.apply(adds.ast, strict=strict)
+        _every_if(adds, strict=strict)
 
     def test_strict_declines_an_inverse_trig_pole(self):
         """`acos` is a pole op by IEEE 754 §7.2: `acos(2)` is NaN."""
@@ -790,7 +798,7 @@ class TestUnrepresentableResults:
             return y
 
         with pytest.raises(TransformDeclined, match='infinity or NaN'):
-            SimplifyIf.apply(guarded.ast, strict=True)
+            _every_if(guarded, strict=True)
 
     def test_strict_declines_overflow_under_a_bounded_context(self):
         """The other route to a special is IEEE 754 §7.4 overflow, which turns
@@ -807,7 +815,7 @@ class TestUnrepresentableResults:
             return z
 
         with pytest.raises(TransformDeclined, match='overflow to an infinity'):
-            SimplifyIf.apply(guarded.ast, strict=True)
+            _every_if(guarded, strict=True)
 
     @pytest.mark.parametrize('strict', [False, True])
     def test_a_saturating_context_is_accepted(self, strict):
@@ -824,7 +832,7 @@ class TestUnrepresentableResults:
                 z = x * y
             return z
 
-        SimplifyIf.apply(guarded.ast, strict=strict)
+        _every_if(guarded, strict=strict)
 
     def test_the_same_shape_under_fp64_is_accepted(self):
         """The refusal is about the context, not the operation."""
@@ -836,7 +844,7 @@ class TestUnrepresentableResults:
                     largest = max(largest, fp.logb(x))
             return largest
 
-        SimplifyIf.apply(under_fp64.ast, strict=True)
+        _every_if(under_fp64, strict=True)
 
 
 class TestArmInlining:

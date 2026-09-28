@@ -6,13 +6,11 @@ asserted here is the strategy layer, and the composition the pass exists for --
 than one exit.
 """
 
-import pytest
-
 import fpy2 as fp
 from fpy2 import Function
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.module import _RebindCalls
-from fpy2.strategies import TransformDeclined, inline, simplify_if, single_exit
+from fpy2.strategies import inline, refusals, simplify_if, single_exit, sites
 
 
 @fp.fpy
@@ -60,6 +58,5 @@ class TestItUnblocksTheConsumers:
         assert _calls(inline(retargeted).ast) == 0
 
     def test_simplify_if_accepts_it_afterwards(self):
-        with pytest.raises(TransformDeclined):
-            simplify_if(_early)
-        simplify_if(single_exit(_early))
+        assert refusals(simplify_if, _early)
+        assert sites(simplify_if, single_exit(_early))

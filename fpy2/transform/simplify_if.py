@@ -305,7 +305,7 @@ class _SimplifyIfInstance(SiteRewriter):
 
         if why is not None:
             self.refused.append((stmt, why))
-            if self._selects(block, pos, -1):
+            if self._named_by_cursor(stmt):
                 self.declined.append(why)
                 if not self.listing:
                     raise TransformDeclined(

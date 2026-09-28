@@ -1,9 +1,8 @@
 """Unit tests for :func:`fpy2.strategies.simplify_if`.
 
 The rewrite itself is covered in ``tests/unit/transform/test_simplify_if.py``.
-What is asserted here is the strategy layer: a `Function` in and out, the
-keyword reaching the transform, and a refusal arriving as the shared
-:class:`TransformDeclined` rather than something the layer invented.
+What is asserted here is the strategy layer: a `Function` in and out, and the
+keyword reaching the transform.
 """
 
 import pytest
@@ -14,7 +13,6 @@ from fpy2.ast.fpyast import ReturnStmt
 from fpy2.transform.cursor import stmt_sites
 import fpy2.strategies as st
 from fpy2.strategies import (
-    TransformDeclined,
     TransformReferenceError,
     simplify_if,
 )
@@ -42,8 +40,8 @@ def _asserts(x: fp.Real) -> fp.Real:
 class TestTheKeywordIsForwarded:
 
     def test_strict_declines_it(self):
-        with pytest.raises(TransformDeclined):
-            simplify_if(_guarded_read, strict=True)
+        assert not simplify_if(_guarded_read).ast.is_equiv(_guarded_read.ast)
+        assert simplify_if(_guarded_read, strict=True).ast.is_equiv(_guarded_read.ast)
 
 
 @fp.fpy
