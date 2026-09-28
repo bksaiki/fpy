@@ -104,7 +104,14 @@ def _prepare(_module, func):
     return func
 
 
-def compile_design(build) -> str:
+def _namespace(name: str) -> str:
+    """Return a unique C++ namespace for a design name."""
+    chars = [c if c.isalnum() else "_" for c in name]
+    words = filter(None, "".join(chars).split("_"))
+    return "model_" + "_".join(words)
+
+
+def compile_design(name: str, build) -> str:
     """The C++ for one design; raises whatever refused it.
 
     Every function is prepared, not just the entry: a model's rounding at a
@@ -115,24 +122,16 @@ def compile_design(build) -> str:
     mod = fp.Module()
     mod.add(st.monomorphize(func, args=arg_types))
     mod = mod.map(_prepare)
-    return fp.CppCompiler(unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS).compile_module(mod)
-
-def _namespace(name: str) -> str:
-    """Return a unique C++ namespace for a design name."""
-    chars = [c if c.isalnum() else "_" for c in name]
-    words = filter(None, "".join(chars).split("_"))
-    return "model_" + "_".join(words)
-
-
-def _translation_unit(name: str, src: str) -> str:
-    """Add shared headers and isolate one generated design's symbols."""
-    body = CPP_HELPERS + "\n" + src
-    return (
-        "\n".join(CPP_HEADERS)
-        + f"\n\nnamespace fpy_models::{_namespace(name)} {{\n"
-        + body
-        + "\n}\n"
+    compiler = fp.CppCompiler(
+        unfold=fp.CppCompiler.UnfoldMode.ROUNDINGS,
+        namespace=f'fpy_models::{_namespace(name)}',
     )
+    return compiler.compile_module(mod)
+
+
+def _translation_unit(src: str) -> str:
+    """*src* with the headers it needs, so the file builds on its own."""
+    return '\n'.join(CPP_HEADERS) + '\n' + CPP_HELPERS + '\n' + src + '\n'
 
 
 def _filename(name: str) -> str:
@@ -168,7 +167,7 @@ def main(argv: list[str]) -> int:
     ok = 0
     for name, build in designs:
         try:
-            src = compile_design(build)
+            src = compile_design(name, build)
         except Exception as ex:  # noqa: BLE001 -- any refusal is a result
             detail = str(ex) if args.verbose else str(ex).split('\n')[0][:110]
             print(f'{name:{width}}  {type(ex).__name__}: {detail}')
@@ -177,11 +176,11 @@ def main(argv: list[str]) -> int:
         note = ''
         if args.out is not None:
             path = args.out / _filename(name)
-            path.write_text(_translation_unit(name, src))
+            path.write_text(_translation_unit(src))
             note = f'  -> {path}'
         print(f'{name:{width}}  OK{note}')
         if args.emit:
-            print(f'\n// ==== {name} ====\n{_translation_unit(name, src)}\n')
+            print(f'\n// ==== {name} ====\n{_translation_unit(src)}\n')
     print(f'\n{ok}/{len(designs)} compile')
     return 0 if ok == len(designs) else 1
 

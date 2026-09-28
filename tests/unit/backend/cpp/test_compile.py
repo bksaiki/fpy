@@ -50,6 +50,30 @@ class TestCppCompilerStub:
         assert isinstance(out, str)
         assert 'double f(double x, double y)' in out
 
+    def test_compile_optional_namespace(self):
+        """A namespace encloses the complete emitted module and is off by
+        default."""
+
+        @fp.fpy
+        def f() -> fp.Real:
+            return 1
+
+        plain = CppCompiler().compile(f, ctx=fp.FP64)
+        namespaced = CppCompiler(namespace='models::fp64').compile(
+            f, ctx=fp.FP64
+        )
+
+        assert namespaced == f'namespace models::fp64 {{\n\n{plain}\n}}'
+
+    @pytest.mark.parametrize('namespace', ['', 'models.fp64', '2models'])
+    def test_compile_rejects_invalid_namespace(self, namespace):
+        with pytest.raises(ValueError, match='qualified C\\+\\+ identifier'):
+            CppCompiler(namespace=namespace)
+
+    def test_compile_rejects_non_string_namespace(self):
+        with pytest.raises(TypeError, match='str or None'):
+            CppCompiler(namespace=True)  # type: ignore[arg-type]
+
     def test_compile_unconstrained_args_rejects(self):
         """An un-monomorphized argument can't be assigned a finite C++
         storage type — the compiler reports a clear error pointing at

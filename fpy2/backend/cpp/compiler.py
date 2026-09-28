@@ -9,6 +9,7 @@ surface as :class:`CppCompileError`.
 """
 
 import copy
+import re
 from collections.abc import Collection
 from dataclasses import dataclass
 
@@ -75,6 +76,10 @@ _UnfoldMode = UnfoldMode
 UnboxMode`` in a class body resolves at runtime but reads as a self-reference,
 which a type checker cannot follow -- so completion on
 ``CppCompiler.UnboxMode.`` gives nothing."""
+
+_CPP_NAMESPACE_RE = re.compile(
+    r'[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*'
+)
 
 
 class CppCompileError(CompileError):
@@ -329,6 +334,10 @@ class CppCompiler(Backend):
             correct-double-rounding rules say the two compose to what the one
             gave.  Default ``NONE``: the refusal is a checker's answer, and
             turning the compiler into a rewriter has to be asked for.
+        namespace:
+            An optional C++ namespace enclosing every emitted function.
+            Qualified names such as ``"models::fp64"`` are accepted.  The
+            default, ``None``, emits functions in the global namespace.
     """
 
     UnboxMode = _UnboxMode
@@ -342,6 +351,7 @@ class CppCompiler(Backend):
     _unfold: _UnfoldMode
     _arrays: bool
     _enable_fenv: bool
+    _namespace: str | None
 
     def __init__(
         self, *,
@@ -351,6 +361,7 @@ class CppCompiler(Backend):
         arrays: bool = True,
         unfold: _UnfoldMode = UnfoldMode.NONE,
         enable_fenv: bool = True,
+        namespace: str | None = None,
     ):
         if not isinstance(unbox, UnboxMode):
             raise TypeError(
@@ -363,16 +374,27 @@ class CppCompiler(Backend):
                 'use UnfoldMode.ROUNDINGS / UnfoldMode.DOUBLE_ROUND '
                 'instead of a bool'
             )
+        if namespace is not None:
+            if not isinstance(namespace, str):
+                raise TypeError(
+                    f'`namespace` must be a str or None, got {namespace!r}'
+                )
+            if _CPP_NAMESPACE_RE.fullmatch(namespace) is None:
+                raise ValueError(
+                    f'`namespace` must be a qualified C++ identifier, got '
+                    f'{namespace!r}'
+                )
         self._unsafe_cast_int = unsafe_cast_int
         self._optimize = optimize
         self._unbox = unbox
         self._arrays = arrays
         self._unfold = unfold
         self._enable_fenv = enable_fenv
+        self._namespace = namespace
 
     # ------------------------------------------------------------------
-    # Translation-unit preamble.  ``compile`` returns a function definition
-    # only, so single-function tests can use exact-string equality.
+    # Translation-unit preamble.  By default, ``compile`` returns a function
+    # definition only, so single-function tests can use exact-string equality.
 
     def headers(self) -> list[str]:
         """C++ headers required by every emitted unit.
@@ -418,10 +440,11 @@ class CppCompiler(Backend):
         Pre-spec optimizations, then ``Specialize`` -- one entry per
         ``(FuncDef, ctx, arg_fmts)``, with calls rewired -- then post-spec
         optimizations now that format inference is monomorphic, then codegen
-        leaves-first.
+        leaves-first.  When ``namespace`` was supplied to the compiler, the
+        complete set of definitions is enclosed in that namespace.
         """
         try:
-            return self._compile_module(module)
+            source = self._compile_module(module)
         except CppCompileError:
             if self._unfold is UnfoldMode.NONE:
                 raise
@@ -436,6 +459,9 @@ class CppCompiler(Backend):
                 if not e.unfold_answers:
                     raise
             raise   # the rewrite's own error stands
+        if self._namespace is None:
+            return source
+        return f'namespace {self._namespace} {{\n\n{source}\n}}'
 
     def _without_unfold(self) -> 'CppCompiler':
         """This compiler with the rewrite off, for a second opinion.

@@ -229,9 +229,10 @@ list is automatically instantiated wider, which is the workaround
 
 ### Translation-unit preamble
 
-`CppCompiler.compile` returns a function definition only, so single-function
-tests can use exact-string equality. Callers wanting a full translation unit
-pull `headers()`, `helpers()`, or `prelude()`. `helpers()` is **empty** —
+By default, `CppCompiler.compile` returns a function definition only, so
+single-function tests can use exact-string equality; `namespace=...` encloses
+it in the requested namespace. Callers wanting a full translation unit pull
+`headers()`, `helpers()`, or `prelude()`. `helpers()` is **empty** —
 everything is emitted in standard-library spellings at the use site
 (`std::shared_ptr<std::vector<T>>`, `std::array`), including the IEEE
 `minimum`/`maximum` that used to be an `fpy::min`/`max` template. It is kept as a
