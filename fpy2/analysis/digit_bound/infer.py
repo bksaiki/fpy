@@ -1262,13 +1262,14 @@ class _DigitBoundInferInstance(DefaultVisitor):
         return v
 
     def _exp2_arg(self, e: Expr) -> Term | None:
-        """*e*'s exponent when it is a power of two.  Only base two: a general
-        power is irrational, and nothing states it exactly."""
-        match e:
-            case Exp2():
-                return self.value_of(e.arg)
-            case Pow() if self.view.int_value(e.first) == 2:
-                return self.value_of(e.second)
+        """*e*'s exponent when it is a power of two, through a name bound to
+        one: hoisting names the factor.  Only base two: a general power is
+        irrational, and nothing states it exactly."""
+        match self.def_use.defining_expr(e):
+            case Exp2() as p:
+                return self.value_of(p.arg)
+            case Pow() as p if self.view.int_value(p.first) == 2:
+                return self.value_of(p.second)
             case _:
                 return None
 
