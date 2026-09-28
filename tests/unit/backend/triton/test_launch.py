@@ -27,6 +27,7 @@ from fpy2.backend.triton import (
     tile_loops,
     unavailable,
 )
+from fpy2.backend.triton.emitter import TritonEmitError
 from fpy2.backend.triton.launcher import _torch_dtype
 from fpy2.transform import Specialize
 from fpy2.types import ListType, RealType
@@ -1019,3 +1020,140 @@ def test_an_aligned_sum_of_fp16_agrees() -> None:
     src = _compile(f, [ListType(ListType(RealType(FP16), 4), n), ListType(RealType(fp.FP64), n), INT])
     torch.manual_seed(0)
     _agree(src, f, [(torch.randn(8, 4) * 100).half().cuda(), torch.zeros(8, dtype=torch.float64).cuda()])
+
+
+# Integer-valued index arithmetic (`docs/todos/triton-integer-indices.md`):
+# a mark names the phase that fixes it, and comes off there.
+
+try:
+    from triton.compiler.errors import CompilationError as _TritonRefused
+except ImportError:  # the tests are skipped without Triton
+    _TritonRefused = Exception
+
+_ROWS = 3
+
+
+def _rows_of(*widths: int) -> list:
+    return [ListType(ListType(F32, w), _ROWS) for w in widths] + [ListType(F32, _ROWS), INT]
+
+
+def _randn(*widths: int) -> list:
+    torch.manual_seed(0)
+    return [torch.randn(_ROWS, w).cuda() for w in widths] + [torch.zeros(_ROWS).cuda()]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _product_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                   BLOCK: fp.Real):
+    """A slice at `t * 16`, `t` a runtime loop over a sixteenth of `xss`."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for t in range(0, len(yss[r]), 4):
+            i = t * 16
+            w = xss[r][i:i + 64]
+            for j in range(64):
+                with fp.FP32:
+                    s = s + w[j]
+        out[r] = s
+    return out
+
+
+@pytest.mark.parametrize('k', [256, 1024, pytest.param(4096, marks=pytest.mark.xfail(
+    strict=True, raises=_TritonRefused,
+    reason='Phase 2: `t` bounded symmetrically, so `t * 16` is FP16'))])
+def test_a_product_index_agrees(k: int):
+    src = _compile(_product_index, _rows_of(k, k // 16))
+    _agree(src, _product_index, _randn(k, k // 16))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _square_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """The index `t * t`: never negative, but held as a float, a factor
+    being possibly negative."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for u in range(64):
+            t = u - 32
+            with fp.FP32:
+                s = s + xss[r][t * t]
+        out[r] = s
+    return out
+
+
+@pytest.mark.xfail(strict=True, raises=_TritonRefused,
+                   reason='Phase 3: a float-held index is a pointer offset')
+def test_a_float_held_index_agrees():
+    src = _compile(_square_index, _rows_of(1025))
+    _agree(src, _square_index, _randn(1025))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _static_product_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A slice at `t * 32`, `t` a loop of static count."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for t in range(32):
+            i = t * 32
+            w = xss[r][i:i + 32]
+            for j in range(32):
+                with fp.FP32:
+                    s = s + w[j]
+        out[r] = s
+    return out
+
+
+@pytest.mark.xfail(strict=True, raises=_TritonRefused,
+                   reason='Phase 4: a constexpr loop variable is cast with `.to`')
+def test_a_static_product_index_agrees():
+    src = _compile(_static_product_index, _rows_of(1024))
+    _agree(src, _static_product_index, _randn(1024))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _integer_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                   BLOCK: fp.Real):
+    """A local list of the slice at `t * 16`, the index computed under
+    `INTEGER`."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for t in range(0, len(yss[r]), 4):
+            with fp.INTEGER:
+                i = t * 16
+            p = [a for a in xss[r][i:i + 64]]
+            for j in range(64):
+                with fp.FP32:
+                    s = s + p[j]
+        out[r] = s
+    return out
+
+
+@pytest.mark.xfail(strict=True, raises=TritonEmitError,
+                   reason='Phase 5: `INTEGER` arithmetic leaves the slice unsized')
+def test_an_integer_context_index_agrees():
+    src = _compile(_integer_index, _rows_of(1024, 64))
+    _agree(src, _integer_index, _randn(1024, 64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _gathered_list(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                   BLOCK: fp.Real):
+    """A literal list of four loads, indexed by a lane, beside a 64-wide
+    slice."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for i in range(0, len(xss[r]), 64):
+            w = xss[r][i:i + 64]
+            sc = [yss[r][i], yss[r][i + 16], yss[r][i + 32], yss[r][i + 48]]
+            for g in range(4):
+                for j in range(16):
+                    with fp.FP32:
+                        s = s + w[g * 16 + j] * sc[g]
+        out[r] = s
+    return out
+
+
+@pytest.mark.xfail(strict=True, raises=_TritonRefused,
+                   reason='Phase 6: tiles of different lane widths are combined')
+def test_a_gathered_list_agrees():
+    src = _compile(_gathered_list, _rows_of(256, 256))
+    _agree(src, _gathered_list, _randn(256, 256))
