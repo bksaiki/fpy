@@ -1021,13 +1021,7 @@ def test_an_aligned_sum_of_fp16_agrees() -> None:
     _agree(src, f, [(torch.randn(8, 4) * 100).half().cuda(), torch.zeros(8, dtype=torch.float64).cuda()])
 
 
-# Integer-valued index arithmetic (`docs/todos/triton-integer-indices.md`):
-# a mark names the phase that fixes it, and comes off there.
-
-try:
-    from triton.compiler.errors import CompilationError as _TritonRefused
-except ImportError:  # the tests are skipped without Triton
-    _TritonRefused = Exception
+# Computed indices (`docs/todos/triton-integer-indices.md`)
 
 _ROWS = 3
 
@@ -1131,25 +1125,62 @@ def test_an_integer_context_index_agrees():
 
 
 @fp.fpy(ctx=fp.REAL)
-def _gathered_list(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
-                   BLOCK: fp.Real):
-    """A literal list of four loads, indexed by a lane, beside a 64-wide
-    slice."""
+def _float_context_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """An index computed under `FP32`, proven an integer in `[0, 63]`."""
     for r in range(len(out)):
         s = fp.round(0)
-        for i in range(0, len(xss[r]), 64):
-            w = xss[r][i:i + 64]
-            sc = [yss[r][i], yss[r][i + 16], yss[r][i + 32], yss[r][i + 48]]
-            for g in range(4):
-                for j in range(16):
-                    with fp.FP32:
-                        s = s + w[g * 16 + j] * sc[g]
+        for g in range(4):
+            for j in range(16):
+                with fp.FP32:
+                    s = s + xss[r][g * 16 + j]
         out[r] = s
     return out
 
 
-@pytest.mark.xfail(strict=True, raises=_TritonRefused,
-                   reason='Phase 6: tiles of different lane widths are combined')
-def test_a_gathered_list_agrees():
-    src = _compile(_gathered_list, _rows_of(256, 256))
-    _agree(src, _gathered_list, _randn(256, 256))
+def test_an_index_computed_under_a_float_context_agrees():
+    """`g * 16 + j` runs at `FP32` but is stored as `U8`: the result is cast
+    into its storage, so the index is an integer."""
+    src = _compile(_float_context_index, _rows_of(64))
+    _agree(src, _float_context_index, _randn(64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _reused_lane_name(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A lane loop's target, `g`, named again by a sequential loop."""
+    for r in range(len(out)):
+        sc = [xss[r][16 * g] for g in range(4)]
+        s = fp.round(0)
+        for g in range(4):
+            with fp.FP32:
+                s = s + sc[g]
+        out[r] = s
+    return out
+
+
+def test_a_reused_lane_name_agrees():
+    """The second `g` is a `static_range` target, not the lanes."""
+    src = _compile(_reused_lane_name, _rows_of(64))
+    _agree(src, _reused_lane_name, _randn(64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _lane_indexed_literal(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A literal list of loads, indexed by a lane."""
+    for r in range(len(out)):
+        sc = [xss[r][0], xss[r][16], xss[r][32], xss[r][48]]
+        with fp.FP32:
+            q = [sc[g] * xss[r][g] for g in range(4)]
+        s = fp.round(0)
+        for k in range(4):
+            with fp.FP32:
+                s = s + q[k]
+        out[r] = s
+    return out
+
+
+@pytest.mark.parametrize('block', [4, 8])
+def test_a_lane_indexed_literal_agrees(block):
+    """The elements, rows, are broadcast across the lanes.  At a block as
+    wide as the lanes, a row read as a lane is wrong values, not a refusal."""
+    src = _compile(_lane_indexed_literal, _rows_of(64))
+    _agree(src, _lane_indexed_literal, _randn(64), block=block)

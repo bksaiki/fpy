@@ -217,6 +217,7 @@ def _literal_int(code: str) -> int | None:
 
 
 _ASSIGN = re.compile(r'(\w+) = (.*)')
+_FOR = re.compile(r'for (\w+) in .*:')
 _IDENT = re.compile(r'\b\w+\b')
 
 
@@ -304,17 +305,15 @@ class _IndentedWriter:
             # the store may alias any pointer loaded from
             for _, loads in self._loads:
                 loads.clear()
-        if (m := _ASSIGN.fullmatch(line)) is not None:
+        if (m := _FOR.fullmatch(line)) is not None:
+            # the target is a scalar, whatever it held before
+            name = m.group(1)
+            self._rebind(name)
+            self.wide.discard(name)
+            self.along.pop(name, None)
+        elif (m := _ASSIGN.fullmatch(line)) is not None:
             name, code = m.groups()
-            for _, loads in self._loads:
-                for addr in [a for a, (held, conj) in loads.items()
-                             if held == name or name in _IDENT.findall(a)
-                             or any(name in _IDENT.findall(c) for c in conj)]:
-                    del loads[addr]
-            for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
-                del self._value[held]
-            self._value.pop(name, None)
-            self._assigned[-1].add(name)
+            self._rebind(name)
             idents = set(_IDENT.findall(code))
             if 'tl.load(' not in code and name not in idents:
                 self._value[name] = self.canonical(code)
@@ -334,6 +333,19 @@ class _IndentedWriter:
                 self.along[name] = self.axes
             elif isinstance(shape, frozenset):
                 self.along[name] = shape
+
+    def _rebind(self, name: str) -> None:
+        """Drop what is known of *name*'s old value: the loads and values
+        that read it, and its own."""
+        for _, loads in self._loads:
+            for addr in [a for a, (held, conj) in loads.items()
+                         if held == name or name in _IDENT.findall(a)
+                         or any(name in _IDENT.findall(c) for c in conj)]:
+                del loads[addr]
+        for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
+            del self._value[held]
+        self._value.pop(name, None)
+        self._assigned[-1].add(name)
 
     def indent(self) -> None:
         self._depth += 1
@@ -823,7 +835,8 @@ class _Emitter(Visitor):
         """Emit *e* through the op table: a signature matching the operands'
         storage; else one whose slots are all the active context's, each
         operand cast into it losslessly; else, under ``REAL``,
-        :meth:`_try_widen`."""
+        :meth:`_try_widen`.  The result is cast into *e*'s storage, which
+        format inference may make narrower than the signature's."""
         sigs = table.get(type(e))
         if not sigs:
             raise TritonEmitError(
@@ -833,18 +846,21 @@ class _Emitter(Visitor):
         storages = tuple(self._storage(src) for _, src in operands)
         bounds = [self.format_info.by_expr.get(src) for _, src in operands]
         active = self._active_ctx(e)
+        target, result = self._storage(e), self.format_info.by_expr.get(e)
 
         for sig in sigs:
             if sig.matches(storages, active):
-                return sig.format(*self._weak(codes, storages))
+                out = sig.format(*self._weak(codes, storages))
+                return self._maybe_cast(out, sig.in_tys[0], target, result)
 
         for sig in sigs:
             if (sig.out_ctx == active and len(sig.in_tys) == len(codes)
                     and len(set(sig.in_tys)) == 1):
-                return sig.format(*self._weak([
+                out = sig.format(*self._weak([
                     self._maybe_cast(code, have, sig.in_tys[0], bound)
                     for code, have, bound in zip(codes, storages, bounds)
                 ], sig.in_tys))
+                return self._maybe_cast(out, sig.in_tys[0], target, result)
 
         if active is REAL:
             widened = self._try_widen(e, sigs, codes, storages, bounds)
@@ -1366,6 +1382,8 @@ class _Emitter(Visitor):
         elems = self._elements(e.value)
         if elems is not None:
             idx = self._index(e.index)
+            if self._lane is not None:
+                elems = [self._as_col(c) for c in elems]
             i = _literal_int(idx)
             if i is None:
                 # an index the trace fixes, as a `static_range` target is:
