@@ -581,6 +581,36 @@ class TestSoundness:
         for f in (bound, operand):
             assert _hoisted(f).ast.is_equiv(f.ast)
 
+    def test_what_may_fail_stays(self):
+        """Above the loop an expression runs where the loop might not have run
+        it.  `round(v)` has no result for a NaN `v`, which the guard keeps from
+        it; `ys[0]` has none for an empty `ys`, which a zero-trip loop never
+        reads."""
+        no_nan = fp.MPBFixedContext(
+            -1, fp.RealFloat(exp=10, c=1), rm=fp.RM.RTZ,
+            overflow=fp.OverflowMode.ASSERT,
+        )
+
+        @fp.fpy(ctx=no_nan)
+        def guarded(v: fp.Real, xs: list[fp.Real]) -> fp.Real:
+            for x in xs:
+                if not fp.isfinite(v):
+                    return 0
+                y = fp.round(v)
+                if y > x:
+                    return y
+            return 1
+
+        @fp.fpy(ctx=fp.REAL)
+        def subscript(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            acc = 0.0
+            for x in xs:
+                acc = acc + ys[0] * x
+            return acc
+
+        for f in (guarded, subscript):
+            assert _hoisted(f).ast.is_equiv(f.ast)
+
     def test_a_body_that_would_empty_keeps_one_statement(self):
         """A `for` with no statements does not re-parse and the interpreter
         rejects it, so the last one stays behind."""

@@ -117,7 +117,7 @@ def _nested_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     return a
 
 
-@fp.fpy
+@fp.fpy(ctx=fp.REAL)
 def _two_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     n = len(xs)
     a = 0.0
@@ -130,7 +130,7 @@ def _two_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     return a
 
 
-@fp.fpy
+@fp.fpy(ctx=fp.REAL)
 def _nested_invariant_for(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     n = len(xs)
     a = 0.0

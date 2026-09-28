@@ -1,5 +1,6 @@
 """Loop-invariant code motion: moving a loop body's invariant work above it."""
 
+import functools
 from collections.abc import Callable
 from typing import NamedTuple
 
@@ -7,6 +8,8 @@ from ..analysis import (
     Alias,
     AliasAnalysis,
     AssignDef,
+    ContextUse,
+    ContextUseAnalysis,
     DefineUse,
     DefineUseAnalysis,
     Definition,
@@ -19,6 +22,7 @@ from ..analysis import (
 )
 from ..analysis.alias import _carries_list
 from ..ast import *
+from ..number import Context, Float
 from ..utils import Gensym
 from .cursor import Cursor, EditLog, StmtPath
 from .error import TransformDeclined
@@ -52,6 +56,7 @@ class _Context(NamedTuple):
     """The analyses the query consults, and the one body fact it precomputes."""
 
     def_use: DefineUseAnalysis
+    ctx_use: ContextUseAnalysis
     types: TypeAnalysis | None
     """`None` where the function does not type-check"""
     alias: AliasAnalysis | None
@@ -69,7 +74,8 @@ class _Context(NamedTuple):
         # without types nothing is hoisted, so there is nothing to consult
         alias = None if types is None or not mutating else \
             Alias.analyze(func, def_use=def_use, type_info=types)
-        return _Context(def_use, types, alias, mutating)
+        ctx_use = ContextUse.analyze(func, def_use=def_use)
+        return _Context(def_use, ctx_use, types, alias, mutating)
 
 
 def _from_before(
@@ -147,6 +153,59 @@ def _may_hold_list(e: Expr, types: TypeAnalysis | None) -> bool:
     return types is None or _carries_list(types.by_expr.get(e))
 
 
+_PROBES = (
+    Float(isnan=True), Float(isinf=True), Float(isinf=True, s=True),
+    Float(c=1, exp=1 << 20), Float(s=True, c=1, exp=1 << 20),
+)
+
+
+@functools.cache
+def _rounds_everything(ctx: Context) -> bool:
+    """Whether *ctx* has a result for every value: a NaN, an infinity and an
+    overflow included."""
+    try:
+        for x in _PROBES:
+            ctx.round(x)
+    except Exception:  # noqa: BLE001 -- a refusal
+        return False
+    return True
+
+
+class _MayFail(DefaultVisitor):
+    """Whether an expression may have no result.
+
+    Above the loop it is evaluated where the loop might not have evaluated it:
+    on a zero-trip loop, or past an early exit in the body.  So only what
+    cannot fail moves: no subscript, which may be out of range; no call, whose
+    callee may fail; and no operation under a context that may refuse a value.
+    """
+
+    ctx_use: ContextUseAnalysis
+    found: bool
+
+    def __init__(self, ctx_use: ContextUseAnalysis):
+        self.ctx_use = ctx_use
+        self.found = False
+
+    def _visit_expr(self, e: Expr, ctx: None):
+        if isinstance(e, ListRef | Call):
+            self.found = True
+            return None
+        scope = self.ctx_use.use_to_scope.get(e)  # type: ignore[call-overload]
+        if scope is not None and not (
+            isinstance(scope.ctx, Context) and _rounds_everything(scope.ctx)
+        ):
+            self.found = True
+            return None
+        return super()._visit_expr(e, ctx)
+
+    @staticmethod
+    def of(e: Expr, ctx_use: ContextUseAnalysis) -> bool:
+        inst = _MayFail(ctx_use)
+        inst._visit_expr(e, None)
+        return inst.found
+
+
 def _bound_in(name: NamedId, body: set[int], def_use: DefineUseAnalysis) -> list[Definition]:
     """Every definition of *name* sited inside the loop body."""
     return [d for d in def_use.name_to_defs.get(name, set()) if id(d.site) in body]
@@ -167,6 +226,8 @@ def _why_not(
         return f'`{target}` is bound to an impure expression'
     if _may_hold_list(stmt.expr, ctx.types):
         return f'`{target}` may hold a list'
+    if _MayFail.of(stmt.expr, ctx.ctx_use):
+        return f'computing `{target}` may fail'
 
     reaching = ctx.def_use.reach[stmt]
     varies = sorted(
@@ -269,7 +330,7 @@ def _invariant_exprs(
             return False
         if ctx.mutating and _may_be_mutated(e, reaching, ctx.alias):
             return False
-        if _may_hold_list(e, ctx.types):
+        if _may_hold_list(e, ctx.types) or _MayFail.of(e, ctx.ctx_use):
             return False
         return Purity.analyze_expr(e, ctx.def_use)
 
@@ -451,7 +512,8 @@ class HoistInvariant:
 
     Relocation, not re-association, so it is sound under any rounding context
     -- and only direct children of the body are considered, which keeps the
-    destination in the scope they were already written in.  See `_why_not` and
+    destination in the scope they were already written in.  Only what cannot
+    fail moves, since the loop may never have evaluated it.  See `_why_not` and
     `_invariant_exprs` for what qualifies.
 
     One pass: a chain within one body comes out together, but work freed by

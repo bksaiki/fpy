@@ -870,6 +870,13 @@ by asking the solver less often rather than by making it faster.
   position name an exponent too.
 - The sum's slack comes from bounding each term independently. Is there a cheap
   way to exploit that the terms' exponents are spread, or should it be accepted?
+  **Accepted.**  Summing per-term bounds rather than `(L+1)·max` gains nothing
+  at the NVIDIA sites.  `L` is a power of two there, so `L·2^W + 2^(W-1)`
+  needs `W + ⌈log2(L+1)⌉` bits either way.  Volta's 28 bits is attained:
+  four maximal products plus `c` at `e_c = e_max`.  The measured 27 in the table
+  above is a generator that never put `c` in the top binade.  What is left
+  is about one bit in the GST designs, from mantissas counted per binade
+  (`576 < 2^10`, `1.75² < 4`), which needs magnitude tracking within a binade.
 - Symbolic *lower* bounds on a magnitude are unimplemented, by the argument in
   [What is deliberately not tracked](#what-is-deliberately-not-tracked). The
   omission is principled, but `mmasim` never asks for the other direction, so
