@@ -25,13 +25,13 @@ import fpy2 as fp
 import pytest
 
 from fpy2.backend.cpp import CppCompiler, CppCompileError
-from fpy2.types import ListType, RealType
+from fpy2.types import ListType, RealType, Type
 
 _L64 = ListType(RealType(fp.FP64))
 _CXX = shutil.which('c++') or shutil.which('g++')
 
 
-def _run(func, arg_types, main: str) -> str:
+def _run(func: fp.Function, arg_types: list[Type], main: str) -> str:
     """The output of *func*'s C++ with *main* appended."""
     cc = CppCompiler()
     src = (

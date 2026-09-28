@@ -135,7 +135,7 @@ def _hoist(ast: FuncDef) -> FuncDef:
         try:
             ast = hoist(ast)
         except TransformDeclined:
-            pass  # nothing to hoist is not a failure
+            pass
     return ast
 
 

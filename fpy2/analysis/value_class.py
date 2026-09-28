@@ -552,9 +552,9 @@ class ValueClassAnalysis:
 #####################################################################
 # Analysis
 
-_CalleePre: TypeAlias = (
-    'tuple[TypeAnalysis, ContextUseAnalysis, AliasAnalysis, ReachabilityAnalysis]'
-)
+_CalleePre: TypeAlias = tuple[
+    TypeAnalysis, ContextUseAnalysis, AliasAnalysis, ReachabilityAnalysis
+]
 
 
 class _CalleeCache:
@@ -657,10 +657,10 @@ class _ValueClassInstance(DefaultVisitor):
     without the stamp a store in a branch nested inside it would come back
     undone on the way out."""
 
-    _arg_classes: 'Sequence[ValueClass | None] | None'
+    _arg_classes: Sequence[ValueClass | None] | None
     """Each argument's class at a call site; `None` for an entry."""
 
-    _cache: '_CalleeCache'
+    _cache: _CalleeCache
 
     def __init__(
         self,
@@ -668,8 +668,8 @@ class _ValueClassInstance(DefaultVisitor):
         type_info: TypeAnalysis,
         ctx_use: ContextUseAnalysis,
         alias: AliasAnalysis,
-        arg_classes: 'Sequence[ValueClass | None] | None' = None,
-        cache: '_CalleeCache | None' = None,
+        arg_classes: Sequence[ValueClass | None] | None = None,
+        cache: _CalleeCache | None = None,
     ):
         self.func = func
         self.type_info = type_info
@@ -1624,8 +1624,7 @@ class _ValueClassInstance(DefaultVisitor):
         """The join of what the callee returns under *this* call's argument
         classes; the top class where the callee is not an FPy function or the
         result is not real."""
-        if not (isinstance(e.fn, Function) and not e.kwargs
-                and len(e.args) == len(e.fn.ast.args)
+        if not (isinstance(e.fn, Function)
                 and isinstance(self.type_info.by_expr.get(e), RealType)):
             return _TOP
         if self._may_share_a_list(e.args):
