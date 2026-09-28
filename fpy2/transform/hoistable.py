@@ -56,8 +56,8 @@ which are then evaluated later than they were:
     return g(a) + t                      # raises h's assertion -- wrong
 
 So the pass names exactly as much as that costs, and no more: see
-:func:`~fpy2.analysis.hoistability.force_names`.  Where it sits in the cpp pipeline is §1 of
-``docs/todos/backend-independence.md``.
+:func:`~fpy2.analysis.hoistability.force_names`.  Where it sits in the cpp
+pipeline is §1 of ``docs/todos/backend-independence.md``.
 """
 
 import dataclasses
@@ -72,7 +72,7 @@ from ..analysis.hoistability import (
     force_names,
     lowers,
 )
-from ..ast.accessors import vars_in
+from ..ast.accessors import names_in
 from ..ast.fpyast import (
     And,
     AssertStmt,
@@ -164,9 +164,9 @@ class _HoistableInstance(DefaultTransformVisitor):
         return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _lowered(self, e: Expr, ctx: _Ctx) -> bool:
-        """Whether *e* becomes statements here.  :func:`lowers` says whether the
-        shape calls for it, and ``hoistable`` whether there is a slot to put
-        them in."""
+        """Whether *e* becomes statements here:
+        :func:`~fpy2.analysis.hoistability.lowers` says whether the shape calls
+        for it, and ``hoistable`` whether there is a slot to put them in."""
         return ctx.hoistable and lowers(e)
 
     # ------------------------------------------------------------------
@@ -215,7 +215,7 @@ class _HoistableInstance(DefaultTransformVisitor):
             if isinstance(e, IfExpr):
                 return self._branch_on(e, target, ctx)
             assert isinstance(e, (And, Or))
-            if not any(v.name == target for a in e.args[1:] for v in vars_in(a)):
+            if not any(target in names_in(a) for a in e.args[1:]):
                 return self._short_circuit(e, ctx, target)
             # a chain assigns its target before the later operands run, so one
             # that reads the target would see the accumulator
@@ -410,8 +410,8 @@ class Hoistable:
         """Every sealed position of `func` still holding a non-atom.
 
         Empty is the invariant: a temporary may be hoisted out of anywhere in
-        `func`.  Afterwards only the two positions with no lowering can appear --
-        a comprehension, and an ``assert`` message.
+        `func`.  Afterwards only the positions with no lowering can appear -- a
+        comprehension, an ``assert`` message, and a chained comparison's tail.
         """
         if not isinstance(func, FuncDef):
             raise TypeError(f'expected a \'FuncDef\', got `{func}`')

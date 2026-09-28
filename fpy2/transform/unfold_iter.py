@@ -113,11 +113,9 @@ class _UnfoldIterInstance(PreambleScoped):
             self._elt(args, i, loc), loc,
         )
 
-    # `PreambleScoped` seals the header of an `if`, `for` or `with`, which is
-    # scope: each is evaluated exactly once, where the preamble runs, and the
-    # `for` iterable is where a derived iterable appears -- sealing it would
-    # refuse the site that matters.  A nested block builds its own preamble in
-    # `_visit_block` either way, so un-sealing is the base implementation back.
+    # `PreambleScoped` seals `if`/`for`/`with` headers for scope only; the `for`
+    # iterable is where a derived iterable appears, so the base visitors are
+    # restored.
     _visit_for = DefaultTransformVisitor._visit_for
     _visit_if1 = DefaultTransformVisitor._visit_if1
     _visit_if = DefaultTransformVisitor._visit_if

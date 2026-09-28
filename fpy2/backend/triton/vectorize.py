@@ -55,7 +55,7 @@ from ...ast import (
     Var,
     WhileStmt,
 )
-from ...ast.accessors import vars_in
+from ...ast.accessors import names_in
 from ...transform import SplitLoop, SplitLoopStrategy
 
 __all__ = ['TileResult', 'carried_scalars', 'tile_loops', 'why_not_tileable']
@@ -284,7 +284,7 @@ def _guard(inner: ForStmt) -> If1Stmt | None:
         return None
     if not isinstance(inner.target, NamedId):
         return None
-    return stmts[0] if any(v.name == inner.target for v in vars_in(stmts[0].cond)) else None
+    return stmts[0] if inner.target in names_in(stmts[0].cond) else None
 
 
 def _tile_loop(outer: ForStmt) -> ForStmt:

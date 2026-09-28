@@ -201,20 +201,6 @@ class _CompToLoopInstance(SiteRewriter):
             and all(isinstance(a, _ATOMIC) for a in operands(iterable))
         )
 
-    def _descend(self, e: ListComp, out: list) -> None:
-        """Visit *e*'s children the way :meth:`_lower` would.
-
-        The listing must reach exactly what the rewrite reaches, or it counts a
-        site the rewrite will not take: the iterables end up outside the loops
-        and keep their statement slot, the element does not.  A dependent clause
-        list keeps only its *first* iterable out here; the rest and the element
-        go into the nested comprehension :meth:`_lower_dependent` builds.
-        """
-        keep = 1 if _per_element(e) else len(e.iterables)
-        for i, iterable in enumerate(e.iterables):
-            self._visit_expr(iterable, out if i < keep else None)
-        self._visit_expr(e.elt, None)
-
     def _fillable(self, e: ListComp, target: NamedId, slot: bool) -> bool:
         """Whether the loops of *e* may write into a place based on *target*.
 
@@ -457,7 +443,7 @@ class _CompToLoopInstance(SiteRewriter):
         self._matched += 1
         if self.listing:
             self.found_exprs.append(e)
-            self._descend(e, ctx)
+            super()._visit_expr(e, ctx)
             return e
 
         lowered = self._lower(e, ctx)

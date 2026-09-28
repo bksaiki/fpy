@@ -455,7 +455,7 @@ class SiteRewriter(DefaultTransformVisitor):
         supplies it."""
         raise NotImplementedError
 
-    def _visit_expr(self, e: Expr, ctx):
+    def _visit_expr(self, e: Expr, ctx: list[Stmt] | None) -> Expr:
         rebuilt = super()._visit_expr(e, ctx)
         return name_forced(e, rebuilt, self._force, ctx, self._fresh)
 
@@ -642,7 +642,7 @@ class PreambleScoped(SiteRewriter):
 
     `_visit_block` hands each statement visitor the list to emit into and
     `DefaultTransformVisitor` threads it down to every sub-expression.  Where a
-    site may be is `strict`; beyond that, this passes `None` for the header of
+    site may be is `_strict`; beyond that, this passes `None` for the header of
     an `if`, `for` or `with`, which is how a subclass knows not to use it.  That
     is scope, not soundness -- a header is evaluated exactly once -- so a
     subclass may lift it (the derived-iterable unfolds do).
@@ -709,7 +709,8 @@ class ExprSiteRewriter(PreambleScoped):
             return super()._visit_expr(e, ctx)
 
         # a refusal is not a site, so it is decided before an index is spent:
-        # `ctx` is `None` where no statement-level preamble reaches
+        # `ctx` is `None` where no statement-level preamble reaches, and `e`
+        # may not be hoisted unless strict
         info = (
             Declined(self._no_slot) if ctx is None or e not in self._strict
             else self._check(e)

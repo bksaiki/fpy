@@ -81,7 +81,7 @@ def hoists_inside(e: Expr, hoisted: Callable[[Expr], bool]) -> bool:
     return hoisted(e) or any(hoists_inside(child, hoisted) for child in _strict(e))
 
 
-def _strict(node: 'Stmt | Expr') -> list[Expr]:
+def _strict(node: Stmt | Expr) -> list[Expr]:
     """The operands of `node` evaluated exactly once whenever it is, in
     evaluation order: always a prefix of :func:`~fpy2.ast.accessors.subexprs`."""
     children = [sub for _field, _i, sub in subexprs(node)]
@@ -96,7 +96,7 @@ def _strict(node: 'Stmt | Expr') -> list[Expr]:
             return children
 
 
-def force_names(node: 'Stmt | Expr', hoisted: Callable[[Expr], bool]) -> set[Expr]:
+def force_names(node: Stmt | Expr, hoisted: Callable[[Expr], bool]) -> set[Expr]:
     """The expressions in `node` to bind to a name, so the `hoisted` ones to
     their right do not overtake them.
 
@@ -126,7 +126,7 @@ def force_names(node: 'Stmt | Expr', hoisted: Callable[[Expr], bool]) -> set[Exp
     return out
 
 
-def _collect(node: 'Stmt | Expr', out: set[Expr], hoisted: Callable[[Expr], bool]) -> None:
+def _collect(node: Stmt | Expr, out: set[Expr], hoisted: Callable[[Expr], bool]) -> None:
     """Accumulate :func:`force_names` for `node` and everything under it."""
     if isinstance(node, ListComp):
         return
@@ -166,7 +166,7 @@ def _strict_exprs(block: StmtBlock, out: set[Expr]) -> None:
             _strict_exprs(sub, out)
 
 
-def _strict_operands(node: 'Stmt | Expr', out: set[Expr]) -> None:
+def _strict_operands(node: Stmt | Expr, out: set[Expr]) -> None:
     for child in _strict(node):
         out.add(child)
         _strict_operands(child, out)
@@ -177,38 +177,38 @@ class _Sealed(DefaultVisitor):
 
     found: list[tuple[Expr, str]]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.found = []
 
-    def _visit_if_expr(self, e: IfExpr, ctx):
+    def _visit_if_expr(self, e: IfExpr, ctx: None) -> None:
         self.found.append((e.ift, 'ternary'))
         self.found.append((e.iff, 'ternary'))
         super()._visit_if_expr(e, ctx)
 
-    def _visit_naryop(self, e: NaryOp, ctx):
+    def _visit_naryop(self, e: NaryOp, ctx: None) -> None:
         if isinstance(e, (And, Or)):
             self.found.extend((arg, 'chain') for arg in e.args[1:])
         super()._visit_naryop(e, ctx)
 
-    def _visit_list_comp(self, e: ListComp, ctx):
+    def _visit_list_comp(self, e: ListComp, ctx: None) -> None:
         # not descended into: the comprehension is why nothing inside it can be
         # hoisted, so it is the one entry -- a ternary in the element is given a
         # slot by the loop the comprehension becomes
         self.found.append((e.elt, 'element'))
         self.found.extend((iterable, 'iterable') for iterable in e.iterables)
 
-    def _visit_while(self, stmt: WhileStmt, ctx):
+    def _visit_while(self, stmt: WhileStmt, ctx: None) -> None:
         self.found.append((stmt.cond, 'condition'))
         super()._visit_while(stmt, ctx)
 
-    def _visit_assert(self, stmt: AssertStmt, ctx):
+    def _visit_assert(self, stmt: AssertStmt, ctx: None) -> None:
         # the test is strict, the message is not; not descended into, as with a
         # comprehension
         self._visit_expr(stmt.test, ctx)
         if stmt.msg is not None:
             self.found.append((stmt.msg, 'message'))
 
-    def _visit_compare(self, e: Compare, ctx):
+    def _visit_compare(self, e: Compare, ctx: None) -> None:
         self.found.extend((arg, 'comparison') for arg in e.args[2:])
         for arg in e.args[:2]:
             self._visit_expr(arg, ctx)

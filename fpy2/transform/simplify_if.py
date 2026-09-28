@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from ..analysis import ContextUse, DefineUse, DefineUseAnalysis, SyntaxCheck
 from ..analysis.context_use import ContextUseAnalysis
 from ..ast import *
-from ..ast.accessors import vars_in
+from ..ast.accessors import names_in
 from ..function import Function
 from ..number import (
     Context,
@@ -399,7 +399,7 @@ class _SimplifyIfInstance(SiteRewriter):
         # An inlined arm leaves pre-`if` names in the merges, so a merge can
         # read one an earlier merge has already overwritten.  Those go through
         # a temporary: the merges happen at once.
-        reads = {var: {v.name for v in vars_in(e)} for var, e in exprs.items()}
+        reads = {var: names_in(e) for var, e in exprs.items()}
         shared = {
             var for var in exprs
             if any(var in reads[o] for o in exprs if o != var)

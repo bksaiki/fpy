@@ -2,6 +2,7 @@
 Where an AST node holds its blocks, sub-expressions and variables.
 """
 
+from collections.abc import Iterable
 from typing import Literal, TypeAlias
 
 from .fpyast import (
@@ -23,6 +24,7 @@ from .fpyast import (
     ListExpr,
     ListRef,
     ListSlice,
+    NamedId,
     NaryOp,
     NullaryOp,
     ReturnStmt,
@@ -64,15 +66,12 @@ def subblocks(stmt: Stmt) -> tuple[tuple[BlockField, StmtBlock], ...]:
             return ()
 
 
-
 def subexprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...]:
-    """The expressions *node* holds, each with the field and position naming it.
-
-    The only place the AST's expression field names appear: resolving a path
-    needs this field-to-child lookup, which a visitor's dispatch does not
-    expose.
-    """
-    def at(field: ExprField, es) -> tuple[tuple[ExprField, int | None, Expr], ...]:
+    """The expressions *node* holds, each with the field and position naming
+    it, in evaluation order."""
+    def at(
+        field: ExprField, es: Iterable[Expr]
+    ) -> tuple[tuple[ExprField, int | None, Expr], ...]:
         return tuple((field, i, e) for i, e in enumerate(es))
 
     match node:
@@ -124,10 +123,10 @@ def subexprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...
 class _Vars(DefaultVisitor):
     found: list[Var]
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.found = []
 
-    def _visit_var(self, e: Var, ctx: None):
+    def _visit_var(self, e: Var, ctx: None) -> None:
         self.found.append(e)
 
 
@@ -143,3 +142,8 @@ def vars_in(node: Expr | Stmt) -> list[Var]:
     else:
         v._visit_statement(node, None)
     return v.found
+
+
+def names_in(node: Expr | Stmt) -> set[NamedId]:
+    """The names of :func:`vars_in`."""
+    return {v.name for v in vars_in(node)}

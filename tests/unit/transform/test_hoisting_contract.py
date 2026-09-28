@@ -8,6 +8,7 @@ program that breaks if either is dropped, and checks the outcome -- the value,
 or which assertion fires -- is unchanged.
 """
 
+from collections.abc import Callable
 from fractions import Fraction
 from typing import Any
 
@@ -15,6 +16,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
+from fpy2.ast import FuncDef
 from fpy2.backend.cpp import CppCompiler
 from fpy2.number import OverflowMode
 from fpy2.transform import (
@@ -68,14 +70,14 @@ def _nonempty(xs: list[fp.Real]) -> list[fp.Real]:
     return xs
 
 
-def _outcome(ast, runtime, args):
+def _outcome(ast: FuncDef, runtime: Any, args: tuple) -> str:
     try:
         return repr(Function(ast, runtime=runtime)(*args))
     except Exception as e:  # noqa: BLE001 -- the exception is the outcome
         return f'{type(e).__name__}({e})'
 
 
-def _arithmetic(S):
+def _arithmetic(S: fp.Context) -> list[tuple[Function, tuple]]:
     """Programs whose site is an operation, run under scope `S`."""
     @fp.fpy(ctx=fp.REAL)
     def and_tail(x, y):
@@ -110,7 +112,7 @@ def _arithmetic(S):
             (order, (0, 2)), (order_through_the_heap, (1, 2))]
 
 
-def _rounding(C):
+def _rounding(C: fp.Context) -> list[tuple[Function, tuple]]:
     """Programs whose site is a rounding under `C`."""
     @fp.fpy(ctx=fp.REAL)
     def and_tail(x):
@@ -145,7 +147,7 @@ def _rounding(C):
             (order, (0,)), (order_through_the_heap, (1,))]
 
 
-def _guarded(C, op):
+def _guarded(C: fp.Context, op: Callable[..., Any]) -> Function:
     """A site whose own statements fault where the guard held it back."""
     @fp.fpy(ctx=fp.REAL)
     def guarded(x):
@@ -236,9 +238,9 @@ _F32 = RealType(fp.FP32)
 _L32 = ListType(_F32)
 
 
-def _specialize(name: str, unfold: str):
+def _specialize(name: str, unfold: str) -> Callable[[FuncDef], FuncDef]:
     """`CppCompiler.specialize` as a pass over one function."""
-    def apply(ast):
+    def apply(ast: FuncDef) -> FuncDef:
         m = fp.Module()
         m.add(Function(ast), arg_types=[_F32, _F32])
         cc = CppCompiler(unfold=CppCompiler.UnfoldMode[unfold])
@@ -296,7 +298,9 @@ _ROWS = [
 
 
 @pytest.mark.parametrize('f,args,apply,mono', [r[1:] for r in _ROWS], ids=[r[0] for r in _ROWS])
-def test_the_outcome_is_unchanged(f, args, apply, mono):
+def test_the_outcome_is_unchanged(
+    f: Function, args: tuple, apply: Callable[[FuncDef], FuncDef], mono: bool,
+) -> None:
     types = [_L32 if isinstance(a, list) else _F32 for a in args]
     ast = Monomorphize.apply(f.ast, f.ast.ctx or fp.REAL, types) if mono else f.ast
     assert _outcome(apply(ast), f.runtime, args) == _outcome(ast, f.runtime, args)
