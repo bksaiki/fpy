@@ -53,11 +53,14 @@ from ...transform import (
     EnumerateElim,
     FreeVarElim,
     Hoistable,
+    HoistInvariant,
+    HoistScale,
     ReduceFusion,
     RoundElim,
     Simplify,
     Specialize,
     StatementForm,
+    TransformDeclined,
     ZipElim,
 )
 from ...transform.free_var_elim import unclosed_data_free_vars
@@ -124,6 +127,16 @@ class SpecAnalyses:
 
 # ---------------------------------------------------------------------
 # Compiler
+
+
+def _hoist(ast: FuncDef) -> FuncDef:
+    """*ast* with loop-invariant work and scale factors hoisted, where any."""
+    for hoist in (HoistInvariant.apply, HoistScale.apply):
+        try:
+            ast = hoist(ast)
+        except TransformDeclined:
+            pass  # nothing to hoist is not a failure
+    return ast
 
 
 def _function_calls(ast: FuncDef) -> dict[Call, Function]:
@@ -545,6 +558,8 @@ class CppCompiler(Backend):
             # debris only a later pass can see -- a length read into a name
             # nothing goes on to use, a copy of an accumulator.
             specialized = specialized.map(lambda _m, fd: Simplify.apply(fd))
+            # after unfolding, which puts per-element scale factors in loop bodies
+            specialized = specialized.map(lambda _m, fd: _hoist(fd))
 
         return list(specialized.call_graph().order)
 
