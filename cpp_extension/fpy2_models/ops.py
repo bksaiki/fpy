@@ -1,6 +1,8 @@
 import torch
 from torch import Tensor
 
+from .quantization import quantize_e2m1
+
 __all__ = [
     "amd_cdna2_bf16",
     "amd_cdna2_f16",
@@ -45,42 +47,9 @@ def _quantize_scalar(value: float, storage_dtype: torch.dtype) -> float:
 
 
 def _quantize_tf32(x: Tensor) -> Tensor:
-    """Apply the operand truncation used by NVIDIA TF32 instructions."""
+    """Apply NVIDIA TF32 operand truncation, which TorchAO does not expose."""
     x = x.to(dtype=torch.float32).contiguous()
     return ((x.view(torch.int32) >> 13) << 13).view(torch.float32)
-
-
-def _quantize_e2m1(x: Tensor) -> Tensor:
-    """Round to unpacked OCP E2M1 values using nearest, ties-to-even."""
-    x = x.to(dtype=torch.float32)
-    magnitude = x.abs()
-    quantized = torch.where(
-        magnitude <= 0.25,
-        0.0,
-        torch.where(
-            magnitude < 0.75,
-            0.5,
-            torch.where(
-                magnitude <= 1.25,
-                1.0,
-                torch.where(
-                    magnitude < 1.75,
-                    1.5,
-                    torch.where(
-                        magnitude <= 2.5,
-                        2.0,
-                        torch.where(
-                            magnitude < 3.5,
-                            3.0,
-                            torch.where(magnitude <= 5.0, 4.0, 6.0),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-    )
-    quantized = torch.copysign(quantized, x)
-    return torch.where(torch.isnan(x), x, quantized)
 
 
 def fp64_fma(a: Tensor, b: Tensor, c: float) -> Tensor:
@@ -153,7 +122,7 @@ def nv_blackwell_nvfp4(
     a: Tensor, b: Tensor, c: float, alphas: Tensor, betas: Tensor
 ) -> Tensor:
     """Apply the Blackwell NVFP4 model to unpacked E2M1 operands."""
-    a, b = _quantize_e2m1(a), _quantize_e2m1(b)
+    a, b = quantize_e2m1(a), quantize_e2m1(b)
     alphas, betas = _quantize_inputs(
         alphas, betas, torch.float8_e4m3fn, torch.float32
     )

@@ -13,7 +13,7 @@ setup(
     name="fpy2-cpp-extension",
     version="0.1.0",
     packages=["fpy2_models"],
-    install_requires=["torch>=2.10"],
+    install_requires=["torch>=2.10", "torchao>=0.18,<0.19"],
     ext_modules=[
         CppExtension(
             "fpy2_models._C",
