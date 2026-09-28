@@ -77,7 +77,7 @@ from ..function import Function
 from ..number import REAL, Context, Float
 from ..number.context.format import Format
 from ..types import ListType, RealType, Type
-from .alias import Alias, AliasAnalysis, Region
+from .alias import Alias, AliasAnalysis, Region, _carries_list
 from .array_size import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -1628,6 +1628,8 @@ class _ValueClassInstance(DefaultVisitor):
                 and len(e.args) == len(e.fn.ast.args)
                 and isinstance(self.type_info.by_expr.get(e), RealType)):
             return _TOP
+        if self._may_share_a_list(e.args):
+            return _TOP
         callee = e.fn.ast
         arg_classes = tuple(self.by_expr.get(arg) for arg in e.args)
         key = (callee, arg_classes)
@@ -1643,6 +1645,32 @@ class _ValueClassInstance(DefaultVisitor):
                     ret |= info.classify(stmt.expr)
             self._cache.ret[key] = ret
         return self._cache.ret[key]
+
+    def _may_share_a_list(self, args: Sequence[Expr]) -> bool:
+        """Whether two of *args* may hold the same list.  The callee's analysis
+        gives each list parameter a region of its own, so there a store through
+        one says nothing of what another holds."""
+        held = [self._lists_in(arg) for arg in args
+                if _carries_list(self.type_info.by_expr.get(arg))]
+        if len(held) < 2:
+            return False
+        known = [regions for regions in held if regions is not None]
+        if len(known) < len(held):
+            return True
+        return sum(map(len, known)) != len(frozenset().union(*known))
+
+    def _lists_in(self, arg: Expr) -> frozenset[Region] | None:
+        """The region of every list level *arg* holds, or `None` where one is
+        unknown or inside a tuple."""
+        out: set[Region] = set()
+        ty, depth = self.type_info.by_expr.get(arg), 0
+        while isinstance(ty, ListType):
+            region = self.alias.region_of_expr(arg, depth)
+            if region is None:
+                return None
+            out.add(region)
+            ty, depth = ty.elt, depth + 1
+        return None if _carries_list(ty) else frozenset(out)
 
     def _visit_if_expr(self, e: IfExpr, ctx: None) -> ValueClass:
         # arms unrefined: a backend may evaluate both on every input

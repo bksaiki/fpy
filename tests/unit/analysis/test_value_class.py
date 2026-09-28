@@ -717,6 +717,18 @@ def _exponent_plus_one(x: fp.Real) -> fp.Real:
     return _exponent(x, -126) + 1
 
 
+@fp.fpy(ctx=fp.FP64)
+def _store_then_read(xs: list[fp.Real], ys: list[fp.Real], z: fp.Real) -> fp.Real:
+    ok = True
+    for y in ys:
+        b = fp.isfinite(y)
+        ok = ok and b
+    if ok:
+        xs[0] = z
+        return ys[0]
+    return 0.0
+
+
 class TestCalls:
     """A call is its callee's return class under the call's argument classes:
     on its own `_exponent` may return a NaN or `+inf`, and only the caller's
@@ -741,6 +753,17 @@ class TestCalls:
             return 0.0
 
         assert _cls(f, '_exponent_plus_one(x)', [_F32]) == ZERO | FINITE
+
+    def test_a_list_passed_twice_is_one_list(self):
+        """On its own, `_store_then_read` assumes `xs` and `ys` are two lists,
+        so `ys[0]` is finite; handed `a` twice, the store makes it `z`."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(a: list[fp.Real], b: list[fp.Real], z: fp.Real) -> fp.Real:
+            return _store_then_read(a, a, z) + _store_then_read(a, b, z)
+
+        args = [ListType(RealType(fp.FP64), 1)] * 2 + [RealType(fp.FP64)]
+        assert _cls(f, '_store_then_read(a, a, z)', args) == TOP
+        assert _cls(f, '_store_then_read(a, b, z)', args) == ZERO | FINITE
 
 
 class TestListElementClasses:
