@@ -930,11 +930,32 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
         ]
-        # values 0..999 -> A(inf, 0, 999); quantum 1, symmetric bound
+        # values 0..999 -> the integers of [0, 999]; quantum 1, none negative
         expected_elt = AbstractFormat(
-            float('inf'), 0, fp.RealFloat.from_int(999)
+            float('inf'), 0, fp.RealFloat.from_int(999), neg_bound=fp.RealFloat.from_int(0)
         ).format()
         assert range_bounds and range_bounds[0] == ListFormat(expected_elt)
+
+    @pytest.mark.parametrize('bounds', [(5, 5), (5, 0, 1), (0, 10, -1)])
+    def test_an_empty_range_has_no_element(self, bounds):
+        """A range that yields nothing has the empty set for its element."""
+        rng = FormatInfer.analyze(_range_program(*bounds).ast)
+        (bound,) = [b for e, b in rng.by_expr.items() if type(e).__name__.startswith('Range')]
+        assert bound == ListFormat(SetFormat.bottom())
+
+    @pytest.mark.parametrize('bounds, lo, hi', [
+        ((-500, 500), -500, 499),
+        ((999, -1, -1), 0, 999),
+        ((-1000, 0), -1000, -1),
+    ])
+    def test_range_large_spans_its_interval(self, bounds, lo, hi):
+        """A large range's integers are those of the interval it spans, not
+        a bound symmetric about zero."""
+        rng = FormatInfer.analyze(_range_program(*bounds).ast)
+        (bound,) = [b for e, b in rng.by_expr.items() if type(e).__name__.startswith('Range')]
+        expected = AbstractFormat(float('inf'), 0, fp.RealFloat.from_int(max(hi, 0)),
+                                  neg_bound=fp.RealFloat.from_int(min(lo, 0))).format()
+        assert bound == ListFormat(expected)
 
     def test_range_set_threshold_is_tunable(self):
         """``range_set_threshold`` controls the set-vs-bounded split."""
@@ -4372,3 +4393,21 @@ class TestNegationOfZero:
         neg = self._neg(fp.SINT8)
         assert not neg.has_neg_zero
         assert neg.exp == 0
+
+
+def _range_program(*bounds: int) -> fp.Function:
+    """A function looping over `range(*bounds)`."""
+    if len(bounds) == 2:
+        a, b = bounds
+
+        @fp.fpy
+        def f2() -> list[fp.Real]:
+            return [0.0 for _ in range(a, b)]
+        return f2
+    a, b, c = bounds
+
+    @fp.fpy
+    def f3() -> list[fp.Real]:
+        return [0.0 for _ in range(a, b, c)]
+    return f3
+

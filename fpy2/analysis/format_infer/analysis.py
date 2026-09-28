@@ -2625,22 +2625,23 @@ class _FormatInferInstance(Visitor):
         with statically-known integer arguments.
 
         Small ranges (at most ``range_set_threshold`` elements) pin the exact
-        value set as a :class:`SetFormat`; larger ranges use the bounded
-        integer ``A(inf, 0, b)`` with ``b`` the largest magnitude attained
-        (quantum 1, i.e. ``exp = 0``).  Invalid (``step == 0``) and empty
-        ranges fall back to the unbounded integer format — a vacuous element.
+        value set as a :class:`SetFormat`; larger ranges use the integers of
+        the interval the range spans (quantum 1, i.e. ``exp = 0``), so a
+        range that never goes negative has no negative values.  An empty or
+        invalid (``step == 0``) range yields no element: the empty set.
         """
         if step == 0:
-            return _INTEGER_FORMAT
+            return SetFormat.bottom()
         rng = range(start, stop, step)
         n = len(rng)
         if n == 0:
-            return _INTEGER_FORMAT
+            return SetFormat.bottom()
         if n <= self._range_set_threshold:
             return SetFormat(frozenset(Fraction(v) for v in rng))
         last = start + (n - 1) * step
-        b = RealFloat.from_int(max(abs(start), abs(last)))
-        return AbstractFormat(float('inf'), 0, b).format()
+        lo, hi = min(start, last), max(start, last)
+        return AbstractFormat(float('inf'), 0, RealFloat.from_int(max(hi, 0)),
+                              neg_bound=RealFloat.from_int(min(lo, 0))).format()
 
     def _range_format(self, start: int, stop: int, step: int) -> FormatBound:
         """:class:`ListFormat` over :meth:`_range_elt_format`."""

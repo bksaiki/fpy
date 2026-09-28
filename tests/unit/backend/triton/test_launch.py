@@ -1045,23 +1045,23 @@ def _randn(*widths: int) -> list:
 @fp.fpy(ctx=fp.REAL)
 def _product_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
                    BLOCK: fp.Real):
-    """A slice at `t * 16`, `t` a runtime loop over a sixteenth of `xss`."""
+    """Slices at `t * 16`, `t` over a sixteenth of `xss`'s length, by 4."""
     for r in range(len(out)):
         s = fp.round(0)
         for t in range(0, len(yss[r]), 4):
             i = t * 16
-            w = xss[r][i:i + 64]
-            for j in range(64):
+            w = xss[r][i:i + 4]
+            for j in range(4):
                 with fp.FP32:
                     s = s + w[j]
         out[r] = s
     return out
 
 
-@pytest.mark.parametrize('k', [256, 1024, pytest.param(4096, marks=pytest.mark.xfail(
-    strict=True, raises=_TritonRefused,
-    reason='Phase 2: `t` bounded symmetrically, so `t * 16` is FP16'))])
+@pytest.mark.parametrize('k', [256, 1024, 2048])
 def test_a_product_index_agrees(k: int):
+    """Past 16 values of `t` (k = 2048) its format is an interval, not a set:
+    `t * 16` must still be an integer."""
     src = _compile(_product_index, _rows_of(k, k // 16))
     _agree(src, _product_index, _randn(k, k // 16))
 

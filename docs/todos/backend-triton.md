@@ -56,6 +56,12 @@ Rules the backend keeps:
 
 ## What is left
 
+- **A static trip count is always unrolled.**  `_visit_for` emits
+  `tl.static_range` whenever the count is known, however large.  Two nested
+  static loops of 64 (4,096 statements) take Triton minutes to compile.
+  Unroll only small counts, or loops whose body needs a constexpr index, and
+  emit `range` otherwise.
+
 - **Index arithmetic stored as a float** blocks chaining block-scaled
   designs in the kernel.  A block-scaled design is one instruction, so
   `serve` chains it over `k` with a launch per instruction: 16-48 launches
