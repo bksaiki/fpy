@@ -164,6 +164,7 @@ class TestUnionfindModel():
             assert len(uf) == len(model)
             assert set(uf) == set(model)
             assert len(uf.representatives()) == len(set(model.values()))
+            assert uf.components() == set(model.values())
             for a, block_a in model.items():
                 assert uf.find(a) in block_a
                 assert uf.component(a) == block_a

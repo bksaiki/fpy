@@ -106,11 +106,11 @@ class Unionfind(Generic[_T]):
         """
         return set(self._sets.keys())
 
-    def components(self) -> set[set[_T]]:
+    def components(self) -> set[frozenset[_T]]:
         """
         Returns the set of all components in the union-find.
         """
-        return set(self._sets.values())
+        return {frozenset(s) for s in self._sets.values()}
 
     def _find(self, x: _T) -> _T:
         """
