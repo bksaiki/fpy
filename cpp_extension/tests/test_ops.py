@@ -1,6 +1,12 @@
 import fpy2_models
 import pytest
 import torch
+from fpy2_models.ops import _quantize_tf32
+from fpy2_models.quantization import quantize_e2m1
+from torchao.prototype.mx_formats.kernels import (
+    f4_unpacked_to_f32,
+    f32_to_f4_unpacked,
+)
 
 
 def _inputs(dtype):
@@ -68,6 +74,87 @@ def test_blackwell_group_scaled_batch():
     scales = torch.ones(2, 4)
     output = fpy2_models.nv_blackwell_nvfp4(a, b, 0.0, scales, scales)
     torch.testing.assert_close(output, torch.ones(2))
+
+
+def test_e2m1_quantization_uses_torchao_numerics():
+    inputs = torch.tensor(
+        [
+            -float("inf"),
+            -7.0,
+            -5.0,
+            -3.5,
+            -2.5,
+            -1.75,
+            -1.25,
+            -0.75,
+            -0.25,
+            -0.0,
+            0.0,
+            0.25,
+            0.75,
+            1.25,
+            1.75,
+            2.5,
+            3.5,
+            5.0,
+            7.0,
+            float("inf"),
+        ],
+        dtype=torch.float64,
+    )
+    expected = f4_unpacked_to_f32(f32_to_f4_unpacked(inputs.float()))
+
+    actual = quantize_e2m1(inputs)
+
+    torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+    assert torch.signbit(actual[9])
+    assert not torch.signbit(actual[10])
+
+
+def test_e2m1_quantization_preserves_nan_for_model_special_values():
+    inputs = torch.tensor([float("nan"), -float("nan")])
+
+    actual = quantize_e2m1(inputs)
+
+    assert torch.isnan(actual).all()
+    assert not torch.signbit(actual[0])
+    assert torch.signbit(actual[1])
+
+
+def test_e2m1_quantization_accepts_noncontiguous_batches():
+    inputs = torch.tensor([[0.25, 0.75], [2.5, 5.0]]).t()
+    assert not inputs.is_contiguous()
+
+    actual = quantize_e2m1(inputs)
+
+    torch.testing.assert_close(
+        actual,
+        torch.tensor([[0.0, 2.0], [1.0, 4.0]]),
+        atol=0,
+        rtol=0,
+    )
+
+
+def test_blackwell_nvfp4_quantizes_operands_to_e2m1():
+    a = torch.zeros(64)
+    b = torch.zeros(64)
+    a[0] = 0.75
+    b[0] = 1.25
+    scales = torch.ones(4)
+
+    actual = fpy2_models.nv_blackwell_nvfp4(a, b, 0.0, scales, scales)
+
+    # Both halfway cases round to 1.0 under E2M1 round-to-nearest-even.
+    assert actual.item() == 1.0
+
+
+def test_tf32_truncation_remains_an_explicit_local_exception():
+    inputs = torch.tensor([1.00048828125, -1.00048828125, float("nan")])
+
+    actual = _quantize_tf32(inputs)
+
+    torch.testing.assert_close(actual[:2], torch.tensor([1.0, -1.0]))
+    assert torch.isnan(actual[2])
 
 
 def test_batched_shape():

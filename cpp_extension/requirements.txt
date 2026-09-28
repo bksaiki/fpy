@@ -1,2 +1,3 @@
 torch
+torchao>=0.18,<0.19
 numpy
