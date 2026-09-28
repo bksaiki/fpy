@@ -372,15 +372,12 @@ class TestAListStoresAtItsElements:
             q, arg_types=[ListType(RealType(fp.FP32), 8)])
 
     def test_the_buffer_holds_the_element_type(self):
-        assert 'std::array<int8_t, 8>' in self._emit(self._guarded())
-
-    def test_the_store_spells_its_conversion(self):
-        """The *value* fits where the expression's storage does not: ``max``
-        computes at ``float`` because ``logb`` does."""
-        assert 'static_cast<int8_t>(std::max(' in self._emit(self._guarded())
-
-    def test_the_reduction_folds_on_the_integer_path(self):
         out = self._emit(self._guarded())
+        assert 'std::array<int8_t, 8>' in out
+        # the *value* fits where the expression's storage does not: `max`
+        # computes at `float` because `logb` does
+        assert 'static_cast<int8_t>(std::max(' in out
+        # and the reduction folds on the integer path
         assert re.search(r'= std::max\(\w+, ys\[', out), out
         assert 'signbit' not in out
         assert 'quiet_NaN' not in out

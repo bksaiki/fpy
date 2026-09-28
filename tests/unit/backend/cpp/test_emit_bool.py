@@ -29,20 +29,6 @@ class TestBoolAndCompare:
         out = CppCompiler().compile(f)
         assert out == 'bool f() {\n    return false;\n}'
 
-    def test_pairwise_lt(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> bool:
-            with fp.FP64:
-                return x < y
-
-        cc = CppCompiler()
-        out = cc.compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        assert 'return (x < y);' in out
-        assert out.startswith('bool f(double x, double y)')
-
     def test_all_six_comparison_ops(self):
         @fp.fpy
         def f(x: fp.Real, y: fp.Real) -> bool:
@@ -61,6 +47,7 @@ class TestBoolAndCompare:
             f, ctx=fp.FP64,
             arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
         )
+        assert out.startswith('bool f(double x, double y)')
         assert 'a = (x < y);' in out
         assert 'b = (x <= y);' in out
         assert 'c = (x > y);' in out
@@ -103,7 +90,10 @@ class TestBooleanReduce:
 
         out = self._compile(f, BoolType())
         assert out.startswith('bool f(const std::vector<bool>& bs)')
-        assert 'std::any_of(' in out
+        # a name is evaluated once already, so there is nothing to bind -- and a
+        # list is a handle, so there was never a copy to avoid either
+        assert 'std::any_of(bs.begin(), bs.end()' in out
+        assert 'auto&&' not in out
 
     def test_all_over_bool_list_arg(self):
         @fp.fpy
@@ -114,14 +104,6 @@ class TestBooleanReduce:
         out = self._compile(f, BoolType())
         assert out.startswith('bool f(const std::vector<bool>& bs)')
         assert 'std::all_of(' in out
-
-    def test_identity_predicate_is_a_bool_lambda(self):
-        @fp.fpy
-        def f(bs: list[bool]) -> bool:
-            with fp.FP64:
-                return all(bs)
-
-        out = self._compile(f, BoolType())
         m = re.search(r'\[\]\(bool (\w+)\) \{ return (\w+); \}', out)
         assert m, f'no identity predicate in:\n{out}'
         assert m.group(1) == m.group(2), 'predicate must return its parameter'
@@ -139,18 +121,6 @@ class TestBooleanReduce:
         assert bound, out
         t = bound.group(1)
         assert f'std::any_of({t}.begin(), {t}.end()' in out
-
-    def test_named_operand_is_not_bound(self):
-        """A name is evaluated once already, so there is nothing to bind — and
-        a list is a handle, so there was never a copy to avoid either."""
-        @fp.fpy
-        def f(bs: list[bool]) -> bool:
-            with fp.FP64:
-                return any(bs)
-
-        out = self._compile(f, BoolType())
-        assert 'std::any_of(bs.begin(), bs.end()' in out
-        assert 'auto&&' not in out
 
     def test_comprehension_operand_is_fused_away(self):
         """``ReduceFusion`` runs in the default (optimizing) pipeline, so the

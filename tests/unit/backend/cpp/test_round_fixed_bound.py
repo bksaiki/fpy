@@ -208,27 +208,20 @@ class TestABoundTheOperandTypeCannotHold:
 
 
 class TestBoundAndSpecialsAreAsserted:
-    def test_the_bound_is_asserted_in_integer_storage(self):
+    def test_the_bound_and_the_specials_are_asserted(self):
         """Integer storage is wider than the format, so the bound needs its own
-        assertion; the cast alone wraps at the type's range."""
+        assertion; the cast alone wraps at the type's range.  It is asserted on
+        the *rounded* value: ``100.7`` rounds to ``100`` under ``RTZ`` and is in
+        bounds.  And a NaN or infinity converted to an integer type is undefined
+        -- on x86-64 it gives ``INT_MIN`` -- where the interpreter raises."""
         out = _emit(_INT_STORAGE)
         assert 'overflow occurred' in out
+        assert 'std::trunc(' in out
+        assert 'std::isfinite' in out
         # 120 is representable in `int8_t` but not in this context
         with pytest.raises(Exception):
             _round_fn(_INT_STORAGE)(120.0)
-
-    def test_the_bound_is_asserted_on_the_rounded_value(self):
-        """``100.7`` rounds to ``100`` under ``RTZ`` and is *in* bounds, so the
-        test cannot be applied to the operand."""
         assert float(_round_fn(_INT_STORAGE)(100.7)) == 100.0
-        out = _emit(_INT_STORAGE)
-        assert 'std::trunc(' in out
-
-    def test_specials_are_guarded_before_an_integer_conversion(self):
-        """A NaN or infinity converted to an integer type is undefined -- on
-        x86-64 it gives ``INT_MIN`` -- where the interpreter raises."""
-        out = _emit(_INT_STORAGE)
-        assert 'std::isfinite' in out
 
 
 class TestEdgeRulesAreRefused:

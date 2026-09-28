@@ -35,6 +35,8 @@ class TestForRange:
         assert 'double acc = 0;' in out
         assert 'for (int8_t i = 0; i < 10; ++i) {' in out
         assert 'acc = (acc + x);' in out
+        # the pre-loop init, the carry and the rebind are one class: one variable
+        assert 'acc_1' not in out
 
     def test_two_loops_share_independent_counters(self):
         """Two for-loops over different counters each declare-on-assign

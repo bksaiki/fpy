@@ -236,19 +236,15 @@ class TestTheCastFallbackKeepsTheMode:
         assert 'std::ceil' in out
         assert 'static_cast<int64_t>' in out
 
-    def test_the_storage_bound_is_asserted(self):
-        """The format is unbounded where `int64_t` is not, so the conversion
-        has a range the context does not state."""
-        out = CppCompiler().compile(self._unfolded(RM.RTZ),
-                                    arg_types=[RealType(fp.FP64)])
-        assert '9223372036854774784' in out
-        assert 'overflow occurred so rounding is undefined' in out
-
-    def test_truncation_still_reaches_the_cast(self):
-        """`RTZ` is what the cast performs, so it needs no spelling."""
+    def test_truncation_reaches_the_cast_under_the_storage_bound(self):
+        """`RTZ` is what the cast performs, so it needs no spelling.  The
+        format is unbounded where `int64_t` is not, so the conversion has a
+        range the context does not state."""
         out = CppCompiler().compile(self._unfolded(RM.RTZ),
                                     arg_types=[RealType(fp.FP64)])
         assert 'static_cast<int64_t>' in out
+        assert '9223372036854774784' in out
+        assert 'overflow occurred so rounding is undefined' in out
 
 
 class TestWrappingOverflow:
@@ -259,15 +255,12 @@ class TestWrappingOverflow:
     """
 
     def test_a_matching_format_wraps(self):
+        """The range test is on the rounded value: under ``RTP`` an operand
+        inside the type's range can round to one outside it, and the cast in
+        that arm would be undefined."""
         out = _emit(fp.SINT32.with_params(rm=RM.RTP))
-        assert 'std::ceil(x)' in out
         assert 'std::fmod' in out
         assert '4294967296.0' in out
-
-    def test_the_range_test_is_on_the_rounded_value(self):
-        """Under ``RTP`` an operand inside the type's range can round to one
-        outside it, and the cast in that arm would be undefined."""
-        out = _emit(fp.SINT32.with_params(rm=RM.RTP))
         rounded = re.search(r'auto&& (\w+) = std::ceil\(x\);', out)
         assert rounded, out
         assert f'if ({rounded.group(1)} >= -2147483648.0' in out
@@ -286,18 +279,12 @@ class TestWrappingOverflow:
 
     def test_a_format_the_type_does_not_hold_exactly_is_refused(self):
         """``int8_t`` runs to -128..127, so it would wrap a step further out
-        than a ``+-100`` format does."""
-        ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
-                              overflow=fp.OverflowMode.WRAP)
-        with pytest.raises(CppCompileError, match='does not hold exactly'):
-            _emit(ctx)
-
-    def test_the_advice_does_not_name_a_pass_that_cannot_help(self):
-        """``unfold_overflow`` states an overflow as a constant, and a wrapping
+        than a ``+-100`` format does.  The advice names no pass:
+        ``unfold_overflow`` states an overflow as a constant, and a wrapping
         rule has none -- its value varies with the operand."""
         ctx = MPBFixedContext(-1, fp.RealFloat(exp=0, c=100), rm=RM.RTP,
                               overflow=fp.OverflowMode.WRAP)
-        with pytest.raises(CppCompileError) as exc:
+        with pytest.raises(CppCompileError, match='does not hold exactly') as exc:
             _emit(ctx)
         assert 'cannot state a wrapping rule' in str(exc.value)
 
@@ -315,10 +302,13 @@ class TestAssertions:
 
     def test_operand_guard_when_specials_are_refused(self):
         """Neither NaN nor infinity representable and no substitute stated, so
-        both collapse to one finiteness test."""
-        out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=10, c=1), overflow=ASSERT))
+        both collapse to one finiteness test, beside the bound."""
+        out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=11, c=1), overflow=ASSERT))
         assert 'assert((std::isfinite(' in out
         assert 'rounding is undefined for this value' in out
+        assert 'assert((std::fabs(' in out
+        assert '2048' in out
+        assert 'overflow occurred so rounding is undefined' in out
 
     def test_only_nan_refused(self):
         """With infinity representable, the guard narrows to NaN alone."""
@@ -338,12 +328,6 @@ class TestAssertions:
             enable_nan=True, enable_inf=True))
         assert 'rounding is undefined for this value' not in out
         assert '!std::isfinite(x) || std::fabs(' in out
-
-    def test_bound_assertion_for_overflow_assert(self):
-        out = _emit(MPBFixedContext(-1, fp.RealFloat(exp=11, c=1), overflow=ASSERT))
-        assert 'assert((std::fabs(' in out
-        assert '2048' in out
-        assert 'overflow occurred so rounding is undefined' in out
 
     def test_asymmetric_bounds_get_two_comparisons(self):
         """``fabs`` states one magnitude, but the two bounds are independent --
@@ -424,14 +408,11 @@ class TestStorageFromTheInferredFormat:
             choose_storage(fp.MPFixedContext(-1).format())
 
     def test_a_rescaled_rounding_compiles(self):
-        """The libm rounding, in the type the inferred format chose."""
+        """The libm rounding, in the type the inferred format chose.  The
+        context states no bound, so the assertion carries the inferred one --
+        which makes it a check on the inference."""
         out = self._compile(self._rescaled())
         assert re.search(r'double \w+ = std::nearbyint\(', out), out
-
-    def test_the_bound_it_asserts_comes_from_the_analysis(self):
-        """The context states no bound, so the assertion carries the inferred
-        one -- which makes it a check on the inference."""
-        out = self._compile(self._rescaled())
         assert 'overflow occurred so rounding is undefined' in out
         # a finite magnitude test, not a context-stated maxval
         assert 'std::fabs' in out
@@ -548,29 +529,30 @@ class TestScaleByPowerOfTwo:
     integral power of two, exact but for overflow and underflow.
     """
 
-    @staticmethod
-    def _lowered(src=fp.FP32, target=fp.FP16):
+    @pytest.fixture(scope='class')
+    def lowered(self) -> str:
+        """An `FP16` rounding of an `FP32` value, lowered to fixed point."""
         import fpy2.strategies as st
 
         @fp.fpy(ctx=fp.REAL)
         def q(x: fp.Real) -> fp.Real:
-            with target:
+            with fp.FP16:
                 y = fp.round(x)
             return y
 
-        ref = st.monomorphize(q, args=[RealType(src)])
+        ref = st.monomorphize(q, args=[RealType(fp.FP32)])
         low = st.rescale_fixed(st.float_to_fixed(
             st.unfold_overflow(ref, early_check=True)))
         return CppCompiler().compile(low)
 
-    def test_the_lowering_uses_ldexp_not_pow(self):
+    def test_the_lowering_uses_ldexp_not_pow(self, lowered):
         """No ``pow`` at all: value classes prove both exponents finite, so even
         the guard's fallback arm is gone."""
-        out = self._lowered()
+        out = lowered
         assert 'std::ldexp(' in out
         assert 'std::pow(' not in out
 
-    def test_the_scale_needs_no_widening(self):
+    def test_the_scale_needs_no_widening(self, lowered):
         """``std::ldexp`` is overloaded on its first argument, so the scale runs
         in whatever type the value is stored in.
 
@@ -584,7 +566,7 @@ class TestScaleByPowerOfTwo:
 
         The peephole fuses the power into the scale, so there is no separate
         product to widen either."""
-        out = self._lowered()
+        out = lowered
         scale = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
         assert scale
         # nothing here is widened: the scale runs in `float`, on `float`
@@ -627,18 +609,12 @@ class TestScaleByPowerOfTwo:
         )
 
     def test_a_guarding_branch_is_what_removes_the_select(self):
-        """Two programs differing only in a branch, so the removal is due to the
+        """The program above behind a branch, so the removal is due to the
         branch and not to the exponent's format -- which admits both specials
         either way.  Reading the branch is what value classes add; the lowered
         rounding above gets the same treatment from its ``elif`` ladder."""
         exp_ctx = MPBFixedContext(
             -1, fp.RealFloat(exp=0, c=100), enable_nan=True, enable_inf=True)
-
-        @fp.fpy(ctx=fp.REAL)
-        def bare(x: fp.Real, n: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = (2 ** n) * x
-            return y
 
         @fp.fpy(ctx=fp.REAL)
         def guarded(x: fp.Real, n: fp.Real) -> fp.Real:
@@ -649,14 +625,14 @@ class TestScaleByPowerOfTwo:
                 y = 0
             return y
 
-        tys = [RealType(fp.FP64), RealType(exp_ctx)]
-        assert 'std::pow(2.0,' in CppCompiler().compile(bare, arg_types=tys)
-        assert 'std::pow(' not in CppCompiler().compile(guarded, arg_types=tys)
+        out = CppCompiler().compile(
+            guarded, arg_types=[RealType(fp.FP64), RealType(exp_ctx)])
+        assert 'std::pow(' not in out
 
-    def test_a_constant_scale_stays_a_multiply(self):
+    def test_a_constant_scale_stays_a_multiply(self, lowered):
         """A constant power of two needs no call: the literal multiply is
         already exact, and folding it is better than either."""
-        out = self._lowered()
+        out = lowered
         # the subnormal branch scales by a literal 2**24
         assert '16777216' in out
 
@@ -710,7 +686,9 @@ class TestScaleByPowerOfTwo:
         assert 'while' in out
 
     def test_both_operand_orders(self):
-        """Multiplication commutes, so the scale may sit on either side."""
+        """Multiplication commutes, so the scale may sit on either side.  An
+        exponent the analysis knows is finite by its format costs neither a
+        branch nor a fallback -- only one derived from ``logb`` does."""
         @fp.fpy
         def left(x: fp.Real, n: fp.Real) -> fp.Real:
             with fp.FP64:
@@ -726,6 +704,7 @@ class TestScaleByPowerOfTwo:
             out = CppCompiler().compile(f, arg_types=tys)
             assert out.count('std::ldexp') == 1, f.name
             assert 'std::pow' not in out, f.name
+            assert 'std::isfinite' not in out, f.name
 
     def test_a_product_of_two_powers(self):
         """Both halves are exact: the multiply peephole takes the outer scale
@@ -771,20 +750,6 @@ class TestScaleByPowerOfTwo:
             f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)])
         assert 'std::ldexp' not in out
         assert 'std::pow' in out
-
-    def test_an_integer_exponent_needs_no_guard(self):
-        """An exponent the analysis knows is finite by its format costs neither
-        a branch nor a fallback -- only one derived from ``logb`` does."""
-        @fp.fpy
-        def f(x: fp.Real, n: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return (2 ** n) * x
-
-        out = CppCompiler().compile(
-            f, arg_types=[RealType(fp.FP64), RealType(fp.SINT8)])
-        assert 'std::ldexp' in out
-        assert 'std::isfinite' not in out
-        assert 'std::pow' not in out
 
     def test_does_not_rescue_a_program_the_dispatch_refuses(self):
         """``ldexp`` computes the *exact* product, so it may only stand in for
