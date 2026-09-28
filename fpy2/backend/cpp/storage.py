@@ -60,13 +60,15 @@ _SIGMA: tuple[tuple[CppScalar, AbstractableFormat], ...] = (
     (CppScalar.S16, SINT16.format()),
     (CppScalar.U32, UINT32.format()),
     (CppScalar.S32, SINT32.format()),
-    (CppScalar.F32, FP32.format()),
     (CppScalar.U64, UINT64.format()),
     (CppScalar.S64, SINT64.format()),
+    (CppScalar.F32, FP32.format()),
     (CppScalar.F64, FP64.format()),
 )
-"""The storage domain: an ordered sequence of *formats*, smallest first, each
-paired with the C++ type that spells it.
+"""The storage domain: an ordered sequence of *formats*, each paired with the
+C++ type that spells it.  Integers come first, then floats, each smallest
+first: an integer-valued bound that fits both is stored as an integer, which
+integer arithmetic reads without a conversion.
 
 A storage type is a format the target can spell -- ``CppScalar.S64`` names
 exactly ``SINT64.format()`` -- so containment, widening and losslessness are all

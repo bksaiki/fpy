@@ -161,13 +161,13 @@ class TestSlotStoreTypes:
             return zs[0]
 
         @fp.fpy
-        def fresh(x: fp.Real):
+        def fresh(x: fp.Real, y: fp.Real):
             with fp.SINT64:
-                zs = [fp.round(x)]
+                zs = [fp.round(x), y]
             return zs[0]
 
         for f in (slot, fresh):
-            out = CppCompiler().compile(f, arg_types=[RealType(fp.FP32)])
+            out = CppCompiler().compile(f, arg_types=[RealType(fp.FP32)] * len(f.args))
             assert 'static_cast<float>' in out, f.name
 
     def test_a_container_widens_rather_than_refusing(self):
