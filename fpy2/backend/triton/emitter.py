@@ -604,6 +604,9 @@ class _Emitter(Visitor):
     cast."""
     _once: set[str]
     """The names assigned exactly once."""
+    _constexprs: set[str]
+    """The `tl.static_range` targets in scope: Python numbers when traced,
+    which have no `.to`."""
     _next_tmp: int
     _branches: int
     """How many flattened branches enclose the statement being emitted."""
@@ -680,6 +683,7 @@ class _Emitter(Visitor):
         for n, ds in self.def_use.name_to_defs.items():
             counts[str(n)] += len(ds)
         self._once = {n for n, c in counts.items() if c == 1}
+        self._constexprs = set()
         self._next_tmp = 0
         self._branches = 0
         self._merging = set()
@@ -761,13 +765,16 @@ class _Emitter(Visitor):
         return scalar_fits_in(have, want) or bound_fits_in_scalar(bound, want)
 
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
-        """*code* cast to *want*.  A literal is respelled instead: a Python
-        number is a `constexpr`, which has no `.to`."""
+        """*code* cast to *want*.  A literal is respelled instead, and code of
+        `static_range` targets alone cast by `tl.cast`: a Python number is a
+        `constexpr`, which has no `.to`."""
         if code in _SPECIALS:
             return code     # a Python float, typed where it is used
         literal = _as_literal(code)
         if literal is not None:
             return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
+        if set(_IDENT.findall(code)) <= self._constexprs:
+            return f'tl.cast({code}, {want.format()})'
         return f'{code}.to({want.format()})'
 
     def _index(self, e: Expr) -> str:
@@ -2416,10 +2423,12 @@ class _Emitter(Visitor):
         n = static_trip_count(stmt.iterable, self.sizes)
         if not isinstance(n, int):
             return self._emit_runtime_loop(stmt, ctx)
+        outer = self._constexprs
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
             ctx.indent()
             ctx.forget(self._carried_names(stmt))
+            self._constexprs = outer | {str(stmt.target)}
         else:
             # `static_range` counts from zero: the target is where the
             # count lands in `range(start, stop, step)`
@@ -2431,6 +2440,7 @@ class _Emitter(Visitor):
             ctx.forget(self._carried_names(stmt))
             ctx.add_line(f'{stmt.target} = {start} + {k} * {step}')
         self._visit_block(stmt.body, ctx)
+        self._constexprs = outer
         ctx.dedent()
 
     def _emit_runtime_loop(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:

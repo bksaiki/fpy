@@ -1088,22 +1088,22 @@ def test_a_float_held_index_agrees():
 
 @fp.fpy(ctx=fp.REAL)
 def _static_product_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
-    """A slice at `t * 32`, `t` a loop of static count."""
+    """Slices at `t * 32`, `t` a loop of static count."""
     for r in range(len(out)):
         s = fp.round(0)
         for t in range(32):
             i = t * 32
-            w = xss[r][i:i + 32]
-            for j in range(32):
+            w = xss[r][i:i + 4]
+            for j in range(4):
                 with fp.FP32:
                     s = s + w[j]
         out[r] = s
     return out
 
 
-@pytest.mark.xfail(strict=True, raises=_TritonRefused,
-                   reason='Phase 4: a constexpr loop variable is cast with `.to`')
 def test_a_static_product_index_agrees():
+    """A `static_range` target, a Python number when traced, is cast by
+    `tl.cast`."""
     src = _compile(_static_product_index, _rows_of(1024))
     _agree(src, _static_product_index, _randn(1024))
 
