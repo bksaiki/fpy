@@ -14,9 +14,11 @@ import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import derive_intermediate
-from fpy2.ast.fpyast import Integer
+from fpy2.ast.fpyast import FuncDef, Integer
 from fpy2.strategies import (
     ExprCursor,
+    FuncBody,
+    StmtCursor,
     TransformReferenceError,
     comp_to_loop,
     float_to_fixed,
@@ -40,7 +42,7 @@ from fpy2.strategies import (
     unroll_while,
 )
 from fpy2.strategies.sites import _SITES
-from fpy2.transform import ForUnrollStrategy, SplitLoopStrategy, contains
+from fpy2.transform import EditLog, ForUnrollStrategy, SplitLoopStrategy, contains
 from fpy2.types import RealType
 
 from ..transform.test_hoist_scale import (
@@ -450,6 +452,26 @@ def test_a_listed_cursor_aims_the_same_as_its_index(strategy, func, kw):
             )
         else:
             assert by_cursor.ast.is_equiv(by_index.ast)
+
+
+def _identity(func: fp.Function) -> fp.Function:
+    """A pass that rewrites nothing, yet produces a new program."""
+    ast = func.ast
+    same = FuncDef(ast.name, ast.args, ast.body, ast.meta, loc=ast.loc)
+    return func.with_edits(EditLog(ast, same, exprs_preserved=True))
+
+
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
+def test_a_cursor_crosses_the_strategy_in_both_directions(strategy, func, kw):
+    """In: a cursor of an earlier program aims as it did there, so the
+    strategy rebases its `where`.  Out: a cursor of its input reaches its
+    output, so it reports what it rewrote."""
+    cursor = sites(strategy, func, **kw)[0]
+    direct = _apply(strategy, func, cursor, kw)
+    assert _apply(strategy, _identity(func), cursor, kw).ast.is_equiv(direct.ast)
+
+    last = StmtCursor(func.ast, FuncBody().stmt(len(func.ast.body.stmts) - 1))
+    assert direct.forward(last).func is direct.ast
 
 
 # ----------------------------------------------------------------------
