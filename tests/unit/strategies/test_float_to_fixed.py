@@ -10,7 +10,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.analysis import PartialEval
-from fpy2.ast import Call, ContextStmt
+from fpy2.ast import ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.transform.utils import RoundingScopes
@@ -31,19 +31,6 @@ def _round_ctxs(ast) -> list:
         def _visit_round(self, e, ctx):
             found.append(scopes.scope_ctx(e))
             super()._visit_round(e, ctx)
-
-    _C()._visit_function(ast, None)
-    return found
-
-
-def _blocks(ast) -> list:
-    """Every ``ContextStmt`` in *ast*."""
-    found = []
-
-    class _C(DefaultVisitor):
-        def _visit_context(self, stmt: ContextStmt, ctx):
-            found.append(stmt)
-            super()._visit_context(stmt, ctx)
 
     _C()._visit_function(ast, None)
     return found

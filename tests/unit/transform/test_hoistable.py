@@ -14,7 +14,7 @@ tests assert:
    raises, which :class:`TestOrdering` witnesses directly.
 4. **Semantic equivalence** through the interpreter, and idempotence.
 
-``test_hoistable_analysis.py`` covers the prefix rule on its own, and
+``tests/unit/analysis/test_hoistability.py`` covers the prefix rule on its own, and
 ``test_hoistable_profile.py`` pins how little the pass does to the corpus.
 """
 

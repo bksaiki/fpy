@@ -1,7 +1,8 @@
 """
-Tests for cpp storage-type selection (Phase 1 of the backend-cpp plan).
+Tests for cpp storage-type selection.
 """
 
+from collections.abc import Iterable
 from fractions import Fraction
 from functools import reduce
 from itertools import combinations, permutations
@@ -315,7 +316,7 @@ class TestBoundFitsInScalar:
 _TYS = [t for t, _ in _SIGMA]
 
 
-def _sup(xs):
+def _sup(xs: Iterable[CppScalar]) -> CppScalar | None:
     try:
         return scalar_sup(list(xs))
     except StorageSelectionError:
@@ -341,7 +342,8 @@ class TestTheLadderIsOrdered:
                     )
 
     def test_minimal_upper_bounds_are_not_unique(self):
-        """Which is why the sequence is the tie-break rather than a detail."""
+        """`u8` and `s8` are incomparable, so containment alone cannot order
+        the ladder: the sequence is the tie-break."""
         assert not _ABSTRACT[CppScalar.U8] <= _ABSTRACT[CppScalar.S8]
         assert not _ABSTRACT[CppScalar.S8] <= _ABSTRACT[CppScalar.U8]
 

@@ -174,10 +174,9 @@ class TestIntegerStorage:
     """
 
     # one mode: `TestModeTable` checks every entry of the table this reads
-    @pytest.mark.parametrize('rm, fn', [(RM.RNE, 'std::nearbyint')], ids=['rne'])
-    def test_the_value_is_made_integral_before_the_cast(self, rm, fn):
-        out = _emit(fp.SINT32.with_params(rm=rm, overflow=ASSERT))
-        assert re.search(rf'auto&& (\w+) = {re.escape(fn)}\(x\);', out), out
+    def test_the_value_is_made_integral_before_the_cast(self):
+        out = _emit(fp.SINT32.with_params(rm=RM.RNE, overflow=ASSERT))
+        assert re.search(r'auto&& (\w+) = std::nearbyint\(x\);', out), out
         assert re.search(r'int32_t \w+ = static_cast<int32_t>\(\w+\);', out), out
 
     def test_truncation_needs_no_call(self):
@@ -489,8 +488,8 @@ class TestFloatContextUnaffected:
         assert 'static_cast<float>' in out
 
     def test_non_float_context_in_float_storage_is_reported(self):
-        """``storage.is_float()`` does not imply a float context — that used to
-        be a bare ``assert`` and is now a diagnostic."""
+        """``storage.is_float()`` does not imply a float context: a diagnostic,
+        not an ``assert``."""
         # a bounded float that is not an `EFloatContext` lands here
         with pytest.raises(CppCompileError, match='is not a floating-point context'):
             _emit(fp.MPBFloatContext(11, -14, fp.RealFloat(c=65504)))
@@ -556,11 +555,9 @@ class TestCastCarriesNoMode:
     rounding mode -- so the guard that holds a declined `Round` to ``RTZ``,
     the cast below it being a truncation, does not apply to a `Cast`."""
 
-    # the cast is emitted before the mode is read, so one mode stands for all
-    @pytest.mark.parametrize('rm', [RM.RTP])
-    def test_a_non_rtz_mode_still_casts(self, rm):
+    def test_a_non_rtz_mode_still_casts(self):
         ctx = MPBFixedContext(
-            -1, fp.RealFloat(exp=10, c=1), rm=rm, overflow=ASSERT,
+            -1, fp.RealFloat(exp=10, c=1), rm=RM.RTP, overflow=ASSERT,
             enable_neg_zero=True)
         out = _emit(ctx, body='cast')
         assert 'static_cast<float>' in out

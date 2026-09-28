@@ -304,13 +304,8 @@ class _SimplifyIfInstance(SiteRewriter):
                 break
 
         if why is not None:
-            self.refused.append((stmt, why))
-            if self._named_by_cursor(stmt):
-                self.declined.append(why)
-                if not self.listing:
-                    raise TransformDeclined(
-                        f'cannot rewrite `if` to `if` expression: {why}'
-                    )
+            if self._refuse(stmt, why) and not self.listing:
+                raise TransformDeclined(f'cannot rewrite `if` to `if` expression: {why}')
             return False
 
         idx = self.site_idx

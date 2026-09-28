@@ -425,7 +425,6 @@ class TestFactorValidation:
 
 
 def _count_if1s(ast) -> int:
-    from fpy2.ast import If1Stmt
     n = [0]
 
     class _C(DefaultVisitor):
@@ -459,7 +458,7 @@ class TestMask:
             assert 'fp.fmod(' not in src
             assert '%' not in src
 
-    @pytest.mark.parametrize('n', [0, 3, 4, 9])
+    @pytest.mark.parametrize('n', [0, 2, 3, 4, 9])
     def test_agrees_on_every_remainder(self, n):
         """Including the empty list and the exactly-divisible length."""
         xs = [float(k + 1) for k in range(n)]

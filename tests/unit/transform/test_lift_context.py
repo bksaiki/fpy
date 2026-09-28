@@ -1,25 +1,20 @@
 """Unit tests for the :class:`fpy2.transform.LiftContext` transform."""
 
 
+from typing import TypeVar
+
 import fpy2 as fp
 
-from fpy2.ast import Assign, ContextStmt, ForStmt, Var
-from fpy2.ast.visitor import DefaultVisitor
+from fpy2.ast import Assign, ContextStmt, ForStmt, FuncDef, Stmt, Var
 from fpy2.transform import LiftContext
+from fpy2.transform.path import walk_stmts
+
+_S = TypeVar('_S', bound=Stmt)
 
 
-def _find_stmt(ast, node_type):
-    """Return the first statement of *node_type* in *ast*."""
-    found = []
-
-    class _C(DefaultVisitor):
-        def _visit_statement(self, stmt, ctx):
-            if isinstance(stmt, node_type):
-                found.append(stmt)
-            return super()._visit_statement(stmt, ctx)
-
-    _C()._visit_function(ast, None)
-    return found[0] if found else None
+def _find_stmt(ast: FuncDef, node_type: type[_S]) -> _S:
+    """The first statement of *node_type* in *ast*."""
+    return next(s for _, s in walk_stmts(ast) if isinstance(s, node_type))
 
 
 @fp.fpy
@@ -50,7 +45,6 @@ def _no_ctx(x: fp.Real) -> fp.Real:
 
 
 class TestLiftContext:
-
     def test_ctor_lifted(self):
         out = LiftContext.apply(_with_ctor.ast)
         assert isinstance(out.body.stmts[0], Assign)

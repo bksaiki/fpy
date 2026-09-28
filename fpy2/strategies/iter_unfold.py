@@ -7,7 +7,12 @@ from ..function import Function
 from ..transform import Cursor, UnfoldEnumerate, UnfoldZip
 
 
-def _unfold(cls: type[UnfoldZip] | type[UnfoldEnumerate], func: Function, where, temp_id) -> Function:
+def _unfold(
+    cls: type[UnfoldZip] | type[UnfoldEnumerate],
+    func: Function,
+    where: int | Cursor | None,
+    temp_id: NamedId | None,
+) -> Function:
     if not isinstance(func, Function):
         raise TypeError(f'Expected a \'Function\', got {func}')
     return func.with_edits(cls.apply_with_edits(

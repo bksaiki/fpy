@@ -3,10 +3,8 @@
 If a strategy has `k` sites in a program, then `where=None` rewrites all `k` and
 `where=j` for ``0 <= j < k`` rewrites the `j`th.  `k` is `len(sites(...))`.
 
-Six of the ten strategies used to break this: `sites` reported *structural*
-candidates while a refusal consumed an index, so `where=j` could raise and
-`where=None` could be a no-op with `k > 0`.  The `refuses` rows are what catch
-that, and every strategy in `_SITES` has to appear here at all --
+`sites` must not report a structural candidate a refusal would consume: the
+`refuses` rows catch that, and every strategy in `_SITES` has to appear here --
 `test_every_aimable_strategy_is_covered` fails if one is added without a row.
 """
 
@@ -424,8 +422,8 @@ def _no_factor(kw):
 def test_every_index_in_range_rewrites(strategy, func, kw):
     """`where=j` for `0 <= j < k` rewrites, and rewrites something.
 
-    This is the half that broke when a refusal consumed an index: `where=j`
-    raised `TransformDeclined` for a `j` the listing had just reported.
+    A refusal must not consume an index: `where=j` must not raise
+    `TransformDeclined` for a `j` the listing reports.
     """
     listed = sites(strategy, func, **kw)
     assert listed, 'the program should give this strategy at least one site'
@@ -438,9 +436,8 @@ def test_every_index_in_range_rewrites(strategy, func, kw):
 def test_where_none_acts_exactly_when_there_are_sites(strategy, func, kw):
     """`where=None` rewrites all `k`, so it is a no-op if and only if `k` is 0.
 
-    This is the half that broke worse: `sites(rescale_fixed, two_floats)`
-    reported two sites in a program holding no fixed-point context at all, and
-    `where=None` did nothing.
+    So a refused program lists nothing: `sites(rescale_fixed, _two_floats)`
+    is empty, since the program holds no fixed-point context.
     """
     listed = sites(strategy, func, **kw)
     out = _apply(strategy, func, None, kw)
@@ -507,9 +504,8 @@ def test_a_cursor_crosses_the_strategy_in_both_directions(strategy, func, kw):
 
 @pytest.mark.parametrize('strategy,func,kw', REFUSE_ROWS, ids=REFUSE_IDS)
 def test_a_strategy_that_applies_to_nothing_lists_nothing(strategy, func, kw):
-    """The divergence, stated directly: a program the strategy refuses has no
-    sites, so `where=None` is a no-op and `where=0` is out of range.  It used to
-    report a site per structural candidate and then rewrite none of them."""
+    """A program the strategy refuses has no sites, so `where=None` is a no-op
+    and `where=0` is out of range."""
     assert sites(strategy, func, **kw) == []
     assert refusals(strategy, func, **kw), 'it should say why, not stay silent'
     assert _apply(strategy, func, None, kw).ast.is_equiv(func.ast)

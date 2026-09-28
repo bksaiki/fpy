@@ -131,7 +131,7 @@ def _lower(func, src):
         early_check=True))))
 
 
-def _rounding(target) -> fp.Function:
+def _rounding(target: fp.Context) -> fp.Function:
     @fp.fpy(ctx=fp.REAL)
     def q(x: fp.Real) -> fp.Real:
         with target:
@@ -140,7 +140,7 @@ def _rounding(target) -> fp.Function:
     return q
 
 
-def _run(target, src=fp.FP32) -> None:
+def _run(target: fp.Context, src: fp.IEEEContext = fp.FP32) -> None:
     """Lower ``round`` into *target* from a *src* source through the compiler's
     own `unfold=DOUBLE_ROUND`, compile, and diff."""
     if _CXX is None:
@@ -150,7 +150,7 @@ def _run(target, src=fp.FP32) -> None:
     _diff(ref, src, src.nbits)
 
 
-def _diff(ref, in_fmt, width: int) -> None:
+def _diff(ref: fp.Function, in_fmt: fp.Context, width: int) -> None:
     """Compile *ref* with the compiler's own lowering, feed it every input of
     *in_fmt*, and diff against *ref* evaluated by the interpreter."""
     cc = CppCompiler(unfold=UnfoldMode.DOUBLE_ROUND)
@@ -215,10 +215,7 @@ class TestLoweredRoundtrip:
         """Byte for byte, so `TestUnfoldRoundingsFlag`'s bit-exact runs answer
         for both.
 
-        FP64 is the source format that matters, and the one this path could not
-        reach until branch refinement read the guards: storage selection used
-        to fail, the scale-in inferred at ``2 ** 2108`` against a true
-        ``[2 ** 10, 2 ** 11)``, and its finest digit at ``2 ** -1090``.
+        FP64 is the source format that matters.
         """
         q = _rounding(target)
         flag = Module()
@@ -357,8 +354,8 @@ def test_a_cursor_aims_the_whole_sequence(which):
 
 
 class TestUnfoldRoundingsFlag:
-    """The same property, with `CppCompiler(unfold=DOUBLE_ROUND)` running the
-    sequence instead of the test.  See `docs/todos/rounding-recovery.md`."""
+    """Compiled with `CppCompiler(unfold=DOUBLE_ROUND)`, against the interpreter
+    bit for bit."""
 
     @pytest.mark.parametrize('target', _TARGETS, ids=_TARGET_IDS)
     def test_matches_the_interpreter(self, target):

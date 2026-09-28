@@ -32,10 +32,11 @@ _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
 _OPTS = ['-std=c++11', '-O0', '-Wall', '-Wextra']
 
 
-def _typecheck(cc: CppCompiler, m: Module) -> str:
-    src = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(m)])
+def _typecheck(module_src: str) -> None:
+    """Typecheck *module_src*, a compiled module, behind its prelude."""
     if _CXX is None:
         pytest.skip('no C++ compiler')
+    src = f'{CppCompiler().prelude()}\n{module_src}'
     with tempfile.TemporaryDirectory() as td:
         cpp = Path(td) / 'm.cpp'
         cpp.write_text(src)
@@ -44,7 +45,6 @@ def _typecheck(cc: CppCompiler, m: Module) -> str:
     assert r.returncode == 0, (
         f'module does not typecheck:\n{r.stderr[-3000:]}\n--- emitted ---\n{src}'
     )
-    return src
 
 
 # --------------------------------------------------------------------------
@@ -115,8 +115,8 @@ ARGS = {
 
 @pytest.fixture(scope='module')
 def emitted() -> str:
-    """The module, compiled and typechecked once for every test below."""
-    return _typecheck(CppCompiler(), _module())
+    """The module, compiled once for every test below."""
+    return CppCompiler().compile_module(_module())
 
 
 def test_the_whole_module_typechecks(emitted):
@@ -126,6 +126,7 @@ def test_the_whole_module_typechecks(emitted):
     Regression class: the `is_called` rule, the `call`-site boundary rule, or
     `annotate_return` stops covering one side of a boundary.
     """
+    _typecheck(emitted)
 
 
 @pytest.mark.parametrize('func', ENTRIES, ids=[f.name for f in ENTRIES])

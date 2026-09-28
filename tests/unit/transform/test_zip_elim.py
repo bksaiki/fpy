@@ -22,7 +22,7 @@ import fpy2 as fp
 
 from fpy2.ast.fpyast import (
     Assign, ForStmt, Fst, Len, ListComp, ListRef, NamedId, Range1, Snd,
-    TupleBinding, TupleExpr, Var, Zip,
+    TupleBinding, TupleExpr, Zip,
 )
 from fpy2.transform import ZipElim
 

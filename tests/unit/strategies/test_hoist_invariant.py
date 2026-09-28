@@ -46,7 +46,6 @@ def _agrees(func, out) -> bool:
 
 
 class TestAiming:
-
     def test_an_index_takes_one_loop(self):
         first = hoist_invariant(two_loops, 0)
         assert _body_names(first.ast) == {'a', 'q', 'b'}
@@ -58,7 +57,6 @@ class TestAiming:
 
 
 class TestFailures:
-
     def test_a_cursor_from_another_program(self):
         where = sites(hoist_invariant, two_loops)[0]
         with pytest.raises(TransformReferenceError, match='unrelated program'):

@@ -104,7 +104,6 @@ class TestFormatEqualityIsNotEnough:
 
 
 class TestTheSupportedPathSurvives:
-
     def test_a_fixed_point_context_is_exempt(self):
         """`_validate_context_rm` has already checked that a libm call or an
         integer cast reproduces a fixed-point rounding, so the guard defers to

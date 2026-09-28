@@ -25,7 +25,7 @@ from ..analysis import (
 )
 from ..ast.fpyast import *
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, StmtCursor, stmt_sites
+from .cursor import Cursor, EditLog
 from .path import StmtPath
 from .rename_target import RenameTarget
 from .utils import (
@@ -253,10 +253,7 @@ class _ForUnroll(SiteRewriter):
         block, pos = self._site
         reason = self._refuses(stmt)
         if reason is not None:
-            # a refusal is not a site, so it takes no index
-            self.refused.append((stmt, reason))
-            if self._named_by_cursor(stmt):
-                self.declined.append(reason)
+            self._refuse(stmt, reason)
             return super()._visit_for(stmt, ctx)
 
         idx = self.site_idx

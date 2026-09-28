@@ -38,27 +38,12 @@ def _asserts(x: fp.Real) -> fp.Real:
 
 
 class TestTheKeywordIsForwarded:
-
     def test_strict_declines_it(self):
         assert not simplify_if(_guarded_read).ast.is_equiv(_guarded_read.ast)
         assert simplify_if(_guarded_read, strict=True).ast.is_equiv(_guarded_read.ast)
 
 
-@fp.fpy
-def _two_ifs(x: fp.Real, y: fp.Real) -> fp.Real:
-    if x > 0:
-        a = 1.0
-    else:
-        a = 2.0
-    if y > 0:
-        b = 3.0
-    else:
-        b = 4.0
-    return a + b
-
-
 class TestWhereThroughTheStrategyLayer:
-
     def test_refusals_are_reported_by_the_generic_lister(self):
         refused = st.refusals(simplify_if, _asserts)
         assert len(refused) == 1 and 'assert' in refused[0][1]

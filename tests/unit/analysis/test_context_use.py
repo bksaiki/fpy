@@ -391,10 +391,10 @@ class TestContextUseOnGeneratedPrograms:
     """``ContextUse`` driven by the type-directed generator.
 
     Generated functions have no function-level ``ctx`` annotation, so the
-    function scope is always symbolic; and ``with``-block contexts that are
-    always ``ForeignVal`` of a concrete :class:`Context`, so they should always
-    resolve concretely.  One test, since generating the program is nearly all
-    of the cost.
+    function scope is always symbolic, and every ``with``-block context is a
+    ``ForeignVal`` of a concrete :class:`Context`, so it always resolves
+    concretely.  One test, since generating the program is nearly all of the
+    cost.
     """
 
     @given(fpy_real_funcdef(**_GEN_KWARGS))

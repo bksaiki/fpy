@@ -19,7 +19,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2 import Function
-from fpy2.ast.fpyast import Assign, BinaryOp, If1Stmt, IfExpr, IfStmt, ReturnStmt
+from fpy2.ast.fpyast import Assign, BinaryOp, FuncDef, If1Stmt, IfExpr, IfStmt, ReturnStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import OverflowMode, RealFloat
 from fpy2.transform.cursor import expr_sites, stmt_sites
@@ -79,7 +79,7 @@ def _apply(f: Function) -> Function:
     return Function(SimplifyIf.apply(f.ast), runtime=f.runtime)
 
 
-def _every_if(f: Function, *, strict: bool = False):
+def _every_if(f: Function, *, strict: bool = False) -> FuncDef:
     """Every `if`, named by a cursor: a refused one raises, where `where=None`
     would leave it in place."""
     body = BlockCursor(f.ast, FuncBody(), range(len(f.ast.body.stmts)))
@@ -211,7 +211,6 @@ class TestTheConditionTemporary:
         assert 'cond' not in {str(n) for n in _names(ast)}
 
 
-
 # ----------------------------------------------------------------------
 # Refusals that hold under every mode
 
@@ -321,9 +320,8 @@ _REFUSED = [
 
 class TestTheRefusalsDoNotOverreach:
     def test_a_guarded_read_is_still_accepted(self):
-        """Partial *reads* are the keyword's business, not this phase's."""
+        """Partial *reads* are `strict`'s business, not these refusals'."""
         _every_if(guarded_read)
-
 
 
 # ----------------------------------------------------------------------

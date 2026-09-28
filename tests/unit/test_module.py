@@ -479,5 +479,3 @@ class TestCallGraph:
         mod = Module()
         with pytest.raises(CallGraphError):
             mod.add(m_)
-
-

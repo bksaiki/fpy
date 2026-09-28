@@ -2944,13 +2944,12 @@ class TestSpecialArithmetic:
 
         assert _set_add(Special[a], Special[b]) is Special[expect]
 
-    @pytest.mark.parametrize('special', ['NEG_INF'])
-    def test_add_of_an_infinity_and_a_finite_value(self, special):
+    def test_add_of_an_infinity_and_a_finite_value(self):
         from fpy2.analysis.format_infer.analysis import Special, _set_add
 
         for finite in (Fraction(0), Fraction(3), Fraction(-3)):
-            assert _set_add(Special[special], finite) is Special[special]
-            assert _set_add(finite, Special[special]) is Special[special]
+            assert _set_add(Special.NEG_INF, finite) is Special.NEG_INF
+            assert _set_add(finite, Special.NEG_INF) is Special.NEG_INF
 
     def test_sub_of_equal_infinities_is_nan(self):
         """``_set_sub`` routes through ``neg`` + ``add``, so this falls out."""
@@ -4006,11 +4005,11 @@ class TestALogbOfZeroHasNoFloor:
         for f in (tested, rounded):
             assert self._holds(f, types, [xs, self.TINY]), f.name
 
-    @pytest.mark.parametrize('e_zero', [-26])
-    def test_a_zero_sentinel_below_the_floor_still_anchors(self, e_zero):
+    def test_a_zero_sentinel_below_the_floor_still_anchors(self):
         """T-FDPA's alignment, in which a zero reads as exponent `e_zero`.  A
         zero has no digits to place, so the sum is as wide at any `e_zero` --
         not only down to FP16's floor, `-24`, less one."""
+        e_zero = -26
 
         @fp.fpy(ctx=fp.REAL)
         def f(a, c):

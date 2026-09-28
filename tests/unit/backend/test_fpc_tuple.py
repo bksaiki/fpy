@@ -19,7 +19,6 @@ def _compile(f) -> str:
 
 
 class TestTupleAccessors:
-
     def test_chain_over_nested_pair(self):
         """``fst(snd(t))`` over a nested pair lowers to nested refs."""
         @fp.fpy

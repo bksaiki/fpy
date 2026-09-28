@@ -144,7 +144,7 @@ class TestUnionfindModel():
         st.lists(st.integers(-6, 6), unique=True),
         st.lists(st.tuples(st.booleans(), st.integers(-6, 6), st.integers(-6, 6)), max_size=30),
     )
-    def test_matches_model(self, init: list[int], ops: list[tuple[bool, int, int]]):
+    def test_matches_model(self, init: list[int], ops: list[tuple[bool, int, int]]) -> None:
         uf = Unionfind(init)
         model = {x: frozenset([x]) for x in init}
         assert uf.representatives() == set(init)

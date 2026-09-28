@@ -7,10 +7,15 @@ import re
 import pytest
 
 import fpy2 as fp
+import fpy2.strategies as st
 from fpy2.backend.cpp import CppCompiler
 from fpy2.backend.cpp.compiler import CppCompileError
 from fpy2.number import MPBFixedContext
 from fpy2.types import BoolType, RealType
+
+_EXP_CTX = MPBFixedContext(
+    -1, fp.RealFloat(exp=0, c=100), enable_nan=True, enable_inf=True)
+"""An integer-only exponent format that admits NaN and infinity."""
 
 
 class TestTheLoweredScaleInStaysNarrow:
@@ -23,15 +28,13 @@ class TestTheLoweredScaleInStaysNarrow:
     """
 
     def test_the_scale_in_takes_the_operand_unwidened(self):
-        import fpy2.strategies as strat
-
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:
             with fp.FP16:
                 return fp.round(x)
 
-        g = strat.simplify(strat.rescale_fixed(strat.float_to_fixed(
-            strat.unfold_overflow(strat.unfold_special(f), early_check=True))))
+        g = st.simplify(st.rescale_fixed(st.float_to_fixed(
+            st.unfold_overflow(st.unfold_special(f), early_check=True))))
         out = CppCompiler().compile(g, arg_types=[RealType(fp.FP32)])
         assert re.search(r'float \w+ = std::ldexp\(x,', out), out
 
@@ -46,11 +49,9 @@ class TestScaleByPowerOfTwo:
     integral power of two, exact but for overflow and underflow.
     """
 
-    @pytest.fixture(scope='class')
-    def lowered(self) -> str:
+    @staticmethod
+    def _lowered() -> str:
         """An `FP16` rounding of an `FP32` value, lowered to fixed point."""
-        import fpy2.strategies as st
-
         @fp.fpy(ctx=fp.REAL)
         def q(x: fp.Real) -> fp.Real:
             with fp.FP16:
@@ -62,28 +63,18 @@ class TestScaleByPowerOfTwo:
             st.unfold_overflow(ref, early_check=True)))
         return CppCompiler().compile(low)
 
-    def test_the_lowering_uses_ldexp_not_pow(self, lowered):
-        """No ``pow`` at all: value classes prove both exponents finite, so even
-        the guard's fallback arm is gone."""
-        out = lowered
-        assert 'std::ldexp(' in out
-        assert 'std::pow(' not in out
-
-    def test_the_scale_needs_no_widening(self, lowered):
+    def test_the_scale_needs_no_widening(self):
         """``std::ldexp`` is overloaded on its first argument, so the scale runs
         in whatever type the value is stored in.
 
-        That used to force a widening to ``double``: the scale-in's bound was
-        inferred at ``2 ** 287``, far past what ``float`` holds, even though the
-        true value is in ``[2 ** 10, 2 ** 11)``.  Branch refinement now reads the
-        guards and reports ``prec=24, exp=-53, bound ~ 2 ** 40``, which ``float``
-        does hold -- so the cast is gone and the scale still lands exactly, which
-        ``test_lowered_roundtrip.py`` checks bit-for-bit across fourteen
-        formats.
+        Branch refinement bounds the scale-in within what ``float`` holds, so
+        no cast is needed and the scale lands exactly --
+        ``test_lowered_roundtrip.py`` checks that bit for bit.
 
         The peephole fuses the power into the scale, so there is no separate
-        product to widen either."""
-        out = lowered
+        product to widen either, and value classes prove both exponents finite,
+        so even the guard's fallback arm is gone."""
+        out = self._lowered()
         scale = [ln for ln in out.splitlines() if 'std::ldexp(' in ln]
         assert scale
         # nothing here is widened: the scale runs in `float`, on `float`
@@ -103,12 +94,10 @@ class TestScaleByPowerOfTwo:
         three cases exactly as FPy does, so the product is the faithful
         lowering precisely where the exponent is not finite.
 
-        Reached by an exponent whose *format* admits both specials while still
-        representing only integers, since neither a lowered rounding nor an
-        integer-typed exponent leaves the question open any more.
+        Reached by an exponent whose *format* admits both specials while
+        representing only integers; a lowered rounding or an integer-typed
+        exponent never leaves the question open.
         """
-        exp_ctx = MPBFixedContext(
-            -1, fp.RealFloat(exp=0, c=100), enable_nan=True, enable_inf=True)
 
         @fp.fpy(ctx=fp.REAL)
         def q(x: fp.Real, n: fp.Real) -> fp.Real:
@@ -117,7 +106,7 @@ class TestScaleByPowerOfTwo:
             return y
 
         out = CppCompiler().compile(
-            q, arg_types=[RealType(fp.FP64), RealType(exp_ctx)])
+            q, arg_types=[RealType(fp.FP64), RealType(_EXP_CTX)])
         assert 'std::isfinite(n)' in out
         assert 'std::ldexp(' in out
         assert 'std::pow(2.0,' in out, 'the non-finite arm must be a product'
@@ -130,8 +119,6 @@ class TestScaleByPowerOfTwo:
         branch and not to the exponent's format -- which admits both specials
         either way.  Reading the branch is what value classes add; the lowered
         rounding above gets the same treatment from its ``elif`` ladder."""
-        exp_ctx = MPBFixedContext(
-            -1, fp.RealFloat(exp=0, c=100), enable_nan=True, enable_inf=True)
 
         @fp.fpy(ctx=fp.REAL)
         def guarded(x: fp.Real, n: fp.Real) -> fp.Real:
@@ -143,13 +130,13 @@ class TestScaleByPowerOfTwo:
             return y
 
         out = CppCompiler().compile(
-            guarded, arg_types=[RealType(fp.FP64), RealType(exp_ctx)])
+            guarded, arg_types=[RealType(fp.FP64), RealType(_EXP_CTX)])
         assert 'std::pow(' not in out
 
-    def test_a_constant_scale_stays_a_multiply(self, lowered):
+    def test_a_constant_scale_stays_a_multiply(self):
         """A constant power of two needs no call: the literal multiply is
         already exact, and folding it is better than either."""
-        out = lowered
+        out = self._lowered()
         # the subnormal branch scales by a literal 2**24
         assert '16777216' in out
 

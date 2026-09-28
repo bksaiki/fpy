@@ -27,7 +27,7 @@ from fpy2.ast.fpyast import (
 )
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.number import REAL, OverflowMode, RealFloat, RoundingMode
-from fpy2.transform import RescaleFixed, TransformDeclined, TransformReferenceError, UnfoldSpecial
+from fpy2.transform import RescaleFixed, TransformReferenceError, UnfoldSpecial
 from fpy2.transform.rescale_fixed import _scale_of
 from fpy2.transform.utils import RoundingScopes
 
@@ -783,7 +783,7 @@ class TestEquivalence:
             assert _same(_eval(out, f, x), f(x)), (signed, scale, nbits, x)
 
     @pytest.mark.parametrize('overflow', [OverflowMode.WRAP, OverflowMode.SATURATE])
-    def test_rounding_and_overflow_modes(self, overflow):
+    def test_overflow_modes(self, overflow):
         ctx = fp.FixedContext(True, -8, 16, RoundingMode.RTZ, overflow)
         f = _quantizer(ctx)
         out = RescaleFixed.apply(f.ast)

@@ -343,11 +343,8 @@ class _HoistInvariant(SiteRewriter):
         block, pos = self._site
         if not hoistable:
             why = '; '.join(_refusals(stmt, self.ctx)) or 'the body is empty'
-            self.refused.append((stmt, why))
-            if self._named_by_cursor(stmt):
-                self.declined.append(why)
-                if not self.listing:
-                    raise TransformDeclined(f'nothing to hoist out of the loop: {why}')
+            if self._refuse(stmt, why) and not self.listing:
+                raise TransformDeclined(f'nothing to hoist out of the loop: {why}')
             return False
 
         idx = self.site_idx

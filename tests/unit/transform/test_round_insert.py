@@ -21,7 +21,7 @@ import itertools
 import pytest
 
 import fpy2 as fp
-from fpy2.ast.fpyast import Abs, Add, ContextStmt, ForeignVal, FuncDef, Mul
+from fpy2.ast.fpyast import Add, ContextStmt, ForeignVal, FuncDef, Mul
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.transform import (
@@ -124,7 +124,6 @@ class TestSites:
         assert RoundInsert.sites(ast, ctx=fp.FP32) == []
 
 
-
 # ----------------------------------------------------------------------
 # The rewrite
 
@@ -169,7 +168,6 @@ class TestRoundInsert:
     def test_is_idempotent(self):
         once = RoundInsert.apply(_fp32_args(_sum_of_squares, 2), fp.FP64)
         assert RoundInsert.apply(once, fp.FP64).is_equiv(once)
-
 
 
 # ----------------------------------------------------------------------

@@ -49,8 +49,9 @@ Known-deferred surface (productions whose generators raise
 """
 
 import dataclasses
+from collections.abc import Callable, Iterable
 from enum import Flag, auto
-from typing import TypeAlias, TypeVar
+from typing import Any, TypeAlias, TypeVar
 
 from hypothesis import strategies as st
 
@@ -157,39 +158,42 @@ def _var_of_type(
     return st.sampled_from(names).map(_node(Var))
 
 
-# Hypothesis reads a lambda's source every time one is passed to `.map`, which was
-# half of generation; a named function it identifies by name.
+_T = TypeVar('_T')
 
-def _node(ctor, *head):
+
+# Hypothesis reads a lambda's source each time one is passed to `.map`; a named
+# function it identifies by name.
+
+def _node(ctor: Callable[..., _T], *head: Any) -> Callable[[Any], _T]:
     """``x -> ctor(*head, x, None)``."""
-    def node(x):
+    def node(x: Any) -> _T:
         return ctor(*head, x, None)
     return node
 
 
-def _node_of(ctor, *head):
+def _node_of(ctor: Callable[..., _T], *head: Any) -> Callable[[Iterable[Any]], _T]:
     """``xs -> ctor(*head, *xs, None)``."""
-    def node(xs):
+    def node(xs: Iterable[Any]) -> _T:
         return ctor(*head, *xs, None)
     return node
 
 
-def _decnum(pf) -> Decnum:
+def _decnum(pf: tuple[int, int]) -> Decnum:
     return Decnum(f'{pf[0]}.{pf[1]:04d}', None)
 
 
-def _compare(oab) -> Compare:
+def _compare(oab: tuple[CompareOp, Expr, Expr]) -> Compare:
     return Compare([oab[0]], [oab[1], oab[2]], None)
 
 
-def _node_fresh(ctor, name: str):
+def _node_fresh(ctor: Callable[..., _T], name: str) -> Callable[[Expr], _T]:
     """``x -> ctor(_func_sym(name), x, None)``, with a symbol of its own each time."""
-    def node(x):
+    def node(x: Expr) -> _T:
         return ctor(_func_sym(name), x, None)
     return node
 
 
-def _tuple_type(elts) -> TupleType:
+def _tuple_type(elts: list[Type]) -> TupleType:
     return TupleType(*elts)
 
 
@@ -476,7 +480,7 @@ def _real_expr(
         # to keep magnitudes manageable.
         hex_sym = _func_sym('hexnum')
         hex_digits = st.integers(0, 0xffff).map('{:x}'.format)
-        def hexnum(t):
+        def hexnum(t: tuple[bool, str, str, int]) -> Hexnum:
             return Hexnum(hex_sym, f'{"-" if t[0] else ""}0x{t[1]}.{t[2]}p{t[3]:+d}', None)
 
         leaves.append(

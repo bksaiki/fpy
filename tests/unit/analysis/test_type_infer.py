@@ -18,7 +18,7 @@ from fpy2.analysis import TypeInfer
 from fpy2.analysis.type_infer import TypeInfer as _TI
 from fpy2.analysis.type_infer import TypeInferError
 from fpy2.ast.fpyast import AllOf, AnyOf, Ast, Expr, Fst, Snd, Var
-from fpy2.types import BoolType, RealType, TupleType, Type
+from fpy2.types import BoolType, RealType, Type
 
 from ..generators import arbitrary_type, fpy_funcdef
 

@@ -32,7 +32,6 @@ def _hoisted_count(ast) -> int:
 
 
 class TestSelections:
-
     def test_it_reaches_a_max(self):
         """`max` and `min` are reductions too.  The conditions are tested in
         ``tests/unit/transform/test_hoist_scale.py``; this is the wrapper
@@ -51,7 +50,6 @@ class TestSelections:
 
 
 class TestAiming:
-
     def test_an_index_takes_one_reduction(self):
         for i in (0, 1):
             out = hoist_scale(two_sums, i)
@@ -60,7 +58,6 @@ class TestAiming:
 
 
 class TestFailures:
-
     def test_a_cursor_from_another_program(self):
         where = sites(hoist_scale, two_sums)[0]
         with pytest.raises(TransformReferenceError, match='unrelated program'):

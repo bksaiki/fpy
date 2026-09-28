@@ -1,12 +1,10 @@
 """
-Phase 4g tests for the cpp emitter — list built-ins.  ``sum`` is in
-``test_emit_sum.py``.
+Tests for the cpp emitter's list built-ins.  ``sum`` is in ``test_emit_sum.py``.
 
-``enumerate`` and ``zip`` no longer reach the emitter at all: `UnfoldEnumerate`
-and `UnfoldZip` state each as the comprehension `derived-semantics.rst` defines
-it to be, inside `StatementForm`'s fixpoint, and `CompToLoop` lowers that.
-So the tuple list they used to build is now built by the comprehension's own
-fill loop — same object, one fewer emitter case.
+``enumerate`` and ``zip`` never reach the emitter: `UnfoldEnumerate` and
+`UnfoldZip` state each as the comprehension `derived-semantics.rst` defines it
+to be, inside `StatementForm`'s fixpoint, and `CompToLoop` lowers that; the
+tuple list is built by the comprehension's own fill loop.
 
 The temporaries the emitter allocates use ``_tmpN`` names.
 """

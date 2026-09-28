@@ -21,8 +21,6 @@ from fpy2 import CppCompiler, FPCoreCompiler, Module
 from fpy2.transform import Specialize
 from fpy2.types import ListType, RealType
 
-from ..test_module import _fpy_callees
-
 _ROUND_AT = fp.MPFixedContext(-4, fp.RM.RTZ)
 
 
@@ -470,10 +468,10 @@ class TestSpecialize:
         def outer(x: fp.Real) -> fp.Real:
             return inner(x)
 
-        return leaf, inner, outer
+        return outer
 
     def test_distinct_ctx_yields_distinct_specs(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
@@ -481,11 +479,11 @@ class TestSpecialize:
         s = m.specialized()
         f32 = s.get('outer_fp32').func
         f64 = s.get('outer_fp64').func
-        assert f32 is not f64                 # different specs
-        assert f32.ast is not f64.ast         # different FuncDefs
+        assert f32 is not f64
+        assert f32.ast is not f64.ast
 
     def test_callees_specialized_per_ctx(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
@@ -495,11 +493,10 @@ class TestSpecialize:
         priv_names = sorted(f.name for f in s.private())
         assert sum(n.startswith('inner__') for n in priv_names) == 2
         assert sum(n.startswith('leaf__') for n in priv_names) == 2
-        # Each private name is unique
         assert len(priv_names) == len(set(priv_names))
 
     def test_shared_ctx_dedups_to_one_spec(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='a', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         m.add(outer, name='b', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
@@ -513,9 +510,7 @@ class TestSpecialize:
         assert len(s.private()) == 2     # one specialized inner + one specialized leaf
 
     def test_same_ctx_different_arg_types_yields_distinct_specs(self):
-        # v2 behavior at the *public* level: two registrations of the same
-        # function at the same outer ctx but with different user-supplied
-        # `arg_types` produce distinct specs (v1 would have collapsed them).
+        # two registrations at one ctx with different `arg_types` are distinct specs
         @fp.fpy
         def adder(x: fp.Real, y: fp.Real) -> fp.Real:
             return x + y
@@ -527,13 +522,11 @@ class TestSpecialize:
         s = m.specialized()
         a32 = s.get('a32').func
         a64 = s.get('a64').func
-        assert a32 is not a64                       # distinct Functions
-        assert a32.ast is not a64.ast               # distinct FuncDefs
+        assert a32 is not a64
+        assert a32.ast is not a64.ast
 
     def test_callee_specialized_per_arg_format_at_same_outer_ctx(self):
-        # v2 behavior at the *callee* level: a callee invoked at the same
-        # outer ctx but with arguments of different format from different
-        # publics gets distinct specs (v1 would have collapsed them).
+        # a callee reached at one ctx with differently formatted args gets distinct specs
         @fp.fpy
         def helper(x: fp.Real) -> fp.Real:
             return x + x
@@ -559,19 +552,18 @@ class TestSpecialize:
         assert len(arg_fps) == 2                     # different arg formats
 
     def test_public_names_preserved_privates_mangled(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
 
         s = m.specialized()
-        # public's FuncDef name == user entry name
         assert s.get('outer_fp32').func.name == 'outer_fp32'
-        # privates use the mangled `original__<hash>` form
+        # privates are mangled
         for f in s.private():
             assert '__' in f.name
 
     def test_cross_function_calls_route_to_specialized_callees(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
@@ -579,11 +571,11 @@ class TestSpecialize:
         s = m.specialized()
         # outer_fp32's only callee must be the FP32 inner spec, not the FP64 one
         outer32 = s.get('outer_fp32').func
-        callees = _fpy_callees(outer32)
-        assert len(callees) == 1
-        assert '__' in callees[0].name           # specialized name
-        # and it lives in the FP32 chain (transitively reaches the FP32 leaf)
         cg = s.call_graph()
+        callees = cg.callees_of(outer32)
+        assert len(callees) == 1
+        assert '__' in callees[0].name
+        # and it lives in the FP32 chain (transitively reaches the FP32 leaf)
         fp32_funcs = {outer32, *cg.callees_of(outer32)}
         for f in list(fp32_funcs):
             fp32_funcs.update(cg.callees_of(f))
@@ -596,7 +588,7 @@ class TestSpecialize:
 
     def test_polymorphic_passthrough(self):
         # ctx=None publics specialize to a single shared spec
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer)
         s = m.specialized()
@@ -606,7 +598,7 @@ class TestSpecialize:
 
     def test_specialized_compiles_through_fpc(self):
         # fpc gets per-context dedup for free
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
@@ -616,7 +608,7 @@ class TestSpecialize:
         assert all(isinstance(v, fpc.FPCore) for v in out.values())
 
     def test_specialized_compiles_through_cpp(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, name='outer_fp32', ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
         m.add(outer, name='outer_fp64', ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
@@ -625,10 +617,9 @@ class TestSpecialize:
         assert 'outer_fp32' in out and 'outer_fp64' in out
 
     def test_composes_with_map(self):
-        leaf, inner, outer = self._polymorphic_funcs()
+        outer = self._polymorphic_funcs()
         m = Module()
         m.add(outer, ctx=fp.FP32, arg_types=[RealType(fp.FP32)])
-        # specialize, then apply a transform to every spec
         s = m.specialized().map(lambda mod, fd: fd)
         assert 'outer' in s
 

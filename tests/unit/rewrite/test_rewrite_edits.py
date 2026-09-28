@@ -197,8 +197,6 @@ def test_overlapping_matches_decline_the_whole_application():
         widen.apply(three)
 
 
-
-
 # ----------------------------------------------------------------------
 # Aiming
 

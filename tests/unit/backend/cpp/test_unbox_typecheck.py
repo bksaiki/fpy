@@ -37,7 +37,7 @@ _OPTS = ['-std=c++11', '-O0', '-Wall', '-Wextra', '-Werror=return-type']
 pytestmark = pytest.mark.skipif(_CXX is None, reason='no C++ compiler')
 
 
-def _typecheck(module: Module, *, unbox=UnboxMode.ALLOW) -> str:
+def _typecheck(module: Module, *, unbox: UnboxMode = UnboxMode.ALLOW) -> str:
     """Compile *module* to a translation unit and put it through the C++
     compiler.  Returns the source on success; fails the test on a diagnostic."""
     cc = CppCompiler(unbox=unbox)

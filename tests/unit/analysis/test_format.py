@@ -82,7 +82,6 @@ class TestAbstractFormat():
         assert fmt.exp == 0
         assert fmt.bound == fp.RealFloat.from_int(128)
 
-
     # `has_neg_zero`: the one special-value flag whose value sits *inside* the
     # finite range.  `pos_bound >= 0 >= neg_bound` holds by convention and the
     # bounds are compared by magnitude, so conditions 1-3 of containment cannot
@@ -844,4 +843,3 @@ class TestJoinReadsTheEffectivePrecision:
         j = (AbstractFormat.from_format(fp.SINT32.format())
              | AbstractFormat.from_format(fp.FP32.format()))
         assert choose_storage_scalar(j.format()) is CppScalar.F64
-

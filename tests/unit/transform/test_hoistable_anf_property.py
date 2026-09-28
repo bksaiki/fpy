@@ -2,9 +2,9 @@
 on its output, over generated programs.
 
 ``test_hoistable.py`` and ``test_anf.py`` pin shapes on hand-written programs,
-and the profiles measure the corpus; neither goes deep.  The corpus is shallow --
-the residue measurement found nothing nested more than two levels -- so the cases
-where a lowering meets another lowering are only reachable by generating them.
+and the profiles measure the corpus; neither goes deep.  The corpus nests nothing
+more than two levels deep, so the cases where a lowering meets another lowering
+are only reachable by generating them.
 One test, since generating the program is nearly all of the cost.
 
 For each pass, on the same draw:

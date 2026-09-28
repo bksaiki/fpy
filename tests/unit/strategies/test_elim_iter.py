@@ -66,7 +66,6 @@ _YS = [0.5, -1.5, 2.5, -3.5]
 
 
 class TestElimIter:
-
     def test_flags(self):
         out = elim_iter(_dot, enable_zip=False)
         assert _has_node(out.ast, Zip)
@@ -81,5 +80,3 @@ class TestElimIter:
         assert not _has_node(out.ast, Enumerate)
         assert not _has_node(out.ast, Zip)
         assert _enum_zip(_XS, _YS) == out(_XS, _YS)
-
-

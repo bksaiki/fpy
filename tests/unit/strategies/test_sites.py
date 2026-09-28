@@ -90,13 +90,6 @@ def cast_and_round_fp16(a: fp.Real) -> fp.Real:
     return aq + bq
 
 
-@fp.fpy(ctx=fp.REAL)
-def declining(x: fp.Real) -> fp.Real:
-    with fp.REAL:      # a candidate that `unfold_special` refuses
-        y = fp.round(x)
-    return y
-
-
 @fp.fpy
 def loops(xs: list[fp.Real], n: fp.Real) -> fp.Real:
     a = 0.0
@@ -225,10 +218,6 @@ def test_a_cast_block_is_not_listed_where_it_does_not_count():
     for strategy in (unfold_overflow, float_to_fixed):
         listed = sites(strategy, cast_and_round_fp16)
         assert [c.path.stmt().index for c in listed] == [0]
-
-
-
-
 
 
 # ----------------------------------------------------------------------

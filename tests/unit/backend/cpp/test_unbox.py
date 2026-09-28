@@ -194,9 +194,8 @@ class TestReferenceBindingStorage:
 
     Where they disagree, the name has the type C++ deduced from its initializer
     rather than the one storage inference chose, and every consumer of
-    `storage_of` must remember to compensate — which is how a boxed `uint8_t`
-    list once reached a vector of boxed `float` lists.  `binds_by_reference` now
-    requires the two to agree, so the divergence cannot arise.
+    `storage_of` must remember to compensate.  `binds_by_reference` requires
+    the two to agree, so the divergence cannot arise.
     """
 
     def test_a_reference_binding_keeps_its_source_storage(self):
@@ -208,8 +207,7 @@ class TestReferenceBindingStorage:
                 ys[0] = n
                 return ys
 
-        out = ALLOW.compile(
-            f, ctx=fp.FP64, arg_types=[RealType(fp.FP64)])
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[R])
         # the binding is a reference, and both names spell the same type
         assert 'const auto& ys = xs;' in out, out
         decl = next(ln for ln in out.splitlines() if ln.strip().startswith(
@@ -228,8 +226,7 @@ class TestReferenceBindingStorage:
                     ys = [n]
                 return ys
 
-        out = ALLOW.compile(
-            f, ctx=fp.FP64, arg_types=[BoolType(), RealType(fp.FP64)])
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[BoolType(), R])
         assert 'const auto& ys' not in out, out
 
 

@@ -39,7 +39,7 @@ from fpy2.number import (
     MPSFloatContext,
     RealFloat,
 )
-from fpy2.transform import TransformDeclined, TransformReferenceError, UnfoldOverflow
+from fpy2.transform import TransformReferenceError, UnfoldOverflow
 from fpy2.transform.utils import RoundingScopes
 from fpy2.types import RealType
 

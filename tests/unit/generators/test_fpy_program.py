@@ -13,7 +13,7 @@ from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis.type_infer import TypeInfer
 from fpy2.ast.fpyast import (
-    BoolVal, Expr, FuncDef, FuncMeta, Integer, ListExpr, ReturnStmt,
+    Assign, BoolVal, Expr, FuncDef, FuncMeta, Integer, ListExpr, ReturnStmt,
     StmtBlock, TupleExpr,
 )
 from fpy2.env import ForeignEnv
@@ -22,7 +22,6 @@ from fpy2.types import BoolType, ListType, RealType, TupleType
 from . import (
     BoolProd,
     DEFAULT_GRAMMAR,
-    Grammar,
     ListProd,
     RealProd,
     StmtProd,
@@ -178,7 +177,6 @@ class TestCompoundLocals:
     ])
     @given(st.data())
     def test_pinned_locals_typecheck(self, local_t, data: st.DataObject) -> None:
-        from fpy2.ast.fpyast import Assign
         block = data.draw(stmt_block(
             {}, RealType(), depth=2, max_assigns=3, local_types=st.just(local_t),
         ))

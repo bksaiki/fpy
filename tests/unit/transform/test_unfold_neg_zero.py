@@ -36,7 +36,6 @@ from fpy2.number import (
 )
 from fpy2.transform import (
     DeadCodeEliminate,
-    TransformDeclined,
     TransformReferenceError,
     UnfoldNegZero,
 )

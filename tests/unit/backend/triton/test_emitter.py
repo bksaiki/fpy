@@ -213,7 +213,6 @@ class TestContextStatements:
 
 
 class TestMemory:
-
     @pytest.mark.parametrize('rows,cols', [(3, 5), (7, 1)])
     def test_the_offset_agrees_with_row_major_flattening(self, rows, cols):
         """The differential for the indexing: evaluate the emitted offset for

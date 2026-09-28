@@ -5,10 +5,9 @@ correctness test can see.
 
 **Internal invariants.**  The emitter refuses for three unrelated reasons -- a
 shape it does not implement, a program C++ cannot represent, and an invariant an
-earlier phase was supposed to guarantee.  The third is a *backend bug*, and it
-used to be spelled exactly like the other two, so an analysis producing
-something structurally impossible read to the user as "your program is
-unsupported."  :class:`CppInternalError` names that third kind, and the sweep
+earlier phase was supposed to guarantee.  The third is a *backend bug*, and
+must not read to the user as "your program is unsupported."
+:class:`CppInternalError` names that third kind, and the sweep
 fails when any program reaches one, in either direction -- a real analysis bug,
 or a refusal that was misclassified as internal and is actually reachable.  One
 site is deliberately left as :class:`CppEmitError` -- *cannot dispatch X under
@@ -26,8 +25,7 @@ slice, a tuple).
 
 **How much keeps a handle.**  A program that boxes something it did not need to
 still gives the right answer, just slower, so a precision regression is
-invisible to the differential harness -- which is how a seeding bug that boxed
-the inner level of every three-deep literal survived a full review.  This fails
+invisible to the differential harness.  This fails
 when a change boxes something that used to be a value, and when a change unboxes
 something new without anyone noticing: the second is not a bug, but it should be
 a decision rather than a surprise.
@@ -131,7 +129,9 @@ class _Sweep:
     """signature list levels that keep a handle"""
 
 
-def _compile(out: _Sweep, f: fp.Function, arg_types) -> bool:
+def _compile(
+    out: _Sweep, f: fp.Function, arg_types: list[fp.types.Type],
+) -> bool:
     """Whether *f* compiles under FP64, recording a backend invariant it hits."""
     try:
         CppCompiler().compile(f, ctx=fp.FP64, arg_types=arg_types)
@@ -148,7 +148,7 @@ def _sweep() -> _Sweep:
     counting = False
     original = _emitter.CppEmitter._bind_operand
 
-    def bind_operand(self, expr):
+    def bind_operand(self: _emitter.CppEmitter, expr: str) -> str:
         bound = original(self, expr)
         if counting and bound is not expr:
             caller = sys._getframe(1).f_code.co_name
@@ -203,7 +203,7 @@ def test_no_corpus_program_trips_an_internal_invariant(sweep):
     Not in the program that exposed it -- these are conditions the emitter is
     entitled to assume, so the fix belongs upstream.  If a hit turns out to be
     genuinely reachable by a legal program, the site was misclassified: move it
-    back to `CppEmitError` and record why in the audit doc.
+    back to `CppEmitError` and record why in ``docs/todos/backend-cpp.md``.
     """
     assert not sweep.hits, (
         f'{len(sweep.hits)} corpus program(s) reached a backend invariant:\n  '

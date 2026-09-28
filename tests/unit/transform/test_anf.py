@@ -18,7 +18,7 @@ something that needed no slot in the first place — the predicate
 :class:`TestNeedsSlot` covers directly.
 
 :class:`TestRefusals` covers the residue report, and
-``test_anf_profile.py`` pins how large that residue is across the corpus.
+``test_hoistable_profile.py`` pins how large that residue is across the corpus.
 """
 
 import pytest

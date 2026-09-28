@@ -652,12 +652,11 @@ class TestEnableFenv:
         assert 'fesetround' not in out
         assert '(a + b)' in out
 
-    # integer storage never consults the mode, so one stands for all
-    @pytest.mark.parametrize('rm', [fp.RM.RTN])
-    def test_integer_roundings_are_untouched(self, rm):
+    def test_integer_roundings_are_untouched(self):
         """`trunc` / `floor` / `ceil` / `round` do not read the rounding
         direction, so a float-to-integer rounding needs nothing set."""
-        ctx = fp.SINT32.with_params(rm=rm, overflow=fp.OverflowMode.ASSERT)
+        ctx = fp.SINT32.with_params(
+            rm=fp.RM.RTN, overflow=fp.OverflowMode.ASSERT)
 
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:

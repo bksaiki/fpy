@@ -36,7 +36,6 @@ def _prod3(x: fp.Real, y: fp.Real, z: fp.Real) -> fp.Real:
 
 
 class TestElimRound:
-
     def test_after_monomorphize(self):
         # FP32 * FP32 is exact in FP64: the inner multiply hoists under
         # REAL; the outer one (48-bit significand * FP32) must not.
@@ -45,5 +44,3 @@ class TestElimRound:
         assert _count_real_blocks(out.ast) == 1
         for xyz in ((1.5, 2.5, 3.5), (0.1, -0.25, 4.0), (-3.0, 0.0, 1.0)):
             assert sched(*xyz) == out(*xyz)
-
-

@@ -50,11 +50,8 @@ def _inst_type(ty: fp.types.Type):
 
 
 def corpus():
-    """Every function the backend's corpus gates run over.
-
-    One definition: three profile tests sweep the same set, and a difference
-    between them would be a silent gap rather than a failure.
-    """
+    """Every function the backend's corpus gates in `test_corpus_profile` run
+    over."""
     import importlib
 
     from ..examples import all_example_tests, all_unit_tests

@@ -3,7 +3,6 @@ The `unfold_zip` / `unfold_enumerate` strategies: the scheduling-language
 surface over `UnfoldZip` / `UnfoldEnumerate`.
 """
 
-
 import fpy2 as fp
 import fpy2.strategies as st
 
@@ -14,19 +13,6 @@ def dot(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
     for x, y in zip(xs, ys):
         acc = acc + x * y
     return acc
-
-
-@fp.fpy(ctx=fp.FP64)
-def total(xs: list[fp.Real]) -> fp.Real:
-    acc = 0.0
-    for i, x in enumerate(xs):
-        acc = acc + x
-    return acc
-
-
-@fp.fpy(ctx=fp.FP64)
-def sealed(xs: list[fp.Real], rs: list[list[fp.Real]]):
-    return [zip(xs, r) for r in rs]
 
 
 def _text(func):

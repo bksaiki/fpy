@@ -42,8 +42,14 @@ from fpy2.backend.cpp.unbox import UnboxMode
 from fpy2.module import Module
 from fpy2.types import ListType, RealType
 
+from .test_unbox_typecheck import _typecheck
+
 _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
 _OPTS = ['-std=c++11', '-O0', '-Wall', '-Wextra', '-Werror=return-type']
+R = RealType(fp.FP64)
+L = ListType(R)
+L32 = ListType(RealType(fp.FP32))
+N32 = ListType(L32)
 
 pytestmark = pytest.mark.skipif(_CXX is None, reason='no C++ compiler')
 
@@ -373,38 +379,14 @@ def test_enough_of_the_matrix_compiles(emitted):
         + '\n  '.join(refused[:20])
     )
 
-R = RealType(fp.FP64)
-L = ListType(R)
-L32 = ListType(RealType(fp.FP32))
-N32 = ListType(L32)
-
-
-def _typecheck(module: Module, *, unbox=UnboxMode.ALLOW) -> str:
-    """Compile *module* to a translation unit and put it through the C++
-    compiler.  Returns the source on success; fails the test on a diagnostic."""
-    cc = CppCompiler(unbox=unbox)
-    src = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(module)])
-    with tempfile.TemporaryDirectory() as td:
-        cpp = Path(td) / 'u.cpp'
-        cpp.write_text(src)
-        r = subprocess.run(
-            [_CXX, *_OPTS, '-fsyntax-only', str(cpp)],
-            capture_output=True, text=True,
-        )
-    assert r.returncode == 0, (
-        f'emitted C++ does not typecheck (unbox={unbox}):'
-        f'\n{r.stderr[-3000:]}\n--- emitted ---\n{src[-3000:]}'
-    )
-    return src
-
 
 # --------------------------------------------------------------------------
 # The hand-written shapes the matrix above generalizes.  None of it is an unbox
 # bug -- all of it reproduces with `UnboxMode.NEVER`.
 #
 # `format_infer` picks a bound per expression and joins where several values
-# reach one place.  The join was never pushed back *down*, so each contributor
-# kept its own narrower bound and the backend gave one place two storages.
+# reach one place; a contributor emitted at its own narrower bound gives one
+# place two storages.
 # Scalars survive that on implicit conversion; `std::vector` has no converting
 # constructor across element types, so these are hard errors.
 
@@ -579,58 +561,14 @@ def sh_mixed_precision_local(c: fp.Real, y: fp.Real) -> list[fp.Real]:
             return [y]
 
 
-@fp.fpy
-def sh_parameter(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """A parameter: the caller holds the same list, and the signature already
-    committed to its element type, so neither side can move."""
-    with fp.FP64:
-        if c > 0:
-            return xs
-        else:
-            return [y]
-
-
-@fp.fpy
-def sh_alias(xs: list[fp.Real], c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """`ys = xs` binds `const auto&`, so `ys` has no buffer of its own."""
-    with fp.FP64:
-        ys = xs
-        if c > 0:
-            return ys
-        else:
-            return [y]
-
-
-@fp.fpy
-def sh_projection(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """`row = xss[0]` binds `const auto&` to a slot."""
-    with fp.FP64:
-        row = xss[0]
-        if c > 0:
-            return row
-        else:
-            return [y]
-
-
-@fp.fpy
-def sh_loop_target(xss: list[list[fp.Real]], c: fp.Real, y: fp.Real) -> list[fp.Real]:
-    """A loop target binds `const auto&` to each element."""
-    with fp.FP64:
-        out = [y]
-        for row in xss:
-            if c > 0:
-                out = row
-        return out
-
-
 SHARED_CASES = [
     (sh_local_in_a_list, [R, R]),
     (sh_local_in_a_tuple, [R, R]),
     (sh_mixed_precision_local, [R, R]),
-    (sh_parameter, [L32, R, R]),
-    (sh_alias, [L32, R, R]),
-    (sh_projection, [N32, R, R]),
-    (sh_loop_target, [N32, R, R]),
+    (s_return_param_or_literal, [L32, R, R]),
+    (s_alias_then_return, [L32, R, R]),
+    (s_projection_then_return, [N32, R, R]),
+    (s_loop_target, [N32, R, R]),
 ]
 
 

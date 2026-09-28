@@ -261,10 +261,10 @@ class TestLossyCastAdvice:
         # the generic advice would send the user to widen the *active* context
         assert 'format contains the operand' not in msg
 
-    # SINT8 and SINT16 are the two named tests above
-    @pytest.mark.parametrize('int_ctx', [fp.SINT32])
-    def test_a_narrow_integer_exponent_needs_no_advice(self, int_ctx):
-        assert self._scale(int_ctx)()
+    def test_a_narrow_integer_exponent_needs_no_advice(self):
+        # `_cast_advice` only asks whether the integer fits in `double`, so
+        # SINT32 stands for every integer `double` holds exactly
+        assert self._scale(fp.SINT32)()
 
     def test_the_suggested_explicit_round_compiles(self):
         """One half of the advice: accept the rounding."""

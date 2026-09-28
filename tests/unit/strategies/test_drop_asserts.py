@@ -14,9 +14,3 @@ def _recip(x: fp.Real) -> fp.Real:
 
 def test_it_agrees_where_the_assertions_held():
     assert repr(drop_asserts(_recip)(4.0)) == repr(_recip(4.0))
-
-
-
-
-
-

@@ -125,7 +125,6 @@ def _full_schedule(func):
 _STOCHASTIC = fp.IEEEContext(5, 16, fp.RM.RTZ, num_randbits=2, rng=random.Random(0))
 _SATURATING = fp.FixedContext(True, 0, 16, overflow=fp.OverflowMode.SATURATE)
 _WRAPPING = fp.FixedContext(True, 0, 16)          # WRAP is the default
-_ASSERTING = fp.FixedContext(True, 0, 16, overflow=fp.OverflowMode.ASSERT)
 
 
 def _selection(ctx, *, use_min: bool = False):
@@ -337,7 +336,7 @@ _NEVER_MATCHED = {'list_rebound_after_the_loop', 'writes_twice', 'product_rounds
 is no rewrite to run: `test_it_is_refused` is the whole story."""
 
 
-def _forced(func, monkeypatch) -> fp.Function:
+def _forced(func: fp.Function, monkeypatch: pytest.MonkeyPatch) -> fp.Function:
     """*func* rewritten with every soundness refusal lifted."""
     monkeypatch.setattr(hoist_scale, '_why_not', lambda site, facts: None)
     out = HoistScale.apply(func.ast)
@@ -345,7 +344,7 @@ def _forced(func, monkeypatch) -> fp.Function:
     return fp.Function(out, runtime=func.runtime)
 
 
-def _outcome(func, args) -> str:
+def _outcome(func: fp.Function, args: tuple[object, ...]) -> str:
     try:
         return repr(func(*args))
     except Exception as ex:  # noqa: BLE001 -- the exception is the outcome
@@ -575,13 +574,7 @@ class TestSoundness:
 
 class TestSelections:
     """`max` and `min` are reductions for this rewrite, under the *same*
-    conditions as `sum` and two more.
-
-    An earlier cut let a selection run under a rounding scope, on the argument
-    that it selects rather than accumulates so its own rounding does not
-    matter.  That argument was wrong twice over — see `TestSelectionSoundness`
-    — and the scope condition is now uniform.
-    """
+    conditions as `sum` and two more."""
 
     def test_max_hoists_under_an_exact_scope(self):
         f = _selection(fp.REAL)
