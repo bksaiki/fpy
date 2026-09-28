@@ -34,7 +34,8 @@ def stream(
     cache = DynamicCache(config=model.config)
     x = prompt
     for _ in range(max_new):
-        t = int(model(x, past_key_values=cache, use_cache=True).logits[0, -1].argmax())
+        out = model(x, past_key_values=cache, use_cache=True, logits_to_keep=1)
+        t = int(out.logits[0, -1].argmax())
         yield t
         if t in eos:
             return

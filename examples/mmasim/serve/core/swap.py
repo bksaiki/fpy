@@ -163,7 +163,9 @@ class Run:
         if last is not None and last[0] is x and last[1] == key:
             return last[2]
         a = x.reshape(-1, x.shape[-1]).to(torch.bfloat16).float()
-        qa = quant.quantize(a, self.scheme.x, scale, amax)
+        # BF16 elements need no more rounding, nor quantize's check (a sync)
+        qa = (quant.Quantized(self.scheme.x, a) if self.scheme.x == BF16.x
+              else quant.quantize(a, self.scheme.x, scale, amax))
         self._input = (x, key, qa)
         return qa
 

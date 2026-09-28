@@ -10,9 +10,23 @@ bit with the interpreter.
 **60/62 designs compile, and all 60 agree** (`compile_triton.py -j 8 -r 8`).
 Refused: `amd.cdna1.*`, 280-525 bits of exact sum, which C++ refuses too.
 The FP16-output designs at `e_zero = -133` (Hopper wgmma, Blackwell
-tcgen05) compile since #325 (`format_infer` and digit bound fixes).  The BF16 designs run at
-170-1,500 GFLOP/s on a TITAN V (`bench/speed.py --best`), against ~27,000 for
-cuBLAS in FP16; `examples/mmasim/serve/` runs an LLM through them.
+tcgen05) compile since #325 (`format_infer` and digit bound fixes).  `examples/mmasim/serve/` runs an LLM through them.
+
+Speed on the TITAN V (`bench/speed.py --best`, 1024 x 1024, `k` = 256, each
+design's fastest tile; measured 2026-09-27):
+
+| family | GFLOP/s |
+|---|---|
+| AMD CDNA2 (bf16, bf16_1k, f16) | 1,210-1,290 |
+| NV Hopper / Blackwell / RTX Blackwell FP8 and FP4 chains | 260-420 |
+| NV Volta, Turing, Ada, Hopper f16 / bf16 / tf32 | 200-375 |
+| NV Blackwell block-scaled, one instruction (`k` = 32 / 64) | 180-290 |
+| AMD CDNA3 | 140-310 |
+| FPy's own FP32 / FP64 FMA dot product, compiled alike | 2,009 / 1,517 |
+| `torch.matmul` FP16 / FP32 | 28,650 / 8,620 |
+
+Bit-accurate models of newer hardware on an older GPU are expected to run
+far below its FP16 peak.  The FMA rows are the harness's own ceiling.
 
 ## The shape of a kernel
 
@@ -41,6 +55,39 @@ Rules the backend keeps:
   Unfolded, the analysis loses the format, and the store check refuses.
 
 ## What is left
+
+- **Index arithmetic stored as a float** blocks chaining block-scaled
+  designs in the kernel.  A block-scaled design is one instruction, so
+  `serve` chains it over `k` with a launch per instruction: 16-48 launches
+  per linear layer, ~4,900 per decoded token for NVFP4 (0.5 tokens/s).  The
+  natural FPy chain, as in `nv.make_t_fdpa_chain` but with each
+  instruction's slice of the scales:
+
+  ```python
+  for t in range(0, len(xs), per):     # per = scales per instruction
+      i = t * g                        # g = elements per scale
+      d = op(A[i:i + k0], B[i:i + k0], d, xs[t:t + per], ys[t:t + per])
+  ```
+
+  - **It works where it compiles.**  NVFP4 at k = 1024: bit-identical to
+    the launch chain, and 0.12 ms at `m = 1` against 1.57 ms for 16
+    launches.  At `m = 2048` it is 29.0 ms against 22.0 ms.
+  - **Past that, `i = t * g` gets FP16 storage** whenever FP16 holds it
+    exactly (every integer up to 2048), and is then used as a pointer
+    offset.
+    - NVFP4 at k >= 2048: `tl.load(A_ptr + ... + i18)` with `i18` a
+      float16, refused by Triton.
+    - The MX chain (one scale per instruction, `range(len(xs))`) at
+      k = 1024: the loop becomes `tl.static_range`, and `t17.to(tl.float16)`
+      fails on a Python int.
+  - **Under `fp.INTEGER` the slice is unsized**, the open item on
+    `_is_exact` below.
+  - **Looping over the element index instead**, with scales per element and
+    the instruction's four gathered as `[xs[i], xs[i + g], ...]`, emits
+    tiles of mismatched shapes ([BLOCK, 4] against [BLOCK, 16]).
+  - **The fix is the backend's:** a value used as an index or offset needs
+    integer storage.  `serve` would then run a block-scaled design chained
+    at decode sizes and per instruction at prefill.
 
 - **FPy's compile time:** size inference runs in both tiling and the
   emitter.

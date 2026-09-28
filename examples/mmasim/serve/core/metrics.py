@@ -97,6 +97,12 @@ class _Exact:
     """`y`'s FP32 ulp, if a metric needs it."""
     rounded: torch.Tensor | None
     """`fl(y)`, `y` rounded to FP32, if a metric needs it."""
+    ref: float = 0.0
+    """`||y||_F^2`, if `normwise` is measured."""
+    sign: torch.Tensor | None = None
+    """`sign(y)`, if `magnitude_bias` is measured."""
+    positive: torch.Tensor | None = None
+    """Where `scale > 0`, if `scale` is."""
 
 
 def _exact(metrics: Collection[str], a: torch.Tensor, wt: torch.Tensor,
@@ -110,8 +116,11 @@ def _exact(metrics: Collection[str], a: torch.Tensor, wt: torch.Tensor,
         _, ex = torch.frexp(y)
         ex = torch.where(y == 0, -125, ex)
         ulp = torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149))
-    return _Exact(y, None if wa is None else a.abs() @ wa, ulp,
-                  y.float() if 'rounded' in metrics else None)
+    scale = None if wa is None else a.abs() @ wa
+    return _Exact(y, scale, ulp, y.float() if 'rounded' in metrics else None,
+                  float((y * y).sum()) if 'normwise' in metrics else 0.0,
+                  torch.sign(y) if 'magnitude_bias' in metrics else None,
+                  None if scale is None else scale > 0)
 
 
 def _against(s: Stats, metrics: Collection[str], r: _Exact, g: torch.Tensor) -> None:
@@ -120,16 +129,18 @@ def _against(s: Stats, metrics: Collection[str], r: _Exact, g: torch.Tensor) -> 
     s.n += e.numel()
     if 'normwise' in metrics:
         s.err += float((e * e).sum())
-        s.ref += float((r.y * r.y).sum())
-    if r.scale is not None:
-        eta = torch.where(r.scale > 0, e / r.scale, 0.0)
+        s.ref += r.ref
+    if r.scale is not None and r.positive is not None:
+        eta = torch.where(r.positive, e / r.scale, 0.0)
         if 'backward' in metrics:
-            s.backward += float(eta.abs().sum())
-            s.backward_max = max(s.backward_max, float(eta.abs().max()))
+            size = eta.abs()
+            s.backward += float(size.sum())
+            s.backward_max = max(s.backward_max, float(size.max()))
+            del size
         if 'bias' in metrics:
             s.bias += float(eta.sum())
-        if 'magnitude_bias' in metrics:
-            s.magnitude_bias += float((torch.sign(r.y) * eta).sum())
+        if r.sign is not None:
+            s.magnitude_bias += float((r.sign * eta).sum())
         del eta
     if r.ulp is not None:
         bits = torch.log2(1 + e.abs() / r.ulp)

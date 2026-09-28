@@ -7,7 +7,7 @@ run), top-1 agreement and Δp against R0 (llama.cpp's statistics), and per
 sequence the mean NLL, KL and top-1 disagreement against each reference (R0,
 and for a design the scheme's exact run) with its first disagreement.
 :func:`against` pairs them over sequences.  Log-probabilities go through a
-block of positions at a time; a reference's are held on the host.
+block of positions at a time; a reference's stay on the GPU, block by block.
 """
 
 import itertools
@@ -55,23 +55,23 @@ class Totals:
         self.same_top1 += int(same.sum().item())
         self.dp_sq += (dp * dp).sum().item()
 
-    def compare(self, refs: dict[str, torch.Tensor | None], lps: Iterable[torch.Tensor],
+    def compare(self, refs: dict[str, list[torch.Tensor] | None], lps: Iterable[torch.Tensor],
                 target: torch.Tensor) -> None:
         """Add one segment's next-token log-probabilities, *lps* in blocks of
-        positions `[b, vocab]`, against each of *refs* (`[t, vocab]` on the
-        host, or `None` for these same ones; R0's first, which the
-        token-level sums take), *target* the tokens predicted."""
+        positions `[b, vocab]`, against each of *refs* (its log-probabilities
+        in the same blocks, or `None` for these same ones; R0's first, which
+        the token-level sums take), *target* the tokens predicted."""
         nll, seg = 0.0, {name: [0.0, 0] for name in refs}
         first: dict[str, int | None] = dict.fromkeys(refs)
         miss, i = None, 0
-        for q in lps:
+        for b, q in enumerate(lps):
             tgt = target[i:i + q.shape[0]]
             rows = torch.arange(q.shape[0], device=q.device)
             nll += -q[rows, tgt].sum().item()
             if miss is None and (hit := q.argmax(-1) == tgt).logical_not().any():
                 miss = i + int(hit.logical_not().nonzero()[0])
             for j, (name, ref) in enumerate(refs.items()):
-                r = q if ref is None else ref[i:i + q.shape[0]].to(q.device)
+                r = q if ref is None else ref[b]
                 kl, same = (r.exp() * (r - q)).sum(-1), r.argmax(-1) == q.argmax(-1)
                 if j == 0:
                     self.add(nll=-q[rows, tgt], kl=kl, same=same,
@@ -120,9 +120,9 @@ def _log_probs(model: torch.nn.Module, seg: torch.Tensor, first: int = 1) -> Ite
 
 
 def _keep(blocks: Iterable[torch.Tensor], kept: list[torch.Tensor]) -> Iterator[torch.Tensor]:
-    """*blocks*, each also copied to the host onto *kept*."""
+    """*blocks*, each also kept on *kept*."""
     for b in blocks:
-        kept.append(b.cpu())
+        kept.append(b)
         yield b
 
 
@@ -141,7 +141,7 @@ def evaluate(
     try:
         for i, (seg, first) in enumerate(zip(segs, starts or itertools.repeat(1))):
             target = seg[0, first:]
-            refs: dict[str, torch.Tensor | None] = {}
+            refs: dict[str, list[torch.Tensor] | None] = {}
             for mode, t in totals.items():
                 run.mode = mode
                 start = time.perf_counter()
@@ -153,7 +153,7 @@ def evaluate(
                 torch.cuda.synchronize()
                 t.seconds += time.perf_counter() - start
                 if kept:
-                    refs[mode] = torch.cat(kept)
+                    refs[mode] = kept
             if progress:
                 print(f'segment {i + 1}', file=sys.stderr, flush=True)
     finally:

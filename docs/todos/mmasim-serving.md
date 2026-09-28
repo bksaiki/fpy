@@ -224,17 +224,20 @@ quantization ("RTN").
 - It is the PTQ baseline: scale, then round each value to the nearest level
   of its format (RNE), with no calibration.
 - Activations are quantized from BF16, as a deployment holds them.
-- The quantizers are `torchao`'s:
-  - **FP8:** `Float8Tensor`, `PerRow` / `PerBlock`, `s = amax / 448`.
-  - **MX:** `MXTensor.to_mx`, `ScaleCalculationMode.RCEIL`.  This is
+- The quantizers compute exactly what `torchao`'s do, in a few tensor
+  ops (`quant.quantize`).  `test_quant.py` checks them bit for bit against
+  torchao on hard finite inputs:
+  - **FP8:** `Float8Tensor`'s `PerRow` / `PerBlock`, `s = amax / 448`.
+  - **MX:** `MXTensor.to_mx` with `ScaleCalculationMode.RCEIL`.  This is
     NVIDIA's (cuBLAS's) rule: the power of two at or above `amax / max`, so
     no element saturates.
-  - **NVFP4:** `nvfp4_quantize` (`NVFP4Tensor`'s), NVIDIA's two-level
-    recipe.  Per tensor `g = amax / (448 * 6)`; per 16, `s =
+  - **NVFP4:** `nvfp4_quantize`, NVIDIA's two-level recipe.  Per tensor `g = amax / (448 * 6)`; per 16, `s =
     rne_e4m3((amax_block / 6) / g)`.  A dynamic `g` is per call, so on
     cached inputs it is per row, from the row's sequence's `amax`.
   - FP8's scale is bounded below, so an all-zero block quantizes to zeros,
-    not NaN; its kernel is torchao's PyTorch path on every host.
+    not NaN.
+  - E2M1 is rounded to nearest-even in float ops: steps of 1/2, 1 and 2 by
+    binade.
 - `quant.Quantized.dequantize` is our own: it multiplies out in FP64, where
   `torchao`'s rounds to FP32.
 
@@ -574,9 +577,34 @@ Condensed; what the code does not say.
   - column blocks in the per-layer metrics;
   - `--batch-size 8` in the harness;
   - a config-built cache for DeltaNet state, and both EOS tokens.
-- **Quantizers are torchao's.** Our first MX and FP8 quantizers matched
-  torchao bit for bit.  On NVFP4 they differed in the order of FP32
-  operations, so torchao's were taken.
+- **Quantizers: torchao's arithmetic, not its code.**
+  - Our first MX and FP8 quantizers matched torchao bit for bit.  On NVFP4
+    they differed in the order of FP32 operations, so torchao's were taken.
+  - An audit then found torchao's eager paths heavy: 31-58 CUDA kernels per
+    MX or NVFP4 activation, with a pack to FP4 and our unpack back.
+  - So `quant.quantize` now repeats torchao's operations in their order,
+    with no packing: NVFP4 0.88 -> 0.29 ms, MXFP4 1.06 -> 0.32 ms, FP8
+    0.20 -> 0.13 ms at `m = 1`.
+  - They are bit-identical on every finite input tested.  They differ only
+    where the input is infinite, or where an all-zero row under a per-row
+    NVFP4 scale makes NaN scales in both.
+  - MX scales are read as `float8_e8m0fnu` natively, since `exp2` gets
+    2^-127 wrong on the GPU.
+- **The audit's other easy fixes** (2026-09-28): identical results
+  throughout.
+  - Reference log-probabilities stay on the GPU, block by block: R0's and
+    R1's scoring 2-2.5x cheaper per segment.
+  - `generate.stream` keeps only the last position's logits.  For R0 this
+    can change the first token after a prefill at a near-tie, since cuBLAS
+    runs a different kernel for one row.
+  - No host sync for a BF16 activation.
+  - `metrics` computes the reference's terms once per block.
+  - Decode speeds barely move (FP8 2.9 -> 3.0 tokens/s, NVFP4 1.3 -> 1.5,
+    CDNA2 5.9 -> 6.5).  Deferred:
+    - the block-scaled and `fp8-block` launch chains, which wait for the
+      backend's index bug (`backend-triton.md`);
+    - caching FP64 weights for exact runs (memory);
+    - CUDA graphs for decode.
 - **`fp8-block` padding.** `PerBlock` takes only whole blocks, so short
   rows are padded with zeros, which leave `amax` unchanged.  A `k` that is
   not a multiple of 128 is refused; none occurs in these models.
