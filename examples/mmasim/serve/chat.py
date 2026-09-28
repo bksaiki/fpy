@@ -16,13 +16,12 @@ import argparse
 import sys
 import time
 
-import decode
-import swap
+from core import cli, generate, swap
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    swap.add_args(ap, seed=False)
+    cli.add_args(ap, seed=False)
     ap.add_argument('-r', '--run', choices=swap.MODES, default='fp32')
     ap.add_argument('--max-new', type=int, default=1024, help='tokens per reply at most')
     args = ap.parse_args(argv)
@@ -32,7 +31,7 @@ def main(argv: list[str]) -> int:
     tok = AutoTokenizer.from_pretrained(args.model)
     model, run = swap.load(args.model, args.split_k, args.combine)
     run.mode = args.run
-    eos = decode.stop_tokens(model, tok)
+    eos = generate.stop_tokens(model, tok)
     messages: list[dict[str, str]] = []
     print(f'{args.model}, run {run.mode}.  /run <mode>, /reset, /quit.', file=sys.stderr)
 
@@ -58,12 +57,12 @@ def main(argv: list[str]) -> int:
             continue
 
         messages.append({'role': 'user', 'content': line})
-        prompt = decode.encode(tok, messages)
+        prompt = generate.encode(tok, messages)
         out: list[int] = []
         shown = ''
         start = time.perf_counter()
         try:
-            for t in decode.stream(model, prompt, args.max_new, eos):
+            for t in generate.stream(model, prompt, args.max_new, eos):
                 out.append(t)
                 # decode the whole reply, holding back a character still incomplete
                 text = tok.decode(out, skip_special_tokens=True)

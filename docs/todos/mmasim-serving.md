@@ -11,7 +11,107 @@ arithmetic is measured.
 - **Primary evaluation: local per-layer metrics on cached activations.** A
   grid search over designs cannot afford the end-to-end evaluations, which
   take hours per design.
-- **Left:** see Essential gaps and Nice to have.
+- **In progress:** Stage 1 of the Roadmap (`mmasim-end-to-end.md`).
+- **Left:** the Roadmap, Essential gaps and Nice to have.
+
+## Roadmap
+
+**The point is feasibility.**  The FPy-to-Triton compiler turns
+bit-accurate models of MMA hardware into kernels.  That makes it possible
+to evaluate MMA designs, real or hypothetical, on real LLMs and real
+workloads, even on a GPU with no such hardware: a TITAN V (sm_70, 2017),
+with no FP8 or FP4 tensor cores.  The deliverable is that this evaluation
+can be done at all, and at what cost.  An interesting trend in which design
+characteristics matter would be a bonus, not the claim.
+
+What is reported to show it, at every stage:
+- **Fidelity:** every design's kernel is checked bit for bit against the
+  FPy interpreter (`compile_triton.py -r`).
+- **Throughput:** designs evaluated per GPU-hour on the TITAN V, per
+  evaluation level; compile time per design; kernel speed against cuBLAS.
+- **Validity:** the cheap evaluations rank designs as the expensive ones do,
+  with uncertainty (Stage 2).
+
+### Stage 1 -- Tractable end-to-end evaluations
+
+`mmasim-end-to-end.md`, in progress:
+- seeded subsets, paired statistics against R0 and `<scheme>-exact`, and
+  teacher-forced divergence;
+- Phase 6 measured the sizes that separate the widest design pairs: 50
+  perplexity segments, KL against R1 (4-15 min per design); decode ranks
+  poorly and stays the generation view;
+- Phase 7 makes the easy performance wins: several designs per pass in
+  local metrics, sharing their design-independent FP64 work; captured
+  activations cached on disk; designs compiled in parallel;
+- Phase 8 restructures `serve/` into `core/` plus scripts.
+
+### Stage 2 -- Do local metrics predict end-to-end effects?
+
+- **Runs:** all 13 designs that take a scheme (5 BF16, 4 FP8, 4
+  block-scaled), on Qwen3-0.6B and Qwen3.5-0.8B.  Each gets the reduced
+  end-to-end evaluations at Stage 1's sizes, and local metrics.
+- **Pairs the design's own effect on both axes:**
+  - local error against the quantized operands' product;
+  - end-to-end effect against `<scheme>-exact`.
+
+  Against R0, quantization swamps every design, so it would correlate
+  schemes, not designs.
+- **Analysis:**
+  - Spearman rank correlation with a bootstrap interval; 13 designs x 2
+    models is few points.
+  - A sensitivity-weighted predictor, `ΔKL ≈ Σ_l a_l ε_l²`, with per-layer
+    `a_l` from noise injection, once per model (HIGGS's linearity theorem).
+    Also: which local metric predicts best (normwise, backward, bias).
+- **Controls:** `<scheme>-exact` against itself is zero on both axes, and a
+  `split_k` variant of one design differs only in accumulation order.
+- **Needs:** end-to-end noise below the spread between designs, which
+  Stage 1's Phase 6 checks.
+
+### Stage 3 -- Exploring hypothetical designs
+
+`K` MMA-Sim-like designs that mix and match characteristics, through the
+same harness.
+- **Axes the builders in `models/` already expose:**
+  - instruction length `L`;
+  - fraction bits kept in the fused sum `F` (and `F2`);
+  - truncation or rounding of aligned terms;
+  - output rounding `rho`;
+  - `e_zero`;
+  - subnormal flushing;
+  - input and accumulator formats;
+  - scale group size `G`;
+  - accumulation order (`split_k`, `combine`).
+
+  Combinations across vendors (NV's truncating T-FDPA with AMD's FTZ
+  multiply, say) need one composable builder from `models/utils.py`.
+- **Per design:** compile, check against the interpreter, pick a default
+  tile, `kernels.register`.
+- **Per-design cost bounds `K`:** `K ≈ budget / (compile + evaluation)`.
+  So evaluate at several fidelity levels, by successive halving:
+  1. every design, local metrics at 512 tokens, normwise only (~1-5 s);
+  2. the top fraction, plus a diverse sample, at 2048 tokens, all metrics,
+     both workloads;
+  3. a handful, reduced end to end.
+
+  Each level is valid only if it ranks designs as the next one up does,
+  which Stage 2 measures between local and end to end.
+- **Cheaper levels:**
+  - The exact FP64 reference and `|x|ᵀ|w|` depend on the scheme, not the
+    design.  Stage 1's Phase 7 shares them across the designs of one pass,
+    a block at a time, leaving each design only its kernel.
+  - A sample of layers may rank designs as all do, since local error is flat
+    with depth.
+- **Phase 1 of the plan is a calibration,** as Stage 1's Phase 6 is: the
+  compile time of a synthetic design, which may dominate the cheap level;
+  each level's cost; and each level's rank agreement with the next.  `K` and
+  the halving fractions then follow from the budget.
+- **Analysis:** a factorial or Latin-hypercube sample over the axes, and
+  log2 error (and end-to-end KL where measured) regressed on the
+  characteristics: which characteristics matter, not only a ranking.
+- **Risks:**
+  - FPy compile time (`backend-triton.md`);
+  - slow kernels, which is why end to end runs on a subset;
+  - combinations the compiler refuses, which the screen skips.
 
 ## Working policy
 
@@ -63,9 +163,19 @@ The runs share one model and one input stream.  They differ only in how
 
 | run | operands | product | answers |
 |---|---|---|---|
-| **R0 `fp32`** | FP32 activations, master weights | FP32 | the model as trained (Yuan et al.'s "LayerCast") |
-| **`<scheme>-exact`** | quantized by the scheme | FP64, rounded once to FP32 | the cost of the scheme alone |
+| **R0 `fp32`**: the pre-quantization reference | FP32 activations, master weights | FP32 | the model as trained (Yuan et al.'s "LayerCast") |
+| **R1 `<scheme>-exact`**: the post-quantization reference | quantized by the scheme | FP64, rounded once to FP32 | the cost of the scheme alone |
 | **a design** | quantized by the scheme | the design's kernel, scales applied as the scheme says | the cost of the design |
+
+The two references split a design's error:
+- **design vs R0** is quantization plus design: the observable effect.
+- **R1 vs R0** is quantization alone.
+- **design vs R1** is the design alone.
+
+R1 is an ideal MMA on the quantized operands: it rounds their exact product
+once.  A design differs from it only in how it accumulates.  The design's
+error is 2^10 or more times smaller than the quantization's, so it is
+visible only against R1.
 
 Settled choices:
 - **Scope: every linear layer.** `lm_head` is included under `bf16`; under a
@@ -158,12 +268,16 @@ cached `(x, W)`.
   the model run through it (measured under `bf16`; `test_local.py` checks
   where the inputs agree).
 
-**Two references** (parallel tables in every run):
-- **quantized:** the quantized operands' exact product, scales included.
-  This measures the design's own effect.
-- **unquantized:** the BF16 activation times the master weight.  This
-  measures quantization and design together.  It is left out for a
-  checkpoint with no known master.
+**Two references** (parallel tables in every run; the JSON keys in
+parentheses):
+- **post-quantization (`quantized`):** the quantized operands' exact
+  product, scales included, R1's product at that layer.  This measures the
+  design's own effect.
+- **pre-quantization (`unquantized`):** the captured BF16 activation times
+  the master weight.  This measures quantization and design together.  It
+  is left out for a checkpoint with no known master.
+  - Its activation is BF16, not R0's FP32, so under `bf16` it coincides
+    with the post-quantization reference (`quantization` is 0).
 - `quantization` is the first reference's normwise error against the
   second.
 - FP64 is exact for the BF16, FP8 and E8M0 products.  With FP32 scales it is
@@ -241,17 +355,21 @@ Options:
 
 ```
 examples/mmasim/serve/
-  kernels.py      compile each design once; prepare, matmul, linear; register
-  quant.py        schemes, torchao's RTN, Quantized with an exact FP64 dequantize
-  checkpoints.py  compressed-tensors checkpoints; weights_for
-  swap.py         a model's nn.Linear forwards through a Run (mode, scheme)
   local.py        capture, then local metrics per design (the primary evaluation)
-  metrics.py      the local metrics (Stats, local)
-  workloads.py    WikiText-2; MT-Bench sessions
-  perplexity.py   WikiText-2 PPL, KL / top-1 / RMS dp vs R0
-  zeroshot.py     lm-evaluation-harness suite, flips vs R0
-  decode.py       greedy decode, divergence index vs R0
+  perplexity.py   WikiText-2 segments, scored against R0 and R1
+  zeroshot.py     lm-evaluation-harness suite, paired Δ acc and flips
+  decode.py       R0's greedy decode, then every run teacher-forced on it
   chat.py         terminal chat
+  core/           the library; no script imports another script
+    kernels.py      compile each design (precompile in parallel); prepare, matmul, linear; register
+    quant.py        schemes, torchao's RTN, Quantized with an exact FP64 dequantize
+    swap.py         a model's nn.Linear forwards through a Run (mode, scheme)
+    checkpoints.py  compressed-tensors checkpoints; weights_for, for_scheme
+    metrics.py      the local metrics (Stats, local); paired, p_value, holm, bootstrap
+    scoring.py      runs scored against references, teacher-forced (Totals, evaluate, against)
+    workloads.py    WikiText-2, MT-Bench sessions, MATH-500 prompts; pick
+    generate.py     greedy generation under the chat template
+    cli.py          the scripts' shared options
   tests/          per module (workloads in test_local.py)
   results/        (gitignored) run outputs, the MT-Bench cache
 ```
@@ -276,7 +394,7 @@ errors not at all:
 | `fp8-row` | nv.blackwell.e4m3.f32 | WikiText | -21.04 | -21.09 |
 | `fp8-row` | nv.ada.e4m3.f32 | WikiText | -8.80 | -8.80 |
 
-### Qwen3-0.6B: the observable effect
+### Qwen3-0.6B: the observable effect (against the pre-quantization reference)
 
 The observable effect is each design's output against the unquantized
 operands' exact product.  For every quantizing scheme and every design, it
@@ -300,7 +418,7 @@ Under `bf16` the cached inputs and the master are BF16 already, so the
 quantization error is 0 and the observable effect is the design's own
 (below).
 
-### Qwen3-0.6B: the design's own effect
+### Qwen3-0.6B: the design's own effect (against the post-quantization reference)
 
 Against the quantized operands' exact product:
 
@@ -489,8 +607,7 @@ the linear layers invites "you measured the easy GEMMs".
 The claim that local metrics are "the evaluation" needs evidence on a few
 designs.  Take the widest separations (Ada vs Blackwell under `fp8-row`,
 Ampere vs CDNA3 under `bf16`) and show the end-to-end ordering matches: KL,
-perplexity, flips.  This depends on tractable end-to-end evaluations (Nice
-to have).
+perplexity, flips.  This is Stage 2 of the Roadmap.
 
 ### Uncertainty on local metrics
 
@@ -515,9 +632,18 @@ Libraries split `k` (split-K, stream-K), which shortens each chain.
 
 ## Nice to have
 
-- **Tractable end-to-end evaluations** (next branch): paired statistics on
-  sampled segments and items; a teacher-forced divergence index in place of
-  free decoding; censoring at a token budget.
+- **If there is time: truncating FP8 accumulation at scale.**
+  - The theory: Ada's and Hopper's 13-bit truncating FP8 accumulators looked
+    harmless in small experiments, and the deviation shows only at scale.
+    DeepSeek-V3 saw it at large K and promoted partials to FP32 every 128.
+  - Here, on Qwen3-0.6B (K ≤ 3072), Ada adds ~2.6% KL on top of `fp8-row`'s
+    quantization end to end.  Its local error already peaks at the largest
+    K (`down_proj`).
+  - Test it with local error against K (layers, or synthetic operands):
+    Ada and Hopper should grow while Blackwell and CDNA3 stay flat.  Then a
+    larger model (Qwen3-8B, K up to 12,288), captured layer by layer.
+  - Training, where DeepSeek saw it, is out of scope.
+
 - **FP8 with an FP16 accumulator.** The `*.f16` designs need a scheme whose
   scales keep `|x| |w|` summed within FP16's range, e.g. `amax / 16` per
   block, and `kernels.matmul` taking FP16 `C`.

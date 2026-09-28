@@ -1,5 +1,5 @@
 """
-`zeroshot`'s flips, subsets and paired Δ; `swap.pick`; `metrics`' paired
+`zeroshot`'s flips, subsets and paired Δ; `workloads.pick`; `metrics`' paired
 statistics.
 
     pytest serve/tests
@@ -8,15 +8,14 @@ statistics.
 import math
 import random
 
-import metrics
-import swap
 import zeroshot
+from core import metrics, workloads
 
 
 def test_pick_is_seeded_sorted_and_whole_when_asked_for_all() -> None:
-    assert swap.pick(100, 10) == swap.pick(100, 10, 0) == sorted(swap.pick(100, 10))
-    assert len(set(swap.pick(100, 10))) == 10 and swap.pick(100, 10, 1) != swap.pick(100, 10)
-    assert swap.pick(5, None) == swap.pick(5, 5) == swap.pick(5, 9) == [0, 1, 2, 3, 4]
+    assert workloads.pick(100, 10) == workloads.pick(100, 10, 0) == sorted(workloads.pick(100, 10))
+    assert len(set(workloads.pick(100, 10))) == 10 and workloads.pick(100, 10, 1) != workloads.pick(100, 10)
+    assert workloads.pick(5, None) == workloads.pick(5, 5) == workloads.pick(5, 9) == [0, 1, 2, 3, 4]
 
 
 def test_subsets_cap_every_task_and_keep_the_old_hellaswag_one() -> None:

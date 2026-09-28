@@ -12,14 +12,13 @@ import struct
 import numpy as np
 import pytest
 import torch
+from core import kernels, quant
 
 from fpy2.backend.triton import unavailable
 
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
-import kernels
-import quant
 
 DESIGNS = [d for d in kernels.TILES if not kernels.block_scaled(d)]
 SCALED = [d for d in kernels.TILES if kernels.block_scaled(d)]

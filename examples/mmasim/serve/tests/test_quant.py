@@ -9,7 +9,8 @@ import torch
 
 pytest.importorskip('torchao')
 
-import quant
+
+from core import quant
 
 import fpy2 as fp
 

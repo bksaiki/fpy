@@ -8,7 +8,9 @@ kernel on the cached, quantized operands, measured against the exact
 product of the quantized and of the unquantized operands (`metrics.local`).
 `--by` splits by a tag.  `--models` takes masters (RTN, `lm_head`
 unquantized unless `bf16`) and checkpoints (`checkpoints.weights_for`).
-Seconds per design include the metrics' FP64 work.
+The designs of a run share each layer's exact products, so the seconds
+reported are each design's kernels and, once, the metrics.  `--acts`
+caches the captured activations across runs.
 
     python serve/local.py                               # every BF16 design
     python serve/local.py -d amd.cdna2.bf16 --tokens 512 --layers mlp -o s.json
@@ -19,23 +21,23 @@ Seconds per design include the metrics' FP64 work.
 
 import argparse
 import bisect
+import hashlib
 import json
 import re
 import sys
 import time
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
 
-import checkpoints
-import kernels
-import metrics
-import perplexity
-import swap
 import torch
-import workloads
+from core import checkpoints, cli, kernels, metrics, swap, workloads
+
+_OUT_ELEMS = 1 << 28
+"""Design outputs (FP32 elements) held at once: past it, a layer's designs
+run a few at a time, `lm_head` at 2048 tokens one at a time."""
 
 REFERENCES = ('quantized', 'unquantized')
 """What a design's output is measured against: the exact product of the
@@ -59,13 +61,13 @@ class Activations:
 
 
 def sample(seqs: list[workloads.Sequence], tokens: int | None, seed: int = 0) -> list[list[int]]:
-    """*tokens* positions over *seqs* (`swap.pick`), as each sequence's
+    """*tokens* positions over *seqs* (`workloads.pick`), as each sequence's
     positions in order."""
     ends = [0]
     for seq in seqs:
         ends.append(ends[-1] + len(seq.ids))
     keep: list[list[int]] = [[] for _ in seqs]
-    for p in swap.pick(ends[-1], tokens, seed):
+    for p in workloads.pick(ends[-1], tokens, seed):
         i = bisect.bisect_right(ends, p) - 1
         keep[i].append(p - ends[i])
     return keep
@@ -114,27 +116,36 @@ def capture(
 
 
 def evaluate(
-    model: torch.nn.Module, run: swap.Run, acts: Activations, design: str,
+    model: torch.nn.Module, run: swap.Run, acts: Activations, designs: Sequence[str],
     names: Collection[str] = metrics.METRICS, *, by: str | None = None, only: str | None = None,
     masters: dict[str, torch.Tensor] | None = None, unquantized: bool = True,
-) -> dict[str, dict[str, dict[str, metrics.Stats]]]:
-    """*design*'s :class:`metrics.Stats` for metrics *names* under *run*'s
-    scheme, as `{reference: {group: {layer: Stats}}}`: references
-    :data:`REFERENCES` (`unquantized` only if *unquantized*); groups by tag
-    *by*, else `all`; layers matching regex *only*, minus *run*'s ignored
-    ones.  *run* gives weights, static scales and `k` splits; unquantized
-    weights are *masters*', else the layer's own."""
+    seconds: dict[str, float] | None = None,
+) -> dict[str, dict[str, dict[str, dict[str, metrics.Stats]]]]:
+    """Each of *designs*' :class:`metrics.Stats` for metrics *names* under
+    *run*'s scheme, as `{design: {reference: {group: {layer: Stats}}}}`:
+    references :data:`REFERENCES` (`unquantized` only if *unquantized*);
+    groups by tag *by*, else `all`; layers matching regex *only*, minus
+    *run*'s ignored ones.  *run* gives weights, static scales and `k`
+    splits; unquantized weights are *masters*', else the layer's own.  The
+    designs share each layer's exact products (`metrics.local`).  With
+    *seconds*, each design's kernel time is added under its name and the
+    metrics' under `metrics`."""
     scheme = run.scheme
-    if not kernels.applicable(design, scheme):
-        raise ValueError(f'{design} does not take {scheme.name}')
+    if refused := [d for d in designs if not kernels.applicable(d, scheme)]:
+        raise ValueError(f'{", ".join(refused)} does not take {scheme.name}')
     groups: dict[str, torch.Tensor | slice] = {'all': slice(None)}
     if by is not None:
         labels = acts.tags[by]
         groups = {g: torch.tensor([i for i, x in enumerate(labels) if x == g], device='cuda')
                   for g in dict.fromkeys(labels)}
-    stats: dict[str, dict[str, dict[str, metrics.Stats]]] = {
-        r: {g: {} for g in groups} for r in REFERENCES[:1 + unquantized]}
-    held = kernels.storage(design)[1]
+    stats = {d: {r: {g: {} for g in groups} for r in REFERENCES[:1 + unquantized]}
+             for d in designs}
+
+    def timed(key: str, start: float) -> None:
+        if seconds is not None:
+            torch.cuda.synchronize()
+            seconds[key] = seconds.get(key, 0.0) + time.perf_counter() - start
+
     with torch.no_grad():
         for name, layer in model.named_modules():
             if (not isinstance(layer, torch.nn.Linear) or id(layer.weight) in run.ignore
@@ -144,41 +155,63 @@ def evaluate(
             a = acts.inputs[i].cuda().float()
             qa = run.quantize(a, layer.weight, acts.amax[i].cuda()[:, None])
             qw = run.weight(layer.weight)
-            split = swap.slices(design, scheme, a.shape[1], run.split_k)
-            y = swap.gemm(design, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
-                          run.combine)
             w0 = layer.weight if masters is None else masters[name].cuda()
-            for g, rows in groups.items():
-                s0 = None
-                if unquantized:
-                    s0 = stats['unquantized'][g][name] = metrics.Stats()
-                metrics.local(stats['quantized'][g].setdefault(name, metrics.Stats()), names,
-                              qa.take(rows), qw, y[rows], (a[rows], w0), s0)
+            per = max(1, _OUT_ELEMS // (a.shape[0] * layer.out_features))
+            for c in range(0, len(designs), per):
+                ys = {}
+                for d in designs[c:c + per]:
+                    start = time.perf_counter()
+                    held = kernels.storage(d)[1]
+                    split = swap.slices(d, scheme, a.shape[1], run.split_k)
+                    ys[d] = swap.gemm(d, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
+                                      run.combine)
+                    timed(d, start)
+                start = time.perf_counter()
+                for g, rows in groups.items():
+                    outs = []
+                    for d, y in ys.items():
+                        s0 = None
+                        if unquantized:
+                            s0 = stats[d]['unquantized'][g][name] = metrics.Stats()
+                        outs.append((stats[d]['quantized'][g].setdefault(name, metrics.Stats()),
+                                     y[rows], s0))
+                    metrics.local(outs, names, qa.take(rows), qw, (a[rows], w0))
+                timed('metrics', start)
+                del ys
     return stats
+
+
+def _digest(key: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    swap.add_args(ap)
+    cli.add_args(ap)
     ap.add_argument('--models', nargs='*', default=None,
                     help='masters (RTN) and quantized checkpoints to evaluate (default: --model)')
-    checkpoints.add_args(ap)
+    cli.add_scheme_args(ap)
     ap.add_argument('-d', '--designs', nargs='*', choices=list(kernels.TILES),
                     help='designs the scheme applies to (default: all of them)')
     ap.add_argument('-m', '--metrics', nargs='*', choices=metrics.METRICS, default=list(metrics.METRICS))
     ap.add_argument('-w', '--workload', choices=['wikitext', 'mtbench'], default='wikitext')
-    ap.add_argument('--tokens', type=int, default=perplexity.CONTEXT,
+    ap.add_argument('--tokens', type=int, default=workloads.CONTEXT,
                     help='rows captured: WikiText-2\'s first, or sampled over MT-Bench')
     ap.add_argument('--by', choices=['role', 'category'], default=None,
                     help='split the result by this tag (MT-Bench)')
     ap.add_argument('--transcripts', type=Path, default=None,
                     help='MT-Bench conversations cache (default: results/mtbench-<model>.json)')
     ap.add_argument('--layers', default=None, help='only the linear layers this regex matches')
+    ap.add_argument('--acts', type=Path, default=None,
+                    help='cache captured activations here, reused for the same settings')
+    ap.add_argument('-j', '--jobs', type=int, default=None,
+                    help='processes compiling the designs (default: one per core)')
     ap.add_argument('-o', '--out', default=None, help='write every layer\'s metrics as JSON here')
     args = ap.parse_args(argv)
     designs = args.designs or kernels.designs(args.scheme)
     if refused := [d for d in designs if not kernels.applicable(d, args.scheme)]:
         ap.error(f'{args.scheme.name} does not apply to {", ".join(refused)}')
+    kernels.precompile(designs, args.jobs)
 
     out: dict[str, Any] = {
         'scheme': args.scheme.name, 'workload': args.workload, 'tokens': args.tokens,
@@ -196,27 +229,33 @@ def main(argv: list[str]) -> int:
         refs = {'quantized': names}
         if known:
             refs['unquantized'] = [m for m in names if m not in metrics.QUANTIZED_ONLY]
-        if args.workload == 'wikitext':
-            seqs = workloads.wikitext(name, args.tokens)
+        transcripts = args.transcripts or (Path(__file__).parent / 'results'
+                                           / f'mtbench-{name.replace("/", "--")}.json')
+        key = {'model': name, 'scheme': args.scheme.name, 'source': about['source'],
+               'workload': args.workload, 'tokens': args.tokens, 'seed': args.seed,
+               'transcripts': str(transcripts) if args.workload == 'mtbench' else None}
+        cached = args.acts / f'acts-{_digest(key)}.pt' if args.acts else None
+        if cached and cached.exists():
+            acts = Activations(**torch.load(cached, weights_only=True))
         else:
-            from transformers import AutoTokenizer
+            if args.workload == 'wikitext':
+                seqs = workloads.wikitext(name, args.tokens)
+            else:
+                from transformers import AutoTokenizer
 
-            path = args.transcripts or (Path(__file__).parent / 'results'
-                                        / f'mtbench-{name.replace("/", "--")}.json')
-            seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name), path)
-        acts = capture(model, run, seqs, args.tokens, args.seed)
+                seqs = workloads.mtbench(model, run, AutoTokenizer.from_pretrained(name),
+                                         transcripts)
+            acts = capture(model, run, seqs, args.tokens, args.seed)
+            if cached:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                torch.save(vars(acts), cached)
 
         results: dict[str, dict[str, dict[str, dict[str, dict[str, float]]]]] = {}
         total: dict[str, dict[str, dict[str, dict[str, float]]]] = {}
         seconds: dict[str, float] = {}
-        for design in designs:
-            kernels.compiled(design)
-            torch.cuda.synchronize()
-            start = time.perf_counter()
-            stats = evaluate(model, run, acts, design, names, by=args.by, only=args.layers,
-                             masters=masters, unquantized=known)
-            torch.cuda.synchronize()
-            seconds[design] = time.perf_counter() - start
+        every = evaluate(model, run, acts, designs, names, by=args.by, only=args.layers,
+                         masters=masters, unquantized=known, seconds=seconds)
+        for design, stats in every.items():
             for r, per_ref in stats.items():
                 total.setdefault(r, {})[design] = {
                     g: sum(per.values(), metrics.Stats()).report(refs[r]) for g, per in per_ref.items()}
@@ -227,9 +266,11 @@ def main(argv: list[str]) -> int:
               f'{", ".join(about["ignore"]) or "none"}; originals from '
               f'{about["master"] or "nothing (no master)"}')
         for r, by_design in total.items():
-            print(f'\n-- against the {r} operands\' exact product: '
-                  + ("the design's own effect" if r == 'quantized'
-                     else "the quantization's and the design's"))
+            print('\n-- against the ' + (
+                "post-quantization reference, the quantized operands' exact product: "
+                "the design's own effect" if r == 'quantized' else
+                "pre-quantization reference, the unquantized operands' exact product: "
+                "the quantization's and the design's"))
             first = next(iter(by_design.values()))
             keys = list(next(iter(first.values())))
             w = max(map(len, by_design))
@@ -240,6 +281,8 @@ def main(argv: list[str]) -> int:
                 for design, t in by_design.items():
                     print(f'{design:{w}} ' + ' '.join(f'{metrics.fmt(k, t[g][k]):>14}' for k in keys)
                           + f' {seconds[design]:6.1f}')
+        print(f'\ns: each design\'s kernels; the metrics, shared by all {len(designs)}: '
+              f'{seconds["metrics"]:.1f} s')
         out['models'][name] = {**about, 'metrics': refs, 'seconds': seconds,
                                'total': total, 'runs': results}
         del model, run, acts, masters

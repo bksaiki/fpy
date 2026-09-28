@@ -15,16 +15,14 @@ so that is full precision in every run.  A linear layer with a bias is
 refused.
 """
 
-import argparse
-import random
 from dataclasses import dataclass, field
 from types import MethodType
-from typing import Any, get_args
+from typing import Any
 
-import kernels
-import quant
 import torch
 import torch.nn.functional as F
+
+from . import kernels, quant
 
 BF16 = quant.SCHEMES['bf16']
 
@@ -211,24 +209,6 @@ def give(run: Run, model: torch.nn.Module, scheme: quant.Scheme,
     run.given = Given(scheme.name, {id(layers[n].weight): q for n, q in weights.items()},
                       {id(layers[n].weight): s for n, s in (inputs or {}).items()})
     run.ignore = {id(layers[n].weight) for n in ignore}
-
-
-def add_args(ap: argparse.ArgumentParser, seed: bool = True) -> None:
-    """The options every script shares: the model, how designs split `k`,
-    and (with *seed*) the seed of its random subsets (:func:`pick`)."""
-    ap.add_argument('--model', default=MODEL)
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=get_args(kernels.Combine), default='linear')
-    if seed:
-        ap.add_argument('--seed', type=int, default=0, help='seed of the random subsets')
-
-
-def pick(total: int, n: int | None, seed: int = 0) -> list[int]:
-    """*n* of `range(total)` at random by *seed*, sorted: all of them if *n*
-    is `None` or no fewer."""
-    if n is None or n >= total:
-        return list(range(total))
-    return sorted(random.Random(seed).sample(range(total), n))
 
 
 def load(name: str = MODEL, split_k: int = 1, combine: kernels.Combine = 'linear',

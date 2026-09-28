@@ -27,9 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import checkpoints
-import metrics
-import swap
+from core import checkpoints, cli, metrics, swap, workloads
 
 TASKS = ('piqa', 'arc_easy', 'arc_challenge', 'hellaswag', 'winogrande', 'lambada_openai')
 METRICS = ('acc', 'acc_norm')
@@ -47,9 +45,9 @@ def sizes() -> dict[str, int]:
 
 
 def subsets(counts: dict[str, int], n: int | None, seed: int = 0) -> dict[str, list[int]]:
-    """*n* items of each task in *counts* that has more (`swap.pick`), by
+    """*n* items of each task in *counts* that has more (`workloads.pick`), by
     index."""
-    return {t: swap.pick(k, n, seed) for t, k in counts.items() if n is not None and n < k}
+    return {t: workloads.pick(k, n, seed) for t, k in counts.items() if n is not None and n < k}
 
 
 def evaluate(lm: Any, run: swap.Run, mode: str, **kw: Any) -> dict[str, Any]:
@@ -119,8 +117,8 @@ def against(items: dict[str, dict[str, Items]], exact: str) -> dict[str, dict[st
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1])
-    swap.add_args(ap)
-    checkpoints.add_args(ap)
+    cli.add_args(ap)
+    cli.add_scheme_args(ap)
     ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
     ap.add_argument('-r', '--runs', nargs='*',
                     help="runs besides fp32 (default: the scheme's exact run and every design)")
@@ -132,7 +130,7 @@ def main(argv: list[str]) -> int:
     from lm_eval.models.huggingface import HFLM
     from transformers import AutoTokenizer
 
-    modes = checkpoints.runs(ap, args)
+    modes = cli.runs(ap, args)
     settings = {'model': args.model, 'items': args.items, 'seed': args.seed,
                 'batch_size': args.batch_size, 'split_k': args.split_k, 'combine': args.combine}
     samples = subsets(sizes(), args.items or None, args.seed) or None

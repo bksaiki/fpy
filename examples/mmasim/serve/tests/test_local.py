@@ -17,12 +17,8 @@ from fpy2.backend.triton import unavailable
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
-import kernels
 import local
-import metrics
-import quant
-import swap
-import workloads
+from core import kernels, metrics, quant, swap, workloads
 
 _WORDS = ['<|im_start|>', 'user', '\n', 'Hi', '<|im_end|>', '\n',
           '<|im_start|>', 'assistant', '\n', '<think>', '\n\n', '</think>', '\n\n',
@@ -55,9 +51,9 @@ def _own_inputs(model: torch.nn.Module, run: swap.Run, tokens: torch.Tensor, des
     def record(name: str, layer: torch.nn.Linear, inputs: tuple[torch.Tensor],
                y: torch.Tensor) -> None:
         x = inputs[0].reshape(-1, inputs[0].shape[-1])
-        metrics.local(stats.setdefault(name, metrics.Stats()), names,
-                      run.quantize(x, layer.weight), run.weight(layer.weight),
-                      y.reshape(-1, y.shape[-1]), (x, layer.weight))
+        metrics.local([(stats.setdefault(name, metrics.Stats()), y.reshape(-1, y.shape[-1]), None)],
+                      names, run.quantize(x, layer.weight), run.weight(layer.weight),
+                      (x, layer.weight))
 
     handles = [m.register_forward_hook(partial(record, n)) for n, m in model.named_modules()
                if isinstance(m, torch.nn.Linear)]
@@ -90,15 +86,30 @@ def test_cached_inputs_give_the_model_run_where_inputs_agree(
 
     # unquantized inputs are FP32 there, BF16 here
     same = [m for m in metrics.METRICS if m != 'quantization']
-    got = local.evaluate(model, run, acts, design)['quantized']['all']
+    got = local.evaluate(model, run, acts, [design])[design]['quantized']['all']
     want = _own_inputs(model, run, tokens, design, same)
     for name in first:
         assert got[name].report(same) == want[name].report(same)
 
     if 'test.copy' not in kernels.TILES:
         kernels.register('test.copy', dict(DESIGNS)[design], *kernels.TILES[design])
-    copy = local.evaluate(model, run, acts, 'test.copy')['quantized']['all']
+    copy = local.evaluate(model, run, acts, ['test.copy'])['test.copy']['quantized']['all']
     assert all(copy[n].report(metrics.METRICS) == s.report(metrics.METRICS) for n, s in got.items())
+
+
+def test_designs_in_one_pass_are_as_each_alone(model: torch.nn.Module, tokens: torch.Tensor) -> None:
+    """Sharing the exact products changes nothing: several designs in one
+    pass, by group and against both references, report as each alone."""
+    run = swap.patch(model)
+    acts = local.capture(model, run, _seqs(tokens))
+    designs = ['amd.cdna2.bf16', 'nv.ampere.bf16.f32', 'amd.cdna3.bf16']
+    together = local.evaluate(model, run, acts, designs, by='role')
+    for d in designs:
+        alone = local.evaluate(model, run, acts, [d], by='role')[d]
+        assert {r: {g: {n: st.report(metrics.METRICS) for n, st in per.items()}
+                    for g, per in groups.items()} for r, groups in together[d].items()} == {
+            r: {g: {n: st.report(metrics.METRICS) for n, st in per.items()}
+                for g, per in groups.items()} for r, groups in alone.items()}
 
 
 def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor) -> None:
@@ -107,8 +118,8 @@ def test_groups_partition_the_rows(model: torch.nn.Module, tokens: torch.Tensor)
     run = swap.patch(model)
     acts = local.capture(model, run, _seqs(tokens), tokens=10)
     assert len(acts.tags['role']) == acts.inputs[0].shape[0] == 10
-    whole = local.evaluate(model, run, acts, 'amd.cdna2.bf16')['quantized']['all']
-    parts = local.evaluate(model, run, acts, 'amd.cdna2.bf16', by='role')['quantized']
+    whole = local.evaluate(model, run, acts, ['amd.cdna2.bf16'])['amd.cdna2.bf16']['quantized']['all']
+    parts = local.evaluate(model, run, acts, ['amd.cdna2.bf16'], by='role')['amd.cdna2.bf16']['quantized']
     assert set(parts) == {'user', 'assistant'}
     for name, s in whole.items():
         pooled = sum((g[name] for g in parts.values()), metrics.Stats())
@@ -131,20 +142,20 @@ def test_a_scheme_measures_its_quantization_apart_from_the_design(
     acts = local.capture(model, run, _seqs(tokens))
     design = kernels.designs(scheme)[0]
     own, both = (sum(r['all'].values(), metrics.Stats()).report(metrics.METRICS)
-                 for r in local.evaluate(model, run, acts, design).values())
+                 for r in local.evaluate(model, run, acts, [design])[design].values())
     assert own['quantization'] > 0 and own['rounded'] < 1
     assert both['normwise'] > own['normwise'] > 0
     with pytest.raises(ValueError, match='does not take'):
-        local.evaluate(model, run, acts, 'amd.cdna2.bf16')
+        local.evaluate(model, run, acts, ['amd.cdna2.bf16'])
     if scheme.applied != 'epilogue':
         run.split_k = 2
         with pytest.raises(ValueError, match='its own blocks'):
-            local.evaluate(model, run, acts, design)
+            local.evaluate(model, run, acts, [design])
         run.split_k = 1
     run.scheme = swap.BF16
     own, both = (sum(r['all'].values(), metrics.Stats()).report(metrics.METRICS)
                  for r in local.evaluate(model, run, local.capture(model, run, _seqs(tokens)),
-                                         'amd.cdna2.bf16').values())
+                                         ['amd.cdna2.bf16'])['amd.cdna2.bf16'].values())
     assert own.pop('quantization') == 0 and own.pop('rounded') > 0
     assert own == {m: v for m, v in both.items() if m in own}
 

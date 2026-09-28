@@ -26,8 +26,9 @@ from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, fields
 from typing import TypeVar
 
-import quant
 import torch
+
+from . import quant
 
 METRICS = ('normwise', 'backward', 'ulp', 'rounded', 'bias', 'magnitude_bias', 'quantization')
 QUANTIZED_ONLY = ('rounded', 'quantization')
@@ -84,69 +85,99 @@ def _rows(n: int) -> int:
     return max(1, _ELEMS // n)
 
 
-def _against(s: Stats, metrics: Collection[str], a: torch.Tensor, wt: torch.Tensor,
-             wa: torch.Tensor | None, g: torch.Tensor) -> torch.Tensor:
-    """Add output block *g*'s *metrics* against `y = a @ wt` (FP64) to *s*,
-    and return `y`; *wa* is `|wt|`, or `None` if unneeded."""
+@dataclass
+class _Exact:
+    """An output block's exact product `y` (FP64), and what the metrics
+    derive from it alone."""
+
+    y: torch.Tensor
+    scale: torch.Tensor | None
+    """`|x|ᵀ|w|`, if a metric needs it."""
+    ulp: torch.Tensor | None
+    """`y`'s FP32 ulp, if a metric needs it."""
+    rounded: torch.Tensor | None
+    """`fl(y)`, `y` rounded to FP32, if a metric needs it."""
+
+
+def _exact(metrics: Collection[str], a: torch.Tensor, wt: torch.Tensor,
+           wa: torch.Tensor | None) -> _Exact:
+    """`a @ wt`'s :class:`_Exact` for *metrics*; *wa* is `|wt|`, or `None`
+    if unneeded."""
     y = a @ wt
-    e = g.double() - y
+    ulp = None
+    if 'ulp' in metrics:
+        # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
+        _, ex = torch.frexp(y)
+        ex = torch.where(y == 0, -125, ex)
+        ulp = torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149))
+    return _Exact(y, None if wa is None else a.abs() @ wa, ulp,
+                  y.float() if 'rounded' in metrics else None)
+
+
+def _against(s: Stats, metrics: Collection[str], r: _Exact, g: torch.Tensor) -> None:
+    """Add output block *g*'s *metrics* against *r* to *s*."""
+    e = g.double() - r.y
     s.n += e.numel()
     if 'normwise' in metrics:
         s.err += float((e * e).sum())
-        s.ref += float((y * y).sum())
-    if wa is not None:
-        scale = a.abs() @ wa
-        eta = torch.where(scale > 0, e / scale, 0.0)
+        s.ref += float((r.y * r.y).sum())
+    if r.scale is not None:
+        eta = torch.where(r.scale > 0, e / r.scale, 0.0)
         if 'backward' in metrics:
             s.backward += float(eta.abs().sum())
             s.backward_max = max(s.backward_max, float(eta.abs().max()))
         if 'bias' in metrics:
             s.bias += float(eta.sum())
         if 'magnitude_bias' in metrics:
-            s.magnitude_bias += float((torch.sign(y) * eta).sum())
-        del scale, eta
-    if 'ulp' in metrics:
-        # |y| in [2^(ex-1), 2^ex): its FP32 ulp is 2^(ex-24), at least 2^-149
-        _, ex = torch.frexp(y)
-        ex = torch.where(y == 0, -125, ex)
-        bits = torch.log2(1 + e.abs() / torch.ldexp(torch.ones_like(y), (ex - 24).clamp(min=-149)))
+            s.magnitude_bias += float((torch.sign(r.y) * eta).sum())
+        del eta
+    if r.ulp is not None:
+        bits = torch.log2(1 + e.abs() / r.ulp)
         s.ulp += float(bits.sum())
         s.ulp_max = max(s.ulp_max, float(bits.max()))
-        del ex, bits
-    if 'rounded' in metrics:
-        s.rounded += int((g == y.float()).sum())
-    return y
+        del bits
+    if r.rounded is not None:
+        s.rounded += int((g == r.rounded).sum())
 
 
-def local(s: Stats, metrics: Collection[str], qa: quant.Quantized, qw: quant.Quantized,
-          got: torch.Tensor, unquantized: tuple[torch.Tensor, torch.Tensor],
-          s0: Stats | None = None) -> None:
-    """Add *got* `[m, n]`, the output on *qa* and *qw*, to *s*'s *metrics*,
-    in blocks.  `quantization` compares their exact product with the
-    *unquantized* operands'; *s0*, if given, takes the metrics (but
+def local(outs: Sequence[tuple[Stats, torch.Tensor, Stats | None]], metrics: Collection[str],
+          qa: quant.Quantized, qw: quant.Quantized,
+          unquantized: tuple[torch.Tensor, torch.Tensor]) -> None:
+    """For each of *outs*, `(s, got, s0)`, add *got* `[m, n]`, an output on
+    *qa* and *qw*, to *s*'s *metrics*, in blocks, every output against the
+    same exact products.  `quantization` compares their exact product with
+    the *unquantized* operands'; *s0*, if given, takes the metrics (but
     :data:`QUANTIZED_ONLY`) against the latter."""
     x0, w0 = unquantized
     m, k = qa.elements.shape
     scaled = bool({'backward', 'bias', 'magnitude_bias'} & set(metrics))
-    before = s0 is not None or 'quantization' in metrics
+    against0 = any(s0 is not None for _, _, s0 in outs)
+    before = against0 or 'quantization' in metrics
     metrics0 = set(metrics) - set(QUANTIZED_ONLY)
     cols = _rows(k)
-    for j in range(0, got.shape[1], cols):
+    for j in range(0, outs[0][1].shape[1], cols):
         wt = qw.dequantize(slice(j, j + cols)).T
         wa = wt.abs() if scaled else None
         w0t = w0[j:j + cols].double().T if before else None
-        w0a = w0t.abs() if s0 is not None and scaled else None
+        w0a = w0t.abs() if against0 and scaled else None
         rows = _rows(wt.shape[1])
         for i in range(0, m, rows):
-            a, g = qa.dequantize(slice(i, i + rows)), got[i:i + rows, j:j + cols]
-            y = _against(s, metrics, a, wt, wa, g)
-            if w0t is None:
-                continue
-            a0 = x0[i:i + rows].double()
-            y0 = a0 @ w0t if s0 is None else _against(s0, metrics0, a0, w0t, w0a, g)
-            if 'quantization' in metrics:
-                s.q_err += float(((y - y0) ** 2).sum())
-                s.q_ref += float((y0 * y0).sum())
+            r = _exact(metrics, qa.dequantize(slice(i, i + rows)), wt, wa)
+            r0 = None
+            if w0t is not None:
+                a0 = x0[i:i + rows].double()
+                r0 = _exact(metrics0, a0, w0t, w0a) if against0 else _Exact(a0 @ w0t, None, None, None)
+            q = None
+            if r0 is not None and 'quantization' in metrics:
+                q = float(((r.y - r0.y) ** 2).sum()), float((r0.y * r0.y).sum())
+            for s, got, s0 in outs:
+                g = got[i:i + rows, j:j + cols]
+                _against(s, metrics, r, g)
+                if s0 is not None and r0 is not None:
+                    _against(s0, metrics0, r0, g)
+                if q is not None:
+                    s.q_err += q[0]
+                    s.q_ref += q[1]
 
 
 def fmt(key: str, v: float) -> str:

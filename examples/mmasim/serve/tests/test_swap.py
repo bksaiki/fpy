@@ -7,15 +7,13 @@ skipped without either.
 
 import pytest
 import torch
+from core import kernels, quant, swap
 
 from fpy2.backend.triton import unavailable
 
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
-import kernels
-import quant
-import swap
 
 
 def _logits(model: torch.nn.Module, tokens: torch.Tensor) -> torch.Tensor:

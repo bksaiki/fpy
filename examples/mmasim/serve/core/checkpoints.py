@@ -5,17 +5,15 @@ scheme (`docs/todos/mmasim-serving.md`); :func:`for_scheme` loads a master
 or a checkpoint ready to run under one.
 """
 
-import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import kernels
-import quant
-import swap
 import torch
 from compressed_tensors.compressors.nvfp4.helpers import unpack_fp4_from_uint8
+
+from . import kernels, quant, swap
 
 
 @dataclass
@@ -155,22 +153,3 @@ def for_scheme(name: str, scheme: quant.Scheme, *, requantize: bool = False,
         swap.give(run, model, scheme, {}, ignore=ignore)
     run.split_k, run.combine = split_k, combine
     return model, run, {'source': source, 'ignore': ignore, 'master': master}
-
-
-def add_args(ap: argparse.ArgumentParser) -> None:
-    """The options choosing a scheme and a model's weights under it."""
-    ap.add_argument('--scheme', type=quant.scheme, default=swap.BF16,
-                    help=f'one of {", ".join(quant.SCHEMES)}, or fp8-row:fnuz, fp8-block:fnuz')
-    ap.add_argument('--requantize', action='store_true',
-                    help='allow a checkpoint in another scheme to be requantized, lossily')
-    ap.add_argument('--master', default=None, help='the unquantized model a checkpoint is '
-                    'measured against (default: its model card\'s base model)')
-
-
-def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
-    """`args.runs` checked against `args.scheme`'s (all but R0 if not
-    given)."""
-    known = swap.modes(args.scheme)[1:]
-    if bad := [r for r in args.runs or () if r not in known]:
-        ap.error(f'{args.scheme.name} has no run {", ".join(bad)} (only {", ".join(known)})')
-    return args.runs or list(known)

@@ -8,23 +8,25 @@ formats in the kernel's storage dtype; the result is its FP32 accumulator.
 weight and :func:`matmul` per call.
 """
 
+import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from functools import cache, partial
 from pathlib import Path
 from typing import Any, Literal
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import compile_triton as ct
-import quant
-from compile import DESIGNS
+from compile import DESIGNS, in_processes
 from compile import _length as _arg_length
 
 from fpy2.backend.triton import KernelSource, launch
 from fpy2.backend.triton.launcher import _torch_dtype
+
+from . import quant
 
 TILES: dict[str, tuple[int, int]] = {
     'nv.ampere.bf16.f32': (32, 1),
@@ -47,6 +49,9 @@ TILES: dict[str, tuple[int, int]] = {
 Combine = Literal['linear', 'tree']
 
 _BUILDS: dict[str, Callable] = dict(DESIGNS)
+
+_KERNELS: dict[str, KernelSource] = {}
+"""Each design compiled so far."""
 
 _ELEMS = 1 << 26
 """Output elements per block of rows: bounds the partials' memory under
@@ -107,12 +112,28 @@ def designs(scheme: quant.Scheme) -> list[str]:
     return [d for d in TILES if applicable(d, scheme)]
 
 
-@cache
 def compiled(design: str) -> tuple[KernelSource, int]:
     """*design*'s kernel and the length its `k` must be a multiple of (a
     block-scaled design's, one instruction)."""
-    kernel, _, _ = ct.compile_matmul(_BUILDS[design], None)
-    return kernel, _arg_length(_args(design)[0])
+    if design not in _KERNELS:
+        _KERNELS[design] = ct.compile_matmul(_BUILDS[design], None)[0]
+    return _KERNELS[design], _arg_length(_args(design)[0])
+
+
+def _compile_named(name: str) -> KernelSource:
+    return ct.compile_matmul(dict(DESIGNS)[name], None)[0]
+
+
+def precompile(designs: Sequence[str], jobs: int | None = None) -> None:
+    """Compile *designs* not yet compiled, MMA-Sim's in *jobs* processes (one
+    per core by default); a :func:`register`ed one compiles here."""
+    todo = [d for d in designs if d not in _KERNELS]
+    named = [d for d in todo if _BUILDS[d] is dict(DESIGNS).get(d)]
+    for d, kernel in zip(named, in_processes(_compile_named, named,
+                                             min(len(named), jobs or os.cpu_count() or 1))):
+        _KERNELS[d] = kernel
+    for d in todo:
+        compiled(d)
 
 
 @cache

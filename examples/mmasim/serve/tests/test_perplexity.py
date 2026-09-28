@@ -1,5 +1,5 @@
 """
-`perplexity.evaluate` on a small random Qwen3.  Needs a GPU and
+`scoring.evaluate` on a small random Qwen3.  Needs a GPU and
 `transformers`; skipped without either.
 
     pytest serve/tests
@@ -15,18 +15,15 @@ from fpy2.backend.triton import unavailable
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
 
-import metrics
-import perplexity
-import quant
-import swap
+from core import metrics, quant, scoring, swap, workloads
 
 
 def test_the_baseline_is_its_own_reference(model: torch.nn.Module, tokens: torch.Tensor) -> None:
     """R0 against itself is no distance at all, and its perplexity is the
     model's cross-entropy over the segments; another run is some distance."""
     run = swap.patch(model)
-    segs = perplexity.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
-    totals = perplexity.evaluate(model, run, segs, ['bf16-exact'])
+    segs = workloads.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
+    totals = scoring.evaluate(model, run, segs, ['bf16-exact'])
     r0, r1 = totals['fp32'].report(), totals['bf16-exact'].report()
     assert (r0['kl'], r0['top1'], r0['rms_dp']) == (0.0, 1.0, 0.0)
     with torch.no_grad():
@@ -43,11 +40,11 @@ def test_a_quantizing_scheme_runs_end_to_end(model: torch.nn.Module, tokens: tor
     does), the exact run is farther from R0 than `bf16-exact`, and every
     design runs."""
     run = swap.patch(model)
-    segs = perplexity.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
-    bf16 = perplexity.evaluate(model, run, segs, ['bf16-exact'])['bf16-exact'].report()['kl']
+    segs = workloads.segments(torch.cat([tokens, tokens.flip(-1)], -1), context=16)
+    bf16 = scoring.evaluate(model, run, segs, ['bf16-exact'])['bf16-exact'].report()['kl']
     fp8 = quant.SCHEMES['fp8-row']
     swap.give(run, model, fp8, {}, ignore=['lm_head'])
-    totals = perplexity.evaluate(model, run, segs, swap.modes(fp8)[1:])
+    totals = scoring.evaluate(model, run, segs, swap.modes(fp8)[1:])
     assert totals['fp8-row-exact'].report()['kl'] > bf16
     assert all(0 < t.report()['kl'] < math.inf for m, t in totals.items() if m != 'fp32')
     swap.give(run, model, swap.BF16, {})
@@ -59,10 +56,10 @@ def test_runs_pair_against_r0_and_the_exact_run(model: torch.nn.Module, tokens: 
     combined."""
     run = swap.patch(model)
     ids = torch.cat([tokens, tokens.flip(-1), tokens.roll(3, -1), tokens.roll(7, -1)], -1)
-    totals = perplexity.evaluate(model, run, perplexity.segments(ids, context=16),
+    totals = scoring.evaluate(model, run, workloads.segments(ids, context=16),
                                  ['amd.cdna2.bf16', 'bf16-exact'])
     assert list(totals) == ['fp32', 'bf16-exact', 'amd.cdna2.bf16']
-    got = perplexity.against(totals)
+    got = scoring.against(totals)
     assert set(got['fp32']) == {'bf16-exact', 'amd.cdna2.bf16'}
     assert set(got['bf16-exact']) == {'amd.cdna2.bf16'}
     r = got['fp32']['amd.cdna2.bf16']
