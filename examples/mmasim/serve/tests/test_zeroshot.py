@@ -8,6 +8,7 @@ statistics.
 import math
 import random
 
+import torch
 import zeroshot
 from core import metrics, workloads
 
@@ -53,13 +54,31 @@ def test_paired_statistics_by_hand() -> None:
 def test_against_pairs_items_per_reference() -> None:
     """Every run against R0, a design against the exact run too; Δ over the
     items both have, macro-averaged over tasks."""
-    r0 = {'a': {'0': {'acc': 1.0}, '1': {'acc': 0.0}}, 'b': {'0': {'acc': 0.0}}}
-    exact = {'a': {'0': {'acc': 1.0}, '1': {'acc': 1.0}}, 'b': {'0': {'acc': 0.0}}}
-    design = {'a': {'0': {'acc': 0.0}, '1': {'acc': 1.0}}, 'b': {'0': {'acc': 1.0}}}
+    def item(acc: float) -> dict[str, object]:
+        return {'acc': acc, 'lls': [-1.0, -2.0], 'gold': 0}
+
+    r0 = {'a': {'0': item(1.0), '1': item(0.0)}, 'b': {'0': item(0.0)}}
+    exact = {'a': {'0': item(1.0), '1': item(1.0)}, 'b': {'0': item(0.0)}}
+    design = {'a': {'0': item(0.0), '1': item(1.0)}, 'b': {'0': item(1.0)}}
     got = zeroshot.against({'fp32': r0, 'bf16-exact': exact, 'd': design}, 'bf16-exact')
     assert set(got['fp32']) == {'bf16-exact', 'd'} and set(got['bf16-exact']) == {'d'}
     d = got['fp32']['d']
     assert d['tasks']['a']['acc'][0] == 0.0 and d['tasks']['b']['acc'][0] == 1.0
     assert d['macro']['acc'][0] == 0.5
     assert got['bf16-exact']['d']['tasks']['a']['acc'][0] == -0.5
+
+
+def test_scores_by_hand() -> None:
+    """Δ of the correct choice's log-likelihood and of its margin; KL of the
+    softmax over the choices; one choice has only the first."""
+    ref = {'lls': [-1.0, -2.0, -3.0], 'gold': 0}
+    got = {'lls': [-1.5, -1.0, -3.0], 'gold': 0}
+    s = zeroshot._scores(ref, got)
+    assert s['ll'] == -0.5 and s['margin'] == -0.5 - 1.0
+    p = torch.tensor(ref['lls']).log_softmax(0)
+    q = torch.tensor(got['lls']).log_softmax(0)
+    assert math.isclose(s['kl'], float((p.exp() * (p - q)).sum()), rel_tol=1e-6)
+    assert zeroshot._scores(ref, ref)['kl'] == 0
+    assert zeroshot._scores({'lls': [-2.0], 'gold': 0}, {'lls': [-2.5], 'gold': 0}) == {'ll': -0.5}
+    assert zeroshot._gold('winogrande', {'doc': {'answer': '2'}, 'target': 'x'}) == 1
 

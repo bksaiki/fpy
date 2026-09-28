@@ -368,7 +368,7 @@ Each is from the per-unit difference between the two designs,
   - `perplexity.py --segments 50`: 39 with a margin for the spread's
     uncertainty; 0 runs all 146.  That is 4-15 min per design.
   - `decode.py --prompts 30`.
-  - `zeroshot.py --items 2000` is unchanged and unmeasured.
+  - `zeroshot.py --items 500`, measured after Phase 8 (below).
 - **Memory:** a forced prompt's logits (~2,300 positions x 152k vocab, 1.3
   GB in FP32) came near the TITAN V's 12 GB; the allocator retried once and
   recovered.  Qwen3.5's 248k vocabulary would need ~2.3 GB.  Phase 7 adds
@@ -388,6 +388,37 @@ Each is from the per-unit difference between the two designs,
   the widest local separations.  They become the defaults.
 - **Why last:** it depends on every earlier phase.  It is what makes the
   "local predicts end-to-end" check affordable.
+
+**Addendum, after Phase 8: zero-shot's power.**
+- `zeroshot.py` now logs each choice's log-likelihood (`lls`, `gold`) and
+  pairs continuous per-item scores (`SCORES`) against both references:
+  - Δ of the correct choice's log-likelihood;
+  - Δ of its margin over the best wrong one;
+  - KL over the softmax of the choices.
+- Measured: 30 items per task, the same pairs, 11 min.  Items for 80%
+  power, from the per-item difference between the two designs:
+
+  | statistic | Ampere vs CDNA3 (`bf16`) | Ada vs Blackwell (`fp8-row`) |
+  |---|---|---|
+  | accuracy (0/1) | 1,413 | no difference in 180 |
+  | Δ log-likelihood, correct choice | 225 | 32,524 |
+  | Δ margin | 1,466 | 1,209 |
+  | KL over choices vs R1 | 61,674 | 5,136 |
+  | KL over choices vs R0 | 661 | 988 |
+
+- **The continuous scores beat accuracy, but no one of them works for both
+  schemes.**  The signed Δ log-likelihood separates BF16, plausibly
+  because Ampere's truncation biases it.  For FP8, both designs move it
+  alike (≈ +0.09 against R1), and only the unsigned scores separate them.
+- **Perplexity KL against R1 stays the ranking statistic:** 39 segments and
+  2 segments.
+- **Cost:** ~1 item/s for Ampere and CDNA3; FP8 designs ~3x faster.
+  `--items 2000` (~11k items) would be ~3 h per slow design.  So the
+  default is `--items 500` (~3,000 items, ~50 min): Δ acc's SE is ~0.2
+  percentage points at a ~1% flip rate.
+- **Role:** Stage 2's capability confirmation, not the grid.  Paired Δ acc
+  with its interval, and flips, headline; Δ log-likelihood and margin go
+  beside them.
 
 ### Phase 7 -- Easy performance wins
 
@@ -527,7 +558,8 @@ the "local metrics predict end-to-end effects" gap at it.
 
 Settled in review:
 
-- **Zero-shot size:** one `--items` cap for every task, default 2,000.  The
+- **Zero-shot size:** one `--items` cap for every task, default 2,000 (500
+  after the addendum to Phase 6).  The
   task sizes differ (PIQA 1,838; ARC-e 2,376; ARC-c 1,172; HellaSwag
   10,042; WinoGrande 1,267; LAMBADA 5,153), so the cap also subsamples ARC-e
   and LAMBADA.  R0's full-suite numbers stay as they are.  Reopen if the

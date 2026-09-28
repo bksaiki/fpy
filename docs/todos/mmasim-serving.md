@@ -38,8 +38,10 @@ What is reported to show it, at every stage:
 - seeded subsets, paired statistics against R0 and `<scheme>-exact`, and
   teacher-forced divergence;
 - Phase 6 measured the sizes that separate the widest design pairs: 50
-  perplexity segments, KL against R1 (4-15 min per design); decode ranks
-  poorly and stays the generation view;
+  perplexity segments, KL against R1 (4-15 min per design).  Decode ranks
+  poorly and stays the generation view.  Zero-shot's continuous scores
+  beat its accuracy but rank worse than perplexity, so it is the capability
+  confirmation (`--items 500`, ~50 min per slow design);
 - Phase 7 makes the easy performance wins: several designs per pass in
   local metrics, sharing their design-independent FP64 work; captured
   activations cached on disk; designs compiled in parallel;
@@ -48,8 +50,10 @@ What is reported to show it, at every stage:
 ### Stage 2 -- Do local metrics predict end-to-end effects?
 
 - **Runs:** all 13 designs that take a scheme (5 BF16, 4 FP8, 4
-  block-scaled), on Qwen3-0.6B and Qwen3.5-0.8B.  Each gets the reduced
-  end-to-end evaluations at Stage 1's sizes, and local metrics.
+  block-scaled), on Qwen3-0.6B and Qwen3.5-0.8B.  Each gets local metrics
+  and perplexity at Stage 1's sizes (50 segments).
+  - Zero-shot (paired Δ acc with its interval, and flips) confirms
+    capability on a few designs.
 - **Pairs the design's own effect on both axes:**
   - local error against the quantized operands' product;
   - end-to-end effect against `<scheme>-exact`.
