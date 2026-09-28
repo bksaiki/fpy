@@ -1,8 +1,6 @@
 """
-Phase 4g tests for the cpp emitter — list built-ins.
-
-``sum(xs)`` lowers to ``std::accumulate``, with the result type inferred by
-format inference.
+Phase 4g tests for the cpp emitter — list built-ins.  ``sum`` is in
+``test_emit_sum.py``.
 
 ``enumerate`` and ``zip`` no longer reach the emitter at all: `UnfoldEnumerate`
 and `UnfoldZip` state each as the comprehension `derived-semantics.rst` defines
@@ -41,30 +39,6 @@ def _no_unfold():
         yield
     finally:
         StatementForm.apply = original
-
-
-class TestSum:
-    """``sum(xs)`` → ``std::accumulate``."""
-
-    def test_sum_returns_accumulate(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return sum(xs)
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[ListType(RealType(fp.FP64))],
-        )
-        # A named operand is read directly; only a prvalue needs binding so
-        # that begin()/end() name the same object (see
-        # ``test_prvalue_operand_is_bound_before_iterating`` in test_emit_bool).
-        assert 'auto&&' not in out
-        # Seeded from the first element over ``begin() + 1``, which is the fold
-        # `_eval_sum` performs -- *n-1* additions from an unrounded seed, and an
-        # exact ``+0`` for the empty list.  See ``test_emit_sum.py``.
-        assert 'std::accumulate(xs.begin() + 1, xs.end(), ' in out
-        assert 'xs.size() == 0 ? static_cast<double>(0)' in out
 
 
 class TestEnumerate:

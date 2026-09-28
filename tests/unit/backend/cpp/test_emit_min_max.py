@@ -21,7 +21,7 @@ import pytest
 
 import fpy2 as fp
 from fpy2.backend.cpp import CppCompiler
-from fpy2.backend.cpp.utils import CPP_HEADERS, CPP_HELPERS
+from fpy2.backend.cpp.utils import CPP_HEADERS
 from fpy2.types import ListType, RealType
 
 _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
@@ -206,13 +206,6 @@ class TestTheInterpreterReference:
         for a, b in ((-0.0, 0.0), (0.0, -0.0)):
             assert _binary(True)(a, b).s, (a, b)      # min is -0.0
             assert not _binary(False)(a, b).s, (a, b)  # max is +0.0
-
-
-class TestNoSupportLibrary:
-
-    def test_the_helper_block_is_empty(self):
-        assert CPP_HELPERS == ''
-        assert CppCompiler().helpers() == ''
 
 
 class TestTheNaryFold:

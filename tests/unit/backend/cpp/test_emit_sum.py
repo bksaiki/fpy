@@ -25,27 +25,21 @@ _L64 = ListType(RealType(fp.FP64))
 
 
 class TestTheEmittedFold:
-    def test_seeds_from_the_first_element(self):
-        @fp.fpy(ctx=fp.FP64)
-        def f(xs: list[fp.Real]) -> fp.Real:
-            return sum(xs)
-
-        out = CppCompiler(optimize=False).compile(f, arg_types=[_L64])
-        assert 'begin() + 1' in out, out
-        assert 'std::accumulate' in out, out
-
-    def test_guards_the_empty_list(self):
+    def test_seeds_from_the_first_element_and_guards_the_empty_list(self):
         """``begin() + 1`` and ``xs[0]`` are both undefined on an empty vector,
-        and the differential harness runs length zero."""
+        and the differential harness runs length zero.  A named operand is read
+        directly: only a prvalue needs binding, so that ``begin()``/``end()``
+        name the same object (see ``test_emit_bool.py``)."""
 
         @fp.fpy(ctx=fp.FP64)
         def f(xs: list[fp.Real]) -> fp.Real:
             return sum(xs)
 
-        out = CppCompiler(optimize=False).compile(f, arg_types=[_L64])
-        assert 'size() == 0' in out, out
+        out = CppCompiler().compile(f, arg_types=[_L64])
+        assert 'std::accumulate(xs.begin() + 1, xs.end(), ' in out, out
         # ...and the empty answer is a positive zero, per `_eval_sum`
-        assert 'static_cast<double>(0)' in out, out
+        assert 'xs.size() == 0 ? static_cast<double>(0)' in out, out
+        assert 'auto&&' not in out, out
 
 
 class TestAccumulatorWidth:

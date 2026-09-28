@@ -8,6 +8,7 @@ result with each compiled function.
 """
 
 from fpy2.backend.cpp import CppCompiler
+from fpy2.backend.cpp.utils import CPP_HELPERS
 
 
 class TestHeaders:
@@ -60,6 +61,7 @@ class TestPrelude:
                          '<cstdint>', '<vector>', '<tuple>'):
             assert required in pre
 
-
-
-
+    def test_the_helper_block_is_empty(self):
+        """The emitted code depends on ``std::`` alone."""
+        assert CPP_HELPERS == ''
+        assert CppCompiler().helpers() == ''
