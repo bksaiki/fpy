@@ -39,6 +39,18 @@ from fpy2.utils import NamedId
 # Helpers
 
 
+@fp.fpy
+def _needs_positive_g(x: fp.Real) -> bool:
+    assert x > 0.0, 'g'
+    return True
+
+
+@fp.fpy
+def _needs_positive_h(x: fp.Real) -> bool:
+    assert x > 0.0, 'h'
+    return True
+
+
 def _count(ast, kind) -> int:
     """How many *kind* nodes are in *ast*."""
     n = 0
@@ -234,13 +246,16 @@ class TestCompToLoop:
 
     def test_a_comprehension_in_an_iterable_does_not_claim_the_target(self):
         """Only the assignment's own right-hand side may fill ``zs``; the
-        comprehension inside its iterable is a different list."""
+        comprehension inside its iterable is a different list.  An iterable is
+        sealed, so that one is lowered by the second run."""
         @fp.fpy(ctx=fp.FP64)
         def f(xss: list[list[fp.Real]]) -> list[fp.Real]:
             zs = [r[0] for r in [q for q in xss]]
             return zs
 
-        out = CompToLoop.apply(f.ast)
+        once = CompToLoop.apply(f.ast)
+        assert _count(once, ListComp) == 1
+        out = CompToLoop.apply(once)
         assert _count(out, ListComp) == 0
         assert _count(out, Empty) == 2      # one fills `zs`, one the inner list
         assert _agree(f, [[1.0, 2.0], [3.0]])
@@ -298,6 +313,23 @@ class TestCompToLoop:
 
 
 class TestDependentClauses:
+    def test_a_later_iterable_runs_once_per_element(self):
+        """`nonempty(ys)` runs once per `a`, so never over an empty `xs`;
+        bound before the loops, it raised where the program returned `[]`."""
+        @fp.fpy
+        def nonempty(ys: list[fp.Real]) -> list[fp.Real]:
+            assert len(ys) > 0
+            return ys
+
+        @fp.fpy
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> list[fp.Real]:
+            return [a + b for a in xs for b in nonempty(ys)]
+
+        assert _agree(f, [], [])
+        assert _agree(f, [1.0, 2.0], [3.0])
+        why = CompToLoop.refusals(f.ast, dependent=False)
+        assert len(why) == 1 and 'not an atom' in why[0][1]
+
     @pytest.mark.parametrize('f', ['_ragged', '_ragged3'])
     def test_opting_out_leaves_a_dependent_clause_list_alone(self, f):
         """`[b for a in xss for b in a]` has length `sum(len(a) for a in xss)`,
@@ -413,6 +445,46 @@ class TestRefusals:
         with pytest.raises(TransformDeclined, match='no statement-level position'):
             CompToLoop.apply(f.ast, where=cursor)
 
+    def test_a_short_circuited_operand_is_refused(self):
+        """The tail runs only where `c` holds; hoisted, it raised where the
+        program returned `False`."""
+        @fp.fpy
+        def f(xs: list[fp.Real], c: bool) -> bool:
+            return c and len([_needs_positive_g(x) for x in xs]) > 0
+
+        assert CompToLoop.sites(f.ast) == []
+        assert CompToLoop.apply(f.ast).is_equiv(f.ast)
+        assert f([-1.0], False) is False
+
+    def test_a_left_operand_is_not_overtaken(self):
+        """The loop lands above the statement, so `g(y)` is named first;
+        otherwise `h` would run before it."""
+        @fp.fpy
+        def f(y: fp.Real, xs: list[fp.Real]) -> bool:
+            return _needs_positive_g(y) == (len([_needs_positive_h(x) for x in xs]) > 0)
+
+        out = CompToLoop.apply(f.ast)
+        assert _count(out, ListComp) == 0
+        with pytest.raises(AssertionError) as before:
+            f(-1.0, [-1.0])
+        with pytest.raises(AssertionError) as after:
+            Function(out, runtime=f.runtime)(-1.0, [-1.0])
+        assert 'g' in str(before.value)
+        assert str(after.value) == str(before.value)
+
+    def test_a_slot_fill_needs_atomic_indices(self):
+        """Every write repeats the indices; a non-atomic one is named once and
+        the comprehension filled into a temporary instead."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(zs: list[list[fp.Real]], i: int, xs: list[fp.Real]) -> list[list[fp.Real]]:
+            zs[i + 0] = [x for x in xs]
+            return zs
+
+        out = CompToLoop.apply(f.ast)
+        assert _count(out, ListComp) == 0
+        assert out.format().count('i + 0') == 1
+        assert _vals(Function(out, runtime=f.runtime)([[0.0]], 0, [1.0, 2.0])) == [[1.0, 2.0]]
+
     def test_rejects_non_funcdef(self):
         with pytest.raises(TypeError):
             CompToLoop.apply(_one)  # type: ignore[arg-type]
@@ -423,6 +495,22 @@ class TestRefusals:
 
 
 class TestWhere:
+    def test_a_site_left_in_place_is_named_not_overtaken(self):
+        """`where=1` lowers only the second comprehension, so the operand that
+        runs before it is bound to a name first; `where=0` needs nothing."""
+        @fp.fpy(ctx=fp.FP64)
+        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
+            return len([x for x in xs]) + len([y for y in ys])
+
+        assert len(CompToLoop.sites(f.ast)) == 2
+        second = CompToLoop.apply(f.ast, where=1)
+        assert _count(second, ListComp) == 1
+        assert second.body.stmts[0].expr.format() == 'len([x for x in xs])'
+        first = CompToLoop.apply(f.ast, where=0)
+        assert _count(first, ListComp) == 1
+        assert '[y for y in ys]' in first.body.stmts[-1].format()
+        assert _agree(f, [1.0], [2.0, 3.0])
+
     def test_sites_are_comprehensions(self):
         found = CompToLoop.sites(_one.ast)
         assert all(isinstance(c, ExprCursor) for c in found)

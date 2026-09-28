@@ -59,13 +59,10 @@ removes the now-unused assigns and any block left with no
 rounding to install.  The local rewrite stays simple at the cost
 of slack in the intermediate AST.
 
-Suppressed positions: hoisting needs a statement-level preamble
-slot, so it is disabled inside ``ListComp`` element / iterable
-expressions and inside ``IfExpr`` branches (the latter would
-evaluate operands unconditionally, changing exception semantics
-under contexts that can raise).  ``Round`` / ``Cast`` collapse
-still applies inside these positions — it's a pure node-level
-rewrite that needs no preamble slot.
+An operation is hoisted only where it is strict (see
+:class:`~fpy2.analysis.Hoistability`), and the operands its statement evaluates
+before it are named first.  ``Round`` / ``Cast`` collapse applies anywhere --
+it's a pure node-level rewrite that needs no preamble slot.
 
 Run after :class:`fpy2.transform.Monomorphize` (so format inference
 resolves to concrete contexts) and before any pass that depends on
@@ -76,12 +73,9 @@ hoisted operations.
 :class:`fpy2.transform.Hoistable` and :class:`fpy2.transform.ANF`.  Nothing here
 can break it — every rewrite
 either collapses a node in place or appends statements to a preamble slot, and
-neither introduces a ternary, an ``and``/``or`` or a ``while`` condition.  The
-dependency runs the other way too: the suppression list below names only
-``ListComp`` and ``IfExpr``, so this pass is safe in an ``and``/``or`` tail and a
-``while`` condition *because* hoistable form leaves atoms in both.  Given
+neither introduces a ternary, an ``and``/``or`` or a ``while`` condition.  Given
 the form, this pass also *gains* by it: a ternary arm is an ``IfStmt`` branch by
-the time it arrives, so the hoist suppressed above is no longer suppressed there.
+the time it arrives, so an operation in it is strict.
 """
 
 import dataclasses
@@ -93,6 +87,7 @@ from ..analysis import (
     ContextUseSite,
     DefineUse,
     DefineUseAnalysis,
+    Hoistability,
     SyntaxCheck,
 )
 from ..analysis.format_infer import (
@@ -104,6 +99,7 @@ from ..analysis.format_infer import (
     round_is_identity,
     unrounded_format,
 )
+from ..analysis.hoistability import force_names
 from ..ast.fpyast import (
     Abs,
     Add,
@@ -113,8 +109,6 @@ from ..ast.fpyast import (
     Expr,
     ForeignVal,
     FuncDef,
-    IfExpr,
-    ListComp,
     Mul,
     Neg,
     Round,
@@ -123,13 +117,12 @@ from ..ast.fpyast import (
     Sub,
     UnderscoreId,
     Var,
-    WhileStmt,
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..number import REAL
 from ..number.context.context import Context
 from ..utils import Gensym
-from .utils import operands, rebuild
+from .utils import name_forced, operands, rebuild
 
 
 @dataclasses.dataclass
@@ -141,6 +134,9 @@ class _Ctx:
     ``Var`` reference) is then appended after them by
     :meth:`_RoundElimInstance._visit_block`."""
     stmts: list[Stmt]
+    force: frozenset[Expr] = frozenset()
+    """:func:`~fpy2.analysis.hoistability.force_names` for the statement being
+    visited"""
 
     @staticmethod
     def default() -> '_Ctx':
@@ -157,6 +153,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
     format_info: FormatAnalysis
     gensym: Gensym
     outer_ctx: Context | None
+    strict: set[Expr]
 
     def __init__(
         self,
@@ -170,6 +167,7 @@ class _RoundElimInstance(DefaultTransformVisitor):
         self.ctx_use = ctx_use
         self.format_info = format_info
         self.gensym = Gensym(reserved=def_use.names())
+        self.strict = Hoistability.analyze(func).strict
         # Outer ctx pinning used to resolve symbolic ``with`` scopes
         # — identical to the resolution :class:`FormatAnalysis` does
         # internally.  Programs analyzed standalone may not have a
@@ -266,7 +264,8 @@ class _RoundElimInstance(DefaultTransformVisitor):
     ) -> tuple[StmtBlock, Any]:
         block_ctx = _Ctx.default()
         for stmt in block.stmts:
-            new_stmt, _ = self._visit_statement(stmt, block_ctx)
+            force = frozenset(force_names(stmt, self._hoisted))
+            new_stmt, _ = self._visit_statement(stmt, _Ctx(block_ctx.stmts, force))
             block_ctx.stmts.append(new_stmt)
         return StmtBlock(block_ctx.stmts), ctx
 
@@ -279,32 +278,29 @@ class _RoundElimInstance(DefaultTransformVisitor):
     #    with the (recursively-rewritten) argument.  Pure node-level
     #    rewrite, no preamble required, works at any expression
     #    position (including inside ListComp / IfExpr branches).
-    #  - Eliminable arithmetic op AND we're at a statement-level
-    #    expression position (``ctx`` is a ``_Ctx``) → per-op hoist
-    #    (see :meth:`_hoist`).
+    #  - Eliminable arithmetic op that is strict → per-op hoist (see
+    #    :meth:`_hoist`).
     #  - Anything else → recurse via the base visitor (children may
     #    still be individually eliminable).
+    #
+    # Whatever it becomes, an operand the prefix rule forces is then named.
 
-    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        # Round / Cast collapse: works regardless of
-        # ctx since it's a pure node-level rewrite (no preamble).
-        if (
-            isinstance(e, (Round, Cast))
-            and self._is_eliminable(e)
-        ):
-            return self._visit_expr(e.arg, ctx)
-        # Arithmetic-op hoist: only at statement-level positions
-        # where ``ctx`` carries a preamble buffer.  Comprehension
-        # element expressions and conditional branches pass a
-        # different sentinel (``None``), suppressing hoists where
-        # statement-level preambles wouldn't be sound.
-        if (
-            isinstance(ctx, _Ctx)
+    def _hoisted(self, e: Expr) -> bool:
+        return (
+            e in self.strict
             and isinstance(e, (Add, Sub, Mul, Abs, Neg))
             and self._is_eliminable(e)
-        ):
-            return self._hoist(e, ctx)
-        return super()._visit_expr(e, ctx)
+        )
+
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
+        if isinstance(e, (Round, Cast)) and self._is_eliminable(e):
+            rebuilt = self._visit_expr(e.arg, ctx)
+        elif self._hoisted(e):
+            rebuilt = self._hoist(e, ctx)
+        else:
+            rebuilt = super()._visit_expr(e, ctx)
+        fresh = lambda: self.gensym.fresh('_t')
+        return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _hoist(self, e: Expr, ctx: _Ctx) -> Expr:
         """Per-op hoist: compute *e* under ``with fp.REAL:`` and
@@ -367,41 +363,6 @@ class _RoundElimInstance(DefaultTransformVisitor):
         )
         ctx.stmts.append(wrapped)
         return Var(result_name, loc)
-
-    # ------------------------------------------------------------------
-    # Sentinel-ctx propagation for nested expression positions where
-    # statement-level hoisting would be unsound.
-
-    def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        # The condition is re-evaluated every iteration, but a preamble lands
-        # before the loop and would compute it once -- a hoist here turns a
-        # terminating loop into one that never advances.  The conditions of
-        # `if` / `for` are each evaluated once, so they need no such guard.
-        return super()._visit_while(stmt, None)[0], ctx
-
-    def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
-        # ``[elt for t in iter]``: the elt sees the loop targets,
-        # and successive iterables in multi-stage comps reference
-        # earlier targets.  Neither can be hoisted to the enclosing
-        # block — pass ``None`` to disable hoisting inside the comp.
-        # Round-node collapse still works (it doesn't need a
-        # statement-level position).
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, None) for i in e.iterables]
-        elt = self._visit_expr(e.elt, None)
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # ``cond ? ift : iff``: the cond is evaluated unconditionally
-        # so it can carry through ``ctx``.  The branches are
-        # conditional; hoisting either of them unconditionally would
-        # change semantics under contexts that can raise.  Disable
-        # branch hoisting via ``None``.
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
-
 
 
 class RoundElim:

@@ -12,6 +12,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.ast import Add, Call, ForStmt, IfStmt, Integer, Mul
+from fpy2.ast.accessors import subexprs
 from fpy2.transform import (
     Edit,
     EditLog,
@@ -21,7 +22,7 @@ from fpy2.transform import (
     StmtCursor,
     TransformReferenceError,
 )
-from fpy2.transform.path import format_path, resolve_expr, sub_exprs
+from fpy2.transform.path import format_path, resolve_expr
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -61,10 +62,10 @@ def test_an_expression_path_knows_its_statement():
     assert p.stmt() == FuncBody().stmt(0)
 
 
-def test_sub_exprs_covers_the_statement_kinds():
+def test_subexprs_covers_the_statement_kinds():
     stmts = branchy.ast.body.stmts
     fields = {
-        type(s).__name__: [f for f, _, _ in sub_exprs(s)]
+        type(s).__name__: [f for f, _, _ in subexprs(s)]
         for s in stmts
     }
     assert fields == {
@@ -75,8 +76,8 @@ def test_sub_exprs_covers_the_statement_kinds():
     assert isinstance(branch, IfStmt)
     loop = branch.ift.stmts[0]
     assert isinstance(loop, ForStmt)
-    assert [f for f, _, _ in sub_exprs(loop)] == ['iterable']
-    assert [f for f, _, _ in sub_exprs(loop.body.stmts[0])] == ['expr']
+    assert [f for f, _, _ in subexprs(loop)] == ['iterable']
+    assert [f for f, _, _ in subexprs(loop.body.stmts[0])] == ['expr']
 
 
 def test_a_path_naming_no_expression_is_a_bad_reference():

@@ -27,10 +27,13 @@ A **dependent clause list** -- a clause's iterable mentions an earlier clause's
 target, as in ``[b for a in xs for b in a]`` -- has a length that is a sum
 rather than a product.  That one is built a row at a time and flattened
 (:meth:`~._CompToLoopInstance._lower_dependent`), at the cost of a materialised
-row per outer element; ``dependent=False`` declines it.
+row per outer element; ``dependent=False`` declines it.  So is a later clause
+whose iterable is not an atom: it runs once per element of the earlier clauses,
+so never over an empty one, and binding it before the loops would run it once.
 
 What the pass leaves, without erroring, is a comprehension with no statement
-slot: a ``while`` condition, an ``IfExpr`` branch, or one nested in another.
+slot -- one :class:`~fpy2.analysis.Hoistability` does not list, such as in a
+``while`` condition, an ``IfExpr`` branch, or another comprehension.
 Running it again after :class:`~fpy2.transform.Hoistable` clears each, which is
 what makes the two a fixpoint.
 """
@@ -46,7 +49,6 @@ from ..ast.fpyast import (
     ForStmt,
     FuncDef,
     Id,
-    IfExpr,
     IndexedAssign,
     Integer,
     Len,
@@ -63,7 +65,6 @@ from ..ast.fpyast import (
     UnderscoreId,
     ValueExpr,
     Var,
-    WhileStmt,
 )
 from ..utils import Gensym
 from .cursor import Cursor, EditLog
@@ -102,10 +103,20 @@ def dependent_clauses(e: ListComp) -> list[int]:
     return out
 
 
+def _per_element(e: ListComp) -> bool:
+    """Whether a later clause's iterable must run once per element of the
+    earlier clauses rather than once before the loops."""
+    return bool(dependent_clauses(e)) or not all(
+        isinstance(it, _ATOMIC) or _CompToLoopInstance._inlinable(it)
+        for it in e.iterables[1:]
+    )
+
+
 class _CompToLoopInstance(SiteRewriter):
     """Lowers selected comprehensions into an allocation plus a loop."""
 
     _expr_sited = True   # the candidates are comprehensions
+    _hoists = True
 
     func: FuncDef
     def_use: DefineUseAnalysis
@@ -154,6 +165,11 @@ class _CompToLoopInstance(SiteRewriter):
                 'a later clause\'s iterable mentions an earlier clause\'s '
                 'target, so the length is not a product of the clause lengths'
             )
+        if not self.dependent and _per_element(e):
+            return Declined(
+                'a later clause\'s iterable is not an atom, so it runs once per '
+                'element of the earlier clauses'
+            )
         return None
 
     # ------------------------------------------------------------------
@@ -184,20 +200,6 @@ class _CompToLoopInstance(SiteRewriter):
             isinstance(iterable, (Range1, Range2, Range3))
             and all(isinstance(a, _ATOMIC) for a in operands(iterable))
         )
-
-    def _descend(self, e: ListComp, out: list) -> None:
-        """Visit *e*'s children the way :meth:`_lower` would.
-
-        The listing must reach exactly what the rewrite reaches, or it counts a
-        site the rewrite will not take: the iterables end up outside the loops
-        and keep their statement slot, the element does not.  A dependent clause
-        list keeps only its *first* iterable out here; the rest and the element
-        go into the nested comprehension :meth:`_lower_dependent` builds.
-        """
-        keep = 1 if dependent_clauses(e) else len(e.iterables)
-        for i, iterable in enumerate(e.iterables):
-            self._visit_expr(iterable, out if i < keep else None)
-        self._visit_expr(e.elt, None)
 
     def _fillable(self, e: ListComp, target: NamedId, slot: bool) -> bool:
         """Whether the loops of *e* may write into a place based on *target*.
@@ -309,10 +311,11 @@ class _CompToLoopInstance(SiteRewriter):
         """Emit the allocation and loops into *out*; return the result `Var`."""
         loc = e.loc
         fill = self._take_fill(e)
-        if dependent_clauses(e):
+        if _per_element(e):
             return self._lower_dependent(e, out, fill)
 
-        # every clause is independent, so each iterable is evaluated once here
+        # every later iterable is an atom or a range over atoms, so evaluating
+        # each once here is unobservable
         iters: list[Expr] = []
         for iterable in e.iterables:
             src = self._visit_expr(iterable, out)
@@ -420,10 +423,10 @@ class _CompToLoopInstance(SiteRewriter):
             Declined(
                 'there is no statement-level position for the loop the rewrite '
                 'emits: a `while` condition runs every iteration, a conditional '
-                'branch may not run at all, and a comprehension has no slot '
-                'until the one around it is lowered'
+                'branch or a short-circuited operand may not run at all, and a '
+                'comprehension has no slot until the one around it is lowered'
             )
-            if ctx is None
+            if e not in self._strict
             else self._verify(e)
         )
         if declined is not None:
@@ -440,7 +443,7 @@ class _CompToLoopInstance(SiteRewriter):
         self._matched += 1
         if self.listing:
             self.found_exprs.append(e)
-            self._descend(e, ctx)
+            super()._visit_expr(e, ctx)
             return e
 
         lowered = self._lower(e, ctx)
@@ -472,6 +475,8 @@ class _CompToLoopInstance(SiteRewriter):
         if (
             isinstance(stmt.expr, ListComp)
             and isinstance(stmt.var, NamedId)
+            # every write repeats the indices, so they must be atoms
+            and all(isinstance(i, _ATOMIC) for i in stmt.indices)
             and self._fillable(stmt.expr, stmt.var, slot=True)
         ):
             self._fill = (stmt.expr, stmt.var, tuple(stmt.indices))
@@ -481,19 +486,8 @@ class _CompToLoopInstance(SiteRewriter):
             return ctx.pop(), ctx
         return s, ctx
 
-    def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # a branch is conditional, so a loop hoisted out of one runs either
-        # way; the condition is unconditional and keeps its slot
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
-
-    def _visit_while(self, stmt: WhileStmt, ctx: Any):
-        # the condition re-runs every iteration where a loop hoisted before the
-        # `while` runs once, freezing the comprehension at its first value
-        stmt, _ = super()._visit_while(stmt, None)
-        return stmt, ctx
+    def _fresh(self) -> NamedId:
+        return self.gensym.refresh(self.temp_id)
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)

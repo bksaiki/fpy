@@ -20,8 +20,9 @@ import pytest
 
 import fpy2 as fp
 from fpy2.transform import statement_form as _statement_form
+from fpy2.backend.cpp import compiler as _compiler
 from fpy2.backend.cpp.compiler import CppCompileError, CppCompiler
-from fpy2.types import RealType
+from fpy2.types import ListType, RealType
 
 _CXX = shutil.which('c++') or shutil.which('g++')
 _OPTS = ['-std=c++11', '-O0', '-Wall', '-Wextra', '-Werror=return-type']
@@ -120,6 +121,7 @@ def hoistable_disabled(monkeypatch):
             return func
 
     monkeypatch.setattr(_statement_form, 'Hoistable', _Identity)
+    monkeypatch.setattr(_compiler, 'Hoistable', _Identity)
 
 
 class TestTheNet:
@@ -164,3 +166,23 @@ class TestTheNet:
 
         with pytest.raises(CppCompileError, match='short-circuited'):
             self._emit_unnormalized(f)
+
+    @pytest.mark.parametrize('tail', ['comp', 'zip'])
+    def test_a_chained_comparison_tail_is_refused(self, tail):
+        """Nothing gives the tail a slot, so what only `StatementForm` lowers
+        would reach the emitter.  See ``docs/todos/backend-cpp.md``."""
+        @fp.fpy
+        def comp(x: fp.Real, xs: list[fp.Real]) -> bool:
+            with fp.FP64:
+                return 0.0 < x < [v * 2.0 for v in xs][0]
+
+        @fp.fpy
+        def zip_(x: fp.Real, xs: list[fp.Real]) -> bool:
+            with fp.FP64:
+                return 0.0 < x < fp.fst(zip(xs, xs)[0])
+
+        f = comp if tail == 'comp' else zip_
+        with pytest.raises(CppCompileError, match='chained comparison'):
+            CppCompiler().compile(
+                f, ctx=fp.FP64, arg_types=[RealType(fp.FP64), ListType(RealType(fp.FP64))],
+            )

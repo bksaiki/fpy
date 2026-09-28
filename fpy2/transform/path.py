@@ -21,55 +21,16 @@ Build one by descending::
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
+from ..ast.accessors import BlockField, ExprField, subblocks, subexprs
 from ..ast.fpyast import (
-    AssertStmt,
-    Assign,
-    Attribute,
-    BinaryOp,
-    Call,
-    Compare,
-    ContextStmt,
-    EffectStmt,
     Expr,
-    ForStmt,
     FuncDef,
-    If1Stmt,
-    IfExpr,
-    IfStmt,
-    IndexedAssign,
-    ListComp,
-    ListExpr,
-    ListRef,
-    ListSlice,
-    NaryOp,
-    NullaryOp,
-    ReturnStmt,
     Stmt,
     StmtBlock,
-    TernaryOp,
-    TupleExpr,
-    UnaryOp,
-    WhileStmt,
 )
 from .error import TransformReferenceError
-
-BlockField: TypeAlias = Literal['body', 'ift', 'iff']
-"""The fields a statement can hold a block in."""
-
-ExprField: TypeAlias = Literal[
-    # of a statement
-    'expr', 'indices', 'cond', 'iterable', 'ctx', 'test', 'msg',
-    # of an expression
-    'args', 'kwargs', 'elts', 'value', 'index', 'start', 'stop',
-    'iterables', 'elt', 'ift', 'iff',
-]
-"""The fields a statement or expression can hold an expression in.
-
-A typo'd field is then a type error, and :func:`sub_exprs` is checked against
-this list.
-"""
 
 
 @dataclass(frozen=True)
@@ -160,73 +121,6 @@ def bad_path(path: Path, why: str) -> TransformReferenceError:
     return TransformReferenceError(f'`{format_path(path)}` {why}')
 
 
-def sub_blocks(stmt: Stmt) -> tuple[tuple[BlockField, StmtBlock], ...]:
-    """The blocks *stmt* encloses, each with the field that names it."""
-    match stmt:
-        case IfStmt():
-            return ('ift', stmt.ift), ('iff', stmt.iff)
-        case If1Stmt() | WhileStmt() | ForStmt() | ContextStmt():
-            return ('body', stmt.body),
-        case _:
-            return ()
-
-
-def sub_exprs(node: Stmt | Expr) -> tuple[tuple[ExprField, int | None, Expr], ...]:
-    """The expressions *node* holds, each with the field and position naming it.
-
-    The only place the AST's expression field names appear: resolving a path
-    needs this field-to-child lookup, which a visitor's dispatch does not
-    expose.
-    """
-    def at(field: ExprField, es) -> tuple[tuple[ExprField, int | None, Expr], ...]:
-        return tuple((field, i, e) for i, e in enumerate(es))
-
-    match node:
-        # statements
-        case Assign() | EffectStmt() | ReturnStmt():
-            return ('expr', None, node.expr),
-        case IndexedAssign():
-            return *at('indices', node.indices), ('expr', None, node.expr)
-        case If1Stmt() | IfStmt() | WhileStmt():
-            return ('cond', None, node.cond),
-        case ForStmt():
-            return ('iterable', None, node.iterable),
-        case ContextStmt():
-            return ('ctx', None, node.ctx),
-        case AssertStmt():
-            if node.msg is None:
-                return ('test', None, node.test),
-            return ('test', None, node.test), ('msg', None, node.msg)
-        # expressions -- every operator holds its operands in `args`, whatever
-        # its arity, and `arg` / `first` / `second` are properties over that
-        case Call():
-            return *at('args', node.args), *at('kwargs', [v for _, v in node.kwargs])
-        case NullaryOp() | UnaryOp() | BinaryOp() | TernaryOp() | NaryOp() | Compare():
-            return at('args', node.args)
-        case TupleExpr() | ListExpr():
-            return at('elts', node.elts)
-        case ListRef():
-            return ('value', None, node.value), ('index', None, node.index)
-        case ListSlice():
-            out: list[tuple[ExprField, int | None, Expr]] = [
-                ('value', None, node.value)
-            ]
-            if node.start is not None:
-                out.append(('start', None, node.start))
-            if node.stop is not None:
-                out.append(('stop', None, node.stop))
-            return tuple(out)
-        case ListComp():
-            return *at('iterables', node.iterables), ('elt', None, node.elt)
-        case IfExpr():
-            return (('cond', None, node.cond), ('ift', None, node.ift),
-                    ('iff', None, node.iff))
-        case Attribute():
-            return ('value', None, node.value),
-        case _:
-            return ()
-
-
 def resolve_block(func: FuncDef, path: BlockPath) -> StmtBlock:
     """The block *path* names in *func*."""
     match path:
@@ -234,7 +128,7 @@ def resolve_block(func: FuncDef, path: BlockPath) -> StmtBlock:
             return func.body
         case SubBlock(parent, field):
             stmt = resolve_stmt(func, parent)
-            for name, block in sub_blocks(stmt):
+            for name, block in subblocks(stmt):
                 if name == field:
                     return block
             raise bad_path(path, f'names no `{field}` block of a `{type(stmt).__name__}`')
@@ -255,7 +149,7 @@ def resolve_expr(func: FuncDef, path: ExprPath) -> Expr:
             node: Stmt | Expr = resolve_expr(func, parent)
         case parent:
             node = resolve_stmt(func, parent)
-    for field, index, e in sub_exprs(node):
+    for field, index, e in subexprs(node):
         if field == path.field and index == path.index:
             return e
     raise bad_path(
@@ -297,7 +191,7 @@ def walk_stmts(func: FuncDef) -> Iterator[tuple[StmtPath, Stmt]]:
         for i, stmt in enumerate(block.stmts):
             here = StmtPath(path, i)
             yield here, stmt
-            for field, sub in sub_blocks(stmt):
+            for field, sub in subblocks(stmt):
                 yield from walk(sub, SubBlock(here, field))
 
     yield from walk(func.body, FuncBody())
@@ -309,7 +203,7 @@ def walk_blocks(func: FuncDef) -> Iterator[tuple[BlockPath, StmtBlock]]:
         yield path, block
         for i, stmt in enumerate(block.stmts):
             here = StmtPath(path, i)
-            for field, sub in sub_blocks(stmt):
+            for field, sub in subblocks(stmt):
                 yield from walk(sub, SubBlock(here, field))
 
     yield from walk(func.body, FuncBody())
@@ -323,11 +217,11 @@ def walk_exprs(func: FuncDef) -> Iterator[tuple[ExprPath, Expr]]:
     """
     def descend(path: ExprPath, e: Expr) -> Iterator[tuple[ExprPath, Expr]]:
         yield path, e
-        for field, index, sub in sub_exprs(e):
+        for field, index, sub in subexprs(e):
             yield from descend(path.expr(field, index), sub)
 
     for stmt_path, stmt in walk_stmts(func):
-        for field, index, e in sub_exprs(stmt):
+        for field, index, e in subexprs(stmt):
             yield from descend(stmt_path.expr(field, index), e)
 
 

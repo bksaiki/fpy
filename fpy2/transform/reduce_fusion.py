@@ -34,12 +34,19 @@ blocked on the cpp emitter accepting an implicit narrowing inside
 ``std::accumulate`` that it rejects at an ordinary assignment.  Both are in
 ``docs/todos/backend-cpp.md``.  Multi-stage comprehensions
 (``[e for a in xs for b in ys]``) would need nested loops and are left alone.
+
+A reduction is fused only where it is strict (see
+:class:`~fpy2.analysis.Hoistability`) -- not in a ternary arm, an ``and``/``or``
+tail or a ``while`` condition -- and the operands to its left are named first, so
+the loop does not overtake them.  Run :class:`~fpy2.transform.Hoistable` first to
+open the positions it lowers.
 """
 
 import dataclasses
 from typing import Any
 
-from ..analysis import DefineUse, DefineUseAnalysis, SyntaxCheck
+from ..analysis import DefineUse, DefineUseAnalysis, Hoistability, SyntaxCheck
+from ..analysis.hoistability import force_names
 from ..ast.fpyast import (
     AllOf,
     And,
@@ -49,7 +56,6 @@ from ..ast.fpyast import (
     Expr,
     ForStmt,
     FuncDef,
-    IfExpr,
     ListComp,
     Or,
     Stmt,
@@ -58,15 +64,17 @@ from ..ast.fpyast import (
 )
 from ..ast.visitor import DefaultTransformVisitor
 from ..utils import Gensym
+from .utils import name_forced
 
 
 @dataclasses.dataclass
 class _Ctx:
     """Block-walk accumulator: :meth:`_fuse` appends the seed and loop here,
-    and :meth:`_visit_block` emits them before the enclosing statement.  A
-    ``ctx`` of ``None`` instead of a ``_Ctx`` marks a position with no
-    statement slot to hoist into, suppressing fusion there."""
+    and :meth:`_visit_block` emits them before the enclosing statement."""
     stmts: list[Stmt]
+    force: frozenset[Expr] = frozenset()
+    """:func:`~fpy2.analysis.hoistability.force_names` for the statement being
+    visited"""
 
     @staticmethod
     def default() -> '_Ctx':
@@ -79,10 +87,12 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
 
     func: FuncDef
     gensym: Gensym
+    strict: set[Expr]
 
     def __init__(self, func: FuncDef, def_use: DefineUseAnalysis):
         self.func = func
         self.gensym = Gensym(reserved=def_use.names())
+        self.strict = Hoistability.analyze(func).strict
 
     def apply(self) -> FuncDef:
         return self._visit_function(self.func, None)
@@ -93,23 +103,30 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
     def _visit_block(self, block: StmtBlock, ctx: Any) -> tuple[StmtBlock, Any]:
         block_ctx = _Ctx.default()
         for stmt in block.stmts:
-            new_stmt, _ = self._visit_statement(stmt, block_ctx)
+            force = frozenset(force_names(stmt, self._fusable))
+            new_stmt, _ = self._visit_statement(stmt, _Ctx(block_ctx.stmts, force))
             block_ctx.stmts.append(new_stmt)
         return StmtBlock(block_ctx.stmts), ctx
 
     # ------------------------------------------------------------------
     # Expression rewriting
 
-    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
-        if (
-            isinstance(ctx, _Ctx)
+    def _fusable(self, e: Expr) -> bool:
+        return (
+            e in self.strict
             and isinstance(e, (AnyOf, AllOf))
             and isinstance(e.arg, ListComp)
             # multi-stage comps would need nested loops; leave them alone
             and len(e.arg.targets) == 1
-        ):
+        )
+
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
+        if self._fusable(e):
+            assert isinstance(e, (AnyOf, AllOf)) and isinstance(e.arg, ListComp)
             return self._fuse(e, e.arg, ctx)
-        return super()._visit_expr(e, ctx)
+        rebuilt = super()._visit_expr(e, ctx)
+        fresh = lambda: self.gensym.fresh('t')
+        return name_forced(e, rebuilt, ctx.force, ctx.stmts, fresh)
 
     def _fuse(self, e: 'AnyOf | AllOf', comp: ListComp, ctx: _Ctx) -> Expr:
         """Emit the seed + loop into *ctx* and return ``Var(acc)``."""
@@ -117,12 +134,11 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
         acc = self.gensym.fresh('acc')
         elt = self.gensym.fresh('b')
 
-        # The iterable is evaluated once, before the loop, so it keeps `ctx`
-        # and a fusable reduction inside it hoists to this block too.  The
-        # element sees the loop target, so it gets no statement slot.
+        # nothing inside is fused: a comprehension's iterable and element are
+        # sealed
         iterable = self._visit_expr(comp.iterables[0], ctx)
         target = self._visit_binding(comp.targets[0], ctx)
-        elt_expr = self._visit_expr(comp.elt, None)
+        elt_expr = self._visit_expr(comp.elt, ctx)
 
         op = Or if is_any else And
         combine = op([Var(acc, e.loc), Var(elt, e.loc)], e.loc)
@@ -136,27 +152,6 @@ class _ReduceFusionInstance(DefaultTransformVisitor):
         ctx.stmts.append(Assign(acc, None, BoolVal(not is_any, e.loc), e.loc))
         ctx.stmts.append(ForStmt(target, iterable, body, e.loc))
         return Var(acc, e.loc)
-
-    # ------------------------------------------------------------------
-    # Positions with no statement-level slot: suppress fusion.
-
-    def _visit_list_comp(self, e: ListComp, ctx: Any) -> ListComp:
-        # The elt sees the loop targets and successive iterables reference
-        # earlier targets, so nothing inside can be hoisted to the enclosing
-        # block.  (Mirrors ``RoundElim._visit_list_comp``.)
-        targets = [self._visit_binding(t, ctx) for t in e.targets]
-        iterables = [self._visit_expr(i, None) for i in e.iterables]
-        elt = self._visit_expr(e.elt, None)
-        return ListComp(targets, iterables, elt, e.loc)
-
-    def _visit_if_expr(self, e: IfExpr, ctx: Any) -> IfExpr:
-        # The branches are conditional; hoisting a loop out of one would run
-        # it unconditionally, which is observable when the element expression
-        # can fault.  The cond is unconditional, so it keeps ``ctx``.
-        cond = self._visit_expr(e.cond, ctx)
-        ift = self._visit_expr(e.ift, None)
-        iff = self._visit_expr(e.iff, None)
-        return IfExpr(cond, ift, iff, e.loc)
 
 
 class ReduceFusion:
