@@ -1072,19 +1072,18 @@ def _square_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
     being possibly negative."""
     for r in range(len(out)):
         s = fp.round(0)
-        for u in range(64):
-            t = u - 32
+        for u in range(0, 128, 2):
+            t = u - 64
             with fp.FP32:
                 s = s + xss[r][t * t]
         out[r] = s
     return out
 
 
-@pytest.mark.xfail(strict=True, raises=_TritonRefused,
-                   reason='Phase 3: a float-held index is a pointer offset')
 def test_a_float_held_index_agrees():
-    src = _compile(_square_index, _rows_of(1025))
-    _agree(src, _square_index, _randn(1025))
+    """An index held as a float is converted to an integer where it is used."""
+    src = _compile(_square_index, _rows_of(4097))
+    _agree(src, _square_index, _randn(4097))
 
 
 @fp.fpy(ctx=fp.REAL)

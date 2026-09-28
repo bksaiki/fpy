@@ -1236,3 +1236,23 @@ class TestSkippedArm:
 
     def test_a_short_arm_is_not(self):
         assert 'if tl.max(' not in self._src(short_arm)
+
+
+@fp.fpy(ctx=fp.FP32)
+def _gather_by_value(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                     BLOCK: fp.Real):
+    """`xss[r]` at a value loaded from `yss`, an FP32 number."""
+    for r in range(len(out)):
+        out[r] = xss[r][yss[r][0]]
+    return out
+
+
+def test_an_index_not_proven_an_integer_is_refused():
+    """An index converts to an integer only where its format says it is one;
+    an FP32 value's does not, so the kernel is refused rather than emitted
+    with a float pointer offset."""
+    f32 = RealType(fp.FP32)
+    with pytest.raises(TritonEmitError, match='is an index, and its values are not proven integers'):
+        TritonCompiler(drop_asserts=True).compile(_gather_by_value, ctx=fp.FP32, arg_types=[
+            ListType(ListType(f32, 8), 4), ListType(ListType(f32, 1), 4), ListType(f32, 4),
+            RealType(fp.INTEGER)])

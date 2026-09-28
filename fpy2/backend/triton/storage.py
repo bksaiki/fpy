@@ -96,6 +96,21 @@ def bound_fits_in_scalar(bound: FormatBound, ty: TritonScalar) -> bool:
     return af is not None and af <= _ABSTRACT[ty]
 
 
+def index_scalar(bound: FormatBound) -> TritonScalar | None:
+    """The integer storage, ``tl.int32`` or else ``tl.int64``, holding every
+    value *bound* admits as an index, a ``-0`` being ``0``; ``None`` where a
+    value may not be an integer."""
+    if not isinstance(bound, AbstractableFormat | SetFormat):
+        return None
+    af = _to_abstract(bound)
+    if af is None:
+        return None
+    af = AbstractFormat(af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
+                        has_pos_inf=af.has_pos_inf, has_neg_inf=af.has_neg_inf,
+                        has_nan=af.has_nan)
+    return next((ty for ty in (TritonScalar.S32, TritonScalar.S64) if af <= _ABSTRACT[ty]), None)
+
+
 class TritonStorageDomain:
     """The Triton backend's :class:`~.storage_infer.StorageDomain`.
 

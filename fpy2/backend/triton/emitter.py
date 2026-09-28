@@ -131,6 +131,7 @@ from .storage import (
     TritonStorageDomain,
     bound_fits_in_scalar,
     choose_storage_scalar,
+    index_scalar,
     scalar_fits_in,
     scalar_sup,
     to_triton,
@@ -769,6 +770,21 @@ class _Emitter(Visitor):
             return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
         return f'{code}.to({want.format()})'
 
+    def _index(self, e: Expr) -> str:
+        """*e* as an index: in its integer storage as it is; held as a float,
+        converted exactly to the integer storage :func:`index_scalar` finds
+        for its format; else a refusal."""
+        code = self.emit(e)
+        if not self._storage(e).is_float():
+            return code
+        want = index_scalar(self.format_info.by_expr.get(e))
+        if want is None:
+            raise TritonEmitError(
+                f'`{type(e).__name__}` is an index, and its values are not '
+                'proven integers'
+            )
+        return self._explicit_cast(code, want)
+
     def _typed(self, code: str, want: TritonScalar, force: bool = False) -> str:
         """*code* as a *want* tensor where it is a Python number no tensor
         operand types: Triton makes a float `fp32`, rounding it.  An integer
@@ -939,7 +955,7 @@ class _Emitter(Visitor):
         if extra is not None:
             # a slice of a slice: only one offset is carried
             return None
-        start = '0' if e.start is None else self._pin(self.emit(e.start))
+        start = '0' if e.start is None else self._pin(self._index(e.start))
         return base, self._pinned(prefix), start
 
     def _pin(self, code: str) -> str:
@@ -955,7 +971,7 @@ class _Emitter(Visitor):
 
     def _pinned(self, indices: list[Expr | str]) -> list[Expr | str]:
         """*indices*, each emitted and pinned."""
-        return [i if isinstance(i, str) else self._pin(self.emit(i)) for i in indices]
+        return [i if isinstance(i, str) else self._pin(self._index(i)) for i in indices]
 
     def _size_code(self, size: object) -> str | None:
         """A length as code: a constant, or the kernel parameter holding it."""
@@ -999,7 +1015,7 @@ class _Emitter(Visitor):
         strides = self._strides(base, len(indices))
         # a pinned row index, as a column against a lane loop's tile
         codes = [
-            self.emit(i) if not isinstance(i, str)
+            self._index(i) if not isinstance(i, str)
             else f'{i}[:, None]' if self._lane is not None and i in self._out.along
             else i
             for i in indices
@@ -1335,14 +1351,14 @@ class _Emitter(Visitor):
         if (tile := self._tile_of(e.value)) is not None:
             if self._at_lane(tile, e.index):
                 return str(tile)
-            idx = self.emit(e.index)
+            idx = self._index(e.index)
             if self._out.wide & set(_IDENT.findall(idx)):
                 return self._gather(tile, e.index, idx)
             code = self._extract(tile, idx)
             return code if self._lane is None else self._as_col(code)
         elems = self._elements(e.value)
         if elems is not None:
-            idx = self.emit(e.index)
+            idx = self._index(e.index)
             i = _literal_int(idx)
             if i is None:
                 # an index the trace fixes, as a `static_range` target is:
@@ -2223,7 +2239,7 @@ class _Emitter(Visitor):
                 f'a lane loop writes `{tile}` other than at its own index'
             )
         else:
-            self._insert(tile, self.emit(idx), val)
+            self._insert(tile, self._index(idx), val)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _IndentedWriter) -> None:
         if self._branches:
@@ -2441,8 +2457,8 @@ class _Emitter(Visitor):
                 ctx.add_line(f'{p.name} = {self._as_row(str(p.name), held)}', 'row')
         it = stmt.iterable
         assert isinstance(it, (Range1, Range3))
-        args = ([self.emit(it.arg)] if isinstance(it, Range1)
-                else [self.emit(a) for a in (it.first, it.second, it.third)])
+        args = ([self._index(it.arg)] if isinstance(it, Range1)
+                else [self._index(a) for a in (it.first, it.second, it.third)])
         ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
         ctx.indent()
         ctx.forget(self._carried_names(stmt))
