@@ -11,8 +11,7 @@ arithmetic is measured.
 - **Primary evaluation: local per-layer metrics on cached activations.** A
   grid search over designs cannot afford the end-to-end evaluations, which
   take hours per design.
-- **Done:** Stage 1 of the Roadmap (`mmasim-end-to-end.md`).  **Next:**
-  Stage 2.
+- **Done:** Stage 1 of the Roadmap.  **Next:** Stage 2.
 - **Left:** the Roadmap, Essential gaps and Nice to have.
 
 ## Roadmap
@@ -35,20 +34,18 @@ What is reported to show it, at every stage:
 
 ### Stage 1 -- Tractable end-to-end evaluations
 
-**Done**, `mmasim-end-to-end.md`:
-- seeded subsets, paired statistics against R0 and `<scheme>-exact`, and
-  teacher-forced divergence;
-- Phase 6 measured the sizes that separate the widest design pairs: 50
-  perplexity segments, KL against R1 (4-15 min per design).  Decode ranks
-  poorly and stays the generation view.  Zero-shot's continuous scores
-  beat its accuracy but rank worse than perplexity, so it is the capability
-  confirmation (`--items 500`, ~50 min per slow design);
-- Phase 7 made the easy performance wins: several designs per pass in
-  local metrics, sharing their design-independent FP64 work; captured
-  activations cached on disk; designs compiled in parallel;
-- Phase 8 restructured `serve/` into `core/` plus scripts;
-- after it: zero-shot's continuous scores, chat under any scheme, leaner
-  quantizers and scoring (Record).
+**Done** (Metrics; Record):
+- seeded subsets, paired statistics against R0 and R1, and teacher-forced
+  divergence;
+- measured sizes: 50 perplexity segments, KL against R1, separate the
+  widest design pairs (4-15 min per design).  Decode ranks poorly and stays
+  the generation view.  Zero-shot's continuous scores beat its accuracy but
+  rank worse than perplexity, so it is the capability confirmation
+  (`--items 500`, ~50 min per slow design);
+- several designs per pass in local metrics, sharing their exact products;
+  captured activations cached on disk; designs compiled in parallel;
+- `serve/` split into `core/` plus scripts; chat under any scheme; leaner
+  quantizers and scoring.
 
 ### Stage 2 -- Do local metrics predict end-to-end effects?
 
@@ -326,20 +323,33 @@ columns report `log2` of the value, so `-24` is one unit roundoff.
 
 `-m` selects metrics, and only those are computed.
 
-End-to-end metrics (secondary, smoke scale):
-- `p_t` is R0's next-token distribution, `q_t` the run's.
-- Paired token-level standard errors treat tokens as independent, as
-  llama.cpp does, and so understate the uncertainty.
+End-to-end metrics (`core/scoring.py`, `zeroshot.py`, `core/stats.py`):
+- **Every run sees the same seeded subset of units:**
+  - WikiText-2 segments of 2048 tokens (`--segments 50`);
+  - MATH-500 prompts with R0's greedy reply (`--prompts 30`);
+  - benchmark items (`--items 500` per task).
+- **Each run is paired against a reference, per unit:**
+  - R0 (pre-quantization), for every run;
+  - R1 (`<scheme>-exact`, post-quantization), for every design.
+- **Statistics:** means over units with standard errors
+  `sd(d) / sqrt(n)` (the normal approximation); Holm's correction over the
+  runs sharing a reference; a bootstrap over units for the median
+  divergence index.
+- `p_t` is the reference's next-token distribution, `q_t` the run's;
+  teacher-forced on the unit's tokens.
 
-| metric | definition | source |
+| metric | per unit | source |
 |---|---|---|
-| perplexity | `exp(mean_t -log q_t(y_t))`, 2048-token segments | GPTQ; HF guide |
+| Δ NLL | mean NLL of the unit's tokens, run minus reference (the log of the perplexity ratio) | GPTQ; HF guide |
 | KL divergence | `mean_t KL(p_t ‖ q_t)` | llama.cpp |
-| top-1 agreement | `mean_t [argmax p_t = argmax q_t]` | llama.cpp |
-| RMS Δp | `sqrt(mean_t (q_t(y_t) - p_t(y_t))^2)` | llama.cpp |
-| `acc` / `acc_norm` | `lm-evaluation-harness`: PIQA, ARC-e/c, HellaSwag (seeded 2,000), WinoGrande, LAMBADA | EleutherAI |
-| flips | items whose correctness differs from R0's | Dutta et al. |
-| divergence index | first greedy token differing from R0's | Yuan et al. |
+| top-1 disagreement | `mean_t [argmax p_t ≠ argmax q_t]` | llama.cpp |
+| divergence index | the first disagreement on R0's greedy reply; the fraction of prompts that diverge | Yuan et al. (on prefill) |
+| Δ acc, flips | per item: correctness, and whether it changed | lm-eval; Dutta et al. |
+| Δ log-likelihood, margin, choice KL | per item: the correct choice's log-likelihood, its margin over the best wrong one, KL over the choices | |
+
+The per-run, token-level figures (PPL, llama.cpp's KL, top-1 and RMS Δp,
+and harness accuracy) are kept for comparison with published ones; their
+token-level standard errors understate the uncertainty.
 
 ## Interface
 
@@ -558,6 +568,61 @@ WikiText-2, first 8 segments:
 
 Condensed; what the code does not say.
 
+- **Stage 1, end-to-end evaluations** (2026-09-27/28):
+  - **Units needed for 80% power** (two-sided, α = 0.05) to separate the
+    widest pairs, from 30 units each: `n = (2.8 sd / mean)²` of the
+    per-unit difference between the two designs.
+
+    | evaluation (unit) | statistic | Ampere vs CDNA3 (`bf16`) | Ada vs Blackwell (`fp8-row`) |
+    |---|---|---|---|
+    | perplexity (segment) | KL vs R1 | 39 | 2 |
+    | | KL vs R0 | 5,391 | 46 |
+    | | NLL | 58 | 433 |
+    | decode, forced (prompt) | KL vs R1 | 20,139 | 44 |
+    | | top-1 disagreement vs R1 | 78 | 1,005 |
+    | | fraction diverged vs R1 | 236 | 114 |
+    | zero-shot (item) | accuracy | 1,413 | no difference in 180 |
+    | | Δ log-likelihood | 225 | 32,524 |
+    | | Δ margin | 1,466 | 1,209 |
+    | | choice KL vs R0 | 661 | 988 |
+
+  - Against R0 the BF16 designs are indistinguishable, since input rounding
+    swamps them.  Ada's truncating FP8 accumulator shows even against R0
+    (+2.6% KL), being only ~2^3.6 below the quantization's error.
+  - Decode ranks poorly.  R0's own greedy text is high-confidence, and
+    under `fp8-row` every run diverges within ~45 tokens.
+  - Zero-shot's signed Δ log-likelihood separates BF16 (Ampere's
+    truncation biases it), but not FP8.
+  - Seconds per segment: R0 0.3, R1 0.7, Ampere 10.5, CDNA3 17.3, Ada 4.4,
+    Blackwell 4.7.  Zero-shot runs ~1 item/s for the slow BF16 designs.
+- **Teacher-forced and free-running divergence differ prompt by prompt.**
+  - The 5 seed-0 MATH-500 prompts:
+
+    | run (vs R0) | free-running | forced |
+    |---|---|---|
+    | bf16-exact | 607, 225 | 607, 225 |
+    | amd.cdna2.bf16 | 713 | 368, 607, 225 |
+    | nv.hopper.bf16.f32 | 607 | 420, 607 |
+
+  - The kernels are row-independent (bit-identical at `m` = 1, 7, 100).
+    The cause is attention: prefill and decoding round it differently
+    (~1e-7), which decides a design's near-ties.
+  - R0 forced misses none of its own tokens, so that is no bound for the
+    designs.
+- **Local metrics, several designs per pass** (bit-identical to one at a
+  time):
+  - `bf16`, five designs: 16.0 s -> 10.1 kernels + 2.8 metrics at 512
+    tokens, and 58.1 -> 39.5 + 10.8 at 2048.
+  - The per-design comparison, not the FP64 GEMMs, is most of the metrics
+    (~1.8 s per design at 2048 tokens).
+  - Parallel compile: 13 designs in 9.2 s, against ~38 s.
+  - `--acts`: MT-Bench at 512 tokens, 34 -> 13.5 s wall.
+  - Blocked logits: a 2,300-token sequence peaks 0.88 GiB above the
+    model, against 2.47 GiB.
+- **`layers.py` retired.**  Its local metrics matched `local.py`'s within
+  ~0.01 in log2 (a test keeps that check), and its `propagated` error is
+  what end-to-end KL now measures.
+
 - **Serving overhead.**
   - At `m = 1` the torch-side wrapper set decode speed: ~210 us CPU per
     call, against 19 us for `F.linear`.
@@ -649,8 +714,8 @@ perplexity, flips.  This is Stage 2 of the Roadmap.
 
 Pooled means carry no intervals.  Standard errors clustered by sequence
 (WikiText-2 segments, MT-Bench conversations) would separate real design
-differences of ~0.05-0.1 in log2 from sampling noise
-(`mmasim-end-to-end.md` builds the statistics).
+differences of ~0.05-0.1 in log2 from sampling noise (`core/stats.py`
+has the statistics).
 
 ### A larger model or a second family
 
@@ -703,6 +768,15 @@ Libraries split `k` (split-K, stream-K), which shortens each chain.
 - **Kernel speed:** the compiler's concern (`backend-triton.md`).
 
 ## Open items
+
+### Do forced and free-running divergence agree in rate?
+
+They differ prompt by prompt at near-ties (Record).  If they agree in rate,
+forced stands in for Yuan et al.'s numbers.  If not, the few designs a
+paper quotes are run free (`generate.greedy(ref=...)`), and forced serves
+the grid.  **Provisional:** forced, headlined by disagreement and KL.
+**Settle** by comparing the fraction diverged on ~20 prompts for two
+designs (~12 min of free running each).
 
 ### NVFP4's per-tensor activation scale: dynamic or calibrated?
 
