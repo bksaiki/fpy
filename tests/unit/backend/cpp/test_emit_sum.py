@@ -15,13 +15,20 @@ narrows on assignment, rounding twice; widening ``T`` to hold the unrounded seed
 would instead round every addition at the wrong format.
 """
 
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
 import fpy2 as fp
 import pytest
 
 from fpy2.backend.cpp import CppCompiler, CppCompileError
+from fpy2.number import RealFloat
 from fpy2.types import ListType, RealType
 
 _L64 = ListType(RealType(fp.FP64))
+_CXX = shutil.which('c++') or shutil.which('g++')
 
 
 class TestTheEmittedFold:
@@ -82,3 +89,53 @@ class TestAccumulatorWidth:
             CppCompiler(optimize=False).compile(
                 f, ctx=fp.FP32, arg_types=[_L64],
             )
+
+
+@fp.fpy(ctx=fp.REAL)
+def _scaled_sum(xs: list[fp.Real], k: fp.Real) -> fp.Real:
+    ts = fp.empty(len(xs))
+    for i in range(len(xs)):
+        y = xs[i] * 2 ** k
+        with fp.MPFixedContext(-1, fp.RM.RTZ, enable_neg_zero=False):
+            ts[i] = fp.round(y)
+    return sum(ts)
+
+
+# 11-bit integers up to 2^54: `float` elements, an `int64_t` sum
+_SCALED_ARGS = [
+    ListType(RealType(fp.FP16), 5),
+    RealType(fp.MPBFixedContext(-1, RealFloat.from_int(38)).format()),
+]
+
+
+class TestIntegralFloatElements:
+    """Elements whose *values* fit the accumulator though their type does not.
+
+    ``int64_t + float`` computes in ``float``, so each element is cast first;
+    the sum below is off by ``2^24`` otherwise.
+    """
+
+    def test_each_element_is_cast_before_it_is_added(self):
+        out = CppCompiler().compile(_scaled_sum, arg_types=_SCALED_ARGS)
+        assert 'return _tmp2 + static_cast<int64_t>(_tmp3); })' in out, out
+
+    @pytest.mark.skipif(_CXX is None, reason='no C++ compiler')
+    def test_it_agrees_with_the_interpreter(self):
+        xs, k = [65504.0, 2.0 ** -14, 0.0, 0.0, 0.0], 38
+        want = int(_scaled_sum(xs, k))
+        assert want == 65504 * 2 ** 38 + 2 ** 24
+        cc = CppCompiler()
+        src = (
+            cc.prelude() + '\n'
+            + cc.compile(_scaled_sum, arg_types=_SCALED_ARGS) + '\n'
+            + '#include <cstdio>\n'
+            + 'int main() { std::array<float, 5> xs{' + ', '.join(map(repr, xs))
+            + f'}}; printf("%lld\\n", (long long) _scaled_sum(xs, {k})); }}\n'
+        )
+        with tempfile.TemporaryDirectory() as d:
+            cpp, exe = Path(d) / 's.cpp', Path(d) / 's'
+            cpp.write_text(src)
+            assert _CXX is not None
+            subprocess.run([_CXX, '-std=c++11', '-o', str(exe), str(cpp)], check=True)
+            got = subprocess.run([str(exe)], capture_output=True, text=True, check=True)
+        assert int(got.stdout) == want

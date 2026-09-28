@@ -36,6 +36,7 @@ from ...analysis.format_infer import (
     AbstractableFormat,
     AbstractFormat,
     FormatBound,
+    ListFormat,
     SetFormat,
     exact_exp2,
     round_is_identity,
@@ -2905,7 +2906,9 @@ class CppEmitter(Visitor):
         The accumulator may be *wider* than the element but not narrower:
         ``init + *first`` converts to the common type, which is the accumulator only
         when the element fits it exactly, making the fold uni-precision there as the
-        interpreter is.  Otherwise the seed would round.
+        interpreter is.  Otherwise the seed would round.  Where only the element's
+        *values* fit -- integral ``float`` elements into ``int64_t`` -- the common type
+        is the element's, so each element is cast before it is added.
         """
         result_ty = self._storage_for_expr(e)
         arg_ty = self._storage_for_expr(e.arg)
@@ -2916,7 +2919,9 @@ class CppEmitter(Visitor):
                 f'{elt_ty!r} and {result_ty!r}',
                 at=e,
             )
-        if not scalar_fits_in(elt_ty, result_ty):
+        list_bound = self._bound_of(e.arg)
+        elt_bound = list_bound.elt if isinstance(list_bound, ListFormat) else None
+        if not self._value_fits(elt_bound, elt_ty, result_ty):
             raise CppEmitError(
                 f'unsupported: `sum` over `{elt_ty.format()}` elements '
                 f'accumulating in `{result_ty.format()}`, which cannot hold one '
@@ -2933,9 +2938,14 @@ class CppEmitter(Visitor):
             # `accumulate` deduces `T` from its seed, so an uncast one would run
             # the whole fold in the element type.  Exact, by the check above.
             seed = self._explicit_cast(seed, result_ty)
+        op = ''
+        if not scalar_fits_in(elt_ty, result_ty):
+            acc, x, r = self._fresh_temp(), self._fresh_temp(), result_ty.format()
+            op = (f', []({r} {acc}, {elt_ty.format()} {x}) '
+                  f'{{ return {acc} + static_cast<{r}>({x}); }}')
         fold = (
             f'std::accumulate({self._list_begin(arg_ty, src)} + 1, '
-            f'{self._list_end(arg_ty, src)}, {seed})'
+            f'{self._list_end(arg_ty, src)}, {seed}{op})'
         )
         if isinstance(arg_ty, CppList) and arg_ty.size:
             # a *non-zero* length settles the guard; `size == 0` is falsy here
