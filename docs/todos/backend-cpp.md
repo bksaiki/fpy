@@ -253,6 +253,20 @@ An `if` / `if1` condition is deliberately *not* gated: it runs once, just before
 the branch, so its statements belong in the enclosing block — which is why
 `_emit_guarded_block` takes its condition already emitted.
 
+### A chained comparison's tail has no slot
+
+In `a < b < c`, `c` runs only where `a < b` held, so `Hoistable` seals it and
+nothing lowers it. A comprehension, `zip` or `enumerate` there would reach the
+emitter unlowered, so `_check_comparison_tails` in `compiler.py` refuses it and
+suggests splitting the comparison with `and`. Before hoisting was restricted to
+strict positions, `CompToLoop` lowered it anyway, unsoundly: it ran the tail
+unconditionally.
+
+The fix is unfolding the chained comparison into an `and` chain, which
+`Hoistable` already lowers (see "Unfold the rest" in
+[backend-independence.md](backend-independence.md)). When that lands, delete the
+guard and its test (`test_a_chained_comparison_tail_is_refused`).
+
 ### `Simplify` evaporates a static witness
 
 `Simplify` runs under the default `optimize=True`, so a test program whose

@@ -298,9 +298,7 @@ _ROWS = [
 
 
 @pytest.mark.parametrize('f,args,apply,mono', [r[1:] for r in _ROWS], ids=[r[0] for r in _ROWS])
-def test_the_outcome_is_unchanged(
-    f: Function, args: tuple, apply: Callable[[FuncDef], FuncDef], mono: bool,
-) -> None:
+def test_the_outcome_is_unchanged(f, args, apply, mono):
     types = [_L32 if isinstance(a, list) else _F32 for a in args]
     ast = Monomorphize.apply(f.ast, f.ast.ctx or fp.REAL, types) if mono else f.ast
     assert _outcome(apply(ast), f.runtime, args) == _outcome(ast, f.runtime, args)

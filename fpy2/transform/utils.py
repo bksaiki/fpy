@@ -455,7 +455,7 @@ class SiteRewriter(DefaultTransformVisitor):
         supplies it."""
         raise NotImplementedError
 
-    def _visit_expr(self, e: Expr, ctx: list[Stmt] | None) -> Expr:
+    def _visit_expr(self, e: Expr, ctx: Any) -> Expr:
         rebuilt = super()._visit_expr(e, ctx)
         return name_forced(e, rebuilt, self._force, ctx, self._fresh)
 

@@ -19,6 +19,7 @@ from ...analysis import (
     DefineUse,
     Escape,
     FormatInfer,
+    Hoistability,
     TypeInfer,
     ValueClassAnalysis,
     ValueClassInfer,
@@ -31,7 +32,19 @@ from ...analysis.escape import EscapeSummary
 from ...analysis.format_infer import FormatAnalysis
 from ...analysis.storage_infer import StorageInfer
 from ...analysis.value_class import ClassBound, TupleClass, join_class
-from ...ast.fpyast import Call, Expr, FuncDef, NamedId, ReturnStmt, TupleExpr, Var
+from ...ast.accessors import subexprs
+from ...ast.fpyast import (
+    Call,
+    Enumerate,
+    Expr,
+    FuncDef,
+    ListComp,
+    NamedId,
+    ReturnStmt,
+    TupleExpr,
+    Var,
+    Zip,
+)
 from ...ast.visitor import DefaultVisitor
 from ...function import Function
 from ...module import Module
@@ -224,6 +237,29 @@ def _callee_abi(a: SpecAnalyses) -> CalleeAbi:
         )
         params.append(ParamAbi(ty, written))
     return CalleeAbi(params, a.ret_ty)
+
+
+def _lowered_by_statement_form(e: Expr) -> Expr | None:
+    """A comprehension, `zip` or `enumerate` in *e*, which only
+    :class:`~fpy2.transform.StatementForm` lowers."""
+    if isinstance(e, (ListComp, Zip, Enumerate)):
+        return e
+    for _field, _i, sub in subexprs(e):
+        if (x := _lowered_by_statement_form(sub)) is not None:
+            return x
+    return None
+
+
+def _check_comparison_tails(ast: FuncDef) -> None:
+    """Refuse a comprehension, `zip` or `enumerate` in a chained comparison's
+    third operand onward: it has no slot, so nothing lowers it before the
+    emitter.  See ``docs/todos/backend-cpp.md``."""
+    for e, why in Hoistability.analyze(ast).sealed:
+        if why == 'comparison' and (x := _lowered_by_statement_form(e)) is not None:
+            raise CppCompileError(
+                f'`{ast.name}`: `{x.format()}` in a chained comparison past its '
+                'first pair is not supported; split the comparison with `and`.'
+            )
 
 
 def _check_signature_monomorphic(a: SpecAnalyses) -> None:
@@ -528,6 +564,7 @@ class CppCompiler(Backend):
             raise CppCompileError(
                 f'unbound data free variable(s): {", ".join(bad)}'
             )
+        _check_comparison_tails(ast)
 
         def_use = DefineUse.analyze(ast)
         ctx_use = ContextUse.analyze(ast, def_use=def_use)
