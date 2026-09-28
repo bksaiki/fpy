@@ -1,5 +1,5 @@
 """
-`quant`: the schemes, and `torchao`'s quantizers as `quant` reads them.
+`quant`: the schemes, and its quantizers, bit for bit against `torchao`'s.
 
     pytest serve/tests
 """
@@ -9,7 +9,8 @@ import torch
 
 pytest.importorskip('torchao')
 
-import quant
+
+from core import quant
 
 import fpy2 as fp
 
@@ -90,3 +91,75 @@ def test_only_the_software_scaled_fp8_schemes_take_fnuz() -> None:
     for bad in ('mxfp8:fnuz', 'bf16:fnuz', 'fp8-row:e5m2'):
         with pytest.raises(ValueError):
             quant.scheme(bad)
+
+
+def _torchao(t: torch.Tensor, op: quant.Operand, tensor: torch.Tensor | None = None,
+             amax: torch.Tensor | None = None) -> quant.Quantized:
+    """*t* quantized for *op* by `torchao`'s own quantizers: the reference."""
+    from torchao.prototype.mx_formats.config import ScaleCalculationMode
+    from torchao.prototype.mx_formats.kernels import f4_unpacked_to_f32, unpack_uint4
+    from torchao.prototype.mx_formats.mx_tensor import MXTensor
+    from torchao.prototype.mx_formats.nvfp4_tensor import (
+        nvfp4_quantize,
+        per_tensor_amax_to_scale,
+    )
+    from torchao.quantization import Float8Tensor, PerBlock, PerRow
+    from torchao.quantization.quantize_.common.kernel_preference import KernelPreference
+
+    def fp4(packed: torch.Tensor) -> torch.Tensor:
+        return f4_unpacked_to_f32(unpack_uint4(packed))
+
+    s, dtype = op.scaling, quant.DTYPES[op.elements]
+    if s.fmt == fp.MX_E8M0:
+        q = MXTensor.to_mx(t, dtype, s.cols, ScaleCalculationMode.RCEIL)
+        return quant.Quantized(op, fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float(),
+                               q.scale.float())
+    if s.tensor:
+        if tensor is None:
+            tensor = per_tensor_amax_to_scale(t.abs().amax() if amax is None else amax)
+        scales, packed = nvfp4_quantize(t, s.cols, tensor)
+        return quant.Quantized(op, fp4(packed), scales.float(), tensor)
+    padded = torch.nn.functional.pad(t, (0, 0, 0, -t.shape[0] % s.rows))
+    q = Float8Tensor.from_hp(padded, float8_dtype=dtype,
+                             granularity=PerRow() if s.cols is None else PerBlock([s.rows, s.cols]),
+                             hp_value_lb=torch.finfo(torch.float32).tiny,
+                             kernel_preference=KernelPreference.TORCH)
+    return quant.Quantized(op, q.qdata.float()[:t.shape[0]], q.scale.float())
+
+
+def _hard(r: int, k: int) -> list[torch.Tensor]:
+    """Finite inputs `[r, k]`: twelve binades; zero rows and blocks; FP32's
+    subnormals and near its largest; every rounding tie, and the formats'
+    largest values."""
+    g = torch.Generator().manual_seed(0)
+    binades = torch.logspace(-6, 6, k)
+    out = [torch.randn(r, k, generator=g) * binades[torch.randperm(k, generator=g)] for _ in range(4)]
+    zero = torch.randn(r, k, generator=g)
+    zero[0], zero[1, :128] = 0.0, 0.0
+    ties = torch.tensor([0.25, 0.75, 1.25, 1.75, 2.5, 3.5, 5.0, 6.0, 448.0, 464.0, 480.0, 0.0])
+    tie = ties[torch.randint(len(ties), (r, k), generator=g)]
+    tie = tie * torch.where(torch.rand(r, k, generator=g) < 0.5, -1.0, 1.0)
+    return [*out, zero, torch.randn(r, k, generator=g) * 1e-39, torch.randn(r, k, generator=g) * 1e37, tie]
+
+
+@pytest.mark.parametrize('name', ['fp8-row', 'fp8-block', 'mxfp8', 'mxfp4', 'nvfp4',
+                                  'fp8-row:fnuz', 'fp8-block:fnuz'])
+@pytest.mark.parametrize('side, shape', [('x', (7, 512)), ('w', (300, 256))])
+def test_quantize_is_torchao_bit_for_bit(name: str, side: str, shape: tuple[int, int]) -> None:
+    """Elements, scales and per-tensor scale, every bit (signed zeros too);
+    NVFP4 also with a per-row and a given per-tensor scale."""
+    op = getattr(quant.scheme(name), side)
+
+    def bits(t: torch.Tensor | None) -> torch.Tensor | None:
+        return None if t is None else t.float().view(torch.int32)
+
+    for t in _hard(*shape):
+        cases: list[dict[str, torch.Tensor]] = [{}]
+        if op.scaling is not None and op.scaling.tensor:
+            cases += [{'amax': t.abs().amax(-1, keepdim=True).clamp(min=1.0)},
+                      {'tensor': torch.tensor(0.01)}]
+        for kw in cases:
+            got, want = quant.quantize(t, op, **kw), _torchao(t, op, **kw)
+            for a, b in ((got.elements, want.elements), (got.scales, want.scales),
+                         (got.tensor, want.tensor)):
+                assert (a is None) == (b is None) and (a is None or torch.equal(bits(a), bits(b)))

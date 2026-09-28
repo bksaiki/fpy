@@ -8,12 +8,10 @@ checkpoints are downloaded).
 
 import pytest
 import torch
+from core import checkpoints, quant, swap
 
 pytest.importorskip('compressed_tensors')
 
-import checkpoints
-import quant
-import swap
 
 _FP8 = quant.SCHEMES['fp8-row']
 

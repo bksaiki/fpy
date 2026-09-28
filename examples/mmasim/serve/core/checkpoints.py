@@ -1,7 +1,8 @@
 """
 Quantized `compressed-tensors` checkpoints: :func:`load` reads one (R0 runs
 its dequantized weights); :func:`weights_for` gives its weights under a
-scheme (`docs/todos/mmasim-serving.md`).
+scheme (`docs/todos/mmasim-serving.md`); :func:`for_scheme` loads a master
+or a checkpoint ready to run under one.
 """
 
 import json
@@ -9,9 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import quant
 import torch
 from compressed_tensors.compressors.nvfp4.helpers import unpack_fp4_from_uint8
+
+from . import kernels, quant, swap
 
 
 @dataclass
@@ -24,7 +26,7 @@ class Checkpoint:
     """The linear layers it leaves unquantized."""
     inputs: dict[str, torch.Tensor] = field(default_factory=dict)
     """NVFP4's static per-tensor activation scales, by layer name (their
-    stored reciprocals inverted, as `torchao` takes them)."""
+    stored reciprocals inverted, as `quant.quantize`'s *tensor*)."""
 
 
 def _scheme(qc: dict[str, Any]) -> quant.Scheme:
@@ -128,3 +130,26 @@ def master_weights(name: str) -> dict[str, torch.Tensor]:
 
     model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.float32)
     return {n: m.weight.detach() for n, m in model.named_modules() if isinstance(m, torch.nn.Linear)}
+
+
+def for_scheme(name: str, scheme: quant.Scheme, *, requantize: bool = False,
+               master: str | None = None, split_k: int = 1, combine: kernels.Combine = 'linear',
+               ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any]]:
+    """*name*, a master (RTN) or a checkpoint, and its run under *scheme*,
+    with its `about`: its weights' source, its unquantized layers (`lm_head`
+    under a quantizing scheme), and its master (*master*, else a
+    checkpoint's card's base model; `None` if unknown)."""
+    if is_checkpoint(name):
+        model, ckpt = load(name)
+        run = swap.patch(model)
+        weights, source = weights_for(ckpt, scheme, requantize)
+        ignore = ckpt.ignore
+        swap.give(run, model, scheme, weights, ckpt.inputs if source == 'checkpoint' else None,
+                  ignore)
+        master = master or base_model(name)
+    else:
+        model, run = swap.load(name)
+        source, ignore, master = 'rtn', [] if scheme.name == 'bf16' else ['lm_head'], name
+        swap.give(run, model, scheme, {}, ignore=ignore)
+    run.split_k, run.combine = split_k, combine
+    return model, run, {'source': source, 'ignore': ignore, 'master': master}

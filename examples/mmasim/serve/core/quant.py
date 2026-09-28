@@ -1,22 +1,14 @@
 """
-Quantization schemes, in FPy formats: `torchao`'s RTN quantizes, and
-:meth:`Quantized.dequantize` multiplies out exactly in FP64 (`torchao`'s
-rounds to FP32).  See `docs/todos/mmasim-serving.md`.
+Quantization schemes, in FPy formats: :func:`quantize` is round-to-nearest
+as `torchao` computes it, in a few tensor ops, and
+:meth:`Quantized.dequantize` multiplies out exactly in FP64.  See
+`docs/todos/mmasim-serving.md`.
 """
 
 from dataclasses import dataclass, replace
 from typing import Literal
 
 import torch
-from torchao.prototype.mx_formats.config import ScaleCalculationMode
-from torchao.prototype.mx_formats.kernels import f4_unpacked_to_f32, unpack_uint4
-from torchao.prototype.mx_formats.mx_tensor import MXTensor
-from torchao.prototype.mx_formats.nvfp4_tensor import (
-    nvfp4_quantize,
-    per_tensor_amax_to_scale,
-)
-from torchao.quantization import Float8Tensor, PerBlock, PerRow
-from torchao.quantization.quantize_.common.kernel_preference import KernelPreference
 
 import fpy2 as fp
 from fpy2 import Context
@@ -80,7 +72,7 @@ DTYPES = {
     fp.S1E4M3: torch.float8_e4m3fnuz, fp.S1E5M2: torch.float8_e5m2fnuz,
     fp.MX_E2M1: torch.float4_e2m1fn_x2,
 }
-"""Each element format's torch dtype, as `torchao` takes it."""
+"""Each element format's torch dtype."""
 
 
 def context(fmt: object) -> Context:
@@ -93,6 +85,8 @@ def scheme(name: str) -> Scheme:
     """A named scheme; `fp8-row:fnuz` and `fp8-block:fnuz` take FNUZ FP8
     elements, as CDNA3's designs do."""
     base, _, variant = name.partition(':')
+    if base not in SCHEMES:
+        raise ValueError(f'no scheme {name!r}')
     s = SCHEMES[base]
     if not variant:
         return s
@@ -136,16 +130,31 @@ def _rows(t: torch.Tensor | None, rows: torch.Tensor | slice) -> torch.Tensor | 
     return t if t is None or t.dim() == 0 else t[rows]
 
 
-def _fp4(packed: torch.Tensor) -> torch.Tensor:
-    return f4_unpacked_to_f32(unpack_uint4(packed))
+_E4M3_TINY = torch.finfo(torch.float8_e4m3fn).tiny
+_F32_TINY = torch.finfo(torch.float32).tiny
+
+
+def _e2m1(x: torch.Tensor) -> torch.Tensor:
+    """*x*, within ±6, rounded to E2M1 (nearest, ties to even): steps of
+    1/2 below 2, 1 below 4, 2 up to 6."""
+    a = x.abs()
+    step = torch.where(a < 2, 0.5, torch.where(a < 4, 1.0, 2.0))
+    return torch.copysign(torch.round(a / step) * step, x)
 
 
 def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None,
              amax: torch.Tensor | None = None) -> Quantized:
-    """*t* `[r, k]` by `torchao`'s RTN for *op*: MX with `RCEIL` scales
-    (cuBLAS's; nothing saturates); NVFP4 with per-tensor scale *tensor*,
-    else from *amax* (a scalar, or `[r, 1]` per row), else from `amax(|t|)`;
-    FP8 with `amax / max` per block, a ragged last row block zero-padded.
+    """*t* `[r, k]` (FP32, finite) by round-to-nearest for *op*, as `torchao`
+    computes it:
+
+    - FP8 per block: `s = max(amax, tiny) / max`, elements `(v / s)`
+      clamped and cast; a ragged last row block zero-padded.
+    - MX: NVIDIA's `RCEIL` scale `2^ceil(log2(amax / max))`, so nothing
+      saturates.
+    - NVFP4: per-tensor scale *tensor*, else `amax / (448 * 6)` from *amax*
+      (a scalar, or `[r, 1]` per row), else from `amax(|t|)`; per 16,
+      `rne_e4m3((amax_block / 6) / g)`.
+
     `k` must be whole blocks."""
     s = op.scaling
     dtype = DTYPES[op.elements]
@@ -153,20 +162,28 @@ def quantize(t: torch.Tensor, op: Operand, tensor: torch.Tensor | None = None,
         # reuse *t* when lossless (e.g. BF16 weights held in FP32)
         q = t.to(dtype).float()
         return Quantized(op, t if t.dtype == torch.float32 and torch.equal(q, t) else q)
+    r, k = t.shape
     if s.fmt == fp.MX_E8M0:
-        q = MXTensor.to_mx(t, dtype, s.cols, ScaleCalculationMode.RCEIL)
-        elements = _fp4(q.qdata) if op.elements == fp.MX_E2M1 else q.qdata.float()
-        return Quantized(op, elements, q.scale.float())
+        top = 6.0 if op.elements == fp.MX_E2M1 else torch.finfo(dtype).max
+        v = t.view(r, k // s.cols, s.cols)
+        e = torch.ceil(torch.log2(v.abs().amax(-1, keepdim=True) / top)).clamp(-127, 127) + 127
+        rcp = torch.where(e == 0, 1.0, torch.exp2(127 - e))
+        v = (v * rcp).clamp(-top, top)
+        elements = _e2m1(v) if op.elements == fp.MX_E2M1 else v.to(dtype).float()
+        scales = e[..., 0].to(torch.uint8).view(torch.float8_e8m0fnu).float()
+        return Quantized(op, elements.view(r, k), scales)
     if s.tensor:
+        v = t.view(r, k // s.cols, s.cols)
+        block = v.abs().amax(-1)
         if tensor is None:
-            tensor = per_tensor_amax_to_scale(t.abs().amax() if amax is None else amax)
-        scales, packed = nvfp4_quantize(t.float().contiguous(), s.cols, tensor)
-        return Quantized(op, _fp4(packed), scales.float(), tensor)
-    granularity = PerRow() if s.cols is None else PerBlock([s.rows, s.cols])
-    r = t.shape[0]
-    padded = torch.nn.functional.pad(t, (0, 0, 0, -r % s.rows))
-    # a lower bound keeps an all-zero block's scale from 0 (and its elements from NaN)
-    q = Float8Tensor.from_hp(padded, float8_dtype=dtype, granularity=granularity,
-                             hp_value_lb=torch.finfo(torch.float32).tiny,
-                             kernel_preference=KernelPreference.TORCH)
-    return Quantized(op, q.qdata.float()[:r], q.scale.float())
+            tensor = (block.amax() if amax is None else amax).float() / (448.0 * 6.0)
+        scales = ((block / 6.0) / tensor).clamp(_E4M3_TINY, 448.0).to(torch.float8_e4m3fn).float()
+        v = (v * ((1.0 / tensor) / scales)[..., None]).clamp(-6.0, 6.0)
+        return Quantized(op, _e2m1(v).view(r, k), scales, tensor)
+    top = torch.finfo(dtype).max
+    rows, cols = s.rows, s.cols or k
+    v = torch.nn.functional.pad(t, (0, 0, 0, -r % rows))
+    v = v.view(-1, rows, k // cols, cols)
+    scales = v.abs().amax((1, 3), keepdim=True).clamp(min=_F32_TINY) / top
+    elements = (v / scales).clamp(-top, top).to(dtype).float().view(-1, k)[:r]
+    return Quantized(op, elements, scales.view(-1, k // cols))

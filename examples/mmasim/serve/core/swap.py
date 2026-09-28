@@ -15,15 +15,14 @@ so that is full precision in every run.  A linear layer with a bias is
 refused.
 """
 
-import argparse
 from dataclasses import dataclass, field
 from types import MethodType
-from typing import Any, get_args
+from typing import Any
 
-import kernels
-import quant
 import torch
 import torch.nn.functional as F
+
+from . import kernels, quant
 
 BF16 = quant.SCHEMES['bf16']
 
@@ -32,10 +31,6 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
     """*scheme*'s runs: R0, its exact run, and every design it applies to."""
     return ('fp32', f'{scheme.name}-exact', *kernels.designs(scheme))
 
-
-MODES = modes()
-RUNS = MODES[1:]
-"""Every `bf16` run but R0 (`fp32`)."""
 
 MODEL = 'Qwen/Qwen3-0.6B'
 """The default model; `Qwen/Qwen3.5-0.8B` also runs (text only)."""
@@ -75,8 +70,8 @@ def slices(design: str, scheme: quant.Scheme, k: int, split_k: int) -> int:
 
 def _per_call(q: quant.Quantized, design: str) -> torch.Tensor:
     """*q*'s block scales as a block-scaled *design*'s instructions take them,
-    `[s, rows]` (one per call) or `[s, rows, g]` (one per group),
-    each scale repeated over the groups its block covers."""
+    `[s, rows]` (one per instruction) or `[s, rows, k0 // g]` (one per
+    group), each scale repeated over the groups its block covers."""
     k0, g = kernels.compiled(design)[1], kernels.group(design)
     r, k = q.elements.shape
     sc = q.scales.repeat_interleave(q.operand.scaling.cols // g, 1).view(r, k // k0, k0 // g)
@@ -168,7 +163,9 @@ class Run:
         if last is not None and last[0] is x and last[1] == key:
             return last[2]
         a = x.reshape(-1, x.shape[-1]).to(torch.bfloat16).float()
-        qa = quant.quantize(a, self.scheme.x, scale, amax)
+        # BF16 elements need no more rounding, nor quantize's check (a sync)
+        qa = (quant.Quantized(self.scheme.x, a) if self.scheme.x == BF16.x
+              else quant.quantize(a, self.scheme.x, scale, amax))
         self._input = (x, key, qa)
         return qa
 
@@ -213,20 +210,10 @@ def give(run: Run, model: torch.nn.Module, scheme: quant.Scheme,
     run.ignore = {id(layers[n].weight) for n in ignore}
 
 
-def add_args(ap: argparse.ArgumentParser) -> None:
-    """The options every script shares: the model, and how designs split `k`."""
-    ap.add_argument('--model', default=MODEL)
-    ap.add_argument('--split-k', type=int, default=1)
-    ap.add_argument('--combine', choices=get_args(kernels.Combine), default='linear')
-
-
-def load(name: str = MODEL, split_k: int = 1, combine: kernels.Combine = 'linear',
-         ) -> tuple[torch.nn.Module, Run]:
+def load(name: str = MODEL) -> tuple[torch.nn.Module, Run]:
     """*name*'s causal LM from the Hub, in FP32 on the GPU and patched
-    (:func:`patch`), its designs splitting `k` as given."""
+    (:func:`patch`)."""
     from transformers import AutoModelForCausalLM
 
     model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.float32).cuda().eval()
-    run = patch(model)
-    run.split_k, run.combine = split_k, combine
-    return model, run
+    return model, patch(model)

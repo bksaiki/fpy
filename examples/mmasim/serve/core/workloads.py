@@ -1,5 +1,7 @@
 """
-The token sequences local metrics are captured on, every token tagged.
+The evaluations' inputs: WikiText-2 (`wikitext_ids`, cut into `segments`
+for perplexity), MATH-500 prompts (`math500`), `pick`'s seeded subsets, and
+the token sequences local metrics are captured on, every token tagged:
 
 - `wikitext`: the first tokens of WikiText-2's test split, one sequence of
   prose.
@@ -15,17 +17,23 @@ headers and empty think block), or `text` for WikiText.
 """
 
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import decode
-import perplexity
-import swap
 import torch
+
+from . import generate, swap
+
+CONTEXT = 2048
+"""Tokens per WikiText-2 segment (the GPTQ convention)."""
 
 MAX_NEW = 512
 """Tokens per MT-Bench reply at most."""
+
+INSTRUCTION = 'Please reason step by step, and put your final answer within \\boxed{}.'
+"""Qwen's instruction for math."""
 
 
 @dataclass
@@ -35,8 +43,42 @@ class Sequence:
     """Per tag, each token's label."""
 
 
+def pick(total: int, n: int | None, seed: int = 0) -> list[int]:
+    """*n* of `range(total)` at random by *seed*, sorted: all of them if *n*
+    is `None` or no fewer."""
+    if n is None or n >= total:
+        return list(range(total))
+    return sorted(random.Random(seed).sample(range(total), n))
+
+
+def wikitext_ids(model: str) -> torch.Tensor:
+    """WikiText-2's test split, joined as the Hugging Face perplexity guide
+    does and tokenized for *model*: `[1, t]` on the GPU."""
+    import datasets
+    from transformers import AutoTokenizer
+
+    text = '\n\n'.join(datasets.load_dataset(
+        'Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')['text'])
+    return AutoTokenizer.from_pretrained(model)(text, return_tensors='pt').input_ids.cuda()
+
+
+def segments(ids: torch.Tensor, context: int = CONTEXT) -> list[torch.Tensor]:
+    """*ids* `[1, t]` as whole segments of *context* tokens."""
+    return [ids[:, s:s + context] for s in range(0, ids.shape[1] - context + 1, context)]
+
+
+def math500(tok: Any, n: int | None, seed: int = 0) -> list[torch.Tensor]:
+    """*n* MATH-500 problems at random (:func:`pick`), each with
+    :data:`INSTRUCTION` under *tok*'s chat template, thinking off."""
+    import datasets
+
+    problems = datasets.load_dataset('HuggingFaceH4/MATH-500', split='test')['problem']
+    return [generate.encode(tok, [{'role': 'user', 'content': f'{problems[i]}\n{INSTRUCTION}'}])
+            for i in pick(len(problems), n, seed)]
+
+
 def wikitext(model: str, tokens: int) -> list[Sequence]:
-    ids = perplexity.wikitext(model)[0, :tokens].tolist()
+    ids = wikitext_ids(model)[0, :tokens].tolist()
     n = len(ids)
     return [Sequence(ids, {'category': ['wikitext'] * n, 'role': ['text'] * n})]
 
@@ -74,15 +116,15 @@ def mtbench(model: torch.nn.Module, run: swap.Run, tok: Any, path: Path) -> list
     if cached is None or cached['model'] != name or cached['max_new'] != MAX_NEW:
         import datasets
 
-        eos = decode.stop_tokens(model, tok)
+        eos = generate.stop_tokens(model, tok)
         run.mode = 'fp32'
         conversations = []
         for row in datasets.load_dataset('HuggingFaceH4/mt_bench_prompts', split='train'):
             messages: list[dict[str, str]] = []
             for question in row['prompt']:
                 messages.append({'role': 'user', 'content': question})
-                prompt = decode.encode(tok, messages)
-                reply = list(decode.stream(model, prompt, MAX_NEW, eos))
+                prompt = generate.encode(tok, messages)
+                reply = list(generate.stream(model, prompt, MAX_NEW, eos))
                 messages.append({'role': 'assistant',
                                  'content': tok.decode(reply, skip_special_tokens=True)})
             conversations.append({'category': row['category'],
