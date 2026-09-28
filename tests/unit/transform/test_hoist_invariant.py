@@ -558,6 +558,29 @@ class TestSoundness:
         for xs in ([1.0, 1.0], [1.0, 1.0, 1.0]):
             assert repr(g(xs)) == repr(f(xs))
 
+    def test_a_list_allocation_stays(self):
+        """Hoisted, `[n]` is one list every row shares, so the write into row
+        0 shows through row 1."""
+        @fp.fpy(ctx=fp.REAL)
+        def bound(n: fp.Real) -> fp.Real:
+            zss = [[0.0], [0.0]]
+            for i in range(2):
+                zs = [n]
+                zss[i] = zs
+            zss[0][0] = 1.0
+            return zss[1][0]
+
+        @fp.fpy(ctx=fp.REAL)
+        def operand(n: fp.Real) -> fp.Real:
+            zss = [[0.0], [0.0]]
+            for i in range(2):
+                zss[i] = [n]
+            zss[0][0] = 1.0
+            return zss[1][0]
+
+        for f in (bound, operand):
+            assert _hoisted(f).ast.is_equiv(f.ast)
+
     def test_a_body_that_would_empty_keeps_one_statement(self):
         """A `for` with no statements does not re-parse and the interpreter
         rejects it, so the last one stays behind."""

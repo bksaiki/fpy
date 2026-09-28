@@ -13,7 +13,11 @@ from ..analysis import (
     LiveVars,
     Purity,
     SyntaxCheck,
+    TypeAnalysis,
+    TypeInfer,
+    TypeInferError,
 )
+from ..analysis.alias import _carries_list
 from ..ast import *
 from ..utils import Gensym
 from .cursor import Cursor, EditLog, StmtPath
@@ -48,17 +52,24 @@ class _Context(NamedTuple):
     """The analyses the query consults, and the one body fact it precomputes."""
 
     def_use: DefineUseAnalysis
+    types: TypeAnalysis | None
+    """`None` where the function does not type-check"""
     alias: AliasAnalysis | None
-    """what may be the same list as what; computed only where it is consulted,
-    since it needs type inference and not every program admits it"""
+    """what may be the same list as what; computed only where it is consulted"""
     mutating: bool
     """whether the function writes into a list in place"""
 
     @staticmethod
     def of(func: FuncDef, def_use: DefineUseAnalysis) -> '_Context':
+        try:
+            types: TypeAnalysis | None = TypeInfer.check(func, def_use=def_use)
+        except (TypeInferError, NotImplementedError):  # the latter: a foreign call
+            types = None
         mutating = _mutating(_Nodes.of(func.body), def_use)
-        alias = Alias.analyze(func, def_use=def_use) if mutating else None
-        return _Context(def_use, alias, mutating)
+        # without types nothing is hoisted, so there is nothing to consult
+        alias = None if types is None or not mutating else \
+            Alias.analyze(func, def_use=def_use, type_info=types)
+        return _Context(def_use, types, alias, mutating)
 
 
 def _from_before(
@@ -126,6 +137,16 @@ def _may_be_mutated(
     )
 
 
+def _may_hold_list(e: Expr, types: TypeAnalysis | None) -> bool:
+    """Whether *e*'s value may hold a list.
+
+    A list has identity: evaluated once rather than per iteration, an
+    allocation becomes one list shared by every iteration, which any write into
+    it can observe -- `t[i] = empty(n)` would give every row one list.
+    """
+    return types is None or _carries_list(types.by_expr.get(e))
+
+
 def _bound_in(name: NamedId, body: set[int], def_use: DefineUseAnalysis) -> list[Definition]:
     """Every definition of *name* sited inside the loop body."""
     return [d for d in def_use.name_to_defs.get(name, set()) if id(d.site) in body]
@@ -144,6 +165,8 @@ def _why_not(
     target = stmt.target
     if not Purity.analyze_expr(stmt.expr, ctx.def_use):
         return f'`{target}` is bound to an impure expression'
+    if _may_hold_list(stmt.expr, ctx.types):
+        return f'`{target}` may hold a list'
 
     reaching = ctx.def_use.reach[stmt]
     varies = sorted(
@@ -245,6 +268,8 @@ def _invariant_exprs(
         if not all(_from_before(reaching.get(n), loop, body, taken) for n in names):
             return False
         if ctx.mutating and _may_be_mutated(e, reaching, ctx.alias):
+            return False
+        if _may_hold_list(e, ctx.types):
             return False
         return Purity.analyze_expr(e, ctx.def_use)
 
