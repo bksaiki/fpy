@@ -10,6 +10,10 @@ diagnostic that is not: a narrowing inside a braced initializer, ill-formed in
 the standard but a warning on GCC.  Style is deliberately not promoted -- the
 emitter parenthesizes every operand, which clang alone objects to, and that is
 not what this is looking for.
+
+The headers are parsed once per session, into a precompiled header beside them.
+A compiler that finds none it can use under these flags parses the header
+instead, so it changes the cost of a check and never its answer.
 """
 
 import shutil
@@ -53,12 +57,30 @@ _FLAGS = ['-std=c++17', '-fsyntax-only'] + (
 )
 
 
-def _check(src: str) -> None:
+@pytest.fixture(scope='session')
+def _headers(tmp_path_factory) -> Path:
+    """`CPP_HEADERS` as a header, precompiled beside it where the compiler can:
+    GCC reads a `.gch`, clang a `.pch`."""
+    header = tmp_path_factory.mktemp('pch') / 'headers.hpp'
+    header.write_text('\n'.join(CPP_HEADERS) + '\n')
+    assert _CXX is not None
+    version = subprocess.run([_CXX, '--version'], capture_output=True, text=True).stdout
+    pch = header.with_name(header.name + ('.pch' if 'clang' in version else '.gch'))
+    build = [flag for flag in _FLAGS if flag != '-fsyntax-only']
+    subprocess.run(
+        [_CXX, *build, '-x', 'c++-header', str(header), '-o', str(pch)],
+        capture_output=True,
+    )
+    return header
+
+
+def _check(src: str, header: Path) -> None:
     with tempfile.TemporaryDirectory() as td:
         cpp = Path(td) / 'm.cpp'
-        cpp.write_text('\n'.join(CPP_HEADERS) + '\n' + src)
+        cpp.write_text(src)
         out = subprocess.run(
-            [_CXX, *_FLAGS, str(cpp)], capture_output=True, text=True,
+            [_CXX, *_FLAGS, '-include', str(header), str(cpp)],
+            capture_output=True, text=True,
         )
     assert out.returncode == 0, (
         f'emitted C++ does not compile:\n{out.stderr[-1500:]}\n--- source ---\n{src}'
@@ -66,14 +88,15 @@ def _check(src: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _compiles_what_it_emits(monkeypatch):
+def _compiles_what_it_emits(monkeypatch, request):
     if _CXX is None:
         return
+    header = request.getfixturevalue('_headers')
     original = CppCompiler.compile
 
     def checked(self, *args, **kwargs):
         out = original(self, *args, **kwargs)
-        _check(out)
+        _check(out, header)
         return out
 
     monkeypatch.setattr(CppCompiler, 'compile', checked)

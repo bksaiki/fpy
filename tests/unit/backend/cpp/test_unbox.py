@@ -81,24 +81,6 @@ class TestTheJoin:
         assert _levels(storage['ys']) == [True]
         assert _levels(storage['xs']) == [True]
 
-    def test_no_class_is_unboxed_against_one_it_reads(self):
-        """The property that makes the conjunction sufficient: a class cannot
-        come out unboxed while a class it is assigned from stays boxed, because
-        the assignment merged their alias classes and hence their site sets."""
-        @fp.fpy
-        def f(xs: list[fp.Real], c: bool, x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                if c:
-                    ys = [x, x]
-                else:
-                    ys = xs
-                ys[0] = 99
-                return xs[0]
-
-        storage, _ = _decide(f, [ListType(R), BoolType(), R])
-        boxed = {n for n, ty in storage.items() if _levels(ty)[0]}
-        assert {'xs', 'ys'} <= boxed
-
 
 class TestUnboxed:
     """Where the decision should be positive — rejecting everything would be
@@ -205,6 +187,47 @@ class TestReferenceBoundNames:
             g, ctx=fp.FP64, arg_types=args,
         )
         assert 'const std::vector<double>& xs' in unopt
+
+
+class TestReferenceBindingStorage:
+    """A reference binding and a shared storage class are the same claim.
+
+    Where they disagree, the name has the type C++ deduced from its initializer
+    rather than the one storage inference chose, and every consumer of
+    `storage_of` must remember to compensate.  `binds_by_reference` requires
+    the two to agree, so the divergence cannot arise.
+    """
+
+    def test_a_reference_binding_keeps_its_source_storage(self):
+        @fp.fpy
+        def f(n: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                xs = [1.0, 2.0]
+                ys = xs
+                ys[0] = n
+                return ys
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[R])
+        # the binding is a reference, and both names spell the same type
+        assert 'const auto& ys = xs;' in out, out
+        decl = next(ln for ln in out.splitlines() if ln.strip().startswith(
+            'std::shared_ptr') and ' xs =' in ln)
+        assert 'std::shared_ptr<std::vector<double>>' in decl, decl
+
+    def test_a_rebound_name_is_not_a_reference(self):
+        """A `const` reference cannot be reassigned, so a rebind copies."""
+
+        @fp.fpy
+        def f(c: bool, n: fp.Real) -> list[fp.Real]:
+            with fp.FP64:
+                xs = [n, n]
+                ys = xs
+                if c:
+                    ys = [n]
+                return ys
+
+        out = ALLOW.compile(f, ctx=fp.FP64, arg_types=[BoolType(), R])
+        assert 'const auto& ys' not in out, out
 
 
 class TestDiscountHasLimits:
@@ -573,7 +596,6 @@ class TestProjectionByReference:
             f, ctx=fp.FP64, arg_types=[ListType(ListType(R)), ListType(R)],
         )
         assert 'auto& row' not in out, out
-
 
     def test_a_literal_nested_three_deep_unboxes_at_every_level(self):
         """Seeding a site per level is only right where nothing else describes

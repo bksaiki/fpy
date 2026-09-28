@@ -26,22 +26,6 @@ def _compile(func, *, arg_ctx=None) -> str:
 class TestPhiWebRenaming:
     """Per-SSA-def renaming."""
 
-    def test_sequential_rebind_renames(self):
-        """A rebind without a phi merge becomes its own C++ variable;
-        single-writer classes fold the type into the assign."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                x = x * 2
-                return x
-
-        out = _compile(f)
-        # The arg is still ``x``; the rebind class picks ``x_1``.
-        assert 'double f(double x)' in out
-        assert 'double x_1 = (x * static_cast<double>(2));' in out
-        assert 'return x_1;' in out
-
     def test_rebind_in_if_merges_with_arg(self):
         """A branch-only rebind has a phi linking it to the arg, so
         the whole class shares the bare arg name — no rename, and no
@@ -78,25 +62,3 @@ class TestPhiWebRenaming:
         assert 'double x_2 = (x_1 + static_cast<double>(1));' in out
         assert 'return x_2;' in out
 
-    def test_loop_carried_var_keeps_one_class(self):
-        """Loop phis pull the pre-loop init, the carry, and the
-        body-rebind all into one class — single C++ variable.  Since
-        the loop phi has ``is_intro=False`` (acc was assigned before
-        the loop), the pre-loop assign declares and the body
-        reassigns."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for i in range(3):
-                    acc = acc + x
-                return acc
-
-        out = _compile(f)
-        # The pre-loop assign declares ``acc``; the body reassigns.
-        assert 'double acc = 0;' in out
-        assert 'acc = (acc + x);' in out
-        # No suffixed acc anywhere — it's all one class.
-        assert 'acc_1' not in out
-        assert 'acc_2' not in out

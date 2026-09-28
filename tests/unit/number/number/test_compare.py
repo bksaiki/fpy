@@ -2,6 +2,8 @@
 Testing `Float` and `REalFloat` comparison methods.
 """
 
+import operator
+
 import fpy2 as fp
 
 from fractions import Fraction
@@ -61,37 +63,8 @@ def _cvt_to_frac(x: int | float | Fraction | fp.RealFloat | fp.Float) -> float |
 class TestCompareMethods():
 
     @given(number(), number())
-    def test_compare_eq(self, a, b):
+    def test_compare(self, a, b):
         af = _cvt_to_frac(a)
         bf = _cvt_to_frac(b)
-        assert (a == b) == (af == bf), f'Failed comparison: {a} == {b} ({af} == {bf})'
-
-    @given(number(), number())
-    def test_compare_ne(self, a, b):
-        af = _cvt_to_frac(a)
-        bf = _cvt_to_frac(b)
-        assert (a != b) == (af != bf), f'Failed comparison: {a} != {b} ({af} != {bf})'
-
-    @given(number(), number())
-    def test_compare_lt(self, a, b):
-        af = _cvt_to_frac(a)
-        bf = _cvt_to_frac(b)
-        assert (a < b) == (af < bf), f'Failed comparison: {a} < {b} ({af} < {bf})'
-
-    @given(number(), number())
-    def test_compare_le(self, a, b):
-        af = _cvt_to_frac(a)
-        bf = _cvt_to_frac(b)
-        assert (a <= b) == (af <= bf), f'Failed comparison: {a} <= {b} ({af} <= {bf})'
-
-    @given(number(), number())
-    def test_compare_gt(self, a, b):
-        af = _cvt_to_frac(a)
-        bf = _cvt_to_frac(b)
-        assert (a > b) == (af > bf), f'Failed comparison: {a} > {b} ({af} > {bf})'
-
-    @given(number(), number())
-    def test_compare_ge(self, a, b):
-        af = _cvt_to_frac(a)
-        bf = _cvt_to_frac(b)
-        assert (a >= b) == (af >= bf), f'Failed comparison: {a} >= {b}  ({af} >= {bf})'
+        for op in (operator.eq, operator.ne, operator.lt, operator.le, operator.gt, operator.ge):
+            assert op(a, b) == op(af, bf), f'Failed comparison: {op.__name__}({a}, {b}) ({af}, {bf})'

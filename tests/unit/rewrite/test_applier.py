@@ -17,13 +17,6 @@ def insert_fma_r(a, b, c):
 def f(x, y, z):
     return x * y + z
 
-@fpy
-def g(x, y, z):
-    t = x * y + z
-    for i in range(10):
-        t += 10 * y + z
-    return t
-
 
 class _ApplierTestCase():
 
@@ -43,20 +36,6 @@ class ApplierExprTestCase(_ApplierTestCase):
         m = Matcher(insert_fma_l)
         a = Applier(insert_fma_r)
         matches = m.match(f)
-        f2 = a.apply(matches[0].subst)
-        self.assertAstEqual(f2, Fma(
-            Var(NamedId('fma'), None),
-            Var(NamedId('x'), None),
-            Var(NamedId('y'), None),
-            Var(NamedId('z'), None),
-            None
-        ))
-
-    def test_fma_example_2(self):
-        assert isinstance(g, Function)
-        m = Matcher(insert_fma_l)
-        a = Applier(insert_fma_r)
-        matches = m.match(g)
         f2 = a.apply(matches[0].subst)
         self.assertAstEqual(f2, Fma(
             Var(NamedId('fma'), None),

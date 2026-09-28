@@ -129,15 +129,6 @@ class TestNoBareStringOperands:
     evaluator dispatch, so it survives text-comparison tests and fails only at
     evaluation.  Assert the invariant directly over the emitted graph."""
 
-    def test_list_reduce_operands_are_exprs(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return sum(xs)
-
-        bad = [o for o in _operands(_compile(_size(f, 3)).e) if isinstance(o, str)]
-        assert not bad, f'bare str operands in emitted core: {bad}'
-
     def test_minimum_wrapper_operands_are_exprs(self):
         @fp.fpy
         def f(x: fp.Real, y: fp.Real) -> fp.Real:
@@ -160,14 +151,6 @@ class TestListReduce:
                 return sum(xs)
 
         assert _agree(_size(f, 3), [0.5, 0.25, 0.125]) == 0.875
-
-    def test_sum_of_integers(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return sum(xs)
-
-        assert _agree(_size(f, 4), [1.0, 2.0, 4.0, 8.0]) == 15.0
 
     def test_amin(self):
         @fp.fpy

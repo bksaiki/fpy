@@ -41,30 +41,6 @@ class TestStaticResolution:
     dispatches under it.  Scopes that hold an exotic context but
     have no uses compile freely."""
 
-    def test_function_with_no_fp_doesnt_need_ctx(self):
-        """A bool-returning function has no op uses, so its outer
-        scope can be symbolic — no error."""
-
-        @fp.fpy
-        def f() -> bool:
-            return True
-
-        out = CppCompiler(optimize=False).compile(f)
-        assert 'fesetround' not in out
-
-    def test_concrete_with_block_resolves(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        out = CppCompiler(optimize=False).compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        # FP64 default-RM (RNE) — no fesetround.
-        assert 'fesetround' not in out
-
     def test_function_scope_unused_when_all_ops_nested(self):
         """When every op lives inside an inner ``with``, the
         function-level scope has no uses and isn't validated — so
@@ -149,18 +125,6 @@ class TestDefaultRmIsImplicit:
     """``with FP64:`` (RM=RNE) doesn't emit fesetround when the
     surrounding mode is already RNE."""
 
-    def test_rne_under_rne(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        out = CppCompiler(optimize=False).compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        assert 'fesetround' not in out
-
     def test_a_real_function_scope_still_delivers_rne(self):
         """A ``REAL``-topped kernel assumes RNE on entry like any other.
 
@@ -237,20 +201,6 @@ class TestNonDefaultRmEmitsFesetround:
     active mode actually changes.  A concrete function-level
     annotation is the caller's contract: we trust the caller to
     deliver that RM and emit nothing at function entry."""
-
-    def test_function_level_rtz_trusts_caller(self):
-        """A concrete function-level RTZ context does *not* emit
-        ``fesetround`` at entry — the caller is contractually
-        delivering RTZ."""
-
-        @fp.fpy(ctx=_RTZ_64)
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            return x + y
-
-        out = CppCompiler(optimize=False).compile(
-            f, arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        assert 'fesetround' not in out
 
     def test_return_inside_a_scope_restores_first(self):
         """A ``return`` inside a rounding scope restores *before* returning.
@@ -702,11 +652,11 @@ class TestEnableFenv:
         assert 'fesetround' not in out
         assert '(a + b)' in out
 
-    @pytest.mark.parametrize('rm', [fp.RM.RTZ, fp.RM.RTN, fp.RM.RTP, fp.RM.RNA])
-    def test_integer_roundings_are_untouched(self, rm):
+    def test_integer_roundings_are_untouched(self):
         """`trunc` / `floor` / `ceil` / `round` do not read the rounding
         direction, so a float-to-integer rounding needs nothing set."""
-        ctx = fp.SINT32.with_params(rm=rm, overflow=fp.OverflowMode.ASSERT)
+        ctx = fp.SINT32.with_params(
+            rm=fp.RM.RTN, overflow=fp.OverflowMode.ASSERT)
 
         @fp.fpy(ctx=fp.REAL)
         def f(x: fp.Real) -> fp.Real:

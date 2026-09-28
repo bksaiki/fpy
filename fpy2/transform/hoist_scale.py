@@ -338,11 +338,8 @@ class _HoistScale(SiteRewriter):
 
     def _claims(self, red: _Reduction, why: str | None) -> bool:
         if why is not None:
-            self.refused.append((red, why))
-            if self._named_by_cursor(red):
-                self.declined.append(why)
-                if not self.listing:
-                    raise TransformDeclined(f'cannot hoist the factor: {why}')
+            if self._refuse(red, why) and not self.listing:
+                raise TransformDeclined(f'cannot hoist the factor: {why}')
             return False
 
         idx = self.site_idx

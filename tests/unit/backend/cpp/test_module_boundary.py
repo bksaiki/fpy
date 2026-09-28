@@ -32,10 +32,11 @@ _CXX = shutil.which('c++') or shutil.which('g++') or shutil.which('clang++')
 _OPTS = ['-std=c++11', '-O0', '-Wall', '-Wextra']
 
 
-def _typecheck(cc: CppCompiler, m: Module) -> str:
-    src = '\n'.join([*cc.headers(), cc.helpers(), cc.compile_module(m)])
+def _typecheck(module_src: str) -> None:
+    """Typecheck *module_src*, a compiled module, behind its prelude."""
     if _CXX is None:
         pytest.skip('no C++ compiler')
+    src = f'{CppCompiler().prelude()}\n{module_src}'
     with tempfile.TemporaryDirectory() as td:
         cpp = Path(td) / 'm.cpp'
         cpp.write_text(src)
@@ -44,7 +45,6 @@ def _typecheck(cc: CppCompiler, m: Module) -> str:
     assert r.returncode == 0, (
         f'module does not typecheck:\n{r.stderr[-3000:]}\n--- emitted ---\n{src}'
     )
-    return src
 
 
 # --------------------------------------------------------------------------
@@ -113,18 +113,24 @@ ARGS = {
 }
 
 
-def test_the_whole_module_typechecks():
+@pytest.fixture(scope='module')
+def emitted() -> str:
+    """The module, compiled once for every test below."""
+    return CppCompiler().compile_module(_module())
+
+
+def test_the_whole_module_typechecks(emitted):
     """A caller and callee that disagree about a representation is a C++ type
     error, and nothing in the unit suite runs a C++ compiler.
 
     Regression class: the `is_called` rule, the `call`-site boundary rule, or
     `annotate_return` stops covering one side of a boundary.
     """
-    _typecheck(CppCompiler(), _module())
+    _typecheck(emitted)
 
 
 @pytest.mark.parametrize('func', ENTRIES, ids=[f.name for f in ENTRIES])
-def test_signature_matches_the_module_for_every_function(func):
+def test_signature_matches_the_module_for_every_function(func, emitted):
     """Bug #3 generalized: `signature(f, module=m)` is what an embedding
     program builds arguments from, so it has to be right for *every* `f` in
     the module -- not just the last one, which is all `specs[-1]` gave you.
@@ -133,10 +139,10 @@ def test_signature_matches_the_module_for_every_function(func):
     duplicate name, a changed emission order) and a native caller builds a
     `std::vector` for a parameter that is really a shared handle.
     """
-    m = _module()
-    cc = CppCompiler()
-    params, ret = cc.signature(func, ctx=fp.FP64, arg_types=ARGS[func.name], module=m)
-    src = cc.compile_module(m)
+    params, ret = CppCompiler().signature(
+        func, ctx=fp.FP64, arg_types=ARGS[func.name], module=_module(),
+    )
+    src = emitted
 
     # locate the emitted definition and compare it token for token
     sig_line = next(
@@ -154,7 +160,7 @@ def test_signature_matches_the_module_for_every_function(func):
         )
 
 
-def test_a_called_functions_result_is_what_its_caller_expects():
+def test_a_called_functions_result_is_what_its_caller_expects(emitted):
     """`g_fresh` returns a list nothing else refers to, so it hands back a
     value — in a module too, since the callers now read that from its
     signature rather than assuming a handle.
@@ -167,10 +173,8 @@ def test_a_called_functions_result_is_what_its_caller_expects():
     _p, alone = cc.signature(g_fresh, ctx=fp.FP64, arg_types=[R])
     assert isinstance(alone, CppList) and not alone.boxed, alone.format()
 
-    m = _module()
-    _p, in_module = cc.signature(g_fresh, ctx=fp.FP64, arg_types=[R], module=m)
-    out = _typecheck(cc, m)
-    assert f'{in_module.format()} g_fresh(' in out, out
+    _p, in_module = cc.signature(g_fresh, ctx=fp.FP64, arg_types=[R], module=_module())
+    assert f'{in_module.format()} g_fresh(' in emitted, emitted
 
 
 def test_signature_without_a_module_still_describes_a_lone_function():

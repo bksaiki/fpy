@@ -13,6 +13,7 @@ this directory.  :data:`EXPECTED_GROWTH` is that direction, and set beside
 rewrite that needs a statement slot pays the first and not the second.
 """
 
+import functools
 import importlib
 
 import fpy2 as fp
@@ -52,6 +53,9 @@ a fixpoint rather than a sequence.
 The other two are the positions nothing lowers at all.
 """
 
+EXPECTED_ANF_RESIDUE = {_ITERABLE: 16, _ELEMENT: 6}
+"""What `ANF` then declines, by reason: comprehension positions only."""
+
 EXPECTED_STATEMENTS = 914
 EXPECTED_GROWTH = 120
 """Statements this pass adds over the whole corpus: each lowering's expansion,
@@ -77,10 +81,13 @@ def _size(func) -> int:
     return sum(1 for _path, _stmt in walk_stmts(func))
 
 
-def _profile():
+@functools.cache
+def _profile() -> tuple[int, dict[str, int], dict[str, int], dict[str, int], tuple[int, int, int]]:
+    """Four passes over each corpus function, measured once per process."""
     n = 0
     residue: dict[str, int] = {}
     after: dict[str, int] = {}
+    anf: dict[str, int] = {}
     before = grown = atomized = 0
     for f in _corpus():
         n += 1
@@ -92,36 +99,40 @@ def _profile():
         before += _size(f.ast)
         grown += _size(out)
         # `ANF` on the *output*, not the input: it requires this pass to have run
-        atomized += _size(ANF.apply(out))
-    return n, residue, after, (before, grown, atomized)
-
-
-_PROFILE = _profile()
-"""Measured once: 230 functions, four passes over each."""
+        flat = ANF.apply(out)
+        atomized += _size(flat)
+        for _e, why in ANF.refusals(flat):
+            anf[why] = anf.get(why, 0) + 1
+    return n, residue, after, anf, (before, grown, atomized)
 
 
 def test_the_pass_applies_to_the_whole_corpus():
     """Total in the sense that matters: it declines to normalize a position,
     never to accept a program."""
-    n, _residue, _after, _sizes = _PROFILE
+    n, _residue, _after, _anf, _sizes = _profile()
     assert n == EXPECTED_FUNCTIONS
 
 
 def test_only_the_positions_with_no_lowering_are_left():
-    _n, residue, _after, _sizes = _PROFILE
+    _n, residue, _after, _anf, _sizes = _profile()
     assert residue == EXPECTED_RESIDUE
 
 
 def test_comp_to_loop_first_leaves_only_what_it_declined():
-    _n, _residue, after, _sizes = _PROFILE
+    _n, _residue, after, _anf, _sizes = _profile()
     assert after == EXPECTED_RESIDUE_AFTER_COMP_TO_LOOP
+
+
+def test_anf_leaves_only_comprehension_positions():
+    _n, _residue, _after, anf, _sizes = _profile()
+    assert anf == EXPECTED_ANF_RESIDUE
 
 
 def test_the_pass_stays_weak():
     """Being able to hoist anywhere costs `EXPECTED_GROWTH` statements; the
     atomization on top of it costs several times that, and a rewrite needs only
     the first."""
-    _n, _residue, _after, (before, grown, atomized) = _PROFILE
+    _n, _residue, _after, _anf, (before, grown, atomized) = _profile()
     assert before == EXPECTED_STATEMENTS
     assert grown - before == EXPECTED_GROWTH
     assert atomized - grown == EXPECTED_ATOMIZATION_GROWTH

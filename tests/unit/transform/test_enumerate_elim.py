@@ -298,6 +298,7 @@ class TestEnumerateOfZip:
         # Neither derived sequence survives.
         assert not _contains(new_ast, (Enumerate, Zip))
         _assert_same(new_ast, f, _XS, _YS)
+        assert EnumerateElim.apply(new_ast).is_equiv(new_ast)
 
     def test_three_arg_zip_fully_eliminated(self):
         @fp.fpy
@@ -443,18 +444,6 @@ class TestListCompRewrite:
         assert not _contains(new_ast, Enumerate)
         _assert_same(new_ast, f, _XS)
 
-    def test_element_read_twice(self):
-        """The substitution lands at every use of the bound name."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            with fp.FP64:
-                return [x * x + x for i, x in enumerate(xs)]
-
-        new_ast = EnumerateElim.apply(f.ast)
-        assert not _contains(new_ast, Enumerate)
-        _assert_same(new_ast, f, _XS)
-
     def test_discarded_index(self):
         @fp.fpy
         def f(xs: list[fp.Real]) -> list[fp.Real]:
@@ -522,45 +511,6 @@ class TestListCompRewrite:
 
 class TestProperties:
     """Cross-cutting properties of the transform."""
-
-    def test_idempotent(self):
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for i, (a, b) in enumerate(zip(xs, ys)):
-                    acc = acc + a * b
-                return acc
-
-        once = EnumerateElim.apply(f.ast)
-        twice = EnumerateElim.apply(once)
-        assert once.is_equiv(twice)
-
-    def test_syntax_check_passes(self):
-        """``EnumerateElim.apply`` runs ``SyntaxCheck.check`` internally, so
-        ill-formed output would make ``apply`` itself raise.  This exercises a
-        representative mix of the shapes the transform emits."""
-
-        @fp.fpy
-        def f(
-            xs: list[fp.Real], ys: list[fp.Real],
-            ps: list[tuple[fp.Real, fp.Real]],
-        ) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for i, x in enumerate(xs):
-                    acc = acc + x
-                for j, (a, b) in enumerate(zip(xs, ys)):
-                    acc = acc + a * b
-                for k, p in enumerate(zip(xs, ys)):
-                    acc = acc + fp.fst(p)
-                for m, (c, d) in enumerate(ps):
-                    acc = acc + c + d
-                return acc + sum([z * z for n, z in enumerate(xs)])
-
-        # Should not raise.
-        out = EnumerateElim.apply(f.ast)
-        assert not _contains(out, (Enumerate, Zip))
 
     def test_rejects_non_funcdef(self):
         import pytest

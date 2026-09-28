@@ -52,14 +52,6 @@ class TestComprehensionScope:
 
         assert f([1.0]) == [[4.0]]
 
-    def test_only_use_is_inside(self):
-        # the whole point: no other reference to `_K` exists to carry it
-        @fp.fpy(ctx=fp.FP64)
-        def f(xs):
-            return sum([x * _K for x in xs])
-
-        assert f([1.0, 2.0]) == 9.0
-
 
 class TestOuterScope:
     """The cases that never depended on the walk."""

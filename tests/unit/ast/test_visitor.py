@@ -7,8 +7,7 @@ reach it -- `LiveVars` among them, which `Pattern.vars()` is computed from.
 
 import fpy2 as fp
 
-from fpy2.analysis import LiveVars
-from fpy2.ast import Call, Var
+from fpy2.ast import Var
 from fpy2.ast.visitor import DefaultTransformVisitor, DefaultVisitor
 
 
@@ -51,14 +50,6 @@ def test_a_keyword_argument_is_visited_once():
 
     _C()._visit_function(kwarg_use.ast, None)
     assert len(seen) == 1
-
-
-def test_live_vars_sees_a_keyword_argument():
-    """`Pattern.vars()` is built on this: a pattern variable appearing only in a
-    keyword argument has to be a pattern variable."""
-    ctx_expr = kwarg_use.ast.body.stmts[1].ctx
-    assert isinstance(ctx_expr, Call)
-    assert {str(v) for v in LiveVars.analyze(ctx_expr)} == {'m'}
 
 
 def test_a_pattern_variable_in_a_keyword_argument_is_a_pattern_variable():

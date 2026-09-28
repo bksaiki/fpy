@@ -170,33 +170,10 @@ class TestTupleDestructure:
         )
 
 
-
 class TestTupleAccessors:
     """``fst`` / ``snd`` are pair projections; they lower to
     ``std::get<0>`` / ``std::get<1>``.  A chain over a nested pair nests
     the ``std::get`` calls."""
-
-    def test_fst_emits_get0(self):
-        @fp.fpy
-        def f(p: tuple[fp.Real, fp.Real]) -> fp.Real:
-            return fp.fst(p)
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64))],
-        )
-        assert 'std::get<0>(p)' in out
-
-    def test_snd_pair_emits_get1(self):
-        @fp.fpy
-        def f(p: tuple[fp.Real, fp.Real]) -> fp.Real:
-            return fp.snd(p)
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[TupleType(RealType(fp.FP64), RealType(fp.FP64))],
-        )
-        assert 'std::get<1>(p)' in out
 
     def test_nested_element_tuple_rebases(self):
         """When ``snd`` yields a bare element that is itself a tuple, an

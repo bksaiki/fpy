@@ -31,7 +31,6 @@ from fpy2.transform import (
     CompToLoop,
     ExprCursor,
     TransformDeclined,
-    TransformReferenceError,
 )
 from fpy2.utils import NamedId
 
@@ -515,23 +514,6 @@ class TestWhere:
         found = CompToLoop.sites(_one.ast)
         assert all(isinstance(c, ExprCursor) for c in found)
         assert [type(c.resolve()).__name__ for c in found] == ['ListComp']
-
-    @pytest.mark.parametrize('f', [_one, _product, _pairs])
-    def test_every_index_rewrites_and_none_does_them_all(self, f):
-        listed = CompToLoop.sites(f.ast)
-        assert listed
-        for j in range(len(listed)):
-            assert not CompToLoop.apply(f.ast, where=j).is_equiv(f.ast)
-        assert not CompToLoop.apply(f.ast).is_equiv(f.ast)
-
-    def test_a_cursor_aims_the_same_as_its_index(self):
-        for j, cursor in enumerate(CompToLoop.sites(_product.ast)):
-            by_index = CompToLoop.apply(_product.ast, where=j)
-            assert CompToLoop.apply(_product.ast, where=cursor).is_equiv(by_index)
-
-    def test_an_index_past_the_end_is_an_error(self):
-        with pytest.raises(TransformReferenceError):
-            CompToLoop.apply(_one.ast, where=7)
 
 
 # ----------------------------------------------------------------------

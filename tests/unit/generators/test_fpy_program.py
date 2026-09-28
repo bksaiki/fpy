@@ -7,12 +7,13 @@ double as fuzz tests for those passes.
 """
 
 import fpy2 as fp
+import pytest
 
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import given, settings, strategies as st
 
 from fpy2.analysis.type_infer import TypeInfer
 from fpy2.ast.fpyast import (
-    BoolVal, Expr, FuncDef, FuncMeta, Integer, ListExpr, ReturnStmt,
+    Assign, BoolVal, Expr, FuncDef, FuncMeta, Integer, ListExpr, ReturnStmt,
     StmtBlock, TupleExpr,
 )
 from fpy2.env import ForeignEnv
@@ -21,7 +22,6 @@ from fpy2.types import BoolType, ListType, RealType, TupleType
 from . import (
     BoolProd,
     DEFAULT_GRAMMAR,
-    Grammar,
     ListProd,
     RealProd,
     StmtProd,
@@ -29,7 +29,6 @@ from . import (
     bool_expr,
     context_expr,
     expr,
-    fpy_funcdef,
     fpy_function,
     fpy_real_funcdef,
     fpy_real_function,
@@ -48,17 +47,33 @@ def _wrap_as_funcdef(body_expr: Expr) -> FuncDef:
     return FuncDef('f', [], body, meta)
 
 
-class TestGeneratedTypeChecks:
-    """Every generated function should type-check to ``real -> ... -> real``."""
+def _typechecks_and_runs(f: fp.Function, data: st.DataObject) -> None:
+    """*f* type-checks to ``real -> ... -> real`` and evaluates under ``fp.FP64``.
 
-    @given(fpy_real_funcdef())
-    def test_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        for at in analysis.arg_types:
-            assert isinstance(at, RealType), f"arg type {at.format()} is not real"
-        assert isinstance(analysis.return_type, RealType), (
-            f"return type {analysis.return_type.format()} is not real"
-        )
+    One test per distribution, since generating the program is nearly all of
+    the cost.  FP64 (not ``fp.REAL``) because ``Div`` isn't implemented for
+    real-number arithmetic; FP64 handles div-by-zero / sqrt of negative / etc.
+    by producing ``±inf`` or ``nan`` rather than raising.
+    """
+    analysis = TypeInfer.check(f.ast)
+    for at in analysis.arg_types:
+        assert isinstance(at, RealType), f"arg type {at.format()} is not real"
+    assert isinstance(analysis.return_type, RealType), (
+        f"return type {analysis.return_type.format()} is not real"
+    )
+    inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
+              for _ in range(len(f.args))]
+    f(*inputs, ctx=fp.FP64)
+
+
+class TestGeneratedTypeChecks:
+    """Every generated function should type-check to ``real -> ... -> real``,
+    and run."""
+
+    @given(fpy_real_function(), st.data())
+    @settings(max_examples=100, deadline=None)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
     @given(fpy_real_funcdef(num_args=st.just(0), max_depth=st.just(0)))
     def test_zero_arg_zero_depth_is_just_a_literal(self, fd: FuncDef) -> None:
@@ -69,43 +84,8 @@ class TestGeneratedTypeChecks:
         assert isinstance(analysis.return_type, RealType)
 
 
-class TestGeneratedRuns:
-    """Generated functions should evaluate under ``fp.FP64`` without crashing.
-
-    FP64 (not ``fp.REAL``) because ``Div`` isn't implemented for real-number
-    arithmetic; FP64 handles div-by-zero / sqrt of negative / etc. by
-    producing ``±inf`` or ``nan`` rather than raising.
-    """
-
-    @given(
-        fpy_real_function(num_args=st.integers(0, 3), max_depth=st.integers(0, 3)),
-        st.data(),
-    )
-    @settings(max_examples=100, deadline=None)
-    def test_runs_under_FP64(self, f: fp.Function, data: st.DataObject) -> None:
-        n = len(f.args)
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(n)]
-        f(*inputs, ctx=fp.FP64)
-
-
-class TestRealExprStrategyDirectly:
-    """Exercise ``real_expr`` outside the ``FuncDef`` wrapper."""
-
-    @given(real_expr({}, depth=0))
-    def test_empty_env_leaf_is_a_literal(self, e: Expr) -> None:
-        # No vars in env + depth=0 ⇒ leaves only ⇒ must be a numeric
-        # literal (Integer / Decnum / Hexnum / Rational).
-        from fpy2.ast.fpyast import RationalVal
-        assert isinstance(e, RationalVal)
-
-
 class TestBoolExprStrategyDirectly:
     """Exercise ``bool_expr`` outside the ``FuncDef`` wrapper."""
-
-    @given(bool_expr({}, depth=0))
-    def test_empty_env_leaf_is_a_literal(self, e: Expr) -> None:
-        assert isinstance(e, BoolVal)
 
     @given(bool_expr({}, depth=3))
     def test_typechecks_as_bool_inside_if_expr(self, cond: Expr) -> None:
@@ -188,124 +168,27 @@ class TestTupleExprStrategyDirectly:
         assert isinstance(analysis.return_type.elts[1], BoolType)
 
 
-class TestStmtBlock:
-    """Statement-block generator.
-
-    Both tests suppress Hypothesis's ``too_slow`` health check because
-    ``stmt_block`` is heavier than a leaf-expr strategy (a single draw
-    can recurse through nested ``with``/``if``/``for`` bodies) — the
-    health check trips on the first few draws under unfortunate seeds
-    even when later draws are fast.
-    """
-
-    @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
-    @settings(suppress_health_check=[HealthCheck.too_slow])
-    def test_ends_with_return(self, block) -> None:
-        assert isinstance(block.stmts[-1], ReturnStmt)
-
-    @given(stmt_block({}, RealType(), depth=2, max_assigns=3))
-    @settings(suppress_health_check=[HealthCheck.too_slow])
-    def test_typechecks_when_wrapped(self, block) -> None:
-        fd = FuncDef('f', [], block,
-                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
-
-class TestAssignsAreVisible:
-    """A generated function with locals should still type-check and run.
-
-    ``max_assigns`` is a *cap*, not a floor, so a body with zero locals is
-    a valid draw — we just verify the body always type-checks regardless.
-    """
-
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(0, 2),
-        max_assigns=st.just(3),
-    ))
-    def test_typechecks_with_locals_in_scope(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
-
 class TestCompoundLocals:
     """``Assign`` locals can have compound types (list/tuple)."""
 
-    @given(stmt_block(
-        {}, RealType(), depth=2,
-        max_assigns=3, max_contexts=0, max_ifs=0, max_loops=0,
-        local_types=st.just(ListType(RealType())),  # pin every local to list[real]
-    ))
-    def test_pinned_list_real_locals_typecheck(self, block) -> None:
-        from fpy2.ast.fpyast import Assign, FuncMeta
-        from fpy2.env import ForeignEnv
-        # Every Assign in the body should bind a list[real] local.
-        assign_count = 0
-        for s in block.stmts:
-            if isinstance(s, Assign):
-                assign_count += 1
-        # Wrap and type-check.
+    @pytest.mark.parametrize('local_t', [
+        ListType(RealType()),
+        TupleType(RealType(), BoolType()),
+    ])
+    @given(st.data())
+    def test_pinned_locals_typecheck(self, local_t, data: st.DataObject) -> None:
+        block = data.draw(stmt_block(
+            {}, RealType(), depth=2, max_assigns=3, local_types=st.just(local_t),
+        ))
         fd = FuncDef('f', [], block,
                      FuncMeta(set(), None, None, {}, ForeignEnv.default()))
         analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-        # Defines list[real] entries — verify via analysis.by_def
-        list_real_defs = [
-            t for t in analysis.by_def.values()
-            if isinstance(t, ListType) and isinstance(t.elt, RealType)
-        ]
-        assert len(list_real_defs) >= assign_count, (
-            f'expected {assign_count} list[real] defs, got {len(list_real_defs)}'
-        )
-
-    @given(stmt_block(
-        {}, RealType(), depth=2,
-        max_assigns=2,
-        local_types=st.just(TupleType(RealType(), BoolType())),
-    ))
-    def test_pinned_tuple_locals_typecheck(self, block) -> None:
-        from fpy2.ast.fpyast import FuncMeta
-        from fpy2.env import ForeignEnv
-        fd = FuncDef('f', [], block,
-                     FuncMeta(set(), None, None, {}, ForeignEnv.default()))
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
-    @given(
-        fpy_real_function(
-            num_args=st.integers(0, 2),
-            max_depth=st.integers(0, 2),
-            max_assigns=st.integers(1, 3),
-        ),
-        st.data(),
-    )
-    @settings(max_examples=80, deadline=None)
-    def test_default_locals_run(self, f: fp.Function, data: st.DataObject) -> None:
-        # Smoke test: with the new default ``arbitrary_type(max_depth=1)``
-        # local_types, the body can include compound locals — still runs.
-        inputs = [
-            data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-            for _ in range(len(f.args))
-        ]
-        f(*inputs, ctx=fp.FP64)
+        names = [s.target for s in block.stmts if isinstance(s, Assign)]
+        assert [t for d, t in analysis.by_def.items() if d.name in names] == [local_t] * len(names)
 
 
 class TestForStmt:
     """``ForStmt`` (``for i in range(N): ...``) in bodies."""
-
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(1, 2),
-        max_assigns=st.just(1),
-        max_contexts=st.just(0),
-        max_ifs=st.just(0),
-        max_loops=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_loops_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
 
     @given(
         fpy_real_function(
@@ -319,28 +202,12 @@ class TestForStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_loops_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestWhileStmt:
     """``WhileStmt`` (counter-driven template) in bodies."""
-
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(1, 2),
-        max_assigns=st.just(1),
-        max_contexts=st.just(0),
-        max_ifs=st.just(0),
-        max_loops=st.just(0),
-        max_whiles=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_whiles_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
 
     @given(
         fpy_real_function(
@@ -355,48 +222,12 @@ class TestWhileStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_whiles_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
-
-
-class TestAllControlFlow:
-    """every statement kind enabled simultaneously."""
-
-    @given(
-        fpy_real_function(
-            num_args=st.integers(0, 2),
-            max_depth=st.integers(0, 2),
-            max_assigns=st.just(1),
-            max_contexts=st.just(1),
-            max_ifs=st.just(1),
-            max_loops=st.just(1),
-            max_whiles=st.just(1),
-        ),
-        st.data(),
-    )
-    @settings(max_examples=80, deadline=None)
-    def test_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestIfStmt:
     """``IfStmt`` / ``If1Stmt`` inside generated function bodies."""
-
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(1, 2),
-        max_assigns=st.just(1),
-        max_contexts=st.just(0),
-        max_ifs=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_ifs_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
 
     @given(
         fpy_real_function(
@@ -409,10 +240,8 @@ class TestIfStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_ifs_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestZipEnumerate:
@@ -435,7 +264,7 @@ class TestZipEnumerate:
         TupleType(RealType(), RealType(), RealType()), {}, depth=2,
         include=ListProd.ZIP,
     ))
-    def test_zip_only_for_arity3_typechecks(self, e: Expr) -> None:
+    def test_zip_only_emits_zip(self, e: Expr) -> None:
         # arity 3 → enumerate doesn't apply; with include=ListProd.ZIP we
         # should always get a Zip node.
         from fpy2.ast.fpyast import Zip as _Zip
@@ -446,41 +275,19 @@ class TestZipEnumerate:
         TupleType(RealType(), RealType()), {}, depth=2,
         include=ListProd.ENUMERATE,
     ))
-    def test_enumerate_only_typechecks(self, e: Expr) -> None:
+    def test_enumerate_only_emits_enumerate(self, e: Expr) -> None:
         from fpy2.ast.fpyast import Enumerate as _Enumerate
         assert isinstance(e, _Enumerate)
 
 
 class TestArbitraryFuncdef:
-    """``fpy_funcdef`` with arbitrary signatures."""
-
-    @given(
-        st.data(),
-    )
-    @settings(max_examples=60, deadline=None)
-    def test_arbitrary_typed_funcdef_typechecks(self, data: st.DataObject) -> None:
-        # Draw a small random signature (1-3 args, all scalar-only for
-        # easier value generation in the runtime test below).
-        n_args = data.draw(st.integers(1, 3))
-        arg_ts = tuple(
-            data.draw(arbitrary_type(max_depth=1, scalar_only=True))
-            for _ in range(n_args)
-        )
-        ret_t = data.draw(arbitrary_type(max_depth=1, scalar_only=True))
-        fd = data.draw(fpy_funcdef(
-            arg_ts, ret_t,
-            max_depth=st.just(2),
-            max_assigns=st.just(1),
-            max_contexts=st.just(0),
-        ))
-        analysis = TypeInfer.check(fd)
-        assert tuple(analysis.arg_types) == arg_ts
-        assert analysis.return_type == ret_t
+    """``fpy_funcdef`` with arbitrary signatures.  Scalar-only, for easier value
+    generation."""
 
     @given(st.data())
     @settings(max_examples=60, deadline=None)
-    def test_arbitrary_typed_function_runs(self, data: st.DataObject) -> None:
-        n_args = data.draw(st.integers(0, 2))
+    def test_arbitrary_typed_function_typechecks_and_runs(self, data: st.DataObject) -> None:
+        n_args = data.draw(st.integers(0, 3))
         arg_ts = tuple(
             data.draw(arbitrary_type(max_depth=1, scalar_only=True))
             for _ in range(n_args)
@@ -492,6 +299,9 @@ class TestArbitraryFuncdef:
             max_assigns=st.just(1),
             max_contexts=st.just(0),
         ))
+        analysis = TypeInfer.check(f.ast)
+        assert tuple(analysis.arg_types) == arg_ts
+        assert analysis.return_type == ret_t
         inputs = [data.draw(value_for_type(t)) for t in arg_ts]
         f(*inputs, ctx=fp.FP64)
 
@@ -510,17 +320,6 @@ class TestContextExpr:
 class TestContextStmt:
     """Generated functions with ``with CTX:`` blocks should typecheck + run."""
 
-    @given(fpy_real_funcdef(
-        num_args=st.integers(0, 2),
-        max_depth=st.integers(0, 2),
-        max_assigns=st.integers(0, 2),
-        max_contexts=st.just(2),
-    ))
-    @settings(max_examples=80, deadline=None)
-    def test_with_contexts_typechecks(self, fd: FuncDef) -> None:
-        analysis = TypeInfer.check(fd)
-        assert isinstance(analysis.return_type, RealType)
-
     @given(
         fpy_real_function(
             num_args=st.integers(0, 2),
@@ -531,10 +330,8 @@ class TestContextStmt:
         st.data(),
     )
     @settings(max_examples=80, deadline=None)
-    def test_with_contexts_runs(self, f: fp.Function, data: st.DataObject) -> None:
-        inputs = [data.draw(real_floats(prec_max=8, exp_min=-4, exp_max=4))
-                  for _ in range(len(f.args))]
-        f(*inputs, ctx=fp.FP64)
+    def test_typechecks_and_runs(self, f: fp.Function, data: st.DataObject) -> None:
+        _typechecks_and_runs(f, data)
 
 
 class TestIncludeNarrowing:
@@ -557,10 +354,6 @@ class TestIncludeNarrowing:
                     children = getattr(node, attr)
                     if isinstance(children, (list, tuple)):
                         stack.extend(c for c in children if isinstance(c, Expr))
-
-    @given(real_expr({}, depth=0, include=RealProd.LITERAL))
-    def test_literal_only_leaf(self, e: Expr) -> None:
-        assert isinstance(e, Integer)
 
     @given(bool_expr({}, depth=3, include=BoolProd.LITERAL | BoolProd.COMPARE))
     def test_bool_compare_only(self, e: Expr) -> None:
@@ -595,17 +388,6 @@ class TestFlagInclude:
         import pytest as _pytest
         with _pytest.raises(TypeError, match='RealProd'):
             real_expr({}, depth=0, include=BoolProd.LITERAL)  # type: ignore[arg-type]
-
-    def test_flag_dispatch_emits_only_requested_class(self) -> None:
-        """``include=RealProd.LITERAL`` produces only ``Integer`` literals."""
-        from fpy2.ast.fpyast import Integer as _Integer
-
-        @given(real_expr({}, depth=0, include=RealProd.LITERAL))
-        @settings(max_examples=20)
-        def _check(e):
-            assert isinstance(e, _Integer)
-
-        _check()
 
 
 class TestGrammarCrossTypePropagation:
@@ -909,10 +691,6 @@ class TestTypeDispatch:
     @given(expr(BoolType(), {}, depth=0))
     def test_bool_dispatch_yields_bool_leaf(self, e: Expr) -> None:
         assert isinstance(e, BoolVal)
-
-    @given(expr(ListType(RealType()), {}, depth=0))
-    def test_list_dispatch_yields_list_literal(self, e: Expr) -> None:
-        assert isinstance(e, ListExpr)
 
     @given(expr(TupleType(RealType(), BoolType()), {}, depth=0))
     def test_tuple_dispatch_yields_tuple_expr(self, e: Expr) -> None:

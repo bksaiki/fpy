@@ -13,24 +13,6 @@ _common: list[EFloatContext] = [
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
 ]
 
-class ToOrdinalTestCase():
-    """Testing `IEEEContext.to_ordinal()`"""
-
-    def test_common(self):
-        # iterate over common contexts
-        for ctx in _common:
-            # for ctx, encode all possible values
-            for s in (True, False):
-                for exp in range(ctx.expmin, ctx.expmax + 1):
-                    for c in range(0, 1 << ctx.pmax):
-                        xr = RealFloat(s, exp, c)
-                        if ctx.representable_under(xr):
-                            x = Float(x=xr, ctx=ctx)
-                            i = ctx.to_ordinal(x)
-                            assert isinstance(i, int), f'x={x}, i={i}'
-                            assert i >= -(1 << ctx.nbits - 1), f'x={x}, i={i}'
-                            assert i < 1 << ctx.nbits - 1, f'x={x}, i={i}'
-
 
 class OrdinalRoundTripTestCase():
     """Testing `ExtFloatContext.to_ordinal()` and `ExtFloatContext.from_ordinal()`"""

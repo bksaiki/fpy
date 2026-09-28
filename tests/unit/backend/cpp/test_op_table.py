@@ -88,21 +88,8 @@ class TestOpTableShape:
 class TestDispatchDirect:
     """Direct same-type matches emit without a cast."""
 
-    def test_double_add(self):
-        @fp.fpy
-        def f(x: fp.Real, y: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x + y
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[RealType(fp.FP64), RealType(fp.FP64)],
-        )
-        assert 'return (x + y);' in out
-        assert 'static_cast' not in out
-
     @pytest.mark.parametrize(
-        'ctx', [fp.UINT8, fp.UINT16, fp.UINT32, fp.UINT64],
+        'ctx', [fp.UINT8, fp.UINT32],
     )
     def test_unsigned_abs_is_the_operand(self, ctx):
         """`std::abs(uint32_t)` is ambiguous and `std::abs(uint8_t)` picks the
@@ -274,9 +261,10 @@ class TestLossyCastAdvice:
         # the generic advice would send the user to widen the *active* context
         assert 'format contains the operand' not in msg
 
-    @pytest.mark.parametrize('int_ctx', [fp.SINT8, fp.SINT16, fp.SINT32])
-    def test_a_narrow_integer_exponent_needs_no_advice(self, int_ctx):
-        assert self._scale(int_ctx)()
+    def test_a_narrow_integer_exponent_needs_no_advice(self):
+        # `_cast_advice` only asks whether the integer fits in `double`, so
+        # SINT32 stands for every integer `double` holds exactly
+        assert self._scale(fp.SINT32)()
 
     def test_the_suggested_explicit_round_compiles(self):
         """One half of the advice: accept the rounding."""

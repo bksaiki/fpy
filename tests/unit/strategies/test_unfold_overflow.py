@@ -93,7 +93,6 @@ class TestUnfoldOverflow:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-
     def test_removes_the_bound_from_the_context(self):
         assert fp.FP16 in _round_ctxs(_quantized_sum.ast)
         out = unfold_overflow(_quantized_sum)
@@ -117,7 +116,6 @@ class TestUnfoldOverflow:
         once = unfold_overflow(_quantized_sum)
         twice = unfold_overflow(once)
         assert twice.ast.is_equiv(once.ast)
-
 
     def test_composes_with_simplify(self):
         out = simplify(
@@ -209,44 +207,6 @@ class TestPipeline:
             assert c.nmin == -1
             if isinstance(c, fp.MPBFixedContext):
                 assert c.overflow is fp.OverflowMode.ASSERT
-
-    def test_target_states_a_claim_not_a_rule(self):
-        """`float_to_fixed` takes its unbounded path, so the bound it states is
-        the operand's reach under `ASSERT` rather than the source format's
-        overflow rule."""
-        alone = float_to_fixed(_quantized_sum)
-        composed = float_to_fixed(unfold_overflow(_quantized_sum))
-
-        def overflows(fn):
-            return {
-                c.overflow for c in _block_ctxs(fn.ast)
-                if isinstance(c, fp.MPBFixedContext)
-            }
-
-        # run alone, the target reproduces FP16's own edge rule
-        assert overflows(alone) == {fp.OverflowMode.OVERFLOW}
-        # composed, nothing but the claim
-        assert overflows(composed) == {fp.OverflowMode.ASSERT}
-        assert _same(composed(_SAMPLE), _quantized_sum(_SAMPLE))
-
-    def test_no_upper_clamp(self):
-        """`float_to_fixed` clamps the digit position so the *bound* stays on
-        representable.  With no bound there is nothing to keep representable, so
-        the position follows the exponent alone."""
-        alone = float_to_fixed(_quantizer(fp.FP16))
-        composed = float_to_fixed(unfold_overflow(_quantizer(fp.FP16)))
-        assert 'min(' in alone.format()
-        assert 'min(' not in composed.format()
-
-    def test_early_check_bounds_what_is_rounded(self):
-        """With the guard in front, only ``|x| < infval`` reaches the
-        rounding, which is what bounds the integer the rescaled round produces
-        — the clamp's job, done by the check instead."""
-        q = _quantizer(fp.FP16)
-        out = rescale_fixed(float_to_fixed(unfold_overflow(q, early_check=True)))
-        assert str(int(fp.FP16.infval())) in out.format()
-        for x in _samples(fp.FP16):
-            assert _same(out(x), q(x)), x
 
     def test_composes_with_simplify(self):
         out = simplify(

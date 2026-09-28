@@ -97,8 +97,7 @@ class TestSignMagnitudeKeepsNegativeZero():
         assert ctx.round(-0.0).s
         assert not ctx.round(0.0).s
 
-    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
-    @given(real_floats(prec_max=8, exp_min=-8, exp_max=8))
+    @given(st.sampled_from(_ROUNDING_MODES), real_floats(prec_max=8, exp_min=-8, exp_max=8))
     def test_round_is_always_representable(self, rm: fp.RoundingMode, x: fp.RealFloat):
         ctx = fp.SMFixedContext(0, 8, rm)
         r = ctx.round(x)
@@ -134,22 +133,13 @@ class TestRoundNeverProducesNegativeZero():
         assert not (r.is_zero() and r.s), f'round({v}) under {rm} gave -0'
         assert ctx.representable_under(r)
 
-    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
-    @given(real_floats(prec_max=8, exp_min=-8, exp_max=8))
+    @given(st.sampled_from(_ROUNDING_MODES), real_floats(prec_max=8, exp_min=-8, exp_max=8))
     def test_round_is_always_representable(self, rm: fp.RoundingMode, x: fp.RealFloat):
-        # the core invariant: `round` lands on a representable value
+        # the core invariant: `round` lands on a representable, encodable value
         ctx = fp.FixedContext(True, 0, 8, rm)
         r = ctx.round(x)
         assert ctx.representable_under(r)
         assert not (r.is_zero() and r.s)
-
-    @pytest.mark.parametrize('rm', _ROUNDING_MODES)
-    @given(real_floats(prec_max=8, exp_min=-8, exp_max=8))
-    def test_rounded_values_encode(self, rm: fp.RoundingMode, x: fp.RealFloat):
-        # a rounded value must always be encodable, which is what a stricter
-        # `representable_in` would otherwise break
-        ctx = fp.FixedContext(True, 0, 8, rm)
-        r = ctx.round(x)
         assert ctx.decode(ctx.encode(r)) == r
 
     @pytest.mark.parametrize('rm', _ROUNDING_MODES)

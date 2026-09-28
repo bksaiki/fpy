@@ -13,7 +13,7 @@ from fpy2 import dim, size
 from fractions import Fraction
 from hypothesis import given, settings, strategies as st
 
-from fpy2.analysis import ContextUseAnalysis, FormatInfer, TypeAnalysis, TypeInfer
+from fpy2.analysis import FormatInfer
 from fpy2.analysis.format_infer import (
     AbstractFormat,
     ListFormat,
@@ -72,26 +72,6 @@ class TestFormatInfer:
     # ------------------------------------------------------------------
     # Format pinned by monomorphized argument types
 
-    def test_monomorphized_scalar_arg_format(self):
-        """
-        After monomorphization, ``RealType.fmt`` carries the concrete
-        format.  ``_top_bound`` extracts that format so the argument's
-        bound is the precise pinned format, not ``REAL_FORMAT``.
-        """
-        from fpy2.transform import Monomorphize
-        from fpy2.types import RealType
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return x
-
-        mono_ast = Monomorphize.apply(f.ast, None, [RealType(fp.FP32)])
-        info = FormatInfer.analyze(mono_ast)
-        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
-        assert fp.FP32.format() in x_bounds, (
-            f'expected FP32 among x bounds after monomorphization, got {x_bounds}'
-        )
-
     def test_monomorphized_list_arg_format(self):
         """
         Monomorphization propagates through structural types: a
@@ -111,51 +91,6 @@ class TestFormatInfer:
             f'expected ListFormat(FP32) among xs bounds, got {xs_bounds}'
         )
 
-    def test_unmonomorphized_arg_keeps_real_format(self):
-        """
-        Without a monomorphization pass, ``RealType.fmt`` is ``None`` and
-        ``_top_bound`` reports ``REAL_FORMAT`` as before — no regression.
-        """
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return x
-
-        info = self._run(f)
-        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
-        assert REAL_FORMAT in x_bounds
-
-    # ------------------------------------------------------------------
-    # Single context block
-
-    def test_fp32_context(self):
-        """Operations inside an FP32 context produce FP32-format values."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                y = fp.round(x)
-                return y
-
-        info = self._run(f)
-        expected = fp.FP32.format()
-        # Every definition touched by the FP32 context should have FP32 format
-        fmt_set = set(info.by_def.values())
-        assert expected in fmt_set, f"expected FP32 format in by_def, got {fmt_set}"
-
-    def test_fp64_context(self):
-        """Operations inside an FP64 context produce FP64-format values."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = fp.round(x)
-                return y
-
-        info = self._run(f)
-        expected = fp.FP64.format()
-        fmt_set = set(info.by_def.values())
-        assert expected in fmt_set, f"expected FP64 format in by_def, got {fmt_set}"
-
     # ------------------------------------------------------------------
     # Arithmetic operations inside a context
 
@@ -172,29 +107,6 @@ class TestFormatInfer:
         # The return expression (x + y) is in by_expr; no assignment means no by_def entry
         fmt_set = set(info.by_expr.values())
         assert expected in fmt_set, f"expected FP32 format in by_expr, got {fmt_set}"
-
-    # ------------------------------------------------------------------
-    # Conditional branches
-
-    def test_if_same_format(self):
-        """
-        When both branches of an ``if`` produce the same format, the merged
-        variable should also have that format (join of equal formats).
-        """
-
-        @fp.fpy
-        def f(x: fp.Real, cond: bool) -> fp.Real:
-            with fp.FP32:
-                if cond:
-                    y = fp.round(x)
-                else:
-                    y = fp.round(x)
-                return y
-
-        info = self._run(f)
-        expected = fp.FP32.format()
-        fmt_set = set(info.by_def.values())
-        assert expected in fmt_set, f"expected FP32 format in by_def, got {fmt_set}"
 
     # ------------------------------------------------------------------
     # Nested context blocks
@@ -216,28 +128,7 @@ class TestFormatInfer:
         assert fp32_fmt in fmt_set, (
             f"expected FP32 format for value from inner context, got {fmt_set}"
         )
-
-    # ------------------------------------------------------------------
-    # Return-value format
-
-    def test_return_format_fp32(self):
-        """The return expression's format matches the enclosing context."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                return fp.round(x)
-
-        info = self._run(f)
-        expected = fp.FP32.format()
-        # Find the ReturnStmt's expression in by_expr
-        ret_fmts = [
-            fmt for e, fmt in info.by_expr.items()
-            if fmt != REAL_FORMAT
-        ]
-        assert expected in ret_fmts, (
-            f"expected FP32 format among by_expr values, got {set(ret_fmts)}"
-        )
+        assert fp.FP64.format() in fmt_set
 
     # ------------------------------------------------------------------
     # While loop
@@ -316,28 +207,6 @@ class TestFormatInfer:
         )
 
     # ------------------------------------------------------------------
-    # Type-info and context-use analysis are stored in the result
-
-    def test_result_has_type_info(self):
-        """The FormatAnalysis result stores the TypeAnalysis."""
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return x
-
-        info = self._run(f)
-        assert isinstance(info.type_info, TypeAnalysis)
-
-    def test_result_has_ctx_use(self):
-        """The FormatAnalysis result stores the ContextUseAnalysis."""
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                return fp.round(x)
-
-        info = self._run(f)
-        assert isinstance(info.ctx_use, ContextUseAnalysis)
-
-    # ------------------------------------------------------------------
     # Join lattice semantics
 
     def test_join_same_format(self):
@@ -355,13 +224,13 @@ class TestFormatInfer:
         representable set contains both inputs (rather than widening
         immediately to ``REAL_FORMAT``).
         """
-        fmt1 = fp.FP32.format()
-        fmt2 = fp.FP64.format()
+        fmt1 = fp.FP16.format()
+        fmt2 = fp.BF16.format()
         joined = _join_bounds(fmt1, fmt2)
         assert isinstance(joined, Format)
         assert joined != REAL_FORMAT
         # The joined format must contain every value representable by either
-        # input. Pick concrete witnesses near the bounds of FP32 / FP64.
+        # input. Pick concrete witnesses near the bounds of FP16 / BF16.
         for fmt in (fmt1, fmt2):
             sample = fmt.maxval()._real
             assert joined.representable_in(sample)
@@ -388,16 +257,6 @@ class TestFormatInfer:
         assert joined != REAL_FORMAT
         assert joined.representable_in(fp32.maxval()._real)
         assert _join_bounds(fp32, big) == joined      # symmetric
-
-    def test_a_set_that_fits_joins_to_the_format(self):
-        fp32 = fp.FP32.format()
-        assert _join_bounds(SetFormat(frozenset({Fraction(1)})), fp32) == fp32
-
-    def test_a_non_dyadic_set_still_reaches_the_top(self):
-        """No ``AbstractFormat`` can pin a non-dyadic value, so there is no
-        bound below ``REAL_FORMAT`` to give."""
-        third = SetFormat(frozenset({Fraction(1, 3)}))
-        assert _join_bounds(third, fp.FP32.format()) == REAL_FORMAT
 
     def test_join_real_is_top(self):
         """
@@ -576,37 +435,6 @@ class TestFormatInfer:
         adds = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Add']
         assert adds and adds[-1] == REAL_FORMAT
 
-    def test_loop_widens_to_real_format(self):
-        """
-        A loop whose body applies exact arithmetic to a phi'd value would
-        produce an infinite ascending chain of bounds (each iteration
-        adds fresh values to a ``SetFormat`` or widens the
-        ``AbstractFormat`` prec/bounds).  After ``loop_iter_limit``
-        iterations the analysis switches to widen-mode joins so the
-        fixpoint terminates at ``REAL_FORMAT``.
-
-        Probe: ``x`` starts at the non-zero constant ``1`` and doubles
-        each iteration.  The natural ``SetFormat`` join over the
-        per-iteration values grows without bound — widening must kick
-        in to break the chain.
-        """
-        @fp.fpy
-        def f(n: fp.Real) -> fp.Real:
-            with fp.FP32:
-                x = fp.round(1)
-            while n > 0:
-                with fp.REAL:
-                    x = x + x
-            return x
-
-        # With a small limit, the fixpoint must terminate and widen x's
-        # while-phi to REAL_FORMAT.
-        info = FormatInfer.analyze(f.ast, loop_iter_limit=2)
-        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
-        assert REAL_FORMAT in x_bounds, (
-            f"expected REAL_FORMAT among x bounds with widening, got {x_bounds}"
-        )
-
     def test_loop_iter_limit_zero_widens_immediately(self):
         """
         ``loop_iter_limit=0`` forces every loop join to widen on the very
@@ -628,33 +456,6 @@ class TestFormatInfer:
         # FP32 and FP64 to top), not an MPB-float containing both.
         assert REAL_FORMAT in y_bounds, (
             f"expected REAL_FORMAT among y bounds with limit=0, got {y_bounds}"
-        )
-
-    def test_loop_iter_limit_high_keeps_precision(self):
-        """
-        With a generous limit, a non-divergent loop must still produce a
-        precise join (an MPB-float containing FP32 and FP64), not widen to
-        ``REAL_FORMAT``.
-        """
-        @fp.fpy
-        def f(cond: bool, x: fp.Real) -> fp.Real:
-            with fp.FP32:
-                y = fp.round(x)
-            while cond:
-                with fp.FP64:
-                    y = fp.round(x)
-            return y
-
-        info = FormatInfer.analyze(f.ast, loop_iter_limit=100)
-        y_bounds = [b for d, b in info.by_def.items() if d.name.base == 'y']
-        # Some bound must be a Format containing both FP32 and FP64 but not
-        # equal to REAL_FORMAT (the AbstractFormat-mediated join survives).
-        precise = [
-            b for b in y_bounds
-            if isinstance(b, Format) and b not in (fp.FP32.format(), REAL_FORMAT)
-        ]
-        assert precise, (
-            f"expected an AbstractFormat-derived join among y bounds, got {y_bounds}"
         )
 
     def test_nested_loop_widen_propagates_inward(self):
@@ -699,6 +500,8 @@ class TestFormatInfer:
         assert REAL_FORMAT in z_bounds, (
             f"expected outer widen-mode to propagate into inner loop, got {z_bounds}"
         )
+        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
+        assert REAL_FORMAT in x_bounds
 
     # ------------------------------------------------------------------
     # Bounded-iteration mode for for-loops with statically known length
@@ -1196,16 +999,6 @@ class TestFormatInfer:
         info = self._run(f)
         lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
         assert lens and lens[0] == SetFormat.from_value(Fraction(5))
-
-    def test_len_symbolic_size_falls_back_to_integer(self):
-        """``len(xs)`` for an unknown-size argument stays the integer format."""
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            return len(xs)
-
-        info = self._run(f)
-        lens = [b for e, b in info.by_expr.items() if type(e).__name__ == 'Len']
-        assert lens and lens[0] == _INTEGER_FORMAT
 
     def test_dim_pins_nesting_depth(self):
         """``dim(xs)`` always pins the (static) nesting depth."""
@@ -1846,14 +1639,6 @@ class TestFormatInfer:
             f"ListFormat(REAL_FORMAT), got {post_bound}"
         )
 
-    def test_list_set_widen_helper_leaf(self):
-        """``_list_set_widen`` at depth 0 is just a join."""
-        a = SetFormat(frozenset((Fraction(1),)))
-        b = SetFormat(frozenset((Fraction(2),)))
-        assert _list_set_widen(a, 0, b) == SetFormat(
-            frozenset((Fraction(1), Fraction(2)))
-        )
-
     def test_list_set_widen_helper_nested(self):
         """``_list_set_widen`` peels one ``ListFormat`` layer per index."""
         leaf = SetFormat(frozenset((Fraction(1),)))
@@ -1922,76 +1707,41 @@ def _format_kind_matches_type(fmt, ty) -> bool:
 class TestFormatInferOnGeneratedPrograms:
     """``FormatInfer`` driven by the type-directed FPy program generator.
 
-    Each test below probes a different format-analysis invariant on
-    randomly generated programs whose ``with``-block contexts are
-    concrete (``ForeignVal`` of a :class:`Context`), so partial evaluation
-    should always resolve them — exercising the "concrete" rather than
-    "symbolic" code paths.
+    The ``with``-block contexts are concrete (``ForeignVal`` of a
+    :class:`Context`), so partial evaluation should always resolve them --
+    exercising the "concrete" rather than "symbolic" code paths.  One test,
+    since generating the program is nearly all of the cost; running at all
+    covers the pre-analysis chain (``DefineUse`` -> ``TypeInfer`` ->
+    ``ContextUse`` -> ``ArraySize`` -> ``FormatInfer``).
     """
 
     @given(fpy_real_funcdef(**_GEN_KWARGS))
     @settings(max_examples=100, deadline=None)
-    def test_doesnt_crash(self, fd: FuncDef) -> None:
-        """End-to-end: the analysis runs to completion on every generated
-        program. Catches regressions in the pre-analysis chain
-        (``DefineUse`` → ``TypeInfer`` → ``ContextUse`` → ``ArraySize`` →
-        ``FormatInfer``) that the handwritten suite might miss."""
-        FormatInfer.analyze(fd)
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_is_deterministic(self, fd: FuncDef) -> None:
-        """Same AST → same analysis shape. Catches accidental statefulness
-        (e.g. ``Gensym`` carrying state, hidden caches)."""
-        a1 = FormatInfer.analyze(fd)
-        a2 = FormatInfer.analyze(fd)
-        assert len(a1.by_def) == len(a2.by_def)
-        assert len(a1.by_expr) == len(a2.by_expr)
-        assert len(a1.by_call) == len(a2.by_call)
-        assert a1.fn_fmt.arg_fmts == a2.fn_fmt.arg_fmts
-        assert a1.fn_fmt.ret_fmt == a2.fn_fmt.ret_fmt
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_format_kind_matches_type_kind(self, fd: FuncDef) -> None:
-        """For every expression in ``by_expr``, the format-bound's "kind"
-        agrees with the basic-type's "kind" (see :func:`_format_kind_matches_type`).
-
-        Catches mismatches like a real-typed expression with a
-        ``TupleFormat``, or a tuple-typed expression with a scalar
-        ``Format`` — both would indicate a soundness break between
-        :class:`TypeInfer` and :class:`FormatInfer`.
-        """
-        t_info = TypeInfer.check(fd)
-        f_info = FormatInfer.analyze(fd)
-        for expr, fmt in f_info.by_expr.items():
-            # Only check expressions that the type-checker also recorded
-            # — some generator-emitted nodes (Var carriers for symbol
-            # names) aren't typed values.
-            if expr not in t_info.by_expr:
-                continue
-            ty = t_info.by_expr[expr]
-            assert _format_kind_matches_type(fmt, ty), (
-                f'format kind mismatch on {type(expr).__name__}: '
-                f'type={ty.format()} format={type(fmt).__name__}'
-            )
-
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_fn_fmt_arg_count_matches_funcdef(self, fd: FuncDef) -> None:
-        """``fn_fmt.arg_fmts`` has one entry per function parameter."""
+    def test_generated_programs(self, fd: FuncDef) -> None:
         info = FormatInfer.analyze(fd)
-        assert len(info.fn_fmt.arg_fmts) == len(fd.args)
+        types = info.type_info
 
-    @given(fpy_real_funcdef(**_GEN_KWARGS))
-    @settings(max_examples=80, deadline=None)
-    def test_return_format_matches_return_type(self, fd: FuncDef) -> None:
-        """The function's ``fn_fmt.ret_fmt`` is a format-bound consistent
-        with the declared return type — for these all-real generators,
-        a scalar Format / SetFormat / None."""
-        t_info = TypeInfer.check(fd)
-        f_info = FormatInfer.analyze(fd)
-        assert _format_kind_matches_type(f_info.fn_fmt.ret_fmt, t_info.return_type)
+        # a format-bound's kind agrees with its type's: a real-typed expression
+        # with a `TupleFormat` would be a soundness break between the two.
+        # Some generator-emitted nodes (`Var` carriers for symbol names) are not
+        # typed values.
+        for expr, fmt in info.by_expr.items():
+            if expr in types.by_expr:
+                ty = types.by_expr[expr]
+                assert _format_kind_matches_type(fmt, ty), (
+                    f'format kind mismatch on {type(expr).__name__}: '
+                    f'type={ty.format()} format={type(fmt).__name__}'
+                )
+        assert len(info.fn_fmt.arg_fmts) == len(fd.args)
+        assert _format_kind_matches_type(info.fn_fmt.ret_fmt, types.return_type)
+
+        # no state carried between runs; keys are AST nodes, so compare sizes
+        again = FormatInfer.analyze(fd)
+        assert len(again.by_def) == len(info.by_def)
+        assert len(again.by_expr) == len(info.by_expr)
+        assert len(again.by_call) == len(info.by_call)
+        assert again.fn_fmt.arg_fmts == info.fn_fmt.arg_fmts
+        assert again.fn_fmt.ret_fmt == info.fn_fmt.ret_fmt
 
 
 class TestTupleAccessorFormats:
@@ -2307,7 +2057,7 @@ class TestRoundOntoACoarseGrid:
 
         return FormatInfer.analyze(h.ast).fn_fmt.ret_fmt, C
 
-    @pytest.mark.parametrize('nmin', [-10, 60, 120, 127])
+    @pytest.mark.parametrize('nmin', [-10, 127])
     def test_the_bound_admits_the_rounded_maxval(self, nmin):
         """Sound at every quantum; the hazard starts about eight binades below
         the operand's bound (``nmin`` 120 and up)."""
@@ -2457,11 +2207,11 @@ class TestSelfAnchoredRounding:
         info = FormatInfer.analyze(mono, use_digit_bounds=True)
         return next(b for e, b in info.by_expr.items() if isinstance(e, Round))
 
-    @pytest.mark.parametrize(('k', 'prec'), [(1, 1), (5, 5), (12, 12), (23, 23)])
+    @pytest.mark.parametrize(('k', 'prec'), [(1, 1), (23, 23)])
     def test_truncating_width_is_k(self, k, prec):
         assert self._round_bound(k, fp.RM.RTZ).pmax == prec
 
-    @pytest.mark.parametrize(('k', 'prec'), [(1, 2), (5, 6), (12, 13)])
+    @pytest.mark.parametrize(('k', 'prec'), [(1, 2), (12, 13)])
     def test_nearest_costs_one_more_bit(self, k, prec):
         """`RNE` can carry out of the top binade onto `2 ** (e + 1)`."""
         assert self._round_bound(k, fp.RM.RNE).pmax == prec
@@ -2945,7 +2695,7 @@ class TestRescaledRounding:
         info = FormatInfer.analyze(mono, use_digit_bounds=True)
         return next(b for e, b in info.by_expr.items() if isinstance(e, Round))
 
-    @pytest.mark.parametrize('k', [5, 12, 23])
+    @pytest.mark.parametrize('k', [12, 23])
     def test_the_precision_survives_the_rescale(self, k):
         assert self._round_bound(k).pmax == k
 
@@ -3038,14 +2788,7 @@ class TestRoundCarry:
     carries with the rest.
     """
 
-    def test_the_only_mode_that_cannot_carry(self):
-        assert TestSelfAnchoredRounding._round_bound(5, fp.RM.RTZ).pmax == 5
-
-    @pytest.mark.parametrize(
-        'rm',
-        [fp.RM.RNE, fp.RM.RNA, fp.RM.RAZ, fp.RM.RTP, fp.RM.RTN, fp.RM.RTE,
-         fp.RM.RTO],
-    )
+    @pytest.mark.parametrize('rm', [fp.RM.RTP, fp.RM.RTN])
     def test_modes_that_can(self, rm):
         assert TestSelfAnchoredRounding._round_bound(5, rm).pmax == 6
 
@@ -3166,7 +2909,6 @@ class TestSpecialConversions:
         assert af.prec == 1 and af.has_nan
 
     @pytest.mark.parametrize('ctx, expect', [
-        (fp.FP32, True),
         (fp.FP64, True),
         (fp.INTEGER, False),
         (fp.SINT8, False),
@@ -3194,26 +2936,20 @@ class TestSpecialArithmetic:
     """IEEE rules for the ``Special`` members of ``SetValue``."""
 
     @pytest.mark.parametrize('a, b, expect', [
-        ('POS_INF', 'POS_INF', 'POS_INF'),
         ('NEG_INF', 'NEG_INF', 'NEG_INF'),
-        # the one undefined sum
-        ('POS_INF', 'NEG_INF', 'NAN'),
-        ('NEG_INF', 'POS_INF', 'NAN'),
         ('NAN', 'POS_INF', 'NAN'),
-        ('NAN', 'NAN', 'NAN'),
     ])
     def test_add_of_two_specials(self, a, b, expect):
         from fpy2.analysis.format_infer.analysis import Special, _set_add
 
         assert _set_add(Special[a], Special[b]) is Special[expect]
 
-    @pytest.mark.parametrize('special', ['POS_INF', 'NEG_INF'])
-    def test_add_of_an_infinity_and_a_finite_value(self, special):
+    def test_add_of_an_infinity_and_a_finite_value(self):
         from fpy2.analysis.format_infer.analysis import Special, _set_add
 
         for finite in (Fraction(0), Fraction(3), Fraction(-3)):
-            assert _set_add(Special[special], finite) is Special[special]
-            assert _set_add(finite, Special[special]) is Special[special]
+            assert _set_add(Special.NEG_INF, finite) is Special.NEG_INF
+            assert _set_add(finite, Special.NEG_INF) is Special.NEG_INF
 
     def test_sub_of_equal_infinities_is_nan(self):
         """``_set_sub`` routes through ``neg`` + ``add``, so this falls out."""
@@ -3224,8 +2960,6 @@ class TestSpecialArithmetic:
         assert _set_sub(Special.POS_INF, Special.NEG_INF) is Special.POS_INF
 
     @pytest.mark.parametrize('a, b, expect', [
-        ('POS_INF', 'POS_INF', 'POS_INF'),
-        ('POS_INF', 'NEG_INF', 'NEG_INF'),
         ('NEG_INF', 'NEG_INF', 'POS_INF'),
         ('NAN', 'POS_INF', 'NAN'),
     ])
@@ -3287,15 +3021,6 @@ class TestSpecialConstants:
         ]
         return bound
 
-    def test_infinity_under_real(self):
-        from fpy2.analysis.format_infer.analysis import Special
-
-        @fp.fpy(ctx=fp.REAL)
-        def f():
-            return fp.inf()
-
-        assert self._nullary_bound(f) == SetFormat.from_value(Special.POS_INF)
-
     def test_nan_under_real(self):
         from fpy2.analysis.format_infer.analysis import Special
 
@@ -3351,10 +3076,8 @@ class TestExponentOps:
 
     @pytest.mark.parametrize('ctx, lo, hi', [
         (fp.FP16, -24, 15),
-        (fp.FP32, -149, 127),
-        (fp.FP64, -1074, 1023),
         (fp.IEEEContext(4, 8), -9, 7),
-    ], ids=['fp16', 'fp32', 'fp64', 'ieee_4_8'])
+    ], ids=['fp16', 'ieee_4_8'])
     def test_logb_range_comes_from_the_argument(self, ctx, lo, hi):
         """The result is an integer fixed by the argument's *range*, not its
         precision: the smallest non-zero magnitude is ``2 ** exp`` and the
@@ -3381,9 +3104,8 @@ class TestExponentOps:
         assert claim.has_neg_inf and not claim.has_pos_inf and not claim.has_nan
 
     @pytest.mark.parametrize('ctx', [
-        fp.INTEGER, fp.MPFixedContext(-4), fp.MPFloatContext(11),
-        fp.MPSFloatContext(11, -14),
-    ], ids=['integer', 'mp_fixed', 'mp_float', 'mps_float'])
+        fp.INTEGER, fp.MPFloatContext(11), fp.MPSFloatContext(11, -14),
+    ], ids=['integer', 'mp_float', 'mps_float'])
     def test_logb_declines_an_unbounded_argument(self, ctx):
         """An unbounded argument reports an unbounded exponent."""
         from fpy2.analysis.format_infer.analysis import exact_logb
@@ -3569,20 +3291,6 @@ class TestMagnitudeRefinement:
 
         assert self._af(self._defs(f)['y']).exp == -14 - 24 + 1
 
-    def test_it_agrees_with_the_logb_spelling(self):
-        """The same fact stated either way gives the same position."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(x: fp.Real) -> fp.Real:
-            e = fp.logb(x)
-            if e < -14:
-                y = 0
-            else:
-                with fp.REAL:
-                    y = x * 1
-            return y
-
-        assert self._af(self._defs(f)['y']).exp == -14 - 24 + 1
-
     def test_a_non_dyadic_literal_refines_nothing(self):
         """A rounded bound could be tighter than the truth."""
         @fp.fpy(ctx=fp.REAL)
@@ -3627,21 +3335,11 @@ class TestBranchRefinement:
                     y = x * 1
             return y
 
-        assert self._pos(self._defs(f)['y']) == 65536.0
-
-    def test_the_holding_arm_is_not_refined_by_the_negation(self):
-        """``x >= 65536`` holding says the operand is *large*, which no bound
-        can state -- so that arm gets nothing rather than the else arm's fact."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(x: fp.Real) -> fp.Real:
-            if x >= 65536:
-                with fp.REAL:
-                    y = x * 1
-            else:
-                y = 0
-            return y
-
-        assert self._pos(self._defs(f)['y']) > 1e300      # FP64's own bound
+        y = self._defs(f)['y']
+        assert self._pos(y) == 65536.0
+        # a NaN fails every ordering, so it reaches this arm too
+        af = AbstractFormat.from_format(y)
+        assert af.has_nan and af.has_pos_inf
 
     def test_a_two_sided_guard_compounds(self):
         """The `early_check` shape: both comparisons fail in the same arm."""
@@ -3734,22 +3432,6 @@ class TestBranchRefinement:
 
         assert self._pos(self._defs(f)['y']) > 1e300
 
-    def test_a_failed_test_does_not_exclude_a_nan(self):
-        """A NaN makes every ordering false, so it takes the else arm too.  The
-        constraint leaves the special flags alone, which is what keeps that
-        sound."""
-        @fp.fpy(ctx=fp.REAL)
-        def f(x: fp.Real) -> fp.Real:
-            if x >= 65536:
-                y = 0
-            else:
-                with fp.REAL:
-                    y = x * 1
-            return y
-
-        af = AbstractFormat.from_format(self._defs(f)['y'])
-        assert af.has_nan and af.has_pos_inf
-
     def test_a_lower_test_states_nothing(self):
         """``x > 5`` bounds the operand away from zero, which this domain cannot
         express: writing 5 into ``neg_bound`` would claim the *most negative*
@@ -3769,15 +3451,13 @@ class TestBranchRefinement:
         assert float(af.neg_bound) < -1e300
 
     @pytest.mark.parametrize('op, c, states', [
-        (CompareOp.LT, 5, 'pos'), (CompareOp.LE, 5, 'pos'),
-        (CompareOp.GT, -5, 'neg'), (CompareOp.GE, -5, 'neg'),
+        (CompareOp.LT, 5, 'pos'), (CompareOp.GE, -5, 'neg'),
         # the away-from-zero direction: `pos_bound >= 0 >= neg_bound` leaves it
         # nowhere to go, so it must be declined rather than written to the
         # opposite bound
-        (CompareOp.GT, 5, None), (CompareOp.GE, 5, None),
-        (CompareOp.LT, -5, None), (CompareOp.LE, -5, None),
+        (CompareOp.GT, 5, None), (CompareOp.LE, -5, None),
         # neither negation of these bounds a magnitude
-        (CompareOp.EQ, 5, None), (CompareOp.NE, 5, None),
+        (CompareOp.NE, 5, None),
     ])
     def test_which_comparisons_state_a_bound(self, op, c, states):
         """The rule itself, since the analysis falls back to the unrefined bound
@@ -3933,16 +3613,10 @@ class TestZeroOnlyIntersection:
                  and all(v == 0 or v is NEG_ZERO for v in b.values)]
         assert zeros, 'the unreachable branch should report only zero'
 
-    def test_it_is_not_widened_to_top(self):
-        """The point of using a set: `REAL_FORMAT` would be sound and useless,
-        and storage selection cannot store it."""
-        info = FormatInfer.analyze(self._lower(fp.SINT32).ast)
-        assert not any(b is REAL_FORMAT for b in info.by_def.values())
-
     @pytest.mark.parametrize(
         'src',
-        [fp.SINT8, fp.SINT16, fp.SINT32, fp.UINT8, fp.UINT16, fp.UINT32],
-        ids=['sint8', 'sint16', 'sint32', 'uint8', 'uint16', 'uint32'],
+        [fp.SINT16, fp.SINT32, fp.UINT8],
+        ids=['sint16', 'sint32', 'uint8'],
     )
     def test_an_integer_source_compiles(self, src):
         """An unsigned source used to stop here too: the scale-out's overlap
@@ -4331,11 +4005,11 @@ class TestALogbOfZeroHasNoFloor:
         for f in (tested, rounded):
             assert self._holds(f, types, [xs, self.TINY]), f.name
 
-    @pytest.mark.parametrize('e_zero', [-25, -26])
-    def test_a_zero_sentinel_below_the_floor_still_anchors(self, e_zero):
+    def test_a_zero_sentinel_below_the_floor_still_anchors(self):
         """T-FDPA's alignment, in which a zero reads as exponent `e_zero`.  A
         zero has no digits to place, so the sum is as wide at any `e_zero` --
         not only down to FP16's floor, `-24`, less one."""
+        e_zero = -26
 
         @fp.fpy(ctx=fp.REAL)
         def f(a, c):

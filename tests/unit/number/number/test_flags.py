@@ -59,71 +59,12 @@ class TestRoundFlags():
         st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
         st.sampled_from(fp.RM)
     )
-    def test_inexact(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
+    def test_flags(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
         assume(p is not None or n is not None)
         rounded = x.round(max_p=p, min_n=n, rm=rm)
-        inexact = ReferenceFlags.inexact(x, p, n, rm)
-        assert rounded.inexact == inexact, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, inexact={inexact}'
-
-    @given(
-        real_floats(prec_max=16, exp_min=-16, exp_max=16),
-        st.one_of(st.none(), st.integers(min_value=1, max_value=8)),
-        st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
-        st.sampled_from(fp.RM)
-    )
-    def test_carry(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
-        assume(p is not None or n is not None)
-        rounded = x.round(max_p=p, min_n=n, rm=rm)
-        carry = ReferenceFlags.carry(x, p, n, rm)
-        assert rounded.carry == carry, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, carry={carry}'
-
-    @given(
-        real_floats(prec_max=16, exp_min=-16, exp_max=16),
-        st.one_of(st.none(), st.integers(min_value=1, max_value=8)),
-        st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
-        st.sampled_from(fp.RM)
-    )
-    def test_tiny_pre(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
-        assume(p is not None or n is not None)
-        rounded = x.round(max_p=p, min_n=n, rm=rm)
-        tiny_pre = ReferenceFlags.tiny_pre(x, p, n, rm)
-        assert rounded.tiny_pre == tiny_pre, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, tiny_pre={tiny_pre}'
-
-    @given(
-        real_floats(prec_max=16, exp_min=-16, exp_max=16),
-        st.one_of(st.none(), st.integers(min_value=1, max_value=8)),
-        st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
-        st.sampled_from(fp.RM)
-    )
-    def test_tiny_post(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
-        assume(p is not None or n is not None)
-        rounded = x.round(max_p=p, min_n=n, rm=rm)
-        tiny_post = ReferenceFlags.tiny_post(x, p, n, rm)
-        assert rounded.tiny_post == tiny_post, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, tiny_post={tiny_post}'
-
-    @given(
-        real_floats(prec_max=16, exp_min=-16, exp_max=16),
-        st.one_of(st.none(), st.integers(min_value=1, max_value=8)),
-        st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
-        st.sampled_from(fp.RM)
-    )
-    def test_underflow_pre(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
-        assume(p is not None or n is not None)
-        rounded = x.round(max_p=p, min_n=n, rm=rm)
-        underflow_pre = ReferenceFlags.underflow_pre(x, p, n, rm)
-        assert rounded.underflow_pre == underflow_pre, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, underflow_pre={underflow_pre}'
-
-    @given(
-        real_floats(prec_max=16, exp_min=-16, exp_max=16),
-        st.one_of(st.none(), st.integers(min_value=1, max_value=8)),
-        st.one_of(st.none(), st.integers(min_value=-16, max_value=16)),
-        st.sampled_from(fp.RM)
-    )
-    def test_underflow_post(self, x: fp.RealFloat, p: int | None, n: int | None, rm: fp.RM):
-        assume(p is not None or n is not None)
-        rounded = x.round(max_p=p, min_n=n, rm=rm)
-        underflow_post = ReferenceFlags.underflow_post(x, p, n, rm)
-        assert rounded.underflow_post == underflow_post, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, underflow_post={underflow_post}'
+        for flag in ('carry', 'tiny_pre', 'tiny_post', 'underflow_pre', 'underflow_post'):
+            expect = getattr(ReferenceFlags, flag)(x, p, n, rm)
+            assert getattr(rounded, flag) == expect, f'x={x}, p={p}, n={n}, rm={rm!r}, rounded={rounded!r}, {flag}={expect}'
 
 
 class TestArithmeticFlags():

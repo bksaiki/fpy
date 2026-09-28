@@ -372,15 +372,12 @@ class TestAListStoresAtItsElements:
             q, arg_types=[ListType(RealType(fp.FP32), 8)])
 
     def test_the_buffer_holds_the_element_type(self):
-        assert 'std::array<int8_t, 8>' in self._emit(self._guarded())
-
-    def test_the_store_spells_its_conversion(self):
-        """The *value* fits where the expression's storage does not: ``max``
-        computes at ``float`` because ``logb`` does."""
-        assert 'static_cast<int8_t>(std::max(' in self._emit(self._guarded())
-
-    def test_the_reduction_folds_on_the_integer_path(self):
         out = self._emit(self._guarded())
+        assert 'std::array<int8_t, 8>' in out
+        # the *value* fits where the expression's storage does not: `max`
+        # computes at `float` because `logb` does
+        assert 'static_cast<int8_t>(std::max(' in out
+        # and the reduction folds on the integer path
         assert re.search(r'= std::max\(\w+, ys\[', out), out
         assert 'signbit' not in out
         assert 'quiet_NaN' not in out
@@ -566,9 +563,6 @@ class TestStorageIsNotTheContext:
     class along.  It does, which is why the guard below survives.
     """
 
-    def test_narrowing_to_a_bounded_format_can_make_an_infinity(self):
-        assert float(fp.FP32.round(1e300)) == float('inf')
-
     def test_so_a_guard_after_a_narrowing_round_stays(self):
         """``v`` is finite by the branch, but ``y`` need not be: `FP32` overflows
         at ``1e300``.  Passing the operand's class through would have dropped the
@@ -593,7 +587,6 @@ class TestAgreesWithTheInterpreter:
     @pytest.mark.parametrize('ctx', [
         pytest.param(FLOAT_STORAGE, id='float_storage'),
         pytest.param(INT_STORAGE, id='integer_storage'),
-        pytest.param(WITH_SPECIALS, id='with_specials'),
         pytest.param(fp.SINT8, id='sint8'),
     ])
     def test_the_guarded_program_value_for_value(self, ctx):

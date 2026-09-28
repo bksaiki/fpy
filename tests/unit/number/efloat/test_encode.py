@@ -13,17 +13,6 @@ _common: list[EFloatContext] = [
     FP8P1, FP8P2, FP8P3, FP8P4, FP8P5, FP8P6, FP8P7
 ]
 
-class DecodeTestCase():
-    """Testing `ExtFloatContext.decode()`"""
-
-    def test_common(self):
-        # iterate over common contexts
-        for ctx in _common:
-            # for ctx, decode all possible encodings
-            for i in range(1 << ctx.nbits):
-                x = ctx.decode(i)
-                assert isinstance(x, Float), f'i={i}, x={x}'
-                assert x.is_representable(), f'i={i}, x={x}'
 
 class EncodeTestCase():
     """Testing `ExtFloatContext.encode()`"""

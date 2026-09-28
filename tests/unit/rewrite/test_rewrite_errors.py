@@ -66,16 +66,7 @@ def test_an_index_past_the_end_says_how_many_matched():
         fma.apply(twice, 5)
     assert 'matches 2 place(s)' in str(exc.value)
     assert 'fma_l' in str(exc.value)
-
-
-def test_the_two_failures_are_distinguishable():
-    """Matching nothing and naming the wrong match are different mistakes."""
-    with pytest.raises(TransformReferenceError) as nothing:
-        fma.apply(plain)
-    with pytest.raises(TransformReferenceError) as wrong:
-        fma.apply(twice, 5)
-    assert 'matches nothing' in str(nothing.value)
-    assert 'does not correspond' in str(wrong.value)
+    assert 'does not correspond' in str(exc.value)
 
 
 def test_a_malformed_rule_is_not_a_transform_error():

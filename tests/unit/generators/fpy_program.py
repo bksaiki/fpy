@@ -49,8 +49,9 @@ Known-deferred surface (productions whose generators raise
 """
 
 import dataclasses
+from collections.abc import Callable, Iterable
 from enum import Flag, auto
-from typing import TypeAlias, TypeVar
+from typing import Any, TypeAlias, TypeVar
 
 from hypothesis import strategies as st
 
@@ -154,7 +155,46 @@ def _var_of_type(
     names = sorted((n for n, t in env.items() if t == target_type), key=str)
     if not names:
         return None
-    return st.sampled_from(names).map(lambda n: Var(n, None))
+    return st.sampled_from(names).map(_node(Var))
+
+
+_T = TypeVar('_T')
+
+
+# Hypothesis reads a lambda's source each time one is passed to `.map`; a named
+# function it identifies by name.
+
+def _node(ctor: Callable[..., _T], *head: Any) -> Callable[[Any], _T]:
+    """``x -> ctor(*head, x, None)``."""
+    def node(x: Any) -> _T:
+        return ctor(*head, x, None)
+    return node
+
+
+def _node_of(ctor: Callable[..., _T], *head: Any) -> Callable[[Iterable[Any]], _T]:
+    """``xs -> ctor(*head, *xs, None)``."""
+    def node(xs: Iterable[Any]) -> _T:
+        return ctor(*head, *xs, None)
+    return node
+
+
+def _decnum(pf: tuple[int, int]) -> Decnum:
+    return Decnum(f'{pf[0]}.{pf[1]:04d}', None)
+
+
+def _compare(oab: tuple[CompareOp, Expr, Expr]) -> Compare:
+    return Compare([oab[0]], [oab[1], oab[2]], None)
+
+
+def _node_fresh(ctor: Callable[..., _T], name: str) -> Callable[[Expr], _T]:
+    """``x -> ctor(_func_sym(name), x, None)``, with a symbol of its own each time."""
+    def node(x: Expr) -> _T:
+        return ctor(_func_sym(name), x, None)
+    return node
+
+
+def _tuple_type(elts: list[Type]) -> TupleType:
+    return TupleType(*elts)
 
 
 def _func_sym(name: str) -> Var:
@@ -424,7 +464,7 @@ def _real_expr(
     leaves: list[st.SearchStrategy[Expr]] = []
     if RealProd.INTEGER in use:
         lo, hi = grammar.int_literal_range
-        leaves.append(st.integers(lo, hi).map(lambda v: Integer(v, None)))
+        leaves.append(st.integers(lo, hi).map(_node(Integer)))
     if RealProd.DECNUM in use:
         lo, hi = grammar.int_literal_range
         # Decnums carry the decimal as a string.  Emit ``<int>.<frac>``
@@ -432,22 +472,21 @@ def _real_expr(
         # (e.g. ``0.1``) without growing magnitudes via ``e±N``.
         leaves.append(
             st.tuples(st.integers(lo, hi), st.integers(0, 9999))
-            .map(lambda pf: Decnum(f'{pf[0]}.{pf[1]:04d}', None))
+            .map(_decnum)
         )
     if RealProd.HEXNUM in use:
         # Hexnums are dyadic-by-construction.  Emit ``[-]0x<i>.<f>p±E``
         # with at most 4 hex digits per part and a small binary exponent
         # to keep magnitudes manageable.
         hex_sym = _func_sym('hexnum')
-        hex_digits = st.integers(0, 0xffff).map(lambda n: f'{n:x}')
+        hex_digits = st.integers(0, 0xffff).map('{:x}'.format)
+        def hexnum(t: tuple[bool, str, str, int]) -> Hexnum:
+            return Hexnum(hex_sym, f'{"-" if t[0] else ""}0x{t[1]}.{t[2]}p{t[3]:+d}', None)
+
         leaves.append(
             st.tuples(
                 st.booleans(), hex_digits, hex_digits, st.integers(-8, 8),
-            ).map(lambda t: Hexnum(
-                hex_sym,
-                f'{"-" if t[0] else ""}0x{t[1]}.{t[2]}p{t[3]:+d}',
-                None,
-            ))
+            ).map(hexnum)
         )
     if RealProd.RATIONAL in use:
         lo, hi = grammar.int_literal_range
@@ -457,7 +496,7 @@ def _real_expr(
         # explode (``1000 / 1`` = 1000) or vanish (``1 / 1000`` ≈ 0).
         leaves.append(
             st.tuples(st.integers(lo, hi), st.integers(1, 100))
-            .map(lambda pq: Rational(rat_sym, pq[0], pq[1], None))
+            .map(_node_of(Rational, rat_sym))
         )
     if RealProd.VAR in use:
         var_strat = _var_of_type(env, RealType())
@@ -476,10 +515,10 @@ def _real_expr(
         )
 
         def _binop(cls):
-            return st.tuples(sub_real, sub_real).map(lambda ab: cls(ab[0], ab[1], None))
+            return st.tuples(sub_real, sub_real).map(_node_of(cls))
 
         def _unop(cls):
-            return sub_real.map(lambda x: cls(x, None))
+            return sub_real.map(_node(cls))
 
         if RealProd.ADD in use: inner.append(_binop(Add))
         if RealProd.SUB in use: inner.append(_binop(Sub))
@@ -490,24 +529,20 @@ def _real_expr(
 
         def _named_unary(cls: type[NamedUnaryOp], name: str) -> st.SearchStrategy[Expr]:
             sym = _func_sym(name)
-            return sub_real.map(lambda x: cls(sym, x, None))
+            return sub_real.map(_node(cls, sym))
 
         for prod, cls, name in _REAL_NAMED_UNARY_FLAG:
             if prod in use:
                 inner.append(_named_unary(cls, name))
 
         if RealProd.IF_EXPR in use:
-            inner.append(st.tuples(sub_bool, sub_real, sub_real).map(
-                lambda cab: IfExpr(cab[0], cab[1], cab[2], None)
-            ))
+            inner.append(st.tuples(sub_bool, sub_real, sub_real).map(_node_of(IfExpr)))
         if RealProd.LEN in use:
             sub_real_list = _list_expr(
                 RealType(), env, depth - 1, grammar=grammar,
                 range_arg_min=rmin, range_arg_max=rmax,
             )
-            inner.append(sub_real_list.map(
-                lambda xs: Len(_func_sym('len'), xs, None)
-            ))
+            inner.append(sub_real_list.map(_node_fresh(Len, 'len')))
         # ``min(xs)`` / ``max(xs)`` over ``xs : list[real]``.  Distinct AST
         # nodes from the variadic scalar ``Min``/``Max`` (which the
         # generator does not yet emit).  Reuses the same list-of-real
@@ -518,13 +553,9 @@ def _real_expr(
                 range_arg_min=rmin, range_arg_max=rmax,
             )
             if RealProd.AMIN in use:
-                inner.append(sub_real_list.map(
-                    lambda xs: AMin(_func_sym('min'), xs, None)
-                ))
+                inner.append(sub_real_list.map(_node_fresh(AMin, 'min')))
             if RealProd.AMAX in use:
-                inner.append(sub_real_list.map(
-                    lambda xs: AMax(_func_sym('max'), xs, None)
-                ))
+                inner.append(sub_real_list.map(_node_fresh(AMax, 'max')))
         if RealProd.ROUND in use:
             # ``Cast`` is deliberately not generated: it asserts the
             # rounded value is exact, which fails whenever the value
@@ -532,7 +563,7 @@ def _real_expr(
             # ``cast(9)`` under E5M2). Sound generation would need a
             # per-context exact-representable check per literal.
             round_sym = _func_sym('round')
-            inner.append(sub_real.map(lambda x: Round(round_sym, x, None)))
+            inner.append(sub_real.map(_node(Round, round_sym)))
         if RealProd.CAST in use:
             raise NotImplementedError(
                 'RealProd.CAST generation is deferred — see _real_expr docstring'
@@ -587,7 +618,7 @@ def _bool_expr(
 
     leaves: list[st.SearchStrategy[Expr]] = []
     if BoolProd.LITERAL in use:
-        leaves.append(st.booleans().map(lambda v: BoolVal(v, None)))
+        leaves.append(st.booleans().map(_node(BoolVal)))
     if BoolProd.VAR in use:
         var_strat = _var_of_type(env, BoolType())
         if var_strat is not None:
@@ -608,21 +639,21 @@ def _bool_expr(
             # Restrict to simple binary comparisons (chain length 1).
             inner.append(st.tuples(
                 st.sampled_from(_COMPARE_OPS), sub_real, sub_real,
-            ).map(lambda oab: Compare([oab[0]], [oab[1], oab[2]], None)))
+            ).map(_compare))
         if BoolProd.NOT in use:
-            inner.append(sub_bool.map(lambda x: Not(x, None)))
+            inner.append(sub_bool.map(_node(Not)))
         and_or_args = None
         if BoolProd.AND in use or BoolProd.OR in use:
             and_or_args = st.lists(sub_bool, min_size=2, max_size=3)
         if BoolProd.AND in use:
             assert and_or_args is not None
-            inner.append(and_or_args.map(lambda xs: And(xs, None)))
+            inner.append(and_or_args.map(_node(And)))
         if BoolProd.OR in use:
             assert and_or_args is not None
-            inner.append(and_or_args.map(lambda xs: Or(xs, None)))
+            inner.append(and_or_args.map(_node(Or)))
         def _predicate(cls: type[NamedUnaryOp], name: str) -> st.SearchStrategy[Expr]:
             sym = _func_sym(name)
-            return sub_real.map(lambda x: cls(sym, x, None))
+            return sub_real.map(_node(cls, sym))
 
         for prod, cls, name in _REAL_PREDICATES_FLAG:
             if prod in use:
@@ -679,7 +710,7 @@ def _list_expr(
         )
         productions.append(st.lists(
             elt_strat, min_size=_LIST_LITERAL_LEN[0], max_size=_LIST_LITERAL_LEN[1],
-        ).map(lambda xs: ListExpr(xs, None)))
+        ).map(_node(ListExpr)))
 
     if ListProd.VAR in use:
         var_strat = _var_of_type(env, ListType(elt_type))
@@ -690,26 +721,22 @@ def _list_expr(
         # Args restricted to ``Integer`` literals: the interpreter rejects
         # non-integer ``range`` args (e.g. ``range(log(0)) == range(-inf)``).
         range_sym = _func_sym('range')
-        small_int = st.integers(rmin, rmax).map(lambda n: Integer(n, None))
+        small_int = st.integers(rmin, rmax).map(_node(Integer))
         if ListProd.RANGE1 in use:
-            productions.append(small_int.map(
-                lambda n: Range1(range_sym, n, None)
-            ))
+            productions.append(small_int.map(_node(Range1, range_sym)))
         if ListProd.RANGE2 in use:
-            productions.append(st.tuples(small_int, small_int).map(
-                lambda ab: Range2(range_sym, ab[0], ab[1], None)
-            ))
+            productions.append(st.tuples(small_int, small_int).map(_node_of(Range2, range_sym)))
         if ListProd.RANGE3 in use:
             # ``range(start, stop, step)`` — step must be non-zero
             # (the interpreter, like Python's ``range``, rejects step 0).
             step_int = (
                 st.integers(rmin, rmax)
                 .filter(lambda n: n != 0)
-                .map(lambda n: Integer(n, None))
+                .map(_node(Integer))
             )
-            productions.append(st.tuples(small_int, small_int, step_int).map(
-                lambda abc: Range3(range_sym, abc[0], abc[1], abc[2], None)
-            ))
+            productions.append(
+                st.tuples(small_int, small_int, step_int).map(_node_of(Range3, range_sym))
+            )
 
     if (ListProd.ZIP in use and depth > 0
             and isinstance(elt_type, TupleType) and elt_type.elts):
@@ -726,12 +753,10 @@ def _list_expr(
 
         def _zip_of_len(n: int, _strats=elt_strats):
             sub_lists = [
-                st.lists(s, min_size=n, max_size=n).map(lambda xs: ListExpr(xs, None))
+                st.lists(s, min_size=n, max_size=n).map(_node(ListExpr))
                 for s in _strats
             ]
-            return st.tuples(*sub_lists).map(
-                lambda xs: Zip(zip_sym, list(xs), None)
-            )
+            return st.tuples(*sub_lists).map(list).map(_node(Zip, zip_sym))
 
         productions.append(st.integers(1, 4).flatmap(_zip_of_len))
 
@@ -746,9 +771,7 @@ def _list_expr(
             val_t, env, depth - 1, grammar=grammar,
             range_arg_min=rmin, range_arg_max=rmax,
         )
-        productions.append(sub_list.map(
-            lambda xs: Enumerate(enum_sym, xs, None)
-        ))
+        productions.append(sub_list.map(_node(Enumerate, enum_sym)))
 
     if ListProd.LIST_COMP in use:
         raise NotImplementedError(
@@ -811,7 +834,7 @@ def _tuple_expr(
         productions.append(st.just(TupleExpr([], None)))
     else:
         productions.append(
-            st.tuples(*elt_strats).map(lambda elts: TupleExpr(list(elts), None))
+            st.tuples(*elt_strats).map(list).map(_node(TupleExpr))
         )
     return st.one_of(*productions)
 
@@ -843,7 +866,7 @@ def _ctx_expr(
             'enable LITERAL'
         )
     contexts = grammar.contexts or _DEFAULT_CONTEXTS
-    return st.sampled_from(list(contexts)).map(lambda c: ForeignVal(c, None))
+    return st.sampled_from(list(contexts)).map(_node(ForeignVal))
 
 
 # ---------------------------------------------------------------------------
@@ -1274,9 +1297,7 @@ def arbitrary_type(
         return scalar
     inner = arbitrary_type(max_depth - 1, scalar_only=scalar_only)
     list_t = inner.map(ListType)
-    tuple_t = st.lists(inner, min_size=1, max_size=3).map(
-        lambda elts: TupleType(*elts)
-    )
+    tuple_t = st.lists(inner, min_size=1, max_size=3).map(_tuple_type)
     return st.one_of(scalar, list_t, tuple_t)
 
 

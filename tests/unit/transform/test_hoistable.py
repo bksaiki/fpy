@@ -14,7 +14,7 @@ tests assert:
    raises, which :class:`TestOrdering` witnesses directly.
 4. **Semantic equivalence** through the interpreter, and idempotence.
 
-``test_hoistable_analysis.py`` covers the prefix rule on its own, and
+``tests/unit/analysis/test_hoistability.py`` covers the prefix rule on its own, and
 ``test_hoistable_profile.py`` pins how little the pass does to the corpus.
 """
 
@@ -206,7 +206,7 @@ _PROGRAMS = [
 
 
 class TestInvariant:
-    @pytest.mark.parametrize('f', [f for f, _args in _PROGRAMS], ids=lambda f: f.name)
+    @pytest.mark.parametrize('f', dict.fromkeys(f for f, _ in _PROGRAMS), ids=lambda f: f.name)
     def test_nothing_is_left_unhoistable(self, f):
         assert Hoistable.refusals(Hoistable.apply(f.ast)) == []
 
@@ -413,7 +413,7 @@ class TestSemantics:
     def test_the_interpreter_agrees(self, f, args):
         assert _run(_apply(f), args) == _run(f, args)
 
-    @pytest.mark.parametrize('f', [f for f, _args in _PROGRAMS], ids=lambda f: f.name)
+    @pytest.mark.parametrize('f', dict.fromkeys(f for f, _ in _PROGRAMS), ids=lambda f: f.name)
     def test_idempotence(self, f):
         once = Hoistable.apply(f.ast)
         assert Hoistable.apply(once).format() == once.format()

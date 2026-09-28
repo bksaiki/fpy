@@ -29,7 +29,7 @@ from ..analysis import (
 )
 from ..ast.fpyast import *
 from ..utils import Gensym
-from .cursor import Cursor, EditLog, StmtCursor
+from .cursor import Cursor, EditLog
 from .path import StmtPath
 from .utils import (
     SiteRewriter,
@@ -369,10 +369,7 @@ class _SplitLoop(SiteRewriter):
         block, pos = self._site
         reason = self._refuses(stmt)
         if reason is not None:
-            # a refusal is not a site, so it takes no index
-            self.refused.append((stmt, reason))
-            if self._target is not None and self._selects(block, pos, -1):
-                self.declined.append(reason)
+            self._refuse(stmt, reason)
             return super()._visit_for(stmt, ctx)
 
         idx = self.site_idx

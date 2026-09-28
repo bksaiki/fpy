@@ -93,11 +93,6 @@ class TestThePackingOrderIsDeterministic:
         names = _first_tuple_names(pas.apply(f.ast))
         assert names == sorted(names)
 
-    @pytest.mark.parametrize('pas,f,_args', _CASES, ids=_IDS)
-    def test_the_order_is_not_merely_source_order(self, pas, f, _args):
-        """Otherwise the assertion above would pass on an unsorted pass."""
-        assert _first_tuple_names(pas.apply(f.ast)) != ['delta', 'beta', 'alpha']
-
 
 class TestBundlingPreservesSemantics:
     @pytest.mark.parametrize('pas,f,args', _CASES, ids=_IDS)

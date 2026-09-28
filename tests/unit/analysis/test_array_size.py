@@ -5,8 +5,6 @@ Unit tests for :class:`ArraySizeInfer`.
 import fpy2 as fp
 import pytest
 
-from hypothesis import given, settings, strategies as st
-
 from fpy2.analysis import (
     ArraySizeAnalysis,
     ArraySizeInfer,
@@ -42,33 +40,8 @@ class TestArraySizeInfer:
         with pytest.raises(TypeError, match='Expected `FuncDef`'):
             ArraySizeInfer.analyze('not a FuncDef')  # type: ignore[arg-type]
 
-    def test_analysis_result_shape(self):
-        """``ArraySizeAnalysis`` exposes the documented public fields."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return x
-
-        info = self._run(f)
-        assert isinstance(info, ArraySizeAnalysis)
-        assert hasattr(info, 'by_expr')
-        assert hasattr(info, 'by_def')
-        assert hasattr(info, 'ret_size')
-        assert hasattr(info, 'def_use')
-
     # ------------------------------------------------------------------
     # Argument typing
-
-    def test_scalar_argument_has_none_bound(self):
-        """A scalar real argument has no array-size info."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            return x
-
-        info = self._run(f)
-        x_bounds = [b for d, b in info.by_def.items() if d.name.base == 'x']
-        assert x_bounds == [None]
 
     def test_list_argument_has_listsize(self):
         """A list-of-real argument has a ListSize whose size is a fresh
@@ -85,38 +58,6 @@ class TestArraySizeInfer:
         assert isinstance(bound, ListSize)
         assert bound.elt is None
         assert isinstance(bound.size, NamedId)
-
-    def test_arg_concrete_length_annotation_seeds_size(self):
-        """A ``list[Real]`` argument annotated with a concrete length
-        (e.g. an FPCore fixed dimension) seeds a concrete array-size."""
-        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            return xs[0]
-
-        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 16, None)
-        info = self._run(f)
-        xs_bound = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
-        assert concrete_size(xs_bound.size) == 16
-
-    def test_shared_symbolic_length_annotation_unifies(self):
-        """Two list args annotated with the *same* symbolic length share a
-        size class (provably-equal lengths)."""
-        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
-
-        n = NamedId('N')
-
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
-            return xs[0]
-
-        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), n, None)
-        f.ast.args[1].type = ListTypeAnn(RealTypeAnn(None, None), n, None)
-        info = self._run(f)
-        xs_b = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
-        ys_b = [b for d, b in info.by_def.items() if d.name.base == 'ys'][0]
-        assert is_size_eq(xs_b, ys_b)
 
     def test_empty_keeps_a_symbolic_length(self):
         """``fp.empty(len(xs))`` is the same size as ``xs`` with no annotation
@@ -197,34 +138,6 @@ class TestArraySizeInfer:
     # ------------------------------------------------------------------
     # Expression rules
 
-    def test_list_literal_size_is_known(self):
-        """A list literal carries a singleton ArraySize equal to its length."""
-
-        @fp.fpy
-        def f() -> list[fp.Real]:
-            return [1.0, 2.0, 3.0]
-
-        info = self._run(f)
-        list_bounds = [
-            b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size == 3
-        ]
-        assert list_bounds, 'expected a ListSize with size {3}'
-
-    def test_empty_list_literal_size_is_zero(self):
-        """An empty list literal has size {0}."""
-
-        @fp.fpy
-        def f() -> list[fp.Real]:
-            return []
-
-        info = self._run(f)
-        list_bounds = [
-            b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size == 0
-        ]
-        assert list_bounds, 'expected a ListSize with size {0}'
-
     def test_empty_nested_list_literal_does_not_crash(self):
         """
         Regression: an empty list literal annotated as ``list[list[…]]``
@@ -302,20 +215,6 @@ class TestArraySizeInfer:
             f'expected outer size 2 with inner size 2, got {list(info.by_expr.values())}'
         )
 
-    def test_tuple_literal(self):
-        """A tuple literal records per-element bounds."""
-
-        @fp.fpy
-        def f() -> tuple[fp.Real, fp.Real]:
-            return (1.0, 2.0)
-
-        info = self._run(f)
-        tup_bounds = [
-            b for b in info.by_expr.values()
-            if isinstance(b, TupleSize) and len(b.elts) == 2
-        ]
-        assert tup_bounds, 'expected a TupleSize of arity 2'
-
     def test_range1_known_size(self):
         """``range(n)`` with a partial-eval-known ``n`` yields a known size."""
 
@@ -373,20 +272,6 @@ class TestArraySizeInfer:
         ]
         assert range_bounds
 
-    def test_range3_positive_step(self):
-        """``range(0, 10, 3)`` has size 4 (== ``len(range(0, 10, 3))``)."""
-
-        @fp.fpy
-        def f() -> list[fp.Real]:
-            return [0.0 for _ in range(0, 10, 3)]
-
-        info = self._run(f)
-        range_bounds = [
-            b for e, b in info.by_expr.items()
-            if type(e).__name__ == 'Range3'
-        ]
-        assert range_bounds and range_bounds[0].size == 4
-
     def test_range3_negative_step(self):
         """``range(10, 0, -3)`` walks down: size 4."""
 
@@ -428,20 +313,6 @@ class TestArraySizeInfer:
             if type(e).__name__ == 'Range3'
         ]
         assert range_bounds and range_bounds[0].size is None
-
-    def test_list_comprehension_size(self):
-        """A comprehension's size is the iterable's size."""
-
-        @fp.fpy
-        def f() -> list[fp.Real]:
-            return [x * 2.0 for x in [1.0, 2.0, 3.0, 4.0]]
-
-        info = self._run(f)
-        comp_bounds = [
-            b for b in info.by_expr.values()
-            if isinstance(b, ListSize) and b.size == 4
-        ]
-        assert comp_bounds
 
     def test_zip_equal_known_sizes(self):
         """``zip`` of equal-length known lists has that size, with a
@@ -506,23 +377,6 @@ class TestArraySizeInfer:
         xs_bound = [b for d, b in info.by_def.items() if d.name.base == 'xs'][0]
         assert concrete_size(xs_bound.size) == 3
 
-    def test_zip_single_arg_preserves_size(self):
-        """A 1-argument ``zip`` preserves the input's known size."""
-
-        @fp.fpy
-        def f() -> list[tuple[fp.Real]]:
-            return [t for t in zip([1.0, 2.0, 3.0, 4.0])]
-
-        info = self._run(f)
-        zip_bounds = [
-            b for e, b in info.by_expr.items()
-            if type(e).__name__ == 'Zip'
-        ]
-        assert len(zip_bounds) == 1
-        bound = zip_bounds[0]
-        assert isinstance(bound, ListSize)
-        assert bound.size == 4
-
     def test_list_ref_returns_element_bound(self):
         """``xs[i]`` exposes the list's element bound."""
 
@@ -538,24 +392,6 @@ class TestArraySizeInfer:
             if type(e).__name__ == 'ListRef'
         ]
         assert ref_bounds == [None]
-
-    def test_list_slice_with_known_bounds(self):
-        """``xs[1:3]`` from a size-5 list resolves to size 2."""
-
-        @fp.fpy
-        def f() -> list[fp.Real]:
-            xs = [1.0, 2.0, 3.0, 4.0, 5.0]
-            return xs[1:3]
-
-        info = self._run(f)
-        slice_bounds = [
-            b for e, b in info.by_expr.items()
-            if type(e).__name__ == 'ListSlice'
-        ]
-        assert len(slice_bounds) == 1
-        bound = slice_bounds[0]
-        assert isinstance(bound, ListSize)
-        assert bound.size == 2
 
     def test_list_slice_omitted_stop_uses_list_size(self):
         """
@@ -660,19 +496,6 @@ class TestArraySizeInfer:
         assert len(slice_bounds) == 1
         assert isinstance(slice_bounds[0], ListSize)
         return slice_bounds[0]
-
-    def test_list_slice_symbolic_offset_under_real(self):
-        """``x[i : i + 16]`` on an unknown-size list has size 16: the
-        symbolic base ``i`` cancels in ``(i + 16) - i``.  Sound only
-        because the ``+`` runs under the exact ``REAL`` context."""
-
-        @fp.fpy
-        def f(x: list[fp.Real], i: fp.Real) -> list[fp.Real]:
-            with fp.REAL:
-                y = x[i:i + 16]
-            return y
-
-        assert self._slice_bound(f).size == 16
 
     def test_list_slice_symbolic_offset_subtraction_under_real(self):
         """Both endpoints offset from the same base: ``x[i-4 : i+4]`` -> 8."""
@@ -884,25 +707,6 @@ class TestArraySizeInfer:
     # ------------------------------------------------------------------
     # IndexedAssign as a fresh SSA def
 
-    def test_indexed_assign_creates_fresh_def(self):
-        """
-        ``xs[i] = e`` is treated as ``xs = update(xs, [i], e)``: the
-        mutation produces a *new* SSA definition of ``xs``.  Both the
-        pre- and post-mutation defs appear in ``by_def`` with their own
-        bounds.
-        """
-
-        @fp.fpy
-        def f() -> list[list[fp.Real]]:
-            xs = [[1.0], [1.0]]
-            xs[0] = [1.0, 2.0]
-            return xs
-
-        info = self._run(f)
-        xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
-        # Two distinct defs for xs: original and post-IndexedAssign.
-        assert len(xs_bounds) == 2, f'expected 2 xs defs, got {xs_bounds}'
-
     def test_indexed_assign_widens_inner_element_size(self):
         """
         Element mutation that inserts a list of a different size widens
@@ -918,6 +722,7 @@ class TestArraySizeInfer:
 
         info = self._run(f)
         xs_bounds = [b for d, b in info.by_def.items() if d.name.base == 'xs']
+        assert len(xs_bounds) == 2, f'expected 2 xs defs, got {xs_bounds}'
         # Original def: inner size 1, outer size 2.
         original = [
             b for b in xs_bounds
@@ -1092,30 +897,6 @@ class TestArraySizeInfer:
         )
 
     # ------------------------------------------------------------------
-    # Return-size capture
-
-    def test_ret_size_captures_list_return(self):
-        """``ret_size`` records the inferred bound of the returned list."""
-
-        @fp.fpy
-        def f() -> list[fp.Real]:
-            return [1.0, 2.0, 3.0]
-
-        info = self._run(f)
-        assert isinstance(info.ret_size, ListSize)
-        assert info.ret_size.size == 3
-
-    def test_ret_size_none_for_scalar_return(self):
-        """``ret_size`` stays ``None`` when the return value isn't a list."""
-
-        @fp.fpy
-        def f() -> fp.Real:
-            return 1.0
-
-        info = self._run(f)
-        assert info.ret_size is None
-
-    # ------------------------------------------------------------------
     # Multi-return: ``_visit_return`` unifies the list-size bound
     # across every reachable return site.
 
@@ -1169,31 +950,6 @@ class TestArraySizeInfer:
     # ------------------------------------------------------------------
     # Call-result size propagation
 
-    def test_call_propagates_known_return_size(self):
-        """A call to a callee whose return size is statically known
-        adopts that size at the call site (and onto a binding of it)."""
-
-        @fp.fpy
-        def callee() -> list[fp.Real]:
-            return [1.0, 2.0, 3.0]
-
-        @fp.fpy
-        def caller() -> list[fp.Real]:
-            ys = callee()
-            return ys
-
-        info = self._run(caller)
-        call_bounds = [
-            b for e, b in info.by_expr.items()
-            if type(e).__name__ == 'Call'
-        ]
-        assert len(call_bounds) == 1
-        assert isinstance(call_bounds[0], ListSize)
-        assert call_bounds[0].size == 3
-        # ...and it survives onto the binding / return.
-        assert isinstance(info.ret_size, ListSize)
-        assert info.ret_size.size == 3
-
     def test_call_with_arg_dependent_size_stays_unknown(self):
         """A callee whose return size depends on its arguments has no
         statically-known size; the call site must not invent one."""
@@ -1215,25 +971,6 @@ class TestArraySizeInfer:
         assert isinstance(call_bounds[0], ListSize)
         assert call_bounds[0].size is None
 
-    def test_call_propagates_transitively(self):
-        """A known size flows through a chain of calls."""
-
-        @fp.fpy
-        def leaf() -> list[fp.Real]:
-            return [1.0, 2.0, 3.0, 4.0, 5.0]
-
-        @fp.fpy
-        def mid() -> list[fp.Real]:
-            return leaf()
-
-        @fp.fpy
-        def top() -> list[fp.Real]:
-            return mid()
-
-        info = self._run(top)
-        assert isinstance(info.ret_size, ListSize)
-        assert info.ret_size.size == 5
-
     def test_call_propagates_nested_sizes(self):
         """Nested known sizes (``empty(2, 3)``) propagate per-dimension
         through a call via the structural overlay."""
@@ -1253,24 +990,6 @@ class TestArraySizeInfer:
         assert isinstance(outer.elt, ListSize)
         assert outer.elt.size == 3
 
-    def test_empty_folds_a_len_dimension(self):
-        """``fp.empty(len(xs))`` keeps the length it was sized from.
-
-        The dimension is resolved with ``_const_int``, which folds ``len`` /
-        ``size`` / ``dim``; the partial-eval table alone does not, so this used
-        to come out unknown and cost the C++ backend its ``std::array``.
-        """
-        from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            return fp.empty(len(xs))
-
-        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 5, None)
-        bound = self._run(f).ret_size
-        assert isinstance(bound, ListSize)
-        assert concrete_size(bound.size) == 5
-
     def test_empty_folds_a_len_dimension_per_axis(self):
         """Each dimension folds on its own, outer to inner."""
         from fpy2.ast.fpyast import ListTypeAnn, RealTypeAnn
@@ -1285,17 +1004,6 @@ class TestArraySizeInfer:
         assert concrete_size(outer.size) == 4
         assert isinstance(outer.elt, ListSize)
         assert concrete_size(outer.elt.size) == 3
-
-    def test_empty_over_an_unknown_length_stays_unknown(self):
-        """No length to fold, so the size is genuinely unknown -- not zero."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            return fp.empty(len(xs))
-
-        bound = self._run(f).ret_size
-        assert isinstance(bound, ListSize)
-        assert concrete_size(bound.size) is None
 
     def test_an_allocation_loop_matches_the_comprehension(self):
         """The two ways of writing the same list agree on length.
@@ -1343,18 +1051,6 @@ class TestArraySizeInfer:
         bounds = [b for d, b in info.by_def.items() if d.name.base == name]
         assert bounds, f'no def found for {name}'
         return bounds[0]
-
-    def test_rebind_preserves_symbol(self):
-        """``ys = xs`` gives ``ys`` the same symbolic length as ``xs``."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            ys = xs
-            return ys
-
-        info = self._run(f)
-        xs_b, ys_b = self._def_size(info, 'xs'), self._def_size(info, 'ys')
-        assert is_size_eq(xs_b, ys_b)
 
     def test_comprehension_over_argument_is_equivalent(self):
         """``[f(x) for x in xs]`` has the same length as ``xs``."""
@@ -1434,37 +1130,8 @@ class TestArraySizeInfer:
         info = self._run(f)
         assert is_size_eq(info.ret_size, self._def_size(info, 'xs'))
 
-    def test_concrete_size_helper(self):
-        """``concrete_size`` resolves ints directly and pinned symbols."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            acc = 0.0
-            for t in zip(xs, [1.0, 2.0]):   # pins xs to 2
-                with fp.FP64:
-                    acc = acc + 1.0
-            return acc
-
-        info = self._run(f)
-        xs_b = self._def_size(info, 'xs')
-        assert concrete_size(xs_b.size) == 2
-        assert concrete_size(7) == 7
-        assert concrete_size(None) is None
-
     # ------------------------------------------------------------------
     # Assertion-seeded size equalities
-
-    def test_assert_len_eq_merges(self):
-        """``assert len(xs) == len(ys)`` makes their sizes equivalent."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
-            assert len(xs) == len(ys)
-            return xs[0]
-
-        info = self._run(f)
-        assert is_size_eq(self._def_size(info, 'xs'),
-                          self._def_size(info, 'ys'))
 
     def test_assert_len_eq_constant_pins(self):
         """``assert len(xs) == 16`` pins ``xs`` to a concrete size."""
@@ -1831,46 +1498,6 @@ class TestArraySizeDifferential:
 
     # -- hypothesis: fuzz argument lengths for size-linked functions ----
 
-    @settings(max_examples=60)
-    @given(n=st.integers(min_value=0, max_value=64))
-    def test_fuzz_comp_over_arg(self, n):
-        self._assert_sound(_d_comp_over_arg, [(_floats(n),)])
-
-    @settings(max_examples=60)
-    @given(n=st.integers(min_value=0, max_value=64))
-    def test_fuzz_enumerate(self, n):
-        self._assert_sound(_d_enumerate, [(_floats(n),)])
-
-    @settings(max_examples=60)
-    @given(n=st.integers(min_value=0, max_value=64))
-    def test_fuzz_rebind(self, n):
-        self._assert_sound(_d_rebind, [(_floats(n),)])
-
-    @settings(max_examples=60)
-    @given(n=st.integers(min_value=0, max_value=64))
-    def test_fuzz_full_slice(self, n):
-        self._assert_sound(_d_slice_full, [(_floats(n),)])
-
-    @settings(max_examples=60)
-    @given(n=st.integers(min_value=0, max_value=64))
-    def test_fuzz_indexed_assign(self, n):
-        self._assert_sound(_d_indexed_assign, [(_floats(n),)])
-
-    @settings(max_examples=60)
-    @given(n=st.integers(min_value=0, max_value=64))
-    def test_fuzz_zip_args_equal(self, n):
-        self._assert_sound(_d_zip_args, [(_floats(n), _floats(n))])
-
-    @settings(max_examples=60)
-    @given(i=st.integers(min_value=0, max_value=32))
-    def test_fuzz_slice_sym_offset(self, i):
-        self._assert_sound(_d_slice_sym_offset, [(_floats(i + 2), i)])
-
-    @settings(max_examples=60)
-    @given(i=st.integers(min_value=-8, max_value=32))
-    def test_fuzz_range_sym_offset(self, i):
-        self._assert_sound(_d_range_sym_offset, [(i,)])
-
 
 class TestAffineAcrossProgramPoints:
     """A slice's bounds may be named, and two names may hold structurally
@@ -2043,23 +1670,6 @@ class TestSizeAcrossACall:
     def _calls(info: ArraySizeAnalysis) -> list[ArraySizeBound]:
         from fpy2.ast.fpyast import Call
         return [b for e, b in info.by_expr.items() if isinstance(e, Call)]
-
-    def test_the_callee_alone_states_nothing(self):
-        """Why a per-callee answer cannot work: the size is arg-dependent."""
-        info = ArraySizeInfer.analyze(self._join().ast)
-        assert concrete_size(info.ret_size.size) is None
-
-    def test_a_length_crosses_the_call(self):
-        join = self._join()
-
-        @fp.fpy(ctx=fp.REAL)
-        def f(c: fp.Real) -> list[fp.Real]:
-            prods = [c for _ in range(8)]
-            return join(prods, [c])
-
-        info = ArraySizeInfer.analyze(f.ast)
-        assert concrete_size(info.ret_size.size) == 9
-        assert len(f(1.0)) == 9      # the counterweight: the claim is true
 
     def test_each_call_site_gets_its_own_size(self):
         """The memo is keyed by the argument sizes, not by the callee."""

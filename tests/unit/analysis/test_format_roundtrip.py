@@ -76,17 +76,6 @@ PROBES = _probes()
 
 class TestFromAConcreteFormat:
     @pytest.mark.parametrize('_name,ctx', CONTEXTS, ids=CONTEXT_IDS)
-    def test_no_value_is_lost(self, _name, ctx):
-        """The direction that has to hold: `format()` is a superset, so nothing
-        the original represented may go missing."""
-        f0 = ctx.format()
-        assert isinstance(f0, AbstractableFormat)
-        f1 = AbstractFormat.from_format(f0).format()
-        lost = [v for v in PROBES
-                if f0.representable_in(v) and not f1.representable_in(v)]
-        assert not lost, [str(v) for v in lost[:5]]
-
-    @pytest.mark.parametrize('_name,ctx', CONTEXTS, ids=CONTEXT_IDS)
     def test_the_abstraction_is_a_fixpoint(self, _name, ctx):
         """A second trip changes nothing."""
         af = AbstractFormat.from_format(ctx.format())   # type: ignore[arg-type]
@@ -97,9 +86,9 @@ class TestFromAConcreteFormat:
 
     @pytest.mark.parametrize('_name,ctx', CONTEXTS, ids=CONTEXT_IDS)
     def test_the_set_survives_exactly(self, _name, ctx):
-        """Stronger than *no value lost*, and it holds for every context the
-        library ships: the round-tripped format represents neither more nor
-        less.  `TestKnownWidenings` has the shapes it does not."""
+        """For every context the library ships, the round-tripped format
+        represents neither more nor less.  `TestKnownWidenings` has the shapes
+        it does not."""
         f0 = ctx.format()
         f1 = AbstractFormat.from_format(f0).format()   # type: ignore[arg-type]
         differ = [v for v in PROBES

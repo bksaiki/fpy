@@ -1,6 +1,8 @@
 # Makefile for running tests and linting
 
 UNITTEST_PATTERN ?= ''
+# pytest-xdist workers; each holds its own interpreter, so memory bounds this
+UNITTEST_JOBS ?= 0
 
 
 default: help;
@@ -39,7 +41,7 @@ infratest:
 
 unittest:
 	@echo "Running unit tests..."
-	python3 -m pytest -v tests/unit -k $(UNITTEST_PATTERN)
+	python3 -m pytest -v tests/unit -n $(UNITTEST_JOBS) -k $(UNITTEST_PATTERN)
 
 cpptest:
 	@echo "Running C++ backend tests (compile + execute, bit-compare vs interpreter)..."

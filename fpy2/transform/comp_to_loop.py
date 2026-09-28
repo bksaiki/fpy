@@ -430,9 +430,7 @@ class _CompToLoopInstance(SiteRewriter):
             else self._verify(e)
         )
         if declined is not None:
-            self.refused.append((e, declined.reason))
-            if self._named_by_cursor(e):
-                self.declined.append(declined.reason)
+            self._refuse(e, declined.reason)
             return super()._visit_expr(e, ctx)
 
         idx = self.site_idx

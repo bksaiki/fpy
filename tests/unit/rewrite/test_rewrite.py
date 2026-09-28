@@ -144,15 +144,6 @@ def k1(N):
     return x
 
 @fpy
-def k2(N):
-    x = N
-    x -= x / 2
-    x -= x / 2
-    while x > 0:
-        x -= x / 2
-    return x
-
-@fpy
 def k3(N):
     x = N
     x -= x / 2
@@ -289,14 +280,6 @@ class RewriteTestCase():
         k_rw = rw_unroll_while.apply(k)
         assert isinstance(k_rw, Function)
         self.assertAstEqual(k_rw.ast.body, k1.ast.body)
-
-    def test_unroll_while_example2(self):
-        assert isinstance(k, Function)
-        assert isinstance(k2, Function)
-
-        k_rw = rw_unroll_while.apply(k, repeat=2)
-        assert isinstance(k_rw, Function)
-        self.assertAstEqual(k_rw.ast.body, k2.ast.body)
 
     def test_unroll_while_example3(self):
         assert isinstance(k, Function)

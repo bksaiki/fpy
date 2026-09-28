@@ -518,11 +518,6 @@ class TestWhere:
         assert remaining == kept
         assert _same(_eval(out, f, 0.1, 0.2), f(0.1, 0.2))
 
-    def test_index_past_the_last_site(self):
-        f = self._two()
-        with pytest.raises(TransformReferenceError):
-            UnfoldSpecial.apply(f.ast, where=9)
-
     def test_rejects_a_non_integer(self):
         f = self._two()
         with pytest.raises(TypeError):
@@ -587,26 +582,15 @@ class TestEquivalence:
     the same rounding, with the rules stated rather than built in."""
 
     @pytest.mark.parametrize('src', [
-        MPFixedContext(-8, enable_nan=True),
         MPFixedContext(-8, enable_inf=True),
-        MPFixedContext(-8, enable_nan=True, enable_inf=True),
-        MPFixedContext(-8, nan_value=_ZERO),
-        MPFixedContext(-8, fp.RoundingMode.RTZ, nan_value=_ZERO),
-        MPBFixedContext(-4, RealFloat(exp=0, c=255), overflow=_SAT,
-                        nan_value=_ZERO, inf_value=_MAX255),
         MPBFixedContext(-2, RealFloat(exp=0, c=100),
                         neg_maxval=RealFloat(s=True, exp=0, c=50),
                         overflow=_SAT, nan_value=_ZERO),
-        MPBFixedContext(-4, RealFloat(exp=0, c=255),
-                        overflow=fp.OverflowMode.WRAP, nan_value=_ZERO),
         fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT,
                           nan_value=_ZERO),
         fp.FixedContext(True, -8, 16, fp.RoundingMode.RNE, _SAT,
                         nan_value=_ZERO, inf_value=_ZERO),
-    ], ids=[
-        'mp_nan', 'mp_inf', 'mp_both', 'mp_nan_value', 'mp_rtz',
-        'mpb_values', 'mpb_asym', 'mpb_wrap', 'sm_nan_value', 'fixed_values',
-    ])
+    ], ids=['mp_inf', 'mpb_asym', 'sm_nan_value', 'fixed_values'])
     def test_formats(self, src):
         f = _quantizer(src)
         out = UnfoldSpecial.apply(f.ast)

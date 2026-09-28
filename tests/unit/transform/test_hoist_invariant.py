@@ -16,7 +16,7 @@ import pytest
 from fpy2.analysis import DefineUse, LiveVars
 from fpy2.ast import Assign, ForStmt, IndexedAssign, Mul, StmtBlock, WhileStmt
 from fpy2.ast.visitor import DefaultVisitor
-from fpy2.transform import HoistInvariant
+from fpy2.transform import HoistInvariant, TransformDeclined
 from fpy2.transform.hoist_invariant import _Context, _from_before, _Nodes, _plan
 from fpy2.utils import Gensym, NamedId
 
@@ -363,6 +363,11 @@ class TestTheTransform:
         assert HoistInvariant.sites(reads_the_loop_target.ast) == []
         (_, why), = HoistInvariant.refusals(reads_the_loop_target.ast)
         assert '`x` varies across iterations' in why
+
+    def test_a_cursor_naming_a_refused_loop_says_why(self):
+        (where, _), = HoistInvariant.refusals(reads_the_loop_target.ast)
+        with pytest.raises(TransformDeclined, match='varies across iterations'):
+            HoistInvariant.apply(reads_the_loop_target.ast, where)
 
     def test_the_zero_trip_case_is_pinned(self):
         """The decision recorded in the plan: an invariant binding is hoisted

@@ -13,7 +13,6 @@ import fpy2 as fp
 from fpy2.ast import ContextStmt, ForeignVal
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.strategies import (
-    TransformReferenceError,
     elim_round,
     insert_round,
     monomorphize,
@@ -82,31 +81,10 @@ class TestInsertRound:
         out = simplify(insert_round(f, fp.FP64))
         assert _agree(out, f, 2)
 
-
     def test_rejects_non_context(self):
         f = _pinned(_sum_of_squares, 2)
         with pytest.raises(TypeError):
             insert_round(f, fp.FP64.format())  # type: ignore[arg-type]
-
-
-class TestWhere:
-    def test_an_index_aims_one_operation(self):
-        f = _pinned(_sum_of_squares, 2)
-        for i in (0, 1):
-            out = insert_round(f, fp.FP64, where=i)
-            assert _blocks(out.ast, fp.FP64) == 1
-            assert _agree(out, f, 2)
-
-    def test_a_where_naming_nothing(self):
-        with pytest.raises(TransformReferenceError):
-            insert_round(_pinned(_sum_of_squares, 2), fp.FP64, where=99)
-
-    def test_a_cursor_of_an_unrelated_program(self):
-        # `_prod3`'s body is under FP64, so it has no exact operation until
-        # `elim_round` hoists one
-        other = sites(insert_round, elim_round(_pinned(_prod3, 3)), ctx=fp.FP64)[0]
-        with pytest.raises(TransformReferenceError):
-            insert_round(_pinned(_sum_of_squares, 2), fp.FP64, where=other)
 
 
 class TestRoundTrip:

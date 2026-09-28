@@ -1,20 +1,26 @@
 """
-Tests for cpp storage-type selection (Phase 1 of the backend-cpp plan).
+Tests for cpp storage-type selection.
 """
 
+from collections.abc import Iterable
 from fractions import Fraction
+from functools import reduce
+from itertools import combinations, permutations
 
 import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import ListFormat, SetFormat, TupleFormat
 from fpy2.backend.cpp.storage import (
+    _ABSTRACT,
+    _SIGMA,
     CppStorageDomain,
     StorageSelectionError,
     bound_fits_in_scalar,
     choose_storage,
     choose_storage_scalar,
     scalar_fits_in,
+    scalar_sup,
     to_cpp,
 )
 from fpy2.analysis.storage_infer import _aggregate
@@ -305,3 +311,60 @@ class TestBoundFitsInScalar:
         assert not bound_fits_in_scalar(one, CppScalar.BOOL)
         assert not bound_fits_in_scalar(REAL_FORMAT, CppScalar.F64)
         assert not bound_fits_in_scalar(None, CppScalar.S8)
+
+
+_TYS = [t for t, _ in _SIGMA]
+
+
+def _sup(xs: Iterable[CppScalar]) -> CppScalar | None:
+    try:
+        return scalar_sup(list(xs))
+    except StorageSelectionError:
+        return None
+
+
+class TestTheLadderIsOrdered:
+    """The storage ladder is an ordered sequence, and its join is n-ary.
+
+    Containment over the ladder is *not* a join-semilattice: `{s8, u16}` has
+    two incomparable minimal upper bounds, `s32` and `f32`, and no least one.
+    """
+
+    def test_it_is_a_linear_extension_of_containment(self):
+        """`ceil` takes the first containing rung, so a rung contained in an
+        earlier one would never be reached."""
+        idx = {t: i for i, (t, _) in enumerate(_SIGMA)}
+        for a in _TYS:
+            for b in _TYS:
+                if a is not b and _ABSTRACT[b] <= _ABSTRACT[a]:
+                    assert idx[b] < idx[a], (
+                        f'{b.format()} fits in {a.format()} but comes later'
+                    )
+
+    def test_minimal_upper_bounds_are_not_unique(self):
+        """`u8` and `s8` are incomparable, so containment alone cannot order
+        the ladder: the sequence is the tie-break."""
+        assert not _ABSTRACT[CppScalar.U8] <= _ABSTRACT[CppScalar.S8]
+        assert not _ABSTRACT[CppScalar.S8] <= _ABSTRACT[CppScalar.U8]
+
+
+class TestTheJoinIsNAry:
+    """Folding pairwise is both less precise and less total."""
+
+    def test_folding_can_overshoot(self):
+        combo = [CppScalar.S8, CppScalar.U16, CppScalar.F32]
+        assert _sup(combo) is CppScalar.F32
+        folded = reduce(lambda a, b: scalar_sup([a, b]), combo)
+        assert folded is CppScalar.F64
+
+    def test_folding_can_fail_where_the_join_succeeds(self):
+        combo = [CppScalar.S8, CppScalar.U32, CppScalar.F32]
+        assert _sup(combo) is CppScalar.F64
+        with pytest.raises(StorageSelectionError):
+            reduce(lambda a, b: scalar_sup([a, b]), combo)
+
+    def test_the_join_is_order_independent(self):
+        """Unlike the fold, which depends on which pair is taken first."""
+        for combo in combinations(_TYS, 3):
+            answers = {_sup(p) for p in permutations(combo)}
+            assert len(answers) == 1, (combo, answers)

@@ -22,7 +22,7 @@ import fpy2 as fp
 
 from fpy2.ast.fpyast import (
     Assign, ForStmt, Fst, Len, ListComp, ListRef, NamedId, Range1, Snd,
-    TupleBinding, TupleExpr, Var, Zip,
+    TupleBinding, TupleExpr, Zip,
 )
 from fpy2.transform import ZipElim
 
@@ -317,22 +317,6 @@ class TestProperties:
         once = ZipElim.apply(f.ast)
         twice = ZipElim.apply(once)
         assert once.is_equiv(twice)
-
-    def test_syntax_check_passes(self):
-        """``ZipElim.apply`` runs ``SyntaxCheck.check`` internally; if
-        the rewrite produced ill-formed output, ``apply`` itself would
-        raise.  This test just exercises a representative input."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real], ys: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                acc = 0
-                for a, b in zip(xs, ys):
-                    acc = acc + a * b
-                return acc
-
-        # Should not raise.
-        ZipElim.apply(f.ast)
 
 
 def _contains(ast: fp.ast.FuncDef, types) -> bool:

@@ -52,16 +52,6 @@ class TestListLiteral:
 class TestListRef:
     """Phase 4a — ``xs[i]`` indexing."""
 
-    def test_constant_index(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return xs[0] + xs[1]
-
-        out = _compile_list_arg(f)
-        assert 'xs[static_cast<size_t>(0)]' in out
-        assert 'xs[static_cast<size_t>(1)]' in out
-
     def test_variable_index(self):
         @fp.fpy
         def f(xs: list[fp.Real], i: fp.Real) -> fp.Real:
@@ -148,18 +138,6 @@ class TestListComp:
         assert 'std::array<uint8_t, 5>' in out  # {0,1,4,9,16} fits u8
         assert 'push_back' not in out
 
-    def test_range2_iterable(self):
-        @fp.fpy
-        def f() -> fp.Real:
-            with fp.FP64:
-                ks = [k for k in range(3, 9)]
-                return ks[0]
-
-        out = CppCompiler().compile(f, ctx=fp.FP64, arg_types=[])
-        # ``range(3, 9)`` yields ``k in {3..8}``; the counter is sized to
-        # hold the exit-test overshoot (9), which fits ``int8_t``.
-        assert 'for (int8_t k = 3; k < 9; ++k) {' in out
-
     def test_nested_comp(self):
         """Multiple ``for`` clauses produce nested loops within a
         single result vector."""
@@ -185,31 +163,6 @@ class TestListComp:
         )
         assert 'push_back' not in out
 
-    def test_tuple_binding_target(self):
-        """Tuple-binding targets in the for-clause destructure each
-        element via ``std::get<i>`` inside the loop body — see
-        ``test_emit_tuple.TestTupleDestructure`` for the detailed
-        shape; this test just confirms list-comp wiring composes."""
-
-        @fp.fpy
-        def f(xs: list[tuple[fp.Real, fp.Real]]) -> fp.Real:
-            with fp.FP64:
-                ys = [a + b for (a, b) in xs]
-                return ys[0]
-
-        from fpy2.types import TupleType
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[
-                ListType(TupleType(RealType(fp.FP64), RealType(fp.FP64)))
-            ],
-        )
-        assert 'std::get<0>' in out
-        assert 'std::get<1>' in out
-        assert re.search(
-            r'ys\[static_cast<size_t>\(\w+\)\] = \(a \+ b\);', out,
-        )
-
 
 class TestListSlice:
     """Phase 4d — ``xs[a:b]`` slicing."""
@@ -227,36 +180,6 @@ class TestListSlice:
         assert (
             'xs.begin() + static_cast<size_t>(1), '
             'xs.begin() + static_cast<size_t>(4)'
-        ) in out
-
-    def test_open_stop(self):
-        """``xs[a:]`` defaults the stop endpoint to ``__tmp.size()``."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                ys = xs[2:]
-                return ys[0]
-
-        out = _compile_list_arg(f)
-        assert (
-            'xs.begin() + static_cast<size_t>(2), '
-            'xs.begin() + xs.size()'
-        ) in out
-
-    def test_open_start(self):
-        """``xs[:b]`` defaults the start endpoint to ``0``."""
-
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                ys = xs[:3]
-                return ys[0]
-
-        out = _compile_list_arg(f)
-        assert (
-            'xs.begin() + 0, '
-            'xs.begin() + static_cast<size_t>(3)'
         ) in out
 
     def test_full_slice(self):

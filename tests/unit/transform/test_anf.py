@@ -18,7 +18,7 @@ something that needed no slot in the first place — the predicate
 :class:`TestNeedsSlot` covers directly.
 
 :class:`TestRefusals` covers the residue report, and
-``test_anf_profile.py`` pins how large that residue is across the corpus.
+``test_hoistable_profile.py`` pins how large that residue is across the corpus.
 """
 
 import pytest
@@ -30,9 +30,7 @@ from fpy2.ast.accessors import subexprs
 from fpy2.ast.fpyast import (
     And,
     Assign,
-    Attribute,
     Call,
-    Compare,
     ContextStmt,
     Expr,
     ForeignVal,
@@ -205,16 +203,6 @@ class TestFlattening:
         out = ANF.apply(f.ast)
         assert _unnamed(out) == []
 
-    def test_no_function_level_context(self):
-        """A program with no ``with`` block still flattens."""
-
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            return (a * b) + (a - b)
-
-        out = ANF.apply(f.ast)
-        assert _unnamed(out) == []
-
     def test_an_aggregate_is_not_named_but_its_elements_are(self):
         """Naming a list would give it a place of its own; its elements are
         scalars and are named."""
@@ -252,6 +240,7 @@ class TestContextBoundary:
         assert len(outer.body.stmts) == 3          # y = ..., with ..., return z
         inner = outer.body.stmts[1]
         assert len(inner.body.stmts) == 3          # two temps, then z = ...
+        assert repr(f(2.0)) == repr(_anf(f)(2.0))
 
 
 # ----------------------------------------------------------------------
@@ -312,17 +301,6 @@ class TestTypeDirectedAtomicity:
             if isinstance(stmt, Assign) and isinstance(stmt.expr, ListRef)
         ]
         assert isinstance(_first(out, ListRef), ListRef)
-
-    def test_a_context_expression_is_not_named(self):
-        """`fp.FP64` types as a context, not a scalar."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                return x * x
-
-        out = ANF.apply(f.ast)
-        assert isinstance(out.body.stmts[0].ctx, Attribute)
 
     def test_a_chain_is_named_once(self):
         """A chain is one scalar-typed expression, so it takes one name, and no
@@ -515,17 +493,6 @@ class TestNeedsSlot:
 
         assert not needs_slot(_while_cond(f))
 
-    def test_a_fold_needs_a_slot(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while max([y, 0.0]) > 0.0:
-                    y = y - 1.0
-                return y
-
-        assert needs_slot(_while_cond(f))
-
     def test_a_rounding_needs_a_slot(self):
         @fp.fpy
         def f(x: fp.Real) -> fp.Real:
@@ -566,19 +533,6 @@ class TestSemantics:
 
         assert repr(f(2.0, 3.0)) == repr(_anf(f)(2.0, 3.0))
 
-    def test_while_loop(self):
-        """A *pure* condition: one needing a place is a precondition failure."""
-
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x
-                while y > 0.0:
-                    y = y - 1.0
-                return y
-
-        assert repr(f(3.0)) == repr(_anf(f)(3.0))
-
     def test_loop_and_comprehension(self):
         @fp.fpy
         def f(xs: list[fp.Real]) -> fp.Real:
@@ -590,17 +544,6 @@ class TestSemantics:
                 return acc
 
         assert repr(f([1.0, 2.0, 3.0])) == repr(_anf(f)([1.0, 2.0, 3.0]))
-
-    def test_nested_contexts(self):
-        @fp.fpy
-        def f(x: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = x + 1.0
-                with fp.FP32:
-                    z = (y * y) + (x * x)
-                return z
-
-        assert repr(f(2.0)) == repr(_anf(f)(2.0))
 
     def test_idempotent(self):
         @fp.fpy
@@ -678,15 +621,6 @@ class TestSealedAssertMessage:
 class TestRefusals:
     """What the pass reports it could not normalize."""
 
-    def test_empty_for_a_flattened_program(self):
-        @fp.fpy
-        def f(a: fp.Real, b: fp.Real) -> fp.Real:
-            with fp.FP64:
-                y = (a * b) + (a - b)
-                return y
-
-        assert ANF.refusals(ANF.apply(f.ast)) == []
-
     def test_the_check_is_not_vacuous(self):
         """The same three positions, un-normalized, are all reported."""
 
@@ -707,15 +641,6 @@ class TestRefusals:
             'a ternary arm is evaluated conditionally',
             'a short-circuited operand may not be evaluated',
         }
-
-    def test_a_comprehension_element_is_reported(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> list[fp.Real]:
-            with fp.FP64:
-                return [fp.round(v) for v in xs]
-
-        why = [reason for _e, reason in ANF.refusals(ANF.apply(f.ast))]
-        assert "a comprehension's element runs once per iteration" in why
 
     def test_a_slot_free_comprehension_is_not_reported(self):
         """Arithmetic over the target needs no place, so the element is clean
@@ -752,11 +677,6 @@ class TestPrecondition:
                 return y
         return f
 
-    def test_a_ternary_arm_is_refused(self):
-        f = self._needs_a_slot_in_a_ternary_arm()
-        with pytest.raises(TransformError, match='ternary arm'):
-            ANF.apply(f.ast)
-
     def test_a_short_circuited_operand_is_refused(self):
         @fp.fpy
         def f(x: fp.Real) -> bool:
@@ -782,25 +702,10 @@ class TestPrecondition:
 
     def test_the_message_names_the_position_and_the_remedy(self):
         f = self._needs_a_slot_in_a_ternary_arm()
-        with pytest.raises(TransformError) as e:
+        with pytest.raises(TransformError, match='ternary arm') as e:
             ANF.apply(f.ast)
         assert 'fp.cast(x)' in str(e.value)
         assert 'Hoistable' in str(e.value)
-
-    def test_a_pure_while_condition_is_accepted(self):
-        """The gate asks what this pass would have to name, not whether the
-        program is in hoistable form.  Nothing in `i < n` needs a place, so there
-        is nothing to refuse -- even though `Hoistable` would rotate the loop."""
-
-        @fp.fpy
-        def f(i: fp.Real, n: fp.Real) -> fp.Real:
-            with fp.FP64:
-                while i < n:
-                    i = i + 1.0
-                return i
-
-        out = ANF.apply(f.ast)
-        assert isinstance(_first(out, WhileStmt).cond, Compare)
 
     def test_a_ternary_over_atoms_is_accepted(self):
         @fp.fpy

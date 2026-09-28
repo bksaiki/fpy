@@ -135,9 +135,7 @@ class _FuncInline(SiteRewriter):
             e, in_while_cond=ctx.in_while_cond, in_comp=ctx.in_comp,
         )
         if reason is not None:
-            self.refused.append((e, reason))
-            if self._named_by_cursor(e):
-                self.declined.append(reason)
+            self._refuse(e, reason)
             return super()._visit_call(e, ctx)
 
         idx = self.site_idx

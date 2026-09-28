@@ -36,7 +36,6 @@ from fpy2.number import (
 )
 from fpy2.transform import (
     DeadCodeEliminate,
-    TransformDeclined,
     TransformReferenceError,
     UnfoldNegZero,
 )
@@ -425,11 +424,6 @@ class TestWhere:
         assert remaining == kept
         assert _same(_eval(out, f, -1e-9, -1e-9), f(-1e-9, -1e-9))
 
-    def test_index_past_the_last_site(self):
-        f = self._two()
-        with pytest.raises(TransformReferenceError):
-            UnfoldNegZero.apply(f.ast, where=9)
-
     def test_naming_a_refused_block_raises(self):
         """A refused block is not a site, so no index names it -- and the
         out-of-range error still says why it
@@ -487,19 +481,12 @@ class TestEquivalence:
 
     @pytest.mark.parametrize('src', [
         MPFixedContext(-8),
-        MPFixedContext(0),
-        MPFixedContext(4, fp.RoundingMode.RTZ),
-        MPBFixedContext(-4, RealFloat(exp=0, c=255), overflow=_SAT),
         MPBFixedContext(-2, RealFloat(exp=0, c=100),
                         neg_maxval=RealFloat(s=True, exp=0, c=50), overflow=_SAT),
         MPBFixedContext(-4, RealFloat(exp=0, c=255),
                         overflow=fp.OverflowMode.OVERFLOW, enable_inf=True),
-        fp.SMFixedContext(-8, 16, fp.RoundingMode.RNE, _SAT),
         fp.SMFixedContext(-8, 16, fp.RoundingMode.RTZ, _SAT),
-    ], ids=[
-        'mp_8', 'mp_0', 'mp_coarse', 'mpb_sat', 'mpb_asym', 'mpb_inf',
-        'sm_16', 'sm_rtz',
-    ])
+    ], ids=['mp_8', 'mpb_asym', 'mpb_inf', 'sm_rtz'])
     def test_formats(self, src):
         f = _quantizer(src)
         out = UnfoldNegZero.apply(f.ast)

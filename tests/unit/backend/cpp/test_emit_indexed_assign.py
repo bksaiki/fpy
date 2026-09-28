@@ -18,7 +18,6 @@ from fpy2.types import ListType, RealType
 
 
 class TestIndexedAssign:
-
     def test_loop_mutation_is_in_place(self):
         """``xs[i] = e`` inside a loop where ``xs`` keeps the same
         storage class throughout collapses to a direct subscript-store

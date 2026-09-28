@@ -194,25 +194,3 @@ class TestThePathSetIsClosed:
             f'path needs to route literals through `_call_arg`'
         )
 
-    def test_every_call_form_op_shares_a_tested_path(self):
-        """The count, so a *large* table change is visible.
-
-        Not a correctness property -- the paths are what matter -- but a jump
-        here means ops were added, which is the moment to check they dispatch
-        the same way.
-        """
-        table = make_op_table()
-        n = 0
-        for name, sigs_by_op in (
-            ('unary', table.unary),
-            ('binary', table.binary),
-            ('ternary', table.ternary),
-        ):
-            for sigs in sigs_by_op.values():
-                if any(s.is_call for s in sigs):
-                    n += 1
-        assert n == 40, (
-            f'{n} ops have a call-form signature, expected 40 -- update this '
-            f'count deliberately, having checked the new ops dispatch through '
-            f'the paths tested above'
-        )

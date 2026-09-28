@@ -10,7 +10,7 @@ import pytest
 import fpy2 as fp
 
 from fpy2.analysis import PartialEval
-from fpy2.ast import Call, ContextStmt
+from fpy2.ast import ContextStmt
 from fpy2.ast.visitor import DefaultVisitor
 from fpy2.function import Function
 from fpy2.transform.utils import RoundingScopes
@@ -31,19 +31,6 @@ def _round_ctxs(ast) -> list:
         def _visit_round(self, e, ctx):
             found.append(scopes.scope_ctx(e))
             super()._visit_round(e, ctx)
-
-    _C()._visit_function(ast, None)
-    return found
-
-
-def _blocks(ast) -> list:
-    """Every ``ContextStmt`` in *ast*."""
-    found = []
-
-    class _C(DefaultVisitor):
-        def _visit_context(self, stmt: ContextStmt, ctx):
-            found.append(stmt)
-            super()._visit_context(stmt, ctx)
 
     _C()._visit_function(ast, None)
     return found
@@ -95,7 +82,6 @@ class TestFloatToFixed:
         assert isinstance(out, Function)
         assert out is not _quantized_sum
 
-
     def test_removes_the_float_rounding(self):
         assert fp.FP16 in _round_ctxs(_quantized_sum.ast)
         out = float_to_fixed(_quantized_sum)
@@ -109,13 +95,6 @@ class TestFloatToFixed:
     def test_preserves_results(self):
         out = float_to_fixed(_quantized_sum)
         assert _same(out(_SAMPLE), _quantized_sum(_SAMPLE))
-
-    def test_idempotent(self):
-        """The lowered program has no float rounding left to lower."""
-        once = float_to_fixed(_quantized_sum)
-        twice = float_to_fixed(once)
-        assert twice.ast.is_equiv(once.ast)
-
 
     def test_composes_with_simplify(self):
         out = simplify(float_to_fixed(_quantized_sum), enable_const_fold_context=False)

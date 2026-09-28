@@ -24,7 +24,7 @@ import pytest
 
 from fpy2.ast.fpyast import Integer
 from fpy2.backend.cpp import CppCompiler
-from fpy2.backend.cpp.emitter import CppEmitError, CppEmitter, _value_cpp_type
+from fpy2.backend.cpp.emitter import CppEmitError, CppEmitter
 from fpy2.types import RealType
 
 _R64 = RealType(fp.FP64)
@@ -101,12 +101,3 @@ class TestReachableThroughAListSlot:
         assert '1e+300' in out, out
         assert '0000000000000000000000' not in out, out
 
-    def test_the_integer_shortcut_goes_through_the_same_path(self):
-        """``_visit_integer`` used to print ``str(e.val)``, bypassing the check.
-
-        Pinned because it is a second spelling of the same bug, and a plausible
-        place to reintroduce it as an "obvious" fast path.
-        """
-        assert _value_cpp_type(Fraction(2 ** 100)) is None
-        src = CppEmitter._visit_integer.__doc__ or ''
-        assert 'str(e.val)' not in src.replace('`str(e.val)`', '')

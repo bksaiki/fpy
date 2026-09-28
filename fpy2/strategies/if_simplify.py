@@ -24,12 +24,13 @@ def simplify_if(
     Refusals are judged on the arm as written, before it is known to inline, so
     an arm that would have inlined can still be declined.  A construct that
     could change which value the function produces, or that aborts where the
-    program asked to, is declined under every mode, raising
-    :class:`~fpy2.transform.TransformDeclined`: `return`, `assert`, an effect,
-    a list write, `while`, `for`, `fp.cast`, a call to another FPy function,
-    and any operation under an `ASSERT` overflow context.  That last is keyed
-    on whether an operation consults the rounding context, not on its node
-    class, so `x * x` overflows there exactly as `fp.round(x)` would.
+    program asked to, is declined under every mode: `return`, `assert`, an
+    effect, a list write, `while`, `for`, `fp.cast`, a call to another FPy
+    function, and any operation under an `ASSERT` overflow context.  That last
+    is keyed on whether an operation consults the rounding context, not on its
+    node class, so `x * x` overflows there exactly as `fp.round(x)` would.  A
+    declined `if` is no site: it is left in place, and :func:`refusals` says
+    why.  A cursor naming one raises :class:`~fpy2.transform.TransformDeclined`.
 
     ``where`` names one site: an index counting `if` statements in visit
     order, or a cursor or region, which takes the sites at or beneath it.

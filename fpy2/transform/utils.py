@@ -509,12 +509,19 @@ class SiteRewriter(DefaultTransformVisitor):
         )
         return [(c, reasons[id(c.resolve())]) for c in found]
 
-    def _named_by_cursor(self, e: Expr) -> bool:
-        """Whether an explicit cursor names the expression *e*, ignoring the
-        index: what decides whether a refusal is reported or merely counted."""
+    def _refuse(self, node: Expr | Stmt, why: str) -> bool:
+        """Record that *node*, the candidate at the current site, is no site,
+        and report *why* if an explicit cursor names it; returns whether one
+        did.  An index counts sites, and a refusal is not one; `where=None`
+        means every site, not this one too."""
+        self.refused.append((node, why))
         if self._target_expr is not None:
-            return self._target_expr is e
-        return self._target is not None and self._selects(*self._site, -1)
+            named = self._target_expr is node
+        else:
+            named = self._target is not None and self._selects(*self._site, -1)
+        if named:
+            self.declined.append(why)
+        return named
 
     def check_site(self, what: str) -> None:
         """Rejects an explicit `where` that named no candidate, or one whose
@@ -716,10 +723,7 @@ class ExprSiteRewriter(PreambleScoped):
             else self._check(e)
         )
         if isinstance(info, Declined):
-            self.refused.append((e, info.reason))
-            if self._named_by_cursor(e):
-                # a cursor named it: say why, rather than that it named nothing
-                self.declined.append(info.reason)
+            self._refuse(e, info.reason)
             return super()._visit_expr(e, ctx)
 
         idx = self.site_idx

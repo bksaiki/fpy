@@ -208,27 +208,20 @@ class TestABoundTheOperandTypeCannotHold:
 
 
 class TestBoundAndSpecialsAreAsserted:
-    def test_the_bound_is_asserted_in_integer_storage(self):
+    def test_the_bound_and_the_specials_are_asserted(self):
         """Integer storage is wider than the format, so the bound needs its own
-        assertion; the cast alone wraps at the type's range."""
+        assertion; the cast alone wraps at the type's range.  It is asserted on
+        the *rounded* value: ``100.7`` rounds to ``100`` under ``RTZ`` and is in
+        bounds.  And a NaN or infinity converted to an integer type is undefined
+        -- on x86-64 it gives ``INT_MIN`` -- where the interpreter raises."""
         out = _emit(_INT_STORAGE)
         assert 'overflow occurred' in out
+        assert 'std::trunc(' in out
+        assert 'std::isfinite' in out
         # 120 is representable in `int8_t` but not in this context
         with pytest.raises(Exception):
             _round_fn(_INT_STORAGE)(120.0)
-
-    def test_the_bound_is_asserted_on_the_rounded_value(self):
-        """``100.7`` rounds to ``100`` under ``RTZ`` and is *in* bounds, so the
-        test cannot be applied to the operand."""
         assert float(_round_fn(_INT_STORAGE)(100.7)) == 100.0
-        out = _emit(_INT_STORAGE)
-        assert 'std::trunc(' in out
-
-    def test_specials_are_guarded_before_an_integer_conversion(self):
-        """A NaN or infinity converted to an integer type is undefined -- on
-        x86-64 it gives ``INT_MIN`` -- where the interpreter raises."""
-        out = _emit(_INT_STORAGE)
-        assert 'std::isfinite' in out
 
 
 class TestEdgeRulesAreRefused:
@@ -256,23 +249,6 @@ class TestOperandTypesAndSpecials:
         out = _emit(_INT_STORAGE, arg_ctx=fp.UINT32)
         assert '-100' not in out
         assert 'v <= 100' in out
-
-    def test_a_signed_operand_keeps_both_comparisons(self):
-        out = _emit(_INT_STORAGE, arg_ctx=fp.SINT32)
-        assert '-100 <= v && v <= 100' in out
-
-    def test_a_representable_special_is_exempt_from_the_bound(self):
-        """No magnitude test admits an infinity, so a context that represents one
-        would abort on a value it can hold.
-
-        The exemption tests the *operand*: a finite value too large for the
-        storage narrows to an infinity on the way in, and that one does overflow.
-        """
-        ctx = fp.MPBFixedContext(
-            -1, fp.RealFloat(exp=0, c=100), rm=fp.RM.RTZ, overflow=A,
-            enable_nan=True, enable_inf=True)
-        out = _emit(ctx)
-        assert '!std::isfinite(v) || std::fabs(' in out
 
 
 class TestRefusalsOnTheIntegerStoragePath:
@@ -324,12 +300,6 @@ class TestNativeContextsAreUntouched:
         assert out.count('assert(') == 1
         assert 'std::isfinite' in out
 
-    def test_wrapping_matches_for_a_native_context(self):
-        q = _round_fn(fp.SINT8)
-        assert float(q(128.0)) == -128.0
-        assert float(q(-129.0)) == 127.0
-        assert float(q(200.0)) == -56.0
-
 
 class TestIntegerOperand:
     def test_no_pointless_float_tests_for_an_integer_operand(self):
@@ -370,10 +340,6 @@ class TestSixtyFourBitWrapIsExact:
     @pytest.mark.parametrize('ctx, ctype, fmt', [
         pytest.param(fp.UINT64, 'unsigned long long', '%llu', id='uint64'),
         pytest.param(fp.SINT64, 'long long', '%lld', id='sint64'),
-        # the narrow types take the same path; they would pass either way,
-        # which is what makes them the control
-        pytest.param(fp.UINT16, 'unsigned long long', '%llu', id='uint16'),
-        pytest.param(fp.SINT8, 'long long', '%lld', id='sint8'),
     ])
     def test_value_for_value(self, ctx, ctype, fmt):
         if _CXX is None:

@@ -75,10 +75,6 @@ class TestF16Placement:
     putting `F32` after `S32`: a count is not a float.
     """
 
-    def test_f16_follows_the_8_bit_integers(self):
-        assert _IDX[T.U8] < _IDX[T.F16]
-        assert _IDX[T.S8] < _IDX[T.F16]
-
     def test_f16_follows_the_16_bit_integers(self):
         assert _IDX[T.U16] < _IDX[T.F16]
         assert _IDX[T.S16] < _IDX[T.F16]

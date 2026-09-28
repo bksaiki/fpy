@@ -3,10 +3,8 @@
 If a strategy has `k` sites in a program, then `where=None` rewrites all `k` and
 `where=j` for ``0 <= j < k`` rewrites the `j`th.  `k` is `len(sites(...))`.
 
-Six of the ten strategies used to break this: `sites` reported *structural*
-candidates while a refusal consumed an index, so `where=j` could raise and
-`where=None` could be a no-op with `k > 0`.  The `refuses` rows are what catch
-that, and every strategy in `_SITES` has to appear here at all --
+`sites` must not report a structural candidate a refusal would consume: the
+`refuses` rows catch that, and every strategy in `_SITES` has to appear here --
 `test_every_aimable_strategy_is_covered` fails if one is added without a row.
 """
 
@@ -14,9 +12,11 @@ import pytest
 
 import fpy2 as fp
 from fpy2.analysis.format_infer import derive_intermediate
-from fpy2.ast.fpyast import Integer
+from fpy2.ast.fpyast import FuncDef, Integer
 from fpy2.strategies import (
     ExprCursor,
+    FuncBody,
+    StmtCursor,
     TransformReferenceError,
     comp_to_loop,
     float_to_fixed,
@@ -40,7 +40,7 @@ from fpy2.strategies import (
     unroll_while,
 )
 from fpy2.strategies.sites import _SITES
-from fpy2.transform import ForUnrollStrategy, SplitLoopStrategy, contains
+from fpy2.transform import EditLog, ForUnrollStrategy, SplitLoopStrategy, contains
 from fpy2.types import RealType
 
 from ..transform.test_hoist_scale import (
@@ -304,6 +304,31 @@ def _nested_ifs(x: fp.Real, y: fp.Real) -> fp.Real:
     return z
 
 
+@fp.fpy
+def _refused_if(x: fp.Real) -> fp.Real:
+    if x > 0:
+        assert x > 1
+        a = 1.0
+    else:
+        a = 2.0
+    return a
+
+
+@fp.fpy
+def _refuses_then_simplifies(x: fp.Real, y: fp.Real) -> fp.Real:
+    """A refused `if` before a site, so index 0 is `body[1]`."""
+    if x > 0:
+        assert x > 1
+        a = 1.0
+    else:
+        a = 2.0
+    if y > 0:
+        b = 3.0
+    else:
+        b = 4.0
+    return a + b
+
+
 ACTS = [
     ('unfold_special', unfold_special, _two_floats, {}),
     ('unfold_special/mixed', unfold_special, _refuses_then_acts, {}),
@@ -327,6 +352,7 @@ ACTS = [
     ('unfold_enumerate', unfold_enumerate, _two_enumerates, {}),
     ('simplify_if', simplify_if, _two_ifs, {}),
     ('simplify_if/nested', simplify_if, _nested_ifs, {}),
+    ('simplify_if/mixed', simplify_if, _refuses_then_simplifies, {}),
     ('hoist_invariant', hoist_invariant, _two_invariant_for, {}),
     ('hoist_invariant/nested', hoist_invariant, _nested_invariant_for, {}),
     ('hoist_scale', hoist_scale, _two_scaled_sums, {}),
@@ -354,6 +380,7 @@ REFUSES = [
     ('split_round/refuses', split_round, _two_rounded, {'ctx': fp.FP32}),
     ('unfold_zip/refuses', unfold_zip, _sealed_zip, {}),
     ('unfold_enumerate/refuses', unfold_enumerate, _sealed_enumerate, {}),
+    ('simplify_if/refuses', simplify_if, _refused_if, {}),
 ]
 
 # `unroll_while` has no row: it refuses nothing at all.
@@ -395,8 +422,8 @@ def _no_factor(kw):
 def test_every_index_in_range_rewrites(strategy, func, kw):
     """`where=j` for `0 <= j < k` rewrites, and rewrites something.
 
-    This is the half that broke when a refusal consumed an index: `where=j`
-    raised `TransformDeclined` for a `j` the listing had just reported.
+    A refusal must not consume an index: `where=j` must not raise
+    `TransformDeclined` for a `j` the listing reports.
     """
     listed = sites(strategy, func, **kw)
     assert listed, 'the program should give this strategy at least one site'
@@ -409,9 +436,8 @@ def test_every_index_in_range_rewrites(strategy, func, kw):
 def test_where_none_acts_exactly_when_there_are_sites(strategy, func, kw):
     """`where=None` rewrites all `k`, so it is a no-op if and only if `k` is 0.
 
-    This is the half that broke worse: `sites(rescale_fixed, two_floats)`
-    reported two sites in a program holding no fixed-point context at all, and
-    `where=None` did nothing.
+    So a refused program lists nothing: `sites(rescale_fixed, _two_floats)`
+    is empty, since the program holds no fixed-point context.
     """
     listed = sites(strategy, func, **kw)
     out = _apply(strategy, func, None, kw)
@@ -425,7 +451,7 @@ def test_where_none_acts_exactly_when_there_are_sites(strategy, func, kw):
         )
 
 
-@pytest.mark.parametrize('strategy,func,kw', ROWS, ids=IDS)
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
 def test_a_listed_cursor_aims_the_same_as_its_index(strategy, func, kw):
     """`sites(...)[j]` and `where=j` name the same site -- where that cursor
     names only that site.
@@ -452,15 +478,34 @@ def test_a_listed_cursor_aims_the_same_as_its_index(strategy, func, kw):
             assert by_cursor.ast.is_equiv(by_index.ast)
 
 
+def _identity(func: fp.Function) -> fp.Function:
+    """A pass that rewrites nothing, yet produces a new program."""
+    ast = func.ast
+    same = FuncDef(ast.name, ast.args, ast.body, ast.meta, loc=ast.loc)
+    return func.with_edits(EditLog(ast, same, exprs_preserved=True))
+
+
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
+def test_a_cursor_crosses_the_strategy_in_both_directions(strategy, func, kw):
+    """In: a cursor of an earlier program aims as it did there, so the
+    strategy rebases its `where`.  Out: a cursor of its input reaches its
+    output, so it reports what it rewrote."""
+    cursor = sites(strategy, func, **kw)[0]
+    direct = _apply(strategy, func, cursor, kw)
+    assert _apply(strategy, _identity(func), cursor, kw).ast.is_equiv(direct.ast)
+
+    last = StmtCursor(func.ast, FuncBody().stmt(len(func.ast.body.stmts) - 1))
+    assert direct.forward(last).func is direct.ast
+
+
 # ----------------------------------------------------------------------
 # What falls out of the contract
 
 
 @pytest.mark.parametrize('strategy,func,kw', REFUSE_ROWS, ids=REFUSE_IDS)
 def test_a_strategy_that_applies_to_nothing_lists_nothing(strategy, func, kw):
-    """The divergence, stated directly: a program the strategy refuses has no
-    sites, so `where=None` is a no-op and `where=0` is out of range.  It used to
-    report a site per structural candidate and then rewrite none of them."""
+    """A program the strategy refuses has no sites, so `where=None` is a no-op
+    and `where=0` is out of range."""
     assert sites(strategy, func, **kw) == []
     assert refusals(strategy, func, **kw), 'it should say why, not stay silent'
     assert _apply(strategy, func, None, kw).ast.is_equiv(func.ast)
@@ -468,7 +513,7 @@ def test_a_strategy_that_applies_to_nothing_lists_nothing(strategy, func, kw):
         _apply(strategy, func, 0, kw)
 
 
-@pytest.mark.parametrize('strategy,func,kw', ROWS, ids=IDS)
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
 def test_an_index_past_the_end_is_an_error(strategy, func, kw):
     """Never a silent no-op: an index outside `range(k)` names nothing."""
     k = len(sites(strategy, func, **kw))
@@ -476,7 +521,7 @@ def test_an_index_past_the_end_is_an_error(strategy, func, kw):
         _apply(strategy, func, k, kw)
 
 
-@pytest.mark.parametrize('strategy,func,kw', ROWS, ids=IDS)
+@pytest.mark.parametrize('strategy,func,kw', ACT_ROWS, ids=ACT_IDS)
 def test_sites_and_refusals_are_disjoint(strategy, func, kw):
     """A program point is a site or a refusal, never both."""
     # `str` rather than `.path`: a region has a span instead, and no listing

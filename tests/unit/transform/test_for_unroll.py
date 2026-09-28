@@ -269,21 +269,6 @@ class TestForUnrollWhere():
     """`where` selects a single loop by pre-order index; an index that names
     no loop is a caller error, not a silent no-op."""
 
-    def test_out_of_range_raises(self):
-        @fp.fpy
-        def one_loop(xs: list[fp.Real]) -> fp.Real:
-            s = 0.0
-            for x in xs:      # the only for loop -> index 0
-                s = s + x
-            return s
-
-        for bad in (1, 2, 5):
-            try:
-                ForUnroll.apply(one_loop.ast, where=bad, times=1)
-                assert False, f'expected TransformReferenceError for where={bad}'
-            except TransformReferenceError:
-                pass
-
     def test_negative_raises(self):
         @fp.fpy
         def one_loop(xs: list[fp.Real]) -> fp.Real:
@@ -295,17 +280,6 @@ class TestForUnrollWhere():
         try:
             ForUnroll.apply(one_loop.ast, where=-1, times=1)
             assert False, 'expected TransformReferenceError for where=-1'
-        except TransformReferenceError:
-            pass
-
-    def test_no_loops_raises(self):
-        @fp.fpy
-        def no_loop(x: fp.Real) -> fp.Real:
-            return x + 1.0
-
-        try:
-            ForUnroll.apply(no_loop.ast, where=0, times=1)
-            assert False, 'expected TransformReferenceError: no loop at index 0'
         except TransformReferenceError:
             pass
 

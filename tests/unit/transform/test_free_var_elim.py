@@ -59,6 +59,20 @@ def test_callable_free_var_left_untouched():
     assert 'c' in _leading_assigns(out)
 
 
+def test_context_free_var_left_untouched():
+    """A rounding context has no literal form; context analysis resolves it."""
+    ctx = fp.IEEEContext(8, 32)
+
+    @fp.fpy
+    def f(x: fp.Real) -> fp.Real:
+        with ctx:
+            return x + 1.0
+
+    out = FreeVarElim.apply(f.ast)
+    assert out.is_equiv(f.ast)
+    assert out.free_vars == f.ast.free_vars
+
+
 def test_no_free_vars_is_noop():
     @fp.fpy
     def f(x, y):

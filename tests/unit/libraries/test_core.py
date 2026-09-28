@@ -17,7 +17,9 @@ class TestCore():
 
     def assertArrayEqual(self, a: list, b: list):
         """Assert that two arrays are equal, handling NaN and Inf"""
-        return len(a) == len(b) and all(self.assertNumEqual(x, y) for x, y in zip(a, b))
+        assert len(a) == len(b)
+        for x, y in zip(a, b):
+            self.assertNumEqual(x, y)
 
     def test_split(self):
         """Testing `split` function"""

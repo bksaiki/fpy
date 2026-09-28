@@ -1,14 +1,10 @@
 """
-Phase 4g tests for the cpp emitter — list built-ins.
+Tests for the cpp emitter's list built-ins.  ``sum`` is in ``test_emit_sum.py``.
 
-``sum(xs)`` lowers to ``std::accumulate``, with the result type inferred by
-format inference.
-
-``enumerate`` and ``zip`` no longer reach the emitter at all: `UnfoldEnumerate`
-and `UnfoldZip` state each as the comprehension `derived-semantics.rst` defines
-it to be, inside `StatementForm`'s fixpoint, and `CompToLoop` lowers that.
-So the tuple list they used to build is now built by the comprehension's own
-fill loop — same object, one fewer emitter case.
+``enumerate`` and ``zip`` never reach the emitter: `UnfoldEnumerate` and
+`UnfoldZip` state each as the comprehension `derived-semantics.rst` defines it
+to be, inside `StatementForm`'s fixpoint, and `CompToLoop` lowers that; the
+tuple list is built by the comprehension's own fill loop.
 
 The temporaries the emitter allocates use ``_tmpN`` names.
 """
@@ -19,7 +15,6 @@ import pytest
 
 import fpy2 as fp
 from fpy2.backend.cpp import CppCompileError, CppCompiler
-from fpy2.backend.cpp.emitter import CppEmitter
 from fpy2.transform import CompToLoop, Hoistable, StatementForm
 from fpy2.types import ListType, RealType
 
@@ -42,30 +37,6 @@ def _no_unfold():
         yield
     finally:
         StatementForm.apply = original
-
-
-class TestSum:
-    """``sum(xs)`` → ``std::accumulate``."""
-
-    def test_sum_returns_accumulate(self):
-        @fp.fpy
-        def f(xs: list[fp.Real]) -> fp.Real:
-            with fp.FP64:
-                return sum(xs)
-
-        out = CppCompiler().compile(
-            f, ctx=fp.FP64,
-            arg_types=[ListType(RealType(fp.FP64))],
-        )
-        # A named operand is read directly; only a prvalue needs binding so
-        # that begin()/end() name the same object (see
-        # ``test_prvalue_operand_is_bound_before_iterating`` in test_emit_bool).
-        assert 'auto&&' not in out
-        # Seeded from the first element over ``begin() + 1``, which is the fold
-        # `_eval_sum` performs -- *n-1* additions from an unrounded seed, and an
-        # exact ``+0`` for the empty list.  See ``test_emit_sum.py``.
-        assert 'std::accumulate(xs.begin() + 1, xs.end(), ' in out
-        assert 'xs.size() == 0 ? static_cast<double>(0)' in out
 
 
 class TestEnumerate:
@@ -272,10 +243,6 @@ class TestTheEmitterNoLongerHasThem:
     instead of to a fixpoint leaves 2 and 9 -- a `zip` only gets its statement
     slot after `CompToLoop` opens the comprehension around it.
     """
-
-    def test_the_methods_are_gone(self):
-        for name in ('_emit_zip', '_emit_enumerate'):
-            assert not hasattr(CppEmitter, name)
 
     def test_a_zip_reaching_the_emitter_is_a_tripwire(self):
         """Reached by taking the unfold out, which is the only way in."""

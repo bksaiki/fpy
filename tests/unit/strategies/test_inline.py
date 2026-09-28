@@ -136,6 +136,8 @@ class TestInlineWhere:
         # `_top`'s candidate sites in visit order: `_mid(x)`, `_leaf(x)`
         out = inline(_top, 0)
         assert _fpy_callees(out.ast) == [_leaf]
+        # `recursive=True` also flattens `_mid`'s own call to `_leaf`
+        assert _count_fpy_calls(out.ast) == 1
         for x in (0.0, 1.5, -3.25, 10.0):
             assert _top(x) == out(x)
 
@@ -151,12 +153,6 @@ class TestInlineWhere:
         assert '_leaf' in {str(v) for v in out.ast.free_vars}
         for x in (0.0, 1.5, -3.25, 10.0):
             assert _leaf_twice(x) == out(x)
-
-    def test_where_selected_site_flattens(self):
-        # `recursive=True` (default): inlining the `_mid` site also
-        # flattens `_mid`'s own call to `_leaf`
-        out = inline(_top, 0)
-        assert _count_fpy_calls(out.ast) == 1
 
     def test_where_with_recursive_false(self):
         # one level only: `_mid`'s body still calls `_leaf`, and the

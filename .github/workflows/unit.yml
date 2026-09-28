@@ -95,7 +95,7 @@ jobs:
       - name: Install
         run: uv sync
       - name: Unit Tests
-        run: uv run make unittest
+        run: uv run make unittest UNITTEST_JOBS=auto
       - name: Infrastucture Tests
         run: uv run python -m tests.infra
 
@@ -114,7 +114,7 @@ jobs:
       - name: Install
         run: uv sync
       - name: Unit Tests
-        run: uv run make unittest
+        run: uv run make unittest UNITTEST_JOBS=auto
 
   fpcore:
     name: "FPCore tests"
