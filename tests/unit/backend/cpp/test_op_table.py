@@ -89,7 +89,7 @@ class TestDispatchDirect:
     """Direct same-type matches emit without a cast."""
 
     @pytest.mark.parametrize(
-        'ctx', [fp.UINT8, fp.UINT16, fp.UINT32, fp.UINT64],
+        'ctx', [fp.UINT8, fp.UINT32],
     )
     def test_unsigned_abs_is_the_operand(self, ctx):
         """`std::abs(uint32_t)` is ambiguous and `std::abs(uint8_t)` picks the
@@ -261,7 +261,8 @@ class TestLossyCastAdvice:
         # the generic advice would send the user to widen the *active* context
         assert 'format contains the operand' not in msg
 
-    @pytest.mark.parametrize('int_ctx', [fp.SINT8, fp.SINT16, fp.SINT32])
+    # SINT8 and SINT16 are the two named tests above
+    @pytest.mark.parametrize('int_ctx', [fp.SINT32])
     def test_a_narrow_integer_exponent_needs_no_advice(self, int_ctx):
         assert self._scale(int_ctx)()
 

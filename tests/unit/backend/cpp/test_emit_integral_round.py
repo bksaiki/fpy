@@ -173,12 +173,8 @@ class TestIntegerStorage:
     would only repeat the cast.
     """
 
-    @pytest.mark.parametrize('rm, fn', [
-        (RM.RTN, 'std::floor'),
-        (RM.RTP, 'std::ceil'),
-        (RM.RNA, 'std::round'),
-        (RM.RNE, 'std::nearbyint'),
-    ], ids=['rtn', 'rtp', 'rna', 'rne'])
+    # one mode: `TestModeTable` checks every entry of the table this reads
+    @pytest.mark.parametrize('rm, fn', [(RM.RNE, 'std::nearbyint')], ids=['rne'])
     def test_the_value_is_made_integral_before_the_cast(self, rm, fn):
         out = _emit(fp.SINT32.with_params(rm=rm, overflow=ASSERT))
         assert re.search(rf'auto&& (\w+) = {re.escape(fn)}\(x\);', out), out
@@ -869,7 +865,8 @@ class TestCastCarriesNoMode:
     rounding mode -- so the guard that holds a declined `Round` to ``RTZ``,
     the cast below it being a truncation, does not apply to a `Cast`."""
 
-    @pytest.mark.parametrize('rm', [RM.RTP, RM.RTN, RM.RNA])
+    # the cast is emitted before the mode is read, so one mode stands for all
+    @pytest.mark.parametrize('rm', [RM.RTP])
     def test_a_non_rtz_mode_still_casts(self, rm):
         ctx = MPBFixedContext(
             -1, fp.RealFloat(exp=10, c=1), rm=rm, overflow=ASSERT,

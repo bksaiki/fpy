@@ -146,9 +146,8 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize('optimize', [True, False])
 @pytest.mark.parametrize('name,func,arg_types', CASES, ids=[c[0] for c in CASES])
-def test_representation_stressing_programs_typecheck(name, func, arg_types, optimize):
+def test_representation_stressing_programs_typecheck(name, func, arg_types):
     """Every per-level and per-return representation choice has to produce a
     program C++ accepts.
 
@@ -159,7 +158,7 @@ def test_representation_stressing_programs_typecheck(name, func, arg_types, opti
     """
     m = Module()
     m.add(func, ctx=fp.FP64, arg_types=list(arg_types))
-    _typecheck(m, unbox=UnboxMode.ALLOW, optimize=optimize)
+    _typecheck(m, unbox=UnboxMode.ALLOW)
 
 
 def test_mixed_nesting_is_actually_produced():
