@@ -346,6 +346,7 @@ python serve/local.py --scheme mxfp4 --models kaitchup/Qwen3-0.6B-NVFP4 --requan
 python serve/local.py --scheme nvfp4 -d nv.blackwell.nvfp4 -w mtbench --by role -m normwise backward
 python serve/{perplexity,zeroshot,decode}.py --model Qwen/Qwen3.5-0.8B   # bf16 runs
 python serve/chat.py                                    # terminal chat, run switchable mid-conversation
+python serve/chat.py --model kaitchup/Qwen3-0.6B-NVFP4 --scheme nvfp4 -r nv.blackwell.nvfp4
 ```
 
 Options:

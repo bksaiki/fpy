@@ -32,9 +32,6 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
     return ('fp32', f'{scheme.name}-exact', *kernels.designs(scheme))
 
 
-MODES = modes()
-"""Every `bf16` run."""
-
 MODEL = 'Qwen/Qwen3-0.6B'
 """The default model; `Qwen/Qwen3.5-0.8B` also runs (text only)."""
 
