@@ -1,7 +1,7 @@
 """
 Phase 6 tests for the cpp emitter — translation-unit preamble.
 
-``CppCompiler.compile`` returns just a function definition.  For
+By default, ``CppCompiler.compile`` returns just a function definition.  For
 end-to-end compilation the caller pulls ``headers()`` / ``helpers()``
 explicitly (or ``prelude()`` for both at once) and concatenates the
 result with each compiled function.
