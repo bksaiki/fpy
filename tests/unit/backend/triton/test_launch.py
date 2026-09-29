@@ -1148,6 +1148,30 @@ def test_a_tail_written_in_a_loop_agrees() -> None:
 
 
 @fp.fpy(ctx=fp.REAL)
+def _slice_of_a_slice(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A slice of a slice, read across the lanes of a local list."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for t in range(0, len(xss[r]), 64):
+            w = xss[r][t:t + 64]
+            for u in range(0, 64, 16):
+                v = w[u:u + 16]
+                q = [a for a in v]
+                for j in range(16):
+                    with fp.FP32:
+                        s = s + q[j]
+        out[r] = s
+    return out
+
+
+def test_a_slice_of_a_slice_agrees() -> None:
+    """It starts at the sum of the starts, a row that the lanes read as a
+    column."""
+    src = _compile(_slice_of_a_slice, _rows_of(128))
+    _agree(src, _slice_of_a_slice, _randn(128))
+
+
+@fp.fpy(ctx=fp.REAL)
 def _count_in_a_loop(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
     """A counter carried by a loop outside any tile, from a literal."""
     with fp.INTEGER:

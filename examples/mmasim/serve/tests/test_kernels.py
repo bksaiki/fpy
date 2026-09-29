@@ -14,7 +14,7 @@ import pytest
 import torch
 from core import kernels, quant
 
-from fpy2.backend.triton import unavailable
+from fpy2.backend.triton import launch, unavailable
 
 _WHY = unavailable()
 pytestmark = pytest.mark.skipif(_WHY is not None, reason=_WHY or '')
@@ -148,6 +148,74 @@ def test_scaled_partials_sum_in_order() -> None:
                                  w[j, c * 128:(c + 1) * 128].tolist(), 0.0))
                 acc = acc + p * (np.float32(sx[i, c]) * np.float32(sw[j, c]))
             assert _bits(got[i, j].item()) == _bits(float(acc)), (i, j)
+
+
+def _same(got: torch.Tensor, want: torch.Tensor) -> bool:
+    """Bit for bit, any NaN as one."""
+    nan = got.isnan()
+    return torch.equal(nan, want.isnan()) and torch.equal(
+        got.masked_fill(nan, 0).view(torch.int32), want.masked_fill(nan, 0).view(torch.int32))
+
+
+def _fused(design: str, a: torch.Tensor, w: torch.Tensor,
+           xs: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+    """*design* over `k` in one kernel (`kernels.fused`), from a zero
+    accumulator, each row's scales a list."""
+    m, n = a.shape[0], w.shape[0]
+    c, out = torch.zeros(m, n, device='cuda'), torch.zeros(m, n, device='cuda')
+    block, block_m = kernels.TILES[design]
+    launch(kernels.fused(design, a.shape[1]), [a, w, c, xs, ys, out],
+           block=block, block_m=min(block_m, 1 << (m - 1).bit_length()))
+    return out
+
+
+@pytest.mark.parametrize('m', [1, 37])
+@pytest.mark.parametrize('design', SCALED)
+def test_a_chain_in_one_kernel_is_the_chain_of_launches(design: str, m: int) -> None:
+    """Three instructions, on hard-case elements and scales."""
+    from compile import DESIGNS as ALL
+    from compile import _fmt, _sample
+
+    _, args = dict(ALL)[design]()
+    k0 = kernels.compiled(design)[1]
+    per = k0 // kernels.group(design)
+    rng = random.Random(0)
+    n, s = 5, 3
+
+    def draw(t: object, *shape: int) -> torch.Tensor:
+        fmt = _fmt(t)
+        return torch.tensor([_sample(fmt, rng, hard=0.25) for _ in range(math.prod(shape))]
+                            ).view(shape)
+
+    x, w = draw(args[0], m, s * k0), draw(args[1], n, s * k0)
+    xs, ys = draw(args[3], s, m, per), draw(args[4], s, n, per)
+    held = kernels.storage(design)
+    a, sx, sy = x.cuda().to(held[0]), xs.cuda().to(held[2]), ys.cuda().to(held[2])
+    each = (sx[..., 0], sy[..., 0]) if per == 1 else (sx, sy)
+    launched = kernels.matmul(a, kernels.prepare(w.cuda(), held[1], s), design, scales=each)
+    # a row's scales, instruction by instruction
+    rows = [t.permute(1, 0, 2).reshape(t.shape[1], s * per).contiguous() for t in (sx, sy)]
+    assert _same(_fused(design, a, w.cuda().to(held[1]), *rows), launched)
+
+
+@pytest.mark.parametrize('m', [1, 37])
+@pytest.mark.parametrize('design', ['nv.hopper.e4m3.f32', 'amd.cdna3.fp8'])
+def test_promoted_in_one_kernel_is_the_partials_scaled_in_torch(design: str, m: int) -> None:
+    """Two blocks of 128, `y + p * (s_x * s_w)`, on hard-case elements."""
+    from compile import DESIGNS as ALL
+    from compile import _fmt, _sample
+
+    _, args = dict(ALL)[design]()
+    rng = random.Random(0)
+    fmt = _fmt(args[0])
+    n, k = 5, 256
+    x = torch.tensor([[_sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(m)])
+    w = torch.tensor([[_sample(fmt, rng, hard=0.25) for _ in range(k)] for _ in range(n)])
+    sx, sw = (torch.rand(m, 2) * 4).cuda(), (torch.rand(n, 2) * 4).cuda()
+    held = kernels.storage(design)
+    a = x.cuda().to(held[0])
+    launched = kernels.matmul(a, kernels.prepare(w.cuda(), held[1], 2), design, scales=(sx, sw))
+    assert _same(_fused(design, a, w.cuda().to(held[1]), sx, sw), launched)
 
 
 @pytest.mark.parametrize('split_k', [1, 4])

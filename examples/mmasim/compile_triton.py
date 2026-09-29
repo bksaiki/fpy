@@ -116,25 +116,106 @@ def compile_matmul(
     arg_types = _at_depth(arg_types, k)
     a, b, c, *scales = arg_types
     assert isinstance(a, _L) and isinstance(b, _L)
-    m, n = NamedId('m'), NamedId('n')
     if not scales:
         a, b = _L(a.elt, NamedId('k')), _L(b.elt, NamedId('k'))
+    return _compile(design, [a, b, c, *scales]), design, arg_types
+
+
+def _compile(f: fp.Function, arg_types: list[Type]) -> KernelSource:
+    """*f*, one output from `(A, B, C, *scales)` of *arg_types*, as a matmul
+    kernel with `m` and `n` symbolic, a scale indexed as its operand."""
+    a, b, c, *scales = arg_types
+    m, n = NamedId('m'), NamedId('n')
     square = _L(_L(c, n), m)
-    kernel = TritonCompiler(
+    return TritonCompiler(
         drop_asserts=True, unfold=TritonCompiler.UnfoldMode.ROUNDINGS,
     ).compile(
-        _matmul(design, len(arg_types)), ctx=fp.REAL,
+        _matmul(f, len(arg_types)), ctx=fp.REAL,
         arg_types=[_L(a, m), _L(b, n), square,
                    *(_L(t, d) for t, d in zip(scales, (m, n))),
                    square, _R(fp.INTEGER)],
     )
-    return kernel, design, arg_types
 
 
-def _kernel_named(name: str, k: int | None) -> tuple[KernelSource | None, str, str]:
-    """The kernel for design *name*, or `None` and the refusal's type and text."""
+def _chained(design: fp.Function, k0: int, per: int | None) -> fp.Function:
+    """A block-scaled *design*, one instruction of *k0* elements, chained over
+    `k`: instruction `t` takes its elements, its scales (one, or *per*), and
+    the last one's result as its accumulator."""
+    if per is None:
+        @fp.fpy(ctx=fp.REAL)
+        def chain1(A, B, c, xs, ys):
+            d = c
+            for t in range(len(xs)):
+                i = t * k0
+                d = design(A[i:i + k0], B[i:i + k0], d, xs[t], ys[t])
+            return d
+        return chain1
+    g = k0 // per
+
+    @fp.fpy(ctx=fp.REAL)
+    def chain(A, B, c, xs, ys):
+        d = c
+        for t in range(0, len(xs), per):
+            i = t * g
+            d = design(A[i:i + k0], B[i:i + k0], d, xs[t:t + per], ys[t:t + per])
+        return d
+    return chain
+
+
+def _promoted(design: fp.Function, block: int) -> fp.Function:
+    """*design* over `k`, *block* elements at a time from a zero accumulator,
+    each block's partial scaled into the result in FP32, `y + p * (s_x *
+    s_w)`, as block-scaled FP8 promotes it."""
+    @fp.fpy(ctx=fp.REAL)
+    def promoted(A, B, c, xs, ys):
+        y = c
+        for t in range(len(xs)):
+            i = t * block
+            p = design(A[i:i + block], B[i:i + block], 0.0)
+            with fp.FP32:
+                y = y + p * (xs[t] * ys[t])
+        return y
+    return promoted
+
+
+PROMOTE = 128
+"""The block of `k` a design without scales of its own is promoted every."""
+
+
+def fuse(build: Build, k: int) -> tuple[fp.Function, list[Type]]:
+    """One design over a static *k*, and its argument types: a block-scaled
+    one chained per instruction (:func:`_chained`), any other promoted every
+    :data:`PROMOTE` of `k` with FP32 scales (:func:`_promoted`)."""
+    design, (a, b, c, *scales) = build()
+    assert isinstance(a, _L) and isinstance(b, _L)
+    k0 = _length(a)
+    if scales:
+        if k % k0:
+            raise ValueError(f'k = {k} is not a multiple of the design\'s {k0}')
+        sx = scales[0]
+        per = _length(sx) if isinstance(sx, _L) else None
+        f, s, elt = _chained(design, k0, per), k // k0 * (per or 1), getattr(sx, 'elt', sx)
+    else:
+        if k % PROMOTE or PROMOTE % k0:
+            raise ValueError(f'k = {k} is not a multiple of {PROMOTE}, or {PROMOTE} of {k0}')
+        f, s, elt = _promoted(design, PROMOTE), k // PROMOTE, _R(fp.FP32)
+    return f, [_L(a.elt, k), _L(b.elt, k), c, _L(elt, s), _L(elt, s)]
+
+
+def compile_fused(build: Build, k: int) -> tuple[KernelSource, fp.Function, list[Type]]:
+    """:func:`fuse`'s function as a matmul kernel, the function, and its
+    argument types."""
+    f, arg_types = fuse(build, k)
+    return _compile(f, arg_types), f, arg_types
+
+
+def _kernel_named(name: str, k: int | None, fused: int | None = None,
+                  ) -> tuple[KernelSource | None, str, str]:
+    """The kernel for design *name* (fused over *fused*, if given), or `None`
+    and the refusal's type and text."""
     try:
-        return compile_matmul(dict(DESIGNS)[name], k)[0], '', ''
+        build = dict(DESIGNS)[name]
+        return (compile_matmul(build, k) if fused is None else compile_fused(build, fused))[0], '', ''
     except Exception as ex:  # noqa: BLE001 -- any refusal is a result
         return None, type(ex).__name__, str(ex)
 
@@ -203,6 +284,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument('-n', type=int, default=1, help="B's columns (default 1)")
     ap.add_argument('-k', type=int, default=None,
                     help="the dot product's length (default: the design's own)")
+    ap.add_argument('--fuse', metavar='K', type=int, default=None,
+                    help=f'each design over K in one kernel: a block-scaled one chained per '
+                         f'instruction, any other promoted every {PROMOTE} with FP32 scales')
     ap.add_argument('-r', '--run', metavar='DRAWS', type=int, default=0,
                     help='launch DRAWS random inputs and compare every output, '
                          'bit for bit, with the interpreter')
@@ -235,14 +319,18 @@ def main(argv: list[str]) -> int:
     total = args.run * args.m * args.n
     width = max(len(name) for name, _ in designs)
     ok = agree = 0
-    kernels = in_processes(partial(_kernel_named, k=args.k),
+    kernels = in_processes(partial(_kernel_named, k=args.k, fused=args.fuse),
                            [name for name, _ in designs], args.jobs)
     for (name, build), (kernel, kind, why) in zip(designs, kernels):
         ran = None
         if kernel is not None and args.run:
-            design, arg_types = build()
+            if args.fuse is None:
+                design, arg_types = build()
+                arg_types = _at_depth(arg_types, args.k)
+            else:
+                design, arg_types = fuse(build, args.fuse)
             try:
-                ran = run_matmul(kernel, design, _at_depth(arg_types, args.k),
+                ran = run_matmul(kernel, design, arg_types,
                                  args.m, args.n, args.run, args.seed,
                                  None if args.autotune else _BLOCK)
             except Exception as ex:  # noqa: BLE001 -- any refusal is a result

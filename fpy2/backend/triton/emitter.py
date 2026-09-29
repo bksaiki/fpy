@@ -950,10 +950,10 @@ class _Emitter(Visitor):
                 base, prefix, extra = self._flatten(e.value)
         except TritonEmitError:
             return None
-        if extra is not None:
-            # a slice of a slice: only one offset is carried
-            return None
         start = '0' if e.start is None else self._pin(self._index(e.start))
+        if extra is not None:
+            # a slice of a slice starts at the sum of their starts
+            start = self._pin(f'{extra} + {start}')
         return base, self._pinned(prefix), start
 
     def _pin(self, code: str) -> str:
@@ -1023,7 +1023,7 @@ class _Emitter(Visitor):
             for code, st in zip(codes, strides)
         ]
         if extra is not None:
-            terms.append(extra)
+            terms.append(extra if self._lane is None else self._as_col(extra))
         terms = [t for t in terms if t != '0']
         return ' + '.join(terms) if terms else '0'
 

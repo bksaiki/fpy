@@ -120,6 +120,15 @@ def compiled(design: str) -> tuple[KernelSource, int]:
     return _KERNELS[design], _arg_length(_args(design)[0])
 
 
+@cache
+def fused(design: str, k: int) -> KernelSource:
+    """*design* over a static *k* in one kernel (`compile_triton.fuse`):
+    a block-scaled one per instruction, any other promoted every 128 of `k`,
+    as `fp8-block` scales it.  Launched on `(a [m, k], w [n, k], C, xs, ys,
+    out)`, a scale list per row."""
+    return ct.compile_fused(_BUILDS[design], k)[0]
+
+
 def _compile_named(name: str) -> KernelSource:
     return ct.compile_matmul(dict(DESIGNS)[name], None)[0]
 
