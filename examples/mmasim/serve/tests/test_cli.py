@@ -1,0 +1,65 @@
+"""The scripts' options, as `--help` shows them."""
+
+import argparse
+import importlib
+
+import pytest
+
+SCRIPTS = ['local', 'perplexity', 'zeroshot', 'decode', 'chat']
+
+
+class _Parsed(Exception):
+    """Raised in place of parsing, carrying the parser a script built."""
+
+    parser: argparse.ArgumentParser
+
+    def __init__(self, parser: argparse.ArgumentParser) -> None:
+        super().__init__()
+        self.parser = parser
+
+
+def _parser(script: str, monkeypatch: pytest.MonkeyPatch) -> argparse.ArgumentParser:
+    """The parser *script*'s `main` builds, stopped before it parses."""
+    def stop(self: argparse.ArgumentParser, *args: object, **kwargs: object) -> None:
+        raise _Parsed(self)
+
+    monkeypatch.setattr(argparse.ArgumentParser, 'parse_args', stop)
+    with pytest.raises(_Parsed) as parsed:
+        importlib.import_module(script).main([])
+    return parsed.value.parser
+
+
+@pytest.mark.parametrize('script', SCRIPTS)
+def test_every_option_says_what_it_does_and_its_default(
+    script: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each option has help, and one with a default names it."""
+    for action in _parser(script, monkeypatch)._actions:
+        if isinstance(action, argparse._HelpAction):
+            continue
+        assert action.help, f'{script}: {action.dest} has no help'
+        if action.default not in (None, False, argparse.SUPPRESS):
+            assert 'default' in action.help, f'{script}: {action.dest} hides its default'
+
+
+@pytest.mark.parametrize('script', SCRIPTS)
+def test_help_prints_and_exits(script: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as done:
+        importlib.import_module(script).main(['--help'])
+    assert done.value.code == 0
+    assert 'options:' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('script', SCRIPTS)
+@pytest.mark.parametrize('flag, shown', [
+    (['--list-models'], 'kaitchup/Qwen3-0.6B-NVFP4'),
+    (['--list-schemes'], 'fp8-block:fnuz'),
+    (['--scheme', 'nvfp4', '--list-matmuls'], 'nv.blackwell.nvfp4'),
+])
+def test_a_list_prints_and_exits(
+    script: str, flag: list[str], shown: str, capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as done:
+        importlib.import_module(script).main(flag)
+    assert done.value.code == 0
+    assert shown in capsys.readouterr().out

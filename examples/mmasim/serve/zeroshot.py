@@ -1,23 +1,23 @@
 """
-Zero-shot accuracy on the standard suite, and each run's flips against R0.
+Zero-shot accuracy on the standard suite, and each matmul's flips against R0.
 
 `lm-evaluation-harness` runs PIQA, ARC-Easy, ARC-Challenge, HellaSwag,
-WinoGrande and LAMBADA (OpenAI) zero-shot for each run, on one model whose
+WinoGrande and LAMBADA (OpenAI) zero-shot for each matmul, on one model whose
 linear layers `swap.patch` switches.  A flip (Dutta et al. 2024) is an item
 whose correctness differs from R0's, either way; counted for each per-item
-metric the task logs (`acc`, `acc_norm`), over the items both runs have.
-Paired per item (:func:`against`), each run against R0 and each design
-against the scheme's exact run, per task and macro-averaged over them, each
+metric the task logs (`acc`, `acc_norm`), over the items both matmuls have.
+Paired per item (:func:`against`), each matmul against R0 and each design
+against the scheme's exact matmul, per task and macro-averaged over them, each
 with its standard error: Δ acc, and the continuous :data:`SCORES` from each
 choice's log-likelihood.  The
-macro Δ acc's and Δ log-likelihood's p-values are Holm-adjusted over the runs
-sharing a reference.  All in `<out>/paired.json`.
+macro Δ acc's and Δ log-likelihood's p-values are Holm-adjusted over the
+matmuls sharing a reference.  All in `<out>/paired.json`.
 
-Each run's results go to `<out>/<run>.json` and are reused by a later call
+Each matmul's results go to `<out>/<matmul>.json` and are reused by a later call
 with the same settings, so the suite can be run a design at a time.
 
-    python serve/zeroshot.py -o zs                        # every run
-    python serve/zeroshot.py -o zs-full -r bf16-exact --items 0
+    python serve/zeroshot.py -o zs                        # every matmul
+    python serve/zeroshot.py -o zs-full --matmuls bf16-exact --items 0
     python serve/zeroshot.py -o smoke --items 10
 """
 
@@ -158,11 +158,14 @@ def main(argv: list[str]) -> int:
     cli.add_args(ap)
     cli.add_scheme_args(ap)
     cli.add_runs(ap)
-    ap.add_argument('-o', '--out', required=True, help='directory for each run\'s JSON')
+    ap.add_argument('-o', '--out', help="directory for each matmul's JSON (required)")
     ap.add_argument('--items', type=int, default=500,
-                    help='items per task at most, at random (0: all)')
-    ap.add_argument('--batch-size', type=int, default=16)
-    args = ap.parse_args(argv)
+                    help='items per task at most, at random, 0 for all (default: %(default)s)')
+    ap.add_argument('--batch-size', type=int, default=16,
+                    help='requests the harness scores at once (default: %(default)s)')
+    args = cli.parse(ap, argv)
+    if args.out is None:
+        ap.error('the following arguments are required: -o/--out')
 
     from lm_eval.models.huggingface import HFLM
     from transformers import AutoTokenizer

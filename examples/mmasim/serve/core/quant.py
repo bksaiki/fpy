@@ -75,6 +75,21 @@ DTYPES = {
 """Each element format's torch dtype."""
 
 
+def describe(s: Scheme) -> str:
+    """*s* in a line: its elements, each operand's scale block, and where the
+    scales apply."""
+    def block(op: Operand) -> str:
+        sc = op.scaling
+        if sc is None:
+            return 'none'
+        return f'{sc.rows}x{sc.cols or "k"}' + (' and per tensor' if sc.tensor else '')
+
+    elements = str(DTYPES[s.x.elements]).removeprefix('torch.')
+    if s.x.scaling is None:
+        return f'{elements}, unscaled'
+    return f'{elements}; scales x {block(s.x)}, w {block(s.w)}; applied {s.applied}'
+
+
 def context(fmt: object) -> Context:
     """The element format among :data:`DTYPES` that is *fmt* (a design's
     argument format)."""

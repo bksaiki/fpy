@@ -207,7 +207,7 @@ def main(argv: list[str]) -> int:
                     help='launch DRAWS random inputs and compare every output, '
                          'bit for bit, with the interpreter')
     ap.add_argument('-s', '--seed', type=int, default=0,
-                    help='seed for the inputs --run draws')
+                    help='seed for the inputs --run draws (default 0)')
     ap.add_argument('-j', '--jobs', type=int, default=1,
                     help='compile in this many processes (default 1); '
                          '--run launches from this one')

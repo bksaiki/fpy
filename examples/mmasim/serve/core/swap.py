@@ -33,7 +33,16 @@ def modes(scheme: quant.Scheme = BF16) -> tuple[str, ...]:
 
 
 MODEL = 'Qwen/Qwen3-0.6B'
-"""The default model; `Qwen/Qwen3.5-0.8B` also runs (text only)."""
+"""The default model."""
+
+MODELS = {
+    MODEL: 'BF16 master',
+    'Qwen/Qwen3.5-0.8B': 'BF16 master, text only',
+    'RedHatAI/Qwen3-0.6B-FP8-dynamic': 'fp8-row checkpoint',
+    'RedHatAI/Qwen3-0.6B-FP8-BLOCK': 'fp8-block checkpoint (baseline: Qwen/Qwen3-0.6B)',
+    'kaitchup/Qwen3-0.6B-NVFP4': 'nvfp4 checkpoint',
+}
+"""The models these scripts have run, and what each holds."""
 
 _ROWS = 256
 """Rows per block of an exact run's FP64 product."""

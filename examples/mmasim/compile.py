@@ -379,7 +379,7 @@ def main(argv: list[str]) -> int:
                     help='run DRAWS random inputs and compare every output, '
                          'bit for bit, with the interpreter')
     ap.add_argument('-s', '--seed', type=int, default=0,
-                    help='seed for the inputs --run draws')
+                    help='seed for the inputs --run draws (default 0)')
     # where the C++ goes: stdout or files, not both
     dest = ap.add_mutually_exclusive_group()
     dest.add_argument('-e', '--emit', action='store_true',

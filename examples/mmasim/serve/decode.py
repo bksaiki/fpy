@@ -1,20 +1,20 @@
 """
-Greedy decode, and where each run departs from R0's output.
+Greedy decode, and where each matmul departs from R0's output.
 
 R0 decodes greedily: a seeded random sample of MATH-500 under the model's
 chat template, thinking off, with Qwen's instruction for math, up to 2,048
 new tokens, as Yuan et al. 2025 do for non-reasoning models; cached as
-`<out>/fp32.json` for the same settings.  Every run is then teacher-forced
+`<out>/fp32.json` for the same settings.  Every matmul is then teacher-forced
 on each prompt and R0's reply, one prefill (`scoring.evaluate`), and
 compared position by position with R0 forced so, and a design with the
-scheme's exact run too.  A prompt's divergence index is its first
+scheme's exact matmul too.  A prompt's divergence index is its first
 disagreement, Yuan et al.'s index computed on prefill (it can differ from
 decoding's at near-ties); R0's first miss of its own tokens is recorded too.
 Reported: `scoring.against`'s paired per-prompt statistics, the fraction
 diverged and the median index among them; all in `<out>/forced.json`.
 
-    python serve/decode.py -o dec                      # every run
-    python serve/decode.py -o dec -r amd.cdna2.bf16 --prompts 10
+    python serve/decode.py -o dec                      # every matmul
+    python serve/decode.py -o dec --matmuls amd.cdna2.bf16 --prompts 10
     python serve/decode.py -o dec-fp8 --scheme fp8-row
 """
 
@@ -33,11 +33,14 @@ def main(argv: list[str]) -> int:
     cli.add_args(ap)
     cli.add_scheme_args(ap)
     cli.add_runs(ap)
-    ap.add_argument('-o', '--out', required=True, help='directory for R0\'s tokens and the results')
+    ap.add_argument('-o', '--out', help="directory for R0's tokens and the results (required)")
     ap.add_argument('--prompts', type=int, default=30,
-                    help='MATH-500 problems, at random (0: all)')
-    ap.add_argument('--max-new', type=int, default=2048)
-    args = ap.parse_args(argv)
+                    help='MATH-500 problems, at random, 0 for all (default: %(default)s)')
+    ap.add_argument('--max-new', type=int, default=2048,
+                    help="tokens of R0's reply at most (default: %(default)s)")
+    args = cli.parse(ap, argv)
+    if args.out is None:
+        ap.error('the following arguments are required: -o/--out')
 
     from transformers import AutoTokenizer
 
