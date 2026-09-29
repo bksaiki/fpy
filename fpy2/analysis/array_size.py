@@ -23,11 +23,11 @@ from typing import TypeAlias
 from ..ast.fpyast import *
 from ..ast.visitor import DefaultVisitor
 from ..function import Function
-from ..number import INTEGER, REAL, Context, Float
+from ..number import INTEGER, REAL, Context, Float, MPFixedContext
 from ..types import ListType, TupleType, Type
 from ..utils import Gensym, NamedId, Unionfind
 from .context_use import ContextUse, ContextUseAnalysis, ContextUseSite
-from .define_use import DefineUseAnalysis, Definition, DefSite
+from .define_use import AssignDef, DefineUseAnalysis, Definition, DefSite
 from .partial_eval import PartialEval, PartialEvalInfo, Value
 from .type_infer import TypeAnalysis, TypeInfer
 
@@ -651,16 +651,16 @@ class _ArraySizeInferInstance(DefaultVisitor):
         return ListSize(ty.elt, slice_size)
 
     def _affine(self, e: Expr) -> _Affine:
-        """Decompose *e* into ``(base, scale, offset)`` with ``e == base *
-        scale + offset``, where *scale* and *offset* are compile-time integers
-        and *base* is the residual expression (``None`` when *e* is a pure
-        constant).
+        """Decompose *e* into ``(base, scale, offset)`` with
+        ``e == base * scale + offset``, where *scale* and *offset* are
+        compile-time integers and *base* is the residual expression (``None``
+        when *e* is a pure constant).
 
-        Only descends through ``+`` / ``-`` / ``*`` whose result is computed
-        under the exact (``REAL``) context: under a rounding context the
-        arithmetic could perturb the value, so ``(i + 16) - i`` would not be
-        guaranteed to equal ``16``.  Falls back to ``(e, 1, 0)`` when nothing
-        can be peeled off — sound, just less precise.
+        Only descends through ``+`` / ``-`` / ``*`` that do not round: under
+        ``REAL``, or on integers under a context holding every integer
+        (:meth:`_is_int_op`).  Otherwise ``(i + 16) - i`` need not be ``16``.
+        Falls back to ``(e, 1, 0)`` when nothing can be peeled off — sound, just
+        less precise.
 
         The scale is what a group index needs: ``g * G`` and ``(g + 1) * G``
         share a base and a scale, so their difference is ``G`` whatever ``g``
@@ -672,19 +672,21 @@ class _ArraySizeInferInstance(DefaultVisitor):
 
         # through a name: `t = i + 32; xs[i:t]` sizes like `xs[i:i+32]`
         e = self.def_use.defining_expr(e)
+        if not (isinstance(e, Add | Sub | Mul) and (self._is_exact(e) or self._is_int_op(e))):
+            return (e, 1, 0)
         match e:
-            case Add() if self._is_exact(e):
+            case Add():
                 for rest, const in ((e.first, e.second), (e.second, e.first)):
                     c = self._const_int(const)
                     if c is not None:
                         base, scale, off = self._affine(rest)
                         return (base, scale, off + c)
-            case Sub() if self._is_exact(e):
+            case Sub():
                 c = self._const_int(e.second)
                 if c is not None:
                     base, scale, off = self._affine(e.first)
                     return (base, scale, off - c)
-            case Mul() if self._is_exact(e):
+            case Mul():
                 for rest, const in ((e.first, e.second), (e.second, e.first)):
                     k = self._const_int(const)
                     if k is None:
@@ -817,6 +819,40 @@ class _ArraySizeInferInstance(DefaultVisitor):
         even though ``e`` is typed wider than the map's key."""
         scope = self._ctx_use.use_to_scope.get(e)
         return scope is not None and scope.ctx == REAL
+
+    def _is_int_valued(self, e: Expr) -> bool:
+        """Whether *e* is provably an integer: an integral constant, a size
+        query, a ``range`` target, or :meth:`_is_int_op` arithmetic."""
+        val = self._get_eval(e)
+        if isinstance(val, Float):
+            return val.is_integer()
+        if isinstance(val, Fraction):
+            return val.denominator == 1
+        e = self.def_use.defining_expr(e)
+        match e:
+            case Len() | Dim() | Size():
+                return True
+            case Var():
+                d = self.def_use.use_to_def.get(e)
+                return (
+                    isinstance(d, AssignDef)
+                    and isinstance(d.site, ForStmt)
+                    and isinstance(d.site.iterable, Range1 | Range2 | Range3)
+                )
+            case Add() | Sub() | Mul():
+                return self._is_int_op(e)
+        return False
+
+    def _is_int_op(self, e: Add | Sub | Mul) -> bool:
+        """True iff *e*'s operands are integers and its context holds every
+        integer (``REAL``, or an unbounded fixed-point no coarser than
+        ``INTEGER``), so it does not round.  A float context may: ``FP32``
+        rounds ``2**24 + 1``."""
+        scope = self._ctx_use.use_to_scope.get(e)
+        ctx = None if scope is None else scope.ctx
+        if not (self._is_exact(e) or isinstance(ctx, MPFixedContext) and ctx.nmin < 0):
+            return False
+        return self._is_int_valued(e.first) and self._is_int_valued(e.second)
 
     def _visit_tuple_expr(self, e: TupleExpr, ctx: None):
         return TupleSize(tuple(self._visit_expr(elt, ctx) for elt in e.elts))

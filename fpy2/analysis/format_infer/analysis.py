@@ -2625,22 +2625,21 @@ class _FormatInferInstance(Visitor):
         with statically-known integer arguments.
 
         Small ranges (at most ``range_set_threshold`` elements) pin the exact
-        value set as a :class:`SetFormat`; larger ranges use the bounded
-        integer ``A(inf, 0, b)`` with ``b`` the largest magnitude attained
-        (quantum 1, i.e. ``exp = 0``).  Invalid (``step == 0``) and empty
-        ranges fall back to the unbounded integer format — a vacuous element.
+        value set as a :class:`SetFormat`; larger ranges use the integers of
+        the interval spanned (``exp = 0``).  An empty or invalid
+        (``step == 0``) range yields no element: the empty set.
         """
         if step == 0:
-            return _INTEGER_FORMAT
+            return SetFormat.bottom()
         rng = range(start, stop, step)
         n = len(rng)
         if n == 0:
-            return _INTEGER_FORMAT
+            return SetFormat.bottom()
         if n <= self._range_set_threshold:
             return SetFormat(frozenset(Fraction(v) for v in rng))
         last = start + (n - 1) * step
-        b = RealFloat.from_int(max(abs(start), abs(last)))
-        return AbstractFormat(float('inf'), 0, b).format()
+        return AbstractFormat(float('inf'), 0, RealFloat.from_int(max(start, last, 0)),
+                              neg_bound=RealFloat.from_int(min(start, last, 0))).format()
 
     def _range_format(self, start: int, stop: int, step: int) -> FormatBound:
         """:class:`ListFormat` over :meth:`_range_elt_format`."""
@@ -2928,6 +2927,10 @@ class _FormatInferInstance(Visitor):
             d_use, len(stmt.indices), insert_fmt, already={d_use, d_def},
         )
 
+    def _insert_count(self) -> int:
+        """How many stores :meth:`_record_region_insert` has recorded."""
+        return sum(map(len, self._region_inserts.values()))
+
     def _record_region_insert(
         self, base: Definition, depth: int, insert_fmt: FormatBound,
         *, already: set[Definition],
@@ -2990,19 +2993,14 @@ class _FormatInferInstance(Visitor):
         outer loop already in widen-mode propagates that into nested
         iterations.
         """
+        phis = list(phis)
         for phi in phis:
             self._set_def_bound(phi, self._bound_of_def(self.def_use.defs[phi.lhs]))
         saved_widen = self._widen
         iter_count = 0
         while True:
-            prev = {phi: self.by_def[phi] for phi in phis}
             self._widen = saved_widen or iter_count >= self._loop_iter_limit
-            run_body()
-            for phi in phis:
-                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                self._set_def_bound(phi, self._join(lhs, rhs))
-            if all(self.by_def[phi] == prev[phi] for phi in phis):
+            if not self._step(phis, run_body):
                 break
             iter_count += 1
         self._widen = saved_widen
@@ -3027,7 +3025,7 @@ class _FormatInferInstance(Visitor):
         n: int,
     ):
         """
-        Drive a loop's phi update for *exactly* ``n`` body executions.
+        Drive a loop's phi update for up to ``n`` body executions.
 
         Used when the iterable's length is statically known (via
         :class:`ArraySizeAnalysis`).  At runtime the loop walks exactly
@@ -3037,9 +3035,12 @@ class _FormatInferInstance(Visitor):
         infinite ascending chains.
 
         Iter-by-iter visit produces a precise (if potentially wide)
-        bound after exactly ``n`` joins; the result is sound and
+        bound after at most ``n`` joins; the result is sound and
         strictly more precise than the fixpoint+widening fall-back when
         ``n`` is small.
+
+        An iteration changing nothing (:meth:`_step`) is a fixed point, which
+        every later one would repeat, so the walk stops there.
         """
         phis = list(phis)
         for phi in phis:
@@ -3052,11 +3053,22 @@ class _FormatInferInstance(Visitor):
             run_body()
             return
         for _ in range(n):
-            run_body()
-            for phi in phis:
-                lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
-                rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
-                self._set_def_bound(phi, self._join(lhs, rhs))
+            if not self._step(phis, run_body):
+                break
+
+    def _step(self, phis: list[PhiDef], run_body: Callable[[], None]) -> bool:
+        """Run the body once and join each phi's back edge into it; whether
+        anything the next iteration reads changed: a phi, or the store record
+        (:meth:`_record_region_insert`), which widens other defs."""
+        prev = [self.by_def[phi] for phi in phis]
+        inserts = self._insert_count()
+        run_body()
+        for phi in phis:
+            lhs = self._bound_of_def(self.def_use.defs[phi.lhs])
+            rhs = self._bound_of_def(self.def_use.defs[phi.rhs])
+            self._set_def_bound(phi, self._join(lhs, rhs))
+        return (self._insert_count() != inserts
+                or any(self.by_def[phi] != p for phi, p in zip(phis, prev)))
 
     def _known_iter_count(self, iterable: Expr) -> int | None:
         """

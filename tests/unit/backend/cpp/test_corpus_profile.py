@@ -51,7 +51,6 @@ EXPECTED_COMPILED = 221
 holds -- fewer programs is fewer opportunities to mint."""
 
 EXPECTED_MINTS = {
-    '_convert_storage': 1,     # a tuple read field by field
     '_emit_empty': 25,         # a dimension, read once per fixed-size layer
     '_emit_ieee_min_max': 7,   # a cast result, not a nested operand
     '_emit_sum': 3,            # the list being folded

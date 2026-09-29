@@ -54,40 +54,40 @@ Rules the backend keeps:
   into `f32`, then truncation onto a narrower format with `f32`'s exponents.
   Unfolded, the analysis loses the format, and the store check refuses.
 
+## Done: computed indices and in-kernel chains (2026-09-28)
+
+The `triton` branch.  The backend compiles or refuses; computed indices broke
+that, and blocked chaining block-scaled designs over `k` in one kernel.
+
+- **An index is an integer where it is used** (`_index`): kept as is in
+  integer storage, else cast to `int32`/`int64` where its format is proven
+  integral (`index_scalar`), else refused.  A static `range` states its true
+  interval, an empty one the empty set, so index products are rarely floats.
+- **Index arithmetic under `INTEGER` is exact to `array_size`**
+  (`_is_int_op`): integer operands under a context holding every integer.
+- **Shapes and types a runtime loop needs:** a `for` header resets its
+  target's shape, a literal list indexed by a lane broadcasts its elements,
+  an op's result is cast into its storage, casts are `tl.cast` (a Python
+  number has no `.to`), a runtime loop enters its carried values and tails
+  in their class's storage, and `split_names` gives each class of
+  definitions its own name.
+- **A static loop is unrolled only where its body indexes a list in
+  registers by its target** (`_indexes_registers`); nothing else gained
+  from unrolling.  The NVFP4 chain's Triton compile went from 802 s to
+  1.5 s.
+- **Format inference stops a loop at a fixed point** of its phis and its
+  store record (`_step`); the chains' FPy compile went from 6-20 s, linear
+  in `k`, to ~4 s.
+- **Acceptance:** all eight block-scaled designs chained at `k` = 1024,
+  2048, 3072 are bit-identical to a launch per instruction.  At `m = 1`
+  (`n = 2048`) fused is 22-64x faster (NVFP4 at 3072: 0.17 against 5.96
+  ms); at `m = 2048` 10-15% slower for NVFP4 and MXFP4, 2-8% faster for MX.
+
 ## What is left
 
-- **Index arithmetic stored as a float** blocks chaining block-scaled
-  designs in the kernel.  A block-scaled design is one instruction, so
-  `serve` chains it over `k` with a launch per instruction: 16-48 launches
-  per linear layer, ~4,900 per decoded token for NVFP4 (0.5 tokens/s).  The
-  natural FPy chain, as in `nv.make_t_fdpa_chain` but with each
-  instruction's slice of the scales:
-
-  ```python
-  for t in range(0, len(xs), per):     # per = scales per instruction
-      i = t * g                        # g = elements per scale
-      d = op(A[i:i + k0], B[i:i + k0], d, xs[t:t + per], ys[t:t + per])
-  ```
-
-  - **It works where it compiles.**  NVFP4 at k = 1024: bit-identical to
-    the launch chain, and 0.12 ms at `m = 1` against 1.57 ms for 16
-    launches.  At `m = 2048` it is 29.0 ms against 22.0 ms.
-  - **Past that, `i = t * g` gets FP16 storage** whenever FP16 holds it
-    exactly (every integer up to 2048), and is then used as a pointer
-    offset.
-    - NVFP4 at k >= 2048: `tl.load(A_ptr + ... + i18)` with `i18` a
-      float16, refused by Triton.
-    - The MX chain (one scale per instruction, `range(len(xs))`) at
-      k = 1024: the loop becomes `tl.static_range`, and `t17.to(tl.float16)`
-      fails on a Python int.
-  - **Under `fp.INTEGER` the slice is unsized**, the open item on
-    `_is_exact` below.
-  - **Looping over the element index instead**, with scales per element and
-    the instruction's four gathered as `[xs[i], xs[i + g], ...]`, emits
-    tiles of mismatched shapes ([BLOCK, 4] against [BLOCK, 16]).
-  - **The fix is the backend's:** a value used as an index or offset needs
-    integer storage.  `serve` would then run a block-scaled design chained
-    at decode sizes and per instruction at prefill.
+- **`serve` runs a block-scaled design chained in the kernel** at decode
+  sizes, and one launch per instruction at prefill (a separate branch).  It
+  compiles a kernel per distinct `k`.
 
 - **FPy's compile time:** size inference runs in both tiling and the
   emitter.
@@ -147,8 +147,39 @@ guarded `round(x * 1024)` at `x = inf` into a raise.  Only the opt-in
 `fpy2.strategies.if_simplify` runs it.  **Provisional:** a refusal keyed on
 `enable_inf` / `enable_nan`.
 
-### Is `_is_exact` narrower than it needs to be?
+### A runtime `k` for a chain?
 
-`_affine` descends only through arithmetic under `REAL`, so index arithmetic
-under `fp.INTEGER` does not decompose, and a slice bounded by it is unsized.
-**Provisional:** leave it; precision, not capability.
+With the scales' length symbolic, `i = t * g` over a runtime `range` is
+unbounded and possibly `-0`, and no storage holds it
+(`StorageSelectionError`).  **Provisional:** out of scope; `serve` compiles
+per `k`.  Reopen if a client needs one kernel for every `k`.
+
+### `max` / `min` of an `fp16` value and a Python float?
+
+`tl.maximum` promotes a tensor to a Python float's `fp32`, unlike
+arithmetic, so the result is `fp32` where its storage says `fp16`.  Typing
+the literal is consistent but made 55 designs 3-20% slower: their
+exponents, stored `fp16` for `-inf` and NaN, then run in `fp16` with
+conversions.  **Provisional:** left untyped; the speed belongs to storage
+selection for registers.  Reopen when a runtime loop writes such a result
+into a tile.
+
+### Integer indices by storage inference, or by conversion at the use?
+
+Conversion at the use (`_index`) is local and always correct, at one
+integer conversion per use; storage inference would need two storages for a
+value used both as an index and in float arithmetic.  **Settled:** at the
+use; `int32` where the bound fits, else `int64`.  Reopen if conversions show
+in the kernels' speed, or a large-tensor launch disagrees.
+
+### Should formats track that a value cannot be zero?
+
+A constant like `16` is possibly `+0`, which makes a signable factor's
+product possibly `-0`.  A zero-free flag touches every arithmetic rule.
+**Settled:** no.  Reopen if `-0` forces float or refused storage in real
+programs.
+
+### One integer-valued analysis for `FormatInfer` and `array_size`?
+
+`array_size._is_int_valued` copies a small rule set `FormatInfer` already
+encodes.  **Settled:** the copy.  Reopen if the two drift.

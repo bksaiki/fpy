@@ -28,8 +28,7 @@ Read the design before changing anything; [Open issues](#open-issues) is at
 the bottom.
 
 Everything C++-specific lives here. Analyses this backend depends on but does
-not own have their own documents: `round-elim.md`, `array-size-symbolic.md`,
-`array-size-integer-exactness.md`.
+not own have their own documents: `round-elim.md`, `array-size-symbolic.md`.
 
 The emitter's input is in **hoistable form**: `fpy2.transform.Hoistable` runs in
 `specialize()`, so every expression sits where a statement may be inserted above

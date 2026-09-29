@@ -15,7 +15,7 @@ import math
 import re
 import struct
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from fractions import Fraction
 from functools import reduce
@@ -45,7 +45,7 @@ from ...analysis.format_infer import (
     to_abstract,
 )
 from ...analysis.format_infer.format import AbstractFormat
-from ...analysis.reaching_defs import same_object_defs
+from ...analysis.reaching_defs import def_classes
 from ...analysis.storage_infer import StorageSelectionError, join, of_bound
 from ...ast import (
     Add,
@@ -62,7 +62,6 @@ from ...ast import (
     Call,
     Cast,
     Compare,
-    CompareOp,
     ConstInf,
     ConstNan,
     ContextStmt,
@@ -125,12 +124,12 @@ from ...number.context.mp_fixed import MPFixedContext
 from ...transform.path import walk_exprs, walk_stmts
 from ...transform.simplify_if import _size
 from ...types import BoolType, ListType, RealType
-from ...utils import Unionfind
 from ..backend import CompileError
 from .storage import (
     TritonStorageDomain,
     bound_fits_in_scalar,
     choose_storage_scalar,
+    index_scalar,
     scalar_fits_in,
     scalar_sup,
     to_triton,
@@ -151,16 +150,6 @@ __all__ = ['KernelSource', 'TritonEmitError', 'emit_block', 'emit_expr', 'emit_k
 
 class TritonEmitError(CompileError):
     """A program this backend declines to emit."""
-
-
-_COMPARE: dict[CompareOp, str] = {
-    CompareOp.LT: '<',
-    CompareOp.LE: '<=',
-    CompareOp.GT: '>',
-    CompareOp.GE: '>=',
-    CompareOp.EQ: '==',
-    CompareOp.NE: '!=',
-}
 
 
 def _reads_name(code: str, names: set[str]) -> bool:
@@ -216,6 +205,7 @@ def _literal_int(code: str) -> int | None:
 
 
 _ASSIGN = re.compile(r'(\w+) = (.*)')
+_FOR = re.compile(r'for (\w+) in .*:')
 _IDENT = re.compile(r'\b\w+\b')
 
 
@@ -303,17 +293,15 @@ class _IndentedWriter:
             # the store may alias any pointer loaded from
             for _, loads in self._loads:
                 loads.clear()
-        if (m := _ASSIGN.fullmatch(line)) is not None:
+        if (m := _FOR.fullmatch(line)) is not None:
+            # the target is a scalar, whatever it held before
+            name = m.group(1)
+            self._rebind(name)
+            self.wide.discard(name)
+            self.along.pop(name, None)
+        elif (m := _ASSIGN.fullmatch(line)) is not None:
             name, code = m.groups()
-            for _, loads in self._loads:
-                for addr in [a for a, (held, conj) in loads.items()
-                             if held == name or name in _IDENT.findall(a)
-                             or any(name in _IDENT.findall(c) for c in conj)]:
-                    del loads[addr]
-            for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
-                del self._value[held]
-            self._value.pop(name, None)
-            self._assigned[-1].add(name)
+            self._rebind(name)
             idents = set(_IDENT.findall(code))
             if 'tl.load(' not in code and name not in idents:
                 self._value[name] = self.canonical(code)
@@ -333,6 +321,19 @@ class _IndentedWriter:
                 self.along[name] = self.axes
             elif isinstance(shape, frozenset):
                 self.along[name] = shape
+
+    def _rebind(self, name: str) -> None:
+        """Drop what is known of *name*'s old value (its own, and the loads
+        and values reading it); record it assigned in the open block."""
+        for _, loads in self._loads:
+            for addr in [a for a, (held, conj) in loads.items()
+                         if held == name or name in _IDENT.findall(a)
+                         or any(name in _IDENT.findall(c) for c in conj)]:
+                del loads[addr]
+        for held in [n for n, v in self._value.items() if name in _IDENT.findall(v)]:
+            del self._value[held]
+        self._value.pop(name, None)
+        self._assigned[-1].add(name)
 
     def indent(self) -> None:
         self._depth += 1
@@ -591,8 +592,9 @@ class _Emitter(Visitor):
     _guard_mask: str | None
     """The tiles' own guards in force, conjoined: the rows past each end, and
     no branch."""
-    _carried: dict[NamedId, TritonScalar]
-    """The names a runtime loop in a tile carries as rows, by storage."""
+    _carried: dict[str, TritonScalar]
+    """The names a runtime loop in a tile carries as rows, by storage: its
+    scalars, and the tails of the lists it writes."""
     _class_of: dict[Definition, Definition]
     """Each definition's class: the definitions a phi joins, as
     `StorageInfer` coalesces them."""
@@ -665,12 +667,7 @@ class _Emitter(Visitor):
         self._axis_guards = {}
         self._guard_mask = None
         self._carried = {}
-        defs = self.def_use.defs
-        uf: Unionfind[Definition] = Unionfind(defs)
-        for d in defs:
-            for i in same_object_defs(d):
-                uf.union(d, defs[i])
-        self._class_of = {d: uf.find(d) for d in defs}
+        self._class_of = def_classes(self.def_use.defs)
         self._members = defaultdict(list)
         for d, c in self._class_of.items():
             self._members[c].append(d)
@@ -760,14 +757,29 @@ class _Emitter(Visitor):
         return scalar_fits_in(have, want) or bound_fits_in_scalar(bound, want)
 
     def _explicit_cast(self, code: str, want: TritonScalar) -> str:
-        """*code* cast to *want*.  A literal is respelled instead: a Python
-        number is a `constexpr`, which has no `.to`."""
+        """*code* cast to *want* by `tl.cast`, which, unlike `.to`, takes a
+        Python number (a traced `static_range` target).  A literal is
+        respelled instead."""
         if code in _SPECIALS:
             return code     # a Python float, typed where it is used
         literal = _as_literal(code)
         if literal is not None:
             return f'{float(literal)}' if want.is_float() else f'{int(literal)}'
-        return f'{code}.to({want.format()})'
+        return f'tl.cast({code}, {want.format()})'
+
+    def _index(self, e: Expr) -> str:
+        """*e* as an integer: as is in integer storage; held as a float, cast
+        to :func:`index_scalar`'s storage for its format, else refused."""
+        code = self.emit(e)
+        if not self._storage(e).is_float():
+            return code
+        want = index_scalar(self.format_info.by_expr.get(e))
+        if want is None:
+            raise TritonEmitError(
+                f'`{type(e).__name__}` is an index, and its values are not '
+                'proven integers'
+            )
+        return self._explicit_cast(code, want)
 
     def _typed(self, code: str, want: TritonScalar, force: bool = False) -> str:
         """*code* as a *want* tensor where it is a Python number no tensor
@@ -800,7 +812,8 @@ class _Emitter(Visitor):
         """Emit *e* through the op table: a signature matching the operands'
         storage; else one whose slots are all the active context's, each
         operand cast into it losslessly; else, under ``REAL``,
-        :meth:`_try_widen`."""
+        :meth:`_try_widen`.  The result is cast into *e*'s storage, which
+        format inference may narrow."""
         sigs = table.get(type(e))
         if not sigs:
             raise TritonEmitError(
@@ -810,21 +823,24 @@ class _Emitter(Visitor):
         storages = tuple(self._storage(src) for _, src in operands)
         bounds = [self.format_info.by_expr.get(src) for _, src in operands]
         active = self._active_ctx(e)
+        target, result = self._storage(e), self.format_info.by_expr.get(e)
 
         for sig in sigs:
             if sig.matches(storages, active):
-                return sig.format(*self._weak(codes, storages))
+                out = sig.format(*self._weak(codes, storages))
+                return self._maybe_cast(out, sig.in_tys[0], target, result)
 
         for sig in sigs:
             if (sig.out_ctx == active and len(sig.in_tys) == len(codes)
                     and len(set(sig.in_tys)) == 1):
-                return sig.format(*self._weak([
+                out = sig.format(*self._weak([
                     self._maybe_cast(code, have, sig.in_tys[0], bound)
                     for code, have, bound in zip(codes, storages, bounds)
                 ], sig.in_tys))
+                return self._maybe_cast(out, sig.in_tys[0], target, result)
 
         if active is REAL:
-            widened = self._try_widen(e, sigs, codes, storages, bounds)
+            widened = self._try_widen(sigs, codes, storages, bounds, target, result)
             if widened is not None:
                 return widened
 
@@ -835,23 +851,21 @@ class _Emitter(Visitor):
 
     def _try_widen(
         self,
-        e: Expr,
         sigs: list[TritonOp],
         codes: list[str],
         storages: tuple[TritonScalar, ...],
         bounds: list[FormatBound],
+        target: TritonScalar,
+        result: FormatBound,
     ) -> str | None:
         """Under ``REAL``, compute at a width that holds the exact result.
 
-        The storage chosen for *e* holds its unrounded result, so the
-        operation at that width is exact: `x.to(tl.float32) *
-        y.to(tl.float32)` for an fp16 product.  Any width holding the operands
-        and the result will do, the result's own first, then the narrowest;
-        the exact result is then cast into *e*'s storage.
+        The *target* storage holds the unrounded *result*, so the operation at
+        that width is exact: an fp16 product computed in `tl.float32`.  Any
+        width holding the operands and the result will do, the result's own
+        first, then the narrowest; the exact result is then cast into
+        *target*.
         """
-        target = self._storage(e)
-        result = self.format_info.by_expr.get(e)
-
         slots = sorted(
             {sig.in_tys[0] for sig in sigs
              if len(sig.in_tys) == len(codes) and len(set(sig.in_tys)) == 1},
@@ -939,14 +953,14 @@ class _Emitter(Visitor):
         if extra is not None:
             # a slice of a slice: only one offset is carried
             return None
-        start = '0' if e.start is None else self._pin(self.emit(e.start))
+        start = '0' if e.start is None else self._pin(self._index(e.start))
         return base, self._pinned(prefix), start
 
     def _pin(self, code: str) -> str:
         """*code*, bound to a temporary unless it is a number or a name
         assigned once, since a recorded binding is re-emitted at each use.  In
         a tile the temporary is a row, as its source need not be one on every
-        iteration of a `static_range`."""
+        iteration of a loop."""
         if _as_number(code) is not None or code in self._once:
             return code
         if self._axes and not self._out.wide & set(_IDENT.findall(code)):
@@ -955,7 +969,7 @@ class _Emitter(Visitor):
 
     def _pinned(self, indices: list[Expr | str]) -> list[Expr | str]:
         """*indices*, each emitted and pinned."""
-        return [i if isinstance(i, str) else self._pin(self.emit(i)) for i in indices]
+        return [i if isinstance(i, str) else self._pin(self._index(i)) for i in indices]
 
     def _size_code(self, size: object) -> str | None:
         """A length as code: a constant, or the kernel parameter holding it."""
@@ -999,7 +1013,7 @@ class _Emitter(Visitor):
         strides = self._strides(base, len(indices))
         # a pinned row index, as a column against a lane loop's tile
         codes = [
-            self.emit(i) if not isinstance(i, str)
+            self._index(i) if not isinstance(i, str)
             else f'{i}[:, None]' if self._lane is not None and i in self._out.along
             else i
             for i in indices
@@ -1135,12 +1149,14 @@ class _Emitter(Visitor):
             if k is not None and k != width + j:
                 continue
             name = f'{tile}_t{j}'
+            held = self._carried.get(name)
+            val = v if held is None else self._as_row(v, held)
             cond = None if k is not None else f'({idx} == {width + j})'
             if mask is not None:
                 cond = mask if cond is None else f'({cond} & {mask})'
             self._out.add_line(
-                f'{name} = {v}' if cond is None
-                else f'{name} = tl.where({cond}, {v}, {name})')
+                f'{name} = {val}' if cond is None
+                else f'{name} = tl.where({cond}, {val}, {name})')
 
     def _elt_storage(self, stmt: Assign) -> TritonScalar:
         """The storage every element of the list *stmt* allocates is held
@@ -1285,7 +1301,7 @@ class _Emitter(Visitor):
         if bounds is None:
             return None
         start, step = bounds
-        idx = self.emit(e.index)
+        idx = self._index(e.index)
         term = idx if step == '1' else f'{idx} * {step}'
         return term if start == '0' else f'({start} + {term})'
 
@@ -1335,18 +1351,19 @@ class _Emitter(Visitor):
         if (tile := self._tile_of(e.value)) is not None:
             if self._at_lane(tile, e.index):
                 return str(tile)
-            idx = self.emit(e.index)
+            idx = self._index(e.index)
             if self._out.wide & set(_IDENT.findall(idx)):
                 return self._gather(tile, e.index, idx)
             code = self._extract(tile, idx)
             return code if self._lane is None else self._as_col(code)
         elems = self._elements(e.value)
         if elems is not None:
-            idx = self.emit(e.index)
+            idx = self._index(e.index)
+            if self._lane is not None:
+                elems = [self._as_col(c) for c in elems]
             i = _literal_int(idx)
             if i is None:
-                # an index the trace fixes, as a `static_range` target is:
-                # the element it selects
+                # a computed index: a select over the elements
                 code = elems[-1]
                 for j in reversed(range(len(elems) - 1)):
                     code = f'tl.where({idx} == {j}, {elems[j]}, {code})'
@@ -1604,7 +1621,7 @@ class _Emitter(Visitor):
     def _chain(e: Compare, codes: list[str]) -> str:
         """The links of *e* over *codes*, joined with `&`."""
         links = [
-            f'({codes[i]} {_COMPARE[op]} {codes[i + 1]})'
+            f'({codes[i]} {op.symbol()} {codes[i + 1]})'
             for i, op in enumerate(e.ops)
         ]
         return links[0] if len(links) == 1 else '(' + ' & '.join(links) + ')'
@@ -2120,8 +2137,8 @@ class _Emitter(Visitor):
                 )
                 return
         code = self._into_class(stmt.target, stmt, stmt.expr)
-        if stmt.target in self._carried:
-            ctx.add_line(f'{stmt.target} = {self._as_row(code, self._carried[stmt.target])}', 'row')
+        if (held := self._carried.get(str(stmt.target))) is not None:
+            ctx.add_line(f'{stmt.target} = {self._as_row(code, held)}', 'row')
             return
         if code.isdigit():
             self.consts[str(stmt.target)] = int(code)
@@ -2223,7 +2240,7 @@ class _Emitter(Visitor):
                 f'a lane loop writes `{tile}` other than at its own index'
             )
         else:
-            self._insert(tile, self.emit(idx), val)
+            self._insert(tile, self._index(idx), val)
 
     def _visit_return(self, stmt: ReturnStmt, ctx: _IndentedWriter) -> None:
         if self._branches:
@@ -2343,8 +2360,7 @@ class _Emitter(Visitor):
             # reassigns is copied ahead and restored in the arm, a merged name
             # gets a placeholder ahead, and a merged list keeps the arm's
             # writes, its tail elements broadcast ahead
-            tails = {f'{v}_t{j}': self.tiles[v][2] for v in lists if v in self.tiles
-                     for j in range(self.tiles[v][1])}
+            tails = self._tails(lists)
             written = ctx.reassigned() & before & ({str(v) for v in lists} | set(tails))
             kept = sorted(ctx.reassigned() & before - {str(v) for v in saved} - written)
             copies = {k: self._fresh() for k in kept}
@@ -2398,7 +2414,7 @@ class _Emitter(Visitor):
                 '`range` and subscript instead'
             )
         n = static_trip_count(stmt.iterable, self.sizes)
-        if not isinstance(n, int):
+        if not isinstance(n, int) or not self._indexes_registers(stmt):
             return self._emit_runtime_loop(stmt, ctx)
         if isinstance(stmt.iterable, Range1):
             ctx.add_line(f'for {stmt.target} in tl.static_range({n}):')
@@ -2417,32 +2433,76 @@ class _Emitter(Visitor):
         self._visit_block(stmt.body, ctx)
         ctx.dedent()
 
+    def _indexes_registers(self, stmt: ForStmt) -> bool:
+        """Whether *stmt*'s body indexes a list held in registers by a value
+        depending on its target: only then does unrolling pay, making the
+        index a constant."""
+        if not isinstance(stmt.target, NamedId):
+            return False
+        dep = {stmt.target}
+
+        def uses(e: Expr) -> bool:
+            return bool(names_in(e) & dep)
+
+        def held(e: Expr) -> bool:
+            return isinstance(e, ListExpr) or (
+                isinstance(e, Var) and (e.name in self.tiles or e.name in self.seqs))
+
+        def in_expr(e: Expr) -> bool:
+            if isinstance(e, ListRef | ListSlice) and held(e.value) and any(
+                    uses(x) for f, _, x in subexprs(e) if f != 'value'):
+                return True
+            return any(in_expr(x) for _, _, x in subexprs(e))
+
+        def in_block(block: StmtBlock) -> bool:
+            for st in block.stmts:
+                if isinstance(st, Assign) and isinstance(st.target, NamedId) and uses(st.expr):
+                    dep.add(st.target)
+                if (isinstance(st, IndexedAssign) and st.var in self.tiles
+                        and any(uses(i) for i in st.indices)):
+                    return True
+                if any(in_expr(x) for _, _, x in subexprs(st)):
+                    return True
+                if any(in_block(b) for _, b in subblocks(st)):
+                    return True
+            return False
+
+        return in_block(stmt.body)
+
     def _emit_runtime_loop(self, stmt: ForStmt, ctx: _IndentedWriter) -> None:
-        """A loop of unproven trip count, as a runtime `range`.
+        """A loop as a runtime `range`: its trip count is unproven, or
+        unrolling it would buy nothing (:meth:`_indexes_registers`).
 
         Triton holds a carried value at one type and shape on every
-        iteration.  The type is its class's storage already; in a tile, each
-        carried name is broadcast to the tile axes' shape at entry and at
-        every assignment.
+        iteration.  Each carried name, and each tail of a list the body
+        writes, enters cast to its class's storage; in a tile it is also
+        broadcast to the tile axes' shape, at entry and at every assignment.
         """
         carried = carried_scalars(stmt, self.def_use)
+        entry = self._tails(self.def_use.mutated_in(stmt.body))
+        for p in self.def_use.phis.get(stmt, ()):
+            if p.name not in carried:
+                continue
+            held = self._class_storage(p)
+            if held is None:
+                raise TritonEmitError(
+                    f'no storage holds every value `{p.name}` carries'
+                )
+            entry[str(p.name)] = held
         prev = self._carried
-        if self._axes and carried:
-            self._carried = {}
-            for p in self.def_use.phis.get(stmt, ()):
-                if p.name not in carried:
-                    continue
-                held = self._class_storage(p)
-                if held is None:
-                    raise TritonEmitError(
-                        f'no storage holds every value `{p.name}` carries'
-                    )
-                self._carried[p.name] = held
-                ctx.add_line(f'{p.name} = {self._as_row(str(p.name), held)}', 'row')
+        if self._axes and entry:
+            self._carried = entry
+        for name, held in entry.items():
+            # an untyped literal would enter as Triton's `int32` or `fp32`
+            code = self._explicit_cast(name, held)
+            if self._axes:
+                ctx.add_line(f'{name} = {self._as_row(code, held)}', 'row')
+            else:
+                ctx.add_line(f'{name} = {code}')
         it = stmt.iterable
         assert isinstance(it, (Range1, Range3))
-        args = ([self.emit(it.arg)] if isinstance(it, Range1)
-                else [self.emit(a) for a in (it.first, it.second, it.third)])
+        args = ([self._index(it.arg)] if isinstance(it, Range1)
+                else [self._index(a) for a in (it.first, it.second, it.third)])
         ctx.add_line(f'for {stmt.target} in range({", ".join(args)}):')
         ctx.indent()
         ctx.forget(self._carried_names(stmt))
@@ -2455,8 +2515,12 @@ class _Emitter(Visitor):
         its target, what the body assigns, and the tails of lists it
         writes."""
         mutated = self.def_use.mutated_in(stmt.body)
-        return {str(stmt.target), *map(str, mutated), *(
-            f'{v}_t{j}' for v in mutated if v in self.tiles for j in range(self.tiles[v][1]))}
+        return {str(stmt.target), *map(str, mutated), *self._tails(mutated)}
+
+    def _tails(self, names: Iterable[NamedId]) -> dict[str, TritonScalar]:
+        """The tail elements of the local lists among *names*, by storage."""
+        return {f'{v}_t{j}': self.tiles[v][2] for v in names if v in self.tiles
+                for j in range(self.tiles[v][1])}
 
     def _shape(self, along: frozenset[str]) -> str:
         """The shape of a value varying along the tile axes *along*: `()` for

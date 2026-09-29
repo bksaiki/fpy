@@ -39,7 +39,6 @@ from typing import Protocol
 
 from ..ast.fpyast import Assign, Expr, ListRef, Var
 from ..number.context.real import REAL_FORMAT
-from ..utils import Unionfind
 from .define_use import DefineUseAnalysis
 from .format_infer import (
     AbstractableFormat,
@@ -53,7 +52,7 @@ from .format_infer import (
 )
 from .format_infer.analysis import _to_abstract
 from .format_infer.format import RealFloat
-from .reaching_defs import AssignDef, Definition, same_object_defs
+from .reaching_defs import AssignDef, Definition, def_classes
 from .value_class import ClassBound, ListClass, TupleClass, ValueClass
 
 
@@ -381,13 +380,7 @@ class StorageInfer:
         """
         defs = def_use.defs
 
-        # classes: union-find over coalescing edges
-        uf: Unionfind[Definition] = Unionfind(defs)
-        for d in defs:
-            for i in same_object_defs(d):
-                uf.union(d, defs[i])
-
-        def_class: dict[Definition, Definition] = {d: uf.find(d) for d in defs}
+        def_class = def_classes(defs)
         class_members: dict[Definition, list[Definition]] = defaultdict(list)
         for d, c in def_class.items():
             class_members[c].append(d)

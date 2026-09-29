@@ -94,7 +94,7 @@ def _compile_wrap8(src: fp.Context):
 
 
 def test_a_wrapping_round_from_an_integer_is_a_cast():
-    assert '.to(tl.int8)' in _compile_wrap8(fp.SINT16).source
+    assert ', tl.int8)' in _compile_wrap8(fp.SINT16).source
 
 
 @pytest.mark.parametrize('mode', [UnfoldMode.NONE, UnfoldMode.ROUNDINGS])

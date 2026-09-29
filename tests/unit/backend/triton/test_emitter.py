@@ -161,9 +161,12 @@ class TestBlock:
 
 class TestSequentialLoops:
     """A loop `why_not_tileable` declined stays sequential per lane, which is
-    `tl.static_range` when its count is proven."""
+    `tl.static_range` when its count is proven and it indexes a list in
+    registers."""
 
-    def test_a_proven_count_emits_static_range(self):
+    def test_a_proven_count_indexing_no_register_stays_rolled(self) -> None:
+        """Unrolling buys a constant index into a register-held list, and
+        this body has none."""
         @fp.fpy(ctx=fp.FP32)
         def fold(x: fp.Real):
             acc = fp.round(0)
@@ -173,7 +176,8 @@ class TestSequentialLoops:
 
         assert _emit(fold, [_R32]) == (
             'acc = 0.0\n'
-            'for _k in tl.static_range(8):\n'
+            'acc = tl.cast(acc, tl.float32)\n'
+            'for _k in range(8):\n'
             '    acc = (acc + x)\n'
             'return acc'
         )
@@ -207,7 +211,7 @@ class TestContextStatements:
         """A context change is a change of storage, which the dispatch reads
         per expression."""
         assert _emit(_prod, [RealType(FP16)] * 2, fp.REAL) == (
-            'p = (x.to(tl.float32) * y.to(tl.float32))\n'
+            'p = (tl.cast(x, tl.float32) * tl.cast(y, tl.float32))\n'
             'return (p + p)'
         )
 
@@ -530,7 +534,7 @@ class TestLiteralLists:
             return s
 
         out = _emit(f, [ListType(_R32, 8)])
-        assert 'for j in tl.static_range(4):' in out
+        assert 'for j in range(4):' in out
         assert 'tl.load(A_ptr + j + 1)' in out
 
     def test_len_of_a_literal_list(self):
@@ -662,7 +666,7 @@ class TestBranch:
             return y
 
         out = _emit(f, [_R32], ctx=fp.REAL)
-        assert 'y = x.to(tl.float16).to(tl.float32)' in out
+        assert 'y = tl.cast(tl.cast(x, tl.float16), tl.float32)' in out
         assert 'y = tl.where(__t0, __t1, y)' in out
 
     def test_a_return_in_an_arm_is_refused(self):
@@ -707,7 +711,7 @@ class TestExactCast:
             'y = x\nreturn y')
 
     def test_dropping_asserts_drops_the_check(self):
-        assert 'x.to(tl.float16)' in _emit(_narrow, [_R32], fp.REAL, drop_asserts=True)
+        assert 'tl.cast(x, tl.float16)' in _emit(_narrow, [_R32], fp.REAL, drop_asserts=True)
 
 
 class TestLiteralSpelling:
@@ -742,17 +746,19 @@ def test_a_float_held_exponent_is_cast_for_ldexp():
 class TestLoopCarried:
     def test_a_range_keeps_its_start_and_step(self):
         """`tl.static_range` counts from zero, so the target is where the
-        count lands: `range(0, 8, 4)` is 0 and 4, not 0 and 1."""
+        count lands: `range(1, 4, 2)` is 1 and 3, not 0 and 1.  Unrolled, as
+        it indexes a literal list."""
         @fp.fpy(ctx=fp.FP32)
         def f(xs: list[fp.Real]):
+            ys = [xs[0], xs[1], xs[2], xs[3]]
             acc = fp.round(0)
-            for i in range(2, 8, 4):
-                acc = acc + xs[i]
+            for i in range(1, 4, 2):
+                acc = acc + ys[i]
             return acc
 
         out = _emit(f, [ListType(_R32, 8)])
         assert 'in tl.static_range(2):' in out
-        assert 'i = 2 + __t0 * 4' in out
+        assert re.search(r'i = 1 \+ __t\d+ \* 2', out)
 
     def test_a_carried_value_is_held_in_its_class(self):
         """Triton declares nothing, so a value narrower than the phi joining
@@ -766,7 +772,7 @@ class TestLoopCarried:
             return d
 
         out = _emit(f, [_R32], ctx=fp.REAL)
-        assert 'd = c.to(tl.float64)' in out
+        assert 'd = tl.cast(c, tl.float64)' in out
 
 
 def test_an_ldexp_scales_in_the_products_storage():
@@ -776,7 +782,7 @@ def test_an_ldexp_scales_in_the_products_storage():
     def f(x: fp.Real):
         return 2 ** -200 * x
 
-    assert 'libdevice.ldexp(x.to(tl.float64), ' in _emit(f, [_R32], ctx=fp.REAL)
+    assert 'libdevice.ldexp(tl.cast(x, tl.float64), ' in _emit(f, [_R32], ctx=fp.REAL)
 
 
 def test_a_lane_invariant_address_is_one_scalar_load():
@@ -825,7 +831,7 @@ class TestTryWiden:
             return y
 
         out = _emit(f, [RealType(FP16), RealType(FP16)], ctx=fp.REAL)
-        assert '(z * 0.0).to(tl.float16)' in out
+        assert 'tl.cast((z * 0.0), tl.float16)' in out
 
     def test_a_literal_wider_than_the_result(self):
         """The branch bounds `2^139 * t` to `f32`, where the literal needs
@@ -839,7 +845,7 @@ class TestTryWiden:
             return y
 
         out = _emit(f, [_R32], ctx=fp.REAL)
-        assert 'tl.float64' in out and '.to(tl.float32)' in out
+        assert 'tl.float64' in out and ', tl.float32)' in out
 
 
 @fp.fpy(ctx=fp.REAL)
@@ -863,7 +869,7 @@ def test_an_exact_sum_folds_in_its_own_storage():
     """Two `f16`s sum exactly in about 41 bits: every partial sum is in the
     sum's `f64`, and folding in the elements' own `f16` would round."""
     out = _emit(_exact_sum, [RealType(FP16)] * 2, fp.REAL)
-    assert '(x.to(tl.float64) + y.to(tl.float64))' in out
+    assert '(tl.cast(x, tl.float64) + tl.cast(y, tl.float64))' in out
 
 
 def test_an_unproven_length_is_a_parameter():
@@ -1099,7 +1105,7 @@ def test_a_scale_in_stays_in_its_operands_storage(rm: fp.RM, halves: bool) -> No
     `fp64`."""
     src = _compile(aligned_sum(rm), _ALIGNED_ARGS, unfold=TritonCompiler.UnfoldMode.ROUNDINGS)
     assert ('bitcast=True) * ((' in src.source) is halves
-    assert ('x.to(tl.float64)' in src.source) is not halves
+    assert (re.search(r'tl\.cast\(x\d*, tl\.float64\)', src.source) is not None) is not halves
 
 
 def test_a_scale_bound_under_a_rounding_context_is_not_fused() -> None:
@@ -1236,3 +1242,38 @@ class TestSkippedArm:
 
     def test_a_short_arm_is_not(self):
         assert 'if tl.max(' not in self._src(short_arm)
+
+
+@fp.fpy(ctx=fp.FP32)
+def _gather_by_value(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                     BLOCK: fp.Real):
+    """`xss[r]` at a value loaded from `yss`, an FP32 number."""
+    for r in range(len(out)):
+        out[r] = xss[r][yss[r][0]]
+    return out
+
+
+def test_an_index_not_proven_an_integer_is_refused() -> None:
+    """An index converts to an integer only where its format says it is one;
+    an FP32 value's does not, so the kernel is refused rather than emitted
+    with a float pointer offset."""
+    with pytest.raises(TritonEmitError, match='is an index, and its values are not proven integers'):
+        TritonCompiler(drop_asserts=True).compile(_gather_by_value, ctx=fp.FP32, arg_types=[
+            ListType(ListType(_R32, 8), 4), ListType(ListType(_R32, 1), 4), ListType(_R32, 4), _INT])
+
+
+@fp.fpy(ctx=fp.FP32)
+def _range_at_a_value(xs: list[fp.Real], ks: list[fp.Real], out: list[fp.Real],
+                      BLOCK: fp.Real):
+    """A `range` subscripted by an FP32 number, the element then an index."""
+    for r in range(len(out)):
+        rs = range(8)
+        out[r] = xs[rs[ks[r]]]
+    return out
+
+
+def test_a_range_at_an_index_not_proven_an_integer_is_refused() -> None:
+    """A `range`'s subscript is an index like any other."""
+    with pytest.raises(TritonEmitError, match='is an index, and its values are not proven integers'):
+        TritonCompiler(drop_asserts=True).compile(_range_at_a_value, ctx=fp.FP32, arg_types=[
+            ListType(_R32, 8), ListType(_R32, 8), ListType(_R32, 8), _INT])

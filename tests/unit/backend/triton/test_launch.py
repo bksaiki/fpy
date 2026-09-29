@@ -296,7 +296,7 @@ def test_a_reduction_stays_sequential_and_agrees(f):
     """No reduction across a tile is lowered, so the loop is not tiled."""
     n = 37
     src = _compile(f, [ListType(F32, n), ListType(F32, 1), INT])
-    assert 'tl.static_range(37)' in src.source
+    assert 'range(37)' in src.source
     torch.manual_seed(0)
     _agree(src, f, [(torch.randn(n) * 4).cuda(), torch.zeros(1).cuda()],
            block=16, grid=1)
@@ -949,7 +949,7 @@ def test_a_loop_ahead_of_the_column_tile_carries_a_column() -> None:
     m, n, k = NamedId('m'), NamedId('n'), NamedId('k')
     src = _compile(row_first, [ListType(ListType(F32, k), m), ListType(F32, n),
                                ListType(ListType(F32, n), m), INT])
-    assert 'acc = tl.broadcast_to(acc, (BLOCK_M, 1))' in src.source
+    assert 'acc = tl.broadcast_to(tl.cast(acc, tl.float32), (BLOCK_M, 1))' in src.source
     torch.manual_seed(0)
     _agree(src, row_first, [torch.randn(5, 3).cuda(), torch.randn(9).cuda(),
                             torch.zeros(5, 9).cuda()], block_m=4)
@@ -1019,3 +1019,232 @@ def test_an_aligned_sum_of_fp16_agrees() -> None:
     src = _compile(f, [ListType(ListType(RealType(FP16), 4), n), ListType(RealType(fp.FP64), n), INT])
     torch.manual_seed(0)
     _agree(src, f, [(torch.randn(8, 4) * 100).half().cuda(), torch.zeros(8, dtype=torch.float64).cuda()])
+
+
+# Computed indices
+
+_ROWS = 3
+
+
+def _rows_of(*widths: int) -> list:
+    return [ListType(ListType(F32, w), _ROWS) for w in widths] + [ListType(F32, _ROWS), INT]
+
+
+def _randn(*widths: int) -> list:
+    torch.manual_seed(0)
+    return [torch.randn(_ROWS, w).cuda() for w in widths] + [torch.zeros(_ROWS).cuda()]
+
+
+@fp.fpy(ctx=fp.REAL)
+def _product_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                   BLOCK: fp.Real):
+    """Slices at `t * 16`, `t` over a sixteenth of `xss`'s length, by 4."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for t in range(0, len(yss[r]), 4):
+            i = t * 16
+            w = xss[r][i:i + 64]
+            for j in range(64):
+                with fp.FP32:
+                    s = s + w[j]
+        out[r] = s
+    return out
+
+
+@pytest.mark.parametrize('k', [256, 1024, 2048, 4096])
+def test_a_product_index_agrees(k: int) -> None:
+    """Past 16 values of `t` (k = 2048) its format is an interval, not a set:
+    `t * 16` must still be an integer."""
+    src = _compile(_product_index, _rows_of(k, k // 16))
+    _agree(src, _product_index, _randn(k, k // 16))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _square_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """The index `t * t`, computed under `FP32` and so held as a float."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for u in range(0, 128, 2):
+            t = u - 64
+            with fp.FP32:
+                s = s + xss[r][t * t]
+        out[r] = s
+    return out
+
+
+def test_a_float_held_index_agrees() -> None:
+    """An index held as a float is converted to an integer where it is used."""
+    src = _compile(_square_index, _rows_of(4097))
+    _agree(src, _square_index, _randn(4097))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _static_product_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """Slices at `t * 32` computed at `FP32`, `t` a loop of static count,
+    unrolled as it indexes a literal list."""
+    for r in range(len(out)):
+        sc = [xss[r][0], xss[r][1], xss[r][2], xss[r][3]]
+        s = fp.round(0)
+        for t in range(4):
+            with fp.FP32:
+                i = t * 32
+            w = xss[r][i:i + 32]
+            for j in range(32):
+                with fp.FP32:
+                    s = s + w[j] * sc[t]
+        out[r] = s
+    return out
+
+
+def test_a_static_product_index_agrees() -> None:
+    """A `static_range` target, a Python number when traced, is cast by
+    `tl.cast`."""
+    src = _compile(_static_product_index, _rows_of(128))
+    assert 'tl.cast(t, ' in src.source
+    _agree(src, _static_product_index, _randn(128))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _integer_index(xss: list[list[fp.Real]], yss: list[list[fp.Real]], out: list[fp.Real],
+                   BLOCK: fp.Real):
+    """A local list of the slice at `t * 16`, the index computed under
+    `INTEGER`."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for t in range(0, len(yss[r]), 4):
+            with fp.INTEGER:
+                i = t * 16
+            p = [a for a in xss[r][i:i + 64]]
+            for j in range(64):
+                with fp.FP32:
+                    s = s + p[j]
+        out[r] = s
+    return out
+
+
+def test_an_integer_context_index_agrees() -> None:
+    src = _compile(_integer_index, _rows_of(1024, 64))
+    _agree(src, _integer_index, _randn(1024, 64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _tail_in_a_loop(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A loop, not unrolled, writing the tail of a list of 5."""
+    for r in range(len(out)):
+        zs = [fp.round(0) for _ in range(5)]
+        for t in range(len(xss[r])):
+            with fp.FP32:
+                zs[4] = zs[4] + xss[r][t]
+        out[r] = zs[4]
+    return out
+
+
+def test_a_tail_written_in_a_loop_agrees() -> None:
+    """The tail is carried as a row, as Triton holds a loop's names at one
+    shape."""
+    src = _compile(_tail_in_a_loop, _rows_of(64))
+    assert 'tl.static_range' not in src.source
+    _agree(src, _tail_in_a_loop, _randn(64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _count_in_a_loop(xs: list[fp.Real], out: list[fp.Real], BLOCK: fp.Real):
+    """A counter carried by a loop outside any tile, from a literal."""
+    with fp.INTEGER:
+        k = 0
+        for _ in range(8):
+            k = k + 1
+    with fp.FP32:
+        out[0] = xs[0] + k
+    return out
+
+
+def test_a_counter_from_a_literal_agrees() -> None:
+    """`k = 0` would enter the loop as Triton's `int32`, the body's `k` a
+    `uint8`: it enters in its class's storage."""
+    src = _compile(_count_in_a_loop, [ListType(F32, 8), ListType(F32, 1), INT])
+    xt, ot = torch.randn(8).cuda(), torch.zeros(1).cuda()
+    _agree(src, _count_in_a_loop, [xt, ot], grid=1)
+
+
+@fp.fpy(ctx=fp.REAL)
+def _empty_loop(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A loop of no iterations: its target has no values at all."""
+    for r in range(len(out)):
+        acc = xss[r][0]
+        for i in range(len(xss[r]) - 1):
+            with fp.INTEGER:
+                j = i + 1
+            with fp.FP32:
+                acc = acc + xss[r][j]
+        out[r] = acc
+    return out
+
+
+def test_an_empty_loop_agrees() -> None:
+    """The body of a loop that never runs is still emitted, and the empty set
+    fits any storage."""
+    src = _compile(_empty_loop, _rows_of(1))
+    _agree(src, _empty_loop, _randn(1))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _float_context_index(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """An index computed under `FP32`, proven an integer in `[0, 63]`."""
+    for r in range(len(out)):
+        s = fp.round(0)
+        for g in range(4):
+            for j in range(16):
+                with fp.FP32:
+                    s = s + xss[r][g * 16 + j]
+        out[r] = s
+    return out
+
+
+def test_an_index_computed_under_a_float_context_agrees() -> None:
+    """`g * 16 + j` runs at `FP32` but is stored as `U8`: the result is cast
+    into its storage, so the index is an integer."""
+    src = _compile(_float_context_index, _rows_of(64))
+    _agree(src, _float_context_index, _randn(64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _reused_lane_name(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A lane loop's target, `g`, named again by a sequential loop."""
+    for r in range(len(out)):
+        sc = [xss[r][16 * g] for g in range(4)]
+        s = fp.round(0)
+        for g in range(4):
+            with fp.FP32:
+                s = s + sc[g]
+        out[r] = s
+    return out
+
+
+def test_a_reused_lane_name_agrees() -> None:
+    """The second `g` is a `static_range` target, not the lanes."""
+    src = _compile(_reused_lane_name, _rows_of(64))
+    _agree(src, _reused_lane_name, _randn(64))
+
+
+@fp.fpy(ctx=fp.REAL)
+def _lane_indexed_literal(xss: list[list[fp.Real]], out: list[fp.Real], BLOCK: fp.Real):
+    """A literal list of loads, indexed by a lane."""
+    for r in range(len(out)):
+        sc = [xss[r][0], xss[r][16], xss[r][32], xss[r][48]]
+        with fp.FP32:
+            q = [sc[g] * xss[r][g] for g in range(4)]
+        s = fp.round(0)
+        for k in range(4):
+            with fp.FP32:
+                s = s + q[k]
+        out[r] = s
+    return out
+
+
+@pytest.mark.parametrize('block', [4, 8])
+def test_a_lane_indexed_literal_agrees(block: int) -> None:
+    """The elements, rows, are broadcast across the lanes.  At a block as
+    wide as the lanes, a row read as a lane is wrong values, not a refusal."""
+    src = _compile(_lane_indexed_literal, _rows_of(64))
+    _agree(src, _lane_indexed_literal, _randn(64), block=block)

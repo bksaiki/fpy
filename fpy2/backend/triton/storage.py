@@ -87,13 +87,31 @@ def bound_fits_in_scalar(bound: FormatBound, ty: TritonScalar) -> bool:
     """Is every value *bound* admits representable in *ty*?
 
     A question about values, where :func:`scalar_fits_in` asks about types.
+    The empty set, a body that never runs, fits in any.
     """
+    if isinstance(bound, SetFormat) and not bound.values:
+        return True
     if ty is TritonScalar.BOOL:
         return False
     if not isinstance(bound, AbstractableFormat | SetFormat):
         return False
     af = _to_abstract(bound)
     return af is not None and af <= _ABSTRACT[ty]
+
+
+def index_scalar(bound: FormatBound) -> TritonScalar | None:
+    """The narrowest of ``tl.int32`` and ``tl.int64`` holding every value
+    *bound* admits, or ``None`` (a value may not be an integer, or none fits)."""
+    if not isinstance(bound, AbstractableFormat | SetFormat):
+        return None
+    af = _to_abstract(bound)
+    if af is None:
+        return None
+    # drop -0: it indexes as 0
+    af = AbstractFormat(af.prec, af.exp, af.pos_bound, neg_bound=af.neg_bound,
+                        has_pos_inf=af.has_pos_inf, has_neg_inf=af.has_neg_inf,
+                        has_nan=af.has_nan)
+    return next((ty for ty in (TritonScalar.S32, TritonScalar.S64) if af <= _ABSTRACT[ty]), None)
 
 
 class TritonStorageDomain:

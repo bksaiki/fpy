@@ -13,7 +13,8 @@ The pipeline, in order, and why:
 4. The normal form, then ``unfold_round`` and the normal form again: the
    lowering sees inlined callees and emits branches of its own.
 5. ``Simplify``: clears what the lowerings leave.
-6. Tiling, after the normal form so it sees inlined loops; then ``Simplify``.
+6. ``split_names``, as Triton holds a name a loop assigns at one type; then
+   tiling, after the normal form so it sees inlined loops; then ``Simplify``.
 
 The ``Simplify`` steps run only under ``optimize``.  A kernel writes through
 pointers and returns nothing, and its tile width is a compile-time parameter,
@@ -37,6 +38,7 @@ from ...types import Type
 from ..backend import Backend, CompileError
 from .emitter import KernelSource, emit_kernel
 from .normalize import normalize, normalize_module
+from .split_names import split_names
 from .unfold_round import UnfoldMode, unfold
 from .vectorize import tile_loops
 
@@ -150,7 +152,7 @@ class TritonCompiler(Backend):
                 except TransformDeclined:
                     pass  # nothing to hoist is not a failure
 
-        tiles = tile_loops(ready.ast, self.block)
+        tiles = tile_loops(split_names(ready.ast), self.block)
         if self.optimize:
             tiles = tiles.rewritten(Simplify.apply(tiles.func))
 

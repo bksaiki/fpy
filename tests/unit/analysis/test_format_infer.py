@@ -6,6 +6,8 @@ runs property tests driven by the type-directed FPy program generator.
 """
 
 import fpy2 as fp
+import time
+
 import pytest
 
 from fpy2 import dim, size
@@ -16,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 from fpy2.analysis import FormatInfer
 from fpy2.analysis.format_infer import (
     AbstractFormat,
+    FormatBound,
     ListFormat,
     SetFormat,
     TupleFormat,
@@ -32,7 +35,7 @@ from fpy2.analysis.format_infer.analysis import (
     is_bottom,
 )
 from fpy2.analysis.reaching_defs import AssignDef
-from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign
+from fpy2.ast.fpyast import Empty, FuncDef, IndexedAssign, ListTypeAnn, RealTypeAnn
 from fpy2.number import FixedContext
 from fpy2.number.context.format import Format
 from fpy2.number.context.real import REAL_FORMAT
@@ -930,11 +933,81 @@ class TestFormatInfer:
         range_bounds = [
             b for e, b in info.by_expr.items() if type(e).__name__ == 'Range1'
         ]
-        # values 0..999 -> A(inf, 0, 999); quantum 1, symmetric bound
+        # values 0..999 -> the integers of [0, 999]; quantum 1, none negative
         expected_elt = AbstractFormat(
-            float('inf'), 0, fp.RealFloat.from_int(999)
+            float('inf'), 0, fp.RealFloat.from_int(999), neg_bound=fp.RealFloat.from_int(0)
         ).format()
         assert range_bounds and range_bounds[0] == ListFormat(expected_elt)
+
+    @pytest.mark.parametrize('bounds', [(5, 5), (5, 0, 1), (0, 10, -1)])
+    def test_an_empty_range_has_no_element(self, bounds: tuple[int, ...]) -> None:
+        """A range that yields nothing has the empty set for its element."""
+        bound = _range_bound(*bounds)
+        assert bound == ListFormat(SetFormat.bottom())
+
+    @pytest.mark.parametrize('bounds, lo, hi', [
+        ((-500, 500), -500, 499),
+        ((999, -1, -1), 0, 999),
+        ((-1000, 0), -1000, -1),
+    ])
+    def test_range_large_spans_its_interval(self, bounds: tuple[int, ...], lo: int, hi: int) -> None:
+        """A large range's element is the integers of the interval it spans."""
+        bound = _range_bound(*bounds)
+        expected = AbstractFormat(float('inf'), 0, fp.RealFloat.from_int(max(hi, 0)),
+                                  neg_bound=fp.RealFloat.from_int(min(lo, 0))).format()
+        assert bound == ListFormat(expected)
+
+    def test_a_static_loop_stops_at_its_fixed_point(self) -> None:
+        """An `FP32` sum over a million elements: the phi stops changing
+        within a few iterations, and the rest are not visited."""
+        @fp.fpy
+        def f(xs: list[fp.Real]):
+            with fp.FP32:
+                acc = fp.round(0)
+                for i in range(len(xs)):
+                    acc = acc + xs[i]
+            return acc
+
+        # a static trip count that partial evaluation does not enumerate
+        f.ast.args[0].type = ListTypeAnn(RealTypeAnn(None, None), 1000000, None)
+        start = time.perf_counter()
+        info = self._run(f)
+        assert time.perf_counter() - start < 10
+        assert all(b is not None for d, b in info.by_def.items() if d.name.base == 'acc')
+
+    def test_a_store_through_an_alias_keeps_a_loop_going(self) -> None:
+        """`ys[0] = t * 10` writes `xs` through `ys`, so `xs` grows while no phi
+        changes: the loop has not converged until the store record stops
+        growing, with a static count or not."""
+        @fp.fpy
+        def static(c: bool, n: fp.Real):
+            with fp.INTEGER:
+                xs = [fp.round(1)]
+                zs = [fp.round(0)]
+                ys = xs if c else zs
+                for _ in range(3):
+                    t = xs[0]
+                    ys[0] = t * 10
+                return xs[0]
+
+        @fp.fpy
+        def runtime(c: bool, n: fp.Real):
+            with fp.INTEGER:
+                xs = [fp.round(1)]
+                zs = [fp.round(0)]
+                ys = xs if c else zs
+                for _ in range(n):
+                    t = xs[0]
+                    ys[0] = t * 10
+                return xs[0]
+
+        for f in (static, runtime):
+            actual = f(True, 3)
+            (bound,) = [b.elt for d, b in self._run(f).by_def.items() if d.name.base == 'xs']
+            if isinstance(bound, SetFormat):
+                assert actual.as_rational() in bound.values, f.name
+            else:
+                assert bound.representable_in(actual), f.name
 
     def test_range_set_threshold_is_tunable(self):
         """``range_set_threshold`` controls the set-vs-bounded split."""
@@ -4372,3 +4445,22 @@ class TestNegationOfZero:
         neg = self._neg(fp.SINT8)
         assert not neg.has_neg_zero
         assert neg.exp == 0
+
+
+def _range_bound(*bounds: int) -> FormatBound:
+    """The inferred format of `range(*bounds)`, two or three arguments."""
+    if len(bounds) == 2:
+        a, b = bounds
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(a, b)]
+    else:
+        a, b, c = bounds
+
+        @fp.fpy
+        def f() -> list[fp.Real]:
+            return [0.0 for _ in range(a, b, c)]
+    info = FormatInfer.analyze(f.ast)
+    (bound,) = [b for e, b in info.by_expr.items() if type(e).__name__.startswith('Range')]
+    return bound
