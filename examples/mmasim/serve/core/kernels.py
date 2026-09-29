@@ -46,12 +46,20 @@ TILES: dict[str, tuple[int, int]] = {
 """Each design and its fixed tile `(block, block_m)`, the fastest per
 `bench/speed.py --best`."""
 
+FUSED_ROWS: dict[str, int] = {'nv.blackwell.mxfp4': 32, 'nv.blackwell.nvfp4': 32}
+"""The most rows a scaled design runs in one kernel (:func:`fused`) at; past
+them its launches are faster.  Measured at Qwen3-0.6B's shapes; a design not
+listed is never slower fused."""
+
 Combine = Literal['linear', 'tree']
 
 _BUILDS: dict[str, Callable] = dict(DESIGNS)
 
 _KERNELS: dict[str, KernelSource] = {}
 """Each design compiled so far."""
+
+_FUSED: dict[tuple[str, int], KernelSource] = {}
+"""Each design compiled fused over a `k` so far (:func:`fused`)."""
 
 _ELEMS = 1 << 26
 """Output elements per block of rows: bounds the partials' memory under
@@ -120,29 +128,38 @@ def compiled(design: str) -> tuple[KernelSource, int]:
     return _KERNELS[design], _arg_length(_args(design)[0])
 
 
-@cache
 def fused(design: str, k: int) -> KernelSource:
     """*design* over a static *k* in one kernel (`compile_triton.fuse`):
     a block-scaled one per instruction, any other promoted every 128 of `k`,
     as `fp8-block` scales it.  Launched on `(a [m, k], w [n, k], C, xs, ys,
     out)`, a scale list per row."""
-    return ct.compile_fused(_BUILDS[design], k)[0]
+    if (design, k) not in _FUSED:
+        _FUSED[design, k] = ct.compile_fused(_BUILDS[design], k)[0]
+    return _FUSED[design, k]
 
 
-def _compile_named(name: str) -> KernelSource:
-    return ct.compile_matmul(dict(DESIGNS)[name], None)[0]
+def _compile_named(item: tuple[str, int | None]) -> KernelSource:
+    """MMA-Sim design *item[0]*'s kernel, or fused over `k` = *item[1]*."""
+    name, k = item
+    build = dict(DESIGNS)[name]
+    return ct.compile_matmul(build, None)[0] if k is None else ct.compile_fused(build, k)[0]
 
 
-def precompile(designs: Sequence[str], jobs: int | None = None) -> None:
-    """Compile *designs* not yet compiled, MMA-Sim's in *jobs* processes (one
-    per core by default); a :func:`register`ed one compiles here."""
-    todo = [d for d in designs if d not in _KERNELS]
-    named = [d for d in todo if _BUILDS[d] is dict(DESIGNS).get(d)]
-    for d, kernel in zip(named, in_processes(_compile_named, named,
-                                             min(len(named), jobs or os.cpu_count() or 1))):
-        _KERNELS[d] = kernel
-    for d in todo:
-        compiled(d)
+def precompile(designs: Sequence[str], jobs: int | None = None, ks: Sequence[int] = ()) -> None:
+    """Compile *designs* not yet compiled, and each fused over each of *ks*
+    (:func:`fused`), MMA-Sim's in *jobs* processes (one per core by default);
+    a :func:`register`ed one compiles here."""
+    todo = [(d, None) for d in designs if d not in _KERNELS]
+    todo += [(d, k) for d in designs for k in ks if (d, k) not in _FUSED]
+    named = [t for t in todo if _BUILDS[t[0]] is dict(DESIGNS).get(t[0])]
+    for (d, k), kernel in zip(named, in_processes(_compile_named, named,
+                                                  min(len(named), jobs or os.cpu_count() or 1))):
+        if k is None:
+            _KERNELS[d] = kernel
+        else:
+            _FUSED[d, k] = kernel
+    for d, k in todo:
+        compiled(d) if k is None else fused(d, k)
 
 
 @cache
@@ -203,39 +220,64 @@ def matmul(
     With `w` in `s > 1` slices, each slice goes through the kernel from a zero
     accumulator and the FP32 partials are summed left to right (`linear`) or
     pairwise (`tree`); one slice accumulates `k` in order through the design
-    alone.  With *scales* `(s_x [m, s], s_w [n, s])`, each slice's partial is
-    scaled as it is summed, left to right, `y + p * (s_x * s_w)` in FP32, as
-    block-scaled FP8 promotes it.  A block-scaled design takes `w` in one
-    slice per instruction and *scales* `(xs [s, m, ...], ys [s, n, ...])`,
-    each instruction's, and chains them: each takes the last one's result
-    as its accumulator."""
+    alone.  With *scales*, `w` is whole (:func:`_scaled`)."""
+    if scales is not None:
+        return _scaled(a, w, design, *scales)
     s, n, step = w.shape
     m, k = a.shape
     k0 = compiled(design)[1]
-    chained = block_scaled(design)
-    if k != s * step or step % k0 or (chained and step != k0):
+    if k != s * step or step % k0:
         raise ValueError(
-            f'`k` = {k} does not split into {s} slices of '
-            f"{'' if chained else 'a multiple of '}{design}'s length {k0}")
+            f"`k` = {k} does not split into {s} slices of a multiple of {design}'s length {k0}")
     y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
     parts = a.view(m, s, step).transpose(0, 1).contiguous() if s > 1 else a.unsqueeze(0)
     rows = max(1, _ELEMS // n)
     for i in range(0, m, rows):
         blk, ab = y[i:i + rows], parts[:, i:i + rows]
-        if chained and scales is not None:
-            xs, ys = scales
-            for j in range(s):
-                _launch(ab[j], w[j], blk, design, xs[j, i:i + rows], ys[j])
-        elif scales is not None:
-            sx, sw = scales
-            for j in range(s):
-                blk += _part(ab, w, design, j) * (sx[i:i + rows, j, None] * sw[:, j])
-        elif combine == 'tree' and s > 1:
+        if combine == 'tree' and s > 1:
             blk.copy_(_tree(partial(_part, ab, w, design), 0, s))
         else:
             _launch(ab[0], w[0], blk, design)
             for j in range(1, s):
                 blk += _part(ab, w, design, j)
+    return y
+
+
+def _scaled(a: torch.Tensor, w: torch.Tensor, design: str,
+            xs: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
+    """:func:`matmul` with scales, `w` whole (`[1, n, k]`) and *xs* `[m, s]`,
+    *ys* `[n, s]`, each row's scales in order along `k`.
+
+    At most :data:`FUSED_ROWS` rows, one kernel (:func:`fused`).  Past them, a
+    block-scaled design is a launch per instruction, each taking the last one's
+    result as its accumulator; another is a launch per `PROMOTE` of `k` from a
+    zero accumulator, each partial scaled as it is summed, left to right,
+    `y + p * (s_x * s_w)` in FP32, as block-scaled FP8 promotes it."""
+    (_, n, k), m = w.shape, a.shape[0]
+    chained = block_scaled(design)
+    step = _arg_length(_args(design)[0]) if chained else ct.PROMOTE
+    if w.shape[0] != 1 or a.shape[1] != k or k % step:
+        raise ValueError(f"`k` = {a.shape[1]} is not whole blocks of {step} for {design}")
+    if not chained and xs.shape[1] * step != k:
+        raise ValueError(f'scales per {k // xs.shape[1]} of `k`, where {design} promotes every {step}')
+    y = torch.zeros(m, n, dtype=torch.float32, device=a.device)
+    if m <= FUSED_ROWS.get(design, m):
+        block, block_m = TILES[design]
+        launch(fused(design, k), [a, w[0], y, xs, ys, y],
+               block=block, block_m=min(block_m, 1 << (m - 1).bit_length()))
+        return y
+    s = k // step
+    per = xs.shape[1] // s
+    parts, ws = (t.view(t.shape[0], s, step).transpose(0, 1).contiguous() for t in (a, w[0]))
+    rows = max(1, _ELEMS // n)
+    for i in range(0, m, rows):
+        blk, ab, sx = y[i:i + rows], parts[:, i:i + rows], xs[i:i + rows]
+        for j in range(s):
+            if chained:
+                cut = j if per == 1 else slice(j * per, (j + 1) * per)
+                _launch(ab[j], ws[j], blk, design, sx[:, cut].contiguous(), ys[:, cut].contiguous())
+            else:
+                blk += _part(ab, ws, design, j) * (sx[:, j, None] * ys[:, j])
     return y
 
 

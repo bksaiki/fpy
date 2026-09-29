@@ -84,9 +84,15 @@ def runs(ap: argparse.ArgumentParser, args: argparse.Namespace) -> list[str]:
 def load(args: argparse.Namespace, name: str | None = None,
          ) -> tuple[torch.nn.Module, swap.Run, dict[str, Any]]:
     """*name* (default `--model`) under *args*' scheme and splits:
-    `checkpoints.for_scheme`'s."""
-    return checkpoints.for_scheme(name or args.model, args.scheme, requantize=args.requantize,
-                                  master=args.master, split_k=args.split_k, combine=args.combine)
+    `checkpoints.for_scheme`'s.  Under a scaled scheme its designs' fused
+    kernels compile now, in parallel, for each of the layers' `k`."""
+    model, run, about = checkpoints.for_scheme(
+        name or args.model, args.scheme, requantize=args.requantize, master=args.master,
+        split_k=args.split_k, combine=args.combine)
+    if args.scheme.applied in ('k-blocks', 'instruction'):
+        ks = sorted({m.in_features for m in model.modules() if isinstance(m, torch.nn.Linear)})
+        kernels.precompile(kernels.designs(args.scheme), ks=ks)
+    return model, run, about
 
 
 def cached(path: Path, settings: dict[str, Any]) -> dict[str, Any] | None:

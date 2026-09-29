@@ -163,7 +163,7 @@ def evaluate(
                 for d in designs[c:c + per]:
                     start = time.perf_counter()
                     held = kernels.storage(d)[1]
-                    split = swap.slices(d, scheme, a.shape[1], run.split_k)
+                    split = swap.slices(scheme, run.split_k)
                     ys[d] = swap.gemm(d, scheme, qa, qw, kernels.prepare(qw.elements, held, split),
                                       run.combine)
                     timed(d, start)
